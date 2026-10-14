@@ -7,7 +7,7 @@ what it leaves out, and the design that follows. It is a first draft, from the e
 blake3-servil (a BLAKE3 implementation proved correct on AArch64 with Lean, Aeneas, Z3, and Isla),
 and from the work of Mark S. Miller (E, Endo), Daira Hopwood (Noether), François-René Rideau
 (*Lambda: The Ultimate Object*), Grigore Roşu and Xiaohong Chen (K, matching logic), the Unison
-authors, Filip Pizlo (Fil-C), and the Lurk authors.
+authors, Filip Pizlo (Fil-C), the Lurk authors, and Nadim Kobeissi (*Nobody Will Read the Lean*).
 
 ## 1. Who Ode is for
 
@@ -24,6 +24,9 @@ loaded and attention on the right things.
   measurements, and the assurance document, and essentially never the source code.
 
 So Ode keeps two kinds of legibility: code legible to agents, and meaning legible to humans.
+The checker settles whether a proof establishes its statement; people settle whether the
+statement says what they mean (Kobeissi). Specifications therefore stay short enough for their
+owners to read in full, and generated proofs carry no reading duty at all.
 
 ## 2. What Ode leaves out
 
@@ -85,10 +88,12 @@ so definitions are safe to share, cache, and load anywhere. Authority exists onl
 An Ode program is a tower of layers (Rideau's hyper- and hypo-systems): each layer is a computing
 system, and each step down is an implementation with a proved correspondence to the system above it.
 
-- **The specification layer** is total and definite (Hopwood's Noether-0): pure, strict, terminating
-  functions and their equations.  A standard such as C2SP's BLAKE3 is written here, executable, so
-  the same text is the reference implementation, the generator of test vectors, and the statement of
-  every theorem about it.
+- **The specification layer** is definite (Hopwood's Noether-0): pure, strict functions whose every
+  computation succeeds deterministically or fails in finite time, and their equations.  A standard
+  such as C2SP's BLAKE3 is written here, executable, so the same text is the reference
+  implementation, the generator of test vectors, and the statement of every theorem about it.
+  The specification is the specification of record: its owners write it, and prose, test vectors,
+  and implementations are checked against it.
 - **The generator layer** adds staging (MetaML brackets and escapes) and generative macros. A staged
   program means exactly its unstaged elision.  Generators produce lower layers: blake3-servil's
   fastest kernels were generated (`tools/gen_neon_hybrid.py`) and their outputs proved, and Ode
@@ -116,9 +121,10 @@ and least fixed points. Matching μ-logic is the leading candidate: patterns den
 its Hilbert system has a handful of rules, its certificates are checked in a few hundred lines
 (Metamath), Lean's proof objects translate into it, and equality, sorts, functions, constructors,
 separation, reachability, and type systems are theories inside it. Chen and Roşu (2026) prove its
-fixpoint-free basic fragment complete and the definedness extension conservative there, so theories
-added as libraries keep each other's meanings; with fixpoints it is, like every logic strong enough
-for induction, incomplete, which costs nothing for the theorems we prove.
+fixpoint-free basic fragment, in one-sorted form, globally complete and the definedness extension
+conservative there, so theories added as libraries keep each other's meanings; with fixpoints it
+is, like every logic strong enough for induction, incomplete, which costs nothing for the theorems
+we prove.
 
 **Operational semantics is the definitional base** (as in K): each layer's language, including each
 ISA, is defined by rewrite rules, and correctness between layers is reachability or simulation,
@@ -172,6 +178,14 @@ recorded with the hash of what discharged it:
 A proof erases the corresponding guard; a guard on a value known early is already a proof. The
 **assurance map** (what is proved, what is checked when, and what each claim rests on) is generated
 from these records for every hash, and is the human-facing account of correctness.
+
+**Property definitions come from a small, standard, versioned library** (Kobeissi): each property
+an obligation can claim — constant-time, reads-and-writes-only-its-own-buffers, forward secrecy in
+a protocol — has one public definition, formalized once and reviewed by the whole community, and
+claims name the definition and its version, the way a protocol names AES-256-GCM. A checker record
+is the only source of a claim: an admitted or assumed proof appears in the assurance map as
+unproved, with its reason. When a definition's new version appears, the map lists every claim
+resting on the old one, and rechecking those claims is mechanical.
 
 ## 9. Working together
 
@@ -249,4 +263,6 @@ what blake3-servil proves today with Lean, Aeneas, Z3, a Python executor, and Is
 - Filip Pizlo, Fil-C: InvisiCaps and GIMSO, <https://fil-c.org/>.
 - Nada Amin et al., *Lurk: Lambda, the Ultimate Recursive Knowledge*, Journal of Functional
   Programming 36, 2026.
+- Nadim Kobeissi, *Nobody Will Read the Lean: A Case for High-Level Cryptographic Languages*,
+  Cryptology ePrint Archive, Paper 2026/2441, 2026.
 - blake3-servil's `QUALITY.md`: what a proved, fast BLAKE3 needed, and where its seams were.
