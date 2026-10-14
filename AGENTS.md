@@ -1,6 +1,6 @@
 # Style Guides
 
-These style guides read the same in the fork's `AGENTS.md` and in bench-hashes' `AGENTS.md`; a change goes into both.
+These style guides read the same in the `AGENTS.md` of the fork, of bench-hashes, and of Ode; a change goes into all three.
 
 ## Communication
 
@@ -133,26 +133,6 @@ We never write "defensive code" — code that complicates a contract to ease the
 
 A highly desirable property of an interface and its contract: the user learns the fewest new concepts. Zero new concepts earns a perfect score. Each new term (a resource unit, a sharing rule, a tuning knob) taxes working memory and needs a place in prediction and control. Prefer familiar concepts the caller already holds (threads, inputs, budgets), keep implementation units unnamed in public docs, and express observable behavior (speed, thread count, fairness beside concurrent calls) in those familiar terms.
 
-# Audiences: three sets of documents
-
-Each document serves one audience; keep it to that audience's needs.
-
-1. **The servil team** (Zooko, and John Servil, his AI assistant; future sessions of both), who change these two repositories: this file, `PROCEDURES.md`, `NOTES-servil.md`, and bench-hashes' `AGENTS.md`, `PROCEDURES.md`, `NEXT-STEPS.md`, and `NOTES.md`. Everything we know, need, or decided goes here.
-2. **People who run the benchmark or use the crate**: bench-hashes' `README.md` (how to run it, read the results, and share them; also the GitHub Pages home page), its `METHODOLOGY.md` (how it measures, for readers who investigate), the graph itself, and the servil preface of this repository's `README.md`. They need no development setup and none of our conventions.
-3. **Other developer teams, human and AI**, who change the code and cooperate with us: `CONTRIBUTING.md` here and in bench-hashes. It holds the bare necessities (layout, build and test, the regression check, the rules that keep results comparable) and points at our notes without asking anyone to follow them.
-
-A fact that concerns several audiences goes in each audience's document, phrased for it.
-
-# Targets
-
-**The native Mac comes first; virtual machines follow** (the user's decision, September 27, 2026). Performance-sensitive programs run on native hosts far more often than in VMs, and the Mac shows what our code does (each thread's cycles per core kind, the host's own scheduler), where a VM's layers hide it. Diagnose and design on the Mac first; then measure the VM, and keep it level or better. How VMs differ (idle vCPUs that spin steal host time from those that hash; a guest's vCPUs may outnumber its fast host cores) is in `NOTES-servil.md` and the host lab's `host-lab-reports/`.
-
 # Where to start
 
-In the VM, run `sh /workspace/vm/setup.sh` before any other command, once per session (it is idempotent and quick after the first run of a boot); every `git` and `cargo` command then works as it is.
-
-Read `/workspace/bench-hashes/NEXT-STEPS.md` first: it says what the work is now (optimising this fork against the benchmark) and where the last session left both repositories. `NOTES-servil.md` holds the fork's design notes and the measurements behind each change. `PROCEDURES.md` holds how things are done here: the regression check, branches and promotion, releases, the Mac runner, probes, and the environment.
-
-# Speed: no slower commit enters unnoticed
-
-Speed is this fork's purpose. Every commit that touches code passes the performance-regression check before it enters git, and the main line takes only changes that passed it on every target machine; `PROCEDURES.md` gives the procedure and what each verdict obliges.
+Read `DESIGN.md`: it says what Ode is for, what it leaves out, the design, its open questions, and the first milestone. Ode is designed from the experience of blake3-servil, at `/workspace/blake3-servil` in the VM; its `QUALITY.md` and `tools/verify/` show what a proved, fast BLAKE3 needed and where the seams were.
