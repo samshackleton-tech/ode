@@ -48,15 +48,27 @@ def validate_expr(e, n_inputs):
 
 
 def validate_spec(defn):
-    if not isinstance(defn, dict) or defn.get("kind") != "spec":
+    from .canon import Sym, field
+    if not isinstance(defn, list) or not defn or defn[0] != "spec":
         raise ValueError("not a spec definition")
-    if not isinstance(defn.get("name"), str) or not defn["name"]:
-        raise ValueError("spec needs a name")
-    n = defn.get("inputs")
+    name = field(defn, "name")
+    if not isinstance(name, Sym):
+        raise ValueError("spec needs a symbol name")
+    n = field(defn, "inputs")
     if not isinstance(n, int) or not (1 <= n <= 2):
         raise ValueError("spec inputs must be 1..2 (toy domain: the checker proves by exhaustion)")
-    validate_expr(defn.get("body"), n)
+    validate_expr(field(defn, "body"), n)
     return defn
+
+
+def spec_inputs(defn):
+    from .canon import field
+    return field(defn, "inputs")
+
+
+def spec_body(defn):
+    from .canon import field
+    return field(defn, "body")
 
 
 def eval_expr(e, inputs):
@@ -77,8 +89,8 @@ def eval_expr(e, inputs):
 
 def eval_spec(defn, inputs):
     validate_spec(defn)
-    if len(inputs) != defn["inputs"]:
+    if len(inputs) != spec_inputs(defn):
         raise ValueError("wrong number of inputs")
     for x in inputs:
         _byte(x, "input")
-    return eval_expr(defn["body"], list(inputs))
+    return eval_expr(spec_body(defn), list(inputs))

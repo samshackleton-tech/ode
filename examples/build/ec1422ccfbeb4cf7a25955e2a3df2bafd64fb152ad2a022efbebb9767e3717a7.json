@@ -1,1 +1,0 @@
-{"code":[["load",0],["load",1],["xor"],["const",60],["add"],["rotl",3]],"inputs":2,"isa":"ODE8","kind":"machine"}

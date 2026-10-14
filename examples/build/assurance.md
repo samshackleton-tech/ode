@@ -9,19 +9,21 @@ Checker: ode-checker-0.1 -- verdict: **accept**
 
 ## What each claim rests on (hashes)
 
-- specification: `789bd120b40b56146487127445e5a646ec7e8dea01dde86d92651da781c6e74d`
-- machine definition: `ec1422ccfbeb4cf7a25955e2a3df2bafd64fb152ad2a022efbebb9767e3717a7`
+- specification: `2b14153a7830597024acd2e3312c7a617b0f0c1d4636f47882cd5c93e58c763f`
+- machine definition: `45e73a4a4759d70f95472e4252d6a459234ecdda5cd0556e8ed7465c23956d4f`
 - emitted binary: `0df19bfa45d1630f1462210efd667e57a2698f7522d284d0ed238c81ae653840`
-- certificate: `7cb5cb2e7a12806637de11ef66a40e3d6f7624f531317dfe0247e6cbd6e206b4`
+- certificate: `e8632a469a21d96dcbc1ac23ce88da5c934b0aa433048730476ab1756ee0935a`
 - property: `equals-spec-v1` (SPEC s5)
 
 ## Reliance, stated on the face of the map (SPEC s1)
 
-- the checker program (R1): this file, small enough to read
-- the canonical-form reader (R2): ode/canon.py
+- the checker program (R1): `ode/checker.py`, the program
+  that issued this record's verdict, small enough to read
+  in one sitting -- this map is its output, not the checker
+- the canonical-form reader (R2): `ode/canon.py`
 - the specification and property definitions say what their
   owners mean (R3): read them; their hashes are above
-- ODE8's semantics as implemented in ode/machine.py are the
+- ODE8's semantics as implemented in `ode/machine.py` are the
   toy ISA model (R4 at toy scale: a VM, no silicon)
 - BLAKE3 collision resistance (R6)
 

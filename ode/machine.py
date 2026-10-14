@@ -58,22 +58,33 @@ def validate_program(code, n_inputs):
 
 
 def validate_machine(defn):
-    if not isinstance(defn, dict) or defn.get("kind") != "machine":
+    from .canon import field
+    if not isinstance(defn, list) or not defn or defn[0] != "machine":
         raise ValueError("not a machine definition")
-    if defn.get("isa") != "ODE8":
-        raise ValueError(f"unknown ISA {defn.get('isa')!r}")
-    n = defn.get("inputs")
+    if field(defn, "isa") != "ODE8":
+        raise ValueError(f"unknown ISA {field(defn, 'isa')!r}")
+    n = field(defn, "inputs")
     if not isinstance(n, int) or not (1 <= n <= 2):
         raise ValueError("machine inputs must be 1..2 (toy domain: the checker proves by exhaustion)")
-    validate_program(defn.get("code"), n)
+    validate_program(field(defn, "code"), n)
     return defn
+
+
+def machine_inputs(defn):
+    from .canon import field
+    return field(defn, "inputs")
+
+
+def machine_code(defn):
+    from .canon import field
+    return field(defn, "code")
 
 
 def emit(defn) -> bytes:
     """The deterministic emitter (s3.4): machine definition -> bytes."""
     validate_machine(defn)
     out = bytearray()
-    for ins in defn["code"]:
+    for ins in machine_code(defn):
         out.append(OPCODES[ins[0]])
         if ins[0] in WITH_OPERAND:
             out.append(ins[1])
@@ -98,8 +109,9 @@ def decode(data: bytes, n_inputs):
             code.append([op])
     validate_program(code, n_inputs)
     # Round-trip: the only accepted bytes are exactly emit's output.
-    if emit({"kind": "machine", "isa": "ODE8", "inputs": n_inputs,
-             "code": code}) != data:
+    from .canon import Sym, assoc
+    if emit(assoc("machine", ("isa", Sym("ODE8")), ("inputs", n_inputs),
+                  ("code", code))) != data:
         raise ValueError("bytes are not the emitter's output")
     return code
 

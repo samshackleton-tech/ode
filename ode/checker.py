@@ -1,13 +1,13 @@
 """The checker (SPEC s4.3, reliance R1): small, deterministic, offline.
 
-It reads only canonical-form definitions from a store, named by hash,
-and a certificate. For the toy property "equals-spec-v1" it proves the
-claim itself, by exhaustion over the whole declared domain: it evaluates
-the specification and the program decoded from the emitted bytes on
-every input, and accepts exactly when they agree everywhere and the
-bytes are the emitter's output for the named machine definition. It
-imports no producer code: the compiler could be replaced by any other,
-honest or hostile, and this file's verdicts would not change.
+It reads only canonical s-expression definitions from a store, named by
+hash, and a certificate. For the toy property "equals-spec-v1" it proves
+the claim itself, by exhaustion over the whole declared domain: it
+evaluates the specification and the program decoded from the emitted
+bytes on every input, and accepts exactly when they agree everywhere
+and the bytes are the emitter's output for the named machine definition.
+It imports no producer code: the compiler could be replaced by any
+other, honest or hostile, and this file's verdicts would not change.
 
 Verdicts: accepts, or rejects with a reason. No third outcome.
 """
@@ -16,9 +16,9 @@ import os
 
 from . import machine, spec as spec_mod
 from .blake3 import blake3_hex
-from .canon import canonical_bytes, hash_of, read_canonical
+from .canon import Sym, assoc, field, hash_of, read_canonical
 
-CHECKER_ID = "ode-checker-0.1"
+CHECKER_ID = Sym("ode-checker-0.1")
 PROPERTY = "equals-spec-v1"
 
 
@@ -27,9 +27,9 @@ class Reject(Exception):
 
 
 def _load(store_dir, h):
-    if not isinstance(h, str) or len(h) != 64:
+    if not isinstance(h, Sym) or len(h) != 64:
         raise Reject(f"bad hash {h!r}")
-    path = os.path.join(store_dir, h + ".json")
+    path = os.path.join(store_dir, str(h) + ".sexp")
     if not os.path.isfile(path):
         raise Reject(f"definition {h} not in store")
     with open(path, "rb") as f:
@@ -44,34 +44,34 @@ def _load(store_dir, h):
 
 
 def check_certificate(store_dir, cert):
-    """Returns a checker record on acceptance; raises Reject otherwise."""
-    if not isinstance(cert, dict) or cert.get("kind") != "certificate":
+    """Returns a checker record (an s-expression) or raises Reject."""
+    if not isinstance(cert, list) or not cert or cert[0] != "certificate":
         raise Reject("not a certificate")
-    if cert.get("cert") != "correctness":
-        raise Reject(f"unsupported certificate kind {cert.get('cert')!r}")
-    if cert.get("property") != PROPERTY:
-        raise Reject(f"unsupported property {cert.get('property')!r}")
-    spec_defn = _load(store_dir, cert.get("spec"))
-    machine_defn = _load(store_dir, cert.get("machine"))
+    if field(cert, "cert") != "correctness":
+        raise Reject(f"unsupported certificate kind {field(cert, 'cert')!r}")
+    if field(cert, "property") != PROPERTY:
+        raise Reject(f"unsupported property {field(cert, 'property')!r}")
+    spec_defn = _load(store_dir, field(cert, "spec"))
+    machine_defn = _load(store_dir, field(cert, "machine"))
     try:
         spec_mod.validate_spec(spec_defn)
         machine.validate_machine(machine_defn)
     except ValueError as e:
         raise Reject(str(e)) from e
-    if machine_defn["inputs"] != spec_defn["inputs"]:
+    if machine.machine_inputs(machine_defn) != spec_mod.spec_inputs(spec_defn):
         raise Reject("spec and machine disagree on input count")
-    n = spec_defn["inputs"]
-    if cert.get("inputs") != n:
+    n = spec_mod.spec_inputs(spec_defn)
+    if field(cert, "inputs") != n:
         raise Reject("certificate names the wrong input count")
-    binary_hex = cert.get("binary_hex")
-    if not isinstance(binary_hex, str):
+    binary_hex = field(cert, "binary-hex")
+    if not isinstance(binary_hex, Sym):
         raise Reject("certificate carries no binary")
     try:
-        binary = bytes.fromhex(binary_hex)
+        binary = bytes.fromhex(str(binary_hex))
     except ValueError as e:
         raise Reject("binary is not hex") from e
-    if blake3_hex(binary) != cert.get("binary_hash"):
-        raise Reject("binary does not hash to the certificate's binary_hash")
+    if blake3_hex(binary) != field(cert, "binary-hash"):
+        raise Reject("binary does not hash to the certificate's binary-hash")
     if machine.emit(machine_defn) != binary:
         raise Reject("binary is not the emitter's output for the machine "
                      "definition")
@@ -91,22 +91,18 @@ def check_certificate(store_dir, cert):
         if got != want:
             raise Reject(f"disagreement at inputs {list(inputs)}: "
                          f"spec gives {want}, machine gives {got}")
-    return {"checker": CHECKER_ID, "verdict": "accept",
-            "property": PROPERTY,
-            "spec": cert["spec"], "machine": cert["machine"],
-            "binary_hash": cert["binary_hash"],
-            "certificate": hash_of(cert),
-            "cases_checked": cases,
-            "claims": [
-                "the emitted bytes compute the specification on every "
-                f"input ({cases} cases, the whole domain)",
-                "the program is straight-line ODE8: its instruction "
-                "trace depends only on its input count"]}
+    return assoc("record", ("checker", CHECKER_ID), ("verdict", Sym("accept")),
+                 ("property", Sym(PROPERTY)),
+                 ("spec", field(cert, "spec")),
+                 ("machine", field(cert, "machine")),
+                 ("binary-hash", field(cert, "binary-hash")),
+                 ("certificate", Sym(hash_of(cert))),
+                 ("cases-checked", cases))
 
 
 def check_store(store_dir):
-    """Check the store's certificate.json; return its record."""
-    path = os.path.join(store_dir, "certificate.json")
+    """Check the store's certificate.sexp; return its record."""
+    path = os.path.join(store_dir, "certificate.sexp")
     with open(path, "rb") as f:
         cert = read_canonical(f.read())
     return check_certificate(store_dir, cert)
@@ -118,38 +114,44 @@ def assurance_markdown(record):
     Every sentence below is computed from the record's fields; a claim
     with no record behind it cannot be written here.
     """
+    cases = field(record, "cases-checked")
     lines = ["# Assurance map (generated by ode/checker.py; do not edit)",
              "",
-             f"Checker: {record['checker']} -- verdict: **{record['verdict']}**",
+             f"Checker: {field(record, 'checker')} -- verdict: "
+             f"**{field(record, 'verdict')}**",
              "",
              "## Claims, each resting on the record above",
+             "",
+             "- the emitted bytes compute the specification on every "
+             f"input ({cases} cases, the whole domain)",
+             "- the program is straight-line ODE8: its instruction "
+             "trace depends only on its input count",
+             "",
+             "## What each claim rests on (hashes)",
+             "",
+             f"- specification: `{field(record, 'spec')}`",
+             f"- machine definition: `{field(record, 'machine')}`",
+             f"- emitted binary: `{field(record, 'binary-hash')}`",
+             f"- certificate: `{field(record, 'certificate')}`",
+             f"- property: `{field(record, 'property')}` (SPEC s5)",
+             "",
+             "## Reliance, stated on the face of the map (SPEC s1)",
+             "",
+             "- the checker program (R1): `ode/checker.py`, the program",
+             "  that issued this record's verdict, small enough to read",
+             "  in one sitting -- this map is its output, not the checker",
+             "- the canonical-form reader (R2): `ode/canon.py`",
+             "- the specification and property definitions say what their",
+             "  owners mean (R3): read them; their hashes are above",
+             "- ODE8's semantics as implemented in `ode/machine.py` are the",
+             "  toy ISA model (R4 at toy scale: a VM, no silicon)",
+             "- BLAKE3 collision resistance (R6)",
+             "",
+             "## Gaps, first-class (SPEC s7)",
+             "",
+             "- toy scale: byte functions of 1-2 inputs, proved by",
+             "  exhaustion; no silicon, no timing promise, no power or",
+             "  clock claim (R5 is empty here and says so)",
+             "- everything not listed under Claims is unproved",
              ""]
-    for c in record["claims"]:
-        lines.append(f"- {c}")
-    lines += ["",
-              "## What each claim rests on (hashes)",
-              "",
-              f"- specification: `{record['spec']}`",
-              f"- machine definition: `{record['machine']}`",
-              f"- emitted binary: `{record['binary_hash']}`",
-              f"- certificate: `{record['certificate']}`",
-              f"- property: `{record['property']}` (SPEC s5)",
-              "",
-              "## Reliance, stated on the face of the map (SPEC s1)",
-              "",
-              "- the checker program (R1): this file, small enough to read",
-              "- the canonical-form reader (R2): ode/canon.py",
-              "- the specification and property definitions say what their",
-              "  owners mean (R3): read them; their hashes are above",
-              "- ODE8's semantics as implemented in ode/machine.py are the",
-              "  toy ISA model (R4 at toy scale: a VM, no silicon)",
-              "- BLAKE3 collision resistance (R6)",
-              "",
-              "## Gaps, first-class (SPEC s7)",
-              "",
-              "- toy scale: byte functions of 1-2 inputs, proved by",
-              "  exhaustion; no silicon, no timing promise, no power or",
-              "  clock claim (R5 is empty here and says so)",
-              "- everything not listed under Claims is unproved",
-              ""]
     return "\n".join(lines)

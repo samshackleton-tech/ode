@@ -53,8 +53,10 @@ hash therefore fixes a definition and, transitively, everything it depends on: s
 generator, compiler, flags, property definitions, ISA model. Two agents adding definitions
 never conflict, because they only ever add hashes.
 
-**2.2 Canonical form.** Each kind of definition has exactly one canonical form: a
-deterministic byte encoding with these properties —
+**2.2 Canonical form.** Ode's one syntax is the s-expression: symbols and integers in
+nested lists. Each kind of definition has exactly one canonical form — its s-expression
+written with one space between elements and no other whitespace — a deterministic byte
+encoding with these properties —
 
 - *Injective:* distinct definitions encode to distinct bytes (up to R6).
 - *Self-delimiting and total to read:* the reader (R2) accepts a byte string as exactly one
