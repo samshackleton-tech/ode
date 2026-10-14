@@ -1,9 +1,9 @@
 """Ode command line: build (produce), check (rely), run, assure.
 
-    python3 -m ode build  examples/mix.json BUILD/
-    python3 -m ode check  BUILD/
-    python3 -m ode run    BUILD/ 60 165
-    python3 -m ode assure BUILD/
+    pypy3 -m ode build  examples/mix.json BUILD/
+    pypy3 -m ode check  BUILD/
+    pypy3 -m ode run    BUILD/ 60 165
+    pypy3 -m ode assure BUILD/
 
 `build` trusts nothing and proves nothing; it produces definitions, a
 binary, and a certificate. `check` is the only command whose output a
@@ -34,7 +34,7 @@ def cmd_build(argv):
     print(f"machine     {result['machine']}")
     print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes)")
     print(f"certificate {result['certificate']}")
-    print("produced, not yet checked: run `python3 -m ode check "
+    print("produced, not yet checked: run `pypy3 -m ode check "
           f"{store}`")
     return 0
 

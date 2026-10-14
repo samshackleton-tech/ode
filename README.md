@@ -12,11 +12,11 @@ Nothing is trusted between the specification and the checker.
 Verify the worked example end to end (Python 3, no dependencies):
 
 ```sh
-python3 -m unittest discover -s tests     # 11 tests, incl. mutants the checker must reject
-python3 -m ode build examples/mix.json examples/build
-python3 -m ode check examples/build       # ACCEPT, 65536 cases
-python3 -m ode run   examples/build 60 165   # 174
-python3 -m ode assure examples/build      # writes and prints examples/build/assurance.md
+pypy3 -m unittest discover -s tests     # 11 tests, incl. mutants the checker must reject
+pypy3 -m ode build examples/mix.json examples/build
+pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
+pypy3 -m ode run   examples/build 60 165   # 174
+pypy3 -m ode assure examples/build      # writes and prints examples/build/assurance.md
 ```
 
 Hand-check the run: the specification (`examples/mix.json`) is

@@ -2,7 +2,7 @@
 
 Every checker ships with checks that it can fail: mutant subjects,
 mutant binaries, and wrong conclusions, each of which it must reject
-(blake3-servil, lesson 3). Run: python3 -m unittest discover -s tests
+(blake3-servil, lesson 3). Run: pypy3 -m unittest discover -s tests
 """
 import copy
 import json
