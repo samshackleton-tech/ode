@@ -1,0 +1,14 @@
+{
+  "binary_hash": "0df19bfa45d1630f1462210efd667e57a2698f7522d284d0ed238c81ae653840",
+  "cases_checked": 65536,
+  "certificate": "7cb5cb2e7a12806637de11ef66a40e3d6f7624f531317dfe0247e6cbd6e206b4",
+  "checker": "ode-checker-0.1",
+  "claims": [
+    "the emitted bytes compute the specification on every input (65536 cases, the whole domain)",
+    "the program is straight-line ODE8: its instruction trace depends only on its input count"
+  ],
+  "machine": "ec1422ccfbeb4cf7a25955e2a3df2bafd64fb152ad2a022efbebb9767e3717a7",
+  "property": "equals-spec-v1",
+  "spec": "789bd120b40b56146487127445e5a646ec7e8dea01dde86d92651da781c6e74d",
+  "verdict": "accept"
+}
