@@ -9,6 +9,9 @@ and from the work of Mark S. Miller (E, Endo), Daira Hopwood (Noether), Françoi
 (*Lambda: The Ultimate Object*), Grigore Roşu and Xiaohong Chen (K, matching logic), the Unison
 authors, Filip Pizlo (Fil-C), the Lurk authors, and Nadim Kobeissi (*Nobody Will Read the Lean*).
 
+`SPEC.md` defines Ode and specifies what an implementation of it must do; where the two
+documents differ, `SPEC.md` governs.
+
 ## 1. Who Ode is for
 
 Ode has one target user: a swarm of loosely-cooperating teams of AI agents (Claude Opus 5.5 and
