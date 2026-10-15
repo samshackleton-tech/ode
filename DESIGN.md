@@ -151,6 +151,37 @@ certificate:
 A certificate is a definition like any other, named by its hash, and states exactly which hashes it
 is about. It is checked once and recognized by anyone thereafter.
 
+### Author-assisted proof production
+
+Ode need not automatically prove every valid Ode source program. Authors
+can supply invariants, intermediate lemmas, decomposition boundaries, and
+semantics-preserving restructurings that make a proof tractable. This is
+a deliberate design freedom, especially for excellent runtime performance:
+keep the fast implementation, and expose the structure its proof needs.
+
+A producer may try within a bounded work budget, then ask the author for
+specific help. A useful request identifies the remaining obligation, its
+local context, what was attempted, and the exact missing fact or proposed
+restructuring. It distinguishes an unsupported proof technique or exhausted
+budget from a counterexample. The author may be a human or another agent.
+This interaction is a design objective; the current producers do not yet
+implement an author-request protocol.
+
+Help guides the producer; it adds no axioms to the checker. Supplied lemmas
+must be proved, and a changed implementation must still refine the owner's
+specification. Proof-only hints have no runtime effect. When source changes
+affect execution, correctness, constant-time behavior, and speed remain
+obligations. A proof-friendly but slower implementation does not discharge
+a performance contract. Owners explicitly approve specification changes;
+proof difficulty never silently weakens the goal.
+
+Author assistance has strong precedents: interactive provers, Dafny's
+verification hints and decomposition, F*'s explicit lemmas, and structured
+verified cryptographic programming. Ode's opportunity is to make precise,
+actionable requests a normal part of the author/producer workflow, and to
+optimize total author effort, proof production/checking cost, and resulting
+program performance together. See `AUTHOR-ASSISTED-PROOFS.md` for precedents.
+
 ## 7. Authority
 
 **Memory safety and capability safety hold for all Ode code, proved or not.** A reference is
