@@ -73,77 +73,49 @@ call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 ## The proof-object kernel
 
 `ode/kernel.py` checks explicit equational proofs and structural induction
-over naturals and finite constructor-built data. Its first theorem says that processing two blocks per
-iteration equals processing one at a time, for **every** iteration count:
+over naturals and finite constructor-built data. The owner selects the
+theory and goal; anyone may supply the proof. The kernel checks every
+supporting lemma from definitions, with no proof-introduced axioms or
+callbacks into the proof producer.
+
+Try a proof that combines **32-bit addition, right rotation, and XOR**:
 
 ```sh
-pypy3 -m ode.proof_cli examples/proofs/batching.theory.sexp \
-  examples/proofs/batching.goal.sexp examples/proofs/batching.proof.sexp
-# ACCEPT — 24 inference steps, 33 shared terms
+pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/arx.goal.sexp examples/proofs/arx.proof.sexp
+# ror8(((x+y)+z) XOR w) XOR ror8(w) = ror8(x+(y+z))
 pypy3 game/kernel_attacks.py
 ```
 
-The kernel also checks reusable lemmas. `ode/nat_proof.py` emits
-natural-addition normalization proofs, with associativity and commutativity
-proved from addition's defining equations. These lemmas support a general
-chain-splitting law for arbitrary batch sizes `n` and `k`:
+The arithmetic exporter (`ode.arx_proof.export_normalizer`) certifies the
+existing symbolic normalizer's proposed result. Its proofs cover addition
+reassociation and reordering, XOR cancellation, rotation composition and
+distribution, and constants within symbolic expressions. Tests certify
+normalization of all four expressions extracted from BLAKE3's G function.
 
-```sh
-pypy3 -m ode.proof_cli examples/proofs/chain-split.theory.sexp \
-  examples/proofs/chain-split.goal.sexp examples/proofs/chain-split.proof.sexp
-# chain(n+k,s,m,i) = chain(k,chain(n,s,m,i),m,n+i)
-```
+The kernel also checks unbounded loop laws: processing two blocks at a
+time equals processing one at a time, and a chain of `n+k` blocks can be
+split into chains of `n` and `k`. These hold for any total compression
+function and every natural iteration count.
 
-Bit operations also have checked definitions: XOR cancellation and width
-preservation are proved for every finite bit string, including 32 bits,
-using the same induction rule:
+[The kernel guide](KERNEL.md) gives the complete rules, runnable examples,
+proof boundaries, and adversarial tests. It includes the Boolean and
+ripple-carry proofs behind Word32 arithmetic and the induction proofs
+behind the loop laws.
 
-```sh
-pypy3 -m ode.proof_cli examples/proofs/bits.theory.sexp \
-  examples/proofs/xor-cancel.goal.sexp examples/proofs/xor-cancel.proof.sexp
-# xor-bits(x,x) = zeros(x), proved from the bit definitions
-```
+**The remaining connection:** expression extraction from the source
+specification, instruction execution, and native loop refinement still
+need kernel proofs. The executable verifier in `ode/check.py` retains its
+own larger reliance set until those connections are established.
 
-The first export from the existing symbolic normalizer is now checked
-against explicit **Word32** semantics, with every XOR law proved from
-the 32 bit fields:
+## Author assistance
 
-```sh
-pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
-  examples/proofs/xor32.goal.sexp examples/proofs/xor32.proof.sexp
-# xor32(x, xor32(y,x)) = y — all 47 supporting lemmas also checked
-```
-
-Rotation composition and distribution over XOR are exported too, against
-explicit right-rotation bit permutations:
-
-```sh
-pypy3 -m ode.proof_cli examples/proofs/rotate32.theory.sexp \
-  examples/proofs/rotate32.goal.sexp examples/proofs/rotate32.proof.sexp
-```
-
-Word32 addition is defined by Boolean ripple carry; its commutativity
-proof is in `examples/proofs/add32.*.sexp`; `add32-zero.*.sexp` proves
-addition of zero preserves every word. `add32-assoc.*.sexp` proves
-associativity via a bitwise carry invariant. `add32-normalize.*.sexp` exports
-symbolic addition flattening, reordering, and zero elimination. Addition,
-XOR, and rotation exports also handle constants within symbolic expressions. Concrete addition, XOR,
-and rotation results have checked exports too; `examples/proofs/constant.*.sexp`
-uses the addition theory to check overflow and XOR on explicit words.
-
-`arx.*.sexp` combines addition, rotation, and XOR in one checked expression.
-Tests also certify normalization of all four expressions extracted from
-BLAKE3's G function. Source-specification extraction and native execution
-remain separate proof obligations.
-
-The theory and goal come from the owner; the proof can come from anyone.
-The theorem holds for any total compression function, initial state,
-block source, and starting index. `KERNEL.md` gives the complete rules,
-reliance boundary, and adversarial tests.
-
-This is a mathematical loop law. The link to BLAKE3's spec, machine
-semantics, and native loop remains to be proved. The existing executable
-verifier in `ode/check.py` still has its own larger reliance set.
+Ode may ask authors for a specific invariant, lemma, decomposition, or
+semantics-preserving source restructuring when proof generation needs
+help. The kernel must still check the result, and program performance
+remains part of the contract. This is a [design objective](DESIGN.md#author-assisted-proof-production),
+with [established precedents](AUTHOR-ASSISTED-PROOFS.md); the interactive
+request protocol is still to be implemented.
 
 ## Next
 
