@@ -261,6 +261,21 @@ conclusions, shared-subterm reuse, and verification in a fresh process
 that blocks imports of the old verifier and producers. The addition
 semantic tests use this same ground-proof producer.
 
+## Boolean case proofs
+
+`ode/boolean_proof.py` proves small Boolean identities by emitting both
+constructor cases for every variable. Each leaf uses the same ground
+proof producer as concrete arithmetic exports. Each internal node uses
+ordinary structural induction and earlier child lemmas. The kernel has
+no truth-table rule or callback into the producer.
+
+The producer accepts at most eight Boolean variables: enumeration has
+2^n leaves, so its input bound states the cost explicitly. The tests
+cover carry symmetry in all three inputs and five-input XOR parity,
+and reject false identities, missing cases, and altered conclusions.
+These finite identities provide building blocks for word-level carry
+proofs; enumerating Word32 values is outside this producer's contract.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
