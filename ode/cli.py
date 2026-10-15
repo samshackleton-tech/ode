@@ -16,7 +16,7 @@ A word program's interface -- its input names, in order, and its outputs
 (outputs ...) of e.g. examples/blake3-g.sexp. `runw` takes the inputs as
 decimal (or 0x...) integers and prints the output words.
 
-`build` trusts nothing and proves nothing; it produces definitions, a
+`build` relies on nothing and proves nothing; it produces definitions, a
 binary, and a certificate. `check` is the only command whose output a
 relying party needs: it re-derives every claim from the hashes alone.
 `assure` prints the assurance map generated from the checker record.

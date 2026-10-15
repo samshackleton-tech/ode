@@ -3,8 +3,8 @@ Ode: a short poem of praise
 ## The toy implementation, and how to check it yourself
 
 `ode/` is an initial, toy-scale implementation of `SPEC.md`, in two
-flavours sharing one shape -- executable specification, untrusted
-compiler, deterministic emitter, small independent checker, assurance
+flavours sharing one shape -- executable specification, a compiler
+carrying no reliance, deterministic emitter, small independent checker, assurance
 map generated from the checker record:
 
 - **bytes** (`ode/spec.py`, `ode/machine.py`, `ode/checker.py`): the proof
@@ -15,7 +15,7 @@ map generated from the checker record:
 In both, the checker reads the store's actual `binary.bin` -- the file
 `run`/`runw` executes -- and binds it to the certificate: what is proved
 is the bytes that run, or the check rejects. Nothing else between the
-specification and the checker is trusted.
+specification and the checker is relied on.
 
 Every definition, expression, program, certificate, and record is a
 canonical s-expression (`ode/canon.py`): symbols, integers, and byte
@@ -103,7 +103,7 @@ Those four words are the updated `(a b c d)`. Inputs are decimal
 (`0x...` works too). The same answer comes from BLAKE3's reference
 algorithm, which the test suite cross-checks on 200 random inputs
 (`tests/test_blake3_slice.py`); `checkw` is the step that makes the
-answer worth trusting for *every* input, not just the one you ran.
+answer worth relying on for *every* input, not just the one you ran.
 
 ## The adversarial game
 

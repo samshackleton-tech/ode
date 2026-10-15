@@ -62,7 +62,7 @@ And three of its own:
 
 - **Design for the team at its best, and make its worst inexpressible.**  An agent at its best needs
   power and fast truth; the tool has no way to express the slips it would make at its worst.
-- **Producers are untrusted; one small checker is trusted.** Every producer of code or proof (a
+- **Producers carry no reliance; one small checker does.** Every producer of code or proof (a
   person, an AI, a generator, a compiler, a solver, a prover of execution) is outside the reliance
   set: what it emits is accepted only with a certificate the checker accepts.
 - **One obligation, discharged at whichever stage knows enough.** A specification is stated once; a
@@ -119,7 +119,7 @@ agents extend behind stable interfaces.
 
 ## 6. One logic, many producers
 
-**The trusted base is one small checker** for proof certificates, in a logic with a minimal rule set
+**The reliance base is one small checker** for proof certificates, in a logic with a minimal rule set
 and least fixed points. Matching μ-logic is the leading candidate: patterns denote sets of elements,
 its Hilbert system has a handful of rules, its certificates are checked in a few hundred lines
 (Metamath), Lean's proof objects translate into it, and equality, sorts, functions, constructors,
@@ -134,13 +134,13 @@ ISA, is defined by rewrite rules, and correctness between layers is reachability
 proved in the same logic. Symbolic execution is proof search; loop invariants are circularities;
 constant-time is a relational (two-run) reachability property.
 
-**Producers above the checker are untrusted and interchangeable:** symbolic executors, SMT solvers,
+**Producers above the checker carry no reliance and are interchangeable:** symbolic executors, SMT solvers,
 normalizers (verified once, or emitting certificates), tactic engines, AI agents. Three kinds of
 certificate:
 
 - **correctness**: a proof that a definition meets its specification;
 - **execution**: a succinct proof that a computation ran and gave its result (as in Lurk), so a run
-  by an untrusted agent or machine is checked without being repeated; and since the checker is
+  by any agent or machine, without being repeated; and since the checker is
   small, a succinct proof that the checker accepted a certificate can stand for the certificate
   itself;
 - **attestation**: an auditor's signed statement about a definition, carrying its recipe for

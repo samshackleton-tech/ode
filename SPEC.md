@@ -14,16 +14,22 @@ check independently, efficiently, and offline.**
 
 An Ode user writes a *specification* of what a program must compute and which properties it
 must have. Ode produces machine code that runs as fast as the best hand-tuned code for the
-target, plus certificates. A small checker — the only program a relying party runs on trust —
+target, plus certificates. A small checker — the only program in a relying party's reliance set —
 verifies the certificates against the specification as written. Everything between the
 specification and the checker (generators, compilers, solvers, AI agents, optimizers) is an
-untrusted producer: its output is believed exactly when its certificate checks.
+producer outside the reliance set: its output is believed exactly when its certificate checks.
 
 Ode serves teams of many AI agents directed by a few human engineers (`DESIGN.md` §1). The
 humans read specifications, property definitions, decisions, and the generated assurance map.
 The agents read and write everything else. Generated proofs carry no reading duty.
 
 ## 1. The reliance set
+
+**A word on the word (Miller).** This document says *rely* and *reliance*, never
+*trust*: trust names a feeling about a person's or institution's character, while
+reliance names a specific property of a specific mechanism that a specific claim
+rests on — and points at the vulnerability when it fails. Ask of every sentence here:
+what is relied on, for what guarantee?
 
 A claim in Ode rests on the reliance set below, and on nothing else. Each entry earns its
 place by being irreducible with the tools available; each carries the mitigation that keeps
@@ -137,7 +143,7 @@ of explicit choice:
 A machine-layer definition plus its ISA model determines its execution completely. Glue
 code (dispatch, tree walks, buffering) is specification-layer code lowered by a certifying
 compiler: the compiler is a producer, and each output carries its refinement certificate
-(§4), so no compiler is trusted, of any size, written in any language.
+(§4), so no compiler is relied on, of any size, written in any language.
 
 ### 3.4 The binary
 
@@ -177,7 +183,7 @@ verifies. Ode has three kinds:
 
 - **Correctness:** a definition meets its specification, in the stated property.
 - **Execution:** a computation ran and gave its stated result, succinctly — a run by an
-  untrusted agent or machine is checked without being repeated; because the checker is
+  any agent or machine, without being repeated; because the checker is
   small, a succinct proof that the checker accepted a certificate can stand in for the
   certificate itself.
 - **Attestation:** an identified auditor's signed statement about a definition, carrying
@@ -216,7 +222,7 @@ with the canonical-form reader of R2 inside it). Its contract:
   wrong conclusions, off-by-one steps, dropped hypotheses, mutant subjects — each of
   which it must reject (§9). A checker that has never been seen to fail is not evidence.
 
-Producers (solvers, tactic engines, compilers, agents) are untrusted and interchangeable.
+Producers (solvers, tactic engines, compilers, agents) carry no reliance and are interchangeable.
 A producer's speed, cleverness, or reputation contributes nothing to a claim; only its
 certificates count. A producer may be written in any language, including Ode itself.
 
@@ -370,7 +376,7 @@ expressible without leaving the proved world. Two rules keep speed honest:
 
 ## 11. Bootstrapping
 
-Ode is built in stages, each stage's trust coming from the stage before:
+Ode is built in stages, each stage's reliance coming from the stage before:
 
 1. The checker's specification and first two implementations, written in existing tools,
    reviewed as R1 demands — the one place existing tools are load-bearing, and the last.

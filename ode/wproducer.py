@@ -1,4 +1,4 @@
-"""The word producer (untrusted): wspec -> W32 machine + certificate."""
+"""The word producer (carrying no reliance): wspec -> W32 + certificate."""
 import os
 
 from . import word

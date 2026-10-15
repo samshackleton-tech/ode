@@ -3,7 +3,7 @@
 A test from the relying party's side. Three roles:
 
 - **Sam** publishes `bootstrap/`: the specification of BLAKE3's G
-  (`blake3-g.sexp`), its hash pinned in `TRUST`, the checker and the
+  (`blake3-g.sexp`), its hash pinned in `RELIANCE`, the checker and the
   canonical-form reader (`ode/`), and Bob's whole procedure (`bob.py`).
   This is everything Bob relies on (SPEC s1) and it travels separately
   from everything else.

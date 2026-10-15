@@ -3,11 +3,11 @@
 
     pypy3 bootstrap/bob.py MALLORY_DIR TARGET word...
 
-Bob holds this directory (from Sam) and nothing else he trusts. He:
+Bob holds this directory (from Sam) and relies on nothing else. He:
   1. loads the checker and reader from THIS directory, by absolute path,
      before anything else, so nothing in Mallory's directory can shadow
      them;
-  2. reads TRUST, finds TARGET (g or hash65), parses its spec, and
+  2. reads RELIANCE, finds TARGET (g or hash65), parses its spec, and
      confirms the hash;
   3. reads Mallory's certificate.sexp and requires that the certificate's
      (spec ...) IS that hash -- a certificate about any other
@@ -35,9 +35,9 @@ def main(argv):
         return 2
     store, target = os.path.abspath(argv[0]), argv[1]
     values = [int(x, 0) for x in argv[2:]]
-    with open(os.path.join(HERE, "TRUST"), "rb") as f:
-        trust = parse(f.read())
-    entries = [e for e in field(trust, "targets") if e and e[0] == target]
+    with open(os.path.join(HERE, "RELIANCE"), "rb") as f:
+        reliance = parse(f.read())
+    entries = [e for e in field(reliance, "targets") if e and e[0] == target]
     if len(entries) != 1:
         print(f"REJECT unknown target {target}")
         return 1
@@ -50,7 +50,7 @@ def main(argv):
         return 1
     spec_hash = hash_of(spec_defn)
     if spec_hash != field(entry, "spec-hash"):
-        print("REJECT bootstrap spec does not match TRUST")
+        print("REJECT bootstrap spec does not match RELIANCE")
         return 1
     try:
         with open(os.path.join(store, "certificate.sexp"), "rb") as f:
@@ -59,7 +59,7 @@ def main(argv):
         print(f"REJECT cannot read certificate: {e}")
         return 1
     if field(cert, "spec") != spec_hash:
-        print("REJECT certificate is not about the trusted specification")
+        print("REJECT certificate is not about the relied-upon specification")
         return 1
     try:
         record = wcheck.check_certificate(store, cert)

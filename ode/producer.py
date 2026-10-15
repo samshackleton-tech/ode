@@ -1,10 +1,10 @@
-"""Producers (SPEC s4.3): untrusted, interchangeable, believed per-output.
+"""Producers (SPEC s4.3): carrying no reliance, believed per-output.
 
 This module holds the compiler from the specification layer to the ODE8
 machine layer, and the build that assembles a store: definitions named
 by hash (as canonical s-expressions, ode/canon.py), the emitted binary,
 and a certificate claiming the binary's program meets the specification.
-Nothing here is trusted; the checker (ode/checker.py) re-derives every
+Nothing here is relied on; the checker (ode/checker.py) re-derives every
 claim from the hashes alone.
 """
 import itertools

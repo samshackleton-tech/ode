@@ -1,8 +1,8 @@
 ; What Bob relies on, and nothing else (SPEC s1). Everything in this
-; directory came from Sam; everything outside it is untrusted.
+; directory came from Sam; Bob relies on nothing outside it.
 ; Two targets: G (6 words in, 4 out) and the hash of a 65-byte message
 ; (32 words in, 8 out). Bob is told which by the attack's TARGET file.
-(trust
+(reliance
   (targets
     ((g (spec blake3-g.sexp) (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092))
      (hash65 (spec blake3-hash-65.sexp) (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a))))

@@ -1,9 +1,8 @@
 #!/usr/bin/env pypy3
 """Generate examples/blake3-compress.sexp from the BLAKE3 algorithm.
 
-The generator is data, not trust: the file it emits is the specification
-of record, checked against the reference implementation and C2SP test
-vectors by tests/test_blake3_slice.py. Run from the repo root:
+The generator carries no reliance: the file it emits is the
+specification of record. Run from the repo root:
 
     pypy3 examples/make_compress_spec.py > examples/blake3-compress.sexp
 """

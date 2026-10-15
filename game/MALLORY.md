@@ -6,9 +6,9 @@ output on at least one input. Nothing else counts.
 
 ## What Bob does (read `bootstrap/bob.py`; it is all of him)
 
-Bob holds `game/bootstrap/` from Sam and trusts only it: the checker
+Bob holds `game/bootstrap/` from Sam and relies only on it: the checker
 (`ode/wcheck.py` and what it imports), the reader (`ode/canon.py`), and
-the specification `blake3-g.sexp`, whose hash is pinned in `TRUST`. He
+the specification `blake3-g.sexp`, whose hash is pinned in `RELIANCE`. He
 runs `bob.py YOUR_DIR a b c d x y` from inside your directory, with the
 bootstrap's modules loaded by absolute path first. He requires your
 `certificate.sexp` to name the pinned spec hash, runs the checker over
