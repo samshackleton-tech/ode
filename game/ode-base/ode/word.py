@@ -18,7 +18,8 @@ indices), and *lists*. Expressions:
               (n= n n) (n< n n), 1 or 0; (count list)
     lists     (list e ...) (concat l ...) (slice l start count) (at l i)
     control   (if n e e) (let ((x e) ...) e) (require n e)
-    calls     (f e ...) for a local function or a callee in (uses ...)
+    calls     (f e ...) for a local function or a callee in (uses ...);
+              a callee's definition is fetched only if the call is expanded
 
 An integer literal is a natural where a natural is expected (an operand
 of a natural operator, a condition, an index, a parameter declared
@@ -165,8 +166,9 @@ def _validate_steps(steps, outputs, names):
 class Concrete:
     """Words are integers: running."""
 
-    def __init__(self, certified=None):
+    def __init__(self, certified=None, bound=None):
         self.certified = certified or {}  # certificate hash -> runner
+        self.bound = bound or {}          # spec hash -> runner of a proved callee
 
     def const(self, v):
         return v
@@ -182,6 +184,8 @@ class Concrete:
         return ((a >> n) | (a << (32 - n))) & MASK if n else a
 
     def spec_call(self, h, callee, args, ev):
+        if h in self.bound:
+            return self.bound[h](args)
         return ev.apply_spec(callee, args)
 
     def cert_call(self, h, args, n_out):
@@ -202,6 +206,7 @@ class Evaluator:
     # -- whole programs ------------------------------------------------
     def apply_spec(self, defn, args):
         """A spec called with word arguments (callees take words only)."""
+        defn = defn.get() if isinstance(defn, _Lazy) else defn
         sorts = input_sorts(defn)
         if any(s != "word" for _, s in sorts) or len(args) != len(sorts):
             raise ValueError("a callee takes exactly its word inputs")
@@ -352,13 +357,24 @@ class _Context:
             return self.ev(body, local, sort)
         if op in self.uses:
             h = self.uses[op]
-            callee = self.ev_.resolve(h)
             vals = []
             for a in args:  # a callee takes words; a list argument spreads
                 v = self.ev(a, env, "word")
                 vals += v if isinstance(v, list) else [v]
-            return self.alg.spec_call(h, callee, vals, self.ev_)
+            return self.alg.spec_call(h, _Lazy(self.ev_.resolve, h), vals, self.ev_)
         raise ValueError(f"unknown operation {op}")
+
+
+class _Lazy:
+    """A callee's definition, fetched only if an algebra expands the call."""
+
+    def __init__(self, resolve, h):
+        self.resolve, self.h = resolve, h
+
+    def get(self):
+        if self.resolve is None:
+            raise ValueError(f"callee {self.h.hex()} is not available")
+        return self.resolve(self.h)
 
 
 def _arity(e, n):
@@ -394,9 +410,10 @@ def _nat_op(op, a, b):
     return int(a < b)
 
 
-def run(defn, at, values, resolve=None, certified=None):
-    """Run a spec (at an instantiation) or a W32 program on word values."""
-    ev = Evaluator(Concrete(certified), resolve)
+def run(defn, at, values, resolve=None, certified=None, bound=None):
+    """Run a spec (at an instantiation) or a W32 program on word values.
+    bound ({spec hash: runner}) runs callees by their proved programs."""
+    ev = Evaluator(Concrete(certified, bound), resolve)
     if defn[0] == "w32":
         return ev.run_w32(defn, dict(zip(inputs_of(defn), values)))
     env, values = {}, list(values)

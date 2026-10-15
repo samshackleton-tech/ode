@@ -20,13 +20,22 @@ becomes the same node -- congruence: the same function of the same
 arguments is the same value -- so a proved callee is checked once, not
 re-expanded at every call. A spec call the implementation does not make
 by certificate is expanded, as before.
+
+The same rule, at the top: a certificate with property
+spec-with-callees-v1 says "run this specification itself, with each
+callee bound to this certified implementation". The checker checks each
+bound certificate, for all inputs, and that it proves exactly the spec
+the (uses ...) entry names; then running the specification with the
+bound programs computes the specification -- by congruence, at every
+instantiation at once. The glue runs in the evaluator; the callees run
+as their proved code.
 """
 from . import word
-from .canon import Sym, assoc, field, hash_of
+from .canon import Bytes, Sym, assoc, field, hash_of
 from .store import Reject, load_definition as _load, load_binary as _load_binary
 
-CHECKER_ID = Sym("ode-checker-0.2")
-PROPERTIES = ("equals-spec-w32-v1", "equals-spec-a64-v1")
+CHECKER_ID = Sym("ode-checker-0.3")
+PROPERTIES = ("equals-spec-w32-v1", "equals-spec-a64-v1", "spec-with-callees-v1")
 MASK = word.MASK
 
 
@@ -136,6 +145,8 @@ def check_certificate(store_dir, cert, _seen=None):
     if prop not in PROPERTIES:
         raise Reject(f"unsupported property {prop!r}")
     spec_defn = _load(store_dir, field(cert, "spec"))
+    if prop == "spec-with-callees-v1":
+        return _check_spec_with_callees(store_dir, cert, spec_defn, seen)
     try:
         word.validate_spec(spec_defn)
         at = word.instantiation(spec_defn, {p[0]: p[1] for p in field(cert, "at") or []})
@@ -208,6 +219,37 @@ def check_certificate(store_dir, cert, _seen=None):
                  ("dag-nodes", len(dag.nodes))), program
 
 
+def _check_spec_with_callees(store_dir, cert, spec_defn, seen):
+    try:
+        word.validate_spec(spec_defn)
+    except ValueError as e:
+        raise Reject(f"spec: {e}") from e
+    binding = {}
+    for pair in field(cert, "callees") or []:
+        if not (isinstance(pair, list) and len(pair) == 2
+                and all(isinstance(x, Bytes) and len(x) == 32 for x in pair)):
+            raise Reject("callees entries are (#spec-hash #certificate-hash)")
+        binding[pair[0]] = pair[1]
+    uses = set(word.uses_of(spec_defn).values())
+    if set(binding) != uses:
+        raise Reject("callees must bind exactly the spec's (uses ...)")
+    bound = {}
+    for spec_hash, cert_hash in binding.items():
+        program, proved = _callee(store_dir, cert_hash, seen)
+        if proved != spec_hash:
+            raise Reject(f"bound certificate {cert_hash.hex()} proves another spec")
+        if program[0] == "spec":
+            raise Reject("a bound callee must be proved code, not another binding")
+        bound[spec_hash] = program
+    record = assoc("record", ("checker", CHECKER_ID), ("verdict", Sym("accept")),
+                   ("property", Sym("spec-with-callees-v1")),
+                   ("spec", field(cert, "spec")), ("at", []),
+                   ("binary-hash", Bytes(bytes(32))),
+                   ("certificate", hash_of(cert)),
+                   ("domain", Sym("every-instantiation")), ("dag-nodes", 0))
+    return record, ("spec", spec_defn, {"in": None, "out": None}, bound)
+
+
 def _callee(store_dir, cert_hash, seen):
     """Check a callee's certificate once per run: (program, spec hash)."""
     if cert_hash in seen:
@@ -221,9 +263,21 @@ def _callee(store_dir, cert_hash, seen):
     return seen[cert_hash]
 
 
-def run(program, values):
-    """Run a proved program: W32 by interpretation, AArch64 natively."""
+def run(program, values, at=None):
+    """Run a proved program: W32 by interpretation, AArch64 natively, a
+    spec with bound callees in the evaluator (at its instantiation)."""
     isa, body, sizes, callees = program
+    if isa == "spec":
+        if any(not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
+            raise ValueError("inputs must be u32 words")
+        at = dict(at or {})
+        lists = [n for n, s in word.input_sorts(body) if s == "words"]
+        n_words = sum(1 for _, s in word.input_sorts(body) if s == "word")
+        if len(lists) == 1 and lists[0] not in at:
+            at[lists[0]] = len(values) - n_words
+        word.instantiation(body, at)
+        return word.run(body, at, values, bound={
+            h: (lambda args, p=p: run(p, args)) for h, p in callees.items()})
     if len(values) != sizes["in"] or any(
             not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
         raise ValueError(f"inputs must be {sizes['in']} u32 words")

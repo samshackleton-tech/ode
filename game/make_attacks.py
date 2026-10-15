@@ -319,6 +319,59 @@ def main():
     composed("36-call-a64-callee", "Control: W32 glue calling the compression's "
              "proved AArch64 certificate; Bob runs the glue interpreted and each "
              "compression natively.", isa="a64", expect=True)
+    # Every length at once: the spec itself, its callee bound to proved code.
+    def bound(name, notes, mutate=None, isa="a64", expect=False):
+        def build(d):
+            for f in os.listdir(d):
+                if f.endswith((".sexp", ".bin")):
+                    os.remove(os.path.join(d, f))
+            produce.bind(BLAKE3, d, isa, LIB)
+            if mutate:
+                path = os.path.join(d, "certificate.sexp")
+                with open(path, "rb") as f:
+                    cert = parse(f.read())
+                with open(path, "wb") as f:
+                    f.write(canonical_bytes(mutate(d, cert)))
+        attack(name, notes, BLAKE3, h, target="blake3", expect=expect, tamper=build)
+
+    def callees(cert, pairs):
+        return [cert[0]] + [p if p[0] != "callees" else [p[0], pairs] for p in cert[1:]]
+
+    bound("38-every-length-honest", "Control: one certificate for every length "
+          "-- the BLAKE3 spec itself, its compression bound to proved AArch64. "
+          "Bob asks for 65 bytes; nothing in the store mentions 65.", expect=True)
+
+    def mutant_callee(d, cert):
+        bad = parse(canonical_bytes(COMPRESS).decode().replace(
+            "(r0c0_d (rotr (xor counter-lo r0c0_a) 16))",
+            "(r0c0_d (rotr (xor counter-lo r0c0_a) 15))"))
+        code = produce.emit_w32(produce.compile_spec(bad))
+        _put_binary(d, code)
+        lie = produce.put_definition(d, _cert(COMPRESS, code))
+        return callees(cert, [[chash, lie]])
+    bound("39-every-length-mutant-callee", "The compression bound to a "
+          "certificate that claims the compression for wrong code.", mutant_callee)
+
+    def g_callee(d, cert):
+        gcert = produce.put_definition(d, _cert(G, g))
+        _put_binary(d, g)
+        produce.put_definition(d, G)
+        return callees(cert, [[chash, gcert]])
+    bound("40-every-length-other-spec", "The compression bound to an honest "
+          "certificate for a different spec (G).", g_callee)
+    bound("41-every-length-unbound", "No callee bound: the spec would have "
+          "to be expanded by Bob -- or trusted to the store.",
+          lambda d, cert: callees(cert, []))
+
+    def lie_about_spec(d, cert):
+        other = parse(canonical_bytes(BLAKE3).decode().replace(
+            "(add (at root 27) 8)", "(add (at root 27) 0)"))
+        produce.put_definition(d, other)
+        return [cert[0]] + [p if p[0] != "spec" else [p[0], hash_of(other)]
+                            for p in cert[1:]]
+    bound("42-every-length-other-spec-bound", "An honest binding certificate "
+          "for a mutant BLAKE3 (no ROOT flag). Bob's pin must reject it.",
+          lie_about_spec)
     print(f"{len(os.listdir(ATTACKS))} attacks regenerated")
 
 

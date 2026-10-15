@@ -2,6 +2,7 @@
 
     pypy3 -m ode build      SPEC.sexp STORE/ [len=N]  # produce W32 bytes + certificate
     pypy3 -m ode build-a64  SPEC.sexp STORE/ [len=N]  # produce AArch64 bytes + certificate
+    pypy3 -m ode bind       SPEC.sexp STORE/ [w32]    # the spec itself, callees proved (AArch64)
     pypy3 -m ode check      STORE/                    # prove the bytes compute the spec
     pypy3 -m ode run        STORE/ WORD...            # check, then run the proved program
     pypy3 -m ode hash       STORE/ MESSAGE            # BLAKE3 stores: hash a UTF-8 message
@@ -17,7 +18,10 @@ decimal or 0x... integers. A spec with natural inputs, like
 examples/blake3.sexp, is built at an instantiation (len=65); a list
 input's word count follows from the spec's own requirement, which for
 BLAKE3 is the message padded to whole 64-byte blocks. Callees named in
-(uses ...) are found by hash among the spec file's neighbours.
+(uses ...) are found by hash among the spec file's neighbours. `bind`
+makes a store whose one certificate covers every instantiation: the
+spec itself runs, with each callee bound to its proved code, so `hash`
+on such a store takes a message of any length.
 """
 import os
 import sys
@@ -55,6 +59,18 @@ def _build(argv, isa):
     return 0
 
 
+def cmd_bind(argv):
+    spec_path, store, *isa = argv
+    with open(spec_path, "rb") as f:
+        spec_defn = parse(f.read())
+    library = produce.library_of(os.path.dirname(os.path.abspath(spec_path)))
+    result = produce.bind(spec_defn, store, (isa or ["a64"])[0], library)
+    print(f"spec        {result['spec']}")
+    print(f"certificate {result['certificate']}  (every instantiation)")
+    print(f"produced, not yet checked: run `pypy3 -m ode check {store}`")
+    return 0
+
+
 def cmd_check(argv):
     (store,) = argv
     try:
@@ -66,8 +82,12 @@ def cmd_check(argv):
         f.write(canonical_bytes(record))
     print(f"ACCEPT ({field(record, 'checker')}, {field(record, 'property')}, "
           f"{field(record, 'dag-nodes')} DAG nodes)")
-    print("  - the bytes compute the specification on every input")
-    print("  - straight-line code: no branches, constant addresses")
+    if field(record, "property") == "spec-with-callees-v1":
+        print("  - running the specification with its bound callees computes it,")
+        print("    at every instantiation; each callee proved for every input")
+    else:
+        print("  - the bytes compute the specification on every input")
+        print("  - straight-line code: no branches, constant addresses")
     return 0
 
 
@@ -89,13 +109,16 @@ def cmd_hash(argv):
     store, message = argv[0], " ".join(argv[1:]).encode("utf-8")
     try:
         record, program = _check(store)
-        at = {str(k): v for k, v in field(record, "at")}
-        if at.get("len") != len(message):
-            raise Reject(f"this store is proved at len={at.get('len')}, "
-                         f"the message has {len(message)} bytes")
-        n = at["m"]
+        n = 16 * max(1, -(-len(message) // 64))
         words = list(struct.unpack(f"<{n}I", message + b"\0" * (4 * n - len(message))))
-        out = check.run(program, words)
+        if program[0] == "spec":
+            out = check.run(program, words, {"len": len(message)})
+        else:
+            at = {str(k): v for k, v in field(record, "at")}
+            if at.get("len") != len(message):
+                raise Reject(f"this store is proved at len={at.get('len')}, "
+                             f"the message has {len(message)} bytes")
+            out = check.run(program, words)
     except (Reject, ValueError) as e:
         print(f"REJECT: {e}")
         return 1
@@ -153,7 +176,7 @@ def cmd_assure(argv):
 
 COMMANDS = {"build": lambda a: _build(a, "w32"),
             "build-a64": lambda a: _build(a, "a64"),
-            "check": cmd_check, "run": cmd_run, "hash": cmd_hash,
+            "bind": cmd_bind, "check": cmd_check, "run": cmd_run, "hash": cmd_hash,
             "assure": cmd_assure}
 
 

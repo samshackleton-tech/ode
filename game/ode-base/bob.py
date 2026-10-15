@@ -7,7 +7,7 @@ RELIANCE bytes and Mallory's store, Bob:
   2. reads Mallory's certificate and requires its (spec ...) to be that
      hash -- a certificate about any other specification proves nothing --
      and its instantiation to give each natural Bob names (len=65) the
-     value he names;
+     value he names -- or to cover every instantiation;
   3. runs the checker, which loads the spec by that hash and proves the
      binary it reads, once;
   4. prints ACCEPT and runs exactly the program it proved -- W32 by
@@ -45,7 +45,8 @@ def main(reliance_bytes, argv):
         print("REJECT certificate is not about the relied-upon specification")
         return 1
     at = {str(p[0]): p[1] for p in field(cert, "at") or [] if isinstance(p, list)}
-    if any(at.get(k) != v for k, v in named.items()):
+    every = field(cert, "property") == "spec-with-callees-v1"
+    if not every and any(at.get(k) != v for k, v in named.items()):
         print(f"REJECT certificate is proved at {at}, not at {named}")
         return 1
     try:
@@ -56,10 +57,15 @@ def main(reliance_bytes, argv):
     except Exception as e:  # any crash in the checker is a rejection
         print(f"REJECT checker failed: {type(e).__name__}: {e}")
         return 1
-    n_in = program[2]["in"]
-    if len(values) != n_in or any(not (0 <= v < 2 ** 32) for v in values):
-        print(f"REJECT inputs must be {n_in} u32 words")
+    try:
+        if every:  # check the inputs fit the spec before any ACCEPT
+            check.run(program, values, named)
+        elif len(values) != program[2]["in"] or any(
+                not (0 <= v < 2 ** 32) for v in values):
+            raise ValueError(f"inputs must be {program[2]['in']} u32 words")
+    except ValueError as e:
+        print(f"REJECT {e}")
         return 1
     print("ACCEPT")
-    print(" ".join(str(v) for v in check.run(program, values)))
+    print(" ".join(str(v) for v in check.run(program, values, named)))
     return 0

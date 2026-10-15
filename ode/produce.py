@@ -297,6 +297,29 @@ def build(spec_defn, store_dir, isa="w32", at=None, library=None):
             "binary_hash": blake3(binary).hex(), "binary_len": len(binary)}
 
 
+def bind(spec_defn, store_dir, isa="a64", library=None):
+    """Write a store whose certificate covers every instantiation: the spec
+    itself, with each callee bound to a certified implementation in isa."""
+    os.makedirs(store_dir, exist_ok=True)
+    library = library or {}
+
+    def resolve(h):
+        put_definition(store_dir, library[h])
+        return library[h]
+
+    pairs = []
+    for h in sorted(word.uses_of(spec_defn).values()):
+        ch, _ = _certify(resolve(h), store_dir, isa, {}, resolve)
+        pairs.append([h, ch])
+    cert = assoc("certificate", ("cert", Sym("correctness")),
+                 ("property", Sym("spec-with-callees-v1")),
+                 ("spec", put_definition(store_dir, spec_defn)), ("callees", pairs))
+    cert_hash = put_definition(store_dir, cert)
+    with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
+        f.write(canonical_bytes(cert))
+    return {"spec": hash_of(spec_defn).hex(), "certificate": cert_hash.hex()}
+
+
 def _load_cert(store_dir, h):
     with open(os.path.join(store_dir, h.hex() + ".sexp"), "rb") as f:
         return parse(f.read())

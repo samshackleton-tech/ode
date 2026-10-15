@@ -195,3 +195,56 @@ class NamesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EveryLengthTest(unittest.TestCase):
+    """One certificate for every length: the spec, its callee bound."""
+
+    def test_bound_spec_hashes_every_length(self):
+        for isa in ("w32", "a64") if os.uname().machine == "aarch64" else ("w32",):
+            tmp = tempfile.mkdtemp()
+            produce.bind(BLAKE3, tmp, isa, LIB)
+            record, program = _check(tmp)
+            self.assertEqual(field(record, "domain"), "every-instantiation")
+            for L in (0, 1, 65, 1025, 3072):
+                msg = bytes((i * 11 + 3) & 0xFF for i in range(L))
+                n = 16 * max(1, -(-L // 64))
+                self.assertEqual(check.run(program, words(msg, n), {"len": L}),
+                                 digest(msg), (isa, L))
+
+    def bound_store(self, mutate):
+        tmp = tempfile.mkdtemp()
+        produce.bind(BLAKE3, tmp, "w32", LIB)
+        with open(os.path.join(tmp, "certificate.sexp"), "rb") as f:
+            cert = parse(f.read())
+        return tmp, mutate(tmp, cert)
+
+    def test_rejects_bad_bindings(self):
+        chash = list(word.uses_of(BLAKE3).values())[0]
+        g = load("blake3-g.sexp")
+
+        def with_callees(cert, pairs):
+            return [cert[0]] + [p if p[0] != "callees" else [p[0], pairs] for p in cert[1:]]
+
+        def other_spec(tmp, cert):  # an honest certificate for another spec
+            gcert, _ = produce._certify(g, tmp, "w32", {}, None)
+            return with_callees(cert, [[chash, gcert]])
+
+        def missing(tmp, cert):
+            return with_callees(cert, [])
+
+        def extra(tmp, cert):
+            pair = cert[[p[0] for p in cert].index("callees")][1][0]
+            return with_callees(cert, [pair, [hash_of(g), pair[1]]])
+
+        def nested(tmp, cert):  # bind the callee to a binding, not to code
+            inner = assoc("certificate", ("cert", Sym("correctness")),
+                          ("property", Sym("spec-with-callees-v1")),
+                          ("spec", produce.put_definition(tmp, LIB[chash])),
+                          ("callees", []))
+            return with_callees(cert, [[chash, produce.put_definition(tmp, inner)]])
+
+        for mutate in (other_spec, missing, extra, nested):
+            tmp, cert = self.bound_store(mutate)
+            with self.assertRaises(Reject, msg=mutate.__name__):
+                check.check_certificate(tmp, cert)

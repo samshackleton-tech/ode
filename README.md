@@ -5,22 +5,22 @@ Ode: a short poem of praise
 Ode builds cryptographic code together with proofs that a small checker
 verifies: `SPEC.md` defines it, `DESIGN.md` says why it is shaped this
 way. This repository is an early implementation. BLAKE3, for messages of
-any length, is one 50-line specification (`examples/blake3.sexp`). For
-any length you choose, Ode produces code -- down to AArch64 bytes the CPU
-runs -- and proves it computes that specification for every message of
-that length.
+any length, is one 50-line specification (`examples/blake3.sexp`), and
+one certificate covers every length:
 
 ```sh
-pypy3 -m ode build-a64 examples/blake3.sexp /tmp/h len=44   # bytes + certificate, 44-byte messages
-pypy3 -m ode check /tmp/h                                   # ACCEPT: proved for every such message
-pypy3 -m ode hash  /tmp/h "The quick brown fox jumps over the lazy dog."
-# 4c9bd68d7f0baa2e167cef98295eb1ec99a3ec8f0656b33dbae943b387f31d5d, run natively
-pypy3 -m unittest discover -s tests                         # 27 tests
+pypy3 -m ode bind  examples/blake3.sexp /tmp/b3     # the spec, its compression bound to proved AArch64
+pypy3 -m ode check /tmp/b3                          # ACCEPT, at every instantiation
+pypy3 -m ode hash  /tmp/b3 "The quick brown fox jumps over the lazy dog."
+# 4c9bd68d7f0baa2e167cef98295eb1ec99a3ec8f0656b33dbae943b387f31d5d -- any length
+pypy3 -m unittest discover -s tests                 # 30 tests
 ```
 
-Needs PyPy3; native runs need aarch64 Linux (`build` without `-a64`
-makes portable W32 bytes, run by interpretation). A proof covers one
-length; covering every length at once is the next step.
+The compression is AArch64 code proved for every input; the tree and
+chunk logic is the specification itself, run by the evaluator, so it is
+correct by definition and only as fast as the evaluator. For speed at a
+chosen length, `build-a64 ... len=44` compiles all of it and proves the
+result at that length. Needs PyPy3; native runs need aarch64 Linux.
 
 ## How it fits together
 
@@ -54,7 +54,7 @@ Every definition, certificate, and record is a canonical s-expression
 `game/` shows it end to end: Bob receives only a 235-line root (BLAKE3
 and a launcher) and about 260 bytes of hashes from Sam, and everything
 else -- the checker itself, the specifications, the implementation --
-from anyone, admitted by hash or by proof. Thirty-four recorded attacks,
+from anyone, admitted by hash or by proof. Thirty-nine recorded attacks,
 replayed by the tests, have found and fixed several real flaws and lost
 every time; `game/README.md` has them.
 
@@ -66,5 +66,6 @@ call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 
 ## Next
 
-One certificate for every length: loops over chunks whose trip count
-depends only on the length, and a proof by induction over them.
+Fast code for every length: compiled glue with loops, proved against the
+specification for all lengths by induction -- the small proof kernel of
+SPEC s4 (DESIGN.md, open question 1), grown only as BLAKE3 needs it.
