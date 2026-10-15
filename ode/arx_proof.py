@@ -55,18 +55,20 @@ def abstract(left,right,operation):
     return params,a,b,values
 
 
-def export_normalizer(t,expression):
-    """Export a complete mixed arithmetic expression, with explicit local proofs.
+class Normalization:
+    """One shared Dag and proof context for one or more arithmetic expressions.
 
-    Input consists of variables, literal Word32 constructors, add32, xor32,
-    and immediate ror-N. Repeated input terms reuse a derivation. This is
-    arithmetic expression normalization, not yet binary/ISA execution.
+    Sharing the arena makes both sides of an equation use the same operand
+    identities and normalization order. Repeated terms reuse derivations.
     """
-    from .check import Dag
-    dag,p,library=Dag(),Proof(),Library(hash_of(t))
-    variables,cache,outputs=set(),{},{}
+    def __init__(self,theory):
+        from .check import Dag
+        self.theory=theory
+        self.dag,self.proof,self.library=Dag(),Proof(),Library(hash_of(theory))
+        self.variables,self.cache,self.outputs=set(),{},{}
 
-    def output(i):
+    def output(self,i):
+        dag,outputs=self.dag,self.outputs
         if i in outputs:
             return outputs[i]
         node=dag.nodes[i]
@@ -75,18 +77,21 @@ def export_normalizer(t,expression):
         elif node[0]=='const':
             result=literal(node[1])
         elif node[0] in ('add','xor'):
-            atoms=[output(j) for j in node[1]]
+            atoms=[self.output(j) for j in node[1]]
             if node[2]:
                 atoms.append(literal(node[2]))
             result=operation_term(node[0]+'32',ZERO,atoms)
         elif node[0]=='rotr':
-            result=app(f'ror-{node[2]}',output(node[1]))
+            result=app(f'ror-{node[2]}',self.output(node[1]))
         else:
             raise ValueError('normalizer returned an unsupported arithmetic node')
         outputs[i]=result
         return result
 
-    def normalize(term):
+    def normalize(self,term):
+        dag,p,library=self.dag,self.proof,self.library
+        variables,cache=self.variables,self.cache
+        t=self.theory
         key=canonical_bytes(term)
         if key in cache:
             return cache[key]
@@ -99,21 +104,21 @@ def export_normalizer(t,expression):
             assert isinstance(term,list) and term, 'requires a Word32 arithmetic expression'
             n=rotation_count(term)
             if n is not None:
-                child,proof=normalize(term[1])
+                child,proof=self.normalize(term[1])
                 index=dag.rotr(child,n)
                 children=[child];proofs=[proof]
                 maker,operation=prove_rotation,'rotation'
             else:
                 assert len(term)==3 and term[0] in ('add32','xor32'), 'unsupported arithmetic operation'
-                children,proofs=map(list,zip(*[normalize(a) for a in term[1:]]))
+                children,proofs=map(list,zip(*[self.normalize(a) for a in term[1:]]))
                 if term[0]=='add32':
                     index=dag.add(*children)
                     maker,operation=prove_addition,'add32'
                 else:
                     index=dag.xor(*children)
                     maker,operation=prove_xor,'xor32'
-            normalized_input=app(term[0],*[output(i) for i in children])
-            normalized_output=output(index)
+            normalized_input=app(term[0],*[self.output(i) for i in children])
+            normalized_output=self.output(index)
             first=p.cong(term[0],*proofs)
             if normalized_input==normalized_output:
                 result=index,first
@@ -128,9 +133,19 @@ def export_normalizer(t,expression):
         cache[key]=result
         return result
 
-    index,last=normalize(expression)
-    p.trans(last,p.refl(output(index)))
-    params=[[v,var('Word32')] for v in sorted(variables)]
-    goal=[var('goal'),3,hash_of(t),params,equation(expression,output(index))]
-    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+
+def export_normalizer(t,expression):
+    """Export a complete mixed arithmetic expression, with explicit local proofs.
+
+    Input consists of variables, literal Word32 constructors, add32, xor32,
+    and immediate ror-N. This is arithmetic expression normalization, not
+    yet binary/ISA execution.
+    """
+    context=Normalization(t)
+    index,last=context.normalize(expression)
+    p=context.proof
+    p.trans(last,p.refl(context.output(index)))
+    params=[[v,var('Word32')] for v in sorted(context.variables)]
+    goal=[var('goal'),3,hash_of(t),params,equation(expression,context.output(index))]
+    proof=[var('proof'),3,hash_of(goal),context.library.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

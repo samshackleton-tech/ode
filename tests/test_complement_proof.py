@@ -5,7 +5,7 @@ import sys
 import unittest
 from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
-from ode.complement_proof import artifacts,residual_artifacts
+from ode.complement_proof import artifacts
 from ode.equation_proof import NeedProof,produce
 from ode.xor32_proof import app,var
 
@@ -30,14 +30,14 @@ class ComplementProofTest(unittest.TestCase):
         g,p=read('complement','goal'),read('complement','proof')
         with self.assertRaises(NeedProof) as context:
             produce(self.t,g)
-        rg,rp=residual_artifacts(self.t)
+        rg,rp=artifacts(self.t)
         self.assertEqual(rg,context.exception.goal)
         self.assertEqual(canonical_bytes(rg),canonical_bytes(read('complement-residual','goal')))
         self.assertEqual(canonical_bytes(rp),canonical_bytes(read('complement-residual','proof')))
         self.assertEqual(canonical_bytes(p),canonical_bytes(produce(self.t,g,rp)))
         result=verify(self.t,g,p)
-        self.assertLess(result['work'],400000)
-        self.assertLess(len(canonical_bytes(p)),450000)
+        self.assertLess(result['work'],340000)
+        self.assertLess(len(canonical_bytes(p)),370000)
 
     def test_real_cli_handoff(self):
         command=[sys.executable,'-m','ode.equation_cli',str(EXAMPLES/'arx.theory.sexp'),

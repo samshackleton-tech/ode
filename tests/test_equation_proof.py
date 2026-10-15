@@ -29,6 +29,30 @@ class EquationProofTest(unittest.TestCase):
         g=goal(t,parse('(add32 (add32 x y) x)'),parse('(add32 x (add32 x y))'))
         verify(t,g,produce(t,g))
 
+    def test_both_sides_share_compound_operand_identities(self):
+        t=theory()
+        g=goal(t,parse('(add32 (ror-8 x) (ror-8 y))'),parse('(add32 (ror-8 y) (ror-8 x))'))
+        verify(t,g,produce(t,g))
+
+    def test_parameter_order_and_unused_parameters_are_preserved(self):
+        t=theory()
+        g=goal(t,parse('(xor32 x y)'),parse('(xor32 y x)'),('y','unused','x'))
+        proof=produce(t,g)
+        self.assertEqual(proof[2],hash_of(g))
+        verify(t,g,proof)
+
+    def test_author_receives_the_simplified_direct_equation(self):
+        from ode.complement_proof import artifacts
+        t=theory();x=var('x');ones=literal(0xffffffff)
+        total=app('add32',x,app('xor32',x,ones))
+        g=goal(t,app('add32',ZERO,total),ones,('x',))
+        with self.assertRaises(NeedProof) as context:
+            produce(t,g)
+        hint_goal,hint=artifacts(t)
+        self.assertEqual(context.exception.goal,hint_goal)
+        self.assertEqual(hint_goal[4],app('eq',total,ones))
+        verify(t,g,produce(t,g,hint))
+
     def test_unresolved_true_identity_requests_a_goal_without_claiming_falsehood(self):
         t=theory();x=var('x');ones=literal(0xffffffff)
         g=goal(t,app('add32',x,app('xor32',x,ones)),ones,('x',))
@@ -36,7 +60,7 @@ class EquationProofTest(unittest.TestCase):
             produce(t,g)
         residual=context.exception.goal
         self.assertEqual(residual[:4],g[:4])
-        self.assertEqual(residual[4][2],ZERO)
+        self.assertEqual(residual,g)
 
     def test_checked_author_hint_finishes_a_missed_rewrite(self):
         from ode.check import Dag
@@ -66,7 +90,7 @@ class EquationProofTest(unittest.TestCase):
 
     def test_hint_for_a_different_goal_stops(self):
         t=theory();g=goal(t,var('x'),var('y'))
-        hint=[var('proof'),3,hash_of(g),[],app('derive',[app('refl',var('x'))])]
+        hint=[var('proof'),3,hash_of(t),[],app('derive',[app('refl',var('x'))])]
         with self.assertRaisesRegex(AssertionError,'different goal'):
             produce(t,g,hint)
 

@@ -11,7 +11,7 @@ from .boolean_proof import prove as prove_boolean
 from .proof_library import Library
 from .proof_slice import slice_proof
 from .word_literal import literal
-from .xor32_proof import ZERO,Proof,app,equation,prove as prove_xor,var,word_lemmas
+from .xor32_proof import Proof,app,equation,var,word_lemmas
 
 ONES=literal(0xffffffff)
 
@@ -73,17 +73,3 @@ def artifacts(t):
     goal=[var('goal'),3,hash_of(t),params,equation(total,ONES)]
     proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)
-
-
-def residual_artifacts(t):
-    """Answer the equation producer's residual XOR-to-zero obligation."""
-    goal,proof=artifacts(t)
-    library=Library(hash_of(t));complement=library.include(goal,proof)
-    cancellation=library.include(*prove_xor(t,[],app('xor32',ONES,ONES),ZERO))
-    x=var('x');total=goal[4][1]
-    p=Proof()
-    first=p.cong('xor32',p.lemma(complement,x),p.refl(ONES))
-    p.trans(first,p.lemma(cancellation))
-    residual=[var('goal'),3,hash_of(t),goal[3],equation(app('xor32',total,ONES),ZERO)]
-    result=[var('proof'),3,hash_of(residual),library.lemmas,[var('derive'),p.steps]]
-    return residual,slice_proof(result)

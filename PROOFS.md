@@ -579,10 +579,11 @@ proof on a later invocation:
 pypy3 -m ode.equation_cli THEORY ORIGINAL_GOAL RESIDUAL_PROOF > final.proof.sexp
 ```
 
-The residual uses the same theory and original parameters. A supplied
-proof must name exactly that residual goal. The producer composes its
-normalization steps, the supplied lemma, and proved XOR cancellation to
-establish the original equality. The CLI verifies the whole result before
+Both sides normalize in one shared expression arena. The residual is the
+direct equality between their normalized results, in the same theory and
+with the original parameters. A supplied proof must name exactly that
+residual goal. Transitivity composes the two normalization derivations
+and the supplied lemma to establish the original equality. The CLI verifies the whole result before
 emitting a successful proof. A false hint or wrong goal identity fails;
 there is no hint-introduced axiom and no weakening of the original claim.
 
@@ -620,7 +621,7 @@ pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
 ```
 
 The answer addresses exactly the requested residual identity. The final
-proof checks the original goal in 432,642 proof bytes and 380,710 work
+proof checks the original goal in 361,028 proof bytes and 327,135 work
 units. Tests reproduce the request, answer, and final proof; exercise the
 actual CLI handoff; and reject changed carry semantics or corrupted hints.
 The normalizer gains no assumed complement rule: the author-supplied
