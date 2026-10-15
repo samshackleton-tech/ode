@@ -1,10 +1,8 @@
 ; The BLAKE3 package: what Bob relies on to know what this package
 ; means, beyond ode-base (SPEC s1, R3). Two specifications, pinned by
 ; hash: G (6 words in, 4 out) and the hash of a 65-byte message (32 words
-; in, 8 out). The checker and reader named below live in ode-base.
+; in, 8 out). Checking relies on ode-base, which states its own reliance.
 (reliance
   (targets
     ((g (spec blake3-g.sexp) (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092))
-     (hash65 (spec blake3-hash-65.sexp) (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a))))
-  (checker ode-base/ode/wcheck.py)
-  (reader ode-base/ode/canon.py))
+     (hash65 (spec blake3-hash-65.sexp) (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a)))))
