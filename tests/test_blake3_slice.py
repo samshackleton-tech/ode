@@ -193,3 +193,31 @@ class HashTest(unittest.TestCase):
         with self.assertRaises(Reject) as cm:
             wcheck.check_certificate(tmp2, cert)
         self.assertIn("differs", str(cm.exception))
+
+
+class CallTest(unittest.TestCase):
+    """Specifications composed by call: name capture must be impossible."""
+
+    def test_inlining_cannot_capture_the_callers_names(self):
+        # Found by the game's Mallory: the producer minted t0, t1, ... and
+        # collided with a caller whose own input was named t0.
+        from ode.canon import canonical_bytes, hash_of
+        callee = parse("(wspec (name inner) (inputs (a b)) "
+                       "(steps ((t0 (add a b)) (t1 (xor t0 a)))) "
+                       "(outputs (t1 t0)))")
+        ch = hash_of(callee)
+        caller = parse(
+            f"(wspec (name outer) (inputs (t0 a)) "
+            f"(defs ((#{ch.hex()} {canonical_bytes(callee).decode()}))) "
+            f"(steps (((u v) (call #{ch.hex()} a t0)) (t1 (add u v)) "
+            f"((w z) (call #{ch.hex()} t1 t0)))) (outputs (w z t1)))")
+        machine_defn = wproducer.compile_wspec(caller)
+        word.validate_wmachine(machine_defn)
+        rng = random.Random(9)
+        for _ in range(100):
+            v = [rng.getrandbits(32), rng.getrandbits(32)]
+            self.assertEqual(word.run_program(caller, v),
+                             word.run_program(machine_defn, v))
+        tmp = tempfile.mkdtemp()
+        wproducer.build(caller, tmp)
+        self.assertEqual(field(wcheck.check_store(tmp), "verdict"), "accept")

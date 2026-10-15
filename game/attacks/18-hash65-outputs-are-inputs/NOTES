@@ -1,0 +1,1 @@
+Raw binary whose output indices point at the inputs m0..m7 (hash := message prefix). The decoder accepts input-indexed outputs; the binding emit(def)==binary must then fail or the symbolic check must catch it.

@@ -1,0 +1,1 @@
+Certificate names the SPEC definition as the machine (a wspec with call steps where a wmachine is expected). Probes the validator on call-steps under the machine kind; must reject, never crash past ACCEPT.

@@ -26,7 +26,7 @@ enough that its reader is a few dozen lines.
 Verify the worked example end to end (PyPy3, no dependencies):
 
 ```sh
-pypy3 -m unittest discover -s tests     # 23 tests, incl. mutants and the adversarial game
+pypy3 -m unittest discover -s tests     # 24 tests, incl. mutants and the adversarial game
 pypy3 -m ode build examples/mix.sexp examples/build
 pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
 pypy3 -m ode run   examples/build 60 165   # 174
@@ -110,8 +110,9 @@ answer worth trusting for *every* input, not just the one you ran.
 `game/` is the test from the relying party's side: Bob holds only Sam's
 bootstrap (the G spec by hash, the checker, his procedure) and gets the
 implementation from Mallory, who may change anything and knows every
-input. Ten recorded attacks, all lost, two of which found and fixed real
-flaws; `game/README.md` has the table. Replay: `pypy3 game/referee.py game/attacks/*`.
+input. Twenty-one recorded attacks over two targets (G, and the hash of a
+65-byte message), all lost; three found and fixed real flaws.
+`game/README.md` has the tables. Replay: `pypy3 game/referee.py game/attacks/*`.
 
 Hand-check the run: the specification (`examples/mix.sexp`) is
 `mix(x, k) = rotl3((x XOR k) + 60)`, so `mix(60, 165)`: `60 XOR 165 = 153`,

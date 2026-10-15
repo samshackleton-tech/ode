@@ -1,0 +1,1 @@
+Machine returns the ROOT output of block 0 alone (the BLAKE3 of the first 64 bytes, a valid-looking but wrong hash), ignoring the 65th byte.

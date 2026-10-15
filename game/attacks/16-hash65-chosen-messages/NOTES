@@ -1,0 +1,1 @@
+Honest machine; INPUTS are Mallory-chosen messages (zero, repeated block, two equal blocks) -- the inputs where a swap-blocks attack would be invisible. Confirms the universal claim covers them.

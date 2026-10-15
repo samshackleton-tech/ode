@@ -9,21 +9,51 @@ from .producer import put_definition
 PROPERTY = Sym("equals-wspec-v1")
 
 
-def _flatten(e, steps, counter):
+def _all_names(defn, acc):
+    """Every name a specification and its callees mention."""
+    acc.update(word.inputs_of(defn))
+    for name, _ in word.steps_of(defn):
+        acc.update(name if isinstance(name, list) else [name])
+    for callee in word._defs_of(defn).values():
+        _all_names(callee, acc)
+    return acc
+
+
+class _Fresh:
+    """Mints step names that collide with nothing the spec names.
+
+    The game's Mallory found the producer minting t0, t1, ... and
+    colliding with a spec whose own input was named t1 (an invalid
+    machine, caught by SSA, but a producer bug all the same). The
+    prefix is chosen so that no name in the spec starts with it.
+    """
+
+    def __init__(self, spec_defn):
+        names = _all_names(spec_defn, set())
+        prefix = "t"
+        while any(n.startswith(prefix) for n in names):
+            prefix += "t"
+        self.prefix, self.n = prefix, 0
+
+    def __call__(self):
+        name = Sym(f"{self.prefix}{self.n}")
+        self.n += 1
+        return name
+
+
+def _flatten(e, steps, fresh):
     """Append single-operation steps for e; return its operand atom."""
     if isinstance(e, (int, Sym)):
         return e
     op = e[0]
     if op == "rotr":
-        a = _flatten(e[1], steps, counter)
-        name = Sym(f"t{counter[0]}")
-        counter[0] += 1
+        a = _flatten(e[1], steps, fresh)
+        name = fresh()
         steps.append([name, [Sym("rotr"), a, e[2]]])
         return name
-    a = _flatten(e[1], steps, counter)
-    b = _flatten(e[2], steps, counter)
-    name = Sym(f"t{counter[0]}")
-    counter[0] += 1
+    a = _flatten(e[1], steps, fresh)
+    b = _flatten(e[2], steps, fresh)
+    name = fresh()
     steps.append([name, [Sym(op), a, b]])
     return name
 
@@ -39,7 +69,7 @@ def _rename(e, env):
     return [e[0], _rename(e[1], env), _rename(e[2], env)]
 
 
-def _inline(spec_defn, args, steps, counter, defs):
+def _inline(spec_defn, args, steps, fresh, defs):
     """Append the callee's steps, renamed; return its output atoms."""
     env = {}
     for name, a in zip(word.inputs_of(spec_defn), args):
@@ -48,33 +78,32 @@ def _inline(spec_defn, args, steps, counter, defs):
     for name, e in word.steps_of(spec_defn):
         if isinstance(name, list):
             outs = _inline(inner_defs[e[1]],
-                           [_flatten(_rename(a, env), steps, counter)
-                            for a in e[2:]], steps, counter, inner_defs)
+                           [_flatten(_rename(a, env), steps, fresh)
+                            for a in e[2:]], steps, fresh, inner_defs)
             for n, o in zip(name, outs):
                 env[n] = o
         else:
-            fresh = Sym(f"t{counter[0]}")
-            counter[0] += 1
-            steps.append([fresh, _flatten(_rename(e, env), steps, counter)])
-            env[name] = fresh
+            new = fresh()
+            steps.append([new, _flatten(_rename(e, env), steps, fresh)])
+            env[name] = new
     return [env[o] for o in word.outputs_of(spec_defn)]
 
 
 def compile_wspec(spec_defn):
     word.validate_wspec(spec_defn)
-    steps, counter = [], [0]
+    steps, fresh = [], _Fresh(spec_defn)
     defs = word._defs_of(spec_defn)
     env = {n: n for n in word.inputs_of(spec_defn)}
     for name, e in word.steps_of(spec_defn):
         if isinstance(name, list):
             outs = _inline(defs[e[1]],
-                           [_flatten(_rename(a, env), steps, counter)
-                            for a in e[2:]], steps, counter, defs)
+                           [_flatten(_rename(a, env), steps, fresh)
+                            for a in e[2:]], steps, fresh, defs)
             for n, o in zip(name, outs):
                 steps.append([n, o])
                 env[n] = n
         else:
-            steps.append([name, _flatten(_rename(e, env), steps, counter)])
+            steps.append([name, _flatten(_rename(e, env), steps, fresh)])
             env[name] = name
     return assoc("wmachine", ("isa", Sym("W32")),
                  ("inputs", word.inputs_of(spec_defn)),

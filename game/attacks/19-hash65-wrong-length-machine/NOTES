@@ -1,0 +1,1 @@
+The (correct, proved) blake3-hash-3 machine certified against the hash65 spec, with (inputs 16). A length-confusion attack: Bob would compute a 16-word hash and print a wrong 65-byte hash.
