@@ -165,3 +165,39 @@ def composed_g_artifacts(t):
           equation(app('run',program(instructions),initial_state()),g_state())]
     proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
     return goal,proof
+
+
+def normalized_output(t, execution_goal, execution_proof, register):
+    """Connect a State execution theorem to one normalized output equation.
+
+    Requires an execution equation whose right side is an explicit six-word
+    state of arithmetic expressions over its Word32 parameters. The supplied
+    execution proof is included as a lemma and must pass kernel checking.
+    Selecting an output is proof decomposition, not a partial state claim:
+    each result states exactly the one register it establishes.
+    """
+    from .arx_proof import export_normalizer
+    from .proof_library import Library
+    from .proof_slice import slice_proof
+    from .xor32_proof import Proof
+    assert register in REGISTERS, 'unknown output register'
+    state=execution_goal[4][2]
+    assert isinstance(state,list) and len(state)==7 and state[0]=='state', 'requires an explicit final state'
+    assert all(sort=='Word32' for _,sort in execution_goal[3]), 'execution parameters must be Word32'
+    expression=state[1+REGISTERS.index(register)]
+    normal_goal,normal_proof=export_normalizer(t,expression)
+    declared={name for name,_ in execution_goal[3]}
+    assert all(name in declared for name,_ in normal_goal[3]), 'final state contains undeclared inputs'
+    library=Library(hash_of(t))
+    execution=library.include(execution_goal,execution_proof)
+    normalization=library.include(normal_goal,normal_proof)
+    p=Proof()
+    projection='state-'+register
+    first=p.cong(projection,p.lemma(execution,*[name for name,_ in execution_goal[3]]))
+    middle=p.unfold(projection,state)
+    last=p.lemma(normalization,*[name for name,_ in normal_goal[3]])
+    p.trans(first,middle,last)
+    goal=[var('goal'),3,hash_of(t),execution_goal[3],
+          equation(app(projection,execution_goal[4][1]),normal_goal[4][2])]
+    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+    return goal,slice_proof(proof)

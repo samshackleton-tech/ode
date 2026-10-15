@@ -428,6 +428,34 @@ obligation. The existing native certificates retain their larger reliance
 set. File verification of this abstract execution proof needs neither the
 old executor nor any proof producer.
 
+## Execution to normalized outputs
+
+`ode.register_proof.normalized_output` combines a checked state-execution
+lemma with a checked arithmetic-normalization lemma and a register
+projection. The resulting goal starts at `state-r(run(program,state))`
+and ends at the normalized Word32 expression. Each goal states exactly
+which register it proves; tests construct and check all six G outputs.
+
+```sh
+pypy3 tools/make_register_output_proof.py
+pypy3 -m ode.proof_cli examples/proofs/register.theory.sexp \
+  examples/proofs/register-g-normalized-b.goal.sexp examples/proofs/register-g-normalized-b.proof.sexp
+```
+
+The committed example is G's most complex output, register `b`: 992,863
+proof bytes and 799,914 work units. This is close to the existing
+1,000,000-byte limit; the regression tests check it through the bounded
+file reader as well as the kernel. More complex programs need further
+proof decomposition or smaller derivations, rather than an assumption
+that arbitrary whole-program expansion will fit.
+
+The execution lemma remains part of the assembled proof. An invalid
+execution derivation cannot be hidden by a valid normalization proof,
+and changing the selected output is rejected. A fresh-process check
+blocks all producers and the old executable verifier. The theorem still
+concerns the abstract register machine; native ISA and memory refinement
+remain separate obligations.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary

@@ -96,7 +96,8 @@ normalization of all four expressions extracted from BLAKE3's G function.
 An explicit six-register machine also has a checked execution theorem:
 BLAKE3 G's 14 register operations produce its four mixing equations and
 preserve the message registers for every initial state. See the
-`register-g` example in the kernel guide. This abstract machine has no
+`register-g` example in the kernel guide. Execution and arithmetic proofs
+also compose into normalized register-output theorems. This abstract machine has no
 memory, flags, or byte decoder; native ISA correspondence remains open.
 
 The kernel also checks unbounded loop laws: processing two blocks at a
