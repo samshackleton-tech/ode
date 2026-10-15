@@ -1,1 +1,1 @@
-Certificate names the honest machine definition but ships a mutant binary, honestly hashed. Wins if the checker proves the definition rather than the decoded bytes.
+An honest machine definition in the store, a mutant binary, honestly hashed. Once caught by the emitter binding; now the checker proves the decoded bytes themselves and no machine definition is read.

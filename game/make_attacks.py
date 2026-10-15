@@ -64,12 +64,12 @@ def _forge(name, notes, spec, machine_defn, target=None, binary=None,
     put_definition(d, spec)
     mh = put_definition(d, machine_defn)
     if binary is None:
-        binary = word.emit_w32(machine_defn)
+        binary = wproducer.emit_w32(machine_defn)
     with open(os.path.join(d, "binary.bin"), "wb") as f:
         f.write(binary)
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym("equals-wspec-v1")),
-                 ("spec", hash_of(spec)), ("machine", mh),
+                 ("spec", hash_of(spec)),
                  ("binary-hash", Bytes(blake3(binary))),
                  ("binary", Bytes(binary)),
                  ("inputs", len(word.inputs_of(spec))))
@@ -137,21 +137,22 @@ def attacks():
          "wcheck accepts everything."))
 
     add(("05-honest-machine-mutant-binary", G, honest_g,
-         {"binary": word.emit_w32(_mach(
+         {"binary": wproducer.emit_w32(_mach(
              G_STEPS.replace("(rotr t5 7)", "(rotr t5 5)")))},
-         "Certificate names the honest machine definition but ships a mutant "
-         "binary, honestly hashed. Wins if the checker proves the definition "
-         "rather than the decoded bytes."))
+         "An honest machine definition in the store, a mutant binary, honestly "
+         "hashed. Once caught by the emitter binding; now the checker proves "
+         "the decoded bytes themselves and no machine definition is read."))
     add(("06-huge-inputs", G, honest_g,
          {"inputs_lines": ["4294967296 0 0 0 0 0", "-1 0 0 0 0 0"]},
          "Honest store; INPUTS names out-of-domain words (2^32, -1). Found: "
          "Bob printed ACCEPT and then crashed; fixed: Bob rejects inputs "
          "outside the domain before anything else."))
-    raw = bytearray(word.emit_w32(honest_g))
+    raw = bytearray(wproducer.emit_w32(honest_g))
     raw[-1] = 39
     add(("07-rotr-39-in-binary", G, honest_g, {"binary": bytes(raw)},
-         "Binary says rotr 39 (== rotr 7 mod 32) where the definition says 7. "
-         "The decoder must reject counts >= 32 and the binding must fail."))
+         "One byte of an honest binary changed (originally a rotr count "
+         "39 == 7 mod 32). The decoder must reject malformed bytes or the "
+         "proof must catch them."))
     add(("08-mallory-chosen-inputs", G, honest_g,
          {"inputs_lines": ["305419896 2596069104 4294967295 0 1 2",
                            "0 0 0 0 4294967295 4294967295"]},
@@ -162,9 +163,10 @@ def attacks():
          {"tamper": lambda dirn, _:
             open(os.path.join(dirn, hash_of(honest_g).hex() + ".sexp"),
                  "ab").write(b"\n")},
-         "The machine definition file is stored under its correct hash but with "
-         "a trailing newline. The reader must reject non-canonical bytes even "
-         "when the parsed value would hash correctly."))
+         "The machine definition file has a trailing newline. Once rejected "
+         "by the reader; the checker no longer reads machine definitions, so "
+         "it is now irrelevant and Bob is right. Attack 23 aims the same "
+         "trick at the spec, which is read."))
     hdr = bytes([6]) + struct.pack("<I", 2) + bytes([4])
     # 20-name-capture has its own TARGET; the forward-ref binary comes after.
 
@@ -243,20 +245,21 @@ def attacks_hash65():
 
     cert17 = [("cert", Sym("correctness")), ("property", Sym("equals-wspec-v1")),
               ("spec", HASH65_HASH), ("machine", HASH65_HASH),
-              ("binary-hash", Bytes(blake3(word.emit_w32(honest)))),
-              ("binary", Bytes(word.emit_w32(honest))), ("inputs", 32)]
+              ("binary-hash", Bytes(blake3(wproducer.emit_w32(honest)))),
+              ("binary", Bytes(wproducer.emit_w32(honest))), ("inputs", 32)]
     out.append(("17-hash65-machine-is-the-spec", HASH65, honest,
                 {"target": "hash65", "cert_fields": cert17},
-                "Certificate names the SPEC definition as the machine. "
-                "Probes the validator on call steps under the machine kind."))
+                "Certificate names the SPEC definition as the machine. Once "
+                "rejected; machine fields are now ignored and the honest "
+                "binary is proved, so Bob is right."))
 
-    raw = bytearray(word.emit_w32(honest))
+    raw = bytearray(wproducer.emit_w32(honest))
     for k in range(8):
         struct.pack_into("<I", raw, 8 + 4 * k, k)
     out.append(("18-hash65-outputs-are-inputs", HASH65, honest,
                 {"target": "hash65", "binary": bytes(raw)},
                 "Raw binary whose output indices point at the inputs m0..m7 "
-                "(hash := message prefix); the emitter binding must fail."))
+                "(hash := message prefix); now caught by the proof."))
     spec3 = _load("blake3-hash-3.sexp")
     m3 = wproducer.compile_wspec(spec3)
 
@@ -264,15 +267,15 @@ def attacks_hash65():
         cert = assoc("certificate", ("cert", Sym("correctness")),
                      ("property", Sym("equals-wspec-v1")),
                      ("spec", HASH65_HASH), ("machine", hash_of(m3)),
-                     ("binary-hash", Bytes(blake3(word.emit_w32(m3)))),
-                     ("binary", Bytes(word.emit_w32(m3))), ("inputs", 16))
+                     ("binary-hash", Bytes(blake3(wproducer.emit_w32(m3)))),
+                     ("binary", Bytes(wproducer.emit_w32(m3))), ("inputs", 16))
         put_definition(dirn, spec3)
         put_definition(dirn, m3)
         put_definition(dirn, cert)
         with open(os.path.join(dirn, "certificate.sexp"), "wb") as f:
             f.write(canonical_bytes(cert))
         with open(os.path.join(dirn, "binary.bin"), "wb") as f:
-            f.write(word.emit_w32(m3))
+            f.write(wproducer.emit_w32(m3))
     out.append(("19-hash65-wrong-length-machine", HASH65, honest,
                 {"target": "hash65", "tamper": override19},
                 "The proved hash-3 machine certified against the hash65 "
@@ -316,7 +319,7 @@ def main():
 
     # 01's byte flip (after its honest store exists).
     p = os.path.join(HERE, "attacks", "01-flip-byte", "binary.bin")
-    raw = bytearray(word.emit_w32(honest_g))
+    raw = bytearray(wproducer.emit_w32(honest_g))
     raw[40] ^= 7
     with open(p, "wb") as f:
         f.write(bytes(raw))
@@ -336,7 +339,41 @@ def main():
            "an integer -- a hex/integer ambiguity. Fixed: byte strings "
            "are now #hex and symbols never start with a digit.",
            G, honest_g, binary=fwd)
-    print(f"{len(all_attacks) + 1} attacks regenerated")
+    # Round 3: the root and a delivered ode-base and spec.
+    forged = os.path.join(HERE, "attacks", "21-forged-ode-base")
+    _forge("21-forged-ode-base",
+           "Mallory delivers his own ode-base beside a wrong binary: a "
+           "wcheck that accepts everything. The root admits ode-base only "
+           "by the package's pinned tree hash.",
+           G, _mach(G_STEPS.replace("(rotr t5 7)", "(rotr t5 6)")))
+    import shutil
+    shutil.copytree(os.path.join(HERE, "ode-base"), os.path.join(forged, "ode-base"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    with open(os.path.join(forged, "ode-base", "ode", "wcheck.py"), "a") as f:
+        f.write("\n\ndef check_certificate(store_dir, cert):\n"
+                "    return None\n")
+    extra = os.path.join(HERE, "attacks", "22-ode-base-extra-file")
+    _forge("22-ode-base-extra-file",
+           "An otherwise genuine ode-base delivered with one added file, "
+           "ode/sitecustomize.py. Any added, removed, or changed file "
+           "changes the tree hash.", G, _mach(G_STEPS.replace("(rotr t5 7)", "(rotr t5 6)")))
+    shutil.copytree(os.path.join(HERE, "ode-base"), os.path.join(extra, "ode-base"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    with open(os.path.join(extra, "ode-base", "ode", "sitecustomize.py"), "w") as f:
+        f.write("pass\n")
+    _forge("23-noncanonical-spec-file",
+           "The spec is now delivered by Mallory and fetched by its pinned "
+           "hash. Here its file has a trailing newline: the reader must "
+           "reject non-canonical bytes even though they parse to the "
+           "pinned spec.", G, honest_g,
+           tamper=lambda dirn, _: open(os.path.join(dirn, G_HASH.hex() + ".sexp"),
+                                       "ab").write(b"\n"))
+    _forge("24-spec-missing",
+           "The store omits the spec entirely. Bob holds only its hash, so "
+           "Mallory can deny availability -- Bob rejects -- but cannot "
+           "change correctness.", G, honest_g,
+           tamper=lambda dirn, _: os.remove(os.path.join(dirn, G_HASH.hex() + ".sexp")))
+    print(f"{len(all_attacks) + 5} attacks regenerated")
 
 
 if __name__ == "__main__":

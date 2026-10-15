@@ -1,1 +1,1 @@
-Binary says rotr 39 (== rotr 7 mod 32) where the definition says 7. The decoder must reject counts >= 32 and the binding must fail.
+One byte of an honest binary changed (originally a rotr count 39 == 7 mod 32). The decoder must reject malformed bytes or the proof must catch them.

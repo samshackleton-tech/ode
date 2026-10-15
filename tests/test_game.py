@@ -25,7 +25,7 @@ class GameTest(unittest.TestCase):
                      "word.py"):
             with open(os.path.join(ROOT, "ode", name), "rb") as f:
                 a = f.read()
-            with open(os.path.join(GAME, "bootstrap", "ode-base", "ode", name), "rb") as f:
+            with open(os.path.join(GAME, "ode-base", "ode", name), "rb") as f:
                 b = f.read()
             self.assertEqual(a, b, f"bootstrap/ode/{name} differs from ode/")
 
@@ -45,11 +45,22 @@ if __name__ == "__main__":
 
 
 class PinTest(unittest.TestCase):
-    def test_package_pins_this_ode_base(self):
-        sys.path.insert(0, os.path.join(GAME, "bootstrap", "ode-base"))
-        from ode.canon import field, parse
-        from ode.store import tree_hash
+    def test_package_pins_the_public_ode_base(self):
+        sys.path.insert(0, os.path.join(GAME, "bootstrap", "root"))
+        from launch import read_tree, tree_hash
+        import re
         with open(os.path.join(GAME, "bootstrap", "blake3", "RELIANCE"), "rb") as f:
-            pin = field(parse(f.read()), "ode-base")
-        self.assertEqual(pin, tree_hash(os.path.join(GAME, "bootstrap", "ode-base")),
+            pins = re.findall(rb"\(ode-base #([0-9a-f]{64})\)", f.read())
+        self.assertEqual(len(pins), 1)
+        self.assertEqual(pins[0].decode(),
+                         tree_hash(read_tree(os.path.join(GAME, "ode-base"))).hex(),
                          "run pypy3 game/pin_ode_base.py")
+
+    def test_root_holds_only_the_hash_and_the_launcher(self):
+        root = os.path.join(GAME, "bootstrap", "root")
+        self.assertEqual(sorted(f for f in os.listdir(root) if f != "__pycache__"),
+                         ["blake3.py", "launch.py"])
+        with open(os.path.join(root, "blake3.py"), "rb") as f:
+            a = f.read()
+        with open(os.path.join(ROOT, "ode", "blake3.py"), "rb") as f:
+            self.assertEqual(a, f.read())

@@ -139,21 +139,16 @@ def check_certificate(store_dir, cert):
     if field(cert, "property") != PROPERTY:
         raise Reject(f"unsupported property {field(cert, 'property')!r}")
     spec_defn = _load(store_dir, field(cert, "spec"))
-    machine_defn = _load(store_dir, field(cert, "machine"))
     try:
         word.validate_wspec(spec_defn)
-        word.validate_wmachine(machine_defn)
     except ValueError as e:
         raise Reject(str(e)) from e
     inputs = word.inputs_of(spec_defn)
-    if word.inputs_of(machine_defn) != inputs:
-        raise Reject("spec and machine disagree on inputs")
     if field(cert, "inputs") != len(inputs):
         raise Reject("certificate names the wrong input count")
+    # The proof's subject is the bytes that run, decoded; no machine
+    # definition and no emitter are relied on.
     binary = _load_binary(store_dir, cert)
-    if word.emit_w32(machine_defn) != binary:
-        raise Reject("binary is not the emitter's output for the machine "
-                     "definition")
     try:
         decoded = word.decode_w32(binary, inputs)
     except ValueError as e:
@@ -174,7 +169,6 @@ def check_certificate(store_dir, cert):
     return assoc("record", ("checker", CHECKER_ID),
                  ("verdict", Sym("accept")), ("property", Sym(PROPERTY)),
                  ("spec", field(cert, "spec")),
-                 ("machine", field(cert, "machine")),
                  ("binary-hash", field(cert, "binary-hash")),
                  ("certificate", hash_of(cert)),
                  ("domain", Sym("all-u32-inputs")),

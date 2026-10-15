@@ -192,44 +192,11 @@ def eval_expr(e, env, defs=None):
 # second operand is a count u8. Deterministic: same definition, same bytes.
 import struct as _struct
 
-_W_OPS = {"copy": 0, "add": 1, "xor": 2, "rotr": 3}
-_W_DECODE = {v: k for k, v in _W_OPS.items()}
-
-
-def _operand(e, index):
-    if isinstance(e, int):
-        return b"\x01" + _struct.pack("<I", e)
-    return b"\x00" + _struct.pack("<I", index[e])
-
-
-def emit_w32(defn) -> bytes:
-    validate_wmachine(defn)
-    inputs, steps, outputs = inputs_of(defn), steps_of(defn), outputs_of(defn)
-    names = list(inputs) + [name for name, _ in steps]
-    index = {n: i for i, n in enumerate(names)}
-    out = bytearray()
-    out += _struct.pack("<H", len(inputs))
-    out += _struct.pack("<I", len(steps))
-    out += _struct.pack("<H", len(outputs))
-    for o in outputs:
-        out += _struct.pack("<I", index[o])
-    for _, e in steps:
-        if isinstance(e, (int, Sym)):
-            out.append(0)
-            out += _operand(e, index)
-        elif e[0] == "rotr":
-            out.append(3)
-            out += _operand(e[1], index)
-            out.append(e[2])
-        else:
-            out.append(_W_OPS[e[0]])
-            out += _operand(e[1], index)
-            out += _operand(e[2], index)
-    return bytes(out)
+_W_DECODE = {0: "copy", 1: "add", 2: "xor", 3: "rotr"}
 
 
 def decode_w32(data, input_names):
-    """Bytes -> (steps, output indices). Rejects non-emitter bytes."""
+    """Bytes -> machine definition: exactly the program the bytes run."""
     assert isinstance(data, bytes)
     pos = 0
 
@@ -280,8 +247,6 @@ def decode_w32(data, input_names):
                  ("steps", steps),
                  ("outputs", [names[i] for i in out_idx]))
     validate_wmachine(defn)
-    if emit_w32(defn) != data:
-        raise ValueError("bytes are not the emitter's output")
     return defn
 
 

@@ -1,15 +1,14 @@
 #!/usr/bin/env pypy3
-"""Write ode-base's tree hash into blake3/RELIANCE as (ode-base #hash).
+"""Write game/ode-base's tree hash into blake3/RELIANCE as (ode-base #hash).
 
-Run after any change to game/bootstrap/ode-base/; tests/test_game.py
-fails until the pin matches.
+Uses the root's own tree hash (bootstrap/root/launch.py). Run after any
+change to game/ode-base/; tests/test_game.py fails until the pin matches.
 """
 import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE = os.path.join(HERE, "bootstrap", "ode-base")
-sys.path.insert(0, BASE)
-from ode.store import tree_hash
-h = tree_hash(BASE).hex()
+sys.path.insert(0, os.path.join(HERE, "bootstrap", "root"))
+from launch import read_tree, tree_hash
+h = tree_hash(read_tree(os.path.join(HERE, "ode-base"))).hex()
 p = os.path.join(HERE, "bootstrap", "blake3", "RELIANCE")
 s = open(p).read()
 s = re.sub(r"\n  \(ode-base #[0-9a-f]*\)", "", s)

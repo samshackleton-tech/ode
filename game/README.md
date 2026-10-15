@@ -2,23 +2,21 @@
 
 A test from the relying party's side. Three roles:
 
-- **Sam** publishes `bootstrap/`, in two parts that Bob relies on for
-  different things:
-  - `ode-base/` -- the same for every Ode package: the reader and hash
-    (`canon.py`, `blake3.py`), the store loader, the checker and the
-    semantics it checks against (`store.py`, `wcheck.py`, `word.py`), and
-    `bob.py`, Bob's whole procedure. Bob relies on it to *check* anything.
-  - `blake3/` -- this package only: the specifications of G and of the
-    65-byte hash, and `RELIANCE`, pinning their hashes. Bob relies on it
-    for what the package *means* (R3); this is the part a person reads.
+- **Sam** publishes `bootstrap/`, which is all Bob must receive from
+  Sam for *correctness*:
+  - `root/` -- `blake3.py` and `launch.py`, 235 lines: the hash, and a
+    launcher that reads an ode-base into memory, computes its tree hash,
+    compares it with the package's pin, stops on any difference, and
+    runs Bob's procedure from the very bytes it hashed.
+  - `blake3/RELIANCE` -- 282 bytes of s-expression: the pinned tree hash
+    of the ode-base this package was checked against, and the hashes of
+    its two specifications (G, and the hash of a 65-byte message).
 
-  `blake3/RELIANCE` also pins `(ode-base #hash)`: the tree hash of the
-  exact ode-base the package was checked against (`pypy3
-  game/pin_ode_base.py` writes it). Bob computes his own ode-base's tree
-  hash and rejects on any difference, so a newer, older, or forged
-  ode-base can never silently check a package.
-
-  Together they travel separately from everything Mallory supplies.
+  Everything else Bob needs only for *availability*, and may get from
+  anyone: `game/ode-base/` (the checker, reader, store loader, semantics,
+  and `bob.py`, admitted by tree hash) and the specifications (fetched
+  from Mallory's store by hash; readable copies in `examples/`). A wrong
+  copy of any of them is a reject, never a wrong answer.
 - **Mallory** supplies the implementation: a directory with a machine
   definition, `binary.bin`, and `certificate.sexp`. He may change
   anything in it. He knows every input Bob will use and may add his own.
@@ -55,6 +53,22 @@ corpus from round 1 (ten attacks, all lost) and what the game found:
 | 08 | Mallory's own chosen inputs | correct: the claim is universal |
 | 09 | correct hash, non-canonical file bytes | rejected: the reader |
 | 10 | forward reference in raw W32 bytes | rejected by the decoder; and **found**: an all-digit hex string was indistinguishable from an integer in canonical form. Fixed: byte strings are `#hex` and symbols never start with a digit |
+
+## Round 3: the root
+
+Bob now holds only the root and the pins; Mallory may deliver the
+ode-base and the specifications too, and the certificate no longer
+names a machine definition -- the checker proves the decoded bytes, so
+neither machine definitions nor the emitter are relied on. Attacks
+05, 07, 09, 17 and 18 now lose to the proof itself (or are simply
+irrelevant) instead of to binding checks.
+
+| Attack | Idea | Result |
+|---|---|---|
+| 21 | Mallory's own ode-base, with a wcheck that accepts all | rejected by the root: tree hash differs |
+| 22 | a genuine ode-base plus one added file | rejected by the root: tree hash differs |
+| 23 | the delivered spec, with a trailing newline | rejected: not canonical |
+| 24 | the spec withheld | rejected: Mallory can deny availability, never correctness |
 
 ## Round 2: the hash target
 

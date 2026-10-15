@@ -19,9 +19,11 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-BASE = os.path.join(HERE, "bootstrap", "ode-base")
-PACKAGE = os.path.join(HERE, "bootstrap", "blake3")
-sys.path.insert(0, BASE)
+ROOT = os.path.join(HERE, "bootstrap", "root")
+RELIANCE = os.path.join(HERE, "bootstrap", "blake3", "RELIANCE")
+PUBLIC_ODE_BASE = os.path.join(HERE, "ode-base")
+EXAMPLES = os.path.join(os.path.dirname(HERE), "examples")
+sys.path.insert(0, os.path.join(PUBLIC_ODE_BASE))
 from ode import word  # noqa: E402
 from ode.canon import parse  # noqa: E402
 
@@ -53,12 +55,18 @@ def target_of(attack_dir):
 
 
 def true_g(values, target="g"):
-    with open(os.path.join(PACKAGE, SPEC_FILE[target]), "rb") as f:
+    with open(os.path.join(EXAMPLES, SPEC_FILE[target]), "rb") as f:
         return word.run_program(parse(f.read()), values)
 
 
 def run_bob(attack_dir, values, target="g"):
-    cmd = ["pypy3", os.path.join(BASE, "bob.py"), PACKAGE, attack_dir, target] + \
+    # An attack may deliver its own ode-base; otherwise Bob fetches the
+    # public one. Either way the root admits it only by its pinned hash.
+    base = os.path.join(attack_dir, "ode-base")
+    if not os.path.isdir(base):
+        base = PUBLIC_ODE_BASE
+    cmd = ["pypy3", os.path.join(ROOT, "launch.py"), RELIANCE, base,
+           attack_dir, target] + \
           [str(v) for v in values]
     p = subprocess.run(cmd, cwd=attack_dir, capture_output=True, text=True,
                        timeout=120)

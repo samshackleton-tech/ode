@@ -1,9 +1,0 @@
-; ode-base: what Bob relies on to check any Ode package, whatever it
-; means (SPEC s1). The same for every package; reviewed once.
-(reliance
-  (procedure bob.py)
-  (reader ode/canon.py)
-  (hash ode/blake3.py)
-  (store ode/store.py)
-  (semantics ode/word.py)
-  (checker ode/wcheck.py))

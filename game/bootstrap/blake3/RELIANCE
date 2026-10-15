@@ -1,9 +1,12 @@
-; The BLAKE3 package: what Bob relies on to know what this package
-; means, beyond ode-base (SPEC s1, R3). Two specifications, pinned by
-; hash: G (6 words in, 4 out) and the hash of a 65-byte message (32 words
-; in, 8 out). Checking relies on ode-base, which states its own reliance.
+; The BLAKE3 package, as Bob holds it: hashes only. For correctness Bob
+; relies on these pins (and the root, bootstrap/root/); for availability
+; he relies on whoever delivers the bytes they name -- the ode-base and
+; the specifications may come from anywhere, and a mismatch is a reject.
+; G: 6 words in, 4 out. hash65: a 65-byte message, 32 words in, 8 out.
+; Readable copies of both specifications: examples/blake3-g.sexp and
+; examples/blake3-hash-65.sexp.
 (reliance
-  (ode-base #6c63f4829b7f5222e6dbcd03e4d92254b222d5ca7b40615c38de0a2868dbacd9)
+  (ode-base #7d325a049c1c04f357ef3a7e415dde35fe321d96562418ecca6112b4cdee6af9)
   (targets
-    ((g (spec blake3-g.sexp) (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092))
-     (hash65 (spec blake3-hash-65.sexp) (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a)))))
+    ((g (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092))
+     (hash65 (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a)))))

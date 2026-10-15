@@ -9,6 +9,46 @@ from .producer import put_definition
 PROPERTY = Sym("equals-wspec-v1")
 
 
+import struct as _struct
+
+_W_OPS = {"copy": 0, "add": 1, "xor": 2, "rotr": 3}
+
+
+def _operand(e, index):
+    if isinstance(e, int):
+        return b"\x01" + _struct.pack("<I", e)
+    return b"\x00" + _struct.pack("<I", index[e])
+
+
+def emit_w32(defn) -> bytes:
+    word.validate_wmachine(defn)
+    inputs, steps, outputs = word.inputs_of(defn), word.steps_of(defn), word.outputs_of(defn)
+    names = list(inputs) + [name for name, _ in steps]
+    index = {n: i for i, n in enumerate(names)}
+    out = bytearray()
+    out += _struct.pack("<H", len(inputs))
+    out += _struct.pack("<I", len(steps))
+    out += _struct.pack("<H", len(outputs))
+    for o in outputs:
+        out += _struct.pack("<I", index[o])
+    for _, e in steps:
+        if isinstance(e, (int, Sym)):
+            out.append(0)
+            out += _operand(e, index)
+        elif e[0] == "rotr":
+            out.append(3)
+            out += _operand(e[1], index)
+            out.append(e[2])
+        else:
+            out.append(_W_OPS[e[0]])
+            out += _operand(e[1], index)
+            out += _operand(e[2], index)
+    return bytes(out)
+
+
+
+
+
 def _all_names(defn, acc):
     """Every name a specification and its callees mention."""
     acc.update(word.inputs_of(defn))
@@ -113,14 +153,14 @@ def compile_wspec(spec_defn):
 def build(spec_defn, store_dir):
     os.makedirs(store_dir, exist_ok=True)
     machine_defn = compile_wspec(spec_defn)
-    binary = word.emit_w32(machine_defn)
+    binary = emit_w32(machine_defn)
     spec_hash = put_definition(store_dir, spec_defn)
     machine_hash = put_definition(store_dir, machine_defn)
     with open(os.path.join(store_dir, "binary.bin"), "wb") as f:
         f.write(binary)
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", PROPERTY),
-                 ("spec", spec_hash), ("machine", machine_hash),
+                 ("spec", spec_hash),
                  ("binary-hash", Bytes(blake3(binary))),
                  ("binary", Bytes(binary)),
                  ("inputs", len(word.inputs_of(spec_defn))))

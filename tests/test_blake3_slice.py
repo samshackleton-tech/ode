@@ -61,7 +61,7 @@ class GTest(unittest.TestCase):
         from ode.producer import put_definition
         from ode.canon import assoc
         from ode.blake3 import blake3
-        binary = word.emit_w32(machine_defn)
+        binary = wproducer.emit_w32(machine_defn)
         with open(os.path.join(tmp, "binary.bin"), "wb") as f:
             f.write(binary)
         cert = assoc(
@@ -180,7 +180,7 @@ class HashTest(unittest.TestCase):
         from ode.canon import assoc
         from ode.blake3 import blake3
         tmp2 = tempfile.mkdtemp()
-        binary = word.emit_w32(machine_defn)
+        binary = wproducer.emit_w32(machine_defn)
         with open(os.path.join(tmp2, "binary.bin"), "wb") as f:
             f.write(binary)
         cert = assoc("certificate", ("cert", Sym("correctness")),

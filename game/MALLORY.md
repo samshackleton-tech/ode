@@ -59,3 +59,13 @@ specification embedded under `(defs (#hash definition))`. New surface:
   bounds on indices.
 
 The old `g` attacks (00-10) are all recorded losses; aim for new ideas.
+
+## Round 3: the root
+
+Bob now holds only `bootstrap/root/` (BLAKE3 and a launcher) and
+`bootstrap/blake3/RELIANCE` (hashes). You may deliver the ode-base too:
+put an `ode-base/` directory in your attack and the referee hands it to
+Bob instead of the public one. The specifications are fetched from your
+store by hash. Certificates no longer name a machine definition. New
+surface: the launcher's tree hash (`read_tree`, `tree_hash`), its
+in-memory import of `ode` (`_MemoryFinder`), and its regex for the pin.

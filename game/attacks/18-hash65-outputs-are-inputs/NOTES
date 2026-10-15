@@ -1,1 +1,1 @@
-Raw binary whose output indices point at the inputs m0..m7 (hash := message prefix); the emitter binding must fail.
+Raw binary whose output indices point at the inputs m0..m7 (hash := message prefix); now caught by the proof.

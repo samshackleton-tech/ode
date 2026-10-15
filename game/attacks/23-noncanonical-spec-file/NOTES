@@ -1,0 +1,1 @@
+The spec is now delivered by Mallory and fetched by its pinned hash. Here its file has a trailing newline: the reader must reject non-canonical bytes even though they parse to the pinned spec.
