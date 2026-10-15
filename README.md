@@ -93,6 +93,12 @@ reassociation and reordering, XOR cancellation, rotation composition and
 distribution, and constants within symbolic expressions. Tests certify
 normalization of all four expressions extracted from BLAKE3's G function.
 
+An explicit six-register machine also has a checked execution theorem:
+BLAKE3 G's 14 register operations produce its four mixing equations and
+preserve the message registers for every initial state. See the
+`register-g` example in the kernel guide. This abstract machine has no
+memory, flags, or byte decoder; native ISA correspondence remains open.
+
 The kernel also checks unbounded loop laws: processing two blocks at a
 time equals processing one at a time, and a chain of `n+k` blocks can be
 split into chains of `n` and `k`. These hold for any total compression
@@ -104,8 +110,8 @@ ripple-carry proofs behind Word32 arithmetic and the induction proofs
 behind the loop laws.
 
 **The remaining connection:** expression extraction from the source
-specification, instruction execution, and native loop refinement still
-need kernel proofs. The executable verifier in `ode/check.py` retains its
+specification, the abstract machine's native ISA correspondence, memory
+behavior, and native loop refinement still need kernel proofs. The executable verifier in `ode/check.py` retains its
 own larger reliance set until those connections are established.
 
 ## Author assistance

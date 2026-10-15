@@ -1,4 +1,4 @@
-"""Emit explicit evaluation derivations; no kernel import or evaluator oracle.
+"""Emit explicit definition-reduction proofs; no kernel import or evaluator oracle.
 
 Memoized constructor evaluation shares repeated carry stages. Every
 reduction emits unfolding and congruence steps checked independently.
@@ -15,11 +15,13 @@ def substitute(term, env):
 
 
 class Evaluation(Proof):
-    """Memoized closed evaluation with explicit proof steps.
+    """Memoized definition reduction with explicit proof steps.
 
-    Requires a valid version-3 theory and well-sorted closed terms whose
-    evaluation terminates in constructor values. Uninterpreted functions
-    cannot be evaluated. This producer is outside the kernel's reliance set.
+    Requires a valid version-3 theory and well-sorted terms. A definition
+    unfolds when its structural argument has a constructor head. Variables
+    and applications whose structural argument is symbolic remain terms.
+    This producer is outside the kernel's reliance set. The closed prove()
+    interface additionally requires a constructor value as its result.
     """
 
     def __init__(self, theory):
@@ -30,18 +32,26 @@ class Evaluation(Proof):
         for sort in theory[2]:
             if isinstance(sort, list):
                 self.constructors.update(c[0] for c in sort[1])
+        self.symbols = self.constructors | set(self.definitions) | {d[0] for d in theory[3]}
         self.cache = {}
 
     def evaluate(self, term):
         key = canonical_bytes(term)
         if key in self.cache:
             return self.cache[key]
+        if isinstance(term, Sym):
+            result = term, self.refl(term)
+            self.cache[key] = result
+            return result
+        assert term[0] in self.symbols, 'evaluation requires declared functions or constructors'
         args = [self.evaluate(a) for a in term[1:]]
         values = [a for a, _ in args]
         reduced = app(term[0], *values)
         start = self.cong(term[0], *[proof for _, proof in args])
-        if term[0] in self.definitions:
-            _, params, _, cases = self.definitions[term[0]]
+        definition = self.definitions.get(term[0])
+        if (definition is not None and isinstance(values[0], list)
+                and values[0][0] in self.constructors):
+            _, params, _, cases = definition
             _, fields, body = next(c for c in cases if c[0] == values[0][0])
             env = {param[0]: value for param, value in zip(params, values)}
             env.update(zip(fields, values[0][1:]))
@@ -49,7 +59,6 @@ class Evaluation(Proof):
             value, end = self.evaluate(substitute(body, env))
             result = value, self.trans(start, unfolded, end)
         else:
-            assert term[0] in self.constructors, 'closed evaluation requires constructor values'
             result = reduced, start
         self.cache[key] = result
         return result
@@ -64,6 +73,11 @@ def prove(t, left, right):
     p = Evaluation(t)
     value, last = p.evaluate(left)
     assert value == right, 'proposed result differs from constructor evaluation'
+    pending = [value]
+    while pending:
+        term = pending.pop()
+        assert isinstance(term,list) and term[0] in p.constructors, 'closed proof requires constructor values'
+        pending.extend(term[1:])
     # Evaluation may return a cached earlier step; explicitly conclude it.
     p.trans(last, p.refl(right))
     g = [var('goal'), 3, hash_of(t), [], app('eq', left, right)]

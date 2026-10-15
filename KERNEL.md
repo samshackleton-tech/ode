@@ -379,6 +379,46 @@ the source specification. That connection, complete symbolic execution,
 and native ISA refinement remain separate obligations. The owner must
 still select the theory and equation whose meaning they intend.
 
+## Symbolic execution of a register program
+
+`examples/proofs/register.theory.sexp` extends Word32 arithmetic with an
+explicit abstract machine: six initialized registers (`a`, `b`, `c`, `d`,
+`x`, `y`), register addition and XOR, 32 immediate right-rotation forms,
+and a finite instruction list. Register reads and writes are exhaustive
+constructor definitions. Each step reads its operands from the incoming
+state, then writes the destination; source/destination aliasing is defined.
+`run` recursively executes the instruction list in order.
+
+```sh
+pypy3 tools/make_register_proof.py
+pypy3 -m ode.proof_cli examples/proofs/register.theory.sexp \
+  examples/proofs/register-g.goal.sexp examples/proofs/register-g.proof.sexp
+```
+
+The theorem says the 14 register operations of BLAKE3 G produce its four
+mixing equations and preserve the two message registers, for every initial
+six-word state. The expected equations are written separately from the
+instruction list. Definition reduction produces the proof: 700 inference
+steps, zero supporting lemmas, and 67,377 work units. The same reduction
+producer handles closed arithmetic and symbolic register execution;
+variables and arithmetic applications with symbolic structural arguments
+remain terms until a constructor case is available.
+
+Tests cover all 432 destination/source combinations for binary operations,
+every rotation count with aliased and distinct source registers, and the
+empty program. Wrong destination writes, skipped instructions, changed
+instruction order, and corruption of a preserved register are rejected.
+The expected equations are also cross-checked against extraction from
+`examples/blake3-g.sexp`; this source-extraction correspondence is a test,
+not a kernel theorem.
+
+This is a theorem about the declared abstract machine. It has no memory,
+flags, uninitialized registers, byte decoder, or native calling convention.
+Its correspondence with AArch64 execution remains an explicit refinement
+obligation. The existing native certificates retain their larger reliance
+set. File verification of this abstract execution proof needs neither the
+old executor nor any proof producer.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary

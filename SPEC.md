@@ -189,6 +189,13 @@ instantiation and congruence. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.
 
+A six-register abstract machine has explicit read/write, instruction-step,
+and finite-program execution definitions (`ode/register_proof.py`). A kernel
+proof connects BLAKE3 G's register instruction list to its four equations,
+with message registers preserved. It models initialized registers and
+straight-line arithmetic; memory, byte decoding, and native ISA correspondence
+remain refinement obligations.
+
 Matching μ-logic was the initial candidate. The current milestone needs equality and
 induction, so the first kernel states these directly. Richer logic earns its place with
 a concrete obligation the current rules cannot express, and an explicit soundness

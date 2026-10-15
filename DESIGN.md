@@ -133,8 +133,9 @@ semantics and normalizer until the word and instruction refinements are connecte
 
 **Operational semantics is the intended definitional base** (as in K): each layer's language,
 including each ISA, needs explicit transition rules. Refinement proofs connect those rules to the
-layer above. The current kernel establishes equations over total functions; expressing state,
-reachability, and relational properties such as constant-time is work still to be done. The first
+layer above. The current kernel establishes equations over total functions, including symbolic
+execution of a six-register abstract machine. Native ISA refinement, reachability,
+and relational properties such as constant-time remain work to be done. The first
 loop law makes no claim about memory accesses or instruction timing.
 
 **Producers above the checker carry no reliance and are interchangeable:** symbolic executors, SMT solvers,
