@@ -1,149 +1,92 @@
-Ode: a short poem of praise
+# Ode
 
-## What this is
+*A short poem of praise.*
 
-Ode builds cryptographic code together with proofs that a small checker
-verifies: `SPEC.md` defines it, `DESIGN.md` says why it is shaped this
-way. This repository is an early implementation. BLAKE3, for messages of
-any length, is one 50-line specification (`examples/blake3.sexp`), and
-one certificate covers every length:
+Ode builds cryptographic code together with independently checkable proofs.
+This is the **0.1 research prototype**: it has a small equational proof
+kernel, proof-producing arithmetic and abstract-machine tools, and a
+separate executable verifier for BLAKE3. Native ISA refinement and a
+competitive cryptographic implementation remain development goals.
+
+## Try it
+
+Run from this checkout with **PyPy3**; no third-party Python packages are
+required. Proof checking is portable. Native execution needs AArch64 Linux.
 
 ```sh
-pypy3 -m ode bind  examples/blake3.sexp /tmp/b3     # the spec, its compression bound to proved AArch64
-pypy3 -m ode check /tmp/b3                          # ACCEPT, at every instantiation
-pypy3 -m ode hash  /tmp/b3 "The quick brown fox jumps over the lazy dog."
-# 4c9bd68d7f0baa2e167cef98295eb1ec99a3ec8f0656b33dbae943b387f31d5d -- any length
+pypy3 -m ode --version
+pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/arx.goal.sexp examples/proofs/arx.proof.sexp
 pypy3 -m unittest discover -s tests
 ```
 
-The compression and the chaining value of a full 1 KB chunk are AArch64
-code proved for every input; the tree logic is the specification itself,
-run by the evaluator, so it is correct by definition -- and slow: about
-15 MB/s at 1-16 MB, against about 700 MB/s for the reference BLAKE3 on
-this machine (single wall-time samples, `time.perf_counter_ns`, noisy;
-the team's `clocks` crate is not available here). Profiling puts the
-time in the Python evaluator and the ctypes crossing per kilobyte, not
-in the native code: each native call carries a fixed cost of glue and
-crossing, so the way forward is fewer, larger native calls. For speed at a
-chosen length, `build-a64 ... len=44` compiles all of it and proves the
-result at that length. Needs PyPy3; native runs need aarch64 Linux.
+The arithmetic example proves an equation combining 32-bit addition, XOR,
+and rotation. The owner selects the theory and goal; the producer supplies
+only a proof. The checker verifies every supporting lemma from definitions.
 
-## How it fits together
-
-1. **A specification** says what to compute, in one s-expression: words,
-   naturals (lengths, indices), lists, `if`, `let`, recursive local
-   functions, and callees named by hash in `(uses ...)`. `blake3.sexp`
-   reads like C2SP: a chunk chain, a recursive tree split, the root; its
-   `(inputs ...)` and `(outputs ...)` are the interface. One evaluator
-   (`ode/word.py`) gives the language its meaning, over three algebras:
-   integers to run, symbolic expressions to prove, W32 steps to compile.
-2. **A producer** (`ode/produce.py`) turns a specification, at a chosen
-   length, into bytes and a certificate. Nothing relies on it. For W32 it
-   certifies each callee first and calls it *by certificate*.
-3. **The checker** (`ode/check.py`) decodes the bytes -- W32
-   (`ode/word.py`) or eight AArch64 instruction forms (`ode/a64.py`) --
-   evaluates them and the specification symbolically over fresh inputs,
-   and accepts when both reduce to the same expressions. Straight-line
-   code and constant addresses make memory safety and a data-independent
-   trace hold by construction. A call by certificate is checked once and
-   then stands as one opaque function of its arguments, the same node on
-   both sides (congruence): a 16 KB hash, 271 compressions, checks in
-   about a second.
-4. **Running** executes exactly the program the checker proved, from the
-   bytes it read once.
-
-Every definition, certificate, and record is a canonical s-expression
-(`ode/canon.py`). Content identities use BLAKE3 derive-key contexts that
-separate object kinds and semantic revisions: changing meaning changes
-the domain even if the bytes stay the same. See [DOMAINS.md](DOMAINS.md).
-
-## What a relying party relies on
-
-`game/` shows it end to end: Bob receives a small root (BLAKE3, the
-semantic-domain registry, and a launcher) plus identity pins from Sam, and everything
-else -- the checker itself, the specifications, the implementation --
-from anyone, admitted by hash or by proof. Thirty-nine recorded attacks,
-replayed by the tests, have found and fixed several real flaws and lost
-every time; `game/README.md` has them.
-
-The AArch64 model is checked against this CPU on random states
-(`tests/test_a64.py`), not derived from Arm's specification, and the
-AArch64 producer is naive: about 8 us per short hash natively, mostly
-call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
-`clocks` crate is not available here).
-
-## The proof-object kernel
-
-`ode/kernel.py` checks explicit equational proofs and structural induction
-over naturals and finite constructor-built data. The owner selects the
-theory and goal; anyone may supply the proof. The kernel checks every
-supporting lemma from definitions, with no proof-introduced axioms or
-callbacks into the proof producer.
-
-Try a proof that combines **32-bit addition, right rotation, and XOR**:
+For an executable BLAKE3 example on AArch64 Linux:
 
 ```sh
-pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
-  examples/proofs/arx.goal.sexp examples/proofs/arx.proof.sexp
-# ror8(((x+y)+z) XOR w) XOR ror8(w) = ror8(x+(y+z))
-pypy3 game/kernel_attacks.py
+pypy3 -m ode bind examples/blake3.sexp /tmp/ode-b3
+pypy3 -m ode check /tmp/ode-b3
+pypy3 -m ode hash /tmp/ode-b3 "The quick brown fox jumps over the lazy dog."
+# 4c9bd68d7f0baa2e167cef98295eb1ec99a3ec8f0656b33dbae943b387f31d5d
+pypy3 -m ode assure /tmp/ode-b3
 ```
 
-The arithmetic exporter (`ode.arx_proof.export_normalizer`) certifies the
-existing symbolic normalizer's proposed result. Its proofs cover addition
-reassociation and reordering, XOR cancellation, rotation composition and
-distribution, and constants within symbolic expressions. Tests certify
-normalization of all four expressions extracted from BLAKE3's G function.
+Add `w32` to the `bind` command for interpreted bytecode on other machines.
+The binding covers every valid message length: the specification's tree
+logic runs in the interpreter, calling checked compression/chunk programs.
+`build` and `build-a64` instead compile a chosen instantiation. These
+executable checks rely on Ode's evaluator, normalizer, and instruction
+models; they are separate from proof-object kernel verification.
 
-An explicit six-register machine also has a checked execution theorem:
-BLAKE3 G's 14 register operations produce its four mixing equations and
-preserve the message registers for every initial state. See the
-`register-g` example in [PROOFS.md](PROOFS.md). Execution and arithmetic proofs
-also compose into normalized register-output theorems. This abstract machine has no
-memory, flags, or byte decoder; native ISA correspondence remains open.
+## What is checked
 
-The `encoding-g` example binds G's 56-byte arithmetic fragment to declared
-AArch64 instruction encodings and proves `run(program,s) = g(s)` against
-`examples/proofs/g-definition.sexp`, the owner-facing half-round equations. Its abstract execution proof and a separate
-CPU cross-check accompany it. The fragment is not a callable function;
-Arm ISA refinement, memory, and calling conventions remain open.
+| Component | Current guarantee | Boundary |
+|---|---|---|
+| Proof kernel (`ode/kernel.py`) | Sorted equations and structural induction, with checked reusable lemmas | Owner-selected definitions; checker/runtime correctness |
+| Arithmetic producers | Word32 XOR, rotation, ripple-carry addition laws, and combined normalization | Native arithmetic refinement remains open |
+| Numeric interpretation | Full-adder conservation and arbitrary finite ripple carry, retaining final carry | Fixed Word32 truncation bridge remains open |
+| Register execution | BLAKE3 G equations and unbounded repetition/batching in a six-register model | Memory, flags, and ABI are outside this model |
+| Fragment recipient | Exact bytes encode the same program whose abstract execution is proved | The 56-byte fragment is not a callable native function |
+| Executable verifier (`ode/check.py`) | Decoded W32/AArch64 programs match specifications in its symbolic model | Its larger reliance set remains separate from the kernel |
 
-The kernel also checks unbounded loop laws: processing two blocks at a
-time equals processing one at a time, and a chain of `n+k` blocks can be
-split into chains of `n` and `k`. These hold for any total compression
-function and every natural iteration count. The explicit register machine
-also has unbounded repetition and batching proofs, applicable to G's
-instruction list.
+The AArch64 model is cross-checked against the CPU. Derivation from Arm's
+formal ISA, native memory/ABI proofs, constant-time guarantees, and full
+compiled BLAKE3 loop refinements remain open. Ode has no current runtime
+speed claim: qualifying measurements need the team's wall-time and
+core-cycle measurement infrastructure.
 
-The kernel-based recipient in `game/kernel-base/` also runs through the
-hash-pinned bootstrap, with owner-selected theory and goal identities.
-Its adversarial tests cover the delivered checker package as well as the
-proofs and bytes; see `game/README.md`.
+## Identity and delivery
 
-[KERNEL.md](KERNEL.md) specifies the complete rules, soundness argument,
-and checking limits. [PROOFS.md](PROOFS.md) gives runnable examples and
-their boundaries, including the Boolean and ripple-carry proofs behind
-Word32 arithmetic and the induction proofs behind the loop laws.
+Canonical s-expressions represent specifications, certificates, theories,
+goals, and proofs. Every identity uses BLAKE3 derive-key mode with an
+explicit **kind and semantic revision**. Changing the interpretation changes
+the domain even when bytes stay unchanged. [DOMAINS.md](DOMAINS.md) specifies
+this policy; the release number and semantic revisions are independent.
 
-**The remaining connection:** expression extraction from the source
-specification, the abstract machine's native ISA correspondence, memory
-behavior, and native loop refinement still need kernel proofs. The executable verifier in `ode/check.py` retains its
-own larger reliance set until those connections are established.
+The [adversarial game](game/README.md) checks delivery from a relying party's
+perspective. A small owner-provided root admits checker packages by hash,
+serves their checked bytes from memory, and enforces owner-selected claims.
+Hash admission identifies code; its correctness remains a reliance.
 
-## Author assistance
+Authors can supply intermediate lemmas when automation needs help.
+`ode.equation_cli` emits an ordinary residual goal and accepts its checked
+proof on a later invocation. Assistance changes neither the owner's goal
+nor the kernel's rules.
 
-Ode may ask authors for a specific invariant, lemma, decomposition, or
-semantics-preserving source restructuring when proof generation needs
-help. The kernel must still check the result, and program performance
-remains part of the contract. The first CLI handoff is implemented: `ode.equation_cli` emits a residual
-goal when arithmetic normalization needs help and accepts its checked
-proof on a later invocation. See [PROOFS.md](PROOFS.md) for the interface,
-the [design](DESIGN.md#author-assisted-proof-production) for the broader
-plan, and [related work](AUTHOR-ASSISTED-PROOFS.md) for its precedents.
+## Reading and development
 
-## Next
+- [QUALITY.md](QUALITY.md): assurance boundaries and validation commands.
+- [KERNEL.md](KERNEL.md): implemented logic, proof format, and resource limits.
+- [PROOFS.md](PROOFS.md): runnable examples and their precise statements.
+- [SPEC.md](SPEC.md) and [DESIGN.md](DESIGN.md): target contract and design;
+  these include requirements the prototype has yet to implement.
+- [AUTHOR-ASSISTED-PROOFS.md](AUTHOR-ASSISTED-PROOFS.md): related work.
+- [RELEASING.md](RELEASING.md): versioning, checks, and release procedure.
 
-Connect the Word32 addition, XOR, and rotation exports to instruction
-semantics and complete symbolic execution certificates;
-then prove native loop refinements with invariants. Native call support and NEON
-remain performance work; they no longer postpone the kernel.
+Next: connect bit-list numeric addition to Word32 truncation, then connect
+source operations and register execution to native ISA semantics. Memory,
+calling conventions, native loops, and measured performance remain explicit
+obligations on the path to a verified high-performance BLAKE3 implementation.

@@ -1,5 +1,9 @@
 # Ode: an initial design
 
+**Scope:** this is the target contract/design, including requirements still
+open in the 0.1 prototype. [README.md](README.md) and [QUALITY.md](QUALITY.md)
+state what the implementation currently checks and relies on.
+
 Ode is a tool for building software whose correctness is proved, whose speed matches the best
 hand-tuned code, and whose authority is bounded by construction, written by loosely-coordinated
 teams of many AI agents directed by a few human engineers. This document states what Ode is for,
@@ -124,13 +128,13 @@ agents extend behind stable interfaces.
 ## 6. One logic, many producers
 
 **The proof-object kernel uses equations and structural induction.** Its
-complete rules are in `KERNEL.md`, and `ode/kernel.py` checks the first unbounded loop
-transformation and bit-string identities. Recursive definitions must visibly decrease their
+complete rules are in `KERNEL.md`, and `ode/kernel.py` checks unbounded loop
+transformations, word identities, and register execution. Recursive definitions must visibly decrease their
 structural argument; the proof producer
 has no axiom-introduction rule. This is the smallest fragment the loop milestone needs.
 Matching μ-logic remains a possible richer foundation, rather than a prerequisite for the
 first kernel. The existing symbolic normalizer exports checked Word32 XOR and
-immediate-rotation derivations; a separate ripple-carry theory has a checked addition
+immediate-rotation derivations; a separate ripple-carry theory has checked addition
 commutativity, identity, and associativity proofs, with symbolic addition
 normalization exports. Complete program claims still rely on the existing verifier's
 semantics and normalizer until the word and instruction refinements are connected.

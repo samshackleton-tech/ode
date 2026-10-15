@@ -33,12 +33,12 @@ the real-world attack.
 ```sh
 pypy3 game/make_attacks.py              # regenerate every attack (one call each, with NOTES)
 pypy3 game/referee.py game/attacks/*    # replay them all
-pypy3 game/pin_ode_base.py              # after changing ode/: refresh ode-base and its pin
+pypy3 game/pin_ode_base.py              # refresh shared root modules, both packages, and code pins
 ```
 
 ## Kernel-based fragment recipient
 
-A separate recipient uses the same unchanged root launcher with
+A separate recipient uses the same root launcher with
 `kernel-base/`. Its owner pins the package tree, the instruction-encoding
 theory, and both the encoding and execution goals in
 `bootstrap/kernel-targets/RELIANCE`. All package files, proof files, and

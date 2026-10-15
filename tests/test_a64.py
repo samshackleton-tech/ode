@@ -17,8 +17,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ode import a64, check, produce, word  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, parse, binary_hash  # noqa: E402
+from ode import a64, check, produce  # noqa: E402
+from ode.canon import Sym, assoc, field, parse, binary_hash  # noqa: E402
 from ode.store import Reject  # noqa: E402
 from ode.check import Dag  # noqa: E402
 

@@ -31,9 +31,9 @@ Names stand in for magic numbers wherever a value crosses a tool boundary.
 
 ## 2. Generate from the specification; never transcribe it
 
-Each hand transcription of the standard joined the trusted base:
+Each hand transcription of the standard joined the reliance set:
 `whole.py`'s 40 lines of tree rules, an earlier Python compression
-function. Both left the trusted base when Lean computed the artifact from
+function. Both left the reliance set when Lean computed the artifact from
 the proved definition:
 
 - the compression as a term graph (`compress.json`);
@@ -41,11 +41,11 @@ the proved definition:
   theorem, `run_eq`, that performing the schedule is the specification's
   output.
 
-What stays trusted is a printer and a reader of a few dozen lines, checked
+What remains relied upon is a printer and a reader of a few dozen lines, checked
 together against the specification's own sample outputs.
 
 *For Ode:* generators emit data structures together with their theorems.
-The trusted surface is the format's reader, small and stated.
+The relied-upon surface is the format's reader, small and stated.
 
 ## 3. Every checker needs a check that it can fail
 
@@ -113,7 +113,7 @@ reached further.
 *For Ode:* a contract is usable exactly where a live proof covers it, and
 the system checks this mechanically, with no stored claim of proof.
 
-## 7. Seams between tools are where trust hides
+## 7. Seams between tools are where reliance hides
 
 Z3 proved the machine code, and Lean proved the algorithms and the
 specification. The joints were:
@@ -127,8 +127,8 @@ specification. The joints were:
 Every one was a place an error could pass unseen, and naming each one in
 the documentation was what made the guarantee explainable.
 
-*For Ode:* one checker kernel (the μ-logic candidate) with every other
-tool as an untrusted producer of certificates. Until then, list every seam
+*For Ode:* one checker kernel with every other
+tool as a producer outside the reliance set. Until then, list every seam
 in the assurance map.
 
 ## 8. Resources are part of the proof design
@@ -150,7 +150,7 @@ pins its tools and reads none from a live working tree.
 
 Isla cannot run `addv`, `cnt`, or one form of `tbl`, and four ZA moves
 exhaust its memory. Those forms stay checked against the CPU, which the
-documentation says beside the count (322 of 325, 19 of 23). Readers trust
+documentation says beside the count (322 of 325, 19 of 23). Readers can assess
 a count that shows its gaps.
 
 *For Ode:* "unproved, and why" is a first-class status in the assurance

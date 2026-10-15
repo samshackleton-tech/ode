@@ -1,5 +1,9 @@
 # Ode: definition and specification
 
+**Scope:** this is the target contract/design, including requirements still
+open in the 0.1 prototype. [README.md](README.md) and [QUALITY.md](QUALITY.md)
+state what the implementation currently checks and relies on.
+
 This document defines Ode and specifies what an implementation of Ode must do. `DESIGN.md`
 states why Ode is shaped this way; this document states what Ode *is*, precisely enough that
 two teams can build it independently and their tools agree. Where this document and
@@ -185,7 +189,7 @@ The goal is one logical foundation for program certificates. Language and ISA se
 must be formalized in it, and producers must emit proofs of refinement against those
 semantics. The existing symbolic verifier (`ode/check.py`) has not yet been translated
 into this foundation; its executable-code results still rely on its own evaluator,
-normalizer, and instruction models. The first bridges export XOR and immediate-rotation normalization derivations
+normalizer, and instruction models. Arithmetic bridges export XOR and immediate-rotation normalization derivations
 against explicit Word32 semantics (`ode/xor32_proof.py`, `ode/rotate32_proof.py`).
 A separate ripple-carry definition has checked commutativity, zero-identity,
 and associativity proofs (`ode/add32_proof.py`, `ode/add_associativity_proof.py`). Closed arithmetic expressions have evaluation-proof
@@ -198,6 +202,10 @@ nonzero constants within symbolic expressions. A composed exporter
 instantiation and congruence. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.
+
+A numeric interpretation proves full-adder conservation and arbitrary finite
+ripple-carry addition with final carry retained. Connecting this bit-list
+interpretation to fixed-width Word32 truncation remains open; see `PROOFS.md`.
 
 A six-register abstract machine has explicit read/write, instruction-step,
 and finite-program execution definitions (`ode/register_proof.py`). A kernel

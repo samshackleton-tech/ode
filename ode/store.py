@@ -31,9 +31,9 @@ def load_definition(store_dir, h, kind):
         raise Reject(str(e)) from e
     if not (isinstance(defn,list) and defn and defn[0]==kind):
         raise Reject(f'expected a {kind} definition')
-    if hash_of(defn, kind) != h:
-        raise Reject(f"definition named {h.hex()} hashes to "
-                     f"{hash_of(defn, kind).hex()}")
+    actual = hash_of(defn, kind)
+    if actual != h:
+        raise Reject(f"definition named {h.hex()} hashes to {actual.hex()}")
     return defn
 
 

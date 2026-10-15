@@ -14,7 +14,7 @@ import os
 import struct as _struct
 
 from . import word
-from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of, binary_hash, parse
+from .canon import Sym, assoc, canonical_bytes, hash_of, binary_hash, parse
 
 
 def put_definition(store_dir, defn):

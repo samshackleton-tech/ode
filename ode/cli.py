@@ -1,5 +1,6 @@
 """Ode command line.
 
+    pypy3 -m ode --version                           # release version
     pypy3 -m ode build      SPEC.sexp STORE/ [len=N]  # produce W32 bytes + certificate
     pypy3 -m ode build-a64  SPEC.sexp STORE/ [len=N]  # produce AArch64 bytes + certificate
     pypy3 -m ode bind       SPEC.sexp STORE/ [w32]    # the spec itself, callees proved (AArch64)
@@ -127,47 +128,41 @@ def cmd_hash(argv):
 
 
 def cmd_assure(argv):
-    """The assurance map, generated from the checker record alone."""
+    """Recheck the store and report exactly the resulting model-level claim."""
     (store,) = argv
-    path = os.path.join(store, "checker-record.sexp")
-    if not os.path.isfile(path):
-        print("no checker record: run `check` first")
+    try:
+        r = check_store(store)
+    except Reject as e:
+        print(f"REJECT: {e}")
         return 1
-    with open(path, "rb") as f:
-        r = read_canonical(f.read())
-    isa = "AArch64" if "a64" in str(field(r, "property")) else "W32"
-    text = "\n".join([
-        "# Assurance map (generated from checker-record.sexp; do not edit)",
-        "",
-        f"Checker {field(r, 'checker')}: **{field(r, 'verdict')}**",
-        "",
-        "## Claims",
-        "",
-        f"- the {isa} bytes compute the specification on every input "
-        f"(symbolic proof, {field(r, 'dag-nodes')} shared expression nodes)",
-        "- straight-line code with constant addresses: the instruction and",
-        "  address trace depends on nothing but the code",
-        "",
-        "## What the claims rest on",
-        "",
-        f"- specification `{field(r, 'spec').hex()}`",
+    prop = str(field(r, "property"))
+    binding = prop == "spec-with-callees-v1"
+    claims = ([
+        "- the specification runs through its evaluator at every valid instantiation",
+        "- each bound callee is checked against its named specification",
+        "- the interpreter's control flow and runtime are outside a native trace claim",
+    ] if binding else [
+        "- the decoded bytes compute the specification for every input at the stated instantiation",
+        "- decoded instructions are straight-line with constant addresses in the declared model",
         f"- binary `{field(r, 'binary-hash').hex()}`",
-        f"- certificate `{field(r, 'certificate').hex()}`, property "
-        f"`{field(r, 'property')}`",
-        "- the checker, `ode/check.py` with `ode/word.py`"
-        + (" and `ode/a64.py`" if isa == "AArch64" else "")
-        + "; the reader, `ode/canon.py`; BLAKE3 (SPEC s1, R1, R2, R6)",
-        "- that the specification says what its owners mean (R3): read it",
-        ("- that this CPU executes the eight modelled AArch64 forms as "
-         "modelled (R4): checked on random states by tests/test_a64.py, "
-         "not proved" if isa == "AArch64" else
-         "- W32's meaning is `ode/word.py`; no silicon is involved"),
-        "",
-        "## Gaps",
-        "",
-        "- no timing claim beyond the trace (R5: instruction timing and",
-        "  power are outside it); everything not listed above is unproved",
-        ""])
+        f"- instantiation `{canonical_bytes(field(r, 'at')).decode()}`",
+    ])
+    text = "\n".join([
+        "# Assurance map (store rechecked for this report)", "",
+        f"Checker {field(r, 'checker')}: **{field(r, 'verdict')}**", "",
+        "## Checked claim", "", *claims, "",
+        f"- specification `{field(r, 'spec').hex()}`",
+        f"- certificate `{field(r, 'certificate').hex()}`, property `{prop}`", "",
+        "## Reliance and boundaries", "",
+        "- the owner's specification, the checker, reader, evaluator, and symbolic normalizer",
+        "- domain-separated BLAKE3 identities and the store's exact checked bytes",
+        "- AArch64 callees additionally rely on Ode's instruction model and native runner",
+        "- PyPy, its standard library, the operating system, and hardware",
+        "- CPU cross-checks exercise the AArch64 model; Arm ISA refinement remains open",
+        "- native memory behavior, calling conventions, and physical constant-time guarantees",
+        "  remain outside the proof-object kernel's current guarantees", "",
+        "This report describes the checked store; owner approval of its specification is separate.", "",
+    ])
     with open(os.path.join(store, "assurance.md"), "w") as f:
         f.write(text)
     print(text)
@@ -182,6 +177,10 @@ COMMANDS = {"build": lambda a: _build(a, "w32"),
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv == ["--version"]:
+        from pathlib import Path
+        print("Ode " + (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip())
+        return 0
     if not argv or argv[0] not in COMMANDS:
         print(__doc__)
         return 2

@@ -34,7 +34,7 @@ from . import word
 from .canon import Bytes, Sym, assoc, field, hash_of
 from .store import Reject, load_definition as _load, load_binary as _load_binary
 
-CHECKER_ID = Sym("ode-checker-0.3")
+CHECKER_NAME = Sym("ode-symbolic")
 PROPERTIES = ("equals-spec-w32-v1", "equals-spec-a64-v1", "spec-with-callees-v1")
 MASK = word.MASK
 
@@ -209,7 +209,7 @@ def check_certificate(store_dir, cert, _seen=None):
                 raise Reject(f"output {i} differs: spec and machine "
                              "reduce to different symbolic values")
         raise Reject("output count differs")
-    return assoc("record", ("checker", CHECKER_ID),
+    return assoc("record", ("checker", CHECKER_NAME),
                  ("verdict", Sym("accept")), ("property", Sym(prop)),
                  ("spec", field(cert, "spec")),
                  ("at", field(cert, "at") or []),
@@ -241,10 +241,9 @@ def _check_spec_with_callees(store_dir, cert, spec_defn, seen):
         if program[0] == "spec":
             raise Reject("a bound callee must be proved code, not another binding")
         bound[spec_hash] = program
-    record = assoc("record", ("checker", CHECKER_ID), ("verdict", Sym("accept")),
+    record = assoc("record", ("checker", CHECKER_NAME), ("verdict", Sym("accept")),
                    ("property", Sym("spec-with-callees-v1")),
                    ("spec", field(cert, "spec")), ("at", []),
-                   ("binary-hash", Bytes(bytes(32))),
                    ("certificate", hash_of(cert, 'certificate')),
                    ("domain", Sym("every-instantiation")), ("dag-nodes", 0))
     return record, ("spec", spec_defn, {"in": None, "out": None}, bound)

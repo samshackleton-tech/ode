@@ -12,7 +12,7 @@ sys.path.insert(0, ROOT)
 
 from ode import check, produce, word  # noqa: E402
 from ode.blake3 import _compress, _g, blake3  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, hash_of, binary_hash, parse  # noqa: E402
+from ode.canon import Sym, assoc, canonical_bytes, field, hash_of, binary_hash, parse  # noqa: E402
 from ode.cli import _check, check_store  # noqa: E402
 from ode.store import Reject  # noqa: E402
 

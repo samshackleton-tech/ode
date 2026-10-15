@@ -21,7 +21,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from ode import produce, word  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, hash_of, binary_hash, parse  # noqa: E402
+from ode.canon import Sym, assoc, canonical_bytes, hash_of, binary_hash, parse  # noqa: E402
 
 ATTACKS = os.path.join(HERE, "attacks")
 EXAMPLES = os.path.join(ROOT, "examples")
