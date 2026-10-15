@@ -24,7 +24,7 @@ class Evaluation(Proof):
     interface additionally requires a constructor value as its result.
     """
 
-    def __init__(self, theory):
+    def __init__(self, theory, reductions=None):
         super().__init__()
         assert theory[0] == 'theory' and theory[1] == 3, 'requires a version-3 theory'
         self.definitions = {d[0]: d for d in theory[4]}
@@ -33,6 +33,10 @@ class Evaluation(Proof):
             if isinstance(sort, list):
                 self.constructors.update(c[0] for c in sort[1])
         self.symbols = self.constructors | set(self.definitions) | {d[0] for d in theory[3]}
+        # Producer-supplied closed evaluation lemmas, already earlier in the
+        # enclosing proof: canonical application -> (value, lemma index).
+        # The kernel checks their derivations and every use independently.
+        self.reductions = {} if reductions is None else reductions
         self.cache = {}
 
     def evaluate(self, term):
@@ -49,7 +53,11 @@ class Evaluation(Proof):
         reduced = app(term[0], *values)
         start = self.cong(term[0], *[proof for _, proof in args])
         definition = self.definitions.get(term[0])
-        if (definition is not None and isinstance(values[0], list)
+        known = self.reductions.get(canonical_bytes(reduced))
+        if known is not None:
+            value, index = known
+            result = value, self.trans(start, self.lemma(index))
+        elif (definition is not None and isinstance(values[0], list)
                 and values[0][0] in self.constructors):
             _, params, _, cases = definition
             _, fields, body = next(c for c in cases if c[0] == values[0][0])

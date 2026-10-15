@@ -24,7 +24,10 @@ class RegisterOutputTest(unittest.TestCase):
             with self.subTest(register=register):
                 goal,proof=normalized_output(t,g,p,register)
                 self.assertLess(len(canonical_bytes(proof)),1000000)
-                verify(t,goal,proof)
+                result=verify(t,goal,proof)
+                if register=='b':
+                    self.assertLess(len(canonical_bytes(proof)),910000)
+                    self.assertLess(result['work'],780000)
                 self.assertEqual(goal[4][1][0],'state-'+register)
                 if register in ('x','y'):
                     self.assertEqual(goal[4][2],var(register))

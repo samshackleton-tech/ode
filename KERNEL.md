@@ -255,8 +255,8 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
   examples/proofs/add32-assoc.goal.sexp examples/proofs/add32-assoc.proof.sexp
 ```
 
-The artifact contains 504 checked lemmas and 14,086 inference steps,
-using 504,710 kernel work units within the existing limits. These are
+The artifact contains 524 checked lemmas and 10,816 inference steps,
+using 472,734 kernel work units within the existing limits. These are
 proof-work counts, not timing measurements. Tests independently check
 all six Boolean identities, reproduce the artifact, and reject changed
 carry semantics, missing Boolean cases, and a dropped operand. A fresh
@@ -285,7 +285,7 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
 ```
 
 The example exports `(x+y)+(z+x)` as `x+(x+(y+z))`, with all additions
-modulo 2^32. Its 508 lemmas and 14,156 inference steps check within the
+modulo 2^32. Its 528 lemmas and 10,886 inference steps check within the
 existing kernel limits. Tests include repeated operands, zero, random
 expression trees, a deliberately broken `Dag.add`, and producer-free
 verification in a fresh process. Mixed constant tests include modular
@@ -338,6 +338,15 @@ cover carry symmetry in all three inputs and five-input XOR parity,
 and reject false identities, missing cases, and altered conclusions.
 These finite identities provide building blocks for word-level carry
 proofs; enumerating Word32 values is outside this producer's contract.
+
+Repeated concrete Boolean operations use shared evaluation lemmas.
+The producer derives each needed small Boolean evaluation from definitions,
+then case leaves reference that earlier lemma. These are ordinary proof
+entries, not a kernel truth table. A producer-supplied table that lies
+about a lemma's result produces an invalid derivation and is rejected.
+Regression tests bound the associativity and composed G-output artifacts'
+bytes and kernel work; these bounds measure proof cost rather than time.
+
 
 ## Composed arithmetic expressions
 
@@ -442,9 +451,9 @@ pypy3 -m ode.proof_cli examples/proofs/register.theory.sexp \
   examples/proofs/register-g-normalized-b.goal.sexp examples/proofs/register-g-normalized-b.proof.sexp
 ```
 
-The committed example is G's most complex output, register `b`: 992,863
-proof bytes and 799,914 work units. This is close to the existing
-1,000,000-byte limit; the regression tests check it through the bounded
+The committed example is G's most complex output, register `b`: 905,436
+proof bytes and 767,938 work units, within the existing
+1,000,000-byte limit. The regression tests check it through the bounded
 file reader as well as the kernel. More complex programs need further
 proof decomposition or smaller derivations, rather than an assumption
 that arbitrary whole-program expansion will fit.

@@ -25,8 +25,8 @@ class AssociativityTest(unittest.TestCase):
         for expected,actual in zip((g,p),artifacts(t)):
             self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
         result=verify(t,g,p)
-        self.assertLess(result['work'],600000)
-        self.assertLess(len(canonical_bytes(p)),700000)
+        self.assertLess(result['work'],480000)
+        self.assertLess(len(canonical_bytes(p)),540000)
 
     def test_all_six_boolean_carry_relations_check_independently(self):
         t,_,_=bundle()

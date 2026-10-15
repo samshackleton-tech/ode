@@ -19,7 +19,7 @@ class BooleanProofTest(unittest.TestCase):
         right=app('carry-bit',c,a,b)
         g,p=prove(self.t,[a,b,c],left,right)
         result=verify(self.t,g,p)
-        self.assertEqual(result['lemmas'],14)
+        self.assertEqual(result['lemmas'],22)
         self.assertEqual(canonical_bytes(p),canonical_bytes(prove(self.t,[a,b,c],left,right)[1]))
 
     def test_full_adder_sum_parity_associativity(self):
@@ -49,6 +49,19 @@ class BooleanProofTest(unittest.TestCase):
         p[2]=hash_of(g)
         with self.assertRaises(Reject):
             verify(self.t,g,p)
+
+    def test_a_lying_reduction_table_cannot_change_a_proved_value(self):
+        from ode.ground_proof import Evaluation,prove as prove_ground
+        term=app('xor-bit',app('bit0'),app('bit0'))
+        g,p=prove_ground(self.t,term,app('bit0'))
+        lemma=[var('lemma'),g[3],g[4],p[4]]
+        reduction=Evaluation(self.t,{canonical_bytes(term):(app('bit1'),0)})
+        value,last=reduction.evaluate(term)
+        reduction.trans(last,reduction.refl(value))
+        goal=[var('goal'),3,hash_of(self.t),[],app('eq',term,value)]
+        proof=[var('proof'),3,hash_of(goal),[lemma],[var('derive'),reduction.steps]]
+        with self.assertRaises(Reject):
+            verify(self.t,goal,proof)
 
     def test_enumeration_bound_and_duplicate_parameters(self):
         with self.assertRaises(AssertionError):
