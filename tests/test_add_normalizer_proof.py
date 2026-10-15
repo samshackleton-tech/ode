@@ -59,9 +59,29 @@ class AdditionNormalizerTest(unittest.TestCase):
         with self.assertRaises(Reject):
             verify(t,g,p)
 
-    def test_nonzero_constant_folding_is_explicitly_outside_this_export(self):
-        with self.assertRaisesRegex(ValueError,'supports variables'):
-            export_normalizer(theory(),app('add32',var('x'),literal(1)))
+    def test_mixed_constant_folding_including_overflow_to_zero(self):
+        t=theory();x=var('x');y=var('y')
+        for a,b in ((1,2),(0xffffffff,1),(0xffffffff,2),(0x80000000,0x80000000)):
+            with self.subTest(a=a,b=b):
+                expression=app('add32',app('add32',x,literal(a)),app('add32',y,literal(b)))
+                g,p=export_normalizer(t,expression)
+                verify(t,g,p)
+                total=(a+b)&0xffffffff
+                tail=app('add32',y,literal(total)) if total else y
+                self.assertEqual(g[4][2],app('add32',x,tail))
+
+    def test_wrong_constant_component_cannot_obtain_proof(self):
+        from ode.check import Dag
+        original=Dag.add
+        def broken(dag,a,b):
+            result=original(dag,a,b)
+            node=dag.nodes[result]
+            if node[0]=='add' and node[2]:
+                return dag._intern(('add',node[1],node[2]^1))
+            return result
+        with patch.object(Dag,'add',broken):
+            with self.assertRaisesRegex(ValueError,'multisets'):
+                export_normalizer(theory(),app('add32',var('x'),literal(9)))
 
     def test_fresh_process_verifies_without_producers(self):
         script='''

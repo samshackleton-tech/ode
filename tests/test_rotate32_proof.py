@@ -83,6 +83,17 @@ class RotateProofTest(unittest.TestCase):
             g,p = export_normalizer(t,expr(2))
             verify(t,g,p)
 
+    def test_rotation_of_symbolic_xor_with_nonzero_constants(self):
+        from ode.constant_proof import literal
+        t=theory();x=var('x')
+        for n in (0,7,8,12,16,31):
+            expression=app('xor32',app(f'ror-{n}',app('xor32',x,literal(0xdeadbeef))),
+                           app(f'ror-{n}',x))
+            g,p=export_normalizer(t,expression)
+            expected=((0xdeadbeef>>n)|(0xdeadbeef<<((32-n)%32)))&0xffffffff
+            self.assertEqual(g[4][2],literal(expected))
+            verify(t,g,p)
+
     def test_wrong_definition_rejected_after_honest_rehashing(self):
         t = theory()
         g,p = export_normalizer(t,app('ror-7',var('x')))

@@ -180,8 +180,9 @@ against explicit Word32 semantics (`ode/xor32_proof.py`, `ode/rotate32_proof.py`
 A separate ripple-carry definition has checked commutativity, zero-identity,
 and associativity proofs (`ode/add32_proof.py`, `ode/add_associativity_proof.py`). Closed arithmetic expressions have evaluation-proof
 exports (`ode/constant_proof.py`). Symbolic addition flattening, reordering,
-and zero elimination have checked exports (`ode/add_normalizer_proof.py`);
-nonzero constant folding within symbolic expressions remains open. The native representation and complete
+zero elimination, and mixed constant folding have checked exports
+(`ode/add_normalizer_proof.py`). XOR and rotation exports also handle
+nonzero constants within symbolic expressions. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.
 

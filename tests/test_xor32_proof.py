@@ -121,6 +121,16 @@ raise SystemExit(main(sys.argv[1:]))
             g,p = prove(t,params,left,right)
             verify(t,g,p)
 
+    def test_mixed_nonzero_constant_folding(self):
+        from ode.constant_proof import literal
+        t=theory();x=var('x')
+        for a,b in ((1,2),(0xffffffff,1),(9,9),(0xaaaaaaaa,0x55555555)):
+            expression=app('xor32',app('xor32',x,literal(a)),literal(b))
+            g,p=export_normalizer(t,expression)
+            expected=x if a==b else app('xor32',x,literal(a^b))
+            self.assertEqual(g[4][2],expected)
+            verify(t,g,p)
+
     def test_concrete_words_can_cancel_without_being_evaluated(self):
         ones = app('word32', *[app('bit1') for _ in range(32)])
         t = theory()

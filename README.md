@@ -126,7 +126,8 @@ Word32 addition is defined by Boolean ripple carry; its commutativity
 proof is in `examples/proofs/add32.*.sexp`; `add32-zero.*.sexp` proves
 addition of zero preserves every word. `add32-assoc.*.sexp` proves
 associativity via a bitwise carry invariant. `add32-normalize.*.sexp` exports
-symbolic addition flattening, reordering, and zero elimination. Concrete addition, XOR,
+symbolic addition flattening, reordering, and zero elimination. Addition,
+XOR, and rotation exports also handle constants within symbolic expressions. Concrete addition, XOR,
 and rotation results have checked exports too; `examples/proofs/constant.*.sexp`
 uses the addition theory to check overflow and XOR on explicit words.
 
@@ -141,7 +142,7 @@ verifier in `ode/check.py` still has its own larger reliance set.
 
 ## Next
 
-Extend the Word32 XOR/rotation exports to addition and the remaining word operations,
-instruction semantics, and complete symbolic execution certificates;
+Connect the Word32 addition, XOR, and rotation exports to instruction
+semantics and complete symbolic execution certificates;
 then prove native loop refinements with invariants. Native call support and NEON
 remain performance work; they no longer postpone the kernel.

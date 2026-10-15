@@ -138,9 +138,9 @@ pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
 
 This checks all 47 supporting lemmas and the final normalization in
 2,231 inference steps, using 936 shared terms. Supported exports are
-variables, the explicit zero word, and XOR expressions: flattening,
-reordering, zero elimination, and cancellation. Other operations and
-constant folding still need their proof producers.
+variables, explicit Word32 literals, and XOR expressions: flattening,
+reordering, zero elimination, cancellation, and constant folding. Constant
+folds emit constructor-evaluation proofs from the same theory.
 
 A randomized producer test found an omitted zero-elimination step after
 suffix cancellation. The kernel rejected the incomplete proof; fixing
@@ -183,10 +183,10 @@ ror16(x XOR y) XOR (ror8(ror8(x)) XOR ror16(y)) = zero32
 
 The result comes from the existing normalizer; the kernel checks all
 107 lemmas and 2,551 inference steps against the bit definitions.
-Exports support variables, zero, XOR, and immediate rotations. Addition,
-nonzero constants in symbolic expressions, and machine-execution claims
-remain outside this fragment. Closed constant expressions have a separate
-export below.
+Exports support variables, explicit Word32 literals, XOR, and immediate
+rotations. Literal words project to their Boolean fields, so constants
+inside symbolic expressions use the same parity proof. Addition and
+machine-execution claims remain outside this fragment.
 
 Tests check composition for every count, including wraparound, and
 random combinations of distribution and cancellation. Separately, one
@@ -267,8 +267,8 @@ export is described below; native instruction refinement remains open.
 ## Symbolic addition exports
 
 `ode/add_normalizer_proof.py` exports actual `Dag.add` results for
-expressions built from variables, zero, and `add32`. It proves
-flattening, reordering, and zero elimination using the ripple-carry
+expressions built from variables, explicit Word32 literals, and `add32`.
+It proves flattening, reordering, zero elimination, and constant folding using the ripple-carry
 commutativity, identity, and associativity theorems. Repeated operands
 remain repeated: addition has no XOR cancellation law.
 
@@ -287,9 +287,14 @@ The example exports `(x+y)+(z+x)` as `x+(x+(y+z))`, with all additions
 modulo 2^32. Its 506 lemmas and 14,132 inference steps check within the
 existing kernel limits. Tests include repeated operands, zero, random
 expression trees, a deliberately broken `Dag.add`, and producer-free
-verification in a fresh process. Combining nonzero constant folding
-with variables is still outside this export; closed concrete expressions
-use the evaluation-proof export below.
+verification in a fresh process. Mixed constant tests include modular
+overflow to zero and a deliberately wrong normalizer constant component.
+
+For both addition and XOR, literal operands sort after symbolic atoms.
+The shared ground producer proves their folded value from constructor
+definitions; congruence lifts that proof through the symbolic prefix.
+When the value is zero, the proved identity removes it. This reuses the
+same evaluation producer as the closed-expression export below.
 
 ## Concrete arithmetic exports
 
@@ -311,9 +316,9 @@ with modular overflow: 925 inference steps and no supporting lemmas.
 The theory is the existing addition theory. Rotation exports use the
 rotation theory. Each supplied theory must define the operations used.
 
-These exports cover closed expressions. The symbolic addition export
-above covers flattening and zero; folding nonzero constants within
-expressions containing variables remains open. Tests include a broken old adder, changed carry definitions and
+These exports cover closed expressions. The symbolic exports above also
+fold nonzero constants within expressions containing variables. Tests
+include a broken old adder, changed carry definitions and
 conclusions, shared-subterm reuse, and verification in a fresh process
 that blocks imports of the old verifier and producers. The addition
 semantic tests use this same ground-proof producer.
@@ -527,8 +532,8 @@ The kernel is the intended destination for the existing symbolic
 checker's work, not a second route to silently accept rejected program
 certificates. Today it checks mathematical proof objects; `check.py`
 still verifies executable programs using its larger reliance set. The
-next connection is to extend the Word32 XOR/rotation export to the remaining
-word/ISA semantics and make the symbolic checker **emit derivations**
+next connection is to combine the Word32 arithmetic exports with explicit
+word/ISA execution semantics and make the symbolic checker **emit derivations**
 for whole programs. Loop claims
 then need invariants and refinement proofs in that same logic. Until
 those connections are checked, the batching theorem and the native

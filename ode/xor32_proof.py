@@ -249,6 +249,9 @@ class Normalizer(Proof):
         assert set(self.laws) in ({'right','comm','assoc','left','exchange'},
                                   {'right','comm','assoc','cancel','left','pair','exchange'})
 
+    def order_key(self, atom):
+        return canonical_bytes(atom)
+
     def term(self, atoms):
         return operation_term(self.operation, self.zero, atoms)
 
@@ -262,7 +265,7 @@ class Normalizer(Proof):
         if atom == head and 'cancel' in self.laws:
             return tail, (self.law('cancel', atom) if not tail
                           else self.law('pair', atom, self.term(tail)))
-        if canonical_bytes(atom) <= canonical_bytes(head):
+        if self.order_key(atom) <= self.order_key(head):
             return [atom] + ordered, self.refl(app(self.operation, atom, self.term(ordered)))
         if not tail:
             return [head, atom], self.law('comm', atom, head)
@@ -302,18 +305,23 @@ class Normalizer(Proof):
 def prove(t, parameters, left, right):
     """Emit a proposed equality and proof for XOR expressions on Word32.
 
-    Only flattening, reordering, zero elimination, and duplicate
-    cancellation are performed. Distinct nonzero constants stay atoms.
-    The relying party must supply the actual theory and goal to verify.
+    Flattening, reordering, zero elimination, duplicate cancellation,
+    and constructor-checked constant folding are performed. The relying
+    party must supply the actual theory and goal to verify.
     """
-    p = Normalizer()
+    from .mixed_constant_proof import NormalizerWithConstants
+    from .proof_library import Library
+    library = Library(hash_of(t))
+    for lemma in law_library():
+        library.add(lemma)
+    p = NormalizerWithConstants(t,library,'xor32',None)
     a, lhs = p.normalize(left)
     b, rhs = p.normalize(right)
     if a != b:
         raise ValueError('the XOR expressions have different parity-normal forms')
     p.trans(lhs, p.sym(rhs))
     goal = [var('goal'), 3, hash_of(t), parameters, equation(left,right)]
-    proof = [var('proof'), 3, hash_of(goal), law_library(), [var('derive'),p.steps]]
+    proof = [var('proof'), 3, hash_of(goal), library.lemmas, [var('derive'),p.steps]]
     return goal, proof
 
 
@@ -326,32 +334,37 @@ def artifacts(t):
 def export_normalizer(theory_value, expression):
     """Propose a proof of an actual ode.check.Dag XOR normalization result.
 
-    Supported input: Word32 variables, the explicit all-zero word, and
+    Supported input: Word32 variables, explicit literal words, and
     xor32 applications. This adapter and the old normalizer are both
     producers. The exported equation and proof go to the independent
     kernel; its verification imports neither of them.
     """
     from .check import Dag
+    from .constant_proof import literal, word_value
+    from .mixed_constant_proof import is_word
     dag, variables = Dag(), set()
 
     def input_node(term):
         if isinstance(term, Sym):
             variables.add(term)
             return dag.var(term)
-        if term == ZERO:
-            return dag.const(0)
+        if is_word(term):
+            return dag.const(word_value(term))
         if isinstance(term, list) and len(term) == 3 and term[0] == 'xor32':
             return dag.xor(input_node(term[1]), input_node(term[2]))
-        raise ValueError('XOR export supports variables, xor32, and the zero word')
+        raise ValueError('XOR export supports variables, xor32, and Word32 literals')
 
     def output_term(i):
         node = dag.nodes[i]
         if node[0] == 'var':
             return var(node[1])
-        if node[0] == 'const' and node[1] == 0:
-            return ZERO
-        if node[0] == 'xor' and node[2] == 0:
-            return xor_term([output_term(j) for j in node[1]])
+        if node[0] == 'const':
+            return literal(node[1])
+        if node[0] == 'xor':
+            atoms = [output_term(j) for j in node[1]]
+            if node[2]:
+                atoms.append(literal(node[2]))
+            return xor_term(atoms)
         raise ValueError('normalizer returned an unsupported XOR result')
 
     result = output_term(input_node(expression))

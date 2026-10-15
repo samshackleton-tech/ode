@@ -16,6 +16,17 @@ def literal(n):
     return app('word32', *[app('bit1' if n & (1 << i) else 'bit0') for i in range(32)])
 
 
+def word_value(term):
+    """Decode exactly 32 Boolean constructor fields, least significant first."""
+    assert isinstance(term,list) and len(term)==33 and term[0]=='word32', 'Word32 requires exactly 32 fields'
+    n = 0
+    for i,bit in enumerate(term[1:]):
+        assert bit in (app('bit0'),app('bit1')), 'requires Boolean constructor fields'
+        if bit[0]=='bit1':
+            n |= 1 << i
+    return n
+
+
 def export_normalizer(t, expression):
     from .check import Dag
     dag = Dag()
@@ -23,13 +34,7 @@ def export_normalizer(t, expression):
     def input_node(term):
         assert isinstance(term,list) and term, 'requires a closed Word32 expression'
         if term[0] == 'word32':
-            assert len(term)==33, 'Word32 requires exactly 32 fields'
-            n = 0
-            for i,bit in enumerate(term[1:]):
-                assert bit in (app('bit0'),app('bit1')), 'requires Boolean constructor fields'
-                if bit[0]=='bit1':
-                    n |= 1 << i
-            return dag.const(n)
+            return dag.const(word_value(term))
         n = rotation_count(term)
         if n is not None:
             return dag.rotr(input_node(term[1]),n)
