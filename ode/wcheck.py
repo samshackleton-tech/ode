@@ -14,7 +14,6 @@ machine definition arriving with honestly recomputed hashes is still
 recomputed here from its bytes.
 """
 from . import word
-from .blake3 import blake3_hex
 from .canon import Sym, assoc, field, hash_of
 from .checker import Reject, _load, _load_binary
 
@@ -137,12 +136,7 @@ def check_certificate(store_dir, cert):
         raise Reject("spec and machine disagree on inputs")
     if field(cert, "inputs") != len(inputs):
         raise Reject("certificate names the wrong input count")
-    binary_hex = field(cert, "binary-hex")
-    if not isinstance(binary_hex, Sym):
-        raise Reject("certificate carries no binary")
     binary = _load_binary(store_dir, cert)
-    if blake3_hex(binary) != field(cert, "binary-hash"):
-        raise Reject("binary does not hash to the certificate's binary-hash")
     if word.emit_w32(machine_defn) != binary:
         raise Reject("binary is not the emitter's output for the machine "
                      "definition")
@@ -167,7 +161,7 @@ def check_certificate(store_dir, cert):
                  ("spec", field(cert, "spec")),
                  ("machine", field(cert, "machine")),
                  ("binary-hash", field(cert, "binary-hash")),
-                 ("certificate", Sym(hash_of(cert))),
+                 ("certificate", hash_of(cert)),
                  ("domain", Sym("all-u32-inputs")),
                  ("dag-nodes", len(dag.nodes)))
 

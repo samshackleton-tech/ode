@@ -12,9 +12,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ode import checker, machine, producer, spec as spec_mod
-from ode.blake3 import blake3_hex
-from ode.canon import (Sym, assoc, canonical_bytes, field, hash_of, parse,
-                       read_canonical)
+from ode.blake3 import blake3, blake3_hex
+from ode.canon import (Bytes, Sym, assoc, canonical_bytes, field, hash_of,
+                       parse, read_canonical)
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "examples", "mix.sexp")
 
@@ -48,6 +48,12 @@ class CanonTest(unittest.TestCase):
             read_canonical(b"(spec (name mix))\n")  # trailing newline
         with self.assertRaises(ValueError):
             parse("(spec (name 'mix))")
+        # No token is both an integer and a symbol; bytes are #hex.
+        self.assertEqual(parse("#0a0b"), Bytes(b"\x0a\x0b"))
+        self.assertEqual(canonical_bytes(parse("(x #)")), b"(x #)")
+        for bad in ("007", "#0A", "#abc", "1abc"):
+            with self.assertRaises(ValueError):
+                parse(bad)
 
     def test_hash_binds_content(self):
         self.assertNotEqual(hash_of(parse("(a 1)")), hash_of(parse("(a 2)")))
@@ -91,10 +97,10 @@ class EndToEndTest(unittest.TestCase):
 
     def test_mutant_binary_rejected(self):
         cert = self._cert()
-        raw = bytearray(bytes.fromhex(str(field(cert, "binary-hex"))))
+        raw = bytearray(field(cert, "binary"))
         raw[-1] ^= 1
-        cert = self._set(cert, "binary-hex", Sym(bytes(raw).hex()))
-        cert = self._set(cert, "binary-hash", Sym(blake3_hex(bytes(raw))))
+        cert = self._set(cert, "binary", Bytes(bytes(raw)))
+        cert = self._set(cert, "binary-hash", Bytes(blake3(bytes(raw))))
         self._rewrite_cert(cert)
         with self.assertRaises(checker.Reject):
             checker.check_store(self.tmp)
@@ -117,11 +123,10 @@ class EndToEndTest(unittest.TestCase):
         bad = parse("(machine (isa ODE8) (inputs 2) "
                     "(code ((load 0) (load 1) (xor) (const 61) (add) "
                     "(rotl 3))))")
-        cert = self._set(cert, "machine",
-                         Sym(producer.put_definition(self.tmp, bad)))
+        cert = self._set(cert, "machine", producer.put_definition(self.tmp, bad))
         binary = machine.emit(bad)  # honest emitter output, honestly hashed
-        cert = self._set(cert, "binary-hex", Sym(binary.hex()))
-        cert = self._set(cert, "binary-hash", Sym(blake3_hex(binary)))
+        cert = self._set(cert, "binary", Bytes(binary))
+        cert = self._set(cert, "binary-hash", Bytes(blake3(binary)))
         with open(os.path.join(self.tmp, "binary.bin"), "wb") as f:
             f.write(binary)  # the store's executed file, honestly replaced
         self._rewrite_cert(cert)
@@ -147,7 +152,7 @@ class EndToEndTest(unittest.TestCase):
     def test_assurance_map_is_generated_from_the_record(self):
         record = checker.check_store(self.tmp)
         text = checker.assurance_markdown(record)
-        self.assertIn(str(field(record, "spec")), text)
+        self.assertIn(field(record, "spec").hex(), text)
         self.assertIn("ode/checker.py", text)
         self.assertIn("unproved", text)
 

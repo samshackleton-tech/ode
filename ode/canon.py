@@ -1,10 +1,14 @@
 """Canonical form and content addressing (SPEC s2).
 
 Ode's one syntax is the s-expression. A canonical value is an integer in
-[0, 2**64), a symbol, or a list of canonical values. A symbol matches
-[A-Za-z0-9][A-Za-z0-9._/*+<>=?!-]* -- no strings, no quoting, nothing to
-escape. The canonical form of a value is its s-expression written with
-exactly one space between elements and no other whitespace:
+[0, 2**64), a symbol, a byte string, or a list of canonical values. A
+symbol matches [A-Za-z_][A-Za-z0-9._/*+<>=?!-]* -- no strings, no
+quoting, nothing to escape; it never begins with a digit, so no token is
+both an integer and a symbol. A byte string is written #hex -- '#'
+followed by an even number of lowercase hex digits (#  alone is the empty
+string) -- the one form for binaries, hashes, and other opaque bytes. The
+canonical form of a value is its s-expression written with exactly one
+space between elements and no other whitespace:
 
     (spec (name mix) (inputs 2) (body (rotl (add (xor (var 0) (var 1)) (const 60)) 3)))
 
@@ -15,14 +19,20 @@ Definitions are written as association lists -- (kind (field value) ...)
 """
 import re
 
-from .blake3 import blake3_hex
+from .blake3 import blake3
 
 MAX_INT = 2 ** 64
-_SYMBOL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/*+<>=?!-]*\Z")
+_SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9._/*+<>=?!-]*\Z")
+_BYTES = re.compile(r"#([0-9a-f][0-9a-f])*\Z")
 
 
 class Sym(str):
-    """A symbol: an atom that is not an integer."""
+    """A symbol: a name."""
+    __slots__ = ()
+
+
+class Bytes(bytes):
+    """A byte string: opaque bytes, written #hex."""
     __slots__ = ()
 
 
@@ -40,6 +50,8 @@ def _validate(v, path="$"):
     if isinstance(v, Sym):
         if not _SYMBOL.match(v):
             raise ValueError(f"{path}: bad symbol {v!r}")
+        return
+    if isinstance(v, Bytes):
         return
     if isinstance(v, list):
         for i, x in enumerate(v):
@@ -59,6 +71,8 @@ def _dump(v):
         return str(v)
     if isinstance(v, Sym):
         return str(v)
+    if isinstance(v, Bytes):
+        return "#" + v.hex()
     return "(" + " ".join(_dump(x) for x in v) + ")"
 
 
@@ -107,7 +121,13 @@ def parse(text):
         if t == ")":
             raise ValueError("unexpected ')'")
         if t.isdigit():
+            if len(t) > 1 and t[0] == "0":
+                raise ValueError(f"non-canonical integer {t!r}")
             return int(t)
+        if t[0] == "#":
+            if not _BYTES.match(t):
+                raise ValueError(f"bad byte string {t!r}")
+            return Bytes(bytes.fromhex(t[1:]))
         if not _SYMBOL.match(t):
             raise ValueError(f"bad symbol {t!r}")
         return Sym(t)
@@ -135,8 +155,9 @@ def read_canonical(data: bytes):
     return value
 
 
-def hash_of(value) -> str:
-    return blake3_hex(canonical_bytes(value))
+def hash_of(value) -> "Bytes":
+    """A definition's identity: the BLAKE3 hash of its canonical form."""
+    return Bytes(blake3(canonical_bytes(value)))
 
 
 def field(defn, name):

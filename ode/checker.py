@@ -15,8 +15,8 @@ import itertools
 import os
 
 from . import machine, spec as spec_mod
-from .blake3 import blake3_hex
-from .canon import Sym, assoc, field, hash_of, read_canonical
+from .canon import Bytes, Sym, assoc, field, hash_of, read_canonical
+from .blake3 import blake3
 
 CHECKER_ID = Sym("ode-checker-0.1")
 PROPERTY = "equals-spec-v1"
@@ -27,9 +27,9 @@ class Reject(Exception):
 
 
 def _load(store_dir, h):
-    if not isinstance(h, Sym) or len(h) != 64:
+    if not isinstance(h, Bytes) or len(h) != 32:
         raise Reject(f"bad hash {h!r}")
-    path = os.path.join(store_dir, str(h) + ".sexp")
+    path = os.path.join(store_dir, h.hex() + ".sexp")
     if not os.path.isfile(path):
         raise Reject(f"definition {h} not in store")
     with open(path, "rb") as f:
@@ -39,7 +39,8 @@ def _load(store_dir, h):
     except ValueError as e:
         raise Reject(str(e)) from e
     if hash_of(defn) != h:
-        raise Reject(f"definition named {h} hashes to {hash_of(defn)}")
+        raise Reject(f"definition named {h.hex()} hashes to "
+                     f"{hash_of(defn).hex()}")
     return defn
 
 
@@ -57,9 +58,11 @@ def _load_binary(store_dir, cert):
         raise Reject("store has no binary.bin")
     with open(path, "rb") as f:
         data = f.read()
-    if data.hex() != str(field(cert, "binary-hex")):
+    if not isinstance(field(cert, "binary"), Bytes):
+        raise Reject("certificate carries no binary")
+    if data != bytes(field(cert, "binary")):
         raise Reject("binary.bin is not the binary the certificate names")
-    if blake3_hex(data) != field(cert, "binary-hash"):
+    if Bytes(blake3(data)) != field(cert, "binary-hash"):
         raise Reject("binary.bin does not hash to the certificate's "
                      "binary-hash")
     return data
@@ -85,12 +88,7 @@ def check_certificate(store_dir, cert):
     n = spec_mod.spec_inputs(spec_defn)
     if field(cert, "inputs") != n:
         raise Reject("certificate names the wrong input count")
-    binary_hex = field(cert, "binary-hex")
-    if not isinstance(binary_hex, Sym):
-        raise Reject("certificate carries no binary")
     binary = _load_binary(store_dir, cert)
-    if blake3_hex(binary) != field(cert, "binary-hash"):
-        raise Reject("binary does not hash to the certificate's binary-hash")
     if machine.emit(machine_defn) != binary:
         raise Reject("binary is not the emitter's output for the machine "
                      "definition")
@@ -115,7 +113,7 @@ def check_certificate(store_dir, cert):
                  ("spec", field(cert, "spec")),
                  ("machine", field(cert, "machine")),
                  ("binary-hash", field(cert, "binary-hash")),
-                 ("certificate", Sym(hash_of(cert))),
+                 ("certificate", hash_of(cert)),
                  ("cases-checked", cases))
 
 
@@ -152,10 +150,10 @@ def assurance_markdown(record):
              "",
              "## What each claim rests on (hashes)",
              "",
-             f"- specification: `{field(record, 'spec')}`",
-             f"- machine definition: `{field(record, 'machine')}`",
-             f"- emitted binary: `{field(record, 'binary-hash')}`",
-             f"- certificate: `{field(record, 'certificate')}`",
+             f"- specification: `{field(record, 'spec').hex()}`",
+             f"- machine definition: `{field(record, 'machine').hex()}`",
+             f"- emitted binary: `{field(record, 'binary-hash').hex()}`",
+             f"- certificate: `{field(record, 'certificate').hex()}`",
              f"- property: `{field(record, 'property')}` (SPEC s5)",
              "",
              "## Reliance, stated on the face of the map (SPEC s1)",

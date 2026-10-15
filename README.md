@@ -18,15 +18,15 @@ is the bytes that run, or the check rejects. Nothing else between the
 specification and the checker is trusted.
 
 Every definition, expression, program, certificate, and record is a
-canonical s-expression (`ode/canon.py`): symbols and integers in nested
-lists, one space between elements, no other whitespace, a definition's
-name the BLAKE3 hash of that form. One syntax for everything, small
+canonical s-expression (`ode/canon.py`): symbols, integers, and byte
+strings (`#hex`) in nested lists, one space between elements, no other
+whitespace, a definition's name the BLAKE3 hash of that form. One syntax for everything, small
 enough that its reader is a few dozen lines.
 
 Verify the worked example end to end (PyPy3, no dependencies):
 
 ```sh
-pypy3 -m unittest discover -s tests     # 18 tests, incl. mutants the checker must reject
+pypy3 -m unittest discover -s tests     # 20 tests, incl. mutants and the adversarial game
 pypy3 -m ode build examples/mix.sexp examples/build
 pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
 pypy3 -m ode run   examples/build 60 165   # 174
@@ -78,6 +78,14 @@ Those four words are the updated `(a b c d)`. Inputs are decimal
 algorithm, which the test suite cross-checks on 200 random inputs
 (`tests/test_blake3_slice.py`); `checkw` is the step that makes the
 answer worth trusting for *every* input, not just the one you ran.
+
+## The adversarial game
+
+`game/` is the test from the relying party's side: Bob holds only Sam's
+bootstrap (the G spec by hash, the checker, his procedure) and gets the
+implementation from Mallory, who may change anything and knows every
+input. Ten recorded attacks, all lost, two of which found and fixed real
+flaws; `game/README.md` has the table. Replay: `pypy3 game/referee.py game/attacks/*`.
 
 Hand-check the run: the specification (`examples/mix.sexp`) is
 `mix(x, k) = rotl3((x XOR k) + 60)`, so `mix(60, 165)`: `60 XOR 165 = 153`,

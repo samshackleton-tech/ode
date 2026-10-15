@@ -1,0 +1,1 @@
+Raw W32 bytes with a step copying a later step (forward reference). Found: this binary hex was all digits, so under the old canonical form it could not be a symbol and parsed as an integer -- a hex/integer ambiguity. Fixed: byte strings are now #hex and symbols never start with a digit.

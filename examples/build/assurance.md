@@ -12,7 +12,7 @@ Checker: ode-checker-0.1 -- verdict: **accept**
 - specification: `2b14153a7830597024acd2e3312c7a617b0f0c1d4636f47882cd5c93e58c763f`
 - machine definition: `45e73a4a4759d70f95472e4252d6a459234ecdda5cd0556e8ed7465c23956d4f`
 - emitted binary: `0df19bfa45d1630f1462210efd667e57a2698f7522d284d0ed238c81ae653840`
-- certificate: `e8632a469a21d96dcbc1ac23ce88da5c934b0aa433048730476ab1756ee0935a`
+- certificate: `6f272010e39fa071ae6edab0456d177e7ad9ac0b04b60928cc5a77feb7cb60db`
 - property: `equals-spec-v1` (SPEC s5)
 
 ## Reliance, stated on the face of the map (SPEC s1)

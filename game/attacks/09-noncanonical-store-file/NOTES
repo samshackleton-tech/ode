@@ -1,0 +1,1 @@
+The machine definition file is stored under its correct hash but with a trailing newline. The reader must reject non-canonical bytes even when the parsed value would hash correctly.

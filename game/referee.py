@@ -1,0 +1,98 @@
+#!/usr/bin/env pypy3
+"""The referee: runs Bob against one or more attack directories, scores.
+
+    pypy3 game/referee.py game/attacks/*          # score every attack
+    pypy3 game/referee.py DIR [DIR ...]
+
+For each attack directory, Bob is run in a fresh subprocess (cwd = the
+attack directory, so anything it plants there is in effect) on the
+game's public inputs and on any inputs the attack declares in its own
+INPUTS file, one line each. The true G comes from the bootstrap
+specification executed directly (the spec is the reference).
+
+Mallory wins an attack when Bob prints ACCEPT and then a wrong output.
+Everything else -- REJECT, a crash, a right output -- is a loss for
+Mallory. Exit status: 0 when Mallory lost every attack, 1 otherwise.
+"""
+import os
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+BOOT = os.path.join(HERE, "bootstrap")
+sys.path.insert(0, BOOT)
+from ode import word  # noqa: E402
+from ode.canon import parse  # noqa: E402
+
+PUBLIC_INPUTS = [
+    [1, 2, 3, 4, 5, 6],
+    [0, 0, 0, 0, 0, 0],
+    [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x61626300, 0],
+    [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF],
+    [0xDEADBEEF, 0xCAFEBABE, 0x01234567, 0x89ABCDEF, 0x13579BDF, 0x2468ACE0],
+]
+
+
+def true_g(values):
+    with open(os.path.join(BOOT, "blake3-g.sexp"), "rb") as f:
+        return word.run_program(parse(f.read()), values)
+
+
+def run_bob(attack_dir, values):
+    cmd = ["pypy3", os.path.join(BOOT, "bob.py"), attack_dir] + \
+          [str(v) for v in values]
+    p = subprocess.run(cmd, cwd=attack_dir, capture_output=True, text=True,
+                       timeout=120)
+    lines = (p.stdout or "").splitlines()
+    return p.returncode, lines, p.stderr
+
+
+def score(attack_dir):
+    inputs = list(PUBLIC_INPUTS)
+    extra = os.path.join(attack_dir, "INPUTS")
+    if os.path.isfile(extra):
+        with open(extra) as f:
+            for line in f:
+                if line.strip():
+                    inputs.append([int(x, 0) for x in line.split()])
+    for values in inputs:
+        if len(values) != 6 or any(not (0 <= v < 2 ** 32) for v in values):
+            # Outside G's domain: no true answer exists, so no wrong one.
+            # Bob must still reject rather than print ACCEPT and crash.
+            code, lines, err = run_bob(attack_dir, values)
+            if lines and lines[0] == "ACCEPT":
+                return ("MALLORY WINS", f"inputs {values}: outside the "
+                        "domain, yet Bob accepted")
+            continue
+        code, lines, err = run_bob(attack_dir, values)
+        verdict = lines[0] if lines else f"(no output; exit {code})"
+        if verdict == "ACCEPT":
+            got = lines[1] if len(lines) > 1 else ""
+            want = " ".join(str(v) for v in true_g(values))
+            if got != want:
+                return ("MALLORY WINS", f"inputs {values}: Bob accepted and "
+                        f"output {got!r}; true G is {want!r}")
+        elif not verdict.startswith("REJECT"):
+            return ("mallory loses", f"Bob did not accept ({verdict})")
+        else:
+            return ("mallory loses", verdict)
+    return ("mallory loses", "accepted and correct on every input")
+
+
+def main(dirs):
+    if not dirs:
+        print(__doc__)
+        return 2
+    wins = 0
+    for d in sorted(dirs):
+        if not os.path.isdir(d):
+            continue
+        result, why = score(os.path.abspath(d))
+        wins += result == "MALLORY WINS"
+        print(f"{os.path.basename(d.rstrip('/')):40s} {result:14s} {why}")
+    print(f"\n{wins} win(s) for Mallory in {len(dirs)} attack(s)")
+    return 1 if wins else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

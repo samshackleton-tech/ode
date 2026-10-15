@@ -2,8 +2,8 @@
 import os
 
 from . import word
-from .blake3 import blake3_hex
-from .canon import Sym, assoc, canonical_bytes, hash_of
+from .blake3 import blake3
+from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of
 from .producer import put_definition
 
 PROPERTY = Sym("equals-wspec-v1")
@@ -49,13 +49,13 @@ def build(spec_defn, store_dir):
         f.write(binary)
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", PROPERTY),
-                 ("spec", Sym(spec_hash)), ("machine", Sym(machine_hash)),
-                 ("binary-hash", Sym(blake3_hex(binary))),
-                 ("binary-hex", Sym(binary.hex())),
+                 ("spec", spec_hash), ("machine", machine_hash),
+                 ("binary-hash", Bytes(blake3(binary))),
+                 ("binary", Bytes(binary)),
                  ("inputs", len(word.inputs_of(spec_defn))))
     cert_hash = put_definition(store_dir, cert)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(cert))
-    return {"spec": spec_hash, "machine": machine_hash,
-            "certificate": cert_hash, "binary_hash": blake3_hex(binary),
+    return {"spec": spec_hash.hex(), "machine": machine_hash.hex(),
+            "certificate": cert_hash.hex(), "binary_hash": blake3(binary).hex(),
             "binary_len": len(binary)}

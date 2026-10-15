@@ -1,0 +1,7 @@
+; What Bob relies on, and nothing else (SPEC s1). Everything in this
+; directory came from Sam; everything outside it is untrusted.
+(trust
+  (spec blake3-g.sexp)
+  (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092)
+  (checker ode/wcheck.py)
+  (reader ode/canon.py))

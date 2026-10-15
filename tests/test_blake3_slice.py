@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ode import wcheck, word, wproducer
 from ode.blake3 import _compress, _g
-from ode.canon import Sym, canonical_bytes, field, parse
+from ode.canon import Bytes, Sym, canonical_bytes, field, parse
 from ode.checker import Reject
 from ode.blake3 import blake3_hex
 
@@ -60,18 +60,20 @@ class GTest(unittest.TestCase):
         machine_defn = wproducer.compile_wspec(mutant)
         from ode.producer import put_definition
         from ode.canon import assoc
-        from ode.blake3 import blake3_hex as bh
+        from ode.blake3 import blake3
         binary = word.emit_w32(machine_defn)
+        with open(os.path.join(tmp, "binary.bin"), "wb") as f:
+            f.write(binary)
         cert = assoc(
             "certificate", ("cert", Sym("correctness")),
-            ("property", wcheck.PROPERTY if isinstance(wcheck.PROPERTY, Sym)
-             else Sym(wcheck.PROPERTY)),
-            ("spec", Sym(put_definition(tmp, self.spec))),
-            ("machine", Sym(put_definition(tmp, machine_defn))),
-            ("binary-hash", Sym(bh(binary))),
-            ("binary-hex", Sym(binary.hex())), ("inputs", 6))
-        with self.assertRaises(Reject):
+            ("property", Sym(wcheck.PROPERTY)),
+            ("spec", put_definition(tmp, self.spec)),
+            ("machine", put_definition(tmp, machine_defn)),
+            ("binary-hash", Bytes(blake3(binary))),
+            ("binary", Bytes(binary)), ("inputs", 6))
+        with self.assertRaises(Reject) as cm:
             wcheck.check_certificate(tmp, cert)
+        self.assertIn("differs", str(cm.exception))
 
 
 class CompressTest(unittest.TestCase):
