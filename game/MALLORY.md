@@ -33,3 +33,26 @@ from an honest build (`pypy3 -m ode buildw examples/blake3-g.sexp DIR`)
 or from nothing. Score yourself with `pypy3 game/referee.py game/attacks/*`.
 Aim for ten distinct ideas, escalating from tampering to forging to
 attacking the checker's reasoning; record each, win or lose.
+
+## Round 2: the hash target
+
+There is now a second target, `hash65`: BLAKE3's hash of a 65-byte
+message (32 input words, 8 output words), specified in
+`bootstrap/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
+attack directory to aim at it. Its spec is built from two *compression*
+calls -- `((outs...) (call #hash args...))` -- with the compression
+specification embedded under `(defs (#hash definition))`. New surface:
+
+- how the validator checks a callee's hash and arity (`ode/word.py`:
+  `_defs_of`, `_validate_call`), and whether anything about `defs` is
+  left unbound by the checker;
+- how the producer inlines calls (`ode/wproducer.py`: `_inline`,
+  `_rename`) versus how the checker expands them (`ode/wcheck.py`:
+  `Dag.expr`, `_run`) -- any disagreement between the two is a win;
+- name capture: inlined callee names are renamed to fresh `tN`; the
+  spec's own step names, input names like `m0`, and callee-internal
+  names like `cv0` or `flags` all coexist;
+- the wider W32 binary header (u16/u32 counts) and the decoder's
+  bounds on indices.
+
+The old `g` attacks (00-10) are all recorded losses; aim for new ideas.

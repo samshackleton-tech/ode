@@ -1,13 +1,14 @@
 #!/usr/bin/env pypy3
 """Bob: the relying party's whole procedure, followed literally.
 
-    pypy3 bootstrap/bob.py MALLORY_DIR a b c d x y
+    pypy3 bootstrap/bob.py MALLORY_DIR TARGET word...
 
 Bob holds this directory (from Sam) and nothing else he trusts. He:
   1. loads the checker and reader from THIS directory, by absolute path,
      before anything else, so nothing in Mallory's directory can shadow
      them;
-  2. reads TRUST, parses blake3-g.sexp, and confirms its hash;
+  2. reads TRUST, finds TARGET (g or hash65), parses its spec, and
+     confirms the hash;
   3. reads Mallory's certificate.sexp and requires that the certificate's
      (spec ...) IS that hash -- a certificate about any other
      specification proves nothing about G;
@@ -29,19 +30,26 @@ assert wcheck.__file__.startswith(HERE), "checker loaded from outside bootstrap"
 
 
 def main(argv):
-    if len(argv) < 2:
-        print("usage: bob.py MALLORY_DIR a b c d x y")
+    if len(argv) < 3:
+        print("usage: bob.py MALLORY_DIR TARGET word...")
         return 2
-    store, values = os.path.abspath(argv[0]), [int(x, 0) for x in argv[1:]]
-    if len(values) != 6 or any(not (0 <= v < 2 ** 32) for v in values):
-        print("REJECT inputs must be six u32 words")  # the spec's domain
-        return 1
+    store, target = os.path.abspath(argv[0]), argv[1]
+    values = [int(x, 0) for x in argv[2:]]
     with open(os.path.join(HERE, "TRUST"), "rb") as f:
         trust = parse(f.read())
-    with open(os.path.join(HERE, str(field(trust, "spec"))), "rb") as f:
+    entries = [e for e in field(trust, "targets") if e and e[0] == target]
+    if len(entries) != 1:
+        print(f"REJECT unknown target {target}")
+        return 1
+    entry = entries[0]  # (name (spec ...) (spec-hash ...))
+    with open(os.path.join(HERE, str(field(entry, "spec"))), "rb") as f:
         spec_defn = parse(f.read())
+    n_in = len(word.inputs_of(spec_defn))
+    if len(values) != n_in or any(not (0 <= v < 2 ** 32) for v in values):
+        print(f"REJECT inputs must be {n_in} u32 words")  # the spec's domain
+        return 1
     spec_hash = hash_of(spec_defn)
-    if spec_hash != field(trust, "spec-hash"):
+    if spec_hash != field(entry, "spec-hash"):
         print("REJECT bootstrap spec does not match TRUST")
         return 1
     try:

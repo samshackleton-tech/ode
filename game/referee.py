@@ -24,22 +24,40 @@ sys.path.insert(0, BOOT)
 from ode import word  # noqa: E402
 from ode.canon import parse  # noqa: E402
 
-PUBLIC_INPUTS = [
-    [1, 2, 3, 4, 5, 6],
-    [0, 0, 0, 0, 0, 0],
-    [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x61626300, 0],
-    [0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF],
-    [0xDEADBEEF, 0xCAFEBABE, 0x01234567, 0x89ABCDEF, 0x13579BDF, 0x2468ACE0],
-]
+import struct
+
+PUBLIC_INPUTS = {
+    "g": [
+        [1, 2, 3, 4, 5, 6],
+        [0, 0, 0, 0, 0, 0],
+        [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x61626300, 0],
+        [0xFFFFFFFF] * 6,
+        [0xDEADBEEF, 0xCAFEBABE, 0x01234567, 0x89ABCDEF, 0x13579BDF, 0x2468ACE0],
+    ],
+    "hash65": [
+        list(struct.unpack("<32I", msg + b"\0" * (128 - len(msg))))
+        for msg in (b"a" * 65, bytes(range(65)), b"\xff" * 65,
+                    b"The quick brown fox jumps over the lazy dog, said BLAKE3." + b"!" * 8)
+    ],
+}
+SPEC_FILE = {"g": "blake3-g.sexp", "hash65": "blake3-hash-65.sexp"}
 
 
-def true_g(values):
-    with open(os.path.join(BOOT, "blake3-g.sexp"), "rb") as f:
+def target_of(attack_dir):
+    path = os.path.join(attack_dir, "TARGET")
+    if os.path.isfile(path):
+        with open(path) as f:
+            return f.read().strip()
+    return "g"
+
+
+def true_g(values, target="g"):
+    with open(os.path.join(BOOT, SPEC_FILE[target]), "rb") as f:
         return word.run_program(parse(f.read()), values)
 
 
-def run_bob(attack_dir, values):
-    cmd = ["pypy3", os.path.join(BOOT, "bob.py"), attack_dir] + \
+def run_bob(attack_dir, values, target="g"):
+    cmd = ["pypy3", os.path.join(BOOT, "bob.py"), attack_dir, target] + \
           [str(v) for v in values]
     p = subprocess.run(cmd, cwd=attack_dir, capture_output=True, text=True,
                        timeout=120)
@@ -48,7 +66,9 @@ def run_bob(attack_dir, values):
 
 
 def score(attack_dir):
-    inputs = list(PUBLIC_INPUTS)
+    target = target_of(attack_dir)
+    n_in = {"g": 6, "hash65": 32}[target]
+    inputs = list(PUBLIC_INPUTS[target])
     extra = os.path.join(attack_dir, "INPUTS")
     if os.path.isfile(extra):
         with open(extra) as f:
@@ -56,19 +76,19 @@ def score(attack_dir):
                 if line.strip():
                     inputs.append([int(x, 0) for x in line.split()])
     for values in inputs:
-        if len(values) != 6 or any(not (0 <= v < 2 ** 32) for v in values):
-            # Outside G's domain: no true answer exists, so no wrong one.
+        if len(values) != n_in or any(not (0 <= v < 2 ** 32) for v in values):
+            # Outside the domain: no true answer exists, so no wrong one.
             # Bob must still reject rather than print ACCEPT and crash.
-            code, lines, err = run_bob(attack_dir, values)
+            code, lines, err = run_bob(attack_dir, values, target)
             if lines and lines[0] == "ACCEPT":
                 return ("MALLORY WINS", f"inputs {values}: outside the "
                         "domain, yet Bob accepted")
             continue
-        code, lines, err = run_bob(attack_dir, values)
+        code, lines, err = run_bob(attack_dir, values, target)
         verdict = lines[0] if lines else f"(no output; exit {code})"
         if verdict == "ACCEPT":
             got = lines[1] if len(lines) > 1 else ""
-            want = " ".join(str(v) for v in true_g(values))
+            want = " ".join(str(v) for v in true_g(values, target))
             if got != want:
                 return ("MALLORY WINS", f"inputs {values}: Bob accepted and "
                         f"output {got!r}; true G is {want!r}")
