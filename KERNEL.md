@@ -400,14 +400,13 @@ induction; the real kernel rejects it. The file-interface
 test runs the command a recipient would run, then corrupts the proof.
 
 The scripts `tools/make_batching_proof.py`, `tools/make_nat_add_proof.py`,
-`tools/make_chain_split_proof.py`, `tools/make_xor_proof.py`, and
-`tools/make_xor32_proof.py`, and `tools/make_rotate32_proof.py` reproduce
-the goals and proofs. The Word32 exporters ask the existing symbolic
-normalizer for its proposed result; all of
-them produce explicit proof steps rather than invoking the kernel to
-claim success. Generated proof
-bytes are included here because this is the artifact Bob checks without
-running the producer. The theorem statement travels separately.
+`tools/make_chain_split_proof.py`, `tools/make_xor_proof.py`,
+`tools/make_xor32_proof.py`, `tools/make_rotate32_proof.py`, and
+`tools/make_add32_proof.py` reproduce the goals and proofs. The Word32
+XOR and rotation exporters ask the existing symbolic normalizer for its
+proposed result. All producers emit explicit proof steps. Generated
+proof bytes are included here because this is the artifact Bob checks
+without running the producer. The theorem statement travels separately.
 
 ## Place in Ode
 

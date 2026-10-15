@@ -125,8 +125,10 @@ transformation and bit-string identities. Recursive definitions must visibly dec
 structural argument; the proof producer
 has no axiom-introduction rule. This is the smallest fragment the loop milestone needs.
 Matching μ-logic remains a possible richer foundation, rather than a prerequisite for the
-first kernel. The existing symbolic verifier has yet to emit proofs in this foundation;
-its current program claims still rely on its own semantics and normalizer.
+first kernel. The existing symbolic normalizer exports checked Word32 XOR and
+immediate-rotation derivations; a separate ripple-carry theory has a checked addition
+commutativity proof. Complete program claims still rely on the existing verifier's
+semantics and normalizer until the word and instruction refinements are connected.
 
 **Operational semantics is the intended definitional base** (as in K): each layer's language,
 including each ISA, needs explicit transition rules. Refinement proofs connect those rules to the
