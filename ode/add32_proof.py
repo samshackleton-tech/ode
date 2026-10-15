@@ -6,8 +6,8 @@ producer proves carry symmetry and lifts it to addition commutativity;
 no arithmetic axiom, native evaluator, or kernel import is involved.
 """
 from .canon import hash_of, parse
-from .xor32_proof import (Proof, app, bit_lemmas, equation,
-                          theory as xor_theory, var, word_lemmas)
+from .xor32_proof import bit_lemmas, theory as xor_theory, word_lemmas
+from .equational_proof import Proof, app, equation, var
 
 
 def theory(bit_theory):
@@ -141,7 +141,7 @@ def artifacts(t):
 
 def identity_artifacts(t):
     """Prove add32(x, zero32) = x, reusing checked carry/sum projections."""
-    from .xor32_proof import ZERO
+    from .word_literal import ZERO
     _, previous = artifacts(t)
     lemmas = previous[3]
     # Boolean carry with two zero inputs is zero for either constructor.

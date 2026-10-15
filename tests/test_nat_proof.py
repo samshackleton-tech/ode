@@ -25,6 +25,8 @@ class LemmaTest(unittest.TestCase):
         t, g, p = bundle()
         result = verify(t, g, p)
         self.assertEqual(result['lemmas'], 5)
+        self.assertLessEqual(result['work'],1976)
+        self.assertLessEqual(len(canonical_bytes(p)),2085)
         made_g, made_p = prove(t, g[3], *g[4][1:])
         self.assertEqual(canonical_bytes(g), canonical_bytes(made_g))
         self.assertEqual(canonical_bytes(p), canonical_bytes(made_p))

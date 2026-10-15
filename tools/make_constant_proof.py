@@ -7,7 +7,7 @@ sys.path.insert(0,str(ROOT))
 from ode.canon import canonical_bytes, parse
 from ode.word_literal import literal
 from ode.arx_proof import export_normalizer
-from ode.xor32_proof import app
+from ode.equational_proof import app
 
 
 def main():

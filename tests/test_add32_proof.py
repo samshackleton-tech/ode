@@ -6,7 +6,7 @@ import unittest
 from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
 from ode.add32_proof import artifacts, identity_artifacts, theory as make_theory
-from ode.xor32_proof import app, var
+from ode.equational_proof import app, var
 from ode.ground_proof import prove as ground_proof
 from ode.word_literal import literal
 

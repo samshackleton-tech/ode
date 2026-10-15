@@ -6,7 +6,7 @@ carry pair and sum bit can be computed from that encoding in either
 addition grouping. Every identity is proved by explicit Boolean cases.
 """
 from .boolean_proof import prove
-from .xor32_proof import app, var
+from .equational_proof import app, var
 
 
 def xor(a, b):

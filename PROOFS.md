@@ -144,7 +144,7 @@ pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
 ```
 
 This checks all 48 supporting lemmas and the final normalization in
-2,245 inference steps, using 938 shared terms. Supported exports are
+2,016 inference steps, using 938 shared terms. Supported exports are
 variables, explicit Word32 literals, and XOR expressions: flattening,
 reordering, zero elimination, cancellation, and constant folding. Constant
 folds emit constructor-evaluation proofs from the same theory.
@@ -189,7 +189,7 @@ ror16(x XOR y) XOR (ror8(ror8(x)) XOR ror16(y)) = zero32
 ```
 
 The result comes from the existing normalizer; the kernel checks all
-112 lemmas and 4,185 inference steps against the bit definitions.
+112 lemmas and 3,538 inference steps against the bit definitions.
 Exports support variables, explicit Word32 literals, XOR, and immediate
 rotations. Literal words project to their Boolean fields, so constants
 inside symbolic expressions use the same parity proof. Addition and
@@ -261,8 +261,8 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
   examples/proofs/add32-assoc.goal.sexp examples/proofs/add32-assoc.proof.sexp
 ```
 
-The artifact contains 524 checked lemmas and 10,816 inference steps,
-using 472,734 kernel work units within the existing limits. These are
+The artifact contains 524 checked lemmas and 10,045 inference steps,
+using 461,739 kernel work units within the existing limits. These are
 proof-work counts, not timing measurements. Tests independently check
 all six Boolean identities, reproduce the artifact, and reject changed
 carry semantics, missing Boolean cases, and a dropped operand. A fresh
@@ -280,9 +280,13 @@ commutativity, identity, and associativity theorems. Repeated operands
 remain repeated: addition has no XOR cancellation law.
 
 The producer reuses the same sorting/reassociation algorithm as XOR,
-configured with the appropriate proved laws. Supporting theorem
-libraries share equal statements, and unused lemmas are removed before
-serialization. Neither operation changes the kernel's checking rules.
+configured with the appropriate proved laws. The same algorithm also serves natural-number addition: its caller supplies
+proof steps for the relevant laws, either earlier lemma instances or direct
+unfolding. Supporting theorem libraries share equal statements; repeated
+steps and unused dependencies are removed within each proof block before
+serialization. These producer transformations preserve the conclusion and
+keep induction-case scopes separate. The kernel checks the resulting
+ordinary proof object with its existing rules.
 
 ```sh
 pypy3 tools/make_add_normalizer_proof.py
@@ -291,7 +295,7 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
 ```
 
 The example exports `(x+y)+(z+x)` as `x+(x+(y+z))`, with all additions
-modulo 2^32. Its 528 lemmas and 10,886 inference steps check within the
+modulo 2^32. Its 528 lemmas and 10,104 inference steps check within the
 existing kernel limits. Tests include repeated operands, zero, random
 expression trees, a deliberately broken `Dag.add`, and producer-free
 verification in a fresh process. Mixed constant tests include modular
@@ -319,7 +323,7 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
 ```
 
 The example checks `(0xffffffff + 1) XOR 0xdeadbeef = 0xdeadbeef`
-with modular overflow: 941 inference steps and two ground-evaluation lemmas.
+with modular overflow: 820 inference steps and two ground-evaluation lemmas.
 The theory is the existing addition theory. Rotation exports use the
 rotation theory. Each supplied theory must define the operations used.
 
@@ -457,8 +461,8 @@ pypy3 -m ode.proof_cli examples/proofs/register.theory.sexp \
   examples/proofs/register-g-normalized-b.goal.sexp examples/proofs/register-g-normalized-b.proof.sexp
 ```
 
-The committed example is G's most complex output, register `b`: 905,436
-proof bytes and 767,938 work units, within the existing
+The committed example is G's most complex output, register `b`: 846,876
+proof bytes and 733,952 work units, within the existing
 1,000,000-byte limit. The regression tests check it through the bounded
 file reader as well as the kernel. More complex programs need further
 proof decomposition or smaller derivations, rather than an assumption
@@ -621,7 +625,7 @@ pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
 ```
 
 The answer addresses exactly the requested residual identity. The final
-proof checks the original goal in 361,028 proof bytes and 327,135 work
+proof checks the original goal in 359,674 proof bytes and 326,490 work
 units. Tests reproduce the request, answer, and final proof; exercise the
 actual CLI handoff; and reject changed carry semantics or corrupted hints.
 The normalizer gains no assumed complement rule: the author-supplied

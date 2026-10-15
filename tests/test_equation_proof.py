@@ -8,7 +8,9 @@ from unittest.mock import patch
 from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.equation_proof import NeedProof,produce
-from ode.xor32_proof import ZERO,app,prove as prove_xor,var
+from ode.xor32_proof import prove as prove_xor
+from ode.equational_proof import app, var
+from ode.word_literal import ZERO
 from ode.word_literal import literal
 
 ROOT=Path(__file__).resolve().parent.parent

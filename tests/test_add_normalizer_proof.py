@@ -10,7 +10,8 @@ from ode.kernel import Reject,verify
 from ode.add_normalizer_proof import prove
 from ode.arx_proof import export_normalizer
 from ode.word_literal import literal
-from ode.xor32_proof import ZERO,app,var
+from ode.equational_proof import app, var
+from ode.word_literal import ZERO
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 

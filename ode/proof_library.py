@@ -7,7 +7,7 @@ must match and references must point backwards within each input proof.
 from copy import deepcopy
 from .canon import canonical_bytes
 from .proof_slice import instructions
-from .xor32_proof import var
+from .equational_proof import var
 
 
 class Library:

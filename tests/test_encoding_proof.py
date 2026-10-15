@@ -10,7 +10,7 @@ from ode.kernel import Reject,verify
 from ode.encoding_cli import check,code_bytes
 from ode.encoding_proof import artifacts,theory as make_theory,execution_artifacts
 from ode.register_proof import REGISTERS,g_instructions
-from ode.xor32_proof import app,var
+from ode.equational_proof import app, var
 from tests.test_a64 import ADD,EOR,ROR,LDR,STR,RET,enc,ON_A64
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'

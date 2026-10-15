@@ -9,7 +9,7 @@ from .add32_proof import artifacts as commutativity
 from .carry_proof import artifacts as carry_artifacts
 from .proof_slice import slice_proof
 from .proof_library import Library
-from .xor32_proof import Proof, app, equation, var
+from .equational_proof import Proof, app, equation, var
 
 
 def artifacts(t):

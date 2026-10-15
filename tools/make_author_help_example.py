@@ -8,7 +8,7 @@ from ode.canon import canonical_bytes,hash_of,parse
 from ode.complement_proof import artifacts
 from ode.equation_proof import NeedProof,produce
 from ode.word_literal import literal
-from ode.xor32_proof import app,var
+from ode.equational_proof import app, var
 
 
 def main():

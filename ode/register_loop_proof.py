@@ -2,7 +2,7 @@
 from .canon import hash_of,parse
 from .register_proof import theory as register_theory,composition_artifacts
 from .proof_library import Library
-from .xor32_proof import Proof,app,equation,var
+from .equational_proof import Proof, app, equation, var
 
 
 def theory(bit_theory):

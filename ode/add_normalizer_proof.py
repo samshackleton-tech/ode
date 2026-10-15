@@ -9,7 +9,8 @@ from .add_associativity_proof import artifacts as associativity
 from .proof_library import Library
 from .proof_slice import slice_proof
 from .mixed_constant_proof import NormalizerWithConstants
-from .xor32_proof import ZERO, Proof, app, equation, var
+from .equational_proof import Proof, app, equation, var, lemma_rules
+from .word_literal import ZERO
 
 
 def library(t):
@@ -34,7 +35,7 @@ def library(t):
 
 def prove(t, parameters, left, right):
     lib,laws = library(t)
-    p = NormalizerWithConstants(t,lib,'add32',laws)
+    p = NormalizerWithConstants(t,lib,'add32',lemma_rules(laws))
     a,lhs = p.normalize(left)
     b,rhs = p.normalize(right)
     if a != b:

@@ -6,7 +6,7 @@ import unittest
 from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.register_proof import normalized_output,REGISTERS
-from ode.xor32_proof import var
+from ode.equational_proof import var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 
@@ -26,8 +26,8 @@ class RegisterOutputTest(unittest.TestCase):
                 self.assertLess(len(canonical_bytes(proof)),1000000)
                 result=verify(t,goal,proof)
                 if register=='b':
-                    self.assertLess(len(canonical_bytes(proof)),910000)
-                    self.assertLess(result['work'],780000)
+                    self.assertLess(len(canonical_bytes(proof)),850000)
+                    self.assertLess(result['work'],740000)
                 self.assertEqual(goal[4][1][0],'state-'+register)
                 if register in ('x','y'):
                     self.assertEqual(goal[4][2],var(register))

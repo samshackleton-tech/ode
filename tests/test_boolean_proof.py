@@ -4,7 +4,7 @@ import unittest
 from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
 from ode.boolean_proof import prove
-from ode.xor32_proof import app, var
+from ode.equational_proof import app, var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 

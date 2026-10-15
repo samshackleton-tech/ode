@@ -7,7 +7,7 @@ It is not an AArch64 decoder or an ISA refinement theorem.
 from .canon import hash_of,parse
 from .arx_proof import theory as arithmetic_theory
 from .ground_proof import Evaluation
-from .xor32_proof import app,equation,var
+from .equational_proof import app, equation, var
 
 REGISTERS = ('a','b','c','d','x','y')
 
@@ -144,7 +144,7 @@ def composed_g_artifacts(t):
     """Prove G by two seven-instruction halves and the general composition law."""
     from .ground_proof import prove as prove_ground
     from .proof_library import Library
-    from .xor32_proof import Proof
+    from .equational_proof import Proof
     library=Library(hash_of(t))
     composition=library.include(*composition_artifacts(t))
     instructions=g_instructions()
@@ -179,7 +179,7 @@ def normalized_output(t, execution_goal, execution_proof, register):
     from .arx_proof import export_normalizer
     from .proof_library import Library
     from .proof_slice import slice_proof
-    from .xor32_proof import Proof
+    from .equational_proof import Proof
     assert register in REGISTERS, 'unknown output register'
     state=execution_goal[4][2]
     assert isinstance(state,list) and len(state)==7 and state[0]=='state', 'requires an explicit final state'

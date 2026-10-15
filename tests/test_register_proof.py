@@ -8,7 +8,7 @@ from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.register_proof import (REGISTERS,theory as make_theory,prove_execution,
                                 g_instructions,g_state,initial_state,composition_artifacts,composed_g_artifacts)
-from ode.xor32_proof import app,var
+from ode.equational_proof import app, var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 

@@ -8,7 +8,7 @@ from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.add_associativity_proof import artifacts
 from ode.carry_proof import artifacts as carry_artifacts
-from ode.xor32_proof import app,var
+from ode.equational_proof import app, var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 
@@ -25,8 +25,8 @@ class AssociativityTest(unittest.TestCase):
         for expected,actual in zip((g,p),artifacts(t)):
             self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
         result=verify(t,g,p)
-        self.assertLess(result['work'],480000)
-        self.assertLess(len(canonical_bytes(p)),540000)
+        self.assertLess(result['work'],465000)
+        self.assertLess(len(canonical_bytes(p)),520000)
 
     def test_all_six_boolean_carry_relations_check_independently(self):
         t,_,_=bundle()

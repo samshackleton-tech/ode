@@ -19,3 +19,6 @@ def word_value(term):
         if bit[0]=='bit1':
             n |= 1 << i
     return n
+
+
+ZERO = literal(0)

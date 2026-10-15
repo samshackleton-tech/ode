@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 from ode.canon import Sym, canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
-from ode.xor32_proof import ZERO, app, artifacts, law_library, prove, theory as make_theory, var
+from ode.xor32_proof import artifacts, law_library, prove, theory as make_theory
+from ode.equational_proof import app, var
+from ode.word_literal import ZERO
 from ode.arx_proof import export_normalizer
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'

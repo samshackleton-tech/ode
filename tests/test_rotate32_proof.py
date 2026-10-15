@@ -10,7 +10,8 @@ from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
 from ode.rotate32_proof import theory as make_theory
 from ode.arx_proof import export_normalizer
-from ode.xor32_proof import ZERO, app, var
+from ode.equational_proof import app, var
+from ode.word_literal import ZERO
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
 

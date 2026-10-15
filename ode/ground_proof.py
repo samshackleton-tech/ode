@@ -4,7 +4,7 @@ Memoized constructor evaluation shares repeated carry stages. Every
 reduction emits unfolding and congruence steps checked independently.
 """
 from .canon import Sym, canonical_bytes, hash_of
-from .xor32_proof import Proof, app, var
+from .equational_proof import Proof, app, var
 
 
 def substitute(term, env):

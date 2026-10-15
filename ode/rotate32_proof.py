@@ -6,8 +6,8 @@ only the existing constructor, equality, and induction rules. The kernel
 never runs this producer's arithmetic on bit indices.
 """
 from .canon import Sym, hash_of
-from .xor32_proof import (Normalizer, Proof, app, bit_lemmas, equation,
-                          theory as xor_theory, var, word_lemmas)
+from .xor32_proof import bit_lemmas, theory as xor_theory, word_lemmas
+from .equational_proof import Normalizer, Proof, app, equation, var, lemma_rules
 
 
 BIT_LAWS = {'right': 1, 'comm': 3, 'assoc': 5, 'cancel': 6,
@@ -86,7 +86,7 @@ class Producer:
     def __init__(self):
         # Use one XOR proof algorithm for bits and words. Only proved lemma
         # indices and the operation/identity differ; no new kernel rule.
-        self.p = Normalizer('xor-bit', app('bit0'), BIT_LAWS)
+        self.p = Normalizer('xor-bit', app('bit0'), lemma_rules(BIT_LAWS))
         self.lemmas = bit_lemmas() + word_lemmas() + helpers()
         self.rotations = {}
 

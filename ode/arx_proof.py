@@ -9,7 +9,9 @@ from .canon import Sym,canonical_bytes,hash_of
 from .add32_proof import theory as addition_theory
 from .rotate32_proof import theory as rotation_theory,rotation_count,prove as prove_rotation
 from .add_normalizer_proof import prove as prove_addition
-from .xor32_proof import ZERO,Proof,app,equation,operation_term,prove as prove_xor,var
+from .xor32_proof import prove as prove_xor
+from .equational_proof import Proof, app, equation, operation_term, var
+from .word_literal import ZERO
 from .word_literal import literal,word_value
 from .proof_library import Library
 from .proof_slice import slice_proof

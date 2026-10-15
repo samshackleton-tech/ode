@@ -11,7 +11,8 @@ from .boolean_proof import prove as prove_boolean
 from .proof_library import Library
 from .proof_slice import slice_proof
 from .word_literal import literal
-from .xor32_proof import Proof,app,equation,var,word_lemmas
+from .xor32_proof import word_lemmas
+from .equational_proof import Proof, app, equation, var
 
 ONES=literal(0xffffffff)
 

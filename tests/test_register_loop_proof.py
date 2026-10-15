@@ -5,7 +5,7 @@ from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.register_loop_proof import theory as make_theory,iteration_artifacts,batching_artifacts
 from ode.register_proof import g_instructions,program,initial_state,REGISTERS
-from ode.xor32_proof import app,var
+from ode.equational_proof import app, var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
 

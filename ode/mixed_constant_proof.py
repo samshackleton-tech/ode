@@ -6,7 +6,8 @@ can be lifted through the surrounding symbolic expression by congruence.
 """
 from .canon import canonical_bytes,hash_of
 from .ground_proof import Evaluation
-from .xor32_proof import ZERO,Normalizer,app,equation,var
+from .equational_proof import Normalizer, app, equation, var
+from .word_literal import ZERO
 
 
 def is_word(term):

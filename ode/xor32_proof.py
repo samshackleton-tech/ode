@@ -5,50 +5,9 @@ Its XOR operates on those fields. The producer proves Boolean laws,
 projection laws and word extensionality, then lifts the Boolean laws to
 words. The kernel checks every step, including all supporting lemmas.
 """
-from .canon import Sym, canonical_bytes, hash_of, parse
-
-
-def app(f, *args):
-    return [Sym(f), *args]
-
-
-def var(name):
-    return Sym(name)
-
-
-def equation(a, b):
-    return app('eq', a, b)
-
-
-class Proof:
-    def __init__(self):
-        self.steps = []
-
-    def emit(self, rule, *args):
-        i = len(self.steps)
-        self.steps.append(app(rule, *args))
-        return i
-
-    def refl(self, t):
-        return self.emit('refl', t)
-
-    def sym(self, p):
-        return self.emit('sym', p)
-
-    def trans(self, *proofs):
-        p = proofs[0]
-        for q in proofs[1:]:
-            p = self.emit('trans', p, q)
-        return p
-
-    def cong(self, f, *proofs):
-        return self.emit('cong', Sym(f), *proofs)
-
-    def unfold(self, f, *args):
-        return self.emit('unfold', Sym(f), *args)
-
-    def lemma(self, n, *args):
-        return self.emit('lemma', n, *args)
+from .canon import hash_of, parse
+from .equational_proof import Proof, app, var, equation, operation_term, lemma_rules
+from .word_literal import ZERO
 
 
 def bit_lemmas():
@@ -116,7 +75,8 @@ def theory(bit_theory):
     return [var('theory'), 3, [bit, word], [], defs]
 
 
-ZERO = app('word32', *[app('bit0') for _ in range(32)])
+XOR_LAWS = {'right': 40, 'comm': 41, 'assoc': 42, 'cancel': 43,
+            'left': 44, 'pair': 45, 'exchange': 46}
 
 
 def word_lemmas():
@@ -218,88 +178,8 @@ def law_library():
     return lemmas
 
 
-def operation_term(operation, zero, atoms):
-    if not atoms:
-        return zero
-    out = atoms[-1]
-    for a in reversed(atoms[:-1]):
-        out = app(operation, a, out)
-    return out
-
-
 def xor_term(atoms):
     return operation_term('xor32', ZERO, atoms)
-
-
-class Normalizer(Proof):
-    """Producer-side commutative-monoid normalization, with proved cancellation.
-
-    laws maps named identities to earlier proved lemma indices. The optional
-    cancel/pair laws enable XOR cancellation; addition keeps multiplicities.
-    Every operation emits a proof; the kernel checks those lemmas and the
-    resulting steps, regardless of the producer's configuration.
-    """
-
-    def __init__(self, operation='xor32', zero=ZERO, laws=None):
-        super().__init__()
-        self.operation, self.zero = operation, zero
-        self.laws = laws if laws is not None else {
-            'right': 40, 'comm': 41, 'assoc': 42, 'cancel': 43,
-            'left': 44, 'pair': 45, 'exchange': 46}
-        assert set(self.laws) in ({'right','comm','assoc','left','exchange'},
-                                  {'right','comm','assoc','cancel','left','pair','exchange'})
-
-    def order_key(self, atom):
-        return canonical_bytes(atom)
-
-    def term(self, atoms):
-        return operation_term(self.operation, self.zero, atoms)
-
-    def law(self, name, *args):
-        return self.lemma(self.laws[name], *args)
-
-    def insert(self, atom, ordered):
-        if not ordered:
-            return [atom], self.law('right', atom)
-        head, *tail = ordered
-        if atom == head and 'cancel' in self.laws:
-            return tail, (self.law('cancel', atom) if not tail
-                          else self.law('pair', atom, self.term(tail)))
-        if self.order_key(atom) <= self.order_key(head):
-            return [atom] + ordered, self.refl(app(self.operation, atom, self.term(ordered)))
-        if not tail:
-            return [head, atom], self.law('comm', atom, head)
-        rest, q = self.insert(atom, tail)
-        p = self.law('exchange', atom, head, self.term(tail))
-        r = self.cong(self.operation, self.refl(head), q)
-        if not rest:
-            return [head], self.trans(p, r, self.law('right', head))
-        return [head] + rest, self.trans(p, r)
-
-    def merge(self, left, right):
-        if not left:
-            return right, self.law('left', self.term(right))
-        if not right:
-            return left, self.law('right', self.term(left))
-        head, *tail = left
-        if not tail:
-            return self.insert(head, right)
-        p = self.law('assoc', head, self.term(tail), self.term(right))
-        rest, q = self.merge(tail, right)
-        r = self.cong(self.operation, self.refl(head), q)
-        out, s = self.insert(head, rest)
-        return out, self.trans(p, r, s)
-
-    def normalize(self, term):
-        if term == self.zero:
-            return [], self.refl(term)
-        if not (isinstance(term, list) and len(term) == 3 and term[0] == self.operation):
-            return [term], self.refl(term)
-        left, p = self.normalize(term[1])
-        right, q = self.normalize(term[2])
-        r = self.cong(self.operation, p, q)
-        atoms, s = self.merge(left, right)
-        return atoms, self.trans(r, s)
 
 
 def prove(t, parameters, left, right):
@@ -314,7 +194,7 @@ def prove(t, parameters, left, right):
     library = Library(hash_of(t))
     for lemma in law_library():
         library.add(lemma)
-    p = NormalizerWithConstants(t,library,'xor32',None)
+    p = NormalizerWithConstants(t,library,'xor32',lemma_rules(XOR_LAWS))
     a, lhs = p.normalize(left)
     b, rhs = p.normalize(right)
     if a != b:

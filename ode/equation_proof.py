@@ -7,7 +7,7 @@ Normalization failure makes no claim that the equation is false.
 from .canon import hash_of
 from .arx_proof import Normalization
 from .proof_slice import slice_proof
-from .xor32_proof import equation,var
+from .equational_proof import equation, var
 
 
 class NeedProof(Exception):

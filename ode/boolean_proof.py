@@ -7,7 +7,7 @@ lemmas. No truth-table rule, axiom, or kernel callback is involved.
 from itertools import product
 from .canon import Sym, canonical_bytes, hash_of
 from .ground_proof import Evaluation, substitute
-from .xor32_proof import app, equation, var
+from .equational_proof import app, equation, var
 
 
 def prove(theory, variables, left, right):

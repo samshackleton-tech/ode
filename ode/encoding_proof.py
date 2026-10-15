@@ -9,7 +9,7 @@ from .canon import parse
 from .register_proof import REGISTERS,program,theory as register_theory
 from .ground_proof import prove
 from .word_literal import literal
-from .xor32_proof import app,var
+from .equational_proof import app, var
 
 
 def theory(bit_theory, g_definitions):
