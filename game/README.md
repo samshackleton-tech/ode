@@ -12,6 +12,12 @@ A test from the relying party's side. Three roles:
     65-byte hash, and `RELIANCE`, pinning their hashes. Bob relies on it
     for what the package *means* (R3); this is the part a person reads.
 
+  `blake3/RELIANCE` also pins `(ode-base #hash)`: the tree hash of the
+  exact ode-base the package was checked against (`pypy3
+  game/pin_ode_base.py` writes it). Bob computes his own ode-base's tree
+  hash and rejects on any difference, so a newer, older, or forged
+  ode-base can never silently check a package.
+
   Together they travel separately from everything Mallory supplies.
 - **Mallory** supplies the implementation: a directory with a machine
   definition, `binary.bin`, and `certificate.sexp`. He may change

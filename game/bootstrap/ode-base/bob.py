@@ -10,8 +10,10 @@ specifications and a RELIANCE file pinning their hashes). He:
   1. loads the checker and reader from THIS directory, by absolute path,
      before anything else, so nothing in Mallory's directory can shadow
      them;
-  2. reads PACKAGE_DIR/RELIANCE, finds TARGET, parses its spec, and
-     confirms the hash;
+  2. reads PACKAGE_DIR/RELIANCE, requires its (ode-base #hash) to be the
+     tree hash of THIS ode-base -- a package checked against any other
+     ode-base, older, newer, or forged, is rejected -- then finds TARGET,
+     parses its spec, and confirms the hash;
   3. reads Mallory's certificate.sexp and requires that the certificate's
      (spec ...) IS that hash -- a certificate about any other
      specification proves nothing about G;
@@ -41,6 +43,10 @@ def main(argv):
     values = [int(x, 0) for x in argv[3:]]
     with open(os.path.join(package, "RELIANCE"), "rb") as f:
         reliance = parse(f.read())
+    from ode.store import tree_hash
+    if field(reliance, "ode-base") != tree_hash(HERE):
+        print("REJECT package was not checked against this ode-base")
+        return 1
     entries = [e for e in field(reliance, "targets") if e and e[0] == target]
     if len(entries) != 1:
         print(f"REJECT unknown target {target}")

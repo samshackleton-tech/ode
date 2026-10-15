@@ -42,3 +42,14 @@ class GameTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PinTest(unittest.TestCase):
+    def test_package_pins_this_ode_base(self):
+        sys.path.insert(0, os.path.join(GAME, "bootstrap", "ode-base"))
+        from ode.canon import field, parse
+        from ode.store import tree_hash
+        with open(os.path.join(GAME, "bootstrap", "blake3", "RELIANCE"), "rb") as f:
+            pin = field(parse(f.read()), "ode-base")
+        self.assertEqual(pin, tree_hash(os.path.join(GAME, "bootstrap", "ode-base")),
+                         "run pypy3 game/pin_ode_base.py")

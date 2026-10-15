@@ -16,6 +16,27 @@ class Reject(Exception):
     """The checker rejects; this exception carries the reason."""
 
 
+def tree_hash(root):
+    """The identity of a directory: the hash of (tree (path #hash) ...).
+
+    Every file under root except __pycache__, sorted by path, each named
+    by the BLAKE3 hash of its bytes. Any changed, added, or removed file
+    changes the result, so a package can pin the exact ode-base it was
+    checked against.
+    """
+    from .canon import Sym
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            with open(path, "rb") as f:
+                h = Bytes(blake3(f.read()))
+            entries.append([Sym(os.path.relpath(path, root)), h])
+    entries.sort(key=lambda e: str(e[0]))
+    return hash_of([Sym("tree")] + entries)
+
+
 def load_definition(store_dir, h):
     if not isinstance(h, Bytes) or len(h) != 32:
         raise Reject(f"bad hash {h!r}")
