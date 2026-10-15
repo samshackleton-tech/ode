@@ -232,6 +232,15 @@ been measured on the Mac?" is a lookup, and a regression report is computed.
 
 1. **The logic**: matching μ-logic as the certificate logic, and how computation inside proofs
    (Lean's strength) is provided: reflection verified once, or certificates for decision procedures.
+   The implementation now forces this question. Every proof today has concrete naturals: a
+   length is fixed, every condition decided, and the checker compares straight-line expressions
+   (smart constructors, and congruence for calls by certificate). One certificate for *every*
+   length needs symbolic naturals with linear arithmetic, symbolic indexing, case splits,
+   induction over loops, and, for BLAKE3, the lemma that a chunk loop with a stack of chaining
+   values computes the specification's recursive tree. Growing the checker rule by rule toward
+   that would build a second logic beside the one this design names; the alternative is the
+   small kernel of SPEC §4, with today's rules restated in it as derived rules. Deciding which
+   comes first is the next design decision.
 2. **ISA semantics**: Arm's ASL through Sail for AArch64 (blake3-servil's probe proved BLAKE3's G
    against it); which subset; the questions it raised (memory as plain memory, decoding, UNKNOWN
    values).

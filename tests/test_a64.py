@@ -151,7 +151,14 @@ class CheckerOnA64Test(unittest.TestCase):
             with self.assertRaises(Reject):
                 self.certify(enc(m), scratch)
         with self.assertRaises(Reject):
-            self.certify(code, scratch - 1)                     # scratch too small
+            self.certify(code, -1)                              # a malformed size
+        compress = parse(open(os.path.join(ROOT, "examples", "blake3-compress.sexp"), "rb").read())
+        ccode, cscratch = produce.emit_a64(produce.compile_spec(compress))
+        self.assertGreater(cscratch, 0)  # the compression spills
+        self.spec = compress
+        self.assertEqual(field(self.certify(ccode, cscratch)[0], "verdict"), "accept")
+        with self.assertRaises(Reject):
+            self.certify(ccode, cscratch - 1)                   # scratch too small
 
 
 if __name__ == "__main__":

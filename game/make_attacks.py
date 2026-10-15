@@ -255,9 +255,9 @@ def main():
     attack("28-a64-branch", "A branch spliced in: anything outside the eight "
            "modelled forms is rejected, since a jump could reach code the "
            "proof never saw.", G, enc([0x14000002] + words_), prop="a64", scratch=gs)
-    attack("29-a64-scratch-too-small", "Honest code, scratch declared one word "
-           "short: Bob would allocate too little.", G, ga, prop="a64",
-           scratch=gs - 1)
+    attack("29-a64-scratch-too-small", "Honest code that spills, scratch "
+           "declared one word short: Bob would allocate too little.", BLAKE3,
+           ha, prop="a64", scratch=hs - 1, target="blake3")
     attack("30-a64-store-past-out", "An extra store far past out[]: memory "
            "safety of the bytes that run.", G,
            enc(words_[:-1] + [0xB9000000 | (4095 << 10) | (1 << 5) | 9, words_[-1]]),

@@ -164,29 +164,114 @@ def _load(r, atom, where):
     return [_ldr(r, base, idx)]
 
 
+REGS = tuple(range(3, 18))  # the data registers ode/a64.py allows
+
+
 def emit_a64(machine_defn):
-    """Returns (bytes, scratch_words)."""
+    """A W32 program (no calls) -> (AArch64 bytes, scratch words).
+
+    Register allocation over straight-line code: values live in w3..w17;
+    when a register is needed, the value used furthest in the future is
+    evicted (Belady's rule, optimal for straight-line code). Inputs and
+    constants are reloaded rather than spilled; a computed value still
+    live is spilled to a scratch word, and slots are reused once a value
+    dies.
+    """
     word.validate_w32(machine_defn)
-    where = {n: (0, i) for i, n in enumerate(word.inputs_of(machine_defn))}
-    code, slot = [], 0
-    for name, e in word.steps_of(machine_defn):
+    inputs = word.inputs_of(machine_defn)
+    steps = list(word.steps_of(machine_defn))
+    outputs = word.outputs_of(machine_defn)
+    alias, ops = {}, []  # copies cost nothing: a name may stand for another
+    for name, e in steps:
+        if isinstance(name, list):
+            raise ValueError("emit_a64 compiles programs without calls")
         if isinstance(e, (int, Sym)):
-            code += _load(11, e, where)
-        elif e[0] == "rotr":
-            code += _load(9, e[1], where)
-            code.append(0x13800000 | (9 << 16) | (e[2] << 10) | (9 << 5) | 11)
+            alias[name] = alias.get(e, e) if isinstance(e, Sym) else e
         else:
-            code += _load(9, e[1], where) + _load(10, e[2], where)
-            op = 0x0B000000 if e[0] == "add" else 0x4A000000
-            code.append(op | (10 << 16) | (9 << 5) | 11)
-        code.append(_str(11, 2, slot))
-        where[name] = (2, slot)
-        slot += 1
-    for k, o in enumerate(word.outputs_of(machine_defn)):
-        code += _load(9, o, where)
-        code.append(_str(9, 1, k))
+            args = [alias.get(x, x) if isinstance(x, Sym) else x
+                    for x in (e[1:2] if e[0] == "rotr" else e[1:3])]
+            ops.append((name, e[0], args, e[2] if e[0] == "rotr" else None))
+    outs = [alias.get(o, o) if isinstance(o, Sym) else o for o in outputs]
+    uses = {}
+    for t, (_, _, args, _) in enumerate(ops):
+        for a in args:
+            if isinstance(a, Sym):
+                uses.setdefault(a, []).append(t)
+    end = len(ops)
+    for o in outs:
+        if isinstance(o, Sym):
+            uses.setdefault(o, []).append(end)
+    in_index = {n: i for i, n in enumerate(inputs)}
+    reg_of, holder = {}, {r: None for r in REGS}  # value <-> register
+    slot_of, free_slots, n_slots = {}, [], [0]
+    code = []
+
+    def next_use(v, t):
+        for u in uses.get(v, ()):
+            if u >= t:
+                return u
+        return None
+
+    def free_reg(t, pinned):
+        for r in REGS:
+            if holder[r] is None and r not in pinned:
+                return r
+        victim = max((r for r in REGS if r not in pinned),
+                     key=lambda r: (next_use(holder[r], t) is None and 10**9)
+                     or next_use(holder[r], t))
+        v = holder[victim]
+        if next_use(v, t) is not None and v not in in_index and v not in slot_of:
+            slot = free_slots.pop() if free_slots else n_slots[0]
+            if slot == n_slots[0]:
+                n_slots[0] += 1
+            slot_of[v] = slot
+            code.append(_str(victim, 2, slot))
+        del reg_of[v]
+        holder[victim] = None
+        return victim
+
+    def into_reg(a, t, pinned):
+        if isinstance(a, int):
+            r = free_reg(t, pinned)
+            code.extend(_load(r, a, {}))
+            return r  # a constant occupies no lasting register
+        if a in reg_of:
+            return reg_of[a]
+        r = free_reg(t, pinned)
+        code.append(_ldr(r, 0, in_index[a]) if a in in_index
+                    else _ldr(r, 2, slot_of[a]))
+        reg_of[a], holder[r] = r, a
+        return r
+
+    def release_dead(t):
+        for r in REGS:
+            v = holder[r]
+            if v is not None and next_use(v, t) is None:
+                holder[r] = None
+                del reg_of[v]
+        for v in list(slot_of):
+            if next_use(v, t) is None:
+                free_slots.append(slot_of.pop(v))
+
+    for t, (name, op, args, count) in enumerate(ops):
+        pinned = {reg_of[a] for a in args if isinstance(a, Sym) and a in reg_of}
+        regs = []
+        for a in args:  # operand registers stay pinned until the op runs
+            r = into_reg(a, t, pinned)
+            pinned.add(r)
+            regs.append(r)
+        release_dead(t + 1)  # operands used for the last time free up now
+        d = free_reg(t + 1, set())
+        if op == "rotr":
+            code.append(0x13800000 | (regs[0] << 16) | (count << 10) | (regs[0] << 5) | d)
+        else:
+            base = 0x0B000000 if op == "add" else 0x4A000000
+            code.append(base | (regs[1] << 16) | (regs[0] << 5) | d)
+        reg_of[name], holder[d] = d, name
+    for k, o in enumerate(outs):
+        code.append(_str(into_reg(o, end, set()), 1, k))
     code.append(RET)
-    return b"".join(w.to_bytes(4, "little") for w in code), slot
+    return b"".join(w.to_bytes(4, "little") for w in code), n_slots[0]
 
 
 def build(spec_defn, store_dir, isa="w32", at=None, library=None):

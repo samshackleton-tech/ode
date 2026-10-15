@@ -184,8 +184,8 @@ def check_certificate(store_dir, cert, _seen=None):
         else:
             from . import a64
             scratch = field(cert, "scratch")
-            if not isinstance(scratch, int) or scratch > 4096:
-                raise Reject("a64 certificate needs (scratch N), N <= 4096")
+            if not isinstance(scratch, int) or not 0 <= scratch <= 4096:
+                raise Reject("a64 certificate needs (scratch N), 0 <= N <= 4096")
             sizes["scratch"] = scratch
             got = a64.execute(dag, a64.decode(binary),
                               lambda i: dag.var(inputs[i]), sizes)
