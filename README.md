@@ -109,7 +109,9 @@ Arm ISA refinement, memory, and calling conventions remain open.
 The kernel also checks unbounded loop laws: processing two blocks at a
 time equals processing one at a time, and a chain of `n+k` blocks can be
 split into chains of `n` and `k`. These hold for any total compression
-function and every natural iteration count.
+function and every natural iteration count. The explicit register machine
+also has unbounded repetition and batching proofs, applicable to G's
+instruction list.
 
 The kernel-based recipient in `game/kernel-base/` also runs through the
 hash-pinned bootstrap, with owner-selected theory and goal identities.

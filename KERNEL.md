@@ -517,6 +517,39 @@ inputs. This is a CPU cross-check; it is not an Arm ISA refinement proof.
 The declared encoding model, the abstract instruction meanings, memory,
 and calling conventions still need their formal native correspondence.
 
+## Unbounded loops over register programs
+
+`examples/proofs/register-loop.theory.sexp` gives two definitions of
+repeated execution: `repeat-program(n,p)` concatenates a program `n`
+times, while `iterate-program(n,p,s)` updates the state by running `p`
+once and recursing on the remaining count. The kernel proves their
+equivalence for every natural count, program, and state.
+
+It also proves explicit register-program batching:
+
+```
+iterate-program(double(n), p, s)
+  = iterate-program(n, append-program(p,p), s)
+```
+
+```sh
+pypy3 tools/make_register_loop_proof.py
+pypy3 -m ode.proof_cli examples/proofs/register-loop.theory.sexp \
+  examples/proofs/register-iterate.goal.sexp examples/proofs/register-iterate.proof.sexp
+pypy3 -m ode.proof_cli examples/proofs/register-loop.theory.sexp \
+  examples/proofs/register-batch.goal.sexp examples/proofs/register-batch.proof.sexp
+```
+
+The two proofs take 38 and 47 inference steps, including the general
+program-composition lemma. They use structural induction and the explicit
+instruction semantics, with no length bound or evaluator callback.
+Tests instantiate batching with G's instruction list and reject incorrect
+count doubling, omitted repetitions, wrong goal counts, and missing cases.
+
+These are state-equivalence theorems in the register model. They do not
+yet specify native branches, memory traces, instruction timing, or the
+performance of a loop implementation.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
