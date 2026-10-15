@@ -1,9 +1,9 @@
 """The checker (reliance R1): a certificate's bytes compute its spec.
 
-It proves by symbolic execution: it runs both the specification and the
-program decoded from the binary -- W32, or AArch64 (ode/a64.py) -- over
-fresh variables, building
-expressions through smart constructors -- constant folding, xor
+It proves by symbolic evaluation: the specification and the program
+decoded from the binary -- W32, or AArch64 (ode/a64.py) -- are both
+evaluated over fresh variables in one algebra, the DAG below, whose
+smart constructors build canonical expressions -- constant folding, xor
 cancellation, add/xor flattening under a canonical operand order, rotr
 composition, and rotr distributing over xor. Expressions are hash-consed
 DAG nodes, so identical subexpressions are one node and size stays
