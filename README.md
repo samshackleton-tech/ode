@@ -133,9 +133,11 @@ own larger reliance set until those connections are established.
 Ode may ask authors for a specific invariant, lemma, decomposition, or
 semantics-preserving source restructuring when proof generation needs
 help. The kernel must still check the result, and program performance
-remains part of the contract. This is a [design objective](DESIGN.md#author-assisted-proof-production),
-with [established precedents](AUTHOR-ASSISTED-PROOFS.md); the interactive
-request protocol is still to be implemented.
+remains part of the contract. The first CLI handoff is implemented: `ode.equation_cli` emits a residual
+goal when arithmetic normalization needs help and accepts its checked
+proof on a later invocation. See [PROOFS.md](PROOFS.md) for the interface,
+the [design](DESIGN.md#author-assisted-proof-production) for the broader
+plan, and [related work](AUTHOR-ASSISTED-PROOFS.md) for its precedents.
 
 ## Next
 

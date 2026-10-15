@@ -166,8 +166,10 @@ specific help. A useful request identifies the remaining obligation, its
 local context, what was attempted, and the exact missing fact or proposed
 restructuring. It distinguishes an unsupported proof technique or exhausted
 budget from a counterexample. The author may be a human or another agent.
-This interaction is a design objective; the current producers do not yet
-implement an author-request protocol.
+`ode.equation_cli` implements the first arithmetic goal/proof handoff:
+normalization can emit a residual goal and accept its proof on a later
+invocation. Requests for specific invariants, source restructuring, or
+budget-aware decomposition remain design work.
 
 Help guides the producer; it adds no axioms to the checker. Supplied lemmas
 must be proved, and a changed implementation must still refine the owner's

@@ -51,3 +51,11 @@ hints, proof decomposition, and verification-oriented source design. It
 does not establish a novelty claim for automatically generated requests
 or a comparative performance claim for Ode. Those require implementation
 and evidence.
+
+## Current Ode interface
+
+`ode.equation_cli` implements a small handoff using ordinary kernel goals
+and proofs: unresolved arithmetic normalization emits a residual goal,
+and an author-supplied proof is composed into the original proof and
+checked. [PROOFS.md](PROOFS.md) documents its status codes and limits.
+The richer diagnostic requests described above remain design objectives.

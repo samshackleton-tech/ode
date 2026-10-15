@@ -555,3 +555,45 @@ count doubling, omitted repetitions, wrong goal counts, and missing cases.
 These are state-equivalence theorems in the register model. They do not
 yet specify native branches, memory traces, instruction timing, or the
 performance of a loop implementation.
+
+## Author-supplied residual proofs
+
+`ode.equation_cli` tries to prove an owner-selected Word32 equation using
+the arithmetic normalizer. On success it checks the resulting proof with
+the kernel and writes the ordinary proof object to stdout:
+
+```sh
+pypy3 -m ode.equation_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/add32-assoc.goal.sexp > /tmp/add-assoc.proof.sexp
+pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/add32-assoc.goal.sexp /tmp/add-assoc.proof.sexp
+```
+
+If normalization leaves a residual equality, stdout contains an ordinary
+version-3 goal and the process exits with status 2. The diagnostic on
+stderr asks for a proof of that goal. This means the equation remains
+unresolved; it makes no counterexample claim. The author can supply a
+proof on a later invocation:
+
+```sh
+pypy3 -m ode.equation_cli THEORY ORIGINAL_GOAL RESIDUAL_PROOF > final.proof.sexp
+```
+
+The residual uses the same theory and original parameters. A supplied
+proof must name exactly that residual goal. The producer composes its
+normalization steps, the supplied lemma, and proved XOR cancellation to
+establish the original equality. The CLI verifies the whole result before
+emitting a successful proof. A false hint or wrong goal identity fails;
+there is no hint-introduced axiom and no weakening of the original claim.
+
+The API is `ode.equation_proof.produce(theory, goal, residual_proof=None)`;
+`NeedProof.goal` carries the request. Tests include a true identity beyond
+the current normalizer, a deliberately weaker but semantically correct
+normalizer completed by an independently generated author proof, and a
+false hint rejected by the kernel. The formats are the existing goal and
+proof formats, rather than a separate hint language.
+
+This is the first author handoff, for arithmetic equalities. Automatic
+requests for particular invariants or source restructurings remain design
+work. Resource exhaustion currently rejects; it does not yet generate a
+budget-aware decomposition request.
