@@ -105,6 +105,22 @@ def cases():
         proof[2] = hash_of(goal)
         yield name, (theory, goal, proof), False
 
+    rotate = [parse((directory / f'rotate32.{k}.sexp').read_bytes())
+              for k in ('theory', 'goal', 'proof')]
+    yield 'honest-rotation-export', rotate, True
+    for name in ('rotation-wrong-field', 'rotation-wrong-count', 'rotation-oracle'):
+        theory, goal, proof = copy.deepcopy(rotate)
+        if name == 'rotation-wrong-field':
+            definition = next(d for d in theory[4] if d[0] == 'ror-8')
+            definition[3][0][2][1] = Sym('b24')
+            goal[2] = hash_of(theory)
+        elif name == 'rotation-wrong-count':
+            goal[4][1][2][1][1][0] = Sym('ror-7')
+        else:
+            proof[4] = [Sym('derive'), [[Sym('rotate-congruence'), goal[4]]]]
+        proof[2] = hash_of(goal)
+        yield name, (theory, goal, proof), False
+
 
 def main():
     failures = 0

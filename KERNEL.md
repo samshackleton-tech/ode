@@ -157,6 +157,45 @@ program. Mapping the decoder's u32 values to these Word32 constructors
 and proving the remaining word/ISA operations are still required before
 existing native certificates can use this smaller reliance set.
 
+## Rotation composition and distribution
+
+The rotation export uses the same Word32/Bit definitions. `ror-0` through
+`ror-31` are explicit permutations of the 32 bit fields: field 0 is the
+least significant bit, and output field `i` reads input `(i+n) mod 32`.
+These are immediate rotations, as used by BLAKE3's compression.
+
+`ode/rotate32_proof.py` exports the existing `Dag.rotr`/`Dag.xor` result
+and proves it via bit projections. It generates projection lemmas only
+for counts used in that proof, and reuses the XOR proof algorithm at the
+Boolean level. No kernel rule, oracle, or arithmetic axiom is added.
+
+```sh
+pypy3 tools/make_rotate32_proof.py
+pypy3 -m ode.proof_cli examples/proofs/rotate32.theory.sexp \
+  examples/proofs/rotate32.goal.sexp examples/proofs/rotate32.proof.sexp
+```
+
+The example proves that
+
+```
+ror16(x XOR y) XOR (ror8(ror8(x)) XOR ror16(y)) = zero32
+```
+
+The result comes from the existing normalizer; the kernel checks all
+107 lemmas and 2,551 inference steps against the bit definitions.
+Exports support variables, zero, XOR, and immediate rotations. Addition,
+nonzero constant folding, and machine-execution claims remain outside
+this fragment.
+
+Tests check composition for every count, including wraparound, and
+random combinations of distribution and cancellation. Separately, one
+unfolding proof for each basis bit and count (1,024 cases) checks the
+definitions against independently computed integer right rotations.
+This matters: the same algebraic laws could hold for a mistakenly
+left-rotating definition. A changed selector, count, conclusion, or
+invented rotation rule is rejected. Verification also succeeds in a
+fresh process that blocks all producer and old-verifier imports.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
@@ -312,7 +351,8 @@ reported work counts are deterministic diagnostic counts, not clocks.
 ## Review and adversarial checks
 
 ```sh
-pypy3 -m unittest tests.test_kernel tests.test_nat_proof tests.test_bits_kernel tests.test_xor32_proof
+pypy3 -m unittest tests.test_kernel tests.test_nat_proof tests.test_bits_kernel
+pypy3 -m unittest tests.test_xor32_proof tests.test_rotate32_proof
 pypy3 game/kernel_attacks.py
 ```
 
@@ -330,8 +370,9 @@ test runs the command a recipient would run, then corrupts the proof.
 
 The scripts `tools/make_batching_proof.py`, `tools/make_nat_add_proof.py`,
 `tools/make_chain_split_proof.py`, `tools/make_xor_proof.py`, and
-`tools/make_xor32_proof.py` reproduce the goals and proofs. The last
-asks the existing symbolic normalizer for its proposed result; all of
+`tools/make_xor32_proof.py`, and `tools/make_rotate32_proof.py` reproduce
+the goals and proofs. The Word32 exporters ask the existing symbolic
+normalizer for its proposed result; all of
 them produce explicit proof steps rather than invoking the kernel to
 claim success. Generated proof
 bytes are included here because this is the artifact Bob checks without
@@ -349,7 +390,7 @@ The kernel is the intended destination for the existing symbolic
 checker's work, not a second route to silently accept rejected program
 certificates. Today it checks mathematical proof objects; `check.py`
 still verifies executable programs using its larger reliance set. The
-next connection is to extend the Word32 XOR export to the remaining
+next connection is to extend the Word32 XOR/rotation export to the remaining
 word/ISA semantics and make the symbolic checker **emit derivations**
 for whole programs. Loop claims
 then need invariants and refinement proofs in that same logic. Until

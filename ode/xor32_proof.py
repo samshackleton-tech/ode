@@ -218,58 +218,81 @@ def law_library():
     return lemmas
 
 
-def xor_term(atoms):
+def operation_term(operation, zero, atoms):
     if not atoms:
-        return ZERO
+        return zero
     out = atoms[-1]
     for a in reversed(atoms[:-1]):
-        out = app('xor32', a, out)
+        out = app(operation, a, out)
     return out
 
 
+def xor_term(atoms):
+    return operation_term('xor32', ZERO, atoms)
+
+
 class Normalizer(Proof):
-    """Producer-side sorting/cancellation; each operation emits its proof."""
+    """Producer-side XOR sorting/cancellation, for bits or whole words.
+
+    laws maps the seven named identities to earlier proved lemma indices.
+    Every operation emits a proof; the kernel checks those lemmas and the
+    resulting steps, regardless of the producer's configuration.
+    """
+
+    def __init__(self, operation='xor32', zero=ZERO, laws=None):
+        super().__init__()
+        self.operation, self.zero = operation, zero
+        self.laws = laws if laws is not None else {
+            'right': 40, 'comm': 41, 'assoc': 42, 'cancel': 43,
+            'left': 44, 'pair': 45, 'exchange': 46}
+        assert set(self.laws) == {'right','comm','assoc','cancel','left','pair','exchange'}
+
+    def term(self, atoms):
+        return operation_term(self.operation, self.zero, atoms)
+
+    def law(self, name, *args):
+        return self.lemma(self.laws[name], *args)
 
     def insert(self, atom, ordered):
         if not ordered:
-            return [atom], self.lemma(40, atom)
+            return [atom], self.law('right', atom)
         head, *tail = ordered
         if atom == head:
-            return tail, (self.lemma(43, atom) if not tail
-                          else self.lemma(45, atom, xor_term(tail)))
+            return tail, (self.law('cancel', atom) if not tail
+                          else self.law('pair', atom, self.term(tail)))
         if canonical_bytes(atom) < canonical_bytes(head):
-            return [atom] + ordered, self.refl(app('xor32', atom, xor_term(ordered)))
+            return [atom] + ordered, self.refl(app(self.operation, atom, self.term(ordered)))
         if not tail:
-            return [head, atom], self.lemma(41, atom, head)
+            return [head, atom], self.law('comm', atom, head)
         rest, q = self.insert(atom, tail)
-        p = self.lemma(46, atom, head, xor_term(tail))
-        r = self.cong('xor32', self.refl(head), q)
+        p = self.law('exchange', atom, head, self.term(tail))
+        r = self.cong(self.operation, self.refl(head), q)
         if not rest:
-            return [head], self.trans(p, r, self.lemma(40, head))
+            return [head], self.trans(p, r, self.law('right', head))
         return [head] + rest, self.trans(p, r)
 
     def merge(self, left, right):
         if not left:
-            return right, self.lemma(44, xor_term(right))
+            return right, self.law('left', self.term(right))
         if not right:
-            return left, self.lemma(40, xor_term(left))
+            return left, self.law('right', self.term(left))
         head, *tail = left
         if not tail:
             return self.insert(head, right)
-        p = self.lemma(42, head, xor_term(tail), xor_term(right))
+        p = self.law('assoc', head, self.term(tail), self.term(right))
         rest, q = self.merge(tail, right)
-        r = self.cong('xor32', self.refl(head), q)
+        r = self.cong(self.operation, self.refl(head), q)
         out, s = self.insert(head, rest)
         return out, self.trans(p, r, s)
 
     def normalize(self, term):
-        if term == ZERO:
+        if term == self.zero:
             return [], self.refl(term)
-        if not (isinstance(term, list) and len(term) == 3 and term[0] == 'xor32'):
+        if not (isinstance(term, list) and len(term) == 3 and term[0] == self.operation):
             return [term], self.refl(term)
         left, p = self.normalize(term[1])
         right, q = self.normalize(term[2])
-        r = self.cong('xor32', p, q)
+        r = self.cong(self.operation, p, q)
         atoms, s = self.merge(left, right)
         return atoms, self.trans(r, s)
 

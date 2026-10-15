@@ -114,6 +114,14 @@ pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
 # xor32(x, xor32(y,x)) = y — all 47 supporting lemmas also checked
 ```
 
+Rotation composition and distribution over XOR are exported too, against
+explicit right-rotation bit permutations:
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/rotate32.theory.sexp \
+  examples/proofs/rotate32.goal.sexp examples/proofs/rotate32.proof.sexp
+```
+
 The theory and goal come from the owner; the proof can come from anyone.
 The theorem holds for any total compression function, initial state,
 block source, and starting index. `KERNEL.md` gives the complete rules,
@@ -125,7 +133,7 @@ verifier in `ode/check.py` still has its own larger reliance set.
 
 ## Next
 
-Extend the first Word32 XOR export to the remaining word operations,
+Extend the Word32 XOR/rotation exports to addition and the remaining word operations,
 instruction semantics, and complete symbolic execution certificates;
 then prove native loop refinements with invariants. Native call support and NEON
 remain performance work; they no longer postpone the kernel.
