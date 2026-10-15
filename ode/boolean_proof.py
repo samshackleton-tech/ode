@@ -1,4 +1,4 @@
-"""Produce Boolean identities by exhaustive, kernel-checked constructor cases.
+"""Produce equations over Boolean variables by checked constructor cases.
 
 Each leaf emits evaluation derivations from the theory. Each internal
 node is an ordinary two-case induction referencing its earlier child
@@ -12,6 +12,8 @@ from .equational_proof import app, equation, var
 
 def prove(theory, variables, left, right):
     """Prove an equation universally over at most eight Boolean variables.
+
+    The equation's result can have any sort; only its parameters are Bit.
 
     The theory must be valid and define Bit with bit0/bit1 constructors.
     Both terms must be well-sorted and closed after substituting variables.

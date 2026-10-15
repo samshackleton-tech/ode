@@ -240,6 +240,35 @@ These milestones prove commutativity and right-zero identity of the
 defined adder. The native ADD representation/refinement link remains
 open; natural-number addition lemmas do not discharge word-level obligations.
 
+## Numeric meaning of a full-adder column
+
+`examples/proofs/adder-value.theory.sexp` uses the same Boolean carry
+and XOR definitions as Word32 addition, and the same `add` definition
+as natural-number arithmetic. `bit-value` maps `bit0` to zero and `bit1`
+to one. The kernel proves, for every three input bits,
+
+```
+value(sum bit) + 2 * value(carry bit)
+  = value(a) + value(b) + value(carry-in)
+```
+
+Here addition is mathematical natural-number addition. The proof uses
+explicit constructor cases and definition reduction, not a machine-integer
+oracle. It checks 26 supporting lemmas and 561 inference steps in 9,916
+work units.
+
+```sh
+pypy3 tools/make_adder_value_proof.py
+pypy3 -m ode.proof_cli examples/proofs/adder-value.theory.sexp \
+  examples/proofs/adder-value.goal.sexp examples/proofs/adder-value.proof.sexp
+```
+
+Tests confirm the shared definitions match exactly, pin the numeric values
+of both bit constructors, and reject changed carry semantics, a dropped
+input, or weighting the carry by one instead of two. This establishes the
+local conservation law; a full Word32 interpretation theorem must still
+lift it across all 32 columns and account for discarded carry-out.
+
 ## Word32 addition associativity
 
 `ode/add_associativity_proof.py` proves
