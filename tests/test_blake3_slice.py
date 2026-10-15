@@ -107,6 +107,20 @@ class CompressTest(unittest.TestCase):
         self.assertEqual(ref.root_bytes(32), bytes.fromhex(blake3_hex(data)))
         self.assertEqual(out_words[:8], ref.chaining_value())
 
+    def test_tampered_binary_file_rejected(self):
+        tmp = tempfile.mkdtemp()
+        wproducer.build(self.spec, tmp)
+        wcheck.check_store(tmp)
+        path = os.path.join(tmp, "binary.bin")
+        with open(path, "rb") as f:
+            raw = bytearray(f.read())
+        raw[100] ^= 1
+        with open(path, "wb") as f:
+            f.write(bytes(raw))
+        with self.assertRaises(Reject) as cm:
+            wcheck.check_store(tmp)
+        self.assertIn("binary.bin", str(cm.exception))
+
     def test_checker_proves_compression(self):
         tmp = tempfile.mkdtemp()
         result = wproducer.build(self.spec, tmp)

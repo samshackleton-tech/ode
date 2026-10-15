@@ -2,12 +2,20 @@ Ode: a short poem of praise
 
 ## The toy implementation, and how to check it yourself
 
-`ode/` is an initial, toy-scale implementation of `SPEC.md`: an executable
-specification, a compiler to a straight-line byte machine (ODE8), a
-deterministic emitter, a small independent checker that proves the emitted
-bytes compute the specification on *every* input (by exhaustion over the
-whole domain), and an assurance map generated from the checker record.
-Nothing is trusted between the specification and the checker.
+`ode/` is an initial, toy-scale implementation of `SPEC.md`, in two
+flavours sharing one shape -- executable specification, untrusted
+compiler, deterministic emitter, small independent checker, assurance
+map generated from the checker record:
+
+- **bytes** (`ode/spec.py`, `ode/machine.py`, `ode/checker.py`): the proof
+  is by exhaustion over the whole 1-2-byte domain; the mix example below.
+- **words** (`ode/word.py`, `ode/wproducer.py`, `ode/wcheck.py`): the proof
+  is symbolic, over every u32 input; the BLAKE3 slice further down.
+
+In both, the checker reads the store's actual `binary.bin` -- the file
+`run`/`runw` executes -- and binds it to the certificate: what is proved
+is the bytes that run, or the check rejects. Nothing else between the
+specification and the checker is trusted.
 
 Every definition, expression, program, certificate, and record is a
 canonical s-expression (`ode/canon.py`): symbols and integers in nested
@@ -15,10 +23,10 @@ lists, one space between elements, no other whitespace, a definition's
 name the BLAKE3 hash of that form. One syntax for everything, small
 enough that its reader is a few dozen lines.
 
-Verify the worked example end to end (Python 3, no dependencies):
+Verify the worked example end to end (PyPy3, no dependencies):
 
 ```sh
-pypy3 -m unittest discover -s tests     # 11 tests, incl. mutants the checker must reject
+pypy3 -m unittest discover -s tests     # 18 tests, incl. mutants the checker must reject
 pypy3 -m ode build examples/mix.sexp examples/build
 pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
 pypy3 -m ode run   examples/build 60 165   # 174

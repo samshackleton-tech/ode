@@ -99,6 +99,19 @@ class EndToEndTest(unittest.TestCase):
         with self.assertRaises(checker.Reject):
             checker.check_store(self.tmp)
 
+    def test_tampered_binary_file_rejected(self):
+        # The file a user executes is what the checker must bind: flipping
+        # one byte of binary.bin itself (certificate untouched) rejects.
+        path = os.path.join(self.tmp, "binary.bin")
+        with open(path, "rb") as f:
+            raw = bytearray(f.read())
+        raw[0] ^= 1
+        with open(path, "wb") as f:
+            f.write(bytes(raw))
+        with self.assertRaises(checker.Reject) as cm:
+            checker.check_store(self.tmp)
+        self.assertIn("binary.bin", str(cm.exception))
+
     def test_mutant_machine_definition_rejected(self):
         cert = self._cert()
         bad = parse("(machine (isa ODE8) (inputs 2) "
@@ -109,6 +122,8 @@ class EndToEndTest(unittest.TestCase):
         binary = machine.emit(bad)  # honest emitter output, honestly hashed
         cert = self._set(cert, "binary-hex", Sym(binary.hex()))
         cert = self._set(cert, "binary-hash", Sym(blake3_hex(binary)))
+        with open(os.path.join(self.tmp, "binary.bin"), "wb") as f:
+            f.write(binary)  # the store's executed file, honestly replaced
         self._rewrite_cert(cert)
         with self.assertRaises(checker.Reject) as cm:
             checker.check_store(self.tmp)

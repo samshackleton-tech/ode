@@ -43,6 +43,28 @@ def _load(store_dir, h):
     return defn
 
 
+def _load_binary(store_dir, cert):
+    """The bytes that run: the store's binary.bin, bound to the certificate.
+
+    A certificate carries the binary's hex and hash; this is where they
+    are tied to the file a user actually executes. A store whose
+    binary.bin differs from its certificate -- by one byte, or by
+    belonging to a different build -- is rejected here.
+    """
+    import os as _os
+    path = _os.path.join(store_dir, "binary.bin")
+    if not _os.path.isfile(path):
+        raise Reject("store has no binary.bin")
+    with open(path, "rb") as f:
+        data = f.read()
+    if data.hex() != str(field(cert, "binary-hex")):
+        raise Reject("binary.bin is not the binary the certificate names")
+    if blake3_hex(data) != field(cert, "binary-hash"):
+        raise Reject("binary.bin does not hash to the certificate's "
+                     "binary-hash")
+    return data
+
+
 def check_certificate(store_dir, cert):
     """Returns a checker record (an s-expression) or raises Reject."""
     if not isinstance(cert, list) or not cert or cert[0] != "certificate":
@@ -66,10 +88,7 @@ def check_certificate(store_dir, cert):
     binary_hex = field(cert, "binary-hex")
     if not isinstance(binary_hex, Sym):
         raise Reject("certificate carries no binary")
-    try:
-        binary = bytes.fromhex(str(binary_hex))
-    except ValueError as e:
-        raise Reject("binary is not hex") from e
+    binary = _load_binary(store_dir, cert)
     if blake3_hex(binary) != field(cert, "binary-hash"):
         raise Reject("binary does not hash to the certificate's binary-hash")
     if machine.emit(machine_defn) != binary:

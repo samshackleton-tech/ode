@@ -16,7 +16,7 @@ recomputed here from its bytes.
 from . import word
 from .blake3 import blake3_hex
 from .canon import Sym, assoc, field, hash_of
-from .checker import Reject, _load
+from .checker import Reject, _load, _load_binary
 
 CHECKER_ID = Sym("ode-wchecker-0.1")
 PROPERTY = "equals-wspec-v1"
@@ -140,10 +140,7 @@ def check_certificate(store_dir, cert):
     binary_hex = field(cert, "binary-hex")
     if not isinstance(binary_hex, Sym):
         raise Reject("certificate carries no binary")
-    try:
-        binary = bytes.fromhex(str(binary_hex))
-    except ValueError as e:
-        raise Reject("binary is not hex") from e
+    binary = _load_binary(store_dir, cert)
     if blake3_hex(binary) != field(cert, "binary-hash"):
         raise Reject("binary does not hash to the certificate's binary-hash")
     if word.emit_w32(machine_defn) != binary:
