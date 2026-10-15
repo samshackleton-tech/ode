@@ -478,19 +478,18 @@ instruction list to a list of Word32 instruction words.
 pypy3 tools/make_encoding_proof.py
 pypy3 -m ode.encoding_cli examples/proofs/encoding.theory.sexp \
   examples/proofs/encoding-g.goal.sexp examples/proofs/encoding-g.proof.sexp \
+  examples/proofs/encoding-g-execution.goal.sexp examples/proofs/encoding-g-execution.proof.sexp \
   examples/proofs/encoding-g.bin
-pypy3 -m ode.proof_cli examples/proofs/encoding.theory.sexp \
-  examples/proofs/encoding-g-execution.goal.sexp examples/proofs/encoding-g-execution.proof.sexp
 ```
 
-The first command checks an encoding theorem and binds its instruction
-words to the exact 56 bytes read from the file. The second checks G's
-abstract execution in the same theory. Tests confirm both goals name the
-same instruction list. The encoding proof uses 280 inference steps; the
+The checker verifies both owner-selected equations, requires that they
+name exactly the same instruction list, and binds the encoded words to
+the exact 56 bytes read from the file. A valid execution theorem for a
+different program is rejected. The encoding proof uses 280 inference steps; the
 execution proof uses 826. The binary is an arithmetic fragment, **not a
 callable function**: it has no loads, stores, or RET.
 
-Byte binding relies on `ode/encoding_cli.py`, literal conversion in
+Program matching and byte binding rely on `ode/encoding_cli.py`, literal conversion in
 `ode/word_literal.py`, and file I/O in addition to the kernel. The reader
 compares literal instruction words in little-endian order and does not
 execute the file. The owner still selects the theory and goal. File

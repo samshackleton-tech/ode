@@ -22,6 +22,10 @@ def bundle():
     return t,g,p
 
 
+def execution():
+    return [parse((EXAMPLES/f'encoding-g-execution.{k}.sexp').read_bytes()) for k in ('goal','proof')]
+
+
 class EncodingProofTest(unittest.TestCase):
     def test_artifacts_reproduce_and_bind_code(self):
         t,g,p=bundle()
@@ -31,7 +35,7 @@ class EncodingProofTest(unittest.TestCase):
         words=[int.from_bytes(code[i:i+4],'little') for i in range(0,len(code),4)]
         for expected,actual in zip((g,p),artifacts(t,g_instructions(),words)):
             self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
-        check(t,g,p,code)
+        check(t,g,p,*execution(),code)
         self.assertEqual(len(code),56)
 
     def test_execution_and_encoding_name_the_same_instruction_list(self):
@@ -63,10 +67,10 @@ class EncodingProofTest(unittest.TestCase):
         for i in range(len(code)):
             mutant=bytearray(code);mutant[i]^=1
             with self.assertRaisesRegex(Reject,'code bytes differ'):
-                check(t,g,p,bytes(mutant))
+                check(t,g,p,*execution(),bytes(mutant))
         for mutant in (code[:-1],code+b'\0'):
             with self.assertRaises(Reject):
-                check(t,g,p,mutant)
+                check(t,g,p,*execution(),mutant)
 
     def test_changed_register_encoding_rejected(self):
         t,g,p=bundle()
@@ -75,6 +79,20 @@ class EncodingProofTest(unittest.TestCase):
         g[2]=hash_of(t);p[2]=hash_of(g)
         with self.assertRaises(Reject):
             verify(t,g,p)
+
+    def test_valid_proofs_for_different_programs_are_rejected(self):
+        from ode.register_proof import prove_execution,initial_state
+        t,g,p=bundle()
+        eg,ep=prove_execution(t,[],initial_state())
+        verify(t,eg,ep)  # A valid theorem, for the wrong instruction list.
+        with self.assertRaisesRegex(Reject,'different programs'):
+            check(t,g,p,eg,ep,(EXAMPLES/'encoding-g.bin').read_bytes())
+
+    def test_invalid_execution_proof_is_rejected_by_byte_binding(self):
+        t,g,p=bundle();eg,ep=execution()
+        ep[4][1][-1][0]=var('invented-rule')
+        with self.assertRaises(Reject):
+            check(t,g,p,eg,ep,(EXAMPLES/'encoding-g.bin').read_bytes())
 
     def test_nonliteral_word_lists_are_rejected(self):
         for value in (var('words'),app('instruction-word'),app('instruction-word',var('x'),app('no-words'))):
@@ -95,7 +113,8 @@ from ode.encoding_cli import main
 raise SystemExit(main(sys.argv[1:]))
 '''
         paths=[str(EXAMPLES/'encoding.theory.sexp')]+[
-            str(EXAMPLES/f'encoding-g.{k}') for k in ('goal.sexp','proof.sexp','bin')]
+            str(EXAMPLES/f'encoding-g.{k}') for k in ('goal.sexp','proof.sexp')]+[
+            str(EXAMPLES/f'encoding-g-execution.{k}.sexp') for k in ('goal','proof')]+[str(EXAMPLES/'encoding-g.bin')]
         result=subprocess.run([sys.executable,'-c',script,*paths],cwd=EXAMPLES.parent.parent,
             capture_output=True,text=True,timeout=30)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
