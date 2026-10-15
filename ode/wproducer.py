@@ -161,9 +161,7 @@ def build(spec_defn, store_dir):
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", PROPERTY),
                  ("spec", spec_hash),
-                 ("binary-hash", Bytes(blake3(binary))),
-                 ("binary", Bytes(binary)),
-                 ("inputs", len(word.inputs_of(spec_defn))))
+                 ("binary-hash", Bytes(blake3(binary))))
     cert_hash = put_definition(store_dir, cert)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(cert))

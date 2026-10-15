@@ -14,7 +14,9 @@ Tree hash: BLAKE3 over the sorted entries, each the file's path (UTF-8,
 '/'-separated, relative to ODE_BASE_DIR), a zero byte, and the 32-byte
 BLAKE3 of its contents. __pycache__ directories are skipped.
 Root code: this file and blake3.py; nothing else is imported from disk
-except Python's standard library.
+except Python's standard library. ode-base carries no hash of its own:
+the root serves its blake3 module to ode-base as `ode.blake3`, so Bob
+relies on one BLAKE3, not two.
 """
 import importlib.abc
 import importlib.util
@@ -24,8 +26,9 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from blake3 import blake3  # noqa: E402  (the root's own copy)
+import blake3 as _root_blake3  # noqa: E402  (the root's own copy)
 sys.path.pop(0)
+blake3 = _root_blake3.blake3
 
 
 def read_tree(root):
@@ -90,9 +93,7 @@ def main(argv):
     if tree_hash(files).hex().encode() != pins[0]:
         print("REJECT ode-base is not the one the package pins")
         return 1
-    for name in list(sys.modules):
-        if name == "ode" or name.startswith("ode."):
-            del sys.modules[name]
+    sys.modules["ode.blake3"] = _root_blake3
     sys.meta_path.insert(0, _MemoryFinder(files))
     if "bob.py" not in files:
         print("REJECT ode-base has no bob.py")

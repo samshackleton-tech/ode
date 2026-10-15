@@ -63,7 +63,6 @@ def build(spec_defn, store_dir):
                  ("property", PROPERTY),
                  ("spec", spec_hash), ("machine", machine_hash),
                  ("binary-hash", Bytes(blake3(binary))),
-                 ("binary", Bytes(binary)),
                  ("inputs", spec_mod.spec_inputs(spec_defn)))
     cert_hash = put_definition(store_dir, cert)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:

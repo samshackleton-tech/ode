@@ -71,8 +71,7 @@ def _forge(name, notes, spec, machine_defn, target=None, binary=None,
                  ("property", Sym("equals-wspec-v1")),
                  ("spec", hash_of(spec)),
                  ("binary-hash", Bytes(blake3(binary))),
-                 ("binary", Bytes(binary)),
-                 ("inputs", len(word.inputs_of(spec))))
+                 )
     put_definition(d, cert)
     with open(os.path.join(d, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(cert))
@@ -90,6 +89,12 @@ def _forge(name, notes, spec, machine_defn, target=None, binary=None,
             f.write("\n".join(inputs_lines) + "\n")
     elif os.path.exists(ipath):
         os.remove(ipath)
+    epath = os.path.join(d, "EXPECT")
+    if notes.startswith("Control"):
+        with open(epath, "w") as f:
+            f.write("accept\n")
+    elif os.path.exists(epath):
+        os.remove(epath)
     if tamper:
         tamper(d, machine_defn)
     return d
@@ -246,7 +251,7 @@ def attacks_hash65():
     cert17 = [("cert", Sym("correctness")), ("property", Sym("equals-wspec-v1")),
               ("spec", HASH65_HASH), ("machine", HASH65_HASH),
               ("binary-hash", Bytes(blake3(wproducer.emit_w32(honest)))),
-              ("binary", Bytes(wproducer.emit_w32(honest))), ("inputs", 32)]
+              ]
     out.append(("17-hash65-machine-is-the-spec", HASH65, honest,
                 {"target": "hash65", "cert_fields": cert17},
                 "Certificate names the SPEC definition as the machine. Once "
@@ -268,7 +273,7 @@ def attacks_hash65():
                      ("property", Sym("equals-wspec-v1")),
                      ("spec", HASH65_HASH), ("machine", hash_of(m3)),
                      ("binary-hash", Bytes(blake3(wproducer.emit_w32(m3)))),
-                     ("binary", Bytes(wproducer.emit_w32(m3))), ("inputs", 16))
+                     )
         put_definition(dirn, spec3)
         put_definition(dirn, m3)
         put_definition(dirn, cert)
@@ -279,7 +284,7 @@ def attacks_hash65():
     out.append(("19-hash65-wrong-length-machine", HASH65, honest,
                 {"target": "hash65", "tamper": override19},
                 "The proved hash-3 machine certified against the hash65 "
-                "spec, with (inputs 16): a length-confusion attack."))
+                "spec: a length-confusion attack, caught by the binary's own input count."))
 
     out.append(("20-name-capture-in-producer", G, wproducer.compile_wspec(G),
                 {},

@@ -36,10 +36,6 @@ class Bytes(bytes):
     __slots__ = ()
 
 
-def is_symbol(x):
-    return isinstance(x, Sym)
-
-
 def _validate(v, path="$"):
     if isinstance(v, bool):
         raise ValueError(f"{path}: booleans are not canonical values")

@@ -1,1 +1,1 @@
-The proved hash-3 machine certified against the hash65 spec, with (inputs 16): a length-confusion attack.
+The proved hash-3 machine certified against the hash65 spec: a length-confusion attack, caught by the binary's own input count.

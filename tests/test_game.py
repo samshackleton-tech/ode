@@ -21,7 +21,7 @@ class GameTest(unittest.TestCase):
     def test_bootstrap_matches_the_toolchain(self):
         # The bootstrap is a copy of the checker; a copy that drifts from
         # the toolchain would silently test something else.
-        for name in ("blake3.py", "canon.py", "store.py", "wcheck.py",
+        for name in ("canon.py", "store.py", "wcheck.py",
                      "word.py"):
             with open(os.path.join(ROOT, "ode", name), "rb") as f:
                 a = f.read()
@@ -37,7 +37,8 @@ class GameTest(unittest.TestCase):
                            timeout=600)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertNotIn("MALLORY WINS", p.stdout)
-        self.assertIn("0 win(s) for Mallory", p.stdout)
+        self.assertIn("0 failure(s)", p.stdout)
+        self.assertNotIn("CONTROL FAILED", p.stdout)
 
 
 if __name__ == "__main__":

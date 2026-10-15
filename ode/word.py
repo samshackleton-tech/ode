@@ -213,7 +213,10 @@ def decode_w32(data, input_names):
     (n_steps,) = _struct.unpack("<I", take(4))
     (n_outputs,) = _struct.unpack("<H", take(2))
     out_idx = [_struct.unpack("<I", take(4))[0] for _ in range(n_outputs)]
-    names = list(input_names) + [Sym(f"s{i}") for i in range(n_steps)]
+    prefix = "s"  # step names must not collide with any input name
+    while any(str(n).startswith(prefix) for n in input_names):
+        prefix += "s"
+    names = list(input_names) + [Sym(f"{prefix}{i}") for i in range(n_steps)]
 
     def operand():
         tag = take(1)[0]

@@ -1,0 +1,1 @@
+(certificate (cert correctness) (property equals-wspec-v1) (spec #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a) (binary-hash #d61460e54fbf16439133ad59665056265c1da541575e94181719c5d2e2f41004))

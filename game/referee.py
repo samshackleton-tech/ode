@@ -23,7 +23,7 @@ ROOT = os.path.join(HERE, "bootstrap", "root")
 RELIANCE = os.path.join(HERE, "bootstrap", "blake3", "RELIANCE")
 PUBLIC_ODE_BASE = os.path.join(HERE, "ode-base")
 EXAMPLES = os.path.join(os.path.dirname(HERE), "examples")
-sys.path.insert(0, os.path.join(PUBLIC_ODE_BASE))
+sys.path.insert(0, os.path.dirname(HERE))  # the referee uses the toolchain, not ode-base
 from ode import word  # noqa: E402
 from ode.canon import parse  # noqa: E402
 
@@ -75,6 +75,17 @@ def run_bob(attack_dir, values, target="g"):
 
 
 def score(attack_dir):
+    result = _score(attack_dir)
+    # A control (an EXPECT file saying accept) must be accepted and right:
+    # a Bob who rejects honest work is broken too, just not in Mallory's favour.
+    expect = os.path.join(attack_dir, "EXPECT")
+    if os.path.isfile(expect) and open(expect).read().strip() == "accept" \
+            and result[1] != "accepted and correct on every input":
+        return ("CONTROL FAILED", result[1])
+    return result
+
+
+def _score(attack_dir):
     target = target_of(attack_dir)
     n_in = {"g": 6, "hash65": 32}[target]
     inputs = list(PUBLIC_INPUTS[target])
@@ -117,9 +128,10 @@ def main(dirs):
         if not os.path.isdir(d):
             continue
         result, why = score(os.path.abspath(d))
-        wins += result == "MALLORY WINS"
+        wins += result in ("MALLORY WINS", "CONTROL FAILED")
         print(f"{os.path.basename(d.rstrip('/')):40s} {result:14s} {why}")
-    print(f"\n{wins} win(s) for Mallory in {len(dirs)} attack(s)")
+    print(f"\n{wins} failure(s) (Mallory wins or rejected controls) in "
+          f"{len(dirs)} attack(s)")
     return 1 if wins else 0
 
 

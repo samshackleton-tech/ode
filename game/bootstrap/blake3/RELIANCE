@@ -1,12 +1,10 @@
-; The BLAKE3 package, as Bob holds it: hashes only. For correctness Bob
-; relies on these pins (and the root, bootstrap/root/); for availability
-; he relies on whoever delivers the bytes they name -- the ode-base and
-; the specifications may come from anywhere, and a mismatch is a reject.
-; G: 6 words in, 4 out. hash65: a 65-byte message, 32 words in, 8 out.
-; Readable copies of both specifications: examples/blake3-g.sexp and
-; examples/blake3-hash-65.sexp.
+; The BLAKE3 package, as Bob holds it: hashes only. The ode-base and the
+; specifications they name may come from anyone; a mismatch is a reject.
+; g: BLAKE3's G (6 words in, 4 out). hash65: the hash of a 65-byte
+; message (32 words in, 8 out). Readable copies: examples/blake3-g.sexp
+; and examples/blake3-hash-65.sexp.
 (reliance
-  (ode-base #7d325a049c1c04f357ef3a7e415dde35fe321d96562418ecca6112b4cdee6af9)
+  (ode-base #77ee53780b2d659ccfe23d604843665a34438d070dee81c033454e91c3563d8e)
   (targets
-    ((g (spec-hash #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092))
-     (hash65 (spec-hash #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a)))))
+    ((g #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092)
+     (hash65 #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a))))

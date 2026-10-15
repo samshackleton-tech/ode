@@ -97,9 +97,11 @@ class EndToEndTest(unittest.TestCase):
 
     def test_mutant_binary_rejected(self):
         cert = self._cert()
-        raw = bytearray(field(cert, "binary"))
-        raw[-1] ^= 1
-        cert = self._set(cert, "binary", Bytes(bytes(raw)))
+        with open(os.path.join(self.tmp, "binary.bin"), "rb") as f:
+            raw = bytearray(f.read())
+        raw[-1] ^= 1  # a mutant binary, its file and hash both honestly redone
+        with open(os.path.join(self.tmp, "binary.bin"), "wb") as f:
+            f.write(bytes(raw))
         cert = self._set(cert, "binary-hash", Bytes(blake3(bytes(raw))))
         self._rewrite_cert(cert)
         with self.assertRaises(checker.Reject):
@@ -125,7 +127,6 @@ class EndToEndTest(unittest.TestCase):
                     "(rotl 3))))")
         cert = self._set(cert, "machine", producer.put_definition(self.tmp, bad))
         binary = machine.emit(bad)  # honest emitter output, honestly hashed
-        cert = self._set(cert, "binary", Bytes(binary))
         cert = self._set(cert, "binary-hash", Bytes(blake3(binary)))
         with open(os.path.join(self.tmp, "binary.bin"), "wb") as f:
             f.write(binary)  # the store's executed file, honestly replaced

@@ -35,23 +35,17 @@ def load_definition(store_dir, h):
 
 
 def load_binary(store_dir, cert):
-    """The bytes that run: the store's binary.bin, bound to the certificate.
+    """The bytes that run: binary.bin, read once, bound by hash.
 
-    A certificate carries the binary itself and its hash; this is where
-    they are tied to the file a user actually executes. A store whose
-    binary.bin differs from its certificate -- by one byte, or by
-    belonging to a different build -- is rejected here.
+    The certificate names the binary by its BLAKE3 hash. The caller must
+    check and run these returned bytes, never re-read the file: a store's
+    owner may change it between two reads.
     """
     path = os.path.join(store_dir, "binary.bin")
     if not os.path.isfile(path):
         raise Reject("store has no binary.bin")
     with open(path, "rb") as f:
         data = f.read()
-    if not isinstance(field(cert, "binary"), Bytes):
-        raise Reject("certificate carries no binary")
-    if data != bytes(field(cert, "binary")):
-        raise Reject("binary.bin is not the binary the certificate names")
     if Bytes(blake3(data)) != field(cert, "binary-hash"):
-        raise Reject("binary.bin does not hash to the certificate's "
-                     "binary-hash")
+        raise Reject("binary.bin is not the binary the certificate names")
     return data

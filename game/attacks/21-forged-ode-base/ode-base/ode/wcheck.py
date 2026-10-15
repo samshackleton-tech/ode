@@ -9,9 +9,8 @@ composition, and rotr distributing over xor. Expressions are hash-consed
 DAG nodes, so identical subexpressions are one node and size stays
 linear in the number of steps. The claim is proved when the two sides'
 outputs are the same nodes. Soundness rests on each constructor's
-rewrite being a u32 identity, and on nothing about the producer: any
-machine definition arriving with honestly recomputed hashes is still
-recomputed here from its bytes.
+rewrite being a u32 identity, and on nothing about the producer: the
+subject of the proof is the binary itself, decoded.
 """
 from . import word
 from .canon import Sym, assoc, field, hash_of
@@ -131,7 +130,8 @@ class Dag:
 
 
 def check_certificate(store_dir, cert):
-    """Returns a checker record or raises Reject."""
+    """Returns (record, program): the record, and the decoded program the
+    proof is about -- run that, from memory, never binary.bin again."""
     if not isinstance(cert, list) or not cert or cert[0] != "certificate":
         raise Reject("not a certificate")
     if field(cert, "cert") != "correctness":
@@ -144,8 +144,6 @@ def check_certificate(store_dir, cert):
     except ValueError as e:
         raise Reject(str(e)) from e
     inputs = word.inputs_of(spec_defn)
-    if field(cert, "inputs") != len(inputs):
-        raise Reject("certificate names the wrong input count")
     # The proof's subject is the bytes that run, decoded; no machine
     # definition and no emitter are relied on.
     binary = _load_binary(store_dir, cert)
@@ -172,15 +170,7 @@ def check_certificate(store_dir, cert):
                  ("binary-hash", field(cert, "binary-hash")),
                  ("certificate", hash_of(cert)),
                  ("domain", Sym("all-u32-inputs")),
-                 ("dag-nodes", len(dag.nodes)))
-
-
-def check_store(store_dir):
-    import os
-    from .canon import read_canonical
-    with open(os.path.join(store_dir, "certificate.sexp"), "rb") as f:
-        cert = read_canonical(f.read())
-    return check_certificate(store_dir, cert)
+                 ("dag-nodes", len(dag.nodes))), decoded
 
 
 def check_certificate(store_dir, cert):

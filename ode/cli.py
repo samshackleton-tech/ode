@@ -88,6 +88,14 @@ def cmd_assure(argv):
     return 0
 
 
+def check_word_store(store):
+    """Check a word store's certificate.sexp; return the checker record."""
+    with open(os.path.join(store, "certificate.sexp"), "rb") as f:
+        cert = read_canonical(f.read())
+    record, _ = wcheck.check_certificate(store, cert)
+    return record
+
+
 def cmd_buildw(argv):
     spec_path, store = argv
     spec_defn = _read_text_file(spec_path)
@@ -103,7 +111,7 @@ def cmd_buildw(argv):
 def cmd_checkw(argv):
     (store,) = argv
     try:
-        record = wcheck.check_store(store)
+        record = check_word_store(store)
     except checker.Reject as e:
         print(f"REJECT: {e}")
         return 1

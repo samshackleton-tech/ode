@@ -8,13 +8,14 @@ A test from the relying party's side. Three roles:
     launcher that reads an ode-base into memory, computes its tree hash,
     compares it with the package's pin, stops on any difference, and
     runs Bob's procedure from the very bytes it hashed.
-  - `blake3/RELIANCE` -- 282 bytes of s-expression: the pinned tree hash
+  - `blake3/RELIANCE` -- about 260 bytes of s-expression: the pinned tree hash
     of the ode-base this package was checked against, and the hashes of
     its two specifications (G, and the hash of a 65-byte message).
 
   Everything else Bob needs only for *availability*, and may get from
   anyone: `game/ode-base/` (the checker, reader, store loader, semantics,
-  and `bob.py`, admitted by tree hash) and the specifications (fetched
+  and `bob.py`, admitted by tree hash; its hash is the root's own BLAKE3,
+  so Bob relies on exactly one) and the specifications (fetched
   from Mallory's store by hash; readable copies in `examples/`). A wrong
   copy of any of them is a reject, never a wrong answer.
 - **Mallory** supplies the implementation: a directory with a machine
@@ -101,3 +102,33 @@ symbolic rewrites against concrete u32 evaluation and found no unsound
 rewrite, and the DAG's value on the full hash65 machine agreed with
 concrete execution on 50 random messages. The corpus is replayed by
 `tests/test_game.py`.
+
+## What `bootstrap/` itself relies on
+
+This is a property of the bootstrap, not part of it, so it lives here:
+running `root/launch.py` at all relies on the Python implementation
+(PyPy), its standard library (`os`, `re`, `importlib`), the operating
+system that reads files and runs processes, and the hardware beneath.
+None of them is checked; each is a place where a fault could make Bob
+accept a wrong answer. The real-machine milestone (SPEC s1, R4 and R5)
+is where these shrink.
+
+## Round 4: the minimality pass
+
+Reading `bootstrap/` and `ode-base/` once more for what could go found:
+- **Bob read binary.bin twice** -- once inside the checker, once to run
+  it -- so a store owner could swap the file in between. The checker now
+  returns the program it proved, and Bob runs that from memory.
+- **Two BLAKE3s:** ode-base carried its own; the root now serves its
+  copy to ode-base, so Bob relies on one.
+- **The certificate held the binary three ways** (the bytes, their hash,
+  and binary.bin) and an input count the spec and binary already fix.
+  It now names the binary by hash only.
+- **The decoder's step names could collide with input names** (`s0`), so
+  such a spec could never be checked. Fixed like the producer's.
+- **The referee scored a rejected honest control as a Mallory loss.**
+  Controls now carry `EXPECT` (accept) and a rejection fails the run --
+  which caught Bob rejecting every G attack after a lookup bug during
+  this very pass.
+- `RELIANCE` lost a wrapper level; `check_store`, `is_symbol`, and a
+  stale docstring left ode-base.

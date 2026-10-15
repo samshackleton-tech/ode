@@ -13,6 +13,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ode import wcheck, word, wproducer
+from ode.cli import check_word_store
 from ode.blake3 import _compress, _g
 from ode.canon import Bytes, Sym, canonical_bytes, field, parse
 from ode.checker import Reject
@@ -44,7 +45,7 @@ class GTest(unittest.TestCase):
     def test_checker_proves_g_and_rejects_mutants(self):
         tmp = tempfile.mkdtemp()
         wproducer.build(self.spec, tmp)
-        record = wcheck.check_store(tmp)
+        record = check_word_store(tmp)
         self.assertEqual(field(record, "verdict"), "accept")
         # A mutant machine: rotation 16 -> 15, all hashes honestly redone.
         bad_spec = load("blake3-g.sexp")
@@ -69,8 +70,7 @@ class GTest(unittest.TestCase):
             ("property", Sym(wcheck.PROPERTY)),
             ("spec", put_definition(tmp, self.spec)),
             ("machine", put_definition(tmp, machine_defn)),
-            ("binary-hash", Bytes(blake3(binary))),
-            ("binary", Bytes(binary)), ("inputs", 6))
+            ("binary-hash", Bytes(blake3(binary))))
         with self.assertRaises(Reject) as cm:
             wcheck.check_certificate(tmp, cert)
         self.assertIn("differs", str(cm.exception))
@@ -112,7 +112,7 @@ class CompressTest(unittest.TestCase):
     def test_tampered_binary_file_rejected(self):
         tmp = tempfile.mkdtemp()
         wproducer.build(self.spec, tmp)
-        wcheck.check_store(tmp)
+        check_word_store(tmp)
         path = os.path.join(tmp, "binary.bin")
         with open(path, "rb") as f:
             raw = bytearray(f.read())
@@ -120,13 +120,13 @@ class CompressTest(unittest.TestCase):
         with open(path, "wb") as f:
             f.write(bytes(raw))
         with self.assertRaises(Reject) as cm:
-            wcheck.check_store(tmp)
+            check_word_store(tmp)
         self.assertIn("binary.bin", str(cm.exception))
 
     def test_checker_proves_compression(self):
         tmp = tempfile.mkdtemp()
         result = wproducer.build(self.spec, tmp)
-        record = wcheck.check_store(tmp)
+        record = check_word_store(tmp)
         self.assertEqual(field(record, "verdict"), "accept")
         self.assertEqual(field(record, "domain"), "all-u32-inputs")
         self.assertGreater(field(record, "dag-nodes"), 1000)
@@ -170,7 +170,7 @@ class HashTest(unittest.TestCase):
         spec = load("blake3-hash-65.sexp")
         tmp = tempfile.mkdtemp()
         wproducer.build(spec, tmp)
-        self.assertEqual(field(wcheck.check_store(tmp), "verdict"), "accept")
+        self.assertEqual(field(check_word_store(tmp), "verdict"), "accept")
         # Mutant: the producer compiles a spec whose root call lost ROOT.
         text = open(os.path.join(ROOT, "examples", "blake3-hash-65.sexp")).read()
         mutant_text = text.replace("0 1 10))", "0 1 2))")  # CHUNK_END|ROOT -> CHUNK_END
@@ -187,9 +187,7 @@ class HashTest(unittest.TestCase):
                      ("property", Sym(wcheck.PROPERTY)),
                      ("spec", put_definition(tmp2, spec)),
                      ("machine", put_definition(tmp2, machine_defn)),
-                     ("binary-hash", Bytes(blake3(binary))),
-                     ("binary", Bytes(binary)),
-                     ("inputs", len(word.inputs_of(spec))))
+                     ("binary-hash", Bytes(blake3(binary))),)
         with self.assertRaises(Reject) as cm:
             wcheck.check_certificate(tmp2, cert)
         self.assertIn("differs", str(cm.exception))
@@ -220,4 +218,15 @@ class CallTest(unittest.TestCase):
                              word.run_program(machine_defn, v))
         tmp = tempfile.mkdtemp()
         wproducer.build(caller, tmp)
-        self.assertEqual(field(wcheck.check_store(tmp), "verdict"), "accept")
+        self.assertEqual(field(check_word_store(tmp), "verdict"), "accept")
+
+
+class DecodeNamesTest(unittest.TestCase):
+    def test_decoder_step_names_cannot_collide_with_inputs(self):
+        # A spec whose inputs are named like the decoder's step names once
+        # could never be checked (the decoded program redefined s0).
+        spec = parse("(wspec (name s) (inputs (s0 s1)) "
+                     "(steps ((r (add s0 s1)))) (outputs (r)))")
+        tmp = tempfile.mkdtemp()
+        wproducer.build(spec, tmp)
+        self.assertEqual(field(check_word_store(tmp), "verdict"), "accept")
