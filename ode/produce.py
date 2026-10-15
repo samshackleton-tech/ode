@@ -84,12 +84,16 @@ class Emitter:
         self.prefix, self.n, self.steps = prefix, 0, []
         self.certified = certified  # spec hash -> (certificate hash, outputs)
 
-    def _step(self, e, n=1):
+    def _fresh(self, n):
         names = [Sym(f"{self.prefix}{self.n + i}") for i in range(n)]
         self.n += n
-        self.steps.append([names if isinstance(e, list) and e[0] == "call"
-                           else names[0], e])
-        return names if n > 1 or (isinstance(e, list) and e[0] == "call") else names[0]
+        return names
+
+    def _step(self, e):
+        """One single-operation step; its name."""
+        name = self._fresh(1)[0]
+        self.steps.append([name, e])
+        return name
 
     def const(self, v):
         return v
@@ -106,7 +110,9 @@ class Emitter:
     def spec_call(self, h, callee, args, ev):
         if h in self.certified:
             cert_hash, n_out = self.certified[h]
-            return self._step([Sym("call"), cert_hash] + list(args), n_out)
+            names = self._fresh(n_out)
+            self.steps.append([names, [Sym("call"), cert_hash] + list(args)])
+            return names
         return ev.apply_spec(callee, args)
 
 
