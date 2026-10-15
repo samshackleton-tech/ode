@@ -1,1 +1,1 @@
-Honest store; INPUTS names out-of-domain words (2^32, -1). Found: Bob printed ACCEPT and then crashed; fixed -- Bob now rejects inputs outside the domain first, and the referee treats ACCEPT on such inputs as a win for Mallory.
+Honest store; INPUTS names out-of-domain words (2^32, -1). Found: Bob printed ACCEPT and then crashed; fixed: Bob rejects inputs outside the domain before anything else.

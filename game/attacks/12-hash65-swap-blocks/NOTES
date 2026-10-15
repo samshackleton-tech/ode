@@ -1,1 +1,1 @@
-Machine computes the hash with the two 64-byte blocks swapped (every m_i -> m_{i+16 mod 32}). Wrong on every non-symmetric message; symbolically m0 and m16 are distinct variables so this must be caught.
+Machine computes the hash with the two 64-byte blocks swapped. Symbolically m0 and m16 are distinct variables, so this must be caught.

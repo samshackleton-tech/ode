@@ -1,1 +1,1 @@
-Second compression starts from the IV instead of block 0 chaining value (the chain is dropped). Compiled honestly from a mutant spec, certified against the true spec.
+Second compression starts from the IV instead of block 0's chaining value (the chain is dropped); compiled honestly from a mutant spec, certified against the true spec.

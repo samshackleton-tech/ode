@@ -27,8 +27,10 @@ checker forgets to bind. You may not touch `game/bootstrap/`.
 
 ## How to work
 
-Each attack is one directory under `game/attacks/NN-name/`, containing a
-`NOTES` file (one paragraph: the idea, and why it should work). Start
+Each attack is one function in `game/make_attacks.py`, producing one
+directory under `game/attacks/NN-name/` with a `NOTES` file (one
+paragraph: the idea, and why it should work), so the corpus stays
+regenerable. Record yours there rather than by hand. Start
 from an honest build (`pypy3 -m ode buildw examples/blake3-g.sexp DIR`)
 or from nothing. Score yourself with `pypy3 game/referee.py game/attacks/*`.
 Aim for ten distinct ideas, escalating from tampering to forging to

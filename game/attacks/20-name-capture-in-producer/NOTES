@@ -1,7 +1,1 @@
-Not a store: a finding against the producer. A specification whose own
-input is named t0 (or t1, t3...) collided with the fresh names the
-producer's inliner minted for callee steps, yielding an invalid machine
-(SSA caught the redefinition, so no wrong answer was ever certified) --
-but a producer that fails on legal specs is a bug. Fixed: the producer
-picks a prefix no name in the spec or its callees starts with
-(wproducer._Fresh). Regression: tests/test_blake3_slice.py CallTest.
+Not a store attack: a finding against the producer. A spec whose input is named t0 collided with the fresh names the inliner minted. Fixed in wproducer._Fresh; regression in tests/test_blake3_slice.py (CallTest). The store here is honest control.

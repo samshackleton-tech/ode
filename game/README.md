@@ -20,8 +20,13 @@ is exactly the real-world attack, and hiding inputs would only hide the
 failure.
 
 ```sh
+pypy3 game/make_attacks.py                # regenerate every attack, deterministically
 pypy3 game/referee.py game/attacks/*      # replay every recorded attack
 ```
+
+The attacks themselves are produced by `game/make_attacks.py` -- one
+function per attack, so the corpus is a program future readers can
+rerun, vary, and learn from, not a pile of one-off directories.
 
 Each attack lives in `attacks/NN-name/` with a `NOTES` file. The
 corpus from round 1 (ten attacks, all lost) and what the game found:
