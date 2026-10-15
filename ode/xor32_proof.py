@@ -232,9 +232,10 @@ def xor_term(atoms):
 
 
 class Normalizer(Proof):
-    """Producer-side XOR sorting/cancellation, for bits or whole words.
+    """Producer-side commutative-monoid normalization, with proved cancellation.
 
-    laws maps the seven named identities to earlier proved lemma indices.
+    laws maps named identities to earlier proved lemma indices. The optional
+    cancel/pair laws enable XOR cancellation; addition keeps multiplicities.
     Every operation emits a proof; the kernel checks those lemmas and the
     resulting steps, regardless of the producer's configuration.
     """
@@ -245,7 +246,8 @@ class Normalizer(Proof):
         self.laws = laws if laws is not None else {
             'right': 40, 'comm': 41, 'assoc': 42, 'cancel': 43,
             'left': 44, 'pair': 45, 'exchange': 46}
-        assert set(self.laws) == {'right','comm','assoc','cancel','left','pair','exchange'}
+        assert set(self.laws) in ({'right','comm','assoc','left','exchange'},
+                                  {'right','comm','assoc','cancel','left','pair','exchange'})
 
     def term(self, atoms):
         return operation_term(self.operation, self.zero, atoms)
@@ -257,10 +259,10 @@ class Normalizer(Proof):
         if not ordered:
             return [atom], self.law('right', atom)
         head, *tail = ordered
-        if atom == head:
+        if atom == head and 'cancel' in self.laws:
             return tail, (self.law('cancel', atom) if not tail
                           else self.law('pair', atom, self.term(tail)))
-        if canonical_bytes(atom) < canonical_bytes(head):
+        if canonical_bytes(atom) <= canonical_bytes(head):
             return [atom] + ordered, self.refl(app(self.operation, atom, self.term(ordered)))
         if not tail:
             return [head, atom], self.law('comm', atom, head)

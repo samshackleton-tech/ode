@@ -261,8 +261,35 @@ all six Boolean identities, reproduce the artifact, and reject changed
 carry semantics, missing Boolean cases, and a dropped operand. A fresh
 process verifies the artifact with producer imports blocked.
 
-The theorem is modular Word32 associativity. Symbolic-normalizer exports
-and native instruction refinement still require their own connections.
+The theorem is modular Word32 associativity. Its symbolic-normalizer
+export is described below; native instruction refinement remains open.
+
+## Symbolic addition exports
+
+`ode/add_normalizer_proof.py` exports actual `Dag.add` results for
+expressions built from variables, zero, and `add32`. It proves
+flattening, reordering, and zero elimination using the ripple-carry
+commutativity, identity, and associativity theorems. Repeated operands
+remain repeated: addition has no XOR cancellation law.
+
+The producer reuses the same sorting/reassociation algorithm as XOR,
+configured with the appropriate proved laws. Supporting theorem
+libraries share equal statements, and unused lemmas are removed before
+serialization. Neither operation changes the kernel's checking rules.
+
+```sh
+pypy3 tools/make_add_normalizer_proof.py
+pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/add32-normalize.goal.sexp examples/proofs/add32-normalize.proof.sexp
+```
+
+The example exports `(x+y)+(z+x)` as `x+(x+(y+z))`, with all additions
+modulo 2^32. Its 506 lemmas and 14,132 inference steps check within the
+existing kernel limits. Tests include repeated operands, zero, random
+expression trees, a deliberately broken `Dag.add`, and producer-free
+verification in a fresh process. Combining nonzero constant folding
+with variables is still outside this export; closed concrete expressions
+use the evaluation-proof export below.
 
 ## Concrete arithmetic exports
 
@@ -284,9 +311,9 @@ with modular overflow: 925 inference steps and no supporting lemmas.
 The theory is the existing addition theory. Rotation exports use the
 rotation theory. Each supplied theory must define the operations used.
 
-These exports cover closed expressions. Symbolic addition flattening
-and folding constants within expressions containing variables remain
-open. Tests include a broken old adder, changed carry definitions and
+These exports cover closed expressions. The symbolic addition export
+above covers flattening and zero; folding nonzero constants within
+expressions containing variables remains open. Tests include a broken old adder, changed carry definitions and
 conclusions, shared-subterm reuse, and verification in a fresh process
 that blocks imports of the old verifier and producers. The addition
 semantic tests use this same ground-proof producer.
