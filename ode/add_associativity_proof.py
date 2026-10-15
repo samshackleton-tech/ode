@@ -4,31 +4,19 @@ The two carry bits from chained additions are compared as sorted pairs
 (AND, OR). Proved five-bit identities transport that invariant through
 one bit position; only 32 such positions are needed for Word32.
 """
-from copy import deepcopy
 from .canon import hash_of
 from .add32_proof import artifacts as commutativity
 from .carry_proof import artifacts as carry_artifacts
-from .proof_slice import instructions, slice_proof
+from .proof_slice import slice_proof
+from .proof_library import Library
 from .xor32_proof import Proof, app, equation, var
 
 
 def artifacts(t):
-    comm_goal, comm_proof = commutativity(t)
-    lemmas = comm_proof[3]
-    comm_index = len(lemmas)
-    lemmas.append([var('lemma'),comm_goal[3],comm_goal[4],comm_proof[4]])
-    rules = {}
-    for name,g,proof in carry_artifacts(t):
-        offset = len(lemmas)
-        library = deepcopy(proof[3])
-        conclusion = [var('lemma'),g[3],g[4],deepcopy(proof[4])]
-        for lemma in library+[conclusion]:
-            for step in instructions(lemma[3]):
-                if step[0]=='lemma':
-                    step[1] += offset
-        lemmas.extend(library)
-        rules[name] = len(lemmas)
-        lemmas.append(conclusion)
+    library = Library(hash_of(t))
+    comm_index = library.include(*commutativity(t))
+    rules = {name: library.include(g,p) for name,g,p in carry_artifacts(t)}
+    lemmas = library.lemmas
     x,y,z = map(var,('x','y','z'))
     params = [[v,var('Word32')] for v in (x,y,z)]
     xy,yz = app('add32',x,y),app('add32',y,z)

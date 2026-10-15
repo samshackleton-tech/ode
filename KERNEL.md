@@ -254,8 +254,8 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
   examples/proofs/add32-assoc.goal.sexp examples/proofs/add32-assoc.proof.sexp
 ```
 
-The artifact contains 546 checked lemmas and 15,355 inference steps,
-using 528,440 kernel work units within the existing limits. These are
+The artifact contains 504 checked lemmas and 14,086 inference steps,
+using 504,710 kernel work units within the existing limits. These are
 proof-work counts, not timing measurements. Tests independently check
 all six Boolean identities, reproduce the artifact, and reject changed
 carry semantics, missing Boolean cases, and a dropped operand. A fresh
