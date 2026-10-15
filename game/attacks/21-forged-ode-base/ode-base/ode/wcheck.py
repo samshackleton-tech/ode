@@ -17,7 +17,8 @@ from .canon import Sym, assoc, field, hash_of
 from .store import Reject, load_definition as _load, load_binary as _load_binary
 
 CHECKER_ID = Sym("ode-wchecker-0.1")
-PROPERTY = "equals-wspec-v1"
+PROPERTY = "equals-wspec-v1"          # the W32 machine
+PROPERTY_A64 = "equals-wspec-a64-v1"  # AArch64 bytes (ode/a64.py)
 MASK = word.MASK
 
 
@@ -136,8 +137,9 @@ def check_certificate(store_dir, cert):
         raise Reject("not a certificate")
     if field(cert, "cert") != "correctness":
         raise Reject(f"unsupported certificate kind {field(cert, 'cert')!r}")
-    if field(cert, "property") != PROPERTY:
-        raise Reject(f"unsupported property {field(cert, 'property')!r}")
+    prop = field(cert, "property")
+    if prop not in (PROPERTY, PROPERTY_A64):
+        raise Reject(f"unsupported property {prop!r}")
     spec_defn = _load(store_dir, field(cert, "spec"))
     try:
         word.validate_wspec(spec_defn)
@@ -147,17 +149,28 @@ def check_certificate(store_dir, cert):
     # The proof's subject is the bytes that run, decoded; no machine
     # definition and no emitter are relied on.
     binary = _load_binary(store_dir, cert)
-    try:
-        decoded = word.decode_w32(binary, inputs)
-    except ValueError as e:
-        raise Reject(str(e)) from e
-    # The proof: one DAG, both sides, outputs must be identical nodes.
     dag = Dag()
     want = dag.program_outputs(inputs, word.steps_of(spec_defn),
                                word.outputs_of(spec_defn),
                                word._defs_of(spec_defn))
-    got = dag.program_outputs(inputs, word.steps_of(decoded),
-                              word.outputs_of(decoded))
+    if prop == PROPERTY:
+        try:
+            decoded = word.decode_w32(binary, inputs)
+        except ValueError as e:
+            raise Reject(str(e)) from e
+        got = dag.program_outputs(inputs, word.steps_of(decoded),
+                                  word.outputs_of(decoded))
+    else:
+        from . import a64
+        scratch = field(cert, "scratch")
+        if not isinstance(scratch, int) or scratch > 4096:
+            raise Reject("a64 certificate needs (scratch N), N <= 4096")
+        sizes = {"in": len(inputs), "out": len(word.outputs_of(spec_defn)),
+                 "scratch": scratch}
+        instrs = a64.decode(binary)
+        got = a64.execute(dag, instrs,
+                          lambda i: dag.var(inputs[i]), sizes)
+        decoded = ("a64", binary, sizes)
     if want != got:
         for i, (w, g) in enumerate(zip(want, got)):
             if w != g:
@@ -165,7 +178,7 @@ def check_certificate(store_dir, cert):
                              "reduce to different symbolic values")
         raise Reject("output count differs")
     return assoc("record", ("checker", CHECKER_ID),
-                 ("verdict", Sym("accept")), ("property", Sym(PROPERTY)),
+                 ("verdict", Sym("accept")), ("property", Sym(prop)),
                  ("spec", field(cert, "spec")),
                  ("binary-hash", field(cert, "binary-hash")),
                  ("certificate", hash_of(cert)),

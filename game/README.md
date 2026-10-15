@@ -108,10 +108,31 @@ concrete execution on 50 random messages. The corpus is replayed by
 This is a property of the bootstrap, not part of it, so it lives here:
 running `root/launch.py` at all relies on the Python implementation
 (PyPy), its standard library (`os`, `re`, `importlib`), the operating
-system that reads files and runs processes, and the hardware beneath.
+system that reads files, runs processes, and maps executable pages,
+ctypes (to call native code), and the hardware beneath -- in
+particular, that the CPU executes the eight AArch64 forms as
+`ode/a64.py` models them, which `tests/test_a64.py` checks on random
+states rather than proves.
 None of them is checked; each is a place where a fault could make Bob
 accept a wrong answer. The real-machine milestone (SPEC s1, R4 and R5)
 is where these shrink.
+
+## Round 5: real AArch64, run natively
+
+Bob's ode-base now proves AArch64 bytes (`ode/a64.py`) and runs them on
+the CPU (`ode/native.py`). Controls 25-26 (G, and the 65-byte hash, as
+proved AArch64) are accepted and correct natively. Attacks:
+
+| Attack | Idea | Result |
+|---|---|---|
+| 27 | one ROR count off by one in real code | rejected: symbolic disagreement |
+| 28 | a branch spliced in | rejected: outside the eight modelled forms |
+| 29 | scratch declared one word short | rejected: the access is out of bounds |
+| 30 | an extra store far past `out[]` | rejected: out of bounds |
+
+Running natively adds to what the bootstrap relies on (below): the
+kernel's mmap of executable pages, ctypes, and the CPU executing the
+eight forms as modelled -- the last checked on this CPU, not proved.
 
 ## Round 4: the minimality pass
 

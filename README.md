@@ -26,7 +26,7 @@ enough that its reader is a few dozen lines.
 Verify the worked example end to end (PyPy3, no dependencies):
 
 ```sh
-pypy3 -m unittest discover -s tests     # 26 tests, incl. mutants and the adversarial game
+pypy3 -m unittest discover -s tests     # 34 tests, incl. the CPU cross-check and the adversarial game
 pypy3 -m ode build examples/mix.sexp examples/build
 pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
 pypy3 -m ode run   examples/build 60 165   # 174
@@ -82,6 +82,35 @@ pypy3 -m ode runw examples/build-hash-3 6513249 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 (`6513249` is `"abc"` as a little-endian word; the other 15 words are
 the block's zero padding.)
 
+### Real silicon: proved AArch64 bytes, run natively
+
+The first real machine layer (`ode/a64.py`): eight AArch64 instruction
+forms (LDR, STR, MOVZ, MOVK, ADD, EOR, ROR, RET, 32-bit), matched
+exactly against their encodings; anything else is a reject. Their
+model is symbolic execution on the checker's same DAG, so the same
+proof covers real bytes. Data registers are w3..w17, no branches, every
+address a base plus a constant and checked against its region -- so
+memory safety and the constant-time shape hold by construction.
+
+```sh
+pypy3 -m ode builda examples/blake3-hash-65.sexp /tmp/a   # 31,732 bytes of AArch64
+pypy3 -m ode checkw /tmp/a                                 # ACCEPT, symbolic
+pypy3 -m ode runa   /tmp/a <32 words>                      # checks, then runs on this CPU
+```
+
+The model is reliance R4, and it has a check that can fail:
+`tests/test_a64.py` runs every form on this CPU from random states and
+compares with the model (a planted rotate-left model fails it), and
+rejects branches, 64-bit loads, shifted operands, stores to inputs,
+w18, clobbered bases, out-of-bounds and unwritten accesses, and mutant
+rotations and operations. The producer (`ode/a64emit.py`) is
+deliberately naive -- every value round-trips through scratch memory
+-- so speed is far from hand-tuned: about 8 us per 65-byte hash
+natively, most of it ctypes call overhead, against 717 us in the W32
+interpreter (wall time via time.perf_counter_ns on this VM, not the
+clocks crate, which is not available here; no cycle counts). A faster
+producer changes nothing Bob relies on.
+
 ### Worked example: compute BLAKE3's G on your own inputs
 
 A fresh copy of this repo is all you need. The interface of a word
@@ -110,7 +139,7 @@ answer worth relying on for *every* input, not just the one you ran.
 `game/` is the test from the relying party's side: Bob holds only Sam's
 bootstrap (the G spec by hash, the checker, his procedure) and gets the
 implementation from Mallory, who may change anything and knows every
-input. Twenty-five recorded attacks over two targets (G, and the hash of a
+input. Thirty-one recorded attacks over two targets (G, and the hash of a
 65-byte message), all lost; three found and fixed real flaws. Bob now holds only a
 235-line root and 282 bytes of hashes; everything else may come from
 anyone.

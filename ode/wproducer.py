@@ -168,3 +168,22 @@ def build(spec_defn, store_dir):
     return {"spec": spec_hash.hex(), "machine": machine_hash.hex(),
             "certificate": cert_hash.hex(), "binary_hash": blake3(binary).hex(),
             "binary_len": len(binary)}
+
+
+def build_a64(spec_defn, store_dir):
+    """Produce an AArch64 store: spec by hash, binary.bin, certificate."""
+    from . import a64emit
+    os.makedirs(store_dir, exist_ok=True)
+    binary, scratch = a64emit.emit_a64(compile_wspec(spec_defn))
+    spec_hash = put_definition(store_dir, spec_defn)
+    with open(os.path.join(store_dir, "binary.bin"), "wb") as f:
+        f.write(binary)
+    cert = assoc("certificate", ("cert", Sym("correctness")),
+                 ("property", Sym("equals-wspec-a64-v1")),
+                 ("spec", spec_hash), ("binary-hash", Bytes(blake3(binary))),
+                 ("scratch", scratch))
+    cert_hash = put_definition(store_dir, cert)
+    with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
+        f.write(canonical_bytes(cert))
+    return {"spec": spec_hash.hex(), "certificate": cert_hash.hex(),
+            "binary_hash": blake3(binary).hex(), "binary_len": len(binary)}

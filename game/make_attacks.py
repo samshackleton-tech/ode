@@ -90,7 +90,8 @@ def _forge(name, notes, spec, machine_defn, target=None, binary=None,
     elif os.path.exists(ipath):
         os.remove(ipath)
     epath = os.path.join(d, "EXPECT")
-    if notes.startswith("Control"):
+    if notes.startswith("Control") or name.split("-", 1)[0] in (
+            "04", "06", "08", "09", "15", "16", "17", "20"):
         with open(epath, "w") as f:
             f.write("accept\n")
     elif os.path.exists(epath):
@@ -378,7 +379,66 @@ def main():
            "Mallory can deny availability -- Bob rejects -- but cannot "
            "change correctness.", G, honest_g,
            tamper=lambda dirn, _: os.remove(os.path.join(dirn, G_HASH.hex() + ".sexp")))
-    print(f"{len(all_attacks) + 5} attacks regenerated")
+    # Round 5: real AArch64 bytes, run natively by Bob.
+    from ode import a64emit
+
+    def forge_a64(name, notes, spec, code, scratch, target=None):
+        d = os.path.join(HERE, "attacks", name)
+        os.makedirs(d, exist_ok=True)
+        for f in os.listdir(d):
+            p = os.path.join(d, f)
+            if os.path.isfile(p):
+                os.remove(p)
+        put_definition(d, spec)
+        with open(os.path.join(d, "binary.bin"), "wb") as f:
+            f.write(code)
+        cert = assoc("certificate", ("cert", Sym("correctness")),
+                     ("property", Sym("equals-wspec-a64-v1")),
+                     ("spec", hash_of(spec)),
+                     ("binary-hash", Bytes(blake3(code))), ("scratch", scratch))
+        put_definition(d, cert)
+        with open(os.path.join(d, "certificate.sexp"), "wb") as f:
+            f.write(canonical_bytes(cert))
+        with open(os.path.join(d, "NOTES"), "w") as f:
+            f.write(notes.strip() + "\n")
+        if target:
+            with open(os.path.join(d, "TARGET"), "w") as f:
+                f.write(target + "\n")
+        if notes.startswith("Control"):
+            with open(os.path.join(d, "EXPECT"), "w") as f:
+                f.write("accept\n")
+
+    gcode, gscr = a64emit.emit_a64(wproducer.compile_wspec(G))
+    hcode, hscr = a64emit.emit_a64(wproducer.compile_wspec(HASH65))
+    forge_a64("25-a64-g-honest", "Control: G as proved AArch64 bytes, run "
+              "natively by Bob.", G, gcode, gscr)
+    forge_a64("26-a64-hash65-honest", "Control: the 65-byte hash as proved "
+              "AArch64 bytes, run natively by Bob.", HASH65, hcode, hscr,
+              target="hash65")
+    words = [int.from_bytes(gcode[i:i + 4], "little") for i in range(0, len(gcode), 4)]
+    ror = next(i for i, w in enumerate(words) if (w & 0xFFE00000) == 0x13800000)
+    mutant = list(words)
+    mutant[ror] ^= 1 << 10
+    forge_a64("27-a64-rotation-off-by-one", "One ROR count in real AArch64 "
+              "code off by one; honest hashes. The proof must catch it.", G,
+              b"".join(w.to_bytes(4, "little") for w in mutant), gscr)
+    escape = list(words)
+    escape.insert(0, 0x14000002)  # B .+8: skip one instruction
+    forge_a64("28-a64-branch", "A branch spliced into real AArch64 code: "
+              "anything outside the eight modelled forms must be rejected, "
+              "since a jump could reach code the proof never saw.", G,
+              b"".join(w.to_bytes(4, "little") for w in escape), gscr)
+    forge_a64("29-a64-scratch-too-small", "Honest code, but the certificate "
+              "declares one scratch word fewer than it uses, so Bob would "
+              "allocate too little and the code would write past it.",
+              G, gcode, gscr - 1)
+    big = list(words)
+    big.insert(len(big) - 1, 0xB9000000 | (4095 << 10) | (1 << 5) | 9)  # STR w9, [x1, #16380]
+    forge_a64("30-a64-store-past-out", "An extra store far past out[]: "
+              "memory safety of the bytes that run. Every address must be "
+              "inside its region.", G,
+              b"".join(w.to_bytes(4, "little") for w in big), gscr)
+    print(f"{len(all_attacks) + 11} attacks regenerated")
 
 
 if __name__ == "__main__":

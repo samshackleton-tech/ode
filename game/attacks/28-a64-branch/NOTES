@@ -1,0 +1,1 @@
+A branch spliced into real AArch64 code: anything outside the eight modelled forms must be rejected, since a jump could reach code the proof never saw.

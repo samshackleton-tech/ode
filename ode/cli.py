@@ -119,8 +119,9 @@ def cmd_checkw(argv):
         f.write(canonical_bytes(record))
     print(f"ACCEPT ({field(record, 'checker')}, symbolic over "
           f"{field(record, 'domain')}, {field(record, 'dag-nodes')} DAG nodes)")
-    print("  - the emitted W32 bytes compute the specification on every input")
-    print("  - the program is straight-line W32: no branches exist in the ISA")
+    print(f"  - the {'AArch64' if 'a64' in str(field(record, 'property')) else 'W32'} "
+          "bytes compute the specification on every input")
+    print("  - the program is straight-line: no branches, constant addresses")
     return 0
 
 
@@ -136,9 +137,37 @@ def cmd_runw(argv):
     return 0
 
 
+def cmd_builda(argv):
+    spec_path, store = argv
+    result = wproducer.build_a64(_read_text_file(spec_path), store)
+    print(f"spec        {result['spec']}")
+    print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes of AArch64)")
+    print(f"certificate {result['certificate']}")
+    print(f"produced, not yet checked: run `pypy3 -m ode checkw {store}`")
+    return 0
+
+
+def cmd_runa(argv):
+    """Check, then run the proved AArch64 bytes natively on this CPU."""
+    from . import native
+    store, values = argv[0], [int(x, 0) for x in argv[1:]]
+    with open(os.path.join(store, "certificate.sexp"), "rb") as f:
+        cert = read_canonical(f.read())
+    try:
+        _, program = wcheck.check_certificate(store, cert)
+    except checker.Reject as e:
+        print(f"REJECT: {e}")
+        return 1
+    kind, code, sizes = program
+    fn = native.Function(code, sizes["in"], sizes["out"], sizes["scratch"])
+    print(" ".join(str(x) for x in fn(values)))
+    return 0
+
+
 COMMANDS = {"build": cmd_build, "check": cmd_check,
             "run": cmd_run, "assure": cmd_assure,
-            "buildw": cmd_buildw, "checkw": cmd_checkw, "runw": cmd_runw}
+            "buildw": cmd_buildw, "checkw": cmd_checkw, "runw": cmd_runw,
+            "builda": cmd_builda, "runa": cmd_runa}
 
 
 def main(argv=None):

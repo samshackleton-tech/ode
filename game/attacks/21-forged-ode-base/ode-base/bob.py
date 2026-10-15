@@ -10,7 +10,8 @@ RELIANCE bytes and Mallory's store, Bob:
      binary it read, once;
   4. requires the inputs to be in the spec's domain;
   5. prints ACCEPT and runs, from memory, the very program the checker
-     proved -- binary.bin is never read again.
+     proved -- binary.bin is never read again. A W32 program runs in the
+     interpreter; an AArch64 program runs natively on this CPU.
 Prints exactly one verdict line first: ACCEPT or REJECT <reason>.
 """
 import os
@@ -50,10 +51,18 @@ def main(reliance_bytes, argv):
     except Exception as e:  # any crash in the checker is a rejection
         print(f"REJECT checker failed: {type(e).__name__}: {e}")
         return 1
-    n_in = len(word.inputs_of(program))
+    n_in = (program[2]["in"] if isinstance(program, tuple)
+            else len(word.inputs_of(program)))
     if len(values) != n_in or any(not (0 <= v < 2 ** 32) for v in values):
         print(f"REJECT inputs must be {n_in} u32 words")
         return 1
     print("ACCEPT")
-    print(" ".join(str(v) for v in word.run_program(program, values)))
+    if isinstance(program, tuple):  # ("a64", bytes, sizes)
+        from ode import native
+        _, code, sizes = program
+        out = native.Function(code, sizes["in"], sizes["out"],
+                              sizes["scratch"])(values)
+    else:
+        out = word.run_program(program, values)
+    print(" ".join(str(v) for v in out))
     return 0
