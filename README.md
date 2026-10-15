@@ -104,6 +104,16 @@ pypy3 -m ode.proof_cli examples/proofs/bits.theory.sexp \
 # xor-bits(x,x) = zeros(x), proved from the bit definitions
 ```
 
+The first export from the existing symbolic normalizer is now checked
+against explicit **Word32** semantics, with every XOR law proved from
+the 32 bit fields:
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
+  examples/proofs/xor32.goal.sexp examples/proofs/xor32.proof.sexp
+# xor32(x, xor32(y,x)) = y — all 47 supporting lemmas also checked
+```
+
 The theory and goal come from the owner; the proof can come from anyone.
 The theorem holds for any total compression function, initial state,
 block source, and starting index. `KERNEL.md` gives the complete rules,
@@ -115,7 +125,7 @@ verifier in `ode/check.py` still has its own larger reliance set.
 
 ## Next
 
-Connect the symbolic checker to the proof-object kernel: formalize the
-word and instruction semantics, emit kernel-checkable derivations, and
-prove loop refinements with invariants. Native call support and NEON
+Extend the first Word32 XOR export to the remaining word operations,
+instruction semantics, and complete symbolic execution certificates;
+then prove native loop refinements with invariants. Native call support and NEON
 remain performance work; they no longer postpone the kernel.

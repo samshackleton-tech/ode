@@ -3,7 +3,7 @@
 
 pypy3 game/kernel_attacks.py
 
-The owner supplies the batching theory and goal. Mallory supplies the
+The owner supplies each example's theory and goal. Mallory supplies the
 proof, or attempts to substitute a theory or goal. Honest rehashing is
 also tried: identity is necessary, but never sufficient, for acceptance.
 Every variant is constructed here; generated directories are unnecessary.
@@ -87,6 +87,21 @@ def cases():
         else:
             theory[4][5][3][1][2] = parse('(xor-bits (bit h t) ys)')
         goal[2] = hash_of(theory)
+        proof[2] = hash_of(goal)
+        yield name, (theory, goal, proof), False
+
+    word = [parse((directory / f'xor32.{k}.sexp').read_bytes())
+            for k in ('theory', 'goal', 'proof')]
+    yield 'honest-word32-normalization', word, True
+    for name in ('word32-wrong-selector', 'word32-lying-result', 'word32-normalizer-oracle'):
+        theory, goal, proof = copy.deepcopy(word)
+        if name == 'word32-wrong-selector':
+            theory[4][33][3][0][2] = Sym('b0')
+            goal[2] = hash_of(theory)
+        elif name == 'word32-lying-result':
+            goal[4][2] = [Sym('word32')] + [[Sym('bit0')] for _ in range(32)]
+        else:
+            proof[4] = [Sym('derive'), [[Sym('normalize'), goal[4]]]]
         proof[2] = hash_of(goal)
         yield name, (theory, goal, proof), False
 

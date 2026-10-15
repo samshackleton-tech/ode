@@ -113,6 +113,50 @@ This establishes the mathematical identity behind one word-normalizer
 rewrite. Linking the existing u32 representation and AArch64 EOR model
 to this bit-string semantics remains a separate proof obligation.
 
+## A checked export from the existing XOR normalizer
+
+`examples/proofs/xor32.theory.sexp` defines `Word32` as one constructor
+with exactly 32 `Bit` fields. It defines each projection and `xor32`
+field by field using the same `xor-bit` definition from the bit-string
+theory. Its equations fully specify a finite
+32-bit domain; XOR's algebraic laws are not declarations or axioms.
+
+`ode/xor32_proof.py` produces proofs of the Boolean laws, word
+extensionality via projections, and the word-level identity,
+commutativity, associativity, and cancellation laws. It then emits
+normalization proofs for XOR expressions by using those proved lemmas.
+`export_normalizer` runs the actual `ode.check.Dag.xor` normalizer and
+constructs a kernel proof of its proposed result. Both that normalizer
+and this proof producer sit outside the kernel's reliance set.
+
+```sh
+pypy3 tools/make_xor32_proof.py
+pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
+  examples/proofs/xor32.goal.sexp examples/proofs/xor32.proof.sexp
+# xor32(x, xor32(y, x)) = y
+```
+
+This checks all 47 supporting lemmas and the final normalization in
+2,231 inference steps, using 936 shared terms. Supported exports are
+variables, the explicit zero word, and XOR expressions: flattening,
+reordering, zero elimination, and cancellation. Other operations and
+constant folding still need their proof producers.
+
+A randomized producer test found an omitted zero-elimination step after
+suffix cancellation. The kernel rejected the incomplete proof; fixing
+the producer required no kernel change. Another test replaces the
+existing normalizer with a broken one: it cannot obtain a proof of the
+wrong result. Attacks that change a bit selector, lie about the final
+result, or introduce a `normalize` oracle are rejected too. A fresh-process
+test blocks imports of the existing verifier, evaluator, native runner,
+and proof producers; the exported proof still checks.
+
+This is the first exported rewrite with explicit Word32 semantics. It
+does not yet certify the complete symbolic execution of a native
+program. Mapping the decoder's u32 values to these Word32 constructors
+and proving the remaining word/ISA operations are still required before
+existing native certificates can use this smaller reliance set.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
@@ -268,7 +312,7 @@ reported work counts are deterministic diagnostic counts, not clocks.
 ## Review and adversarial checks
 
 ```sh
-pypy3 -m unittest tests.test_kernel tests.test_nat_proof tests.test_bits_kernel
+pypy3 -m unittest tests.test_kernel tests.test_nat_proof tests.test_bits_kernel tests.test_xor32_proof
 pypy3 game/kernel_attacks.py
 ```
 
@@ -285,9 +329,11 @@ induction; the real kernel rejects it. The file-interface
 test runs the command a recipient would run, then corrupts the proof.
 
 The scripts `tools/make_batching_proof.py`, `tools/make_nat_add_proof.py`,
-`tools/make_chain_split_proof.py`, and `tools/make_xor_proof.py` reproduce
-the goals and proofs. They
-import neither the kernel nor the existing program verifier. Generated proof
+`tools/make_chain_split_proof.py`, `tools/make_xor_proof.py`, and
+`tools/make_xor32_proof.py` reproduce the goals and proofs. The last
+asks the existing symbolic normalizer for its proposed result; all of
+them produce explicit proof steps rather than invoking the kernel to
+claim success. Generated proof
 bytes are included here because this is the artifact Bob checks without
 running the producer. The theorem statement travels separately.
 
@@ -303,8 +349,9 @@ The kernel is the intended destination for the existing symbolic
 checker's work, not a second route to silently accept rejected program
 certificates. Today it checks mathematical proof objects; `check.py`
 still verifies executable programs using its larger reliance set. The
-next connection is to formalize the word/ISA semantics and make the
-symbolic checker **emit derivations** the kernel verifies. Loop claims
+next connection is to extend the Word32 XOR export to the remaining
+word/ISA semantics and make the symbolic checker **emit derivations**
+for whole programs. Loop claims
 then need invariants and refinement proofs in that same logic. Until
 those connections are checked, the batching theorem and the native
 BLAKE3 results remain distinct claims.
