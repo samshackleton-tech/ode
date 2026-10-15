@@ -5,7 +5,7 @@ import unittest
 
 from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
-from ode.add32_proof import artifacts, theory as make_theory
+from ode.add32_proof import artifacts, identity_artifacts, theory as make_theory
 from ode.xor32_proof import app, var
 from ode.ground_proof import prove as ground_proof
 from ode.constant_proof import literal
@@ -29,6 +29,31 @@ class AdditionProofTest(unittest.TestCase):
         result=verify(t,g,p)
         self.assertEqual(result['lemmas'],104)
         self.assertLess(result['work'],300000)
+
+    def test_universal_zero_identity_reproduces(self):
+        t,_,_=bundle()
+        g,p=[parse((EXAMPLES/f'add32-zero.{k}.sexp').read_bytes()) for k in ('goal','proof')]
+        for expected,actual in zip((g,p),identity_artifacts(t)):
+            self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
+        verify(t,g,p)
+
+    def test_zero_identity_rejects_nonzero_initial_carry(self):
+        t,_,_=bundle()
+        g,p=identity_artifacts(t)
+        definition=next(d for d in t[4] if d[0]=='carry-0')
+        definition[3][0][2]=app('bit1')
+        g[2]=hash_of(t)
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+    def test_zero_identity_cannot_claim_x_plus_one_equals_x(self):
+        t,_,_=bundle()
+        g,p=identity_artifacts(t)
+        g[4][1][2]=literal(1)
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
 
     def test_ground_sums_pin_carry_direction_and_modular_overflow(self):
         t,_,_=bundle()

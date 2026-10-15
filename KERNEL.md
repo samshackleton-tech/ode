@@ -223,9 +223,15 @@ arithmetic. These tests constrain the intended semantics beyond
 commutativity alone. Changed carry equations, stage dependencies, sum
 bits, and theorem conclusions are rejected by the kernel.
 
-This milestone proves commutativity of the defined adder. Associativity,
-symbolic normalization exports, and the native ADD representation/refinement
-link remain open; the natural-number addition lemmas do not discharge
+The same generator also emits `add32-zero.goal.sexp` and
+`add32-zero.proof.sexp`: `add32(x, zero32) = x` for every word. Its proof
+shows that each incoming carry stays zero, reduces each sum bit with
+proved Boolean XOR identity, and reconstructs the word. Changed initial
+carry and replacement of zero by one are rejected.
+
+These milestones prove commutativity and right-zero identity of the
+defined adder. Associativity, symbolic normalization exports, and the
+native ADD representation/refinement link remain open; the natural-number addition lemmas do not discharge
 those word-level obligations.
 
 ## Concrete arithmetic exports

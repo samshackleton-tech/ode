@@ -137,3 +137,48 @@ def artifacts(t):
     goal = [var('goal'),3,hash_of(t),params,equation(left,right)]
     proof = [var('proof'),3,hash_of(goal),lemmas,[var('derive'),p.steps]]
     return goal,proof
+
+
+def identity_artifacts(t):
+    """Prove add32(x, zero32) = x, reusing checked carry/sum projections."""
+    from .xor32_proof import ZERO
+    _, previous = artifacts(t)
+    lemmas = previous[3]
+    # Boolean carry with two zero inputs is zero for either constructor.
+    lemmas.append(parse('''(lemma ((a Bit))
+      (eq (carry-bit a (bit0) (bit0)) (bit0))
+      (induct a (
+        (bit0 () ((unfold carry-bit (bit0) (bit0) (bit0))
+                  (unfold and-bit (bit0) (bit0)) (trans 0 1)))
+        (bit1 () ((unfold carry-bit (bit1) (bit0) (bit0))
+                  (unfold or-bit (bit0) (bit0)) (trans 0 1))))))'''))
+    carry_zero = len(lemmas)-1
+    x = var('x')
+    params = [[x,var('Word32')]]
+    zero_carries = []
+    for i in range(32):
+        p = Proof()
+        recurrence = p.lemma(8+i,x,ZERO)
+        if i:
+            at = f'bit-at-{i-1}'
+            reduced = p.cong('carry-bit',p.refl(app(at,x)),p.unfold(at,ZERO),
+                             p.lemma(zero_carries[i-1],x))
+            p.trans(recurrence,reduced,p.lemma(carry_zero,app(at,x)))
+        zero_carries.append(len(lemmas))
+        lemmas.append([var('lemma'),params,
+                       equation(app(f'carry-{i}',x,ZERO),app('bit0')),
+                       [var('derive'),p.steps]])
+    p, components = Proof(), []
+    for i in range(32):
+        at = f'bit-at-{i}'
+        projection = p.lemma(72+i,x,ZERO)
+        inner = p.cong('xor-bit',p.refl(app(at,x)),p.unfold(at,ZERO))
+        inner = p.trans(inner,p.lemma(1,app(at,x)))
+        outer = p.cong('xor-bit',inner,p.lemma(zero_carries[i],x))
+        components.append(p.trans(projection,outer,p.lemma(1,app(at,x))))
+    middle = p.cong('word32',*components)
+    left = app('add32',x,ZERO)
+    p.trans(p.sym(p.lemma(4,left)),middle,p.lemma(4,x))
+    goal = [var('goal'),3,hash_of(t),params,equation(left,x)]
+    proof = [var('proof'),3,hash_of(goal),lemmas,[var('derive'),p.steps]]
+    return goal,proof
