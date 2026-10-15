@@ -11,6 +11,15 @@ linear in the number of steps. The claim is proved when the two sides'
 outputs are the same nodes. Soundness rests on each constructor's
 rewrite being a u32 identity, and on nothing about the producer: the
 subject of the proof is the binary itself, decoded.
+
+Calls by certificate: when a W32 program calls another program by its
+certificate, the checker checks that certificate (once per run) and
+represents the call as an opaque node, call(spec, args), for the spec
+the callee is proved to compute. A spec's own call to that same spec
+becomes the same node -- congruence: the same function of the same
+arguments is the same value -- so a proved callee is checked once, not
+re-expanded at every call. A spec call the implementation does not make
+by certificate is expanded, as before.
 """
 from . import word
 from .canon import Sym, assoc, field, hash_of
@@ -25,6 +34,7 @@ class Dag:
     def __init__(self):
         self.nodes = []
         self.index = {}
+        self.opaque = {}  # spec hash -> output count, for proved callees
 
     def _intern(self, node):
         i = self.index.get(node)
@@ -97,12 +107,20 @@ class Dag:
             return result
         return self._intern(("rotr", a, n))
 
+    def call(self, spec_hash, args, n_out):
+        """The outputs of an opaque call to a proved function."""
+        node = self._intern(("call", spec_hash, tuple(args)))
+        return [self._intern(("out", node, k)) for k in range(n_out)]
+
     def expr(self, e, env, defs=None):
         if isinstance(e, int):
             return self.const(e)
         if isinstance(e, Sym):
             return env[e]
         if e[0] == "call":
+            if e[1] in self.opaque:
+                args = [self.expr(a, env, defs) for a in e[2:]]
+                return self.call(e[1], args, self.opaque[e[1]])
             callee = defs[e[1]]
             args = [self.expr(a, env, defs) for a in e[2:]]
             inner = word._defs_of(callee)
@@ -129,10 +147,11 @@ class Dag:
         return self._run(steps, outputs, env, defs or {})
 
 
-def check_certificate(store_dir, cert):
+def check_certificate(store_dir, cert, _seen=None):
     """Returns (record, program). The program is what the proof is about,
     decoded from the bytes read once: run it with run(program, values),
-    never binary.bin again -- a store's owner may change the file."""
+    never the binary file again -- a store's owner may change it."""
+    seen = {} if _seen is None else _seen  # certificate hash -> program
     if not isinstance(cert, list) or not cert or cert[0] != "certificate":
         raise Reject("not a certificate")
     if field(cert, "cert") != "correctness":
@@ -149,17 +168,35 @@ def check_certificate(store_dir, cert):
     sizes = {"in": len(inputs), "out": len(word.outputs_of(spec_defn))}
     binary = _load_binary(store_dir, cert)
     dag = Dag()
-    want = dag.program_outputs(inputs, word.steps_of(spec_defn),
-                               word.outputs_of(spec_defn),
-                               word._defs_of(spec_defn))
+    callees, spec_of = {}, {}
     if prop == "equals-spec-w32-v1":
         try:
             decoded = word.decode_w32(binary, inputs)
         except ValueError as e:
             raise Reject(str(e)) from e
-        got = dag.program_outputs(inputs, word.steps_of(decoded),
-                                  word.outputs_of(decoded))
-        program = ("w32", decoded, sizes)
+        for name, e in word.steps_of(decoded):
+            if isinstance(name, list):  # a call by certificate
+                callee, callee_spec = _callee(store_dir, e[1], seen)
+                callees[e[1]] = callee
+                spec_of[e[1]] = callee_spec
+                callee_sizes = callee[2]
+                if (len(e) - 2, len(name)) != (callee_sizes["in"], callee_sizes["out"]):
+                    raise Reject("call arity differs from the callee's spec")
+                dag.opaque[callee_spec] = callee_sizes["out"]
+    want = dag.program_outputs(inputs, word.steps_of(spec_defn),
+                               word.outputs_of(spec_defn),
+                               word._defs_of(spec_defn))
+    if prop == "equals-spec-w32-v1":
+        env = {n: dag.var(n) for n in inputs}
+        for name, e in word.steps_of(decoded):
+            if isinstance(name, list):
+                outs = dag.call(spec_of[e[1]], [dag.expr(a, env) for a in e[2:]],
+                                len(name))
+                env.update(zip(name, outs))
+            else:
+                env[name] = dag.expr(e, env)
+        got = [env[o] for o in word.outputs_of(decoded)]
+        program = ("w32", decoded, sizes, callees)
     else:
         from . import a64
         scratch = field(cert, "scratch")
@@ -168,7 +205,7 @@ def check_certificate(store_dir, cert):
         sizes["scratch"] = scratch
         got = a64.execute(dag, a64.decode(binary),
                           lambda i: dag.var(inputs[i]), sizes)
-        program = ("a64", binary, sizes)
+        program = ("a64", binary, sizes, {})
     if want != got:
         for i, (w, g) in enumerate(zip(want, got)):
             if w != g:
@@ -184,14 +221,28 @@ def check_certificate(store_dir, cert):
                  ("dag-nodes", len(dag.nodes))), program
 
 
+def _callee(store_dir, cert_hash, seen):
+    """Check a callee's certificate once per run: (program, spec hash)."""
+    if cert_hash in seen:
+        if seen[cert_hash] is None:
+            raise Reject("a certificate calls itself")
+        return seen[cert_hash]
+    seen[cert_hash] = None  # in progress: a cycle is a reject
+    cert = _load(store_dir, cert_hash)
+    _, program = check_certificate(store_dir, cert, seen)
+    seen[cert_hash] = (program, field(cert, "spec"))
+    return seen[cert_hash]
+
+
 def run(program, values):
     """Run a proved program: W32 by interpretation, AArch64 natively."""
-    isa, body, sizes = program
+    isa, body, sizes, callees = program
     if len(values) != sizes["in"] or any(
             not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
         raise ValueError(f"inputs must be {sizes['in']} u32 words")
     if isa == "w32":
-        return word.run_program(body, values)
+        return word.run_program(body, values,
+                                lambda h, args: run(callees[h], args))
     from . import native
     return native.Function(body, sizes["in"], sizes["out"],
                            sizes["scratch"])(values)

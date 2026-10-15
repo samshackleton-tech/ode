@@ -13,7 +13,7 @@ pypy3 -m ode build-a64 examples/blake3-hash-3.sexp /tmp/h  # produce bytes + cer
 pypy3 -m ode check /tmp/h                                  # ACCEPT: proved for every input
 pypy3 -m ode run   /tmp/h 6513249 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
 # 2897426276 860964408 ... -- the 8 words of blake3("abc"), run natively
-pypy3 -m unittest discover -s tests                        # 24 tests
+pypy3 -m unittest discover -s tests                        # 26 tests
 ```
 
 `6513249` is `"abc"` as a little-endian word; the other 15 are the
@@ -28,13 +28,17 @@ block's zero padding. Needs PyPy3; native runs need aarch64 Linux
    the 65-byte hash calls the compression by `(call #hash ...)`, with the
    compression carried inside under `(defs ...)`.
 2. **A producer** (`ode/produce.py`) turns a specification into bytes and
-   a certificate. Nothing relies on it.
+   a certificate. Nothing relies on it. For W32 it certifies each callee
+   first and has the caller call it *by certificate*.
 3. **The checker** (`ode/check.py`) decodes the bytes -- W32
    (`ode/word.py`) or eight AArch64 instruction forms (`ode/a64.py`) --
    executes them and the specification symbolically over fresh inputs,
    and accepts when both reduce to the same expressions. Straight-line
    code and constant addresses make memory safety and a data-independent
-   trace hold by construction.
+   trace hold by construction. A call by certificate is checked once and
+   then stands as one opaque function of its arguments, the same node on
+   both sides (congruence): a 3,072-byte hash, 50 compressions, checks in
+   0.05 s instead of 103 s.
 4. **Running** executes exactly the program the checker proved, from the
    bytes it read once.
 
@@ -46,7 +50,7 @@ Every definition, certificate, and record is a canonical s-expression
 `game/` shows it end to end: Bob receives only a 235-line root (BLAKE3
 and a launcher) and about 260 bytes of hashes from Sam, and everything
 else -- the checker itself, the specifications, the implementation --
-from anyone, admitted by hash or by proof. Twenty-seven recorded
+from anyone, admitted by hash or by proof. Thirty-three recorded
 attacks, replayed by the tests, have found and fixed several real flaws
 and lost every time; `game/README.md` has them.
 
@@ -58,6 +62,6 @@ overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 
 ## Next
 
-Calls by certificate, so a checker treats a proved callee as an opaque
-function instead of re-expanding it; then BLAKE3 of any length, proved
-by induction over its chunk loop and tree.
+BLAKE3 of any length: a specification with definite recursion over its
+chunks and tree, and a proof by induction over the implementation's
+chunk loop, so one certificate covers every length.

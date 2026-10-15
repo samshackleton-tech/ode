@@ -13,7 +13,7 @@ from you.
 
 ## What you may do
 
-Anything to your attack directory: the store (`binary.bin`,
+Anything to your attack directory: the store (binaries `<hash>.bin`,
 `certificate.sexp`, the definitions it names), a `TARGET` (`g` or
 `hash65`), an `INPUTS` file of inputs you choose, and an `ode-base/` of
 your own, which the referee hands to Bob in place of the public one. You
@@ -24,7 +24,8 @@ Places a flaw might hide:
 - a rewrite in `check.Dag` that is not a true u32 identity;
 - the W32 decoder (`word.decode_w32`) or the AArch64 decoder and model
   (`a64.decode`, `a64.execute`);
-- calls and `defs` (`word._defs_of`, `word._validate_call`) versus how
+- calls by certificate (`check._callee`, `check.Dag.call`) and calls and
+  `defs` (`word._defs_of`, `word._validate_call`) versus how
   the checker expands them (`check.Dag.expr`);
 - the canonical reader (`canon.read_canonical`), the store
   (`store.load_definition`, `store.load_binary`);

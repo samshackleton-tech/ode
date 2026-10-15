@@ -52,7 +52,7 @@ def attack(name, notes, spec, binary, prop="w32", target=None, inputs=None,
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     produce.put_definition(d, spec)
-    with open(os.path.join(d, "binary.bin"), "wb") as f:
+    with open(os.path.join(d, blake3(binary).hex() + ".bin"), "wb") as f:
         f.write(binary)
     extra = (("scratch", scratch),) if scratch is not None else ()
     cert = assoc("certificate", ("cert", Sym("correctness")),
@@ -91,10 +91,10 @@ def main():
     # Round 1: G, W32.
     attack("00-honest", "Control: an honest build. Bob must accept and be right.",
            G, g, expect=True)
-    attack("01-flip-byte", "Flip one byte of binary.bin; the certificate is "
-           "untouched. Found before the game: the checkers once never opened "
-           "binary.bin.", G, g,
-           tamper=lambda d: open(os.path.join(d, "binary.bin"), "wb").write(
+    attack("01-flip-byte", "Flip one byte of the binary file; the certificate "
+           "is untouched. Found before the game: the checkers once never opened "
+           "the file that runs.", G, g,
+           tamper=lambda d: open(os.path.join(d, blake3(g).hex() + ".bin"), "wb").write(
                _patch(g, 40, g[40] ^ 7)))
     attack("02-mutant-honest-hashes", "A wrong program (b2 rotation 7 -> 6) "
            "with honest hashes. Tests that the checker reasons rather than "
@@ -238,6 +238,80 @@ def main():
            "safety of the bytes that run.", G,
            enc(words[:-1] + [0xB9000000 | (4095 << 10) | (1 << 5) | 9, words[-1]]),
            prop="a64", scratch=gs)
+    # Round 6: calls by certificate.
+    compress = _load("blake3-compress.sexp")
+    chash = hash_of(compress)
+
+    def composed(name, notes, callee_binary=None, callee_spec=None,
+                 rewrite=None, expect=False, drop_callee=False, isa="w32"):
+        """hash65 as glue calling a compression by certificate."""
+        def build(d):
+            cs = callee_spec or compress
+            if isa == "a64":
+                cb, scr = produce.emit_a64(produce.compile_spec(cs))
+                extra = (("scratch", scr),)
+            else:
+                cb = callee_binary or produce.emit_w32(produce.compile_spec(cs))
+                extra = ()
+            with open(os.path.join(d, blake3(cb).hex() + ".bin"), "wb") as f:
+                f.write(cb)
+            ccert = assoc("certificate", ("cert", Sym("correctness")),
+                          ("property", Sym(f"equals-spec-{isa}-v1")),
+                          ("spec", produce.put_definition(d, cs)),
+                          ("binary-hash", Bytes(blake3(cb))), *extra)
+            ch = produce.put_definition(d, ccert)
+            glue = produce.compile_spec(HASH65, {chash: ch})
+            if rewrite:
+                glue = rewrite(glue)
+            gb = produce.emit_w32(glue)
+            with open(os.path.join(d, blake3(gb).hex() + ".bin"), "wb") as f:
+                f.write(gb)
+            cert = assoc("certificate", ("cert", Sym("correctness")),
+                         ("property", Sym("equals-spec-w32-v1")),
+                         ("spec", hash_of(HASH65)),
+                         ("binary-hash", Bytes(blake3(gb))))
+            with open(os.path.join(d, "certificate.sexp"), "wb") as f:
+                f.write(canonical_bytes(cert))
+            if drop_callee:
+                os.remove(os.path.join(d, ch.hex() + ".sexp"))
+        attack(name, notes, HASH65, h, target="hash65", expect=expect,
+               tamper=build)
+
+    composed("31-call-honest", "Control: hash65 as glue calling the "
+             "compression by its certificate; the compression is proved "
+             "once, and both calls are one opaque function.", expect=True)
+    composed("32-call-mutant-callee", "The callee certificate claims the "
+             "compression spec for a wrong compression (one rotation off). "
+             "Checking the callee must catch it.",
+             callee_binary=produce.emit_w32(produce.compile_spec(parse(
+                 canonical_bytes(compress).decode().replace(
+                     "(r0c0_d (rotr (xor counter-lo r0c0_a) 16))",
+                     "(r0c0_d (rotr (xor counter-lo r0c0_a) 15))")))))
+    other = parse(canonical_bytes(compress).decode().replace(
+        "(name blake3-compress)", "(name blake3-compress-but-different)").replace(
+        "(r6d3_B (rotr (xor r6d3_b r6d3_C) 7))", "(r6d3_B (rotr (xor r6d3_b r6d3_C) 6))"))
+    composed("33-call-other-spec", "The call names an honest certificate for "
+             "a *different* spec of the same shape. Its opaque node is a "
+             "different function, so it must not stand for the compression.",
+             callee_spec=other)
+
+    def swap_args(glue):
+        steps = [list(s) for s in word.steps_of(glue)]
+        for s in steps:
+            if isinstance(s[0], list):
+                s[1] = s[1][:2] + [s[1][3], s[1][2]] + s[1][4:]
+                break
+        return assoc("w32", ("inputs", word.inputs_of(glue)), ("steps", steps),
+                     ("outputs", word.outputs_of(glue)))
+    composed("34-call-swapped-args", "Two arguments of the first call "
+             "swapped (cv0 and cv1). Congruence holds only for equal "
+             "arguments.", rewrite=swap_args)
+    composed("35-call-callee-missing", "The callee's certificate withheld: "
+             "availability lost, correctness kept.", drop_callee=True)
+    composed("36-call-a64-callee", "Control: W32 glue calling the "
+             "compression's proved AArch64 certificate; Bob runs the glue "
+             "interpreted and each compression natively.", isa="a64",
+             expect=True)
     print(f"{len(os.listdir(ATTACKS))} attacks regenerated")
 
 

@@ -29,9 +29,9 @@ def words_of(spec, msg):
 
 
 def certify(spec, binary, prop="equals-spec-w32-v1", extra=()):
-    """A store holding spec, binary.bin, and a certificate for them."""
+    """A store holding spec, binary, and a certificate for them."""
     tmp = tempfile.mkdtemp()
-    with open(os.path.join(tmp, "binary.bin"), "wb") as f:
+    with open(os.path.join(tmp, blake3(binary).hex() + ".bin"), "wb") as f:
         f.write(binary)
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym(prop)), ("spec", produce.put_definition(tmp, spec)),
@@ -109,14 +109,14 @@ class CheckerTest(unittest.TestCase):
 
     def test_rejects_tampered_binary_file(self):
         tmp = tempfile.mkdtemp()
-        produce.build(load("blake3-g.sexp"), tmp)
-        path = os.path.join(tmp, "binary.bin")
+        result = produce.build(load("blake3-g.sexp"), tmp)
+        path = os.path.join(tmp, result["binary_hash"] + ".bin")
         raw = bytearray(open(path, "rb").read())
         raw[20] ^= 1
         open(path, "wb").write(bytes(raw))
         with self.assertRaises(Reject) as cm:
             check_store(tmp)
-        self.assertIn("binary.bin", str(cm.exception))
+        self.assertIn("binary file", str(cm.exception))
 
     def test_rejects_spec_file_under_a_false_name(self):
         tmp = tempfile.mkdtemp()
@@ -155,3 +155,29 @@ class NamesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CallsByCertificateTest(unittest.TestCase):
+    """A proved callee is checked once and is one opaque function after."""
+
+    def test_composed_hash_is_small_to_check_and_right(self):
+        gen = os.path.join(ROOT, "examples", "make_hash_spec.py")
+        spec = parse(subprocess.run(["pypy3", gen, "3072"], capture_output=True,
+                                    text=True, check=True).stdout)
+        tmp = tempfile.mkdtemp()
+        produce.build(spec, tmp)
+        from ode.cli import _check
+        record, program = _check(tmp)
+        self.assertLess(field(record, "dag-nodes"), 2000)  # 50 calls, not 50 bodies
+        msg = bytes((i * 7 + 1) & 0xFF for i in range(3072))
+        self.assertEqual(check.run(program, words_of(spec, msg)),
+                         list(struct.unpack("<8I", blake3(msg))))
+
+    def test_inlined_and_composed_both_prove(self):
+        spec = load("blake3-hash-65.sexp")
+        tmp, cert = certify(spec, produce.emit_w32(produce.compile_spec(spec)))
+        record, _ = check.check_certificate(tmp, cert)  # no calls: expanded
+        self.assertGreater(field(record, "dag-nodes"), 10000)
+        tmp = tempfile.mkdtemp()
+        produce.build(spec, tmp)                          # calls by certificate
+        self.assertLess(field(check_store(tmp), "dag-nodes"), 200)

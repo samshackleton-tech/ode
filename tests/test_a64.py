@@ -125,7 +125,7 @@ class CheckerOnA64Test(unittest.TestCase):
 
     def certify(self, code, scratch):
         tmp = tempfile.mkdtemp()
-        with open(os.path.join(tmp, "binary.bin"), "wb") as f:
+        with open(os.path.join(tmp, blake3(code).hex() + ".bin"), "wb") as f:
             f.write(code)
         cert = assoc("certificate", ("cert", Sym("correctness")),
                      ("property", Sym("equals-spec-a64-v1")),

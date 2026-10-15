@@ -17,9 +17,12 @@ definition) ...), so a definition is closed over everything it means.
 Every computation is definite: it yields one value or is rejected.
 
 A W32 program (w32 ...) has the same shape, with each step a single
-operation on atoms and no calls: the portable, branch-free word machine
-the producer emits, the checker proves, and run_program interprets.
-decode_w32 reads its binary form.
+operation on atoms: the portable, branch-free word machine the producer
+emits, the checker proves, and run_program interprets. A W32 call step,
+((o1 ...) (call #certificate a1 ...)), calls another *proved* program,
+named by its certificate; the checker checks that certificate and
+treats the call as the function its spec computes. decode_w32 reads the
+binary form.
 """
 from .canon import Bytes, Sym, field, hash_of
 
@@ -108,7 +111,15 @@ def _program(defn, kind):
         for t in targets:
             if t in names:
                 raise ValueError(f"step redefines {t} (SSA: one assignment)")
-        if isinstance(step[0], list):
+        if isinstance(step[0], list) and kind == "w32":
+            e = step[1]  # arity is checked against the callee's certificate
+            if not (isinstance(e, list) and len(e) >= 2 and e[0] == "call"
+                    and isinstance(e[1], Bytes) and len(e[1]) == 32
+                    and all(isinstance(a, (int, Sym)) for a in e[2:])):
+                raise ValueError(f"bad W32 call {e!r}")
+            for a in e[2:]:
+                validate_expr(a, names)
+        elif isinstance(step[0], list):
             callee = _validate_call(step[1], names, defs)
             if len(targets) != len(outputs_of(callee)):
                 raise ValueError("call binds a different number of outputs")
@@ -130,8 +141,9 @@ def validate_spec(defn):
 
 def validate_w32(defn):
     inputs, steps, outputs = _program(defn, "w32")
-    for _, e in steps:
-        _validate_machine_expr(e)
+    for name, e in steps:
+        if not isinstance(name, list):
+            _validate_machine_expr(e)
     return defn
 
 
@@ -187,7 +199,7 @@ def eval_expr(e, env, defs=None):
 # second operand is a count u8. Deterministic: same definition, same bytes.
 import struct as _struct
 
-_W_DECODE = {0: "copy", 1: "add", 2: "xor", 3: "rotr"}
+_W_DECODE = {0: "copy", 1: "add", 2: "xor", 3: "rotr", 4: "call"}
 
 
 def decode_w32(data, input_names):
@@ -224,18 +236,31 @@ def decode_w32(data, input_names):
             return names[i]
         raise ValueError("bad operand tag")
 
-    steps = []
-    for i in range(n_steps):
+    # n_steps counts names defined; a call defines one per output.
+    steps, defined = [], 0
+    while defined < n_steps:
         op = _W_DECODE.get(take(1)[0])
         if op is None:
             raise ValueError("bad W32 opcode")
+        here = len(input_names) + defined
+        if op == "call":
+            h = Bytes(take(32))
+            (n_args,) = _struct.unpack("<H", take(2))
+            args = [operand() for _ in range(n_args)]
+            (n_outs,) = _struct.unpack("<H", take(2))
+            if n_outs == 0 or defined + n_outs > n_steps:
+                raise ValueError("bad W32 call output count")
+            steps.append([names[here:here + n_outs], [Sym("call"), h] + args])
+            defined += n_outs
+            continue
         if op == "copy":
             e = operand()
         elif op == "rotr":
             e = [Sym("rotr"), operand(), take(1)[0]]
         else:
             e = [Sym(op), operand(), operand()]
-        steps.append([names[len(input_names) + i], e])
+        steps.append([names[here], e])
+        defined += 1
     if pos != len(data):
         raise ValueError("trailing bytes in W32 binary")
     if any(i >= len(names) for i in out_idx):
@@ -248,8 +273,9 @@ def decode_w32(data, input_names):
     return defn
 
 
-def run_program(defn, values):
-    """Concrete execution of a spec or a W32 program."""
+def run_program(defn, values, call=None):
+    """Concrete execution of a spec or a W32 program. A W32 program's
+    call steps run through call(certificate_hash, args) -> outputs."""
     inputs, steps, outputs = _program(
         defn, "spec" if defn[0] == "spec" else "w32")
     if len(values) != len(inputs):
@@ -257,7 +283,11 @@ def run_program(defn, values):
     defs = _defs_of(defn) if defn[0] == "spec" else {}
     env = {name: _const(v) for name, v in zip(inputs, values)}
     for name, e in steps:
-        if isinstance(name, list):
+        if isinstance(name, list) and defn[0] == "w32":
+            outs = call(e[1], [eval_expr(a, env) for a in e[2:]])
+            for n, v in zip(name, outs):
+                env[n] = v
+        elif isinstance(name, list):
             for n, v in zip(name, eval_expr(e, env, defs)):
                 env[n] = v
         else:

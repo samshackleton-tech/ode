@@ -15,7 +15,7 @@ import struct as _struct
 
 from . import word
 from .blake3 import blake3
-from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of
+from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of, parse
 
 
 def put_definition(store_dir, defn):
@@ -38,16 +38,25 @@ def _operand(e, index):
 def emit_w32(defn) -> bytes:
     word.validate_w32(defn)
     inputs, steps, outputs = word.inputs_of(defn), word.steps_of(defn), word.outputs_of(defn)
-    names = list(inputs) + [name for name, _ in steps]
+    names = list(inputs)
+    for name, _ in steps:
+        names += name if isinstance(name, list) else [name]
     index = {n: i for i, n in enumerate(names)}
     out = bytearray()
     out += _struct.pack("<H", len(inputs))
-    out += _struct.pack("<I", len(steps))
+    out += _struct.pack("<I", len(names) - len(inputs))
     out += _struct.pack("<H", len(outputs))
     for o in outputs:
         out += _struct.pack("<I", index[o])
-    for _, e in steps:
-        if isinstance(e, (int, Sym)):
+    for name, e in steps:
+        if isinstance(name, list):  # a call by certificate
+            out.append(4)
+            out += bytes(e[1])
+            out += _struct.pack("<H", len(e) - 2)
+            for a in e[2:]:
+                out += _operand(a, index)
+            out += _struct.pack("<H", len(name))
+        elif isinstance(e, (int, Sym)):
             out.append(0)
             out += _operand(e, index)
         elif e[0] == "rotr":
@@ -142,13 +151,20 @@ def _inline(spec_defn, args, steps, fresh, defs):
     return [env[o] for o in word.outputs_of(spec_defn)]
 
 
-def compile_spec(spec_defn):
+def compile_spec(spec_defn, certified=None):
+    """A straight-line W32 program for the spec. A call whose callee is in
+    certified ({spec hash: certificate hash}) becomes a call by certificate;
+    every other call is inlined."""
     word.validate_spec(spec_defn)
     steps, fresh = [], _Fresh(spec_defn)
     defs = word._defs_of(spec_defn)
     env = {n: n for n in word.inputs_of(spec_defn)}
     for name, e in word.steps_of(spec_defn):
-        if isinstance(name, list):
+        if isinstance(name, list) and certified and e[1] in certified:
+            args = [_flatten(_rename(a, env), steps, fresh) for a in e[2:]]
+            steps.append([list(name), [Sym("call"), certified[e[1]]] + args])
+            env.update((n, n) for n in name)
+        elif isinstance(name, list):
             outs = _inline(defs[e[1]],
                            [_flatten(_rename(a, env), steps, fresh)
                             for a in e[2:]], steps, fresh, defs)
@@ -212,26 +228,43 @@ def emit_a64(machine_defn):
 
 
 def build(spec_defn, store_dir, isa="w32"):
-    """Write a store: the spec by hash, binary.bin, certificate.sexp."""
+    """Write a store: the spec, binaries, certificates, certificate.sexp.
+
+    For W32, every callee under the spec's (defs ...) is built and
+    certified first, and the spec calls it by certificate, so a checker
+    proves each callee once. AArch64 makes no calls yet: its callees are
+    inlined. Returns the top certificate's summary.
+    """
     os.makedirs(store_dir, exist_ok=True)
-    program = compile_spec(spec_defn)
+    cert_hash, binary = _certify(spec_defn, store_dir, isa)
+    with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
+        f.write(canonical_bytes(_load_cert(store_dir, cert_hash)))
+    return {"spec": hash_of(spec_defn).hex(), "certificate": cert_hash.hex(),
+            "binary_hash": blake3(binary).hex(), "binary_len": len(binary)}
+
+
+def _load_cert(store_dir, h):
+    with open(os.path.join(store_dir, h.hex() + ".sexp"), "rb") as f:
+        return parse(f.read())
+
+
+def _certify(spec_defn, store_dir, isa):
+    certified = {}
     if isa == "w32":
-        binary = emit_w32(program)
-        extra = ()
+        for h, callee in word._defs_of(spec_defn).items():
+            certified[h], _ = _certify(callee, store_dir, isa)
+    program = compile_spec(spec_defn, certified)
+    if isa == "w32":
+        binary, extra = emit_w32(program), ()
     elif isa == "a64":
         binary, scratch = emit_a64(program)
         extra = (("scratch", scratch),)
     else:
         raise ValueError(f"unknown isa {isa!r}")
-    spec_hash = put_definition(store_dir, spec_defn)
-    with open(os.path.join(store_dir, "binary.bin"), "wb") as f:
+    with open(os.path.join(store_dir, blake3(binary).hex() + ".bin"), "wb") as f:
         f.write(binary)
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym(f"equals-spec-{isa}-v1")),
-                 ("spec", spec_hash), ("binary-hash", Bytes(blake3(binary))),
-                 *extra)
-    cert_hash = put_definition(store_dir, cert)
-    with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
-        f.write(canonical_bytes(cert))
-    return {"spec": spec_hash.hex(), "certificate": cert_hash.hex(),
-            "binary_hash": blake3(binary).hex(), "binary_len": len(binary)}
+                 ("spec", put_definition(store_dir, spec_defn)),
+                 ("binary-hash", Bytes(blake3(binary))), *extra)
+    return put_definition(store_dir, cert), binary
