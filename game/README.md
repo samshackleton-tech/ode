@@ -2,11 +2,17 @@
 
 A test from the relying party's side. Three roles:
 
-- **Sam** publishes `bootstrap/`: the specification of BLAKE3's G
-  (`blake3-g.sexp`), its hash pinned in `RELIANCE`, the checker and the
-  canonical-form reader (`ode/`), and Bob's whole procedure (`bob.py`).
-  This is everything Bob relies on (SPEC s1) and it travels separately
-  from everything else.
+- **Sam** publishes `bootstrap/`, in two parts that Bob relies on for
+  different things:
+  - `ode-base/` -- the same for every Ode package: the reader and hash
+    (`canon.py`, `blake3.py`), the store loader, the checker and the
+    semantics it checks against (`store.py`, `wcheck.py`, `word.py`), and
+    `bob.py`, Bob's whole procedure. Bob relies on it to *check* anything.
+  - `blake3/` -- this package only: the specifications of G and of the
+    65-byte hash, and `RELIANCE`, pinning their hashes. Bob relies on it
+    for what the package *means* (R3); this is the part a person reads.
+
+  Together they travel separately from everything Mallory supplies.
 - **Mallory** supplies the implementation: a directory with a machine
   definition, `binary.bin`, and `certificate.sexp`. He may change
   anything in it. He knows every input Bob will use and may add his own.

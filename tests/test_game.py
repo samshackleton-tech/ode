@@ -25,7 +25,7 @@ class GameTest(unittest.TestCase):
                      "word.py"):
             with open(os.path.join(ROOT, "ode", name), "rb") as f:
                 a = f.read()
-            with open(os.path.join(GAME, "bootstrap", "ode", name), "rb") as f:
+            with open(os.path.join(GAME, "bootstrap", "ode-base", "ode", name), "rb") as f:
                 b = f.read()
             self.assertEqual(a, b, f"bootstrap/ode/{name} differs from ode/")
 

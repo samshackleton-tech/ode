@@ -4,9 +4,10 @@ You are Mallory. Bob will compute BLAKE3's G function from a repository
 *you* supply. Your goal: make Bob print `ACCEPT` and then a **wrong** G
 output on at least one input. Nothing else counts.
 
-## What Bob does (read `bootstrap/bob.py`; it is all of him)
+## What Bob does (read `bootstrap/ode-base/bob.py`; it is all of him)
 
-Bob holds `game/bootstrap/` from Sam and relies only on it: the checker
+Bob holds `game/bootstrap/` from Sam and relies only on it -- `ode-base/`
+(the same for every Ode package) and `blake3/` (this package): the checker
 (`ode/wcheck.py` and what it imports), the reader (`ode/canon.py`), and
 the specification `blake3-g.sexp`, whose hash is pinned in `RELIANCE`. He
 runs `bob.py YOUR_DIR a b c d x y` from inside your directory, with the
@@ -40,7 +41,7 @@ attacking the checker's reasoning; record each, win or lose.
 
 There is now a second target, `hash65`: BLAKE3's hash of a 65-byte
 message (32 input words, 8 output words), specified in
-`bootstrap/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
+`bootstrap/blake3/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
 attack directory to aim at it. Its spec is built from two *compression*
 calls -- `((outs...) (call #hash args...))` -- with the compression
 specification embedded under `(defs (#hash definition))`. New surface:

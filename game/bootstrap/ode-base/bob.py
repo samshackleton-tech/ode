@@ -1,13 +1,16 @@
 #!/usr/bin/env pypy3
 """Bob: the relying party's whole procedure, followed literally.
 
-    pypy3 bootstrap/bob.py MALLORY_DIR TARGET word...
+    pypy3 ode-base/bob.py PACKAGE_DIR MALLORY_DIR TARGET word...
 
-Bob holds this directory (from Sam) and relies on nothing else. He:
+Bob relies on two things from Sam: this directory, ode-base (the same
+for every Ode package: reader, hash, store, checker, and this
+procedure), and one package directory (what this package means: its
+specifications and a RELIANCE file pinning their hashes). He:
   1. loads the checker and reader from THIS directory, by absolute path,
      before anything else, so nothing in Mallory's directory can shadow
      them;
-  2. reads RELIANCE, finds TARGET (g or hash65), parses its spec, and
+  2. reads PACKAGE_DIR/RELIANCE, finds TARGET, parses its spec, and
      confirms the hash;
   3. reads Mallory's certificate.sexp and requires that the certificate's
      (spec ...) IS that hash -- a certificate about any other
@@ -30,19 +33,20 @@ assert wcheck.__file__.startswith(HERE), "checker loaded from outside bootstrap"
 
 
 def main(argv):
-    if len(argv) < 3:
-        print("usage: bob.py MALLORY_DIR TARGET word...")
+    if len(argv) < 4:
+        print("usage: bob.py PACKAGE_DIR MALLORY_DIR TARGET word...")
         return 2
-    store, target = os.path.abspath(argv[0]), argv[1]
-    values = [int(x, 0) for x in argv[2:]]
-    with open(os.path.join(HERE, "RELIANCE"), "rb") as f:
+    package = os.path.abspath(argv[0])
+    store, target = os.path.abspath(argv[1]), argv[2]
+    values = [int(x, 0) for x in argv[3:]]
+    with open(os.path.join(package, "RELIANCE"), "rb") as f:
         reliance = parse(f.read())
     entries = [e for e in field(reliance, "targets") if e and e[0] == target]
     if len(entries) != 1:
         print(f"REJECT unknown target {target}")
         return 1
     entry = entries[0]  # (name (spec ...) (spec-hash ...))
-    with open(os.path.join(HERE, str(field(entry, "spec"))), "rb") as f:
+    with open(os.path.join(package, str(field(entry, "spec"))), "rb") as f:
         spec_defn = parse(f.read())
     n_in = len(word.inputs_of(spec_defn))
     if len(values) != n_in or any(not (0 <= v < 2 ** 32) for v in values):
@@ -50,7 +54,7 @@ def main(argv):
         return 1
     spec_hash = hash_of(spec_defn)
     if spec_hash != field(entry, "spec-hash"):
-        print("REJECT bootstrap spec does not match RELIANCE")
+        print("REJECT package spec does not match its RELIANCE")
         return 1
     try:
         with open(os.path.join(store, "certificate.sexp"), "rb") as f:
