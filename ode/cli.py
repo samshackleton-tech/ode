@@ -1,48 +1,46 @@
-"""Ode command line: build (produce), check (rely), run, assure.
+"""Ode command line.
 
-    pypy3 -m ode build  examples/mix.sexp BUILD/
-    pypy3 -m ode check  BUILD/
-    pypy3 -m ode run    BUILD/ 60 165
-    pypy3 -m ode assure BUILD/
+    pypy3 -m ode build      SPEC.sexp STORE/    # produce W32 bytes + certificate
+    pypy3 -m ode build-a64  SPEC.sexp STORE/    # produce AArch64 bytes + certificate
+    pypy3 -m ode check      STORE/              # prove the store's bytes compute its spec
+    pypy3 -m ode run        STORE/ WORD...      # check, then run the proved program
+    pypy3 -m ode assure     STORE/              # print the assurance map
 
-Word programs (u32, symbolic proofs; SPEC s3 at word scale):
-
-    pypy3 -m ode buildw examples/blake3-g.sexp BUILD/
-    pypy3 -m ode checkw BUILD/
-    pypy3 -m ode runw   BUILD/ 1 2 3 4 5 6
-
-A word program's interface -- its input names, in order, and its outputs
--- is stated in its specification file itself: read the (inputs ...) and
-(outputs ...) of e.g. examples/blake3-g.sexp. `runw` takes the inputs as
-decimal (or 0x...) integers and prints the output words.
-
-`build` relies on nothing and proves nothing; it produces definitions, a
-binary, and a certificate. `check` is the only command whose output a
-relying party needs: it re-derives every claim from the hashes alone.
-`assure` prints the assurance map generated from the checker record.
-All definitions and records are canonical s-expressions (ode/canon.py).
+`build` relies on nothing and proves nothing. `check` is what a relying
+party runs: it re-derives the claim from the store's hashes and bytes.
+`run` checks first and runs exactly the program it proved -- W32 by
+interpretation, AArch64 natively on this CPU. A specification's
+interface -- its input names, in order, and its outputs -- is stated in
+the file itself: read its (inputs ...) and (outputs ...). Words are
+decimal or 0x... integers.
 """
 import os
 import sys
 
-from . import checker, machine, producer, wcheck, word, wproducer
+from . import check, produce
 from .canon import canonical_bytes, field, parse, read_canonical
+from .store import Reject
 
 
-def _read_text_file(path):
-    with open(path, "rb") as f:
-        return parse(f.read())
+def _check(store):
+    with open(os.path.join(store, "certificate.sexp"), "rb") as f:
+        cert = read_canonical(f.read())
+    return check.check_certificate(store, cert)
 
 
-def cmd_build(argv):
+def check_store(store):
+    """The checker record for a store; raises Reject."""
+    return _check(store)[0]
+
+
+def _build(argv, isa):
     spec_path, store = argv
-    spec_defn = _read_text_file(spec_path)
-    result = producer.build(spec_defn, store)
-    with open(os.path.join(store, "self-test.sexp"), "wb") as f:
-        f.write(canonical_bytes(producer.self_test_vectors(spec_defn)))
+    with open(spec_path, "rb") as f:
+        spec_defn = parse(f.read())
+    result = produce.build(spec_defn, store, isa)
     print(f"spec        {result['spec']}")
-    print(f"machine     {result['machine']}")
-    print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes)")
+    print(f"binary      {result['binary_hash']}  ({result['binary_len']} "
+          f"bytes, {isa})")
     print(f"certificate {result['certificate']}")
     print(f"produced, not yet checked: run `pypy3 -m ode check {store}`")
     return 0
@@ -51,123 +49,82 @@ def cmd_build(argv):
 def cmd_check(argv):
     (store,) = argv
     try:
-        record = checker.check_store(store)
-    except checker.Reject as e:
+        record = check_store(store)
+    except Reject as e:
         print(f"REJECT: {e}")
         return 1
     with open(os.path.join(store, "checker-record.sexp"), "wb") as f:
         f.write(canonical_bytes(record))
-    print(f"ACCEPT ({field(record, 'checker')}, "
-          f"{field(record, 'cases-checked')} cases)")
-    print("  - the emitted bytes compute the specification on every input")
-    print("  - the program is straight-line ODE8: its instruction trace "
-          "depends only on its input count")
+    print(f"ACCEPT ({field(record, 'checker')}, {field(record, 'property')}, "
+          f"{field(record, 'dag-nodes')} DAG nodes)")
+    print("  - the bytes compute the specification on every input")
+    print("  - straight-line code: no branches, constant addresses")
     return 0
 
 
 def cmd_run(argv):
-    store, inputs = argv[0], [int(x) for x in argv[1:]]
-    with open(os.path.join(store, "binary.bin"), "rb") as f:
-        binary = f.read()
-    print(machine.run_binary(binary, inputs))
+    store, values = argv[0], [int(x, 0) for x in argv[1:]]
+    try:
+        _, program = _check(store)
+        out = check.run(program, values)
+    except (Reject, ValueError) as e:
+        print(f"REJECT: {e}")
+        return 1
+    print(" ".join(str(x) for x in out))
     return 0
 
 
 def cmd_assure(argv):
+    """The assurance map, generated from the checker record alone."""
     (store,) = argv
     path = os.path.join(store, "checker-record.sexp")
     if not os.path.isfile(path):
         print("no checker record: run `check` first")
         return 1
     with open(path, "rb") as f:
-        record = read_canonical(f.read())
-    text = checker.assurance_markdown(record)
+        r = read_canonical(f.read())
+    isa = "AArch64" if "a64" in str(field(r, "property")) else "W32"
+    text = "\n".join([
+        "# Assurance map (generated from checker-record.sexp; do not edit)",
+        "",
+        f"Checker {field(r, 'checker')}: **{field(r, 'verdict')}**",
+        "",
+        "## Claims",
+        "",
+        f"- the {isa} bytes compute the specification on every input "
+        f"(symbolic proof, {field(r, 'dag-nodes')} shared expression nodes)",
+        "- straight-line code with constant addresses: the instruction and",
+        "  address trace depends on nothing but the code",
+        "",
+        "## What the claims rest on",
+        "",
+        f"- specification `{field(r, 'spec').hex()}`",
+        f"- binary `{field(r, 'binary-hash').hex()}`",
+        f"- certificate `{field(r, 'certificate').hex()}`, property "
+        f"`{field(r, 'property')}`",
+        "- the checker, `ode/check.py` with `ode/word.py`"
+        + (" and `ode/a64.py`" if isa == "AArch64" else "")
+        + "; the reader, `ode/canon.py`; BLAKE3 (SPEC s1, R1, R2, R6)",
+        "- that the specification says what its owners mean (R3): read it",
+        ("- that this CPU executes the eight modelled AArch64 forms as "
+         "modelled (R4): checked on random states by tests/test_a64.py, "
+         "not proved" if isa == "AArch64" else
+         "- W32's meaning is `ode/word.py`; no silicon is involved"),
+        "",
+        "## Gaps",
+        "",
+        "- no timing claim beyond the trace (R5: instruction timing and",
+        "  power are outside it); everything not listed above is unproved",
+        ""])
     with open(os.path.join(store, "assurance.md"), "w") as f:
         f.write(text)
     print(text)
     return 0
 
 
-def check_word_store(store):
-    """Check a word store's certificate.sexp; return the checker record."""
-    with open(os.path.join(store, "certificate.sexp"), "rb") as f:
-        cert = read_canonical(f.read())
-    record, _ = wcheck.check_certificate(store, cert)
-    return record
-
-
-def cmd_buildw(argv):
-    spec_path, store = argv
-    spec_defn = _read_text_file(spec_path)
-    result = wproducer.build(spec_defn, store)
-    print(f"spec        {result['spec']}")
-    print(f"machine     {result['machine']}")
-    print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes)")
-    print(f"certificate {result['certificate']}")
-    print(f"produced, not yet checked: run `pypy3 -m ode checkw {store}`")
-    return 0
-
-
-def cmd_checkw(argv):
-    (store,) = argv
-    try:
-        record = check_word_store(store)
-    except checker.Reject as e:
-        print(f"REJECT: {e}")
-        return 1
-    with open(os.path.join(store, "checker-record.sexp"), "wb") as f:
-        f.write(canonical_bytes(record))
-    print(f"ACCEPT ({field(record, 'checker')}, symbolic over "
-          f"{field(record, 'domain')}, {field(record, 'dag-nodes')} DAG nodes)")
-    print(f"  - the {'AArch64' if 'a64' in str(field(record, 'property')) else 'W32'} "
-          "bytes compute the specification on every input")
-    print("  - the program is straight-line: no branches, constant addresses")
-    return 0
-
-
-def cmd_runw(argv):
-    store, values = argv[0], [int(x, 0) for x in argv[1:]]
-    cert = read_canonical(open(os.path.join(store, "certificate.sexp"),
-                               "rb").read())
-    spec_defn = checker._load(store, field(cert, "spec"))
-    with open(os.path.join(store, "binary.bin"), "rb") as f:
-        binary = f.read()
-    decoded = word.decode_w32(binary, word.inputs_of(spec_defn))
-    print(" ".join(str(x) for x in word.run_program(decoded, values)))
-    return 0
-
-
-def cmd_builda(argv):
-    spec_path, store = argv
-    result = wproducer.build_a64(_read_text_file(spec_path), store)
-    print(f"spec        {result['spec']}")
-    print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes of AArch64)")
-    print(f"certificate {result['certificate']}")
-    print(f"produced, not yet checked: run `pypy3 -m ode checkw {store}`")
-    return 0
-
-
-def cmd_runa(argv):
-    """Check, then run the proved AArch64 bytes natively on this CPU."""
-    from . import native
-    store, values = argv[0], [int(x, 0) for x in argv[1:]]
-    with open(os.path.join(store, "certificate.sexp"), "rb") as f:
-        cert = read_canonical(f.read())
-    try:
-        _, program = wcheck.check_certificate(store, cert)
-    except checker.Reject as e:
-        print(f"REJECT: {e}")
-        return 1
-    kind, code, sizes = program
-    fn = native.Function(code, sizes["in"], sizes["out"], sizes["scratch"])
-    print(" ".join(str(x) for x in fn(values)))
-    return 0
-
-
-COMMANDS = {"build": cmd_build, "check": cmd_check,
-            "run": cmd_run, "assure": cmd_assure,
-            "buildw": cmd_buildw, "checkw": cmd_checkw, "runw": cmd_runw,
-            "builda": cmd_builda, "runa": cmd_runa}
+COMMANDS = {"build": lambda a: _build(a, "w32"),
+            "build-a64": lambda a: _build(a, "a64"),
+            "check": cmd_check, "run": cmd_run, "assure": cmd_assure}
 
 
 def main(argv=None):

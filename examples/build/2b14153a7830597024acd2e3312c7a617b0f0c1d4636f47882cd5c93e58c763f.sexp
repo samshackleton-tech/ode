@@ -1,1 +1,0 @@
-(spec (name mix) (inputs 2) (body (rotl (add (xor (var 0) (var 1)) (const 60)) 3)))

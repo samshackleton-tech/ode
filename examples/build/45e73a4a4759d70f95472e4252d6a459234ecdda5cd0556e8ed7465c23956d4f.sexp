@@ -1,1 +1,0 @@
-(machine (isa ODE8) (inputs 2) (code ((load 0) (load 1) (xor) (const 60) (add) (rotl 3))))

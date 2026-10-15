@@ -3,7 +3,7 @@
 Ode names every definition by the BLAKE3 hash of its canonical form (SPEC s2).
 This module is the one hash implementation the toolchain shares; the checker
 uses the same published algorithm through it. Test vectors from the BLAKE3
-paper / C2SP appendix live in tests/test_ode.py.
+paper / C2SP appendix live in tests/test_canon.py.
 """
 import struct
 
@@ -64,66 +64,41 @@ def _compress(cv, block, counter, block_len, flags):
     return out
 
 
-class _Output:
-    def __init__(self, cv, block, counter, block_len, flags):
-        self.cv, self.block, self.counter = cv, block, counter
-        self.block_len, self.flags = block_len, flags
-
-    def chaining_value(self):
-        return _compress(self.cv, self.block, self.counter,
-                         self.block_len, self.flags)[:8]
-
-    def root_bytes(self, n):
-        out = b""
-        counter = 0
-        while len(out) < n:
-            words = _compress(self.cv, self.block, counter, self.block_len,
-                              self.flags | ROOT)
-            out += struct.pack("<16I", *words)
-            counter += 1
-        return out[:n]
-
-
-def _chunk_output(data, counter):
+def _chunk_node(data, counter):
+    """The last compression's inputs for one chunk: (cv, block, counter,
+    block_len, flags), with every earlier block already chained in."""
     cv = IV[:]
     blocks = [data[i:i + 64] for i in range(0, len(data), 64)] or [b""]
-    out = None
     for i, block in enumerate(blocks):
-        flags = 0
-        if i == 0:
-            flags |= CHUNK_START
-        if i == len(blocks) - 1:
-            flags |= CHUNK_END
-        padded = block + b"\x00" * (64 - len(block))
-        out = _Output(cv, padded, counter, len(block), flags)
-        cv = out.chaining_value()
-    return out
+        flags = (CHUNK_START if i == 0 else 0) | \
+                (CHUNK_END if i == len(blocks) - 1 else 0)
+        node = (cv, block + b"\x00" * (64 - len(block)), counter,
+                len(block), flags)
+        if i < len(blocks) - 1:
+            cv = _compress(*node)[:8]
+    return node
 
 
-def blake3(data: bytes, out_len: int = 32) -> bytes:
-    """Unkeyed BLAKE3 hash of data."""
+def _cv(node):
+    return _compress(*node)[:8]
+
+
+def _root(node):
+    cv, block, counter, block_len, flags = node
+    return struct.pack("<8I", *_compress(cv, block, counter, block_len,
+                                         flags | ROOT)[:8])
+
+
+def blake3(data: bytes) -> bytes:
+    """The 32-byte BLAKE3 hash of data (unkeyed)."""
     assert isinstance(data, bytes)
-    if len(data) <= 1024:
-        return _chunk_output(data, 0).root_bytes(out_len)
-    # Tree: chunk chaining values combined pairwise as parent nodes.
-    cvs = []
-    for off in range(0, len(data), 1024):
-        cvs.append(_chunk_output(data[off:off + 1024], off // 1024)
-                   .chaining_value())
-    while len(cvs) > 1:
-        root = len(cvs) == 2
-        nxt = []
-        for i in range(0, len(cvs) - 1, 2):
-            block = struct.pack("<8I", *cvs[i]) + struct.pack("<8I", *cvs[i + 1])
-            out = _Output(IV[:], block, 0, 64, PARENT)
-            if root:
-                return out.root_bytes(out_len)
-            nxt.append(out.chaining_value())
-        if len(cvs) % 2 == 1:
-            nxt.append(cvs[-1])
-        cvs = nxt
-    raise AssertionError("unreachable")
-
-
-def blake3_hex(data: bytes) -> str:
-    return blake3(data).hex()
+    nodes = [_chunk_node(data[off:off + 1024], off // 1024)
+             for off in range(0, max(len(data), 1), 1024)]
+    # Pair chaining values left to right; an odd one carries up a level.
+    while len(nodes) > 1:
+        nxt = [(IV[:], struct.pack("<16I", *(_cv(nodes[i]) + _cv(nodes[i + 1]))),
+                0, 64, PARENT) for i in range(0, len(nodes) - 1, 2)]
+        if len(nodes) % 2:
+            nxt.append(nodes[-1])
+        nodes = nxt
+    return _root(nodes[0])

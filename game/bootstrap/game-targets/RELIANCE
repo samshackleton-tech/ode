@@ -7,7 +7,7 @@
 ; can state it. Readable copies: examples/blake3-g.sexp and
 ; examples/blake3-hash-65.sexp.
 (reliance
-  (ode-base #af43ff7b2c27a13211c9df434fc8577c741214e68a40ca024e6b03e34f5f8145)
+  (ode-base #964884ab3e3d720b66e06812bca2d3742a58e5eaf6a8dd4c3d09416e6e085525)
   (targets
-    ((g #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092)
-     (hash65 #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a))))
+    ((g #ba18cb6f9a2be29ee2f94582f9735f9381a23be3b968fa2218c0bd62e7f8f838)
+     (hash65 #4fc210b7960cec8e03dea04197d1425030d5682532008282f639e5cc74bb1f45))))

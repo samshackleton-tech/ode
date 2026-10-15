@@ -1,1 +1,0 @@
-Honest store; INPUTS names out-of-domain words (2^32, -1). Found: Bob printed ACCEPT and then crashed; fixed: Bob rejects inputs outside the domain before anything else.

@@ -4,15 +4,16 @@
     pypy3 game/referee.py game/attacks/*          # score every attack
     pypy3 game/referee.py DIR [DIR ...]
 
-For each attack directory, Bob is run in a fresh subprocess (cwd = the
-attack directory, so anything it plants there is in effect) on the
-game's public inputs and on any inputs the attack declares in its own
-INPUTS file, one line each. The true G comes from the bootstrap
-specification executed directly (the spec is the reference).
+For each attack directory, Bob is run through the root in a fresh
+subprocess (cwd = the attack directory, so anything planted there is in
+effect) on the game's public inputs and on any inputs the attack
+declares in INPUTS, one line each. The truth is the pinned
+specification, run directly: the referee refuses to start unless its
+copies in examples/ hash to the pins.
 
-Mallory wins an attack when Bob prints ACCEPT and then a wrong output.
-Everything else -- REJECT, a crash, a right output -- is a loss for
-Mallory. Exit status: 0 when Mallory lost every attack, 1 otherwise.
+A run fails when Bob prints ACCEPT and then a wrong output (Mallory
+wins), or when a control (EXPECT: accept) is not accepted and right.
+Exit status: 0 when nothing failed, 1 otherwise.
 """
 import os
 import subprocess
@@ -25,9 +26,9 @@ PUBLIC_ODE_BASE = os.path.join(HERE, "ode-base")
 EXAMPLES = os.path.join(os.path.dirname(HERE), "examples")
 sys.path.insert(0, os.path.dirname(HERE))  # the referee uses the toolchain, not ode-base
 from ode import word  # noqa: E402
-from ode.canon import parse  # noqa: E402
+from ode.canon import field, hash_of, parse  # noqa: E402
 
-import struct
+import struct  # noqa: E402
 
 PUBLIC_INPUTS = {
     "g": [
@@ -54,9 +55,23 @@ def target_of(attack_dir):
     return "g"
 
 
-def true_g(values, target="g"):
-    with open(os.path.join(EXAMPLES, SPEC_FILE[target]), "rb") as f:
-        return word.run_program(parse(f.read()), values)
+def _pinned_specs():
+    with open(RELIANCE, "rb") as f:
+        pins = dict((str(p[0]), p[1]) for p in field(parse(f.read()), "targets"))
+    specs = {}
+    for target, name in SPEC_FILE.items():
+        with open(os.path.join(EXAMPLES, name), "rb") as f:
+            specs[target] = parse(f.read())
+        if hash_of(specs[target]) != pins[target]:
+            raise SystemExit(f"referee: examples/{name} is not the pinned {target}")
+    return specs
+
+
+SPECS = _pinned_specs()
+
+
+def truth(values, target):
+    return word.run_program(SPECS[target], values)
 
 
 def run_bob(attack_dir, values, target="g"):
@@ -108,7 +123,7 @@ def _score(attack_dir):
         verdict = lines[0] if lines else f"(no output; exit {code})"
         if verdict == "ACCEPT":
             got = lines[1] if len(lines) > 1 else ""
-            want = " ".join(str(v) for v in true_g(values, target))
+            want = " ".join(str(v) for v in truth(values, target))
             if got != want:
                 return ("MALLORY WINS", f"inputs {values}: Bob accepted and "
                         f"output {got!r}; true G is {want!r}")

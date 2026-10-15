@@ -1,1 +1,0 @@
-The machine definition file has a trailing newline. Once rejected by the reader; the checker no longer reads machine definitions, so it is now irrelevant and Bob is right. Attack 23 aims the same trick at the spec, which is read.

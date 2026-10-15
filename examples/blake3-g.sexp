@@ -1,7 +1,7 @@
-; BLAKE3's G mixing function (C2SP BLAKE3, section 2.2), as an Ode word
+; BLAKE3's G mixing function (C2SP BLAKE3, section 2.2), as an Ode
 ; specification: the specification of record for this slice.
 ; G(a, b, c, d, x, y) updates four state words with two message words.
-(wspec
+(spec
   (name blake3-g)
   (inputs (a b c d x y))
   (steps

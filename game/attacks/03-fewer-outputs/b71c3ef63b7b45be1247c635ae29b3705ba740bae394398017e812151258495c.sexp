@@ -1,1 +1,0 @@
-(wmachine (isa W32) (inputs (a b c d x y)) (steps ((t0 (add a b)) (a1 (add t0 x)) (t1 (xor d a1)) (d1 (rotr t1 16)) (c1 (add c d1)) (t2 (xor b c1)) (b1 (rotr t2 12)) (t3 (add a1 b1)) (a2 (add t3 y)) (t4 (xor d1 a2)) (d2 (rotr t4 8)) (c2 (add c1 d2)) (t5 (xor b1 c2)) (b2 (rotr t5 7)))) (outputs (a2 b2 c2)))

@@ -1,28 +1,25 @@
-"""Word programs: the specification layer at u32 scale, and W32.
+"""The specification layer, and W32: word programs and their meaning.
 
-The BLAKE3 slice (see examples/blake3-g.sexp) needs 32-bit words. A word
-program is an s-expression definition in sequential (SSA) steps:
+A specification is an s-expression definition in SSA steps over u32
+words:
 
-    (wspec (name blake3-g)
+    (spec (name blake3-g)
       (inputs (a b c d x y))
       (steps ((a1 (add (add a b) x)) (d1 (rotr (xor d a1) 16)) ...))
       (outputs (a2 b2 c2 d2)))
 
-Expressions: an atom is a name (a step or input) or an integer constant;
+An atom is a name (an input or an earlier step) or an integer constant;
 compound forms are (add e e), (xor e e), (rotr e n), all modulo 2**32.
-Every step computes exactly one word; the program is definite and pure.
+A step may also call another specification it names by hash -- the
+step ((o1 o2 ...) (call #hash e1 e2 ...)) binds the callee's outputs, in
+order -- and the callee travels inside the caller, under (defs (#hash
+definition) ...), so a definition is closed over everything it means.
+Every computation is definite: it yields one value or is rejected.
 
-A specification may also call another specification it names by hash:
-the step ((o1 o2 ...) (call #hash e1 e2 ...)) binds the callee's outputs,
-in order, to fresh names. A `wspec` carries its callees under (defs
-(#hash definition) ...), so a definition is closed over everything it
-means (SPEC s2.1); the validator checks each callee's hash and arity.
-This is how BLAKE3's hash composes compressions.
-
-A machine program (wmachine, isa W32) has the same shape, except each
-step's expression is a single operation on atoms -- the straight-line,
-branch-free word machine the producer emits and the checker symbolically
-executes (ode/wcheck.py).
+A W32 program (w32 ...) has the same shape, with each step a single
+operation on atoms and no calls: the portable, branch-free word machine
+the producer emits, the checker proves, and run_program interprets.
+decode_w32 reads its binary form.
 """
 from .canon import Bytes, Sym, field, hash_of
 
@@ -83,7 +80,7 @@ def _defs_of(defn):
             raise ValueError("defs entries are (#hash definition)")
         if hash_of(item[1]) != item[0]:
             raise ValueError(f"def named {item[0].hex()} hashes differently")
-        validate_wspec(item[1])
+        validate_spec(item[1])
         defs[item[0]] = item[1]
     return defs
 
@@ -101,7 +98,7 @@ def _program(defn, kind):
     if not isinstance(steps, list) or not isinstance(outputs, list) or not outputs:
         raise ValueError("program needs steps and outputs")
     names = set(inputs)
-    defs = _defs_of(defn) if kind == "wspec" else {}
+    defs = _defs_of(defn) if kind == "spec" else {}
     for step in steps:
         if not (isinstance(step, list) and len(step) == 2):
             raise ValueError(f"bad step {step!r}")
@@ -124,17 +121,15 @@ def _program(defn, kind):
     return inputs, steps, outputs
 
 
-def validate_wspec(defn):
-    _program(defn, "wspec")
+def validate_spec(defn):
+    _program(defn, "spec")
     if not isinstance(field(defn, "name"), Sym):
-        raise ValueError("wspec needs a symbol name")
+        raise ValueError("spec needs a symbol name")
     return defn
 
 
-def validate_wmachine(defn):
-    inputs, steps, outputs = _program(defn, "wmachine")
-    if field(defn, "isa") != "W32":
-        raise ValueError("wmachine isa must be W32")
+def validate_w32(defn):
+    inputs, steps, outputs = _program(defn, "w32")
     for _, e in steps:
         _validate_machine_expr(e)
     return defn
@@ -185,7 +180,7 @@ def eval_expr(e, env, defs=None):
     return ((x >> n) | (x << ((32 - n) % 32))) & MASK if n else x
 
 
-# --- W32 binary emission (SPEC s3.4 at word scale) ---------------------
+# --- The W32 binary form (written by produce.emit_w32) ------------------
 # Header: inputs u16, steps u32, outputs u16, output name-indices u32 each.
 # Step: opcode (0 copy, 1 add, 2 xor, 3 rotr); an operand is tag 0 + name
 # index u32 (inputs first, then steps) or tag 1 + constant u32. rotr's
@@ -246,20 +241,20 @@ def decode_w32(data, input_names):
     if any(i >= len(names) for i in out_idx):
         raise ValueError("output index out of range")
     from .canon import assoc
-    defn = assoc("wmachine", ("isa", Sym("W32")), ("inputs", list(input_names)),
+    defn = assoc("w32", ("inputs", list(input_names)),
                  ("steps", steps),
                  ("outputs", [names[i] for i in out_idx]))
-    validate_wmachine(defn)
+    validate_w32(defn)
     return defn
 
 
 def run_program(defn, values):
-    """Concrete execution; works for wspec and wmachine alike."""
+    """Concrete execution of a spec or a W32 program."""
     inputs, steps, outputs = _program(
-        defn, "wspec" if defn[0] == "wspec" else "wmachine")
+        defn, "spec" if defn[0] == "spec" else "w32")
     if len(values) != len(inputs):
         raise ValueError("wrong number of inputs")
-    defs = _defs_of(defn) if defn[0] == "wspec" else {}
+    defs = _defs_of(defn) if defn[0] == "spec" else {}
     env = {name: _const(v) for name, v in zip(inputs, values)}
     for name, e in steps:
         if isinstance(name, list):

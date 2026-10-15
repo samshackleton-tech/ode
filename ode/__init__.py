@@ -1,1 +1,1 @@
-"""Ode, toy initial implementation. See SPEC.md; start with ode/cli.py."""
+"""Ode. See README.md; SPEC.md defines it. Commands: ode/cli.py."""

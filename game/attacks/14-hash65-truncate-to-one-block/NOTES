@@ -1,1 +1,0 @@
-Machine returns the ROOT output of block 0 alone (the hash of the first 64 bytes) and ignores the 65th byte.

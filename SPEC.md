@@ -323,7 +323,7 @@ hashes it describes:
 - **the assurance map** (§7), including the reliance set (§1) printed in full;
 - **decision prompts**: at a real trade-off, the options with their numbers, the decision
   recorded as a definition;
-- **measurement reports** (§9 of `DESIGN.md`; §10 below);
+- **measurement reports** (§10);
 - **projections** of any definition, proof step, counterexample, or rejected certificate,
   for the exceptional investigation.
 

@@ -1,1 +1,0 @@
-The store omits the spec entirely. Bob holds only its hash, so Mallory can deny availability -- Bob rejects -- but cannot change correctness.

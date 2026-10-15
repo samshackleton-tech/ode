@@ -17,12 +17,11 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ode import a64, a64emit, wcheck, wproducer, word  # noqa: E402
+from ode import a64, check, produce, word  # noqa: E402
 from ode.blake3 import blake3  # noqa: E402
 from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, parse  # noqa: E402
-from ode.producer import put_definition  # noqa: E402
 from ode.store import Reject  # noqa: E402
-from ode.wcheck import Dag  # noqa: E402
+from ode.check import Dag  # noqa: E402
 
 ON_A64 = platform.machine() == "aarch64" and sys.platform.startswith("linux")
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -129,18 +128,18 @@ class CheckerOnA64Test(unittest.TestCase):
         with open(os.path.join(tmp, "binary.bin"), "wb") as f:
             f.write(code)
         cert = assoc("certificate", ("cert", Sym("correctness")),
-                     ("property", Sym("equals-wspec-a64-v1")),
-                     ("spec", put_definition(tmp, self.spec)),
+                     ("property", Sym("equals-spec-a64-v1")),
+                     ("spec", produce.put_definition(tmp, self.spec)),
                      ("binary-hash", Bytes(blake3(code))), ("scratch", scratch))
-        return wcheck.check_certificate(tmp, cert)
+        return check.check_certificate(tmp, cert)
 
     def test_honest_g_is_proved(self):
-        code, scratch = a64emit.emit_a64(wproducer.compile_wspec(self.spec))
+        code, scratch = produce.emit_a64(produce.compile_spec(self.spec))
         record, _ = self.certify(code, scratch)
         self.assertEqual(field(record, "verdict"), "accept")
 
     def test_mutants_rejected(self):
-        code, scratch = a64emit.emit_a64(wproducer.compile_wspec(self.spec))
+        code, scratch = produce.emit_a64(produce.compile_spec(self.spec))
         words = [int.from_bytes(code[i:i + 4], "little") for i in range(0, len(code), 4)]
         rors = [i for i, w in enumerate(words) if (w & 0xFFE00000) == 0x13800000]
         adds = [i for i, w in enumerate(words) if (w & 0xFFE0FC00) == 0x0B000000]

@@ -1,71 +1,38 @@
 # Brief for Mallory
 
-You are Mallory. Bob will compute BLAKE3's G function from a repository
-*you* supply. Your goal: make Bob print `ACCEPT` and then a **wrong** G
-output on at least one input. Nothing else counts.
+You are Mallory. Bob will run an implementation of BLAKE3's G, or of
+BLAKE3 on a 65-byte message, that *you* supply. Your goal: make Bob
+print `ACCEPT` and then a **wrong** answer. Nothing else counts.
 
-## What Bob does (read `bootstrap/ode-base/bob.py`; it is all of him)
+## What Bob does
 
-Bob holds `game/bootstrap/` from Sam and relies only on it -- `ode-base/`
-(the same for every Ode package) and `blake3/` (this package): the checker
-(`ode/wcheck.py` and what it imports), the reader (`ode/canon.py`), and
-the specification `blake3-g.sexp`, whose hash is pinned in `RELIANCE`. He
-runs `bob.py YOUR_DIR a b c d x y` from inside your directory, with the
-bootstrap's modules loaded by absolute path first. He requires your
-`certificate.sexp` to name the pinned spec hash, runs the checker over
-your store, and on ACCEPT decodes and runs your `binary.bin`.
+Read `game/README.md` for the roles, then `bootstrap/root/launch.py` and
+`ode-base/bob.py`: they are all of him. Bob holds only the root and
+`bootstrap/game-targets/RELIANCE` (hashes). Everything else may come
+from you.
 
 ## What you may do
 
-Anything to your directory: every file, every byte. You know the public
-inputs Bob will use (`game/referee.py`, `PUBLIC_INPUTS`) and may add a
-file `INPUTS` (one `a b c d x y` per line) naming inputs you'd like Bob
-to run as well -- a "wrong only where I choose" attack is welcome. You
-may read all of Ode's source, including the checker, to find a rewrite
-rule in `wcheck.Dag` that is not a true u32 identity, a canonical-form
-ambiguity, a decoder/emitter disagreement, or a certificate field the
-checker forgets to bind. You may not touch `game/bootstrap/`.
+Anything to your attack directory: the store (`binary.bin`,
+`certificate.sexp`, the definitions it names), a `TARGET` (`g` or
+`hash65`), an `INPUTS` file of inputs you choose, and an `ode-base/` of
+your own, which the referee hands to Bob in place of the public one. You
+know every input Bob will use. You may read all of Ode. You may not
+touch `bootstrap/`.
 
-## How to work
+Places a flaw might hide:
+- a rewrite in `check.Dag` that is not a true u32 identity;
+- the W32 decoder (`word.decode_w32`) or the AArch64 decoder and model
+  (`a64.decode`, `a64.execute`);
+- calls and `defs` (`word._defs_of`, `word._validate_call`) versus how
+  the checker expands them (`check.Dag.expr`);
+- the canonical reader (`canon.read_canonical`), the store
+  (`store.load_definition`, `store.load_binary`);
+- the root: its tree hash, its in-memory import, its regex for the pin.
 
-Each attack is one function in `game/make_attacks.py`, producing one
-directory under `game/attacks/NN-name/` with a `NOTES` file (one
-paragraph: the idea, and why it should work), so the corpus stays
-regenerable. Record yours there rather than by hand. Start
-from an honest build (`pypy3 -m ode buildw examples/blake3-g.sexp DIR`)
-or from nothing. Score yourself with `pypy3 game/referee.py game/attacks/*`.
-Aim for ten distinct ideas, escalating from tampering to forging to
-attacking the checker's reasoning; record each, win or lose.
+## How to record an attack
 
-## Round 2: the hash target
-
-There is now a second target, `hash65`: BLAKE3's hash of a 65-byte
-message (32 input words, 8 output words), specified in
-`bootstrap/game-targets/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
-attack directory to aim at it. Its spec is built from two *compression*
-calls -- `((outs...) (call #hash args...))` -- with the compression
-specification embedded under `(defs (#hash definition))`. New surface:
-
-- how the validator checks a callee's hash and arity (`ode/word.py`:
-  `_defs_of`, `_validate_call`), and whether anything about `defs` is
-  left unbound by the checker;
-- how the producer inlines calls (`ode/wproducer.py`: `_inline`,
-  `_rename`) versus how the checker expands them (`ode/wcheck.py`:
-  `Dag.expr`, `_run`) -- any disagreement between the two is a win;
-- name capture: inlined callee names are renamed to fresh `tN`; the
-  spec's own step names, input names like `m0`, and callee-internal
-  names like `cv0` or `flags` all coexist;
-- the wider W32 binary header (u16/u32 counts) and the decoder's
-  bounds on indices.
-
-The old `g` attacks (00-10) are all recorded losses; aim for new ideas.
-
-## Round 3: the root
-
-Bob now holds only `bootstrap/root/` (BLAKE3 and a launcher) and
-`bootstrap/game-targets/RELIANCE` (hashes). You may deliver the ode-base too:
-put an `ode-base/` directory in your attack and the referee hands it to
-Bob instead of the public one. The specifications are fetched from your
-store by hash. Certificates no longer name a machine definition. New
-surface: the launcher's tree hash (`read_tree`, `tree_hash`), its
-in-memory import of `ode` (`_MemoryFinder`), and its regex for the pin.
+Add one `attack(...)` call to `game/make_attacks.py`, with `NOTES`
+saying the idea and why it should work, regenerate, and score with
+`pypy3 game/referee.py game/attacks/*`. Every attack stays in the
+corpus, win or lose.

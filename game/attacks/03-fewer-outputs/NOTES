@@ -1,1 +1,0 @@
-Machine declares only 3 outputs; a pairwise zip comparison could ignore the missing fourth, and Bob would print 3 words.

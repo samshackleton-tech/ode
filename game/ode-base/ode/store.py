@@ -1,6 +1,6 @@
 """Reading a store: definitions by hash, and the binary that runs.
 
-Shared by both checkers, and the only store code in a relying party's
+The checker's, and the only store code in a relying party's
 bootstrap: a store is a directory of canonical s-expressions named by
 their BLAKE3 hash (<hash>.sexp) plus binary.bin. Loading is strict --
 bytes must be canonical, and must hash to the name they were fetched

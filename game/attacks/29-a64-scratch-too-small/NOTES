@@ -1,1 +1,0 @@
-Honest code, but the certificate declares one scratch word fewer than it uses, so Bob would allocate too little and the code would write past it.

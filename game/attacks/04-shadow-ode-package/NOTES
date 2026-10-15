@@ -1,1 +1,0 @@
-Plant an ode/ package and sitecustomize.py in the attack dir (Bob runs with cwd here). If any import resolves through cwd, the planted wcheck accepts everything.
