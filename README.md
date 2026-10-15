@@ -23,8 +23,8 @@ run by the evaluator, so it is correct by definition -- and slow: about
 this machine (single wall-time samples, `time.perf_counter_ns`, noisy;
 the team's `clocks` crate is not available here). Profiling puts the
 time in the Python evaluator and the ctypes crossing per kilobyte, not
-in the native code: fast BLAKE3 for every length needs native glue,
-proved for every length -- phase 2 below. For speed at a
+in the native code: each native call carries a fixed cost of glue and
+crossing, so the way forward is fewer, larger native calls. For speed at a
 chosen length, `build-a64 ... len=44` compiles all of it and proves the
 result at that length. Needs PyPy3; native runs need aarch64 Linux.
 
@@ -72,7 +72,12 @@ call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 
 ## Next
 
-Native glue for every length: compiled loops over chunks, proved against
-the specification for all lengths -- the small proof kernel of SPEC s4
-(DESIGN.md, open question 1), grown only as BLAKE3 needs it. Then NEON
-kernels hashing several chunks at once.
+1. **Calls by certificate in AArch64**: a `BLR` into a separately proved
+   function, treated by the checker exactly as W32 calls are (congruence;
+   the callee's own proof covers its memory). Then a proved kernel can
+   hash a 16-chunk subtree in one native call with a few KB of code and a
+   cache-resident compression, and the evaluator's glue shrinks to a small
+   fraction of the time. No new logic.
+2. **NEON**: kernels hashing several chunks at once, as the reference does.
+3. **The proof kernel** of SPEC s4 (DESIGN.md, open question 1), for native
+   glue across variable lengths -- once 1 and 2 show what the glue costs.
