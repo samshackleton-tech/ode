@@ -184,8 +184,9 @@ ror16(x XOR y) XOR (ror8(ror8(x)) XOR ror16(y)) = zero32
 The result comes from the existing normalizer; the kernel checks all
 107 lemmas and 2,551 inference steps against the bit definitions.
 Exports support variables, zero, XOR, and immediate rotations. Addition,
-nonzero constant folding, and machine-execution claims remain outside
-this fragment.
+nonzero constants in symbolic expressions, and machine-execution claims
+remain outside this fragment. Closed constant expressions have a separate
+export below.
 
 Tests check composition for every count, including wraparound, and
 random combinations of distribution and cancellation. Separately, one
@@ -223,9 +224,36 @@ commutativity alone. Changed carry equations, stage dependencies, sum
 bits, and theorem conclusions are rejected by the kernel.
 
 This milestone proves commutativity of the defined adder. Associativity,
-constant-folding exports, and the native ADD representation/refinement
+symbolic normalization exports, and the native ADD representation/refinement
 link remain open; the natural-number addition lemmas do not discharge
 those word-level obligations.
+
+## Concrete arithmetic exports
+
+`ode/constant_proof.py` exports the existing normalizer's concrete
+Word32 addition, XOR, and immediate-rotation results. Nonzero words are
+explicit 32-bit constructors. `ode/ground_proof.py` evaluates the
+owner's definitions while emitting unfolding and congruence steps;
+repeated subterms reuse their derivations. The kernel receives only
+these ordinary proof steps, with no evaluation callback or new rule.
+
+```sh
+pypy3 tools/make_constant_proof.py
+pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/constant.goal.sexp examples/proofs/constant.proof.sexp
+```
+
+The example checks `(0xffffffff + 1) XOR 0xdeadbeef = 0xdeadbeef`
+with modular overflow: 925 inference steps and no supporting lemmas.
+The theory is the existing addition theory. Rotation exports use the
+rotation theory. Each supplied theory must define the operations used.
+
+These exports cover closed expressions. Symbolic addition flattening
+and folding constants within expressions containing variables remain
+open. Tests include a broken old adder, changed carry definitions and
+conclusions, shared-subterm reuse, and verification in a fresh process
+that blocks imports of the old verifier and producers. The addition
+semantic tests use this same ground-proof producer.
 
 ## The logic
 
@@ -402,7 +430,8 @@ test runs the command a recipient would run, then corrupts the proof.
 The scripts `tools/make_batching_proof.py`, `tools/make_nat_add_proof.py`,
 `tools/make_chain_split_proof.py`, `tools/make_xor_proof.py`,
 `tools/make_xor32_proof.py`, `tools/make_rotate32_proof.py`, and
-`tools/make_add32_proof.py` reproduce the goals and proofs. The Word32
+`tools/make_add32_proof.py`, and `tools/make_constant_proof.py` reproduce
+the goals and proofs. The Word32
 XOR and rotation exporters ask the existing symbolic normalizer for its
 proposed result. All producers emit explicit proof steps. Generated
 proof bytes are included here because this is the artifact Bob checks

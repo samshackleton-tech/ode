@@ -178,7 +178,8 @@ into this foundation; its executable-code results still rely on its own evaluato
 normalizer, and instruction models. The first bridges export XOR and immediate-rotation normalization derivations
 against explicit Word32 semantics (`ode/xor32_proof.py`, `ode/rotate32_proof.py`).
 A separate ripple-carry definition has a checked commutativity proof
-(`ode/add32_proof.py`); addition-normalizer exports remain open. The native representation and complete
+(`ode/add32_proof.py`). Closed arithmetic expressions have evaluation-proof
+exports (`ode/constant_proof.py`); symbolic addition normalization remains open. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.
 

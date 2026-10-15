@@ -3,10 +3,12 @@ from pathlib import Path
 import random
 import unittest
 
-from ode.canon import Sym, canonical_bytes, hash_of, parse
+from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
 from ode.add32_proof import artifacts, theory as make_theory
-from ode.xor32_proof import Proof, app, var
+from ode.xor32_proof import app, var
+from ode.ground_proof import prove as ground_proof
+from ode.constant_proof import literal
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
 
@@ -15,52 +17,6 @@ def bundle():
     return [parse((EXAMPLES/f'add32.{k}.sexp').read_bytes()) for k in ('theory','goal','proof')]
 
 
-def literal(n):
-    return app('word32',*[app('bit1' if n & (1<<i) else 'bit0') for i in range(32)])
-
-
-def ground_proof(t, left, right):
-    """Test-side evaluator emits ordinary unfolding/congruence steps.
-
-    Its computed result is checked against a separately supplied goal;
-    evaluation is only a proof producer, never a kernel callback.
-    """
-    definitions = {d[0]:d for d in t[4]}
-    p, cache = Proof(), {}
-
-    def substitute(term, env):
-        if isinstance(term,Sym):
-            return env[term]
-        return [term[0]]+[substitute(a,env) for a in term[1:]]
-
-    def evaluate(term):
-        key=canonical_bytes(term)
-        if key in cache:
-            return cache[key]
-        args=[evaluate(a) for a in term[1:]]
-        values=[a for a,_ in args]
-        reduced=app(term[0],*values)
-        start=p.cong(term[0],*[proof for _,proof in args])
-        if term[0] in definitions:
-            _,params,_,cases=definitions[term[0]]
-            constructor,fields,body=next(c for c in cases if c[0]==values[0][0])
-            env={param[0]:value for param,value in zip(params,values)}
-            env.update(zip(fields,values[0][1:]))
-            unfolded=p.unfold(term[0],*values)
-            value,end=evaluate(substitute(body,env))
-            result=value,p.trans(start,unfolded,end)
-        else:
-            result=reduced,start
-        cache[key]=result
-        return result
-
-    value,last=evaluate(left)
-    assert value==right, 'producer result differs from independently computed integer sum'
-    # evaluate() may return a cached earlier step; explicitly conclude it.
-    p.trans(last,p.refl(right))
-    g=[var('goal'),3,hash_of(t),[],app('eq',left,right)]
-    proof=[var('proof'),3,hash_of(g),[],[var('derive'),p.steps]]
-    return g,proof
 
 
 class AdditionProofTest(unittest.TestCase):
