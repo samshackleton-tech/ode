@@ -119,20 +119,19 @@ agents extend behind stable interfaces.
 
 ## 6. One logic, many producers
 
-**The reliance base is one small checker** for proof certificates, in a logic with a minimal rule set
-and least fixed points. Matching μ-logic is the leading candidate: patterns denote sets of elements,
-its Hilbert system has a handful of rules, its certificates are checked in a few hundred lines
-(Metamath), Lean's proof objects translate into it, and equality, sorts, functions, constructors,
-separation, reachability, and type systems are theories inside it. Chen and Roşu (2026) prove its
-fixpoint-free basic fragment, in one-sorted form, globally complete and the definedness extension
-conservative there, so theories added as libraries keep each other's meanings; with fixpoints it
-is, like every logic strong enough for induction, incomplete, which costs nothing for the theorems
-we prove.
+**The proof-object kernel starts with equations and natural-number induction.** Its
+complete rules are in `KERNEL.md`, and `ode/kernel.py` checks the first unbounded loop
+transformation. Recursive definitions must visibly decrease their counter; the proof producer
+has no axiom-introduction rule. This is the smallest fragment the loop milestone needs.
+Matching μ-logic remains a possible richer foundation, rather than a prerequisite for the
+first kernel. The existing symbolic verifier has yet to emit proofs in this foundation;
+its current program claims still rely on its own semantics and normalizer.
 
-**Operational semantics is the definitional base** (as in K): each layer's language, including each
-ISA, is defined by rewrite rules, and correctness between layers is reachability or simulation,
-proved in the same logic. Symbolic execution is proof search; loop invariants are circularities;
-constant-time is a relational (two-run) reachability property.
+**Operational semantics is the intended definitional base** (as in K): each layer's language,
+including each ISA, needs explicit transition rules. Refinement proofs connect those rules to the
+layer above. The current kernel establishes equations over total functions; expressing state,
+reachability, and relational properties such as constant-time is work still to be done. The first
+loop law makes no claim about memory accesses or instruction timing.
 
 **Producers above the checker carry no reliance and are interchangeable:** symbolic executors, SMT solvers,
 normalizers (verified once, or emitting certificates), tactic engines, AI agents. Three kinds of
@@ -140,7 +139,7 @@ certificate:
 
 - **correctness**: a proof that a definition meets its specification;
 - **execution**: a succinct proof that a computation ran and gave its result (as in Lurk), so a run
-  by any agent or machine, without being repeated; and since the checker is
+  by any agent or machine is checked without being repeated; and since the checker is
   small, a succinct proof that the checker accepted a certificate can stand for the certificate
   itself;
 - **attestation**: an auditor's signed statement about a definition, carrying its recipe for
@@ -230,17 +229,11 @@ been measured on the Mac?" is a lookup, and a regression report is computed.
 
 ## 13. Open questions
 
-1. **The logic**: matching μ-logic as the certificate logic, and how computation inside proofs
-   (Lean's strength) is provided: reflection verified once, or certificates for decision procedures.
-   The implementation now forces this question. Every proof today has concrete naturals: a
-   length is fixed, every condition decided, and the checker compares straight-line expressions
-   (smart constructors, and congruence for calls by certificate). One certificate for *every*
-   length needs symbolic naturals with linear arithmetic, symbolic indexing, case splits,
-   induction over loops, and, for BLAKE3, the lemma that a chunk loop with a stack of chaining
-   values computes the specification's recursive tree. Growing the checker rule by rule toward
-   that would build a second logic beside the one this design names; the alternative is the
-   small kernel of SPEC §4, with today's rules restated in it as derived rules. Deciding which
-   comes first is the next design decision.
+1. **The proof connection**: connect the symbolic verifier's word operations and
+   instruction semantics to kernel proofs, then prove native loop refinements. The
+   owner chose a small kernel driven by the BLAKE3 milestone. Its first theorem is a
+   counter-based batching law for all iteration counts (`KERNEL.md`); the bridge to
+   the existing BLAKE3 definitions and executable bytes remains open.
 2. **ISA semantics**: Arm's ASL through Sail for AArch64 (blake3-servil's probe proved BLAKE3's G
    against it); which subset; the questions it raised (memory as plain memory, decoding, UNKNOWN
    values).

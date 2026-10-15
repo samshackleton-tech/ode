@@ -16,7 +16,7 @@ An Ode user writes a *specification* of what a program must compute and which pr
 must have. Ode produces machine code that runs as fast as the best hand-tuned code for the
 target, plus certificates. A small checker — the only program in a relying party's reliance set —
 verifies the certificates against the specification as written. Everything between the
-specification and the checker (generators, compilers, solvers, AI agents, optimizers) is an
+specification and the checker (generators, compilers, solvers, AI agents, optimizers) is a
 producer outside the reliance set: its output is believed exactly when its certificate checks.
 
 Ode serves teams of many AI agents directed by a few human engineers (`DESIGN.md` §1). The
@@ -164,26 +164,33 @@ behind stable interfaces and changes exactly the hashes that depend on it.
 
 ### 4.1 One logic
 
-All certificates are statements in one logic: matching μ-logic, used in its one-sorted form,
-with sorts, equality, functions, constructors, separation, and type systems expressed as
-theories inside it (Chen & Roşu). Patterns denote sets of elements; its proof system has a
-handful of rules; least fixed points express induction and coinduction through circular
-proofs checked by the kernel. Each layer's operational semantics — including each ISA,
-from its model — is a theory in the logic, so correctness between layers is reachability or
-simulation stated and proved in the same place. Constant-time is a relational (two-run)
-reachability property of the machine-layer semantics. Symbolic execution is proof search
-in this logic; every other formalism (a solver's, a tactic engine's, another prover's) is a
-producer whose results enter only as certificates here.
+The initial proof-object kernel uses sorted equational logic with natural-number
+induction. `KERNEL.md` specifies its current format, rules, semantics, and resource
+limits; `ode/kernel.py` implements it. The first checked theorem is loop batching for
+all iteration counts. Definitions must visibly decrease a natural counter. Proofs
+introduce no axioms, evaluator shortcuts, or solver verdicts.
+
+The goal is one logical foundation for program certificates. Language and ISA semantics
+must be formalized in it, and producers must emit proofs of refinement against those
+semantics. The existing symbolic verifier (`ode/check.py`) has not yet been translated
+into this foundation; its executable-code results still rely on its own evaluator,
+normalizer, and instruction models. A kernel theorem is not, by itself, a proof about
+those executable bytes.
+
+Matching μ-logic was the initial candidate. The current milestone needs equality and
+induction, so the first kernel states these directly. Richer logic earns its place with
+a concrete obligation the current rules cannot express, and an explicit soundness
+argument. Its addition must preserve the meanings and guarantees of existing theorems.
 
 ### 4.2 Certificates
 
-A *certificate* is a definition (§2) stating: the hashes it is about, the claim (a pattern in
+A *certificate* is a definition (§2) stating: the hashes it is about, the claim (a statement in
 the logic, built from named property definitions, §5), and a proof object the checker
 verifies. Ode has three kinds:
 
 - **Correctness:** a definition meets its specification, in the stated property.
-- **Execution:** a computation ran and gave its stated result, succinctly — a run by an
-  any agent or machine, without being repeated; because the checker is
+- **Execution:** a computation ran and gave its stated result, succinctly — a run by
+  any agent or machine can be checked without being repeated; because the checker is
   small, a succinct proof that the checker accepted a certificate can stand in for the
   certificate itself.
 - **Attestation:** an identified auditor's signed statement about a definition, carrying
@@ -209,12 +216,11 @@ with the canonical-form reader of R2 inside it). Its contract:
 - **Determinism and offline operation.** Same input, same verdict, with no network, no
   clock, no randomness, and no ambient authority (§6). It runs in a confined process whose
   only inputs are the certificate bytes.
-- **Efficiency.** Checking is at most near-linear in the certificate's size, with the
-  constant stated in the checker's own specification, and a certificate declares its
-  checking-cost bound (time and memory as integers) before it is checked; the checker
-  enforces the bound as it runs and rejects a certificate that exceeds its declaration.
-  In particular, checking is always cheaper — by a stated factor — than producing, and
-  than re-running the computation an execution certificate describes.
+- **Efficiency.** Checking shares repeated terms and obeys explicit limits on input
+  size, term depth, and work. Exceeding a limit rejects the certificate; it never
+  weakens the claim. `KERNEL.md` states the implemented limits. A near-linear cost
+  for arbitrary proofs, or checking always costing less than producing, requires a
+  demonstrated bound; neither is assumed. Wall-time and cycle measurements follow §10.
 - **Independence.** The checker is implemented at least twice, by different authors from
   this specification, in different implementation languages. Both must agree on the whole
   conformance corpus (§9). Either implementation alone suffices to rely on a claim.
@@ -350,8 +356,9 @@ specification.
 5. **Self-knowledge.** The implementation reports its own version, the specification
    version it implements, and the checker-cost constants of §4.3, as definitions any user
    can hash and cite.
-6. **Speed of checking.** On the corpus's reference certificates, checking meets the
-   near-linear bound and the stated producer/checker cost factor. (§4.3)
+6. **Cost of checking.** The checker enforces its declared input, term, and work limits;
+   the corpus includes exhaustion tests. Reported cost counts describe the actual
+   checking algorithm. Speed claims require measurements under §10. (§4.3)
 
 Speed of the *produced code* is specified separately (§10): it is a property of a
 definition on a machine, measured and recorded, never asserted by the toolchain.
@@ -409,10 +416,10 @@ has the criterion that will close it.
 3. **Memory management above the machine layer.** Regions per vat, garbage collection,
    or capability-confined manual memory with proofs. *Criterion:* the milestone's glue
    code, measured; kernels already live without this choice.
-4. **The many-sorted question.** Completeness for basic matching logic is proved
-   one-sorted and fails many-sorted (Chen & Roşu); Ode's one-logic design (§4.1) keeps
-   sorts as theories. *Criterion:* any future move to sorted kernel primitives must show
-   the corpus's proofs survive it.
+4. **The next logical fragment.** The initial kernel covers equations and natural
+   induction, with sorts checked directly. *Criterion:* extend it for a specific
+   refinement obligation, with semantics and a soundness argument. Completeness
+   results for matching logic do not establish completeness of this different calculus.
 5. **Which standard properties come first.** The library of §5 starts with the properties
    the milestone needs — functional correctness, constant-time, own-buffers — and grows by
    public argument. *Criterion:* a property joins when two independent projects need the

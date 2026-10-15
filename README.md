@@ -13,7 +13,7 @@ pypy3 -m ode bind  examples/blake3.sexp /tmp/b3     # the spec, its compression 
 pypy3 -m ode check /tmp/b3                          # ACCEPT, at every instantiation
 pypy3 -m ode hash  /tmp/b3 "The quick brown fox jumps over the lazy dog."
 # 4c9bd68d7f0baa2e167cef98295eb1ec99a3ec8f0656b33dbae943b387f31d5d -- any length
-pypy3 -m unittest discover -s tests                 # 30 tests
+pypy3 -m unittest discover -s tests
 ```
 
 The compression and the chaining value of a full 1 KB chunk are AArch64
@@ -70,14 +70,31 @@ AArch64 producer is naive: about 8 us per short hash natively, mostly
 call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 `clocks` crate is not available here).
 
+## The proof-object kernel
+
+`ode/kernel.py` now checks explicit equational proofs and induction over
+natural numbers. Its first theorem says that processing two blocks per
+iteration equals processing one at a time, for **every** iteration count:
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/batching.theory.sexp \
+  examples/proofs/batching.goal.sexp examples/proofs/batching.proof.sexp
+# ACCEPT — 24 inference steps, 33 shared terms
+pypy3 game/kernel_attacks.py
+```
+
+The theory and goal come from the owner; the proof can come from anyone.
+The theorem holds for any total compression function, initial state,
+block source, and starting index. `KERNEL.md` gives the complete rules,
+reliance boundary, and adversarial tests.
+
+This is a mathematical loop law. The link to BLAKE3's spec, machine
+semantics, and native loop remains to be proved. The existing executable
+verifier in `ode/check.py` still has its own larger reliance set.
+
 ## Next
 
-1. **Calls by certificate in AArch64**: a `BLR` into a separately proved
-   function, treated by the checker exactly as W32 calls are (congruence;
-   the callee's own proof covers its memory). Then a proved kernel can
-   hash a 16-chunk subtree in one native call with a few KB of code and a
-   cache-resident compression, and the evaluator's glue shrinks to a small
-   fraction of the time. No new logic.
-2. **NEON**: kernels hashing several chunks at once, as the reference does.
-3. **The proof kernel** of SPEC s4 (DESIGN.md, open question 1), for native
-   glue across variable lengths -- once 1 and 2 show what the glue costs.
+Connect the symbolic checker to the proof-object kernel: formalize the
+word and instruction semantics, emit kernel-checkable derivations, and
+prove loop refinements with invariants. Native call support and NEON
+remain performance work; they no longer postpone the kernel.
