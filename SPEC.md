@@ -182,7 +182,9 @@ and associativity proofs (`ode/add32_proof.py`, `ode/add_associativity_proof.py`
 exports (`ode/constant_proof.py`). Symbolic addition flattening, reordering,
 zero elimination, and mixed constant folding have checked exports
 (`ode/add_normalizer_proof.py`). XOR and rotation exports also handle
-nonzero constants within symbolic expressions. The native representation and complete
+nonzero constants within symbolic expressions. A composed exporter
+(`ode/arx_proof.py`) connects these local rewrites through checked lemma
+instantiation and congruence. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.
 

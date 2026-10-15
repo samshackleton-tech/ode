@@ -338,6 +338,43 @@ and reject false identities, missing cases, and altered conclusions.
 These finite identities provide building blocks for word-level carry
 proofs; enumerating Word32 values is outside this producer's contract.
 
+## Composed arithmetic expressions
+
+`ode/arx_proof.py` combines addition, rotation, and XOR (often abbreviated
+ARX) in one expression and one theory. The theory contains the same bit,
+Word32, carry, and rotation definitions as the individual fragments; the
+producer checks that their shared definitions agree when assembling it.
+
+For each operation, the existing `Dag` proposes a result. The producer
+abstracts unrelated subexpressions into Word32 parameters, obtains a local
+arithmetic proof, and instantiates its checked lemma with those actual
+subexpressions. Congruence connects the local rewrite to the original
+expression. Repeated source subexpressions reuse a derivation, and shared
+supporting theorem statements appear once in the assembled library.
+
+```sh
+pypy3 tools/make_arx_proof.py
+pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/arx.goal.sexp examples/proofs/arx.proof.sexp
+```
+
+The example proves
+
+```
+ror8(((x+y)+z) XOR w) XOR ror8(w) = ror8(x+(y+z))
+```
+
+All additions are modulo 2^32. The kernel checks the whole expression
+from explicit definitions; no producer or old-verifier import is needed.
+
+The tests also extract the four output expressions of
+`examples/blake3-g.sexp` through the existing evaluator and certify each
+normalization. Each proof fits the current byte and work limits. This
+checks those exported equations, not the extraction's correspondence to
+the source specification. That connection, complete symbolic execution,
+and native ISA refinement remain separate obligations. The owner must
+still select the theory and equation whose meaning they intend.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary

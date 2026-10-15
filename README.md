@@ -131,6 +131,11 @@ XOR, and rotation exports also handle constants within symbolic expressions. Con
 and rotation results have checked exports too; `examples/proofs/constant.*.sexp`
 uses the addition theory to check overflow and XOR on explicit words.
 
+`arx.*.sexp` combines addition, rotation, and XOR in one checked expression.
+Tests also certify normalization of all four expressions extracted from
+BLAKE3's G function. Source-specification extraction and native execution
+remain separate proof obligations.
+
 The theory and goal come from the owner; the proof can come from anyone.
 The theorem holds for any total compression function, initial state,
 block source, and starting index. `KERNEL.md` gives the complete rules,
