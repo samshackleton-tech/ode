@@ -96,7 +96,7 @@ normalization of all four expressions extracted from BLAKE3's G function.
 An explicit six-register machine also has a checked execution theorem:
 BLAKE3 G's 14 register operations produce its four mixing equations and
 preserve the message registers for every initial state. See the
-`register-g` example in the kernel guide. Execution and arithmetic proofs
+`register-g` example in [PROOFS.md](PROOFS.md). Execution and arithmetic proofs
 also compose into normalized register-output theorems. This abstract machine has no
 memory, flags, or byte decoder; native ISA correspondence remains open.
 
@@ -118,10 +118,10 @@ hash-pinned bootstrap, with owner-selected theory and goal identities.
 Its adversarial tests cover the delivered checker package as well as the
 proofs and bytes; see `game/README.md`.
 
-[The kernel guide](KERNEL.md) gives the complete rules, runnable examples,
-proof boundaries, and adversarial tests. It includes the Boolean and
-ripple-carry proofs behind Word32 arithmetic and the induction proofs
-behind the loop laws.
+[KERNEL.md](KERNEL.md) specifies the complete rules, soundness argument,
+and checking limits. [PROOFS.md](PROOFS.md) gives runnable examples and
+their boundaries, including the Boolean and ripple-carry proofs behind
+Word32 arithmetic and the induction proofs behind the loop laws.
 
 **The remaining connection:** expression extraction from the source
 specification, the abstract machine's native ISA correspondence, memory

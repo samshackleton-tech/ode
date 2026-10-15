@@ -268,7 +268,7 @@ been measured on the Mac?" is a lookup, and a regression report is computed.
 1. **The proof connection**: connect the symbolic verifier's word operations and
    instruction semantics to kernel proofs, then prove native loop refinements. The
    owner chose a small kernel driven by the BLAKE3 milestone. Its first theorem is a
-   counter-based batching law for all iteration counts (`KERNEL.md`); the bridge to
+   counter-based batching law for all iteration counts (`PROOFS.md`); the bridge to
    the existing BLAKE3 definitions and executable bytes remains open.
 2. **ISA semantics**: Arm's ASL through Sail for AArch64 (blake3-servil's probe proved BLAKE3's G
    against it); which subset; the questions it raised (memory as plain memory, decoding, UNKNOWN
