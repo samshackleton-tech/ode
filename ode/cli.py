@@ -5,6 +5,17 @@
     pypy3 -m ode run    BUILD/ 60 165
     pypy3 -m ode assure BUILD/
 
+Word programs (u32, symbolic proofs; SPEC s3 at word scale):
+
+    pypy3 -m ode buildw examples/blake3-g.sexp BUILD/
+    pypy3 -m ode checkw BUILD/
+    pypy3 -m ode runw   BUILD/ 1 2 3 4 5 6
+
+A word program's interface -- its input names, in order, and its outputs
+-- is stated in its specification file itself: read the (inputs ...) and
+(outputs ...) of e.g. examples/blake3-g.sexp. `runw` takes the inputs as
+decimal (or 0x...) integers and prints the output words.
+
 `build` trusts nothing and proves nothing; it produces definitions, a
 binary, and a certificate. `check` is the only command whose output a
 relying party needs: it re-derives every claim from the hashes alone.

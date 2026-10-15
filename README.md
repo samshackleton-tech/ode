@@ -48,6 +48,29 @@ pypy3 -m ode checkw examples/build-compress   # ACCEPT, symbolic, 3521 DAG nodes
 pypy3 -m unittest discover -s tests           # spec == reference BLAKE3; mutants rejected
 ```
 
+### Worked example: compute BLAKE3's G on your own inputs
+
+A fresh copy of this repo is all you need. The interface of a word
+program is stated in its specification file, so start there:
+`examples/blake3-g.sexp` says `(inputs (a b c d x y))` and
+`(outputs (a2 b2 c2 d2))` -- G takes four state words and two message
+words, in that order, and returns the four updated state words. (The
+whole definition is 8 steps; it *is* the interface documentation.)
+Then build it, check the proof, and run it:
+
+```sh
+pypy3 -m ode buildw examples/blake3-g.sexp /tmp/g   # produce binary + certificate
+pypy3 -m ode checkw /tmp/g                          # ACCEPT: the checker re-proves it
+pypy3 -m ode runw   /tmp/g 1 2 3 4 5 6               # G(1, 2, 3, 4, msg 5, msg 6)
+# 1048782 2275162169 3456900099 3456113664
+```
+
+Those four words are the updated `(a b c d)`. Inputs are decimal
+(`0x...` works too). The same answer comes from BLAKE3's reference
+algorithm, which the test suite cross-checks on 200 random inputs
+(`tests/test_blake3_slice.py`); `checkw` is the step that makes the
+answer worth trusting for *every* input, not just the one you ran.
+
 Hand-check the run: the specification (`examples/mix.sexp`) is
 `mix(x, k) = rotl3((x XOR k) + 60)`, so `mix(60, 165)`: `60 XOR 165 = 153`,
 `153 + 60 = 213`, `rotl3(213) = 174`. Then flip any byte of the binary in a
