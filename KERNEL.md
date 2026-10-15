@@ -686,6 +686,21 @@ proposed result. All producers emit explicit proof steps. Generated
 proof bytes are included here because this is the artifact Bob checks
 without running the producer. The theorem statement travels separately.
 
+## Delivery through the pinned bootstrap
+
+The kernel fragment recipient in `game/kernel-base/` runs through the
+existing hash-pinned root launcher. Owner pins separately identify its
+code package, theory, encoding goal, and execution goal. Delivery may be
+adversarial; the recipient checks the pins before checking the proofs and
+matching the bytes. It uses the same in-memory objects it read, and
+contains no symbolic verifier, native runner, or proof producer.
+
+See `game/README.md` for the command and full reliance boundary.
+`tests/test_kernel_bootstrap.py` tests honest and alternative-proof
+controls, changed package code, changed owner claims, corrupt proofs and
+bytes, and missing artifacts. `game/pin_ode_base.py` refreshes both
+recipient packages; owner semantic pins remain explicit and unchanged.
+
 ## Place in Ode
 
 This is the first small, precisely specified proof-object kernel for

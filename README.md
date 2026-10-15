@@ -110,6 +110,11 @@ time equals processing one at a time, and a chain of `n+k` blocks can be
 split into chains of `n` and `k`. These hold for any total compression
 function and every natural iteration count.
 
+The kernel-based recipient in `game/kernel-base/` also runs through the
+hash-pinned bootstrap, with owner-selected theory and goal identities.
+Its adversarial tests cover the delivered checker package as well as the
+proofs and bytes; see `game/README.md`.
+
 [The kernel guide](KERNEL.md) gives the complete rules, runnable examples,
 proof boundaries, and adversarial tests. It includes the Boolean and
 ripple-carry proofs behind Word32 arithmetic and the induction proofs

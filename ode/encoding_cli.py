@@ -39,16 +39,21 @@ def check(theory,goal,proof,execution_goal,execution_proof,code):
     return {'encoding':encoding,'execution':execution}
 
 
+def read_code(path):
+    with open(path,'rb') as stream:
+        code=stream.read(MAX_INPUT_BYTES+1)
+    if len(code)>MAX_INPUT_BYTES:
+        raise Reject('code exceeds byte limit')
+    return code
+
+
 def main(argv):
     if len(argv)!=6:
         print('usage: pypy3 -m ode.encoding_cli THEORY ENCODING_GOAL ENCODING_PROOF EXECUTION_GOAL EXECUTION_PROOF CODE')
         return 2
     try:
         theory,goal,proof,execution_goal,execution_proof=(read_object(p) for p in argv[:5])
-        with open(argv[5],'rb') as stream:
-            code=stream.read(MAX_INPUT_BYTES+1)
-        if len(code)>MAX_INPUT_BYTES:
-            raise Reject('code exceeds byte limit')
+        code=read_code(argv[5])
         check(theory,goal,proof,execution_goal,execution_proof,code)
     except (ValueError,OSError) as error:
         print(f'REJECT: {error}')

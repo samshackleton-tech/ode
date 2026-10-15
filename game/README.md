@@ -36,6 +36,41 @@ pypy3 game/referee.py game/attacks/*    # replay them all
 pypy3 game/pin_ode_base.py              # after changing ode/: refresh ode-base and its pin
 ```
 
+## Kernel-based fragment recipient
+
+A separate recipient uses the same unchanged root launcher with
+`kernel-base/`. Its owner pins the package tree, the instruction-encoding
+theory, and both the encoding and execution goals in
+`bootstrap/kernel-targets/RELIANCE`. All package files, proof files, and
+fragment bytes may be delivered by anyone.
+
+```sh
+pypy3 game/bootstrap/root/launch.py \
+  game/bootstrap/kernel-targets/RELIANCE game/kernel-base examples/proofs g-fragment
+pypy3 -m unittest tests.test_kernel_bootstrap
+```
+
+The recipient admits the delivered package by its tree hash, checks the
+theory and goals against the owner's pins, and verifies both proofs and
+the exact fragment bytes. It retains the objects and bytes it read;
+verification does not reopen them. Alternative valid proofs are accepted.
+Tests reject altered package code before it runs, changed owner claims,
+corrupted proofs or bytes, and missing artifacts, with honest controls.
+
+The package includes `kernel.py`, `canon.py`, `proof_cli.py`,
+`encoding_cli.py`, `word_literal.py`, and an empty package initializer.
+It contains no old symbolic verifier, native runner, or proof producer.
+`game/pin_ode_base.py` refreshes both recipient packages and their code
+pins together; it preserves the owner's theory, goal, and specification
+pins.
+
+Acceptance concerns the declared arithmetic fragment model, not a
+callable native function or refinement against Arm's ISA. Correctness
+relies on the pinned kernel and readers, the root loader/hash, PyPy and
+its standard library, the OS, and hardware. Hash admission fixes code
+identity; it does not establish that code's correctness. The package
+runs no supplied binary.
+
 ## What the game has found
 
 Each became a fix and a permanent test:
