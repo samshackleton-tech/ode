@@ -28,12 +28,54 @@ def _flatten(e, steps, counter):
     return name
 
 
+def _rename(e, env):
+    """Substitute names in an expression (callee body under its env)."""
+    if isinstance(e, int):
+        return e
+    if isinstance(e, Sym):
+        return env[e]
+    if e[0] == "rotr":
+        return [e[0], _rename(e[1], env), e[2]]
+    return [e[0], _rename(e[1], env), _rename(e[2], env)]
+
+
+def _inline(spec_defn, args, steps, counter, defs):
+    """Append the callee's steps, renamed; return its output atoms."""
+    env = {}
+    for name, a in zip(word.inputs_of(spec_defn), args):
+        env[name] = a
+    inner_defs = word._defs_of(spec_defn)
+    for name, e in word.steps_of(spec_defn):
+        if isinstance(name, list):
+            outs = _inline(inner_defs[e[1]],
+                           [_flatten(_rename(a, env), steps, counter)
+                            for a in e[2:]], steps, counter, inner_defs)
+            for n, o in zip(name, outs):
+                env[n] = o
+        else:
+            fresh = Sym(f"t{counter[0]}")
+            counter[0] += 1
+            steps.append([fresh, _flatten(_rename(e, env), steps, counter)])
+            env[name] = fresh
+    return [env[o] for o in word.outputs_of(spec_defn)]
+
+
 def compile_wspec(spec_defn):
     word.validate_wspec(spec_defn)
     steps, counter = [], [0]
+    defs = word._defs_of(spec_defn)
+    env = {n: n for n in word.inputs_of(spec_defn)}
     for name, e in word.steps_of(spec_defn):
-        operand = _flatten(e, steps, counter)
-        steps.append([name, operand])
+        if isinstance(name, list):
+            outs = _inline(defs[e[1]],
+                           [_flatten(_rename(a, env), steps, counter)
+                            for a in e[2:]], steps, counter, defs)
+            for n, o in zip(name, outs):
+                steps.append([n, o])
+                env[n] = n
+        else:
+            steps.append([name, _flatten(_rename(e, env), steps, counter)])
+            env[name] = name
     return assoc("wmachine", ("isa", Sym("W32")),
                  ("inputs", word.inputs_of(spec_defn)),
                  ("steps", steps), ("outputs", word.outputs_of(spec_defn)))

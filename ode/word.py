@@ -12,12 +12,19 @@ Expressions: an atom is a name (a step or input) or an integer constant;
 compound forms are (add e e), (xor e e), (rotr e n), all modulo 2**32.
 Every step computes exactly one word; the program is definite and pure.
 
+A specification may also call another specification it names by hash:
+the step ((o1 o2 ...) (call #hash e1 e2 ...)) binds the callee's outputs,
+in order, to fresh names. A `wspec` carries its callees under (defs
+(#hash definition) ...), so a definition is closed over everything it
+means (SPEC s2.1); the validator checks each callee's hash and arity.
+This is how BLAKE3's hash composes compressions.
+
 A machine program (wmachine, isa W32) has the same shape, except each
 step's expression is a single operation on atoms -- the straight-line,
 branch-free word machine the producer emits and the checker symbolically
 executes (ode/wcheck.py).
 """
-from .canon import Sym, field
+from .canon import Bytes, Sym, field, hash_of
 
 MASK = 0xFFFFFFFF
 OPS = ("add", "xor", "rotr")
@@ -29,7 +36,7 @@ def _const(n):
     return n
 
 
-def validate_expr(e, names):
+def validate_expr(e, names, defs=None):
     if isinstance(e, int):
         _const(e)
         return
@@ -51,6 +58,36 @@ def validate_expr(e, names):
     raise ValueError(f"bad expression {e!r}")
 
 
+def _validate_call(e, names, defs):
+    """(call #hash arg ...) -> the callee; args are atoms or expressions."""
+    if not (isinstance(e, list) and len(e) >= 2 and e[0] == "call"
+            and isinstance(e[1], Bytes)):
+        raise ValueError(f"bad call {e!r}")
+    callee = (defs or {}).get(e[1])
+    if callee is None:
+        raise ValueError(f"call to unknown definition {e[1].hex()}")
+    if len(e) - 2 != len(inputs_of(callee)):
+        raise ValueError("call arity differs from callee's inputs")
+    for arg in e[2:]:
+        validate_expr(arg, names, defs)
+    return callee
+
+
+def _defs_of(defn):
+    """(defs (#hash definition) ...) -> {hash: definition}, each checked."""
+    raw = field(defn, "defs") or []
+    defs = {}
+    for item in raw:
+        if not (isinstance(item, list) and len(item) == 2
+                and isinstance(item[0], Bytes)):
+            raise ValueError("defs entries are (#hash definition)")
+        if hash_of(item[1]) != item[0]:
+            raise ValueError(f"def named {item[0].hex()} hashes differently")
+        validate_wspec(item[1])
+        defs[item[0]] = item[1]
+    return defs
+
+
 def _program(defn, kind):
     if not isinstance(defn, list) or not defn or defn[0] != kind:
         raise ValueError(f"not a {kind} definition")
@@ -64,14 +101,23 @@ def _program(defn, kind):
     if not isinstance(steps, list) or not isinstance(outputs, list) or not outputs:
         raise ValueError("program needs steps and outputs")
     names = set(inputs)
+    defs = _defs_of(defn) if kind == "wspec" else {}
     for step in steps:
-        if not (isinstance(step, list) and len(step) == 2
-                and isinstance(step[0], Sym)):
+        if not (isinstance(step, list) and len(step) == 2):
             raise ValueError(f"bad step {step!r}")
-        if step[0] in names:
-            raise ValueError(f"step redefines {step[0]} (SSA: one assignment)")
-        validate_expr(step[1], names)
-        names.add(step[0])
+        targets = step[0] if isinstance(step[0], list) else [step[0]]
+        if not all(isinstance(t, Sym) for t in targets):
+            raise ValueError(f"bad step {step!r}")
+        for t in targets:
+            if t in names:
+                raise ValueError(f"step redefines {t} (SSA: one assignment)")
+        if isinstance(step[0], list):
+            callee = _validate_call(step[1], names, defs)
+            if len(targets) != len(outputs_of(callee)):
+                raise ValueError("call binds a different number of outputs")
+        else:
+            validate_expr(step[1], names, defs)
+        names.update(targets)
     for o in outputs:
         if not isinstance(o, Sym) or o not in names:
             raise ValueError(f"bad output {o!r}")
@@ -122,12 +168,15 @@ def outputs_of(defn):
     return field(defn, "outputs")
 
 
-def eval_expr(e, env):
+def eval_expr(e, env, defs=None):
     if isinstance(e, int):
         return e
     if isinstance(e, Sym):
         return env[e]
     op = e[0]
+    if op == "call":
+        callee = defs[e[1]]
+        return run_program(callee, [eval_expr(a, env, defs) for a in e[2:]])
     if op == "add":
         return (eval_expr(e[1], env) + eval_expr(e[2], env)) & MASK
     if op == "xor":
@@ -137,9 +186,9 @@ def eval_expr(e, env):
 
 
 # --- W32 binary emission (SPEC s3.4 at word scale) ---------------------
-# Header: inputs u8, steps u16, outputs u8, output step-indices u16 each.
+# Header: inputs u16, steps u32, outputs u16, output name-indices u32 each.
 # Step: opcode (0 copy, 1 add, 2 xor, 3 rotr); an operand is tag 0 + name
-# index u16 (inputs first, then steps) or tag 1 + constant u32. rotr's
+# index u32 (inputs first, then steps) or tag 1 + constant u32. rotr's
 # second operand is a count u8. Deterministic: same definition, same bytes.
 import struct as _struct
 
@@ -150,7 +199,7 @@ _W_DECODE = {v: k for k, v in _W_OPS.items()}
 def _operand(e, index):
     if isinstance(e, int):
         return b"\x01" + _struct.pack("<I", e)
-    return b"\x00" + _struct.pack("<H", index[e])
+    return b"\x00" + _struct.pack("<I", index[e])
 
 
 def emit_w32(defn) -> bytes:
@@ -159,11 +208,11 @@ def emit_w32(defn) -> bytes:
     names = list(inputs) + [name for name, _ in steps]
     index = {n: i for i, n in enumerate(names)}
     out = bytearray()
-    out.append(len(inputs))
-    out += _struct.pack("<H", len(steps))
-    out.append(len(outputs))
+    out += _struct.pack("<H", len(inputs))
+    out += _struct.pack("<I", len(steps))
+    out += _struct.pack("<H", len(outputs))
     for o in outputs:
-        out += _struct.pack("<H", index[o])
+        out += _struct.pack("<I", index[o])
     for _, e in steps:
         if isinstance(e, (int, Sym)):
             out.append(0)
@@ -191,12 +240,12 @@ def decode_w32(data, input_names):
         b, pos = data[pos:pos + n], pos + n
         return b
 
-    n_inputs = take(1)[0]
+    (n_inputs,) = _struct.unpack("<H", take(2))
     if n_inputs != len(input_names):
         raise ValueError("W32 binary input count mismatch")
-    (n_steps,) = _struct.unpack("<H", take(2))
-    n_outputs = take(1)[0]
-    out_idx = [_struct.unpack("<H", take(2))[0] for _ in range(n_outputs)]
+    (n_steps,) = _struct.unpack("<I", take(4))
+    (n_outputs,) = _struct.unpack("<H", take(2))
+    out_idx = [_struct.unpack("<I", take(4))[0] for _ in range(n_outputs)]
     names = list(input_names) + [Sym(f"s{i}") for i in range(n_steps)]
 
     def operand():
@@ -204,7 +253,7 @@ def decode_w32(data, input_names):
         if tag == 1:
             return _struct.unpack("<I", take(4))[0]
         if tag == 0:
-            (i,) = _struct.unpack("<H", take(2))
+            (i,) = _struct.unpack("<I", take(4))
             if i >= len(names):
                 raise ValueError("operand index out of range")
             return names[i]
@@ -242,7 +291,12 @@ def run_program(defn, values):
         defn, "wspec" if defn[0] == "wspec" else "wmachine")
     if len(values) != len(inputs):
         raise ValueError("wrong number of inputs")
+    defs = _defs_of(defn) if defn[0] == "wspec" else {}
     env = {name: _const(v) for name, v in zip(inputs, values)}
     for name, e in steps:
-        env[name] = eval_expr(e, env)
+        if isinstance(name, list):
+            for n, v in zip(name, eval_expr(e, env, defs)):
+                env[n] = v
+        else:
+            env[name] = eval_expr(e, env, defs)
     return [env[o] for o in outputs]

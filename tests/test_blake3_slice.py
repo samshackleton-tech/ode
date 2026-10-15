@@ -135,3 +135,61 @@ class CompressTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HashTest(unittest.TestCase):
+    """BLAKE3's hash mode, composed from compressions by (call #hash ...)."""
+
+    def _words(self, spec, msg):
+        n = len(word.inputs_of(spec))
+        return list(struct.unpack(f"<{n}I", msg + b"\0" * (n * 4 - len(msg))))
+
+    def test_hash_specs_match_reference_at_committed_lengths(self):
+        from ode.blake3 import blake3
+        for L in (3, 65):
+            spec = load(f"blake3-hash-{L}.sexp")
+            for seed in range(3):
+                msg = bytes((i * 7 + seed) & 0xFF for i in range(L))
+                got = word.run_program(spec, self._words(spec, msg))
+                self.assertEqual(got, list(struct.unpack("<8I", blake3(msg))))
+
+    def test_generated_hash_specs_match_reference_across_the_tree(self):
+        # Chunk boundaries, a two-level tree, and an odd chunk carried up.
+        import subprocess
+        from ode.blake3 import blake3
+        gen = os.path.join(ROOT, "examples", "make_hash_spec.py")
+        for L in (0, 1, 64, 1024, 1025, 2048, 3072):
+            text = subprocess.run(["pypy3", gen, str(L)], capture_output=True,
+                                  text=True, check=True).stdout
+            spec = parse(text)
+            msg = bytes((i * 13 + 5) & 0xFF for i in range(L))
+            got = word.run_program(spec, self._words(spec, msg))
+            self.assertEqual(got, list(struct.unpack("<8I", blake3(msg))), L)
+
+    def test_checker_proves_hash_and_rejects_a_dropped_flag(self):
+        spec = load("blake3-hash-65.sexp")
+        tmp = tempfile.mkdtemp()
+        wproducer.build(spec, tmp)
+        self.assertEqual(field(wcheck.check_store(tmp), "verdict"), "accept")
+        # Mutant: the producer compiles a spec whose root call lost ROOT.
+        text = open(os.path.join(ROOT, "examples", "blake3-hash-65.sexp")).read()
+        mutant_text = text.replace("0 1 10))", "0 1 2))")  # CHUNK_END|ROOT -> CHUNK_END
+        self.assertNotEqual(text, mutant_text)
+        machine_defn = wproducer.compile_wspec(parse(mutant_text))
+        from ode.producer import put_definition
+        from ode.canon import assoc
+        from ode.blake3 import blake3
+        tmp2 = tempfile.mkdtemp()
+        binary = word.emit_w32(machine_defn)
+        with open(os.path.join(tmp2, "binary.bin"), "wb") as f:
+            f.write(binary)
+        cert = assoc("certificate", ("cert", Sym("correctness")),
+                     ("property", Sym(wcheck.PROPERTY)),
+                     ("spec", put_definition(tmp2, spec)),
+                     ("machine", put_definition(tmp2, machine_defn)),
+                     ("binary-hash", Bytes(blake3(binary))),
+                     ("binary", Bytes(binary)),
+                     ("inputs", len(word.inputs_of(spec))))
+        with self.assertRaises(Reject) as cm:
+            wcheck.check_certificate(tmp2, cert)
+        self.assertIn("differs", str(cm.exception))

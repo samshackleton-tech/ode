@@ -98,22 +98,36 @@ class Dag:
             return result
         return self._intern(("rotr", a, n))
 
-    def expr(self, e, env):
+    def expr(self, e, env, defs=None):
         if isinstance(e, int):
             return self.const(e)
         if isinstance(e, Sym):
             return env[e]
+        if e[0] == "call":
+            callee = defs[e[1]]
+            args = [self.expr(a, env, defs) for a in e[2:]]
+            inner = word._defs_of(callee)
+            cenv = dict(zip(word.inputs_of(callee), args))
+            return self._run(word.steps_of(callee), word.outputs_of(callee),
+                             cenv, inner)
         if e[0] == "add":
-            return self.add(self.expr(e[1], env), self.expr(e[2], env))
+            return self.add(self.expr(e[1], env, defs), self.expr(e[2], env, defs))
         if e[0] == "xor":
-            return self.xor(self.expr(e[1], env), self.expr(e[2], env))
-        return self.rotr(self.expr(e[1], env), e[2])
+            return self.xor(self.expr(e[1], env, defs), self.expr(e[2], env, defs))
+        return self.rotr(self.expr(e[1], env, defs), e[2])
 
-    def program_outputs(self, inputs, steps, outputs):
-        env = {name: self.var(name) for name in inputs}
+    def _run(self, steps, outputs, env, defs):
         for name, e in steps:
-            env[name] = self.expr(e, env)
+            if isinstance(name, list):
+                for n, v in zip(name, self.expr(e, env, defs)):
+                    env[n] = v
+            else:
+                env[name] = self.expr(e, env, defs)
         return [env[o] for o in outputs]
+
+    def program_outputs(self, inputs, steps, outputs, defs=None):
+        env = {name: self.var(name) for name in inputs}
+        return self._run(steps, outputs, env, defs or {})
 
 
 def check_certificate(store_dir, cert):
@@ -147,7 +161,8 @@ def check_certificate(store_dir, cert):
     # The proof: one DAG, both sides, outputs must be identical nodes.
     dag = Dag()
     want = dag.program_outputs(inputs, word.steps_of(spec_defn),
-                               word.outputs_of(spec_defn))
+                               word.outputs_of(spec_defn),
+                               word._defs_of(spec_defn))
     got = dag.program_outputs(inputs, word.steps_of(decoded),
                               word.outputs_of(decoded))
     if want != got:

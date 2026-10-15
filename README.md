@@ -26,7 +26,7 @@ enough that its reader is a few dozen lines.
 Verify the worked example end to end (PyPy3, no dependencies):
 
 ```sh
-pypy3 -m unittest discover -s tests     # 20 tests, incl. mutants and the adversarial game
+pypy3 -m unittest discover -s tests     # 23 tests, incl. mutants and the adversarial game
 pypy3 -m ode build examples/mix.sexp examples/build
 pypy3 -m ode check examples/build       # ACCEPT, 65536 cases
 pypy3 -m ode run   examples/build 60 165   # 174
@@ -55,6 +55,32 @@ pypy3 -m ode buildw examples/blake3-compress.sexp examples/build-compress
 pypy3 -m ode checkw examples/build-compress   # ACCEPT, symbolic, 3521 DAG nodes
 pypy3 -m unittest discover -s tests           # spec == reference BLAKE3; mutants rejected
 ```
+
+### BLAKE3's hash mode, proved: the published hash of "abc" from a proved binary
+
+A specification may call another by hash -- `((o...) (call #hash args...))`
+with the callee embedded under `(defs ...)`, so the definition is closed
+over everything it means. `examples/make_hash_spec.py LENGTH` composes
+the compression into BLAKE3's chunk chain and tree for one message
+length, exactly as C2SP states it; the producer inlines calls into
+straight-line W32 and the checker expands them symbolically. Committed:
+`blake3-hash-3.sexp` and `blake3-hash-65.sexp` (two chunks). Generated
+specs match the reference at 0, 1, 64, 1024, 1025, 2048 and 3072 bytes
+(chunk boundaries, a two-level tree, an odd chunk carried up), and the
+checker proves every one of them for all inputs: 3 bytes in 0.2s (3,501
+DAG nodes), 65 in 0.3s, 1025 in 26s (454k nodes), 3072 in 103s (1.6M
+nodes) -- about two seconds per compression, on PyPy, measured on one
+machine once, so a rough figure rather than a claim.
+
+```sh
+pypy3 -m ode buildw examples/blake3-hash-3.sexp examples/build-hash-3
+pypy3 -m ode checkw examples/build-hash-3        # ACCEPT, symbolic
+pypy3 -m ode runw examples/build-hash-3 6513249 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+# -> the 8 words of blake3("abc"): 6437b3ac 38465133 ... (little-endian per word)
+```
+
+(`6513249` is `"abc"` as a little-endian word; the other 15 words are
+the block's zero padding.)
 
 ### Worked example: compute BLAKE3's G on your own inputs
 
