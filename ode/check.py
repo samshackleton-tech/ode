@@ -34,7 +34,8 @@ class Dag:
     def __init__(self):
         self.nodes = []
         self.index = {}
-        self.opaque = {}  # spec hash -> output count, for proved callees
+        self.opaque = {}   # spec hash -> output count, for proved callees
+        self.spec_of = {}  # callee certificate hash -> its spec hash
 
     def _intern(self, node):
         i = self.index.get(node)
@@ -112,46 +113,21 @@ class Dag:
         node = self._intern(("call", spec_hash, tuple(args)))
         return [self._intern(("out", node, k)) for k in range(n_out)]
 
-    def expr(self, e, env, defs=None):
-        if isinstance(e, int):
-            return self.const(e)
-        if isinstance(e, Sym):
-            return env[e]
-        if e[0] == "call":
-            if e[1] in self.opaque:
-                args = [self.expr(a, env, defs) for a in e[2:]]
-                return self.call(e[1], args, self.opaque[e[1]])
-            callee = defs[e[1]]
-            args = [self.expr(a, env, defs) for a in e[2:]]
-            inner = word._defs_of(callee)
-            cenv = dict(zip(word.inputs_of(callee), args))
-            return self._run(word.steps_of(callee), word.outputs_of(callee),
-                             cenv, inner)
-        if e[0] == "add":
-            return self.add(self.expr(e[1], env, defs), self.expr(e[2], env, defs))
-        if e[0] == "xor":
-            return self.xor(self.expr(e[1], env, defs), self.expr(e[2], env, defs))
-        return self.rotr(self.expr(e[1], env, defs), e[2])
+    # -- the algebra the evaluator uses (ode/word.py) -------------------
+    def spec_call(self, h, callee, args, ev):
+        if h in self.opaque:
+            return self.call(h, args, self.opaque[h])
+        return ev.apply_spec(callee, args)
 
-    def _run(self, steps, outputs, env, defs):
-        for name, e in steps:
-            if isinstance(name, list):
-                for n, v in zip(name, self.expr(e, env, defs)):
-                    env[n] = v
-            else:
-                env[name] = self.expr(e, env, defs)
-        return [env[o] for o in outputs]
-
-    def program_outputs(self, inputs, steps, outputs, defs=None):
-        env = {name: self.var(name) for name in inputs}
-        return self._run(steps, outputs, env, defs or {})
+    def cert_call(self, cert_hash, args, n_out):
+        return self.call(self.spec_of[cert_hash], args, n_out)
 
 
 def check_certificate(store_dir, cert, _seen=None):
     """Returns (record, program). The program is what the proof is about,
     decoded from the bytes read once: run it with run(program, values),
     never the binary file again -- a store's owner may change it."""
-    seen = {} if _seen is None else _seen  # certificate hash -> program
+    seen = {} if _seen is None else _seen  # certificate hash -> (program, spec)
     if not isinstance(cert, list) or not cert or cert[0] != "certificate":
         raise Reject("not a certificate")
     if field(cert, "cert") != "correctness":
@@ -162,13 +138,21 @@ def check_certificate(store_dir, cert, _seen=None):
     spec_defn = _load(store_dir, field(cert, "spec"))
     try:
         word.validate_spec(spec_defn)
-    except ValueError as e:
-        raise Reject(str(e)) from e
-    inputs = word.inputs_of(spec_defn)
-    sizes = {"in": len(inputs), "out": len(word.outputs_of(spec_defn))}
+        at = word.instantiation(spec_defn, {p[0]: p[1] for p in field(cert, "at") or []})
+        inputs = word.word_input_names(spec_defn, at)
+    except (ValueError, TypeError, IndexError) as e:
+        raise Reject(f"spec or instantiation: {e}") from e
     binary = _load_binary(store_dir, cert)
+
+    def resolve(h):
+        callee = _load(store_dir, h)
+        try:
+            return word.validate_spec(callee)
+        except ValueError as e:
+            raise Reject(f"callee {h.hex()}: {e}") from e
+
     dag = Dag()
-    callees, spec_of = {}, {}
+    callees = {}
     if prop == "equals-spec-w32-v1":
         try:
             decoded = word.decode_w32(binary, inputs)
@@ -177,35 +161,37 @@ def check_certificate(store_dir, cert, _seen=None):
         for name, e in word.steps_of(decoded):
             if isinstance(name, list):  # a call by certificate
                 callee, callee_spec = _callee(store_dir, e[1], seen)
-                callees[e[1]] = callee
-                spec_of[e[1]] = callee_spec
-                callee_sizes = callee[2]
-                if (len(e) - 2, len(name)) != (callee_sizes["in"], callee_sizes["out"]):
+                if (len(e) - 2, len(name)) != (callee[2]["in"], callee[2]["out"]):
                     raise Reject("call arity differs from the callee's spec")
-                dag.opaque[callee_spec] = callee_sizes["out"]
-    want = dag.program_outputs(inputs, word.steps_of(spec_defn),
-                               word.outputs_of(spec_defn),
-                               word._defs_of(spec_defn))
-    if prop == "equals-spec-w32-v1":
-        env = {n: dag.var(n) for n in inputs}
-        for name, e in word.steps_of(decoded):
-            if isinstance(name, list):
-                outs = dag.call(spec_of[e[1]], [dag.expr(a, env) for a in e[2:]],
-                                len(name))
-                env.update(zip(name, outs))
-            else:
-                env[name] = dag.expr(e, env)
-        got = [env[o] for o in word.outputs_of(decoded)]
-        program = ("w32", decoded, sizes, callees)
-    else:
-        from . import a64
-        scratch = field(cert, "scratch")
-        if not isinstance(scratch, int) or scratch > 4096:
-            raise Reject("a64 certificate needs (scratch N), N <= 4096")
-        sizes["scratch"] = scratch
-        got = a64.execute(dag, a64.decode(binary),
-                          lambda i: dag.var(inputs[i]), sizes)
-        program = ("a64", binary, sizes, {})
+                callees[e[1]] = callee
+                dag.spec_of[e[1]] = callee_spec
+                dag.opaque[callee_spec] = callee[2]["out"]
+    env, it = {}, iter(inputs)
+    for name, sort in word.input_sorts(spec_defn):
+        if sort == "word":
+            env[name] = dag.var(next(it))
+        elif sort == "nat":
+            env[name] = word.Nat(at[name])
+        else:
+            env[name] = [dag.var(next(it)) for _ in range(at[name])]
+    try:
+        want = word.Evaluator(dag, resolve).run_spec(spec_defn, env)
+        sizes = {"in": len(inputs), "out": len(want)}
+        if prop == "equals-spec-w32-v1":
+            got = word.Evaluator(dag).run_w32(
+                decoded, {n: dag.var(n) for n in inputs})
+            program = ("w32", decoded, sizes, callees)
+        else:
+            from . import a64
+            scratch = field(cert, "scratch")
+            if not isinstance(scratch, int) or scratch > 4096:
+                raise Reject("a64 certificate needs (scratch N), N <= 4096")
+            sizes["scratch"] = scratch
+            got = a64.execute(dag, a64.decode(binary),
+                              lambda i: dag.var(inputs[i]), sizes)
+            program = ("a64", binary, sizes, {})
+    except (ValueError, TypeError, IndexError, KeyError, RecursionError) as e:
+        raise Reject(f"evaluation fails: {type(e).__name__}: {e}") from e
     if want != got:
         for i, (w, g) in enumerate(zip(want, got)):
             if w != g:
@@ -215,6 +201,7 @@ def check_certificate(store_dir, cert, _seen=None):
     return assoc("record", ("checker", CHECKER_ID),
                  ("verdict", Sym("accept")), ("property", Sym(prop)),
                  ("spec", field(cert, "spec")),
+                 ("at", field(cert, "at") or []),
                  ("binary-hash", field(cert, "binary-hash")),
                  ("certificate", hash_of(cert)),
                  ("domain", Sym("all-u32-inputs")),
@@ -241,8 +228,8 @@ def run(program, values):
             not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
         raise ValueError(f"inputs must be {sizes['in']} u32 words")
     if isa == "w32":
-        return word.run_program(body, values,
-                                lambda h, args: run(callees[h], args))
+        return word.run(body, {}, values, certified={
+            h: (lambda args, p=p: run(p, args)) for h, p in callees.items()})
     from . import native
     return native.Function(body, sizes["in"], sizes["out"],
                            sizes["scratch"])(values)

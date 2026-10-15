@@ -1,9 +1,8 @@
-"""BLAKE3 in Ode: specifications against the reference, and the checker
-proving W32 bytes for all inputs -- and rejecting what it must."""
+"""BLAKE3 in Ode: the specifications against the reference, and the
+checker proving W32 bytes against them -- and rejecting what it must."""
 import os
 import random
 import struct
-import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,10 +11,12 @@ ROOT = os.path.join(os.path.dirname(__file__), "..")
 sys.path.insert(0, ROOT)
 
 from ode import check, produce, word  # noqa: E402
-from ode.blake3 import IV, CHUNK_START, CHUNK_END, _compress, _g, blake3  # noqa: E402
+from ode.blake3 import _compress, _g, blake3  # noqa: E402
 from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, hash_of, parse  # noqa: E402
-from ode.cli import check_store  # noqa: E402
+from ode.cli import _check, check_store  # noqa: E402
 from ode.store import Reject  # noqa: E402
+
+LIB = produce.library_of(os.path.join(ROOT, "examples"))
 
 
 def load(name):
@@ -23,32 +24,45 @@ def load(name):
         return parse(f.read())
 
 
-def words_of(spec, msg):
-    n = len(word.inputs_of(spec))
+BLAKE3 = load("blake3.sexp")
+
+
+def at_len(L):
+    return {"len": L, "m": 16 * max(1, -(-L // 64))}
+
+
+def words(msg, n):
     return list(struct.unpack(f"<{n}I", msg + b"\0" * (4 * n - len(msg))))
 
 
-def certify(spec, binary, prop="equals-spec-w32-v1", extra=()):
-    """A store holding spec, binary, and a certificate for them."""
+def digest(msg):
+    return list(struct.unpack("<8I", blake3(msg)))
+
+
+def certify(spec, binary, at=None):
+    """A store holding spec, its callees, a binary, and a certificate."""
     tmp = tempfile.mkdtemp()
+    for h in word.uses_of(spec).values():
+        produce.put_definition(tmp, LIB[h])
     with open(os.path.join(tmp, blake3(binary).hex() + ".bin"), "wb") as f:
         f.write(binary)
+    extra = (("at", [[Sym(k), v] for k, v in sorted(at.items())]),) if at else ()
     cert = assoc("certificate", ("cert", Sym("correctness")),
-                 ("property", Sym(prop)), ("spec", produce.put_definition(tmp, spec)),
-                 ("binary-hash", Bytes(blake3(binary))), *extra)
+                 ("property", Sym("equals-spec-w32-v1")),
+                 ("spec", produce.put_definition(tmp, spec)), *extra,
+                 ("binary-hash", Bytes(blake3(binary))))
     return tmp, cert
 
 
 class SpecsMatchReferenceTest(unittest.TestCase):
     def test_g(self):
-        spec = load("blake3-g.sexp")
-        rng = random.Random(1)
+        spec, rng = load("blake3-g.sexp"), random.Random(1)
         for _ in range(200):
             v = [rng.getrandbits(32) for _ in range(16)]
             x, y = rng.getrandbits(32), rng.getrandbits(32)
             ins = [v[0], v[4], v[8], v[12], x, y]
             _g(v, 0, 4, 8, 12, x, y)
-            self.assertEqual(word.run_program(spec, ins), [v[0], v[4], v[8], v[12]])
+            self.assertEqual(word.run(spec, {}, ins), [v[0], v[4], v[8], v[12]])
 
     def test_compress(self):
         spec, rng = load("blake3-compress.sexp"), random.Random(42)
@@ -56,54 +70,58 @@ class SpecsMatchReferenceTest(unittest.TestCase):
             cv = [rng.getrandbits(32) for _ in range(8)]
             block = bytes(rng.getrandbits(8) for _ in range(64))
             counter, blen, flags = rng.getrandbits(40), rng.randrange(65), rng.randrange(16)
-            ins = cv + list(struct.unpack("<16I", block)) + [
-                counter & 0xFFFFFFFF, counter >> 32, blen, flags]
-            self.assertEqual(word.run_program(spec, ins),
+            ins = cv + words(block, 16) + [counter & 0xFFFFFFFF, counter >> 32, blen, flags]
+            self.assertEqual(word.run(spec, {}, ins),
                              _compress(cv, block, counter, blen, flags))
 
-    def test_hash_at_committed_and_generated_lengths(self):
-        for L in (3, 65):
-            spec = load(f"blake3-hash-{L}.sexp")
-            msg = bytes(range(L))
-            self.assertEqual(word.run_program(spec, words_of(spec, msg)),
-                             list(struct.unpack("<8I", blake3(msg))))
-        gen = os.path.join(ROOT, "examples", "make_hash_spec.py")
-        for L in (0, 1, 64, 1024, 1025, 2048, 3072):  # boundaries, tree, carry
-            spec = parse(subprocess.run(["pypy3", gen, str(L)], capture_output=True,
-                                        text=True, check=True).stdout)
-            msg = bytes((i * 13 + 5) & 0xFF for i in range(L))
-            self.assertEqual(word.run_program(spec, words_of(spec, msg)),
-                             list(struct.unpack("<8I", blake3(msg))), L)
+    def test_blake3_at_every_kind_of_length(self):
+        # Empty, partial and whole blocks, chunk boundaries, multi-level
+        # trees, an odd chunk carried up.
+        for L in (0, 1, 3, 63, 64, 65, 1023, 1024, 1025, 2048, 2049, 3072, 5000, 8193):
+            msg = bytes((i * 31 + 7) & 0xFF for i in range(L))
+            at = at_len(L)
+            self.assertEqual(word.run(BLAKE3, at, words(msg, at["m"]), LIB.get),
+                             digest(msg), L)
+
+    def test_blake3_requires_the_padded_word_count(self):
+        with self.assertRaises(ValueError):
+            word.run(BLAKE3, {"len": 3, "m": 32}, [0] * 32, LIB.get)
 
 
 class CheckerTest(unittest.TestCase):
-    def test_proves_and_runs_g(self):
-        tmp = tempfile.mkdtemp()
-        produce.build(load("blake3-g.sexp"), tmp)
-        self.assertEqual(field(check_store(tmp), "verdict"), "accept")
-
-    def test_proves_compress_and_hash65(self):
-        for name in ("blake3-compress.sexp", "blake3-hash-65.sexp"):
+    def test_proves_g_compress_and_blake3(self):
+        for spec, at in ((load("blake3-g.sexp"), None),
+                         (load("blake3-compress.sexp"), None),
+                         (BLAKE3, at_len(65))):
             tmp = tempfile.mkdtemp()
-            produce.build(load(name), tmp)
-            self.assertEqual(field(check_store(tmp), "verdict"), "accept", name)
+            produce.build(spec, tmp, "w32", at, LIB)
+            self.assertEqual(field(check_store(tmp), "verdict"), "accept")
 
     def test_rejects_mutant_rotation(self):
         spec = load("blake3-g.sexp")
         text = canonical_bytes(spec).decode().replace("(d1 (rotr (xor d a1) 16))",
                                                       "(d1 (rotr (xor d a1) 15))")
-        mutant = produce.compile_spec(parse(text))
-        tmp, cert = certify(spec, produce.emit_w32(mutant))
+        tmp, cert = certify(spec, produce.emit_w32(produce.compile_spec(parse(text))))
         with self.assertRaises(Reject) as cm:
             check.check_certificate(tmp, cert)
         self.assertIn("differs", str(cm.exception))
 
-    def test_rejects_dropped_root_flag(self):
-        spec = load("blake3-hash-65.sexp")
-        text = canonical_bytes(spec).decode()
-        mutant = text.replace(" 0 0 1 10))", " 0 0 1 2))")  # CHUNK_END|ROOT -> CHUNK_END
+    def test_rejects_dropped_root_flag_and_wrong_length(self):
+        text = canonical_bytes(BLAKE3).decode()
+        mutant = text.replace("(add (at root 27) 8)", "(add (at root 27) 0)")
         self.assertNotEqual(text, mutant)
-        tmp, cert = certify(spec, produce.emit_w32(produce.compile_spec(parse(mutant))))
+        at = at_len(65)
+        for program, cert_at in (
+                (produce.compile_spec(parse(mutant), at, resolve=LIB.get), at),
+                (produce.compile_spec(BLAKE3, at_len(64), resolve=LIB.get), at)):
+            tmp, cert = certify(BLAKE3, produce.emit_w32(program), cert_at)
+            with self.assertRaises(Reject):
+                check.check_certificate(tmp, cert)
+
+    def test_rejects_an_instantiation_the_spec_refuses(self):
+        tmp, cert = certify(BLAKE3, produce.emit_w32(
+            produce.compile_spec(BLAKE3, at_len(3), resolve=LIB.get)),
+            {"len": 3, "m": 32})
         with self.assertRaises(Reject):
             check.check_certificate(tmp, cert)
 
@@ -127,23 +145,45 @@ class CheckerTest(unittest.TestCase):
             check_store(tmp)
 
 
-class NamesTest(unittest.TestCase):
-    """Names in a spec must never collide with names the tools mint."""
+class CallsByCertificateTest(unittest.TestCase):
+    """A proved callee is checked once and is one opaque function after."""
 
-    def test_inlining_cannot_capture_the_callers_names(self):
+    def test_composed_blake3_is_small_to_check_and_right(self):
+        tmp, at = tempfile.mkdtemp(), at_len(3072)
+        produce.build(BLAKE3, tmp, "w32", at, LIB)
+        record, program = _check(tmp)
+        self.assertLess(field(record, "dag-nodes"), 2000)  # 50 calls, not 50 bodies
+        msg = bytes((i * 7 + 1) & 0xFF for i in range(3072))
+        self.assertEqual(check.run(program, words(msg, at["m"])), digest(msg))
+
+    def test_inlined_and_composed_both_prove(self):
+        at = at_len(65)
+        inlined = produce.compile_spec(BLAKE3, at, resolve=LIB.get)
+        tmp, cert = certify(BLAKE3, produce.emit_w32(inlined), at)
+        record, _ = check.check_certificate(tmp, cert)  # no calls: expanded
+        self.assertGreater(field(record, "dag-nodes"), 5000)
+        tmp = tempfile.mkdtemp()
+        produce.build(BLAKE3, tmp, "w32", at, LIB)  # calls by certificate
+        self.assertLess(field(check_store(tmp), "dag-nodes"), 200)
+
+
+class NamesTest(unittest.TestCase):
+    """Names in a spec never collide with names the tools mint."""
+
+    def test_spec_names_like_minted_ones(self):
         callee = parse("(spec (name inner) (inputs (a b)) "
                        "(steps ((t0 (add a b)) (t1 (xor t0 a)))) (outputs (t1 t0)))")
-        ch = hash_of(callee).hex()
-        caller = parse(f"(spec (name outer) (inputs (t0 a)) "
-                       f"(defs ((#{ch} {canonical_bytes(callee).decode()}))) "
-                       f"(steps (((u v) (call #{ch} a t0)) (t1 (add u v)) "
-                       f"((w z) (call #{ch} t1 t0)))) (outputs (w z t1)))")
-        program, rng = produce.compile_spec(caller), random.Random(9)
+        ch = hash_of(callee)
+        caller = parse(f"(spec (name outer) (inputs (t0 a)) (uses ((inner #{ch.hex()}))) "
+                       f"(steps (((u v) (inner a t0)) (t1 (add u v)) "
+                       f"((w z) (inner t1 t0)))) (outputs (w z t1)))")
+        lib = {ch: callee}
+        program, rng = produce.compile_spec(caller, resolve=lib.get), random.Random(9)
         for _ in range(100):
             v = [rng.getrandbits(32), rng.getrandbits(32)]
-            self.assertEqual(word.run_program(caller, v), word.run_program(program, v))
+            self.assertEqual(word.run(caller, {}, v, lib.get), word.run(program, {}, v))
         tmp = tempfile.mkdtemp()
-        produce.build(caller, tmp)
+        produce.build(caller, tmp, "w32", None, lib)
         self.assertEqual(field(check_store(tmp), "verdict"), "accept")
 
     def test_decoder_names_cannot_collide_with_inputs(self):
@@ -155,29 +195,3 @@ class NamesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class CallsByCertificateTest(unittest.TestCase):
-    """A proved callee is checked once and is one opaque function after."""
-
-    def test_composed_hash_is_small_to_check_and_right(self):
-        gen = os.path.join(ROOT, "examples", "make_hash_spec.py")
-        spec = parse(subprocess.run(["pypy3", gen, "3072"], capture_output=True,
-                                    text=True, check=True).stdout)
-        tmp = tempfile.mkdtemp()
-        produce.build(spec, tmp)
-        from ode.cli import _check
-        record, program = _check(tmp)
-        self.assertLess(field(record, "dag-nodes"), 2000)  # 50 calls, not 50 bodies
-        msg = bytes((i * 7 + 1) & 0xFF for i in range(3072))
-        self.assertEqual(check.run(program, words_of(spec, msg)),
-                         list(struct.unpack("<8I", blake3(msg))))
-
-    def test_inlined_and_composed_both_prove(self):
-        spec = load("blake3-hash-65.sexp")
-        tmp, cert = certify(spec, produce.emit_w32(produce.compile_spec(spec)))
-        record, _ = check.check_certificate(tmp, cert)  # no calls: expanded
-        self.assertGreater(field(record, "dag-nodes"), 10000)
-        tmp = tempfile.mkdtemp()
-        produce.build(spec, tmp)                          # calls by certificate
-        self.assertLess(field(check_store(tmp), "dag-nodes"), 200)

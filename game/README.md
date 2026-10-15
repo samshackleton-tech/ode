@@ -10,8 +10,9 @@ A test from the relying party's side.
     import served from the very bytes it hashed. The root's BLAKE3 is the
     only one: it serves it to ode-base as `ode.blake3`.
   - `game-targets/RELIANCE` -- about 260 bytes: the tree hash of the
-    ode-base, and the hashes of the game's two specifications (BLAKE3's
-    G, and BLAKE3 of a 65-byte message).
+    ode-base, and the hashes of the game's two specifications: BLAKE3's
+    G, and BLAKE3 of any length (`examples/blake3.sexp`), which Bob asks
+    for at 65 bytes.
 - **Anyone**, Mallory included, may deliver what Bob needs only for
   *availability*: `ode-base/` (the checker, reader, semantics, AArch64
   model and runner, and `bob.py`), admitted by tree hash, and the

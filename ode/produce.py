@@ -73,110 +73,66 @@ def emit_w32(defn) -> bytes:
 
 
 
-def _all_names(defn, acc):
-    """Every name a specification and its callees mention."""
-    acc.update(word.inputs_of(defn))
-    for name, _ in word.steps_of(defn):
-        acc.update(name if isinstance(name, list) else [name])
-    for callee in word._defs_of(defn).values():
-        _all_names(callee, acc)
-    return acc
+class Emitter:
+    """Words are W32 atoms: each operation appends one step. Evaluating a
+    spec in this algebra compiles it (ode/word.py gives the meaning)."""
 
-
-class _Fresh:
-    """Mints step names that collide with nothing the spec names.
-
-    The prefix is chosen so that no name in the spec or its callees
-    starts with it (the game found a collision with an input named t0).
-    """
-
-    def __init__(self, spec_defn):
-        names = _all_names(spec_defn, set())
-        prefix = "t"
-        while any(n.startswith(prefix) for n in names):
+    def __init__(self, input_names, certified):
+        prefix = "t"  # fresh names collide with no input name
+        while any(str(n).startswith(prefix) for n in input_names):
             prefix += "t"
-        self.prefix, self.n = prefix, 0
+        self.prefix, self.n, self.steps = prefix, 0, []
+        self.certified = certified  # spec hash -> (certificate hash, outputs)
 
-    def __call__(self):
-        name = Sym(f"{self.prefix}{self.n}")
-        self.n += 1
-        return name
+    def _step(self, e, n=1):
+        names = [Sym(f"{self.prefix}{self.n + i}") for i in range(n)]
+        self.n += n
+        self.steps.append([names if isinstance(e, list) and e[0] == "call"
+                           else names[0], e])
+        return names if n > 1 or (isinstance(e, list) and e[0] == "call") else names[0]
 
+    def const(self, v):
+        return v
 
-def _flatten(e, steps, fresh):
-    """Append single-operation steps for e; return its operand atom."""
-    if isinstance(e, (int, Sym)):
-        return e
-    op = e[0]
-    if op == "rotr":
-        a = _flatten(e[1], steps, fresh)
-        name = fresh()
-        steps.append([name, [Sym("rotr"), a, e[2]]])
-        return name
-    a = _flatten(e[1], steps, fresh)
-    b = _flatten(e[2], steps, fresh)
-    name = fresh()
-    steps.append([name, [Sym(op), a, b]])
-    return name
+    def add(self, a, b):
+        return self._step([Sym("add"), a, b])
 
+    def xor(self, a, b):
+        return self._step([Sym("xor"), a, b])
 
-def _rename(e, env):
-    """Substitute names in an expression (callee body under its env)."""
-    if isinstance(e, int):
-        return e
-    if isinstance(e, Sym):
-        return env[e]
-    if e[0] == "rotr":
-        return [e[0], _rename(e[1], env), e[2]]
-    return [e[0], _rename(e[1], env), _rename(e[2], env)]
+    def rotr(self, a, n):
+        return a if n % 32 == 0 else self._step([Sym("rotr"), a, n % 32])
+
+    def spec_call(self, h, callee, args, ev):
+        if h in self.certified:
+            cert_hash, n_out = self.certified[h]
+            return self._step([Sym("call"), cert_hash] + list(args), n_out)
+        return ev.apply_spec(callee, args)
 
 
-def _inline(spec_defn, args, steps, fresh, defs):
-    """Append the callee's steps, renamed; return its output atoms."""
-    env = {}
-    for name, a in zip(word.inputs_of(spec_defn), args):
-        env[name] = a
-    inner_defs = word._defs_of(spec_defn)
-    for name, e in word.steps_of(spec_defn):
-        if isinstance(name, list):
-            outs = _inline(inner_defs[e[1]],
-                           [_flatten(_rename(a, env), steps, fresh)
-                            for a in e[2:]], steps, fresh, inner_defs)
-            for n, o in zip(name, outs):
-                env[n] = o
-        else:
-            new = fresh()
-            steps.append([new, _flatten(_rename(e, env), steps, fresh)])
-            env[name] = new
-    return [env[o] for o in word.outputs_of(spec_defn)]
+def compile_spec(spec_defn, at=None, certified=None, resolve=None):
+    """A straight-line W32 program computing the spec at an instantiation.
 
-
-def compile_spec(spec_defn, certified=None):
-    """A straight-line W32 program for the spec. A call whose callee is in
-    certified ({spec hash: certificate hash}) becomes a call by certificate;
-    every other call is inlined."""
+    A call to a callee in certified ({spec hash: (certificate hash, output
+    count)}) becomes a call by certificate; every other call is inlined.
+    """
     word.validate_spec(spec_defn)
-    steps, fresh = [], _Fresh(spec_defn)
-    defs = word._defs_of(spec_defn)
-    env = {n: n for n in word.inputs_of(spec_defn)}
-    for name, e in word.steps_of(spec_defn):
-        if isinstance(name, list) and certified and e[1] in certified:
-            args = [_flatten(_rename(a, env), steps, fresh) for a in e[2:]]
-            steps.append([list(name), [Sym("call"), certified[e[1]]] + args])
-            env.update((n, n) for n in name)
-        elif isinstance(name, list):
-            outs = _inline(defs[e[1]],
-                           [_flatten(_rename(a, env), steps, fresh)
-                            for a in e[2:]], steps, fresh, defs)
-            for n, o in zip(name, outs):
-                steps.append([n, o])
-                env[n] = n
+    at = word.instantiation(spec_defn, at or {})
+    inputs = word.word_input_names(spec_defn, at)
+    em = Emitter(inputs, certified or {})
+    env, it = {}, iter(inputs)
+    for name, sort in word.input_sorts(spec_defn):
+        if sort == "word":
+            env[name] = next(it)
+        elif sort == "nat":
+            env[name] = word.Nat(at[name])
         else:
-            steps.append([name, _flatten(_rename(e, env), steps, fresh)])
-            env[name] = name
-    return assoc("w32",
-                 ("inputs", word.inputs_of(spec_defn)),
-                 ("steps", steps), ("outputs", word.outputs_of(spec_defn)))
+            env[name] = [next(it) for _ in range(at[name])]
+    outs = word.Evaluator(em, resolve).run_spec(spec_defn, env)
+    names = []
+    for o in outs:  # outputs must be names: copy constants into a step
+        names.append(em._step(o) if isinstance(o, int) else o)
+    return assoc("w32", ("inputs", inputs), ("steps", em.steps), ("outputs", names))
 
 
 RET = 0xD65F03C0
@@ -227,16 +183,23 @@ def emit_a64(machine_defn):
     return b"".join(w.to_bytes(4, "little") for w in code), slot
 
 
-def build(spec_defn, store_dir, isa="w32"):
-    """Write a store: the spec, binaries, certificates, certificate.sexp.
+def build(spec_defn, store_dir, isa="w32", at=None, library=None):
+    """Write a store: the spec, its callees, binaries, certificates, and
+    certificate.sexp naming the top one.
 
-    For W32, every callee under the spec's (defs ...) is built and
-    certified first, and the spec calls it by certificate, so a checker
-    proves each callee once. AArch64 makes no calls yet: its callees are
-    inlined. Returns the top certificate's summary.
+    library ({hash: definition}) supplies callees named in (uses ...).
+    For W32 each callee is built and certified first and called by
+    certificate, so a checker proves it once; AArch64 makes no calls yet,
+    so there callees are inlined.
     """
     os.makedirs(store_dir, exist_ok=True)
-    cert_hash, binary = _certify(spec_defn, store_dir, isa)
+    library = library or {}
+
+    def resolve(h):
+        put_definition(store_dir, library[h])
+        return library[h]
+
+    cert_hash, binary = _certify(spec_defn, store_dir, isa, at or {}, resolve)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(_load_cert(store_dir, cert_hash)))
     return {"spec": hash_of(spec_defn).hex(), "certificate": cert_hash.hex(),
@@ -248,12 +211,16 @@ def _load_cert(store_dir, h):
         return parse(f.read())
 
 
-def _certify(spec_defn, store_dir, isa):
+def _certify(spec_defn, store_dir, isa, at, resolve):
     certified = {}
     if isa == "w32":
-        for h, callee in word._defs_of(spec_defn).items():
-            certified[h], _ = _certify(callee, store_dir, isa)
-    program = compile_spec(spec_defn, certified)
+        for h in word.uses_of(spec_defn).values():
+            callee = resolve(h)
+            ch, _ = _certify(callee, store_dir, isa, {}, resolve)
+            n_out = len(word.run(callee, {}, [0] * len(word.inputs_of(callee)),
+                                 resolve))
+            certified[h] = (ch, n_out)
+    program = compile_spec(spec_defn, at, certified, resolve)
     if isa == "w32":
         binary, extra = emit_w32(program), ()
     elif isa == "a64":
@@ -263,8 +230,23 @@ def _certify(spec_defn, store_dir, isa):
         raise ValueError(f"unknown isa {isa!r}")
     with open(os.path.join(store_dir, blake3(binary).hex() + ".bin"), "wb") as f:
         f.write(binary)
+    at_field = (("at", [[Sym(k), v] for k, v in sorted(at.items())]),) if at else ()
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym(f"equals-spec-{isa}-v1")),
-                 ("spec", put_definition(store_dir, spec_defn)),
+                 ("spec", put_definition(store_dir, spec_defn)), *at_field,
                  ("binary-hash", Bytes(blake3(binary))), *extra)
     return put_definition(store_dir, cert), binary
+
+
+def library_of(directory):
+    """Every .sexp definition in a directory, by hash: a producer's library."""
+    lib = {}
+    for name in sorted(os.listdir(directory)):
+        if name.endswith(".sexp"):
+            with open(os.path.join(directory, name), "rb") as f:
+                try:
+                    d = parse(f.read())
+                except ValueError:
+                    continue
+            lib[hash_of(d)] = d
+    return lib

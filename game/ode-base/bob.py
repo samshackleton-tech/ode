@@ -5,7 +5,9 @@ pins, and runs this file from the bytes it hashed. With the package's
 RELIANCE bytes and Mallory's store, Bob:
   1. finds TARGET's pinned spec hash;
   2. reads Mallory's certificate and requires its (spec ...) to be that
-     hash -- a certificate about any other specification proves nothing;
+     hash -- a certificate about any other specification proves nothing --
+     and its instantiation to give each natural Bob names (len=65) the
+     value he names;
   3. runs the checker, which loads the spec by that hash and proves the
      binary it reads, once;
   4. prints ACCEPT and runs exactly the program it proved -- W32 by
@@ -23,7 +25,8 @@ from ode.store import Reject
 def main(reliance_bytes, argv):
     store, target = os.path.abspath(argv[0]), argv[1]
     try:
-        values = [int(x, 0) for x in argv[2:]]
+        named = dict((k, int(v)) for k, v in (a.split("=") for a in argv[2:] if "=" in a))
+        values = [int(x, 0) for x in argv[2:] if "=" not in x]
     except ValueError:
         print("REJECT inputs must be integers")
         return 1
@@ -40,6 +43,10 @@ def main(reliance_bytes, argv):
         return 1
     if field(cert, "spec") != pins[0]:
         print("REJECT certificate is not about the relied-upon specification")
+        return 1
+    at = {str(p[0]): p[1] for p in field(cert, "at") or [] if isinstance(p, list)}
+    if any(at.get(k) != v for k, v in named.items()):
+        print(f"REJECT certificate is proved at {at}, not at {named}")
         return 1
     try:
         _, program = check.check_certificate(store, cert)

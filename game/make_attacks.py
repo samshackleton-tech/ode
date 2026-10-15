@@ -5,10 +5,11 @@
     pypy3 game/referee.py game/attacks/*        # score them
 
 Each attack is one call below: its NOTES (the idea, and why it should
-work), its store, and optionally TARGET (g or hash65), INPUTS (extra
-inputs, one per line), EXPECT (accept: a control that must be accepted
-and right), and a tamper step. Numbers retired with the designs they
-attacked stay unused: 05, 09, 17, 20.
+work), its store, and optionally TARGET (g, or blake3 -- BLAKE3 at the
+length Bob asks for, 65 bytes), INPUTS (extra inputs, one per line),
+EXPECT (accept: a control that must be accepted and right), and a tamper
+step. Numbers retired with the designs they attacked stay unused: 05,
+09, 17, 20.
 """
 import os
 import shutil
@@ -24,46 +25,65 @@ from ode.blake3 import blake3  # noqa: E402
 from ode.canon import Bytes, Sym, assoc, canonical_bytes, hash_of, parse  # noqa: E402
 
 ATTACKS = os.path.join(HERE, "attacks")
+EXAMPLES = os.path.join(ROOT, "examples")
+LIB = produce.library_of(EXAMPLES)
 
 
 def _load(name):
-    with open(os.path.join(ROOT, "examples", name), "rb") as f:
+    with open(os.path.join(EXAMPLES, name), "rb") as f:
         return parse(f.read())
 
 
 G = _load("blake3-g.sexp")
-HASH65 = _load("blake3-hash-65.sexp")
-
-
-def _w32(text):
-    """A W32 program over G's inputs, from its steps."""
-    return parse(f"(w32 (inputs (a b c d x y)) (steps {text}) (outputs (a2 b2 c2 d2)))")
-
-
+BLAKE3 = _load("blake3.sexp")
+COMPRESS = _load("blake3-compress.sexp")
+AT65 = {"len": 65, "m": 32}
 G_STEPS = ("((t0 (add a b)) (a1 (add t0 x)) (t1 (xor d a1)) (d1 (rotr t1 16)) "
            "(c1 (add c d1)) (t2 (xor b c1)) (b1 (rotr t2 12)) (t3 (add a1 b1)) "
            "(a2 (add t3 y)) (t4 (xor d1 a2)) (d2 (rotr t4 8)) (c2 (add c1 d2)) "
            "(t5 (xor b1 c2)) (b2 (rotr t5 7)))")
 
 
+def _w32(steps, outputs="(a2 b2 c2 d2)", inputs="(a b c d x y)"):
+    return parse(f"(w32 (inputs {inputs}) (steps {steps}) (outputs {outputs}))")
+
+
+def _blake3_w32(spec=BLAKE3, at=AT65):
+    """A W32 program for a spec at an instantiation, callees inlined."""
+    return produce.compile_spec(spec, at, resolve=LIB.get)
+
+
+def _put_binary(d, binary):
+    with open(os.path.join(d, blake3(binary).hex() + ".bin"), "wb") as f:
+        f.write(binary)
+
+
+def _cert(spec, binary, prop="w32", at=None, scratch=None):
+    fields = [("cert", Sym("correctness")), ("property", Sym(f"equals-spec-{prop}-v1")),
+              ("spec", hash_of(spec))]
+    if at:
+        fields.append(("at", [[Sym(k), v] for k, v in sorted(at.items())]))
+    fields.append(("binary-hash", Bytes(blake3(binary))))
+    if scratch is not None:
+        fields.append(("scratch", scratch))
+    return assoc("certificate", *fields)
+
+
 def attack(name, notes, spec, binary, prop="w32", target=None, inputs=None,
-           expect=False, scratch=None, tamper=None):
+           expect=False, scratch=None, at=None, tamper=None):
     d = os.path.join(ATTACKS, name)
     shutil.rmtree(d, ignore_errors=True)
     os.makedirs(d)
     produce.put_definition(d, spec)
-    with open(os.path.join(d, blake3(binary).hex() + ".bin"), "wb") as f:
-        f.write(binary)
-    extra = (("scratch", scratch),) if scratch is not None else ()
-    cert = assoc("certificate", ("cert", Sym("correctness")),
-                 ("property", Sym(f"equals-spec-{prop}-v1")),
-                 ("spec", hash_of(spec)),
-                 ("binary-hash", Bytes(blake3(binary))), *extra)
+    for h in word.uses_of(spec).values():
+        produce.put_definition(d, LIB[h])
+    _put_binary(d, binary)
+    if at is None and target == "blake3":
+        at = AT65
     with open(os.path.join(d, "certificate.sexp"), "wb") as f:
-        f.write(canonical_bytes(cert))
+        f.write(canonical_bytes(_cert(spec, binary, prop, at, scratch)))
     files = {"NOTES": notes.strip(), "TARGET": target,
-             "INPUTS": inputs and "\n".join(inputs),
-             "EXPECT": expect and "accept"}
+             "INPUTS": inputs and "\n".join(inputs), "EXPECT": expect and "accept"}
     for fname, text in files.items():
         if text:
             with open(os.path.join(d, fname), "w") as f:
@@ -82,27 +102,33 @@ def _patch(code, at, value):
     return bytes(raw)
 
 
+def _mutant_spec(old, new):
+    text = canonical_bytes(BLAKE3).decode()
+    assert old in text, old
+    return parse(text.replace(old, new))
+
+
 def main():
     shutil.rmtree(ATTACKS, ignore_errors=True)
     g = produce.emit_w32(produce.compile_spec(G))
-    h = produce.emit_w32(produce.compile_spec(HASH65))
     mutant_g = produce.emit_w32(_w32(G_STEPS.replace("(rotr t5 7)", "(rotr t5 6)")))
+    honest = _blake3_w32()
+    h = produce.emit_w32(honest)
 
-    # Round 1: G, W32.
+    # G, W32.
     attack("00-honest", "Control: an honest build. Bob must accept and be right.",
            G, g, expect=True)
     attack("01-flip-byte", "Flip one byte of the binary file; the certificate "
            "is untouched. Found before the game: the checkers once never opened "
            "the file that runs.", G, g,
-           tamper=lambda d: open(os.path.join(d, blake3(g).hex() + ".bin"), "wb").write(
-               _patch(g, 40, g[40] ^ 7)))
+           tamper=lambda d: open(os.path.join(d, blake3(g).hex() + ".bin"), "wb")
+           .write(_patch(g, 40, g[40] ^ 7)))
     attack("02-mutant-honest-hashes", "A wrong program (b2 rotation 7 -> 6) "
            "with honest hashes. Tests that the checker reasons rather than "
            "merely binds.", G, mutant_g)
     attack("03-fewer-outputs", "A program with only 3 outputs; a pairwise "
            "comparison could ignore the missing fourth.", G,
-           produce.emit_w32(parse(f"(w32 (inputs (a b c d x y)) (steps {G_STEPS}) "
-                                  "(outputs (a2 b2 c2)))")))
+           produce.emit_w32(_w32(G_STEPS, "(a2 b2 c2)")))
 
     def plant(d):
         os.makedirs(os.path.join(d, "ode"))
@@ -133,65 +159,63 @@ def main():
            "old canonical form read as an integer; byte strings are now #hex.",
            G, fwd)
 
-    # Round 2: the 65-byte hash.
-    attack("11-hash65-honest", "Control: an honest hash65 build.", HASH65, h,
-           target="hash65", expect=True)
-    text = canonical_bytes(HASH65).decode()
-    honest65 = produce.compile_spec(HASH65)
-
-    def program(steps, outputs=None):
-        return assoc("w32", ("inputs", word.inputs_of(honest65)), ("steps", steps),
-                     ("outputs", outputs or word.outputs_of(honest65)))
-    ren = {Sym(f"m{i}"): Sym(f"m{(i + 16) % 32}") for i in range(32)}
+    # BLAKE3 at 65 bytes, against the one general specification.
+    attack("11-blake3-honest", "Control: BLAKE3 at 65 bytes, every compression "
+           "inlined.", BLAKE3, h, target="blake3", expect=True)
+    ren = {Sym(f"m.{i}"): Sym(f"m.{(i + 16) % 32}") for i in range(32)}
 
     def swap(e):
         if isinstance(e, Sym):
             return ren.get(e, e)
-        if isinstance(e, list) and e[0] == "rotr":
+        if isinstance(e, list) and e and e[0] == "rotr":
             return [e[0], swap(e[1]), e[2]]
         return [swap(x) for x in e] if isinstance(e, list) else e
-    swapped = program([[n, swap(e)] for n, e in word.steps_of(honest65)])
-    attack("12-hash65-swap-blocks", "The two 64-byte blocks swapped "
-           "(m_i -> m_{i+16 mod 32}). Symbolically m0 and m16 differ.",
-           HASH65, produce.emit_w32(swapped), target="hash65")
-    first_cv = " ".join(f"c0b0_{i}" for i in range(8))
-    iv = " ".join(str(v) for v in (0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
-                                   0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19))
-    i = text.index(first_cv, text.index("(call"))  # the second call's cv
-    dropped = text[:i] + iv + text[i + len(first_cv):]
-    attack("13-hash65-drop-chain", "The second compression starts from the "
-           "IV, not block 0's chaining value; compiled honestly from a mutant "
-           "spec, certified against the true one.", HASH65,
-           produce.emit_w32(produce.compile_spec(parse(dropped))), target="hash65")
-    trunc = program(word.steps_of(honest65), [Sym(f"c0b0_{j}") for j in range(8)])
-    attack("14-hash65-truncate", "Return block 0's chaining value as the "
-           "hash, ignoring block 1 and the 65th byte.", HASH65,
-           produce.emit_w32(trunc), target="hash65")
-    steps = [list(s) for s in word.steps_of(honest65)]
-    k = next(j for j, (_, e) in enumerate(steps)
-             if isinstance(e, list) and e[0] == "add")
+
+    def program(steps, outputs=None):
+        return assoc("w32", ("inputs", word.inputs_of(honest)), ("steps", steps),
+                     ("outputs", outputs or word.outputs_of(honest)))
+    attack("12-blake3-swap-blocks", "The two 64-byte blocks swapped "
+           "(m.i <-> m.i+16). Symbolically m.0 and m.16 differ.", BLAKE3,
+           produce.emit_w32(program([[n, swap(e)] for n, e in word.steps_of(honest)])),
+           target="blake3")
+    attack("13-blake3-drop-chain", "A chunk's next block starts from the IV "
+           "instead of the chaining value: compiled honestly from a mutant "
+           "spec, certified against the true one.", BLAKE3,
+           produce.emit_w32(_blake3_w32(_mutant_spec(
+               "(chain c start blocks (n+ b 1) (cv node))",
+               "(chain c start blocks (n+ b 1) (iv))"))), target="blake3")
+    attack("14-blake3-truncate", "Every chunk stops after its first block: "
+           "the hash ignores the 65th byte.", BLAKE3,
+           produce.emit_w32(_blake3_w32(_mutant_spec(
+               "(if (n= b (n- blocks 1)) node", "(if (n= b 0) node"))),
+           target="blake3")
+    steps = [list(s) for s in word.steps_of(honest)]
+    k = next(j for j, (_, e) in enumerate(steps) if isinstance(e, list) and e[0] == "add")
     steps[k][1] = [steps[k][1][0], steps[k][1][2], steps[k][1][1]]
-    attack("15-hash65-commuted-add", "An honest program with one add "
-           "commuted: correct, differently written. The checker must accept.",
-           HASH65, produce.emit_w32(program(steps)),
-           target="hash65", expect=True)
-    attack("16-hash65-chosen-messages", "Mallory's messages, including two "
-           "equal blocks, where a swap would be invisible.", HASH65, h,
-           target="hash65", expect=True,
-           inputs=[_words(b"\0" * 65), _words(b"A" * 64 + b"\0"),
-                   _words(bytes(range(64)) + b"\0")])
+    attack("15-blake3-commuted-add", "An honest program with one add commuted: "
+           "correct, differently written. The checker must accept.", BLAKE3,
+           produce.emit_w32(program(steps)), target="blake3", expect=True)
+    attack("16-blake3-chosen-messages", "Mallory's messages, including two equal "
+           "blocks, where a swap would be invisible.", BLAKE3, h, target="blake3",
+           expect=True, inputs=[_words(b"\0" * 65), _words(b"A" * 64 + b"\0"),
+                                _words(bytes(range(64)) + b"\0")])
     raw = bytearray(h)
     for j in range(8):
         struct.pack_into("<I", raw, 8 + 4 * j, j)
-    attack("18-hash65-outputs-are-inputs", "Raw bytes whose outputs index the "
-           "inputs m0..m7: hash := message prefix.", HASH65, bytes(raw),
-           target="hash65")
-    attack("19-hash65-wrong-length-program", "The proved 3-byte hash program "
-           "certified against the hash65 spec: length confusion.", HASH65,
-           produce.emit_w32(produce.compile_spec(_load("blake3-hash-3.sexp"))),
-           target="hash65")
+    attack("18-blake3-outputs-are-inputs", "Raw bytes whose outputs index the "
+           "inputs m.0..m.7: hash := message prefix.", BLAKE3, bytes(raw),
+           target="blake3")
+    attack("19-blake3-other-length", "An honest certificate for BLAKE3 at 3 "
+           "bytes, offered when Bob asks for 65: a proof at one length says "
+           "nothing about another.", BLAKE3,
+           produce.emit_w32(_blake3_w32(at={"len": 3, "m": 16})), target="blake3",
+           at={"len": 3, "m": 16})
+    attack("37-blake3-unpadded-count", "An instantiation the spec refuses: "
+           "65 bytes in 16 words. The spec's own requirement must reject it.",
+           BLAKE3, produce.emit_w32(_blake3_w32(at={"len": 3, "m": 16})),
+           target="blake3", at={"len": 65, "m": 16})
 
-    # Round 3: the root, a delivered ode-base, a delivered spec.
+    # The root, a delivered ode-base, a delivered spec.
     def deliver_ode_base(d, edit):
         shutil.copytree(os.path.join(HERE, "ode-base"), os.path.join(d, "ode-base"),
                         ignore=shutil.ignore_patterns("__pycache__"))
@@ -213,86 +237,71 @@ def main():
            "availability, never correctness.", G, g,
            tamper=lambda d: os.remove(os.path.join(d, hash_of(G).hex() + ".sexp")))
 
-    # Round 5: real AArch64, run natively.
+    # Real AArch64, run natively.
     ga, gs = produce.emit_a64(produce.compile_spec(G))
-    ha, hs = produce.emit_a64(produce.compile_spec(HASH65))
-    words = [int.from_bytes(ga[j:j + 4], "little") for j in range(0, len(ga), 4)]
+    ha, hs = produce.emit_a64(honest)
+    words_ = [int.from_bytes(ga[j:j + 4], "little") for j in range(0, len(ga), 4)]
     enc = lambda ws: b"".join(w.to_bytes(4, "little") for w in ws)  # noqa: E731
-    ror = next(j for j, w in enumerate(words) if (w & 0xFFE00000) == 0x13800000)
+    ror = next(j for j, w in enumerate(words_) if (w & 0xFFE00000) == 0x13800000)
     attack("25-a64-g-honest", "Control: G as proved AArch64, run natively.",
            G, ga, prop="a64", scratch=gs, expect=True)
-    attack("26-a64-hash65-honest", "Control: the 65-byte hash as proved "
-           "AArch64, run natively.", HASH65, ha, prop="a64", scratch=hs,
-           target="hash65", expect=True)
+    attack("26-a64-blake3-honest", "Control: BLAKE3 at 65 bytes as proved "
+           "AArch64, run natively.", BLAKE3, ha, prop="a64", scratch=hs,
+           target="blake3", expect=True)
     attack("27-a64-rotation-off-by-one", "One ROR count off by one in real "
            "code; honest hashes.", G,
-           enc(words[:ror] + [words[ror] ^ (1 << 10)] + words[ror + 1:]),
+           enc(words_[:ror] + [words_[ror] ^ (1 << 10)] + words_[ror + 1:]),
            prop="a64", scratch=gs)
     attack("28-a64-branch", "A branch spliced in: anything outside the eight "
            "modelled forms is rejected, since a jump could reach code the "
-           "proof never saw.", G, enc([0x14000002] + words), prop="a64", scratch=gs)
+           "proof never saw.", G, enc([0x14000002] + words_), prop="a64", scratch=gs)
     attack("29-a64-scratch-too-small", "Honest code, scratch declared one word "
            "short: Bob would allocate too little.", G, ga, prop="a64",
            scratch=gs - 1)
     attack("30-a64-store-past-out", "An extra store far past out[]: memory "
            "safety of the bytes that run.", G,
-           enc(words[:-1] + [0xB9000000 | (4095 << 10) | (1 << 5) | 9, words[-1]]),
+           enc(words_[:-1] + [0xB9000000 | (4095 << 10) | (1 << 5) | 9, words_[-1]]),
            prop="a64", scratch=gs)
-    # Round 6: calls by certificate.
-    compress = _load("blake3-compress.sexp")
-    chash = hash_of(compress)
+
+    # Calls by certificate: BLAKE3 as glue over a certified compression.
+    chash = hash_of(COMPRESS)
 
     def composed(name, notes, callee_binary=None, callee_spec=None,
                  rewrite=None, expect=False, drop_callee=False, isa="w32"):
-        """hash65 as glue calling a compression by certificate."""
         def build(d):
-            cs = callee_spec or compress
+            cs = callee_spec or COMPRESS
             if isa == "a64":
                 cb, scr = produce.emit_a64(produce.compile_spec(cs))
-                extra = (("scratch", scr),)
             else:
-                cb = callee_binary or produce.emit_w32(produce.compile_spec(cs))
-                extra = ()
-            with open(os.path.join(d, blake3(cb).hex() + ".bin"), "wb") as f:
-                f.write(cb)
-            ccert = assoc("certificate", ("cert", Sym("correctness")),
-                          ("property", Sym(f"equals-spec-{isa}-v1")),
-                          ("spec", produce.put_definition(d, cs)),
-                          ("binary-hash", Bytes(blake3(cb))), *extra)
-            ch = produce.put_definition(d, ccert)
-            glue = produce.compile_spec(HASH65, {chash: ch})
-            if rewrite:
-                glue = rewrite(glue)
-            gb = produce.emit_w32(glue)
-            with open(os.path.join(d, blake3(gb).hex() + ".bin"), "wb") as f:
-                f.write(gb)
-            cert = assoc("certificate", ("cert", Sym("correctness")),
-                         ("property", Sym("equals-spec-w32-v1")),
-                         ("spec", hash_of(HASH65)),
-                         ("binary-hash", Bytes(blake3(gb))))
+                cb, scr = callee_binary or produce.emit_w32(produce.compile_spec(cs)), None
+            _put_binary(d, cb)
+            produce.put_definition(d, cs)
+            ch = produce.put_definition(d, _cert(cs, cb, isa, scratch=scr))
+            glue = produce.compile_spec(BLAKE3, AT65, {chash: (ch, 16)}, LIB.get)
+            gb = produce.emit_w32(rewrite(glue) if rewrite else glue)
+            _put_binary(d, gb)
             with open(os.path.join(d, "certificate.sexp"), "wb") as f:
-                f.write(canonical_bytes(cert))
+                f.write(canonical_bytes(_cert(BLAKE3, gb, at=AT65)))
             if drop_callee:
                 os.remove(os.path.join(d, ch.hex() + ".sexp"))
-        attack(name, notes, HASH65, h, target="hash65", expect=expect,
-               tamper=build)
+        attack(name, notes, BLAKE3, h, target="blake3", expect=expect, tamper=build)
 
-    composed("31-call-honest", "Control: hash65 as glue calling the "
-             "compression by its certificate; the compression is proved "
-             "once, and both calls are one opaque function.", expect=True)
+    composed("31-call-honest", "Control: BLAKE3 as glue calling the compression "
+             "by its certificate; the compression is proved once, and every call "
+             "is one opaque function.", expect=True)
     composed("32-call-mutant-callee", "The callee certificate claims the "
              "compression spec for a wrong compression (one rotation off). "
              "Checking the callee must catch it.",
              callee_binary=produce.emit_w32(produce.compile_spec(parse(
-                 canonical_bytes(compress).decode().replace(
+                 canonical_bytes(COMPRESS).decode().replace(
                      "(r0c0_d (rotr (xor counter-lo r0c0_a) 16))",
                      "(r0c0_d (rotr (xor counter-lo r0c0_a) 15))")))))
-    other = parse(canonical_bytes(compress).decode().replace(
+    other = parse(canonical_bytes(COMPRESS).decode().replace(
         "(name blake3-compress)", "(name blake3-compress-but-different)").replace(
         "(r6d3_B (rotr (xor r6d3_b r6d3_C) 7))", "(r6d3_B (rotr (xor r6d3_b r6d3_C) 6))"))
-    composed("33-call-other-spec", "The call names an honest certificate for "
-             "a *different* spec of the same shape. Its opaque node is a "
-             "different function, so it must not stand for the compression.",
+    composed("33-call-other-spec", "The call names an honest certificate for a "
+             "*different* spec of the same shape. Its opaque node is a different "
+             "function, so it must not stand for the compression.",
              callee_spec=other)
 
     def swap_args(glue):
@@ -303,15 +312,13 @@ def main():
                 break
         return assoc("w32", ("inputs", word.inputs_of(glue)), ("steps", steps),
                      ("outputs", word.outputs_of(glue)))
-    composed("34-call-swapped-args", "Two arguments of the first call "
-             "swapped (cv0 and cv1). Congruence holds only for equal "
-             "arguments.", rewrite=swap_args)
+    composed("34-call-swapped-args", "Two arguments of the first call swapped. "
+             "Congruence holds only for equal arguments.", rewrite=swap_args)
     composed("35-call-callee-missing", "The callee's certificate withheld: "
              "availability lost, correctness kept.", drop_callee=True)
-    composed("36-call-a64-callee", "Control: W32 glue calling the "
-             "compression's proved AArch64 certificate; Bob runs the glue "
-             "interpreted and each compression natively.", isa="a64",
-             expect=True)
+    composed("36-call-a64-callee", "Control: W32 glue calling the compression's "
+             "proved AArch64 certificate; Bob runs the glue interpreted and each "
+             "compression natively.", isa="a64", expect=True)
     print(f"{len(os.listdir(ATTACKS))} attacks regenerated")
 
 

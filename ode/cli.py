@@ -1,10 +1,11 @@
 """Ode command line.
 
-    pypy3 -m ode build      SPEC.sexp STORE/    # produce W32 bytes + certificate
-    pypy3 -m ode build-a64  SPEC.sexp STORE/    # produce AArch64 bytes + certificate
-    pypy3 -m ode check      STORE/              # prove the store's bytes compute its spec
-    pypy3 -m ode run        STORE/ WORD...      # check, then run the proved program
-    pypy3 -m ode assure     STORE/              # print the assurance map
+    pypy3 -m ode build      SPEC.sexp STORE/ [len=N]  # produce W32 bytes + certificate
+    pypy3 -m ode build-a64  SPEC.sexp STORE/ [len=N]  # produce AArch64 bytes + certificate
+    pypy3 -m ode check      STORE/                    # prove the bytes compute the spec
+    pypy3 -m ode run        STORE/ WORD...            # check, then run the proved program
+    pypy3 -m ode hash       STORE/ MESSAGE            # BLAKE3 stores: hash a UTF-8 message
+    pypy3 -m ode assure     STORE/                    # print the assurance map
 
 `build` relies on nothing and proves nothing. `check` is what a relying
 party runs: it re-derives the claim from the store's hashes and bytes.
@@ -12,7 +13,11 @@ party runs: it re-derives the claim from the store's hashes and bytes.
 interpretation, AArch64 natively on this CPU. A specification's
 interface -- its input names, in order, and its outputs -- is stated in
 the file itself: read its (inputs ...) and (outputs ...). Words are
-decimal or 0x... integers.
+decimal or 0x... integers. A spec with natural inputs, like
+examples/blake3.sexp, is built at an instantiation (len=65); a list
+input's word count follows from the spec's own requirement, which for
+BLAKE3 is the message padded to whole 64-byte blocks. Callees named in
+(uses ...) are found by hash among the spec file's neighbours.
 """
 import os
 import sys
@@ -34,10 +39,14 @@ def check_store(store):
 
 
 def _build(argv, isa):
-    spec_path, store = argv
+    spec_path, store, *assign = argv
     with open(spec_path, "rb") as f:
         spec_defn = parse(f.read())
-    result = produce.build(spec_defn, store, isa)
+    at = {k: int(v) for k, v in (a.split("=") for a in assign)}
+    if "len" in at and "m" not in at:  # BLAKE3's message words
+        at["m"] = 16 * max(1, -(-at["len"] // 64))
+    library = produce.library_of(os.path.dirname(os.path.abspath(spec_path)))
+    result = produce.build(spec_defn, store, isa, at, library)
     print(f"spec        {result['spec']}")
     print(f"binary      {result['binary_hash']}  ({result['binary_len']} "
           f"bytes, {isa})")
@@ -71,6 +80,26 @@ def cmd_run(argv):
         print(f"REJECT: {e}")
         return 1
     print(" ".join(str(x) for x in out))
+    return 0
+
+
+def cmd_hash(argv):
+    """Hash a message with a proved BLAKE3 store built at its length."""
+    import struct
+    store, message = argv[0], " ".join(argv[1:]).encode("utf-8")
+    try:
+        record, program = _check(store)
+        at = {str(k): v for k, v in field(record, "at")}
+        if at.get("len") != len(message):
+            raise Reject(f"this store is proved at len={at.get('len')}, "
+                         f"the message has {len(message)} bytes")
+        n = at["m"]
+        words = list(struct.unpack(f"<{n}I", message + b"\0" * (4 * n - len(message))))
+        out = check.run(program, words)
+    except (Reject, ValueError) as e:
+        print(f"REJECT: {e}")
+        return 1
+    print(struct.pack("<8I", *out).hex())
     return 0
 
 
@@ -124,7 +153,8 @@ def cmd_assure(argv):
 
 COMMANDS = {"build": lambda a: _build(a, "w32"),
             "build-a64": lambda a: _build(a, "a64"),
-            "check": cmd_check, "run": cmd_run, "assure": cmd_assure}
+            "check": cmd_check, "run": cmd_run, "hash": cmd_hash,
+            "assure": cmd_assure}
 
 
 def main(argv=None):

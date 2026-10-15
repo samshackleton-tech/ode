@@ -25,7 +25,7 @@ RELIANCE = os.path.join(HERE, "bootstrap", "game-targets", "RELIANCE")
 PUBLIC_ODE_BASE = os.path.join(HERE, "ode-base")
 EXAMPLES = os.path.join(os.path.dirname(HERE), "examples")
 sys.path.insert(0, os.path.dirname(HERE))  # the referee uses the toolchain, not ode-base
-from ode import word  # noqa: E402
+from ode import produce, word  # noqa: E402
 from ode.canon import field, hash_of, parse  # noqa: E402
 
 import struct  # noqa: E402
@@ -38,13 +38,17 @@ PUBLIC_INPUTS = {
         [0xFFFFFFFF] * 6,
         [0xDEADBEEF, 0xCAFEBABE, 0x01234567, 0x89ABCDEF, 0x13579BDF, 0x2468ACE0],
     ],
-    "hash65": [
+    "blake3": [
         list(struct.unpack("<32I", msg + b"\0" * (128 - len(msg))))
         for msg in (b"a" * 65, bytes(range(65)), b"\xff" * 65,
                     b"The quick brown fox jumps over the lazy dog, said BLAKE3." + b"!" * 8)
     ],
 }
-SPEC_FILE = {"g": "blake3-g.sexp", "hash65": "blake3-hash-65.sexp"}
+SPEC_FILE = {"g": "blake3-g.sexp", "blake3": "blake3.sexp"}
+# The game's blake3 attacks are about 65-byte messages: Bob asks for len=65.
+NAMED = {"g": {}, "blake3": {"len": 65}}
+AT = {"g": {}, "blake3": {"len": 65, "m": 32}}
+LIBRARY = produce.library_of(EXAMPLES)
 
 
 def target_of(attack_dir):
@@ -71,7 +75,7 @@ SPECS = _pinned_specs()
 
 
 def truth(values, target):
-    return word.run_program(SPECS[target], values)
+    return word.run(SPECS[target], AT[target], values, LIBRARY.get)
 
 
 def run_bob(attack_dir, values, target="g"):
@@ -82,7 +86,7 @@ def run_bob(attack_dir, values, target="g"):
         base = PUBLIC_ODE_BASE
     cmd = ["pypy3", os.path.join(ROOT, "launch.py"), RELIANCE, base,
            attack_dir, target] + \
-          [str(v) for v in values]
+          [f"{k}={v}" for k, v in NAMED[target].items()] + [str(v) for v in values]
     p = subprocess.run(cmd, cwd=attack_dir, capture_output=True, text=True,
                        timeout=120)
     lines = (p.stdout or "").splitlines()
@@ -102,7 +106,7 @@ def score(attack_dir):
 
 def _score(attack_dir):
     target = target_of(attack_dir)
-    n_in = {"g": 6, "hash65": 32}[target]
+    n_in = {"g": 6, "blake3": 32}[target]
     inputs = list(PUBLIC_INPUTS[target])
     extra = os.path.join(attack_dir, "INPUTS")
     if os.path.isfile(extra):
