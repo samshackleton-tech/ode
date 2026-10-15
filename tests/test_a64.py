@@ -152,7 +152,8 @@ class CheckerOnA64Test(unittest.TestCase):
                 self.certify(enc(m), scratch)
         with self.assertRaises(Reject):
             self.certify(code, -1)                              # a malformed size
-        compress = parse(open(os.path.join(ROOT, "examples", "blake3-compress.sexp"), "rb").read())
+        with open(os.path.join(ROOT, "examples", "blake3-compress.sexp"), "rb") as stream:
+            compress = parse(stream.read())
         ccode, cscratch = produce.emit_a64(produce.compile_spec(compress))
         self.assertGreater(cscratch, 0)  # the compression spills
         self.spec = compress

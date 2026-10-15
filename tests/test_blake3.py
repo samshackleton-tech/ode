@@ -129,9 +129,11 @@ class CheckerTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         result = produce.build(load("blake3-g.sexp"), tmp)
         path = os.path.join(tmp, result["binary_hash"] + ".bin")
-        raw = bytearray(open(path, "rb").read())
+        with open(path, "rb") as stream:
+            raw = bytearray(stream.read())
         raw[20] ^= 1
-        open(path, "wb").write(bytes(raw))
+        with open(path, "wb") as stream:
+            stream.write(bytes(raw))
         with self.assertRaises(Reject) as cm:
             check_store(tmp)
         self.assertIn("binary file", str(cm.exception))
@@ -140,7 +142,8 @@ class CheckerTest(unittest.TestCase):
         tmp = tempfile.mkdtemp()
         result = produce.build(load("blake3-g.sexp"), tmp)
         evil = parse("(spec (name g) (inputs (a b c d x y)) (steps ()) (outputs (a b c d)))")
-        open(os.path.join(tmp, result["spec"] + ".sexp"), "wb").write(canonical_bytes(evil))
+        with open(os.path.join(tmp, result["spec"] + ".sexp"), "wb") as stream:
+            stream.write(canonical_bytes(evil))
         with self.assertRaises(Reject):
             check_store(tmp)
 
