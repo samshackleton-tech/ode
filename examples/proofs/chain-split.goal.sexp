@@ -1,1 +1,1 @@
-(goal 2 #7a9554603a2d1ede7e04c568e2dcbc7073dfe98c9528bf5d752d0243c59f166a ((n Nat) (k Nat) (s State) (m Blocks) (i Nat)) (eq (chain (add n k) s m i) (chain k (chain n s m i) m (add n i))))
+(goal 3 #aa8c6c4293f7c341a0e22a07086bf3e02f9b174daeafcf56b434e4208a60f445 ((n Nat) (k Nat) (s State) (m Blocks) (i Nat)) (eq (chain (add n k) s m i) (chain k (chain n s m i) m (add n i))))

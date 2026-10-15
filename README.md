@@ -72,8 +72,8 @@ call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 
 ## The proof-object kernel
 
-`ode/kernel.py` now checks explicit equational proofs and induction over
-natural numbers. Its first theorem says that processing two blocks per
+`ode/kernel.py` checks explicit equational proofs and structural induction
+over naturals and finite constructor-built data. Its first theorem says that processing two blocks per
 iteration equals processing one at a time, for **every** iteration count:
 
 ```sh
@@ -92,6 +92,16 @@ chain-splitting law for arbitrary batch sizes `n` and `k`:
 pypy3 -m ode.proof_cli examples/proofs/chain-split.theory.sexp \
   examples/proofs/chain-split.goal.sexp examples/proofs/chain-split.proof.sexp
 # chain(n+k,s,m,i) = chain(k,chain(n,s,m,i),m,n+i)
+```
+
+Bit operations also have checked definitions: XOR cancellation and width
+preservation are proved for every finite bit string, including 32 bits,
+using the same induction rule:
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/bits.theory.sexp \
+  examples/proofs/xor-cancel.goal.sexp examples/proofs/xor-cancel.proof.sexp
+# xor-bits(x,x) = zeros(x), proved from the bit definitions
 ```
 
 The theory and goal come from the owner; the proof can come from anyone.

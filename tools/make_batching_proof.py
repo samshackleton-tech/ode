@@ -10,11 +10,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from ode.canon import canonical_bytes, hash_of, parse
+from ode.canon import Sym, canonical_bytes, hash_of, parse
 
 
 def artifacts(theory):
-    goal = parse(f"""(goal 2 #{hash_of(theory).hex()}
+    goal = parse(f"""(goal 3 #{hash_of(theory).hex()}
       ((n Nat) (s State) (m Blocks) (i Nat))
       (eq (chain (double n) s m i) (pairs n s m i)))""")
     one = "(compress s (block-at m i))"
@@ -34,12 +34,13 @@ def artifacts(theory):
       (trans 4 5)
       (unfold chain (succ (double k)) {one} m (succ i))
       (trans 6 7)
-      (ih {two} m (succ (succ i)))
+      (ih k {two} m (succ (succ i)))
       (trans 8 9)
       (unfold pairs (succ k) s m i)
       (sym 11)
       (trans 10 12))"""
-    proof = parse(f"(proof 2 #{hash_of(goal).hex()} () (induct n k {base} {step}))")
+    proof = [Sym("proof"), 3, hash_of(goal), [],
+             parse(f"(induct n ((zero () {base}) (succ (k) {step})))")]
     return goal, proof
 
 

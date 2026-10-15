@@ -119,9 +119,10 @@ agents extend behind stable interfaces.
 
 ## 6. One logic, many producers
 
-**The proof-object kernel starts with equations and natural-number induction.** Its
+**The proof-object kernel uses equations and structural induction.** Its
 complete rules are in `KERNEL.md`, and `ode/kernel.py` checks the first unbounded loop
-transformation. Recursive definitions must visibly decrease their counter; the proof producer
+transformation and bit-string identities. Recursive definitions must visibly decrease their
+structural argument; the proof producer
 has no axiom-introduction rule. This is the smallest fragment the loop milestone needs.
 Matching μ-logic remains a possible richer foundation, rather than a prerequisite for the
 first kernel. The existing symbolic verifier has yet to emit proofs in this foundation;

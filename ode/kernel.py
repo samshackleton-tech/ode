@@ -1,4 +1,4 @@
-"""Equations and induction: Ode's first proof-object kernel.
+"""Equations and structural induction: Ode's proof-object kernel.
 
 See KERNEL.md for the complete grammar, rules, semantics, and boundary.
 verify(theory, goal, proof) checks a proof of the *caller's* goal in the
@@ -8,7 +8,7 @@ The evaluator and symbolic executor in check.py are outside this kernel.
 """
 from .canon import Bytes, Sym, canonical_bytes, hash_of
 
-VERSION = 2
+VERSION = 3
 MAX_DEPTH = 128
 MAX_INPUT_BYTES = 1_000_000
 DEFAULT_WORK = 1_000_000
@@ -33,6 +33,7 @@ class Kernel:
         self.sorts = {Sym("Nat")}
         self.signature = {Sym("zero"): ((), Sym("Nat")),
                           Sym("succ"): ((Sym("Nat"),), Sym("Nat"))}
+        self.constructors = {Sym("Nat"): (Sym("zero"), Sym("succ"))}
         self.definitions = {}
         self.lemmas = []  # closed, universally quantified equations, checked in order
         self.rules = 0
@@ -133,47 +134,85 @@ class Kernel:
     def load_theory(self, theory):
         header(theory, "theory", 5)
         require(type(theory[2]) is list, "sorts must be a list")
-        for s in theory[2]:
-            require(type(s) is Sym and s not in self.sorts, "duplicate or invalid sort")
-            self.sorts.add(s)
+        for declaration in theory[2]:
+            if type(declaration) is Sym:
+                self.add_sort(declaration)
+                continue
+            require(type(declaration) is list and len(declaration) == 2,
+                    "datatype is (sort ((constructor (field-sorts ...)) ...))")
+            sort, constructors = declaration
+            self.add_sort(sort)
+            require(type(constructors) is list and constructors, "datatype needs constructors")
+            names, inhabited = [], False
+            for c in constructors:
+                require(type(c) is list and len(c) == 2, "constructor is (name field-sorts)")
+                self.declare([c[0], c[1], sort])
+                names.append(c[0])
+                inhabited |= sort not in c[1]
+            require(inhabited, "datatype needs a nonrecursive constructor")
+            self.constructors[sort] = tuple(names)
         require(type(theory[3]) is list and type(theory[4]) is list,
                 "symbols and definitions must be lists")
         for decl in theory[3]:
             self.declare(decl)
         for definition in theory[4]:
-            require(type(definition) is list and len(definition) == 5,
-                    "definition is (name parameters result zero-body (predecessor step-body))")
-            name, params, result, base, step = definition
+            require(type(definition) is list and len(definition) == 4,
+                    "definition is (name parameters result cases)")
+            name, params, result, cases = definition
             env = self.parameters(params)
-            require(params and params[0][1] == "Nat", "definition's first parameter must be Nat")
-            require(type(step) is list and len(step) == 2 and type(step[0]) is Sym,
-                    "step must name its predecessor")
-            pred = step[0]
-            require(pred not in env, "predecessor must be fresh")
-            # The counter itself is unavailable in either branch. Only the
-            # predecessor is available in the step. Self is unavailable in zero.
+            require(params, "definition needs a structural parameter")
+            sort = params[0][1]
             tail = dict(list(env.items())[1:])
-            base_term = self.term(base, tail)
             self.declare([name, [p[1] for p in params], result])
-            k = self.intern("var", pred, (), Sym("Nat"))
-            step_env = dict(tail)
-            step_env[pred] = k
-            step_term = self.term(step[1], step_env)
-            require(self.nodes[base_term][3] == result == self.nodes[step_term][3],
-                    "definition result sort mismatch")
-            # All self calls must decrease the first argument exactly to k.
-            todo, visited = [step_term], set()
-            while todo:
-                self.spend()
-                i = todo.pop()
-                if i in visited:
-                    continue
-                visited.add(i)
-                tag, f, args, _, _ = self.nodes[i]
-                if tag == "app" and f == name:
-                    require(args and args[0] == k, "recursive call does not decrease to predecessor")
-                todo.extend(args)
-            self.definitions[name] = (tuple(tail.values()), k, base_term, step_term)
+            bodies = {}
+            for constructor, fields, body in self.cases(cases, sort):
+                local = self.case_variables(constructor, fields, env)
+                body_env = dict(tail)
+                body_env.update(local)
+                term = self.term(body, body_env)
+                require(self.nodes[term][3] == result, "definition result sort mismatch")
+                smaller = {i for i in local.values() if self.nodes[i][3] == sort}
+                todo, visited = [term], set()
+                while todo:
+                    self.spend()
+                    i = todo.pop()
+                    if i in visited:
+                        continue
+                    visited.add(i)
+                    tag, f, args, _, _ = self.nodes[i]
+                    if tag == "app" and f == name:
+                        require(args and args[0] in smaller,
+                                "recursive call does not decrease to a constructor field")
+                    todo.extend(args)
+                bodies[constructor] = (tuple(local.values()), term)
+            self.definitions[name] = (tuple(tail.values()), bodies)
+
+    def add_sort(self, sort):
+        require(type(sort) is Sym and sort not in self.sorts, "duplicate or invalid sort")
+        self.sorts.add(sort)
+
+    def cases(self, cases, sort):
+        require(sort in self.constructors, "structural argument needs a datatype")
+        require(type(cases) is list, "cases must be a list")
+        covered = set()
+        for case in cases:
+            require(type(case) is list and len(case) == 3, "case is (constructor fields body)")
+            c = case[0]
+            require(type(c) is Sym and c in self.constructors[sort] and c not in covered,
+                    "unknown or duplicate constructor case")
+            covered.add(c)
+        require(covered == set(self.constructors[sort]), "cases must cover every constructor")
+        return cases
+
+    def case_variables(self, constructor, names, outer):
+        sorts, _ = self.signature[constructor]
+        require(type(names) is list and len(names) == len(sorts), "constructor field count")
+        env = {}
+        for name, sort in zip(names, sorts):
+            require(type(name) is Sym and name not in outer and name not in env,
+                    "constructor field variables must be fresh")
+            env[name] = self.intern("var", name, (), sort)
+        return env
 
     def declare(self, decl):
         require(type(decl) is list and len(decl) == 3, "symbol is (name argument-sorts result)")
@@ -187,21 +226,19 @@ class Kernel:
     def unfold(self, term):
         tag, f, args, _, _ = self.nodes[term]
         require(tag == "app" and f in self.definitions, "unfold needs a defined function")
-        params, k, base, step = self.definitions[f]
+        params, cases = self.definitions[f]
         head = self.nodes[args[0]]
-        require(head[0] == "app" and head[1] in ("zero", "succ"),
-                "unfold needs a zero or successor counter")
+        require(head[0] == "app" and head[1] in cases,
+                "unfold needs a visible constructor in its first argument")
+        fields, body = cases[head[1]]
         mapping = dict(zip(params, args[1:]))
-        body = base
-        if head[1] == "succ":
-            mapping[k] = head[2][0]
-            body = step
+        mapping.update(zip(fields, head[2]))
         return term, self.substitute(body, mapping)
 
     def block(self, steps, env, ih=None):
         """Each step infers an equation. Only backwards references exist.
-        ih is (generalized parameters, equation) and exists only in the
-        induction step; its counter is fixed, never substitutable.
+        ih maps recursive field names to (generalized parameters, equation)
+        inside an induction case. Each recursive field is fixed.
         """
         require(type(steps) is list and steps, "proof block must contain steps")
         proved = []
@@ -240,7 +277,9 @@ class Kernel:
                 eq = self.instance(self.lemmas[i], args[1:], env)
             elif rule == "ih":
                 require(ih is not None, "induction hypothesis outside step")
-                eq = self.instance(ih, args, env)
+                require(args and type(args[0]) is Sym and args[0] in ih,
+                        "induction hypothesis needs a recursive field of this case")
+                eq = self.instance(ih[args[0]], args[1:], env)
             else:
                 raise Reject(f"unknown rule or wrong arity: {rule}")
             proved.append(eq)
@@ -262,25 +301,23 @@ class Kernel:
         if form[0] == "derive" and len(form) == 2:
             require(self.block(form[1], env) == conclusion,
                     "proof concludes a different equation")
-        elif form[0] == "induct" and len(form) == 5:
-            _, n, pred, base, step = form
-            require(type(n) is Sym and n in env and self.nodes[env[n]][3] == "Nat",
-                    "induction variable must be a declared Nat")
-            require(type(pred) is Sym and pred not in env, "induction predecessor must be fresh")
-            tail = {v: t for v, t in env.items() if v != n}
-            zero = self.app(Sym("zero"), [])
-            p = self.intern("var", pred, (), Sym("Nat"))
-            successor = self.app(Sym("succ"), [p])
-            expected_base = tuple(self.substitute(t, {env[n]: zero}) for t in conclusion)
-            require(self.block(base, tail) == expected_base,
-                    "induction base proves a different equation")
-            hypothesis = tuple(self.substitute(t, {env[n]: p}) for t in conclusion)
-            expected_step = tuple(self.substitute(t, {env[n]: successor}) for t in conclusion)
-            ih = tuple(tail.values()), hypothesis
-            step_env = dict(tail)
-            step_env[pred] = p
-            require(self.block(step, step_env, ih) == expected_step,
-                    "induction step proves a different equation")
+        elif form[0] == "induct" and len(form) == 3:
+            _, subject, cases = form
+            require(type(subject) is Sym and subject in env, "induction variable must be declared")
+            sort = self.nodes[env[subject]][3]
+            tail = {v: t for v, t in env.items() if v != subject}
+            for constructor, fields, steps in self.cases(cases, sort):
+                local = self.case_variables(constructor, fields, env)
+                instance = self.app(constructor, list(local.values()))
+                expected = tuple(self.substitute(t, {env[subject]: instance}) for t in conclusion)
+                hypotheses = {
+                    name: (tuple(tail.values()),
+                           tuple(self.substitute(t, {env[subject]: i}) for t in conclusion))
+                    for name, i in local.items() if self.nodes[i][3] == sort}
+                case_env = dict(tail)
+                case_env.update(local)
+                require(self.block(steps, case_env, hypotheses) == expected,
+                        f"induction case {constructor} proves a different equation")
         else:
             raise Reject("expected derive or induct")
         return tuple(env.values()), conclusion

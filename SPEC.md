@@ -164,11 +164,11 @@ behind stable interfaces and changes exactly the hashes that depend on it.
 
 ### 4.1 One logic
 
-The initial proof-object kernel uses sorted equational logic with natural-number
-induction. `KERNEL.md` specifies its current format, rules, semantics, and resource
+The proof-object kernel uses sorted equational logic with structural induction over
+finite constructor-built data, including naturals and bit strings. `KERNEL.md` specifies its current format, rules, semantics, and resource
 limits; `ode/kernel.py` implements it. Checked theorems include loop batching and
-chain splitting for arbitrary iteration counts. Definitions must visibly decrease a
-natural counter. Lemmas become usable only after their complete derivations check;
+chain splitting for arbitrary iteration counts, and XOR cancellation for every finite
+bit-string width. Definitions must visibly decrease their structural argument. Lemmas become usable only after their complete derivations check;
 proofs introduce no axioms, evaluator shortcuts, or solver verdicts.
 
 The goal is one logical foundation for program certificates. Language and ISA semantics
@@ -417,7 +417,7 @@ has the criterion that will close it.
 3. **Memory management above the machine layer.** Regions per vat, garbage collection,
    or capability-confined manual memory with proofs. *Criterion:* the milestone's glue
    code, measured; kernels already live without this choice.
-4. **The next logical fragment.** The initial kernel covers equations and natural
+4. **The next logical fragment.** The kernel covers equations and structural
    induction, with sorts checked directly. *Criterion:* extend it for a specific
    refinement obligation, with semantics and a soundness argument. Completeness
    results for matching logic do not establish completeness of this different calculus.

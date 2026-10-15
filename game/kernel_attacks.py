@@ -30,25 +30,25 @@ def cases():
     for name in names:
         theory, goal, proof = copy.deepcopy(original)
         if name == 'no-base':
-            proof[4][3] = [parse('(refl s)')]
+            proof[4][2][0][2] = [parse('(refl s)')]
         elif name == 'no-step':
-            proof[4][4] = [parse('(refl s)')]
+            proof[4][2][1][2] = [parse('(refl s)')]
         elif name == 'use-hypothesis-in-base':
-            proof[4][3] = [parse('(ih s m i)')]
+            proof[4][2][0][2] = [parse('(ih s m i)')]
         elif name == 'capture-predecessor':
-            proof[4][2] = Sym('i')
+            proof[4][2][1][1][0] = Sym('i')
         elif name == 'generalize-predecessor':
-            proof[4][4][9] = parse('(ih (succ k) s m i)')
+            proof[4][2][1][2][9] = parse('(ih (succ k) s m i)')
         elif name == 'self-reference':
-            proof[4][4][-1] = parse('(trans 13 12)')
+            proof[4][2][1][2][-1] = parse('(trans 13 12)')
         elif name == 'oracle':
-            proof[4][4][-1] = [Sym('oracle'), goal[4]]
+            proof[4][2][1][2][-1] = [Sym('oracle'), goal[4]]
         elif 'wrong-goal' in name or name == 'different-goal':
             goal[4][2][1] = parse('(succ n)')
         elif 'wrong-stride' in name or name == 'different-theory':
-            theory[4][2][4][1][-1] = parse('(succ i)')
+            theory[4][2][3][1][2][-1] = parse('(succ i)')
         elif name == 'nondecreasing-definition':
-            theory[4][0][4][1] = parse('(double (succ k))')
+            theory[4][0][3][1][2] = parse('(double (succ k))')
         if name.startswith('honestly-rehashed') or name == 'nondecreasing-definition':
             goal[2] = hash_of(theory)
             proof[2] = hash_of(goal)
@@ -69,6 +69,25 @@ def cases():
             proof[3].append(parse('(lemma () (eq (zero) (succ (zero))) (derive ((refl (zero)))))'))
         else:
             proof[4] = parse('(derive ((lemma 0 a b)))')
+        yield name, (theory, goal, proof), False
+
+    bits = [parse((directory / 'bits.theory.sexp').read_bytes()),
+            parse((directory / 'xor-cancel.goal.sexp').read_bytes()),
+            parse((directory / 'xor-cancel.proof.sexp').read_bytes())]
+    yield 'honest-bitstring-induction', bits, True
+    for name in ('omitted-constructor-case', 'hypothesis-for-a-nonrecursive-field',
+                 'wrong-bit-xor-definition', 'recursion-on-parent'):
+        theory, goal, proof = copy.deepcopy(bits)
+        if name == 'omitted-constructor-case':
+            del proof[4][2][0]
+        elif name == 'hypothesis-for-a-nonrecursive-field':
+            proof[4][2][1][2][9] = parse('(ih h)')
+        elif name == 'wrong-bit-xor-definition':
+            theory[4][1][3][1][2] = Sym('b')
+        else:
+            theory[4][5][3][1][2] = parse('(xor-bits (bit h t) ys)')
+        goal[2] = hash_of(theory)
+        proof[2] = hash_of(goal)
         yield name, (theory, goal, proof), False
 
 

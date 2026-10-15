@@ -1,0 +1,1 @@
+(goal 3 #25ab4bb9fcb61ffb55d77d54d6642105cdcb5628a03fb8479233ff0a593d9043 ((x Bits)) (eq (width (xor-bits x x)) (width x)))

@@ -1,6 +1,5 @@
-; Addition on mathematical natural numbers. These are defining equations,
-; not algebraic axioms. The kernel checks counter-decreasing recursion.
-(theory 2 () ()
+; Addition on mathematical natural numbers, defined by structural recursion.
+(theory 3 () ()
   ((add ((a Nat) (b Nat)) Nat
-     b
-     (k (succ (add k b))))))
+     ((zero () b)
+      (succ (k) (succ (add k b)))))))

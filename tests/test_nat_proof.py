@@ -33,8 +33,8 @@ class LemmaTest(unittest.TestCase):
         t = theory()
         lemmas = arithmetic_lemmas()
         for i, lemma in enumerate(lemmas):
-            g = [Sym('goal'), 2, hash_of(t), lemma[1], lemma[2]]
-            p = [Sym('proof'), 2, hash_of(g), lemmas[:i], lemma[3]]
+            g = [Sym('goal'), 3, hash_of(t), lemma[1], lemma[2]]
+            p = [Sym('proof'), 3, hash_of(g), lemmas[:i], lemma[3]]
             with self.subTest(index=i):
                 verify(t, g, p)
 
@@ -77,7 +77,7 @@ class LemmaTest(unittest.TestCase):
 
     def test_changed_definition_with_honest_rehashing(self):
         t, g, p = bundle()
-        t[4][0][3] = parse('(succ b)')  # false zero equation for ordinary addition
+        t[4][0][3][0][2] = parse('(succ b)')  # false zero equation for ordinary addition
         g[2] = hash_of(t)
         p[2] = hash_of(g)
         with self.assertRaises(Reject):

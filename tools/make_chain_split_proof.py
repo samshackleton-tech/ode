@@ -10,7 +10,7 @@ from ode.nat_proof import arithmetic_lemmas
 
 
 def artifacts(theory):
-    goal = parse(f'''(goal 2 #{hash_of(theory).hex()}
+    goal = parse(f'''(goal 3 #{hash_of(theory).hex()}
       ((n Nat) (k Nat) (s State) (m Blocks) (i Nat))
       (eq (chain (add n k) s m i)
           (chain k (chain n s m i) m (add n i))))''')
@@ -28,7 +28,7 @@ def artifacts(theory):
       (cong chain 0 1 2 3)
       (unfold chain (succ (add p k)) s m i)
       (trans 4 5)
-      (ih k {first} m (succ i))
+      (ih p k {first} m (succ i))
       (trans 6 7)
       (refl k)
       (refl (chain p {first} m (succ i)))
@@ -41,8 +41,8 @@ def artifacts(theory):
       (sym 16) (trans 13 17))'''
     # Both arithmetic lemmas are proved anew in this theory. Equality of
     # textual function names alone grants no import permission.
-    proof = [Sym('proof'), 2, hash_of(goal), arithmetic_lemmas()[:2],
-             parse(f'(induct n p {base} {step})')]
+    proof = [Sym('proof'), 3, hash_of(goal), arithmetic_lemmas()[:2],
+             parse(f'(induct n ((zero () {base}) (succ (p) {step})))')]
     return goal, proof
 
 

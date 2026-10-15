@@ -32,9 +32,9 @@ def rebind(theory, goal, proof):
 
 
 def simple(equation, body, variables="((n Nat))"):
-    theory = parse("(theory 2 () () ())")
-    goal = parse(f"(goal 2 #{hash_of(theory).hex()} {variables} {equation})")
-    proof = parse(f"(proof 2 #{hash_of(goal).hex()} () {body})")
+    theory = parse("(theory 3 () () ())")
+    goal = parse(f"(goal 3 #{hash_of(theory).hex()} {variables} {equation})")
+    proof = parse(f"(proof 3 #{hash_of(goal).hex()} () {body})")
     return theory, goal, proof
 
 
@@ -61,7 +61,7 @@ class KernelTest(unittest.TestCase):
 
     def test_induction_on_a_goal_with_no_other_variables(self):
         verify(*simple("(eq n n)",
-                       "(induct n k ((refl (zero))) ((ih) (cong succ 0)))"))
+                       "(induct n ((zero () ((refl (zero)))) (succ (k) ((ih k) (cong succ 0)))))"))
 
     def test_false_equation_rejected_even_with_an_honest_hash(self):
         args = simple("(eq (zero) (succ (zero)))", "(derive ((refl (zero))))", "()")
@@ -82,39 +82,40 @@ class KernelTest(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(Reject):
                 verify(*simple("(eq n n)", body))
         theory, goal, proof = objects()
-        proof[4][4][1] = parse("(refl (succ s))")  # s is State, not Nat
+        proof[4][2][1][2][1] = parse("(refl (succ s))")  # s is State, not Nat
         with self.assertRaisesRegex(Reject, "sort mismatch"):
             verify(theory, goal, proof)
 
     def test_hypothesis_is_available_only_in_the_step(self):
-        for body in ("(derive ((ih)))", "(induct n k ((ih)) ((refl (succ k))))"):
-            with self.subTest(body=body), self.assertRaisesRegex(Reject, "outside step"):
+        for body in ("(derive ((ih)))", "(induct n ((zero () ((ih k))) (succ (k) ((refl (succ k))))))"):
+            with self.subTest(body=body), self.assertRaisesRegex(Reject, "induction hypothesis"):
                 verify(*simple("(eq n n)", body))
 
     def test_induction_must_check_both_exact_premises(self):
-        for phase in (3, 4):
+        for phase in (0, 1):
             theory, goal, proof = objects()
-            proof[4][phase] = [parse("(refl s)")]
+            proof[4][2][phase][2] = [parse("(refl s)")]
             with self.subTest(phase=phase), self.assertRaisesRegex(Reject, "different equation"):
                 verify(theory, goal, proof)
 
     def test_predecessor_must_be_fresh_and_nat(self):
         theory, goal, proof = objects()
-        proof[4][2] = Sym("s")
+        proof[4][2][1][1][0] = Sym("s")
         with self.assertRaisesRegex(Reject, "fresh"):
             verify(theory, goal, proof)
-        proof[4][1:3] = [Sym("s"), Sym("k")]
-        with self.assertRaisesRegex(Reject, "Nat"):
+        proof[4][1] = Sym("s")
+        proof[4][2][1][1][0] = Sym("k")
+        with self.assertRaisesRegex(Reject, "datatype"):
             verify(theory, goal, proof)
 
     def test_current_counter_cannot_be_used_as_hypothesis(self):
         theory, goal, proof = objects()
         # Supplying a counter to IH attempts to generalize k: IH only accepts
         # (s,m,i), at the FIXED predecessor k.
-        proof[4][4][9] = parse("(ih (succ k) s m i)")
-        with self.assertRaisesRegex(Reject, "argument count"):
+        proof[4][2][1][2][9] = parse("(ih (succ k) s m i)")
+        with self.assertRaisesRegex(Reject, "recursive field"):
             verify(theory, goal, proof)
-        proof[4][4][9] = parse("(ih s m n)")  # n is out of scope in the step
+        proof[4][2][1][2][9] = parse("(ih k s m n)")  # n is out of scope in the step
         with self.assertRaisesRegex(Reject, "unbound variable n"):
             verify(theory, goal, proof)
 
@@ -132,21 +133,21 @@ class KernelTest(unittest.TestCase):
     def test_no_assumed_fact_or_unchecked_evaluator_rule(self):
         for rule in ("axiom", "sorry", "assume", "eval", "oracle", "admit"):
             theory, goal, proof = objects()
-            proof[4][4][-1] = [Sym(rule), goal[4]]
+            proof[4][2][1][2][-1] = [Sym(rule), goal[4]]
             with self.subTest(rule=rule), self.assertRaisesRegex(Reject, "unknown rule"):
                 verify(theory, goal, proof)
 
     def test_no_nondecreasing_recursive_definition(self):
         for body in ("(double (succ k))", "(double (double k))"):
             theory, goal, proof = objects()
-            theory[4][0][4][1] = parse(body)
+            theory[4][0][3][1][2] = parse(body)
             with self.subTest(body=body), self.assertRaisesRegex(Reject, "does not decrease"):
                 verify(*rebind(theory, goal, proof))
 
     def test_base_case_cannot_recurse_and_forward_calls_are_unknown(self):
         for body in ("(double (zero))", "(chain (zero) s m i)"):
             theory, goal, proof = objects()
-            theory[4][0][3] = parse(body)
+            theory[4][0][3][0][2] = parse(body)
             with self.subTest(body=body), self.assertRaises(Reject):
                 verify(*rebind(theory, goal, proof))
 
@@ -160,7 +161,7 @@ class KernelTest(unittest.TestCase):
             elif mutation == "duplicate-sort":
                 theory[2].append(Sym("Nat"))
             else:
-                theory[4][1][3] = Sym("outsider")
+                theory[4][1][3][0][2] = Sym("outsider")
             with self.subTest(mutation=mutation), self.assertRaises(Reject):
                 verify(*rebind(theory, goal, proof))
 
@@ -201,11 +202,11 @@ class KernelTest(unittest.TestCase):
         for mutant in ("skip", "count", "state", "goal"):
             theory, goal, proof = objects()
             if mutant == "skip":
-                theory[4][2][4][1][-1] = parse("(succ i)")
+                theory[4][2][3][1][2][-1] = parse("(succ i)")
             elif mutant == "count":
-                theory[4][0][4][1] = parse("(succ (double k))")
+                theory[4][0][3][1][2] = parse("(succ (double k))")
             elif mutant == "state":
-                theory[4][2][4][1][2] = Sym("s")
+                theory[4][2][3][1][2][2] = Sym("s")
             else:
                 goal[4][2][1] = parse("(succ n)")
             with self.subTest(mutant=mutant), self.assertRaises(Reject):
@@ -214,7 +215,7 @@ class KernelTest(unittest.TestCase):
     def test_sharing_avoids_exponential_tree_expansion(self):
         # Each congruence doubles the *unfolded* expression size. The kernel
         # works on a shared DAG, so 50 doublings remain 51 term nodes.
-        theory = parse("(theory 2 () ((f (Nat Nat) Nat)) ())")
+        theory = parse("(theory 3 () ((f (Nat Nat) Nat)) ())")
         k = Kernel(DEFAULT_WORK)
         k.load_theory(theory)
         env = k.parameters(parse("((n Nat))"))
@@ -259,7 +260,7 @@ class KernelTest(unittest.TestCase):
         self.assertIn("ACCEPT", p.stdout)
         with tempfile.TemporaryDirectory() as d:
             proof = objects()[2]
-            proof[4][4][-1] = parse("(refl s)")
+            proof[4][2][1][2][-1] = parse("(refl s)")
             path = Path(d) / "proof.sexp"
             path.write_bytes(canonical_bytes(proof))
             p = subprocess.run(cmd + paths[:2] + [str(path)], cwd=ROOT,
