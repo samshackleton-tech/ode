@@ -398,8 +398,8 @@ pypy3 -m ode.proof_cli examples/proofs/register.theory.sexp \
 The theorem says the 14 register operations of BLAKE3 G produce its four
 mixing equations and preserve the two message registers, for every initial
 six-word state. The expected equations are written separately from the
-instruction list. Definition reduction produces the proof: 700 inference
-steps, zero supporting lemmas, and 67,377 work units. The same reduction
+instruction list. The proof composes two seven-instruction halves:
+826 inference steps, four supporting lemmas, and 52,199 work units. The same reduction
 producer handles closed arithmetic and symbolic register execution;
 variables and arithmetic applications with symbolic structural arguments
 remain terms until a constructor case is available.
@@ -411,6 +411,15 @@ instruction order, and corruption of a preserved register are rejected.
 The expected equations are also cross-checked against extraction from
 `examples/blake3-g.sexp`; this source-extraction correspondence is a test,
 not a kernel theorem.
+
+Program composition itself has a 20-step induction proof:
+`run(append-program(p,q),s) = run(q,run(p,s))`, for all programs and
+states. `tools/make_register_proof.py` emits this theorem as
+`register-compose.goal.sexp` and `register-compose.proof.sexp`, alongside
+the G execution proof. The tests check both the composed G proof and a
+direct definition-reduction proof against exactly the same goal. The
+composed proof has fewer bytes and uses fewer kernel work units; these
+are deterministic proof costs, not runtime timing measurements.
 
 This is a theorem about the declared abstract machine. It has no memory,
 flags, uninitialized registers, byte decoder, or native calling convention.

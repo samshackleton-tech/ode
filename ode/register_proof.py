@@ -44,6 +44,8 @@ def theory(bit_theory):
     t[4].append([var('step'),parse('((i Instruction) (s State))'),var('State'),cases])
     t[4].append(parse('''(run ((p Program) (s State)) State
         ((halt () s) (next (i tail) (run tail (step i s)))))'''))
+    t[4].append(parse('''(append-program ((p Program) (q Program)) Program
+        ((halt () q) (next (i tail) (next i (append-program tail q)))))'''))
     return t
 
 
@@ -89,14 +91,77 @@ def g_instructions():
 
 
 def g_state():
-    """Owner-readable equations for G, written independently of the instruction list."""
+    """G's two half equations, independent of the instruction list."""
+    from .ground_proof import substitute
+    first=half_state('x',16,12)
+    return substitute(half_state('y',8,7),dict(zip(map(var,REGISTERS),first[1:])))
+
+
+def composition_artifacts(t):
+    """run(append(p,q),s) = run(q,run(p,s)), for all programs and states."""
+    params=parse('((p Program) (q Program) (s State))')
+    eq=parse('(eq (run (append-program p q) s) (run q (run p s)))')
+    derivation=parse('''(induct p (
+      (halt () (
+        (unfold append-program (halt) q)
+        (refl s)
+        (cong run 0 1)
+        (refl q)
+        (unfold run (halt) s)
+        (cong run 3 4)
+        (sym 5)
+        (trans 2 6)))
+      (next (i tail) (
+        (unfold append-program (next i tail) q)
+        (refl s)
+        (cong run 0 1)
+        (unfold run (next i (append-program tail q)) s)
+        (trans 2 3)
+        (ih tail q (step i s))
+        (trans 4 5)
+        (refl q)
+        (unfold run (next i tail) s)
+        (cong run 7 8)
+        (sym 9)
+        (trans 6 10)))))''')
+    goal=[var('goal'),3,hash_of(t),params,eq]
+    proof=[var('proof'),3,hash_of(goal),[],derivation]
+    return goal,proof
+
+
+def half_state(message, first_rotation, second_rotation):
+    """The equations of one G half, independent of register-step semantics."""
+    assert message in ('x','y') and 0 <= first_rotation < 32 and 0 <= second_rotation < 32
     a,b,c,d,x,y=map(var,REGISTERS)
-    a=app('add32',app('add32',a,b),x)
-    d=app('ror-16',app('xor32',d,a))
+    a=app('add32',app('add32',a,b),var(message))
+    d=app(f'ror-{first_rotation}',app('xor32',d,a))
     c=app('add32',c,d)
-    b=app('ror-12',app('xor32',b,c))
-    a=app('add32',app('add32',a,b),y)
-    d=app('ror-8',app('xor32',d,a))
-    c=app('add32',c,d)
-    b=app('ror-7',app('xor32',b,c))
+    b=app(f'ror-{second_rotation}',app('xor32',b,c))
     return app('state',a,b,c,d,x,y)
+
+
+def composed_g_artifacts(t):
+    """Prove G by two seven-instruction halves and the general composition law."""
+    from .ground_proof import prove as prove_ground
+    from .proof_library import Library
+    from .xor32_proof import Proof
+    library=Library(hash_of(t))
+    composition=library.include(*composition_artifacts(t))
+    instructions=g_instructions()
+    first_program,second_program=program(instructions[:7]),program(instructions[7:])
+    first_state=half_state('x',16,12)
+    second_state=half_state('y',8,7)
+    first=library.include(*prove_execution(t,instructions[:7],first_state))
+    second=library.include(*prove_execution(t,instructions[7:],second_state))
+    appended=app('append-program',first_program,second_program)
+    concatenation=library.include(*prove_ground(t,appended,program(instructions)))
+    p=Proof()
+    start=p.sym(p.cong('run',p.lemma(concatenation),p.refl(initial_state())))
+    join=p.lemma(composition,first_program,second_program,initial_state())
+    middle=p.cong('run',p.refl(second_program),p.lemma(first,*initial_state()[1:]))
+    end=p.lemma(second,*first_state[1:])
+    p.trans(start,join,middle,end)
+    goal=[var('goal'),3,hash_of(t),[[var(r),var('Word32')] for r in REGISTERS],
+          equation(app('run',program(instructions),initial_state()),g_state())]
+    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+    return goal,proof

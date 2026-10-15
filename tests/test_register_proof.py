@@ -7,7 +7,7 @@ import unittest
 from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.register_proof import (REGISTERS,theory as make_theory,prove_execution,
-                                g_instructions,g_state,initial_state)
+                                g_instructions,g_state,initial_state,composition_artifacts,composed_g_artifacts)
 from ode.xor32_proof import app,var
 
 EXAMPLES=Path(__file__).resolve().parent.parent/'examples'/'proofs'
@@ -24,11 +24,42 @@ class RegisterProofTest(unittest.TestCase):
         t,g,p=bundle()
         self.assertEqual(canonical_bytes(t),canonical_bytes(make_theory(
             parse((EXAMPLES/'bits.theory.sexp').read_bytes()))))
-        for expected,actual in zip((g,p),prove_execution(t,g_instructions(),g_state())):
+        for expected,actual in zip((g,p),composed_g_artifacts(t)):
             self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
         result=verify(t,g,p)
         self.assertLess(result['work'],100000)
-        self.assertEqual(result['lemmas'],0)
+        self.assertEqual(result['lemmas'],4)
+
+    def test_composition_theorem_reproduces(self):
+        t,_,_=bundle()
+        g,p=[parse((EXAMPLES/f'register-compose.{k}.sexp').read_bytes()) for k in ('goal','proof')]
+        for expected,actual in zip((g,p),composition_artifacts(t)):
+            self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
+        result=verify(t,g,p)
+        self.assertEqual(result['rules'],20)
+
+    def test_composed_and_direct_execution_prove_same_goal(self):
+        t,g,p=bundle()
+        direct_goal,direct=prove_execution(t,g_instructions(),g_state())
+        self.assertEqual(g,direct_goal)
+        verify(t,direct_goal,direct)
+        self.assertLess(len(canonical_bytes(p)),len(canonical_bytes(direct)))
+        self.assertLess(verify(t,g,p)['work'],verify(t,g,direct)['work'])
+
+    def test_reversing_composition_order_rejected(self):
+        t,_,_=bundle()
+        g,p=composition_artifacts(t)
+        g[4][2]=app('run',var('p'),app('run',var('q'),var('s')))
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+    def test_missing_composition_induction_case_rejected(self):
+        t,_,_=bundle()
+        g,p=composition_artifacts(t)
+        p[4][2].pop()
+        with self.assertRaises(Reject):
+            verify(t,g,p)
 
     def test_every_binary_register_alias_pattern(self):
         t,_,_=bundle()

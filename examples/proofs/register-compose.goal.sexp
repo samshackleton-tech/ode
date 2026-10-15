@@ -1,0 +1,1 @@
+(goal 3 #65bc0e34b558f303c788da43a7102b7159de603bb590663985b1d3eafb260061 ((p Program) (q Program) (s State)) (eq (run (append-program p q) s) (run q (run p s))))
