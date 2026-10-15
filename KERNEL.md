@@ -125,7 +125,8 @@ theory. Its equations fully specify a finite
 extensionality via projections, and the word-level identity,
 commutativity, associativity, and cancellation laws. It then emits
 normalization proofs for XOR expressions by using those proved lemmas.
-`export_normalizer` runs the actual `ode.check.Dag.xor` normalizer and
+The single entry point, `ode.arx_proof.export_normalizer`, runs the actual
+`ode.check.Dag` normalizer and
 constructs a kernel proof of its proposed result. Both that normalizer
 and this proof producer sit outside the kernel's reliance set.
 
@@ -136,8 +137,8 @@ pypy3 -m ode.proof_cli examples/proofs/xor32.theory.sexp \
 # xor32(x, xor32(y, x)) = y
 ```
 
-This checks all 47 supporting lemmas and the final normalization in
-2,231 inference steps, using 936 shared terms. Supported exports are
+This checks all 48 supporting lemmas and the final normalization in
+2,245 inference steps, using 938 shared terms. Supported exports are
 variables, explicit Word32 literals, and XOR expressions: flattening,
 reordering, zero elimination, cancellation, and constant folding. Constant
 folds emit constructor-evaluation proofs from the same theory.
@@ -164,8 +165,8 @@ The rotation export uses the same Word32/Bit definitions. `ror-0` through
 least significant bit, and output field `i` reads input `(i+n) mod 32`.
 These are immediate rotations, as used by BLAKE3's compression.
 
-`ode/rotate32_proof.py` exports the existing `Dag.rotr`/`Dag.xor` result
-and proves it via bit projections. It generates projection lemmas only
+`ode/rotate32_proof.py` supplies bit-projection proofs for the common
+exporter's rotation rewrites. It generates projection lemmas only
 for counts used in that proof, and reuses the XOR proof algorithm at the
 Boolean level. No kernel rule, oracle, or arithmetic axiom is added.
 
@@ -182,7 +183,7 @@ ror16(x XOR y) XOR (ror8(ror8(x)) XOR ror16(y)) = zero32
 ```
 
 The result comes from the existing normalizer; the kernel checks all
-107 lemmas and 2,551 inference steps against the bit definitions.
+112 lemmas and 4,185 inference steps against the bit definitions.
 Exports support variables, explicit Word32 literals, XOR, and immediate
 rotations. Literal words project to their Boolean fields, so constants
 inside symbolic expressions use the same parity proof. Addition and
@@ -266,7 +267,7 @@ export is described below; native instruction refinement remains open.
 
 ## Symbolic addition exports
 
-`ode/add_normalizer_proof.py` exports actual `Dag.add` results for
+`ode/add_normalizer_proof.py` supplies the common exporter's proofs for
 expressions built from variables, explicit Word32 literals, and `add32`.
 It proves flattening, reordering, zero elimination, and constant folding using the ripple-carry
 commutativity, identity, and associativity theorems. Repeated operands
@@ -284,7 +285,7 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
 ```
 
 The example exports `(x+y)+(z+x)` as `x+(x+(y+z))`, with all additions
-modulo 2^32. Its 506 lemmas and 14,132 inference steps check within the
+modulo 2^32. Its 508 lemmas and 14,156 inference steps check within the
 existing kernel limits. Tests include repeated operands, zero, random
 expression trees, a deliberately broken `Dag.add`, and producer-free
 verification in a fresh process. Mixed constant tests include modular
@@ -298,7 +299,7 @@ same evaluation producer as the closed-expression export below.
 
 ## Concrete arithmetic exports
 
-`ode/constant_proof.py` exports the existing normalizer's concrete
+The common exporter also handles the existing normalizer's concrete
 Word32 addition, XOR, and immediate-rotation results. Nonzero words are
 explicit 32-bit constructors. `ode/ground_proof.py` evaluates the
 owner's definitions while emitting unfolding and congruence steps;
@@ -312,7 +313,7 @@ pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
 ```
 
 The example checks `(0xffffffff + 1) XOR 0xdeadbeef = 0xdeadbeef`
-with modular overflow: 925 inference steps and no supporting lemmas.
+with modular overflow: 941 inference steps and two ground-evaluation lemmas.
 The theory is the existing addition theory. Rotation exports use the
 rotation theory. Each supplied theory must define the operations used.
 
@@ -340,9 +341,12 @@ proofs; enumerating Word32 values is outside this producer's contract.
 
 ## Composed arithmetic expressions
 
-`ode/arx_proof.py` combines addition, rotation, and XOR (often abbreviated
-ARX) in one expression and one theory. The theory contains the same bit,
-Word32, carry, and rotation definitions as the individual fragments; the
+`ode.arx_proof.export_normalizer` is the single exporter for addition,
+rotation, and XOR (often abbreviated ARX), separately or combined in one
+expression. Its supplied theory must define every operation used. Closed
+local rewrites use ground evaluation; rewrites with symbolic parameters
+use the corresponding algebraic proof producer. The combined theory
+contains the same bit, Word32, carry, and rotation definitions as the individual fragments; the
 producer checks that their shared definitions agree when assembling it.
 
 For each operation, the existing `Dag` proposes a result. The producer

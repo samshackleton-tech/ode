@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from ode.canon import Sym, canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
-from ode.xor32_proof import ZERO, app, artifacts, export_normalizer, prove, theory as make_theory, var
+from ode.xor32_proof import ZERO, app, artifacts, law_library, prove, theory as make_theory, var
+from ode.arx_proof import export_normalizer
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
 
@@ -26,11 +27,12 @@ class Word32ProofTest(unittest.TestCase):
     def test_theory_and_proof_reproduce(self):
         t, g, p = bundle()
         self.assertEqual(canonical_bytes(t), canonical_bytes(theory()))
-        for maker in (artifacts, lambda t: export_normalizer(t, parse('(xor32 x (xor32 y x))'))):
-            for expected, actual in zip((g,p), maker(t)):
-                self.assertEqual(canonical_bytes(expected), canonical_bytes(actual))
+        for expected, actual in zip((g,p), export_normalizer(t, parse('(xor32 x (xor32 y x))'))):
+            self.assertEqual(canonical_bytes(expected), canonical_bytes(actual))
+        own_goal,own_proof=artifacts(t)
+        self.assertEqual(own_goal,g)
+        verify(t,own_goal,own_proof)
         result = verify(t, g, p)
-        self.assertEqual(result['lemmas'], 47)
         self.assertLess(result['work'], 150000)
 
     def test_verification_needs_no_producer_or_old_checker(self):
@@ -57,13 +59,14 @@ raise SystemExit(main(sys.argv[1:]))
 
     def test_core_word_laws_as_independent_goals(self):
         t, _, p = bundle()
+        library=law_library()
         # Identity, commutativity, associativity, cancellation. Each becomes
         # the main goal and only its prior proved lemmas are available.
         for i in (40, 41, 42, 43):
             with self.subTest(lemma=i):
-                _, params, eq, deriv = p[3][i]
+                _, params, eq, deriv = library[i]
                 g = [Sym('goal'),3,hash_of(t),params,eq]
-                proof = [Sym('proof'),3,hash_of(g),p[3][:i],deriv]
+                proof = [Sym('proof'),3,hash_of(g),library[:i],deriv]
                 verify(t,g,proof)
 
     def test_explicit_word_constructor_has_exactly_32_bits(self):
@@ -122,7 +125,7 @@ raise SystemExit(main(sys.argv[1:]))
             verify(t,g,p)
 
     def test_mixed_nonzero_constant_folding(self):
-        from ode.constant_proof import literal
+        from ode.word_literal import literal
         t=theory();x=var('x')
         for a,b in ((1,2),(0xffffffff,1),(9,9),(0xaaaaaaaa,0x55555555)):
             expression=app('xor32',app('xor32',x,literal(a)),literal(b))

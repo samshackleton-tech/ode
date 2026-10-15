@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
-from ode.constant_proof import export_normalizer, literal
+from ode.word_literal import literal
+from ode.arx_proof import export_normalizer
 from ode.ground_proof import prove
 from ode.xor32_proof import app, var
 
@@ -31,7 +32,7 @@ import importlib.abc
 import sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self,name,path=None,target=None):
-        if name in {'ode.check','ode.word','ode.native','ode.constant_proof',
+        if name in {'ode.check','ode.word','ode.native','ode.word_literal',
                     'ode.ground_proof','ode.xor32_proof','ode.rotate32_proof'}:
             raise ImportError(name)
 sys.meta_path.insert(0,Block())
@@ -105,7 +106,7 @@ raise SystemExit(main(sys.argv[1:]))
         for n in (-1,2**32,True):
             with self.assertRaises(AssertionError):
                 literal(n)
-        for term in (var('x'),app('word32'),app('word32',*[var('b')]*32)):
+        for term in (app('word32'),app('word32',*[var('b')]*32)):
             with self.assertRaises(AssertionError):
                 export_normalizer(theory(),term)
         with self.assertRaisesRegex(AssertionError,'constructor'):

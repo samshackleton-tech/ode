@@ -6,8 +6,8 @@ only the existing constructor, equality, and induction rules. The kernel
 never runs this producer's arithmetic on bit indices.
 """
 from .canon import Sym, hash_of
-from .xor32_proof import (ZERO, Normalizer, Proof, app, bit_lemmas, equation,
-                          theory as xor_theory, var, word_lemmas, xor_term)
+from .xor32_proof import (Normalizer, Proof, app, bit_lemmas, equation,
+                          theory as xor_theory, var, word_lemmas)
 
 
 BIT_LAWS = {'right': 1, 'comm': 3, 'assoc': 5, 'cancel': 6,
@@ -100,7 +100,7 @@ class Producer:
         """Prove a projection equal to a Boolean XOR expression."""
         p, at = self.p, f'bit-at-{i}'
         if isinstance(term,list) and term and term[0]=='word32':
-            from .constant_proof import word_value
+            from .word_literal import word_value
             word_value(term)  # Validate the exact constructor width and fields.
             return term[i+1], p.unfold(at,term)
         n = rotation_count(term)
@@ -136,44 +136,3 @@ def prove(t, parameters, left, right):
     goal = [var('goal'),3,hash_of(t),parameters,equation(left,right)]
     proof = [var('proof'),3,hash_of(goal),producer.lemmas,[var('derive'),p.steps]]
     return goal,proof
-
-
-def export_normalizer(t, expression):
-    """Prove an actual ode.check.Dag XOR/rotation-normalization result.
-    The old normalizer's result is only a proposal, never an assumption.
-    """
-    from .check import Dag
-    from .constant_proof import literal, word_value
-    dag, variables = Dag(), set()
-
-    def input_node(term):
-        if isinstance(term,Sym):
-            variables.add(term)
-            return dag.var(term)
-        if isinstance(term,list) and term and term[0]=='word32':
-            return dag.const(word_value(term))
-        n = rotation_count(term)
-        if n is not None:
-            return dag.rotr(input_node(term[1]),n)
-        if isinstance(term,list) and len(term)==3 and term[0]=='xor32':
-            return dag.xor(input_node(term[1]),input_node(term[2]))
-        raise ValueError('rotation/XOR export supports variables, Word32 literals, xor32, and ror-N')
-
-    def output_term(i):
-        node = dag.nodes[i]
-        if node[0]=='var':
-            return var(node[1])
-        if node[0]=='const':
-            return literal(node[1])
-        if node[0]=='xor':
-            atoms = [output_term(j) for j in node[1]]
-            if node[2]:
-                atoms.append(literal(node[2]))
-            return xor_term(atoms)
-        if node[0]=='rotr':
-            return app(f'ror-{node[2]}',output_term(node[1]))
-        raise ValueError('normalizer returned an unsupported rotation/XOR result')
-
-    result = output_term(input_node(expression))
-    parameters = [[v,var('Word32')] for v in sorted(variables)]
-    return prove(t,parameters,expression,result)

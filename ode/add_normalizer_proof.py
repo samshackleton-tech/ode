@@ -3,14 +3,13 @@
 Variables, literal Word32 constants, and add32: flattening, reordering,
 zero elimination, and constant folding. Multiplicity is preserved.
 """
-from .canon import Sym, hash_of
+from .canon import hash_of
 from .add32_proof import artifacts as commutativity, identity_artifacts
 from .add_associativity_proof import artifacts as associativity
 from .proof_library import Library
 from .proof_slice import slice_proof
-from .mixed_constant_proof import NormalizerWithConstants, is_word
-from .constant_proof import literal, word_value
-from .xor32_proof import ZERO, Proof, app, equation, operation_term, var
+from .mixed_constant_proof import NormalizerWithConstants
+from .xor32_proof import ZERO, Proof, app, equation, var
 
 
 def library(t):
@@ -44,35 +43,3 @@ def prove(t, parameters, left, right):
     goal = [var('goal'),3,hash_of(t),parameters,equation(left,right)]
     proof = [var('proof'),3,hash_of(goal),lib.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)
-
-
-def export_normalizer(t, expression):
-    from .check import Dag
-    dag, variables = Dag(), set()
-
-    def input_node(term):
-        if isinstance(term,Sym):
-            variables.add(term)
-            return dag.var(term)
-        if is_word(term):
-            return dag.const(word_value(term))
-        if isinstance(term,list) and len(term)==3 and term[0]=='add32':
-            return dag.add(input_node(term[1]),input_node(term[2]))
-        raise ValueError('symbolic addition export supports variables, Word32 literals, and add32')
-
-    def output_term(i):
-        node=dag.nodes[i]
-        if node[0]=='var':
-            return var(node[1])
-        if node[0]=='const':
-            return literal(node[1])
-        if node[0]=='add':
-            atoms = [output_term(j) for j in node[1]]
-            if node[2]:
-                atoms.append(literal(node[2]))
-            return operation_term('add32',ZERO,atoms)
-        raise ValueError('normalizer returned an unsupported addition result')
-
-    result = output_term(input_node(expression))
-    parameters = [[v,var('Word32')] for v in sorted(variables)]
-    return prove(t,parameters,expression,result)

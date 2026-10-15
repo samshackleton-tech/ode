@@ -6,7 +6,8 @@ import sys
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
 from ode.canon import canonical_bytes, parse
-from ode.rotate32_proof import export_normalizer, theory
+from ode.rotate32_proof import theory
+from ode.arx_proof import export_normalizer
 
 
 def main():

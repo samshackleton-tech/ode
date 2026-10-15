@@ -179,7 +179,8 @@ normalizer, and instruction models. The first bridges export XOR and immediate-r
 against explicit Word32 semantics (`ode/xor32_proof.py`, `ode/rotate32_proof.py`).
 A separate ripple-carry definition has checked commutativity, zero-identity,
 and associativity proofs (`ode/add32_proof.py`, `ode/add_associativity_proof.py`). Closed arithmetic expressions have evaluation-proof
-exports (`ode/constant_proof.py`). Symbolic addition flattening, reordering,
+exports through `ode.arx_proof.export_normalizer`, the single arithmetic
+export entry point. Symbolic addition flattening, reordering,
 zero elimination, and mixed constant folding have checked exports
 (`ode/add_normalizer_proof.py`). XOR and rotation exports also handle
 nonzero constants within symbolic expressions. A composed exporter

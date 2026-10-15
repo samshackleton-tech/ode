@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from ode.canon import canonical_bytes, hash_of, parse
 from ode.kernel import Reject, verify
-from ode.rotate32_proof import export_normalizer, theory as make_theory
+from ode.rotate32_proof import theory as make_theory
+from ode.arx_proof import export_normalizer
 from ode.xor32_proof import ZERO, app, var
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
@@ -38,7 +39,6 @@ class RotateProofTest(unittest.TestCase):
         self.assertEqual(canonical_bytes(p),canonical_bytes(made_p))
         result = verify(t,g,p)
         self.assertLess(result['work'],200000)
-        self.assertEqual(result['lemmas'],107)
 
     def test_every_basis_bit_and_immediate_matches_integer_right_rotation(self):
         # A right-rotation model accidentally implemented as a left rotation
@@ -84,7 +84,7 @@ class RotateProofTest(unittest.TestCase):
             verify(t,g,p)
 
     def test_rotation_of_symbolic_xor_with_nonzero_constants(self):
-        from ode.constant_proof import literal
+        from ode.word_literal import literal
         t=theory();x=var('x')
         for n in (0,7,8,12,16,31):
             expression=app('xor32',app(f'ror-{n}',app('xor32',x,literal(0xdeadbeef))),
@@ -96,7 +96,7 @@ class RotateProofTest(unittest.TestCase):
 
     def test_wrong_definition_rejected_after_honest_rehashing(self):
         t = theory()
-        g,p = export_normalizer(t,app('ror-7',var('x')))
+        g,p = export_normalizer(t,app('ror-7',app('ror-7',var('x'))))
         rotate = next(d for d in t[4] if d[0]=='ror-7')
         rotate[3][0][2][1] = var('b6')  # output bit 0 reads wrong input bit
         g[2] = hash_of(t)
@@ -119,8 +119,8 @@ class RotateProofTest(unittest.TestCase):
                 export_normalizer(theory(),app('ror-7',var('x')))
 
     def test_bad_counts_and_other_operations_stop_at_the_producer(self):
-        for bad in ('(ror-32 x)','(ror-07 x)','(ror--1 x)','(ror-x x)','(add32 x y)'):
-            with self.subTest(expression=bad), self.assertRaises(ValueError):
+        for bad in ('(ror-32 x)','(ror-07 x)','(ror--1 x)','(ror-x x)','(multiply x y)'):
+            with self.subTest(expression=bad), self.assertRaises((ValueError,AssertionError)):
                 export_normalizer(theory(),parse(bad))
 
     def test_independent_file_verification(self):

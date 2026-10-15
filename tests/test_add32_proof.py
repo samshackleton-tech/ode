@@ -8,7 +8,7 @@ from ode.kernel import Reject, verify
 from ode.add32_proof import artifacts, identity_artifacts, theory as make_theory
 from ode.xor32_proof import app, var
 from ode.ground_proof import prove as ground_proof
-from ode.constant_proof import literal
+from ode.word_literal import literal
 
 EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
 

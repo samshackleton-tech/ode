@@ -5,7 +5,8 @@ import sys
 ROOT=Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
 from ode.canon import canonical_bytes, parse
-from ode.constant_proof import export_normalizer, literal
+from ode.word_literal import literal
+from ode.arx_proof import export_normalizer
 from ode.xor32_proof import app
 
 

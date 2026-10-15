@@ -10,9 +10,10 @@ from .add32_proof import theory as addition_theory
 from .rotate32_proof import theory as rotation_theory,rotation_count,prove as prove_rotation
 from .add_normalizer_proof import prove as prove_addition
 from .xor32_proof import ZERO,Proof,app,equation,operation_term,prove as prove_xor,var
-from .constant_proof import literal,word_value
+from .word_literal import literal,word_value
 from .proof_library import Library
 from .proof_slice import slice_proof
+from .ground_proof import prove as prove_ground
 
 
 def theory(bit_theory):
@@ -118,7 +119,10 @@ def export_normalizer(t,expression):
                 result=index,first
             else:
                 params,left,right,args=abstract(normalized_input,normalized_output,operation)
-                goal,proof=maker(t,params,left,right)
+                if params:
+                    goal,proof=maker(t,params,left,right)
+                else:
+                    goal,proof=prove_ground(t,left,right)
                 theorem=library.include(goal,proof)
                 result=index,p.trans(first,p.lemma(theorem,*args))
         cache[key]=result
