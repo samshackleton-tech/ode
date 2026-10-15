@@ -50,8 +50,8 @@ def cases():
         elif name == 'nondecreasing-definition':
             theory[4][0][3][1][2] = parse('(double (succ k))')
         if name.startswith('honestly-rehashed') or name == 'nondecreasing-definition':
-            goal[2] = hash_of(theory)
-            proof[2] = hash_of(goal)
+            goal[2] = hash_of(theory, 'theory')
+            proof[2] = hash_of(goal, 'goal')
         yield name, (theory, goal, proof), False
 
     reuse = [parse((directory / f'nat-add.{k}.sexp').read_bytes())
@@ -86,8 +86,8 @@ def cases():
             theory[4][1][3][1][2] = Sym('b')
         else:
             theory[4][5][3][1][2] = parse('(xor-bits (bit h t) ys)')
-        goal[2] = hash_of(theory)
-        proof[2] = hash_of(goal)
+        goal[2] = hash_of(theory, 'theory')
+        proof[2] = hash_of(goal, 'goal')
         yield name, (theory, goal, proof), False
 
     word = [parse((directory / f'xor32.{k}.sexp').read_bytes())
@@ -97,12 +97,12 @@ def cases():
         theory, goal, proof = copy.deepcopy(word)
         if name == 'word32-wrong-selector':
             theory[4][33][3][0][2] = Sym('b0')
-            goal[2] = hash_of(theory)
+            goal[2] = hash_of(theory, 'theory')
         elif name == 'word32-lying-result':
             goal[4][2] = [Sym('word32')] + [[Sym('bit0')] for _ in range(32)]
         else:
             proof[4] = [Sym('derive'), [[Sym('normalize'), goal[4]]]]
-        proof[2] = hash_of(goal)
+        proof[2] = hash_of(goal, 'goal')
         yield name, (theory, goal, proof), False
 
     rotate = [parse((directory / f'rotate32.{k}.sexp').read_bytes())
@@ -113,12 +113,12 @@ def cases():
         if name == 'rotation-wrong-field':
             definition = next(d for d in theory[4] if d[0] == 'ror-8')
             definition[3][0][2][1] = Sym('b24')
-            goal[2] = hash_of(theory)
+            goal[2] = hash_of(theory, 'theory')
         elif name == 'rotation-wrong-count':
             goal[4][1][2][1][1][0] = Sym('ror-7')
         else:
             proof[4] = [Sym('derive'), [[Sym('rotate-congruence'), goal[4]]]]
-        proof[2] = hash_of(goal)
+        proof[2] = hash_of(goal, 'goal')
         yield name, (theory, goal, proof), False
 
     addition = [parse((directory / f'add32.{k}.sexp').read_bytes())
@@ -129,14 +129,14 @@ def cases():
         if name == 'addition-wrong-carry':
             definition = next(d for d in theory[4] if d[0] == 'carry-bit')
             definition[3][0][2] = Sym('b')
-            goal[2] = hash_of(theory)
+            goal[2] = hash_of(theory, 'theory')
         elif name == 'addition-wrong-stage':
             definition = next(d for d in theory[4] if d[0] == 'carry-16')
             definition[3][0][2][3][0] = Sym('carry-14')
-            goal[2] = hash_of(theory)
+            goal[2] = hash_of(theory, 'theory')
         else:
             goal[4][2] = Sym('x')
-        proof[2] = hash_of(goal)
+        proof[2] = hash_of(goal, 'goal')
         yield name, (theory, goal, proof), False
 
 

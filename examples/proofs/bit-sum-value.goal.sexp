@@ -1,0 +1,1 @@
+(goal 3 #2993c5e08cbca05db05f9469527d41ebe3b0d30d391dc5f62e8091d475e20eba ((columns Columns) (c Bit)) (eq (bits-value (add-columns columns c)) (add (bits-value (left-bits columns)) (add (bits-value (right-bits columns)) (bit-value c)))))

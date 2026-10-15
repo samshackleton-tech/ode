@@ -266,8 +266,38 @@ pypy3 -m ode.proof_cli examples/proofs/adder-value.theory.sexp \
 Tests confirm the shared definitions match exactly, pin the numeric values
 of both bit constructors, and reject changed carry semantics, a dropped
 input, or weighting the carry by one instead of two. This establishes the
-local conservation law; a full Word32 interpretation theorem must still
-lift it across all 32 columns and account for discarded carry-out.
+local conservation law. The following induction lifts it across arbitrary
+finite inputs; connecting it to Word32 and discarded carry-out remains open.
+
+## Numeric meaning of finite ripple carry
+
+`bit-sum-value` proves addition for arbitrary finite paired input bits,
+including carry-in and final carry. Each column contains one bit from each
+input, so their widths agree by construction. Bits are least-significant
+first; `bits-value` assigns each successive position twice the weight.
+
+```
+value(add-columns(columns, carry-in))
+  = value(left-bits(columns)) + value(right-bits(columns)) + value(carry-in)
+```
+
+The output includes one final carry bit, even when it is zero. Structural
+induction uses the full-adder conservation theorem and checked natural
+addition rearrangements. It covers every finite width with 35 supporting
+lemmas and 886 rules, using 16,490 checker work units. These counts measure
+proof cost, not runtime speed.
+
+```sh
+pypy3 tools/make_bit_sum_value_proof.py
+pypy3 -m ode.proof_cli examples/proofs/bit-sum-value.theory.sexp \
+  examples/proofs/bit-sum-value.goal.sexp examples/proofs/bit-sum-value.proof.sexp
+```
+
+Independent small integer sums check the definitions. Mutations reject a
+dropped final carry, an incorrect propagated carry, wrong positional weights,
+a replaced input, and a false goal. The remaining Word32 bridge must connect
+these lists to the fixed 32-field adder and account for truncation modulo
+2^32. This theorem makes no native instruction claim.
 
 ## Word32 addition associativity
 
