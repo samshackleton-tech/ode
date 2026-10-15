@@ -1,0 +1,134 @@
+"""Ripple-carry commutativity and ground semantic checks through the kernel."""
+from pathlib import Path
+import random
+import unittest
+
+from ode.canon import Sym, canonical_bytes, hash_of, parse
+from ode.kernel import Reject, verify
+from ode.add32_proof import artifacts, theory as make_theory
+from ode.xor32_proof import Proof, app, var
+
+EXAMPLES = Path(__file__).resolve().parent.parent / 'examples' / 'proofs'
+
+
+def bundle():
+    return [parse((EXAMPLES/f'add32.{k}.sexp').read_bytes()) for k in ('theory','goal','proof')]
+
+
+def literal(n):
+    return app('word32',*[app('bit1' if n & (1<<i) else 'bit0') for i in range(32)])
+
+
+def ground_proof(t, left, right):
+    """Test-side evaluator emits ordinary unfolding/congruence steps.
+
+    Its computed result is checked against a separately supplied goal;
+    evaluation is only a proof producer, never a kernel callback.
+    """
+    definitions = {d[0]:d for d in t[4]}
+    p, cache = Proof(), {}
+
+    def substitute(term, env):
+        if isinstance(term,Sym):
+            return env[term]
+        return [term[0]]+[substitute(a,env) for a in term[1:]]
+
+    def evaluate(term):
+        key=canonical_bytes(term)
+        if key in cache:
+            return cache[key]
+        args=[evaluate(a) for a in term[1:]]
+        values=[a for a,_ in args]
+        reduced=app(term[0],*values)
+        start=p.cong(term[0],*[proof for _,proof in args])
+        if term[0] in definitions:
+            _,params,_,cases=definitions[term[0]]
+            constructor,fields,body=next(c for c in cases if c[0]==values[0][0])
+            env={param[0]:value for param,value in zip(params,values)}
+            env.update(zip(fields,values[0][1:]))
+            unfolded=p.unfold(term[0],*values)
+            value,end=evaluate(substitute(body,env))
+            result=value,p.trans(start,unfolded,end)
+        else:
+            result=reduced,start
+        cache[key]=result
+        return result
+
+    value,last=evaluate(left)
+    assert value==right, 'producer result differs from independently computed integer sum'
+    # evaluate() may return a cached earlier step; explicitly conclude it.
+    p.trans(last,p.refl(right))
+    g=[var('goal'),3,hash_of(t),[],app('eq',left,right)]
+    proof=[var('proof'),3,hash_of(g),[],[var('derive'),p.steps]]
+    return g,proof
+
+
+class AdditionProofTest(unittest.TestCase):
+    def test_artifacts_reproduce(self):
+        t,g,p=bundle()
+        self.assertEqual(canonical_bytes(t),canonical_bytes(make_theory(
+            parse((EXAMPLES/'bits.theory.sexp').read_bytes()))))
+        for expected,actual in zip((g,p),artifacts(t)):
+            self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
+        result=verify(t,g,p)
+        self.assertEqual(result['lemmas'],104)
+        self.assertLess(result['work'],300000)
+
+    def test_ground_sums_pin_carry_direction_and_modular_overflow(self):
+        t,_,_=bundle()
+        rng=random.Random(32)
+        pairs=[(0,0),(0,0xffffffff),(0xffffffff,1),(0xffffffff,0xffffffff),
+               (0x7fffffff,1),(0x80000000,0x80000000),(0xaaaaaaaa,0x55555555)]
+        pairs += [((1<<i)-1,1) for i in range(1,32)]
+        pairs += [(rng.getrandbits(32),rng.getrandbits(32)) for _ in range(8)]
+        for a,b in pairs:
+            with self.subTest(a=a,b=b):
+                g,p=ground_proof(t,app('add32',literal(a),literal(b)),literal((a+b)&0xffffffff))
+                verify(t,g,p)
+
+    def test_every_boolean_carry_input(self):
+        t,_,_=bundle()
+        for a in range(2):
+            for b in range(2):
+                for c in range(2):
+                    bit=lambda n: app('bit1' if n else 'bit0')
+                    g,p=ground_proof(t,app('carry-bit',bit(a),bit(b),bit(c)),bit(a+b+c>=2))
+                    verify(t,g,p)
+
+    def test_asymmetric_carry_definition_rejected(self):
+        t,g,p=bundle()
+        carry=next(d for d in t[4] if d[0]=='carry-bit')
+        carry[3][0][2]=var('b')
+        g[2]=hash_of(t)
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+    def test_wrong_carry_stage_rejected(self):
+        t,g,p=bundle()
+        carry=next(d for d in t[4] if d[0]=='carry-16')
+        carry[3][0][2][3][0]=var('carry-14')
+        g[2]=hash_of(t)
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+    def test_wrong_sum_bit_rejected(self):
+        t,g,p=bundle()
+        add=next(d for d in t[4] if d[0]=='add32')
+        add[3][0][2][17]=app('bit0')
+        g[2]=hash_of(t)
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+    def test_lying_goal_rejected(self):
+        t,g,p=bundle()
+        g[4][2]=var('x')
+        p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
+
+
+if __name__=='__main__':
+    unittest.main()

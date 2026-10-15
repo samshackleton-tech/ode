@@ -196,6 +196,37 @@ left-rotating definition. A changed selector, count, conclusion, or
 invented rotation rule is rejected. Verification also succeeds in a
 fresh process that blocks all producer and old-verifier imports.
 
+## Modular addition from ripple carry
+
+`examples/proofs/add32.theory.sexp` defines Boolean AND, OR, and carry,
+then 32 carry stages and the sum's 32 bit fields. Field 0 is the least
+significant bit; carry into bit 0 is zero; carry out of bit 31 is
+discarded. These equations specify addition modulo 2^32.
+
+`ode/add32_proof.py` proves Boolean carry symmetry, each stage's
+recurrence and symmetry, and each sum projection. Together with proved
+XOR commutativity and Word32 reconstruction, these establish
+`add32(x,y) = add32(y,x)` for every pair of words. All 104 supporting
+lemmas and 1,257 inference steps use the existing kernel rules.
+
+```sh
+pypy3 tools/make_add32_proof.py
+pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/add32.goal.sexp examples/proofs/add32.proof.sexp
+```
+
+Ground tests emit unfolding/congruence proofs for all Boolean carry
+inputs, carry chains through every bit position, modular overflow, and
+seeded random sums. The expected results use independent integer
+arithmetic. These tests constrain the intended semantics beyond
+commutativity alone. Changed carry equations, stage dependencies, sum
+bits, and theorem conclusions are rejected by the kernel.
+
+This milestone proves commutativity of the defined adder. Associativity,
+constant-folding exports, and the native ADD representation/refinement
+link remain open; the natural-number addition lemmas do not discharge
+those word-level obligations.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
@@ -352,7 +383,7 @@ reported work counts are deterministic diagnostic counts, not clocks.
 
 ```sh
 pypy3 -m unittest tests.test_kernel tests.test_nat_proof tests.test_bits_kernel
-pypy3 -m unittest tests.test_xor32_proof tests.test_rotate32_proof
+pypy3 -m unittest tests.test_xor32_proof tests.test_rotate32_proof tests.test_add32_proof
 pypy3 game/kernel_attacks.py
 ```
 

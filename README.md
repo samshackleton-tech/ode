@@ -122,6 +122,10 @@ pypy3 -m ode.proof_cli examples/proofs/rotate32.theory.sexp \
   examples/proofs/rotate32.goal.sexp examples/proofs/rotate32.proof.sexp
 ```
 
+Word32 addition is defined by Boolean ripple carry; its commutativity
+proof is in `examples/proofs/add32.*.sexp`. Associativity and the complete
+addition-normalizer export remain open.
+
 The theory and goal come from the owner; the proof can come from anyone.
 The theorem holds for any total compression function, initial state,
 block source, and starting index. `KERNEL.md` gives the complete rules,

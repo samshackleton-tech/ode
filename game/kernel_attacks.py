@@ -121,6 +121,24 @@ def cases():
         proof[2] = hash_of(goal)
         yield name, (theory, goal, proof), False
 
+    addition = [parse((directory / f'add32.{k}.sexp').read_bytes())
+                for k in ('theory', 'goal', 'proof')]
+    yield 'honest-word32-addition', addition, True
+    for name in ('addition-wrong-carry', 'addition-wrong-stage', 'addition-lying-result'):
+        theory, goal, proof = copy.deepcopy(addition)
+        if name == 'addition-wrong-carry':
+            definition = next(d for d in theory[4] if d[0] == 'carry-bit')
+            definition[3][0][2] = Sym('b')
+            goal[2] = hash_of(theory)
+        elif name == 'addition-wrong-stage':
+            definition = next(d for d in theory[4] if d[0] == 'carry-16')
+            definition[3][0][2][3][0] = Sym('carry-14')
+            goal[2] = hash_of(theory)
+        else:
+            goal[4][2] = Sym('x')
+        proof[2] = hash_of(goal)
+        yield name, (theory, goal, proof), False
+
 
 def main():
     failures = 0

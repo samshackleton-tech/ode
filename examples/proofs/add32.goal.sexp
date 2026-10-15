@@ -1,0 +1,1 @@
+(goal 3 #513e2cc2706fe7ebc0c7b6ab1399efa6ac4c74c047b7d51d01b5a0e40093f27e ((x Word32) (y Word32)) (eq (add32 x y) (add32 y x)))
