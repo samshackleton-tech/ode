@@ -62,6 +62,6 @@ def prove(theory, parameters, left, right):
     if lhs!=rhs:
         raise ValueError('the two sums have different multisets of terms')
     p.trans(a,p.sym(b))
-    goal=[Sym('goal'),3,hash_of(theory),parameters,[Sym('eq'),left,right]]
-    proof=[Sym('proof'),3,hash_of(goal),lemmas,[Sym('derive'),p.steps]]
+    goal=[Sym('goal'),3,hash_of(theory, 'theory'),parameters,[Sym('eq'),left,right]]
+    proof=[Sym('proof'),3,hash_of(goal, 'goal'),lemmas,[Sym('derive'),p.steps]]
     return goal,slice_proof(proof)

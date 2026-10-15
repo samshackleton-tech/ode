@@ -14,7 +14,7 @@ from ode.canon import Sym, canonical_bytes, hash_of, parse
 
 
 def artifacts(theory):
-    goal = parse(f"""(goal 3 #{hash_of(theory).hex()}
+    goal = parse(f"""(goal 3 #{hash_of(theory, 'theory').hex()}
       ((n Nat) (s State) (m Blocks) (i Nat))
       (eq (chain (double n) s m i) (pairs n s m i)))""")
     one = "(compress s (block-at m i))"
@@ -39,7 +39,7 @@ def artifacts(theory):
       (unfold pairs (succ k) s m i)
       (sym 11)
       (trans 10 12))"""
-    proof = [Sym("proof"), 3, hash_of(goal), [],
+    proof = [Sym("proof"), 3, hash_of(goal, 'goal'), [],
              parse(f"(induct n ((zero () {base}) (succ (k) {step})))")]
     return goal, proof
 
@@ -50,7 +50,7 @@ def main():
     goal, proof = artifacts(theory)
     for name, value in (("goal", goal), ("proof", proof)):
         (directory / f"batching.{name}.sexp").write_bytes(canonical_bytes(value))
-    print(f"goal #{hash_of(goal).hex()}")
+    print(f"goal #{hash_of(goal, 'goal').hex()}")
 
 
 if __name__ == "__main__":

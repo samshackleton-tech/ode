@@ -26,15 +26,15 @@ def objects():
 
 
 def rebind(theory, goal, proof):
-    goal[2] = hash_of(theory)
-    proof[2] = hash_of(goal)
+    goal[2] = hash_of(theory, 'theory')
+    proof[2] = hash_of(goal, 'goal')
     return theory, goal, proof
 
 
 def simple(equation, body, variables="((n Nat))"):
     theory = parse("(theory 3 () () ())")
-    goal = parse(f"(goal 3 #{hash_of(theory).hex()} {variables} {equation})")
-    proof = parse(f"(proof 3 #{hash_of(goal).hex()} () {body})")
+    goal = parse(f"(goal 3 #{hash_of(theory, 'theory').hex()} {variables} {equation})")
+    proof = parse(f"(proof 3 #{hash_of(goal, 'goal').hex()} () {body})")
     return theory, goal, proof
 
 

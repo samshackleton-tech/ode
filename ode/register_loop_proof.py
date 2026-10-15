@@ -17,15 +17,15 @@ def theory(bit_theory):
 
 
 def package(t,eq,base,step,library):
-    goal=[var('goal'),3,hash_of(t),parse('((n Nat) (p Program) (s State))'),eq]
+    goal=[var('goal'),3,hash_of(t, 'theory'),parse('((n Nat) (p Program) (s State))'),eq]
     derivation=[var('induct'),var('n'),[
         [var('zero'),[],base.steps],[var('succ'),[var('k')],step.steps]]]
-    return goal,[var('proof'),3,hash_of(goal),library.lemmas,derivation]
+    return goal,[var('proof'),3,hash_of(goal, 'goal'),library.lemmas,derivation]
 
 
 def iteration_artifacts(t):
     """Repeated instruction-list execution equals tail-recursive state iteration."""
-    lib=Library(hash_of(t));composition=lib.include(*composition_artifacts(t))
+    lib=Library(hash_of(t, 'theory'));composition=lib.include(*composition_artifacts(t))
     n,p,s,k=map(var,('n','p','s','k'))
     zero=app('zero')
     base=Proof()
@@ -44,7 +44,7 @@ def iteration_artifacts(t):
 
 def batching_artifacts(t):
     """Two executions per iteration equal twice as many single executions."""
-    lib=Library(hash_of(t));composition=lib.include(*composition_artifacts(t))
+    lib=Library(hash_of(t, 'theory'));composition=lib.include(*composition_artifacts(t))
     n,p,s,k=map(var,('n','p','s','k'))
     zero=app('zero');twice=app('append-program',p,p)
     base=Proof()

@@ -86,7 +86,7 @@ class ArithmeticProofTest(unittest.TestCase):
 
     def test_changed_outer_goal_is_rejected(self):
         t,g,p=bundle()
-        g[4][2]=var('w');p[2]=hash_of(g)
+        g[4][2]=var('w');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

@@ -21,8 +21,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
 from ode import produce, word  # noqa: E402
-from ode.blake3 import blake3  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, hash_of, parse  # noqa: E402
+from ode.canon import Bytes, Sym, assoc, canonical_bytes, hash_of, binary_hash, parse  # noqa: E402
 
 ATTACKS = os.path.join(HERE, "attacks")
 EXAMPLES = os.path.join(ROOT, "examples")
@@ -53,17 +52,17 @@ def _blake3_w32(spec=BLAKE3, at=AT65):
     return produce.compile_spec(spec, at, resolve=LIB.get)
 
 
-def _put_binary(d, binary):
-    with open(os.path.join(d, blake3(binary).hex() + ".bin"), "wb") as f:
+def _put_binary(d, binary, prop="w32"):
+    with open(os.path.join(d, binary_hash(binary, prop).hex() + ".bin"), "wb") as f:
         f.write(binary)
 
 
 def _cert(spec, binary, prop="w32", at=None, scratch=None):
     fields = [("cert", Sym("correctness")), ("property", Sym(f"equals-spec-{prop}-v1")),
-              ("spec", hash_of(spec))]
+              ("spec", hash_of(spec, 'spec'))]
     if at:
         fields.append(("at", [[Sym(k), v] for k, v in sorted(at.items())]))
-    fields.append(("binary-hash", Bytes(blake3(binary))))
+    fields.append(("binary-hash", binary_hash(binary, prop)))
     if scratch is not None:
         fields.append(("scratch", scratch))
     return assoc("certificate", *fields)
@@ -77,7 +76,7 @@ def attack(name, notes, spec, binary, prop="w32", target=None, inputs=None,
     produce.put_definition(d, spec)
     for h in word.uses_of(spec).values():
         produce.put_definition(d, LIB[h])
-    _put_binary(d, binary)
+    _put_binary(d, binary, prop)
     if at is None and target == "blake3":
         at = AT65
     with open(os.path.join(d, "certificate.sexp"), "wb") as f:
@@ -121,7 +120,7 @@ def main():
     attack("01-flip-byte", "Flip one byte of the binary file; the certificate "
            "is untouched. Found before the game: the checkers once never opened "
            "the file that runs.", G, g,
-           tamper=lambda d: open(os.path.join(d, blake3(g).hex() + ".bin"), "wb")
+           tamper=lambda d: open(os.path.join(d, binary_hash(g, "w32").hex() + ".bin"), "wb")
            .write(_patch(g, 40, g[40] ^ 7)))
     attack("02-mutant-honest-hashes", "A wrong program (b2 rotation 7 -> 6) "
            "with honest hashes. Tests that the checker reasons rather than "
@@ -232,10 +231,10 @@ def main():
     attack("23-noncanonical-spec-file", "The delivered spec with a trailing "
            "newline: non-canonical bytes are rejected even when they parse to "
            "the pinned spec.", G, g, tamper=lambda d: open(
-               os.path.join(d, hash_of(G).hex() + ".sexp"), "ab").write(b"\n"))
+               os.path.join(d, hash_of(G, 'spec').hex() + ".sexp"), "ab").write(b"\n"))
     attack("24-spec-missing", "The spec withheld: Mallory can deny "
            "availability, never correctness.", G, g,
-           tamper=lambda d: os.remove(os.path.join(d, hash_of(G).hex() + ".sexp")))
+           tamper=lambda d: os.remove(os.path.join(d, hash_of(G, 'spec').hex() + ".sexp")))
 
     # Real AArch64, run natively.
     ga, gs = produce.emit_a64(produce.compile_spec(G))
@@ -264,7 +263,7 @@ def main():
            prop="a64", scratch=gs)
 
     # Calls by certificate: BLAKE3 as glue over a certified compression.
-    chash = hash_of(COMPRESS)
+    chash = hash_of(COMPRESS, 'spec')
 
     def composed(name, notes, callee_binary=None, callee_spec=None,
                  rewrite=None, expect=False, drop_callee=False, isa="w32"):
@@ -274,7 +273,7 @@ def main():
                 cb, scr = produce.emit_a64(produce.compile_spec(cs))
             else:
                 cb, scr = callee_binary or produce.emit_w32(produce.compile_spec(cs)), None
-            _put_binary(d, cb)
+            _put_binary(d, cb, isa)
             produce.put_definition(d, cs)
             ch = produce.put_definition(d, _cert(cs, cb, isa, scratch=scr))
             glue = produce.compile_spec(BLAKE3, AT65, {chash: (ch, 16)}, LIB.get)
@@ -367,7 +366,7 @@ def main():
         other = parse(canonical_bytes(BLAKE3).decode().replace(
             "(add (at root 27) 8)", "(add (at root 27) 0)"))
         produce.put_definition(d, other)
-        return [cert[0]] + [p if p[0] != "spec" else [p[0], hash_of(other)]
+        return [cert[0]] + [p if p[0] != "spec" else [p[0], hash_of(other, 'spec')]
                             for p in cert[1:]]
     bound("42-every-length-other-spec-bound", "An honest binding certificate "
           "for a mutant BLAKE3 (no ROOT flag). Bob's pin must reject it.",

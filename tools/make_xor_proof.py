@@ -46,8 +46,8 @@ def artifacts(theory):
          [bit_cancel, [Sym('lemma'), parameters, word_equation, word_derivation], zero_width],
          parse('(derive ((lemma 1 x) (cong width 0) (lemma 2 x) (trans 1 2)))')),
     ):
-        goal = [Sym('goal'), 3, hash_of(theory), parameters, equation]
-        proof = [Sym('proof'), 3, hash_of(goal), lemmas, derivation]
+        goal = [Sym('goal'), 3, hash_of(theory, 'theory'), parameters, equation]
+        proof = [Sym('proof'), 3, hash_of(goal, 'goal'), lemmas, derivation]
         result[name] = (goal, proof)
     return result
 

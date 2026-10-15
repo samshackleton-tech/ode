@@ -54,7 +54,7 @@ class ComplementProofTest(unittest.TestCase):
         g,p=artifacts(self.t)
         carry=next(d for d in self.t[4] if d[0]=='carry-bit')
         carry[3][0][2]=app('bit1')
-        g[2]=hash_of(self.t);p[2]=hash_of(g)
+        g[2]=hash_of(self.t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(self.t,g,p)
 

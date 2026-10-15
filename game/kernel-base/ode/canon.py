@@ -12,14 +12,16 @@ space between elements and no other whitespace:
 
     (spec (name mix) (inputs 2) (body (rotl (add (xor (var 0) (var 1)) (const 60)) 3)))
 
-A definition's identity is the BLAKE3 hash of its canonical form.
+A definition's identity uses BLAKE3 derive-key on its canonical form,
+with a caller-selected kind and semantic revision (ode/domains.py).
 Definitions are written as association lists -- (kind (field value) ...)
 -- and read with `field`. Text files may be formatted freely and use
 ';' comments; canonical form is what hashes and the checker read.
 """
 import re
 
-from .blake3 import blake3
+from .blake3 import derive_key
+from .domains import context
 
 MAX_INT = 2 ** 64
 _SYMBOL = re.compile(r"[A-Za-z_][A-Za-z0-9._/*+<>=?!-]*\Z")
@@ -151,9 +153,18 @@ def read_canonical(data: bytes):
     return value
 
 
-def hash_of(value) -> "Bytes":
-    """A definition's identity: the BLAKE3 hash of its canonical form."""
-    return Bytes(blake3(canonical_bytes(value)))
+def hash_of(value, kind) -> "Bytes":
+    """Identity of canonical bytes in the caller-selected current semantic domain.
+
+    The caller chooses the expected kind; this does not infer semantics
+    from an untrusted object's tag. Type/format checking is the reader's job.
+    """
+    return Bytes(derive_key(context(kind), canonical_bytes(value)))
+
+
+def binary_hash(data, isa) -> "Bytes":
+    """Identity of exact bytes under the selected binary execution model."""
+    return Bytes(derive_key(context('binary-' + isa), data))
 
 
 def field(defn, name):

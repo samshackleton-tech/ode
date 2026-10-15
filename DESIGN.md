@@ -73,8 +73,12 @@ And three of its own:
 
 Everything in Ode is a **definition**: a specification, a function, a kernel, a generator, a proof,
 a measurement, a decision. Each definition is immutable and identified by the BLAKE3 hash of its
-canonical form, with its dependencies referred to by their hashes (as in Unison). A hash fixes
-exactly what a definition is and everything it depends on.
+canonical form in a kind-specific semantic domain, with dependencies referred to by
+their identities (as in Unison). BLAKE3 derive-key contexts bind bytes to their kind and
+semantic revision. Changing meaning changes the domain even when the bytes do not;
+meaning-preserving refactors keep it. `ode/domains.py` is the current registry and
+`DOMAINS.md` specifies the policy. An identity fixes a definition's interpretation
+and everything it depends on.
 
 **Names are pet names** (as in Miller's petname systems and Endo): each agent and each human holds
 its own local names for hashes and for capabilities. A shared project is a directory of names that

@@ -3,9 +3,9 @@
 
     pypy3 game/pin_ode_base.py
 
-Copies each recipient's modules, then pins each package tree using the
-unchanged root launcher. Owner-selected theorem and specification pins
-are preserved. Tests check both copies and pins for drift.
+Refreshes the root's shared BLAKE3/domain modules, copies each recipient's
+modules, and pins each package tree. Owner-selected theorem and specification
+pins are preserved. Tests check both copies and pins for drift.
 """
 import os
 import re
@@ -14,7 +14,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLCHAIN = os.path.join(os.path.dirname(HERE), "ode")
-sys.path.insert(0, os.path.join(HERE, "bootstrap", "root"))
+ROOT = os.path.join(HERE, "bootstrap", "root")
+for name in ("blake3.py", "domains.py"):
+    shutil.copy(os.path.join(TOOLCHAIN, name), os.path.join(ROOT, name))
+sys.path.insert(0, ROOT)
 from launch import read_tree, tree_hash  # noqa: E402
 
 

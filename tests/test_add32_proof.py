@@ -42,8 +42,8 @@ class AdditionProofTest(unittest.TestCase):
         g,p=identity_artifacts(t)
         definition=next(d for d in t[4] if d[0]=='carry-0')
         definition[3][0][2]=app('bit1')
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -51,7 +51,7 @@ class AdditionProofTest(unittest.TestCase):
         t,_,_=bundle()
         g,p=identity_artifacts(t)
         g[4][1][2]=literal(1)
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -80,8 +80,8 @@ class AdditionProofTest(unittest.TestCase):
         t,g,p=bundle()
         carry=next(d for d in t[4] if d[0]=='carry-bit')
         carry[3][0][2]=var('b')
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -89,8 +89,8 @@ class AdditionProofTest(unittest.TestCase):
         t,g,p=bundle()
         carry=next(d for d in t[4] if d[0]=='carry-16')
         carry[3][0][2][3][0]=var('carry-14')
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -98,15 +98,15 @@ class AdditionProofTest(unittest.TestCase):
         t,g,p=bundle()
         add=next(d for d in t[4] if d[0]=='add32')
         add[3][0][2][17]=app('bit0')
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_lying_goal_rejected(self):
         t,g,p=bundle()
         g[4][2]=var('x')
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

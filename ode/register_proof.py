@@ -73,8 +73,8 @@ def prove_execution(t, instructions, expected):
     assert result==expected, 'expected state differs from definition reduction'
     p.trans(last,p.refl(expected))
     params=[[var(r),var('Word32')] for r in REGISTERS]
-    goal=[var('goal'),3,hash_of(t),params,equation(left,expected)]
-    proof=[var('proof'),3,hash_of(goal),[],[var('derive'),p.steps]]
+    goal=[var('goal'),3,hash_of(t, 'theory'),params,equation(left,expected)]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),[],[var('derive'),p.steps]]
     return goal,proof
 
 
@@ -124,8 +124,8 @@ def composition_artifacts(t):
         (cong run 7 8)
         (sym 9)
         (trans 6 10)))))''')
-    goal=[var('goal'),3,hash_of(t),params,eq]
-    proof=[var('proof'),3,hash_of(goal),[],derivation]
+    goal=[var('goal'),3,hash_of(t, 'theory'),params,eq]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),[],derivation]
     return goal,proof
 
 
@@ -145,7 +145,7 @@ def composed_g_artifacts(t):
     from .ground_proof import prove as prove_ground
     from .proof_library import Library
     from .equational_proof import Proof
-    library=Library(hash_of(t))
+    library=Library(hash_of(t, 'theory'))
     composition=library.include(*composition_artifacts(t))
     instructions=g_instructions()
     first_program,second_program=program(instructions[:7]),program(instructions[7:])
@@ -161,9 +161,9 @@ def composed_g_artifacts(t):
     middle=p.cong('run',p.refl(second_program),p.lemma(first,*initial_state()[1:]))
     end=p.lemma(second,*first_state[1:])
     p.trans(start,join,middle,end)
-    goal=[var('goal'),3,hash_of(t),[[var(r),var('Word32')] for r in REGISTERS],
+    goal=[var('goal'),3,hash_of(t, 'theory'),[[var(r),var('Word32')] for r in REGISTERS],
           equation(app('run',program(instructions),initial_state()),g_state())]
-    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),library.lemmas,[var('derive'),p.steps]]
     return goal,proof
 
 
@@ -188,7 +188,7 @@ def normalized_output(t, execution_goal, execution_proof, register):
     normal_goal,normal_proof=export_normalizer(t,expression)
     declared={name for name,_ in execution_goal[3]}
     assert all(name in declared for name,_ in normal_goal[3]), 'final state contains undeclared inputs'
-    library=Library(hash_of(t))
+    library=Library(hash_of(t, 'theory'))
     execution=library.include(execution_goal,execution_proof)
     normalization=library.include(normal_goal,normal_proof)
     p=Proof()
@@ -197,7 +197,7 @@ def normalized_output(t, execution_goal, execution_proof, register):
     middle=p.unfold(projection,state)
     last=p.lemma(normalization,*[name for name,_ in normal_goal[3]])
     p.trans(first,middle,last)
-    goal=[var('goal'),3,hash_of(t),execution_goal[3],
+    goal=[var('goal'),3,hash_of(t, 'theory'),execution_goal[3],
           equation(app(projection,execution_goal[4][1]),normal_goal[4][2])]
-    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),library.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

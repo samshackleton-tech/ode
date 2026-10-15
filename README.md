@@ -53,12 +53,14 @@ result at that length. Needs PyPy3; native runs need aarch64 Linux.
    bytes it read once.
 
 Every definition, certificate, and record is a canonical s-expression
-(`ode/canon.py`) named by its BLAKE3 hash (`ode/blake3.py`).
+(`ode/canon.py`). Content identities use BLAKE3 derive-key contexts that
+separate object kinds and semantic revisions: changing meaning changes
+the domain even if the bytes stay the same. See [DOMAINS.md](DOMAINS.md).
 
 ## What a relying party relies on
 
-`game/` shows it end to end: Bob receives only a 235-line root (BLAKE3
-and a launcher) and about 260 bytes of hashes from Sam, and everything
+`game/` shows it end to end: Bob receives a small root (BLAKE3, the
+semantic-domain registry, and a launcher) plus identity pins from Sam, and everything
 else -- the checker itself, the specifications, the implementation --
 from anyone, admitted by hash or by proof. Thirty-nine recorded attacks,
 replayed by the tests, have found and fixed several real flaws and lost

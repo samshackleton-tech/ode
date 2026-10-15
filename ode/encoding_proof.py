@@ -63,7 +63,7 @@ def execution_artifacts(t):
     from .ground_proof import Evaluation
     from .proof_library import Library
     from .canon import hash_of
-    library=Library(hash_of(t))
+    library=Library(hash_of(t, 'theory'))
     execution=library.include(*composed_g_artifacts(t))
     p=Evaluation(t)
     result,right=p.evaluate(app('g',initial_state()))
@@ -71,8 +71,8 @@ def execution_artifacts(t):
     left=p.lemma(execution,*initial_state()[1:])
     p.trans(left,p.sym(right))
     s=var('s')
-    goal=[var('goal'),3,hash_of(t),[[s,var('State')]],
+    goal=[var('goal'),3,hash_of(t, 'theory'),[[s,var('State')]],
           app('eq',app('run',program(g_instructions()),s),app('g',s))]
     derivation=[var('induct'),s,[[var('state'),initial_state()[1:],p.steps]]]
-    proof=[var('proof'),3,hash_of(goal),library.lemmas,derivation]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),library.lemmas,derivation]
     return goal,proof

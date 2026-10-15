@@ -1,1 +1,1 @@
-(goal 3 #c9be9a0cd7f21024df6d62d7b46f7a3ade6b83e33529bd86466a7aa963a08a05 ((w Word32) (x Word32) (y Word32) (z Word32)) (eq (xor32 (ror-8 (xor32 (add32 (add32 x y) z) w)) (ror-8 w)) (ror-8 (add32 x (add32 y z)))))
+(goal 3 #5b6a2feb0b13a37b849a3b0a6ff77c9d12825361395f2d46504977cbb39d02a3 ((w Word32) (x Word32) (y Word32) (z Word32)) (eq (xor32 (ror-8 (xor32 (add32 (add32 x y) z) w)) (ror-8 w)) (ror-8 (add32 x (add32 y z)))))

@@ -14,7 +14,7 @@ from ode.equational_proof import app, var
 def main():
     d=ROOT/'examples'/'proofs'
     t=parse((d/'arx.theory.sexp').read_bytes());x=var('x');ones=literal(0xffffffff)
-    goal=[var('goal'),3,hash_of(t),[[x,var('Word32')]],
+    goal=[var('goal'),3,hash_of(t, 'theory'),[[x,var('Word32')]],
           app('eq',app('add32',x,app('xor32',x,ones)),ones)]
     try:
         produce(t,goal)

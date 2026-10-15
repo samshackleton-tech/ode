@@ -13,7 +13,7 @@ from .equational_proof import Proof, app, equation, var
 
 
 def artifacts(t):
-    library = Library(hash_of(t))
+    library = Library(hash_of(t, 'theory'))
     comm_index = library.include(*commutativity(t))
     rules = {name: library.include(g,p) for name,g,p in carry_artifacts(t)}
     lemmas = library.lemmas
@@ -88,6 +88,6 @@ def artifacts(t):
         components.append(p.trans(lhs,first,middle,p.sym(last),p.sym(rhs)))
     middle = p.cong('word32',*components)
     p.trans(p.sym(p.lemma(4,left)),middle,p.lemma(4,right),p.lemma(comm_index,yz,x))
-    goal = [var('goal'),3,hash_of(t),params,equation(left,app('add32',x,yz))]
-    proof = [var('proof'),3,hash_of(goal),lemmas,[var('derive'),p.steps]]
+    goal = [var('goal'),3,hash_of(t, 'theory'),params,equation(left,app('add32',x,yz))]
+    proof = [var('proof'),3,hash_of(goal, 'goal'),lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

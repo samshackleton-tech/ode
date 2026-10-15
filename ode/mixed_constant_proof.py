@@ -32,8 +32,8 @@ class NormalizerWithConstants(Normalizer):
         evaluation = Evaluation(self.theory)
         value,last = evaluation.evaluate(expression)
         evaluation.trans(last,evaluation.refl(value))
-        goal = [var('goal'),3,hash_of(self.theory),[],equation(expression,value)]
-        proof = [var('proof'),3,hash_of(goal),[],[var('derive'),evaluation.steps]]
+        goal = [var('goal'),3,hash_of(self.theory, 'theory'),[],equation(expression,value)]
+        proof = [var('proof'),3,hash_of(goal, 'goal'),[],[var('derive'),evaluation.steps]]
         q = self.lemma(self.library.include(goal,proof))
         suffix = [] if value==ZERO else [value]
         for atom in reversed(symbols):

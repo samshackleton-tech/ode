@@ -35,8 +35,8 @@ class LemmaTest(unittest.TestCase):
         t = theory()
         lemmas = arithmetic_lemmas()
         for i, lemma in enumerate(lemmas):
-            g = [Sym('goal'), 3, hash_of(t), lemma[1], lemma[2]]
-            p = [Sym('proof'), 3, hash_of(g), lemmas[:i], lemma[3]]
+            g = [Sym('goal'), 3, hash_of(t, 'theory'), lemma[1], lemma[2]]
+            p = [Sym('proof'), 3, hash_of(g, 'goal'), lemmas[:i], lemma[3]]
             with self.subTest(index=i):
                 verify(t, g, p)
 
@@ -70,9 +70,9 @@ class LemmaTest(unittest.TestCase):
                 verify(t, g, p)
         t, g, p = bundle()
         t[2].append(Sym('State'))
-        g[2] = hash_of(t)
+        g[2] = hash_of(t, 'theory')
         g[3].append(parse('(s State)'))
-        p[2] = hash_of(g)
+        p[2] = hash_of(g, 'goal')
         p[4] = parse('(derive ((lemma 0 s)))')
         with self.assertRaisesRegex(Reject, 'sort mismatch'):
             verify(t, g, p)
@@ -80,8 +80,8 @@ class LemmaTest(unittest.TestCase):
     def test_changed_definition_with_honest_rehashing(self):
         t, g, p = bundle()
         t[4][0][3][0][2] = parse('(succ b)')  # false zero equation for ordinary addition
-        g[2] = hash_of(t)
-        p[2] = hash_of(g)
+        g[2] = hash_of(t, 'theory')
+        p[2] = hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t, g, p)
 
@@ -95,7 +95,7 @@ class LemmaTest(unittest.TestCase):
     def test_producer_cannot_smuggle_in_a_wrong_result(self):
         t, g, p = bundle()
         g[4][2] = parse('(succ (add (add d c) (add b a)))')
-        p[2] = hash_of(g)
+        p[2] = hash_of(g, 'goal')
         with self.assertRaisesRegex(Reject, 'different equation'):
             verify(t, g, p)
 
@@ -116,7 +116,7 @@ class ChainSplitTest(unittest.TestCase):
         args = [parse((EXAMPLES / f'chain-split.{kind}.sexp').read_bytes())
                 for kind in ('theory', 'goal', 'proof')]
         args[1][4][2][-1] = Sym('i')  # forget to advance the block index
-        args[2][2] = hash_of(args[1])
+        args[2][2] = hash_of(args[1], 'goal')
         with self.assertRaises(Reject):
             verify(*args)
 
@@ -146,7 +146,7 @@ class NormalizerTest(unittest.TestCase):
             # Preserve multiplicity: changing an atom gives a false target.
             bad_goal = copy.deepcopy(goal)
             bad_goal[4][2] = [Sym('succ'), right]
-            proof[2] = hash_of(bad_goal)
+            proof[2] = hash_of(bad_goal, 'goal')
             with self.assertRaises(Reject):
                 verify(t, bad_goal, proof)
 

@@ -24,7 +24,7 @@ def main(reliance_bytes,argv):
                          ('encoding-goal','encoding-g.goal.sexp'),
                          ('execution-goal','encoding-g-execution.goal.sexp')):
             value=read_object(os.path.join(store,name))
-            if hash_of(value)!=field(pins,key):
+            if hash_of(value, "theory" if key=="theory" else "goal")!=field(pins,key):
                 raise Reject(f'{key} differs from the owner pin')
             objects.append(value)
         theory,encoding_goal,execution_goal=objects

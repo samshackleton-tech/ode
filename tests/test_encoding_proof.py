@@ -57,7 +57,7 @@ class EncodingProofTest(unittest.TestCase):
         t,_,_=bundle();g,p=execution()
         definition=next(d for d in t[4] if d[0]=='g-second')
         definition[3][0][2][2][0]=var('ror-8')  # b's final rotation should be 7
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -91,7 +91,7 @@ class EncodingProofTest(unittest.TestCase):
         t,g,p=bundle()
         bit=next(d for d in t[4] if d[0]=='register-bit-0')
         bit[3][0][2]=app('bit0')
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

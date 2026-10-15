@@ -46,7 +46,7 @@ class BooleanProofTest(unittest.TestCase):
         a,b=map(var,'ab')
         g,p=prove(self.t,[a,b],app('xor-bit',a,b),app('xor-bit',b,a))
         g[4][2]=a
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(self.t,g,p)
 
@@ -58,8 +58,8 @@ class BooleanProofTest(unittest.TestCase):
         reduction=Evaluation(self.t,{canonical_bytes(term):(app('bit1'),0)})
         value,last=reduction.evaluate(term)
         reduction.trans(last,reduction.refl(value))
-        goal=[var('goal'),3,hash_of(self.t),[],app('eq',term,value)]
-        proof=[var('proof'),3,hash_of(goal),[lemma],[var('derive'),reduction.steps]]
+        goal=[var('goal'),3,hash_of(self.t, 'theory'),[],app('eq',term,value)]
+        proof=[var('proof'),3,hash_of(goal, 'goal'),[lemma],[var('derive'),reduction.steps]]
         with self.assertRaises(Reject):
             verify(self.t,goal,proof)
 

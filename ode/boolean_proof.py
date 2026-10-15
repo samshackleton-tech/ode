@@ -69,6 +69,6 @@ def prove(theory, variables, left, right):
 
     cases(list(variables), left, right)
     _, params, eq, derivation = lemmas.pop()
-    goal = [var('goal'), 3, hash_of(theory), params, eq]
-    proof = [var('proof'), 3, hash_of(goal), lemmas, derivation]
+    goal = [var('goal'), 3, hash_of(theory, 'theory'), params, eq]
+    proof = [var('proof'), 3, hash_of(goal, 'goal'), lemmas, derivation]
     return goal, proof

@@ -57,7 +57,7 @@ class AdditionNormalizerTest(unittest.TestCase):
     def test_changed_output_rejected(self):
         t=theory()
         g,p=export_normalizer(t,parse('(add32 (add32 x y) (add32 z x))'))
-        g[4][2]=var('x');p[2]=hash_of(g)
+        g[4][2]=var('x');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

@@ -46,7 +46,7 @@ class RotateProofTest(unittest.TestCase):
         # also satisfies composition/distribution. Ground statements pin the
         # direction independently, across all 32 basis bits and all counts.
         t = theory()
-        h = hash_of(t)
+        h = hash_of(t, 'theory')
         for n in range(32):
             for i in range(32):
                 value = 1 << i
@@ -54,7 +54,7 @@ class RotateProofTest(unittest.TestCase):
                 left = app(f'ror-{n}',literal(value))
                 right = literal(expected)
                 g = [var('goal'),3,h,[],app('eq',left,right)]
-                p = [var('proof'),3,hash_of(g),[],
+                p = [var('proof'),3,hash_of(g, 'goal'),[],
                      app('derive', [app('unfold',var(f'ror-{n}'),literal(value))])]
                 with self.subTest(count=n,bit=i):
                     verify(t,g,p)
@@ -100,15 +100,15 @@ class RotateProofTest(unittest.TestCase):
         g,p = export_normalizer(t,app('ror-7',app('ror-7',var('x'))))
         rotate = next(d for d in t[4] if d[0]=='ror-7')
         rotate[3][0][2][1] = var('b6')  # output bit 0 reads wrong input bit
-        g[2] = hash_of(t)
-        p[2] = hash_of(g)
+        g[2] = hash_of(t, 'theory')
+        p[2] = hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_lying_conclusion_rejected(self):
         t,g,p = bundle()
         g[4][2] = literal(1)
-        p[2] = hash_of(g)
+        p[2] = hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

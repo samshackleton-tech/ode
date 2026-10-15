@@ -133,6 +133,6 @@ def prove(t, parameters, left, right):
         components.append(p.trans(a,c,p.sym(d),p.sym(b)))
     middle = p.cong('word32',*components)
     p.trans(p.sym(p.lemma(7,left)),middle,p.lemma(7,right))
-    goal = [var('goal'),3,hash_of(t),parameters,equation(left,right)]
-    proof = [var('proof'),3,hash_of(goal),producer.lemmas,[var('derive'),p.steps]]
+    goal = [var('goal'),3,hash_of(t, 'theory'),parameters,equation(left,right)]
+    proof = [var('proof'),3,hash_of(goal, 'goal'),producer.lemmas,[var('derive'),p.steps]]
     return goal,proof

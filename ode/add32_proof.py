@@ -134,8 +134,8 @@ def artifacts(t):
     middle = p.cong('word32',*components)
     left,right = app('add32',x,y),app('add32',y,x)
     p.trans(p.sym(p.lemma(4,left)),middle,p.lemma(4,right))
-    goal = [var('goal'),3,hash_of(t),params,equation(left,right)]
-    proof = [var('proof'),3,hash_of(goal),lemmas,[var('derive'),p.steps]]
+    goal = [var('goal'),3,hash_of(t, 'theory'),params,equation(left,right)]
+    proof = [var('proof'),3,hash_of(goal, 'goal'),lemmas,[var('derive'),p.steps]]
     return goal,proof
 
 
@@ -179,7 +179,7 @@ def identity_artifacts(t):
     middle = p.cong('word32',*components)
     left = app('add32',x,ZERO)
     p.trans(p.sym(p.lemma(4,left)),middle,p.lemma(4,x))
-    goal = [var('goal'),3,hash_of(t),params,equation(left,x)]
-    proof = [var('proof'),3,hash_of(goal),lemmas,[var('derive'),p.steps]]
+    goal = [var('goal'),3,hash_of(t, 'theory'),params,equation(left,x)]
+    proof = [var('proof'),3,hash_of(goal, 'goal'),lemmas,[var('derive'),p.steps]]
     from .proof_slice import slice_proof
     return goal,slice_proof(proof)

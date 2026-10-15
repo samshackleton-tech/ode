@@ -74,7 +74,7 @@ raise SystemExit(main(sys.argv[1:]))
         t=theory()
         g,p=export_normalizer(t,app('add32',literal(0xffffffff),literal(1)))
         g[4][2]=literal(1)
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -83,8 +83,8 @@ raise SystemExit(main(sys.argv[1:]))
         g,p=export_normalizer(t,app('add32',literal(0xffffffff),literal(1)))
         definition=next(d for d in t[4] if d[0]=='carry-bit')
         definition[3][1][2]=app('bit0')
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

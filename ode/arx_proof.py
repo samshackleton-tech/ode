@@ -66,7 +66,7 @@ class Normalization:
     def __init__(self,theory):
         from .check import Dag
         self.theory=theory
-        self.dag,self.proof,self.library=Dag(),Proof(),Library(hash_of(theory))
+        self.dag,self.proof,self.library=Dag(),Proof(),Library(hash_of(theory, 'theory'))
         self.variables,self.cache,self.outputs=set(),{},{}
 
     def output(self,i):
@@ -148,6 +148,6 @@ def export_normalizer(t,expression):
     p=context.proof
     p.trans(last,p.refl(context.output(index)))
     params=[[v,var('Word32')] for v in sorted(context.variables)]
-    goal=[var('goal'),3,hash_of(t),params,equation(expression,context.output(index))]
-    proof=[var('proof'),3,hash_of(goal),context.library.lemmas,[var('derive'),p.steps]]
+    goal=[var('goal'),3,hash_of(t, 'theory'),params,equation(expression,context.output(index))]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),context.library.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

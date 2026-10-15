@@ -191,7 +191,7 @@ def prove(t, parameters, left, right):
     """
     from .mixed_constant_proof import NormalizerWithConstants
     from .proof_library import Library
-    library = Library(hash_of(t))
+    library = Library(hash_of(t, 'theory'))
     for lemma in law_library():
         library.add(lemma)
     p = NormalizerWithConstants(t,library,'xor32',lemma_rules(XOR_LAWS))
@@ -200,8 +200,8 @@ def prove(t, parameters, left, right):
     if a != b:
         raise ValueError('the XOR expressions have different parity-normal forms')
     p.trans(lhs, p.sym(rhs))
-    goal = [var('goal'), 3, hash_of(t), parameters, equation(left,right)]
-    proof = [var('proof'), 3, hash_of(goal), library.lemmas, [var('derive'),p.steps]]
+    goal = [var('goal'), 3, hash_of(t, 'theory'), parameters, equation(left,right)]
+    proof = [var('proof'), 3, hash_of(goal, 'goal'), library.lemmas, [var('derive'),p.steps]]
     return goal, proof
 
 

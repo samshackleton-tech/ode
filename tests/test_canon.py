@@ -33,7 +33,7 @@ class CanonTest(unittest.TestCase):
                 parse(bad)
 
     def test_hash_binds_content(self):
-        self.assertNotEqual(hash_of(parse("(a 1)")), hash_of(parse("(a 2)")))
+        self.assertNotEqual(hash_of(parse("(a 1)"), 'spec'), hash_of(parse("(a 2)"), 'spec'))
 
 
 if __name__ == "__main__":

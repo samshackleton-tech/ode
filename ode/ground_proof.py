@@ -88,6 +88,6 @@ def prove(t, left, right):
         pending.extend(term[1:])
     # Evaluation may return a cached earlier step; explicitly conclude it.
     p.trans(last, p.refl(right))
-    g = [var('goal'), 3, hash_of(t), [], app('eq', left, right)]
-    proof = [var('proof'), 3, hash_of(g), [], [var('derive'), p.steps]]
+    g = [var('goal'), 3, hash_of(t, 'theory'), [], app('eq', left, right)]
+    proof = [var('proof'), 3, hash_of(g, 'goal'), [], [var('derive'), p.steps]]
     return g, proof

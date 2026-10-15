@@ -36,12 +36,14 @@ class GameTest(unittest.TestCase):
         self.assertEqual(pins, [tree_hash(read_tree(os.path.join(GAME, "ode-base")))
                                 .hex().encode()], "run pypy3 game/pin_ode_base.py")
 
-    def test_root_holds_only_the_hash_and_the_launcher(self):
+    def test_root_holds_hash_domains_and_launcher(self):
         root = os.path.join(GAME, "bootstrap", "root")
         self.assertEqual(sorted(f for f in os.listdir(root) if f != "__pycache__"),
-                         ["blake3.py", "launch.py"])
+                         ["blake3.py", "domains.py", "launch.py"])
         self.assertEqual(_bytes(os.path.join(root, "blake3.py")),
                          _bytes(os.path.join(ROOT, "ode", "blake3.py")))
+        self.assertEqual(_bytes(os.path.join(root, "domains.py")),
+                         _bytes(os.path.join(ROOT, "ode", "domains.py")))
 
     def test_mallory_loses_and_controls_pass(self):
         # The corpus is generated, not committed: regenerate, then replay.

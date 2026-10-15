@@ -36,7 +36,7 @@ class KernelBootstrapTest(unittest.TestCase):
         self.assertEqual(field(pins,'ode-base'),tree_hash(read_tree(str(BASE))))
         for key,name in (('theory','encoding.theory.sexp'),('encoding-goal','encoding-g.goal.sexp'),
                          ('execution-goal','encoding-g-execution.goal.sexp')):
-            self.assertEqual(field(pins,key),hash_of(parse((EXAMPLES/name).read_bytes())))
+            self.assertEqual(field(pins,key),hash_of(parse((EXAMPLES/name).read_bytes()), 'theory' if key == 'theory' else 'goal'))
 
     def test_honest_control_from_an_unrelated_working_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

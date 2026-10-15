@@ -18,8 +18,8 @@ def example(name='xor-cancel'):
 
 
 def rehash(theory, goal, proof):
-    goal[2] = hash_of(theory)
-    proof[2] = hash_of(goal)
+    goal[2] = hash_of(theory, 'theory')
+    proof[2] = hash_of(goal, 'goal')
     return theory, goal, proof
 
 
@@ -37,15 +37,15 @@ class BitsKernelTest(unittest.TestCase):
         t, _, _ = example()
         for a in (0, 1):
             for b in (0, 1):
-                g = parse(f'''(goal 3 #{hash_of(t).hex()} ()
+                g = parse(f'''(goal 3 #{hash_of(t, "theory").hex()} ()
                             (eq (xor-bit (bit{a}) (bit{b})) (bit{a ^ b})))''')
                 steps = f'(unfold xor-bit (bit{a}) (bit{b}))'
                 if a:
                     steps += f' (unfold not-bit (bit{b})) (trans 0 1)'
-                p = parse(f'(proof 3 #{hash_of(g).hex()} () (derive ({steps})))')
+                p = parse(f'(proof 3 #{hash_of(g, "goal").hex()} () (derive ({steps})))')
                 verify(t, g, p)
                 g[4][2] = parse(f'(bit{1 - (a ^ b)})')
-                p[2] = hash_of(g)
+                p[2] = hash_of(g, "goal")
                 with self.assertRaises(Reject):
                     verify(t, g, p)
 
@@ -118,9 +118,9 @@ class BitsKernelTest(unittest.TestCase):
           ((mirror ((t Tree)) Tree
             ((leaf () (leaf))
              (node (l r) (node (mirror r) (mirror l)))))))''')
-        g = parse(f'''(goal 3 #{hash_of(t).hex()} ((t Tree))
+        g = parse(f'''(goal 3 #{hash_of(t, "theory").hex()} ((t Tree))
                        (eq (mirror (mirror t)) t))''')
-        p = parse(f'''(proof 3 #{hash_of(g).hex()} ()
+        p = parse(f'''(proof 3 #{hash_of(g, "goal").hex()} ()
           (induct t
             ((leaf () ((unfold mirror (leaf)) (cong mirror 0) (trans 1 0)))
              (node (l r)
@@ -140,8 +140,8 @@ class BitsKernelTest(unittest.TestCase):
         mutant = {"__name__": "ode._mutant_kernel", "__package__": "ode"}
         exec(compile(source.replace(line, "pass"), "<mutant-kernel>", "exec"), mutant)
         t, _, _ = example()
-        g = parse(f'(goal 3 #{hash_of(t).hex()} ((b Bit)) (eq (bit0) (bit1)))')
-        p = parse(f'(proof 3 #{hash_of(g).hex()} () (induct b ()))')
+        g = parse(f'(goal 3 #{hash_of(t, "theory").hex()} ((b Bit)) (eq (bit0) (bit1)))')
+        p = parse(f'(proof 3 #{hash_of(g, "goal").hex()} () (induct b ()))')
         with self.assertRaisesRegex(Reject, 'every constructor'):
             verify(t, g, p)
         mutant['verify'](t, g, p)  # vacuous induction would admit a false equation

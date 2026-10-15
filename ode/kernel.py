@@ -340,9 +340,9 @@ def verify(theory, goal, proof, work=DEFAULT_WORK):
         k.scan(obj)
     k.load_theory(theory)
     header(goal, "goal", 5)
-    require(goal[2] == hash_of(theory), "goal names a different theory")
+    require(goal[2] == hash_of(theory, 'theory'), "goal names a different theory")
     header(proof, "proof", 5)
-    require(proof[2] == hash_of(goal), "proof names a different goal")
+    require(proof[2] == hash_of(goal, 'goal'), "proof names a different goal")
     require(type(proof[3]) is list, "lemmas must be a list")
     for lemma in proof[3]:
         require(type(lemma) is list and len(lemma) == 4 and lemma[0] == "lemma",
@@ -351,5 +351,5 @@ def verify(theory, goal, proof, work=DEFAULT_WORK):
         # reference, forward reference, and exporting an induction hypothesis.
         k.lemmas.append(k.prove(*lemma[1:]))
     k.prove(goal[3], goal[4], proof[4])
-    return {"theory": hash_of(theory), "goal": hash_of(goal), "proof": hash_of(proof),
+    return {"theory": hash_of(theory, 'theory'), "goal": hash_of(goal, 'goal'), "proof": hash_of(proof, 'proof'),
             "rules": k.rules, "lemmas": len(k.lemmas), "terms": len(k.nodes), "work": k.limit - k.remaining}

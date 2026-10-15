@@ -1,1 +1,1 @@
-(goal 3 #fd061b119b6d85cf6da34118687d6a9366e9b6c5df1cd3b4fed20971543303c1 ((a Bit) (b Bit) (c Bit)) (eq (add (bit-value (xor-bit (xor-bit a b) c)) (add (bit-value (carry-bit a b c)) (bit-value (carry-bit a b c)))) (add (bit-value a) (add (bit-value b) (bit-value c)))))
+(goal 3 #71f869eb1a6ef599081a6e892e7bd7212dcaa3daa9c92e8f35aaa16b18f187be ((a Bit) (b Bit) (c Bit)) (eq (add (bit-value (xor-bit (xor-bit a b) c)) (add (bit-value (carry-bit a b c)) (bit-value (carry-bit a b c)))) (add (bit-value a) (add (bit-value b) (bit-value c)))))

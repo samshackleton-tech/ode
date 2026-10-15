@@ -15,7 +15,7 @@ class SliceTest(unittest.TestCase):
         from ode.canon import hash_of
         for path in EXAMPLES.glob('*.theory.sexp'):
             t=parse(path.read_bytes())
-            theories[hash_of(t)]=t
+            theories[hash_of(t, 'theory')]=t
         for path in EXAMPLES.glob('*.proof.sexp'):
             with self.subTest(proof=path.name):
                 p=parse(path.read_bytes())

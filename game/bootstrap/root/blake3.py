@@ -1,9 +1,8 @@
-"""BLAKE3 (unkeyed, 32-byte output), implemented from the C2SP specification.
+"""BLAKE3 with standard 32-byte hash and derive-key modes.
 
-Ode names every definition by the BLAKE3 hash of its canonical form (SPEC s2).
-This module is the one hash implementation the toolchain shares; the checker
-uses the same published algorithm through it. Test vectors from the BLAKE3
-paper / C2SP appendix live in tests/test_canon.py.
+The hash primitive preserves standard BLAKE3 outputs. Ode identities use
+only derive_key with the versioned contexts defined in ode/domains.py.
+The bootstrap root serves this same implementation to delivered packages.
 """
 import struct
 
@@ -14,6 +13,8 @@ CHUNK_START = 1 << 0
 CHUNK_END = 1 << 1
 PARENT = 1 << 2
 ROOT = 1 << 3
+DERIVE_KEY_CONTEXT = 1 << 5
+DERIVE_KEY_MATERIAL = 1 << 6
 MASK32 = 0xFFFFFFFF
 
 
@@ -64,13 +65,13 @@ def _compress(cv, block, counter, block_len, flags):
     return out
 
 
-def _chunk_node(data, counter):
+def _chunk_node(data, counter, key, mode):
     """The last compression's inputs for one chunk: (cv, block, counter,
     block_len, flags), with every earlier block already chained in."""
-    cv = IV[:]
+    cv = key[:]
     blocks = [data[i:i + 64] for i in range(0, len(data), 64)] or [b""]
     for i, block in enumerate(blocks):
-        flags = (CHUNK_START if i == 0 else 0) | \
+        flags = mode | (CHUNK_START if i == 0 else 0) | \
                 (CHUNK_END if i == len(blocks) - 1 else 0)
         node = (cv, block + b"\x00" * (64 - len(block)), counter,
                 len(block), flags)
@@ -89,16 +90,33 @@ def _root(node):
                                          flags | ROOT)[:8])
 
 
-def blake3(data: bytes) -> bytes:
-    """The 32-byte BLAKE3 hash of data (unkeyed)."""
-    assert isinstance(data, bytes)
-    nodes = [_chunk_node(data[off:off + 1024], off // 1024)
+def _hash(data, key, mode):
+    nodes = [_chunk_node(data[off:off + 1024], off // 1024, key, mode)
              for off in range(0, max(len(data), 1), 1024)]
     # Pair chaining values left to right; an odd one carries up a level.
     while len(nodes) > 1:
-        nxt = [(IV[:], struct.pack("<16I", *(_cv(nodes[i]) + _cv(nodes[i + 1]))),
-                0, 64, PARENT) for i in range(0, len(nodes) - 1, 2)]
+        nxt = [(key[:], struct.pack("<16I", *(_cv(nodes[i]) + _cv(nodes[i + 1]))),
+                0, 64, mode | PARENT) for i in range(0, len(nodes) - 1, 2)]
         if len(nodes) % 2:
             nxt.append(nodes[-1])
         nodes = nxt
     return _root(nodes[0])
+
+
+def blake3(data: bytes) -> bytes:
+    """Standard unkeyed BLAKE3; for implementing/testing BLAKE3, not Ode identities."""
+    assert isinstance(data, bytes)
+    return _hash(data, IV, 0)
+
+
+def derive_key(context: str, material: bytes) -> bytes:
+    """Standard BLAKE3 derive-key mode, returning 32 bytes.
+
+    Context must be an application-specific UTF-8 string identifying the
+    purpose and semantics. It is public domain separation, not a secret.
+    """
+    assert isinstance(context,str) and context, 'derive-key requires a nonempty context'
+    assert isinstance(material,bytes), 'derive-key material must be bytes'
+    context_key = _hash(context.encode('utf-8'), IV, DERIVE_KEY_CONTEXT)
+    key = list(struct.unpack('<8I', context_key))
+    return _hash(material, key, DERIVE_KEY_MATERIAL)

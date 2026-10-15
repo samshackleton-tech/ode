@@ -22,7 +22,7 @@ def theory():
 
 
 def goal(t,left,right,names=('x','y')):
-    return [var('goal'),3,hash_of(t),[[var(n),var('Word32')] for n in names],app('eq',left,right)]
+    return [var('goal'),3,hash_of(t, 'theory'),[[var(n),var('Word32')] for n in names],app('eq',left,right)]
 
 
 class EquationProofTest(unittest.TestCase):
@@ -40,7 +40,7 @@ class EquationProofTest(unittest.TestCase):
         t=theory()
         g=goal(t,parse('(xor32 x y)'),parse('(xor32 y x)'),('y','unused','x'))
         proof=produce(t,g)
-        self.assertEqual(proof[2],hash_of(g))
+        self.assertEqual(proof[2],hash_of(g, 'goal'))
         verify(t,g,proof)
 
     def test_author_receives_the_simplified_direct_equation(self):
@@ -85,14 +85,14 @@ class EquationProofTest(unittest.TestCase):
         with self.assertRaises(NeedProof) as context:
             produce(t,g)
         residual=context.exception.goal
-        hint=[var('proof'),3,hash_of(residual),[],app('derive',[app('refl',ZERO)])]
+        hint=[var('proof'),3,hash_of(residual, 'goal'),[],app('derive',[app('refl',ZERO)])]
         proof=produce(t,g,hint)
         with self.assertRaises(Reject):
             verify(t,g,proof)
 
     def test_hint_for_a_different_goal_stops(self):
         t=theory();g=goal(t,var('x'),var('y'))
-        hint=[var('proof'),3,hash_of(t),[],app('derive',[app('refl',var('x'))])]
+        hint=[var('proof'),3,hash_of(t, 'theory'),[],app('derive',[app('refl',var('x'))])]
         with self.assertRaisesRegex(AssertionError,'different goal'):
             produce(t,g,hint)
 
@@ -107,7 +107,7 @@ class EquationProofTest(unittest.TestCase):
             residual=parse(request.stdout)
             self.assertEqual(residual[0],'goal')
             self.assertIn('NEEDS PROOF',request.stderr)
-            hint=[var('proof'),3,hash_of(residual),[],app('derive',[app('refl',ZERO)])]
+            hint=[var('proof'),3,hash_of(residual, 'goal'),[],app('derive',[app('refl',ZERO)])]
             (d/'hint').write_bytes(canonical_bytes(hint))
             rejected=subprocess.run(command+[str(d/'hint')],cwd=ROOT,capture_output=True,text=True,timeout=30)
             self.assertEqual(rejected.returncode,1)

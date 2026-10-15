@@ -26,7 +26,7 @@ class Library:
     def include(self, goal, proof):
         assert goal[2] == self.theory_hash, 'theorem uses a different theory'
         from .canon import hash_of
-        assert proof[2] == hash_of(goal), 'proof names a different goal'
+        assert proof[2] == hash_of(goal, 'goal'), 'proof names a different goal'
         remap = {}
         entries = proof[3] + [[var('lemma'),goal[3],goal[4],proof[4]]]
         for i,entry in enumerate(entries):

@@ -20,7 +20,7 @@ IV = (0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A,
       0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19)
 
 with open(os.path.join(HERE, "blake3-compress.sexp"), "rb") as f:
-    chash = hash_of(parse(f.read())).hex()
+    chash = hash_of(parse(f.read()), 'spec').hex()
 steps, cv = [], [str(v) for v in IV]
 for b in range(16):
     flags = (1 if b == 0 else 0) | (2 if b == 15 else 0)

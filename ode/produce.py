@@ -14,13 +14,12 @@ import os
 import struct as _struct
 
 from . import word
-from .blake3 import blake3
-from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of, parse
+from .canon import Bytes, Sym, assoc, canonical_bytes, hash_of, binary_hash, parse
 
 
 def put_definition(store_dir, defn):
     """File a definition in a store under its hash; return the hash."""
-    h = hash_of(defn)
+    h = hash_of(defn, defn[0])
     with open(os.path.join(store_dir, h.hex() + ".sexp"), "wb") as f:
         f.write(canonical_bytes(defn))
     return h
@@ -293,8 +292,8 @@ def build(spec_defn, store_dir, isa="w32", at=None, library=None):
     cert_hash, binary = _certify(spec_defn, store_dir, isa, at or {}, resolve)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(_load_cert(store_dir, cert_hash)))
-    return {"spec": hash_of(spec_defn).hex(), "certificate": cert_hash.hex(),
-            "binary_hash": blake3(binary).hex(), "binary_len": len(binary)}
+    return {"spec": hash_of(spec_defn, 'spec').hex(), "certificate": cert_hash.hex(),
+            "binary_hash": binary_hash(binary, isa).hex(), "binary_len": len(binary)}
 
 
 def bind(spec_defn, store_dir, isa="a64", library=None):
@@ -317,7 +316,7 @@ def bind(spec_defn, store_dir, isa="a64", library=None):
     cert_hash = put_definition(store_dir, cert)
     with open(os.path.join(store_dir, "certificate.sexp"), "wb") as f:
         f.write(canonical_bytes(cert))
-    return {"spec": hash_of(spec_defn).hex(), "certificate": cert_hash.hex()}
+    return {"spec": hash_of(spec_defn, 'spec').hex(), "certificate": cert_hash.hex()}
 
 
 def _load_cert(store_dir, h):
@@ -342,13 +341,13 @@ def _certify(spec_defn, store_dir, isa, at, resolve):
         extra = (("scratch", scratch),)
     else:
         raise ValueError(f"unknown isa {isa!r}")
-    with open(os.path.join(store_dir, blake3(binary).hex() + ".bin"), "wb") as f:
+    with open(os.path.join(store_dir, binary_hash(binary, isa).hex() + ".bin"), "wb") as f:
         f.write(binary)
     at_field = (("at", [[Sym(k), v] for k, v in sorted(at.items())]),) if at else ()
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym(f"equals-spec-{isa}-v1")),
                  ("spec", put_definition(store_dir, spec_defn)), *at_field,
-                 ("binary-hash", Bytes(blake3(binary))), *extra)
+                 ("binary-hash", binary_hash(binary, isa)), *extra)
     return put_definition(store_dir, cert), binary
 
 
@@ -362,5 +361,5 @@ def library_of(directory):
                     d = parse(f.read())
                 except ValueError:
                     continue
-            lib[hash_of(d)] = d
+            lib[hash_of(d, d[0])] = d
     return lib

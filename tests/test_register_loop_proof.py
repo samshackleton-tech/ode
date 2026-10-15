@@ -30,12 +30,12 @@ class RegisterLoopTest(unittest.TestCase):
     def test_general_batching_instantiates_to_g(self):
         from ode.proof_library import Library
         from ode.ground_proof import substitute
-        t,g,p=bundle('register-batch');lib=Library(hash_of(t));index=lib.include(g,p)
+        t,g,p=bundle('register-batch');lib=Library(hash_of(t, 'theory'));index=lib.include(g,p)
         inputs=initial_state();code=program(g_instructions())
         count=app('succ',app('succ',app('zero')))
         eq=substitute(g[4],{var('n'):count,var('p'):code,var('s'):inputs})
-        goal=[var('goal'),3,hash_of(t),[[var(r),var('Word32')] for r in REGISTERS],eq]
-        proof=[var('proof'),3,hash_of(goal),lib.lemmas,
+        goal=[var('goal'),3,hash_of(t, 'theory'),[[var(r),var('Word32')] for r in REGISTERS],eq]
+        proof=[var('proof'),3,hash_of(goal, 'goal'),lib.lemmas,
                app('derive',[app('lemma',index,count,code,inputs)])]
         verify(t,goal,proof)
 
@@ -43,13 +43,13 @@ class RegisterLoopTest(unittest.TestCase):
         t,g,p=bundle('register-batch')
         definition=next(d for d in t[4] if d[0]=='double')
         definition[3][1][2]=app('succ',app('double',var('k')))
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_wrong_batch_count_rejected(self):
         t,g,p=bundle('register-batch')
-        g[4][1][1]=var('n');p[2]=hash_of(g)
+        g[4][1][1]=var('n');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -57,7 +57,7 @@ class RegisterLoopTest(unittest.TestCase):
         t,g,p=bundle('register-iterate')
         definition=next(d for d in t[4] if d[0]=='repeat-program')
         definition[3][1][2]=app('repeat-program',var('k'),var('p'))
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

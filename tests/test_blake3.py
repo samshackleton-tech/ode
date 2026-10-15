@@ -12,7 +12,7 @@ sys.path.insert(0, ROOT)
 
 from ode import check, produce, word  # noqa: E402
 from ode.blake3 import _compress, _g, blake3  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, hash_of, parse  # noqa: E402
+from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, hash_of, binary_hash, parse  # noqa: E402
 from ode.cli import _check, check_store  # noqa: E402
 from ode.store import Reject  # noqa: E402
 
@@ -44,13 +44,13 @@ def certify(spec, binary, at=None):
     tmp = tempfile.mkdtemp()
     for h in word.uses_of(spec).values():
         produce.put_definition(tmp, LIB[h])
-    with open(os.path.join(tmp, blake3(binary).hex() + ".bin"), "wb") as f:
+    with open(os.path.join(tmp, binary_hash(binary, "w32").hex() + ".bin"), "wb") as f:
         f.write(binary)
     extra = (("at", [[Sym(k), v] for k, v in sorted(at.items())]),) if at else ()
     cert = assoc("certificate", ("cert", Sym("correctness")),
                  ("property", Sym("equals-spec-w32-v1")),
                  ("spec", produce.put_definition(tmp, spec)), *extra,
-                 ("binary-hash", Bytes(blake3(binary))))
+                 ("binary-hash", binary_hash(binary, "w32")))
     return tmp, cert
 
 
@@ -176,7 +176,7 @@ class NamesTest(unittest.TestCase):
     def test_spec_names_like_minted_ones(self):
         callee = parse("(spec (name inner) (inputs (a b)) "
                        "(steps ((t0 (add a b)) (t1 (xor t0 a)))) (outputs (t1 t0)))")
-        ch = hash_of(callee)
+        ch = hash_of(callee, 'spec')
         caller = parse(f"(spec (name outer) (inputs (t0 a)) (uses ((inner #{ch.hex()}))) "
                        f"(steps (((u v) (inner a t0)) (t1 (add u v)) "
                        f"((w z) (inner t1 t0)))) (outputs (w z t1)))")
@@ -238,7 +238,7 @@ class EveryLengthTest(unittest.TestCase):
 
         def extra(tmp, cert):
             pair = cert[[p[0] for p in cert].index("callees")][1][0]
-            return with_callees(cert, [pair, [hash_of(g), pair[1]]])
+            return with_callees(cert, [pair, [hash_of(g, 'spec'), pair[1]]])
 
         def nested(tmp, cert):  # bind the callee to a binding, not to code
             inner = assoc("certificate", ("cert", Sym("correctness")),

@@ -66,7 +66,7 @@ def _pinned_specs():
     for target, name in SPEC_FILE.items():
         with open(os.path.join(EXAMPLES, name), "rb") as f:
             specs[target] = parse(f.read())
-        if hash_of(specs[target]) != pins[target]:
+        if hash_of(specs[target], 'spec') != pins[target]:
             raise SystemExit(f"referee: examples/{name} is not the pinned {target}")
     return specs
 

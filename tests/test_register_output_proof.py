@@ -67,7 +67,7 @@ raise SystemExit(main(sys.argv[1:]))
         t,g,p=execution()
         goal,proof=normalized_output(t,g,p,'a')
         goal[4][1][0]=var('state-b')
-        proof[2]=hash_of(goal)
+        proof[2]=hash_of(goal, 'goal')
         with self.assertRaises(Reject):
             verify(t,goal,proof)
 

@@ -10,13 +10,13 @@ package's RELIANCE. On any difference it stops. Otherwise it runs
 ode-base's bob.py from those same in-memory bytes, with every `ode`
 import served from them, so nothing read after the hash can run.
 
-Tree hash: BLAKE3 over the sorted entries, each the file's path (UTF-8,
-'/'-separated, relative to ODE_BASE_DIR), a zero byte, and the 32-byte
-BLAKE3 of its contents. __pycache__ directories are skipped.
-Root code: this file and blake3.py; nothing else is imported from disk
-except Python's standard library. ode-base carries no hash of its own:
-the root serves its blake3 module to ode-base as `ode.blake3`, so Bob
-relies on one BLAKE3, not two.
+Tree identity: BLAKE3 derive-key in the package-tree semantic context over
+sorted entries: UTF-8 relative path, NUL, and the 32-byte package-file
+identity of its bytes. File/tree domains are distinct; domains.py records
+their current semantic revisions. __pycache__ directories are skipped.
+Root code: this file, blake3.py, and domains.py; other imports from disk
+are Python's standard library. The root serves its hash implementation
+and domain registry to packages as ode.blake3 and ode.domains.
 """
 import importlib.abc
 import importlib.util
@@ -27,8 +27,10 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import blake3 as _root_blake3  # noqa: E402  (the root's own copy)
+import domains as _root_domains  # noqa: E402
 sys.path.pop(0)
-blake3 = _root_blake3.blake3
+derive_key = _root_blake3.derive_key
+context = _root_domains.context
 
 
 def read_tree(root):
@@ -44,9 +46,9 @@ def read_tree(root):
 
 
 def tree_hash(files):
-    entries = sorted(rel.encode("utf-8") + b"\0" + blake3(data)
+    entries = sorted(rel.encode("utf-8") + b"\0" + derive_key(context('package-file'), data)
                      for rel, data in files.items())
-    return blake3(b"".join(entries))
+    return derive_key(context('package-tree'), b"".join(entries))
 
 
 class _MemoryFinder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
@@ -94,6 +96,7 @@ def main(argv):
         print("REJECT ode-base is not the one the package pins")
         return 1
     sys.modules["ode.blake3"] = _root_blake3
+    sys.modules["ode.domains"] = _root_domains
     sys.meta_path.insert(0, _MemoryFinder(files))
     if "bob.py" not in files:
         print("REJECT ode-base has no bob.py")

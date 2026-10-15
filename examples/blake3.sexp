@@ -15,8 +15,8 @@
 (spec
   (name blake3)
   (inputs ((len nat) (m words)))
-  (uses ((full-chunk #9d5c7c9ee60e41c33aa152ea78633ced2ad3cf066861540a49e45962d6740287)
-         (compress #8ab0f1624cd1178d89715392b2c37efb28080b8c1f72e31f138b3c3770a81b6b)))
+  (uses ((full-chunk #f1186a4716d66e11ed5d890df9679b21d4a7f50c4f135545fe634bca28a3b343)
+         (compress #6d5c8554f810e8ea78a642238b861ef958fcd5c306e7afbf7cd97d58f5fc8cab)))
   (funs
     ((iv () (list 1779033703 3144134277 1013904242 2773480762
                   1359893119 2600822924 528734635 1541459225))

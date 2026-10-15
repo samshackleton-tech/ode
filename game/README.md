@@ -4,12 +4,12 @@ A test from the relying party's side.
 
 - **Sam** publishes `bootstrap/`: everything Bob relies on for
   *correctness*.
-  - `root/` -- `blake3.py` and `launch.py`, 235 lines. The launcher reads
+  - `root/` -- `blake3.py`, `domains.py`, and `launch.py`. The launcher reads
     an ode-base into memory, computes its tree hash, compares it with the
     pin, stops on any difference, and runs `bob.py` with every `ode`
-    import served from the very bytes it hashed. The root's BLAKE3 is the
-    only one: it serves it to ode-base as `ode.blake3`.
-  - `game-targets/RELIANCE` -- about 260 bytes: the tree hash of the
+    import served from the very bytes it hashed. The root serves its single BLAKE3 implementation and semantic-domain
+    registry to the delivered package as `ode.blake3` and `ode.domains`.
+  - `game-targets/RELIANCE` -- the domain-separated tree identity of the
     ode-base, and the hashes of the game's two specifications: BLAKE3's
     G, and BLAKE3 of any length (`examples/blake3.sexp`), which Bob asks
     for at 65 bytes.
@@ -70,6 +70,11 @@ relies on the pinned kernel and readers, the root loader/hash, PyPy and
 its standard library, the OS, and hardware. Hash admission fixes code
 identity; it does not establish that code's correctness. The package
 runs no supplied binary.
+
+File identities and tree identities use separate BLAKE3 derive-key contexts;
+specification, theory, and goal identities have their own semantic contexts.
+`../DOMAINS.md` documents the policy. A meaning change updates the relevant
+domain revision and all dependent pins; old identities are rejected.
 
 ## What the game has found
 

@@ -14,7 +14,7 @@ from .word_literal import ZERO
 
 
 def library(t):
-    lib = Library(hash_of(t))
+    lib = Library(hash_of(t, 'theory'))
     laws = {}
     for name,maker in (('comm',commutativity),('right',identity_artifacts),('assoc',associativity)):
         laws[name] = lib.include(*maker(t))
@@ -41,6 +41,6 @@ def prove(t, parameters, left, right):
     if a != b:
         raise ValueError('addition expressions have different operand multisets')
     p.trans(lhs,p.sym(rhs))
-    goal = [var('goal'),3,hash_of(t),parameters,equation(left,right)]
-    proof = [var('proof'),3,hash_of(goal),lib.lemmas,[var('derive'),p.steps]]
+    goal = [var('goal'),3,hash_of(t, 'theory'),parameters,equation(left,right)]
+    proof = [var('proof'),3,hash_of(goal, 'goal'),lib.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

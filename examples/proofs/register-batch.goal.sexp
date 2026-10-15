@@ -1,1 +1,1 @@
-(goal 3 #c1f0a1a2c8080cd9ca56e593ad3c5c22c78f82f7ce489753041d305d8cb947f8 ((n Nat) (p Program) (s State)) (eq (iterate-program (double n) p s) (iterate-program n (append-program p p) s)))
+(goal 3 #23897e76fbdff8ce55372479dfa0971012283b38b38a10f65bcf419a792fed77 ((n Nat) (p Program) (s State)) (eq (iterate-program (double n) p s) (iterate-program n (append-program p p) s)))

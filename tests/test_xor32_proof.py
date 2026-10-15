@@ -67,23 +67,23 @@ raise SystemExit(main(sys.argv[1:]))
         for i in (40, 41, 42, 43):
             with self.subTest(lemma=i):
                 _, params, eq, deriv = library[i]
-                g = [Sym('goal'),3,hash_of(t),params,eq]
-                proof = [Sym('proof'),3,hash_of(g),library[:i],deriv]
+                g = [Sym('goal'),3,hash_of(t, 'theory'),params,eq]
+                proof = [Sym('proof'),3,hash_of(g, 'goal'),library[:i],deriv]
                 verify(t,g,proof)
 
     def test_explicit_word_constructor_has_exactly_32_bits(self):
         for bits in (31, 33):
             t, g, p = bundle()
             g[4][2] = app('word32', *[app('bit0') for _ in range(bits)])
-            p[2] = hash_of(g)
+            p[2] = hash_of(g, 'goal')
             with self.subTest(bits=bits), self.assertRaises(Reject):
                 verify(t,g,p)
 
     def test_wrong_selector_breaks_its_extensionality_proof(self):
         t,g,p = bundle()
         t[4][33][3][0][2] = var('b0')  # bit-at-31 returns bit 0
-        g[2] = hash_of(t)
-        p[2] = hash_of(g)
+        g[2] = hash_of(t, 'theory')
+        p[2] = hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -91,15 +91,15 @@ raise SystemExit(main(sys.argv[1:]))
         t,g,p = bundle()
         # Define xor32(x,y)=x, which preserves width but breaks cancellation.
         t[4][-1][3][0][2] = app('word32', *[var(f'b{i}') for i in range(32)])
-        g[2] = hash_of(t)
-        p[2] = hash_of(g)
+        g[2] = hash_of(t, 'theory')
+        p[2] = hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_a_lying_normalizer_cannot_choose_the_result(self):
         t,g,p = bundle()
         g[4][2] = ZERO  # x XOR (y XOR x) = 0 is false for nonzero y
-        p[2] = hash_of(g)
+        p[2] = hash_of(g, 'goal')
         with self.assertRaisesRegex(Reject, 'different equation'):
             verify(t,g,p)
 

@@ -50,7 +50,7 @@ class RegisterProofTest(unittest.TestCase):
         t,_,_=bundle()
         g,p=composition_artifacts(t)
         g[4][2]=app('run',var('p'),app('run',var('q'),var('s')))
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -96,7 +96,7 @@ class RegisterProofTest(unittest.TestCase):
         t,g,p=bundle()
         step=next(d for d in t[4] if d[0]=='step')
         step[3][0][2][1]=var('b')
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -104,7 +104,7 @@ class RegisterProofTest(unittest.TestCase):
         t,g,p=bundle()
         run=next(d for d in t[4] if d[0]=='run')
         run[3][1][2]=app('run',var('tail'),var('s'))
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -112,14 +112,14 @@ class RegisterProofTest(unittest.TestCase):
         t,g,p=bundle()
         program=g[4][1][1]
         program[1],program[2][1]=program[2][1],program[1]
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_changed_preserved_register_rejected(self):
         t,g,p=bundle()
         g[4][2][5]=var('a')
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

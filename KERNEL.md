@@ -42,7 +42,11 @@ axioms, admitted equations, solver verdicts, or evaluator callbacks.
 
 The version-3 grammar uses positional s-expressions; every field and
 arity is checked. Files may have formatting and `;` comments. Identities
-are BLAKE3 hashes of the canonical forms from `ode/canon.py`.
+use BLAKE3 derive-key mode on the canonical forms from `ode/canon.py`,
+with separate semantic contexts for theories, goals, and proofs. These
+contexts are independent of the serialized version number; a change of
+meaning requires a domain revision even for identical bytes. `DOMAINS.md`
+specifies the current contexts and the fail-stop migration policy.
 
 ```lisp
 (theory 3

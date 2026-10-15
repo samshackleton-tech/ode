@@ -53,8 +53,9 @@ under R1–R2, or appears in the assurance map as unproved (§7).
 
 **2.1 Definitions.** Every artefact in Ode is a *definition*: a specification, a function, a
 kernel, a generator, a proof certificate, a property, a measurement, a decision, an ISA
-model fragment. A definition is immutable. A definition's identity is the BLAKE3 hash of its
-canonical form, and its dependencies appear inside the canonical form as their hashes. A
+model fragment. A definition is immutable. Its identity uses BLAKE3 derive-key mode
+on its canonical bytes, with an explicit domain for its kind and semantic revision.
+Dependencies appear inside the canonical form as their domain-separated identities. A
 hash therefore fixes a definition and, transitively, everything it depends on: source,
 generator, compiler, flags, property definitions, ISA model. Two agents adding definitions
 never conflict, because they only ever add hashes.
@@ -77,6 +78,15 @@ encoding with these properties —
 The canonical form is the only form the checker reads. Text and graphical forms are
 projections (§8) produced from it and parsed back into it; a projection is a view, never a
 second source.
+
+**Semantic domains.** `ode/domains.py` records the current revision for each identity
+purpose. Callers choose the expected kind; readers do not infer their hashing domain
+from untrusted object tags. Specifications, certificates, theories, goals, proofs,
+W32 binaries, AArch64 binaries, package files, and package trees use distinct contexts.
+A change to what an object means requires a new domain revision even when its bytes
+and serialization version are unchanged. The same change updates dependent references,
+artifacts, and pins; readers accept only current domains. Meaning-preserving refactors
+retain the revision. `DOMAINS.md` specifies the mechanism and migration policy.
 
 **2.3 Names.** A *name directory* maps human- and agent-chosen names (pet names) to hashes.
 Names live outside definitions, carry no authority, and differ between projects and people.

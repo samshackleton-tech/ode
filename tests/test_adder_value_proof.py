@@ -44,21 +44,21 @@ class AdderValueTest(unittest.TestCase):
         t,g,p=bundle()
         carry=next(d for d in t[4] if d[0]=='carry-bit')
         carry[3][1][2]=app('bit0')
-        g[2]=hash_of(t);p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory');p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_carry_weight_cannot_drop_from_two_to_one(self):
         t,g,p=bundle()
         g[4][1][2]=g[4][1][2][1]
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
     def test_missing_input_is_rejected(self):
         t,g,p=bundle()
         g[4][2]=app('add',app('bit-value',var('a')),app('bit-value',var('b')))
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 

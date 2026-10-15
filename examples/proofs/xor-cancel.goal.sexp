@@ -1,1 +1,1 @@
-(goal 3 #25ab4bb9fcb61ffb55d77d54d6642105cdcb5628a03fb8479233ff0a593d9043 ((x Bits)) (eq (xor-bits x x) (zeros x)))
+(goal 3 #4f925923084103a70cef77964f8c85ce6b6aa2f2fc490c4dc20f8aa1751ab6e5 ((x Bits)) (eq (xor-bits x x) (zeros x)))

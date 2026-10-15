@@ -26,7 +26,7 @@ def produce(theory,goal,residual_proof=None):
     exactly the requested residual goal; the recipient kernel checks it.
     """
     assert goal[0:2]==[var('goal'),3] and len(goal)==5, 'requires a version-3 goal'
-    assert goal[2]==hash_of(theory), 'goal names a different theory'
+    assert goal[2]==hash_of(theory, 'theory'), 'goal names a different theory'
     assert all(sort=='Word32' for _,sort in goal[3]), 'requires Word32 parameters'
     assert goal[4][0]=='eq' and len(goal[4])==3, 'requires an equation'
     declared={name for name,_ in goal[3]}
@@ -48,4 +48,4 @@ def produce(theory,goal,residual_proof=None):
         steps.append(p.lemma(hint,*[name for name,_ in goal[3]]))
     steps.append(p.sym(right_proof))
     p.trans(*steps)
-    return slice_proof([var('proof'),3,hash_of(goal),context.library.lemmas,[var('derive'),p.steps]])
+    return slice_proof([var('proof'),3,hash_of(goal, 'goal'),context.library.lemmas,[var('derive'),p.steps]])

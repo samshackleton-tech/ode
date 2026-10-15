@@ -18,8 +18,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from ode import a64, check, produce, word  # noqa: E402
-from ode.blake3 import blake3  # noqa: E402
-from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, parse  # noqa: E402
+from ode.canon import Bytes, Sym, assoc, canonical_bytes, field, parse, binary_hash  # noqa: E402
 from ode.store import Reject  # noqa: E402
 from ode.check import Dag  # noqa: E402
 
@@ -125,12 +124,12 @@ class CheckerOnA64Test(unittest.TestCase):
 
     def certify(self, code, scratch):
         tmp = tempfile.mkdtemp()
-        with open(os.path.join(tmp, blake3(code).hex() + ".bin"), "wb") as f:
+        with open(os.path.join(tmp, binary_hash(code, "a64").hex() + ".bin"), "wb") as f:
             f.write(code)
         cert = assoc("certificate", ("cert", Sym("correctness")),
                      ("property", Sym("equals-spec-a64-v1")),
                      ("spec", produce.put_definition(tmp, self.spec)),
-                     ("binary-hash", Bytes(blake3(code))), ("scratch", scratch))
+                     ("binary-hash", binary_hash(code, "a64")), ("scratch", scratch))
         return check.check_certificate(tmp, cert)
 
     def test_honest_g_is_proved(self):

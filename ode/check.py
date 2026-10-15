@@ -144,7 +144,7 @@ def check_certificate(store_dir, cert, _seen=None):
     prop = field(cert, "property")
     if prop not in PROPERTIES:
         raise Reject(f"unsupported property {prop!r}")
-    spec_defn = _load(store_dir, field(cert, "spec"))
+    spec_defn = _load(store_dir, field(cert, "spec"), "spec")
     if prop == "spec-with-callees-v1":
         return _check_spec_with_callees(store_dir, cert, spec_defn, seen)
     try:
@@ -156,7 +156,7 @@ def check_certificate(store_dir, cert, _seen=None):
     binary = _load_binary(store_dir, cert)
 
     def resolve(h):
-        callee = _load(store_dir, h)
+        callee = _load(store_dir, h, "spec")
         try:
             return word.validate_spec(callee)
         except ValueError as e:
@@ -214,7 +214,7 @@ def check_certificate(store_dir, cert, _seen=None):
                  ("spec", field(cert, "spec")),
                  ("at", field(cert, "at") or []),
                  ("binary-hash", field(cert, "binary-hash")),
-                 ("certificate", hash_of(cert)),
+                 ("certificate", hash_of(cert, 'certificate')),
                  ("domain", Sym("all-u32-inputs")),
                  ("dag-nodes", len(dag.nodes))), program
 
@@ -245,7 +245,7 @@ def _check_spec_with_callees(store_dir, cert, spec_defn, seen):
                    ("property", Sym("spec-with-callees-v1")),
                    ("spec", field(cert, "spec")), ("at", []),
                    ("binary-hash", Bytes(bytes(32))),
-                   ("certificate", hash_of(cert)),
+                   ("certificate", hash_of(cert, 'certificate')),
                    ("domain", Sym("every-instantiation")), ("dag-nodes", 0))
     return record, ("spec", spec_defn, {"in": None, "out": None}, bound)
 
@@ -257,7 +257,7 @@ def _callee(store_dir, cert_hash, seen):
             raise Reject("a certificate calls itself")
         return seen[cert_hash]
     seen[cert_hash] = None  # in progress: a cycle is a reject
-    cert = _load(store_dir, cert_hash)
+    cert = _load(store_dir, cert_hash, "certificate")
     _, program = check_certificate(store_dir, cert, seen)
     seen[cert_hash] = (program, field(cert, "spec"))
     return seen[cert_hash]

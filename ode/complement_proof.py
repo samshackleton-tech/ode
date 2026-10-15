@@ -18,7 +18,7 @@ ONES=literal(0xffffffff)
 
 
 def artifacts(t):
-    library=Library(hash_of(t))
+    library=Library(hash_of(t, 'theory'))
     library.include(*addition_laws(t))
     word_rules=[library.add(lemma) for lemma in word_lemmas()]
     a,x,y=map(var,('a','x','y'))
@@ -71,6 +71,6 @@ def artifacts(t):
         components.append(p.trans(first,middle,p.lemma(bit_identity,pair),p.lemma(sum_one,bit)))
     middle=p.cong('word32',*components)
     p.trans(p.sym(p.lemma(word_rules[0],total)),middle)
-    goal=[var('goal'),3,hash_of(t),params,equation(total,ONES)]
-    proof=[var('proof'),3,hash_of(goal),library.lemmas,[var('derive'),p.steps]]
+    goal=[var('goal'),3,hash_of(t, 'theory'),params,equation(total,ONES)]
+    proof=[var('proof'),3,hash_of(goal, 'goal'),library.lemmas,[var('derive'),p.steps]]
     return goal,slice_proof(proof)

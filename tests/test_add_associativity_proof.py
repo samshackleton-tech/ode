@@ -38,8 +38,8 @@ class AssociativityTest(unittest.TestCase):
         t,g,p=bundle()
         carry=next(d for d in t[4] if d[0]=='carry-bit')
         carry[3][1][2]=app('and-bit',var('b'),var('c'))
-        g[2]=hash_of(t)
-        p[2]=hash_of(g)
+        g[2]=hash_of(t, 'theory')
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
@@ -53,7 +53,7 @@ class AssociativityTest(unittest.TestCase):
     def test_dropped_operand_rejected(self):
         t,g,p=bundle()
         g[4][2]=app('add32',var('x'),var('y'))
-        p[2]=hash_of(g)
+        p[2]=hash_of(g, 'goal')
         with self.assertRaises(Reject):
             verify(t,g,p)
 
