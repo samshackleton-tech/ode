@@ -1,0 +1,248 @@
+"""Word programs: the specification layer at u32 scale, and W32.
+
+The BLAKE3 slice (see examples/blake3-g.sexp) needs 32-bit words. A word
+program is an s-expression definition in sequential (SSA) steps:
+
+    (wspec (name blake3-g)
+      (inputs (a b c d x y))
+      (steps ((a1 (add (add a b) x)) (d1 (rotr (xor d a1) 16)) ...))
+      (outputs (a2 b2 c2 d2)))
+
+Expressions: an atom is a name (a step or input) or an integer constant;
+compound forms are (add e e), (xor e e), (rotr e n), all modulo 2**32.
+Every step computes exactly one word; the program is definite and pure.
+
+A machine program (wmachine, isa W32) has the same shape, except each
+step's expression is a single operation on atoms -- the straight-line,
+branch-free word machine the producer emits and the checker symbolically
+executes (ode/wcheck.py).
+"""
+from .canon import Sym, field
+
+MASK = 0xFFFFFFFF
+OPS = ("add", "xor", "rotr")
+
+
+def _const(n):
+    if not isinstance(n, int) or isinstance(n, bool) or not (0 <= n <= MASK):
+        raise ValueError(f"bad u32 constant {n!r}")
+    return n
+
+
+def validate_expr(e, names):
+    if isinstance(e, int):
+        _const(e)
+        return
+    if isinstance(e, Sym):
+        if e not in names:
+            raise ValueError(f"unknown name {e}")
+        return
+    if isinstance(e, list) and e and e[0] in OPS:
+        if e[0] in ("add", "xor"):
+            if len(e) != 3:
+                raise ValueError(f"{e[0]} takes two operands")
+            validate_expr(e[1], names)
+            validate_expr(e[2], names)
+            return
+        if len(e) != 3 or not isinstance(e[2], int) or not (0 <= e[2] < 32):
+            raise ValueError("rotr takes an expression and a count in 0..31")
+        validate_expr(e[1], names)
+        return
+    raise ValueError(f"bad expression {e!r}")
+
+
+def _program(defn, kind):
+    if not isinstance(defn, list) or not defn or defn[0] != kind:
+        raise ValueError(f"not a {kind} definition")
+    inputs = field(defn, "inputs")
+    steps = field(defn, "steps")
+    outputs = field(defn, "outputs")
+    if not isinstance(inputs, list) or not all(isinstance(x, Sym) for x in inputs):
+        raise ValueError("inputs must be a list of names")
+    if len(set(inputs)) != len(inputs):
+        raise ValueError("duplicate input name")
+    if not isinstance(steps, list) or not isinstance(outputs, list) or not outputs:
+        raise ValueError("program needs steps and outputs")
+    names = set(inputs)
+    for step in steps:
+        if not (isinstance(step, list) and len(step) == 2
+                and isinstance(step[0], Sym)):
+            raise ValueError(f"bad step {step!r}")
+        if step[0] in names:
+            raise ValueError(f"step redefines {step[0]} (SSA: one assignment)")
+        validate_expr(step[1], names)
+        names.add(step[0])
+    for o in outputs:
+        if not isinstance(o, Sym) or o not in names:
+            raise ValueError(f"bad output {o!r}")
+    return inputs, steps, outputs
+
+
+def validate_wspec(defn):
+    _program(defn, "wspec")
+    if not isinstance(field(defn, "name"), Sym):
+        raise ValueError("wspec needs a symbol name")
+    return defn
+
+
+def validate_wmachine(defn):
+    inputs, steps, outputs = _program(defn, "wmachine")
+    if field(defn, "isa") != "W32":
+        raise ValueError("wmachine isa must be W32")
+    for _, e in steps:
+        _validate_machine_expr(e)
+    return defn
+
+
+def _validate_machine_expr(e):
+    # One operation on atoms: (add a b), (rotr a 7), or a bare atom.
+    if isinstance(e, (int, Sym)):
+        return
+    if isinstance(e, list) and e and e[0] in OPS:
+        if e[0] == "rotr":
+            if not (len(e) == 3 and isinstance(e[1], (Sym, int))
+                    and isinstance(e[2], int)):
+                raise ValueError(f"machine step not a single operation: {e!r}")
+        elif not (len(e) == 3 and all(isinstance(x, (Sym, int))
+                                      for x in e[1:])):
+            raise ValueError(f"machine step not a single operation: {e!r}")
+        return
+    raise ValueError(f"machine step not a single operation: {e!r}")
+
+
+def inputs_of(defn):
+    return field(defn, "inputs")
+
+
+def steps_of(defn):
+    return field(defn, "steps")
+
+
+def outputs_of(defn):
+    return field(defn, "outputs")
+
+
+def eval_expr(e, env):
+    if isinstance(e, int):
+        return e
+    if isinstance(e, Sym):
+        return env[e]
+    op = e[0]
+    if op == "add":
+        return (eval_expr(e[1], env) + eval_expr(e[2], env)) & MASK
+    if op == "xor":
+        return eval_expr(e[1], env) ^ eval_expr(e[2], env)
+    x, n = eval_expr(e[1], env), e[2] % 32
+    return ((x >> n) | (x << ((32 - n) % 32))) & MASK if n else x
+
+
+# --- W32 binary emission (SPEC s3.4 at word scale) ---------------------
+# Header: inputs u8, steps u16, outputs u8, output step-indices u16 each.
+# Step: opcode (0 copy, 1 add, 2 xor, 3 rotr); an operand is tag 0 + name
+# index u16 (inputs first, then steps) or tag 1 + constant u32. rotr's
+# second operand is a count u8. Deterministic: same definition, same bytes.
+import struct as _struct
+
+_W_OPS = {"copy": 0, "add": 1, "xor": 2, "rotr": 3}
+_W_DECODE = {v: k for k, v in _W_OPS.items()}
+
+
+def _operand(e, index):
+    if isinstance(e, int):
+        return b"\x01" + _struct.pack("<I", e)
+    return b"\x00" + _struct.pack("<H", index[e])
+
+
+def emit_w32(defn) -> bytes:
+    validate_wmachine(defn)
+    inputs, steps, outputs = inputs_of(defn), steps_of(defn), outputs_of(defn)
+    names = list(inputs) + [name for name, _ in steps]
+    index = {n: i for i, n in enumerate(names)}
+    out = bytearray()
+    out.append(len(inputs))
+    out += _struct.pack("<H", len(steps))
+    out.append(len(outputs))
+    for o in outputs:
+        out += _struct.pack("<H", index[o])
+    for _, e in steps:
+        if isinstance(e, (int, Sym)):
+            out.append(0)
+            out += _operand(e, index)
+        elif e[0] == "rotr":
+            out.append(3)
+            out += _operand(e[1], index)
+            out.append(e[2])
+        else:
+            out.append(_W_OPS[e[0]])
+            out += _operand(e[1], index)
+            out += _operand(e[2], index)
+    return bytes(out)
+
+
+def decode_w32(data, input_names):
+    """Bytes -> (steps, output indices). Rejects non-emitter bytes."""
+    assert isinstance(data, bytes)
+    pos = 0
+
+    def take(n):
+        nonlocal pos
+        if pos + n > len(data):
+            raise ValueError("truncated W32 binary")
+        b, pos = data[pos:pos + n], pos + n
+        return b
+
+    n_inputs = take(1)[0]
+    if n_inputs != len(input_names):
+        raise ValueError("W32 binary input count mismatch")
+    (n_steps,) = _struct.unpack("<H", take(2))
+    n_outputs = take(1)[0]
+    out_idx = [_struct.unpack("<H", take(2))[0] for _ in range(n_outputs)]
+    names = list(input_names) + [Sym(f"s{i}") for i in range(n_steps)]
+
+    def operand():
+        tag = take(1)[0]
+        if tag == 1:
+            return _struct.unpack("<I", take(4))[0]
+        if tag == 0:
+            (i,) = _struct.unpack("<H", take(2))
+            if i >= len(names):
+                raise ValueError("operand index out of range")
+            return names[i]
+        raise ValueError("bad operand tag")
+
+    steps = []
+    for i in range(n_steps):
+        op = _W_DECODE.get(take(1)[0])
+        if op is None:
+            raise ValueError("bad W32 opcode")
+        if op == "copy":
+            e = operand()
+        elif op == "rotr":
+            e = [Sym("rotr"), operand(), take(1)[0]]
+        else:
+            e = [Sym(op), operand(), operand()]
+        steps.append([names[len(input_names) + i], e])
+    if pos != len(data):
+        raise ValueError("trailing bytes in W32 binary")
+    if any(i >= len(names) for i in out_idx):
+        raise ValueError("output index out of range")
+    from .canon import assoc
+    defn = assoc("wmachine", ("isa", Sym("W32")), ("inputs", list(input_names)),
+                 ("steps", steps),
+                 ("outputs", [names[i] for i in out_idx]))
+    validate_wmachine(defn)
+    if emit_w32(defn) != data:
+        raise ValueError("bytes are not the emitter's output")
+    return defn
+
+
+def run_program(defn, values):
+    """Concrete execution; works for wspec and wmachine alike."""
+    inputs, steps, outputs = _program(
+        defn, "wspec" if defn[0] == "wspec" else "wmachine")
+    if len(values) != len(inputs):
+        raise ValueError("wrong number of inputs")
+    env = {name: _const(v) for name, v in zip(inputs, values)}
+    for name, e in steps:
+        env[name] = eval_expr(e, env)
+    return [env[o] for o in outputs]

@@ -14,7 +14,7 @@ All definitions and records are canonical s-expressions (ode/canon.py).
 import os
 import sys
 
-from . import checker, machine, producer
+from . import checker, machine, producer, wcheck, word, wproducer
 from .canon import canonical_bytes, field, parse, read_canonical
 
 
@@ -77,8 +77,49 @@ def cmd_assure(argv):
     return 0
 
 
+def cmd_buildw(argv):
+    spec_path, store = argv
+    spec_defn = _read_text_file(spec_path)
+    result = wproducer.build(spec_defn, store)
+    print(f"spec        {result['spec']}")
+    print(f"machine     {result['machine']}")
+    print(f"binary      {result['binary_hash']}  ({result['binary_len']} bytes)")
+    print(f"certificate {result['certificate']}")
+    print(f"produced, not yet checked: run `pypy3 -m ode checkw {store}`")
+    return 0
+
+
+def cmd_checkw(argv):
+    (store,) = argv
+    try:
+        record = wcheck.check_store(store)
+    except checker.Reject as e:
+        print(f"REJECT: {e}")
+        return 1
+    with open(os.path.join(store, "checker-record.sexp"), "wb") as f:
+        f.write(canonical_bytes(record))
+    print(f"ACCEPT ({field(record, 'checker')}, symbolic over "
+          f"{field(record, 'domain')}, {field(record, 'dag-nodes')} DAG nodes)")
+    print("  - the emitted W32 bytes compute the specification on every input")
+    print("  - the program is straight-line W32: no branches exist in the ISA")
+    return 0
+
+
+def cmd_runw(argv):
+    store, values = argv[0], [int(x, 0) for x in argv[1:]]
+    cert = read_canonical(open(os.path.join(store, "certificate.sexp"),
+                               "rb").read())
+    spec_defn = checker._load(store, field(cert, "spec"))
+    with open(os.path.join(store, "binary.bin"), "rb") as f:
+        binary = f.read()
+    decoded = word.decode_w32(binary, word.inputs_of(spec_defn))
+    print(" ".join(str(x) for x in word.run_program(decoded, values)))
+    return 0
+
+
 COMMANDS = {"build": cmd_build, "check": cmd_check,
-            "run": cmd_run, "assure": cmd_assure}
+            "run": cmd_run, "assure": cmd_assure,
+            "buildw": cmd_buildw, "checkw": cmd_checkw, "runw": cmd_runw}
 
 
 def main(argv=None):

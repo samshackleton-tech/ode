@@ -5,7 +5,7 @@ Checker: ode-checker-0.1 -- verdict: **accept**
 ## Claims, each resting on the record above
 
 - the emitted bytes compute the specification on every input (65536 cases, the whole domain)
-- the program is straight-line ODE8: its instruction trace depends only on its input count
+- the program is straight-line: its ISA has no branch instructions, so its instruction trace depends only on its input count
 
 ## What each claim rests on (hashes)
 
