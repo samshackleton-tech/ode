@@ -265,11 +265,19 @@ def _callee(store_dir, cert_hash, seen):
 
 def run(program, values, at=None):
     """Run a proved program: W32 by interpretation, AArch64 natively, a
-    spec with bound callees in the evaluator (at its instantiation)."""
+    spec with bound callees in the evaluator (at its instantiation).
+    Inputs are checked here, once; calls inside trust their caller."""
+    if any(not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
+        raise ValueError("inputs must be u32 words")
+    isa, body, sizes, callees = program
+    if isa != "spec" and len(values) != sizes["in"]:
+        raise ValueError(f"inputs must be {sizes['in']} u32 words")
+    return _run(program, values, at)
+
+
+def _run(program, values, at=None):
     isa, body, sizes, callees = program
     if isa == "spec":
-        if any(not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
-            raise ValueError("inputs must be u32 words")
         at = dict(at or {})
         lists = [n for n, s in word.input_sorts(body) if s == "words"]
         n_words = sum(1 for _, s in word.input_sorts(body) if s == "word")
@@ -277,13 +285,20 @@ def run(program, values, at=None):
             at[lists[0]] = len(values) - n_words
         word.instantiation(body, at)
         return word.run(body, at, values, bound={
-            h: (lambda args, p=p: run(p, args)) for h, p in callees.items()})
-    if len(values) != sizes["in"] or any(
-            not (isinstance(v, int) and 0 <= v < 2 ** 32) for v in values):
-        raise ValueError(f"inputs must be {sizes['in']} u32 words")
+            h: _runner(p) for h, p in callees.items()})
     if isa == "w32":
         return word.run(body, {}, values, certified={
-            h: (lambda args, p=p: run(p, args)) for h, p in callees.items()})
-    from . import native
-    return native.Function(body, sizes["in"], sizes["out"],
-                           sizes["scratch"])(values)
+            h: _runner(p) for h, p in callees.items()})
+    fn = _NATIVE.get(body)
+    if fn is None:  # map each proved binary once; it lasts the process
+        from . import native
+        fn = _NATIVE[body] = native.Function(body, sizes["in"], sizes["out"],
+                                             sizes["scratch"])
+    return fn(values)
+
+
+def _runner(program):
+    return lambda args: _run(program, args)
+
+
+_NATIVE = {}  # AArch64 bytes -> their mapped function

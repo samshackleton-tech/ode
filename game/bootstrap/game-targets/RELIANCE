@@ -5,7 +5,7 @@
 ; (examples/blake3.sexp), the function users call. Readable copies of
 ; both are in examples/.
 (reliance
-  (ode-base #a79398b7edd27917f352176568b54dfdfa4c8fba5bd73e087aebffa8f3d1d229)
+  (ode-base #649d2c53884b4bbd522cf812984acc8ca058e877305c791eb62538b867b6b2e0)
   (targets
     ((g #ba18cb6f9a2be29ee2f94582f9735f9381a23be3b968fa2218c0bd62e7f8f838)
-     (blake3 #0874c6867d3af0efc1bf3f725fed47bff9ea4d90f60b378d2cf55e31849695e4))))
+     (blake3 #cd2843afe5a1e28b2dc35ead61a8fd93ebfb0c9a1ad47e0555e80cac135e4488))))

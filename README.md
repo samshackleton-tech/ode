@@ -16,9 +16,15 @@ pypy3 -m ode hash  /tmp/b3 "The quick brown fox jumps over the lazy dog."
 pypy3 -m unittest discover -s tests                 # 30 tests
 ```
 
-The compression is AArch64 code proved for every input; the tree and
-chunk logic is the specification itself, run by the evaluator, so it is
-correct by definition and only as fast as the evaluator. For speed at a
+The compression and the chaining value of a full 1 KB chunk are AArch64
+code proved for every input; the tree logic is the specification itself,
+run by the evaluator, so it is correct by definition -- and slow: about
+15 MB/s at 1-16 MB, against about 700 MB/s for the reference BLAKE3 on
+this machine (single wall-time samples, `time.perf_counter_ns`, noisy;
+the team's `clocks` crate is not available here). Profiling puts the
+time in the Python evaluator and the ctypes crossing per kilobyte, not
+in the native code: fast BLAKE3 for every length needs native glue,
+proved for every length -- phase 2 below. For speed at a
 chosen length, `build-a64 ... len=44` compiles all of it and proves the
 result at that length. Needs PyPy3; native runs need aarch64 Linux.
 
@@ -66,6 +72,7 @@ call overhead (wall time, `time.perf_counter_ns`, this VM; the team's
 
 ## Next
 
-Fast code for every length: compiled glue with loops, proved against the
-specification for all lengths by induction -- the small proof kernel of
-SPEC s4 (DESIGN.md, open question 1), grown only as BLAKE3 needs it.
+Native glue for every length: compiled loops over chunks, proved against
+the specification for all lengths -- the small proof kernel of SPEC s4
+(DESIGN.md, open question 1), grown only as BLAKE3 needs it. Then NEON
+kernels hashing several chunks at once.
