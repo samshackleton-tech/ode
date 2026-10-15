@@ -101,7 +101,8 @@ also compose into normalized register-output theorems. This abstract machine has
 memory, flags, or byte decoder; native ISA correspondence remains open.
 
 The `encoding-g` example binds G's 56-byte arithmetic fragment to declared
-AArch64 instruction encodings. Its abstract execution proof and a separate
+AArch64 instruction encodings and proves `run(program,s) = g(s)` against
+`examples/proofs/g-definition.sexp`, the owner-facing half-round equations. Its abstract execution proof and a separate
 CPU cross-check accompany it. The fragment is not a callable function;
 Arm ISA refinement, memory, and calling conventions remain open.
 

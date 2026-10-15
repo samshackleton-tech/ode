@@ -12,7 +12,7 @@ from .word_literal import literal
 from .xor32_proof import app,var
 
 
-def theory(bit_theory):
+def theory(bit_theory, g_definitions):
     t=register_theory(bit_theory)
     t[2].append(parse('(InstructionWords ((no-words ()) (instruction-word (Word32 InstructionWords))))'))
     for i in range(5):
@@ -38,6 +38,10 @@ def theory(bit_theory):
     t[4].append(parse('''(encode-program ((p Program)) InstructionWords
       ((halt () (no-words))
        (next (i tail) (instruction-word (encode-instruction i) (encode-program tail)))))'''))
+    # The owner supplies the source-level G definitions separately from
+    # the register instructions and encoding model.
+    assert [d[0] for d in g_definitions] == ['g-first','g-second','g'], 'requires the three G definitions'
+    t[4].extend(g_definitions)
     return t
 
 
@@ -51,3 +55,24 @@ def word_list(words):
 def artifacts(t,instructions,words):
     """Prove the instruction list encodes exactly the supplied u32 words."""
     return prove(t,app('encode-program',program(instructions)),word_list(words))
+
+
+def execution_artifacts(t):
+    """run(program,s) = g(s), for every State constructor instance."""
+    from .register_proof import composed_g_artifacts,g_instructions,g_state,initial_state
+    from .ground_proof import Evaluation
+    from .proof_library import Library
+    from .canon import hash_of
+    library=Library(hash_of(t))
+    execution=library.include(*composed_g_artifacts(t))
+    p=Evaluation(t)
+    result,right=p.evaluate(app('g',initial_state()))
+    assert result==g_state(), 'owner G definition differs from the proved instruction equations'
+    left=p.lemma(execution,*initial_state()[1:])
+    p.trans(left,p.sym(right))
+    s=var('s')
+    goal=[var('goal'),3,hash_of(t),[[s,var('State')]],
+          app('eq',app('run',program(g_instructions()),s),app('g',s))]
+    derivation=[var('induct'),s,[[var('state'),initial_state()[1:],p.steps]]]
+    proof=[var('proof'),3,hash_of(goal),library.lemmas,derivation]
+    return goal,proof

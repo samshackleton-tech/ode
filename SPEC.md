@@ -200,8 +200,11 @@ Declared ADD/EOR/immediate-ROR encodings connect this six-register fragment
 to concrete instruction words (`ode/encoding_proof.py`). A separate bounded
 reader (`ode/encoding_cli.py`) checks both encoding and execution proofs,
 requires their instruction lists to match exactly, and compares the proved
-words to exact little-endian file bytes. This byte binding adds its reader and literal conversion to the
-reliance set; it does not establish native ISA semantics or a callable function.
+words to exact little-endian file bytes. Its execution goal is `run(program,s) = g(s)` for every state,
+where `examples/proofs/g-definition.sexp` supplies the named half-round
+definitions directly in the kernel theory. This byte binding adds its reader
+and literal conversion to the reliance set; it does not establish native ISA
+semantics or a callable function.
 
 Matching μ-logic was the initial candidate. The current milestone needs equality and
 induction, so the first kernel states these directly. Richer logic earns its place with

@@ -8,8 +8,8 @@ import unittest
 from ode.canon import canonical_bytes,hash_of,parse
 from ode.kernel import Reject,verify
 from ode.encoding_cli import check,code_bytes
-from ode.encoding_proof import artifacts,theory as make_theory
-from ode.register_proof import REGISTERS,g_instructions,composed_g_artifacts
+from ode.encoding_proof import artifacts,theory as make_theory,execution_artifacts
+from ode.register_proof import REGISTERS,g_instructions
 from ode.xor32_proof import app,var
 from tests.test_a64 import ADD,EOR,ROR,LDR,STR,RET,enc,ON_A64
 
@@ -30,7 +30,8 @@ class EncodingProofTest(unittest.TestCase):
     def test_artifacts_reproduce_and_bind_code(self):
         t,g,p=bundle()
         self.assertEqual(canonical_bytes(t),canonical_bytes(make_theory(
-            parse((EXAMPLES/'bits.theory.sexp').read_bytes()))))
+            parse((EXAMPLES/'bits.theory.sexp').read_bytes()),
+            parse((EXAMPLES/'g-definition.sexp').read_bytes()))))
         code=(EXAMPLES/'encoding-g.bin').read_bytes()
         words=[int.from_bytes(code[i:i+4],'little') for i in range(0,len(code),4)]
         for expected,actual in zip((g,p),artifacts(t,g_instructions(),words)):
@@ -41,10 +42,24 @@ class EncodingProofTest(unittest.TestCase):
     def test_execution_and_encoding_name_the_same_instruction_list(self):
         t,g,p=bundle()
         eg,ep=[parse((EXAMPLES/f'encoding-g-execution.{k}.sexp').read_bytes()) for k in ('goal','proof')]
-        for expected,actual in zip((eg,ep),composed_g_artifacts(t)):
+        for expected,actual in zip((eg,ep),execution_artifacts(t)):
             self.assertEqual(canonical_bytes(expected),canonical_bytes(actual))
         self.assertEqual(g[4][1][1],eg[4][1][1])
         verify(t,eg,ep)
+
+    def test_execution_goal_names_g_for_every_initial_state(self):
+        t,_,_=bundle();g,p=execution()
+        self.assertEqual(g[3],parse('((s State))'))
+        self.assertEqual(g[4][2],parse('(g s)'))
+        verify(t,g,p)
+
+    def test_changed_owner_g_definition_cannot_reuse_execution_proof(self):
+        t,_,_=bundle();g,p=execution()
+        definition=next(d for d in t[4] if d[0]=='g-second')
+        definition[3][0][2][2][0]=var('ror-8')  # b's final rotation should be 7
+        g[2]=hash_of(t);p[2]=hash_of(g)
+        with self.assertRaises(Reject):
+            verify(t,g,p)
 
     def test_binary_instruction_fields_against_existing_encoders(self):
         t,_,_=bundle()
@@ -90,7 +105,7 @@ class EncodingProofTest(unittest.TestCase):
 
     def test_invalid_execution_proof_is_rejected_by_byte_binding(self):
         t,g,p=bundle();eg,ep=execution()
-        ep[4][1][-1][0]=var('invented-rule')
+        ep[4][2][0][2][-1][0]=var('invented-rule')
         with self.assertRaises(Reject):
             check(t,g,p,eg,ep,(EXAMPLES/'encoding-g.bin').read_bytes())
 

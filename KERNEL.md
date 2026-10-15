@@ -486,8 +486,21 @@ The checker verifies both owner-selected equations, requires that they
 name exactly the same instruction list, and binds the encoded words to
 the exact 56 bytes read from the file. A valid execution theorem for a
 different program is rejected. The encoding proof uses 280 inference steps; the
-execution proof uses 826. The binary is an arithmetic fragment, **not a
+execution proof uses 864. The binary is an arithmetic fragment, **not a
 callable function**: it has no loads, stores, or RET.
+
+The owner-facing specification is `examples/proofs/g-definition.sexp`:
+three declarative definitions state the first half-round, second
+half-round, and their composition as `g`. They contain no register
+instructions. The execution goal is `run(program,s) = g(s)` for every
+State `s`; structural induction connects the named specification to the
+proved register equations. The encoding theory carries those definitions,
+so its owner pin fixes their exact meaning. Changing the specification's
+final rotation invalidates the execution proof.
+
+This named specification is directly inside the kernel's theory. The
+older `examples/blake3-g.sexp` is still cross-checked as a separate source
+representation; no theorem about translating that source syntax is claimed.
 
 Program matching and byte binding rely on `ode/encoding_cli.py`, literal conversion in
 `ode/word_literal.py`, and file I/O in addition to the kernel. The reader

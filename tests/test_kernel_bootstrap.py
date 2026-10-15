@@ -86,7 +86,8 @@ class KernelBootstrapTest(unittest.TestCase):
                     data=bytearray(path.read_bytes());data[0]^=1;path.write_bytes(data)
                 else:
                     proof=parse(path.read_bytes())
-                    proof[4][1][-1][0]=parse('invented-rule')
+                    steps=proof[4][1] if proof[4][0]=='derive' else proof[4][2][0][2]
+                    steps[-1][0]=parse('invented-rule')
                     path.write_bytes(canonical_bytes(proof))
                 result=self.run_bob(store)
                 self.assertEqual(result.returncode,1,result.stdout+result.stderr)
