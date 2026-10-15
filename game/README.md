@@ -8,7 +8,7 @@ A test from the relying party's side. Three roles:
     launcher that reads an ode-base into memory, computes its tree hash,
     compares it with the package's pin, stops on any difference, and
     runs Bob's procedure from the very bytes it hashed.
-  - `blake3/RELIANCE` -- about 260 bytes of s-expression: the pinned tree hash
+  - `game-targets/RELIANCE` -- about 260 bytes of s-expression: the pinned tree hash
     of the ode-base this package was checked against, and the hashes of
     its two specifications (G, and the hash of a 65-byte message).
 

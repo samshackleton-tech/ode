@@ -50,7 +50,7 @@ class PinTest(unittest.TestCase):
         sys.path.insert(0, os.path.join(GAME, "bootstrap", "root"))
         from launch import read_tree, tree_hash
         import re
-        with open(os.path.join(GAME, "bootstrap", "blake3", "RELIANCE"), "rb") as f:
+        with open(os.path.join(GAME, "bootstrap", "game-targets", "RELIANCE"), "rb") as f:
             pins = re.findall(rb"\(ode-base #([0-9a-f]{64})\)", f.read())
         self.assertEqual(len(pins), 1)
         self.assertEqual(pins[0].decode(),

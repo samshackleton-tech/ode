@@ -1,0 +1,13 @@
+; The game's targets, as Bob holds them: hashes only. These pins serve
+; the game -- they keep every recorded attack replayable -- so they live
+; here, not in a BLAKE3 package. g is BLAKE3's internal G function (6
+; words in, 4 out), the round-1 target; hash65 is BLAKE3 of exactly 65
+; bytes (32 words in, 8 out), the round-2 target. A BLAKE3 package will
+; pin one target, the hash of any length, once the specification layer
+; can state it. Readable copies: examples/blake3-g.sexp and
+; examples/blake3-hash-65.sexp.
+(reliance
+  (ode-base #af43ff7b2c27a13211c9df434fc8577c741214e68a40ca024e6b03e34f5f8145)
+  (targets
+    ((g #11f0d1bff6833a5841b50af18a2e60c6321d73dac6608b4e8456ce0a0c3a5092)
+     (hash65 #8d70a73c14212c373ee0b6e9563b24c926f8465386c286cfb1d4d47dcccb415a))))

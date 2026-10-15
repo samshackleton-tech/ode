@@ -41,7 +41,7 @@ attacking the checker's reasoning; record each, win or lose.
 
 There is now a second target, `hash65`: BLAKE3's hash of a 65-byte
 message (32 input words, 8 output words), specified in
-`bootstrap/blake3/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
+`bootstrap/game-targets/blake3-hash-65.sexp`. Put `hash65` in a `TARGET` file in your
 attack directory to aim at it. Its spec is built from two *compression*
 calls -- `((outs...) (call #hash args...))` -- with the compression
 specification embedded under `(defs (#hash definition))`. New surface:
@@ -63,7 +63,7 @@ The old `g` attacks (00-10) are all recorded losses; aim for new ideas.
 ## Round 3: the root
 
 Bob now holds only `bootstrap/root/` (BLAKE3 and a launcher) and
-`bootstrap/blake3/RELIANCE` (hashes). You may deliver the ode-base too:
+`bootstrap/game-targets/RELIANCE` (hashes). You may deliver the ode-base too:
 put an `ode-base/` directory in your attack and the referee hands it to
 Bob instead of the public one. The specifications are fetched from your
 store by hash. Certificates no longer name a machine definition. New

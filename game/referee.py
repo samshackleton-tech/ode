@@ -20,7 +20,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.join(HERE, "bootstrap", "root")
-RELIANCE = os.path.join(HERE, "bootstrap", "blake3", "RELIANCE")
+RELIANCE = os.path.join(HERE, "bootstrap", "game-targets", "RELIANCE")
 PUBLIC_ODE_BASE = os.path.join(HERE, "ode-base")
 EXAMPLES = os.path.join(os.path.dirname(HERE), "examples")
 sys.path.insert(0, os.path.dirname(HERE))  # the referee uses the toolchain, not ode-base
