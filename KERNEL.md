@@ -465,6 +465,46 @@ blocks all producers and the old executable verifier. The theorem still
 concerns the abstract register machine; native ISA and memory refinement
 remain separate obligations.
 
+## Instruction encodings and exact bytes
+
+`examples/proofs/encoding.theory.sexp` extends the abstract register model
+with declared encodings for 32-bit unshifted ADD, EOR, and immediate ROR
+(EXTR with equal source registers). Abstract `a,b,c,d,x,y` map to physical
+W3 through W8. Five explicit register-bit functions and constructor bit
+permutations define each instruction word. `encode-program` maps a finite
+instruction list to a list of Word32 instruction words.
+
+```sh
+pypy3 tools/make_encoding_proof.py
+pypy3 -m ode.encoding_cli examples/proofs/encoding.theory.sexp \
+  examples/proofs/encoding-g.goal.sexp examples/proofs/encoding-g.proof.sexp \
+  examples/proofs/encoding-g.bin
+pypy3 -m ode.proof_cli examples/proofs/encoding.theory.sexp \
+  examples/proofs/encoding-g-execution.goal.sexp examples/proofs/encoding-g-execution.proof.sexp
+```
+
+The first command checks an encoding theorem and binds its instruction
+words to the exact 56 bytes read from the file. The second checks G's
+abstract execution in the same theory. Tests confirm both goals name the
+same instruction list. The encoding proof uses 280 inference steps; the
+execution proof uses 826. The binary is an arithmetic fragment, **not a
+callable function**: it has no loads, stores, or RET.
+
+Byte binding relies on `ode/encoding_cli.py`, literal conversion in
+`ode/word_literal.py`, and file I/O in addition to the kernel. The reader
+compares literal instruction words in little-endian order and does not
+execute the file. The owner still selects the theory and goal. File
+verification blocks imports of all producers and the old executable
+verifier in its independence test.
+
+Tests cover all 432 binary register combinations, every rotation count
+with aliased/distinct sources, and corruption of each byte. A separate
+AArch64 test adds a load/store/RET wrapper and compares native execution
+with the existing G specification on edge cases and 100 seeded random
+inputs. This is a CPU cross-check; it is not an Arm ISA refinement proof.
+The declared encoding model, the abstract instruction meanings, memory,
+and calling conventions still need their formal native correspondence.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary

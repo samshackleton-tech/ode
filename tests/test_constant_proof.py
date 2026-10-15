@@ -107,7 +107,7 @@ raise SystemExit(main(sys.argv[1:]))
             with self.assertRaises(AssertionError):
                 literal(n)
         for term in (app('word32'),app('word32',*[var('b')]*32)):
-            with self.assertRaises(AssertionError):
+            with self.assertRaises((AssertionError,ValueError)):
                 export_normalizer(theory(),term)
         with self.assertRaisesRegex(AssertionError,'constructor'):
             prove(theory(),app('opaque'),app('opaque'))

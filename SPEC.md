@@ -196,6 +196,12 @@ with message registers preserved. It models initialized registers and
 straight-line arithmetic; memory, byte decoding, and native ISA correspondence
 remain refinement obligations.
 
+Declared ADD/EOR/immediate-ROR encodings connect this six-register fragment
+to concrete instruction words (`ode/encoding_proof.py`). A separate bounded
+reader (`ode/encoding_cli.py`) compares the proved words to exact little-endian
+file bytes. This byte binding adds its reader and literal conversion to the
+reliance set; it does not establish native ISA semantics or a callable function.
+
 Matching μ-logic was the initial candidate. The current milestone needs equality and
 induction, so the first kernel states these directly. Richer logic earns its place with
 a concrete obligation the current rules cannot express, and an explicit soundness

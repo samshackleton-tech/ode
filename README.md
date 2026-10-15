@@ -100,6 +100,11 @@ preserve the message registers for every initial state. See the
 also compose into normalized register-output theorems. This abstract machine has no
 memory, flags, or byte decoder; native ISA correspondence remains open.
 
+The `encoding-g` example binds G's 56-byte arithmetic fragment to declared
+AArch64 instruction encodings. Its abstract execution proof and a separate
+CPU cross-check accompany it. The fragment is not a callable function;
+Arm ISA refinement, memory, and calling conventions remain open.
+
 The kernel also checks unbounded loop laws: processing two blocks at a
 time equals processing one at a time, and a chain of `n+k` blocks can be
 split into chains of `n` and `k`. These hold for any total compression
