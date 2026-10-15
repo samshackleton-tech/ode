@@ -24,7 +24,7 @@ sys.path[:0] = [HERE]  # the bootstrap's ode package, and only it
 
 from ode import wcheck, word  # noqa: E402
 from ode.canon import field, hash_of, parse, read_canonical  # noqa: E402
-from ode.checker import Reject  # noqa: E402
+from ode.store import Reject  # noqa: E402
 
 assert wcheck.__file__.startswith(HERE), "checker loaded from outside bootstrap"
 

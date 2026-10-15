@@ -15,57 +15,13 @@ import itertools
 import os
 
 from . import machine, spec as spec_mod
-from .canon import Bytes, Sym, assoc, field, hash_of, read_canonical
-from .blake3 import blake3
+from .canon import Sym, assoc, field, hash_of, read_canonical
 
 CHECKER_ID = Sym("ode-checker-0.1")
 PROPERTY = "equals-spec-v1"
 
 
-class Reject(Exception):
-    pass
-
-
-def _load(store_dir, h):
-    if not isinstance(h, Bytes) or len(h) != 32:
-        raise Reject(f"bad hash {h!r}")
-    path = os.path.join(store_dir, h.hex() + ".sexp")
-    if not os.path.isfile(path):
-        raise Reject(f"definition {h} not in store")
-    with open(path, "rb") as f:
-        data = f.read()
-    try:
-        defn = read_canonical(data)
-    except ValueError as e:
-        raise Reject(str(e)) from e
-    if hash_of(defn) != h:
-        raise Reject(f"definition named {h.hex()} hashes to "
-                     f"{hash_of(defn).hex()}")
-    return defn
-
-
-def _load_binary(store_dir, cert):
-    """The bytes that run: the store's binary.bin, bound to the certificate.
-
-    A certificate carries the binary's hex and hash; this is where they
-    are tied to the file a user actually executes. A store whose
-    binary.bin differs from its certificate -- by one byte, or by
-    belonging to a different build -- is rejected here.
-    """
-    import os as _os
-    path = _os.path.join(store_dir, "binary.bin")
-    if not _os.path.isfile(path):
-        raise Reject("store has no binary.bin")
-    with open(path, "rb") as f:
-        data = f.read()
-    if not isinstance(field(cert, "binary"), Bytes):
-        raise Reject("certificate carries no binary")
-    if data != bytes(field(cert, "binary")):
-        raise Reject("binary.bin is not the binary the certificate names")
-    if Bytes(blake3(data)) != field(cert, "binary-hash"):
-        raise Reject("binary.bin does not hash to the certificate's "
-                     "binary-hash")
-    return data
+from .store import Reject, load_binary as _load_binary, load_definition as _load  # noqa: E402,F401
 
 
 def check_certificate(store_dir, cert):

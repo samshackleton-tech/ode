@@ -21,8 +21,8 @@ class GameTest(unittest.TestCase):
     def test_bootstrap_matches_the_toolchain(self):
         # The bootstrap is a copy of the checker; a copy that drifts from
         # the toolchain would silently test something else.
-        for name in ("blake3.py", "canon.py", "checker.py", "wcheck.py",
-                     "word.py", "spec.py", "machine.py"):
+        for name in ("blake3.py", "canon.py", "store.py", "wcheck.py",
+                     "word.py"):
             with open(os.path.join(ROOT, "ode", name), "rb") as f:
                 a = f.read()
             with open(os.path.join(GAME, "bootstrap", "ode", name), "rb") as f:

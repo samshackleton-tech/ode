@@ -15,7 +15,7 @@ recomputed here from its bytes.
 """
 from . import word
 from .canon import Sym, assoc, field, hash_of
-from .checker import Reject, _load, _load_binary
+from .store import Reject, load_definition as _load, load_binary as _load_binary
 
 CHECKER_ID = Sym("ode-wchecker-0.1")
 PROPERTY = "equals-wspec-v1"
