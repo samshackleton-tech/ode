@@ -124,8 +124,9 @@ pypy3 -m ode.proof_cli examples/proofs/rotate32.theory.sexp \
 
 Word32 addition is defined by Boolean ripple carry; its commutativity
 proof is in `examples/proofs/add32.*.sexp`; `add32-zero.*.sexp` proves
-addition of zero preserves every word. Associativity and the complete
-symbolic addition-normalizer export remain open. Concrete addition, XOR,
+addition of zero preserves every word. `add32-assoc.*.sexp` proves
+associativity via a bitwise carry invariant. The symbolic addition-normalizer
+export remains open. Concrete addition, XOR,
 and rotation results have checked exports too; `examples/proofs/constant.*.sexp`
 uses the addition theory to check overflow and XOR on explicit words.
 

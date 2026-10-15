@@ -177,8 +177,8 @@ semantics. The existing symbolic verifier (`ode/check.py`) has not yet been tran
 into this foundation; its executable-code results still rely on its own evaluator,
 normalizer, and instruction models. The first bridges export XOR and immediate-rotation normalization derivations
 against explicit Word32 semantics (`ode/xor32_proof.py`, `ode/rotate32_proof.py`).
-A separate ripple-carry definition has checked commutativity and zero-identity proofs
-(`ode/add32_proof.py`). Closed arithmetic expressions have evaluation-proof
+A separate ripple-carry definition has checked commutativity, zero-identity,
+and associativity proofs (`ode/add32_proof.py`, `ode/add_associativity_proof.py`). Closed arithmetic expressions have evaluation-proof
 exports (`ode/constant_proof.py`); symbolic addition normalization remains open. The native representation and complete
 instruction-semantics bridge remain open: these rewrite theorems alone do not prove
 those executable bytes.

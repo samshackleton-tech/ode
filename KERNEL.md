@@ -230,9 +230,39 @@ proved Boolean XOR identity, and reconstructs the word. Changed initial
 carry and replacement of zero by one are rejected.
 
 These milestones prove commutativity and right-zero identity of the
-defined adder. Associativity, symbolic normalization exports, and the
-native ADD representation/refinement link remain open; the natural-number addition lemmas do not discharge
-those word-level obligations.
+defined adder. The native ADD representation/refinement link remains
+open; natural-number addition lemmas do not discharge word-level obligations.
+
+## Word32 addition associativity
+
+`ode/add_associativity_proof.py` proves
+`add32(add32(x,y),z) = add32(x,add32(y,z))` from the same ripple-carry
+definitions. The two successive additions have two incoming carry bits.
+Their AND and OR encode the pair in sorted order, preserving its count
+without requiring the individual carries to match across groupings.
+
+Six five-variable Boolean identities establish that either grouping
+produces the same encoded outgoing carries and sum bit from the encoded
+incoming carries. `ode/carry_proof.py` produces these identities using
+explicit constructor cases. The word proof establishes the carry relation
+at bit 0, transports it through each of the remaining 31 positions, and
+reconstructs the equal words from their sum bits.
+
+```sh
+pypy3 tools/make_add_associativity_proof.py
+pypy3 -m ode.proof_cli examples/proofs/add32.theory.sexp \
+  examples/proofs/add32-assoc.goal.sexp examples/proofs/add32-assoc.proof.sexp
+```
+
+The artifact contains 546 checked lemmas and 15,355 inference steps,
+using 528,440 kernel work units within the existing limits. These are
+proof-work counts, not timing measurements. Tests independently check
+all six Boolean identities, reproduce the artifact, and reject changed
+carry semantics, missing Boolean cases, and a dropped operand. A fresh
+process verifies the artifact with producer imports blocked.
+
+The theorem is modular Word32 associativity. Symbolic-normalizer exports
+and native instruction refinement still require their own connections.
 
 ## Concrete arithmetic exports
 
