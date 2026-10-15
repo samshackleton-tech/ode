@@ -597,3 +597,31 @@ This is the first author handoff, for arithmetic equalities. Automatic
 requests for particular invariants or source restructurings remain design
 work. Resource exhaustion currently rejects; it does not yet generate a
 budget-aware decomposition request.
+
+### A complete author handoff
+
+The ordinary normalizer does not establish
+`x + (x XOR 0xffffffff) = 0xffffffff`. Its owner goal is
+`examples/proofs/complement.goal.sexp`. The producer requests a residual
+proof; `ode/complement_proof.py` supplies one by proving every incoming
+carry is zero and every sum bit is one. It reuses the explicit carry
+recurrences, Word32 projections, Boolean case proofs, and reconstruction.
+
+```sh
+pypy3 tools/make_author_help_example.py
+pypy3 -m ode.equation_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/complement.goal.sexp > /tmp/complement-request.goal.sexp
+# Exit 2: stdout is the residual goal, not a proof.
+pypy3 -m ode.equation_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/complement.goal.sexp \
+  examples/proofs/complement-residual.proof.sexp > /tmp/complement.proof.sexp
+pypy3 -m ode.proof_cli examples/proofs/arx.theory.sexp \
+  examples/proofs/complement.goal.sexp /tmp/complement.proof.sexp
+```
+
+The answer addresses exactly the requested residual identity. The final
+proof checks the original goal in 432,642 proof bytes and 380,710 work
+units. Tests reproduce the request, answer, and final proof; exercise the
+actual CLI handoff; and reject changed carry semantics or corrupted hints.
+The normalizer gains no assumed complement rule: the author-supplied
+argument remains an explicit, independently checked part of the proof.
