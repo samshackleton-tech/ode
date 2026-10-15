@@ -166,9 +166,10 @@ behind stable interfaces and changes exactly the hashes that depend on it.
 
 The initial proof-object kernel uses sorted equational logic with natural-number
 induction. `KERNEL.md` specifies its current format, rules, semantics, and resource
-limits; `ode/kernel.py` implements it. The first checked theorem is loop batching for
-all iteration counts. Definitions must visibly decrease a natural counter. Proofs
-introduce no axioms, evaluator shortcuts, or solver verdicts.
+limits; `ode/kernel.py` implements it. Checked theorems include loop batching and
+chain splitting for arbitrary iteration counts. Definitions must visibly decrease a
+natural counter. Lemmas become usable only after their complete derivations check;
+proofs introduce no axioms, evaluator shortcuts, or solver verdicts.
 
 The goal is one logical foundation for program certificates. Language and ISA semantics
 must be formalized in it, and producers must emit proofs of refinement against those

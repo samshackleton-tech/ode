@@ -14,7 +14,7 @@ from ode.canon import canonical_bytes, hash_of, parse
 
 
 def artifacts(theory):
-    goal = parse(f"""(goal 1 #{hash_of(theory).hex()}
+    goal = parse(f"""(goal 2 #{hash_of(theory).hex()}
       ((n Nat) (s State) (m Blocks) (i Nat))
       (eq (chain (double n) s m i) (pairs n s m i)))""")
     one = "(compress s (block-at m i))"
@@ -39,7 +39,7 @@ def artifacts(theory):
       (unfold pairs (succ k) s m i)
       (sym 11)
       (trans 10 12))"""
-    proof = parse(f"(proof 1 #{hash_of(goal).hex()} (induct n k {base} {step}))")
+    proof = parse(f"(proof 2 #{hash_of(goal).hex()} () (induct n k {base} {step}))")
     return goal, proof
 
 

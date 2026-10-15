@@ -32,9 +32,9 @@ def rebind(theory, goal, proof):
 
 
 def simple(equation, body, variables="((n Nat))"):
-    theory = parse("(theory 1 () () ())")
-    goal = parse(f"(goal 1 #{hash_of(theory).hex()} {variables} {equation})")
-    proof = parse(f"(proof 1 #{hash_of(goal).hex()} {body})")
+    theory = parse("(theory 2 () () ())")
+    goal = parse(f"(goal 2 #{hash_of(theory).hex()} {variables} {equation})")
+    proof = parse(f"(proof 2 #{hash_of(goal).hex()} () {body})")
     return theory, goal, proof
 
 
@@ -71,7 +71,7 @@ class KernelTest(unittest.TestCase):
     def test_future_negative_boolean_and_own_step_references_rejected(self):
         for i in (-1, 0, 1, True):
             args = list(simple("(eq n n)", "(derive ((refl n)))"))
-            args[2][3][1] = [[Sym("sym"), i]]
+            args[2][4][1] = [[Sym("sym"), i]]
             with self.subTest(ref=i), self.assertRaises(Reject):
                 verify(*args)
 
@@ -82,7 +82,7 @@ class KernelTest(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(Reject):
                 verify(*simple("(eq n n)", body))
         theory, goal, proof = objects()
-        proof[3][4][1] = parse("(refl (succ s))")  # s is State, not Nat
+        proof[4][4][1] = parse("(refl (succ s))")  # s is State, not Nat
         with self.assertRaisesRegex(Reject, "sort mismatch"):
             verify(theory, goal, proof)
 
@@ -94,16 +94,16 @@ class KernelTest(unittest.TestCase):
     def test_induction_must_check_both_exact_premises(self):
         for phase in (3, 4):
             theory, goal, proof = objects()
-            proof[3][phase] = [parse("(refl s)")]
+            proof[4][phase] = [parse("(refl s)")]
             with self.subTest(phase=phase), self.assertRaisesRegex(Reject, "different equation"):
                 verify(theory, goal, proof)
 
     def test_predecessor_must_be_fresh_and_nat(self):
         theory, goal, proof = objects()
-        proof[3][2] = Sym("s")
+        proof[4][2] = Sym("s")
         with self.assertRaisesRegex(Reject, "fresh"):
             verify(theory, goal, proof)
-        proof[3][1:3] = [Sym("s"), Sym("k")]
+        proof[4][1:3] = [Sym("s"), Sym("k")]
         with self.assertRaisesRegex(Reject, "Nat"):
             verify(theory, goal, proof)
 
@@ -111,10 +111,10 @@ class KernelTest(unittest.TestCase):
         theory, goal, proof = objects()
         # Supplying a counter to IH attempts to generalize k: IH only accepts
         # (s,m,i), at the FIXED predecessor k.
-        proof[3][4][9] = parse("(ih (succ k) s m i)")
+        proof[4][4][9] = parse("(ih (succ k) s m i)")
         with self.assertRaisesRegex(Reject, "argument count"):
             verify(theory, goal, proof)
-        proof[3][4][9] = parse("(ih s m n)")  # n is out of scope in the step
+        proof[4][4][9] = parse("(ih s m n)")  # n is out of scope in the step
         with self.assertRaisesRegex(Reject, "unbound variable n"):
             verify(theory, goal, proof)
 
@@ -132,7 +132,7 @@ class KernelTest(unittest.TestCase):
     def test_no_assumed_fact_or_unchecked_evaluator_rule(self):
         for rule in ("axiom", "sorry", "assume", "eval", "oracle", "admit"):
             theory, goal, proof = objects()
-            proof[3][4][-1] = [Sym(rule), goal[4]]
+            proof[4][4][-1] = [Sym(rule), goal[4]]
             with self.subTest(rule=rule), self.assertRaisesRegex(Reject, "unknown rule"):
                 verify(theory, goal, proof)
 
@@ -214,7 +214,7 @@ class KernelTest(unittest.TestCase):
     def test_sharing_avoids_exponential_tree_expansion(self):
         # Each congruence doubles the *unfolded* expression size. The kernel
         # works on a shared DAG, so 50 doublings remain 51 term nodes.
-        theory = parse("(theory 1 () ((f (Nat Nat) Nat)) ())")
+        theory = parse("(theory 2 () ((f (Nat Nat) Nat)) ())")
         k = Kernel(DEFAULT_WORK)
         k.load_theory(theory)
         env = k.parameters(parse("((n Nat))"))
@@ -259,7 +259,7 @@ class KernelTest(unittest.TestCase):
         self.assertIn("ACCEPT", p.stdout)
         with tempfile.TemporaryDirectory() as d:
             proof = objects()[2]
-            proof[3][4][-1] = parse("(refl s)")
+            proof[4][4][-1] = parse("(refl s)")
             path = Path(d) / "proof.sexp"
             path.write_bytes(canonical_bytes(proof))
             p = subprocess.run(cmd + paths[:2] + [str(path)], cwd=ROOT,

@@ -8,7 +8,7 @@ The evaluator and symbolic executor in check.py are outside this kernel.
 """
 from .canon import Bytes, Sym, canonical_bytes, hash_of
 
-VERSION = 1
+VERSION = 2
 MAX_DEPTH = 128
 MAX_INPUT_BYTES = 1_000_000
 DEFAULT_WORK = 1_000_000
@@ -34,6 +34,7 @@ class Kernel:
         self.signature = {Sym("zero"): ((), Sym("Nat")),
                           Sym("succ"): ((Sym("Nat"),), Sym("Nat"))}
         self.definitions = {}
+        self.lemmas = []  # closed, universally quantified equations, checked in order
         self.rules = 0
 
     def spend(self, n=1):
@@ -232,16 +233,57 @@ class Kernel:
                       self.app(args[0], [p[1] for p in pairs]))
             elif rule == "unfold" and args:
                 eq = self.unfold(self.term(args, env))
+            elif rule == "lemma" and args:
+                i = args[0]
+                require(type(i) is int and 0 <= i < len(self.lemmas),
+                        "lemma reference is not an earlier proved lemma")
+                eq = self.instance(self.lemmas[i], args[1:], env)
             elif rule == "ih":
                 require(ih is not None, "induction hypothesis outside step")
-                params, conclusion = ih
-                require(len(args) == len(params), "induction hypothesis argument count")
-                mapping = dict(zip(params, [self.term(t, env) for t in args]))
-                eq = tuple(self.substitute(t, mapping) for t in conclusion)
+                eq = self.instance(ih, args, env)
             else:
                 raise Reject(f"unknown rule or wrong arity: {rule}")
             proved.append(eq)
         return proved[-1]
+
+    def instance(self, theorem, args, env):
+        params, conclusion = theorem
+        require(len(args) == len(params), "theorem argument count")
+        mapping = dict(zip(params, [self.term(t, env) for t in args]))
+        return tuple(self.substitute(t, mapping) for t in conclusion)
+
+    def prove(self, declarations, equation, form):
+        """Discharge a closed universally quantified equation. The local
+        hypothesis of an induction never becomes an exported lemma.
+        """
+        env = self.parameters(declarations)
+        conclusion = self.equation(equation, env)
+        require(type(form) is list and form, "missing derivation")
+        if form[0] == "derive" and len(form) == 2:
+            require(self.block(form[1], env) == conclusion,
+                    "proof concludes a different equation")
+        elif form[0] == "induct" and len(form) == 5:
+            _, n, pred, base, step = form
+            require(type(n) is Sym and n in env and self.nodes[env[n]][3] == "Nat",
+                    "induction variable must be a declared Nat")
+            require(type(pred) is Sym and pred not in env, "induction predecessor must be fresh")
+            tail = {v: t for v, t in env.items() if v != n}
+            zero = self.app(Sym("zero"), [])
+            p = self.intern("var", pred, (), Sym("Nat"))
+            successor = self.app(Sym("succ"), [p])
+            expected_base = tuple(self.substitute(t, {env[n]: zero}) for t in conclusion)
+            require(self.block(base, tail) == expected_base,
+                    "induction base proves a different equation")
+            hypothesis = tuple(self.substitute(t, {env[n]: p}) for t in conclusion)
+            expected_step = tuple(self.substitute(t, {env[n]: successor}) for t in conclusion)
+            ih = tuple(tail.values()), hypothesis
+            step_env = dict(tail)
+            step_env[pred] = p
+            require(self.block(step, step_env, ih) == expected_step,
+                    "induction step proves a different equation")
+        else:
+            raise Reject("expected derive or induct")
+        return tuple(env.values()), conclusion
 
 
 def header(obj, kind, size):
@@ -262,33 +304,15 @@ def verify(theory, goal, proof, work=DEFAULT_WORK):
     k.load_theory(theory)
     header(goal, "goal", 5)
     require(goal[2] == hash_of(theory), "goal names a different theory")
-    env = k.parameters(goal[3])
-    conclusion = k.equation(goal[4], env)
-    header(proof, "proof", 4)
+    header(proof, "proof", 5)
     require(proof[2] == hash_of(goal), "proof names a different goal")
-    form = proof[3]
-    require(type(form) is list and form, "missing derivation")
-    if form[0] == "derive" and len(form) == 2:
-        require(k.block(form[1], env) == conclusion, "proof concludes a different equation")
-    elif form[0] == "induct" and len(form) == 5:
-        _, n, pred, base, step = form
-        require(type(n) is Sym and n in env and k.nodes[env[n]][3] == "Nat",
-                "induction variable must be a declared Nat")
-        require(type(pred) is Sym and pred not in env, "induction predecessor must be fresh")
-        tail = {v: t for v, t in env.items() if v != n}
-        zero = k.app(Sym("zero"), [])
-        p = k.intern("var", pred, (), Sym("Nat"))
-        successor = k.app(Sym("succ"), [p])
-        expected_base = tuple(k.substitute(t, {env[n]: zero}) for t in conclusion)
-        require(k.block(base, tail) == expected_base, "induction base proves a different equation")
-        hypothesis = tuple(k.substitute(t, {env[n]: p}) for t in conclusion)
-        expected_step = tuple(k.substitute(t, {env[n]: successor}) for t in conclusion)
-        ih = tuple(tail.values()), hypothesis  # generalized parameters, fixed predecessor
-        step_env = dict(tail)
-        step_env[pred] = p
-        require(k.block(step, step_env, ih) == expected_step,
-                "induction step proves a different equation")
-    else:
-        raise Reject("expected derive or induct")
+    require(type(proof[3]) is list, "lemmas must be a list")
+    for lemma in proof[3]:
+        require(type(lemma) is list and len(lemma) == 4 and lemma[0] == "lemma",
+                "lemma is (lemma parameters equation derivation)")
+        # Append only after the entire lemma is proved. This forbids self
+        # reference, forward reference, and exporting an induction hypothesis.
+        k.lemmas.append(k.prove(*lemma[1:]))
+    k.prove(goal[3], goal[4], proof[4])
     return {"theory": hash_of(theory), "goal": hash_of(goal), "proof": hash_of(proof),
-            "rules": k.rules, "terms": len(k.nodes), "work": k.limit - k.remaining}
+            "rules": k.rules, "lemmas": len(k.lemmas), "terms": len(k.nodes), "work": k.limit - k.remaining}

@@ -1,1 +1,1 @@
-(goal 1 #39231e5efd78df96d05fa5583280a5686def40f6aa32ec24aa3a383430368ef8 ((n Nat) (s State) (m Blocks) (i Nat)) (eq (chain (double n) s m i) (pairs n s m i)))
+(goal 2 #092079191b2053e06361c15f560fcb59ce7a45b3832f65f534c91d80e8c85884 ((n Nat) (s State) (m Blocks) (i Nat)) (eq (chain (double n) s m i) (pairs n s m i)))

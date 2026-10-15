@@ -83,6 +83,17 @@ pypy3 -m ode.proof_cli examples/proofs/batching.theory.sexp \
 pypy3 game/kernel_attacks.py
 ```
 
+The kernel also checks reusable lemmas. `ode/nat_proof.py` emits
+natural-addition normalization proofs, with associativity and commutativity
+proved from addition's defining equations. These lemmas support a general
+chain-splitting law for arbitrary batch sizes `n` and `k`:
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/chain-split.theory.sexp \
+  examples/proofs/chain-split.goal.sexp examples/proofs/chain-split.proof.sexp
+# chain(n+k,s,m,i) = chain(k,chain(n,s,m,i),m,n+i)
+```
+
 The theory and goal come from the owner; the proof can come from anyone.
 The theorem holds for any total compression function, initial state,
 block source, and starting index. `KERNEL.md` gives the complete rules,

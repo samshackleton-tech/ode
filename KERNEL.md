@@ -45,6 +45,44 @@ accesses, or verify the AArch64 implementation of either loop. Those
 connections need their own proofs. In particular, acceptance by the
 existing symbolic checker (`ode/check.py`) is not a kernel proof.
 
+## Proof-producing arithmetic and loop composition
+
+`ode/nat_proof.py` normalizes sums of **natural numbers** by emitting
+proofs. It first supplies derivations of right identity, successor,
+commutativity, associativity, and exchange from the two defining
+equations of `add`; then it uses those proved lemmas to reorder and
+reassociate sums. The kernel never runs the sorting algorithm or assumes
+its answer. This is loop-counter arithmetic, not modular 32-bit arithmetic.
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/nat-add.theory.sexp \
+  examples/proofs/nat-add.goal.sexp examples/proofs/nat-add.proof.sexp
+```
+
+The example proves `(a+b)+(c+(d+0)) = (d+c)+(b+a)`, with all five helper
+lemmas checked. The producer may be replaced or corrupted without changing
+the kernel's rules. `tools/make_nat_add_proof.py` regenerates the artifacts.
+
+The same arithmetic proofs support an unbounded chain-splitting theorem:
+
+```
+chain(n+k, s, m, i) = chain(k, chain(n, s, m, i), m, n+i)
+```
+
+Processing `n+k` blocks is equivalent to processing `n` and then `k`,
+starting the second batch at the updated state and index. Both batch
+sizes are arbitrary naturals. Its proof generalizes the state/index
+invariant and instantiates the proved addition-successor lemma.
+
+```sh
+pypy3 -m ode.proof_cli examples/proofs/chain-split.theory.sexp \
+  examples/proofs/chain-split.goal.sexp examples/proofs/chain-split.proof.sexp
+```
+
+This takes 48 inference steps, including two arithmetic lemmas. It is a
+composition law for sequential compression chains; it says nothing yet
+about BLAKE3's binary hash tree or its native memory accesses.
+
 ## The logic
 
 Terms are sorted, first-order applications. Equality has its ordinary
@@ -68,23 +106,25 @@ axioms, admitted equations, solver verdicts, or evaluator callbacks.
 
 ### Objects and identities
 
-The version-1 grammar uses positional s-expressions; every field and
+The version-2 grammar uses positional s-expressions; every field and
 arity is checked. Files may have formatting and `;` comments. Identities
 are BLAKE3 hashes of the canonical forms from `ode/canon.py`.
 
 ```lisp
-(theory 1
+(theory 2
   (ExtraSort ...)
   ((function (ArgumentSort ...) ResultSort) ...)
   ((defined-function ((counter Nat) (parameter Sort) ...) ResultSort
      zero-body
      (predecessor successor-body)) ...))
 
-(goal 1 #theory-hash
+(goal 2 #theory-hash
   ((variable Sort) ...)
   (eq left-term right-term))
 
-(proof 1 #goal-hash derivation)
+(proof 2 #goal-hash
+  ((lemma ((parameter Sort) ...) (eq left right) derivation) ...)
+  derivation)
 ```
 
 A term is a variable name or `(function argument ...)`. Constants are
@@ -114,6 +154,7 @@ A reference must identify an earlier step in this block.
 | `(cong f p ...)` | `f(a,...) = f(b,...)`, from argument equations `a = b, ...`; sorts and arity must fit `f` |
 | `(unfold f arg ...)` | `f(arg,...) = body`, by instantiating the function's zero or successor equation; the first argument must visibly be `(zero)` or `(succ k)` |
 | `(ih arg ...)` | An instance of the induction hypothesis; only available in the step block, with the predecessor fixed |
+| `(lemma index arg ...)` | An instance of an earlier, completely proved lemma; substitution covers its parameters in declaration order |
 
 There are two derivation forms:
 
@@ -133,10 +174,17 @@ For a goal `P(n, parameters)` (where `P` is an equation):
    value for `k`. Substitution is simultaneous and sort-preserving; terms
    being substituted have no binders.
 
-This first kernel allows one induction at the root of a proof. Nested
-inductions and imported lemmas have no syntax yet. The rule does not
-invoke Python's evaluator, test sample counters, or assume a conclusion
-because a producer calls it an invariant.
+A proof carries an ordered list of lemmas followed by its final derivation.
+Each lemma is a universally quantified equation proved in the same theory
+using only earlier lemmas. Every lemma is checked, even if unused; it
+becomes available only after its entire proof passes. Self references,
+forward references, and exporting a local induction hypothesis are
+rejected. Each derivation has either an equational block or a root
+induction; this suffices to reuse inductive lemmas in later inductions.
+Version 1 objects are rejected.
+
+The rule does not invoke Python's evaluator, test sample counters, or
+assume a conclusion because a producer calls it an invariant.
 
 ### Why the rules are sound
 
@@ -147,7 +195,10 @@ step block, every hypothesis instance holds at the fixed predecessor
 for arbitrary state parameters, so ordinary equational reasoning
 preserves it. The separately checked base and step establish the goal
 for every natural number by induction. Freshness and scope checks keep
-the hypothesis out of the base and out of the final context.
+the hypothesis out of the base and out of the final context. A checked
+lemma holds for all its declared parameters; sort-preserving simultaneous
+substitution therefore preserves its truth in later proofs. No theorem
+can depend on itself because it is published only after verification.
 
 This argument is written for human review; it is not a machine-checked
 metatheorem about the Python implementation. The kernel's implementation,
@@ -178,7 +229,7 @@ reported work counts are deterministic diagnostic counts, not clocks.
 ## Review and adversarial checks
 
 ```sh
-pypy3 -m unittest tests.test_kernel
+pypy3 -m unittest tests.test_kernel tests.test_nat_proof
 pypy3 game/kernel_attacks.py
 ```
 
@@ -192,8 +243,9 @@ the real kernel rejects the same proof, showing that the negative control
 distinguishes that broken rule implementation. The file-interface
 test runs the command a recipient would run, then corrupts the proof.
 
-`tools/make_batching_proof.py` reproduces the goal and proof. It imports
-neither the kernel nor the existing program verifier. Generated proof
+The scripts `tools/make_batching_proof.py`, `tools/make_nat_add_proof.py`,
+and `tools/make_chain_split_proof.py` reproduce the goals and proofs. They
+import neither the kernel nor the existing program verifier. Generated proof
 bytes are included here because this is the artifact Bob checks without
 running the producer. The theorem statement travels separately.
 

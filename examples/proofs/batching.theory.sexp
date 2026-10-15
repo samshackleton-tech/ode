@@ -2,7 +2,7 @@
 ; State, Blocks, and Block are arbitrary nonempty sets. compress and
 ; block-at are arbitrary total functions. Block may include flags,
 ; counter, and block length: the theorem assumes no cryptographic law.
-(theory 1
+(theory 2
   (State Block Blocks)
   ((compress (State Block) State)
    (block-at (Blocks Nat) Block))

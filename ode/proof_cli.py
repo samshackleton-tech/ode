@@ -42,7 +42,8 @@ def main(argv):
     print(canonical_bytes(goal[4]).decode())
     print(f"theory #{result['theory'].hex()}")
     print(f"goal   #{result['goal'].hex()}")
-    print(f"{result['rules']} inference steps; {result['terms']} shared terms; "
+    print(f"{result['lemmas']} proved lemmas; {result['rules']} inference steps; "
+          f"{result['terms']} shared terms; "
           f"{result['work']} work units")
     return 0
 

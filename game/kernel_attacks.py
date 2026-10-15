@@ -30,19 +30,19 @@ def cases():
     for name in names:
         theory, goal, proof = copy.deepcopy(original)
         if name == 'no-base':
-            proof[3][3] = [parse('(refl s)')]
+            proof[4][3] = [parse('(refl s)')]
         elif name == 'no-step':
-            proof[3][4] = [parse('(refl s)')]
+            proof[4][4] = [parse('(refl s)')]
         elif name == 'use-hypothesis-in-base':
-            proof[3][3] = [parse('(ih s m i)')]
+            proof[4][3] = [parse('(ih s m i)')]
         elif name == 'capture-predecessor':
-            proof[3][2] = Sym('i')
+            proof[4][2] = Sym('i')
         elif name == 'generalize-predecessor':
-            proof[3][4][9] = parse('(ih (succ k) s m i)')
+            proof[4][4][9] = parse('(ih (succ k) s m i)')
         elif name == 'self-reference':
-            proof[3][4][-1] = parse('(trans 13 12)')
+            proof[4][4][-1] = parse('(trans 13 12)')
         elif name == 'oracle':
-            proof[3][4][-1] = [Sym('oracle'), goal[4]]
+            proof[4][4][-1] = [Sym('oracle'), goal[4]]
         elif 'wrong-goal' in name or name == 'different-goal':
             goal[4][2][1] = parse('(succ n)')
         elif 'wrong-stride' in name or name == 'different-theory':
@@ -52,6 +52,23 @@ def cases():
         if name.startswith('honestly-rehashed') or name == 'nondecreasing-definition':
             goal[2] = hash_of(theory)
             proof[2] = hash_of(goal)
+        yield name, (theory, goal, proof), False
+
+    reuse = [parse((directory / f'nat-add.{k}.sexp').read_bytes())
+             for k in ('theory', 'goal', 'proof')]
+    yield 'honest-lemma-reuse', reuse, True
+    for name in ('circular-lemma', 'forward-lemma', 'leaked-lemma-hypothesis',
+                 'unchecked-unused-lemma', 'wrong-lemma-instantiation'):
+        theory, goal, proof = copy.deepcopy(reuse)
+        if name in ('circular-lemma', 'forward-lemma'):
+            index = 0 if name == 'circular-lemma' else 1
+            proof[3][0][3] = parse(f'(derive ((lemma {index} a)))')
+        elif name == 'leaked-lemma-hypothesis':
+            proof[4] = parse('(derive ((ih a b c d)))')
+        elif name == 'unchecked-unused-lemma':
+            proof[3].append(parse('(lemma () (eq (zero) (succ (zero))) (derive ((refl (zero)))))'))
+        else:
+            proof[4] = parse('(derive ((lemma 0 a b)))')
         yield name, (theory, goal, proof), False
 
 
