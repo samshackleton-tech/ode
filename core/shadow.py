@@ -18,21 +18,24 @@ import sym, table
 ROWS = {}
 for row in table.read():
     t = row.row.split()
-    if t[0].startswith(".x") and all(h in ("X", "Y", "Z", "I") for h in t[1:]): ROWS[t[0]] = (row, t[1:])
+    if t[0].startswith(".x") and all(h in ("X", "Y", "Z", "I", "N", ".B", ".S") for h in t[1:]): ROWS[t[0]] = (row, t[1:])
 COUNT = {"instructions": 0, "by the table": 0, "differ": 0}
 
 
 def effect(row, bind, m):
-    """The vector registers the row assigns, on m's symbolic state."""
+    """What the row assigns, on m's symbolic state: {vector register: lanes} and {("mem", base, disp): lanes}."""
     S = sym.rules(m.T)
+    def mem(e): return m.address("." + bind[e[2][0][1]], bind[e[2][1][1]])
     def value(e):
         if e[0] == "number": return e[1]
         if e[0] == "lane": return m.halves(bind[e[1]])[e[2]]
         if e[0] == "name":
             if e[1] in S: return S[e[1]]
+            if e[1] in ("S", "B"): return m.g[bind[e[1]]]
             return bind[e[1]] if e[1] == "I" else tuple(m.halves(bind[e[1]]))
+        if e[1] == "mem128": return tuple(m.load(*mem(e), 16))
         return S[e[1]](*[value(a) for a in e[2]])
-    return {bind[lhs[1]]: tuple(value(rhs)) for lhs, rhs in row.effect}
+    return {(("mem",) + (bind[lhs[2][0][1]], bind[lhs[2][1][1]]) if lhs[0] == "call" else bind[lhs[1]]): tuple(value(rhs)) for lhs, rhs in row.effect}
 
 
 def shadowed(one):
@@ -42,15 +45,17 @@ def shadowed(one):
         said = None
         if op in ROWS and len(a) == len(ROWS[op][1]) and all(isinstance(t, str) for t in a):
             row, holders = ROWS[op]
-            try: said = effect(row, {h: int(t, 0) for h, t in zip(holders, a)}, self)
+            bind = {h.lstrip("."): (t.lstrip(".") if h.startswith(".") else t if h == "N" else int(t, 0)) for h, t in zip(holders, a)}
+            try: said = effect(row, bind, self)
             except sym.Refuse: said = None
         one(self)
         COUNT["instructions"] += 1
         if said is not None:
             COUNT["by the table"] += 1
             for r, lanes in said.items():
-                if tuple(self.x[r][:4]) != lanes:
-                    COUNT["differ"] += 1; print(f"DIFFERS at {op} {' '.join(a)}: xmm{r}")
+                left = tuple(self.load(*self.address("." + r[1], r[2]), 16)) if isinstance(r, tuple) else tuple(self.x[r][:4])
+                if left != lanes:
+                    COUNT["differ"] += 1; print(f"DIFFERS at {op} {' '.join(a)}: {r}")
     return step
 
 

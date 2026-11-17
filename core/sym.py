@@ -48,6 +48,12 @@ def rotation(T):
     return g
 
 
+def pair_lanes(T, v):
+    """A 64-bit register moved into a vector register: answered for a counter held as its two words."""
+    if not (isinstance(v, tuple) and v[0] == "pair"): raise Refuse("a general register moved to a vector register that is not a counter's two words")
+    return (v[1], v[2], T.const(0), T.const(0))
+
+
 def rules(T):
     """The symbolic rules over the terms T. Immediates stay numbers."""
     return {
@@ -55,6 +61,7 @@ def rules(T):
         "shl32": half("shl"), "shr32": half("shr"), "or32": rotation(T),
         "each32": lambda f, a, b: tuple(f(x, y) for x, y in zip(a, b if isinstance(b, tuple) else (b,) * 4)),
         "lanes": lambda a, b, c, d: (a, b, c, d),
+        "lanes_of64": lambda v: pair_lanes(T, v),
         "pick4": table.CONC["pick4"], "blend4": table.CONC["blend4"],
     }
 
