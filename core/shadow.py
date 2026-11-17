@@ -27,10 +27,10 @@ def effect(row, bind, m):
     S = sym.rules(m.T)
     def value(e):
         if e[0] == "number": return e[1]
-        if e[0] == "lane": return m.lanes(bind[e[1]])[e[2]]
+        if e[0] == "lane": return m.halves(bind[e[1]])[e[2]]
         if e[0] == "name":
             if e[1] in S: return S[e[1]]
-            return bind[e[1]] if e[1] == "I" else tuple(m.lanes(bind[e[1]]))
+            return bind[e[1]] if e[1] == "I" else tuple(m.halves(bind[e[1]]))
         return S[e[1]](*[value(a) for a in e[2]])
     return {bind[lhs[1]]: tuple(value(rhs)) for lhs, rhs in row.effect}
 
@@ -42,7 +42,8 @@ def shadowed(one):
         said = None
         if op in ROWS and len(a) == len(ROWS[op][1]) and all(isinstance(t, str) for t in a):
             row, holders = ROWS[op]
-            said = effect(row, {h: int(t, 0) for h, t in zip(holders, a)}, self)
+            try: said = effect(row, {h: int(t, 0) for h, t in zip(holders, a)}, self)
+            except sym.Refuse: said = None
         one(self)
         COUNT["instructions"] += 1
         if said is not None:

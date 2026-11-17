@@ -25,6 +25,7 @@ CONC = {
     "low8": lambda a: a & 0xFF, "sub8": lambda a, b: (a - b) & 0xFF,
     "setlow8": lambda a, b: (a & ~0xFF & M64) | (b & 0xFF),
     "add32": lambda a, b: (a + b) & M32, "xor32": lambda a, b: a ^ b, "ror32": ror32,
+    "shl32": lambda a, n: (a << n) & M32, "shr32": lambda a, n: a >> n, "or32": lambda a, b: a | b,
     "each32": lambda f, a, b: tuple(f(x, y) for x, y in zip(a, b if isinstance(b, tuple) else (b,) * 4)),
     "lanes": lambda a, b, c, d: (a, b, c, d),
     "lanes_of64": lambda a: (a & M32, (a >> 32) & M32, 0, 0),
