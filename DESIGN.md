@@ -429,8 +429,12 @@ Each is open on purpose, with what will close it.
 3. **Where computation in proofs lives**: a verified procedure in the core, or a derivation per decision
    from the prover (as arithmetic is today). *Criterion:* whichever keeps the core small on the first
    example's proofs.
-4. **Data and file layout**: how a shipped file carries code, constants, proof and specification, and how
-   names of files and contracts follow the naming rules. Undiscussed.
+4. **Data and file layout**: how code, constants, proof and specification are shipped, and how names of
+   files and contracts follow the naming rules. *Decided so far (Sam, November 17, 2026):* a proof is a
+   file of its own beside the binary, not a section inside it. The tools still read a proof carried in a
+   binary (`.ode.proof`), and the shipped examples still carry theirs; that way is no longer maintained or
+   extended, and is not being taken out either, since something like it may return. The rest (whether
+   the specification a binary carries goes the same way; the files' names) is undiscussed.
 5. **The word-level layer**: whether word-level Ode stays, with the coder's choices made explicit in it, or
    every function is written in the instruction layer with macros.
 6. **Succinct proofs of verification** (Lurk and its kind): an optional further leg, "a proof that the
