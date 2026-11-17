@@ -71,7 +71,8 @@ Inside `core/`:
 | role | files |
 |---|---|
 | relied on: what each instruction does | `x86.tab` (93 rows), `table.py` (reads it), `step.py` (does a row's effect on the verifier's machine: a rule on symbols for each primitive, none about one instruction) |
-| testers | `conc.py` (each primitive's meaning on numbers), `cross.py` (every row run on this machine's processor from random states and compared), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
+| the rules, written down | `RULES.md`: what the verifier concludes from a row, rule by rule, and what holds after every instruction (memory, calls and places are not yet written there) |
+| testers | `conc.py` (each primitive's meaning on numbers), `decoder.py` (the verifier's decoder reads each row's assembled instances as that row), `cross.py` (every row run on this machine's processor from random states and compared), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
 
 ## Where this came from
 
