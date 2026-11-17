@@ -1,0 +1,51 @@
+# The machine, written once: x86-64 instruction forms, one row a form.
+#
+#     NAME | ASM | ROW | EFFECT
+#
+# ASM     how an assembler writes an instance (Intel syntax). Random instances are assembled from it and run
+#         on a processor (cross.py): everything the EFFECT assigns must be what the processor leaves.
+# ROW     the decoded instruction, as the decoder writes it.
+# EFFECT  what the instruction does: assignments, left to right, over the primitives of table.py.
+#         `= unknown` says nothing of that part of the state: the verifier may not rely on it afterwards,
+#         and the comparison with a processor leaves it out. Everything else a row leaves as it was.
+#
+# In ASM and ROW: D, S, B are general registers (D64 its 64-bit name, D32, D8); X, Y, Z are vector register
+# numbers; I is an immediate; N a displacement. In EFFECT: D, S, B are those registers' 64 bits; X, Y, Z the
+# low 128 bits of the vector registers as four 32-bit lanes; mem8/mem64/mem128(B, N) the bytes at B + N;
+# zf, cf two of the flags.
+
+# -- 64-bit arithmetic and moves
+add64_rr   | add D64, S64            | .add 64 (.reg .D) (.reg .S)   | D = add64(D, S); zf = unknown; cf = unknown
+add64_ri   | add D64, I              | .add 64 (.reg .D) (.imm I)    | D = add64(D, I); zf = unknown; cf = unknown
+sub64_rr   | sub D64, S64            | .sub 64 (.reg .D) (.reg .S)   | D = sub64(D, S); zf = unknown; cf = unknown
+sub64_ri   | sub D64, I              | .sub 64 (.reg .D) (.imm I)    | D = sub64(D, I); zf = unknown; cf = unknown
+and64_ri   | and D64, I              | .and 64 (.reg .D) (.imm I)    | D = and64(D, I); zf = unknown; cf = unknown
+or64_rr    | or D64, S64             | .or 64 (.reg .D) (.reg .S)    | D = or64(D, S); zf = unknown; cf = unknown
+shl64_ri   | shl D64, I              | .shl64 .D I                   | D = shl64(D, I); zf = unknown; cf = unknown
+shr64_ri   | shr D64, I              | .shr64 .D I                   | D = shr64(D, I); zf = unknown; cf = unknown
+cmp64_rr   | cmp D64, S64            | .cmp 64 (.reg .D) (.reg .S)   | zf = equal(D, S); cf = below(D, S)
+mov64_rr   | mov D64, S64            | .mov 64 (.reg .D) (.reg .S)   | D = S
+mov64_ri   | mov D64, I              | .mov 64 (.reg .D) (.imm I)    | D = I
+mov64_rm   | mov D64, [B64 + N]      | .mov 64 (.reg .D) (.mem .B N) | D = mem64(B, N)
+mov64_mr   | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B, N) = S
+
+# -- bytes
+movzx8_rm  | movzx D32, byte ptr [B64 + N] | .movzx8 .D (.mem .B N)  | D = mem8(B, N)
+movzx8_rr  | movzx D32, S8           | .movzx8 .D (.reg .S)          | D = low8(S)
+mov8_al_i  | mov al, I               | .mov 8 (.reg .rax) (.imm I)   | rax = setlow8(rax, I)
+dec8_al    | dec al                  | .decb .rax                    | rax = setlow8(rax, sub8(low8(rax), 1)); zf = equal(low8(rax), 0); cf = unknown
+
+# -- 128-bit vectors of four 32-bit lanes (VEX and EVEX encodings: bits above 127 of the register are cleared)
+loadu128   | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
+storeu128  | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
+mov128     | vmovdqa xmmX, xmmY      | .xmov X Y                     | X = Y
+movq128    | vmovq xmmX, S64         | .xmovq X .S                   | X = lanes_of64(S)
+paddd128   | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
+pxor128    | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = each32(xor32, Y, Z)
+prord128   | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
+pshufd128  | vpshufd xmmX, xmmY, I   | .xpshufd X Y I                | X = pick4(Y, Y, I)
+shufps128  | vshufps xmmX, xmmY, xmmZ, I | .xshufps X Y Z I          | X = pick4(Y, Z, I)
+unpckldq   | vpunpckldq xmmX, xmmY, xmmZ | .xpunpckldq X Y Z         | X = lanes(Y.0, Z.0, Y.1, Z.1)
+unpckhdq   | vpunpckhdq xmmX, xmmY, xmmZ | .xpunpckhdq X Y Z         | X = lanes(Y.2, Z.2, Y.3, Z.3)
+unpcklqdq  | vpunpcklqdq xmmX, xmmY, xmmZ | .xpunpcklqdq X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
+pblendd128 | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = blend4(Y, Z, I)
