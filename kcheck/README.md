@@ -1,5 +1,12 @@
 # kcheck: a specification, a binary, and a verifier a reader runs (a trial, November 14 and 15, 2026)
 
+**This page is the dated record of evidence**: what was built, measured, audited and found wrong, in the
+order it happened. For what Ode is and where it is going read [../DESIGN.md](../DESIGN.md); to run things,
+[../README.md](../README.md). Most of it was written while this work lived in BLAKE3-Servil's repository
+(fork `samshackleton-tech/BLAKE3`, `tools/verify/machine/kcheck/`, to commit `dca7275f`). Paths in the older
+sections are that tree's: its `c/` and `test_vectors/` are `../reference/blake3-servil/` here, and its
+Lean folders (`../lang/*.lean`, `../one/`, `../spec/`), `kcheck_cross.py` and `earlier/` stayed there.
+
 **To verify a shipped binary yourself: `VERIFY.md`** (one page) and `python3 verify.py FILE`, which prints
 the contract you are asked to rely on, the verification, and the files that ran to reach it.
 
@@ -120,7 +127,7 @@ where the verifier is wrong, and what that found.
 
 ## The specification: `blake3.spec`
 
-    python3 ode.py blake3.spec --vectors ../../../../test_vectors/test_vectors.json      # 105 vectors, 6 s
+    python3 ode.py blake3.spec --vectors ../reference/blake3-servil/test_vectors/test_vectors.json      # 105 vectors, 6 s
     python3 test_ode.py
 
 The language (its summary is at the top of the file): numbers, 32-bit words, 64-bit counters, lists, bytes,
@@ -762,7 +769,7 @@ called, once, and not again at each use. What it taught:
 
 **1. The verifier searches for no arithmetic.** Every fact of arithmetic a verification needs ("these whole
 numbers cannot all be >= 0") was found by elimination inside the verifier: a search, most of which shows
-nothing (`DESIGN.md` has the counts). Now the search is the prover's:
+nothing (the `DESIGN.md` of that day had the counts). Now the search is the prover's:
 
 - `kprove.py` (the prover's, trusted for nothing) does the same elimination and remembers how each row was
   made; when it comes to a contradiction it writes out the rows it started from and the steps that led there.
@@ -1324,7 +1331,7 @@ specification. (The hash above does not use them: it has no stack.)
 |---|---|---|
 | `blake3.spec` | 185 | the specification (147 lines), and the public contract: that of the function a user calls |
 | `LANGUAGE.md` | 157 | what a specification's text means and what a contract means: one page in two parts, the same for every program |
-| `DESIGN.md` | 175 | the design: what is wanted and given up, the rules for code written to be proved, how it stands to types-as-proofs |
+| `../DESIGN.md` | | the design (it was a page of this folder, 175 lines, when this table was made) |
 | `proofs/inner.spec`, `proofs/*.json` | 185 | the inner contracts (of the functions inside), the layouts of two records; the wide kernels' and `merge`'s places |
 | `hash.ode`, `glue/*.S` | 332 | the hash written to be proved; the assembly the Ode compiler prints of it (and of the stack's three functions) |
 | `b3hashr.o` | | the binary: 80,920 bytes, the specification and the proof in it |

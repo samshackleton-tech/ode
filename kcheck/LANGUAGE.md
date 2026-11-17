@@ -2,7 +2,9 @@
 
 A reader reads two kinds of text: a specification (definitions by equations: part 1) and a contract (what a
 function in a binary does: part 2). This page is the whole meaning of both. It is the same for every
-program; read it once.
+program; read it once. Here a **contract** is always the formal text. What a reader wants of the software,
+which may still be changing, is his **intent** ([DESIGN.md](../DESIGN.md#3-bobs-intent-and-the-contract-his-verifier-decides)): verifying a
+contract settles whether the bytes meet that text, and leaves to him whether the text says what he wants.
 
 ## Part 1. The specification language: what its texts mean
 
@@ -143,6 +145,10 @@ way. Both are the language's own (part 1) and a specification may not define the
   (`needs F if C`: only where C holds). That the processor has them is the caller's to know.
 - Which instructions it ran, and which addresses it touched, depend on the numbers it was given and not on the
   bytes in memory: unless a line `trace depends on X` says they may depend on the bytes at X.
+
+The trace property speaks of which instructions run and which addresses are touched. How long an instruction
+takes on its operands, and every other effect of the processor, lie outside it: a promise about those needs
+an account and assumptions of its own. A verification reports the property that was shown, by this name.
 
 A function that does more, or promises less, says so in its contract. Silence always means the stronger
 thing.

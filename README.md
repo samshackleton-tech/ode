@@ -1,0 +1,80 @@
+# Ode
+
+Ode is a way to write fast native code together with a proof that its bytes meet a contract, so that the
+person who depends on the code can verify it for himself while relying only on a short, named list of things.
+
+A maker ships three things: a binary, a proof carried inside it, and a specification. Bob, the auditor,
+reads a short contract ("this function writes the BLAKE3 hash of the input to `out`, reads and writes
+nothing else, and uses this much stack"), and runs his verifier on the binary. The compiler, the prover and
+the maker are relied on for nothing: whatever they produced is accepted only where the verifier shows the
+bytes meet the contract. The coder chooses the machine code, instruction by instruction where speed needs
+it; the tools automate its proof. [DESIGN.md](DESIGN.md) is the whole design.
+
+**State, November 17, 2026: a research prototype.** One real program is verified from its bytes: the
+one-shot BLAKE3 hash for x86-64 with AVX-512, fourteen functions written in Ode, at 97% of BLAKE3-Servil's
+speed for a megabyte and 60% at 16 to 32 KiB. Twelve smaller functions (Adler-32, LZ4, UTF-8, base-64 and
+others) are verified the same way. **The verifier itself is unverified Python**, tested and audited; six
+ways to have it accept a wrong binary were found by reading on November 17 and closed. Making the part Bob
+relies on small and provable is the work ahead. Section 13 of DESIGN.md sets the state against the design,
+line by line.
+
+## Verify the first example
+
+    cd kcheck
+    python3 verify.py b3hashr.o blake3.spec
+
+Python 3 and this folder are all it needs: nothing is installed, no solver runs, no network is used. In
+about 25 seconds it prints the public contract (seven lines), the verification ("`b3l_hashr` in this file
+meets its public contract, with all it calls: 14 functions, from the file's bytes"), and the files that ran
+to reach it (3,153 lines of Python in ten files). Exit status 0 means shown.
+[kcheck/VERIFY.md](kcheck/VERIFY.md) is the page for a reader: what is shown, what is left unshown, and
+what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
+
+## Make it again, and test it
+
+    sh kcheck/make_hash.sh /tmp/out      # the shipped b3hashr.o from its Ode sources, byte for byte
+    python3 kcheck/gate.py --jobs 16     # the check before a merge: under five minutes
+    sh tests.sh                          # every test file
+
+Making needs clang and Lean's `lake` (the word-level compiler's printer is 358 lines of Lean; nothing is
+proved in Lean). The gate and some tests run code on a processor and need x86-64 Linux with AVX-512; they
+skip elsewhere. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
+judge each change the verifier accepts: hours, run in the background.
+
+## What is where
+
+| | |
+|---|---|
+| `DESIGN.md` | what Ode is for and how it is built; the state today; open decisions |
+| `NAMES.md` | names and identities: requirements, the proposal, what the tools do |
+| `LESSONS.md` | what the work has taught, October and November 2026 |
+| `AGENTS.md` | how the team works, and how to work here |
+| `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
+| `wide/` | BLAKE3's five kernels in Ode's instruction layer (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
+| `lang/` | the Ode compiler: `odec.py` (reader; kernels to assembly) and `Lang.lean` (word-level functions to assembly); `build.sh` |
+| `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |
+
+Inside `kcheck/`, by what a file is relied on for:
+
+| role | files |
+|---|---|
+| what Bob is given | `VERIFY.md`, `verify.py`, `LANGUAGE.md`; `blake3.spec` and `b3hashr.o`; `programs/NAME/NAME.spec` and `programs/NAME/odeNAME.o` |
+| the verifier (relied on) | `check_binary.py`, `programs/check_file.py`, `kdecode.py`, `kfn.py`, `kbyte.py`, `kspec.py`, `ode.py`, `klin.py`, `kterms.py`, `kproof.py`, `kshow.py`, `kends.py`, `varith.py` |
+| provers (relied on for nothing) | `kprove.py`, `kguess.py`, `kplace.py`, `kwide.py` |
+| makers | `hash.ode`, `glue/` (its functions as the compiler prints them), `kernels.py`, `klink.py`, `make_hash.sh`, `programs/kpack.py`, `proofs/` |
+| testers and audits | `refute.py` (looks for an input that breaks a contract), `gate.py`, `test_*.py`, `audit.sh` and the `k*_flip.py` tools, `lemma_audit.py`, `kadversary.py`, `kfile_flip.py`, `audit/` (the last whole audit's output), `backdoor.o` (a wrong binary that must be refused), `varith2.c` (a second verifier of arithmetic proofs) |
+| earlier pieces, loaded by no verification | `kcheck.py`, `kglue.py`, `check_all.py`, `kremove.py`, `lift_one.py` |
+
+## Where this came from
+
+- **Ode 0.1** (October 2026) is this repository's tag `v0.1.0`: a proof kernel for equations, a symbolic
+  verifier for a bytecode and an AArch64 subset, and the design pages this one grew from.
+- **The present tools** were built from November 11 to 17, 2026 inside BLAKE3-Servil's repository (fork
+  `samshackleton-tech/BLAKE3`, branch `experiment/sam-wide-model`, `tools/verify/machine/`) and moved here
+  from its commit `dca7275f`. The Lean experiments that came before them stay there.
+
+## Licence
+
+The files that came from BLAKE3-Servil's repository were published there under CC0-1.0, or Apache-2.0, or
+Apache-2.0 with LLVM exception, at the user's choice; the licence texts are in `reference/blake3-servil/`.
+This repository has no licence file of its own yet.

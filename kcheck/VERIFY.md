@@ -3,6 +3,10 @@
 You are handed a binary and told what it does. This page is how you find out for yourself, in seconds,
 without believing whoever made it.
 
+You may still be deciding what you want of the binary. That is your **intent**
+([DESIGN.md](../DESIGN.md#3-bobs-intent-and-the-contract-his-verifier-decides)), and it may change as you learn of risks and costs.
+The tool answers for one exact text, the contract you give it. Choosing that text, alone or with help, is yours.
+
 ## Run it
 
 You need Python 3 and this folder. Nothing is installed, nothing is downloaded, no solver runs.
@@ -39,7 +43,11 @@ A reader is told, of each public contract, whether it is met, and the counts: no
 he need not read. The functions inside by name, where each is, how long each took and why one is not shown
 are a maintainer's: `python3 verify.py FILE --maintain`.
 
-## What you must read
+## Choosing what to verify
+
+You may read these yourself, work through them with a person or an AI you chose, or take up a specification
+that others have already scrutinized. What matters is a justified connection between what you require and
+the exact text the tool verifies:
 
 - **The contract** (printed), and **the definitions it names**: `python3 verify.py FILE` prints the
   contract; the whole specification is `programs/NAME/NAME.spec` (`blake3.spec` for the hash), 12 to 185
@@ -49,7 +57,9 @@ are a maintainer's: `python3 verify.py FILE --maintain`.
 - **What a specification's text means**: `LANGUAGE.md`, part 1. (The two parts are one page.)
 
 The specification can be **your own copy** (`python3 verify.py FILE YOUR.spec`) or the one the file carries.
-If you use the file's, read it: the maker wrote it, and the verification says the code meets *that text*.
+If you use the file's, establish that it says what you want: the maker wrote it, and the verification says
+the code meets *that text*. A further requirement needs a showing of its own, and `NOT shown` leaves open
+whether the requirement is false.
 Its name is the BLAKE3 hash printed beside it, all 64 digits (`b3sum` gives the same): compare two of them
 with a tool, not by eye. What a file carries is printed with every control character written out (`\x1b`):
 a maker's comment cannot move your terminal's cursor.
@@ -63,7 +73,7 @@ file; the verifier uses them and trusts none of them. A wrong one makes the veri
   programs (they load more than they use). None of them searches for anything. They hold: how the file's bytes are read as instructions; what
   each instruction does; how a specification is read and worked out; how a proof of arithmetic is added up.
   They are tested and audited, **not proved**: that is the weakest part of this, and the work under way is
-  to make that list short enough to read (`DESIGN.md`, "Where it stands"). On November 17, 2026 six faults
+  to make that list short enough to scrutinize ([DESIGN.md](../DESIGN.md#7-what-the-verifier-establishes-and-why-it-can-be-believed), section 7). On November 17, 2026 six faults
   were found in them by reading, each one a way to have a wrong file shown (a function that wrote below its
   argument; a kernel that read its constants from an address of the maker's choosing; a register taken to
   hold what a call had written over; two unknown registers taken for one; a layout in the proof that let
@@ -109,7 +119,10 @@ first verifier's part). It is the beginning of a second verifier, not one.
 
 ## What it does not show
 
-- **Speed**, and anything else a contract does not say. (A `trace` line says what the timing may depend on.)
+- **Speed**, and anything else a contract does not say. A `trace` line limits which instructions run and
+  which addresses are touched. Other timing effects of a processor, such as an instruction whose duration
+  depends on its operands, are outside it. To protect a secret, connect your requirement to the exact
+  property that was shown.
 - **What else is linked into your program.** A shipped file here is an object to be linked, and it is read
   only in one shape: its code and its proof and nothing else a linker would take, and no name but those of
   functions each shown to meet a contract (a copy with a second function hidden under a verified one's name
@@ -123,7 +136,7 @@ first verifier's part). It is the beginning of a second verifier, not one.
 
 We began in Lean: the same hash, proved from its machine code. It worked and did not scale: a function took
 days, the 32-lane kernel's proof ran 37 minutes on one part without ending, and a proof was of one build's
-bytes, so a compiler flag undid it. (Figures from our notes of those weeks; `tools/verify/machine/lang` has
+bytes, so a compiler flag undid it. (Figures from our notes of those weeks; `tools/verify/machine/lang` in BLAKE3-Servil's repository has
 the proofs.) The work was never missing mathematics, which a library could have
 supplied; it was stepping through thousands of instructions inside a general-purpose prover, where each
 step is a large rewrite of a large term. A verifier made for this one job does the same stepping as plain
