@@ -1,1 +1,0 @@
-(goal 3 #fdcd45c200161f95c58b6128afdbf277cc78ab4f0186f9730ed1155e32d178c7 ((a Nat) (b Nat) (c Nat) (d Nat)) (eq (add (add a b) (add c (add d (zero)))) (add (add d c) (add b a))))

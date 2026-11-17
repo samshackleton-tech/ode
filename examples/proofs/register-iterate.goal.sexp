@@ -1,1 +1,0 @@
-(goal 3 #23897e76fbdff8ce55372479dfa0971012283b38b38a10f65bcf419a792fed77 ((n Nat) (p Program) (s State)) (eq (run (repeat-program n p) s) (iterate-program n p s)))

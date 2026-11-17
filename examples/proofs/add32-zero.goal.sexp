@@ -1,1 +1,0 @@
-(goal 3 #3fc74e773b8590afb900f5437a473c3e62b8398123b997480df0ef507ef23e12 ((x Word32)) (eq (add32 x (word32 (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0) (bit0))) x))

@@ -1,7 +1,0 @@
-; Owner-selected model and claims. This is an arithmetic fragment, not a callable function.
-(reliance
-  (ode-base #a8ec22bfe33dc769b26d5eb554add3bead2ac0df959225d99d644cf8b4acbaf4)
-  (theory #d32aefc7a8c46d146aeb7e4b8db8bd107b648a57e727fc0acd493eda58ce3912)
-  (encoding-goal #fa44ee23341cd9e7fe52f6e09e66ec21b0236e661f612a9bcb51a18b5daa8268)
-  (execution-goal #729406601f7dc2d134cfc7d852da238bb62948699b999f6ddb3f0d9ecdaf0cf5)
-)
