@@ -15,7 +15,9 @@ It runs, in parallel (one process per step), and fails on the first failure:
   (3) ELF/linkable shape flips: kfile_flip.py on a program file (every single-bit change of its ELF outside
       code/proof; the hash file's own ELF flips are in the soak, because its driver takes ~15 s a file);
   (4) the lemma tests (test_lemma_audit.py: changed lemmas and specifications judged on numbers; the full
-      lemma_audit.py sweep is in the soak).
+      lemma_audit.py sweep is in the soak);
+  (5) the table of instructions (../core/test_core.py): every row run on this machine's processor (where it
+      has AVX-512), every rule on symbols against its primitive's meaning on numbers, each with its control.
 The full 355k-bit instruction sweep takes hours and is RUN AS A SOAK (audit.sh), not a gate.
 
 Why this catches real bugs in minutes: every hole found by reading (Nov 17: 6 + 2 milder) is a multi-byte /
@@ -51,6 +53,7 @@ def main():
         ("test_kbinary (hash file as object and shared object)", [sys.executable, "test_kbinary.py"]),
         ("kfile_flip frame (ELF outside code/proof)", [sys.executable, "kfile_flip.py", "frame", "--jobs", str(jobs)]),
         ("test_lemma_audit (changed lemmas judged on numbers)", [sys.executable, "test_lemma_audit.py"]),
+        ("the table of instructions (rows on this processor, rules on numbers)", [sys.executable, os.path.join("..", "core", "test_core.py")]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

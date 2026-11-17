@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The table's checks, each with a control that it can fail.
+"""The checks of the table of instructions and of the rules that read it, each with a control that it can fail.
 
     python3 core/test_core.py
 
@@ -7,14 +7,16 @@
    machine and on kbyte.py's; rules made wrong are caught.
 2. Every row against this machine's processor (cross.py; x86-64 Linux with AVX-512 and clang, else
    skipped), and a table with rows made wrong has each of them reported.
-3. The table beside today's verifier (shadow.py) on the whole of ../kcheck/b3hashr.o and of the eight program
-   files: every instruction step leaves the same machine; and a row made wrong shows."""
+3. The verifier goes by the table: with a row made wrong a shipped file is no longer shown.
+(Before the verifier's own code for each instruction was taken out, the table was run beside it on every
+instruction step of every shipped file and of their single-bit changes, the two machines compared whole
+after each: shadow.py, in this repository's history at commit 015750a.)"""
 import contextlib, io, os, platform, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import meaning, step, table        # (these put ../kcheck on the path)
-import kbyte
+import kbyte, kfn
 
 NATIVE = platform.system() == "Linux" and platform.machine() == "x86_64" and shutil.which("clang") and "avx512vl" in open("/proc/cpuinfo").read()
 WRONG = [("X = lanes(Y.2, Z.2, Y.3, Z.3)", "X = lanes(Y.2, Z.2, Z.3, Y.3)", "unpckhdq"), ("D = shr64(D, I); zf", "D = shl64(D, I); zf", "shr64_ri"),
@@ -22,13 +24,12 @@ WRONG = [("X = lanes(Y.2, Z.2, Y.3, Z.3)", "X = lanes(Y.2, Z.2, Z.3, Y.3)", "unp
          ("D = low8(S)", "D = S", "movzx8_rr"), ("| jump I if not cf", "| jump I if cf", "jae"), ("mem64(rsp, 0) = P", "mem64(rsp, 8) = P", "push"),
          ("in_quarters(Y512, Z512, 2, 3, 6, 7)", "in_quarters(Y512, Z512, 2, 3, 7, 6)", "unpckhqdq512"), ("| D = at(B, N)", "| D = at(B, N); zf = equal(D, 0)", "lea"),
          ("choose16(M, each32(add32, Y512, Z512), X512)", "choose16(M, X512, each32(add32, Y512, Z512))", "paddd512k")]
-PROGRAMS = ["common", "adler32", "varint", "inet", "utf8", "base64", "frame", "lz4"]
-SAME = r"shadow: \d+ instruction steps by the verifier and by the table: [1-9]\d* the same, 0 differ, 0 the table refuses, 0 the table answers where the verifier refuses"
+KCHECK = os.path.join(HERE, "..", "kcheck")
 
 
 class Core(unittest.TestCase):
     def test_every_rule_on_symbols_is_its_primitives_meaning_on_numbers(self):
-        for of in (step.kfn.Machine, kbyte.Machine):
+        for of in (kfn.Machine, kbyte.Machine):
             with contextlib.redirect_stdout(io.StringIO()) as out: bad = meaning.test(6000, of=of)
             self.assertEqual(bad, 0, out.getvalue()[-1500:])
             self.assertIn("every rule answered", out.getvalue())
@@ -72,29 +73,20 @@ class Core(unittest.TestCase):
             self.assertEqual(r.returncode, 1, r.stdout[-1500:])
             for _, _, name in WRONG: self.assertIn(f"DIFFERS {name}:", r.stdout)
 
-    def test_the_table_does_every_instruction_of_the_hash_file_as_todays_verifier_does(self):
-        r = subprocess.run([sys.executable, os.path.join(HERE, "shadow.py")], capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stdout[-1500:] + r.stderr[-500:])
-        self.assertIn("the verification's exit: 0", r.stdout)
-        self.assertRegex(r.stdout, SAME)
-
-    def test_and_of_the_program_files(self):
-        for name in PROGRAMS:
-            r = subprocess.run([sys.executable, os.path.join(HERE, "shadow.py"), "--file", f"programs/{name}/ode{name}.o"], capture_output=True, text=True)
-            self.assertEqual(r.returncode, 0, name + r.stdout[-1500:] + r.stderr[-500:])
-            self.assertIn("the verification's exit: 0", r.stdout, name)
-            self.assertRegex(r.stdout, SAME, name)
-
-    def test_a_row_made_wrong_shows_beside_todays_verifier(self):
+    def test_the_verifier_goes_by_the_table(self):
+        """A row made wrong, and a shipped file is no longer shown; an instruction with no row is not verified."""
+        check = [sys.executable, os.path.join("programs", "check_file.py"), os.path.join("programs", "common", "odecommon.o")]
+        r = subprocess.run(check, capture_output=True, text=True, cwd=KCHECK)
+        self.assertEqual(r.returncode, 0, r.stdout[-800:] + r.stderr[-500:])
         with open(os.path.join(HERE, "x86.tab")) as f: text = f.read()
-        old = "| jump I if not cf"
-        self.assertEqual(text.count(old), 1)
-        with tempfile.TemporaryDirectory() as d:
-            path = os.path.join(d, "wrong.tab")
-            with open(path, "w") as f: f.write(text.replace(old, "| jump I if cf"))
-            r = subprocess.run([sys.executable, os.path.join(HERE, "shadow.py"), "--file", "programs/common/odecommon.o", "--list"], capture_output=True, text=True, env=dict(os.environ, ODE_TABLE=path))
-        self.assertEqual(r.returncode, 1, r.stdout[-1500:])
-        self.assertIn("DIFFERS", r.stdout)
+        for old, new in (("| jump I if not cf", "| jump I if cf"), ("| D = mem8(B, N)", "| D = mem64(B, N)"), ("| .movzx8 .D (.mem .B N)", "| .movzx9 .D (.mem .B N)")):
+            self.assertEqual(text.count(old), 1, old)
+            with tempfile.TemporaryDirectory() as d:
+                path = os.path.join(d, "wrong.tab")
+                with open(path, "w") as f: f.write(text.replace(old, new))
+                r = subprocess.run(check, capture_output=True, text=True, cwd=KCHECK, env=dict(os.environ, ODE_TABLE=path))
+            self.assertEqual(r.returncode, 1, old + r.stdout[-800:])
+            self.assertIn("NOT shown", r.stdout, old)
 
 
 if __name__ == "__main__":

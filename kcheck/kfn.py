@@ -40,7 +40,9 @@ WHAT IS NOT CHECKED HERE: this verifier (Python, unverified: its audits are its 
 import copy, itertools, json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kdecode, kspec, kterms, ode
-from kterms import Fail, num, signed
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core"))
+import step                 # one instruction by the table of instructions (../core/x86.tab)
+from kterms import Fail, Fork, num, signed
 from klin import Lin, Facts, sym, value, lin
 from kspec import Arr, ByteT, Slice, Named, plain, byte_or, byte_term, term_byte, halved
 from ode import Word, Counter, Err
@@ -216,10 +218,6 @@ def one_block(symbol):
 # known (XMM), sixteen where all 512 are (ZMM). A mask register ("k", number) holds sixteen truths, as terms.
 # An XMM register may hold, for a moment, half of a rotation a word: ("shl" or "shr", term, by how much): the
 # older instructions rotate by two shifts and an or. Nothing takes such a half but a move and that or.
-class Fork(Exception):
-    def __init__(self, kind, x): self.kind, self.x = kind, x
-
-
 class Machine:
     # `wide`: where the stack pointer was (from its entry value) when it was rounded down to a 64-byte boundary,
     # while it is in the part of the frame below that ("wide": sixty-four bytes a cell, as sixteen terms).
@@ -570,11 +568,6 @@ class Machine:
         if r not in self.x: raise Fail(f"xmm{r} read before it is written")
         return self.x[r][:4]
 
-    def lanes(self, r):
-        v = self.halves(r)
-        if any(isinstance(t, tuple) for t in v): raise Fail(f"xmm{r} holds half of a rotation")
-        return v
-
     def vec(self, r):
         if len(self.x.get(r, ())) != 16: raise Fail(f"zmm{r} read before all of it is written")
         return self.x[r]
@@ -586,19 +579,6 @@ class Machine:
         if v[0] == "pair": return ("t", v[1])
         if v[0] in ("t", "z"): return v
         raise Fail(f"the low 32 bits of {v}")
-
-    def word(self, o):
-        """An operand as a 32-bit term: a word of memory, a number, the low 32 bits of a register."""
-        v = self.load(*self.address(o[1], o[2]), 4) if o[0] == ".mem" else self.low32(self.operand(o))
-        if v[0] == "t": return v[1]
-        if v[0] == "n": return self.T.const(v[1])
-        if v[0] == "p" and all(b == 0 for b in v[1][1:]): return byte_term(self.T, v[1][0])
-        raise Fail(f"a word from {v}")
-
-    def operand(self, o):
-        if o[0] == ".reg": return self.g[o[1].lstrip(".")]
-        if o[0] == ".imm": return ("n", num(o[1]))
-        return self.load(*self.address(o[1], o[2]), 8)
 
     def number(self, d):
         """A number the code has computed, within 64 bits. A subtraction that may go below zero splits the
@@ -861,206 +841,14 @@ class Machine:
 
     # -- one instruction
     def one(self):
+        """The instruction at self.pc. What it does is its row of the table of instructions (../core/x86.tab), read by
+        step.py with a rule on symbols for each primitive; nothing here is about one instruction. Then what
+        holds after every instruction, whatever it was."""
         if self.pc not in self.rows: raise Fail(f"no instruction at 0x{self.pc:X}")
-        nxt, i = self.rows[self.pc]
-        op, a = i[0], i[1:]
-        if op in (".je", ".jne", ".jae", ".jb"):
-            if self.branch(op): nxt = num(a[0])                       # may fork: nothing is changed before it does
-        elif op == ".jmp": nxt = num(a[0])
-        elif op == ".nop": pass
-        elif op == ".mov":
-            if a[0] == "8" and a[1] == [".reg", ".rax"] and a[2][0] == ".imm": self.g["rax"] = ("al", num(a[2][1]) & 0xFF)      # a count put in AL
-            elif a[0] == "8":
-                if a[1][0] != ".mem" or a[2][0] not in (".reg", ".imm"): raise Fail("a move of a byte that is not from a register or a number to memory")
-                self.store(*self.address(a[1][1], a[1][2]), 1, self.g[a[2][1].lstrip(".")] if a[2][0] == ".reg" else ("n", num(a[2][1]) & 0xFF))
-            elif a[0] == "32":
-                if a[1][0] != ".reg": raise Fail("a move of 32 bits that is not into a register")
-                self.g[a[1][1].lstrip(".")] = self.low32(self.load(*self.address(a[2][1], a[2][2]), 4) if a[2][0] == ".mem" else self.operand(a[2]))
-            elif a[0] == "64":
-                v = self.operand(a[2])
-                if a[1][0] == ".reg": self.g[a[1][1].lstrip(".")] = v
-                else: self.store(*self.address(a[1][1], a[1][2]), 8, v)
-            else: raise Fail("a move that is not of 64 bits, of 32 or of a byte")
-        elif op == ".movzx8":
-            if a[1][0] == ".reg":                                           # a register's low byte, zeros above it
-                src = self.g[a[1][1].lstrip(".")]
-                if src[0] == "low": self.g[a[0].lstrip(".")] = ("p", ((0, (src[1],)),) + (0,) * 7)
-                elif src[0] == "p": self.g[a[0].lstrip(".")] = ("p", (src[1][0],) + (0,) * 7)
-                else: raise Fail(f"the low byte of {src}")
-            elif a[1][0] != ".mem": raise Fail("a byte that is not from memory or a register")
-            else: self.g[a[0].lstrip(".")] = self.load(*self.address(a[1][1], a[1][2]), 1)
-        elif op == ".and" and self.BOUNDARY and a[0] == "64" and a[1] == [".reg", ".rsp"] and a[2][0] == ".imm" and num(a[2][1]) == WORD64 - 63:
-            # the stack pointer rounded down to a 64-byte boundary: from here it is in a part of the frame of its
-            # own ("wide"), whose top is 0 to 63 bytes below where the stack pointer was
-            self.wide = self.top()[2]; self.g["rsp"] = ("a", "wide", 0); self.mem["wide"] = {}; self.flags = None
-        elif op in (".or", ".and") and a[0] == "32":
-            # of 32 bits, zeros above: bytes or-ed, or a register's low byte taken
-            if a[1][0] != ".reg" or a[2][0] != (".reg" if op == ".or" else ".imm"): raise Fail(f"{op} of 32 bits that is not of two registers, or of a register and a number")
-            r = a[1][1].lstrip("."); x = self.low32(self.g[r])
-            if op == ".or": self.g[r] = self.arith("or", x, self.low32(self.operand(a[2])))
-            elif num(a[2][1]) != 0xFF or x[0] not in ("n", "p"): raise Fail(f"an and of {x} that does not take its low byte")
-            else: self.g[r] = ("n", x[1] & 0xFF) if x[0] == "n" else ("p", (x[1][0],) + (0,) * 7)
-            self.flags = None
-        elif op in (".add", ".sub", ".or", ".and"):
-            if a[0] != "64" or a[1][0] != ".reg": raise Fail(f"{op} that is not of 64 bits into a register")
-            r = a[1][1].lstrip(".")
-            self.g[r] = self.arith(op[1:], self.g[r], self.operand(a[2])); self.flags = None
-        elif op == ".xor":
-            if a[1][0] != ".reg" or a[1] != a[2]: raise Fail("an xor that is not of a register with itself")
-            self.g[a[1][1].lstrip(".")] = ("n", 0); self.flags = None
-        elif op == ".test":
-            # a register with itself: is the number it holds zero?
-            if a[1][0] != ".reg" or a[1] != a[2]: raise Fail("a test that is not of a register with itself")
-            v = self.g[a[1][1].lstrip(".")] if a[0] == "64" else self.low32(self.g[a[1][1].lstrip(".")])
-            if lin(v) is None: raise Fail(f"a test of {v}")
-            self.flags = ("numbers", lin(v), "zero")
-        elif op == ".lea_data": self.g[a[0].lstrip(".")] = ("a", "rodata", num(a[1]))            # the address of the file's read-only data, so many bytes in
-        elif op == ".shr32":
-            r, n = a[0].lstrip("."), num(a[1]); v = self.low32(self.g[r])
-            if v[0] == "n" and 0 <= n < 32: self.g[r] = ("n", v[1] >> n)
-            elif v[0] == "p" and n in (8, 16, 24): self.g[r] = ("p", v[1][n // 8:4] + (0,) * (4 + n // 8))
-            else: raise Fail(f"{v} shifted right by {n}")
-            self.flags = None
-        elif op in (".dec64", ".dec32"):
-            # one less: a number that stays one (a count of turns), and the branch after it asks whether it is zero
-            r = a[0].lstrip("."); v = self.g[r] if op == ".dec64" else self.low32(self.g[r])
-            if lin(v) is None: raise Fail(f"one taken from {v}")
-            self.g[r] = self.number(lin(v) - 1) if op == ".dec64" else ("n", (v[1] - 1) & 0xFFFFFFFF)
-            self.flags = ("numbers", lin(self.g[r]), "zero")
-        elif op in (".shl64", ".shr64"):
-            r = a[0].lstrip("."); self.g[r] = self.arith(op[1:4], self.g[r], ("n", num(a[1]))); self.flags = None
-        elif op == ".cmp":
-            if a[0] != "64": raise Fail("a compare that is not of 64 bits")
-            x, y = self.operand(a[1]), self.operand(a[2])
-            if lin(x) is not None and lin(y) is not None: self.flags = ("numbers", lin(x) - lin(y))
-            elif x[0] == "q" and y[0] == "n": self.flags = ("unknown", (x[1], y[1]))        # is an unknown word this number? either way
-            else: raise Fail(f"a compare of {x} and {y}")
-        elif op == ".lea":
-            b = self.g[a[1].lstrip(".")]
-            if b[0] != "a": raise Fail("lea from a non-address")
-            self.g[a[0].lstrip(".")] = ("a", b[1], plain(Lin.of(b[2]) + signed(num(a[2]))))
-        elif op == ".xloadu": self.x[int(a[0])] = self.load(*self.address(a[1], a[2]), 16)
-        elif op == ".xstoreu": self.store(*self.address(a[0], a[1]), 16, self.lanes(int(a[2])))
-        elif op == ".xconst": self.x[int(a[0])] = tuple(self.T.const(num(w)) for w in a[1:5])
-        elif op == ".xmov": self.x[int(a[0])] = self.halves(int(a[1]))
-        elif op in (".xpslld", ".xpsrld"):
-            n = int(a[2])
-            if not 0 < n < 32: raise Fail("a shift by nothing, or by the word's width")
-            self.x[int(a[0])] = tuple(("shl" if op == ".xpslld" else "shr", t, n) for t in self.lanes(int(a[1])))
-        elif op == ".xpor":
-            # the two halves of a rotation: (x << (32 - n)) | (x >> n)
-            out = []
-            for p, q in zip(self.halves(int(a[1])), self.halves(int(a[2]))):
-                if not (isinstance(p, tuple) and isinstance(q, tuple)): raise Fail("an or that is not of a rotation's halves")
-                if p[0] == "shr": p, q = q, p
-                if not (p[0] == "shl" and q[0] == "shr" and p[1] == q[1] and p[2] + q[2] == 32): raise Fail("an or that is not of a rotation's halves")
-                out.append(self.T.ror(q[1], q[2]))
-            self.x[int(a[0])] = tuple(out)
-        elif op == ".xpshufb":
-            # a shuffle of bytes by a constant that rotates each word's bytes: a rotation of each word by whole bytes
-            src, mask, out = self.lanes(int(a[1])), self.lanes(int(a[2])), []
-            for lane, m in enumerate(mask):
-                k = self.T.nodes[m]
-                if k[0] != "c": raise Fail("a shuffle of bytes by something that is not a constant")
-                idx = [(k[1] >> (8 * j)) & 0xFF for j in range(4)]
-                r = idx[0] - 4 * lane
-                if not 0 <= r < 4 or any(idx[j] != 4 * lane + (r + j) % 4 for j in range(4)): raise Fail("a shuffle of bytes that is not a rotation of each word")
-                out.append(self.T.ror(src[lane], 8 * r) if r else src[lane])
-            self.x[int(a[0])] = tuple(out)
-        elif op == ".xpblendw":
-            # by 16-bit halves: both halves of a word from one source, or this is no blend of words
-            x, y, n = self.lanes(int(a[1])), self.lanes(int(a[2])), int(a[3])
-            if any(((n >> (2 * j)) & 3) not in (0, 3) for j in range(4)): raise Fail("a blend that splits a word")
-            self.x[int(a[0])] = tuple(y[j] if (n >> (2 * j)) & 1 else x[j] for j in range(4))
-        elif op == ".xmovq":
-            # the low 64 bits from a general register, zero above: a counter's two words; or bytes, each word a byte with zeros above it
-            v, T = self.g[a[1].lstrip(".")], self.T
-            if v[0] == "pair": self.x[int(a[0])] = (v[1], v[2], T.const(0), T.const(0))
-            elif v[0] == "p":
-                if any(b != 0 for k, b in enumerate(v[1]) if k % 4): raise Fail(f"a register moved to a vector register whose words are not each a byte: {v}")
-                self.x[int(a[0])] = tuple(T.const(b) if isinstance(b, int) else byte_term(T, b) for b in (v[1][0], v[1][4])) + (T.const(0), T.const(0))
-            else: raise Fail(f"a general register moved to a vector register: {v}")
-        elif op in (".xpaddd", ".xpxor"):
-            x, y = self.lanes(int(a[1])), self.lanes(int(a[2]))
-            self.x[int(a[0])] = tuple((self.T.add if op == ".xpaddd" else self.T.xor)(p, q) for p, q in zip(x, y))
-        elif op == ".xprord":
-            if not 0 < int(a[2]) < 32: raise Fail("a rotation by nothing, or by the word's width")
-            self.x[int(a[0])] = tuple(self.T.ror(t, int(a[2])) for t in self.lanes(int(a[1])))
-        elif op == ".xpshufd":
-            s, n = self.lanes(int(a[1])), int(a[2]); self.x[int(a[0])] = tuple(s[(n >> (2 * j)) & 3] for j in range(4))
-        elif op == ".xshufps":
-            x, y, n = self.lanes(int(a[1])), self.lanes(int(a[2])), int(a[3])
-            self.x[int(a[0])] = (x[n & 3], x[(n >> 2) & 3], y[(n >> 4) & 3], y[(n >> 6) & 3])
-        elif op == ".xpunpcklqdq": x, y = self.lanes(int(a[1])), self.lanes(int(a[2])); self.x[int(a[0])] = (x[0], x[1], y[0], y[1])
-        elif op == ".xpunpckldq": x, y = self.lanes(int(a[1])), self.lanes(int(a[2])); self.x[int(a[0])] = (x[0], y[0], x[1], y[1])
-        elif op == ".xpunpckhdq": x, y = self.lanes(int(a[1])), self.lanes(int(a[2])); self.x[int(a[0])] = (x[2], y[2], x[3], y[3])
-        elif op == ".xpblendd":
-            # of 128 bits the processor reads the mask's low four bits
-            x, y, n = self.lanes(int(a[1])), self.lanes(int(a[2])), int(a[3]) & 15
-            self.x[int(a[0])] = tuple(y[j] if (n >> j) & 1 else x[j] for j in range(4))
-        elif op == ".vzeroupper":                                           # ZMM0 to ZMM15 cleared above bit 127
-            for r in range(16):
-                if r in self.x: self.x[r] = self.x[r][:4]
-        elif op == ".zbroadcast": self.x[int(a[0])] = (self.word(a[1]),) * 16
-        elif op == ".zmov": self.x[int(a[0])] = self.vec(int(a[1]))
-        elif op in (".zload", ".zloadi", ".zstore"):
-            # sixty-four bytes as sixteen words. An aligned one faults off a 64-byte boundary: taken only in the frame on one.
-            if op == ".zloadi": aligned, r, at = False, int(a[0]), self.address(a[1], a[3], a[2])
-            elif op == ".zload": aligned, r, at = a[0] == "true", int(a[1]), self.address(a[2], a[3])
-            else: aligned, r, at = a[0] == "true", int(a[3]), self.address(a[1], a[2])
-            if aligned and at[0] != "wide": raise Fail(f"an aligned read or write of 64 bytes at {at[0]} + {at[1]}: not known to be on a 64-byte boundary")
-            if op == ".zstore": self.store(*at, 64, self.vec(r))
-            else: self.x[r] = self.load(*at, 64)
-        elif op == ".zpadddm":                                              # a sum with sixteen words of memory
-            x, y = self.vec(int(a[1])), self.load(*self.address(a[2], a[4], a[3]), 64)
-            self.x[int(a[0])] = tuple(self.T.add(p, q) for p, q in zip(x, y))
-        elif op == ".zpadddc":                                              # a sum with sixteen numbers
-            self.x[int(a[0])] = tuple(self.T.add(p, self.T.const((num(a[2]) >> (32 * k)) & 0xFFFFFFFF)) for k, p in enumerate(self.vec(int(a[1]))))
-        elif op == ".zpcmpud":                                              # a mask: where the first's word is below the second's
-            if int(a[3]) != 1: raise Fail("a comparison other than less-than")
-            self.x[("k", int(a[0]))] = tuple(self.T.ult(p, q) for p, q in zip(self.vec(int(a[1])), self.vec(int(a[2]))))
-        elif op == ".zpaddd_k":                                             # a sum where the mask says so; the word that was there elsewhere
-            if ("k", int(a[1])) not in self.x: raise Fail(f"k{a[1]} read before it is written")
-            d, k, x, y = self.vec(int(a[0])), self.x[("k", int(a[1]))], self.vec(int(a[2])), self.vec(int(a[3]))
-            self.x[int(a[0])] = tuple(self.T.ite(c, self.T.add(p, q), old) for c, p, q, old in zip(k, x, y, d))
-        elif op in (".zpaddd", ".zpxord"):
-            if op == ".zpxord" and a[1] == a[2]: self.x[int(a[0])] = (self.T.const(0),) * 16         # a register with itself: zero, whatever it held
-            else:
-                x, y = self.vec(int(a[1])), self.vec(int(a[2]))
-                self.x[int(a[0])] = tuple((self.T.add if op == ".zpaddd" else self.T.xor)(p, q) for p, q in zip(x, y))
-        elif op == ".zprord":
-            if not 0 < int(a[2]) < 32: raise Fail("a rotation by nothing, or by the word's width")
-            self.x[int(a[0])] = tuple(self.T.ror(t, int(a[2])) for t in self.vec(int(a[1])))
-        elif op in (".zunpckldq", ".zunpckhdq", ".zunpcklqdq", ".zunpckhqdq"):
-            # within each quarter of the register (four words)
-            x, y = self.vec(int(a[1])), self.vec(int(a[2]))
-            pick = {".zunpckldq": lambda q: (x[q], y[q], x[q + 1], y[q + 1]), ".zunpckhdq": lambda q: (x[q + 2], y[q + 2], x[q + 3], y[q + 3]),
-                    ".zunpcklqdq": lambda q: (x[q], x[q + 1], y[q], y[q + 1]), ".zunpckhqdq": lambda q: (x[q + 2], x[q + 3], y[q + 2], y[q + 3])}[op]
-            self.x[int(a[0])] = sum((pick(q) for q in (0, 4, 8, 12)), ())
-        elif op == ".zshufi32x4":
-            # quarters picked: two of the first register, then two of the second
-            x, y, n = self.vec(int(a[1])), self.vec(int(a[2])), int(a[3])
-            quarter = lambda v, q: v[4 * q:4 * q + 4]
-            self.x[int(a[0])] = quarter(x, n % 4) + quarter(x, n // 4 % 4) + quarter(y, n // 16 % 4) + quarter(y, n // 64 % 4)
-        elif op == ".decb":
-            # a count kept in AL, counted down: a plain number, so the branch after it is decided
-            r = a[0].lstrip("."); v = self.g[r]
-            if v[0] != "al": raise Fail("a byte counted down that no number was put in")
-            n = (v[1] - 1) & 0xFF; self.g[r] = ("al", n); self.flags = ("numbers", Lin.of(n), "zero")
-        elif op == ".push":
-            if a[0] == ".rsp": raise Fail("a push of the stack pointer")
-            sp = self.top()
-            self.g["rsp"] = ("a", "frame", sp[2] - 8); self.low = min(self.low, sp[2] - 8)
-            self.store("frame", sp[2] - 8, 8, self.g[a[0].lstrip(".")])
-        elif op == ".pop":
-            if a[0] == ".rsp": raise Fail("a pop into the stack pointer")
-            sp = self.top()
-            self.g[a[0].lstrip(".")] = self.load("frame", sp[2], 8); self.g["rsp"] = ("a", "frame", sp[2] + 8)
-        elif op == ".call": self.call(a[0])
-        elif op == ".ret":
-            if self.g["rsp"] != ("a", "frame", 0) or self.mem["frame"].get(0) != (8, "q", ("q", "return address")): raise Fail("a return to somewhere else")
-            nxt = None
-        else: raise Fail(f"an instruction this verifier does not know: {' '.join(map(str, i))}")
+        ins = self.rows[self.pc][1]
+        row, bind = step.find(ins)
+        if row is None: raise Fail(f"an instruction this verifier does not know: {' '.join(map(str, ins))}")
+        nxt = step.run(self, row, bind)                               # may fork: nothing is changed before it does
         if nxt is not None and nxt <= self.pc:
             self.back[nxt] = self.back.get(nxt, 0) + 1
             if self.back[nxt] > TURNS: raise Fail(f"a loop has turned {TURNS} times on one path: not a loop this verifier runs")
@@ -1068,6 +856,10 @@ class Machine:
         # not above where it was at entry. (A push, a pop, a call and a write through it are then where this
         # machine takes them to be; the stack used is counted from wherever it is.)
         sp = self.g["rsp"]
+        if sp[0] == "aligned":
+            # the stack pointer rounded down to a 64-byte boundary: from here it is in a part of the frame of its
+            # own ("wide"), whose top is 0 to 63 bytes below where the stack pointer was
+            self.wide = sp[1]; self.g["rsp"] = sp = ("a", "wide", 0); self.mem["wide"] = {}
         if self.wide is not None and sp[0] == "a" and sp[1] == "frame": self.wide = None; del self.mem["wide"]         # back in the frame as it was: the part on the boundary is given up
         if sp[0] != "a" or sp[1] != ("frame" if self.wide is None else "wide") or not isinstance(sp[2], int) or sp[2] > 0: raise Fail(f"the stack pointer leaves the function's own frame: {sp}")
         self.low = min(self.low, sp[2] if self.wide is None else self.wide - 63 + sp[2])

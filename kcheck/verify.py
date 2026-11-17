@@ -11,7 +11,7 @@ It prints, in this order:
      from the specification the file carries, with that text's BLAKE3 hash. Read it: it is what is shown.
   2. the verification itself (check_binary.py for the hash, programs/check_file.py for the others), which
      reads the file's bytes as a loader maps them and takes nothing else from the file on trust;
-  3. what ran: every file of this folder that was loaded to reach the verdict, with its lines of code
+  3. what ran: every file of this folder (and of ../core) that was loaded to reach the verdict, with its lines of code
      (and, with --digests, its BLAKE3 hash). That list is what you relied on, beside Python itself. The prover's files are not on it.
 
 With --maintain (a maintainer's run): each function inside by name, where it is, how long it took, and why one
@@ -93,7 +93,7 @@ def main():
         ran = []
         for name, mod in sorted(sys.modules.items()):
             f = getattr(mod, "__file__", None)
-            if f and os.path.abspath(f).startswith(HERE + os.sep) and os.path.abspath(f) != os.path.abspath(__file__) and os.path.relpath(f, HERE) not in but:
+            if f and os.path.abspath(f).startswith(os.path.dirname(HERE) + os.sep) and os.path.abspath(f) != os.path.abspath(__file__) and os.path.relpath(f, HERE) not in but:
                 digest = None
                 if "--digests" in sys.argv:
                     with open(f, "rb") as fh: digest = kshow.b3(fh.read())
@@ -107,15 +107,22 @@ def main():
         print("   the specification: " + kshow.ends_said(line, bool(maintain)))
         if "NOT shown" in line:
             print("   NOT shown: the contract speaks through definitions that are not shown to come to an end"); code = 1
-    print("\n3. What ran, to reach that (the files of this folder that were loaded; beside them, Python):\n")
+    print("\n3. What ran, to reach that (the files of this folder and of ../core that were loaded; beside them, Python):\n")
     total = sum(n for _, n, _ in ran)
     for f, n, digest in ran: print(f"   {f:<26} {n:>5} lines of code" + (f"   BLAKE3 {digest}" if digest else ""))
     print(f"   {'in all':<26} {total:>5} lines of code, {len(ran)} files")
+    step = sys.modules.get("step")
+    if step is not None:
+        # what each instruction does is not in those lines: it is the table's rows, which ../core/step.py reads
+        digest = ""
+        if "--digests" in sys.argv:
+            with open(step.TABLE, "rb") as fh: digest = "   BLAKE3 " + kshow.b3(fh.read())
+        print(f"   {os.path.relpath(step.TABLE, HERE):<26} {sum(len(rows) for rows in step.HEADS.values()):>5} rows: the table of instructions (what each one does)" + digest)
     if more:
         print("   and for the one line about the specification's definitions coming to an end (no part of what shows the code meets the contract):")
         for f, n, digest in more: print(f"   {f:<26} {n:>5} lines of code" + (f"   BLAKE3 {digest}" if digest else ""))
     absent = [f for f in ("kprove.py", "refute.py", "klink.py", os.path.join("programs", "kpack.py")) if f not in {r[0] for r in ran + more}]
-    names = " ".join(f for f, _, _ in ran + more)
+    names = " ".join([f for f, _, _ in ran + more] + ([os.path.relpath(step.TABLE, HERE)] if step is not None else []))
     if "--digests" in sys.argv: print("   (the digits: BLAKE3, worked out by ode.py from blake3.spec of this folder; `b3sum` gives the same)")
     else: print(f"   to name them (a program cannot vouch for itself; --digests prints BLAKE3's digits here all the same):\n      b3sum {names}")
     if absent: print(f"   not loaded (a prover's or a maker's, trusted for nothing): {', '.join(absent)}")

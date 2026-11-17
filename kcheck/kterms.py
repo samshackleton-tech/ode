@@ -75,5 +75,10 @@ def parse(ins):
     return out
 
 
+class Fork(Exception):
+    """The path splits here: `kind` and `x` say on what (a number that is zero or not, not below zero or below, a condition)."""
+    def __init__(self, kind, x): self.kind, self.x = kind, x
+
+
 def num(t): return int(t.split("#")[0], 16) if t.startswith("0x") else int(t.split("#")[0])
 def signed(n): return n - (1 << 64) if n >> 63 else n

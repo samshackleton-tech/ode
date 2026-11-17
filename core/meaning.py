@@ -3,7 +3,7 @@
 
     python3 meaning.py [CASES]
 
-A row of the table says `D = add64(D, S)`. On numbers add64 has one meaning (table.CONC), and that is what
+A row of the table says `D = add64(D, S)`. On numbers add64 has one meaning (conc.CONC), and that is what
 is compared with a processor. On symbols step.py answers it with a rule over the verifier's forms of value,
 refusing what it has no answer for. Here each form is given its meaning as a number (or as some bits of a
 number, for a form that says only some) under random values of the unknowns that satisfy the facts in
@@ -17,7 +17,7 @@ import os, random, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "kcheck")); sys.path.insert(0, HERE)
 import kbyte, kfn, klin, kterms
-import step, table
+import conc, step, table
 
 M64, M32 = table.M64, table.M32
 BASES = {"frame": 0x7FFC00001238, "r": 0x7F0000001000, "s": 0x7F0000100040}
@@ -59,7 +59,7 @@ def term_value(T, t, env):
         out = 0
         for x in k[1:]: out ^= term_value(T, x, env)
         return out
-    if k[0] == "ror": return table.ror32(term_value(T, k[1], env), k[2])
+    if k[0] == "ror": return conc.ror32(term_value(T, k[1], env), k[2])
     if k[0] == "ult": return int(term_value(T, k[1], env) < term_value(T, k[2], env))
     if k[0] == "ite": return term_value(T, k[2] if term_value(T, k[1], env) else k[3], env)
     if k[0] == "orb": return byte_value((k[1], k[2]), env)
@@ -135,7 +135,7 @@ def test(cases=4000, seed=1, rules=step.rules, say=True, of=kfn.Machine):
     rng = random.Random(seed); FORMS.clear()
     T = kterms.Terms(); base = klin.Facts()
     for i in range(3): base.add(klin.sym(f"u{i}")); base.add(klin.Lin([(f"u{i}", -1)], 1 << 20))          # 0 <= u_i <= 2^20
-    m = machine(of, base, T); C = table.CONC
+    m = machine(of, base, T); C = conc.CONC
     seen, bad, shown = {}, 0, 0
 
     for _ in range(cases):

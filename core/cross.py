@@ -8,13 +8,13 @@ For each row of x86.tab, N random instances (registers, numbers, displacements c
 assembled from the row's ASM by clang and run on the processor from random states: the sixteen general
 registers (the stack pointer among them: it points into the memory below), the flags, the thirty-two vector
 registers' 512 bits, seven mask registers, and 1024 bytes of memory that base registers and the stack
-pointer point into. What the processor leaves is compared with what the row's EFFECT says (table.py), part
+pointer point into. What the processor leaves is compared with what the row's EFFECT says (conc.py), part
 by part: a part the row calls `unknown` is left out, and a part the row does not mention must be as it was.
 For a jump, whether it was taken. Exit 1 if any instance differs.
 
 Not run: rows whose ASM is `-` (they are named at the end)."""
 import os, random, re, struct, subprocess, sys, tempfile
-import table
+import conc, table
 
 G64 = "rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15".split()
 G32 = "eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d".split()
@@ -184,7 +184,7 @@ def main():
             gx = {i: struct.unpack("<16I", got[128 + 64 * i:192 + 64 * i]) for i in range(32)}
             gk = {i: tuple((struct.unpack("<H", got[2176 + 2 * i:2178 + 2 * i])[0] >> j) & 1 for j in range(16)) for i in range(1, 8)}
             gm, gzf, gcf, taken = got[2192:2192 + ROOM], got[2192 + ROOM], got[2193 + ROOM], got[2194 + ROOM]
-            s = table.run(row, bind, table.State(g, x, {SCRATCH + i: b for i, b in enumerate(mem)}, zf, cf, k))
+            s = conc.run(row, bind, conc.State(g, x, {SCRATCH + i: b for i, b in enumerate(mem)}, zf, cf, k))
             wrong = [n for n in G64 if s.g[n] != table.UNKNOWN and s.g[n] != gg[n]]
             wrong += [f"zmm{i}" for i in range(32) if any(w != table.UNKNOWN and w != v for w, v in zip(s.x[i], gx[i]))]
             wrong += [f"k{i}" for i in range(1, 8) if tuple(s.k[i]) != gk[i]]

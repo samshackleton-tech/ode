@@ -1,30 +1,27 @@
 #!/usr/bin/env python3
 """step: one instruction by the table, on symbols.
 
-`step(m)` does what the instruction at m.pc does to the machine m (kcheck/kfn.py's or kbyte.py's: its
-registers, flags, facts and memory, in their forms of value), and it knows no instruction: it finds the
-instruction's row in the table (x86.tab), reads the row's EFFECT, and answers each primitive of the effect
-with a rule on symbols. A rule is partial (it refuses what it has no answer for: Fail, "not shown"), and
-where it answers it must agree with the primitive's meaning on numbers (table.CONC): sym.py and sym64.py
-try that on random values.
+`find(ins)` gives the row of the table (x86.tab) that a decoded instruction is an instance of; `run(m, row,
+bind)` does what the row's EFFECT says to the machine m (kcheck/kfn.py's or kbyte.py's: its registers,
+flags, facts and memory, in their forms of value). Nothing here is about one instruction: an effect is a
+few statements over primitives, and each primitive has a rule on symbols (`rules`). A rule is partial (it
+refuses what it has no answer for: Fail, "not shown"), and where it answers it must agree with the
+primitive's meaning on numbers (conc.CONC): meaning.py tries that on random values, and cross.py compares
+the rows' effects on numbers with a processor.
 
-What is here, then, is of three kinds, none of them about one instruction:
-- reading an effect (`run`);
-- the rules of the primitives on symbols (`rules`);
-- what holds after every instruction (`after`): the stack pointer stays in the function's own frame, the
-  stack used is counted, nothing is remembered below the stack pointer, a loop is not run for ever.
-Memory, calls, places and the return are the machine's own rules (m.load, m.store, m.call, m.branch)."""
+Memory, calls, the conditions of jumps and what holds after every instruction are the machine's own rules
+(m.load, m.store, m.call, m.branch, and the end of kfn.py's `one`)."""
 import os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "kcheck")); sys.path.insert(0, HERE)
-import kfn
-from kterms import Fail, num, signed
+from kterms import Fail, Fork, num, signed
 from klin import Lin, lin
 from kspec import plain, byte_term
 import table
 
 M64, M32 = table.M64, table.M32
-HEADS = table.by_head(table.read(os.environ["ODE_TABLE"]) if os.environ.get("ODE_TABLE") else table.read())      # (ODE_TABLE: another table, for the tests' controls)
+TABLE = os.environ.get("ODE_TABLE") or os.path.join(HERE, "x86.tab")       # (ODE_TABLE: another table, for the tests' controls)
+HEADS = table.by_head(table.read(TABLE))
 JUMP = {("zf", True): ".je", ("zf", False): ".jne", ("cf", False): ".jae", ("cf", True): ".jb"}      # the machine's names for the four conditions
 
 
@@ -154,7 +151,7 @@ def rules(m):
     wide = {"lane32": lane32, "spread16": lambda w: (w,) * 16, "zeros16": lambda: (T.const(0),) * 16,
             "words16": lambda n: tuple(T.const((n >> (32 * k)) & M32) for k in range(16)),
             "ult32": T.ult, "choose16": lambda k, a, b: tuple(T.ite(c, p, old) for c, p, old in zip(k, a, b)),
-            "in_quarters": table.CONC["in_quarters"], "quarters": table.CONC["quarters"]}
+            "in_quarters": table.MOVES["in_quarters"], "quarters": table.MOVES["quarters"]}
     return wide | {
         "add64": lambda x, y: m.arith("add", q(x), q(y)), "sub64": lambda x, y: m.arith("sub", q(x), q(y)),
         "or64": lambda x, y: m.arith("or", q(x), q(y)), "and64": and64,
@@ -163,7 +160,7 @@ def rules(m):
         "equal": equal, "below": below, "at": at, "data": lambda w: ("a", "rodata", w),
         "each32": each32, "add32": lane(T.add), "xor32": lane(T.xor), "ror32": lane(ror32), "shl32": half("shl"), "shr32": half("shr"), "or32": or32,
         "lanes": lanes, "words": words, "lanes_of64": lanes_of64, "shuffle_bytes": shuffle_bytes, "blend_halves": blend_halves,
-        "pick4": lambda a, b, i: table.CONC["pick4"](whole(a), whole(b), i), "blend4": lambda a, b, i: table.CONC["blend4"](whole(a), whole(b), i & 15),
+        "pick4": lambda a, b, i: table.MOVES["pick4"](whole(a), whole(b), i), "blend4": lambda a, b, i: table.MOVES["blend4"](whole(a), whole(b), i & 15),
     }
 
 
@@ -245,39 +242,13 @@ def run(m, row, bind):
                         if r in m.x: m.x[r] = m.x[r][:4]
                 else: m.g[bind[lhs[1]] if lhs[1] in table.REGISTERS else lhs[1]] = q(v)
                 wrote = True
-    except kfn.Fork:
+    except Fork:
         if wrote: raise Fail("a path would split after part of an instruction is done")
         raise
     if flagged: m.flags = join(zf, cf)
     return nxt
 
 
-def after(m, nxt):
-    """What holds after every instruction, whatever it was."""
-    if nxt is not None and nxt <= m.pc:
-        m.back[nxt] = m.back.get(nxt, 0) + 1
-        if m.back[nxt] > kfn.TURNS: raise Fail(f"a loop has turned {kfn.TURNS} times on one path: not a loop this verifier runs")
-    sp = m.g["rsp"]
-    if sp[0] == "aligned":
-        # the stack pointer rounded down to a 64-byte boundary: from here it is in a part of the frame of its
-        # own ("wide"), whose top is 0 to 63 bytes below where the stack pointer was
-        m.wide = sp[1]; m.g["rsp"] = sp = ("a", "wide", 0); m.mem["wide"] = {}
-    # The stack pointer is in the function's own frame, a plain number of bytes not above where it was at entry.
-    if m.wide is not None and sp[0] == "a" and sp[1] == "frame": m.wide = None; del m.mem["wide"]         # back in the frame as it was
-    if sp[0] != "a" or sp[1] != ("frame" if m.wide is None else "wide") or not isinstance(sp[2], int) or sp[2] > 0: raise Fail(f"the stack pointer leaves the function's own frame: {sp}")
-    m.low = min(m.low, sp[2] if m.wide is None else m.wide - 63 + sp[2])
-    # Nothing is remembered of the stack below the stack pointer: a call writes there, and so may whatever interrupts the program.
-    floor = m.floor()
-    for o in [o for o in m.mem["frame"] if o < floor]: del m.mem["frame"][o]
-    if m.wide is not None:
-        for o in [o for o in m.mem["wide"] if o < sp[2]]: del m.mem["wide"][o]
-    m.steps += 1; m.pc = nxt
-
-
-def step(m):
-    """The instruction at m.pc, by the table."""
-    if m.pc not in m.rows: raise Fail(f"no instruction at 0x{m.pc:X}")
-    ins = m.rows[m.pc][1]
-    row, bind = table.find(HEADS, ins)
-    if row is None: raise Fail(f"an instruction the table has no row for: {' '.join(map(str, ins))}")
-    after(m, run(m, row, bind))
+def find(ins):
+    """(the row this decoded instruction is an instance of, what its placeholders are), or (None, None)."""
+    return table.find(HEADS, ins)
