@@ -68,7 +68,7 @@ def run(row, bind, s):
             if n in VECTORS: return s.x[bind[n]][:4]
             if n in WIDE: return s.x[bind[WIDE[n]]]
             if n in MASKS: return s.k[bind[n]]
-            if n in NUMBERS: return bind[n] & M64
+            if n in NUMBERS: return bind[n] if bind[n] > M64 else bind[n] & M64         # (a number of sixteen words is whole)
             if n in ("zf", "cf"): return getattr(s, n)
             return s.g[n]
         name, args = e[1], [value(a) for a in e[2]]

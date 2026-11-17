@@ -51,6 +51,8 @@ done:
     pop rbx
     ret
 %(bodies)s
+.section .rodata
+%(datas)s
 .data
 cases:
 %(table)s
@@ -128,6 +130,9 @@ def instance(row, rng):
     if re.search(r"\bkM\b", asm): bind["M"] = rng.randrange(1, 8)
     if re.search(r"\bI\b", asm): bind["I"] = number(asm, rng)
     if re.search(r"\bN\b", asm): bind["N"] = 64 * rng.randrange(-2, 3) if "vmovdqa32" in asm else rng.randrange(-128, 129)
+    if "DATA4" in asm: bind.update({h: rng.getrandbits(32) for h in "IJKL"})
+    if re.search(r"DATA1\b", asm): bind["I"] = rng.getrandbits(32)
+    if "DATA16" in asm: bind["K"] = rng.getrandbits(512)
     if "B" in bind: fixed[bind["B"]] = BASE
     if index: fixed[bind[index]] = 4 * rng.randrange(0, 65)
     text = asm
@@ -152,7 +157,7 @@ def main():
     rows = table.read(a[a.index("--table") + 1]) if "--table" in a else table.read()
     if "--rows" in a: rows = [r for r in rows if r.name in a[a.index("--rows") + 1].split(",")]
     left = [r.name for r in rows if r.asm == "-"]; rows = [r for r in rows if r.asm != "-"]
-    todo, bodies = [], []
+    todo, bodies, datas = [], [], []
     with open(os.path.join(work, "cases.in"), "wb") as f:
         for row in rows:
             jump = any(st[0] == "jump" for st in row.effect)
@@ -166,12 +171,16 @@ def main():
                 mem = bytes(rng.getrandbits(8) for _ in range(ROOM))
                 n = len(todo)
                 if jump: bind["I"] = 1; text = re.sub(r"\bI\b", f"taken_{n}", row.asm) + f"\n    jmp done\ntaken_{n}:\n    mov byte ptr [rip + out_taken], 1"
+                if "DATA" in text:                                                  # the row's numbers, as words of read-only data
+                    words = [bind[h] for h in "IJKL"] if "DATA4" in text else [bind["I"]] if re.search(r"DATA1\b", text) else [(bind["K"] >> (32 * j)) & 0xFFFFFFFF for j in range(16)]
+                    datas.append(f"    .p2align 6\ndata_{n}: .long " + ", ".join(map(str, words)))
+                    text = re.sub(r"DATA\d+", f"data_{n}", text)
                 todo.append((row, bind, text, g, x, k, mem, zf, cf))
                 bodies.append(f"case_{n}:\n    {text}\n    jmp done")
                 f.write(struct.pack("<16Q", *(g[r] for r in G64)) + struct.pack("<Q", 0x202 | zf << 6 | cf) + b"".join(struct.pack("<16I", *x[i]) for i in range(32))
                         + b"\0\0" + b"".join(struct.pack("<H", sum(b << j for j, b in enumerate(k[i]))) for i in range(1, 8)) + mem)
     with open(os.path.join(work, "cases.S"), "w") as f:
-        f.write(STUB % {"load": LOAD, "save": SAVE, "bodies": "\n".join(bodies), "table": "\n".join(f"    .quad case_{n}" for n in range(len(todo)))})
+        f.write(STUB % {"load": LOAD, "save": SAVE, "bodies": "\n".join(bodies), "table": "\n".join(f"    .quad case_{n}" for n in range(len(todo))), "datas": "\n".join(datas)})
     with open(os.path.join(work, "driver.c"), "w") as f: f.write(DRIVER)
     subprocess.run(["clang", "-O1", "-no-pie", "-o", os.path.join(work, "cross"), os.path.join(work, "driver.c"), os.path.join(work, "cases.S")], check=True)
     subprocess.run([os.path.join(work, "cross"), os.path.join(work, "cases.in"), os.path.join(work, "cases.out")], check=True)

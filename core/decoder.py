@@ -30,7 +30,7 @@ def main():
     a = sys.argv[1:]
     cases = int(a[a.index("--cases") + 1]) if "--cases" in a else 40
     rng = random.Random(int(a[a.index("--seed") + 1]) if "--seed" in a else 1)
-    rows = [r for r in table.read() if r.asm != "-"]
+    rows = [r for r in table.read() if r.asm != "-" and "DATA" not in r.asm]        # (a row that reads the file's data: the decoder needs the file)
     todo, text = [], [".intel_syntax noprefix", ".text"]
     for row in rows:
         jump = any(st[0] == "jump" for st in row.effect)

@@ -4,7 +4,8 @@
 #
 # ASM     how an assembler writes an instance (Intel syntax). Random instances are assembled from it and run
 #         on a processor (cross.py): everything the EFFECT assigns must be what the processor leaves.
-#         `-`: not yet run on a processor.
+#         `-`: not run on a processor. DATA4, DATA1, DATA16: so many 32-bit words of the file's read-only data, which
+#         the decoder has read: they are the row's numbers (I, J, K, L; or the one number I; or K, sixteen words long).
 # ROW     the decoded instruction, as the decoder writes it. The first row of the table that an instruction
 #         is an instance of is its row; an instruction that is an instance of none is not verified.
 # EFFECT  what the instruction does: statements, left to right, over the primitives of table.py.
@@ -81,7 +82,7 @@ nop          | nop                     | .nop                          | nothing
 # -- 128-bit vectors of four 32-bit lanes (the four written without a `v` are the older encodings, the only ones of them the decoder reads)
 loadu128     | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
 storeu128    | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
-const128     | -                       | .xconst X I J K L             | X = words(I, J, K, L)
+const128     | vmovaps xmmX, xmmword ptr [rip + DATA4] | .xconst X I J K L | X = words(I, J, K, L)
 mov128       | vmovdqa xmmX, xmmY      | .xmov X Y                     | X = Y
 movq128      | vmovq xmmX, S64         | .xmovq X .S                   | X = lanes_of64(S)
 paddd128     | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
@@ -102,7 +103,7 @@ vzeroupper   | vzeroupper              | .vzeroupper                   | above12
 
 # -- 512-bit vectors of sixteen 32-bit lanes (X512: the whole of vector register X; M: a mask register's sixteen bits)
 broadcast_r  | vpbroadcastd zmmX, S32  | .zbroadcast X (.reg .S)       | X512 = spread16(lane32(low32(S)))
-broadcast_i  | -                       | .zbroadcast X (.imm I)        | X512 = spread16(lane32(low32(I)))
+broadcast_i  | vpbroadcastd zmmX, dword ptr [rip + DATA1] | .zbroadcast X (.imm I) | X512 = spread16(lane32(low32(I)))
 broadcast_m  | vpbroadcastd zmmX, dword ptr [B64 + N] | .zbroadcast X (.mem .B N) | X512 = spread16(lane32(mem32(B, N)))
 mov512       | vmovdqa32 zmmX, zmmY    | .zmov X Y                     | X512 = Y512
 load512a     | vmovdqa32 zmmX, [B64 + N] | .zload true X .B N          | X512 = mem512a(B, N)
@@ -111,7 +112,7 @@ load512i     | vmovdqu32 zmmX, [B64 + S64 + N] | .zloadi X .B .S N     | X512 = 
 store512a    | vmovdqa32 [B64 + N], zmmX | .zstore true .B N X         | mem512a(B, N) = X512
 store512     | vmovdqu32 [B64 + N], zmmX | .zstore false .B N X        | mem512(B, N) = X512
 paddd512m    | vpaddd zmmX, zmmY, [B64 + S64 + N] | .zpadddm X Y .B .S N | X512 = each32(add32, Y512, mem512(B, N, S))
-paddd512c    | -                       | .zpadddc X Y K                | X512 = each32(add32, Y512, words16(K))
+paddd512c    | vpaddd zmmX, zmmY, zmmword ptr [rip + DATA16] | .zpadddc X Y K | X512 = each32(add32, Y512, words16(K))
 pcmpud512    | vpcmpud kM, zmmX, zmmY, 1 | .zpcmpud M X Y 1            | M = each32(ult32, X512, Y512)
 paddd512k    | vpaddd zmmX{kM}, zmmY, zmmZ | .zpaddd_k X M Y Z         | X512 = choose16(M, each32(add32, Y512, Z512), X512)
 paddd512     | vpaddd zmmX, zmmY, zmmZ | .zpaddd X Y Z                 | X512 = each32(add32, Y512, Z512)
