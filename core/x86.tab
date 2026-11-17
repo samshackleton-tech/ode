@@ -4,51 +4,122 @@
 #
 # ASM     how an assembler writes an instance (Intel syntax). Random instances are assembled from it and run
 #         on a processor (cross.py): everything the EFFECT assigns must be what the processor leaves.
-# ROW     the decoded instruction, as the decoder writes it.
-# EFFECT  what the instruction does: assignments, left to right, over the primitives of table.py.
+#         `-`: not yet run on a processor.
+# ROW     the decoded instruction, as the decoder writes it. The first row of the table that an instruction
+#         is an instance of is its row; an instruction that is an instance of none is not verified.
+# EFFECT  what the instruction does: statements, left to right, over the primitives of table.py.
 #         `= unknown` says nothing of that part of the state: the verifier may not rely on it afterwards,
 #         and the comparison with a processor leaves it out. Everything else a row leaves as it was.
 #
-# In ASM and ROW: D, S, B are general registers (D64 its 64-bit name, D32, D8); X, Y, Z are vector register
-# numbers; I is an immediate; N a displacement. In EFFECT: D, S, B are those registers' 64 bits; X, Y, Z the
-# low 128 bits of the vector registers as four 32-bit lanes; mem8/mem64/mem128(B, N) the bytes at B + N;
-# zf, cf two of the flags.
+# In ASM and ROW: D, S, B are general registers (D64 its 64-bit name, D32, D8); P is one that is not the
+# stack pointer; X, Y, Z are vector register numbers; I, J, K, L are numbers; N a displacement.
+# In EFFECT: D, S, B, P are those registers' 64 bits; X, Y, Z the low 128 bits of the vector registers as
+# four 32-bit lanes (of the bits above them a row that writes X says nothing); mem8/mem32/mem64/mem128(b, n)
+# the bytes at b + n; zf, cf two of the flags. The other flags are not in this account: no row reads them.
 
-# -- 64-bit arithmetic and moves
-add64_rr   | add D64, S64            | .add 64 (.reg .D) (.reg .S)   | D = add64(D, S); zf = unknown; cf = unknown
-add64_ri   | add D64, I              | .add 64 (.reg .D) (.imm I)    | D = add64(D, I); zf = unknown; cf = unknown
-sub64_rr   | sub D64, S64            | .sub 64 (.reg .D) (.reg .S)   | D = sub64(D, S); zf = unknown; cf = unknown
-sub64_ri   | sub D64, I              | .sub 64 (.reg .D) (.imm I)    | D = sub64(D, I); zf = unknown; cf = unknown
-and64_ri   | and D64, I              | .and 64 (.reg .D) (.imm I)    | D = and64(D, I); zf = unknown; cf = unknown
-or64_rr    | or D64, S64             | .or 64 (.reg .D) (.reg .S)    | D = or64(D, S); zf = unknown; cf = unknown
-shl64_ri   | shl D64, I              | .shl64 .D I                   | D = shl64(D, I); zf = unknown; cf = unknown
-shr64_ri   | shr D64, I              | .shr64 .D I                   | D = shr64(D, I); zf = unknown; cf = unknown
-cmp64_rr   | cmp D64, S64            | .cmp 64 (.reg .D) (.reg .S)   | zf = equal(D, S); cf = below(D, S)
-mov64_rr   | mov D64, S64            | .mov 64 (.reg .D) (.reg .S)   | D = S
-mov64_ri   | mov D64, I              | .mov 64 (.reg .D) (.imm I)    | D = I
-mov64_rm   | mov D64, [B64 + N]      | .mov 64 (.reg .D) (.mem .B N) | D = mem64(B, N)
-mov64_mr   | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B, N) = S
+# -- 64-bit arithmetic
+add64_rr     | add D64, S64            | .add 64 (.reg .D) (.reg .S)   | D = add64(D, S); zf = unknown; cf = unknown
+add64_ri     | add D64, I              | .add 64 (.reg .D) (.imm I)    | D = add64(D, I); zf = unknown; cf = unknown
+add64_rm     | add D64, [B64 + N]      | .add 64 (.reg .D) (.mem .B N) | D = add64(D, mem64(B, N)); zf = unknown; cf = unknown
+sub64_rr     | sub D64, S64            | .sub 64 (.reg .D) (.reg .S)   | D = sub64(D, S); zf = unknown; cf = unknown
+sub64_ri     | sub D64, I              | .sub 64 (.reg .D) (.imm I)    | D = sub64(D, I); zf = unknown; cf = unknown
+sub64_rm     | sub D64, [B64 + N]      | .sub 64 (.reg .D) (.mem .B N) | D = sub64(D, mem64(B, N)); zf = unknown; cf = unknown
+and64_rr     | and D64, S64            | .and 64 (.reg .D) (.reg .S)   | D = and64(D, S); zf = unknown; cf = unknown
+and64_ri     | and D64, I              | .and 64 (.reg .D) (.imm I)    | D = and64(D, I); zf = unknown; cf = unknown
+and64_rm     | and D64, [B64 + N]      | .and 64 (.reg .D) (.mem .B N) | D = and64(D, mem64(B, N)); zf = unknown; cf = unknown
+or64_rr      | or D64, S64             | .or 64 (.reg .D) (.reg .S)    | D = or64(D, S); zf = unknown; cf = unknown
+or64_ri      | or D64, I               | .or 64 (.reg .D) (.imm I)     | D = or64(D, I); zf = unknown; cf = unknown
+or64_rm      | or D64, [B64 + N]       | .or 64 (.reg .D) (.mem .B N)  | D = or64(D, mem64(B, N)); zf = unknown; cf = unknown
+xor64_same   | xor D64, D64            | .xor 64 (.reg .D) (.reg .D)   | D = 0; zf = unknown; cf = unknown
+shl64_ri     | shl D64, I              | .shl64 .D I                   | D = shl64(D, I); zf = unknown; cf = unknown
+shr64_ri     | shr D64, I              | .shr64 .D I                   | D = shr64(D, I); zf = unknown; cf = unknown
+dec64        | dec D64                 | .dec64 .D                     | D = sub64(D, 1); zf = equal(D, 0); cf = unknown
+cmp64_rr     | cmp D64, S64            | .cmp 64 (.reg .D) (.reg .S)   | zf = equal(D, S); cf = below(D, S)
+cmp64_ri     | cmp D64, I              | .cmp 64 (.reg .D) (.imm I)    | zf = equal(D, I); cf = below(D, I)
+cmp64_rm     | cmp D64, [B64 + N]      | .cmp 64 (.reg .D) (.mem .B N) | zf = equal(D, mem64(B, N)); cf = below(D, mem64(B, N))
+test64_same  | test D64, D64           | .test 64 (.reg .D) (.reg .D)  | zf = equal(D, 0); cf = unknown
+
+# -- 64-bit moves and addresses
+mov64_rr     | mov D64, S64            | .mov 64 (.reg .D) (.reg .S)   | D = S
+mov64_ri     | mov D64, I              | .mov 64 (.reg .D) (.imm I)    | D = I
+mov64_rm     | mov D64, [B64 + N]      | .mov 64 (.reg .D) (.mem .B N) | D = mem64(B, N)
+mov64_mr     | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B, N) = S
+lea          | lea D64, [B64 + N]      | .lea .D .B N                  | D = at(B, N)
+lea_data     | -                       | .lea_data .D I                | D = data(I)
+
+# -- 32 bits: the result is in the register's low 32 bits, zeros above
+mov32_rr     | mov D32, S32            | .mov 32 (.reg .D) (.reg .S)   | D = low32(S)
+mov32_ri     | mov D32, I              | .mov 32 (.reg .D) (.imm I)    | D = low32(I)
+mov32_rm     | mov D32, [B64 + N]      | .mov 32 (.reg .D) (.mem .B N) | D = low32(mem32(B, N))
+or32_rr      | or D32, S32             | .or 32 (.reg .D) (.reg .S)    | D = or64(low32(D), low32(S)); zf = unknown; cf = unknown
+and32_ri     | and D32, I              | .and 32 (.reg .D) (.imm I)    | D = and64(low32(D), low32(I)); zf = unknown; cf = unknown
+xor32_same   | xor D32, D32            | .xor 32 (.reg .D) (.reg .D)   | D = 0; zf = unknown; cf = unknown
+shr32_ri     | shr D32, I              | .shr32 .D I                   | D = shr64(low32(D), I); zf = unknown; cf = unknown
+dec32        | dec D32                 | .dec32 .D                     | D = low32(sub64(low32(D), 1)); zf = equal(D, 0); cf = unknown
+test32_same  | test D32, D32           | .test 32 (.reg .D) (.reg .D)  | zf = equal(low32(D), 0); cf = unknown
 
 # -- bytes
-movzx8_rm  | movzx D32, byte ptr [B64 + N] | .movzx8 .D (.mem .B N)  | D = mem8(B, N)
-movzx8_rr  | movzx D32, S8           | .movzx8 .D (.reg .S)          | D = low8(S)
-mov8_al_i  | mov al, I               | .mov 8 (.reg .rax) (.imm I)   | rax = setlow8(rax, I)
-dec8_al    | dec al                  | .decb .rax                    | rax = setlow8(rax, sub8(low8(rax), 1)); zf = equal(low8(rax), 0); cf = unknown
+movzx8_rm    | movzx D32, byte ptr [B64 + N] | .movzx8 .D (.mem .B N)  | D = mem8(B, N)
+movzx8_rr    | movzx D32, S8           | .movzx8 .D (.reg .S)          | D = low8(S)
+mov8_al_i    | mov al, I               | .mov 8 (.reg .rax) (.imm I)   | rax = setlow8(rax, I)
+mov8_m_al    | mov byte ptr [B64 + N], al | .mov 8 (.mem .B N) (.reg .rax) | mem8(B, N) = low8(rax)
+mov8_mi      | mov byte ptr [B64 + N], I | .mov 8 (.mem .B N) (.imm I) | mem8(B, N) = I
+dec8_al      | dec al                  | .decb .rax                    | rax = setlow8(rax, sub8(low8(rax), 1)); zf = equal(low8(rax), 0); cf = unknown
 
-# -- 128-bit vectors of four 32-bit lanes (VEX and EVEX encodings: bits above 127 of the register are cleared)
-loadu128   | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
-storeu128  | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
-mov128     | vmovdqa xmmX, xmmY      | .xmov X Y                     | X = Y
-movq128    | vmovq xmmX, S64         | .xmovq X .S                   | X = lanes_of64(S)
-paddd128   | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
-pxor128    | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = each32(xor32, Y, Z)
-prord128   | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
-pslld128   | vpslld xmmX, xmmY, I   | .xpslld X Y I                 | X = each32(shl32, Y, I)
-psrld128   | vpsrld xmmX, xmmY, I   | .xpsrld X Y I                 | X = each32(shr32, Y, I)
-por128     | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
-pshufd128  | vpshufd xmmX, xmmY, I   | .xpshufd X Y I                | X = pick4(Y, Y, I)
-shufps128  | vshufps xmmX, xmmY, xmmZ, I | .xshufps X Y Z I          | X = pick4(Y, Z, I)
-unpckldq   | vpunpckldq xmmX, xmmY, xmmZ | .xpunpckldq X Y Z         | X = lanes(Y.0, Z.0, Y.1, Z.1)
-unpckhdq   | vpunpckhdq xmmX, xmmY, xmmZ | .xpunpckhdq X Y Z         | X = lanes(Y.2, Z.2, Y.3, Z.3)
-unpcklqdq  | vpunpcklqdq xmmX, xmmY, xmmZ | .xpunpcklqdq X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
-pblendd128 | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = blend4(Y, Z, I)
+# -- the stack, calls, jumps
+push         | push P64                | .push .P                      | rsp = sub64(rsp, 8); mem64(rsp, 0) = P
+pop          | pop P64                 | .pop .P                       | P = mem64(rsp, 0); rsp = add64(rsp, 8)
+call         | -                       | .call I                       | call I
+ret          | -                       | .ret                          | return
+jmp          | jmp I                   | .jmp I                        | jump I
+je           | je I                    | .je I                         | jump I if zf
+jne          | jne I                   | .jne I                        | jump I if not zf
+jae          | jae I                   | .jae I                        | jump I if not cf
+jb           | jb I                    | .jb I                         | jump I if cf
+nop          | nop                     | .nop                          | nothing
+
+# -- 128-bit vectors of four 32-bit lanes
+loadu128     | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
+storeu128    | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
+const128     | -                       | .xconst X I J K L             | X = words(I, J, K, L)
+mov128       | vmovdqa xmmX, xmmY      | .xmov X Y                     | X = Y
+movq128      | vmovq xmmX, S64         | .xmovq X .S                   | X = lanes_of64(S)
+paddd128     | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
+pxor128      | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = each32(xor32, Y, Z)
+prord128     | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
+pslld128     | vpslld xmmX, xmmY, I    | .xpslld X Y I                 | X = each32(shl32, Y, I)
+psrld128     | vpsrld xmmX, xmmY, I    | .xpsrld X Y I                 | X = each32(shr32, Y, I)
+por128       | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
+pshufb128    | vpshufb xmmX, xmmY, xmmZ | .xpshufb X Y Z               | X = shuffle_bytes(Y, Z)
+pshufd128    | vpshufd xmmX, xmmY, I   | .xpshufd X Y I                | X = pick4(Y, Y, I)
+shufps128    | vshufps xmmX, xmmY, xmmZ, I | .xshufps X Y Z I          | X = pick4(Y, Z, I)
+unpckldq     | vpunpckldq xmmX, xmmY, xmmZ | .xpunpckldq X Y Z         | X = lanes(Y.0, Z.0, Y.1, Z.1)
+unpckhdq     | vpunpckhdq xmmX, xmmY, xmmZ | .xpunpckhdq X Y Z         | X = lanes(Y.2, Z.2, Y.3, Z.3)
+unpcklqdq    | vpunpcklqdq xmmX, xmmY, xmmZ | .xpunpcklqdq X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
+pblendd128   | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = blend4(Y, Z, I)
+pblendw128   | vpblendw xmmX, xmmY, xmmZ, I | .xpblendw X Y Z I        | X = blend_halves(Y, Z, I)
+vzeroupper   | vzeroupper              | .vzeroupper                   | above128 = unknown
+
+# -- 512-bit vectors of sixteen 32-bit lanes (X512: the whole of vector register X; M: a mask register's sixteen bits)
+broadcast_r  | vpbroadcastd zmmX, S32  | .zbroadcast X (.reg .S)       | X512 = spread16(lane32(low32(S)))
+broadcast_i  | -                       | .zbroadcast X (.imm I)        | X512 = spread16(lane32(low32(I)))
+broadcast_m  | vpbroadcastd zmmX, dword ptr [B64 + N] | .zbroadcast X (.mem .B N) | X512 = spread16(lane32(mem32(B, N)))
+mov512       | vmovdqa32 zmmX, zmmY    | .zmov X Y                     | X512 = Y512
+load512a     | vmovdqa32 zmmX, [B64 + N] | .zload true X .B N          | X512 = mem512a(B, N)
+load512      | vmovdqu32 zmmX, [B64 + N] | .zload false X .B N         | X512 = mem512(B, N)
+load512i     | vmovdqu32 zmmX, [B64 + S64 + N] | .zloadi X .B .S N     | X512 = mem512(B, N, S)
+store512a    | vmovdqa32 [B64 + N], zmmX | .zstore true .B N X         | mem512a(B, N) = X512
+store512     | vmovdqu32 [B64 + N], zmmX | .zstore false .B N X        | mem512(B, N) = X512
+paddd512m    | vpaddd zmmX, zmmY, [B64 + S64 + N] | .zpadddm X Y .B .S N | X512 = each32(add32, Y512, mem512(B, N, S))
+paddd512c    | -                       | .zpadddc X Y K                | X512 = each32(add32, Y512, words16(K))
+pcmpud512    | vpcmpud kM, zmmX, zmmY, 1 | .zpcmpud M X Y 1            | M = each32(ult32, X512, Y512)
+paddd512k    | vpaddd zmmX{kM}, zmmY, zmmZ | .zpaddd_k X M Y Z         | X512 = choose16(M, each32(add32, Y512, Z512), X512)
+paddd512     | vpaddd zmmX, zmmY, zmmZ | .zpaddd X Y Z                 | X512 = each32(add32, Y512, Z512)
+pxord512_same | vpxord zmmX, zmmY, zmmY | .zpxord X Y Y                | X512 = zeros16()
+pxord512     | vpxord zmmX, zmmY, zmmZ | .zpxord X Y Z                 | X512 = each32(xor32, Y512, Z512)
+prord512     | vprord zmmX, zmmY, I    | .zprord X Y I                 | X512 = each32(ror32, Y512, I)
+unpckldq512  | vpunpckldq zmmX, zmmY, zmmZ | .zunpckldq X Y Z          | X512 = in_quarters(Y512, Z512, 0, 4, 1, 5)
+unpckhdq512  | vpunpckhdq zmmX, zmmY, zmmZ | .zunpckhdq X Y Z          | X512 = in_quarters(Y512, Z512, 2, 6, 3, 7)
+unpcklqdq512 | vpunpcklqdq zmmX, zmmY, zmmZ | .zunpcklqdq X Y Z        | X512 = in_quarters(Y512, Z512, 0, 1, 4, 5)
+unpckhqdq512 | vpunpckhqdq zmmX, zmmY, zmmZ | .zunpckhqdq X Y Z        | X512 = in_quarters(Y512, Z512, 2, 3, 6, 7)
+shufi32x4    | vshufi32x4 zmmX, zmmY, zmmZ, I | .zshufi32x4 X Y Z I    | X512 = quarters(Y512, Z512, I)
