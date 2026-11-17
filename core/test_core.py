@@ -3,8 +3,8 @@
 
     python3 core/test_core.py
 
-1. The symbolic rules against the primitives' meaning on numbers (sym.py for the vector lanes, sym64.py for
-   today's rules of 64-bit registers), and a rule made wrong is caught.
+1. Every rule on symbols (step.py) against its primitive's meaning on numbers (meaning.py), on kfn.py's
+   machine and on kbyte.py's; rules made wrong are caught.
 2. Every row against this machine's processor (cross.py; x86-64 Linux with AVX-512 and clang, else
    skipped), and a table with rows made wrong has each of them reported.
 3. The table beside today's verifier (shadow.py) on the whole of ../kcheck/b3hashr.o and of the eight program
@@ -13,7 +13,8 @@ import contextlib, io, os, platform, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import sym, sym64, table
+import meaning, step, table        # (these put ../kcheck on the path)
+import kbyte
 
 NATIVE = platform.system() == "Linux" and platform.machine() == "x86_64" and shutil.which("clang") and "avx512vl" in open("/proc/cpuinfo").read()
 WRONG = [("X = lanes(Y.2, Z.2, Y.3, Z.3)", "X = lanes(Y.2, Z.2, Z.3, Y.3)", "unpckhdq"), ("D = shr64(D, I); zf", "D = shl64(D, I); zf", "shr64_ri"),
@@ -26,34 +27,31 @@ SAME = r"shadow: \d+ instruction steps by the verifier and by the table: [1-9]\d
 
 
 class Core(unittest.TestCase):
-    def test_the_symbolic_rules_are_the_meaning_on_numbers(self):
-        with contextlib.redirect_stdout(io.StringIO()): bad = sym.test(800)
-        self.assertEqual(bad, 0)
+    def test_every_rule_on_symbols_is_its_primitives_meaning_on_numbers(self):
+        for of in (step.kfn.Machine, kbyte.Machine):
+            with contextlib.redirect_stdout(io.StringIO()) as out: bad = meaning.test(6000, of=of)
+            self.assertEqual(bad, 0, out.getvalue()[-1500:])
+            self.assertIn("every rule answered", out.getvalue())
 
-    def test_a_rule_made_wrong_is_caught(self):
-        real = sym.rules
-        def wrong(T):
-            r = real(T); r["ror32"] = sym.whole(lambda x, n: T.ror(x, (n + 1) % 32) if (n + 1) % 32 else x); return r
-        sym.rules = wrong
-        try:
-            with contextlib.redirect_stdout(io.StringIO()): bad = sym.test(100)
-            self.assertGreater(bad, 0)
-        finally: sym.rules = real
-
-    def test_the_rules_for_64_bit_registers_are_the_meaning_on_numbers(self):
-        with contextlib.redirect_stdout(io.StringIO()) as out: bad = sym64.test(6000)
-        self.assertEqual(bad, 0, out.getvalue()[-1500:])
-        self.assertIn(f"each of the {len(sym64.CASES)} cases of the rules was compared", out.getvalue())
-
-    def test_a_rule_for_64_bit_registers_made_wrong_is_caught(self):
-        real = sym64.Stub.RULE
-        def wrong(m, op, x, y):                 # a counter moved down 32 bits: its low word, where the high one is meant
-            return ("t", x[1]) if op == "shr" and x[0] == "pair" and y[1] == 32 else real(m, op, x, y)
-        sym64.Stub.RULE = staticmethod(wrong)
-        try:
-            with contextlib.redirect_stdout(io.StringIO()): bad = sym64.test(3000)
-            self.assertGreater(bad, 0)
-        finally: sym64.Stub.RULE = staticmethod(real)
+    def test_rules_made_wrong_are_caught(self):
+        def wrong(name, rule):
+            def rules(m):
+                R = step.rules(m); right = R[name]
+                R[name] = lambda *a: rule(right, m, *a)
+                return R
+            return rules
+        q = step.q
+        for name, rule in (
+                ("shr64", lambda right, m, x, n: q(x) if q(x)[0] == "p" else right(x, n)),                                   # packed bytes not moved down
+                ("shr64", lambda right, m, x, n: ("t", q(x)[1]) if q(x)[0] == "pair" and n == 32 else right(x, n)),            # a counter's low word for its high one
+                ("and64", lambda right, m, x, y: q(x) if q(x)[0] == "p" else right(x, y)),                                    # the low byte not taken
+                ("equal", lambda right, m, x, y: ("zero", step.lin(q(x)) + step.lin(q(y))) if step.lin(q(x)) is not None and step.lin(q(y)) is not None else right(x, y)),
+                ("lanes_of64", lambda right, m, v: (lambda r: (r[1], r[0], r[2], r[3]))(right(v))),                            # the two words exchanged
+                ("choose16", lambda right, m, k, a, b: right(k, b, a)),
+                ("ror32", lambda right, m, x, n: right(x, n % 31 + 1)),
+                ("in_quarters", lambda right, m, a, b, *pick: right(b, a, *pick))):
+            with contextlib.redirect_stdout(io.StringIO()): bad = meaning.test(1500, rules=wrong(name, rule), say=False)
+            self.assertGreater(bad, 0, name)
 
     @unittest.skipUnless(NATIVE, "no x86-64 Linux with AVX-512 and clang: the rows are not run on a processor")
     def test_every_row_is_what_this_processor_does(self):
