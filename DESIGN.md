@@ -435,8 +435,18 @@ Each is open on purpose, with what will close it.
    binary (`.ode.proof`), and the shipped examples still carry theirs; that way is no longer maintained or
    extended, and is not being taken out either, since something like it may return. The rest (whether
    the specification a binary carries goes the same way; the files' names) is undiscussed.
-5. **The word-level layer**: whether word-level Ode stays, with the coder's choices made explicit in it, or
-   every function is written in the instruction layer with macros.
+5. **The word-level layer.** *Decided (Sam, November 17, 2026):* one language. Every function, kernel or
+   not, is written in the instruction layer, where each instruction, register and stack byte is the
+   coder's choice; the word-level layer and its compiler go, whole, once the nine functions written in it
+   are rewritten (a trial: `node_out` by hand is 18 instructions where the compiler printed 58, and the
+   same verifier takes it against the same contract). The one language will grow a compiler, of this
+   kind only: it may check what the coder declares, expand a convenience in a fixed and documented way
+   (a name bound to a register, an `if` over a flag the coder sets), and carry the coder's types and
+   places down to the proof. It may not choose. What it would choose it asks the coder for; the test of a
+   convenience is that the coder can tell the exact bytes from the source without running the compiler.
+   The coder's information is kept for making proofs. It could serve speed or porting too, as a
+   suggestion the coder accepts into the source; nothing relies on it for either, and nothing takes the
+   control of the machine code from the coder.
 6. **Succinct proofs of verification** (Lurk and its kind): an optional further leg, "a proof that the
    core accepted". *Criterion:* what Bob must read to rely on it is shorter than the core.
 7. **The second instruction set**: AArch64 needs a decoder, an account and kernels of its own.
