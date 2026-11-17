@@ -23,10 +23,11 @@ line by line.
     cd kcheck
     python3 verify.py b3hashr.o blake3.spec
 
-Python 3 and this folder are all it needs: nothing is installed, no solver runs, no network is used. In
+Python 3, this folder and `core/` beside it are all it needs: nothing is installed, no solver runs, no network is used. In
 about 25 seconds it prints the public contract (seven lines), the verification ("`b3l_hashr` in this file
 meets its public contract, with all it calls: 14 functions, from the file's bytes"), and the files that ran
-to reach it (3,153 lines of Python in ten files). Exit status 0 means shown.
+to reach it (3,247 lines of Python in twelve files, and the table of instructions: 93 rows). Exit status 0
+means shown.
 [kcheck/VERIFY.md](kcheck/VERIFY.md) is the page for a reader: what is shown, what is left unshown, and
 what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
 

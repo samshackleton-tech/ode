@@ -9,7 +9,8 @@ The tool answers for one exact text, the contract you give it. Choosing that tex
 
 ## Run it
 
-You need Python 3 and this folder. Nothing is installed, nothing is downloaded, no solver runs.
+You need Python 3, this folder and `../core` beside it (the table of instructions and the two files that
+read it). Nothing is installed, nothing is downloaded, no solver runs.
 
     python3 verify.py programs/lz4/odelz4.o        # an LZ4 decoder and two encoders: 0.3 s
     python3 verify.py programs/utf8/odeutf8.o      # a UTF-8 validator: 0.03 s
@@ -33,7 +34,8 @@ It prints three things:
    on every input the contract allows; or `NOT shown`. And one line about the specification: the
    definitions the contracts speak through come to an end on everything the contracts allow (so a
    contract says something of every input). Where that is not shown, the file is not shown.
-3. **What ran**: the files of this folder that were loaded to reach that, with their sizes, and the `b3sum`
+3. **What ran**: the files of this folder and of `../core` that were loaded to reach that, with their sizes,
+   the table of instructions with its count of rows, and the `b3sum`
    command that names them (a program cannot vouch for itself; `--digests` prints their BLAKE3 hashes here
    all the same).
 
