@@ -112,9 +112,12 @@ tools can show which libraries provide each choice. Which choice he ought to mak
 
 What makes the answers quick and reliable is that they are verifications of evidence:
 
-- the binary carries a proof of a contract, and the verifier decides whether the proof shows it;
-- a contract Bob asks for follows from one already shown, and that implication has a proof of its own;
-- a maker who expects different readers ships proofs of several public contracts, strongest first.
+- the binary carries a proof of one public contract, the strongest its maker stands behind: the most
+  promised, to callers who owe the least. Anything more she can prove becomes a clause of that contract,
+  so there is one contract, and Bob receives it;
+- a contract Bob asks for is a relaxation of the one shown. Where he drops a promise or adds a
+  requirement on the caller, his tool decides it from the two texts. Where the relaxation takes reasoning
+  (the same thing defined another way), it has a proof of its own.
 
 Each answer is one of three, kept distinct: **shown**; **refuted**, with evidence such as an
 input on which the binary breaks the contract; **not shown**. "Not shown" is silence about the program: no

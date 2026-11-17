@@ -75,6 +75,17 @@ Inside `kcheck/`, by what a file is relied on for:
 
 ## Licence
 
-The files that came from BLAKE3-Servil's repository were published there under CC0-1.0, or Apache-2.0, or
-Apache-2.0 with LLVM exception, at the user's choice; the licence texts are in `reference/blake3-servil/`.
-This repository has no licence file of its own yet.
+Copyright (c) the Ode contributors.
+
+You may use Ode under the terms of any of these four Free and Open Source Software licences, at your
+choice (the same four as [smalloc](https://github.com/zooko/smalloc)):
+
+* MIT license ([LICENSE-MIT](LICENSE-MIT))
+* Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+* Transitive Grace Period Public Licence 1.0 ([LICENSE-TGPPL](LICENSE-TGPPL)):
+  *Licensed under the Transitive Grace Period Public Licence version 1.0*
+* Bootstrap Open Source Licence v1.0 ([LICENSE-BOSL.txt](LICENSE-BOSL.txt)):
+  *Licensed under the Bootstrap Open Source Licence version 1.0*
+
+The files under `reference/blake3-servil/` are BLAKE3-Servil's, kept for comparison, and carry the licence
+texts they came with.
