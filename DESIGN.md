@@ -112,12 +112,15 @@ tools can show which libraries provide each choice. Which choice he ought to mak
 
 What makes the answers quick and reliable is that they are verifications of evidence:
 
-- the binary carries a proof of one public contract, the strongest its maker stands behind: the most
-  promised, to callers who owe the least. Anything more she can prove becomes a clause of that contract,
-  so there is one contract, and Bob receives it;
-- a contract Bob asks for is a relaxation of the one shown. Where he drops a promise or adds a
-  requirement on the caller, his tool decides it from the two texts. Where the relaxation takes reasoning
-  (the same thing defined another way), it has a proof of its own.
+- the binary carries a proof of one public contract for each function. Two promises can be incomparable:
+  one asks more of the caller and gives more (below 2^32 bytes, the trace depends on the length alone),
+  another asks less and gives less, and neither can stand for the other. So a promise may carry its
+  condition (`ensures X if C`), and the contract holds every promise its maker stands behind. Whatever
+  she can prove is one contract, and Bob receives it;
+- Bob says what he, as the caller, will guarantee, and his tool shows what the contract then promises
+  him: a promise whose condition follows from his guarantees applies, and the others fall away. Where he
+  drops a promise or adds a guarantee, the tool decides it from the two texts. Where his candidate takes
+  reasoning (the same thing defined another way), it has a proof of its own.
 
 Each answer is one of three, kept distinct: **shown**; **refuted**, with evidence such as an
 input on which the binary breaks the contract; **not shown**. "Not shown" is silence about the program: no
@@ -393,7 +396,7 @@ unproved.
 | the verifier's own contract | deterministic and offline; 17 kept cases it must refuse, and a gate that fails if the kept bad binary is accepted. Its limits are partial: a wrong lemma can take minutes to refuse |
 | three answers | "shown" and "not shown" from the verifier; "false, with an input" from a tester that runs the binary on a processor (x86-64 Linux) |
 | a contract shown able to hold | unbuilt: the tester makes calls that meet `requires`, and the reader is not yet shown one |
-| exploring contracts; implications between contracts | unbuilt |
+| exploring contracts; implications between contracts | unbuilt. `ensures` and `needs` lines can carry a condition today; `trace`, `writes` and `stack` lines cannot yet |
 | names by hash, glossaries, Bob's own list | whole BLAKE3 digests of files and specifications are printed; the rest is a proposal |
 | one account of the machine | the decoder and the model are separate Python files. The decoder is compared with a second reading of the bytes; changes the verifier accepts are judged by processors in audits; the model's forms are not yet each compared with a processor on random states |
 | claims computed from records | a machine-readable record of each verification exists; the pages' numbers are still typed by hand |
