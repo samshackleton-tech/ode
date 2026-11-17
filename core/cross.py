@@ -109,7 +109,7 @@ def number(asm, rng):
     """A number for the row's I: one the instruction can hold."""
     first = asm.split()[0]
     if first in ("shl", "shr"): return rng.randrange(0, 32 if "32" in asm.split(",")[0] else 64)
-    if first in ("vpslld", "vpsrld"): return rng.choice([rng.randrange(0, 32), rng.randrange(0, 256)])
+    if first in ("pslld", "psrld"): return rng.choice([rng.randrange(0, 32), rng.randrange(0, 256)])
     if "mm" in asm or " al," in asm or "byte ptr" in asm: return rng.randrange(256)
     if first == "mov" and "32" in asm.split(",")[0]: return rng.getrandbits(32)
     return rng.choice([rng.randrange(-2 ** 31, 2 ** 31), rng.randrange(-128, 128), rng.randrange(0, 2 ** 16)])

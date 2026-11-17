@@ -7,7 +7,8 @@
    machine and on kbyte.py's; rules made wrong are caught.
 2. Every row against this machine's processor (cross.py; x86-64 Linux with AVX-512 and clang, else
    skipped), and a table with rows made wrong has each of them reported.
-3. The verifier goes by the table: with a row made wrong a shipped file is no longer shown.
+3. Every row's ASM against its ROW: the verifier's decoder reads each assembled instance as that row (decoder.py).
+4. The verifier goes by the table: with a row made wrong a shipped file is no longer shown.
 (Before the verifier's own code for each instruction was taken out, the table was run beside it on every
 instruction step of every shipped file and of their single-bit changes, the two machines compared whole
 after each: shadow.py, in this repository's history at commit 015750a.)"""
@@ -72,6 +73,12 @@ class Core(unittest.TestCase):
             r = subprocess.run([sys.executable, os.path.join(HERE, "cross.py"), "--cases", "60", "--work", d, "--table", path], capture_output=True, text=True)
             self.assertEqual(r.returncode, 1, r.stdout[-1500:])
             for _, _, name in WRONG: self.assertIn(f"DIFFERS {name}:", r.stdout)
+
+    @unittest.skipUnless(shutil.which("clang"), "no clang: the rows' instances are not assembled")
+    def test_the_decoder_reads_each_rows_instances_as_that_row(self):
+        r = subprocess.run([sys.executable, os.path.join(HERE, "decoder.py"), "--cases", "30"], capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stdout[-2000:] + r.stderr[-500:])
+        self.assertIn(", 0 otherwise than as their row", r.stdout)
 
     def test_the_verifier_goes_by_the_table(self):
         """A row made wrong, and a shipped file is no longer shown; an instruction with no row is not verified."""

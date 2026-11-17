@@ -78,7 +78,7 @@ jae          | jae I                   | .jae I                        | jump I 
 jb           | jb I                    | .jb I                         | jump I if cf
 nop          | nop                     | .nop                          | nothing
 
-# -- 128-bit vectors of four 32-bit lanes
+# -- 128-bit vectors of four 32-bit lanes (the four written without a `v` are the older encodings, the only ones of them the decoder reads)
 loadu128     | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
 storeu128    | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
 const128     | -                       | .xconst X I J K L             | X = words(I, J, K, L)
@@ -87,17 +87,17 @@ movq128      | vmovq xmmX, S64         | .xmovq X .S                   | X = lan
 paddd128     | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
 pxor128      | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = each32(xor32, Y, Z)
 prord128     | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
-pslld128     | vpslld xmmX, xmmY, I    | .xpslld X Y I                 | X = each32(shl32, Y, I)
-psrld128     | vpsrld xmmX, xmmY, I    | .xpsrld X Y I                 | X = each32(shr32, Y, I)
+pslld128     | pslld xmmX, I           | .xpslld X X I                 | X = each32(shl32, X, I)
+psrld128     | psrld xmmX, I           | .xpsrld X X I                 | X = each32(shr32, X, I)
 por128       | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
-pshufb128    | vpshufb xmmX, xmmY, xmmZ | .xpshufb X Y Z               | X = shuffle_bytes(Y, Z)
+pshufb128    | pshufb xmmX, xmmZ       | .xpshufb X X Z                | X = shuffle_bytes(X, Z)
 pshufd128    | vpshufd xmmX, xmmY, I   | .xpshufd X Y I                | X = pick4(Y, Y, I)
 shufps128    | vshufps xmmX, xmmY, xmmZ, I | .xshufps X Y Z I          | X = pick4(Y, Z, I)
 unpckldq     | vpunpckldq xmmX, xmmY, xmmZ | .xpunpckldq X Y Z         | X = lanes(Y.0, Z.0, Y.1, Z.1)
 unpckhdq     | vpunpckhdq xmmX, xmmY, xmmZ | .xpunpckhdq X Y Z         | X = lanes(Y.2, Z.2, Y.3, Z.3)
 unpcklqdq    | vpunpcklqdq xmmX, xmmY, xmmZ | .xpunpcklqdq X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
 pblendd128   | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = blend4(Y, Z, I)
-pblendw128   | vpblendw xmmX, xmmY, xmmZ, I | .xpblendw X Y Z I        | X = blend_halves(Y, Z, I)
+pblendw128   | pblendw xmmX, xmmZ, I   | .xpblendw X X Z I             | X = blend_halves(X, Z, I)
 vzeroupper   | vzeroupper              | .vzeroupper                   | above128 = unknown
 
 # -- 512-bit vectors of sixteen 32-bit lanes (X512: the whole of vector register X; M: a mask register's sixteen bits)
