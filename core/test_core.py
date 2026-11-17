@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""The table's three checks, each with a control that it can fail.
+"""The table's checks, each with a control that it can fail.
 
     python3 core/test_core.py
 
-1. The symbolic rules against the primitives' meaning on numbers (sym.py), and a rule made wrong is caught.
+1. The symbolic rules against the primitives' meaning on numbers (sym.py for the vector lanes, sym64.py for
+   today's rules of 64-bit registers), and a rule made wrong is caught.
 2. Every row against this machine's processor (cross.py; x86-64 Linux with AVX-512 and clang, else
    skipped), and a table with rows made wrong has each of them reported.
 3. The table beside today's verifier on the whole of ../kcheck/b3hashr.o (shadow.py): no difference."""
@@ -11,7 +12,7 @@ import contextlib, io, os, platform, shutil, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import sym, table
+import sym, sym64, table
 
 NATIVE = platform.system() == "Linux" and platform.machine() == "x86_64" and shutil.which("clang") and "avx512vl" in open("/proc/cpuinfo").read()
 WRONG = [("X = lanes(Y.2, Z.2, Y.3, Z.3)", "X = lanes(Y.2, Z.2, Z.3, Y.3)", "unpckhdq"), ("D = shr64(D, I); zf", "D = shl64(D, I); zf", "shr64_ri"),
@@ -33,6 +34,21 @@ class Core(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()): bad = sym.test(100)
             self.assertGreater(bad, 0)
         finally: sym.rules = real
+
+    def test_the_rules_for_64_bit_registers_are_the_meaning_on_numbers(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out: bad = sym64.test(6000)
+        self.assertEqual(bad, 0, out.getvalue()[-1500:])
+        self.assertIn(f"each of the {len(sym64.CASES)} cases of the rules was compared", out.getvalue())
+
+    def test_a_rule_for_64_bit_registers_made_wrong_is_caught(self):
+        real = sym64.Stub.RULE
+        def wrong(m, op, x, y):                 # a counter moved down 32 bits: its low word, where the high one is meant
+            return ("t", x[1]) if op == "shr" and x[0] == "pair" and y[1] == 32 else real(m, op, x, y)
+        sym64.Stub.RULE = staticmethod(wrong)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()): bad = sym64.test(3000)
+            self.assertGreater(bad, 0)
+        finally: sym64.Stub.RULE = staticmethod(real)
 
     @unittest.skipUnless(NATIVE, "no x86-64 Linux with AVX-512 and clang: the rows are not run on a processor")
     def test_every_row_is_what_this_processor_does(self):
