@@ -4,6 +4,10 @@
     python3 shadow.py [FUNCTION]            the hash file ../kcheck/b3hashr.o (default: all its functions)
     python3 shadow.py --file PROGRAM.o      a file of byte programs (../kcheck/programs/NAME/odeNAME.o)
     python3 shadow.py ... --list            also list, by instruction, where the two do not go together
+    python3 shadow.py --tool TOOL.py ARGS   one of kcheck's tools that give the verifier changed code (kfn_flip.py,
+                                            kbyte_flip.py, kglue_flip.py ...), run as it is with ARGS, its every
+                                            instruction step compared; the differences of all its worker processes
+                                            are gathered in a file (--log FILE, else a temporary one) and counted
 
 kcheck's verifier (kfn.py, and kbyte.py on it) runs every path of every function as it always does. Before
 each instruction, a copy of the machine is given to step.py, which does the instruction by the table; then
@@ -25,6 +29,7 @@ from kterms import Fail
 import step
 
 COUNT = {"same": 0, "DIFFERS": 0, "refused": 0, "answered": 0, "calls": 0}
+LOG = None              # --tool: a file every worker process appends its differences to
 WHERE = {"DIFFERS": {}, "refused": {}, "answered": {}}
 
 
@@ -40,6 +45,7 @@ def note(kind, ins, why):
     COUNT[kind] += 1
     if kind != "same":
         head = " ".join(map(str, ins))
+        if LOG is not None: os.write(LOG, (f"{kind}\t{head}\t" + why.replace("\n", " ")[:600] + "\n").encode())
         WHERE[kind].setdefault(head if kind == "DIFFERS" else ins[0], [0, f"{head}: {why}"])[0] += 1
 
 
@@ -71,10 +77,33 @@ def shadowed(one):
 
 
 def main():
+    global LOG
     a = sys.argv[1:]
     listing = "--list" in a
     if listing: a.remove("--list")
     kfn.Machine.one = shadowed(kfn.Machine.one)
+    if a[:1] == ["--tool"]:
+        path = os.path.abspath(a[a.index("--log") + 1]) if "--log" in a else os.path.join(__import__("tempfile").mkdtemp(), "shadow.log")
+        if "--log" in a: del a[a.index("--log"):a.index("--log") + 2]
+        LOG = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_TRUNC, 0o644)
+        # the tool's worker processes must be copies of this one (with the verifier's step wrapped and the log open), not started afresh
+        __import__("multiprocessing").set_start_method("fork")
+        os.chdir(KCHECK); sys.argv = a[1:]
+        code = 0
+        try: runpy.run_path(a[1], run_name="__main__")
+        except SystemExit as e: code = e.code
+        print("the tool's exit:", code)
+        kinds, heads = {}, {}
+        with open(path) as f:
+            for line in f:
+                kind, head, why = line.rstrip("\n").split("\t", 2)
+                kinds[kind] = kinds.get(kind, 0) + 1
+                key = (kind, head.split()[0] if kind != "DIFFERS" else head)
+                heads.setdefault(key, [0, f"{head}: {why}"])[0] += 1
+        for (kind, head), (n, why) in sorted(heads.items(), key=lambda t: (t[0][0], -t[1][0]))[:60]: print(f"  {kind} {n:6}  e.g. {why}"[:700])
+        print(f"shadow: over all the tool's processes: {kinds.get('DIFFERS', 0)} instruction steps differ, {kinds.get('refused', 0)} the table refuses, "
+              f"{kinds.get('answered', 0)} the table answers where the verifier refuses (the log: {path})")
+        sys.exit(1 if kinds.get("DIFFERS") or kinds.get("refused") else 0)
     os.chdir(KCHECK)
     if a[:1] == ["--file"]: script, sys.argv = os.path.join("programs", "check_file.py"), ["check_file.py", os.path.relpath(os.path.join(os.path.dirname(HERE), a[1]) if not os.path.isabs(a[1]) and not os.path.exists(a[1]) else a[1])]
     else: script, sys.argv = "check_binary.py", ["check_binary.py", "b3hashr.o"] + a[:1] + ["--spec", "blake3.spec", "--no-ends"]
