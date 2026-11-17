@@ -59,6 +59,9 @@ WAYS = [("an argument's address moved into it, a push, and back", "  mov rax, rs
         ("the same by a pop", "  mov rax, rsp\n  push rdi\n  pop rsp\n  push rbx\n  mov rsp, rax\n", "an instruction this verifier does not know: .pop .rsp"),          # (the table has no row for it)
         ("a push of it", "  push rsp\n  pop rax\n", "an instruction this verifier does not know: .push .rsp"),
         ("above where it was at entry", "  add rsp, 8\n  sub rsp, 8\n", "leaves the function's own frame"),
+        # (November 17, on taking the instructions out of the verifier: only the stack pointer's own value is rounded down to a boundary)
+        ("rounded down to a 64-byte boundary from above where it was, sixty-four bytes written there, and back",
+         "  mov r11, rsp\n  lea rax, [rsp+64]\n  and rax, -64\n  mov rsp, rax\n  sub rsp, 64\n  vpxord zmm16, zmm16, zmm16\n  vmovdqa32 zmmword ptr [rsp], zmm16\n  mov rsp, r11\n", "and of ('a', 'frame', 64)"),
         ("moved 8192 bytes down by lea, a write there, and back", "  lea rsp, [rsp-0x2000]\n  mov qword ptr [rsp], rbx\n  lea rsp, [rsp+0x2000]\n", "8192 bytes of stack used")]
 
 

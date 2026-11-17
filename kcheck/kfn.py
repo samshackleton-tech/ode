@@ -859,6 +859,7 @@ class Machine:
         if sp[0] == "aligned":
             # the stack pointer rounded down to a 64-byte boundary: from here it is in a part of the frame of its
             # own ("wide"), whose top is 0 to 63 bytes below where the stack pointer was
+            if self.wide is not None or sp[1] > 0: raise Fail(f"the stack pointer leaves the function's own frame: {sp}")
             self.wide = sp[1]; self.g["rsp"] = sp = ("a", "wide", 0); self.mem["wide"] = {}
         if self.wide is not None and sp[0] == "a" and sp[1] == "frame": self.wide = None; del self.mem["wide"]         # back in the frame as it was: the part on the boundary is given up
         if sp[0] != "a" or sp[1] != ("frame" if self.wide is None else "wide") or not isinstance(sp[2], int) or sp[2] > 0: raise Fail(f"the stack pointer leaves the function's own frame: {sp}")

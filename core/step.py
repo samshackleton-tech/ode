@@ -48,8 +48,10 @@ def rules(m):
 
     def and64(x, y):
         x, y = q(x), q(y)
-        # an address in the frame rounded down to a 64-byte boundary: a value of its own, which only the stack pointer may take (`after`)
-        if m.BOUNDARY and m.wide is None and x[0] == "a" and x[1] == "frame" and isinstance(x[2], int) and y == ("n", M64 - 63): return ("aligned", x[2])
+        # the stack pointer's own value rounded down to a 64-byte boundary: a value of its own, which the stack pointer may then
+        # take (the end of kfn.py's `one`). Only of where the stack pointer is: rounded down from anywhere else in the frame
+        # (from above the return address, say) it would be taken for a part of the frame that is the function's to write.
+        if m.BOUNDARY and m.wide is None and x == m.g["rsp"] and x[0] == "a" and x[1] == "frame" and isinstance(x[2], int) and x[2] <= 0 and y == ("n", M64 - 63): return ("aligned", x[2])
         if x[0] == "p" and y == ("n", 0xFF): return ("p", (x[1][0],) + (0,) * 7)                # a register's low byte taken
         return m.arith("and", x, y)
 

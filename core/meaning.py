@@ -44,7 +44,7 @@ CASES = [(name,) + tuple(forms.split("/")) for name, all_forms in (
 def machine(kind, facts, T):
     """A machine of the verifier's with nothing in it but the facts and the terms."""
     m = kind.__new__(kind)
-    m.facts, m.T, m.halves, m.secret = facts, T, [], set()
+    m.facts, m.T, m.halves, m.secret, m.g = facts, T, [], set(), {"rsp": ("a", "frame", -8)}
     return m
 
 
@@ -153,7 +153,8 @@ def test(cases=4000, seed=1, rules=step.rules, say=True, of=kfn.Machine):
         def lv(v): return tuple(term_value(T, t, env) for t in v)
         x, y = some(T, rng), some(T, rng)
         if x[0] == "p" and rng.random() < 0.3: y = ("n", 0xFF)
-        if x[:2] == ("a", "frame") and rng.random() < 0.3: y = ("n", M64 - 63)
+        m.g["rsp"] = ("a", "frame", -8 * rng.randrange(0, 64))
+        if x[:2] == ("a", "frame") and rng.random() < 0.3: y = ("n", M64 - 63); m.g["rsp"] = x          # the stack pointer's own value, rounded down
         if x[0] == "l" and rng.random() < 0.3: y = ("n", (1 << rng.randrange(1, 12)) - 1)                  # a mask
         if x[0] == "l" and rng.random() < 0.2: x, y = ("l", x[1].scale(16)), ("n", rng.randrange(16))         # a multiple of sixteen, and less than sixteen
         n = rng.choice([0, 1, 4, 8, 16, 24, 32, 40, rng.randrange(64)])
