@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""What a test of this repository can read, as one number: tests.sh keeps a test's passing under it.
+
+    python3 tests_key.py GROUP        GROUP: `rest` (the tests outside proof-core) or `proof-core`
+
+A test that passed on some files passes on the same files. So where ODE_TEST_CACHE names a folder, tests.sh
+writes down each passing test under the key printed here, and does not run that test again while its key
+stands: a change to proof-core alone leaves the keys of the forty tests outside it as they were. No
+failure is ever kept. Without ODE_TEST_CACHE every test runs, as before.
+
+The key is a hash of every file under this folder that the group's tests can read, with each file's path,
+and of what runs them (Python's version, the processor, the system). A test outside proof-core reads
+nothing in proof-core; a test of proof-core may read anything (the table, the Python verifier it is
+compared with, the shipped files). Left out of both: the pages and licences at the top and
+proof-core/README.md (no test reads them), and what a run itself writes (.lake, __pycache__, tests.out).
+
+The hash is BLAKE2 because Python has it everywhere. It names nothing for anybody: it is a key in our own
+machine's folder, and a wrong match could only come from a collision in 512 bits."""
+import hashlib, os, platform, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+WRITTEN = {".lake", "__pycache__", ".git", "tests.out", "tests.log", "tests.exit"}
+
+
+def files(group):
+    for top in sorted(os.listdir(HERE)):
+        path = os.path.join(HERE, top)
+        if top in WRITTEN: continue
+        if os.path.isfile(path):
+            if top in ("tests.sh", "tests_key.py"): yield top
+            continue
+        if top == "proof-core" and group != "proof-core": continue
+        for where, dirs, names in os.walk(path):
+            dirs[:] = sorted(d for d in dirs if d not in WRITTEN)
+            for n in sorted(names):
+                rel = os.path.relpath(os.path.join(where, n), HERE)
+                if n.endswith(".pyc") or rel == os.path.join("proof-core", "README.md"): continue
+                yield rel
+
+
+def key(group):
+    h = hashlib.blake2b()
+    # (the Lean that builds proof-core is named by a file of that folder, lean-toolchain)
+    h.update(repr((group, platform.python_version(), platform.machine(), platform.system())).encode())
+    for rel in files(group):
+        with open(os.path.join(HERE, rel), "rb") as f: data = f.read()
+        h.update(repr((rel, len(data))).encode()); h.update(data)
+    return h.hexdigest()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2 or sys.argv[1] not in ("rest", "proof-core"): sys.exit(__doc__)
+    print(key(sys.argv[1]))
