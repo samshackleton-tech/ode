@@ -4,8 +4,8 @@
 #     sh tests.sh [OUTPUT]         (default OUTPUT: tests.out here; one line a file as each ends)
 #
 # kcheck/test_kbyte.py is run a class at a time (whole, it takes over twenty minutes; so, about seven).
-# Tests that run code on a processor need x86-64 Linux with AVX-512 and skip elsewhere. Exit 0 only where
-# every line ends OK.
+# Tests that run code on a processor need x86-64 Linux with AVX-512 and skip elsewhere; the tests of
+# proof-core need Lean's lake and skip where it is not installed. Exit 0 only where every line ends OK.
 # This is the whole suite. The check before a merge is shorter: python3 kcheck/gate.py (under five minutes).
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here/tests.out}
@@ -26,8 +26,8 @@ done
 for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t" "" & done
 one core test_core.py "" &
 one lang test_asm.py "" &
-one proof-core test_arith.py "" &
-one proof-core test_verify.py "" &
+# (the four of proof-core one after another: each asks Lean's lake to build in the same folder)
+( one proof-core test_sound.py ""; one proof-core test_arith.py ""; one proof-core test_machine.py ""; one proof-core test_verify.py "" ) &
 wait
 total=$(grep -c '' "$out")
 good=$(grep -c -E ' OK( \(skipped=[0-9]+\))? *$' "$out")
