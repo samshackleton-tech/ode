@@ -1,0 +1,9 @@
+name = "odecore"
+defaultTargets = ["arith"]
+
+[[lean_lib]]
+name = "Arithmetic"
+
+[[lean_exe]]
+name = "arith"
+root = "ArithMain"
