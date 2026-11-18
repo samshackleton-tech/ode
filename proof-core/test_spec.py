@@ -37,9 +37,14 @@ def rest(x, y) { x % y }
 def share(x, y) { x / y }
 def digits(x) { if x < 10 then 1 else 1 + digits(x / 10) }
 def fold(a, at, s) { if at == len(a) then s else fold(a, at + 1, (s + a[at]) % 251) }
+def varint(v) { if v < 128 then [v] else [128 + v % 128] ++ varint(v / 128) }
+def pair(x, y) { [x, y] ++ [x + y] }
+def spread(a, at) { if at == len(a) then [] else [a[at], at] ++ spread(a, at + 1) }
+def odd(x) { [x - 3, x] }
 """
 KINDS = {"alike": "bbn", "common": "bb", "gap": "nn", "under": "nn", "mix": "bn", "count": "bnn", "total": "bn", "never": "n", "past": "b", "order": "nn",
-         "rest": "nn", "fold": "bnn", "share": "nn", "digits": "n"}
+         "rest": "nn", "fold": "bnn", "share": "nn", "digits": "n", "varint": "n", "pair": "nn", "spread": "bn", "odd": "n"}
+LISTS = ("varint", "pair", "spread", "odd")            # the definitions whose value is a list
 
 
 def value(kind, rng, like=None):
@@ -62,7 +67,7 @@ def expression(rng, names, depth):
         if pick == 6: return ("ifx", truth(d - 1), number(d - 1), number(d - 1))
         if pick == 7: return ("index", ("name", rng.choice(runs)), number(d - 1))
         if pick == 8: return ("call", "len", [("name", rng.choice(runs))])
-        f = rng.choice([f for f in KINDS if f != "never"])
+        f = rng.choice([f for f in KINDS if f != "never" and f not in LISTS])
         return ("call", f, [("name", rng.choice(runs)) if k == "b" else number(d - 1) for k in KINDS[f]])
     def truth(d): return ("bin", rng.choice(["==", "!=", "<", "<=", ">", ">="]), number(d), number(d))
     return number(depth) if rng.random() < 0.8 else truth(depth)
@@ -94,7 +99,8 @@ class Spec(unittest.TestCase):
         def read(line):
             w = line.split()
             if w == ["none"]: return None
-            self.assertIn(w[0], ("int", "bool", "bytes"), line)
+            self.assertIn(w[0], ("int", "bool", "bytes", "list"), line)
+            if w[0] == "list": return [int(x) for x in w[1:]]
             return int(w[1]) if w[0] == "int" else w[1] == "1" if w[0] == "bool" else list(bytes.fromhex(w[1] if len(w) > 1 else ""))
         return [read(l) for l in out]
 
@@ -121,6 +127,31 @@ class Spec(unittest.TestCase):
         self.assertGreater(valued, 800)
         self.assertLess(valued, len(cases) - 150)                      # and some have none: `never`, `past`, differences below zero
         print(f"\nspec: {len(cases)} uses of {len(KINDS)} definitions: evalSpec and ode.py say the same ({valued} have a value)", file=sys.stderr)
+
+    def test_lists_mean_the_same(self):
+        """Lists written out and joined (the value of an `ensures`): evalSpec and ode.py give the same list, or
+        both none (a thing of the list has no value)."""
+        rng = random.Random(3)
+        cases = []
+        for _ in range(600):
+            a = value("b", rng)
+            env = {"x": rng.choice([0, 1, 127, 128, 129, rng.randrange(0, 300), rng.randrange(0, 1 << 64)]), "y": value("n", rng), "a": a}
+            pick = rng.randrange(8)
+            x, y = ("name", "x"), ("name", "y")
+            e = [("call", "varint", [x]), ("call", "pair", [x, y]), ("call", "spread", [("name", "a"), ("num", rng.randrange(0, 4))]),
+                 ("call", "odd", [y]), ("list", []), ("list", [x, ("bin", "%", x, ("num", 256)), ("bin", "/", x, ("num", 3))]),
+                 ("bin", "++", ("call", "varint", [x]), ("list", [y, ("num", 7)])),
+                 ("bin", "++", ("list", [("bin", "-", y, ("num", 5))]), ("call", "varint", [y]))][pick]
+            cases.append((e, env))
+        got = self.lean(cases)
+        valued = 0
+        for (e, env), g in zip(cases, got):
+            want = self.reference(self.spec, e, env)
+            self.assertTrue(type(want) is type(g) and want == g, (e, env, want, g))
+            valued += g is not None
+        self.assertGreater(valued, 400)
+        self.assertLess(valued, len(cases) - 30)                       # and some have none: a difference below zero in a list, a place past a run
+        print(f"\nspec: {len(cases)} lists: evalSpec and ode.py say the same ({valued} have a value)", file=sys.stderr)
 
     def test_wherever_evalspec_gives_a_value_ode_gives_the_same(self):
         rng = random.Random(2)

@@ -145,6 +145,19 @@ def compare (facts : List Row) (a b : Row) : V Cmp :=
     | some (.proof ..) => refuse "lt, eq or gt is expected"
     | none => need "compare" facts [Lin.sub a b]
 
+/-- Whether `a` is below `b`, by the facts: the proof says which, `lt` (below) or `ge` (not below). -/
+def isBelow (facts : List Row) (a b : Row) : V Bool :=
+  match Lin.isConst (Lin.sub a b) with
+  | some k => pure (decide (k < 0))
+  | none => do
+    match ← pop with
+    | some (.tag name _) =>
+      if name == "lt" then do entail facts (Lin.sub (Lin.sub b a) (Lin.const 1)); pure true
+      else if name == "ge" then do entail facts (Lin.sub a b); pure false
+      else refuse "lt or ge is expected"
+    | some (.proof ..) => refuse "lt or ge is expected"
+    | none => need "below" facts [Lin.sub a b]
+
 /-! ## What is held at a point of a path -/
 
 inductive Flag where
@@ -252,6 +265,13 @@ def symDivide (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
   match divided s x m with
   | some q => (Lin.var q, Lin.var (q + 1), s)
   | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), { s.divide x m with facts := Lin.var s.nvars :: (s.divide x m).facts })
+
+/-- The quotient and the remainder of any number by a number above zero: the unknowns the facts held
+already say they are, where they say it; else the two new unknowns of `Sym.divide`. -/
+def Sym.quotRem (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
+  match divided s x m with
+  | some q => (Lin.var q, Lin.var (q + 1), s)
+  | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), s.divide x m)
 
 def lookupByte (r : Nat) (o : Row) : List (Nat × Nat × Row) → Option Nat
   | [] => none
@@ -531,31 +551,29 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     | some k, _ => pure (.val (.lin (Lin.scale k y)), s)
     | _, some k => pure (.val (.lin (Lin.scale k x)), s)
     | _, _ => refuse "a product of two unknowns: not here yet"
-  else do
-    let c ← compare s.facts x y
-    if op == "==" then pure (.val (.bool c.isEq), s)
-    else if op == "!=" then pure (.val (.bool (!c.isEq)), s)
-    else if op == "<" then pure (.val (.bool c.isLt), s)
-    else if op == "<=" then pure (.val (.bool (!c.isGt)), s)
-    else if op == ">" then pure (.val (.bool c.isGt), s)
-    else if op == ">=" then pure (.val (.bool (!c.isLt)), s)
-    else refuse s!"no rule for {op}"
+  else if op == "==" then do let c ← compare s.facts x y; pure (.val (.bool c.isEq), s)
+  else if op == "!=" then do let c ← compare s.facts x y; pure (.val (.bool (!c.isEq)), s)
+  -- an order is asked two ways: below or not (where the facts say `x >= y`, they need not say which of the two)
+  else if op == "<" then do let t ← isBelow s.facts x y; pure (.val (.bool t), s)
+  else if op == "<=" then do let t ← isBelow s.facts y x; pure (.val (.bool (!t)), s)
+  else if op == ">" then do let t ← isBelow s.facts y x; pure (.val (.bool t), s)
+  else if op == ">=" then do let t ← isBelow s.facts x y; pure (.val (.bool (!t)), s)
+  else refuse s!"no rule for {op}"
 
-/-- The remainder of `x` by a number of the specification above zero: the remainder of the two new
-unknowns of `Sym.divide`. -/
+/-- The remainder of `x` by a number of the specification above zero (`Sym.quotRem`: the one the code
+has found, where it has found it). -/
 def smod (s : Sym) (x y : Row) : V (SRes × Sym) :=
   match Lin.isConst y with
   | some m =>
-    if 0 < m then pure (.val (.lin (Lin.var (s.nvars + 1))), s.divide x m)
+    if 0 < m then pure (.val (.lin (s.quotRem x m).2.1), (s.quotRem x m).2.2)
     else refuse "a remainder by a number that is not above zero"
   | none => refuse "a remainder by what is no number of the specification: not here yet"
 
-/-- The quotient of `x` by a number of the specification above zero: the quotient of the two new unknowns
-of `Sym.divide`. -/
+/-- The quotient of `x` by a number of the specification above zero (`Sym.quotRem`). -/
 def sdiv (s : Sym) (x y : Row) : V (SRes × Sym) :=
   match Lin.isConst y with
   | some m =>
-    if 0 < m then pure (.val (.lin (Lin.var s.nvars)), s.divide x m)
+    if 0 < m then pure (.val (.lin (s.quotRem x m).1), (s.quotRem x m).2.2)
     else refuse "a quotient by a number that is not above zero"
   | none => refuse "a quotient by what is no number of the specification: not here yet"
 
@@ -792,15 +810,109 @@ def suppose (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : SExpr) : V 
   let (rows, facts, s) ← assertion ctx env s e
   pure { s with facts := rows ++ s.facts, spec := facts ++ s.spec }
 
+/-! ## A list of the specification, on symbols -/
+
+/-- The things of a list written out: numbers, each shown to be no less than zero. -/
+def numbers (facts : List Row) : List SVal → V (List Row)
+  | [] => pure []
+  | .lin v :: more => do
+    entail facts v
+    let rest ← numbers facts more
+    pure (v :: rest)
+  | _ => refuse "a list written out of what are no numbers"
+
+/-- The list an expression is, thing by thing: a list written out; two lists joined; one of two lists, by
+a condition; a use of a definition, which is opened. `fuel`: how deep this goes at most. -/
+def slist (ctx : Ctx) : Nat → List (String × SVal) → Sym → SExpr → V (List Row × Sym)
+  | 0, _, _, _ => refuse "a list defined deeper than this verifier follows"
+  | fuel + 1, env, s, .list items => do
+    let (vs, s) ← seval ctx env s items
+    match vs with
+    | .list vs => do
+      let rows ← numbers s.facts vs
+      pure (rows, s)
+    | _ => refuse "a list written out of what is no list of things"
+  | fuel + 1, env, s, .bin op a b =>
+    if op == "++" then do
+      let (x, s) ← slist ctx fuel env s a
+      let (y, s) ← slist ctx fuel env s b
+      pure (x ++ y, s)
+    else refuse "a list is expected"
+  | fuel + 1, env, s, .ifx c a b => do
+    let (c, s) ← seval ctx env s c
+    match c with
+    | .val (.bool t) => if t then slist ctx fuel env s a else slist ctx fuel env s b
+    | _ => refuse "a condition that is not true or false"
+  | fuel + 1, env, s, .call f args => do
+    let (vs, s) ← seval ctx env s args
+    match vs with
+    | .list vs =>
+      if f == "len" then refuse "a list is expected"
+      else match findDef ctx.defs f with
+        | some d =>
+          if d.params.length == vs.length then slist ctx fuel (d.params.zip vs) s d.body
+          else refuse s!"{f} takes another number of things"
+        | none => refuse s!"no definition {f}"
+    | _ => refuse "a definition used with what is no list of things"
+  | _, _, _, _ => refuse "a list is expected"
+
+def LIST : Nat := 100
+
 /-! ## Return, places, paths -/
 
+/-- The contract's names at the return: those at entry, and the name `returns` gives the number returned. -/
+def symEnvAfter (c : Contract) (s : Sym) : List (String × SVal) :=
+  match c.result with
+  | some name => (name, .lin (s.reg 0)) :: symEnv c
+  | none => symEnv c
+
+/-- The run given to write of that name: which it is, and how many bytes. -/
+def findOutNamed (name : String) : List (String × Nat × Nat) → Nat → Option (Nat × Nat)
+  | [], _ => none
+  | (x, _, n) :: more, k => if x == name then some (k, n) else findOutNamed name more (k + 1)
+
+/-- The byte known written at that place of the run `w`. -/
+def wroteAt (w : Nat) (place : Row) : List (Nat × Row × Row) → Option Row
+  | [] => none
+  | (w', o, x) :: more => if w' = w ∧ Lin.isConst (Lin.sub o place) = some 0 then some x else wroteAt w place more
+
+/-- The things of a list are what is known written at the places from `lo + k` on of the run `w`. -/
+def written (facts : List Row) (wrote : List (Nat × Row × Row)) (w : Nat) (lo : Row) : Nat → List Row → V Unit
+  | _, [] => pure ()
+  | k, v :: more =>
+    match wroteAt w (Lin.add lo (Lin.const (k : Int))) wrote with
+    | some x => do
+      entail facts (Lin.sub x v)
+      entail facts (Lin.sub v x)
+      written facts wrote w lo (k + 1) more
+    | none => refuse "an `ensures`: a byte of the run is not known written"
+
+/-- One `ensures RUN[lo .. hi] = LIST`, at the return: the list thing by thing, `lo` no less than zero,
+`hi - lo` as many as the list's things, `hi` within the run, and each of the places known written with
+the list's thing. -/
+def symEnsure (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : Ensure) : V Sym :=
+  match findOutNamed e.run ctx.contract.outs 0 with
+  | none => refuse "an `ensures` of what is no run given to write"
+  | some (w, n) => do
+    let (rows, s) ← slist ctx LIST env s e.value
+    let (lo, s) ← seval ctx env s e.lo
+    let (lo, s) ← numberV (opener ctx DEEP) s lo
+    let (hi, s) ← seval ctx env s e.hi
+    let (hi, s) ← numberV (opener ctx DEEP) s hi
+    entail s.facts lo
+    entail s.facts (Lin.sub (Lin.sub hi lo) (Lin.const (rows.length : Int)))
+    entail s.facts (Lin.sub (Lin.add lo (Lin.const (rows.length : Int))) hi)
+    entail s.facts (Lin.sub (Lin.const (n : Int)) hi)
+    written s.facts s.wrote w lo 0 rows
+    pure s
+
 /-- At the return: the stack pointer is where it was, the registers a callee keeps hold what they held at
-entry, and rax holds what the contract says. -/
+entry, the runs given to write hold what each `ensures` says, and rax holds what the contract says. -/
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
-  if !ctx.contract.ensures.isEmpty then refuse "an `ensures` of the contract: not here yet"
-  else if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
+  if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
-  else
+  else do
+    let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
     match ctx.contract.returns with
     | none => pure ()
     | some e => do
@@ -942,11 +1054,12 @@ def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVa
   p.names.map (fun (n, r) => (n, SVal.lin (value r))) ++ symEnv ctx.contract
 
 /-- What is known at entry: each register a number below 2^64; the frame the contract allows and the return
-address lie in memory; so does each run of bytes given. -/
+address lie in memory; so does each run of bytes given, to read or to write. -/
 def entryFacts (ctx : Ctx) : List Row :=
   ((List.range 16).map ranged).flatten ++
   [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 9)) (Lin.var RSP)] ++
-  ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)
+  (ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)) ++
+  ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,

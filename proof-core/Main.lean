@@ -8,8 +8,11 @@ TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by t
     fn NAME                   a function, then its instructions and its contract:
     i START END ROW…          an instruction, as the reader of code writes it
     arg NAME number           the contract's arguments, in order
-    arg NAME bytes LEN
-    returns EXPRESSION
+    arg NAME bytes LEN        (the address of LEN bytes to read, LEN another argument)
+    arg NAME out N            (the address of N bytes to write, which the function does not read)
+    returns EXPRESSION        the number returned
+    result NAME               or: the number returned is called NAME in the `ensures` lines
+    ensures NAME LO HI LIST   at the return the bytes LO to HI of the run NAME are the things of LIST
     stack N
     def NAME PARAMETER… = EXPRESSION      a definition of the specification (for every function)
 
@@ -30,7 +33,8 @@ statement's kinds in it is refused.
                               rows the verifier holds (0: the first); its steps (as ArithMain.lean reads
                               them); the end
 
-An EXPRESSION is written with brackets: (num 1) (name x) (bin + A B) (ifx C A B) (index A I) (call f A…).
+An EXPRESSION is written with brackets: (num 1) (name x) (bin + A B) (ifx C A B) (index A I) (call f A…)
+(list A…).
 It answers `shown` (every function of the statement meets its contract), or what it needs or why it
 refuses and, on a last line `in NAME`, of which function; it ends with 0 only for `shown`.
 Reading this text is not covered by any theorem.

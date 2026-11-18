@@ -24,6 +24,7 @@ def sexp(e, seqs={}):
     if kind == "num": return f"(num {e[1]})"
     if kind == "name": return f"(name {e[1]})"
     if kind == "bin": return f"(bin {e[1]} {sexp(e[2], seqs)} {sexp(e[3], seqs)})"
+    if kind == "list": return "(" + " ".join(["list"] + [sexp(a, seqs) for a in e[1]]) + ")"
     if kind == "ifx": return f"(ifx {sexp(e[1], seqs)} {sexp(e[2], seqs)} {sexp(e[3], seqs)})"
     if kind == "index":
         if e[1][0] == "call" and e[1][1] in seqs and len(e[1][2]) == seqs[e[1][1]]:
@@ -70,23 +71,50 @@ def sequences(spec):
     return {name: len(seq[0]) for name, seq in spec.seqs.items()}
 
 
-def contract_lines(c, name, seqs={}):
+def contract_lines(c, name, seqs={}, consts=()):
     """A contract as the lines Reader.lean reads."""
     out = []
+    names = [arg for arg, _ in c["args"]]
+    if len(set(names)) != len(names): raise SystemExit(f"statement: the contract of {name} has two arguments of one name")
+    # `returns r`, r no name of the specification's (LANGUAGE.md): the number returned is called r in `ensures` lines.
+    r = c["returns"]
+    result = r[1] if r is not None and r[0] == "name" and r[1] not in names and r[1] not in consts else None
+    # A run an `ensures` speaks of is written. In the account in Lean the function may write it and never reads
+    # it (which is less than the contract lets it do), and nothing is said of what the run held before.
+    written = [leaf["name"] for leaf in c["leaves"]]
+    if len(set(written)) != len(written): raise SystemExit(f"statement: the contract of {name} has two `ensures` of one run: the verifier in Lean does not read that yet")
     for arg, kind in c["args"]:
         m = re.fullmatch(r"(\w+) bytes", kind)
-        if kind == "number": out.append(f"arg {arg} number")
-        elif m and not m.group(1).isdigit(): out.append(f"arg {arg} bytes {m.group(1)}")
+        if kind == "number" and arg not in written: out.append(f"arg {arg} number")
+        elif m and not m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} bytes {m.group(1)}")
+        elif m and m.group(1).isdigit() and arg in written: out.append(f"arg {arg} out {int(m.group(1))}")
         else: raise SystemExit(f"statement: {name}: an argument of a kind the verifier in Lean does not read yet: {arg}: {kind}")
-    for key in ("asks", "calls", "conditions", "given", "leaves", "needs", "spoils"):
+    for key in ("asks", "calls", "conditions", "given", "needs", "spoils"):
         if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")
-    if c["no_overlap"] or c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
+    if c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
+    # What is written is taken to overlap nothing else given (the account in Lean asks it of the caller), so the
+    # contract must ask it of the caller too: `requires no_overlap` of every address among the arguments.
+    addresses = [arg for arg, kind in c["args"] if kind != "number"]
+    if written and len(addresses) > 1:
+        if sorted(c["no_overlap"] or []) != sorted(addresses):
+            raise SystemExit(f"statement: the contract of {name} does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap nothing else it is given")
+    elif c["no_overlap"]: raise SystemExit(f"statement: the contract of {name} has `requires no_overlap`, which the verifier in Lean reads only with something written")
     # A contract promises that which instructions run and which addresses are touched do not depend on the bytes
-    # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that.
-    quiet = [arg for arg, kind in c["args"] if kind != "number" and arg not in c["trace"]]
+    # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that: a
+    # run only read must be named there. (A run written is never read in that account, so nothing depends on
+    # what it held; and it is not to be named, since nothing may then depend on it.)
+    quiet = [arg for arg, kind in c["args"] if kind != "number" and arg not in c["trace"] and arg not in written]
     if quiet: raise SystemExit(f"statement: the contract of {name} promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
                                "the verifier in Lean does not show that yet")
-    if c["returns"] is not None: out.append("returns " + sexp(c["returns"], seqs))
+    if [arg for arg in written if arg in c["trace"]]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
+    if result is not None: out.append(f"result {result}")
+    elif r is not None: out.append("returns " + sexp(r, seqs))
+    for leaf in c["leaves"]:
+        if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
+            raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")
+        count = next(int(re.fullmatch(r"(\d+) bytes", kind).group(1)) for arg, kind in c["args"] if arg == leaf["name"])
+        lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
+        out.append(f"ensures {leaf['name']} {sexp(lo, seqs)} {sexp(hi, seqs)} {sexp(leaf['expr'], seqs)}")
     out.append(f"stack {c['stack']}")
     return out
 
@@ -146,7 +174,7 @@ def statement(spec_text, functions):
         rows, _ = kdecode.read(obj, symbol, 0, 0)
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
-        out += contract_lines(spec.contracts[symbol], symbol, seqs)
+        out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts)
     for name, (params, body) in spec.fns.items():
         if len(body) != 1 or body[0][0] != "expr": raise SystemExit(f"statement: the definition {name} is more than one expression")
         out.append(" ".join(["def", name] + params + ["=", sexp(body[0][1], seqs)]))

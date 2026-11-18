@@ -7,7 +7,8 @@ For the comparison of `evalSpec` (Contract.lean) with `../kcheck/ode.py` (test_s
 
     NAME=i:NUMBER NAME=b:HEXBYTES … | EXPRESSION
 
-The answer is a line: `int N`, `bool 0` or `bool 1`, `bytes HEX`, or `none` where the expression has no value.
+The answer is a line: `int N`, `bool 0` or `bool 1`, `bytes HEX` (a list of numbers all below 256), `list N N …`
+(a list with a number of 256 or more), or `none` where the expression has no value.
 -/
 open Ode
 
@@ -30,7 +31,8 @@ def readBinding (text : String) : Option (String × Val) :=
 def showVal : Option Val → String
   | some (.int n) => s!"int {n}"
   | some (.bool b) => if b then "bool 1" else "bool 0"
-  | some (.bytes l) => "bytes " ++ String.join (l.map hex2)
+  | some (.bytes l) =>
+    if l.all (· < 256) then "bytes " ++ String.join (l.map hex2) else "list " ++ " ".intercalate (l.map toString)
   | none => "none"
 
 def runCase (defs : List Def) (line : String) : String :=

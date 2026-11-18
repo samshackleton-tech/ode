@@ -10,6 +10,7 @@ and it is run again, until it has no more to ask of that function. The answers a
 
     need entail / branch    a proof of arithmetic, by elimination (../kcheck/kprove.py's derive)
     need compare            which of lt, eq, gt has such a proof
+    need below              which of lt, ge has such a proof
     need spec               which value held to carry over, or which use of a definition to open: each is tried
     need held               which value held is of a use with the same things: each is tried
     a kept register refused the register is left out of the place's `keep`
@@ -277,6 +278,11 @@ class Prover:
             elif what == "branch":
                 p = refutation(facts, 0)                       # (the newest fact is first)
                 proof = proof + (["t live"] if p is None else ["t dead"] + proof_text(p, facts))
+            elif what == "below":                              # is a - b below zero: `lt`, or not: `ge`
+                d = goals[0]
+                if refutation(facts + [d]): proof = proof + ["t lt"]
+                elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
+                else: self.last = said; self.note(proof, said + ' (undecided)'); return None
             elif what == "compare":
                 d = goals[0]
                 if refutation(facts + [negation(d)]) and refutation(facts + [negation(-d)]): proof = proof + ["t eq"]

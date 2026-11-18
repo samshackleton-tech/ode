@@ -588,6 +588,33 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
         · exact bounded_sub (bounded_const _ _) br
         · exact bounded_mono le (wf.facts f hf) }
 
+/-- Any number divided by a number above zero: what `Sym.quotRem` gives is the quotient and the remainder. -/
+theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' (s.quotRem x m).2.2 st ∧
+      ev ρ' (s.quotRem x m).1 = ev ρ x / m ∧ ev ρ' (s.quotRem x m).2.1 = ev ρ x % m ∧
+      bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).1 ∧ bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).2.1 := by
+  cases hd : divided s x m with
+  | some q =>
+    simp only [Sym.quotRem, hd]
+    have hq := List.find?_some hd
+    simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
+    obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    have f1 := H.facts _ m1
+    have f2 := H.facts _ m2
+    have f3 := H.facts _ m3
+    have f4 := H.facts _ m4
+    rw [holds_iff] at f1 f2 f3 f4
+    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
+    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
+    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
+           bounded_var (List.mem_range.mp (List.mem_of_find?_eq_some hd)), wf.facts _ m3⟩
+  | none =>
+    simp only [Sym.quotRem, hd]
+    obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
+    exact ⟨ρ', c, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr,
+           bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
+
 /-- A number of the machine divided by a number above zero: what `symDivide` gives is the quotient and the
 remainder. -/
 theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}

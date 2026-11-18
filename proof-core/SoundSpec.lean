@@ -335,10 +335,10 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
             exact ⟨rfl, _, rfl, bounded_scale _ hx, by simp [binop, h1, h2, h3, semv, ev_isConst hcy, Int.mul_comm]⟩
           | none => simp only [hcx, hcy] at h; exact (refuse_ok h).elim
       next h3 =>
-        obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
-        obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
         split at h
         next h4 =>
+          obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
+          obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
           have := V.pure_ok h
           injection this with hp _
           injection hp with e1 e2
@@ -347,6 +347,8 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
         next h4 =>
           split at h
           next h5 =>
+            obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
+            obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
             have := V.pure_ok h
             injection this with hp _
             injection hp with e1 e2
@@ -355,35 +357,47 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
           next h5 =>
             split at h
             next h6 =>
+              obtain ⟨t, r1, e1, h⟩ := V.bind_ok h
+              have ht := isBelow_sound e1 ρ hf
               have := V.pure_ok h
               injection this with hp _
               injection hp with e1 e2
               subst e1 e2
-              exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, semv, ← c3]⟩
+              exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, semv, ht]⟩
             next h6 =>
               split at h
               next h7 =>
+                obtain ⟨t, r1, e1, h⟩ := V.bind_ok h
+                have ht := isBelow_sound e1 ρ hf
                 have := V.pure_ok h
                 injection this with hp _
                 injection hp with e1 e2
                 subst e1 e2
-                exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, semv, ← c4]⟩
+                have hd : decide (ev ρ x ≤ ev ρ y) = !decide (ev ρ y < ev ρ x) := by
+                  by_cases hc : ev ρ y < ev ρ x <;> simp [hc] <;> omega
+                exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, semv, ht, hd]⟩
               next h7 =>
                 split at h
                 next h8 =>
+                  obtain ⟨t, r1, e1, h⟩ := V.bind_ok h
+                  have ht := isBelow_sound e1 ρ hf
                   have := V.pure_ok h
                   injection this with hp _
                   injection hp with e1 e2
                   subst e1 e2
-                  exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, h8, semv, ← c5]⟩
+                  exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, h8, semv, ht]⟩
                 next h8 =>
                   split at h
                   next h9 =>
+                    obtain ⟨t, r1, e1, h⟩ := V.bind_ok h
+                    have ht := isBelow_sound e1 ρ hf
                     have := V.pure_ok h
                     injection this with hp _
                     injection hp with e1 e2
                     subst e1 e2
-                    exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, h8, h9, semv, ← c6]⟩
+                    have hd : decide (ev ρ y ≤ ev ρ x) = !decide (ev ρ x < ev ρ y) := by
+                      by_cases hc : ev ρ x < ev ρ y <;> simp [hc] <;> omega
+                    exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, h8, h9, semv, ht, hd]⟩
                   next => exact (refuse_ok h).elim
 
 theorem runBytes_get (s0 : State) (base len k : Nat) (h : k < s0.reg len) : (runBytes s0 base len)[k]? = some (s0.mem (s0.reg base + k)) := by
@@ -503,7 +517,7 @@ theorem reach_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) (fac
   | 0, _, hs => hs
   | fuel + 1, seen, hs => reach_sound a facts hf fuel _ (foldl_reach a facts seen hf hs)
 
-/-- A remainder: the two new unknowns are the quotient and the remainder there are. -/
+/-- A remainder: what `Sym.quotRem` gives is the remainder there is. -/
 theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State}
     (h : smod s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (hx : bounded s.nvars x) :
@@ -519,13 +533,13 @@ theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      obtain ⟨ρ', c, _, nr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
-      refine ⟨ρ', c, _, rfl, bounded_var (show s.nvars + 1 < s.nvars + 2 by omega), ?_⟩
+      obtain ⟨ρ', c, _, nr, _, br⟩ := quotRem_sound (ctx := ctx) (s0 := s0) H wf hx pos
+      refine ⟨ρ', c, _, rfl, br, ?_⟩
       have ym : ev ρ y = m := ev_isConst hm
       simp [binop, semv, nr, ym, pos]
     next => exact (refuse_ok h).elim
 
-/-- A quotient: the first of the two new unknowns is the quotient there is. -/
+/-- A quotient: what `Sym.quotRem` gives is the quotient there is. -/
 theorem sdiv_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State}
     (h : sdiv s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (hx : bounded s.nvars x) :
@@ -541,8 +555,8 @@ theorem sdiv_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      obtain ⟨ρ', c, nq, _⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
-      refine ⟨ρ', c, _, rfl, bounded_var (show s.nvars < s.nvars + 2 by omega), ?_⟩
+      obtain ⟨ρ', c, nq, _, bq, _⟩ := quotRem_sound (ctx := ctx) (s0 := s0) H wf hx pos
+      refine ⟨ρ', c, _, rfl, bq, ?_⟩
       have ym : ev ρ y = m := ev_isConst hm
       simp [binop, semv, nq, ym, pos]
     next => exact (refuse_ok h).elim

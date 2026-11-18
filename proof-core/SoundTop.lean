@@ -1,4 +1,5 @@
 import SoundCall
+import SoundList
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
 -/
@@ -183,18 +184,37 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     allowed (ctx.contract.perm s0).read (st.reg RSP) 8 = true ∧
     ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
   unfold symReturn at h
-  -- (the verifier has no rule for an `ensures` yet: it has passed only where the contract has none)
-  have hens : ctx.contract.ensures = [] := by
-    cases he : ctx.contract.ensures.isEmpty with
-    | true => simpa using he
-    | false => simp only [he, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
-  simp only [hens, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
   split at h
   next => exact (refuse_ok h).elim
   next hsp =>
     split at h
     next => exact (refuse_ok h).elim
     next hcs =>
+      -- every `ensures` first: of the state the return leaves, whose memory and rax are this state's
+      obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
+      have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
+        have hsym := (symEnv_bounded ctx.contract).mono wf.base
+        unfold symEnvAfter
+        split
+        · intro nv m
+          rcases List.mem_cons.mp m with rfl | m
+          · exact wf.reg 0 (by decide)
+          · exact hsym nv m
+        · exact hsym
+      have henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' (symEnvAfter ctx.contract s) =
+          ctx.contract.envAfter s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+        intro ρ' a
+        have hsym := semEnv_symEnv ctx s0 ρ' (fun r hr => by rw [← a r (Nat.lt_of_lt_of_le hr wf.base)]; exact H.entry r hr)
+        have hrax : ev ρ' (s.reg 0) = (st.reg 0 : Int) := by rw [← ev_agree (wf.reg 0 (by decide)) a]; exact (H.reg 0 (by decide)).symm
+        cases hres : ctx.contract.result with
+        | none => simp only [symEnvAfter, Contract.envAfter, hres]; exact hsym
+        | some name =>
+          simp only [symEnvAfter, Contract.envAfter, hres]
+          show (name, semv ctx s0 ρ' (.lin (s.reg 0))) :: semEnv ctx s0 ρ' (symEnv ctx.contract) = _
+          rw [hsym]
+          simp only [semv, hrax]
+          simp [setReg, RSP]
+      obtain ⟨ρE, cE, hens⟩ := symEnsures_sound E en H wf henvB henv rfl
       have hsp' : s.sp = some 0 := by simpa using hsp
       have hcs' : ∀ r ∈ calleeSaved, s.reg r = Lin.var r := by simpa using hcs
       have e := ev_isConst (ρ := ρ) hsp'
@@ -204,7 +224,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hrsp : st.reg RSP = s0.reg RSP := by omega
       have hstack := E.stack
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, fun e m => by rw [hens] at m; cases m⟩
+      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens⟩
       · intro x hx1 hx2
         simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
         left; right; omega
@@ -230,7 +250,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       · intro e he
         simp only [he] at h
         obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
-        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 H wf ((symEnv_bounded ctx.contract).mono wf.base)
+        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 cE.holds cE.wf ((symEnv_bounded ctx.contract).mono cE.wf.base)
         rw [semEnv_symEnv ctx s0 ρ1 c1.holds.entry] at sem
         show Value ctx.defs (ctx.contract.env s0) e (.int ((if 0 = RSP then (st.reg RSP + 8) % M64 else st.reg 0 : Nat)))
         rw [if_neg (by decide)]
@@ -511,7 +531,7 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with (m | m) | m
+    rcases m with ((m | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, _, rfl⟩ := List.mem_map.mp hl
       have := E.small r
@@ -528,12 +548,16 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       have := (E.region hm).1
       unfold M64 at this
       rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
+    · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
+      have := (E.out hm).1
+      unfold M64 at this
+      rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
   · intro v r o m; cases m
   · intro f m; cases m
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with (m | m) | m
+    rcases m with ((m | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
       have hr := List.mem_range.mp hr
@@ -548,6 +572,8 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     · obtain ⟨⟨b, l⟩, hm, rfl⟩ := List.mem_map.mp m
       have := regions_lt hm
       exact bounded_sub (bounded_sub (bounded_const _ _) (bounded_var this.1)) (bounded_var this.2)
+    · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
+      exact bounded_sub (bounded_const _ _) (bounded_var (outs_lt hm))
   · intro v r o m; cases m
   · intro f m; cases m
 

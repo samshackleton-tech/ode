@@ -35,7 +35,7 @@ if [ -n "$lake" ]; then
     else lean=broken; echo "proof-core/lake build | 0 s | FAILED" >> "$out"; fi
 fi
 if [ "$lean" != broken ]; then
-    for t in test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py \
+    for t in test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py test_varint.py \
              test_adler.py test_blocks.py test_blocks4.py; do
         ( [ "$lean" = built ] && export ODE_LEAN_BUILT=1; one proof-core "$t" "" ) &
     done

@@ -119,6 +119,46 @@ theorem entail_sound {facts : List Row} {g : Row} {items : List Item} {r : Unit 
     (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g :=
   entailAs_sound (what := "entail") h ρ hf
 
+theorem isBelow_sound {facts : List Row} {a b : Row} {items : List Item} {t : Bool} {rest : List Item}
+    (h : isBelow facts a b items = .ok (t, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
+    t = decide (ev ρ a < ev ρ b) := by
+  cases hk : Lin.isConst (Lin.sub a b) with
+  | some k =>
+    simp only [isBelow, hk] at h
+    have e := ev_isConst (ρ := ρ) hk
+    simp only [ev_sub] at e
+    have := V.pure_ok h
+    injection this with hc _
+    subst hc
+    by_cases h1 : k < 0 <;> simp [h1] <;> omega
+  | none =>
+    simp only [isBelow, hk] at h
+    obtain ⟨item, rest1, _, h2⟩ := V.bind_ok h
+    split at h2
+    next name n =>
+      split at h2
+      next =>
+        obtain ⟨_, r1, e1, h3⟩ := V.bind_ok h2
+        have := V.pure_ok h3
+        injection this with hc _
+        subst hc
+        have g1 := entail_sound e1 ρ hf
+        simp only [ev_sub, ev_const] at g1
+        simp; omega
+      next =>
+        split at h2
+        next =>
+          obtain ⟨_, r1, e1, h3⟩ := V.bind_ok h2
+          have := V.pure_ok h3
+          injection this with hc _
+          subst hc
+          have g1 := entail_sound e1 ρ hf
+          simp only [ev_sub] at g1
+          simp; omega
+        next => exact (refuse_ok h2).elim
+    next => exact (refuse_ok h2).elim
+    next => exact (need_ok h2).elim
+
 theorem compare_sound {facts : List Row} {a b : Row} {items : List Item} {c : Cmp} {rest : List Item}
     (h : compare facts a b items = .ok (c, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
     (c = .lt → ev ρ a < ev ρ b) ∧ (c = .eq → ev ρ a = ev ρ b) ∧ (c = .gt → ev ρ b < ev ρ a) := by

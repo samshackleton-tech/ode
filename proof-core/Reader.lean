@@ -12,6 +12,7 @@ partial def toSExpr : Sexp → Option SExpr
   | .list [.atom "ifx", c, a, b] => do some (.ifx (← toSExpr c) (← toSExpr a) (← toSExpr b))
   | .list [.atom "index", a, i] => do some (.index (← toSExpr a) (← toSExpr i))
   | .list (.atom "call" :: .atom f :: args) => do some (.call f ((← args.mapM toSExpr).foldr .cons .nil))
+  | .list (.atom "list" :: items) => do some (.list ((← items.mapM toSExpr).foldr .cons .nil))
   | _ => none
 
 def readSExpr (text : String) : Except String SExpr :=
@@ -37,7 +38,7 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
-def statementKinds : List String := ["fn", "i", "arg", "returns", "stack", "def"]
+def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "stack", "def"]
 
 def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
   -- a line of the statement is of the function last named there; a line of the proof, of the one its `for` names
@@ -73,9 +74,21 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     onLast fun g => { g with code := g.code ++ [(a, ⟨row.effect, bind, b⟩)] }
   | ["arg", name, "number"] => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .number)] } }
   | ["arg", name, "bytes", len] => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .bytes len)] } }
+  | ["arg", name, "out", n] => match n.toNat? with
+    | some n => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .out n)] } }
+    | none => throw s!"cannot read {line}"
   | "returns" :: _ => do
     let e ← readSExpr (rest line 1)
     onLast fun g => { g with contract := { g.contract with returns := some e } }
+  | ["result", name] => onLast fun g => { g with contract := { g.contract with result := some name } }
+  | "ensures" :: run :: _ =>
+    match parseSexp (rest line 2) with
+    | some [lo, hi, value] =>
+      match toSExpr lo, toSExpr hi, toSExpr value with
+      | some lo, some hi, some value =>
+        onLast fun g => { g with contract := { g.contract with ensures := g.contract.ensures ++ [⟨run, lo, hi, value⟩] } }
+      | _, _, _ => throw s!"cannot read {line}"
+    | _ => throw s!"cannot read {line}"
   | ["stack", n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with stack := n } }
     | none => throw s!"cannot read {line}"

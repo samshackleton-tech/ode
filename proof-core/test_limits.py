@@ -24,7 +24,8 @@ import built, lean_verify, statement
 PROGRAMS = os.path.join(HERE, "..", "kcheck", "programs")
 # (the folder of ../kcheck/programs, the object, the specification, the function)
 SHOWN = [("common", "odecommon.o", "common.spec", "ode_common"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32"),
-         ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks4")]
+         ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks4"),
+         ("varint", "odevarint.o", "varint.spec", "ode_varint")]
 SIZE = 100_000          # bytes of a proof
 TIMES = float(os.environ.get("ODE_LIMIT_TIMES", "5"))          # the Lean verifier's time over kcheck's (to see the test fail: ODE_LIMIT_TIMES=1)
 SMALL = 0.015           # seconds: under this a program's start is most of the time
