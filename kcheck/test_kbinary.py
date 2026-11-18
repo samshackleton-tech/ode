@@ -12,8 +12,8 @@ import os, shutil, struct, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "reference", "blake3-servil"))
 sys.path.insert(0, HERE)
-import check_binary, kcheck, kdecode, klink
-from test_kcheck import assemble
+import check_binary, kdecode, klink, kterms
+from test_kdecode import assemble
 
 QUICK = ["blake3_servil_compress_in_place_sse41", "blake3_servil_compress_in_place_avx512", "b3l_node_out", "blake3_servil_avx512_p16"]
 LOAD, DYNAMIC = 1, 2
@@ -37,7 +37,7 @@ def shared(blob, flags=5, at=0x1040, off=0x40, longer=0, more=()):
 def verdict(file, symbol):
     try: check_binary.check(file, symbol); return "accepted"
     except kdecode.Stop as e: return f"stopped: {e}"
-    except kcheck.Fail as e: return f"refused: {e}"
+    except kterms.Fail as e: return f"refused: {e}"
 
 
 class Binary(unittest.TestCase):
@@ -169,7 +169,7 @@ class Binary(unittest.TestCase):
             try:
                 spec = ode.with_proof(text, lemmas); kbyte.prove_lemmas(spec)
                 return "shown" if kbyte.ends(spec) == (["children", "subtree"], []) else f"not all: {kbyte.ends(spec)}"
-            except (kcheck.Fail, ode.Err) as err: return f"refused: {err}"
+            except (kterms.Fail, ode.Err) as err: return f"refused: {err}"
         self.assertEqual(verdict(text, lemmas), "shown")
         self.assertEqual(kbyte.ends(ode.Spec(text)), (["children", "subtree"], ["children", "subtree"]))          # without the lemmas: not said
         for old, new in (("decreases 2 * len(bytes)\n", "decreases len(bytes)\n"),                 # children stands between: one for it

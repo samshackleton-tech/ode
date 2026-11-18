@@ -9,6 +9,9 @@ Lean folders (`../lang/*.lean`, `../one/`, `../spec/`), `kcheck_cross.py` and `e
 Since November 18, 2026 Ode has one layer, a function's instructions: where this record speaks of
 `glue/*.S`, of a compiler that prints functions (`Lang.lean`), of `check_all.py` or `kglue.py`, or of a
 decoder written by hand, it speaks of what was (this repository's history has them to commit `d1b06be`).
+The first trial's machine, `kcheck.py`, which ran a kernel to its end for a fixed number of blocks, went the
+same day with `kremove.py`, their tests and their audit outputs (history has them to commit `5c067b8`); no
+verification of a shipped file had loaded them since November 17.
 
 **To verify a shipped binary yourself: `VERIFY.md`** (one page) and `python3 verify.py FILE`, which prints
 the contract you are asked to rely on, the verification, and the files that ran to reach it.

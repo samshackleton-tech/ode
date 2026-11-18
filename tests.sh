@@ -15,7 +15,7 @@ one() {     # DIRECTORY FILE [CLASS]
     last=$(cd "$here/$1" && python3 "$2" $3 2>&1 | tail -n 4 | tr '\n' ' ')
     echo "$1/$2 $3| $(( $(date +%s) - s )) s | $last" >> "$out"
 }
-for t in test_ode.py test_kcheck.py test_kone.py test_kloop.py test_varith.py test_varith2.py \
+for t in test_ode.py test_kdecode.py test_kone.py test_kloop.py test_varith.py test_varith2.py \
          test_kbinary.py test_lemma_audit.py test_kguess.py test_kplace.py test_kfn.py test_kends.py \
          test_refute.py test_kholes.py test_made.py programs/test_files.py programs/test_specs.py programs/test_decimal.py; do
     one kcheck "$t" "" &

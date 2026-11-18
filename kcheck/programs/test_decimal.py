@@ -4,7 +4,7 @@ bytes shown to meet its contract with no proof text; changed copies refused."""
 import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
-import kbyte, kcheck, kends, klin, ode
+import kbyte, kends, klin, ode
 import test_kbyte as T
 
 

@@ -8,8 +8,8 @@ import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "reference", "blake3-servil"))
 sys.path.insert(0, HERE)
-import kcheck, kfn
-from test_kcheck import assemble
+import kfn, kterms
+from test_kdecode import assemble
 
 SYMBOL = {"avx512": "blake3_servil_compress_in_place_avx512", "sse41": "blake3_servil_compress_in_place_sse41"}
 
@@ -69,7 +69,7 @@ class Kone(unittest.TestCase):
             hits = [k for k, r in enumerate(rows) if r[2] == old]
             self.assertGreater(len(hits), which, f"{name}: no instruction `{old}` number {which}")
             rows[hits[which]] = (rows[hits[which]][0], rows[hits[which]][1], new)
-            with self.assertRaises(kcheck.Fail, msg=f"{name}: {what}"):
+            with self.assertRaises(kterms.Fail, msg=f"{name}: {what}"):
                 kone.check(rows, name)
 
     def test_a_changed_contract_refuses_the_true_kernel(self):
@@ -87,7 +87,7 @@ class Kone(unittest.TestCase):
                                    ("sse41", "flags: low word", "flags: low byte")):
                 self.assertEqual(text.count(head[name]), 1)
                 kspec.SPEC = ode.Spec(text.replace(head[name], head[name].replace(old, new)))
-                with self.assertRaises(kcheck.Fail, msg=f"{name}: {new}"):
+                with self.assertRaises(kterms.Fail, msg=f"{name}: {new}"):
                     kone.check(self.rows[name], name)
         finally:
             kspec.SPEC = true
@@ -104,7 +104,7 @@ class Kone(unittest.TestCase):
                                    ("sse41", "ensures h = compress(h, m, t, length, flags)\n    stack 0\n    needs sse41\n", "ensures h = compress(h, m, t, length, flags)\n    stack 0\n")):
                 self.assertEqual(text.count(old), 1, old)
                 kspec.SPEC = ode.Spec(text.replace(old, new))
-                with self.assertRaises(kcheck.Fail, msg=f"{name}: {new}"):
+                with self.assertRaises(kterms.Fail, msg=f"{name}: {new}"):
                     kone.load(os.path.join(self.dir, name + ".o"), name)
         finally:
             kspec.SPEC = true
@@ -112,9 +112,9 @@ class Kone(unittest.TestCase):
 
     def test_a_kernel_does_not_meet_the_others_contract(self):
         # the SSE4.1 kernel reads all of EDX: against "the low byte of RDX" it is refused, and the other way round
-        with self.assertRaises(kcheck.Fail):
+        with self.assertRaises(kterms.Fail):
             kone.check(self.rows["sse41"], "avx512")
-        with self.assertRaises(kcheck.Fail):
+        with self.assertRaises(kterms.Fail):
             kone.check(self.rows["avx512"], "sse41")
 
 

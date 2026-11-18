@@ -15,7 +15,7 @@ Exit 1 if an accepted object does not. For functions with one loop (what kplace.
 import multiprocessing, os, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, kdecode, kplace, ode
+import kbyte, kdecode, kplace, kterms, ode
 
 
 def setup(argv):
@@ -47,7 +47,7 @@ def one(k):
     """(k, "as written" | "found" | None, the proof found)"""
     b = without(k)
     try: changed = kbyte.load(b, symbol)
-    except (kdecode.Stop, kcheck.Fail, IndexError, ValueError, KeyError, StopIteration): return k, None, None
+    except (kdecode.Stop, kterms.Fail, IndexError, ValueError, KeyError, StopIteration): return k, None, None
     if kplace.verdict(changed, spec, symbol, proof) is None: return k, "as written", None
     try: found, tries = kplace.guess(changed, spec, symbol, limit=limit)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError, AttributeError): found = None

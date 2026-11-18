@@ -22,14 +22,14 @@ and asks the verifier of each proof made of these, the plainest first."""
 import itertools, os, re, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, kdecode, kguess, ode
+import kbyte, kdecode, kguess, kterms, ode
 
 KEPT = ["rbx", "rbp", "r12", "r13", "r14", "r15"]
 
 
 def verdict(rows, spec, symbol, proof):
     try: kbyte.check(rows, spec, symbol, proof); return None
-    except (kcheck.Fail, kdecode.Stop, ode.Err) as err: return str(err)
+    except (kterms.Fail, kdecode.Stop, ode.Err) as err: return str(err)
     except RecursionError: return "too deep"
 
 

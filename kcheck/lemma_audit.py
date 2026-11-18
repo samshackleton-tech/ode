@@ -37,7 +37,7 @@ the flips: every acceptance among many near misses, judged by something that is 
 import os, random, re, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, kends, klin, ode
+import kbyte, kends, klin, kterms, ode
 
 PROGRAMS = {  # name: (specification, lemmas)
     "lz4": ("programs/lz4/lz4.spec", "programs/lz4/lz4.lemmas"), "frame": ("programs/frame/frame.spec", "programs/frame/frame.lemmas"),
@@ -362,7 +362,7 @@ def said_to_end(spec, text):
     try:
         klin.Facts.PROOFS = {}
         return all(kends.ends_for(spec, s)[1] is None for s in ode.Spec(text).contracts)
-    except (kcheck.Fail, ode.Err, KeyError, IndexError, TypeError, AttributeError, RecursionError): return False
+    except (kterms.Fail, ode.Err, KeyError, IndexError, TypeError, AttributeError, RecursionError): return False
     finally: klin.Facts.PROOFS = None
 
 
@@ -379,7 +379,7 @@ def verdict(spec_text, lemma_text, limit=120):
         spec = ode.with_proof(spec_text, lemma_text)
         kbyte.prove_lemmas(spec)
         return "shown", spec
-    except (kcheck.Fail, ode.Err) as err: return "refused", str(err)
+    except (kterms.Fail, ode.Err) as err: return "refused", str(err)
     except RecursionError: return "refused", "too deep"
 
 

@@ -67,7 +67,7 @@ Inside `kcheck/`, by what a file is relied on for:
 | provers (relied on for nothing) | `kprove.py`, `kguess.py`, `kplace.py`, `kwide.py` |
 | makers | `hash.ode` and `programs/NAME/*.ode` (the sources), `kernels.py`, `klink.py`, `make_hash.sh`, `programs/kpack.py`, `proofs/` |
 | testers and audits | `refute.py` (looks for an input that breaks a contract), `gate.py`, `test_*.py`, `audit.sh` and the `k*_flip.py` tools, `lemma_audit.py`, `kadversary.py`, `kfile_flip.py`, `audit/` (the last whole audit's output), `backdoor.o` (a wrong binary that must be refused), `varith2.c` (a second verifier of arithmetic proofs) |
-| earlier pieces, loaded by no verification | `kcheck.py`, `kremove.py`, `lift_one.py` |
+| a disassembler's reading, for a test of the decoder | `lift_one.py` |
 
 Inside `core/`:
 

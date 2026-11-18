@@ -14,7 +14,7 @@ verifier, and the exit status is 1. (The judge is the whole hash: a change that 
 goes is not seen by it.)"""
 import multiprocessing, os, signal, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kcheck, kdecode, kfn, kspec
+import kdecode, kfn, kspec, kterms
 
 LIMIT = int(os.environ.get("LIMIT", "120"))        # seconds a change may take; beyond it: NO VERDICT
 
@@ -34,7 +34,7 @@ def verdict(obj, name):
     try:
         kspec.fits(obj, "b3l_" + name)
         kfn.find(rows, name)
-    except kcheck.Fail as e: return "refused", str(e)
+    except kterms.Fail as e: return "refused", str(e)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError, AttributeError) as e: return "refused", f"the verifier cannot run it ({type(e).__name__}: {e})"
     return "ACCEPTED", ""
 

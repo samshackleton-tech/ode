@@ -5,7 +5,7 @@ the impossible is shown (of nothing) and must not make the line say what is not 
 import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, kends, klin, ode
+import kbyte, kends, klin, kterms, ode
 
 
 def read(*path):
@@ -19,7 +19,7 @@ def ask(spec_text, lemmas, symbol):
         klin.Facts.PROOFS = None
         spec = ode.with_proof(spec_text, lemmas) if lemmas else ode.Spec(spec_text)
         try: kbyte.prove_lemmas(spec)
-        except (kcheck.Fail, ode.Err): return "lemmas refused"
+        except (kterms.Fail, ode.Err): return "lemmas refused"
         klin.Facts.PROOFS = {}
         again, why = kends.ends_for(spec, symbol)
         return "ends" if why is None else why

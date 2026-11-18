@@ -10,7 +10,7 @@ change the verifier accepts and the processor tells from that is the verifier's 
 or a change without a verdict."""
 import multiprocessing, os, signal, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kbyte, kcheck, kdecode, ode
+import kbyte, kdecode, kterms, ode
 
 LIMIT = int(os.environ.get("LIMIT", "300"))
 
@@ -25,10 +25,10 @@ def time_up(*_): raise TimeUp()
 def verdict(obj, spec_text, symbol, proof):
     try: rows = kbyte.load(obj, symbol)
     except kdecode.Stop as e: return "stopped", str(e)
-    except kcheck.Fail as e: return "refused", str(e)
+    except kterms.Fail as e: return "refused", str(e)
     except (IndexError, ValueError, KeyError, StopIteration) as e: return "stopped", f"the decoder ran off the bytes ({type(e).__name__})"
     try: kbyte.check(rows, ode.Spec(spec_text), symbol, proof)
-    except (kcheck.Fail, ode.Err) as e: return "refused", str(e)
+    except (kterms.Fail, ode.Err) as e: return "refused", str(e)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError, AttributeError) as e: return "refused", f"the verifier cannot run it ({type(e).__name__}: {e})"
     return "ACCEPTED", ""
 

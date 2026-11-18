@@ -6,8 +6,8 @@ specification, contract, proof or instruction does not (but for instructions tha
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
-import kbyte, kcheck, kdecode, ode, odec
-from test_kcheck import assemble
+import kbyte, kdecode, kterms, ode, odec
+from test_kdecode import assemble
 
 
 def text(*path):
@@ -25,7 +25,7 @@ class Program:
         shutil.rmtree(self.dir)
     def verdict(self, spec=None, proof=None, rows=None):
         try: kbyte.check(rows or self.rows, ode.Spec(spec or self.spec), self.symbol, self.proof if proof is None else proof); return "accepted"
-        except (kcheck.Fail, ode.Err) as e: return f"refused: {e}"
+        except (kterms.Fail, ode.Err) as e: return f"refused: {e}"
     def changed(self, test, what, changes):
         whole = self.spec if what == "spec" else self.proof
         for old, new in changes:
@@ -444,7 +444,7 @@ class Lemmas(unittest.TestCase):
         spec = text("lz4", "lz4.spec")
         def shown(lemma):
             try: kbyte.prove_lemmas(ode.with_proof(spec, lemma)); return True
-            except (kcheck.Fail, ode.Err): return False
+            except (kterms.Fail, ode.Err): return False
         head = "lemma counted(bytes: bytes, at: number, sum: number): "
         self.assertTrue(shown(head + "record(value, next) { }\n"))
         self.assertTrue(shown(head + "record(next, value) { }\n"))

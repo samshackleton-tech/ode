@@ -5,7 +5,7 @@ what was found. And where its few shapes do not reach, it says so."""
 import os, re, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, kguess, kplace, ode
+import kbyte, kguess, kplace, kterms, ode
 import test_kbyte as T
 
 
@@ -22,7 +22,7 @@ def from_nothing(folder, name):
 class Places(unittest.TestCase):
     def shown(self, rows, spec, symbol, proof):
         try: kbyte.check(rows, spec, symbol, proof); return True
-        except (kcheck.Fail, ode.Err): return False
+        except (kterms.Fail, ode.Err): return False
 
     def test_adler32(self):
         lemmas, proof, rows, spec, symbol = from_nothing("adler32", "adler32")
@@ -52,7 +52,7 @@ class Places(unittest.TestCase):
         written by hand names registers and is refused; the prover finds the proof of this build. (In Lean a
         proof was of one build's bytes, and another build undid it.)"""
         import shutil, tempfile
-        from test_kcheck import assemble
+        from test_kdecode import assemble
         for folder, name, swap in (("common", "common", ("r13", "r14")), ("adler32", "adler32", ("r12", "r13")), ("utf8", "utf8", ("r12", "r13"))):
             p = T.Program(folder, name, "ode_" + name)
             src = T.odec.assembly(T.odec.source_of(os.path.join(T.HERE, "programs", folder), name), name)

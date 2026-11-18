@@ -25,7 +25,7 @@ and for the definitions the ring uses that work on words, a lemma of kind `any` 
 import itertools, os, re, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import kbyte, kcheck, ode
+import kbyte, kterms, ode
 
 
 def walk(x, f):
@@ -127,7 +127,7 @@ def shown(spec_text, lemmas):
     try:
         spec = ode.with_proof(spec_text, lemmas); kbyte.prove_lemmas(spec)
         return spec
-    except (kcheck.Fail, ode.Err, RecursionError): return None
+    except (kterms.Fail, ode.Err, RecursionError): return None
 
 
 def split_lemmas(text):

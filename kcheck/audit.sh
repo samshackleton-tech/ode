@@ -8,7 +8,7 @@
 # for (or, for a kernel, that the verifier accepts) is linked with BLAKE3 written out in C and run on the
 # processor on inputs the contract allows. The outputs go to audit/*.txt; the last lines here are one a
 # function. Exit 1 if any accepted change is told from BLAKE3 by the processor, or any change has no verdict.
-# Run it after any change of kdecode.py, kfn.py, kbyte.py, kspec.py, kterms.py, kcheck.py,
+# Run it after any change of kdecode.py, kfn.py, kbyte.py, kspec.py, kterms.py,
 # ode.py, klin.py, blake3.spec, proofs/inner.spec or a program's specification or proof: an unverified
 # verifier is worth what its audits are worth.
 # (The functions of hash.ode are judged by the whole hash: each accepted change of one of them is linked with
@@ -33,9 +33,7 @@ if [ "$only" = all ]; then
 for k in p16 k32 p32; do
     obj="$work/hash/k32.o"; [ $k = p16 ] && obj="$work/hash/p16.o"
     # every number of blocks, as kfn.py verifies the kernel, with kwide.py's prover as the adversary
-    run "kflip-general-$k.txt" python3 kflip.py $k "$obj" --jobs "$jobs" --native 1000 --refused-sample 400 --detail --general
-    # (kcheck.py's machine, a fixed number of blocks: what no verification of a shipped file loads any more)
-    run "kflip-$k.txt" python3 kflip.py $k "$obj" --jobs "$jobs" --native 1000 --refused-sample 400 --detail
+    run "kflip-general-$k.txt" python3 kflip.py $k "$obj" --jobs "$jobs" --native 1000 --refused-sample 400 --detail
 done
 for f in avx512 sse41; do run "kone-flip-$f.txt" python3 kone_flip.py $f "$work/one" --jobs "$jobs" --native 20000; done
 fi

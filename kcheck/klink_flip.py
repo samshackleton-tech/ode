@@ -12,7 +12,7 @@ hash: exit 1 if any differs)."""
 import os, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import check_binary, kcheck, kdecode, klink
+import check_binary, kdecode, klink, kterms
 
 
 class Recording(kdecode.Settled):
@@ -48,7 +48,7 @@ def main():
                 try:
                     check_binary.check(bytes(b), symbol); verdict = "ACCEPTED"; accepted.append((symbol, kind, field, bit, bytes(b)))
                 except kdecode.Stop: verdict = "stopped"
-                except kcheck.Fail: verdict = "refused"
+                except kterms.Fail: verdict = "refused"
                 here[verdict] += 1; count[verdict] += 1
         print(f"  {symbol:<42} {len(found):>3} fields  {32 * len(found):>5} changes  {here['stopped']:>5} stopped by the decoder  {here['refused']:>5} refused  {here['ACCEPTED']:>3} accepted")
     print(f"{sum(count.values())} changes: {count['stopped']} stopped by the decoder, {count['refused']} refused, {count['ACCEPTED']} accepted")

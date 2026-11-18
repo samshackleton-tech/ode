@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """kflip: every single-bit change of a kernel's code, given to the decoder and the verifier.
 
-    python3 kflip.py k32|p32|p16|o16 OBJECT [--jobs N] [--every K] [--native CASES] [--refused-sample N] [--detail] [--general]
+    python3 kflip.py k32|p32|p16 OBJECT [--jobs N] [--every K] [--native CASES] [--refused-sample N] [--detail]
 
---general (k32, p32, p16): the kernel for every number of blocks and every flag byte, as kfn.py verifies it
-(since November 17, 2026; before, kloop.py). "Accepted" is then: kwide.py's prover finds a proof of the changed
-kernel and kfn.py's verifier takes it; and the processor runs the changed kernel on 1 to 20 blocks with any
-flag bytes. (Without --general: kcheck.py's machine, for a fixed number of blocks: no verification of a
-shipped file loads that any more.)
+The kernel is taken for every number of blocks and every flag byte, as kfn.py verifies it (since November
+17, 2026; before, kloop.py). "Accepted" is: kwide.py's prover finds a proof of the changed kernel and
+kfn.py's verifier takes it; and the processor runs the changed kernel on 1 to 20 blocks with any flag bytes.
+(Until November 18, 2026 there was a second way, for a fixed number of blocks, by a machine of its own,
+kcheck.py. No verification of a shipped file loaded it, and it is gone. `--general` named the way that is
+left; it is still taken, and says nothing.)
 
-An audit of kdecode.py and kcheck.py together. Each bit of the kernel's code in the object is flipped in turn
+An audit of kdecode.py and kfn.py together. Each bit of the kernel's code in the object is flipped in turn
 (--every K: each K-th bit), and the changed object is read and checked as the true one is. Three outcomes:
 
   stopped   the decoder does not know the bytes (it knows only the forms the kernels use)
@@ -37,28 +38,26 @@ than its inputs hold it faults (the pages around each input); a refused change o
 BLAKE3."""
 import faulthandler, multiprocessing, os, signal, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kcheck, kdecode
+import kdecode, kterms
 
 BASE, DATA = 0x10000, 0x50000000
-
-
-GENERAL = "--general" in sys.argv        # every block count and every flag byte: kwide.py's prover and kfn.py's verifier, and the processor run to match
+# a kernel: the symbol its code starts at, and the symbol it is entered at (the 32-lane kernel has two ways in)
+KERNELS = {"k32": ("blake3_servil_avx512_k32", "blake3_servil_avx512_k32"), "p32": ("blake3_servil_avx512_k32", "blake3_servil_avx512_p32"),
+           "p16": ("blake3_servil_avx512_p16", "blake3_servil_avx512_p16")}
 
 
 def verdict(obj, name):
     try:
-        rows, data = kdecode.read(obj, kcheck.KERNELS[name]["start"], BASE, DATA)
-        entry = BASE + kdecode.address(obj, kcheck.KERNELS[name]["symbol"]) - kdecode.address(obj, kcheck.KERNELS[name]["start"])
+        start, symbol = KERNELS[name]
+        rows, data = kdecode.read(obj, start, BASE, DATA)
+        entry = BASE + kdecode.address(obj, symbol) - kdecode.address(obj, start)
     except kdecode.Stop as e: return "stopped", str(e)
     except (IndexError, ValueError, KeyError, StopIteration) as e: return "stopped", f"the decoder ran off the bytes ({type(e).__name__})"
     try:
-        import kspec
-        kspec.fits(obj, kcheck.KERNELS[name]["start"], kcheck.KERNELS[name]["symbol"])
-        if GENERAL:
-            import kwide
-            kwide.find(rows, data, kcheck.KERNELS[name]["symbol"], entry)         # accepted: a proof is found, and the verifier takes it
-        else: kcheck.check(rows, DATA, data, name, entry)
-    except kcheck.Fail as e: return "refused", str(e)
+        import kspec, kwide
+        kspec.fits(obj, start, symbol)
+        kwide.find(rows, data, symbol, entry)         # accepted: a proof is found, and the verifier takes it
+    except kterms.Fail as e: return "refused", str(e)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError) as e: return "refused", f"the verifier cannot run it ({type(e).__name__}: {e})"
     return "ACCEPTED", ""
 
@@ -101,7 +100,7 @@ def native(job):
     """The changed object on this processor: "same", "DIFFERS: ...", "CRASHES: ..." or "not linked"."""
     name, obj, bit, folder, cases = job
     b = bytearray(obj)
-    extra = ["over"] if bit == "over" else ["any"] if GENERAL else []
+    extra = ["over"] if bit == "over" else ["any"]          # any: 1 to 20 blocks, any flag bytes
     if bit not in (None, "over"): b[bit // 8] ^= 1 << (bit % 8)
     o, exe = f"{folder}/m{bit}.o", f"{folder}/m{bit}"
     with open(o, "wb") as f: f.write(b)
@@ -129,8 +128,8 @@ def main():
     if v[0] != "ACCEPTED": return 1
     e = kdecode.Elf(obj)
     sec = e.sections[e.index[".text"]]
-    start = kdecode.address(obj, kcheck.KERNELS[name]["start"])
-    rows, _ = kdecode.read(obj, kcheck.KERNELS[name]["start"], BASE, DATA)
+    start = kdecode.address(obj, KERNELS[name][0])
+    rows, _ = kdecode.read(obj, KERNELS[name][0], BASE, DATA)
     size = rows[-1][1] - BASE
     relocs = e.relocations(".text")
     first = (sec["off"] + start) * 8
@@ -153,7 +152,7 @@ def main():
             unexplained[row[2]] = unexplained.get(row[2], 0) + 1
             if "--detail" in sys.argv:
                 b = bytearray(obj); b[bit // 8] ^= 1 << (bit % 8)
-                rows2, _ = kdecode.read(bytes(b), kcheck.KERNELS[name]["start"], BASE, DATA)
+                rows2, _ = kdecode.read(bytes(b), KERNELS[name][0], BASE, DATA)
                 new = next((x[2] for x in rows2 if x[0] == row[0]), "?")
                 detail.append(f"  0x{row[0]:X} `{raw.hex()}` byte {at - (row[0] - BASE)} bit {bit % 8}: {row[2]}  ->  {new}" + ("" if len(rows2) == len(rows) else f"  ({len(rows2)} instructions, were {len(rows)})"))
     n = len(results)
@@ -166,7 +165,7 @@ def main():
         subprocess.run([cc, "-O1", "-c", "-o", f"{folder}/h.o", f"{here}/kflip_native.c"], check=True)
         subprocess.run([cc, "-c", "-o", f"{folder}/t.o", f"{here}/kflip_thunk.S"], check=True)
         print(f"control: the unchanged object on this processor, {cases} cases: {native((name, obj, None, folder, cases))[1]}")
-        # (a change refused for what the kernel leaves: kcheck.py's words for it, or kfn.py's and kwide.py's)
+        # (a change refused for what the kernel leaves: kfn.py's words for it, and kwide.py's)
         rot = next((bit for bit, (v, why) in results if v == "refused" and any(said in why for said in ("chaining value is not the specification's", "at the return is not what the contract says", "at the place is not what the proof says"))), None)
         print(f"control: the unchanged object given inputs shorter than it reads (a block too few, or a block a byte short), on this processor: {native((name, obj, 'over', folder, 20))[1]}")
         print(f"control: a change the verifier refused ({dict(results)[rot][1] if rot is not None else 'for what the kernel leaves'}), on this processor: {native((name, obj, rot, folder, 20))[1] if rot is not None else 'NONE FOUND'}")

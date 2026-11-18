@@ -12,7 +12,7 @@ blocks: an accepted change the processor tells from BLAKE3's compression is an e
 verifier, and the exit status is 1."""
 import multiprocessing, os, signal, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kcheck, kdecode, kfn, kspec
+import kdecode, kfn, kspec, kterms
 
 ONE = {"avx512": "blake3_servil_compress_in_place_avx512", "sse41": "blake3_servil_compress_in_place_sse41"}
 
@@ -37,7 +37,7 @@ def verdict(obj, name):
     try:
         kspec.fits(obj, symbol(name))
         kfn.check(rows, None, symbol=symbol(name))
-    except kcheck.Fail as e: return "refused", str(e)
+    except kterms.Fail as e: return "refused", str(e)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError) as e: return "refused", f"the verifier cannot run it ({type(e).__name__}: {e})"
     return "ACCEPTED", ""
 

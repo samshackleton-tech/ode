@@ -61,8 +61,8 @@ first page of verify.py, and the check said "NOT verified" of it while exiting 0
 import os, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "programs")); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
-import check_programs, kbyte, kcheck, kdecode, kfn, kspec, ode, odec
-from test_kcheck import assemble
+import check_programs, kbyte, kdecode, kfn, kspec, kterms, ode, odec
+from test_kdecode import assemble
 
 KERNEL = "blake3_servil_compress_in_place_avx512"
 FIRST = "  vmovdqu xmm0, xmmword ptr [rdi]\n"            # the kernel's first instruction (wide/one.ode)
@@ -107,13 +107,13 @@ class Stack(unittest.TestCase):
     def test_counting_down_says_only_whether_the_number_is_zero(self):
         at = "  dec al\n  jz @done\n"
         self.assertEqual(self.source.count(at), 2)             # (the source has two kernels: the first is the one tried here)
-        with self.assertRaises(kcheck.Fail) as refused: self.kernel(self.source.replace(at, "  dec al\n  jb @done\n  jz @done\n", 1))
+        with self.assertRaises(kterms.Fail) as refused: self.kernel(self.source.replace(at, "  dec al\n  jb @done\n  jz @done\n", 1))
         self.assertIn("say only whether a number is zero", str(refused.exception))
 
     def test_no_way_out_of_the_frame(self):
         for what, added, why in WAYS:
             with self.subTest(what):
-                with self.assertRaises((kcheck.Fail, kdecode.Stop)) as refused: self.kernel(self.source.replace(FIRST, added + FIRST))
+                with self.assertRaises((kterms.Fail, kdecode.Stop)) as refused: self.kernel(self.source.replace(FIRST, added + FIRST))
                 self.assertIn(why, str(refused.exception))
 
     def common(self, text, place):
@@ -128,7 +128,7 @@ class Stack(unittest.TestCase):
         at = "_ode_common:\n    push rbx\n"
         self.assertEqual(text.count(at), 1)
         self.common(text, "+0x34")                                          # as shipped
-        with self.assertRaises(kcheck.Fail) as refused:
+        with self.assertRaises(kterms.Fail) as refused:
             self.common(text.replace(at, "_ode_common:\n    mov rax, rsp\n    mov rsp, rdi\n    push rbx\n    mov rsp, rax\n    push rbx\n"), "+0x3e")
         self.assertIn("leaves the function's own frame", str(refused.exception))
 
@@ -158,7 +158,7 @@ class Calls(unittest.TestCase):
 
     def test_nothing_is_remembered_of_the_stack_below_the_stack_pointer(self):
         call = "    mov rcx, r15\n    call CALL(ode_lz4_decode)\n"
-        with self.assertRaises(kcheck.Fail) as refused:
+        with self.assertRaises(kterms.Fail) as refused:
             self.unframe(self.changed(call, "    mov rcx, r15\n    push r15\n    pop r11\n    call CALL(ode_lz4_decode)\n    sub rsp, 8\n    pop r15\n"))
         self.assertIn("nothing was written there", str(refused.exception))
 
@@ -167,7 +167,7 @@ class Calls(unittest.TestCase):
         evil = "    mov byte ptr [rbx - 1], 65\n.Lskip:\n    mov qword ptr [rsp + 0], rax\n"         # a byte written below `out`
         for asked in ("    cmp rcx, 0\n    jne .Lskip\n    cmp rdx, 0\n    je .Lskip\n",            # where rcx is zero and rdx is not
                       "    cmp rcx, 0\n    jne .Lskip\n"):                                         # (where rcx is zero: this one was always refused)
-            with self.assertRaises(kcheck.Fail) as refused: self.unframe(self.changed(after, "    call CALL(ode_lz4_decode)\n" + asked + evil))
+            with self.assertRaises(kterms.Fail) as refused: self.unframe(self.changed(after, "    call CALL(ode_lz4_decode)\n" + asked + evil))
             self.assertIn("a write at out + -1", str(refused.exception))
 
 
@@ -310,7 +310,7 @@ contract demo(n: number) {
         try:
             kfn.check(rows, "demo", symbol="demo")
             self.fail("the shape-changing sequence was named by its first value")
-        except kcheck.Fail as refused:
+        except kterms.Fail as refused:
             self.assertIn("stay of one shape", str(refused))
         finally:
             import kspec as k, kfn as f
@@ -382,7 +382,7 @@ contract b3l_caller(h: cv) {
                 (B + 21, B + 22, ".ret"),
             ]
             with self.subTest(bad_lea):
-                with self.assertRaisesRegex(kcheck.Fail, why):
+                with self.assertRaisesRegex(kterms.Fail, why):
                     kfn.check(caller, None, symbol="b3l_caller")
 
     def test_a_written_layouts_unmentioned_fields_are_not_assumed_on_entry(self):
@@ -406,7 +406,7 @@ contract b3l_edit(p: partial_rec) {
             (B + 18, B + 22, ".mov 64 (.mem .rdi 0x8) (.reg .rax)"),
             (B + 22, B + 23, ".ret"),
         ]
-        with self.assertRaisesRegex(kcheck.Fail, "nothing has been written there"):
+        with self.assertRaisesRegex(kterms.Fail, "nothing has been written there"):
             kfn.check(edit, None, symbol="b3l_edit")
 
     def test_writes_without_ensures_leaves_no_invariant_for_the_caller(self):
@@ -441,7 +441,7 @@ contract b3l_caller(out: 1 bytes) {
             (B + 44, B + 45, ".pop .rbx"),
             (B + 45, B + 46, ".ret"),
         ]
-        with self.assertRaisesRegex(kcheck.Fail, "nothing was written there"):
+        with self.assertRaisesRegex(kterms.Fail, "nothing was written there"):
             kfn.check(caller, None, symbol="b3l_caller")
 
     def test_a_proof_in_kbyte_cannot_name_stack_cells_outside_the_frame(self):
@@ -452,9 +452,9 @@ contract b3l_caller(out: 1 bytes) {
                 (B + 2, B + 9, ".mov 64 (.reg .rcx) (.mem .rsp 0x10000000)"),
                 (B + 9, B + 11, ".xor 32 (.reg .rax) (.reg .rax)"),
                 (B + 11, B + 12, ".ret")]
-        with self.assertRaisesRegex(kcheck.Fail, "outside the function's own frame"):
+        with self.assertRaisesRegex(kterms.Fail, "outside the function's own frame"):
             kbyte.check(rows, spec, "f", "place +0x2 {\n any stack[268435456], rcx\n}\n")
-        with self.assertRaisesRegex(kcheck.Fail, "outside the function's own frame"):
+        with self.assertRaisesRegex(kterms.Fail, "outside the function's own frame"):
             kbyte.check(rows, spec, "f", "place +0x2 {\n any stack[0], rcx\n}\n")
 
 

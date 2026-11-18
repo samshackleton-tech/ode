@@ -10,8 +10,8 @@ by kdecode.py and checked by kbyte.py against the contract in programs/NAME/NAME
 import os, shutil, sys, tempfile, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE)); sys.path.insert(0, os.path.join(os.path.dirname(HERE), "..", "lang"))
-import kbyte, kcheck, kdecode, kends, ode, odec
-from test_kcheck import assemble
+import kbyte, kdecode, kends, kterms, ode, odec
+from test_kdecode import assemble
 
 PROGRAMS = [("adler32", "adler32", "Adler-32 of any bytes"),
             ("adler32", "adler32_blocks", "the same, the sums brought below 65521 once in 5552 bytes"),
@@ -55,8 +55,8 @@ def composed(folder, program, function, parts, made=True):
         tally = kbyte.check(rows, spec, symbol, read(where, name + ".proof"))
         out.append((symbol, len(rows), time.time() - t0, tally["calls"]))
         for called in tally["calls"]:
-            if symbol != "ode_" + function: raise kcheck.Fail(f"{symbol} calls {called}: a function that is called and calls another is not this driver's yet")
-            if called not in parts: raise kcheck.Fail(f"{symbol} calls {called}, which is no part of this program")
+            if symbol != "ode_" + function: raise kterms.Fail(f"{symbol} calls {called}: a function that is called and calls another is not this driver's yet")
+            if called not in parts: raise kterms.Fail(f"{symbol} calls {called}, which is no part of this program")
             todo.append((called,) + parts[called])
     return out
 
@@ -76,9 +76,9 @@ def main():
                 tally = kbyte.check(rows, ode.with_proof(spec_text, lemmas(program)) if lemmas(program) else ode.Spec(spec_text), "ode_" + function, proof)
                 total += len(rows)
                 again, why = kends.ends_for(ode.with_proof(spec_text, lemmas(program)) if lemmas(program) else ode.Spec(spec_text), "ode_" + function)
-                if why: raise kcheck.Fail(f"the definitions its contract speaks through are not shown to come to an end: {why}")
+                if why: raise kterms.Fail(f"the definitions its contract speaks through are not shown to come to an end: {why}")
                 print(f"  ode_{function:<12} {len(rows):>4} instructions  proof {lines(proof):>3} lines, {proof.count('place +')} places  {1000 * (time.time() - t0):7.1f} ms  meets its contract: {what}")
-            except (kcheck.Fail, kdecode.Stop, ode.Err) as e:
+            except (kterms.Fail, kdecode.Stop, ode.Err) as e:
                 failed += 1; print(f"  ode_{function}: NOT shown: {e}")
         for program, function, what, parts in COMPOSED:
             try:
@@ -86,7 +86,7 @@ def main():
                 total += done[0][1]
                 print(f"  ode_{function:<12} {done[0][1]:>4} instructions  {len(done[0][3])} functions called by their contracts  {1000 * done[0][2]:7.1f} ms  meets its contract: {what}")
                 for symbol, n, secs, _ in done[1:]: print(f"      {symbol}: its {n} instructions meet the contract the caller used ({1000 * secs:.0f} ms)")
-            except (kcheck.Fail, kdecode.Stop, ode.Err) as e:
+            except (kterms.Fail, kdecode.Stop, ode.Err) as e:
                 failed += 1; print(f"  ode_{function}: NOT shown: {e}")
     finally:
         if made: shutil.rmtree(folder)

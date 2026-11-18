@@ -9,8 +9,8 @@ import json, os, shutil, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
-import kcheck, kfn, kspec, ode, odec
-from test_kcheck import assemble
+import kfn, kspec, kterms, ode, odec
+from test_kdecode import assemble
 
 NAMES = ["pad", "chunk_node", "node_out", "wide32", "wide128", "take", "part32", "subtree", "hashr"]
 FLIP = {".jae": ".jb", ".jb": ".jae", ".je": ".jne", ".jne": ".je"}
@@ -106,7 +106,7 @@ class Kfn(unittest.TestCase):
                     branches += 1
                     if name == "wide128" and branches > 4: continue
                 rows = list(self.rows[name]); rows[k] = (a, nxt, new)
-                with self.assertRaises(kcheck.Fail, msg=f"{name}: {ins} -> {new}"):
+                with self.assertRaises(kterms.Fail, msg=f"{name}: {ins} -> {new}"):
                     kfn.check(rows, name)
 
     def test_a_changed_contract_or_specification_is_refused(self):
@@ -115,15 +115,15 @@ class Kfn(unittest.TestCase):
         try:
             for name, old, new in TEXT:
                 self.assertEqual(text.count(old), 1, old)
-                with self.assertRaises(kcheck.Fail, msg=f"{name}: {new}"):          # (a text the reader of specifications refuses is refused there)
+                with self.assertRaises(kterms.Fail, msg=f"{name}: {new}"):          # (a text the reader of specifications refuses is refused there)
                     kspec.SPEC = ode.Spec(text.replace(old, new)); kfn.CONTRACTS.clear()
                     kfn.check(self.rows[name], name)
         finally:
             kspec.SPEC = true; kfn.CONTRACTS.clear()
 
     def test_a_function_is_not_another(self):
-        with self.assertRaises(kcheck.Fail): kfn.check(self.rows["subtree"], "hashr")
-        with self.assertRaises(kcheck.Fail): kfn.check(self.rows["hashr"], "subtree")
+        with self.assertRaises(kterms.Fail): kfn.check(self.rows["subtree"], "hashr")
+        with self.assertRaises(kterms.Fail): kfn.check(self.rows["hashr"], "subtree")
 
 
 if __name__ == "__main__":

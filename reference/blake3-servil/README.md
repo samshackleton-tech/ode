@@ -5,9 +5,9 @@ no verification loads any of it.
 
 | file | from | used by |
 |---|---|---|
-| `c/blake3_avx512_32.S` | BLAKE3-Servil's 32-lane and 16-lane AVX-512 kernels | `wide/test_*.py`: the kernels written in Ode (`wide/k32.ode`, `wide/p16.ode`) assemble to the same bytes |
+| `c/blake3_avx512_32.S` | BLAKE3-Servil's 32-lane and 16-lane AVX-512 kernels | `wide/test_*.py`: the kernels written in Ode (`wide/k32.ode`, `wide/p16.ode`) assemble to the same bytes; `kcheck/test_kloop.py` and `kcheck/test_kdecode.py` read and verify the library's own |
 | `c/blake3_avx512_x86-64_unix.S`, `c/blake3_sse41_x86-64_unix.S` | its one-block kernels | the same, for `wide/one.ode` |
-| `c/blake3_output16.S` | a kernel with no Ode source yet | tests and audits of the earlier machine (`kcheck/test_kcheck.py`, `kcheck/audit.sh`) |
+| `c/blake3_output16.S` | a kernel with no Ode source yet | nothing now; it is what `output16` written in Ode is to be compared with |
 | `test_vectors/test_vectors.json` | the official BLAKE3 test vectors | `kcheck/test_ode.py`: the specification `kcheck/blake3.spec`, evaluated, gives all 105 |
 
 Taken unchanged from `samshackleton-tech/BLAKE3` at commit `dca7275f6c4817b7ebe0a985fd7024b6f7aea17f`.

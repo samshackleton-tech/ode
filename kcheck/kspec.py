@@ -1,7 +1,7 @@
 """kspec: the specification (blake3.spec) read on symbols, for the verifiers.
 
 ode.py evaluates the specification's text over an algebra of words. Numbers (ode.Numbers) gives the test
-vectors. Symbols, here, gives the verifiers their terms: a word is a term of the verifier's table (kcheck.Terms);
+vectors. Symbols, here, gives the verifiers their terms: a word is a term of the verifier's table (kterms.Terms);
 a number may depend on counts (klin.Lin), and a comparison of such numbers is decided from the path's facts or
 the evaluation stops. There is no other specification: every verifier takes what it compares code with from
 the one text.
