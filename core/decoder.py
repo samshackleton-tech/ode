@@ -68,6 +68,8 @@ def main():
         if wrong:
             bad += 1
             if bad <= 12: print(f"DIFFERS {row.name}: `{ins}` is read as `{decoded}`: {wrong}")
+    if "--why" in a:
+        for name, n in sorted(stopped.items()): print(f"stops at {n} of {name}, e.g. {why[name]}")
     never = [f"{r.name} (e.g. {why[r.name]})" for r in rows if not read.get(r.name)]
     print(f"decoder: {len(rows)} rows, {len(todo)} instances assembled; the decoder reads {sum(read.values())} of them, {bad} otherwise than as their row"
           + f"; it stops at {sum(stopped.values())} (encodings it does not know)" + (f"; NO INSTANCE READ of: {'; '.join(never)}" if never else ""))

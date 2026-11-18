@@ -12,6 +12,36 @@
 #         `= unknown` says nothing of that part of the state: the verifier may not rely on it afterwards,
 #         and the comparison with a processor leaves it out. Everything else a row leaves as it was.
 #
+# Under a row, the ways its instances are written in bytes, one a line:
+#
+#         = ENCODING ; OPERANDS
+#
+# ENCODING is in the processor manuals' notation: bytes in hex, in order. `66`, `F3` first: a prefix the
+#         instruction needs. `REX.W`: a REX prefix with W set (64-bit operands); without it a REX prefix is
+#         written only where a register numbered 8 or more needs one. `0F`, `0F 38`, `0F 3A`: the opcode map.
+#         `50+r`: a register's low three bits are added to the opcode. `/r`: a ModRM byte follows; `/4`: one
+#         whose middle field is 4. `ib` `id`: one, four bytes of a number, as it is; `sb` `sd`: one, four
+#         bytes of a number that is taken sign-extended to 64 bits; `cb`: one byte, a count or a choice (as
+#         `ib`: the decoded row writes it in decimal). `rel8` `rel32`: how far a jump goes from the
+#         instruction's end. `VEX.128.66.0F.W0`, `EVEX.512.66.0F38.W0`: a VEX or EVEX prefix: the vector's
+#         width, the prefix it stands for (none, 66, F3), the map, the W bit. `d8*64`: a one-byte
+#         displacement counts in units of 64 bytes (EVEX). A line of bytes alone is written just so.
+# OPERANDS says where the row's placeholders are: `reg=` the ModRM byte's middle field, `rm=` its last field
+#         as a register (`rm8=`: a register's low byte; for rsp, rbp, rsi, rdi a REX prefix is written to say so),
+#         `mem=B+N` or `mem=B+S+N` its last field as memory at base + displacement (+ index, times one),
+#         `vvvv=` the VEX or EVEX prefix's register, `k=` the EVEX prefix's mask register (k1 to k7),
+#         `r=` the register added to the opcode, `imm=` the number (`imm=I<64`: below 64; `imm=1`: it is 1),
+#         `rel=` where a jump goes. `X,Y`: both are that field. `D=rax`, `I=1`: the placeholder is that, and
+#         is not written. A small letter is a placeholder the row does not name (a prefetch's address).
+#         What stands in the file's read-only data, or is named by the file's relocations, is written as four
+#         bytes after the ModRM byte (RIP-relative) or the opcode: `data=I` the place in the data, `data4=`
+#         four words there (on a 16-byte boundary), `data1=` one word, `data16=` sixteen as one number;
+#         `call=I` the function called.
+# An instance is written in ONE way by each line (encode.py): the shortest displacement that holds it, a SIB
+# byte only where rsp or r12 is the base or there is an index, the two-byte VEX prefix where it can be, no bit
+# set that the line does not name. The reader of code takes bytes for an instance only if this writes those
+# very bytes for it (decode.py): so nothing is read that is not written here.
+#
 # In ASM and ROW: D, S, B are general registers (D64 its 64-bit name, D32, D8); P is one that is not the
 # stack pointer; X, Y, Z are vector register numbers; I, J, K, L are numbers; N a displacement.
 # In EFFECT: D, S, B, P are those registers' 64 bits; X, Y, Z the low 128 bits of the vector registers as
@@ -20,107 +50,257 @@
 
 # -- 64-bit arithmetic
 add64_rr     | add D64, S64            | .add 64 (.reg .D) (.reg .S)   | D = add64(D, S); zf = unknown; cf = unknown
+             = REX.W 01 /r ; rm=D reg=S
 add64_ri     | add D64, I              | .add 64 (.reg .D) (.imm I)    | D = add64(D, I); zf = unknown; cf = unknown
+             = REX.W 83 /0 sb ; rm=D imm=I
+             = REX.W 81 /0 sd ; rm=D imm=I
+             = REX.W 05 sd ; D=rax imm=I
 add64_rm     | add D64, [B64 + N]      | .add 64 (.reg .D) (.mem .B N) | D = add64(D, mem64(B, N)); zf = unknown; cf = unknown
+             = REX.W 03 /r ; reg=D mem=B+N
 sub64_rr     | sub D64, S64            | .sub 64 (.reg .D) (.reg .S)   | D = sub64(D, S); zf = unknown; cf = unknown
+             = REX.W 29 /r ; rm=D reg=S
 sub64_ri     | sub D64, I              | .sub 64 (.reg .D) (.imm I)    | D = sub64(D, I); zf = unknown; cf = unknown
+             = REX.W 83 /5 sb ; rm=D imm=I
+             = REX.W 81 /5 sd ; rm=D imm=I
+             = REX.W 2D sd ; D=rax imm=I
 sub64_rm     | sub D64, [B64 + N]      | .sub 64 (.reg .D) (.mem .B N) | D = sub64(D, mem64(B, N)); zf = unknown; cf = unknown
+             = REX.W 2B /r ; reg=D mem=B+N
 and64_rr     | and D64, S64            | .and 64 (.reg .D) (.reg .S)   | D = and64(D, S); zf = unknown; cf = unknown
+             = REX.W 21 /r ; rm=D reg=S
 and64_ri     | and D64, I              | .and 64 (.reg .D) (.imm I)    | D = and64(D, I); zf = unknown; cf = unknown
+             = REX.W 83 /4 sb ; rm=D imm=I
+             = REX.W 81 /4 sd ; rm=D imm=I
+             = REX.W 25 sd ; D=rax imm=I
 and64_rm     | and D64, [B64 + N]      | .and 64 (.reg .D) (.mem .B N) | D = and64(D, mem64(B, N)); zf = unknown; cf = unknown
+             = REX.W 23 /r ; reg=D mem=B+N
 or64_rr      | or D64, S64             | .or 64 (.reg .D) (.reg .S)    | D = or64(D, S); zf = unknown; cf = unknown
+             = REX.W 09 /r ; rm=D reg=S
 or64_ri      | or D64, I               | .or 64 (.reg .D) (.imm I)     | D = or64(D, I); zf = unknown; cf = unknown
+             = REX.W 83 /1 sb ; rm=D imm=I
+             = REX.W 81 /1 sd ; rm=D imm=I
+             = REX.W 0D sd ; D=rax imm=I
 or64_rm      | or D64, [B64 + N]       | .or 64 (.reg .D) (.mem .B N)  | D = or64(D, mem64(B, N)); zf = unknown; cf = unknown
+             = REX.W 0B /r ; reg=D mem=B+N
 xor64_same   | xor D64, D64            | .xor 64 (.reg .D) (.reg .D)   | D = 0; zf = unknown; cf = unknown
+             = REX.W 31 /r ; rm=D reg=D
 shl64_ri     | shl D64, I              | .shl64 .D I                   | D = shl64(D, I); zf = unknown; cf = unknown
+             = REX.W C1 /4 cb ; rm=D imm=I<64
+             = REX.W D1 /4 ; rm=D I=1
 shr64_ri     | shr D64, I              | .shr64 .D I                   | D = shr64(D, I); zf = unknown; cf = unknown
+             = REX.W C1 /5 cb ; rm=D imm=I<64
+             = REX.W D1 /5 ; rm=D I=1
 dec64        | dec D64                 | .dec64 .D                     | D = sub64(D, 1); zf = equal(D, 0); cf = unknown
+             = REX.W FF /1 ; rm=D
 cmp64_rr     | cmp D64, S64            | .cmp 64 (.reg .D) (.reg .S)   | zf = equal(D, S); cf = below(D, S)
+             = REX.W 39 /r ; rm=D reg=S
 cmp64_ri     | cmp D64, I              | .cmp 64 (.reg .D) (.imm I)    | zf = equal(D, I); cf = below(D, I)
+             = REX.W 83 /7 sb ; rm=D imm=I
+             = REX.W 81 /7 sd ; rm=D imm=I
+             = REX.W 3D sd ; D=rax imm=I
 cmp64_rm     | cmp D64, [B64 + N]      | .cmp 64 (.reg .D) (.mem .B N) | zf = equal(D, mem64(B, N)); cf = below(D, mem64(B, N))
+             = REX.W 3B /r ; reg=D mem=B+N
 test64_same  | test D64, D64           | .test 64 (.reg .D) (.reg .D)  | zf = equal(D, 0); cf = unknown
+             = REX.W 85 /r ; rm=D reg=D
 
 # -- 64-bit moves and addresses
 mov64_rr     | mov D64, S64            | .mov 64 (.reg .D) (.reg .S)   | D = S
+             = REX.W 89 /r ; rm=D reg=S
 mov64_ri     | mov D64, I              | .mov 64 (.reg .D) (.imm I)    | D = I
+             = REX.W C7 /0 sd ; rm=D imm=I
 mov64_rm     | mov D64, [B64 + N]      | .mov 64 (.reg .D) (.mem .B N) | D = mem64(B, N)
+             = REX.W 8B /r ; reg=D mem=B+N
 mov64_mr     | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B, N) = S
+             = REX.W 89 /r ; reg=S mem=B+N
 lea          | lea D64, [B64 + N]      | .lea .D .B N                  | D = at(B, N)
+             = REX.W 8D /r ; reg=D mem=B+N
 lea_data     | -                       | .lea_data .D I                | D = data(I)
+             = REX.W 8D /r ; reg=D data=I
 
 # -- 32 bits: the result is in the register's low 32 bits, zeros above
 mov32_rr     | mov D32, S32            | .mov 32 (.reg .D) (.reg .S)   | D = low32(S)
+             = 89 /r ; rm=D reg=S
 mov32_ri     | mov D32, I              | .mov 32 (.reg .D) (.imm I)    | D = low32(I)
+             = B8+r id ; r=D imm=I
 mov32_rm     | mov D32, [B64 + N]      | .mov 32 (.reg .D) (.mem .B N) | D = low32(mem32(B, N))
+             = 8B /r ; reg=D mem=B+N
 or32_rr      | or D32, S32             | .or 32 (.reg .D) (.reg .S)    | D = or64(low32(D), low32(S)); zf = unknown; cf = unknown
+             = 09 /r ; rm=D reg=S
 and32_ri     | and D32, I              | .and 32 (.reg .D) (.imm I)    | D = and64(low32(D), low32(I)); zf = unknown; cf = unknown
+             = 83 /4 sb ; rm=D imm=I
+             = 81 /4 id ; rm=D imm=I
+             = 25 id ; D=rax imm=I
 xor32_same   | xor D32, D32            | .xor 32 (.reg .D) (.reg .D)   | D = 0; zf = unknown; cf = unknown
+             = 31 /r ; rm=D reg=D
 shr32_ri     | shr D32, I              | .shr32 .D I                   | D = shr64(low32(D), I); zf = unknown; cf = unknown
+             = C1 /5 cb ; rm=D imm=I<32
+             = D1 /5 ; rm=D I=1
 dec32        | dec D32                 | .dec32 .D                     | D = low32(sub64(low32(D), 1)); zf = equal(D, 0); cf = unknown
+             = FF /1 ; rm=D
 test32_same  | test D32, D32           | .test 32 (.reg .D) (.reg .D)  | zf = equal(low32(D), 0); cf = unknown
+             = 85 /r ; rm=D reg=D
 
 # -- bytes
 movzx8_rm    | movzx D32, byte ptr [B64 + N] | .movzx8 .D (.mem .B N)  | D = mem8(B, N)
+             = 0F B6 /r ; reg=D mem=B+N
 movzx8_rr    | movzx D32, S8           | .movzx8 .D (.reg .S)          | D = low8(S)
+             = 0F B6 /r ; reg=D rm8=S
 mov8_al_i    | mov al, I               | .mov 8 (.reg .rax) (.imm I)   | rax = setlow8(rax, I)
+             = B0 ib ; imm=I
 mov8_m_al    | mov byte ptr [B64 + N], al | .mov 8 (.mem .B N) (.reg .rax) | mem8(B, N) = low8(rax)
+             = 88 /0 ; mem=B+N
 mov8_mi      | mov byte ptr [B64 + N], I | .mov 8 (.mem .B N) (.imm I) | mem8(B, N) = I
+             = C6 /0 ib ; mem=B+N imm=I
 dec8_al      | dec al                  | .decb .rax                    | rax = setlow8(rax, sub8(low8(rax), 1)); zf = equal(low8(rax), 0); cf = unknown
+             = FE /1 ; rm=rax
 
 # -- the stack, calls, jumps
 push         | push P64                | .push .P                      | rsp = sub64(rsp, 8); mem64(rsp, 0) = P
+             = 50+r ; r=P
 pop          | pop P64                 | .pop .P                       | P = mem64(rsp, 0); rsp = add64(rsp, 8)
+             = 58+r ; r=P
 call         | -                       | .call I                       | call I
+             = E8 rel32 ; call=I
 ret          | -                       | .ret                          | return
+             = C3
 jmp          | jmp I                   | .jmp I                        | jump I
+             = EB rel8 ; rel=I
+             = E9 rel32 ; rel=I
 je           | je I                    | .je I                         | jump I if zf
+             = 74 rel8 ; rel=I
+             = 0F 84 rel32 ; rel=I
 jne          | jne I                   | .jne I                        | jump I if not zf
+             = 75 rel8 ; rel=I
+             = 0F 85 rel32 ; rel=I
 jae          | jae I                   | .jae I                        | jump I if not cf
+             = 73 rel8 ; rel=I
+             = 0F 83 rel32 ; rel=I
 jb           | jb I                    | .jb I                         | jump I if cf
+             = 72 rel8 ; rel=I
+             = 0F 82 rel32 ; rel=I
 nop          | nop                     | .nop                          | nothing
+             = 90
+             = 66 90
+             = 0F 1F 00
+             = 0F 1F 40 00
+             = 0F 1F 44 00 00
+             = 66 0F 1F 44 00 00
+             = 0F 1F 80 00 00 00 00
+             = 0F 1F 84 00 00 00 00 00
+             = 66 0F 1F 84 00 00 00 00 00
+             = 66 2E 0F 1F 84 00 00 00 00 00
+             = 66 66 2E 0F 1F 84 00 00 00 00 00
+             = 66 66 66 2E 0F 1F 84 00 00 00 00 00
+             = 66 66 66 66 2E 0F 1F 84 00 00 00 00 00
+             = 66 66 66 66 66 2E 0F 1F 84 00 00 00 00 00
+             = 66 66 66 66 66 66 2E 0F 1F 84 00 00 00 00 00
+             = F3 0F 1E FA
+             = 0F 18 /1 ; mem=b+n
+             = 0F 18 /1 ; mem=b+s+n
 
 # -- 128-bit vectors of four 32-bit lanes (the four written without a `v` are the older encodings, the only ones of them the decoder reads)
 loadu128     | vmovdqu xmmX, [B64 + N] | .xloadu X .B N                | X = mem128(B, N)
+             = 0F 10 /r ; reg=X mem=B+N
+             = VEX.128.0F.W0 10 /r ; reg=X mem=B+N
+             = VEX.128.F3.0F.W0 6F /r ; reg=X mem=B+N
 storeu128    | vmovdqu [B64 + N], xmmX | .xstoreu .B N X               | mem128(B, N) = X
+             = 0F 11 /r ; reg=X mem=B+N
+             = VEX.128.0F.W0 11 /r ; reg=X mem=B+N
+             = VEX.128.F3.0F.W0 7F /r ; reg=X mem=B+N
 const128     | vmovaps xmmX, xmmword ptr [rip + DATA4] | .xconst X I J K L | X = words(I, J, K, L)
+             = 0F 28 /r ; reg=X data4=I,J,K,L
+             = VEX.128.0F.W0 28 /r ; reg=X data4=I,J,K,L
 mov128       | vmovdqa xmmX, xmmY      | .xmov X Y                     | X = Y
+             = 0F 28 /r ; reg=X rm=Y
+             = 66 0F 6F /r ; reg=X rm=Y
+             = VEX.128.0F.W0 28 /r ; reg=X rm=Y
+             = VEX.128.66.0F.W0 6F /r ; reg=X rm=Y
+             = VEX.128.66.0F.W0 7F /r ; rm=X reg=Y
 movq128      | vmovq xmmX, S64         | .xmovq X .S                   | X = lanes_of64(S)
+             = 66 REX.W 0F 6E /r ; reg=X rm=S
+             = VEX.128.66.0F.W1 6E /r ; reg=X rm=S
 paddd128     | vpaddd xmmX, xmmY, xmmZ | .xpaddd X Y Z                 | X = each32(add32, Y, Z)
+             = 66 0F FE /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 FE /r ; reg=X vvvv=Y rm=Z
 pxor128      | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = each32(xor32, Y, Z)
+             = 66 0F EF /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 EF /r ; reg=X vvvv=Y rm=Z
+             = EVEX.128.66.0F.W0 EF /r ; reg=X vvvv=Y rm=Z
 prord128     | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
+             = EVEX.128.66.0F.W0 72 /0 cb ; vvvv=X rm=Y imm=I
 pslld128     | pslld xmmX, I           | .xpslld X X I                 | X = each32(shl32, X, I)
+             = 66 0F 72 /6 cb ; rm=X imm=I
 psrld128     | psrld xmmX, I           | .xpsrld X X I                 | X = each32(shr32, X, I)
+             = 66 0F 72 /2 cb ; rm=X imm=I
 por128       | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
+             = 66 0F EB /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 EB /r ; reg=X vvvv=Y rm=Z
 pshufb128    | pshufb xmmX, xmmZ       | .xpshufb X X Z                | X = shuffle_bytes(X, Z)
+             = 66 0F 38 00 /r ; reg=X rm=Z
 pshufd128    | vpshufd xmmX, xmmY, I   | .xpshufd X Y I                | X = pick4(Y, Y, I)
+             = 66 0F 70 /r cb ; reg=X rm=Y imm=I
+             = VEX.128.66.0F.W0 70 /r cb ; reg=X rm=Y imm=I
 shufps128    | vshufps xmmX, xmmY, xmmZ, I | .xshufps X Y Z I          | X = pick4(Y, Z, I)
+             = 0F C6 /r cb ; reg=X,Y rm=Z imm=I
+             = VEX.128.0F.W0 C6 /r cb ; reg=X vvvv=Y rm=Z imm=I
 unpckldq     | vpunpckldq xmmX, xmmY, xmmZ | .xpunpckldq X Y Z         | X = lanes(Y.0, Z.0, Y.1, Z.1)
+             = 66 0F 62 /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 62 /r ; reg=X vvvv=Y rm=Z
 unpckhdq     | vpunpckhdq xmmX, xmmY, xmmZ | .xpunpckhdq X Y Z         | X = lanes(Y.2, Z.2, Y.3, Z.3)
+             = 66 0F 6A /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 6A /r ; reg=X vvvv=Y rm=Z
 unpcklqdq    | vpunpcklqdq xmmX, xmmY, xmmZ | .xpunpcklqdq X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
+             = 66 0F 6C /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 6C /r ; reg=X vvvv=Y rm=Z
 pblendd128   | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = blend4(Y, Z, I)
+             = VEX.128.66.0F3A.W0 02 /r cb ; reg=X vvvv=Y rm=Z imm=I
 pblendw128   | pblendw xmmX, xmmZ, I   | .xpblendw X X Z I             | X = blend_halves(X, Z, I)
+             = 66 0F 3A 0E /r cb ; reg=X rm=Z imm=I
 vzeroupper   | vzeroupper              | .vzeroupper                   | above128 = unknown
+             = VEX.128.0F.W0 77
 
 # -- 512-bit vectors of sixteen 32-bit lanes (X512: the whole of vector register X; M: a mask register's sixteen bits)
 broadcast_r  | vpbroadcastd zmmX, S32  | .zbroadcast X (.reg .S)       | X512 = spread16(lane32(low32(S)))
+             = EVEX.512.66.0F38.W0 7C /r ; reg=X rm=S
 broadcast_i  | vpbroadcastd zmmX, dword ptr [rip + DATA1] | .zbroadcast X (.imm I) | X512 = spread16(lane32(low32(I)))
+             = EVEX.512.66.0F38.W0 58 /r ; reg=X data1=I
 broadcast_m  | vpbroadcastd zmmX, dword ptr [B64 + N] | .zbroadcast X (.mem .B N) | X512 = spread16(lane32(mem32(B, N)))
+             = EVEX.512.66.0F38.W0 58 /r d8*4 ; reg=X mem=B+N
 mov512       | vmovdqa32 zmmX, zmmY    | .zmov X Y                     | X512 = Y512
+             = EVEX.512.66.0F.W0 6F /r ; reg=X rm=Y
+             = EVEX.512.F3.0F.W0 6F /r ; reg=X rm=Y
 load512a     | vmovdqa32 zmmX, [B64 + N] | .zload true X .B N          | X512 = mem512a(B, N)
+             = EVEX.512.66.0F.W0 6F /r d8*64 ; reg=X mem=B+N
 load512      | vmovdqu32 zmmX, [B64 + N] | .zload false X .B N         | X512 = mem512(B, N)
+             = EVEX.512.F3.0F.W0 6F /r d8*64 ; reg=X mem=B+N
 load512i     | vmovdqu32 zmmX, [B64 + S64 + N] | .zloadi X .B .S N     | X512 = mem512(B, N, S)
+             = EVEX.512.F3.0F.W0 6F /r d8*64 ; reg=X mem=B+S+N
 store512a    | vmovdqa32 [B64 + N], zmmX | .zstore true .B N X         | mem512a(B, N) = X512
+             = EVEX.512.66.0F.W0 7F /r d8*64 ; reg=X mem=B+N
 store512     | vmovdqu32 [B64 + N], zmmX | .zstore false .B N X        | mem512(B, N) = X512
+             = EVEX.512.F3.0F.W0 7F /r d8*64 ; reg=X mem=B+N
 paddd512m    | vpaddd zmmX, zmmY, [B64 + S64 + N] | .zpadddm X Y .B .S N | X512 = each32(add32, Y512, mem512(B, N, S))
+             = EVEX.512.66.0F.W0 FE /r d8*64 ; reg=X vvvv=Y mem=B+S+N
 paddd512c    | vpaddd zmmX, zmmY, zmmword ptr [rip + DATA16] | .zpadddc X Y K | X512 = each32(add32, Y512, words16(K))
+             = EVEX.512.66.0F.W0 FE /r ; reg=X vvvv=Y data16=K
 pcmpud512    | vpcmpud kM, zmmX, zmmY, 1 | .zpcmpud M X Y 1            | M = each32(ult32, X512, Y512)
+             = EVEX.512.66.0F3A.W0 1E /r cb ; reg=M vvvv=X rm=Y imm=1
 paddd512k    | vpaddd zmmX{kM}, zmmY, zmmZ | .zpaddd_k X M Y Z         | X512 = choose16(M, each32(add32, Y512, Z512), X512)
+             = EVEX.512.66.0F.W0 FE /r ; reg=X k=M vvvv=Y rm=Z
 paddd512     | vpaddd zmmX, zmmY, zmmZ | .zpaddd X Y Z                 | X512 = each32(add32, Y512, Z512)
+             = EVEX.512.66.0F.W0 FE /r ; reg=X vvvv=Y rm=Z
 pxord512_same | vpxord zmmX, zmmY, zmmY | .zpxord X Y Y                | X512 = zeros16()
+             = EVEX.512.66.0F.W0 EF /r ; reg=X vvvv=Y rm=Y
 pxord512     | vpxord zmmX, zmmY, zmmZ | .zpxord X Y Z                 | X512 = each32(xor32, Y512, Z512)
+             = EVEX.512.66.0F.W0 EF /r ; reg=X vvvv=Y rm=Z
 prord512     | vprord zmmX, zmmY, I    | .zprord X Y I                 | X512 = each32(ror32, Y512, I)
+             = EVEX.512.66.0F.W0 72 /0 cb ; vvvv=X rm=Y imm=I
 unpckldq512  | vpunpckldq zmmX, zmmY, zmmZ | .zunpckldq X Y Z          | X512 = in_quarters(Y512, Z512, 0, 4, 1, 5)
+             = EVEX.512.66.0F.W0 62 /r ; reg=X vvvv=Y rm=Z
 unpckhdq512  | vpunpckhdq zmmX, zmmY, zmmZ | .zunpckhdq X Y Z          | X512 = in_quarters(Y512, Z512, 2, 6, 3, 7)
+             = EVEX.512.66.0F.W0 6A /r ; reg=X vvvv=Y rm=Z
 unpcklqdq512 | vpunpcklqdq zmmX, zmmY, zmmZ | .zunpcklqdq X Y Z        | X512 = in_quarters(Y512, Z512, 0, 1, 4, 5)
+             = EVEX.512.66.0F.W1 6C /r ; reg=X vvvv=Y rm=Z
 unpckhqdq512 | vpunpckhqdq zmmX, zmmY, zmmZ | .zunpckhqdq X Y Z        | X512 = in_quarters(Y512, Z512, 2, 3, 6, 7)
+             = EVEX.512.66.0F.W1 6D /r ; reg=X vvvv=Y rm=Z
 shufi32x4    | vshufi32x4 zmmX, zmmY, zmmZ, I | .zshufi32x4 X Y Z I    | X512 = quarters(Y512, Z512, I)
+             = EVEX.512.66.0F3A.W0 43 /r cb ; reg=X vvvv=Y rm=Z imm=I

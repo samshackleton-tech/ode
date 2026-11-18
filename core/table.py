@@ -3,9 +3,9 @@
 
     python3 table.py            lists the rows
 
-A row is NAME | ASM | ROW | EFFECT (see the head of x86.tab). `read` gives the rows; `find` the row a
-decoded instruction is an instance of, with what its placeholders are. An EFFECT is statements, run left to
-right, over primitives:
+A row is NAME | ASM | ROW | EFFECT, and under it the ways its instances are written in bytes (see the head
+of x86.tab). `read` gives the rows; `find` the row a decoded instruction is an instance of, with what its
+placeholders are. An EFFECT is statements, run left to right, over primitives:
 
     PLACE = EXPRESSION          a register, a flag (zf, cf) or bytes of memory (mem8/mem32/mem64/mem128/mem512(base, displacement[, index]))
     jump TARGET [if [not] FLAG] the next instruction is at TARGET (if the flag says so)
@@ -70,6 +70,7 @@ def unify(pattern, ins, bind):
 class Row:
     def __init__(self, name, asm, row, effect):
         self.name, self.asm, self.row, self.text = name, asm, row, effect
+        self.bytes = []                 # the ways its instances are written in bytes: the `=` lines under it (encode.py reads them)
         self.pattern = parse_row(row)
         self.effect = [statement(s) for s in effect.split(";")]
 
@@ -121,6 +122,7 @@ def read(path=os.path.join(HERE, "x86.tab")):
         for line in f:
             line = line.split("#")[0].strip()
             if not line: continue
+            if line.startswith("="): rows[-1].bytes.append(line[1:].strip()); continue
             parts = [p.strip() for p in line.split("|")]
             if len(parts) != 4: raise ValueError(f"a row that is not NAME | ASM | ROW | EFFECT: {line}")
             rows.append(Row(*parts))

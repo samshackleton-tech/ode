@@ -21,7 +21,10 @@ target is what its relocation names. A file whose addresses are settled (`settle
 relocation left for its code, a shared object, an executable): the target is where the instruction's own
 bytes say; the bytes read are those a loader maps without leave to write, whole pages of the file, and they
 are the read-only data too."""
-import struct, sys
+import os, struct, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core"))
+import decode as table_decode
 
 G = "rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15".split()
 
@@ -218,6 +221,26 @@ def linkable(e):
                     f"section {sym['shndx']}{', given twice' if sym['name'] in names else ''}), and a linker reads names by rules of its own"), {}
         names[sym["name"]] = sym["value"]
     return None, names
+
+
+def by_table(code, at, relocs, rodata, rodata_at, base, start):
+    """One instruction at `at`: (its length, its text as the table's ROW writes it), by the table of instructions
+    (../core/decode.py: bytes are read as an instance of a row only if the table writes those very bytes for it).
+    What the table leaves to the file is answered here: four bytes that stand for a place in the file's
+    read-only data, or for a function called."""
+    def late(kind, field, end):
+        if kind == "call": return (relocs.callee(code, field, end),)
+        off = relocs.data(code, field, end)
+        size = {"data": 0, "data4": 16, "data1": 4, "data16": 64}[kind]
+        if not 0 <= off <= len(rodata) - size: raise Stop("an operand that is not within the file's read-only data")
+        # MOVAPS faults where the sixteen bytes do not start on a 16-byte boundary
+        if kind == "data4" and (off % 16 or relocs.align % 16): raise Stop("sixteen bytes read as aligned from where they need not be on a 16-byte boundary")
+        if kind == "data": return (bv(off),)
+        if kind == "data4": return tuple(f"0x{int.from_bytes(rodata[off + 4 * i:off + 4 * i + 4], 'little'):X}" for i in range(4))
+        return ("0x" + "".join(f"{x:02X}" for x in reversed(rodata[off:off + size])) + ("#512" if kind == "data16" else ""),)
+    got = table_decode.decode(code, at, base + at - start, late)
+    if got is None: raise Stop(f"an instruction this verifier does not know: {bytes(code[at:at + 6]).hex()}")
+    return got
 
 
 def decode(code, at, relocs, rodata, rodata_at, base, start):
@@ -582,7 +605,7 @@ def read(obj, symbol, base, rodata_at):
     at = start
     rows = []
     while True:
-        n, ins = decode(text, at, relocs, rodata, rodata_at, base, start)
+        n, ins = by_table(text, at, relocs, rodata, rodata_at, base, start)
         if isinstance(relocs, Settled) and not relocs.runs(at, at + n): raise Stop("the code runs out of what is loaded to be run")
         rows.append((base + at - start, base + at - start + n, ins))
         at += n

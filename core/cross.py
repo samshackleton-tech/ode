@@ -5,7 +5,8 @@
     (x86-64 Linux with AVX-512; needs clang)
 
 For each row of x86.tab, N random instances (registers, numbers, displacements chosen at random) are
-assembled from the row's ASM by clang and run on the processor from random states: the sixteen general
+assembled from the row's ASM by clang, and N more for each way the table writes the row in bytes are laid
+down as the very bytes encode.py writes; all are run on the processor from random states: the sixteen general
 registers (the stack pointer among them: it points into the memory below), the flags, the thirty-two vector
 registers' 512 bits, seven mask registers, and 1024 bytes of memory that base registers and the stack
 pointer point into. What the processor leaves is compared with what the row's EFFECT says (conc.py), part
@@ -14,7 +15,7 @@ For a jump, whether it was taken. Exit 1 if any instance differs.
 
 Not run: rows whose ASM is `-` (they are named at the end)."""
 import os, random, re, struct, subprocess, sys, tempfile
-import conc, table
+import conc, encode, table
 
 G64 = "rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15".split()
 G32 = "eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d".split()
@@ -148,6 +149,36 @@ def instance(row, rng):
     return bind, text, fixed
 
 
+def written(row, way, rng, n):
+    """An instance of the row that this way writes, as the bytes the table writes for it (encode.py), for the
+    assembler to lay down as they are: (what each placeholder is, the lines, what the registers that address
+    memory must hold), or None where no instance was found that the way writes."""
+    jump = any(st[0] == "jump" for st in row.effect)
+    if row.asm == "-": return None                                                   # (a call, a return, the address of the file's data: not run)
+    for _ in range(400):
+        bind, _, fixed = instance(row, rng)
+        for h in table.VECTORS:
+            if h in bind and way.kind == "E": bind[h] = rng.randrange(32)          # (an EVEX prefix names thirty-two registers)
+        for h, v in way.fixed.items(): bind[h] = v if h in table.NUMBERS else G64[v]
+        for places in way.fields.values():                                           # one field for two placeholders: the same thing
+            for h in places[1:]: bind[h] = bind[places[0]]
+        for h in ("b", "s"):
+            if any(h in v for v in way.fields.values()): bind[h] = rng.choice([r for r in G64 if not (h == "s" and r == "rsp")])
+        if any("n" in v for v in way.fields.values()): bind["n"] = rng.choice([0, rng.randrange(-128, 128), rng.randrange(-2 ** 31, 2 ** 31)])
+        inner = {h: G64.index(v) if isinstance(v, str) else v & (0xFFFFFFFF if way.imm == "id" and h == "I" else encode.M64) for h, v in bind.items()}
+        try:
+            if jump:
+                size = len(encode.encode(way, {**inner, "I": 0}, 0))
+                code, tail = encode.encode(way, {**inner, "I": size + 5}, 0), [".byte 0xE9", ".long done - . - 4", f"mov byte ptr [rip + out_taken], 1"]
+                bind["I"] = 1                                                       # (taken: over the five bytes of a jump to the end)
+            elif way.rip: code, tail = encode.encode(way, {**inner, "field": bytes(4)}, 0)[:-4], [f".long data_{n} - . - 4"]
+            elif way.late: return None
+            else: code, tail = encode.encode(way, inner, 0), []
+        except encode.Refuse: continue
+        return bind, "\n    ".join([".byte " + ", ".join(f"0x{b:02X}" for b in code)] + tail), fixed
+    return None
+
+
 def main():
     a = sys.argv[1:]
     cases = int(a[a.index("--cases") + 1]) if "--cases" in a else 200
@@ -156,13 +187,19 @@ def main():
     os.makedirs(work, exist_ok=True)
     rows = table.read(a[a.index("--table") + 1]) if "--table" in a else table.read()
     if "--rows" in a: rows = [r for r in rows if r.name in a[a.index("--rows") + 1].split(",")]
-    left = [r.name for r in rows if r.asm == "-"]; rows = [r for r in rows if r.asm != "-"]
-    todo, bodies, datas = [], [], []
+    left = [r.name for r in rows if r.asm == "-"]
+    # each row as the assembler writes its ASM, and each of its ways as the table itself writes the bytes
+    how = [(row, None) for row in rows if row.asm != "-"] + ([] if "--asm-only" in a else [(row, encode.Way(row, text)) for row in rows for text in row.bytes])
+    todo, bodies, datas, unwritten = [], [], [], []
     with open(os.path.join(work, "cases.in"), "wb") as f:
-        for row in rows:
+        for row, way in how:
             jump = any(st[0] == "jump" for st in row.effect)
             for _ in range(cases):
-                bind, text, fixed = instance(row, rng)
+                if way is None: bind, text, fixed = instance(row, rng)
+                else:
+                    got = written(row, way, rng, len(todo))
+                    if got is None: unwritten.append(f"{row.name}: {way.text}"); break
+                    bind, text, fixed = got
                 g = {name: rng.getrandbits(64) for name in G64}
                 g.update(fixed); g["rsp"] = STACK
                 zf, cf = rng.randrange(2), rng.randrange(2)
@@ -170,12 +207,12 @@ def main():
                 k = {i: tuple(rng.randrange(2) for _ in range(16)) for i in range(1, 8)}
                 mem = bytes(rng.getrandbits(8) for _ in range(ROOM))
                 n = len(todo)
-                if jump: bind["I"] = 1; text = re.sub(r"\bI\b", f"taken_{n}", row.asm) + f"\n    jmp done\ntaken_{n}:\n    mov byte ptr [rip + out_taken], 1"
-                if "DATA" in text:                                                  # the row's numbers, as words of read-only data
-                    words = [bind[h] for h in "IJKL"] if "DATA4" in text else [bind["I"]] if re.search(r"DATA1\b", text) else [(bind["K"] >> (32 * j)) & 0xFFFFFFFF for j in range(16)]
+                if jump and way is None: bind["I"] = 1; text = re.sub(r"\bI\b", f"taken_{n}", row.asm) + f"\n    jmp done\ntaken_{n}:\n    mov byte ptr [rip + out_taken], 1"
+                if "DATA" in row.asm:                                               # the row's numbers, as words of read-only data
+                    words = [bind[h] for h in "IJKL"] if "DATA4" in row.asm else [bind["I"]] if re.search(r"DATA1\b", row.asm) else [(bind["K"] >> (32 * j)) & 0xFFFFFFFF for j in range(16)]
                     datas.append(f"    .p2align 6\ndata_{n}: .long " + ", ".join(map(str, words)))
                     text = re.sub(r"DATA\d+", f"data_{n}", text)
-                todo.append((row, bind, text, g, x, k, mem, zf, cf))
+                todo.append((row, way, bind, text, g, x, k, mem, zf, cf))
                 bodies.append(f"case_{n}:\n    {text}\n    jmp done")
                 f.write(struct.pack("<16Q", *(g[r] for r in G64)) + struct.pack("<Q", 0x202 | zf << 6 | cf) + b"".join(struct.pack("<16I", *x[i]) for i in range(32))
                         + b"\0\0" + b"".join(struct.pack("<H", sum(b << j for j, b in enumerate(k[i]))) for i in range(1, 8)) + mem)
@@ -186,7 +223,7 @@ def main():
     subprocess.run([os.path.join(work, "cross"), os.path.join(work, "cases.in"), os.path.join(work, "cases.out")], check=True)
     bad, per = 0, {}
     with open(os.path.join(work, "cases.out"), "rb") as f:
-        for row, bind, text, g, x, k, mem, zf, cf in todo:
+        for row, way, bind, text, g, x, k, mem, zf, cf in todo:
             got = f.read(OUT)
             assert len(got) == OUT, "the run wrote less than a case's results"
             gg = dict(zip(G64, struct.unpack("<16Q", got[:128])))
@@ -200,13 +237,16 @@ def main():
             wrong += ["memory"] if bytes(s.mem[SCRATCH + i] for i in range(ROOM)) != gm else []
             wrong += [n for n, v, w in (("zf", s.zf, gzf), ("cf", s.cf, gcf)) if v != table.UNKNOWN and v != w]
             wrong += ["whether it jumps"] if (s.to is not None) != bool(taken) else []
-            per.setdefault(row.name, [0, 0]); per[row.name][0] += 1
+            name = row.name if way is None else f"{row.name} = {way.text}"
+            per.setdefault(name, [0, 0]); per[name][0] += 1
             if wrong:
-                per[row.name][1] += 1; bad += 1
-                if per[row.name][1] <= 2: print(f"DIFFERS {row.name}: {text.splitlines()[0]}: {', '.join(wrong)}")
+                per[name][1] += 1; bad += 1
+                if per[name][1] <= 2: print(f"DIFFERS {name}: {text.splitlines()[0]}: {', '.join(wrong)}")
     for name, (n, b) in per.items(): print(f"{name:13} {n} instances, {b} differ")
-    print(f"cross: {len(rows)} rows, {len(todo)} instances, {bad} differ from this processor" + ("" if bad else ": every row run is what the processor does")
-          + (f"; {len(left)} rows are not run: {', '.join(left)}" if left else ""))
+    asm, ways = [n for n in per if " = " not in n], [n for n in per if " = " in n]
+    print(f"cross: {len(asm)} rows as the assembler writes them, {sum(per[n][0] for n in asm)} instances; {len(ways)} ways of {len({n.split(' = ')[0] for n in ways})} rows as the table writes "
+          f"their bytes, {sum(per[n][0] for n in ways)} instances: {bad} differ from this processor" + ("" if bad else ": every row and way run is what the processor does")
+          + (f"; {len(left)} rows' assembly is not run: {', '.join(left)}" if left else "") + (f"; ways not run: {'; '.join(unwritten)}" if unwritten else ""))
     sys.exit(1 if bad else 0)
 
 

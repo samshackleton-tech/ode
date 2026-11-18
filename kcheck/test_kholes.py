@@ -56,8 +56,8 @@ KERNEL = "blake3_servil_compress_in_place_avx512"
 FIRST = "  vmovdqu xmm0, xmmword ptr [rdi]\n"            # the kernel's first instruction (wide/one.ode)
 WAYS = [("an argument's address moved into it, a push, and back", "  mov rax, rsp\n  mov rsp, rdi\n  push rbx\n  mov rsp, rax\n", "leaves the function's own frame"),
         ("the same by lea", "  mov rax, rsp\n  lea rsp, [rdi+0]\n  push rbx\n  mov rsp, rax\n", "leaves the function's own frame"),
-        ("the same by a pop", "  mov rax, rsp\n  push rdi\n  pop rsp\n  push rbx\n  mov rsp, rax\n", "an instruction this verifier does not know: .pop .rsp"),          # (the table has no row for it)
-        ("a push of it", "  push rsp\n  pop rax\n", "an instruction this verifier does not know: .push .rsp"),
+        ("the same by a pop", "  mov rax, rsp\n  push rdi\n  pop rsp\n  push rbx\n  mov rsp, rax\n", "an instruction this verifier does not know: 5c"),          # (the table has no row for it, so no bytes are read as it)
+        ("a push of it", "  push rsp\n  pop rax\n", "an instruction this verifier does not know: 54"),
         ("above where it was at entry", "  add rsp, 8\n  sub rsp, 8\n", "leaves the function's own frame"),
         # (November 17, on taking the instructions out of the verifier: only the stack pointer's own value is rounded down to a boundary)
         ("rounded down to a 64-byte boundary from above where it was, sixty-four bytes written there, and back",
@@ -101,7 +101,7 @@ class Stack(unittest.TestCase):
     def test_no_way_out_of_the_frame(self):
         for what, added, why in WAYS:
             with self.subTest(what):
-                with self.assertRaises(kcheck.Fail) as refused: self.kernel(self.source.replace(FIRST, added + FIRST))
+                with self.assertRaises((kcheck.Fail, kdecode.Stop)) as refused: self.kernel(self.source.replace(FIRST, added + FIRST))
                 self.assertIn(why, str(refused.exception))
 
     def common(self, text, place):
