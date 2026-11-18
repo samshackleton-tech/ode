@@ -181,7 +181,9 @@ class Verify(unittest.TestCase):
         for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
                                ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
                                ("the function needs an instruction set", "    stack 40\n", "    stack 40\n    needs sse41\n"),
-                               ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n")):
+                               ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n"),
+                               ("the specification has a sequence", "def common(a, b)", "sequence steady(a) { s[0] = 1   s[i + 1] = s[i] }\n\ndef common(a, b)"),
+                               ("the specification has a constant", "def common(a, b)", "const NO = 7\n\ndef common(a, b)")):
             with self.subTest(what=what):
                 self.assertEqual(self.spec.count(old), 1)
                 with self.assertRaises(SystemExit) as e: statement.statement(self.spec.replace(old, new), [(obj, "ode_common")])

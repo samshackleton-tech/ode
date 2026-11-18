@@ -93,6 +93,10 @@ def statement(spec_text, functions):
     its contract, a function after those it calls; then the definitions."""
     out = []
     spec = ode.Spec(spec_text)
+    # Nothing of the specification is left out without a word: what the account in Lean has no meaning for is refused.
+    for what, there in (("a sequence", spec.seqs), ("a constant", spec.consts), ("a layout", spec.layouts), ("a machine", spec.machines),
+                        ("a lemma", spec.lemmas), ("a kind", spec.kinds)):
+        if there: raise SystemExit(f"statement: the specification has {what} ({', '.join(map(str, list(there)[:3]))}), which the verifier in Lean does not read yet")
     for obj, symbol in ordered(functions):
         out.append(f"fn {symbol}")
         rows, _ = kdecode.read(obj, symbol, 0, 0)

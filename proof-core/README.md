@@ -115,7 +115,8 @@ the language, and the verifier asks for that to be shown wherever it meets one.
 `statement.py` refuses a contract with any other line, so that none is dropped: `requires`, `ensures`,
 `writes`, `needs`, `calls`; and a contract that promises that the trace does not depend on some run's
 bytes, since the account here says nothing of the trace. (The two contracts here allow the trace to depend
-on both runs.)
+on both runs.) It refuses a specification with a sequence, a constant, a layout or a lemma in the same
+way.
 
 Where it says "not shown" of something true, so far:
 
