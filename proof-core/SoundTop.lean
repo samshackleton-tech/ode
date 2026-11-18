@@ -183,6 +183,12 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     allowed (ctx.contract.perm s0).read (st.reg RSP) 8 = true ∧
     ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
   unfold symReturn at h
+  -- (the verifier has no rule for an `ensures` yet: it has passed only where the contract has none)
+  have hens : ctx.contract.ensures = [] := by
+    cases he : ctx.contract.ensures.isEmpty with
+    | true => simpa using he
+    | false => simp only [he, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
+  simp only [hens, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
   split at h
   next => exact (refuse_ok h).elim
   next hsp =>
@@ -198,7 +204,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hrsp : st.reg RSP = s0.reg RSP := by omega
       have hstack := E.stack
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, fun e m => by rw [hens] at m; cases m⟩
       · intro x hx1 hx2
         simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
         left; right; omega
@@ -207,8 +213,9 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         apply load_congr
         intro x hx1 hx2
         apply H.mem
-        simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
-        omega
+        · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+          omega
+        · exact E.frame_notOut (by omega) (by omega)
       · show (if RSP = RSP then (st.reg RSP + 8) % M64 else st.reg RSP) = s0.reg RSP + 8
         rw [if_pos rfl, hrsp, Nat.mod_eq_of_lt habove]
       · intro r hr
@@ -218,8 +225,8 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have := H.reg r lt
         rw [hcs' r hr, ev_var, H.entry r lt] at this
         omega
-      · intro a ha
-        exact H.mem a ha
+      · intro a ha ho
+        exact H.mem a ha ho
       · intro e he
         simp only [he] at h
         obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
@@ -498,7 +505,7 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   have hstack := E.stack
   have habove := E.above
   unfold M64 at habove
-  refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, fun _ _ => rfl⟩,
+  refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, fun _ _ _ => rfl⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_⟩⟩
   · intro o v m; cases m
   · intro f m

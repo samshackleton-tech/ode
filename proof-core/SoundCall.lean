@@ -276,12 +276,12 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
       · rw [holds_iff, ev_var, val]; omega
       · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
     · exact H'.facts f m
-  · intro a ha
+  · intro a ha ho
     have hfr : a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a := by
       simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at ha
       omega
     rw [hmem a hfr]
-    exact H.mem a ha
+    exact H.mem a ha ho
 
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
@@ -304,6 +304,14 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     next => exact (refuse_ok h).elim
     next hguard =>
       have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack := by simpa using hguard
+      -- the called function writes nothing for its caller (the verifier has no rule for that yet)
+      have hw : (c.outs.isEmpty && c.ensures.isEmpty) = true := by
+        cases hw : (c.outs.isEmpty && c.ensures.isEmpty) with
+        | true => rfl
+        | false => simp only [hw, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
+      simp only [hw, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      have hout : c.outs = [] ∧ c.ensures = [] := by simpa using hw
+      have hno : ∀ (x : State) (a : Nat), c.inOut x a = false := fun x a => by simp [Contract.inOut, hout.1]
       cases henv : calleeEnv ctx c s c.args argRegs with
       | none => simp only [henv] at h; exact (refuse_ok h).elim
       | some env =>
@@ -341,7 +349,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             rw [e2, ev_var, H.entry l0 lt.2] at this
             omega
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_⟩
+          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, fun x r n m => by rw [hout.1] at m; cases m⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega
@@ -355,8 +363,9 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             refine ⟨fit, by omega, ?_⟩
             intro k hk
             have hx : (afterCall p q i st).mem (s0.reg b0 + k) = st.mem (s0.reg b0 + k) := s1mem _ (by omega)
-            rw [hx, H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)]
-            exact E.byte hm k hk
+            rw [hx, H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)
+              (E.region_notOut hm (Nat.le_add_right _ _) (by omega))]
+            exact E.byte hm k (by omega)
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
@@ -370,16 +379,16 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             exact List.any_eq_true.mpr ⟨(b0, l0), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact hin⟩
         have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
           intro a ha
-          simp only [Contract.perm, Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
-          omega
-        have hw : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
+          simp only [Contract.perm, hno, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          left; omega
+        have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
           apply allowed_of
           intro x hx1 hx2
-          simp only [Contract.perm, Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
-          omega
-        refine ⟨h8, hw, hpre, hread, hwrite, ?_⟩
+          simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
+          left; omega
+        refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
         intro s2 post
-        obtain ⟨prip, prsp, psaved, pmem, pret, psmall⟩ := post
+        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]
           show load (store st.mem (st.reg RSP - 8) (p.base + i.next) 8) (st.reg RSP - 8) 8 = p.base + i.next
@@ -396,7 +405,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             rw [psaved r hmemr, s1reg r h4]
         have hmem2 : ∀ a, a + 8 + c.stack < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a := by
           intro a ha
-          rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega)]
+          rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega) (hno _ a)]
           exact s1mem a (by omega)
         have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2
         have wafter := afterCall_wf wf sp
@@ -421,7 +430,8 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
               (fun b0 l0 hm k hk => by
                 obtain ⟨fit, apart⟩ := E.region hm
                 rw [s1mem _ (by omega)]
-                exact H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega))
+                exact H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)
+                  (E.region_notOut hm (Nat.le_add_right _ _) (by omega)))
               c.args argRegs (fun r m => m) henv
           rw [henv3] at sem
           have val := pret e hret'

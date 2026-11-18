@@ -8,8 +8,9 @@ a difference below zero: the numbers of a specification are zero and up).
 `Meets` is what it is for a function's code to meet a contract: the statement the verifier's yes stands for.
 
 Here so far: definitions that are one expression (numbers, `if`, comparisons, `+ - * / %`, `a[i]`, `len`,
-uses of definitions); contracts whose arguments are numbers and runs of `n` bytes that the function only
-reads, with `returns` and `stack`. Not here yet: `requires`, `ensures` (memory written), `trace`, calls.
+lists written out and joined, uses of definitions); contracts whose arguments are numbers, runs of `n` bytes
+that the function only reads, and runs of so many bytes that it may write and does not read; with
+`returns`, `stack`, and `ensures RUN[lo .. hi] = LIST`. Not here yet: other `requires` and `ensures`, `trace`.
 -/
 namespace Ode
 
@@ -20,6 +21,7 @@ inductive SExpr where
   | ifx (c a b : SExpr)
   | index (a i : SExpr)
   | call (f : String) (args : SExpr)      -- the things a definition is used with: `cons a (cons b … nil)`
+  | list (items : SExpr)                  -- a list written out, `[a, b]`: its things as `cons a (cons b nil)`
   | nil
   | cons (a rest : SExpr)
   deriving Repr, Inhabited
@@ -50,7 +52,14 @@ def binop (op : String) : Val → Val → Option Val
     else if op == "%" then (if 0 < b then some (.int (a % b)) else none)     -- (the remainder by a number above zero)
     else if op == "/" then (if 0 < b then some (.int (a / b)) else none)     -- (and the quotient, rounded down)
     else none
+  | .bytes a, .bytes b => if op == "++" then some (.bytes (a ++ b)) else none  -- (two lists joined)
   | _, _ => none
+
+/-- A list of numbers, none below zero, as a list of things. -/
+def asList : List Val → Option (List Nat)
+  | [] => some []
+  | .int k :: rest => if 0 ≤ k then (asList rest).map (k.toNat :: ·) else none
+  | _ => none
 
 def findDef (defs : List Def) (f : String) : Option Def := defs.find? fun d => d.name == f
 
@@ -96,6 +105,7 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
           match findDef defs f with
           | some d => if d.params.length == vs.length then evalSpec defs fuel (d.params.zip vs) d.body else none
           | none => none
+    | .list items => ((evalList (evalSpec defs fuel env) items).bind asList).map .bytes
     | .nil => none
     | .cons _ _ => none
 
@@ -106,12 +116,23 @@ def Value (defs : List Def) (env : List (String × Val)) (e : SExpr) (v : Val) :
 inductive Kind where
   | number                      -- a whole number, in the argument's register
   | bytes (len : String)        -- the address, in the argument's register, of as many bytes as the number argument `len` says
+  | out (count : Nat)           -- the address of so many bytes that the function may write, and does not read
+  deriving Repr, Inhabited
+
+/-- `ensures RUN[lo .. hi] = value`: when the function has returned, those bytes of the run are that list. -/
+structure Ensure where
+  run : String
+  lo : SExpr
+  hi : SExpr
+  value : SExpr
   deriving Repr, Inhabited
 
 structure Contract where
   args : List (String × Kind)
   returns : Option SExpr
   stack : Nat
+  result : Option String := none      -- `returns r`, r no name of the specification's: the number returned, by that name in `ensures`
+  ensures : List Ensure := []
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -132,10 +153,22 @@ def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat 
     | some l => (r, l) :: regionsIn c args regs
     | none => regionsIn c args regs
   | (_, .number) :: args, _ :: regs => regionsIn c args regs
+  | (_, .out _) :: args, _ :: regs => regionsIn c args regs
   | _, _ => []
 
-/-- The runs of bytes the function is given: (the register with the address, the register with the length). -/
+/-- The runs of bytes the function is given to read: (the register with the address, the register with the length). -/
 def Contract.regions (c : Contract) : List (Nat × Nat) := regionsIn c c.args argRegs
+
+def outsIn : List (String × Kind) → List Nat → List (String × Nat × Nat)
+  | (name, .out n) :: args, r :: regs => (name, r, n) :: outsIn args regs
+  | _ :: args, _ :: regs => outsIn args regs
+  | _, _ => []
+
+/-- The runs of bytes the function may write: (the argument's name, the register with the address, how many bytes). -/
+def Contract.outs (c : Contract) : List (String × Nat × Nat) := outsIn c.args argRegs
+
+/-- The address is in a run the function may write, `s` being the state at entry. -/
+def Contract.inOut (c : Contract) (s : State) (a : Nat) : Bool := c.outs.any fun (_, r, n) => s.reg r ≤ a && a < s.reg r + n
 
 def envIn (c : Contract) (s : State) : List (String × Kind) → List Nat → List (String × Val)
   | (n, .number) :: args, r :: regs => (n, .int (s.reg r)) :: envIn c s args regs
@@ -143,6 +176,7 @@ def envIn (c : Contract) (s : State) : List (String × Kind) → List Nat → Li
     match c.regOf len with
     | some l => (n, .bytes ((List.range (s.reg l)).map fun k => s.mem (s.reg r + k))) :: envIn c s args regs
     | none => envIn c s args regs
+  | (_, .out _) :: args, _ :: regs => envIn c s args regs        -- (a run only written has no value at entry)
   | _, _ => []
 
 /-- The names of the contract as values, in a state at entry: a number is its register; a run of bytes is
@@ -151,34 +185,58 @@ def Contract.env (c : Contract) (s : State) : List (String × Val) := envIn c s 
 
 def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
 
-/-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given,
-its own frame and the return address above it; it may write its own frame. -/
+/-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
+read, its own frame and the return address above it; it may write its own frame and the runs given to write. -/
 def Contract.perm (c : Contract) (s : State) : Perm where
   read a := (c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l
-  write a := c.inFrame s a
+  write a := c.inFrame s a || c.inOut s a
 
 /-- The function's code lies in memory below 2^64. -/
 def Program.fits (p : Program) : Prop := ∀ oi ∈ p.code, p.base + oi.2.next < M64
 
 /-- What the caller sees to: the function is entered at its start; the registers hold numbers below 2^64;
-`stack` bytes below the stack pointer and the eight at it are in memory; each run of bytes given lies in
-memory, apart from that frame and from the address to return to, and holds bytes. -/
+`stack` bytes below the stack pointer and the eight at it are in memory; each run of bytes given to read
+lies in memory, apart from that frame and from the address to return to, and holds bytes; each run given to
+write lies in memory, apart from that frame, from the address to return to, from every run given to read
+and from every other run given to write. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
-  ∀ r l, (r, l) ∈ c.regions →
+  (∀ r l, (r, l) ∈ c.regions →
     s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
-    ∀ k, k < s.reg l → s.mem (s.reg r + k) < 256
+    ∀ k, k < s.reg l → s.mem (s.reg r + k) < 256) ∧
+  ∀ x r n, (x, r, n) ∈ c.outs →
+    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
+    (∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
+    ∀ x' r' n', (x', r', n') ∈ c.outs → x' = x ∨ s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r
+
+/-- The names of the contract as values when the function has returned: those at entry, and the number
+returned by the name `returns` gives it, where it gives it one. -/
+def Contract.envAfter (c : Contract) (s s' : State) : List (String × Val) :=
+  match c.result with
+  | some name => (name, .int (s'.reg 0)) :: c.env s
+  | none => c.env s
+
+/-- `ensures RUN[lo .. hi] = value` holds, `s` being the state at entry and `s'` the state at the return:
+the list has `hi - lo` things, the places lie in the run, and each byte there is the list's thing. -/
+def Ensure.holds (e : Ensure) (c : Contract) (defs : List Def) (s s' : State) : Prop :=
+  ∃ r n a b l, (e.run, r, n) ∈ c.outs ∧
+    Value defs (c.envAfter s s') e.lo (.int a) ∧ Value defs (c.envAfter s s') e.hi (.int b) ∧
+    Value defs (c.envAfter s s') e.value (.bytes l) ∧
+    0 ≤ a ∧ a + l.length = b ∧ b ≤ n ∧
+    ∀ k (h : k < l.length), s'.mem (s.reg r + a.toNat + k) = l[k]
 
 /-- What the function leaves, `s` being the state at entry: it has returned to its caller with the stack
 pointer above the return address, the registers a callee keeps as they were, memory outside its own frame
-as it was, in rax the value the contract says, and numbers below 2^64 in the registers. -/
+and the runs given to write as it was, in rax the value the contract says, numbers below 2^64 in the
+registers, and in the runs given to write what each `ensures` says. -/
 def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   s'.rip = load s.mem (s.reg RSP) 8 ∧ s'.reg RSP = s.reg RSP + 8 ∧
   (∀ r ∈ calleeSaved, s'.reg r = s.reg r) ∧
-  (∀ a, c.inFrame s a = false → s'.mem a = s.mem a) ∧
+  (∀ a, c.inFrame s a = false → c.inOut s a = false → s'.mem a = s.mem a) ∧
   (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))) ∧
-  ∀ r, s'.reg r < M64
+  (∀ r, s'.reg r < M64) ∧
+  ∀ e ∈ c.ensures, e.holds c defs s s'
 
 /-- The function's code meets the contract, among the functions of `world` (those it may call). -/
 def Meets (world : List Program) (c : Contract) (defs : List Def) (p : Program) : Prop :=

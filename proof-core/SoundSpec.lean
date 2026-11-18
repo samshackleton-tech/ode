@@ -24,6 +24,7 @@ theorem evalList_mono {ev ev' : SExpr → Option Val} (h : ∀ a v, ev a = some 
         rw [h a v hv, ih hr]
         simpa [hv, hr] using h1
   | num _ => intro vs h1; simp [evalList] at h1
+  | list _ _ => intro vs h1; simp [evalList] at h1
   | name _ => intro vs h1; simp [evalList] at h1
   | bin _ _ _ _ _ => intro vs h1; simp [evalList] at h1
   | ifx _ _ _ _ _ _ => intro vs h1; simp [evalList] at h1
@@ -44,6 +45,13 @@ theorem evalSpec_mono (defs : List Def) : ∀ (fuel : Nat) {env : List (String �
       | name x => simpa [evalSpec] using h
       | nil => simp [evalSpec] at h
       | cons _ _ => simp [evalSpec] at h
+      | list items =>
+        simp only [evalSpec] at h ⊢
+        cases hl : evalList (evalSpec defs fuel env) items with
+        | none => simp [hl] at h
+        | some vs =>
+          rw [evalList_mono (fun a v h => ih h) items hl]
+          simpa [hl] using h
       | bin op a b =>
         simp only [evalSpec] at h ⊢
         cases ha : evalSpec defs fuel env a with
@@ -745,6 +753,10 @@ theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ res.sem ctx s0 ρ' (semEnv ctx s0 ρ' env) e ∧ res.bounded s'.nvars := by
   intro e
   induction e with
+  | list _ _ =>
+    intro s s' res items rest ρ st h H wf hb
+    simp only [sevalWith] at h
+    exact (refuse_ok h).elim
   | num n =>
     intro s s' res items rest ρ st h H wf hb
     simp only [sevalWith] at h
@@ -1177,6 +1189,10 @@ theorem symEnvIn_bounded (c : Contract) : ∀ (args : List (String × Kind)) (re
     rcases m with rfl | m
     · exact bounded_var (hr r (List.mem_cons_self ..))
     · exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
+  | (n, .out _) :: args, r :: regs, k, hr => by
+    intro nv m
+    simp only [symEnvIn] at m
+    exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
   | (n, .bytes len) :: args, r :: regs, k, hr => by
     intro nv m
     simp only [symEnvIn] at m
@@ -1201,6 +1217,11 @@ theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r
       (by intro j; have := hj j; simpa only [regionsIn] using this)
     simp only [symEnvIn, envIn, semEnv, List.map_cons, semv, ev_var] at ih ⊢
     rw [hρ r (hr r (List.mem_cons_self ..)), ih]
+  | (n, .out _) :: args, r :: regs, k, hr, hj => by
+    have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
+      (by intro j; have := hj j; simpa only [regionsIn] using this)
+    simp only [symEnvIn, envIn]
+    exact ih
   | (n, .bytes len) :: args, r :: regs, k, hr, hj => by
     cases hl : ctx.contract.regOf len with
     | none =>

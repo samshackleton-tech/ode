@@ -136,7 +136,7 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   bytes : ∀ v r o, (v, r, o) ∈ s.bytes → ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧
     0 ≤ ev ρ o ∧ ev ρ o < s0.reg len ∧ ρ v = s0.mem (s0.reg base + (ev ρ o).toNat)
   spec : ∀ f ∈ s.spec, f.holds ctx s0 ρ
-  mem : ∀ a, ctx.contract.inFrame s0 a = false → st.mem a = s0.mem a
+  mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k

@@ -204,6 +204,7 @@ def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → Lis
     match c.regOf len with
     | some _ => (n, .region k) :: symEnvIn c args regs (k + 1)
     | none => symEnvIn c args regs k
+  | (_, .out _) :: args, _ :: regs, k => symEnvIn c args regs k
   | _, _, _ => []
 
 /-- The contract's names on symbols: a number is its register at entry; a run of bytes is a run by its number. -/
@@ -644,6 +645,7 @@ def sevalWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (env : List (String
     match vs with
     | .list vs => scall ctx f vs s
     | _ => refuse "a definition used with what is no list of things"
+  | _, .list _ => refuse "a list written out where a number or a use of a definition is expected"
   | s, .nil => pure (.list [], s)
   | s, .cons a rest => do
     let (v, s) ← sevalWith ctx deeper env s a
@@ -755,7 +757,8 @@ def suppose (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : SExpr) : V 
 /-- At the return: the stack pointer is where it was, the registers a callee keeps hold what they held at
 entry, and rax holds what the contract says. -/
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
-  if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
+  if !ctx.contract.ensures.isEmpty then refuse "an `ensures` of the contract: not here yet"
+  else if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
   else
     match ctx.contract.returns with
@@ -845,6 +848,7 @@ def calleeEnv (ctx : Ctx) (c : Contract) (s : Sym) : List (String × Kind) → L
       | some j, some env => some ((n, SVal.region j) :: env)
       | _, _ => none
     | none => calleeEnv ctx c s args regs
+  | (_, .out _) :: _, _ :: _ => none            -- (a called function that writes for its caller: not here yet)
   | _, _ => some []
 
 /-- The state after a call, before anything is known of what was returned: the stack pointer and the
@@ -868,6 +872,8 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   | some sp =>
     if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
+    else if !(c.outs.isEmpty && c.ensures.isEmpty) then
+      refuse "a called function that writes for its caller: not here yet"
     else
       match calleeEnv ctx c s c.args argRegs with
       | none => refuse "a called function is given a run of bytes that is not one this function was given, whole"
@@ -999,7 +1005,7 @@ and its proof. -/
 structure Fn where
   name : String
   code : List (Nat × Instr) := []
-  contract : Contract := ⟨[], none, 0⟩
+  contract : Contract := { args := [], returns := none, stack := 0 }
   places : List Place := []
   proof : List Item := []
 

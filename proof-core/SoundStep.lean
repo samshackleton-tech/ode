@@ -21,9 +21,35 @@ theorem above : s0.reg RSP + 8 < M64 := E.pre.2.2.2.1
 theorem fits {o : Nat} {i : Instr} (h : (o, i) ∈ p.code) : p.base + i.next < M64 := E.pre.2.2.2.2.1 (o, i) h
 theorem region {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) :
     s0.reg r + s0.reg l ≤ M64 ∧ (s0.reg r + s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
-  ⟨(E.pre.2.2.2.2.2 r l h).1, (E.pre.2.2.2.2.2 r l h).2.1⟩
+  ⟨(E.pre.2.2.2.2.2.1 r l h).1, (E.pre.2.2.2.2.2.1 r l h).2.1⟩
 theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k < s0.reg l) : s0.mem (s0.reg r + k) < 256 :=
-  (E.pre.2.2.2.2.2 r l h).2.2 k hk
+  (E.pre.2.2.2.2.2.1 r l h).2.2 k hk
+/-- A run given to write: in memory, and apart from the frame and the address to return to. -/
+theorem out {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) :
+    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
+  ⟨(E.pre.2.2.2.2.2.2 x r n h).1, (E.pre.2.2.2.2.2.2 x r n h).2.1⟩
+theorem outRegion {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) {r' l : Nat} (h' : (r', l) ∈ ctx.contract.regions) :
+    s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + s0.reg l ≤ s0.reg r := (E.pre.2.2.2.2.2.2 x r n h).2.2.1 r' l h'
+theorem outOut {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) {x' : String} {r' n' : Nat} (h' : (x', r', n') ∈ ctx.contract.outs) :
+    x' = x ∨ s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r := (E.pre.2.2.2.2.2.2 x r n h).2.2.2 x' r' n' h'
+/-- An address in a run given to read is in no run given to write. -/
+theorem region_notOut {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) {a : Nat} (h1 : s0.reg r ≤ a) (h2 : a < s0.reg r + s0.reg l) :
+    ctx.contract.inOut s0 a = false := by
+  unfold Contract.inOut
+  rw [List.any_eq_false]
+  intro ⟨x, r', n⟩ hm
+  have := E.outRegion hm h
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  omega
+/-- An address of the frame, or of the address to return to, is in no run given to write. -/
+theorem frame_notOut {a : Nat} (h1 : s0.reg RSP - ctx.contract.stack ≤ a) (h2 : a < s0.reg RSP + 8) :
+    ctx.contract.inOut s0 a = false := by
+  unfold Contract.inOut
+  rw [List.any_eq_false]
+  intro ⟨x, r', n⟩ hm
+  have := (E.out hm).2
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  omega
 end Setting
 
 theorem indexOf_lt (name : String) : ∀ (l : List String) (k r : Nat), indexOf name l k = some r → r < k + l.length
@@ -62,6 +88,10 @@ theorem regionsIn_mem (c : Contract) : ∀ (args : List (String × Kind)) (regs 
   | [], _, _, _, h => by simp [regionsIn] at h
   | _ :: _, [], _, _, h => by simp [regionsIn] at h
   | (_, .number) :: args, x :: regs, b, l, h => by
+    simp only [regionsIn] at h
+    have := regionsIn_mem c args regs b l h
+    exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
+  | (_, .out _) :: args, x :: regs, b, l, h => by
     simp only [regionsIn] at h
     have := regionsIn_mem c args regs b l h
     exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
@@ -297,8 +327,8 @@ theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
     left; left; omega
   · intro x hx1 hx2
-    simp only [Contract.perm, Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
-    omega
+    simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
+    left; omega
 
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : List Item} {ρ : Nat → Int} {st : State}
@@ -366,8 +396,9 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         have hadr : a = s0.reg base + (ev ρ' o).toNat := by omega
         have hmem0 : st.mem a = s0.mem a := by
           apply c1.holds.mem
-          simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
-          omega
+          · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+            omega
+          · exact E.region_notOut hmem (by omega) (by omega)
         have hbyte := E.byte hmem (ev ρ' o).toNat (by omega)
         rw [← hadr] at hbyte
         refine ⟨ρ', c1, ?_, ?_, ?_, bv⟩
@@ -876,12 +907,12 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       refine ⟨g1, g2, ?_⟩
       rw [load_store_other _ _ _ _ _ _ (by omega)]
       exact g3
-  mem x' hx' := by
+  mem x' hx' ho := by
     have hs := E.stack
     simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at hx'
     show store st.mem a x 8 x' = s0.mem x'
     rw [store_other _ _ _ _ _ (by omega)]
-    apply H.mem
+    apply H.mem _ _ ho
     simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
     exact hx'
 

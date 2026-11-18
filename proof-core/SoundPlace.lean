@@ -78,6 +78,7 @@ theorem assertion_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       (((∀ r ∈ rows, r.holds ρ') ∧ (∀ f ∈ sfacts, f.holds ctx s0 ρ')) ↔ Asserts ctx.defs (semEnv ctx s0 ρ' env) e) := by
   cases e with
   | num _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | list _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | name _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | ifx _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | index _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
@@ -434,7 +435,7 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
   small : ∀ r, st.reg r < M64
   frame : ∀ o v, (o, v) ∈ first.frame →
     -(ctx.contract.stack : Int) ≤ o ∧ o + 8 ≤ 0 ∧ (load st.mem ((s0.reg RSP : Int) + o).toNat 8 : Int) = ev ρ v
-  mem : ∀ a, ctx.contract.inFrame s0 a = false → st.mem a = s0.mem a
+  mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
   facts : ∀ e ∈ pl.facts, Asserts ctx.defs (placeVals ctx pl s0 st) e
 
 theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
