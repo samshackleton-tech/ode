@@ -11,6 +11,8 @@ TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by t
     returns EXPRESSION
     stack N
     def NAME PARAMETER… = EXPRESSION      a definition of the specification
+    callee NAME               a function this one calls, then its contract, by which the call is taken:
+    carg NAME number  /  carg NAME bytes LEN  /  creturns EXPRESSION  /  cstack N
 
 PROOF is the maker's, and may be anything: no line of it adds to what is to be shown, and a line of the
 statement's kinds in it is refused.

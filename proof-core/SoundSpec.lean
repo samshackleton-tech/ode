@@ -452,6 +452,65 @@ theorem ifx_finish {r res : SRes} {s2 s' : Sym} {r2 rest : List Item}
     injection hp with e1 e2
     exact ⟨e1.symm, e2.symm, fun vs h => by cases h⟩
 
+theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownValue facts c = some v → SFact.value c v ∈ facts
+  | [], _, _, h => by simp [knownValue] at h
+  | .same _ _ :: more, c, v, h => by
+    simp only [knownValue] at h
+    exact List.mem_cons_of_mem _ (knownValue_mem h)
+  | .value c' v' :: more, c, v, h => by
+    simp only [knownValue] at h
+    split at h
+    next e =>
+      injection h with h
+      have e' : c' = c := by simpa using e
+      subst e' h
+      exact List.mem_cons_self ..
+    next => exact List.mem_cons_of_mem _ (knownValue_mem h)
+
+/-- A result taken where a number is needed: the expression has that number as its value. -/
+theorem number_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row}
+    (h : number s res = some x) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+    Value ctx.defs env e (.int (ev ρ x)) ∧ bounded s.nvars x := by
+  cases res with
+  | list _ => simp [number] at h
+  | val v =>
+    cases v with
+    | region _ => simp [number] at h
+    | bool _ => simp [number] at h
+    | lin y =>
+      simp only [number] at h
+      injection h with h
+      subst h
+      exact ⟨sem, bd⟩
+  | tail c =>
+    simp only [number] at h
+    have m := knownValue_mem h
+    exact ⟨(sem _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+
+/-- A result taken as one of the things a definition is used with: the expression has that value. -/
+theorem argument_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal}
+    (h : argument s res = some v) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+    Value ctx.defs env e (semv ctx s0 ρ v) ∧ v.bounded s.nvars := by
+  cases res with
+  | list _ => simp [argument] at h
+  | val w =>
+    simp only [argument] at h
+    injection h with h
+    subst h
+    exact ⟨sem, bd⟩
+  | tail c =>
+    simp only [argument] at h
+    cases hk : knownValue s.spec c with
+    | none => simp [hk] at h
+    | some x =>
+      simp only [hk, Option.map] at h
+      injection h with h
+      subst h
+      have m := knownValue_mem hk
+      exact ⟨(sem _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+
 /-- An expression of the specification worked out on symbols: what comes out is what the expression means. -/
 theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (e : SExpr) {s s' : Sym} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State},
@@ -499,23 +558,23 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sm, bm⟩ := ihm e2 c1.holds c1.wf hb1
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    cases v with
-    | tail _ => exact (refuse_ok h).elim
-    | list _ => exact (refuse_ok h).elim
-    | val v =>
+    cases ha : argument s2 v with
+    | none => cases vs <;> simp only [ha] at h <;> exact (refuse_ok h).elim
+    | some av =>
       cases vs with
-      | tail _ => exact (refuse_ok h).elim
-      | val _ => exact (refuse_ok h).elim
+      | tail _ => simp only [ha] at h; exact (refuse_ok h).elim
+      | val _ => simp only [ha] at h; exact (refuse_ok h).elim
       | list vs =>
-        simp only at h
+        simp only [ha] at h
         have := V.pure_ok h
         injection this with hp _
         injection hp with e1 e2
         subst e1 e2
-        refine ⟨ρ2, c1.then c2, Values.cons sa2 sm, ?_⟩
+        obtain ⟨va, bva⟩ := argument_sound c2.holds c2.wf ha sa2 (SRes.bounded_mono c2.mono ba)
+        refine ⟨ρ2, c1.then c2, Values.cons va sm, ?_⟩
         intro w m
         cases m with
-        | head => exact SVal.bounded_mono c2.mono ba
+        | head => exact bva
         | tail _ m => exact bm w m
   | bin op a b iha ihb =>
     intro s s' res items rest ρ st h H wf hb
@@ -526,26 +585,21 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sb, bb⟩ := ihb e2 c1.holds c1.wf hb1
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    cases x with
-    | tail _ => exact (refuse_ok h).elim
-    | list _ => exact (refuse_ok h).elim
-    | val x =>
-      cases x with
-      | region _ => exact (refuse_ok h).elim
-      | bool _ => exact (refuse_ok h).elim
-      | lin x =>
-        cases y with
-        | tail _ => exact (refuse_ok h).elim
-        | list _ => exact (refuse_ok h).elim
-        | val y =>
-          cases y with
-          | region _ => exact (refuse_ok h).elim
-          | bool _ => exact (refuse_ok h).elim
-          | lin y =>
-            simp only at h
-            obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts (bounded_mono c2.mono ba) bb
-            subst hs hres
-            exact ⟨ρ2, c1.then c2, Value.bin sa2 sb hz, bv⟩
+    cases hx : number s2 x with
+    | none =>
+      cases hy : number s2 y with
+      | none => simp only [hx, hy] at h; exact (refuse_ok h).elim
+      | some _ => simp only [hx, hy] at h; exact (refuse_ok h).elim
+    | some xr =>
+      cases hy : number s2 y with
+      | none => simp only [hx, hy] at h; exact (refuse_ok h).elim
+      | some yr =>
+        simp only [hx, hy] at h
+        obtain ⟨vx, bx⟩ := number_sound c2.holds c2.wf hx sa2 (SRes.bounded_mono c2.mono ba)
+        obtain ⟨vy, by'⟩ := number_sound c2.holds c2.wf hy sb bb
+        obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
+        subst hs hres
+        exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
   | index a i iha ihi =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h

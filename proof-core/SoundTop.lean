@@ -1,4 +1,4 @@
-import SoundPlace
+import SoundCall
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
 -/
@@ -51,14 +51,6 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : List It
     next => exact (refuse_ok h).elim
 
 /-! ## A jump on a flag -/
-
-theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
-    (rows : List Row) (hr : ∀ r ∈ rows, r.holds ρ) : Holds ctx s0 ρ { s with facts := rows ++ s.facts } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
-   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem⟩
-
-theorem WF.more {s : Sym} (wf : WF s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF { s with facts := rows ++ s.facts } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec⟩
 
 /-- The way the flag is in fact set is among the ways gone. -/
 theorem ways_sound {ctx : Ctx} {s0 : State} {s : Sym} {want : Bool} {target next : Nat} {ρ : Nat → Int} {st : State}
@@ -206,7 +198,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hrsp : st.reg RSP = s0.reg RSP := by omega
       have hstack := E.stack
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_⟩
+      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
       · intro x hx1 hx2
         simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
         left; right; omega
@@ -259,6 +251,11 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           simp only [SFact.holds] at gh
           rw [← ev_agree (c1.wf.reg 0 (by decide)) c2.agree, ← hrax] at gh
           exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
+      · intro r
+        show (if r = RSP then (st.reg RSP + 8) % M64 else st.reg r) < M64
+        split
+        · exact Nat.mod_lt _ (by unfold M64; omega)
+        · exact H.small r
 
 /-! ## An instruction -/
 
@@ -414,46 +411,69 @@ theorem onward_mono {ctx : Ctx} {general : Option (Row × Sym)} {go : Sym → Na
     exact m
 
 /-- One instruction, in general: if from every state the machine can go on in, at a place the verifier
-went on at, the machine runs to its return and leaves what the contract promises, so it does from here. -/
-theorem step_runs {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {pc : Nat} {i : Instr}
+went on at, the machine runs to its return and leaves what the contract promises, so it does from here.
+At a call, the called function runs by its contract, which it meets, and the machine goes on after it. -/
+theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx)
+    {s : Sym} {pc : Nat} {i : Instr}
     {nexts : List (Sym × Next)} {items rest : List Item} {ρ : Nat → Int} {st : State}
-    (hl : ctx.code.lookup pc = some i) (h : symInstr ctx s i items = .ok (nexts, rest))
+    (hl : ctx.code.lookup pc = some i) (h : symNext ctx s i items = .ok (nexts, rest))
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hrip : st.rip = p.base + pc)
     (K : ∀ s' pc' ρ' st', (s', Next.at pc') ∈ nexts → st'.rip = p.base + pc' → Carried ctx s0 ρ s ρ' s' st' →
-      Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') :
-    Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st := by
+      Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') :
+    Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st := by
   have hfetch : p.fetch st.rip = some i := by
     unfold Program.fetch
     rw [hrip, if_neg (by omega), E.code, Nat.add_sub_cancel_left]
     exact hl
-  apply Runs.step st i hfetch
-  · intro u hn
-    obtain ⟨o, ho, _⟩ := symInstr_sound E h H wf u
-    rw [ho] at hn
-    cases hn
-  · intro u st' hx
-    obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf u
-    rw [hx] at ho
-    injection ho with ho
-    subst ho
-    obtain ⟨s', pc', ρ', m, hrip', c'⟩ := hmatch
-    exact K s' pc' ρ' st' m hrip' c'
-  · intro u st' hx
-    obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf u
-    rw [hx] at ho
-    injection ho with ho
-    subst ho
-    exact hmatch
+  cases hc : callTarget i with
+  | none =>
+    simp only [symNext, hc] at h
+    apply Runs.step _ p _ st i hfetch
+    · intro u hn
+      obtain ⟨o, ho, _⟩ := symInstr_sound E h H wf u
+      rw [ho] at hn
+      cases hn
+    · intro u st' hx
+      obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf u
+      rw [hx] at ho
+      injection ho with ho
+      subst ho
+      obtain ⟨s', pc', ρ', m, hrip', c'⟩ := hmatch
+      exact K s' pc' ρ' st' m hrip' c'
+    · intro u st' hx
+      obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf u
+      rw [hx] at ho
+      injection ho with ho
+      subst ho
+      exact hmatch
+  | some name =>
+    simp only [symNext, hc] at h
+    cases hl2 : ctx.callees.lookup name with
+    | none => simp only [hl2] at h; exact (refuse_ok h).elim
+    | some c =>
+      simp only [hl2] at h
+      obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
+      have := V.pure_ok h
+      injection this with hn _
+      subst hn
+      obtain ⟨q, hq, fitq, meets⟩ := W name c hl2
+      have hcode : (pc, i) ∈ p.code := by rw [E.code]; exact lookup_mem hl
+      obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i (E.fits hcode)
+      exact Runs.call _ p _ st i name q (c.perm (afterCall p q i st)) (c.post ctx.defs (afterCall p q i st))
+        hfetch hc hq h8 hw hread hwrite (meets _ hpre)
+        (fun s2 post => by
+          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 post
+          exact K s' i.next ρ' s2 (List.mem_cons_self ..) hrip2 c')
 
 /-- The paths from the entry: from a state of which what the verifier holds is so, the machine runs to the
 function's return and leaves what the contract promises, if it does so from every state in which the
 verifier came to the place. -/
-theorem explore_first {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
+theorem explore_first {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx) :
     ∀ (fuel : Nat) {s : Sym} {pc : Nat} {items rest : List Item} {found : List Sym} {ρ : Nat → Int} {st : State},
     explore ctx none fuel s pc items = .ok (found, rest) → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
     (∀ pl, ctx.place = some pl → ∀ s' ∈ found, ∀ ρ' st', Holds ctx s0 ρ' s' st' → WF s' → st'.rip = p.base + pl.pc →
-      Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') →
-    Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
+      Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') →
+    Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
   | 0, s, pc, items, rest, found, ρ, st, h, H, wf, hrip, K => by
     simp only [explore] at h
     exact (refuse_ok h).elim
@@ -464,14 +484,14 @@ theorem explore_first {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
       simp only [explore, hl] at h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
       obtain ⟨_, parts⟩ := fold_mem_acc (f := onward ctx none (explore ctx none fuel)) (fun hb => onward_mono hb) h
-      apply step_runs E hl e1 H wf hrip
+      apply step_runs E W hl e1 H wf hrip
       intro s' pc' ρ' st' m hrip' c'
       obtain ⟨acc, items', r', hbody, sub⟩ := parts (s', Next.at pc') m
       cases hp : ctx.place with
       | none =>
         simp only [onward, hp] at hbody
         obtain ⟨more, r2, e2, hb2⟩ := V.bind_ok hbody
-        exact explore_first E fuel e2 c'.holds c'.wf hrip' (fun pl hpl => by rw [hp] at hpl; cases hpl)
+        exact explore_first E W fuel e2 c'.holds c'.wf hrip' (fun pl hpl => by rw [hp] at hpl; cases hpl)
       | some pl =>
         by_cases hpc : (pl.pc == pc') = true
         · simp only [onward, hp, hpc, ↓reduceIte] at hbody
@@ -483,21 +503,21 @@ theorem explore_first {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           obtain ⟨more, r2, e2, hb2⟩ := V.bind_ok hbody
           have := V.pure_ok hb2
           subst this
-          exact explore_first E fuel e2 c'.holds c'.wf hrip'
+          exact explore_first E W fuel e2 c'.holds c'.wf hrip'
             (fun pl' hpl' s'' m'' => K pl' hpl' s'' (sub s'' (List.mem_append_right _ m'')))
 
 /-- The paths from the place, in a state the general state stands for whose number is `N`: the machine
 runs to the function's return and leaves what the contract promises, if it does so from every state at
 the place whose number is less than `N`. -/
-theorem explore_place {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hpl : ctx.place = some pl)
+theorem explore_place {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx) (pl : Place) (hpl : ctx.place = some pl)
     (hn : ∀ nr ∈ pl.names, nr.2 < 16) (g : Sym) (d : Row) (first : Sym) (hd : bounded g.nvars d) (N : Int)
     (G : ∀ ρ' st', AtPlace ctx pl s0 first ρ' st' →
       ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ 0 ≤ ev ρ'' d ∧ Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d)))
     (IH : ∀ ρ' st', Holds ctx s0 ρ' g st' → st'.rip = p.base + pl.pc → 0 ≤ ev ρ' d → ev ρ' d < N →
-      Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') :
+      Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st') :
     ∀ (fuel : Nat) {s : Sym} {pc : Nat} {items rest : List Item} {found : List Sym} {ρ : Nat → Int} {st : State},
     explore ctx (some (d, first)) fuel s pc items = .ok (found, rest) → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
-    g.nvars ≤ s.nvars → ev ρ d = N → Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
+    g.nvars ≤ s.nvars → ev ρ d = N → Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
   | 0, s, pc, items, rest, found, ρ, st, h, H, wf, hrip, hle, hN => by
     simp only [explore] at h
     exact (refuse_ok h).elim
@@ -507,7 +527,7 @@ theorem explore_place {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     | some i =>
       simp only [explore, hl] at h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
-      apply step_runs E hl e1 H wf hrip
+      apply step_runs E W hl e1 H wf hrip
       intro s' pc' ρ' st' m hrip' c'
       obtain ⟨acc, items', r', hbody⟩ := fold_mem h (s', Next.at pc') m
       have hle' : g.nvars ≤ s'.nvars := Nat.le_trans hle c'.mono
@@ -523,24 +543,24 @@ theorem explore_place {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         exact IH ρ'' st' Hg (by rw [e]; exact hrip') pos (by omega)
       · simp only [onward, hpl, hpc, ↓reduceIte] at hbody
         obtain ⟨more, r2, e2, _⟩ := V.bind_ok hbody
-        exact explore_place E pl hpl hn g d first hd N G IH fuel e2 c'.holds c'.wf hrip' hle' hN'
+        exact explore_place E W pl hpl hn g d first hd N G IH fuel e2 c'.holds c'.wf hrip' hle' hN'
 
 /-- From every state at the place that the general state stands for, the machine runs to the function's
 return and leaves what the contract promises: by induction on the place's number, which every way round
 makes less and which is never below zero. -/
-theorem place_runs {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hpl : ctx.place = some pl)
+theorem place_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx) (pl : Place) (hpl : ctx.place = some pl)
     (hn : ∀ nr ∈ pl.names, nr.2 < 16) (g : Sym) (d : Row) (first : Sym) (wg : WF g) (hd : bounded g.nvars d)
     (G : ∀ ρ' st', AtPlace ctx pl s0 first ρ' st' →
       ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ 0 ≤ ev ρ'' d ∧ Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d)))
     {items rest : List Item} {found : List Sym}
     (h : explore ctx (some (d, first)) PATH g pl.pc items = .ok (found, rest)) :
     ∀ (n : Nat) (ρ : Nat → Int) (st : State), Holds ctx s0 ρ g st → st.rip = p.base + pl.pc → ev ρ d = (n : Int) →
-    Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st := by
+    Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st := by
   intro n
   induction n using Nat.strongRecOn with
   | ind n ih =>
     intro ρ st H hrip hN
-    apply explore_place E pl hpl hn g d first hd (n : Int) G ?_ PATH h H wg hrip (Nat.le_refl _) hN
+    apply explore_place E W pl hpl hn g d first hd (n : Int) G ?_ PATH h H wg hrip (Nat.le_refl _) hN
     intro ρ' st' H' hrip' pos lt
     exact ih (ev ρ' d).toNat (by omega) ρ' st' H' hrip' (by omega)
 
@@ -597,14 +617,15 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   · intro v r o m; cases m
   · intro f m; cases m
 
-/-- **What the verifier's yes stands for.** If the verifier says yes of a proof, whatever the proof is, the
-function's code meets its contract (`Meets`): from every state at entry of which the caller has seen to
-what the contract asks, the machine runs on instructions of the function, touches only memory the contract
+/-- **What the verifier's yes stands for.** If the verifier says yes of a proof, whatever the proof is, and
+every function this one calls meets the contract its call was taken by, then the function's code meets its
+contract (`Meets`): from every state at entry of which the caller has seen to what the contract asks, the
+machine runs on instructions of the function and of those it calls, touches only memory the contract
 allows, and after finitely many instructions returns to its caller with the stack pointer, the registers a
 callee keeps and all memory outside its frame as they were, and in rax the value the contract's `returns`
 has by the specification's definitions. -/
-theorem verify_sound (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
-    (h : verdict ctx proof = none) : Meets ctx.contract ctx.defs p := by
+theorem verify_sound (world : List Program) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
+    (W : CalleesMeet world ctx) (h : verdict ctx proof = none) : Meets world ctx.contract ctx.defs p := by
   intro s0 pre
   have E : Setting ctx p s0 := ⟨hcode, pre⟩
   cases hv : verify ctx proof with
@@ -614,7 +635,7 @@ theorem verify_sound (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.co
     obtain ⟨arrivals, r1, e1, hv⟩ := V.bind_ok hv
     obtain ⟨_, r2, e2, _⟩ := V.bind_ok hv
     obtain ⟨H, wf⟩ := entry_holds E
-    apply explore_first E PATH e1 H wf (by rw [E.rip]; rfl)
+    apply explore_first E W PATH e1 H wf (by rw [E.rip]; rfl)
     intro pl hpl s' m ρ' st' H' wf' hrip'
     cases arrivals with
     | nil => cases m
@@ -629,6 +650,6 @@ theorem verify_sound (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.co
         obtain ⟨_, r4, e4, _⟩ := V.bind_ok e2
         obtain ⟨hn, ⟨ρ1, A⟩, wg, hd, G⟩ := generalize_sound E pl e3 H' wf'
         obtain ⟨ρ'', Hg, pos, _⟩ := G ρ1 st' A
-        exact place_runs E pl hpl hn g d first wg hd G e4 (ev ρ'' d).toNat ρ'' st' Hg hrip' (by omega)
+        exact place_runs E W pl hpl hn g d first wg hd G e4 (ev ρ'' d).toNat ρ'' st' Hg hrip' (by omega)
 
 end Ode

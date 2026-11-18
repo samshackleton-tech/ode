@@ -6,9 +6,9 @@ What a row's EFFECT does to registers, two flags and memory, on whole numbers. T
 contract's meaning is stated over (`Contract.lean`), and it is meant to say what `../core/conc.py` says,
 which processors are compared with (`../core/cross.py`).
 
-Here so far: the rows over the general registers, the two flags, and memory of 1, 4 and 8 bytes. A
-row that uses anything else (a vector register, a call) has no meaning here yet, and a function that has
-such a row is not verified.
+Here so far: the rows over the general registers, the two flags, and memory of 1, 4 and 8 bytes, and
+calls of functions by name. A row that uses anything else (a vector register) has no meaning here yet, and
+a function that has such a row is not verified.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -187,8 +187,9 @@ structure Instr where
   next : Nat
   deriving Inhabited
 
-/-- A function's code: where it is in memory, and the instruction at each place in it. -/
+/-- A function's code: its name, where it is in memory, and the instruction at each place in it. -/
 structure Program where
+  name : String
   base : Nat
   code : List (Nat × Instr)
 
@@ -198,14 +199,41 @@ def Program.fetch (p : Program) (rip : Nat) : Option Instr :=
 def exec (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) : Option Outcome :=
   execAll perm i.bind p.base u 0 { s with rip := p.base + i.next } i.effect
 
-/-- From `s`, whatever the unknowns turn out to be: the function runs on instructions it has, touches
-only what it may, and returns after finitely many of them in a state of which `Q` holds. -/
-inductive Runs (perm : Perm) (p : Program) (Q : State → Prop) : State → Prop where
-  | step (s : State) (i : Instr) :
+/-- The function an instruction calls, by its name. -/
+def callTarget (i : Instr) : Option String :=
+  match i.effect with
+  | [.call (.name n)] => i.bind.lookup n
+  | _ => none
+
+/-- The function of that name among the functions there are. -/
+def findProgram (world : List Program) (name : String) : Option Program := world.find? fun q => q.name == name
+
+/-- The state a called function starts in: the address to come back to is put just below the stack
+pointer, the stack pointer points at it, and the next instruction is the called function's first. -/
+def afterCall (p q : Program) (i : Instr) (s : State) : State :=
+  { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
+    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base }
+
+/-- From `s`, whatever the unknowns turn out to be: the function `p` runs on instructions it has, touches
+only what `perm` lets it, and returns after finitely many of them in a state of which `Q` holds.
+
+At a call the address to come back to is written below the stack pointer, and the called function runs in
+its turn, in the same way: on its own instructions, touching only what it is let (never more than its
+caller is), until it returns; and from every state it can return in, the caller's run goes on. -/
+inductive Runs (world : List Program) : Perm → Program → (State → Prop) → State → Prop where
+  | step (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr) :
       p.fetch s.rip = some i →
       (∀ u, exec perm p i u s ≠ none) →
-      (∀ u s', exec perm p i u s = some (.next s') → Runs perm p Q s') →
+      (∀ u s', exec perm p i u s = some (.next s') → Runs world perm p Q s') →
       (∀ u s', exec perm p i u s = some (.returned s') → Q s') →
-      Runs perm p Q s
+      Runs world perm p Q s
+  | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
+      (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
+      p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
+      8 ≤ s.reg RSP → allowed perm.write (s.reg RSP - 8) 8 = true →
+      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
+      Runs world inner q R (afterCall p q i s) →
+      (∀ s', R s' → Runs world perm p Q s') →
+      Runs world perm p Q s
 
 end Ode

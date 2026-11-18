@@ -10,8 +10,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 THEOREMS = {"Ode.verify_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.Arithmetic.refutes_sound": "[propext, Quot.sound]"}
-STATEMENT = ("Ode.verify_sound : ∀ (ctx : Ode.Ctx) (p : Ode.Program) (proof : List Ode.Item), "
-             "p.code = ctx.code → Ode.verdict ctx proof = none → Ode.Meets ctx.contract ctx.defs p")
+STATEMENT = ("Ode.verify_sound : ∀ (world : List Ode.Program) (ctx : Ode.Ctx) (p : Ode.Program) (proof : List Ode.Item), "
+             "p.code = ctx.code → Ode.CalleesMeet world ctx → Ode.verdict ctx proof = none → "
+             "Ode.Meets world ctx.contract ctx.defs p")
 
 
 @unittest.skipUnless(LAKE, "Lean's lake is not installed")

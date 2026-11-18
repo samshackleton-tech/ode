@@ -16,12 +16,14 @@ variable {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
 include E
 theorem rip : s0.rip = p.base := E.pre.1
 theorem small (r : Nat) : s0.reg r < M64 := E.pre.2.1 r
-theorem byte (a : Nat) : s0.mem a < 256 := E.pre.2.2.1 a
-theorem stack : ctx.contract.stack ≤ s0.reg RSP := E.pre.2.2.2.1
-theorem above : s0.reg RSP + 8 < M64 := E.pre.2.2.2.2.1
+theorem stack : ctx.contract.stack ≤ s0.reg RSP := E.pre.2.2.1
+theorem above : s0.reg RSP + 8 < M64 := E.pre.2.2.2.1
+theorem fits {o : Nat} {i : Instr} (h : (o, i) ∈ p.code) : p.base + i.next < M64 := E.pre.2.2.2.2.1 (o, i) h
 theorem region {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) :
     s0.reg r + s0.reg l ≤ M64 ∧ (s0.reg r + s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
-  E.pre.2.2.2.2.2 r l h
+  ⟨(E.pre.2.2.2.2.2 r l h).1, (E.pre.2.2.2.2.2 r l h).2.1⟩
+theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k < s0.reg l) : s0.mem (s0.reg r + k) < 256 :=
+  (E.pre.2.2.2.2.2 r l h).2.2 k hk
 end Setting
 
 theorem indexOf_lt (name : String) : ∀ (l : List String) (k r : Nat), indexOf name l k = some r → r < k + l.length
@@ -174,7 +176,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             rcases hf with rfl | rfl | hf
             · rw [holds_iff, ev_var, new]; exact Int.natCast_nonneg _
             · rw [holds_iff, ev_sub, ev_const, ev_var, new]
-              have := E.byte (s0.reg base + (ev ρ o).toNat)
+              have := E.byte (List.mem_of_getElem? hreg) (ev ρ o).toNat (by omega)
               omega
             · exact H'.facts f hf
           bytes := by
@@ -366,7 +368,8 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           apply c1.holds.mem
           simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
           omega
-        have hbyte := E.byte a
+        have hbyte := E.byte hmem (ev ρ' o).toNat (by omega)
+        rw [← hadr] at hbyte
         refine ⟨ρ', c1, ?_, ?_, ?_, bv⟩
         · simp only [allowed, Bool.and_true, Contract.perm, Bool.or_eq_true]
           right

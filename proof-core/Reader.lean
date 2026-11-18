@@ -27,6 +27,7 @@ structure Job where
   returns : Option SExpr := none
   stack : Nat := 0
   defs : List Def := []
+  callees : List (String × Contract) := []
   place : Option Place := none
   items : List Item := []
   starts : List Row := []
@@ -41,13 +42,17 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
-def statementKinds : List String := ["i", "arg", "returns", "stack", "def"]
+def statementKinds : List String := ["i", "arg", "returns", "stack", "def", "callee", "carg", "creturns", "cstack"]
 
 def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
   let inPlace (f : Place → Place) : Except String Job :=
     match t.place with
     | some p => pure { t with place := some (f p) }
     | none => throw s!"outside a place: {line}"
+  let inCallee (f : Contract → Contract) : Except String Job :=
+    match t.callees.reverse with
+    | (name, c) :: before => pure { t with callees := before.reverse ++ [(name, f c)] }
+    | [] => throw s!"outside a called function's contract: {line}"
   match (words line).head? with
   | some kind =>
     if inProof && statementKinds.contains kind then throw s!"refused: a line of the statement in the proof: {line}"
@@ -60,6 +65,17 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     let some (row, bind) := findRow table ins | throw s!"refused: an instruction that is no row of the table: {rest line 3}"
     let (some a, some b) := (a.toNat?, b.toNat?) | throw s!"cannot read {line}"
     pure { t with code := t.code ++ [(a, ⟨row.effect, bind, b⟩)] }
+  | ["callee", name] => pure { t with callees := t.callees ++ [(name, ⟨[], none, 0⟩)] }
+  | "carg" :: name :: kind =>
+    let k ← match kind with
+      | ["number"] => pure Kind.number
+      | ["bytes", len] => pure (Kind.bytes len)
+      | _ => throw s!"cannot read {line}"
+    inCallee fun c => { c with args := c.args ++ [(name, k)] }
+  | "creturns" :: _ => do let e ← readSExpr (rest line 1); inCallee fun c => { c with returns := some e }
+  | ["cstack", n] => match n.toNat? with
+    | some n => inCallee fun c => { c with stack := n }
+    | none => throw s!"cannot read {line}"
   | ["arg", name, "number"] => pure { t with args := t.args ++ [(name, .number)] }
   | ["arg", name, "bytes", len] => pure { t with args := t.args ++ [(name, .bytes len)] }
   | "returns" :: _ => pure { t with returns := some (← readSExpr (rest line 1)) }
@@ -90,4 +106,4 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | _ => throw s!"cannot read {line}"
 
 def Job.ctx (t : Job) : Ctx :=
-  { code := t.code, contract := ⟨t.args, t.returns, t.stack⟩, defs := t.defs, place := t.place }
+  { code := t.code, contract := ⟨t.args, t.returns, t.stack⟩, defs := t.defs, place := t.place, callees := t.callees }

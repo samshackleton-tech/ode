@@ -155,24 +155,31 @@ def Contract.perm (c : Contract) (s : State) : Perm where
   read a := (c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l
   write a := c.inFrame s a
 
-/-- What the caller sees to. -/
+/-- The function's code lies in memory below 2^64. -/
+def Program.fits (p : Program) : Prop := ∀ oi ∈ p.code, p.base + oi.2.next < M64
+
+/-- What the caller sees to: the function is entered at its start; the registers hold numbers below 2^64;
+`stack` bytes below the stack pointer and the eight at it are in memory; each run of bytes given lies in
+memory, apart from that frame and from the address to return to, and holds bytes. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
-  s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧ (∀ a, s.mem a < 256) ∧
-  c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧
+  s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
+  c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
   ∀ r l, (r, l) ∈ c.regions →
-    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r)
+    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
+    ∀ k, k < s.reg l → s.mem (s.reg r + k) < 256
 
 /-- What the function leaves, `s` being the state at entry: it has returned to its caller with the stack
 pointer above the return address, the registers a callee keeps as they were, memory outside its own frame
-as it was, and in rax the value the contract says. -/
+as it was, in rax the value the contract says, and numbers below 2^64 in the registers. -/
 def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   s'.rip = load s.mem (s.reg RSP) 8 ∧ s'.reg RSP = s.reg RSP + 8 ∧
   (∀ r ∈ calleeSaved, s'.reg r = s.reg r) ∧
   (∀ a, c.inFrame s a = false → s'.mem a = s.mem a) ∧
-  ∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))
+  (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))) ∧
+  ∀ r, s'.reg r < M64
 
-/-- The function's code meets the contract. -/
-def Meets (c : Contract) (defs : List Def) (p : Program) : Prop :=
-  ∀ s, c.pre p s → Runs (c.perm s) p (c.post defs s) s
+/-- The function's code meets the contract, among the functions of `world` (those it may call). -/
+def Meets (world : List Program) (c : Contract) (defs : List Def) (p : Program) : Prop :=
+  ∀ s, c.pre p s → Runs world (c.perm s) p (c.post defs s) s
 
 end Ode

@@ -36,7 +36,7 @@ def runCase (table : Array TRow) (line : String) : String :=
           let s : State := { reg := fun k => regs.getD k 0, zf := zf == "1", cf := cf == "1", rip := 0,
                              mem := fun a => if start ≤ a ∧ a < start + bytes.size then bytes[a - start]! else 0 }
           let perm : Perm := ⟨fun _ => true, fun _ => true⟩
-          match exec perm ⟨base.toNat!, []⟩ ⟨row.effect, bind, next.toNat!⟩ (fun _ => u.toNat!) s with
+          match exec perm ⟨"", base.toNat!, []⟩ ⟨row.effect, bind, next.toNat!⟩ (fun _ => u.toNat!) s with
           | none => "none"
           | some o =>
             let (kind, s') := match o with

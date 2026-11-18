@@ -1,0 +1,18 @@
+// Whether two runs of n bytes are the same, found by asking ode_common how many bytes they have alike at
+// their start. The first function shown by the verifier in Lean that calls another: the call is taken by
+// ode_common's contract alone.
+// equal(a, b, n): arguments in rdi, rsi, rdx, as ode_common takes them. Kept across the call: n in rbx.
+fn equal as "ode_equal" {
+  push rbx
+  mov rbx, rdx
+  call ode_common
+  cmp rax, rbx
+  jne @differ
+  mov rax, 1
+  jmp @done
+@differ:
+  xor eax, eax
+@done:
+  pop rbx
+  ret
+}

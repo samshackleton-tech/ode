@@ -188,6 +188,7 @@ structure Ctx where
   contract : Contract
   defs : List Def
   place : Option Place
+  callees : List (String × Contract) := []      -- the functions this one calls, each with its contract
   deriving Inhabited
 
 def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → List (String × SVal)
@@ -417,6 +418,24 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     else if op == ">=" then pure (.val (.bool (!c.isLt)), s)
     else refuse s!"no rule for {op}"
 
+/-- The value of a use of a definition, where the verifier holds one. -/
+def knownValue : List SFact → SCall → Option Row
+  | [], _ => none
+  | .value c' v :: more, c => if c' == c then some v else knownValue more c
+  | .same _ _ :: more, c => knownValue more c
+
+/-- A result where a number is needed: a number, or a use of a definition whose value is held. -/
+def number (s : Sym) : SRes → Option Row
+  | .val (.lin x) => some x
+  | .tail c => knownValue s.spec c
+  | _ => none
+
+/-- A result as one of the things a definition is used with: a value, or a use whose value is held. -/
+def argument (s : Sym) : SRes → Option SVal
+  | .val v => some v
+  | .tail c => (knownValue s.spec c).map SVal.lin
+  | .list _ => none
+
 def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) :=
   if f == "len" then
     match vs with
@@ -438,9 +457,9 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
   | s, .bin op a b => do
     let (x, s) ← seval ctx env s a
     let (y, s) ← seval ctx env s b
-    match x, y with
-    | .val (.lin x), .val (.lin y) => sbin op s x y
-    | _, _ => refuse "a number is expected (a use of a definition where its value is needed: not here yet)"
+    match number s x, number s y with
+    | some x, some y => sbin op s x y
+    | _, _ => refuse "a number is expected (or a use of a definition whose value is held)"
   | s, .ifx c a b => do
     let (c, s) ← seval ctx env s c
     match c with
@@ -467,9 +486,9 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
   | s, .cons a rest => do
     let (v, s) ← seval ctx env s a
     let (vs, s) ← seval ctx env s rest
-    match v, vs with
-    | .val v, .list vs => pure (.list (v :: vs), s)
-    | _, _ => refuse "a use of a definition inside another: not here yet"
+    match argument s v, vs with
+    | some v, .list vs => pure (.list (v :: vs), s)
+    | _, _ => refuse "a use of a definition inside another, whose value is not held"
 
 /-- A use of a definition, opened once: a fact of what it is the same as, or of its value. -/
 def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym :=
@@ -625,6 +644,75 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     let s ← settle ctx s
     pure [(s, .at i.next)]
 
+/-! ## A call, by the called function's contract -/
+
+/-- The registers a called function may leave anything in: rax, rcx, rdx, rsi, rdi, r8 to r11. -/
+def callerSaved : List Nat := [0, 1, 2, 6, 7, 8, 9, 10, 11]
+
+/-- Among the runs of bytes this function was given: the one whose address register `b` holds and whose
+length register `l` holds, both as they were at entry. -/
+def findRun (s : Sym) (b l : Nat) : List (Nat × Nat) → Nat → Option Nat
+  | [], _ => none
+  | (b0, l0) :: more, k => if s.reg b == Lin.var b0 && s.reg l == Lin.var l0 then some k else findRun s b l more (k + 1)
+
+/-- What a called function's names are, on symbols: a number is what its register holds at the call; a run
+of bytes must be one of the runs this function was itself given, whole. -/
+def calleeEnv (ctx : Ctx) (c : Contract) (s : Sym) : List (String × Kind) → List Nat → Option (List (String × SVal))
+  | (n, .number) :: args, r :: regs => (calleeEnv ctx c s args regs).map fun env => (n, SVal.lin (s.reg r)) :: env
+  | (n, .bytes len) :: args, r :: regs =>
+    match c.regOf len with
+    | some l =>
+      match findRun s r l ctx.contract.regions 0, calleeEnv ctx c s args regs with
+      | some j, some env => some ((n, SVal.region j) :: env)
+      | _, _ => none
+    | none => calleeEnv ctx c s args regs
+  | _, _ => some []
+
+/-- The state after a call, before anything is known of what was returned: the stack pointer and the
+registers a callee keeps are as before; every other register holds a number below 2^64 and no more is
+known; nothing is known of the flags; of the frame, only what lies above the stack pointer is kept (the
+called function's frame and its return address were below). -/
+def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
+  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+    zf := .unknown, cf := .unknown,
+    frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
+    facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 }
+
+/-- A call, taken by the called function's contract `c` and nothing else. What the contract asks is shown
+first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
+given is one this function was given (so it lies in memory, apart from that frame, as the contract
+asks). Then the state is what the contract leaves: `Sym.afterCall`, and rax holds what `returns` says. -/
+def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+  match s.sp with
+  | none => refuse "at a call the stack pointer is not known"
+  | some sp =>
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+      refuse "a call needs more stack than this function's contract allows"
+    else
+      match calleeEnv ctx c s c.args argRegs with
+      | none => refuse "a called function is given a run of bytes that is not one this function was given, whole"
+      | some env =>
+        match c.returns with
+        | none => pure (s.afterCall sp)
+        | some e => do
+          let (res, s2) ← seval ctx env (s.afterCall sp) e
+          match res with
+          | .val (.lin v) => pure { s2 with facts := [Lin.sub v (Lin.var s.nvars), Lin.sub (Lin.var s.nvars) v] ++ s2.facts }
+          | .tail call => pure { s2 with spec := .value call (Lin.var s.nvars) :: s2.spec }
+          | _ => refuse "a function returns a number"
+
+/-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
+def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
+  match callTarget i with
+  | some name =>
+    match ctx.callees.lookup name with
+    | none => refuse s!"a call of {name}: its contract is not in what is to be shown"
+    | some c => do
+      let s' ← symCall ctx s c
+      pure [(s', .at i.next)]
+  | none => symInstr ctx s i
+
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=
   p.names.map (fun (n, r) => (n, SVal.lin (value r))) ++ symEnv ctx.contract
 
@@ -705,7 +793,7 @@ def explore (ctx : Ctx) (general : Option (Row × Sym)) : Nat → Sym → Nat �
     match ctx.code.lookup pc with
     | none => refuse s!"no instruction at {pc}"
     | some i => do
-      let nexts ← symInstr ctx s i
+      let nexts ← symNext ctx s i
       fold (onward ctx general (explore ctx general fuel)) [] nexts
 
 def PATH : Nat := 100000

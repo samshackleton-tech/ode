@@ -25,28 +25,49 @@ def sexp(e):
     raise SystemExit(f"statement: an expression of a kind the verifier in Lean does not read yet: {e!r}")
 
 
+def contract_lines(c, name, pre=""):
+    """A contract as the lines Reader.lean reads; `pre`: "c" for the contract of a function that is called."""
+    out = []
+    for arg, kind in c["args"]:
+        m = re.fullmatch(r"(\w+) bytes", kind)
+        if kind == "number": out.append(f"{pre}arg {arg} number")
+        elif m and not m.group(1).isdigit(): out.append(f"{pre}arg {arg} bytes {m.group(1)}")
+        else: raise SystemExit(f"statement: {name}: an argument of a kind the verifier in Lean does not read yet: {arg}: {kind}")
+    for key in ("asks", "calls", "conditions", "given", "leaves", "needs", "spoils"):
+        if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")
+    if c["no_overlap"] or c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
+    # A contract promises that which instructions run and which addresses are touched do not depend on the bytes
+    # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that.
+    quiet = [arg for arg, kind in c["args"] if kind != "number" and arg not in c["trace"]]
+    if quiet: raise SystemExit(f"statement: the contract of {name} promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
+                               "the verifier in Lean does not show that yet")
+    if c["returns"] is not None: out.append(f"{pre}returns " + sexp(c["returns"]))
+    out.append(f"{pre}stack {c['stack']}")
+    return out
+
+
+def called(obj, symbol):
+    """The functions SYMBOL calls, by name, in the order of their first call."""
+    out = []
+    for _, _, text in kdecode.read(obj, symbol, 0, 0)[0]:
+        m = re.fullmatch(r"\.call (\S+)", text)
+        if m and m.group(1) not in out: out.append(m.group(1))
+    return out
+
+
 def statement(obj, symbol, spec_text):
-    """The lines that say what is to be shown: the function's instructions, its contract, the definitions."""
+    """The lines that say what is to be shown: the function's instructions, its contract, the contract of each
+    function it calls (a call is taken by that contract), and the definitions."""
     out = []
     rows, _ = kdecode.read(obj, symbol, 0, 0)
     for a, b, text in rows: out.append(f"i {a} {b} {text}")
     spec = ode.Spec(spec_text)
-    c = spec.contracts[symbol]
-    for name, kind in c["args"]:
-        m = re.fullmatch(r"(\w+) bytes", kind)
-        if kind == "number": out.append(f"arg {name} number")
-        elif m and not m.group(1).isdigit(): out.append(f"arg {name} bytes {m.group(1)}")
-        else: raise SystemExit(f"statement: an argument of a kind the verifier in Lean does not read yet: {name}: {kind}")
-    for key in ("asks", "calls", "conditions", "given", "leaves", "needs", "spoils"):
-        if c[key]: raise SystemExit(f"statement: the contract has `{key}`, which the verifier in Lean does not read yet")
-    if c["no_overlap"] or c["decreases"]: raise SystemExit("statement: the contract has a line the verifier in Lean does not read yet")
-    # A contract promises that which instructions run and which addresses are touched do not depend on the bytes
-    # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that.
-    quiet = [name for name, kind in c["args"] if kind != "number" and name not in c["trace"]]
-    if quiet: raise SystemExit(f"statement: the contract promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
-                               "the verifier in Lean does not show that yet")
-    if c["returns"] is not None: out.append("returns " + sexp(c["returns"]))
-    out.append(f"stack {c['stack']}")
+    if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
+    out += contract_lines(spec.contracts[symbol], symbol)
+    for name in called(obj, symbol):
+        if name not in spec.contracts: raise SystemExit(f"statement: {symbol} calls {name}, whose contract is not in the specification")
+        out.append(f"callee {name}")
+        out += contract_lines(spec.contracts[name], name, "c")
     for name, (params, body) in spec.fns.items():
         if len(body) != 1 or body[0][0] != "expr": raise SystemExit(f"statement: the definition {name} is more than one expression")
         out.append(" ".join(["def", name] + params + ["=", sexp(body[0][1])]))
