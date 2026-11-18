@@ -16,6 +16,10 @@ name = "Contract"
 [[lean_lib]]
 name = "Core"
 
+[[lean_lib]]
+name = "Sound"
+roots = ["SoundLin", "SoundState", "SoundStep", "SoundSpec", "SoundTop"]
+
 [[lean_exe]]
 name = "arith"
 root = "ArithMain"

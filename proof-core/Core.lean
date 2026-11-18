@@ -181,16 +181,16 @@ structure Ctx where
   place : Option Place
   deriving Inhabited
 
+def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → List (String × SVal)
+  | (n, .number) :: args, r :: regs, k => (n, .lin (Lin.var r)) :: symEnvIn c args regs k
+  | (n, .bytes len) :: args, _ :: regs, k =>
+    match c.regOf len with
+    | some _ => (n, .region k) :: symEnvIn c args regs (k + 1)
+    | none => symEnvIn c args regs k
+  | _, _, _ => []
+
 /-- The contract's names on symbols: a number is its register at entry; a run of bytes is a run by its number. -/
-def symEnv (c : Contract) : List (String × SVal) :=
-  let rec go : List (String × Kind) → List Nat → Nat → List (String × SVal)
-    | (n, .number) :: args, r :: regs, k => (n, .lin (Lin.var r)) :: go args regs k
-    | (n, .bytes len) :: args, _ :: regs, k =>
-      match c.regOf len with
-      | some _ => (n, .region k) :: go args regs (k + 1)
-      | none => go args regs k
-    | _, _, _ => []
-  go c.args argRegs 0
+def symEnv (c : Contract) : List (String × SVal) := symEnvIn c c.args argRegs 0
 
 def Sym.put (s : Sym) (r : Nat) (v : Row) : Sym := { s with reg := fun k => if k = r then v else s.reg k }
 
@@ -305,10 +305,6 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
       | none => symPrim f s x y
     | _, _ => refuse "a flag's value where a number is expected"
   | _, .call f _ => refuse s!"no rule for {f}"
-
-def isUnknown : Expr → Bool
-  | .name n => n == "unknown"
-  | _ => false
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s

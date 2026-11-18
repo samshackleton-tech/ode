@@ -116,35 +116,35 @@ def argRegs : List Nat := [7, 6, 2, 1, 8, 9]
 
 def calleeSaved : List Nat := [3, 5, 12, 13, 14, 15]
 
+def regOfIn (name : String) : List (String × Kind) → List Nat → Option Nat
+  | (n, _) :: args, r :: regs => if n == name then some r else regOfIn name args regs
+  | _, _ => none
+
 /-- The register of the argument of that name. -/
-def Contract.regOf (c : Contract) (name : String) : Option Nat :=
-  let rec go : List (String × Kind) → List Nat → Option Nat
-    | (n, _) :: args, r :: regs => if n == name then some r else go args regs
-    | _, _ => none
-  go c.args argRegs
+def Contract.regOf (c : Contract) (name : String) : Option Nat := regOfIn name c.args argRegs
+
+def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat × Nat)
+  | (_, .bytes len) :: args, r :: regs =>
+    match c.regOf len with
+    | some l => (r, l) :: regionsIn c args regs
+    | none => regionsIn c args regs
+  | (_, .number) :: args, _ :: regs => regionsIn c args regs
+  | _, _ => []
 
 /-- The runs of bytes the function is given: (the register with the address, the register with the length). -/
-def Contract.regions (c : Contract) : List (Nat × Nat) :=
-  let rec go : List (String × Kind) → List Nat → List (Nat × Nat)
-    | (_, .bytes len) :: args, r :: regs =>
-      match c.regOf len with
-      | some l => (r, l) :: go args regs
-      | none => go args regs
-    | _ :: args, _ :: regs => go args regs
-    | _, _ => []
-  go c.args argRegs
+def Contract.regions (c : Contract) : List (Nat × Nat) := regionsIn c c.args argRegs
+
+def envIn (c : Contract) (s : State) : List (String × Kind) → List Nat → List (String × Val)
+  | (n, .number) :: args, r :: regs => (n, .int (s.reg r)) :: envIn c s args regs
+  | (n, .bytes len) :: args, r :: regs =>
+    match c.regOf len with
+    | some l => (n, .bytes ((List.range (s.reg l)).map fun k => s.mem (s.reg r + k))) :: envIn c s args regs
+    | none => envIn c s args regs
+  | _, _ => []
 
 /-- The names of the contract as values, in a state at entry: a number is its register; a run of bytes is
 what memory holds there. -/
-def Contract.env (c : Contract) (s : State) : List (String × Val) :=
-  let rec go : List (String × Kind) → List Nat → List (String × Val)
-    | (n, .number) :: args, r :: regs => (n, .int (s.reg r)) :: go args regs
-    | (n, .bytes len) :: args, r :: regs =>
-      match c.regOf len with
-      | some l => (n, .bytes ((List.range (s.reg l)).map fun k => s.mem (s.reg r + k))) :: go args regs
-      | none => go args regs
-    | _, _ => []
-  go c.args argRegs
+def Contract.env (c : Contract) (s : State) : List (String × Val) := envIn c s c.args argRegs
 
 def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
 

@@ -133,6 +133,11 @@ mutual
       | _, _ => none
 end
 
+/-- `unknown`: the row says nothing of what it sets. -/
+def isUnknown : Expr → Bool
+  | .name n => n == "unknown"
+  | _ => false
+
 def setReg (s : State) (r v : Nat) : State := { s with reg := fun k => if k = r then v % M64 else s.reg k }
 
 /-- One statement of an effect. `u` is what an `unknown` turns out to be this time. -/
@@ -146,10 +151,7 @@ def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → O
       | some (flag, want) => (if flag == "zf" then s.zf else s.cf) == want
     if taken then (value perm bind s target).map fun t => { s with rip := base + t } else some s
   | .set place v =>
-    let x := match v with
-      | .name n => if n == "unknown" then some u else value perm bind s v
-      | _ => value perm bind s v
-    match x, place with
+    match (if isUnknown v then some u else value perm bind s v), place with
     | some x, .name n =>
       if n == "zf" then some { s with zf := x != 0 }
       else if n == "cf" then some { s with cf := x != 0 }
