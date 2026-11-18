@@ -18,7 +18,9 @@ inductive SExpr where
   | bin (op : String) (a b : SExpr)
   | ifx (c a b : SExpr)
   | index (a i : SExpr)
-  | call (f : String) (args : List SExpr)
+  | call (f : String) (args : SExpr)      -- the things a definition is used with: `cons a (cons b … nil)`
+  | nil
+  | cons (a rest : SExpr)
   deriving Repr, Inhabited
 
 inductive Val where
@@ -49,6 +51,15 @@ def binop (op : String) : Val → Val → Option Val
 
 def findDef (defs : List Def) (f : String) : Option Def := defs.find? fun d => d.name == f
 
+/-- The values of the things a definition is used with, each by `ev`. -/
+def evalList (ev : SExpr → Option Val) : SExpr → Option (List Val)
+  | .nil => some []
+  | .cons a rest =>
+    match ev a, evalList ev rest with
+    | some v, some vs => some (v :: vs)
+    | _, _ => none
+  | _ => none
+
 /-- The value of an expression, where the names of `env` are these values; `none` where it has none within
 `fuel` uses of definitions and operators nested. -/
 def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Option Val
@@ -71,7 +82,7 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
       | some (.bytes l), some (.int k) => if 0 ≤ k then (l[k.toNat]?).map fun b => .int b else none
       | _, _ => none
     | .call f args =>
-      match args.mapM (evalSpec defs fuel env) with
+      match evalList (evalSpec defs fuel env) args with
       | none => none
       | some vs =>
         if f == "len" then
@@ -82,6 +93,8 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
           match findDef defs f with
           | some d => if d.params.length == vs.length then evalSpec defs fuel (d.params.zip vs) d.body else none
           | none => none
+    | .nil => none
+    | .cons _ _ => none
 
 /-- The expression has the value `v`. -/
 def Value (defs : List Def) (env : List (String × Val)) (e : SExpr) (v : Val) : Prop :=
@@ -144,7 +157,7 @@ def Contract.perm (c : Contract) (s : State) : Perm where
 /-- What the caller sees to. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧ (∀ a, s.mem a < 256) ∧
-  c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 ≤ M64 ∧
+  c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧
   ∀ r l, (r, l) ∈ c.regions →
     s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r)
 

@@ -30,7 +30,7 @@ partial def toSExpr : Sexp → Option SExpr
   | .list [.atom "bin", .atom op, a, b] => do some (.bin op (← toSExpr a) (← toSExpr b))
   | .list [.atom "ifx", c, a, b] => do some (.ifx (← toSExpr c) (← toSExpr a) (← toSExpr b))
   | .list [.atom "index", a, i] => do some (.index (← toSExpr a) (← toSExpr i))
-  | .list (.atom "call" :: .atom f :: args) => do some (.call f (← args.mapM toSExpr))
+  | .list (.atom "call" :: .atom f :: args) => do some (.call f ((← args.mapM toSExpr).foldr .cons .nil))
   | _ => none
 
 def readSExpr (text : String) : Except String SExpr :=
@@ -102,13 +102,7 @@ def Job.line (table : Array TRow) (t : Job) (line : String) : Except String Job 
   | _ => throw s!"cannot read {line}"
 
 def Job.ctx (t : Job) : Ctx :=
-  let c : Contract := ⟨t.args, t.returns, t.stack⟩
-  let regions := c.regions.map fun (r, l) => (⟨r, l⟩ : Region)
-  let rec env : List (String × Kind) → List Nat → Nat → List (String × SVal)
-    | (n, .number) :: args, r :: regs, k => (n, .lin (Lin.var r)) :: env args regs k
-    | (n, .bytes _) :: args, _ :: regs, k => (n, .region k) :: env args regs (k + 1)
-    | _, _, _ => []
-  { code := t.code, contract := c, defs := t.defs, regions := regions, env := env t.args argRegs 0, place := t.place }
+  { code := t.code, contract := ⟨t.args, t.returns, t.stack⟩, defs := t.defs, place := t.place }
 
 def main (args : List String) : IO UInt32 := do
   match args with
