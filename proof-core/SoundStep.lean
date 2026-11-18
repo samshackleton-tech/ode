@@ -448,7 +448,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     simp only [symDivide, hd]
     have hq := List.find?_some hd
     simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
-    obtain ⟨⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
     have f1 := H.facts _ m1
     have f2 := H.facts _ m2
     have f3 := H.facts _ m3

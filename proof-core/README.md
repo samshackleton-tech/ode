@@ -34,9 +34,9 @@ lines of proof. The verifier shows `ode_common` first and then takes the call by
 proof is 265 lines (3 kB), most of it the arithmetic of remainders, and the verifier decides in 5 ms.
 `ode_adler32_blocks` is the same checksum taken in blocks of at most 5552 bytes, the sums reduced once a
 block by shifts and masks: 116 instructions, a loop inside a loop. Its proof is about 1,400 lines (19 kB),
-and the verifier decides in 77 ms. `ode_adler32_blocks4` takes the bytes of a block four a turn, and is the
+and the verifier decides in 40 ms. `ode_adler32_blocks4` takes the bytes of a block four a turn, and is the
 one of the three that is fast (87% of the usual C): 164 instructions, three loops. Its proof is about 2,100
-lines (27 kB), and the verifier decides in 188 ms.
+lines (27 kB), and the verifier decides in 80 ms.
 
 ## The theorem
 
@@ -209,7 +209,7 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | `ode_adler32`: the proof | 265 lines, 3 kB: the place 11 lines, 39 proofs of arithmetic (the prover's elimination does not give the same proof every run); found in 204 runs of the verifier, 1.0 s |
 | `ode_adler32_blocks` (116 instructions, two loops): the proof | about 1,400 lines, 19 kB: two places (24 lines), 174 proofs of arithmetic; found in 763 runs of the verifier, 20 s. (It was 135 kB while a proof of arithmetic wrote out the rows it starts from; it names them by number now) |
 | `ode_adler32_blocks4` (164 instructions, three loops): the proof | about 2,100 lines, 27 kB: three places (36 lines), 266 proofs of arithmetic, 12 uses of definitions opened where they are met; found in 2,206 runs of the verifier, 81 s |
-| the verifier's time | 4 ms for `ode_common`; 4 ms for it and `ode_equal` together; 5 ms for `ode_adler32`; 77 ms for `ode_adler32_blocks`; 188 ms for `ode_adler32_blocks4` |
+| the verifier's time | 4 ms for `ode_common`; 4 ms for it and `ode_equal` together; 5 ms for `ode_adler32`; 40 ms for `ode_adler32_blocks`; 80 ms for `ode_adler32_blocks4` (each a whole run: the program started, three files read). The verifier in Python that a reader uses today (`../kcheck/`, by the proofs the shipped file carries) takes 4, 4, 14 and 28 ms for the same four, without its start: this one is as fast on the small two and three times slower on the large two. Most of its time goes in rows held as lists with a place for every unknown |
 | wrong versions of `ode_common` | 18 changes of one place in the code, the specification, the contract or the place: each refused, and the prover finds no proof for any. Every line of the proof left out or changed (85 trials): refused |
 | wrong versions of `ode_adler32` | 19 changes of one place in the code (another modulus, a sum not reduced, the shift by 15, …), the specification, the contract or the place: none shown, and the prover finds no proof for any in four times the runs it needs for the right one. Every line of the proof left out, and 167 changed: refused |
 | wrong versions of `ode_adler32_blocks` | 14 changes of one place in the code (a shift by 15, a mask of 17 bits, the high part counted 8 times, a sum not reduced, …), the specification, the contract or the places (a place that does not keep the block's end, a number that does not decrease): none shown, and the prover finds no proof for any within the runs, and one and a half times the time, of the right one. Of every seventh line of the proof left out or changed (343 trials): each refused |
@@ -219,7 +219,7 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | wrong versions of the caller | 11 changes of the caller's code (the count kept in a register a call may change, a run not handed over whole, the stack pointer moved, what a call leaves in rcx used, …) and 5 of the contracts: none shown, no proof found, and for each the test names what the verifier then lacks or refuses. The caller before its callee, a function that calls itself, a callee left out, two functions of one name: refused. Two other ways of writing the caller and two of writing its contract: shown |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
-| size | the account 442 lines of code; the verifier 911 (Core.lean 752, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 4,122 |
+| size | the account 442 lines of code; the verifier 918 (Core.lean 759, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 4,122 |
 
 ## The files
 

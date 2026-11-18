@@ -225,13 +225,23 @@ def Sym.divide (s : Sym) (x : Row) (m : Int) : Sym :=
   { s with nvars := s.nvars + 2,
            facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts }
 
+/-- The unknowns a fact names as a quotient of `x` by `m`: the fact is `x` less `m` times that unknown, less
+the next unknown. (Only to look at few unknowns in `divided`: nothing rests on it.) -/
+def quotients (s : Sym) (x : Row) (m : Int) : List Nat :=
+  s.facts.filterMap fun f =>
+    let e := Lin.sub x f
+    let q := e.coeff.length - 2
+    if 2 ≤ e.coeff.length && e == Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)) then some q else none
+
 /-- The quotient's unknown, where the facts held already say what `x` divided by `m` is: the four facts of
 `Sym.divide`, of one unknown and the next. -/
 def divided (s : Sym) (x : Row) (m : Int) : Option Nat :=
+  let named := quotients s x m
   (List.range s.nvars).find? fun q =>
-    let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)))
-    s.facts.contains d && s.facts.contains (Lin.scale (-1) d) && s.facts.contains (Lin.var (q + 1)) &&
-      s.facts.contains (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1)))
+    named.contains q &&
+    (let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)))
+     s.facts.contains d && s.facts.contains (Lin.scale (-1) d) && s.facts.contains (Lin.var (q + 1)) &&
+       s.facts.contains (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1))))
 
 /-- A number of the machine (from 0 to 2^64 - 1) divided by a number above zero: its quotient and its
 remainder, and the state that knows of them. They are found once for one number and one divisor; the
