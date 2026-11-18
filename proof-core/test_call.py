@@ -12,6 +12,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "lang"))
 import lean_verify, odec, prove, statement
+import built
 COMMON = os.path.join(HERE, "..", "kcheck", "programs", "common")
 EQUAL = os.path.join(HERE, "examples", "equal")
 LAKE = lean_verify.LAKE
@@ -74,8 +75,7 @@ class Call(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-        r = subprocess.run([LAKE, "build", "odeverify"], cwd=HERE, capture_output=True, text=True, env=env)
-        if r.returncode != 0: raise AssertionError("lake build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+        built.built("odeverify")
         cls.dir = tempfile.mkdtemp(prefix="odecall-")
         cls.common, cls.equal = os.path.join(COMMON, "odecommon.o"), os.path.join(EQUAL, "odeequal.o")
         with open(os.path.join(EQUAL, "equal.spec")) as f: cls.spec = f.read()
@@ -226,4 +226,5 @@ class Call(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    built.same_every_run()          # the prover finds the same proof every run
     unittest.main()

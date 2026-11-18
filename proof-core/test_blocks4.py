@@ -18,6 +18,7 @@ import os, shutil, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import lean_verify, prove, statement
+import built
 ADLER = os.path.join(HERE, "..", "kcheck", "programs", "adler32")
 LAKE = lean_verify.LAKE
 STATEMENT = ("fn", "i", "arg", "returns", "stack", "def")    # the kinds of line that say what is to be shown
@@ -37,8 +38,7 @@ class Blocks4(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-        r = subprocess.run([LAKE, "build", "odeverify"], cwd=HERE, capture_output=True, text=True, env=env)
-        if r.returncode != 0: raise AssertionError("lake build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+        built.built("odeverify")
         cls.dir = tempfile.mkdtemp(prefix="odeblocks4-")
         cls.obj = os.path.join(ADLER, "odeadler32.o")
         cls.statement, cls.proof = os.path.join(cls.dir, "blocks.statement"), os.path.join(cls.dir, "blocks.proof")
@@ -81,6 +81,8 @@ class Blocks4(unittest.TestCase):
 
     def test_the_kept_proof_shows_from_the_files(self):
         self.assertEqual(lean_verify.verify(self.spec, [(self.obj, SYMBOL)], self.kept), (True, "shown"))
+        if os.environ.get("PYTHONHASHSEED") == "0":         # in a fixed order (built.same_every_run) the prover finds the kept proof again
+            with open(self.kept) as f, open(self.proof) as g: self.assertEqual(f.read(), g.read())
 
     def test_changed_in_one_place(self):
         for what, old, new in CHANGED:
@@ -121,4 +123,5 @@ class Blocks4(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    built.same_every_run()          # the prover finds the same proof every run
     unittest.main()

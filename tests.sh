@@ -26,8 +26,20 @@ done
 for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t" "" & done
 one core test_core.py "" &
 one lang test_asm.py "" &
-# (the ten of proof-core one after another: each asks Lean's lake to build in the same folder)
-( one proof-core test_sound.py ""; one proof-core test_arith.py ""; one proof-core test_machine.py ""; one proof-core test_spec.py ""; one proof-core test_verify.py ""; one proof-core test_call.py ""; one proof-core test_blocks.py ""; one proof-core test_blocks4.py ""; one proof-core test_low.py ""; one proof-core test_adler.py "" ) &
+# proof-core: Lean's lake builds everything once, here; then its tests run side by side (ODE_LEAN_BUILT tells
+# them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.
+lake=$(command -v lake || { [ -x "$HOME/.elan/bin/lake" ] && echo "$HOME/.elan/bin/lake"; })
+lean=""
+if [ -n "$lake" ]; then
+    if ( cd "$here/proof-core" && PATH="$(dirname "$lake"):$PATH" "$lake" build > /dev/null 2>&1 ); then lean=built
+    else lean=broken; echo "proof-core/lake build | 0 s | FAILED" >> "$out"; fi
+fi
+if [ "$lean" != broken ]; then
+    for t in test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py \
+             test_adler.py test_blocks.py test_blocks4.py; do
+        ( [ "$lean" = built ] && export ODE_LEAN_BUILT=1; one proof-core "$t" "" ) &
+    done
+fi
 wait
 total=$(grep -c '' "$out")
 good=$(grep -c -E ' OK( \(skipped=[0-9]+\))? *$' "$out")

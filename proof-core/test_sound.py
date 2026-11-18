@@ -6,6 +6,9 @@
 `lake build Sound` checks every proof. Then Lean is asked what each theorem depends on: an unfinished proof
 would show there as `sorryAx`, an assumption of ours as an axiom's name."""
 import os, shutil, subprocess, tempfile, unittest
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import built
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
@@ -30,8 +33,7 @@ STATEMENTS = [
 class Sound(unittest.TestCase):
     def test_the_theorems_are_proved_from_leans_axioms_alone(self):
         env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-        r = subprocess.run([LAKE, "build", "Sound"], cwd=HERE, capture_output=True, text=True, env=env)
-        self.assertEqual(r.returncode, 0, r.stdout[-3000:] + r.stderr[-3000:])
+        built.built("Sound")
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "Ask.lean")
             with open(path, "w") as f:

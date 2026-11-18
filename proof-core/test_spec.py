@@ -19,6 +19,7 @@ sys.path.insert(0, HERE)
 import ode
 import statement
 from statement import sexp
+import built
 
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 DEFINITIONS = """
@@ -72,8 +73,7 @@ class Spec(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-        r = subprocess.run([LAKE, "build", "odespec"], cwd=HERE, capture_output=True, text=True, env=env)
-        if r.returncode != 0: raise AssertionError("lake build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+        built.built("odespec")
         cls.dir = tempfile.mkdtemp(prefix="odespec-")
         cls.spec = ode.Spec(DEFINITIONS)
         cls.defs = os.path.join(cls.dir, "defs")

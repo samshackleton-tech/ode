@@ -20,6 +20,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.join(HERE, "..", "core")
 sys.path.insert(0, CORE)
 import conc, cross, table
+import built
 
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 G64, SCRATCH, ROOM, STACK = cross.G64, cross.SCRATCH, cross.ROOM, cross.STACK
@@ -89,7 +90,7 @@ def compare(todo, answers):
 class Machine(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        subprocess.run([LAKE, "build", "odemachine"], cwd=HERE, check=True, capture_output=True)
+        built.built("odemachine")
         cls.n = int(os.environ.get("MACHINE_CASES", "60"))
         cls.rows = table.read()
         cls.work = tempfile.mkdtemp()

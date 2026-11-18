@@ -23,7 +23,7 @@ sys.path.insert(0, KCHECK)
 import kbyte, klin, kprove, varith
 sys.path.insert(0, HERE)
 from statement import sexp, statement, ordered, sequences
-import ode
+import built, ode
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
@@ -341,6 +341,7 @@ def prove(spec_text, targets, statement_out, out):
 
 
 if __name__ == "__main__":
+    built.same_every_run()          # the same proof every run
     if len(sys.argv) < 5: raise SystemExit(__doc__)
     spec, statement_out, out = sys.argv[1:4]
     targets = []

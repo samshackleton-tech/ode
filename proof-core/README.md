@@ -198,7 +198,9 @@ The call in `ode_equal` needs no line of proof of its own.
 `prove.py` is the prover, relied on for nothing: it runs the verifier, which says what it needs next, finds
 an answer (the arithmetic by elimination, the equalities first), and runs it again: 47 runs and a fifth of a
 second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds for `ode_adler32_blocks`,
-2,206 runs and 81 seconds for `ode_adler32_blocks4`.
+2,206 runs and 81 seconds for `ode_adler32_blocks4`. Its choices go by the order Python walks its sets in,
+so it starts itself with that order fixed (`built.py`): it finds the same proof every run, and the tests
+compare each kept proof with what it finds.
 
 ## What was measured (November 18, 2026)
 
@@ -206,7 +208,7 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 |---|---|
 | `ode_common`: the proof | 55 lines, 646 bytes: the place 8 lines, 7 proofs of arithmetic |
 | `ode_equal`, which calls it: its part of the proof | 9 lines, 77 bytes (the two together: 65 lines, 723 bytes; the statement 2,262 bytes) |
-| `ode_adler32`: the proof | 265 lines, 3 kB: the place 11 lines, 39 proofs of arithmetic (the prover's elimination does not give the same proof every run); found in 204 runs of the verifier, 1.0 s |
+| `ode_adler32`: the proof | 265 lines, 3 kB: the place 11 lines, 39 proofs of arithmetic; found in 204 runs of the verifier, 1.0 s |
 | `ode_adler32_blocks` (116 instructions, two loops): the proof | about 1,400 lines, 19 kB: two places (24 lines), 174 proofs of arithmetic; found in 763 runs of the verifier, 20 s. (It was 135 kB while a proof of arithmetic wrote out the rows it starts from; it names them by number now) |
 | `ode_adler32_blocks4` (164 instructions, three loops): the proof | about 2,100 lines, 27 kB: three places (36 lines), 266 proofs of arithmetic, 12 uses of definitions opened where they are met; found in 2,206 runs of the verifier, 81 s |
 | the verifier's time | 4 ms for `ode_common`; 4 ms for it and `ode_equal` together; 5 ms for `ode_adler32`; 40 ms for `ode_adler32_blocks`; 80 ms for `ode_adler32_blocks4` (each a whole run: the program started, three files read). The verifier in Python that a reader uses today (`../kcheck/`, by the proofs the shipped file carries) takes 4, 4, 14 and 28 ms for the same four, without its start: this one is as fast on the small two and three times slower on the large two. Most of its time goes in rows held as lists with a place for every unknown |
@@ -217,6 +219,7 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | the low half and the low byte (`ode_low` of `examples/low/`: 4 instructions) | the proof 528 bytes, found in 8 runs of the verifier, verified in 3 ms; 4 changes of the code and 4 of the contract (the whole number for its low half, the other number's low byte, 7 bits for 8, …): none shown, and no proof found; each of the proof's lines left out: refused |
 | a quotient in a specification (`ode_eighth` of `examples/low/`: a shift right by three, against `a / 8`) | the proof 158 bytes; 3 changes of the code and 3 of the contract (a shift by two, a quotient by nine, the remainder for the quotient, …): none shown, and no proof found; each of the proof's lines left out: refused |
 | wrong versions of the caller | 11 changes of the caller's code (the count kept in a register a call may change, a run not handed over whole, the stack pointer moved, what a call leaves in rcx used, …) and 5 of the contracts: none shown, no proof found, and for each the test names what the verifier then lacks or refuses. The caller before its callee, a function that calls itself, a callee left out, two functions of one name: refused. Two other ways of writing the caller and two of writing its contract: shown |
+| the two limits set for it (`test_limits.py`) | a proof under 100 kB, and a whole run of this verifier no more than five times the time `../kcheck`'s verifier takes for the same function: measured at every run of the tests for the four shipped functions, and failed where either is passed |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
 | size | the account 442 lines of code; the verifier 918 (Core.lean 759, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 4,122 |
@@ -231,6 +234,6 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | what is to be shown (relied on) | `statement.py` |
 | for a reader | `lean_verify.py`; `proofs/ode_common.proof`, `proofs/ode_equal.proof`, `proofs/ode_adler32.proof`, `proofs/ode_adler32_blocks.proof`, `proofs/ode_adler32_blocks4.proof`, `proofs/ode_low.proof`, `proofs/ode_eighth.proof`; `examples/equal/` and `examples/low/` (a source, its specification, and the object the source makes); `examples/adler32/adler32.places`, `blocks.places` and `blocks4.places` (the places the prover starts from) |
 | the prover (relied on for nothing) | `prove.py` |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_low.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run; `built.py` builds with Lean's lake once a process |
 
 The tests skip where Lean's `lake` is not installed.

@@ -13,6 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, KCHECK)
 import kdecode, kproof, varith
+import built
 
 SHIPPED = [os.path.join(KCHECK, "b3hashr.o")] + sorted(glob.glob(os.path.join(KCHECK, "programs", "*", "ode*.o")))
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
@@ -48,9 +49,8 @@ class Lean(unittest.TestCase):
         cls.exe = None
         if LAKE:
             env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-            r = subprocess.run([LAKE, "build", "arith"], cwd=HERE, capture_output=True, text=True, env=env)
-            if r.returncode == 0: cls.exe = os.path.join(HERE, ".lake", "build", "bin", "arith")
-            else: raise AssertionError("lake build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+            built.built("arith")
+            cls.exe = os.path.join(HERE, ".lake", "build", "bin", "arith")
 
     def setUp(self):
         if self.exe is None: self.skipTest("no Lean (lake) here")

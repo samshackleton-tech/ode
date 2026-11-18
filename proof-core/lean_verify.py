@@ -14,7 +14,7 @@ by `lake build`) says `shown` of all of them, or why not. Exit 0 only for shown.
 import os, re, shutil, subprocess, sys, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import statement
+import built, statement
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
@@ -24,9 +24,8 @@ LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.pat
 def verify(spec_text, functions, proof_path):
     """functions: [(object, symbol)]. (shown?, what the verifier said)."""
     if not LAKE: raise SystemExit("lean_verify: Lean's `lake` is not installed (https://lean-lang.org): the verifier is built with it")
-    env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-    r = subprocess.run([LAKE, "build", "odeverify"], cwd=HERE, capture_output=True, text=True, env=env)
-    if r.returncode != 0: raise SystemExit("lean_verify: the verifier does not build:\n" + r.stdout[-2000:] + r.stderr[-2000:])
+    try: built.built("odeverify")
+    except AssertionError as e: raise SystemExit(f"lean_verify: the verifier does not build: {e}")
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "statement")
         with open(path, "w") as f: f.write("\n".join(statement.statement(spec_text, functions)) + "\n")
