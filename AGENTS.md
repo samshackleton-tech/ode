@@ -137,7 +137,7 @@ A highly desirable property of an interface and its contract: the user learns th
 
 **The coder decides.** The compiler does what the source says or refuses. Two tests hold that line: the shipped files' code is what the sources give, byte for byte (`kcheck/test_made.py`; `kcheck/make_hash.sh` makes the whole hash file again), and the kernels written in Ode are the reference kernels byte for byte (`wide/test_sources.py`).
 
-**Before a merge or a public number:** `python3 kcheck/gate.py --jobs N` (under five minutes; the parts that run code need x86-64 Linux with AVX-512). `sh tests.sh` is the whole suite (about nine minutes on 64 threads). `kcheck/audit.sh` is a soak of hours: start it on a tree that then stays as it is, and try its tools small on its machine first.
+**Before a merge or a public number:** `python3 kcheck/gate.py --jobs N` (under five minutes; the parts that run code need x86-64 Linux with AVX-512). `sh tests.sh` is the whole suite (about nine minutes on 64 threads). With `ODE_TEST_CACHE=FOLDER` it does not run a test again that passed on the same files (`tests_key.py`): after a change to `proof-core/` alone only its twelve tests run, about three minutes. `kcheck/audit.sh` is a soak of hours: start it on a tree that then stays as it is, and try its tools small on its machine first.
 
 **State what was measured.** Count from the files before writing a number, and say what ran and where. A timing is evidence from a machine that was otherwise idle.
 

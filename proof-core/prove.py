@@ -24,10 +24,11 @@ sys.path.insert(0, KCHECK)
 import kbyte, klin, kprove, varith
 sys.path.insert(0, HERE)
 from statement import sexp, statement, ordered, sequences
-import built, ode
+import built, ode, session
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+FROM_THE_START = bool(os.environ.get("ODE_PROVE_FROM_START"))     # ask `odeverify` each time (the slow way, to compare with)
 REGISTERS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
 
 
@@ -242,6 +243,12 @@ class Prover:
     def __init__(self, statement_path, head, out, later=(), budget=None, until=None):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
+        self.session = None                 # the talk with `odeprove`, begun at the first question
+
+    def close(self):
+        if self.session is not None: self.session.close(); self.session = None
+
+    def __del__(self): self.close()
 
     def finished(self, said):
         """The verifier has no more to ask of this function: all is shown, or it speaks of a later function."""
@@ -252,9 +259,17 @@ class Prover:
     def ask(self, proof):
         if self.budget is not None and self.runs >= self.budget: raise GaveUp(self.runs)
         if self.until is not None and time.time() > self.until: raise GaveUp(self.runs)
-        with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
         self.runs += 1
-        return subprocess.run([EXE, TABLE, self.statement, self.out], capture_output=True, text=True).stdout
+        if FROM_THE_START or not os.path.exists(session.EXE):
+            # the verifier itself, from the proof's first line each time
+            with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+            return subprocess.run([EXE, TABLE, self.statement, self.out], capture_output=True, text=True).stdout
+        # `odeprove` says what the verifier would say, and goes only through the lines that are new (session.py)
+        if self.session is None:
+            names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
+            if not names: raise SystemExit("prove: the lines before the proof name no function (`for NAME`)")
+            self.session = session.Session(self.statement, self.lines, names[-1])
+        return self.session.ask(proof)
 
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
@@ -333,6 +348,7 @@ def prove(spec_text, targets, statement_out, out):
             except Unkept as e:
                 keep[e.args[0]] = [r for r in keep.get(e.args[0], REGISTERS) if r != REGISTERS[e.args[1]]]
                 runs += p.runs
+                p.close()
                 continue
             if proof is None: raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
             k = len(proof) - 1
@@ -341,8 +357,12 @@ def prove(spec_text, targets, statement_out, out):
                 k -= 1
             done = p.lines + proof
             numbers[symbol] = (runs + p.runs, len(proof))
+            p.close()
             break
     with open(out, "w") as f: f.write("\n".join(done) + "\n")
+    # the prover's helper is not the verifier: what was found is a proof only if `odeverify` says so
+    said = subprocess.run([EXE, TABLE, statement_out, out], capture_output=True, text=True).stdout
+    if not said.startswith("shown"): raise SystemExit(f"prove: the verifier does not take the proof that was found:\n{said[:400]}")
     return numbers
 
 

@@ -1,5 +1,5 @@
 name = "odecore"
-defaultTargets = ["arith", "odeverify", "odemachine", "odespec", "Sound"]
+defaultTargets = ["arith", "odeverify", "odeprove", "odemachine", "odespec", "Sound"]
 
 [[lean_lib]]
 name = "Arithmetic"
@@ -38,3 +38,7 @@ root = "MachineMain"
 [[lean_exe]]
 name = "odespec"
 root = "SpecMain"
+
+[[lean_exe]]
+name = "odeprove"
+root = "ProveMain"

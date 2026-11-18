@@ -47,7 +47,7 @@ theorem listOf_agree {n : Nat} {ρ ρ' : Nat → Int} {rows : List Row} (hb : �
 
 /-- The things of a list written out are numbers no less than zero. -/
 theorem numbers_sound {ctx : Ctx} {s0 : State} {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) {n : Nat} :
-    ∀ {vs : List SVal} {rows : List Row} {items rest : List Item}, numbers facts vs items = .ok (rows, rest) → (∀ v ∈ vs, v.bounded n) →
+    ∀ {vs : List SVal} {rows : List Row} {items rest : Items}, numbers facts vs items = .ok (rows, rest) → (∀ v ∈ vs, v.bounded n) →
       asList (vs.map (semv ctx s0 ρ)) = some (listOf ρ rows) ∧ (∀ r ∈ rows, 0 ≤ ev ρ r) ∧ (∀ r ∈ rows, bounded n r)
   | [], rows, items, rest, h, _ => by
     simp only [numbers] at h
@@ -80,7 +80,7 @@ theorem numbers_sound {ctx : Ctx} {s0 : State} {facts : List Row} {ρ : Nat → 
 /-- **A list of the specification, on symbols.** The rows that come out are the things of the list the
 expression is, each no less than zero. -/
 theorem slist_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
-    ∀ (fuel : Nat) (env : List (String × SVal)) (e : SExpr) {s s' : Sym} {rows : List Row} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (fuel : Nat) (env : List (String × SVal)) (e : SExpr) {s s' : Sym} {rows : List Row} {items rest : Items} {ρ : Nat → Int} {st : State},
     slist ctx fuel env s e items = .ok ((rows, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ (∀ r ∈ rows, bounded s'.nvars r) ∧ (∀ r ∈ rows, 0 ≤ ev ρ' r) ∧
       Value ctx.defs (semEnv ctx s0 ρ' env) e (.bytes (listOf ρ' rows))
@@ -242,7 +242,7 @@ theorem wroteAt_spec {w : Nat} {place : Row} : ∀ {l : List (Nat × Row × Row)
 
 /-- The things of a list, each shown to be what is known written at its place. -/
 theorem written_sound {facts : List Row} {wrote : List (Nat × Row × Row)} {w : Nat} {lo : Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
-    ∀ {k : Nat} {rows : List Row} {items : List Item} {r : Unit × List Item}, written facts wrote w lo k rows items = .ok r →
+    ∀ {k : Nat} {rows : List Row} {items : Items} {r : Unit × Items}, written facts wrote w lo k rows items = .ok r →
       ∀ j (hj : j < rows.length), ∃ o x, (w, o, x) ∈ wrote ∧ ev ρ o = ev ρ lo + ((k + j : Nat) : Int) ∧ ev ρ x = ev ρ rows[j]
   | _, [], _, _, _ => fun j hj => absurd hj (by simp)
   | k, v :: more, items, r, h => by
@@ -269,7 +269,7 @@ theorem written_sound {facts : List Row} {wrote : List (Nat × Row × Row)} {w :
 /-- **One `ensures`.** Where the verifier has passed it, it holds of the state at the return (`st'`, whose
 memory is that of the state `st` the verifier is at). -/
 theorem symEnsure_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} {s s' : Sym}
-    {e : Ensure} {items rest : List Item} {ρ : Nat → Int} {st st' : State}
+    {e : Ensure} {items rest : Items} {ρ : Nat → Int} {st st' : State}
     (h : symEnsure ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env)
     (henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' env = ctx.contract.envAfter s0 st') (hmem : st'.mem = st.mem) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ e.holds ctx.contract ctx.defs s0 st' := by
@@ -345,7 +345,7 @@ theorem symEnsure_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 /-- Every `ensures` of a list. -/
 theorem symEnsures_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} :
-    ∀ {es : List Ensure} {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st st' : State},
+    ∀ {es : List Ensure} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st st' : State},
     fold (symEnsure ctx env) s es items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
     (∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' env = ctx.contract.envAfter s0 st') → st'.mem = st.mem →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ e ∈ es, e.holds ctx.contract ctx.defs s0 st'

@@ -299,7 +299,7 @@ address to come back to can be written; the state the called function starts in 
 caller has seen to; what the called function may touch, this function may touch; and of every state the
 contract lets it return in, what the verifier holds after the call is so, at the next instruction. -/
 theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧

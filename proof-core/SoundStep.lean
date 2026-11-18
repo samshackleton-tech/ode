@@ -160,7 +160,7 @@ theorem Carried.then {ctx : Ctx} {s0 : State} {ρ ρ1 ρ2 : Nat → Int} {s s1 s
   ⟨Agree.trans a.mono a.agree b.agree, Nat.le_trans a.mono b.mono, b.holds, b.wf⟩
 
 theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {r : Nat} {o v : Row}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : readByte ctx s r o items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars o) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ bounded s'.nvars v ∧
       ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧ 0 ≤ ev ρ' o ∧ ev ρ' o < s0.reg len ∧
@@ -450,7 +450,7 @@ theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     left; omega
 
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars addr)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
@@ -663,7 +663,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
           · exact bq
           · exact c.wf.facts f hf }
 
-theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State}
+theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa, xb] = some z ∧ EV.sem ρ' s'.nvars z v := by
@@ -838,7 +838,7 @@ theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
 
 /-- A primitive of one number: what the verifier holds for it is what the account says of it; and it is no
 reading of memory. -/
-theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : Row} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State}
+theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim1 f s x items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xa : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) :
     memSize f = none ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa] = some z ∧ EV.sem ρ' s'.nvars z v := by
@@ -871,7 +871,7 @@ theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : R
     next => exact (refuse_ok h).elim
 
 theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
-    ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State},
     symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF s →
     ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm s0) bind st e = some x ∧ EV.sem ρ' s'.nvars x v
   | .number n, s, s', v, items, rest, ρ, st, h, H, wf => by
@@ -1168,7 +1168,7 @@ theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb 
   simp [values, h1, h2]
 
 theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with

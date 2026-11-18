@@ -72,7 +72,7 @@ theorem asserts_symm {defs : List Def} {env : List (String × Val)} {a b : SExpr
 /-- A line of a place worked out on symbols: the rows and facts that come out hold exactly when what the
 line says is so. -/
 theorem assertion_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
-    {s s' : Sym} {rows : List Row} {sfacts : List SFact} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {s s' : Sym} {rows : List Row} {sfacts : List SFact} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : assertion ctx env s e items = .ok ((rows, sfacts, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ (∀ r ∈ rows, bounded s'.nvars r) ∧ (∀ f ∈ sfacts, f.bounded s'.nvars) ∧
       (((∀ r ∈ rows, r.holds ρ') ∧ (∀ f ∈ sfacts, f.holds ctx s0 ρ')) ↔ Asserts ctx.defs (semEnv ctx s0 ρ' env) e) := by
@@ -291,7 +291,7 @@ theorem assertion_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem Agree.symm {n : Nat} {ρ ρ' : Nat → Int} (a : Agree n ρ ρ') : Agree n ρ' ρ := fun k hk => (a k hk).symm
 
-theorem each_mem {α : Type} {f : α → V Unit} : ∀ {l : List α} {items : List Item} {r : Unit × List Item},
+theorem each_mem {α : Type} {f : α → V Unit} : ∀ {l : List α} {items : Items} {r : Unit × Items},
     each f l items = .ok r → ∀ a ∈ l, ∃ items' r', f a items' = .ok r'
   | [], _, _, _, _, m => nomatch m
   | x :: more, items, r, h, a, m => by
@@ -303,7 +303,7 @@ theorem each_mem {α : Type} {f : α → V Unit} : ∀ {l : List α} {items : Li
 
 /-- Facts of the specification the verifier has come to, one after another: all are so. -/
 theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
-    ∀ (goals : List SFact) {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (goals : List SFact) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
     fold (specGoal ctx 16) s goals items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → (∀ f ∈ goals, f.bounded s.nvars) →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ f ∈ goals, f.holds ctx s0 ρ'
   | [], s, s', items, rest, ρ, st, h, H, wf, hb => by
@@ -325,7 +325,7 @@ theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 /-- A line of a place the verifier has shown of a state: what the line says is so. -/
 theorem establish_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
-    {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : establish ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Asserts ctx.defs (semEnv ctx s0 ρ' env) e := by
   unfold establish at h
@@ -342,7 +342,7 @@ theorem establish_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
   exact ⟨ρ2, c1.then c2, A⟩
 
 theorem establish_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
-    ∀ (facts : List SExpr) {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
     fold (establish ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ e ∈ facts, Asserts ctx.defs (semEnv ctx s0 ρ' env) e
   | [], s, s', items, rest, ρ, st, h, H, wf, hb => by
@@ -363,7 +363,7 @@ theorem establish_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
 
 /-- A line of a place taken as known of a state of which it is so: what the verifier then holds is so. -/
 theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
-    {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : suppose ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env)
     (A : Asserts ctx.defs (semEnv ctx s0 ρ env) e) : ∃ ρ', Carried ctx s0 ρ s ρ' s' st := by
   unfold suppose at h
@@ -385,7 +385,7 @@ theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
      fun f m => (List.mem_append.mp m).elim (bf f) (w1.spec f), w1.wrote⟩⟩
 
 theorem suppose_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
-    ∀ (facts : List SExpr) {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
     fold (suppose ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
     (∀ e ∈ facts, Asserts ctx.defs (semEnv ctx s0 ρ env) e) → ∃ ρ', Carried ctx s0 ρ s ρ' s' st
   | [], s, s', items, rest, ρ, st, h, H, wf, hb, A => by
@@ -521,7 +521,7 @@ it says; and of every state of which the place says so (the unknowns of before b
 the general state holds is so, and the place's number there is the general state's number, no less than
 zero. -/
 theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) {s g first : Sym} {d : Row}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : generalize ctx pl s items = .ok ((g, d, first), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
     (∀ nr ∈ pl.names, nr.2 < 16) ∧ ∃ ρ1, Agree s.nvars ρ ρ1 ∧ s.nvars ≤ first.nvars ∧ AtPlace ctx pl s0 first ρ1 ρ1 st ∧
       WF g ∧ first.nvars ≤ g.nvars ∧ bounded g.nvars d ∧
@@ -596,7 +596,7 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
 /-- The verifier's work when a path comes again to a place: of the state of the machine there the place
 says what it says, and the place's number there is less than `d` was. -/
 theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
-    {first s : Sym} {d : Row} {items : List Item} {r : Unit × List Item} {ρ : Nat → Int} {st : State}
+    {first s : Sym} {d : Row} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State}
     (h : arrive ctx pl first d s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hd : bounded s.nvars d) :
     AtPlace ctx pl s0 first ρ ρ st ∧
     ∃ n : Int, Value ctx.defs (placeVals ctx pl s0 st) pl.decreases (.int n) ∧ n + 1 ≤ ev ρ d := by

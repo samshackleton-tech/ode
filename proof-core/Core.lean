@@ -51,9 +51,19 @@ inductive Item where
   | proof (starts : List Nat) (steps : List Step)   -- of arithmetic: the rows it starts from, by their numbers among those the verifier holds
   deriving Inhabited
 
+/-- The proof's lines as the verifier takes them: by their numbers, and the number of the next one. (By
+number, so that a prover's program can hand a line over when the verifier first asks for it.) -/
+structure Items where
+  line : Nat → Option Item
+  next : Nat := 0
+
+def Items.ofList (l : List Item) : Items :=
+  let a := l.toArray
+  { line := fun n => a[n]? }
+
 /-- A step of the verifier: it takes what it needs from the front of the proof, and gives an answer and the
 rest of the proof, or stops with the reason. -/
-def V (α : Type) := List Item → Except String (α × List Item)
+def V (α : Type) := Items → Except String (α × Items)
 
 namespace V
 def pure (a : α) : V α := fun items => .ok (a, items)
@@ -75,11 +85,11 @@ def need (what : String) (facts goals : List Row) : V α := fun _ =>
     ++ String.join (goals.map fun g => "g " ++ showRow g ++ "\n"))
 
 def pop : V (Option Item) := fun items =>
-  match items with
-  | [] => .ok (none, [])
-  | i :: rest => .ok (some i, rest)
+  match items.line items.next with
+  | none => .ok (none, items)
+  | some i => .ok (some i, { items with next := items.next + 1 })
 
-def finished : V Bool := fun items => .ok (items.isEmpty, items)
+def finished : V Bool := fun items => .ok ((items.line items.next).isNone, items)
 
 def each (f : α → V Unit) : List α → V Unit
   | [] => pure ()
@@ -1162,7 +1172,7 @@ def verify (ctx : Ctx) : V Unit := do
 
 /-- Does the function meet its contract, by this proof? `none`: yes. -/
 def verdict (ctx : Ctx) (proof : List Item) : Option String :=
-  match verify ctx proof with
+  match verify ctx (Items.ofList proof) with
   | .ok _ => none
   | .error why => some why
 

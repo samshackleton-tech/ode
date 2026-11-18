@@ -12,7 +12,7 @@ theorem Holds.rip {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
 
 /-- The statements of an effect, one after another. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
-    ∀ (stmts : List Stmt) (k : Nat) {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    ∀ (stmts : List Stmt) (k : Nat) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
     fold (symStmt ctx bind) s stmts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s →
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧
       execAll (ctx.contract.perm s0) bind base u k st stmts = some (.next st') ∧ st'.rip = st.rip
@@ -36,7 +36,7 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     | jump _ _ => simp only [execAll, x1]; exact x2
     | call _ => simp only [execAll, x1]; exact x2
 
-theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : List Item} {ρ : Nat → Int} {st : State}
+theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : settle ctx s items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
   cases hsp : s.sp with
   | none => simp only [settle, hsp] at h; exact (refuse_ok h).elim
@@ -57,7 +57,7 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : List It
 /-- The way the flag is in fact set is among the ways gone. -/
 theorem ways_sound {ctx : Ctx} {s0 : State} {s : Sym} {want : Bool} {target next : Nat} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (b : Bool) :
-    ∀ (w : List (Bool × List Row)) {nexts : List (Sym × Next)} {items rest : List Item},
+    ∀ (w : List (Bool × List Row)) {nexts : List (Sym × Next)} {items rest : Items},
     ways s want target next w items = .ok (nexts, rest) →
     (∀ sr ∈ w, ∀ r ∈ sr.2, bounded s.nvars r) →
     (∃ sr ∈ w, sr.1 = b ∧ ∀ r ∈ sr.2, r.holds ρ) →
@@ -179,8 +179,8 @@ theorem calleeSaved_spec {r : Nat} (h : r ∈ calleeSaved) : r < 16 ∧ r ≠ RS
 
 /-- At a return the verifier has passed: the machine's return is allowed, and leaves what the contract
 promises. -/
-theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : List Item}
-    {r : Unit × List Item} {ρ : Nat → Int} {st : State}
+theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
+    {r : Unit × Items} {ρ : Nat → Int} {st : State}
     (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) :
     allowed (ctx.contract.perm s0).read (st.reg RSP) 8 = true ∧
     ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
@@ -301,7 +301,7 @@ theorem shape_jump {target : Expr} {cond : Option (String × Bool)} : ∀ {l : L
 does not fault; if it returns, the contract's promise holds; if it goes on, it goes on at one of the places
 the verifier went on at, in a state of which what the verifier holds there is so. -/
 theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {i : Instr}
-    {nexts : List (Sym × Next)} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (u : Nat → Nat) :
     ∃ o, exec (ctx.contract.perm s0) p i u st = some o ∧
       match o with
@@ -377,7 +377,7 @@ went on at, the machine runs to its return and leaves what the contract promises
 At a call, the called function runs by its contract, which it meets, and the machine goes on after it. -/
 theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx)
     {s : Sym} {pc : Nat} {i : Instr}
-    {nexts : List (Sym × Next)} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
     (hl : ctx.code.lookup pc = some i) (h : symNext ctx s i items = .ok (nexts, rest))
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hrip : st.rip = p.base + pc)
     (K : ∀ s' pc' ρ' st', (s', Next.at pc') ∈ nexts → st'.rip = p.base + pc' → Carried ctx s0 ρ s ρ' s' st' →
@@ -451,7 +451,7 @@ theorem Trusted.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : S
 return and leaves what the contract promises. Where a path first comes to a place, by induction on the
 place's number, which every way round to it makes less and which is never below zero. -/
 theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx) :
-    ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : List Item} {r : Unit × List Item} {ρ : Nat → Int} {st : State},
+    ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State},
     explore ctx fuel seen s pc items = .ok r → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
     Trusted world ctx p s0 seen s.nvars ρ →
     Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
@@ -589,7 +589,7 @@ theorem verify_sound (world : List Program) (ctx : Ctx) (p : Program) (proof : L
     (W : CalleesMeet world ctx) (h : verdict ctx proof = none) : Meets world ctx.contract ctx.defs p := by
   intro s0 pre
   have E : Setting ctx p s0 := ⟨hcode, pre⟩
-  cases hv : verify ctx proof with
+  cases hv : verify ctx (Items.ofList proof) with
   | error why => simp [verdict, hv] at h
   | ok r =>
     unfold verify at hv

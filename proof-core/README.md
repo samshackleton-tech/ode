@@ -244,12 +244,32 @@ only what would otherwise be searched for. A proof of arithmetic starts from row
 holds and adds them up, with whole multipliers, to a row that says a number below zero is at least zero.
 The call in `ode_equal` needs no line of proof of its own.
 
-`prove.py` is the prover, relied on for nothing: it runs the verifier, which says what it needs next, finds
-an answer (the arithmetic by elimination, the equalities first), and runs it again: 47 runs and a fifth of a
-second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds for `ode_adler32_blocks`,
-2,206 runs and 81 seconds for `ode_adler32_blocks4`, 186 runs and 5 seconds for `ode_varint`. Its choices go by the order Python walks its sets in,
-so it starts itself with that order fixed (`built.py`): it finds the same proof every run, and the tests
-compare each kept proof with what it finds.
+`prove.py` is the prover, relied on for nothing: it asks the verifier, which says what it needs next, finds
+an answer (the arithmetic by elimination, the equalities first), and asks again: 47 times for `ode_common`,
+16 more for `ode_equal`, 763 for `ode_adler32_blocks`, 2,101 for `ode_adler32_blocks4`, 186 for `ode_varint`.
+Its choices go by the order Python walks its sets in, so it starts itself with that order fixed (`built.py`):
+it finds the same proof every run, and the tests compare each kept proof with what it finds.
+
+Asked so, `odeverify` goes through the proof from its first line every time: for the 2,023 lines of
+`ode_adler32_blocks4`'s proof that was 1.2 million lines gone through, 47 of the prover's 62 seconds. So the
+prover asks `odeprove` (ProveMain.lean, through `session.py`) instead: the same verifier, which takes the
+proof's lines by number (`Items` in Core.lean), with a process left waiting at the end of each batch of
+lines it was given. A line that has not come makes the process copy itself; the copy says what the
+verifier says of the proof so far, the original waits for the line. Going back to an earlier stage is
+ending the processes after it. Found so, on 64 threads of Zen 4, with the old way beside it:
+
+| | asked | with `odeprove` | `odeverify` each time |
+|---|---|---|---|
+| `ode_common` | 47 | 0.16 s | 0.28 s |
+| `ode_adler32` | 204 | 0.58 s | 1.26 s |
+| `ode_adler32_blocks` | 763 | 5.3 s | 14.0 s |
+| `ode_adler32_blocks4` | 2,101 | 15.2 s | 53.1 s |
+| `ode_varint` | 186 | 2.2 s | 6.2 s |
+
+Both ways find the kept proofs, byte for byte (`ODE_PROVE_FROM_START=1` is the old way). What is left is
+the prover's own search for the arithmetic. `odeprove` is relied on for nothing either: `prove.py` hands
+out a proof only after `odeverify` has said `shown` of it, and test_session.py compares the two at every
+cut of three kept proofs.
 
 ## What was measured (November 18, 2026)
 
@@ -274,7 +294,7 @@ compare each kept proof with what it finds.
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 68 rows, 60 instances a row in the tests: Machine.lean and `conc.py` leave the same registers, flags, memory, low four lanes of each vector register and place to go on at; 24 rows have no meaning in Machine.lean yet (the 512-bit ones, a mask, `lea_data`, `call`) |
 | the specification of BLAKE3 | `evalSpec` (Contract.lean) on `../kcheck/blake3.spec`, its 29 definitions as `statement.py` writes them: the 105 official test vectors (35 lengths to 102,400 bytes, the three modes) come out, in 43 s; with one number of the specification changed (a turn by 11 bits for 12) they do not |
-| size | the account 686 lines of code; the verifier 1,058 (Core.lean 899, Arithmetic.lean 159 with its proofs); the reader of lines 146; the proofs of the theorems 5,043 |
+| size | the account 686 lines of code; the verifier 1,064 (Core.lean 905, Arithmetic.lean 159 with its proofs); the reader of lines 146; the proofs of the theorems 5,043 |
 
 ## The files
 
@@ -285,7 +305,7 @@ compare each kept proof with what it finds.
 | the theorems | `SoundLin.lean` (arithmetic on rows), `SoundState.lean` (what the verifier's state says of the machine's), `SoundStep.lean` (one statement of an effect), `SoundSpec.lean` (the specification on symbols), `SoundList.lean` (a list of the specification, and an `ensures`), `SoundPlace.lean` (a place), `SoundCall.lean` (a call), `SoundTop.lean` (paths and places: `explore_sound`, by induction on a place's number; `verify_sound`, `verify_all_sound`) |
 | what is to be shown (relied on) | `statement.py` |
 | for a reader | `lean_verify.py`; `proofs/ode_common.proof`, `proofs/ode_equal.proof`, `proofs/ode_adler32.proof`, `proofs/ode_adler32_blocks.proof`, `proofs/ode_adler32_blocks4.proof`, `proofs/ode_varint.proof`, `proofs/ode_low.proof`, `proofs/ode_eighth.proof`; `examples/equal/` and `examples/low/` (a source, its specification, and the object the source makes); `examples/adler32/adler32.places`, `blocks.places` and `blocks4.places` (the places the prover starts from) |
-| the prover (relied on for nothing) | `prove.py` |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run; `built.py` builds with Lean's lake once a process |
+| the prover (relied on for nothing) | `prove.py`, `session.py`, ProveMain.lean (`odeprove`) |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run; `built.py` builds with Lean's lake once a process |
 
 The tests skip where Lean's `lake` is not installed.

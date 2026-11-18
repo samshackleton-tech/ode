@@ -21,7 +21,8 @@ def built(target):
     if target in _DONE or os.environ.get("ODE_LEAN_BUILT"): return
     if not LAKE: raise AssertionError("Lean's `lake` is not installed (https://lean-lang.org)")
     env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
-    r = subprocess.run([LAKE, "build", target], cwd=HERE, capture_output=True, text=True, env=env)
+    # (with the verifier, the prover's helper that stands in for it while a proof is being found: session.py)
+    r = subprocess.run([LAKE, "build", target] + (["odeprove"] if target == "odeverify" else []), cwd=HERE, capture_output=True, text=True, env=env)
     if r.returncode != 0: raise AssertionError("lake build failed:\n" + r.stdout[-2000:] + r.stderr[-2000:])
     _DONE.add(target)
 

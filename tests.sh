@@ -21,7 +21,7 @@ if [ -n "$cache" ]; then
 fi
 kept() {    # DIRECTORY FILE [CLASS]: the file of this test's passing on these very files
     [ -n "$cache" ] || return 1
-    if [ "$1" = proof-core ]; then k=$key_pc; else k=$key_rest; fi
+    if [ "$1" = proof-core ] || [ "$1" = . ]; then k=$key_pc; else k=$key_rest; fi
     echo "$cache/$k-$(echo "$1-$2-$3" | tr '/ ' '__')"
 }
 one() {     # DIRECTORY FILE [CLASS]
@@ -52,7 +52,7 @@ one lang test_asm.py "" &
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.
 lake=$(command -v lake || { [ -x "$HOME/.elan/bin/lake" ] && echo "$HOME/.elan/bin/lake"; })
 lean=""
-pc="test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py"
+pc="test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py test_session.py"
 torun=""
 for t in $pc; do { f=$(kept proof-core "$t" "") && [ -f "$f" ]; } || torun="$torun $t"; done
 if [ -n "$lake" ] && [ -n "$torun" ]; then

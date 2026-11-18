@@ -53,7 +53,7 @@ theorem ev_isConst {ρ : Nat → Int} {a : Row} {k : Int} (h : Lin.isConst a = s
 
 /-! ## The monad -/
 
-theorem V.bind_ok {x : V α} {f : α → V β} {items : List Item} {r : β × List Item}
+theorem V.bind_ok {x : V α} {f : α → V β} {items : Items} {r : β × Items}
     (h : (x >>= f) items = .ok r) : ∃ a rest, x items = .ok (a, rest) ∧ f a rest = .ok r := by
   change V.bind x f items = .ok r at h
   unfold V.bind at h
@@ -61,16 +61,16 @@ theorem V.bind_ok {x : V α} {f : α → V β} {items : List Item} {r : β × Li
   next a rest hx => exact ⟨a, rest, hx, h⟩
   next => contradiction
 
-theorem V.pure_ok {a : α} {items : List Item} {r : α × List Item}
+theorem V.pure_ok {a : α} {items : Items} {r : α × Items}
     (h : (Pure.pure a : V α) items = .ok r) : r = (a, items) := by
   change V.pure a items = .ok r at h
   unfold V.pure at h
   injection h with h; exact h.symm
 
-theorem refuse_ok {why : String} {items : List Item} {r : α × List Item} (h : (refuse why : V α) items = .ok r) : False := by
+theorem refuse_ok {why : String} {items : Items} {r : α × Items} (h : (refuse why : V α) items = .ok r) : False := by
   unfold refuse at h; contradiction
 
-theorem need_ok {what : String} {facts goals : List Row} {items : List Item} {r : α × List Item}
+theorem need_ok {what : String} {facts goals : List Row} {items : Items} {r : α × Items}
     (h : (need what facts goals : V α) items = .ok r) : False := by
   unfold need at h; contradiction
 
@@ -93,7 +93,7 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
       omega
     next => contradiction
 
-theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : List Item} {r : Unit × List Item}
+theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : Items} {r : Unit × Items}
     (h : entailAs what facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
   unfold entailAs at h
   split at h
@@ -115,11 +115,11 @@ theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : Lis
     next => exact (refuse_ok h2).elim
     next => exact (need_ok h2).elim
 
-theorem entail_sound {facts : List Row} {g : Row} {items : List Item} {r : Unit × List Item}
+theorem entail_sound {facts : List Row} {g : Row} {items : Items} {r : Unit × Items}
     (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g :=
   entailAs_sound (what := "entail") h ρ hf
 
-theorem isBelow_sound {facts : List Row} {a b : Row} {items : List Item} {t : Bool} {rest : List Item}
+theorem isBelow_sound {facts : List Row} {a b : Row} {items : Items} {t : Bool} {rest : Items}
     (h : isBelow facts a b items = .ok (t, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
     t = decide (ev ρ a < ev ρ b) := by
   cases hk : Lin.isConst (Lin.sub a b) with
@@ -159,7 +159,7 @@ theorem isBelow_sound {facts : List Row} {a b : Row} {items : List Item} {t : Bo
     next => exact (refuse_ok h2).elim
     next => exact (need_ok h2).elim
 
-theorem compare_sound {facts : List Row} {a b : Row} {items : List Item} {c : Cmp} {rest : List Item}
+theorem compare_sound {facts : List Row} {a b : Row} {items : Items} {c : Cmp} {rest : Items}
     (h : compare facts a b items = .ok (c, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
     (c = .lt → ev ρ a < ev ρ b) ∧ (c = .eq → ev ρ a = ev ρ b) ∧ (c = .gt → ev ρ b < ev ρ a) := by
   cases hk : Lin.isConst (Lin.sub a b) with
@@ -221,7 +221,7 @@ theorem constBelowZero_fails {r : Row} (h : constBelowZero r = true) (ρ : Nat �
   next => contradiction
 
 /-- A way assumed: either no input goes it, or the rows are added to the facts (or were plain numbers). -/
-theorem assume_sound {s : Sym} {rows : List Row} {items : List Item} {res : Option Sym} {rest : List Item}
+theorem assume_sound {s : Sym} {rows : List Row} {items : Items} {res : Option Sym} {rest : Items}
     (h : assume s rows items = .ok (res, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ s.facts, f.holds ρ) :
     match res with
     | none => ¬ ∀ r ∈ rows, r.holds ρ
