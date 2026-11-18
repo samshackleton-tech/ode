@@ -79,6 +79,14 @@ theorem assertion_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
   cases e with
   | num _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | list _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | letx _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | each _ _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | slice _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | withx _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | record _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | field _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | theNumber _ _ _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
+  | thePower _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | name _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | ifx _ _ _ => simp only [assertion] at h; exact (refuse_ok h).elim
   | index _ _ => simp only [assertion] at h; exact (refuse_ok h).elim

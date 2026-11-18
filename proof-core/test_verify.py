@@ -183,11 +183,20 @@ class Verify(unittest.TestCase):
                                ("the function needs an instruction set", "    stack 40\n", "    stack 40\n    needs sse41\n"),
                                ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n"),
                                ("the specification has a layout", "def common(a, b)", "layout pair 16 { x: number at 0, y: number at 8 }\n\ndef common(a, b)"),
-                               ("the specification has a constant", "def common(a, b)", "const NO = 7\n\ndef common(a, b)")):
+                               ("a definition may fail", "def common(a, b) { alike(a, b, 0) }", "def common(a, b) {\n    fails 1 if len(a) > 4096\n    alike(a, b, 0)\n}")):
             with self.subTest(what=what):
                 self.assertEqual(self.spec.count(old), 1)
                 with self.assertRaises(SystemExit) as e: statement.statement(self.spec.replace(old, new), [(obj, "ode_common")])
                 self.assertIn("does not", str(e.exception))
+        # a constant is read: it is written as the definition of nothing that it is, and a name that stands for it as the use of that
+        self.assertEqual(self.spec.count("def common(a, b) { alike(a, b, 0) }"), 1)
+        with_constant = self.spec.replace("def common(a, b) { alike(a, b, 0) }", "const START = 0\n\ndef common(a, b) { alike(a, b, START) }")
+        lines = statement.statement(with_constant, [(obj, "ode_common")])
+        self.assertIn("def START = (num 0)", lines)
+        self.assertIn("def common a b = (call alike (name a) (name b) (call START))", lines)
+        # and where a definition gives the name itself a meaning, the name is that, not the constant
+        shadowed = self.spec.replace("def common(a, b) { alike(a, b, 0) }", "const a = 0\n\ndef common(a, b) { alike(a, b, 0) }")
+        self.assertIn("def common a b = (call alike (name a) (name b) (num 0))", statement.statement(shadowed, [(obj, "ode_common")]))
 
 
 if __name__ == "__main__":

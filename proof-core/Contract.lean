@@ -2,15 +2,18 @@ import Machine
 /-!
 # What a specification says, and what a contract promises
 
-A specification's definitions are expressions over whole numbers and runs of bytes; `evalSpec` is what
-they mean, as a value or as nothing (a definition that does not come to an end, an index outside its run,
-a difference below zero: the numbers of a specification are zero and up).
+A specification's definitions are expressions over whole numbers, words of 32 bits, counters of 64, lists
+and records; `evalSpec` is what they mean, as a value or as nothing (a definition that does not come to an
+end, an index outside its list, a difference below zero: the numbers of a specification are zero and up).
 `Meets` is what it is for a function's code to meet a contract: the statement the verifier's yes stands for.
 
-Here so far: definitions that are one expression (numbers, `if`, comparisons, `+ - * / %`, `a[i]`, `len`,
-lists written out and joined, uses of definitions); contracts whose arguments are numbers, runs of `n` bytes
-that the function only reads, and runs of so many bytes that it may write and does not read; with
-`returns`, `stack`, and `ensures RUN[lo .. hi] = LIST`. Not here yet: other `requires` and `ensures`, `trace`.
+Here so far: definitions with `let` (numbers, `if`, comparisons, `+ - * / % |`, words with `+ ^ | >>>`,
+`a[i]`, `a[i .. j]`, `len`, lists written out, joined, made thing by thing (`[e for x in a..b]`) and with
+places replaced (`with`), records, `the least number`, `the greatest power of two`, uses of definitions; a
+sequence is the definition it is, its place a last thing it is used with); contracts whose arguments are
+numbers, runs of `n` bytes that the function only reads, and runs of so many bytes that it may write and
+does not read; with `returns`, `stack`, and `ensures RUN[lo .. hi] = LIST`. Not here yet: other `requires`
+and `ensures`, `trace`, `fails`.
 -/
 namespace Ode
 
@@ -24,19 +27,45 @@ inductive SExpr where
   | list (items : SExpr)                  -- a list written out, `[a, b]`: its things as `cons a (cons b nil)`
   | nil
   | cons (a rest : SExpr)
+  | letx (x : String) (e rest : SExpr)    -- `let x = e`, and then the rest of the definition
+  | each (e : SExpr) (x : String) (a b : SExpr)       -- `[e for x in a..b]`
+  | slice (a lo hi : SExpr)               -- `a[lo .. hi]`
+  | withx (a puts : SExpr)                -- `a with [i: x, j: y]`: `puts` is `cons i (cons x (cons j (cons y nil)))`
+  | record (names : List String) (items : SExpr)      -- `{h: a, length: b}`: the names, and their things
+  | field (e : SExpr) (name : String)     -- `r.h`
+  | theNumber (greatest : Bool) (x : String) (a b cond : SExpr)   -- `the least number x in a..b with cond` (or the greatest)
+  | thePower (greatest : Bool) (x : String) (cond : SExpr)        -- `the greatest power of two x with cond` (or the least)
   deriving Repr, Inhabited
 
 inductive Val where
   | int (n : Int)
   | bool (b : Bool)
-  | bytes (l : List Nat)
-  deriving Repr, DecidableEq, Inhabited
+  | word (w : Nat)                        -- 32 bits
+  | counter (n : Nat)                     -- 64 bits
+  | list (l : List Val)
+  | record (fields : List (String × Val))
+  deriving Repr, Inhabited, BEq
+
+/-- A run of bytes, as the list of numbers it is. -/
+def Val.bytes (l : List Nat) : Val := .list (l.map fun (b : Nat) => .int b)
 
 structure Def where
   name : String
   params : List String
   body : SExpr
   deriving Repr, Inhabited
+
+def W32 : Nat := 2 ^ 32
+
+/-- A word turned right by `n` bits: its low `n` bits go to the top. -/
+def rotr (w n : Nat) : Nat := w / 2 ^ n + w % 2 ^ n * 2 ^ (32 - n)
+
+/-- `+`, `^`, `|` of two words: the sum's low 32 bits; bit by bit, one or the other; bit by bit, either. -/
+def wordop (op : String) (a b : Nat) : Option Val :=
+  if op == "+" then some (.word ((a + b) % W32))
+  else if op == "^" then some (.word (a ^^^ b))
+  else if op == "|" then some (.word (a ||| b))
+  else none
 
 def binop (op : String) : Val → Val → Option Val
   | .int a, .int b =>
@@ -51,14 +80,55 @@ def binop (op : String) : Val → Val → Option Val
     else if op == ">=" then some (.bool (b ≤ a))
     else if op == "%" then (if 0 < b then some (.int (a % b)) else none)     -- (the remainder by a number above zero)
     else if op == "/" then (if 0 < b then some (.int (a / b)) else none)     -- (and the quotient, rounded down)
+    else if op == "|" then (if 0 ≤ a ∧ 0 ≤ b then some (.int (a.toNat ||| b.toNat : Nat)) else none)   -- (bit by bit, either)
     else none
-  | .bytes a, .bytes b => if op == "++" then some (.bytes (a ++ b)) else none  -- (two lists joined)
+  | .word a, .word b => wordop op a b
+  -- a number beside a word stands for the word of its low 32 bits; `w >>> n` turns the word right by n bits
+  | .word a, .int b =>
+    if op == ">>>" then (if 0 ≤ b ∧ b ≤ 32 then some (.word (rotr a b.toNat)) else none)
+    else if 0 ≤ b then wordop op a (b.toNat % W32) else none
+  | .int a, .word b => if 0 ≤ a then wordop op (a.toNat % W32) b else none
+  | .counter c, .int n => if op == "+" ∧ 0 ≤ n then some (.counter ((c + n.toNat) % 2 ^ 64)) else none
+  | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none     -- (two lists joined)
   | _, _ => none
 
-/-- A list of numbers, none below zero, as a list of things. -/
-def asList : List Val → Option (List Nat)
+/-- Every four bytes a word, the lowest byte first. -/
+def toWords : List Val → Option (List Val)
   | [] => some []
-  | .int k :: rest => if 0 ≤ k then (asList rest).map (k.toNat :: ·) else none
+  | .int a :: .int b :: .int c :: .int d :: rest =>
+    if 0 ≤ a ∧ a < 256 ∧ 0 ≤ b ∧ b < 256 ∧ 0 ≤ c ∧ c < 256 ∧ 0 ≤ d ∧ d < 256 then
+      (toWords rest).map fun ws => .word (a.toNat + 256 * b.toNat + 65536 * c.toNat + 16777216 * d.toNat) :: ws
+    else none
+  | _ => none
+
+/-- Each word's four bytes, the lowest first. -/
+def ofWords : List Val → Option (List Val)
+  | [] => some []
+  | .word w :: rest =>
+    (ofWords rest).map fun bs =>
+      .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: bs
+  | _ => none
+
+/-- The language's own names, but `len`: a specification defines none of them. -/
+def own : List String := ["word", "counter", "lo", "hi", "words", "bytes_of"]
+
+/-- What the language's own names mean. `word(n)`, `counter(n)`: the word of a number's low 32 bits, the
+counter of its low 64; `lo(t)`, `hi(t)`: a counter's low and high word. -/
+def builtin (f : String) : List Val → Option Val
+  | [.int n] =>
+    if f == "word" then (if 0 ≤ n then some (.word (n.toNat % W32)) else none)
+    else if f == "counter" then (if 0 ≤ n then some (.counter (n.toNat % 2 ^ 64)) else none)
+    else none
+  | [.word w] => if f == "word" then some (.word w) else none
+  | [.counter t] =>
+    if f == "counter" then some (.counter t)
+    else if f == "lo" then some (.word (t % W32))
+    else if f == "hi" then some (.word (t / W32))
+    else none
+  | [.list l] =>
+    if f == "words" then (toWords l).map .list
+    else if f == "bytes_of" then (ofWords l).map .list
+    else none
   | _ => none
 
 def findDef (defs : List Def) (f : String) : Option Def := defs.find? fun d => d.name == f
@@ -71,6 +141,29 @@ def evalList (ev : SExpr → Option Val) : SExpr → Option (List Val)
     | some v, some vs => some (v :: vs)
     | _, _ => none
   | _ => none
+
+/-- `[e for x in a..b]`: the values `ev` gives of `count` numbers in turn, from `i` up. -/
+def evalEach (ev : Int → Option Val) : Nat → Int → Option (List Val)
+  | 0, _ => some []
+  | count + 1, i =>
+    match ev i, evalEach ev count (i + 1) with
+    | some v, some vs => some (v :: vs)
+    | _, _ => none
+
+/-- `l with [i: x, …]`: the list with those places replaced, one after another (`puts`: i, x, …). -/
+def putAll : List Val → List Val → Option (List Val)
+  | l, [] => some l
+  | l, .int i :: x :: rest => if 0 ≤ i ∧ i.toNat < l.length then putAll (l.set i.toNat x) rest else none
+  | _, _ => none
+
+/-- The first of the numbers of which `ev` says true, every one before it being one of which it says false. -/
+def firstWith (ev : Int → Option Val) : List Int → Option Val
+  | [] => none
+  | n :: rest =>
+    match ev n with
+    | some (.bool true) => some (.int n)
+    | some (.bool false) => firstWith ev rest
+    | _ => none
 
 /-- The value of an expression, where the names of `env` are these values; `none` where it has none within
 `fuel` uses of definitions and operators nested. -/
@@ -91,7 +184,7 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
       | _ => none
     | .index a i =>
       match evalSpec defs fuel env a, evalSpec defs fuel env i with
-      | some (.bytes l), some (.int k) => if 0 ≤ k then (l[k.toNat]?).map fun b => .int b else none
+      | some (.list l), some (.int k) => if 0 ≤ k then l[k.toNat]? else none
       | _, _ => none
     | .call f args =>
       match evalList (evalSpec defs fuel env) args with
@@ -99,15 +192,51 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
       | some vs =>
         if f == "len" then
           match vs with
-          | [.bytes l] => some (.int l.length)
+          | [.list l] => some (.int l.length)
           | _ => none
+        else if own.contains f then builtin f vs
         else
           match findDef defs f with
           | some d => if d.params.length == vs.length then evalSpec defs fuel (d.params.zip vs) d.body else none
           | none => none
-    | .list items => ((evalList (evalSpec defs fuel env) items).bind asList).map .bytes
+    | .list items => (evalList (evalSpec defs fuel env) items).map .list
     | .nil => none
     | .cons _ _ => none
+    | .letx x e rest =>
+      match evalSpec defs fuel env e with
+      | some v => evalSpec defs fuel ((x, v) :: env) rest
+      | none => none
+    | .each e x a b =>
+      match evalSpec defs fuel env a, evalSpec defs fuel env b with
+      | some (.int lo), some (.int hi) =>
+        (evalEach (fun i => evalSpec defs fuel ((x, .int i) :: env) e) (hi - lo).toNat lo).map .list
+      | _, _ => none
+    | .slice a lo hi =>
+      match evalSpec defs fuel env a, evalSpec defs fuel env lo, evalSpec defs fuel env hi with
+      | some (.list l), some (.int i), some (.int j) =>
+        if 0 ≤ i ∧ i ≤ j ∧ j ≤ l.length then some (.list ((l.drop i.toNat).take (j - i).toNat)) else none
+      | _, _, _ => none
+    | .withx a puts =>
+      match evalSpec defs fuel env a, evalList (evalSpec defs fuel env) puts with
+      | some (.list l), some ps => (putAll l ps).map .list
+      | _, _ => none
+    | .record names items =>
+      match evalList (evalSpec defs fuel env) items with
+      | some vs => if names.length == vs.length then some (.record (names.zip vs)) else none
+      | none => none
+    | .field e x =>
+      match evalSpec defs fuel env e with
+      | some (.record fields) => fields.lookup x
+      | _ => none
+    | .theNumber greatest x a b cond =>
+      match evalSpec defs fuel env a, evalSpec defs fuel env b with
+      | some (.int lo), some (.int hi) =>
+        let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
+        firstWith (fun n => evalSpec defs fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among)
+      | _, _ => none
+    | .thePower greatest x cond =>
+      let among := (List.range 64).map fun (k : Nat) => (2 : Int) ^ k
+      firstWith (fun n => evalSpec defs fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among)
 
 /-- The expression has the value `v`. -/
 def Value (defs : List Def) (env : List (String × Val)) (e : SExpr) (v : Val) : Prop :=

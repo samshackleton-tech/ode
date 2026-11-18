@@ -13,6 +13,23 @@ partial def toSExpr : Sexp → Option SExpr
   | .list [.atom "index", a, i] => do some (.index (← toSExpr a) (← toSExpr i))
   | .list (.atom "call" :: .atom f :: args) => do some (.call f ((← args.mapM toSExpr).foldr .cons .nil))
   | .list (.atom "list" :: items) => do some (.list ((← items.mapM toSExpr).foldr .cons .nil))
+  | .list [.atom "let", .atom x, e, rest] => do some (.letx x (← toSExpr e) (← toSExpr rest))
+  | .list [.atom "each", e, .atom x, a, b] => do some (.each (← toSExpr e) x (← toSExpr a) (← toSExpr b))
+  | .list [.atom "slice", a, lo, hi] => do some (.slice (← toSExpr a) (← toSExpr lo) (← toSExpr hi))
+  | .list (.atom "with" :: a :: puts) => do some (.withx (← toSExpr a) ((← puts.mapM toSExpr).foldr .cons .nil))
+  | .list (.atom "record" :: fields) => do
+    -- (record (NAME E) (NAME E) …)
+    let pairs ← fields.mapM fun f => match f with
+      | .list [.atom n, e] => do some (n, ← toSExpr e)
+      | _ => none
+    some (.record (pairs.map (·.1)) ((pairs.map (·.2)).foldr .cons .nil))
+  | .list [.atom "field", e, .atom x] => do some (.field (← toSExpr e) x)
+  | .list [.atom "thenumber", .atom which, .atom x, a, b, cond] =>
+    if which == "least" || which == "greatest" then do
+      some (.theNumber (which == "greatest") x (← toSExpr a) (← toSExpr b) (← toSExpr cond))
+    else none
+  | .list [.atom "thepower", .atom which, .atom x, cond] =>
+    if which == "least" || which == "greatest" then do some (.thePower (which == "greatest") x (← toSExpr cond)) else none
   | _ => none
 
 def readSExpr (text : String) : Except String SExpr :=

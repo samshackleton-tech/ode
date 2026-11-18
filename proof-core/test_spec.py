@@ -11,7 +11,12 @@ Here both work out the same expressions on the same numbers and runs of bytes:
   must give the same value, or both none (an index outside its run, a difference below zero, a definition
   that comes to no end);
 - random expressions over the operators Contract.lean has: wherever `evalSpec` gives a value, ode.py must
-  give the same. (ode.py has values for more: it compares runs of bytes, which `evalSpec` does not.)"""
+  give the same. (ode.py has values for more: it compares runs of bytes, which `evalSpec` does not.)
+- uses of definitions with words, counters, `let`, lists made thing by thing, parts of lists, lists with
+  places replaced, records, `the least number`, `the greatest power of two`, constants and sequences, on
+  random values: the same value, or both none;
+- BLAKE3 as ../kcheck/blake3.spec defines it, by `evalSpec`: the 105 official test vectors (35 lengths, the
+  three modes)."""
 import os, random, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "kcheck"))
@@ -45,6 +50,77 @@ def odd(x) { [x - 3, x] }
 KINDS = {"alike": "bbn", "common": "bb", "gap": "nn", "under": "nn", "mix": "bn", "count": "bnn", "total": "bn", "never": "n", "past": "b", "order": "nn",
          "rest": "nn", "fold": "bnn", "share": "nn", "digits": "n", "varint": "n", "pair": "nn", "spread": "bn", "odd": "n"}
 LISTS = ("varint", "pair", "spread", "odd")            # the definitions whose value is a list
+
+RICH = """
+const K = [3, 1, 2, 0]
+const BIG = 0x9E3779B9
+def mixw(a, b) {
+    let x = word(a) + word(b)
+    let y = (x ^ word(BIG)) >>> 7
+    (y | word(a)) + b
+}
+def twist(n) { [word(n + i) >>> i for i in 0..5] }
+def packed(bs) { words(bs) }
+def unpacked(bs) { bytes_of(words(bs)) }
+def ctr(n, k) {
+    let t = counter(n) + k
+    [lo(t), hi(t)]
+}
+def part(a, i, j) { a[i .. j] }
+def swapped(a, i, j) { a with [i: a[j], j: a[i]] }
+def rec(a, n) {
+    let r = {first: a[0 .. n], count: len(a), twice: n * 2}
+    [r.count, r.twice] ++ r.first
+}
+def whole(a, n) { {run: a, words: [word(n), word(BIG)], t: counter(n), small: n < 5} }
+def least(a) { the least number n in 0..20 with n * n >= len(a) }
+def greatest(n) { the greatest power of two k with k <= n }
+def perm(a) { [a[K[i]] for i in 0..4] }
+def fib(n) {
+    let f[0] = [0, 1]
+    let f[i + 1] = [f[i][1], f[i][0] + f[i][1]]
+    f[n][0]
+}
+def weave(n) {
+    let s[0] = 0
+    let w[0] = 1
+    let s[i + 1] = s[i] + w[i]
+    let w[i + 1] = w[i] * 2 % 251
+    [s[n], w[n]]
+}
+sequence run(a, n) {
+    h[0] = 7
+    h[b + 1] = (h[b] * 31 + a[b]) % 65521
+    for b in 0..n
+}
+def ors(x, y) { x | y }
+def later(n) {
+    let m = n + 1
+    let s[0] = m
+    let s[i + 1] = s[i] * 2 % 1000 + K[i % 4]
+    s[n % 7] + m
+}
+"""
+RICH_KINDS = {"mixw": "nn", "twist": "n", "packed": "b", "unpacked": "b", "ctr": "nn", "part": "bnn", "swapped": "bnn", "rec": "bn", "whole": "bn",
+              "least": "b", "greatest": "n", "perm": "b", "fib": "n", "weave": "n", "run": "bn", "ors": "nn", "later": "n"}
+
+
+def show(v):
+    """A value of ode.py's as SpecMain.lean writes one."""
+    def any_(v):
+        if isinstance(v, bool): return "true" if v else "false"
+        if isinstance(v, int): return str(v)
+        if isinstance(v, ode.Word): return f"w{v.v}"
+        if isinstance(v, ode.Counter): return f"c{v.lo.v | v.hi.v << 32}"
+        if isinstance(v, list): return "[" + " ".join(map(any_, v)) + "]"
+        if isinstance(v, dict): return "{" + " ".join(f"{k}={any_(x)}" for k, x in v.items()) + "}"
+        raise AssertionError(f"a value of no kind: {v!r}")
+    if v is None: return "none"
+    if isinstance(v, bool): return "bool 1" if v else "bool 0"
+    if isinstance(v, int): return f"int {v}"
+    if isinstance(v, list) and all(isinstance(x, int) and not isinstance(x, bool) for x in v):
+        return "bytes " + bytes(v).hex() if all(0 <= x < 256 for x in v) else "list " + " ".join(map(str, v))
+    return "val " + any_(v)
 
 
 def value(kind, rng, like=None):
@@ -87,6 +163,74 @@ class Spec(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls): shutil.rmtree(cls.dir)
+
+    def answers(self, defs_text, lines):
+        """What `odespec` says of each case line, as it writes it."""
+        defs, path = os.path.join(self.dir, "rich.defs"), os.path.join(self.dir, "rich.cases")
+        with open(defs, "w") as f: f.write("\n".join(statement.definitions(defs_text)) + "\n")
+        with open(path, "w") as f: f.write("\n".join(lines) + "\n")
+        out = subprocess.run([os.path.join(HERE, ".lake", "build", "bin", "odespec"), defs, path], capture_output=True, text=True, check=True).stdout.split("\n")[:len(lines)]
+        self.assertEqual(len(out), len(lines))
+        return out
+
+    def test_words_lists_records_and_sequences_mean_the_same(self):
+        spec = ode.Spec(RICH)
+        rng = random.Random(5)
+        def number(): return rng.choice([0, 1, 2, 3, 5, rng.randrange(0, 14), rng.randrange(0, 300), (1 << 32) - 1, 1 << 32, rng.randrange(0, 1 << 33),
+                                         (1 << 64) - 1, rng.randrange(0, 1 << 64)])
+        cases, lines = [], []
+        for f, kinds in RICH_KINDS.items():
+            for _ in range(120):
+                env = {}
+                for i, k in enumerate(kinds):
+                    if k == "b": env[f"v{i}"] = [rng.randrange(256) for _ in range(rng.choice([0, 3, 4, 4, 8, 8, 12, rng.randrange(0, 13)]))]
+                    elif f in ("fib", "weave", "part", "swapped", "rec", "run", "greatest", "least", "later"): env[f"v{i}"] = rng.choice([0, 1, 2, 3, 4, 7, rng.randrange(0, 14), rng.randrange(0, 90)])
+                    else: env[f"v{i}"] = number()
+                cases.append((("call", f, [("name", n) for n in env]), env))
+                lines.append(" ".join(f"{n}=b:{bytes(v).hex()}" if isinstance(v, list) else f"{n}=i:{v}" for n, v in env.items()) + " | " + sexp(cases[-1][0]))
+        got = self.answers(RICH, lines)
+        valued, kinds_seen = 0, set()
+        for (e, env), g in zip(cases, got):
+            want = show(self.reference(spec, e, env))
+            self.assertEqual(want, g, (e, env))
+            valued += g != "none"; kinds_seen.add(g.split(" ")[0])
+        self.assertGreater(valued, 1300)
+        self.assertLess(valued, len(cases) - 150)        # and some have none: a part past the list, four bytes to a word, no such power of two
+        self.assertEqual(kinds_seen, {"int", "bytes", "list", "val", "none"})
+        print(f"\nspec: {len(cases)} uses of {len(RICH_KINDS)} definitions with words, lists, records and sequences: evalSpec and ode.py say the same "
+              f"({valued} have a value)", file=sys.stderr)
+
+    def test_a_sequence_that_could_be_read_two_ways_is_refused(self):
+        # statement.py writes a definition's own sequence as a definition of what was given before it; ode.py
+        # reads its equations with whatever the definition has given when the sequence is used
+        for what, text in (("a name given after the sequence", "def f(x) {\n let s[0] = x\n let n = x + 1\n let s[i + 1] = s[i] + n\n s[2]\n}"),
+                           ("an equation twice", "def f(x) {\n let s[0] = x\n let s[0] = 1\n let s[i + 1] = s[i] + 1\n s[2]\n}"),
+                           ("the sequence as a thing", "def f(x) {\n let s[0] = x\n let s[i + 1] = s[i] + len(s)\n s[2]\n}"),
+                           ("a name of the definition given again", "def f(x) {\n let s[0] = x\n let s[i + 1] = s[i] + 1\n [s[2] for x in 0..2]\n}"),
+                           ("a definition that may fail", "def f(x) {\n fails 1 if x > 3\n x\n}")):
+            with self.subTest(what=what):
+                ode.Spec(text)                                           # (the language has it)
+                with self.assertRaises(SystemExit): statement.definitions(text)
+
+    def test_blake3_as_the_account_reads_it_gives_the_official_vectors(self):
+        import json
+        with open(os.path.join(HERE, "..", "kcheck", "blake3.spec")) as f: text = f.read()
+        with open(os.path.join(HERE, "..", "reference", "blake3-servil", "test_vectors", "test_vectors.json")) as f: v = json.load(f)
+        key, context = v["key"].encode().hex(), v["context_string"].encode().hex()
+        lines, want = [], []
+        for c in v["cases"]:
+            m = bytes(i % 251 for i in range(c["input_len"])).hex()
+            lines += [f"m=b:{m} | (call blake3 (name m))", f"m=b:{m} k=b:{key} | (call blake3_keyed (name k) (name m))",
+                      f"m=b:{m} c=b:{context} | (call blake3_derive_key (name c) (name m))"]
+            want += ["bytes " + c["hash"][:64], "bytes " + c["keyed_hash"][:64], "bytes " + c["derive_key"][:64]]
+        self.assertEqual(len(lines), 105)
+        got = self.answers(text, lines)
+        for i, (w, g) in enumerate(zip(want, got)): self.assertEqual(w, g, f"vector {i // 3} ({v['cases'][i // 3]['input_len']} bytes), mode {i % 3}")
+        # a control: the specification with one number of it changed gives other hashes
+        changed = text.replace("let b1 = (v[b] ^ c1) >>> 12", "let b1 = (v[b] ^ c1) >>> 11")
+        self.assertNotEqual(changed, text)
+        self.assertNotEqual(self.answers(changed, lines[:3]), want[:3])
+        print(f"\nspec: blake3.spec by evalSpec gives the {len(lines)} official test vectors (35 lengths, three modes)", file=sys.stderr)
 
     def lean(self, cases, defs=None):
         """What evalSpec says of each (expression, {name: value}): a number, True or False, a list of bytes, or None."""

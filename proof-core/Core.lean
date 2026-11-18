@@ -663,6 +663,7 @@ def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) 
       | some (_, len) => pure (.val (.lin (Lin.var len)), s)
       | none => refuse "no such run of bytes"
     | _ => refuse "the length of what is no run of bytes"
+  else if own.contains f then refuse s!"{f}, of the language's own: not here yet"
   else match findDef ctx.defs f with
     | some d => if d.params.length == vs.length then pure (.tail ⟨f, vs⟩, s) else refuse s!"{f} takes another number of things"
     | none => refuse s!"no definition {f}"
@@ -712,6 +713,14 @@ def sevalWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (env : List (String
     match vs with
     | .list vs => pure (.list (v :: vs), s)
     | _ => refuse "what a definition is used with is no list of things"
+  | _, .letx _ _ _ => refuse "a `let`: not here yet"
+  | _, .each _ _ _ _ => refuse "a list made thing by thing: not here yet"
+  | _, .slice _ _ _ => refuse "a part of a list: not here yet"
+  | _, .withx _ _ => refuse "a list with places replaced: not here yet"
+  | _, .record _ _ => refuse "a record: not here yet"
+  | _, .field _ _ => refuse "a field of a record: not here yet"
+  | _, .theNumber _ _ _ _ _ => refuse "`the least number`: not here yet"
+  | _, .thePower _ _ _ => refuse "`the greatest power of two`: not here yet"
 
 /-- A use of a definition, opened once: a fact of what it is the same as, or of its value. -/
 def openCallWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (s : Sym) (c : SCall) : V Sym :=
@@ -848,6 +857,7 @@ def slist (ctx : Ctx) : Nat → List (String × SVal) → Sym → SExpr → V (L
     match vs with
     | .list vs =>
       if f == "len" then refuse "a list is expected"
+      else if own.contains f then refuse s!"{f}, of the language's own: not here yet"
       else match findDef ctx.defs f with
         | some d =>
           if d.params.length == vs.length then slist ctx fuel (d.params.zip vs) s d.body

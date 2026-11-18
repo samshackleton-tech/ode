@@ -8,7 +8,8 @@ For the comparison of `evalSpec` (Contract.lean) with `../kcheck/ode.py` (test_s
     NAME=i:NUMBER NAME=b:HEXBYTES … | EXPRESSION
 
 The answer is a line: `int N`, `bool 0` or `bool 1`, `bytes HEX` (a list of numbers all below 256), `list N N …`
-(a list with a number of 256 or more), or `none` where the expression has no value.
+(a list of numbers, one of them 256 or more), `val V` for any other value (a word `wN`, a counter `cN`, a list
+`[V V]`, a record `{NAME=V NAME=V}`, a number `N`, `true`, `false`), or `none` where the expression has no value.
 -/
 open Ode
 
@@ -28,11 +29,30 @@ def readBinding (text : String) : Option (String × Val) :=
     else none
   | _ => none
 
+/-- The numbers of a list, where they are all numbers. -/
+def numbersOf : List Val → Option (List Int)
+  | [] => some []
+  | .int n :: rest => (numbersOf rest).map (n :: ·)
+  | _ => none
+
+partial def showAny : Val → String
+  | .int n => toString n
+  | .bool b => if b then "true" else "false"
+  | .word w => s!"w{w}"
+  | .counter n => s!"c{n}"
+  | .list l => "[" ++ " ".intercalate (l.map showAny) ++ "]"
+  | .record fields => "{" ++ " ".intercalate (fields.map fun (n, v) => n ++ "=" ++ showAny v) ++ "}"
+
 def showVal : Option Val → String
   | some (.int n) => s!"int {n}"
   | some (.bool b) => if b then "bool 1" else "bool 0"
-  | some (.bytes l) =>
-    if l.all (· < 256) then "bytes " ++ String.join (l.map hex2) else "list " ++ " ".intercalate (l.map toString)
+  | some (.list l) =>
+    match numbersOf l with
+    | some ns =>
+      if ns.all (fun n => 0 ≤ n && n < 256) then "bytes " ++ String.join (ns.map fun n => hex2 n.toNat)
+      else "list " ++ " ".intercalate (ns.map toString)
+    | none => "val " ++ showAny (.list l)
+  | some v => "val " ++ showAny v
   | none => "none"
 
 def runCase (defs : List Def) (line : String) : String :=

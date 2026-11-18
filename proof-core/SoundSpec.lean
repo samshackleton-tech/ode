@@ -30,6 +30,51 @@ theorem evalList_mono {ev ev' : SExpr → Option Val} (h : ∀ a v, ev a = some 
   | ifx _ _ _ _ _ _ => intro vs h1; simp [evalList] at h1
   | index _ _ _ _ => intro vs h1; simp [evalList] at h1
   | call _ _ _ => intro vs h1; simp [evalList] at h1
+  | letx _ _ _ _ _ => intro vs h1; simp [evalList] at h1
+  | each _ _ _ _ _ _ _ => intro vs h1; simp [evalList] at h1
+  | slice _ _ _ _ _ _ => intro vs h1; simp [evalList] at h1
+  | withx _ _ _ _ => intro vs h1; simp [evalList] at h1
+  | record _ _ _ => intro vs h1; simp [evalList] at h1
+  | field _ _ _ => intro vs h1; simp [evalList] at h1
+  | theNumber _ _ _ _ _ _ _ _ => intro vs h1; simp [evalList] at h1
+  | thePower _ _ _ _ => intro vs h1; simp [evalList] at h1
+
+theorem evalEach_mono {ev ev' : Int → Option Val} (h : ∀ i v, ev i = some v → ev' i = some v) :
+    ∀ (n : Nat) (i : Int) {vs : List Val}, evalEach ev n i = some vs → evalEach ev' n i = some vs := by
+  intro n
+  induction n with
+  | zero => intro i vs h1; simpa [evalEach] using h1
+  | succ n ih =>
+    intro i vs h1
+    simp only [evalEach] at h1 ⊢
+    cases hv : ev i with
+    | none => simp [hv] at h1
+    | some v =>
+      cases hr : evalEach ev n (i + 1) with
+      | none => simp [hv, hr] at h1
+      | some vs' =>
+        rw [h i v hv, ih (i + 1) hr]
+        simpa [hv, hr] using h1
+
+theorem firstWith_mono {ev ev' : Int → Option Val} (h : ∀ i v, ev i = some v → ev' i = some v) :
+    ∀ (l : List Int) {v : Val}, firstWith ev l = some v → firstWith ev' l = some v := by
+  intro l
+  induction l with
+  | nil => intro v h1; simp [firstWith] at h1
+  | cons n rest ih =>
+    intro v h1
+    simp only [firstWith] at h1 ⊢
+    cases hv : ev n with
+    | none => simp [hv] at h1
+    | some c =>
+      rw [h n c hv]
+      simp only [hv] at h1
+      cases c with
+      | bool t =>
+        cases t with
+        | true => simpa using h1
+        | false => simp only at h1 ⊢; exact ih h1
+      | _ => simp at h1
 
 theorem evalSpec_mono (defs : List Def) : ∀ (fuel : Nat) {env : List (String × Val)} {e : SExpr} {v : Val},
     evalSpec defs fuel env e = some v → ∀ fuel', fuel ≤ fuel' → evalSpec defs fuel' env e = some v
@@ -76,12 +121,84 @@ theorem evalSpec_mono (defs : List Def) : ∀ (fuel : Nat) {env : List (String �
           rw [ih hc]
           simp only [hc] at h
           cases cv with
-          | int _ => simp at h
-          | bytes _ => simp at h
           | bool t =>
             cases t with
             | true => simp only at h ⊢; exact ih h
             | false => simp only at h ⊢; exact ih h
+          | _ => simp at h
+      | letx x e rest =>
+        simp only [evalSpec] at h ⊢
+        cases he : evalSpec defs fuel env e with
+        | none => simp [he] at h
+        | some v1 => rw [ih he]; simp only [he] at h; exact ih h
+      | each e x a b =>
+        simp only [evalSpec] at h ⊢
+        cases ha : evalSpec defs fuel env a with
+        | none => simp [ha] at h
+        | some va =>
+          cases hb : evalSpec defs fuel env b with
+          | none => simp [ha, hb] at h
+          | some vb =>
+            rw [ih ha, ih hb]
+            simp only [ha, hb] at h
+            cases va with
+            | int lo =>
+              cases vb with
+              | int hi =>
+                simp only at h ⊢
+                cases hl : evalEach (fun i => evalSpec defs fuel ((x, .int i) :: env) e) (hi - lo).toNat lo with
+                | none => simp [hl] at h
+                | some vs => rw [evalEach_mono (fun i v h => ih h) _ _ hl]; simpa [hl] using h
+              | _ => simp at h
+            | _ => simp at h
+      | slice a lo hi =>
+        simp only [evalSpec] at h ⊢
+        cases ha : evalSpec defs fuel env a with
+        | none => simp [ha] at h
+        | some va =>
+          cases hl : evalSpec defs fuel env lo with
+          | none => simp [ha, hl] at h
+          | some vl =>
+            cases hh : evalSpec defs fuel env hi with
+            | none => simp [ha, hl, hh] at h
+            | some vh => rw [ih ha, ih hl, ih hh]; simpa [ha, hl, hh] using h
+      | withx a puts =>
+        simp only [evalSpec] at h ⊢
+        cases ha : evalSpec defs fuel env a with
+        | none => simp [ha] at h
+        | some va =>
+          cases hp : evalList (evalSpec defs fuel env) puts with
+          | none => simp [ha, hp] at h
+          | some ps => rw [ih ha, evalList_mono (fun a v h => ih h) puts hp]; simpa [ha, hp] using h
+      | record names items =>
+        simp only [evalSpec] at h ⊢
+        cases hl : evalList (evalSpec defs fuel env) items with
+        | none => simp [hl] at h
+        | some vs => rw [evalList_mono (fun a v h => ih h) items hl]; simpa [hl] using h
+      | field e x =>
+        simp only [evalSpec] at h ⊢
+        cases he : evalSpec defs fuel env e with
+        | none => simp [he] at h
+        | some ve => rw [ih he]; simpa [he] using h
+      | theNumber greatest x a b cond =>
+        simp only [evalSpec] at h ⊢
+        cases ha : evalSpec defs fuel env a with
+        | none => simp [ha] at h
+        | some va =>
+          cases hb : evalSpec defs fuel env b with
+          | none => simp [ha, hb] at h
+          | some vb =>
+            rw [ih ha, ih hb]
+            simp only [ha, hb] at h
+            cases va with
+            | int lo =>
+              cases vb with
+              | int hi => simp only at h ⊢; exact firstWith_mono (fun i v h => ih h) _ h
+              | _ => simp at h
+            | _ => simp at h
+      | thePower greatest x cond =>
+        simp only [evalSpec] at h ⊢
+        exact firstWith_mono (fun i v h => ih h) _ h
       | call f args =>
         simp only [evalSpec] at h ⊢
         cases hl : evalList (evalSpec defs fuel env) args with
@@ -94,13 +211,17 @@ theorem evalSpec_mono (defs : List Def) : ∀ (fuel : Nat) {env : List (String �
           next hlen => rw [if_pos hlen]; exact h
           next hlen =>
             rw [if_neg hlen]
-            cases hd : findDef defs f with
-            | none => simp [hd] at h
-            | some d =>
-              simp only [hd] at h ⊢
-              split at h
-              next hp => rw [if_pos hp]; exact ih h
-              next => contradiction
+            split at h
+            next ho => rw [if_pos ho]; exact h
+            next ho =>
+              rw [if_neg ho]
+              cases hd : findDef defs f with
+              | none => simp [hd] at h
+              | some d =>
+                simp only [hd] at h ⊢
+                split at h
+                next hp => rw [if_pos hp]; exact ih h
+                next => contradiction
 
 theorem Value.unique {defs : List Def} {env : List (String × Val)} {e : SExpr} {v v' : Val}
     (h : Value defs env e v) (h' : Value defs env e v') : v = v' := by
@@ -153,7 +274,7 @@ theorem Value.index {a i : SExpr} {l : List Nat} {k : Int} {b : Nat} (ha : Value
   refine ⟨max f f' + 1, ?_⟩
   simp only [evalSpec]
   rw [evalSpec_mono defs f hf _ (Nat.le_max_left _ _), evalSpec_mono defs f' hf' _ (Nat.le_max_right _ _)]
-  simp [h0, hb]
+  simp [Val.bytes, h0, hb]
 
 /-- Where the condition is true or false, an `if` has the values of the branch taken, and no others. -/
 theorem Value.ifx {c a b : SExpr} {t : Bool} (hc : Value defs env c (.bool t)) (x : Val) :
@@ -185,11 +306,11 @@ theorem Value.ifx {c a b : SExpr} {t : Bool} (hc : Value defs env c (.bool t)) (
 theorem Value.len {args : SExpr} {l : List Nat} (h : Values defs env args [.bytes l]) :
     Value defs env (.call "len" args) (.int l.length) := by
   obtain ⟨f, hf⟩ := h
-  exact ⟨f + 1, by simp [evalSpec, hf]⟩
+  exact ⟨f + 1, by simp [evalSpec, hf, Val.bytes]⟩
 
 /-- A use of a definition (not `len`) has the values of the definition's body, with the definition's names
 standing for the values of the things it is used with, and no others. -/
-theorem Value.call {f : String} {args : SExpr} {vs : List Val} {d : Def} (hf : (f == "len") = false)
+theorem Value.call {f : String} {args : SExpr} {vs : List Val} {d : Def} (hf : (f == "len") = false) (ho : own.contains f = false)
     (hd : findDef defs f = some d) (hp : (d.params.length == vs.length) = true) (h : Values defs env args vs) (x : Val) :
     Value defs env (.call f args) x ↔ Value defs (d.params.zip vs) d.body x := by
   constructor
@@ -203,14 +324,14 @@ theorem Value.call {f : String} {args : SExpr} {vs : List Val} {d : Def} (hf : (
       | some vs' =>
         have : vs' = vs := Values.unique ⟨g, hl⟩ h
         subst this
-        simp only [hl, hf, hd, hp, if_true] at hg
+        simp only [hl, hf, ho, hd, hp, if_true] at hg
         exact ⟨g, by simpa using hg⟩
   · rintro ⟨g, hg⟩
     obtain ⟨k, hk⟩ := h
     refine ⟨max k g + 1, ?_⟩
     simp only [evalSpec]
     rw [Values.at_least hk (Nat.le_max_left _ _)]
-    simp only [hf, hd, hp, if_true]
+    simp only [hf, ho, hd, hp, if_true]
     simpa using evalSpec_mono defs g hg _ (Nat.le_max_right _ _)
 
 theorem Values.nil : Values defs env .nil [] := ⟨0, rfl⟩
@@ -440,21 +561,24 @@ theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s'
             simp only [SRes.sem, semv, ev_var, H.entry len hlt]
             simpa [runBytes] using this
   next hlen =>
-    cases hd : findDef ctx.defs f with
-    | none => simp only [hd] at h; exact (refuse_ok h).elim
-    | some d =>
-      simp only [hd] at h
-      split at h
-      next hp =>
-        have := V.pure_ok h
-        injection this with hp' _
-        injection hp' with e1 e2
-        subst e1 e2
-        refine ⟨rfl, ?_, hb⟩
-        intro x
-        simp only [CallValue, hd]
-        exact Value.call (by simpa using hlen) hd (by simpa using hp) ha x
-      next => exact (refuse_ok h).elim
+    split at h
+    next ho => exact (refuse_ok h).elim
+    next ho =>
+      cases hd : findDef ctx.defs f with
+      | none => simp only [hd] at h; exact (refuse_ok h).elim
+      | some d =>
+        simp only [hd] at h
+        split at h
+        next hp =>
+          have := V.pure_ok h
+          injection this with hp' _
+          injection hp' with e1 e2
+          subst e1 e2
+          refine ⟨rfl, ?_, hb⟩
+          intro x
+          simp only [CallValue, hd]
+          exact Value.call (by simpa using hlen) (by simpa using ho) hd (by simpa using hp) ha x
+        next => exact (refuse_ok h).elim
 
 theorem ifx_finish {r res : SRes} {s2 s' : Sym} {r2 rest : List Item}
     (h : (match r with
@@ -771,6 +895,14 @@ theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     intro s s' res items rest ρ st h H wf hb
     simp only [sevalWith] at h
     exact (refuse_ok h).elim
+  | letx _ _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | each _ _ _ _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | slice _ _ _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | withx _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | record _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | field _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | theNumber _ _ _ _ _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
+  | thePower _ _ _ _ => intro s s' res items rest ρ st h H wf hb; simp only [sevalWith] at h; exact (refuse_ok h).elim
   | num n =>
     intro s s' res items rest ρ st h H wf hb
     simp only [sevalWith] at h

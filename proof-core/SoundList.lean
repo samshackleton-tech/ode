@@ -5,10 +5,37 @@ import SoundSpec
 namespace Ode
 open Arithmetic
 
+/-- A list of numbers, none below zero, as the numbers they are. -/
+def asList : List Val → Option (List Nat)
+  | [] => some []
+  | .int k :: rest => if 0 ≤ k then (asList rest).map (k.toNat :: ·) else none
+  | _ => none
+
+theorem asList_bytes : ∀ {vals : List Val} {l : List Nat}, asList vals = some l → vals = l.map fun (b : Nat) => Val.int b
+  | [], l, h => by simp only [asList] at h; injection h with h; subst h; rfl
+  | .int k :: rest, l, h => by
+    simp only [asList] at h
+    split at h
+    next hk =>
+      cases hr : asList rest with
+      | none => simp [hr] at h
+      | some l' =>
+        simp only [hr, Option.map_some] at h
+        injection h with h
+        subst h
+        rw [asList_bytes hr]
+        simp [Int.toNat_of_nonneg hk]
+    next => contradiction
+  | .bool _ :: _, _, h => by simp [asList] at h
+  | .word _ :: _, _, h => by simp [asList] at h
+  | .counter _ :: _, _, h => by simp [asList] at h
+  | .list _ :: _, _, h => by simp [asList] at h
+  | .record _ :: _, _, h => by simp [asList] at h
+
 theorem Value.list {defs : List Def} {env : List (String × Val)} {items : SExpr} {vals : List Val} {l : List Nat}
     (h : Values defs env items vals) (ha : asList vals = some l) : Value defs env (.list items) (.bytes l) := by
   obtain ⟨f, hf⟩ := h
-  exact ⟨f + 1, by simp [evalSpec, hf, ha]⟩
+  exact ⟨f + 1, by simp [evalSpec, hf, Val.bytes, asList_bytes ha]⟩
 
 /-- The numbers rows stand for, as the things of a list. -/
 def listOf (ρ : Nat → Int) (rows : List Row) : List Nat := rows.map fun r => (ev ρ r).toNat
@@ -65,6 +92,14 @@ theorem slist_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     | index _ _ => simp only [slist] at h; exact (refuse_ok h).elim
     | nil => simp only [slist] at h; exact (refuse_ok h).elim
     | cons _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | letx _ _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | each _ _ _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | slice _ _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | withx _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | record _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | field _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | theNumber _ _ _ _ _ => simp only [slist] at h; exact (refuse_ok h).elim
+    | thePower _ _ _ => simp only [slist] at h; exact (refuse_ok h).elim
     | list l =>
       simp only [slist] at h
       obtain ⟨⟨vs, s1⟩, r1, e1, h⟩ := V.bind_ok h
@@ -108,7 +143,7 @@ theorem slist_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         · rw [semEnv_agree hb1 c2.agree, listOf_agree b1 c2.agree] at v1
           have : listOf ρ2 (x ++ y) = listOf ρ2 x ++ listOf ρ2 y := by simp [listOf]
           rw [this]
-          exact Value.bin v1 v2 (by simp [binop])
+          exact Value.bin v1 v2 (by simp [binop, Val.bytes])
       next => exact (refuse_ok h).elim
     | ifx c a b =>
       simp only [slist] at h
@@ -148,22 +183,25 @@ theorem slist_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         split at h
         next => exact (refuse_ok h).elim
         next hlen =>
-          cases hd : findDef ctx.defs f with
-          | none => simp only [hd] at h; exact (refuse_ok h).elim
-          | some d =>
-            simp only [hd] at h
-            split at h
-            next hp =>
-              have henv : EnvB s1.nvars (d.params.zip vs) := fun nv m => bd nv.2 (mem_zip_right m)
-              obtain ⟨ρ2, c2, b2, z2, v2⟩ := slist_sound E fuel (d.params.zip vs) d.body h c1.holds c1.wf henv
-              rw [semEnv_zip] at v2
-              simp only [SRes.sem] at sem
-              rw [semEnv_agree hb1 c2.agree] at sem
-              have hvs : vs.map (semv ctx s0 ρ1) = vs.map (semv ctx s0 ρ2) :=
-                List.map_congr_left fun v m => semv_agree (bd v m) c2.agree
-              rw [hvs] at sem
-              exact ⟨ρ2, c1.then c2, b2, z2, (Value.call (by simpa using hlen) hd (by simpa using hp) sem _).mpr v2⟩
-            next => exact (refuse_ok h).elim
+          split at h
+          next => exact (refuse_ok h).elim
+          next ho =>
+            cases hd : findDef ctx.defs f with
+            | none => simp only [hd] at h; exact (refuse_ok h).elim
+            | some d =>
+              simp only [hd] at h
+              split at h
+              next hp =>
+                have henv : EnvB s1.nvars (d.params.zip vs) := fun nv m => bd nv.2 (mem_zip_right m)
+                obtain ⟨ρ2, c2, b2, z2, v2⟩ := slist_sound E fuel (d.params.zip vs) d.body h c1.holds c1.wf henv
+                rw [semEnv_zip] at v2
+                simp only [SRes.sem] at sem
+                rw [semEnv_agree hb1 c2.agree] at sem
+                have hvs : vs.map (semv ctx s0 ρ1) = vs.map (semv ctx s0 ρ2) :=
+                  List.map_congr_left fun v m => semv_agree (bd v m) c2.agree
+                rw [hvs] at sem
+                exact ⟨ρ2, c1.then c2, b2, z2, (Value.call (by simpa using hlen) (by simpa using ho) hd (by simpa using hp) sem _).mpr v2⟩
+              next => exact (refuse_ok h).elim
 
 /-! ## An `ensures`, at the return -/
 

@@ -116,10 +116,10 @@ Lean itself (test_sound.py checks this, the statements above, and that no proof 
 
 | | |
 |---|---|
-| covered by the theorem, so not to be read | the verifier's rules: Core.lean (888 lines of code) and the arithmetic rule of Arithmetic.lean. Everything clever is here or in the prover |
-| what the theorem is about: to be read, or relied on some other way | the account: Table.lean (reads `../core/x86.tab`), Machine.lean (what a row's effect does to registers, flags and memory; what a call and a return do), Contract.lean (what a contract and a definition mean, `Meets`). 481 lines of code |
+| covered by the theorem, so not to be read | the verifier's rules: Core.lean (898 lines of code) and the arithmetic rule of Arithmetic.lean. Everything clever is here or in the prover |
+| what the theorem is about: to be read, or relied on some other way | the account: Table.lean (reads `../core/x86.tab`), Machine.lean (what a row's effect does to registers, flags and memory; what a call and a return do), Contract.lean (what a contract and a definition mean, `Meets`). 586 lines of code |
 | that the proofs are proofs | Lean's kernel, or any other checker of Lean's proofs |
-| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). What a definition means (`evalSpec` in Contract.lean) against `../kcheck/ode.py`, which the reader's tester takes it from: 2,700 uses of eighteen definitions, 600 lists, 4,000 random expressions, and 300 places of Adler-32's two sequences as `statement.py` writes them (test_spec.py). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
+| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). What a definition means (`evalSpec` in Contract.lean) against `../kcheck/ode.py`, which the reader's tester takes it from: 2,700 uses of eighteen definitions, 600 lists, 4,000 random expressions, and 300 places of Adler-32's two sequences as `statement.py` writes them; 2,040 uses of seventeen more definitions with words, counters, `let`, lists made thing by thing, parts of lists, records, `the least number`, constants and sequences; and BLAKE3 itself, as `../kcheck/blake3.spec` defines it, on the 105 official test vectors (test_spec.py). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
 
 Not covered by the theorem, and relied on today:
 
@@ -174,8 +174,18 @@ not which of `x == y` and `x > y` decides `x < y`.
 promises that the trace does not depend on the bytes of some run it reads, since the account here says
 nothing of the trace. (A run given to write is never read in this account, so nothing depends on what it
 held.) A contract that writes one run and is given another must say `requires no_overlap` of them all: the
-account asks that of the caller, so the contract must. It refuses a specification with a constant, a layout
-or a lemma in the same way.
+account asks that of the caller, so the contract must. It refuses a specification with a layout, a kind
+or a lemma in the same way, and a definition with `fails`.
+
+The account says what more of the specification language means than the verifier works out on symbols:
+`let`, words of 32 bits (`word`, `+ ^ | >>>`), counters, lists made thing by thing (`[e for i in a..b]`),
+parts of lists, lists with places replaced (`with`), records, `the least number` and `the greatest power of
+two`, `words` and `bytes_of`. That is the whole of `../kcheck/blake3.spec`: by `evalSpec` the specification
+gives the 105 official test vectors. `statement.py` writes a constant as the definition of nothing that it
+is, and a sequence (a definition's own, or one with its count) as the definition it is, of what was given
+before it and a place: `def NAME.s … k = if k == 0 then FIRST else (let i = k - 1; let s = NAME.s(…, i);
+NEXT)`, so that `s[i]`, the value before, is worked out once. The verifier refuses a use of these forms
+where it would have to open one ("not here yet"): no function of the hash is shown by it.
 
 Where it says "not shown" of something true, so far:
 
@@ -263,7 +273,8 @@ compare each kept proof with what it finds.
 | the two limits set for it (`test_limits.py`) | a proof under 100 kB, and a whole run of this verifier no more than five times the time `../kcheck`'s verifier takes for the same function: measured at every run of the tests for the five shipped functions, and failed where either is passed |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
-| size | the account 481 lines of code; the verifier 1,047 (Core.lean 888, Arithmetic.lean 159 with its proofs); the reader of lines 130; the proofs of the theorems 4,868 |
+| the specification of BLAKE3 | `evalSpec` (Contract.lean) on `../kcheck/blake3.spec`, its 29 definitions as `statement.py` writes them: the 105 official test vectors (35 lengths to 102,400 bytes, the three modes) come out, in 43 s; with one number of the specification changed (a turn by 11 bits for 12) they do not |
+| size | the account 586 lines of code; the verifier 1,057 (Core.lean 898, Arithmetic.lean 159 with its proofs); the reader of lines 146; the proofs of the theorems 5,041 |
 
 ## The files
 
