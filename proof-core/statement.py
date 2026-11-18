@@ -16,18 +16,61 @@ sys.path.insert(0, os.path.join(HERE, "..", "kcheck"))
 import kdecode, ode
 
 
-def sexp(e):
+def sexp(e, seqs={}):
+    """An expression as Reader.lean reads one. `seqs`: the specification's sequences, each with how many things
+    it is of; NAME(x)[k], the sequence's value at place k, is written as the use NAME(x, k) of the
+    definition the sequence is (sequence_def)."""
     kind = e[0]
     if kind == "num": return f"(num {e[1]})"
     if kind == "name": return f"(name {e[1]})"
-    if kind == "bin": return f"(bin {e[1]} {sexp(e[2])} {sexp(e[3])})"
-    if kind == "ifx": return f"(ifx {sexp(e[1])} {sexp(e[2])} {sexp(e[3])})"
-    if kind == "index": return f"(index {sexp(e[1])} {sexp(e[2])})"
-    if kind == "call": return "(call " + " ".join([e[1]] + [sexp(a) for a in e[2]]) + ")"
+    if kind == "bin": return f"(bin {e[1]} {sexp(e[2], seqs)} {sexp(e[3], seqs)})"
+    if kind == "ifx": return f"(ifx {sexp(e[1], seqs)} {sexp(e[2], seqs)} {sexp(e[3], seqs)})"
+    if kind == "index":
+        if e[1][0] == "call" and e[1][1] in seqs and len(e[1][2]) == seqs[e[1][1]]:
+            return "(call " + " ".join([e[1][1]] + [sexp(a, seqs) for a in e[1][2]] + [sexp(e[2], seqs)]) + ")"
+        return f"(index {sexp(e[1], seqs)} {sexp(e[2], seqs)})"
+    if kind == "call":
+        if e[1] in seqs and len(e[2]) != seqs[e[1]] + 1:
+            raise SystemExit(f"statement: the sequence {e[1]} is used other than at one place of it: the verifier in Lean does not read that yet")
+        return "(call " + " ".join([e[1]] + [sexp(a, seqs) for a in e[2]]) + ")"
     raise SystemExit(f"statement: an expression of a kind the verifier in Lean does not read yet: {e!r}")
 
 
-def contract_lines(c, name):
+def sequence_def(name, seq, seqs):
+    """A sequence as the definition it is (LANGUAGE.md: values in order, each from the one before):
+
+        sequence NAME(x) { s[0] = E   s[i + 1] = F }      NAME(x)[k] is its value at place k
+
+    is written    def NAME x k = if k == 0 then E else F', F' being F with k - 1 for i and NAME(x, k - 1) for s[i]."""
+    params, h, var, first, nxt = seq
+    k = "place"
+    while k in params or k in (h, var): k += "_"
+    before = ("bin", "-", ("name", k), ("num", 1))
+    def put(e, inside):
+        kind = e[0]
+        if kind == "num": return e
+        if kind == "name":
+            if e[1] == h or (e[1] == var and not inside): raise SystemExit(f"statement: the sequence {name}: {e[1]} stands where the verifier in Lean does not read it yet")
+            return before if e[1] == var else e
+        if kind == "bin": return ("bin", e[1], put(e[2], inside), put(e[3], inside))
+        if kind == "ifx": return ("ifx", put(e[1], inside), put(e[2], inside), put(e[3], inside))
+        if kind == "index":
+            if e[1] == ("name", h):
+                if not inside: raise SystemExit(f"statement: the sequence {name}: its first value is said from itself")
+                return ("call", name, [("name", p) for p in params] + [put(e[2], inside)])
+            return ("index", put(e[1], inside), put(e[2], inside))
+        if kind == "call": return ("call", e[1], [put(a, inside) for a in e[2]])
+        raise SystemExit(f"statement: the sequence {name}: an expression of a kind the verifier in Lean does not read yet: {e!r}")
+    body = ("ifx", ("bin", "==", ("name", k), ("num", 0)), put(first, False), put(nxt, True))
+    return " ".join(["def", name] + params + [k, "=", sexp(body, seqs)])
+
+
+def sequences(spec):
+    """{a sequence's name: how many things it is of}."""
+    return {name: len(seq[0]) for name, seq in spec.seqs.items()}
+
+
+def contract_lines(c, name, seqs={}):
     """A contract as the lines Reader.lean reads."""
     out = []
     for arg, kind in c["args"]:
@@ -43,7 +86,7 @@ def contract_lines(c, name):
     quiet = [arg for arg, kind in c["args"] if kind != "number" and arg not in c["trace"]]
     if quiet: raise SystemExit(f"statement: the contract of {name} promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
                                "the verifier in Lean does not show that yet")
-    if c["returns"] is not None: out.append("returns " + sexp(c["returns"]))
+    if c["returns"] is not None: out.append("returns " + sexp(c["returns"], seqs))
     out.append(f"stack {c['stack']}")
     return out
 
@@ -93,8 +136,9 @@ def statement(spec_text, functions):
     its contract, a function after those it calls; then the definitions."""
     out = []
     spec = ode.Spec(spec_text)
+    seqs = sequences(spec)
     # Nothing of the specification is left out without a word: what the account in Lean has no meaning for is refused.
-    for what, there in (("a sequence", spec.seqs), ("a constant", spec.consts), ("a layout", spec.layouts), ("a machine", spec.machines),
+    for what, there in (("a constant", spec.consts), ("a layout", spec.layouts), ("a machine", spec.machines),
                         ("a lemma", spec.lemmas), ("a kind", spec.kinds)):
         if there: raise SystemExit(f"statement: the specification has {what} ({', '.join(map(str, list(there)[:3]))}), which the verifier in Lean does not read yet")
     for obj, symbol in ordered(functions):
@@ -102,10 +146,11 @@ def statement(spec_text, functions):
         rows, _ = kdecode.read(obj, symbol, 0, 0)
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
-        out += contract_lines(spec.contracts[symbol], symbol)
+        out += contract_lines(spec.contracts[symbol], symbol, seqs)
     for name, (params, body) in spec.fns.items():
         if len(body) != 1 or body[0][0] != "expr": raise SystemExit(f"statement: the definition {name} is more than one expression")
-        out.append(" ".join(["def", name] + params + ["=", sexp(body[0][1])]))
+        out.append(" ".join(["def", name] + params + ["=", sexp(body[0][1], seqs)]))
+    for name, seq in spec.seqs.items(): out.append(sequence_def(name, seq, seqs))
     return [one_line(l) for l in out]
 
 

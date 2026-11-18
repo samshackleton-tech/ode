@@ -17,6 +17,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "kcheck"))
 sys.path.insert(0, HERE)
 import ode
+import statement
 from statement import sexp
 
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
@@ -151,6 +152,40 @@ class Spec(unittest.TestCase):
         for (e, env), g in zip(cases, self.lean(cases, defs)):
             want = self.reference(spec, e, env)
             self.assertTrue(want is not None and type(want) is type(g) and want == g, (env, want, g))
+
+
+    def test_a_sequence_means_the_definition_it_is_written_as(self):
+        # the Adler-32 specification's two sequences, as statement.py writes them for Lean, against ode.py on the sequences
+        folder = os.path.join(HERE, "..", "kcheck", "programs", "adler32")
+        with open(os.path.join(folder, "adler32.spec")) as f: text = f.read()
+        spec = ode.Spec(text)
+        seqs = statement.sequences(spec)
+        self.assertEqual(seqs, {"s1": 1, "s2": 1})
+        defs = os.path.join(self.dir, "adler.defs")
+        with open(defs, "w") as f:
+            f.write("".join(l + "\n" for l in statement.statement(text, [(os.path.join(folder, "odeadler32.o"), "ode_adler32")]) if l.startswith("def ")))
+        rng = random.Random(4)
+        asked, cases = [], []
+        for _ in range(300):
+            a = [rng.choice([0, 1, 255, rng.randrange(256)]) for _ in range(rng.randrange(0, 40))]
+            k = rng.randrange(0, len(a) + 3)                               # (past the last place there is no value)
+            which = rng.choice(["s1", "s2", "adler32"])
+            e = ("call", "adler32", [("name", "a")]) if which == "adler32" else ("index", ("call", which, [("name", "a")]), ("num", k))
+            asked.append((e, {"a": a}))
+        path = os.path.join(self.dir, "cases")
+        with open(path, "w") as f:
+            for e, env in asked: f.write(f"a=b:{bytes(env['a']).hex()} | " + sexp(e, seqs) + "\n")
+        out = subprocess.run([os.path.join(HERE, ".lake", "build", "bin", "odespec"), defs, path], capture_output=True, text=True, check=True).stdout.split("\n")[:len(asked)]
+        valued = 0
+        for (e, env), line in zip(asked, out):
+            want = self.reference(spec, e, env)
+            got = None if line.split() == ["none"] else int(line.split()[1])
+            self.assertEqual(want, got, (e, env))
+            valued += got is not None
+        self.assertGreater(valued, 200); self.assertLess(valued, len(asked))
+        # Adler-32 of "Wikipedia" is 0x11E60398
+        self.assertEqual(self.reference(spec, ("call", "adler32", [("name", "a")]), {"a": list(b"Wikipedia")}), 0x11E60398)
+        print(f"\nspec: {len(asked)} places of Adler-32's sequences and whole sums: the definitions written for them and ode.py say the same ({valued} have a value)", file=sys.stderr)
 
 
 if __name__ == "__main__":

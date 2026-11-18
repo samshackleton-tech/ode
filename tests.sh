@@ -26,8 +26,8 @@ done
 for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t" "" & done
 one core test_core.py "" &
 one lang test_asm.py "" &
-# (the six of proof-core one after another: each asks Lean's lake to build in the same folder)
-( one proof-core test_sound.py ""; one proof-core test_arith.py ""; one proof-core test_machine.py ""; one proof-core test_spec.py ""; one proof-core test_verify.py ""; one proof-core test_call.py "" ) &
+# (the seven of proof-core one after another: each asks Lean's lake to build in the same folder)
+( one proof-core test_sound.py ""; one proof-core test_arith.py ""; one proof-core test_machine.py ""; one proof-core test_spec.py ""; one proof-core test_verify.py ""; one proof-core test_call.py ""; one proof-core test_adler.py "" ) &
 wait
 total=$(grep -c '' "$out")
 good=$(grep -c -E ' OK( \(skipped=[0-9]+\))? *$' "$out")
