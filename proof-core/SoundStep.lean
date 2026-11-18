@@ -445,7 +445,39 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
           unfold M64
           rw [Nat.mod_eq_of_lt hx1, Nat.mod_eq_of_lt hy1, ← hx2, ← hy2]
           simp only [Int.ofNat_lt]
-        next => exact (refuse_ok h).elim
+        next hc4 =>
+          split at h
+          next hc5 =>
+            have fe : f = "shl64" := by simpa using hc5
+            subst fe
+            cases hk : Lin.isConst y with
+            | none => simp only [hk] at h; exact (refuse_ok h).elim
+            | some k =>
+              simp only [hk] at h
+              split at h
+              next hk2 =>
+                obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+                unfold inRange at e1
+                obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
+                have g1 := entail_sound e2 ρ hf
+                have g2 := entail_sound e3 ρ hf
+                simp only [ev_sub, ev_scale, ev_const, top] at g1 g2
+                have := V.pure_ok h
+                injection this with hp _
+                injection hp with h1 h2
+                subst h1 h2
+                have yk : (xb : Int) = k := by rw [hy2]; exact ev_isConst hk
+                have e : xb = k.toNat := by omega
+                subst e
+                have cast : ((2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat := by simp
+                have lt : xa * 2 ^ k.toNat < M64 := by
+                  have : ((xa * 2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat * ev ρ x := by
+                    rw [Int.natCast_mul, cast, ← hx2, Int.mul_comm]
+                  unfold M64; omega
+                refine ⟨rfl, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
+                rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
+              next => exact (refuse_ok h).elim
+          next => exact (refuse_ok h).elim
 
 theorem M64_cast : (M64 : Int) = 2 ^ 64 := by decide
 

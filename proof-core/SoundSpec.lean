@@ -452,6 +452,79 @@ theorem ifx_finish {r res : SRes} {s2 s' : Sym} {r2 rest : List Item}
     injection hp with e1 e2
     exact ⟨e1.symm, e2.symm, fun vs h => by cases h⟩
 
+/-- A remainder: the two new unknowns are the quotient and the remainder there are. -/
+theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    (h : smod s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hx : bounded s.nvars x) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ v, res = .val v ∧ v.bounded s'.nvars ∧
+      binop "%" (.int (ev ρ x)) (.int (ev ρ y)) = some (semv ctx s0 ρ' v) := by
+  cases hm : Lin.isConst y with
+  | none => simp only [smod, hm] at h; exact (refuse_ok h).elim
+  | some m =>
+    simp only [smod, hm] at h
+    split at h
+    next pos =>
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      let ρ' : Nat → Int := fun k => if k = s.nvars then ev ρ x / m else if k = s.nvars + 1 then ev ρ x % m else ρ k
+      have ag : Agree s.nvars ρ ρ' := fun k hk => by
+        show ρ k = if k = s.nvars then _ else if k = s.nvars + 1 then _ else ρ k
+        rw [if_neg (by omega), if_neg (by omega)]
+      have H' := H.agree wf ag
+      have ex : ev ρ' x = ev ρ x := (ev_agree hx ag).symm
+      have nq : ρ' s.nvars = ev ρ x / m := by
+        show (if s.nvars = s.nvars then _ else _) = _
+        rw [if_pos rfl]
+      have nr : ρ' (s.nvars + 1) = ev ρ x % m := by
+        show (if s.nvars + 1 = s.nvars then _ else if s.nvars + 1 = s.nvars + 1 then _ else _) = _
+        rw [if_neg (by omega), if_pos rfl]
+      have le : s.nvars ≤ s.nvars + 2 := Nat.le_add_right _ _
+      have bq : bounded (s.nvars + 2) (Lin.var s.nvars) := bounded_var (by omega)
+      have br : bounded (s.nvars + 2) (Lin.var (s.nvars + 1)) := bounded_var (by omega)
+      have bd : bounded (s.nvars + 2) (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) :=
+        bounded_sub (bounded_mono le hx) (bounded_add (bounded_scale _ bq) br)
+      have dv : ev ρ' (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) = 0 := by
+        rw [ev_sub, ev_add, ev_scale, ev_var, ev_var, nq, nr, ex]
+        have := Int.mul_ediv_add_emod (ev ρ x) m
+        omega
+      refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, _, rfl, br, ?_⟩
+      · exact {
+          entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
+          spec := H'.spec, mem := H'.mem, bytes := H'.bytes,
+          facts := by
+            intro f hf
+            simp only [List.mem_cons] at hf
+            rcases hf with rfl | rfl | rfl | rfl | hf
+            · rw [holds_iff, dv]; omega
+            · rw [holds_iff, ev_scale, dv]; omega
+            · rw [holds_iff, ev_var, nr]; exact Int.emod_nonneg _ (by omega)
+            · rw [holds_iff, ev_sub, ev_const, ev_var, nr]
+              have := Int.emod_lt_of_pos (ev ρ x) pos
+              omega
+            · exact H'.facts f hf }
+      · exact {
+          base := Nat.le_trans wf.base le
+          reg := fun r hr => bounded_mono le (wf.reg r hr)
+          zf := Flag.bounded_mono le wf.zf
+          cf := Flag.bounded_mono le wf.cf
+          frame := fun o v m => bounded_mono le (wf.frame o v m)
+          spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+          bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
+          facts := by
+            intro f hf
+            simp only [List.mem_cons] at hf
+            rcases hf with rfl | rfl | rfl | rfl | hf
+            · exact bd
+            · exact bounded_scale _ bd
+            · exact br
+            · exact bounded_sub (bounded_const _ _) br
+            · exact bounded_mono le (wf.facts f hf) }
+      · have ym : ev ρ y = m := ev_isConst hm
+        simp [binop, semv, nr, ym, pos]
+    next => exact (refuse_ok h).elim
+
 theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownValue facts c = some v → SFact.value c v ∈ facts
   | [], _, _, h => by simp [knownValue] at h
   | .same _ _ :: more, c, v, h => by
@@ -597,9 +670,19 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         simp only [hx, hy] at h
         obtain ⟨vx, bx⟩ := number_sound c2.holds c2.wf hx sa2 (SRes.bounded_mono c2.mono ba)
         obtain ⟨vy, by'⟩ := number_sound c2.holds c2.wf hy sb bb
-        obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
-        subst hs hres
-        exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
+        split at h
+        next hop =>
+          have eop : op = "%" := by simpa using hop
+          obtain ⟨ρ3, c3, v, hres, bv, hz⟩ := smod_sound h c2.holds c2.wf bx
+          subst hres
+          refine ⟨ρ3, (c1.then c2).then c3, ?_, bv⟩
+          show Value ctx.defs (semEnv ctx s0 ρ3 env) (.bin op a b) (semv ctx s0 ρ3 v)
+          rw [← semEnv_agree (hb1.mono c2.mono) c3.agree, eop]
+          exact Value.bin vx vy hz
+        next =>
+          obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
+          subst hs hres
+          exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
   | index a i iha ihi =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h

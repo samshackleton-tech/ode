@@ -47,6 +47,7 @@ def binop (op : String) : Val → Val → Option Val
     else if op == "<=" then some (.bool (a ≤ b))
     else if op == ">" then some (.bool (b < a))
     else if op == ">=" then some (.bool (b ≤ a))
+    else if op == "%" then (if 0 < b then some (.int (a % b)) else none)     -- (the remainder by a number above zero)
     else none
   | _, _ => none
 

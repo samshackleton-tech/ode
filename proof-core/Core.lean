@@ -292,6 +292,15 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
     pure (.lin (Lin.sub (signed x) (signed y)), s)
   else if f == "equal" then pure (.equal x y, s)
   else if f == "below" then pure (.below x y, s)
+  else if f == "shl64" then
+    -- a shift to the left by a number of the table: so many doublings, shown to stay below 2^64
+    match Lin.isConst y with
+    | some k =>
+      if 0 ≤ k ∧ k < 64 then do
+        inRange s.facts (Lin.scale (2 ^ k.toNat) x)
+        pure (.lin (Lin.scale (2 ^ k.toNat) x), s)
+      else refuse "a shift by 64 or more"
+    | none => refuse "a shift by what is no number of the table: not here yet"
   else refuse s!"no rule for {f}"
 
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
@@ -418,6 +427,19 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     else if op == ">=" then pure (.val (.bool (!c.isLt)), s)
     else refuse s!"no rule for {op}"
 
+/-- The remainder of `x` by a number of the specification above zero: two new unknowns, the quotient `q`
+and the remainder `r`, and what is so of them: x = m * q + r and 0 <= r < m. -/
+def smod (s : Sym) (x y : Row) : V (SRes × Sym) :=
+  match Lin.isConst y with
+  | some m =>
+    if 0 < m then
+      let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))
+      pure (.val (.lin (Lin.var (s.nvars + 1))),
+            { s with nvars := s.nvars + 2,
+                     facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts })
+    else refuse "a remainder by a number that is not above zero"
+  | none => refuse "a remainder by what is no number of the specification: not here yet"
+
 /-- The value of a use of a definition, where the verifier holds one. -/
 def knownValue : List SFact → SCall → Option Row
   | [], _ => none
@@ -458,7 +480,7 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
     let (x, s) ← seval ctx env s a
     let (y, s) ← seval ctx env s b
     match number s x, number s y with
-    | some x, some y => sbin op s x y
+    | some x, some y => if op == "%" then smod s x y else sbin op s x y
     | _, _ => refuse "a number is expected (or a use of a definition whose value is held)"
   | s, .ifx c a b => do
     let (c, s) ← seval ctx env s c
