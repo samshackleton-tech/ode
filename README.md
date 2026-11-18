@@ -1,47 +1,104 @@
 # Ode
 
-Ode is a way to write fast native code together with a proof that its bytes meet a contract, so that the
-person who depends on the code can verify it for himself while relying only on a short, named list of things.
+Ode is a research project in proof-carrying native code. The goal is fast machine code that ships with a
+machine-checkable proof that it does what a short, readable contract says. A skeptical user can then check
+the proof himself. He does not have to trust the author, the compiler or the build.
 
-A maker ships three things: a binary, a proof carried inside it, and a specification. Bob, the auditor,
-reads a short contract ("this function writes the BLAKE3 hash of the input to `out`, reads and writes
-nothing else, and uses this much stack"), and runs his verifier on the binary. The compiler, the prover and
-the maker are relied on for nothing: whatever they produced is accepted only where the verifier shows the
-bytes meet the contract. The coder chooses the machine code, instruction by instruction where speed needs
-it; the tools automate its proof. [DESIGN.md](DESIGN.md) is the whole design.
+## The idea in one example
 
-**State, November 17, 2026: a research prototype.** One real program is verified from its bytes: the
-one-shot BLAKE3 hash for x86-64 with AVX-512, fourteen functions written in Ode, at 97% of BLAKE3-Servil's
-speed for a megabyte and 60% at 16 to 32 KiB. Twelve smaller functions (Adler-32, LZ4, UTF-8, base-64 and
-others) are verified the same way. **The verifier itself is unverified Python**, tested and audited; six
-ways to have it accept a wrong binary were found by reading on November 17 and closed. Making the part Bob
-relies on small and provable is the work ahead. Section 13 of DESIGN.md sets the state against the design,
-line by line.
+Take a hash function. Its author ships three things:
 
-## Verify the first example
+1. The binary: the compiled function, as an ordinary object file.
+2. A contract: a few lines saying what the function does. Our BLAKE3 contract is seven lines long. It says
+   that the function writes the BLAKE3 hash of `input` into `out`. It requires that `out`, `input` and
+   `key` are separate pieces of memory. It bounds the stack the function uses, and it names the processor
+   feature the function needs (AVX-512).
+3. A proof that the binary satisfies the contract.
+
+The user, whom we call **Bob**, is an auditor who trusts nobody. Bob reads the contract and decides whether
+it is what he wants. Then he runs a **verifier** on the binary, the contract and the proof. The verifier
+either accepts ("this binary satisfies this contract") or rejects. Bob has no need to read the
+implementation.
+
+Three design decisions follow from that picture:
+
+- The verifier checks the bytes that will run. Source code is not what it reads. So the compiler, the
+  assembler and the author's tools need no trust: whatever they produced is accepted only if the proof
+  checks.
+- The programmer chooses the machine code, instruction by instruction where speed needs it. Ode's tools
+  leave optimizing to the programmer. Their job is to produce the proof.
+- Whatever Bob must trust should be small and itself checkable. Finding a proof is the clever part, and an
+  untrusted program called the **prover** does it. The verifier only checks the result.
+
+[DESIGN.md](DESIGN.md) is the full design.
+
+## Where the project stands (November 18, 2026)
+
+It is a research prototype. Nothing here is ready to protect anything of value.
+
+### What works
+
+One real program is verified from its bytes. It is a one-shot BLAKE3 hash for x86-64 with AVX-512, made
+of fourteen functions written in Ode. On a 1 MiB input it runs at 97% of the speed of BLAKE3-Servil's
+hand-written assembly. On 16 to 32 KiB inputs it reaches 60%, because one kernel is still missing there.
+
+Twelve smaller functions are verified the same way. Among them are Adler-32, an LZ4 decoder and a UTF-8
+validator.
+
+### The main weakness
+
+The verifier that checks those programs is about 3,300 lines of Python that nobody has proved correct. It
+is tested and audited, and we attack it ourselves. On November 17 and 18 we found eight ways to make it
+accept a wrong binary, and closed them. A verifier that can be fooled defeats the purpose, so this is the
+main thing we are working on.
+
+### What we are doing about it
+
+The folder `proof-core/` holds a second, much smaller verifier, written in Lean 4. With it comes a
+soundness theorem that Lean checks: if this verifier accepts a function, the function satisfies its
+contract, whatever proof it was given. So far it can verify five of the twelve small functions and none of
+BLAKE3. Extending it until it covers the BLAKE3 code is the current work.
+[proof-core/README.md](proof-core/README.md) says exactly what its theorem assumes.
+
+Section 13 of DESIGN.md compares the current state with the design, point by point.
+
+## Try it: verify the BLAKE3 example
 
     cd kcheck
     python3 verify.py b3hashr.o blake3.spec
 
-Python 3, this folder and `core/` beside it are all it needs: nothing is installed, no solver runs, no network is used. In
-about 25 seconds it prints the public contract (seven lines), the verification ("`b3l_hashr` in this file
-meets its public contract, with all it calls: 14 functions, from the file's bytes"), and the files that ran
-to reach it (3,291 lines of Python in fourteen files, and the table of instructions: 93 rows, and under them
-150 ways of writing them in bytes). Exit status 0
-means shown.
-[kcheck/VERIFY.md](kcheck/VERIFY.md) is the page for a reader: what is shown, what is left unshown, and
-what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
+This needs Python 3 and this repository. Nothing is installed, no SMT solver runs, and no network is used.
+In about 25 seconds it prints:
 
-## Make it again, and test it
+- the contract (seven lines),
+- the verdict: `b3l_hashr` in this file meets its public contract, together with the thirteen functions
+  it calls,
+- the list of files that took part in reaching that verdict: 3,291 lines of Python in fourteen files, and
+  a table describing the x86-64 instructions the verifier understands (93 instruction forms, with 150
+  byte encodings).
 
-    sh kcheck/make_hash.sh /tmp/out      # the shipped b3hashr.o from its Ode sources, byte for byte
-    python3 kcheck/gate.py --jobs 16     # the check before a merge: under five minutes
-    sh tests.sh                          # every test file
+Exit status 0 means the binary was accepted. In these shipped examples the proof is stored inside the
+object file; `--proof FILE` reads it from a separate file instead, which is where proofs are moving.
 
-Making needs Python 3 and nothing else: `core/asm.py` writes a function's bytes by the instruction table. (clang
-is used by tests only: `lang/test_asm.py` compares the two assemblers on every function.) The gate and some tests run code on a processor and need
-x86-64 Linux with AVX-512; they skip elsewhere. The tests of `proof-core/` need Lean's `lake` and skip where it is not installed. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
-judge each change the verifier accepts: hours, run in the background.
+[kcheck/VERIFY.md](kcheck/VERIFY.md) is written for someone verifying: what exactly was established,
+what was not, and what you are trusting. Another example:
+`python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
+
+## Rebuild it and run the tests
+
+    sh kcheck/make_hash.sh /tmp/out      # rebuilds the shipped b3hashr.o from its Ode sources, byte for byte
+    python3 kcheck/gate.py --jobs 16     # the check we run before every merge: under five minutes
+    sh tests.sh                          # every test
+
+Rebuilding needs only Python 3: our own assembler, `core/asm.py`, writes each instruction's bytes from the
+instruction table. (clang is used only by a test that compares the two assemblers on every function.)
+
+Some tests execute the verified code on a real processor and need x86-64 Linux with AVX-512; elsewhere
+they are skipped. The tests of `proof-core/` need Lean's build tool `lake` and are skipped without it.
+
+`kcheck/audit.sh` is a long-running fault-injection test. It flips every single bit of every verified
+function, one at a time. Whenever the verifier still accepts the changed function, the changed code is run
+on a real processor and compared with a reference implementation. It takes hours.
 
 ## What is where
 
