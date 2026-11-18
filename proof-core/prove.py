@@ -15,7 +15,7 @@ and it is run again, until it has no more to ask of that function. The answers a
     a kept register refused the register is left out of the place's `keep`
 
 What comes out is a proof the verifier accepts by itself: `odeverify ../core/x86.tab OUT.statement OUT.proof`."""
-import os, re, subprocess, sys
+import os, re, subprocess, sys, time
 from math import gcd
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -30,20 +30,22 @@ EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
 REGISTERS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
 
 
-def places(places_text, keep=None, seqs={}):
-    """The places as the verifier reads them; `keep`: the registers each place might keep (None: all it does not
-    name); `seqs`: the specification's sequences (statement.sequences)."""
-    out, named = [], []
+def places(places_text, keep={}, seqs={}):
+    """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
+    (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences)."""
+    out, named, also, at = [], [], [], None
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
         if not line or line == "}": continue
         m = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", line)
-        if m: out.append(f"place {int(m.group(1), 16)}"); named = []; continue
+        if m: at = int(m.group(1), 16); out.append(f"place {at}"); named, also = [], []; continue
+        m = re.fullmatch(r"keep ((?:\w+ ?)+)", line)              # registers a place names and keeps all the same
+        if m: also += m.group(1).split(); continue
         m = re.fullmatch(r"name (\w+) = (\w+)", line)
         if m: out.append(f"name {m.group(1)} {m.group(2)}"); named.append(m.group(2)); continue
         if line.startswith("fact "): out.append("fact " + sexp(kbyte.expression(line[5:]), seqs)); continue
         if line.startswith("decreases "):
-            out.append("keep " + " ".join(r for r in REGISTERS if r not in named and (keep is None or r in keep)))
+            out.append("keep " + " ".join(r for r in REGISTERS if (r not in named or r in also) and r in keep.get(at, REGISTERS)))
             out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs)); continue
         raise SystemExit(f"prove: a line of a place the verifier in Lean does not read yet: {line}")
     return out
@@ -84,23 +86,45 @@ def bearing(system, seed):
     return [f for k, f in enumerate(system) if k in chosen]
 
 
+def near(system, seed, steps):
+    """The rows within so many steps of the row at `seed`: a row is one step from a row it shares an unknown with."""
+    names, chosen = set(n for n, _ in system[seed].c), {seed}
+    for _ in range(steps):
+        more = [k for k, f in enumerate(system) if k not in chosen and any(n in names for n, _ in f.c)]
+        if not more: break
+        chosen.update(more)
+        for k in more: names.update(n for n, _ in system[k].c)
+    return [f for k, f in enumerate(system) if k in chosen]
+
+
 FOUND = {}                # (the rows, the seed) -> what was found: the same question comes again and again in a search
 
 
-def refutation(system, seed=-1):
+def refutation(system, seed=-1, quick=False):
     """A proof that the rows (each >= 0) cannot all hold, or None; `seed`: the row asked about (the goal's, or the
     newest fact). Elimination over all the rows first, in a small room. Then over the rows that bear on the one
     asked about: in the usual order; with the unknowns that some row multiplies (a quotient, in x = m * q + r)
     left for last, so that what is known of them as whole numbers is used (a row m * q + k >= 0 is rounded
-    where it is made); and in a large room."""
+    where it is made); and in a large room. `quick`: only the small room (for a question that, where its answer
+    is yes, is a plain one: are two uses of a definition of the same things)."""
     if not system: return None
-    key = (tuple(system), seed)
+    key = (tuple(system), seed, quick)
     if key not in FOUND:
         found = kprove.derive(system, 600)
         if not found:
             rows = bearing(system, seed % len(system))
             if len(rows) < len(system): found = kprove.derive(rows, 600)
-            if not found:
+            if not found and not quick:
+                for room in (30000, 300000):           # the rows near the one asked about, the quotients left for last
+                    tried = None
+                    for steps in (1, 2, 3, 4):
+                        close = near(system, seed % len(system), steps)
+                        if close == tried or len(close) == len(rows): break
+                        tried = close
+                        found = kprove.derive(close, room, last=frozenset(n for f in close for n, c in f.c if abs(c) > 1))
+                        if found: break
+                    if found: break
+            if not found and not quick:
                 multiplied = frozenset(n for f in rows for n, c in f.c if abs(c) > 1)
                 if multiplied: found = kprove.derive(rows, 3000, last=multiplied)
             found = found or kprove.derive(rows, 30000)
@@ -114,14 +138,15 @@ def negation(g): return klin.Lin([(n, -c) for n, c in g.c], -g.k - 1)
 class Unkept(Exception): pass
 
 
-class GaveUp(Exception): pass           # more runs of the verifier than the prover was allowed (Prover.budget)
+class GaveUp(Exception): pass           # more runs of the verifier, or more time, than the prover was allowed
 
 
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
+        self.until = until                  # the time (time.time()) after which the search gives up
 
     def finished(self, said):
         """The verifier has no more to ask of this function: all is shown, or it speaks of a later function."""
@@ -131,6 +156,7 @@ class Prover:
 
     def ask(self, proof):
         if self.budget is not None and self.runs >= self.budget: raise GaveUp(self.runs)
+        if self.until is not None and time.time() > self.until: raise GaveUp(self.runs)
         with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
         self.runs += 1
         return subprocess.run([EXE, TABLE, self.statement, self.out], capture_output=True, text=True).stdout
@@ -143,15 +169,15 @@ class Prover:
         while True:
             said = self.ask(proof)
             if self.finished(said): return proof
-            m = re.search(r"at the place register (\d+) does not hold", said)
-            if m: raise Unkept(int(m.group(1)))
+            m = re.search(r"at the place (\d+) register (\d+) does not hold", said)
+            if m: raise Unkept(int(m.group(1)), int(m.group(2)))
             if not said.startswith("need "): self.last = said; self.note(proof, said); return None
             lines = said.split("\n")
             what = lines[0][5:]
             facts = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("f ")]
             goals = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("g ")]
-            if what == "entail":
-                p = refutation(facts + [negation(goals[0])])
+            if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
+                p = refutation(facts + [negation(goals[0])], quick=what == "same")
                 if p is None: self.last = said; self.note(proof, said + ' (no proof found)'); return None
                 proof = proof + proof_text(p)
             elif what == "branch":
@@ -197,13 +223,13 @@ def prove(spec_text, targets, statement_out, out):
     done, numbers = [], {}
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
-        keep, runs = None, 0
+        keep, runs = {}, 0
         while True:
             p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs), out, later)
             p.last = ""
             try: proof = p.solve([])
             except Unkept as e:
-                keep = [r for r in (keep if keep is not None else REGISTERS) if r != REGISTERS[e.args[0]]]
+                keep[e.args[0]] = [r for r in keep.get(e.args[0], REGISTERS) if r != REGISTERS[e.args[1]]]
                 runs += p.runs
                 continue
             if proof is None: raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")

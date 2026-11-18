@@ -101,15 +101,19 @@ def plain (facts : List Row) (g : Row) : Bool :=
     | some k => decide (0 ≤ k)
     | none => false
 
-/-- `g ≥ 0` follows from the facts. -/
-def entail (facts : List Row) (g : Row) : V Unit :=
+/-- `g ≥ 0` follows from the facts. `what`: the word by which a proof that has no step for it is asked for
+one. -/
+def entailAs (what : String) (facts : List Row) (g : Row) : V Unit :=
   if plain facts g then pure () else do
     match ← pop with
     | some (.proof starts steps) =>
       if Arithmetic.refutes (negation g :: facts) starts steps then pure ()
       else refuse "a proof of arithmetic does not show what is to be shown"
     | some (.tag ..) => refuse "a proof of arithmetic is expected"
-    | none => need "entail" facts [g]
+    | none => need what facts [g]
+
+/-- `g ≥ 0` follows from the facts. -/
+def entail (facts : List Row) (g : Row) : V Unit := entailAs "entail" facts g
 
 inductive Cmp where
   | lt | eq | gt
@@ -178,7 +182,7 @@ structure Sym where
 structure Place where
   pc : Nat
   names : List (String × Nat)     -- a name for what a register holds there
-  keep : List Nat                 -- registers that hold there what they held on first coming there
+  keep : List Nat                 -- registers that hold there what they held when the path first came there
   facts : List SExpr
   decreases : SExpr
   deriving Inhabited
@@ -187,7 +191,7 @@ structure Ctx where
   code : List (Nat × Instr)
   contract : Contract
   defs : List Def
-  place : Option Place
+  places : List Place := []                     -- the maker's: where the paths of loops are cut
   callees : List (String × Contract) := []      -- the functions this one calls, each with its contract
   deriving Inhabited
 
@@ -210,6 +214,29 @@ def Sym.sp (s : Sym) : Option Int := Lin.isConst (Lin.sub (s.reg RSP) (Lin.var R
 def top : Int := 2 ^ 64 - 1
 
 def ranged (v : Nat) : List Row := [Lin.var v, Lin.sub (Lin.const top) (Lin.var v)]
+
+/-- Two new unknowns for a number divided by a number above zero, the quotient `q` and the remainder `r`,
+and what is so of them: x = m * q + r and 0 <= r < m. -/
+def Sym.divide (s : Sym) (x : Row) (m : Int) : Sym :=
+  let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))
+  { s with nvars := s.nvars + 2,
+           facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts }
+
+/-- The quotient's unknown, where the facts held already say what `x` divided by `m` is: the four facts of
+`Sym.divide`, of one unknown and the next. -/
+def divided (s : Sym) (x : Row) (m : Int) : Option Nat :=
+  (List.range s.nvars).find? fun q =>
+    let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)))
+    s.facts.contains d && s.facts.contains (Lin.scale (-1) d) && s.facts.contains (Lin.var (q + 1)) &&
+      s.facts.contains (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1)))
+
+/-- A number of the machine (from 0 to 2^64 - 1) divided by a number above zero: its quotient and its
+remainder, and the state that knows of them. They are found once for one number and one divisor; the
+quotient is no less than zero. -/
+def symDivide (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
+  match divided s x m with
+  | some q => (Lin.var q, Lin.var (q + 1), s)
+  | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), { s.divide x m with facts := Lin.var s.nvars :: (s.divide x m).facts })
 
 def lookupByte (r : Nat) (o : Row) : List (Nat × Nat × Row) → Option Nat
   | [] => none
@@ -301,6 +328,21 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
         pure (.lin (Lin.scale (2 ^ k.toNat) x), s)
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
+  else if f == "shr64" then
+    -- a shift to the right by a number of the table: the quotient by so many doublings
+    match Lin.isConst y with
+    | some k =>
+      if 0 ≤ k ∧ k < 64 then pure (.lin (symDivide s x (2 ^ k.toNat)).1, (symDivide s x (2 ^ k.toNat)).2.2)
+      else refuse "a shift by 64 or more"
+    | none => refuse "a shift by what is no number of the table: not here yet"
+  else if f == "and64" then
+    -- the bits below a power of two (an and with one less than it): the remainder by it
+    match Lin.isConst y with
+    | some m =>
+      match (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
+      | some k => pure (.lin (symDivide s x (2 ^ k)).2.1, (symDivide s x (2 ^ k)).2.2)
+      | none => refuse "an and with a number that is not one less than a power of two: not here yet"
+    | none => refuse "an and with what is no number of the table: not here yet"
   else refuse s!"no rule for {f}"
 
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
@@ -427,16 +469,12 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     else if op == ">=" then pure (.val (.bool (!c.isLt)), s)
     else refuse s!"no rule for {op}"
 
-/-- The remainder of `x` by a number of the specification above zero: two new unknowns, the quotient `q`
-and the remainder `r`, and what is so of them: x = m * q + r and 0 <= r < m. -/
+/-- The remainder of `x` by a number of the specification above zero: the remainder of the two new
+unknowns of `Sym.divide`. -/
 def smod (s : Sym) (x y : Row) : V (SRes × Sym) :=
   match Lin.isConst y with
   | some m =>
-    if 0 < m then
-      let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))
-      pure (.val (.lin (Lin.var (s.nvars + 1))),
-            { s with nvars := s.nvars + 2,
-                     facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts })
+    if 0 < m then pure (.val (.lin (Lin.var (s.nvars + 1))), s.divide x m)
     else refuse "a remainder by a number that is not above zero"
   | none => refuse "a remainder by what is no number of the specification: not here yet"
 
@@ -468,8 +506,8 @@ or numbers shown equal. -/
 def sameArgs (facts : List Row) : List SVal → List SVal → V Unit
   | [], [] => pure ()
   | .lin a :: as, .lin b :: bs => do
-    entail facts (Lin.sub a b)
-    entail facts (Lin.sub b a)
+    entailAs "same" facts (Lin.sub a b)
+    entailAs "same" facts (Lin.sub b a)
     sameArgs facts as bs
   | a :: as, b :: bs => if a = b then sameArgs facts as bs else refuse "two uses of a definition with other things"
   | _, _ => refuse "two uses of a definition with other things"
@@ -806,24 +844,26 @@ def entryFacts (ctx : Ctx) : List Row :=
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16 }
 
-/-- The state that stands for every coming to the place: the kept registers and the frame as in `s`, every
-other register any number below 2^64; nothing else is known but what is known at entry. -/
-def Sym.general (ctx : Ctx) (p : Place) (s : Sym) : Sym :=
+/-- The state that stands for every coming to the place on a path that first came there in `s`: the kept
+registers and the frame as in `s`, every other register any number below 2^64. What `s` knows of the
+unknowns it has (its facts, the bytes of the runs given, the values of uses of definitions) is still so:
+those unknowns are what they were. -/
+def Sym.general (p : Place) (s : Sym) : Sym :=
   { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
-    zf := .unknown, cf := .unknown, frame := s.frame, bytes := [], spec := [], nvars := s.nvars + 16,
-    facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ entryFacts ctx }
+    zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
+    facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for
 every coming there, of which the place's facts are taken as known, and its number that decreases, which is
 shown to be no less than zero. Given back with them: the state as it first came, with which every later
 coming is compared. -/
 def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
-  if !p.keep.contains RSP || p.names.any (fun (_, r) => p.keep.contains r || decide (16 ≤ r)) then
-    refuse "a place must keep the stack pointer, and name registers it does not keep"
+  if !p.keep.contains RSP || p.names.any (fun (_, r) => decide (16 ≤ r)) then
+    refuse "a place must keep the stack pointer, and name registers"
   else do
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
-    let g ← fold (suppose ctx (placeEnv ctx p (s.general ctx p).reg)) (s.general ctx p) p.facts
-    let (d, g) ← seval ctx (placeEnv ctx p (s.general ctx p).reg) g p.decreases
+    let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
+    let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
     match d with
     | .val (.lin d) => do
       entail g.facts d
@@ -835,7 +875,7 @@ coming had in the kept registers and the frame, and the place's facts are shown 
 less than `d`, the number of the general state the path began in. -/
 def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   match p.keep.find? fun r => s.reg r != first.reg r with
-  | some r => refuse s!"at the place register {r} does not hold what it held on first coming there"
+  | some r => refuse s!"at the place {p.pc} register {r} does not hold what it held on first coming there"
   | none =>
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
@@ -845,53 +885,46 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
     | .val (.lin d') => entail s2.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
     | _ => refuse "a place's number that decreases is no number"
 
-/-- Where a path goes on after an instruction. At the function's return it ends. At the place: with no
-general state yet, the state is given back; with one, the coming there is shown to be one of its. Anywhere
-else the path is gone on with (`go`). -/
-def onward (ctx : Ctx) (general : Option (Row × Sym)) (go : Sym → Nat → V (List Sym)) (found : List Sym) (next : Sym × Next) : V (List Sym) :=
-  match next.2 with
-  | .returned => pure found
-  | .at pc' =>
-    match ctx.place with
-    | some p =>
-      if p.pc == pc' then
-        match general with
-        | some (d, first) => do arrive ctx p first d next.1; pure found
-        | none => pure (found ++ [next.1])
-      else do
-        let more ← go next.1 pc'
-        pure (found ++ more)
-    | none => do
-      let more ← go next.1 pc'
-      pure (found ++ more)
+/-- A place a path has come to: the place, the number of its general state, and the state as the path first
+came there. -/
+structure Seen where
+  place : Place
+  d : Row
+  first : Sym
 
-/-- Every path from `pc`, to the function's return or to the place. With no general state yet, the states
-in which the place is come to are given back; with one, each coming there is shown to be one of its. -/
-def explore (ctx : Ctx) (general : Option (Row × Sym)) : Nat → Sym → Nat → V (List Sym)
-  | 0, _, _ => refuse "a path longer than the verifier goes"
-  | fuel + 1, s, pc =>
+/-- Where a path goes on after an instruction. At the function's return it ends. At a place this path has
+come to before, the coming there is shown to be one that place's general state stands for, with a number
+less than the general state's: there the path ends. At a place it has not come to before, the place's
+general state is made and the path goes on from that, the place remembered. Anywhere else the path is
+gone on with. -/
+def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V Unit) (next : Sym × Next) : V Unit :=
+  match next.2 with
+  | .returned => pure ()
+  | .at pc' =>
+    match ctx.places.find? (fun p => p.pc == pc') with
+    | none => go seen next.1 pc'
+    | some p =>
+      match seen.find? (fun e => e.place.pc == pc') with
+      | some e => arrive ctx e.place e.first e.d next.1
+      | none => do
+        let (g, d, first) ← generalize ctx p next.1
+        go (⟨p, d, first⟩ :: seen) g pc'
+
+/-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
+def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit
+  | 0, _, _, _ => refuse "a path longer than the verifier goes"
+  | fuel + 1, seen, s, pc =>
     match ctx.code.lookup pc with
     | none => refuse s!"no instruction at {pc}"
     | some i => do
       let nexts ← symNext ctx s i
-      fold (onward ctx general (explore ctx general fuel)) [] nexts
+      each (onward ctx seen (explore ctx fuel)) nexts
 
 def PATH : Nat := 100000
 
-/-- From the place, if the paths from the entry came to it: the general state, and every path from it. -/
-def fromPlace (ctx : Ctx) (arrivals : List Sym) : V Unit :=
-  match ctx.place, arrivals with
-  | _, [] => pure ()
-  | some p, [s] => do
-    let (g, d, first) ← generalize ctx p s
-    let _ ← explore ctx (some (d, first)) PATH g p.pc
-    pure ()
-  | _, _ => refuse "more than one way from the entry to the place: not here yet"
-
 /-- The verifier. -/
 def verify (ctx : Ctx) : V Unit := do
-  let arrivals ← explore ctx none PATH (entrySym ctx) 0
-  fromPlace ctx arrivals
+  explore ctx PATH [] (entrySym ctx) 0
   if ← finished then pure () else refuse "the proof says more than is asked of it"
 
 /-- Does the function meet its contract, by this proof? `none`: yes. -/
@@ -900,13 +933,13 @@ def verdict (ctx : Ctx) (proof : List Item) : Option String :=
   | .ok _ => none
   | .error why => some why
 
-/-- A function of a statement: its name, its instructions and its contract; and, the maker's, its place
+/-- A function of a statement: its name, its instructions and its contract; and, the maker's, its places
 and its proof. -/
 structure Fn where
   name : String
   code : List (Nat × Instr) := []
   contract : Contract := ⟨[], none, 0⟩
-  place : Option Place := none
+  places : List Place := []
   proof : List Item := []
 
 /-- The functions one after another, `done` being those already shown, each with its contract. A call is
@@ -916,7 +949,7 @@ def verdictFrom (defs : List Def) : List (String × Contract) → List Fn → Op
   | _, [] => none
   | done, f :: more =>
     if done.any (fun d => d.1 == f.name) then some s!"refused: two functions are named {f.name}"
-    else match verdict { code := f.code, contract := f.contract, defs := defs, place := f.place, callees := done } f.proof with
+    else match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := done } f.proof with
       | some why => some s!"{why}\nin {f.name}"
       | none => verdictFrom defs ((f.name, f.contract) :: done) more
 

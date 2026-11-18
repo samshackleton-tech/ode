@@ -52,9 +52,10 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
       let fns ← t.fns.mapM fun g => if g.name == name then f g else pure g
       pure { t with fns := fns }
   let inPlace (f : Place → Place) : Except String Job := onCur fun g =>
-    match g.place with
-    | some p => pure { g with place := some (f p) }
-    | none => throw s!"outside a place: {line}"
+    -- a line of a place is of the place last begun
+    match g.places.reverse with
+    | p :: before => pure { g with places := before.reverse ++ [f p] }
+    | [] => throw s!"outside a place: {line}"
   match (words line).head? with
   | some kind =>
     if inProof && statementKinds.contains kind then throw s!"refused: a line of the statement in the proof: {line}"
@@ -84,9 +85,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["for", name] =>
     if t.fns.any (fun g => g.name == name) then pure { t with cur := some name }
     else throw s!"refused: the proof speaks of {name}, which is no function of the statement"
-  | ["place", pc] => onCur fun g => match pc.toNat?, g.place with
-    | some pc, none => pure { g with place := some ⟨pc, [], [], [], .num 0⟩ }
-    | _, _ => throw s!"cannot read {line} (one place a function: not more yet)"
+  | ["place", pc] => onCur fun g => match pc.toNat? with
+    | some pc =>
+      if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
+      else pure { g with places := g.places ++ [⟨pc, [], [], [], .num 0⟩] }
+    | none => throw s!"cannot read {line}"
   | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
   | "fact" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with facts := p.facts ++ [e] }

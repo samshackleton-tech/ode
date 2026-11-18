@@ -511,61 +511,10 @@ theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      let ρ' : Nat → Int := fun k => if k = s.nvars then ev ρ x / m else if k = s.nvars + 1 then ev ρ x % m else ρ k
-      have ag : Agree s.nvars ρ ρ' := fun k hk => by
-        show ρ k = if k = s.nvars then _ else if k = s.nvars + 1 then _ else ρ k
-        rw [if_neg (by omega), if_neg (by omega)]
-      have H' := H.agree wf ag
-      have ex : ev ρ' x = ev ρ x := (ev_agree hx ag).symm
-      have nq : ρ' s.nvars = ev ρ x / m := by
-        show (if s.nvars = s.nvars then _ else _) = _
-        rw [if_pos rfl]
-      have nr : ρ' (s.nvars + 1) = ev ρ x % m := by
-        show (if s.nvars + 1 = s.nvars then _ else if s.nvars + 1 = s.nvars + 1 then _ else _) = _
-        rw [if_neg (by omega), if_pos rfl]
-      have le : s.nvars ≤ s.nvars + 2 := Nat.le_add_right _ _
-      have bq : bounded (s.nvars + 2) (Lin.var s.nvars) := bounded_var (by omega)
-      have br : bounded (s.nvars + 2) (Lin.var (s.nvars + 1)) := bounded_var (by omega)
-      have bd : bounded (s.nvars + 2) (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) :=
-        bounded_sub (bounded_mono le hx) (bounded_add (bounded_scale _ bq) br)
-      have dv : ev ρ' (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) = 0 := by
-        rw [ev_sub, ev_add, ev_scale, ev_var, ev_var, nq, nr, ex]
-        have := Int.mul_ediv_add_emod (ev ρ x) m
-        omega
-      refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, _, rfl, br, ?_⟩
-      · exact {
-          entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-          spec := H'.spec, mem := H'.mem, bytes := H'.bytes,
-          facts := by
-            intro f hf
-            simp only [List.mem_cons] at hf
-            rcases hf with rfl | rfl | rfl | rfl | hf
-            · rw [holds_iff, dv]; omega
-            · rw [holds_iff, ev_scale, dv]; omega
-            · rw [holds_iff, ev_var, nr]; exact Int.emod_nonneg _ (by omega)
-            · rw [holds_iff, ev_sub, ev_const, ev_var, nr]
-              have := Int.emod_lt_of_pos (ev ρ x) pos
-              omega
-            · exact H'.facts f hf }
-      · exact {
-          base := Nat.le_trans wf.base le
-          reg := fun r hr => bounded_mono le (wf.reg r hr)
-          zf := Flag.bounded_mono le wf.zf
-          cf := Flag.bounded_mono le wf.cf
-          frame := fun o v m => bounded_mono le (wf.frame o v m)
-          spec := fun f m => SFact.bounded_mono le (wf.spec f m)
-          bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
-          facts := by
-            intro f hf
-            simp only [List.mem_cons] at hf
-            rcases hf with rfl | rfl | rfl | rfl | hf
-            · exact bd
-            · exact bounded_scale _ bd
-            · exact br
-            · exact bounded_sub (bounded_const _ _) br
-            · exact bounded_mono le (wf.facts f hf) }
-      · have ym : ev ρ y = m := ev_isConst hm
-        simp [binop, semv, nr, ym, pos]
+      obtain ⟨ρ', c, _, nr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
+      refine ⟨ρ', c, _, rfl, bounded_var (show s.nvars + 1 < s.nvars + 2 by omega), ?_⟩
+      have ym : ev ρ y = m := ev_isConst hm
+      simp [binop, semv, nr, ym, pos]
     next => exact (refuse_ok h).elim
 
 theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownValue facts c = some v → SFact.value c v ∈ facts
@@ -611,8 +560,8 @@ theorem sameArgs_sound (ctx : Ctx) (s0 : State) {facts : List Row} {ρ : Nat →
         simp only [sameArgs] at h
         obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
         obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
-        have g1 := entail_sound e1 ρ hf
-        have g2 := entail_sound e2 ρ hf
+        have g1 := entailAs_sound e1 ρ hf
+        have g2 := entailAs_sound e2 ρ hf
         rw [ev_sub] at g1 g2
         have e : ev ρ x = ev ρ y := by omega
         simp only [List.map_cons, semv, e, sameArgs_sound ctx s0 hf as bs h]

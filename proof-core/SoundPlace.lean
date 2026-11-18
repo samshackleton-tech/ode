@@ -423,10 +423,12 @@ theorem placeEnv_bounded {ctx : Ctx} (pl : Place) {s : Sym} (wf : WF s) (hn : �
     exact wf.reg r (hn (n, r) hm)
   · exact (symEnv_bounded ctx.contract).mono wf.base nv m
 
-/-- What a place says of a state of the machine there, `first` being what the verifier held on first coming
-there: the registers kept and the frame are as `first` has them, memory outside the frame is as at entry,
-and the place's facts are so of what the named registers hold. -/
-structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρ : Nat → Int) (st : State) : Prop where
+/-- What a place says of a state of the machine there, `first` being what the verifier held when a path
+first came there and `ρs` what its unknowns then were: those unknowns are still what they were, the
+registers kept and the frame are as `first` has them, memory outside the frame is as at entry, and the
+place's facts are so of what the named registers hold. -/
+structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : Nat → Int) (st : State) : Prop where
+  outer : Agree first.nvars ρs ρ
   entry : ∀ r, r < 16 → ρ r = s0.reg r
   kept : ∀ r, r < 16 → pl.keep.contains r = true → (st.reg r : Int) = ev ρ (first.reg r)
   small : ∀ r, st.reg r < M64
@@ -435,58 +437,11 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρ : Nat 
   mem : ∀ a, ctx.contract.inFrame s0 a = false → st.mem a = s0.mem a
   facts : ∀ e ∈ pl.facts, Asserts ctx.defs (placeVals ctx pl s0 st) e
 
-theorem entryFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int}
-    (hρ : ∀ r, r < 16 → ρ r = s0.reg r) : ∀ f ∈ entryFacts ctx, f.holds ρ := by
-  have hstack := E.stack
-  have habove := E.above
-  unfold M64 at habove
-  have hsp := hρ RSP (by decide)
-  intro f m
-  simp only [entryFacts, List.mem_append] at m
-  rcases m with (m | m) | m
-  · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
-    obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-    have hr := List.mem_range.mp hr
-    have := E.small r
-    have h1 := hρ r hr
-    unfold M64 at this
-    simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
-    rcases hf with rfl | rfl
-    · rw [holds_iff, ev_var]; omega
-    · rw [holds_iff, ev_sub, ev_const, ev_var]; simp only [top]; omega
-  · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
-    rcases m with rfl | rfl
-    · rw [holds_iff, ev_sub, ev_const, ev_var]; omega
-    · rw [holds_iff, ev_sub, ev_const, ev_var]; omega
-  · obtain ⟨⟨b, l⟩, hm, rfl⟩ := List.mem_map.mp m
-    have := (E.region hm).1
-    have lt := regions_lt hm
-    have h1 := hρ b lt.1
-    have h2 := hρ l lt.2
-    unfold M64 at this
-    rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
-
-theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f := by
-  intro f m
-  simp only [entryFacts, List.mem_append] at m
-  rcases m with (m | m) | m
-  · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
-    obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-    have hr := List.mem_range.mp hr
-    simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
-    rcases hf with rfl | rfl
-    · exact bounded_var hr
-    · exact bounded_sub (bounded_const _ _) (bounded_var hr)
-  · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
-    rcases m with rfl | rfl
-    · exact bounded_sub (bounded_var (show RSP < 16 by decide)) (bounded_const _ _)
-    · exact bounded_sub (bounded_const _ _) (bounded_var (show RSP < 16 by decide))
-  · obtain ⟨⟨b, l⟩, hm, rfl⟩ := List.mem_map.mp m
-    have := regions_lt hm
-    exact bounded_sub (bounded_sub (bounded_const _ _) (bounded_var this.1)) (bounded_var this.2)
-
-theorem general_wf (ctx : Ctx) (pl : Place) {first : Sym} (wf : WF first) : WF (first.general ctx pl) := by
-  refine ⟨Nat.le_add_left _ _, ?_, trivial, trivial, ?_, ?_, (fun v r o m => nomatch m), (fun f m => nomatch m)⟩
+theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
+  have le : first.nvars ≤ first.nvars + 16 := Nat.le_add_right _ _
+  refine ⟨Nat.le_add_left _ _, ?_, trivial, trivial, ?_, ?_,
+          (fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩),
+          (fun f m => SFact.bounded_mono le (wf.spec f m))⟩
   · intro r hr
     show bounded (first.nvars + 16) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     split
@@ -504,14 +459,15 @@ theorem general_wf (ctx : Ctx) (pl : Place) {first : Sym} (wf : WF first) : WF (
       rcases hf with rfl | rfl
       · exact bounded_var (show first.nvars + r < first.nvars + 16 by omega)
       · exact bounded_sub (bounded_const _ _) (bounded_var (show first.nvars + r < first.nvars + 16 by omega))
-    · exact bounded_mono (Nat.le_trans wf.base (Nat.le_add_right _ _)) (entryFacts_bounded ctx f m)
+    · exact bounded_mono le (wf.facts f m)
 
 /-- Of every state of the machine of which the place says what it says, what the general state holds is
-so: the registers not kept are the unknowns the general state made for them. -/
-theorem general_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) {first : Sym} (wf : WF first)
-    {ρ : Nat → Int} {st : State} (A : AtPlace ctx pl s0 first ρ st) :
+so: the registers not kept are the unknowns the general state made for them, and what was so of the
+unknowns of before, when the path first came there, is so still. -/
+theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : WF first)
+    {ρs ρ : Nat → Int} {stf st : State} (Hf : Holds ctx s0 ρs first stf) (A : AtPlace ctx pl s0 first ρs ρ st) :
     Holds ctx s0 (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k)
-      (first.general ctx pl) st := by
+      (first.general pl) st := by
   have ag : Agree first.nvars ρ (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) := by
     intro k hk
     show ρ k = if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k
@@ -522,7 +478,8 @@ theorem general_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     show (if first.nvars ≤ r ∧ r < first.nvars + 16 then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
     rw [if_neg (by omega)]
     exact A.entry r hr
-  refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, (fun v r o m => nomatch m), (fun f m => nomatch m), A.mem⟩
+  have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)
+  refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem⟩
   · intro r hr
     show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     by_cases hk : pl.keep.contains r = true
@@ -548,17 +505,20 @@ theorem general_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
       rcases hf with rfl | rfl
       · rw [holds_iff, ev_var, val]; omega
       · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
-    · exact entryFacts_hold E hentry f m
+    · exact Hg.facts f m
 
-/-- The verifier's work on first coming to the place: of the state it first came in, the place says what
-it says; and of every state of which the place says so, what the general state holds is so, and the
-place's number there is the general state's number, no less than zero. -/
+/-- The verifier's work when a path first comes to a place: of the state it came in, the place says what
+it says; and of every state of which the place says so (the unknowns of before being what they were), what
+the general state holds is so, and the place's number there is the general state's number, no less than
+zero. -/
 theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) {s g first : Sym} {d : Row}
     {items rest : List Item} {ρ : Nat → Int} {st : State}
     (h : generalize ctx pl s items = .ok ((g, d, first), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
-    (∀ nr ∈ pl.names, nr.2 < 16) ∧ (∃ ρ1, AtPlace ctx pl s0 first ρ1 st) ∧ WF g ∧ bounded g.nvars d ∧
-    ∀ ρ' st', AtPlace ctx pl s0 first ρ' st' →
-      ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ 0 ≤ ev ρ'' d ∧ Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d)) := by
+    (∀ nr ∈ pl.names, nr.2 < 16) ∧ ∃ ρ1, Agree s.nvars ρ ρ1 ∧ s.nvars ≤ first.nvars ∧ AtPlace ctx pl s0 first ρ1 ρ1 st ∧
+      WF g ∧ first.nvars ≤ g.nvars ∧ bounded g.nvars d ∧
+      ∀ ρ' st', AtPlace ctx pl s0 first ρ1 ρ' st' →
+        ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ Agree first.nvars ρ' ρ'' ∧ 0 ≤ ev ρ'' d ∧
+          Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d)) := by
   unfold generalize at h
   split at h
   next => exact (refuse_ok h).elim
@@ -572,7 +532,7 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         apply hguard
         simp only [Bool.or_eq_true]
         right
-        exact List.any_eq_true.mpr ⟨(n, r), m, by simp only [Bool.or_eq_true, decide_eq_true_eq]; right; omega⟩
+        exact List.any_eq_true.mpr ⟨(n, r), m, by simp only [decide_eq_true_eq]; omega⟩
     obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨g1, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨⟨dres, g2⟩, r3, e3, h⟩ := V.bind_ok h
@@ -581,8 +541,8 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     have env1 : semEnv ctx s0 ρ1 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
       rw [← semEnv_agree envb c1.agree]
       exact semEnv_placeEnv pl H.entry H.reg hnames
-    have first_at : AtPlace ctx pl s0 s1 ρ1 st :=
-      ⟨c1.holds.entry, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
+    have first_at : AtPlace ctx pl s0 s1 ρ1 ρ1 st :=
+      ⟨Agree.refl _ _, c1.holds.entry, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
        fun e m => by rw [← env1]; exact a1 e m⟩
     cases dres with
     | list _ => exact (refuse_ok h).elim
@@ -599,32 +559,37 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         injection h1 with hg h2
         injection h2 with hd hf
         rw [hg, hd, hf]
-        have G : ∀ ρ' st', AtPlace ctx pl s0 s1 ρ' st' →
-            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF g2 ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
+        have G : ∀ ρ' st', AtPlace ctx pl s0 s1 ρ1 ρ' st' →
+            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF g2 ∧ s1.nvars ≤ g2.nvars ∧ Agree s1.nvars ρ' ρ'' ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
               Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d')) := by
           intro ρ' st' A
-          have H0 := general_holds E pl c1.wf A
-          have w0 := general_wf ctx pl c1.wf
-          have envb0 : EnvB (s1.general ctx pl).nvars (placeEnv ctx pl (s1.general ctx pl).reg) := placeEnv_bounded pl w0 hnames
+          have H0 := general_holds pl c1.wf c1.holds A
+          have ag0 : Agree s1.nvars ρ' (fun k => if s1.nvars ≤ k ∧ k < s1.nvars + 16 then (st'.reg (k - s1.nvars) : Int) else ρ' k) := by
+            intro k hk
+            show ρ' k = if s1.nvars ≤ k ∧ k < s1.nvars + 16 then (st'.reg (k - s1.nvars) : Int) else ρ' k
+            rw [if_neg (by omega)]
+          have w0 := general_wf pl c1.wf
+          have envb0 : EnvB (s1.general pl).nvars (placeEnv ctx pl (s1.general pl).reg) := placeEnv_bounded pl w0 hnames
           have env0 := semEnv_placeEnv (ctx := ctx) pl H0.entry H0.reg hnames
           obtain ⟨ρa, ca⟩ := suppose_all E _ pl.facts e2 H0 w0 envb0 (fun e m => by rw [env0]; exact A.facts e m)
           obtain ⟨ρb, cb, sem, bd⟩ := seval_sound E _ pl.decreases e3 ca.holds ca.wf (envb0.mono ca.mono)
-          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1.general ctx pl).reg) = placeVals ctx pl s0 st' := by
+          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1.general pl).reg) = placeVals ctx pl s0 st' := by
             rw [← semEnv_agree envb0 (ca.then cb).agree]; exact env0
           rw [env2] at sem
-          exact ⟨ρb, cb.holds, cb.wf, bd, entail_sound e4 ρb cb.holds.facts, sem⟩
-        obtain ⟨ρx, Hx, wg, bdd, _, _⟩ := G ρ1 st first_at
-        refine ⟨hnames, ⟨ρ1, first_at⟩, wg, bdd, ?_⟩
+          exact ⟨ρb, cb.holds, cb.wf, Nat.le_trans (Nat.le_add_right _ 16) (ca.then cb).mono,
+                 Agree.trans (Nat.le_add_right _ 16) ag0 (ca.then cb).agree, bd, entail_sound e4 ρb cb.holds.facts, sem⟩
+        obtain ⟨ρx, Hx, wg, leg, _, bdd, _, _⟩ := G ρ1 st first_at
+        refine ⟨hnames, ρ1, c1.agree, c1.mono, first_at, wg, leg, bdd, ?_⟩
         intro ρ' st' A
-        obtain ⟨ρ'', Hh, _, _, pos, val⟩ := G ρ' st' A
-        exact ⟨ρ'', Hh, pos, val⟩
+        obtain ⟨ρ'', Hh, _, _, agx, _, pos, val⟩ := G ρ' st' A
+        exact ⟨ρ'', Hh, agx, pos, val⟩
 
-/-- The verifier's work on coming to the place again: of the state of the machine there the place says
-what it says, and the place's number there is less than `d` was. -/
+/-- The verifier's work when a path comes again to a place: of the state of the machine there the place
+says what it says, and the place's number there is less than `d` was. -/
 theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
     {first s : Sym} {d : Row} {items : List Item} {r : Unit × List Item} {ρ : Nat → Int} {st : State}
     (h : arrive ctx pl first d s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hd : bounded s.nvars d) :
-    AtPlace ctx pl s0 first ρ st ∧
+    AtPlace ctx pl s0 first ρ ρ st ∧
     ∃ n : Int, Value ctx.defs (placeVals ctx pl s0 st) pl.decreases (.int n) ∧ n + 1 ≤ ev ρ d := by
   cases hfind : pl.keep.find? (fun r => s.reg r != first.reg r) with
   | some _ => simp only [arrive, hfind] at h; exact (refuse_ok h).elim
@@ -656,7 +621,7 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         rw [← semEnv_agree envb c1.agree]; exact env0
       have env2 : semEnv ctx s0 ρ2 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
         rw [← semEnv_agree envb (c1.then c2).agree]; exact env0
-      refine ⟨⟨H.entry, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
+      refine ⟨⟨Agree.refl _ _, H.entry, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
                (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m)⟩, ?_⟩
       cases dres with
       | list _ => exact (refuse_ok h).elim

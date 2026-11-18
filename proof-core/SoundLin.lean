@@ -93,9 +93,9 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
       omega
     next => contradiction
 
-theorem entail_sound {facts : List Row} {g : Row} {items : List Item} {r : Unit × List Item}
-    (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
-  unfold entail at h
+theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : List Item} {r : Unit × List Item}
+    (h : entailAs what facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
+  unfold entailAs at h
   split at h
   next hp => exact plain_sound hp ρ hf
   next =>
@@ -114,6 +114,10 @@ theorem entail_sound {facts : List Row} {g : Row} {items : List Item} {r : Unit 
       next => exact (refuse_ok h2).elim
     next => exact (refuse_ok h2).elim
     next => exact (need_ok h2).elim
+
+theorem entail_sound {facts : List Row} {g : Row} {items : List Item} {r : Unit × List Item}
+    (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g :=
+  entailAs_sound (what := "entail") h ρ hf
 
 theorem compare_sound {facts : List Row} {a b : Row} {items : List Item} {c : Cmp} {rest : List Item}
     (h : compare facts a b items = .ok (c, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :

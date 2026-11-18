@@ -53,7 +53,7 @@ judge each change the verifier accepts: hours, run in the background.
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
-| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_all_sound`); it shows two shipped functions (`ode_common`, `ode_adler32`) and a function that calls the first, so far. Its `README.md` says what that rests on. No other folder needs Lean |
+| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_all_sound`); it shows three shipped functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`) and a function that calls the first, so far. Its `README.md` says what that rests on. No other folder needs Lean |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |

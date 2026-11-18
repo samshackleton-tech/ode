@@ -56,14 +56,14 @@ r 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1
 r 18446744073709551616 0 0 -1 0 0 0 -1
 s 0 1 1 1 1
 q
-t open 0
+t open 2
 t lt
 t eq
-t open 0
+t open 2
 t lt
 t gt
-t open 0
+t open 2
 t lt
 t lt
-t open 0
+t open 2
 t eq

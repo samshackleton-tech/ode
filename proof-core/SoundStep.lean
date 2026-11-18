@@ -378,12 +378,120 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         · rw [g3, ← hadr]; simp only [load, hmem0]; omega
       next => exact (refuse_ok h).elim
 
-theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : List Item} {ρ : Nat → Int}
-    (h : symPrim f s x y items = .ok ((v, s'), rest)) (hf : ∀ g ∈ s.facts, g.holds ρ)
+/-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
+theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' (s.divide x m) st ∧ ρ' s.nvars = ev ρ x / m ∧ ρ' (s.nvars + 1) = ev ρ x % m := by
+  let ρ' : Nat → Int := fun k => if k = s.nvars then ev ρ x / m else if k = s.nvars + 1 then ev ρ x % m else ρ k
+  have ag : Agree s.nvars ρ ρ' := fun k hk => by
+    show ρ k = if k = s.nvars then _ else if k = s.nvars + 1 then _ else ρ k
+    rw [if_neg (by omega), if_neg (by omega)]
+  have H' := H.agree wf ag
+  have ex : ev ρ' x = ev ρ x := (ev_agree hx ag).symm
+  have nq : ρ' s.nvars = ev ρ x / m := by
+    show (if s.nvars = s.nvars then _ else _) = _
+    rw [if_pos rfl]
+  have nr : ρ' (s.nvars + 1) = ev ρ x % m := by
+    show (if s.nvars + 1 = s.nvars then _ else if s.nvars + 1 = s.nvars + 1 then _ else _) = _
+    rw [if_neg (by omega), if_pos rfl]
+  have le : s.nvars ≤ s.nvars + 2 := Nat.le_add_right _ _
+  have bq : bounded (s.nvars + 2) (Lin.var s.nvars) := bounded_var (by omega)
+  have br : bounded (s.nvars + 2) (Lin.var (s.nvars + 1)) := bounded_var (by omega)
+  have bd : bounded (s.nvars + 2) (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) :=
+    bounded_sub (bounded_mono le hx) (bounded_add (bounded_scale _ bq) br)
+  have dv : ev ρ' (Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))) = 0 := by
+    rw [ev_sub, ev_add, ev_scale, ev_var, ev_var, nq, nr, ex]
+    have := Int.mul_ediv_add_emod (ev ρ x) m
+    omega
+  refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, nq, nr⟩
+  · exact {
+      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
+      spec := H'.spec, mem := H'.mem, bytes := H'.bytes,
+      facts := by
+        intro f hf
+        simp only [Sym.divide, List.mem_cons] at hf
+        rcases hf with rfl | rfl | rfl | rfl | hf
+        · rw [holds_iff, dv]; omega
+        · rw [holds_iff, ev_scale, dv]; omega
+        · rw [holds_iff, ev_var, nr]; exact Int.emod_nonneg _ (by omega)
+        · rw [holds_iff, ev_sub, ev_const, ev_var, nr]
+          have := Int.emod_lt_of_pos (ev ρ x) pos
+          omega
+        · exact H'.facts f hf }
+  · exact {
+      base := Nat.le_trans wf.base le
+      reg := fun r hr => bounded_mono le (wf.reg r hr)
+      zf := Flag.bounded_mono le wf.zf
+      cf := Flag.bounded_mono le wf.cf
+      frame := fun o v m => bounded_mono le (wf.frame o v m)
+      spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+      bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
+      facts := by
+        intro f hf
+        simp only [Sym.divide, List.mem_cons] at hf
+        rcases hf with rfl | rfl | rfl | rfl | hf
+        · exact bd
+        · exact bounded_scale _ bd
+        · exact br
+        · exact bounded_sub (bounded_const _ _) br
+        · exact bounded_mono le (wf.facts f hf) }
+
+/-- A number of the machine divided by a number above zero: what `symDivide` gives is the quotient and the
+remainder. -/
+theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' (symDivide s x m).2.2 st ∧
+      ev ρ' (symDivide s x m).1 = ev ρ x / m ∧ ev ρ' (symDivide s x m).2.1 = ev ρ x % m ∧
+      bounded (symDivide s x m).2.2.nvars (symDivide s x m).1 ∧ bounded (symDivide s x m).2.2.nvars (symDivide s x m).2.1 := by
+  cases hd : divided s x m with
+  | some q =>
+    simp only [symDivide, hd]
+    have hq := List.find?_some hd
+    simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
+    obtain ⟨⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    have f1 := H.facts _ m1
+    have f2 := H.facts _ m2
+    have f3 := H.facts _ m3
+    have f4 := H.facts _ m4
+    rw [holds_iff] at f1 f2 f3 f4
+    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
+    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
+    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
+           bounded_var (List.mem_range.mp (List.mem_of_find?_eq_some hd)), wf.facts _ m3⟩
+  | none =>
+    simp only [symDivide, hd]
+    obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
+    have le : s.nvars ≤ s.nvars + 2 := Nat.le_add_right _ _
+    have bq : bounded (s.nvars + 2) (Lin.var s.nvars) := bounded_var (by omega)
+    have br : bounded (s.nvars + 2) (Lin.var (s.nvars + 1)) := bounded_var (by omega)
+    refine ⟨ρ', ⟨c.agree, c.mono, ?_, ?_⟩, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr, bq, br⟩
+    · exact {
+        entry := c.holds.entry, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
+        frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes,
+        facts := by
+          intro f hf
+          simp only [List.mem_cons] at hf
+          rcases hf with rfl | hf
+          · rw [holds_iff, ev_var, hq]; exact Int.ediv_nonneg x0 (by omega)
+          · exact c.holds.facts f hf }
+    · exact {
+        base := c.wf.base, reg := c.wf.reg, zf := c.wf.zf, cf := c.wf.cf, frame := c.wf.frame, spec := c.wf.spec,
+        bytes := c.wf.bytes,
+        facts := by
+          intro f hf
+          simp only [List.mem_cons] at hf
+          rcases hf with rfl | hf
+          · exact bq
+          · exact c.wf.facts f hf }
+
+theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
-    s' = s ∧ ∃ z, prim f [xa, xb] = some z ∧ EV.sem ρ s.nvars z v := by
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa, xb] = some z ∧ EV.sem ρ' s'.nvars z v := by
+  have hf := H.facts
   obtain ⟨hx1, hx2, hx3⟩ := hx
   obtain ⟨hy1, hy2, hy3⟩ := hy
+  have hx1' : xa < M64 := hx1
   have sx := signed_ev ρ x
   have sy := signed_ev ρ y
   unfold M64 at hx1 hy1
@@ -400,7 +508,7 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
     injection this with hp _
     injection hp with h1 h2
     subst h1 h2
-    refine ⟨rfl, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
+    refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
     · exact Nat.mod_lt _ (by decide)
     · rw [ev_add]; unfold M64; omega
   next hc =>
@@ -416,7 +524,7 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      refine ⟨rfl, (xa + (M64 - xb % M64)) % M64, by simp only [prim]; rw [if_neg hc, if_pos hc2], ?_, ?_, bounded_sub (bounded_signed hx3) (bounded_signed hy3)⟩
+      refine ⟨ρ, Carried.here H wf, (xa + (M64 - xb % M64)) % M64, by simp only [prim]; rw [if_neg hc, if_pos hc2], ?_, ?_, bounded_sub (bounded_signed hx3) (bounded_signed hy3)⟩
       · exact Nat.mod_lt _ (by decide)
       · rw [ev_sub]; unfold M64; omega
     next hc2 =>
@@ -428,7 +536,7 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
         subst h1 h2
         have fe : f = "equal" := by simpa using hc3
         subst fe
-        refine ⟨rfl, (if xa % M64 = xb % M64 then 1 else 0), by simp [prim], ?_, hx3, hy3⟩
+        refine ⟨ρ, Carried.here H wf, (if xa % M64 = xb % M64 then 1 else 0), by simp [prim], ?_, hx3, hy3⟩
         unfold M64
         rw [Nat.mod_eq_of_lt hx1, Nat.mod_eq_of_lt hy1, ← hx2, ← hy2]
         simp only [Int.natCast_inj]
@@ -441,7 +549,7 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
           subst h1 h2
           have fe : f = "below" := by simpa using hc4
           subst fe
-          refine ⟨rfl, (if xa % M64 < xb % M64 then 1 else 0), by simp [prim], ?_, hx3, hy3⟩
+          refine ⟨ρ, Carried.here H wf, (if xa % M64 < xb % M64 then 1 else 0), by simp [prim], ?_, hx3, hy3⟩
           unfold M64
           rw [Nat.mod_eq_of_lt hx1, Nat.mod_eq_of_lt hy1, ← hx2, ← hy2]
           simp only [Int.ofNat_lt]
@@ -474,10 +582,65 @@ theorem symPrim_sound {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest
                   have : ((xa * 2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat * ev ρ x := by
                     rw [Int.natCast_mul, cast, ← hx2, Int.mul_comm]
                   unfold M64; omega
-                refine ⟨rfl, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
+                refine ⟨ρ, Carried.here H wf, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
                 rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
               next => exact (refuse_ok h).elim
-          next => exact (refuse_ok h).elim
+          next hc5 =>
+            split at h
+            next hc6 =>
+              have fe : f = "shr64" := by simpa using hc6
+              subst fe
+              cases hk : Lin.isConst y with
+              | none => simp only [hk] at h; exact (refuse_ok h).elim
+              | some k =>
+                simp only [hk] at h
+                split at h
+                next hk2 =>
+                  have := V.pure_ok h
+                  injection this with hp _
+                  injection hp with h1 h2
+                  subst h1 h2
+                  have yk : (xb : Int) = k := by rw [hy2]; exact ev_isConst hk
+                  have e : xb = k.toNat := by omega
+                  subst e
+                  have pos : (0 : Int) < 2 ^ k.toNat := Int.pow_pos (by decide)
+                  obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
+                  have cast : ((2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat := by simp
+                  refine ⟨ρ', c, (xa % M64) >>> k.toNat, by simp [prim], ?_, ?_, bq⟩
+                  · rw [Nat.mod_eq_of_lt hx1', Nat.shiftRight_eq_div_pow]
+                    exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hx1'
+                  · rw [hq, ← hx2, Nat.mod_eq_of_lt hx1', Nat.shiftRight_eq_div_pow, Int.natCast_ediv, cast]
+                next => exact (refuse_ok h).elim
+            next hc6 =>
+              split at h
+              next hc7 =>
+                have fe : f = "and64" := by simpa using hc7
+                subst fe
+                cases hk : Lin.isConst y with
+                | none => simp only [hk] at h; exact (refuse_ok h).elim
+                | some m =>
+                  simp only [hk] at h
+                  cases hfind : (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
+                  | none => simp only [hfind] at h; exact (refuse_ok h).elim
+                  | some k =>
+                    simp only [hfind] at h
+                    have := V.pure_ok h
+                    injection this with hp _
+                    injection hp with h1 h2
+                    subst h1 h2
+                    have hm : (2 : Int) ^ k - 1 = m := by simpa using List.find?_some hfind
+                    have ym : (xb : Int) = m := by rw [hy2]; exact ev_isConst hk
+                    have pos : (0 : Int) < 2 ^ k := Int.pow_pos (by decide)
+                    have cast : ((2 ^ k : Nat) : Int) = (2 : Int) ^ k := by simp
+                    have xbk : xb = 2 ^ k - 1 := by
+                      have := Nat.two_pow_pos k
+                      omega
+                    subst xbk
+                    obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
+                    have lt : xa % 2 ^ k < M64 := Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1'
+                    refine ⟨ρ', c, (xa &&& (2 ^ k - 1)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, br⟩
+                    rw [hr, ← hx2, Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt lt, Int.natCast_emod, cast]
+              next => exact (refuse_ok h).elim
 
 theorem M64_cast : (M64 : Int) = 2 ^ 64 := by decide
 
@@ -555,9 +718,8 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           exact ⟨ρ3, _, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, sumList, al, if_true], sv⟩
         | none =>
           simp only [hm] at h
-          obtain ⟨hs, z, hz, sz⟩ := symPrim_sound h c2.holds.facts xa xb sa2 sb
-          subst hs
-          exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, vb, hm, hz], sz⟩
+          obtain ⟨ρ3, c3, z, hz, sz⟩ := symPrim_sound h c2.holds c2.wf xa xb sa2 sb
+          exact ⟨ρ3, z, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], sz⟩
   | .call f [], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
