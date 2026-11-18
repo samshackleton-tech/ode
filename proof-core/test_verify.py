@@ -14,7 +14,7 @@ import prove, statement
 COMMON = os.path.join(HERE, "..", "kcheck", "programs", "common")
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 
-STATEMENT = ("i", "arg", "returns", "stack", "def")          # the kinds of line that say what is to be shown
+STATEMENT = ("fn", "i", "arg", "returns", "stack", "def")    # the kinds of line that say what is to be shown
 
 # (what is changed, the line as it is, the line changed)
 CHANGED = [
@@ -53,7 +53,7 @@ class Verify(unittest.TestCase):
             with open(os.path.join(COMMON, "common.spec")) as f: cls.spec = f.read()
             with open(os.path.join(COMMON, "common.proof")) as f: cls.places = f.read()
             t = time.time()
-            cls.runs, cls.items = prove.prove(os.path.join(COMMON, "odecommon.o"), "ode_common", cls.spec, cls.places, cls.statement, cls.proof)
+            cls.runs, cls.items = prove.prove(cls.spec, [(os.path.join(COMMON, "odecommon.o"), "ode_common", cls.places)], cls.statement, cls.proof)["ode_common"]
             cls.found_in = time.time() - t
             cls.lines = []                                  # the statement's lines, then the proof's
             for path in (cls.statement, cls.proof):
@@ -91,7 +91,7 @@ class Verify(unittest.TestCase):
         self.assertEqual(len(proof), self.items)
         with open(self.proof) as f: whole = f.read()
         print(f"\node_common: shown in {1000 * took:.0f} ms; the proof: {whole.count(chr(10))} lines, {len(whole)} bytes "
-              f"(the place: {whole.count(chr(10)) - len(proof)} lines; {sum(l == 'q' for l in proof)} proofs of arithmetic); "
+              f"(the place: {whole.count(chr(10)) - len(proof) - 1} lines; {sum(l == 'q' for l in proof)} proofs of arithmetic); "
               f"the statement: {os.path.getsize(self.statement)} bytes; found in {self.runs} runs of the verifier, {self.found_in:.1f} s", file=sys.stderr)
 
     def test_changed_in_one_place(self):
@@ -143,12 +143,20 @@ class Verify(unittest.TestCase):
 
     def test_a_proof_cannot_add_to_what_is_to_be_shown(self):
         with open(self.proof) as f: proof = f.read()
-        for extra in ("stack 4000", "returns (num 0)", "def common a b = (num 0)", "arg x number", "i 0 1 .ret"):
+        for extra in ("stack 4000", "returns (num 0)", "def common a b = (num 0)", "arg x number", "i 0 1 .ret", "fn other"):
             for text in (proof + extra + "\n", extra + "\n" + proof):
                 path = os.path.join(self.dir, "more.proof")
                 with open(path, "w") as f: f.write(text)
                 said = self.run_files(self.statement, path)
                 self.assertTrue(said.startswith("refused: a line of the statement in the proof"), said[:200])
+        # a proof speaks only of the statement's functions, and says of which
+        self.assertEqual(proof.count("for ode_common\n"), 1)
+        for text, why in ((proof.replace("for ode_common\n", "for ode_other\n"), "refused: the proof speaks of ode_other, which is no function of the statement"),
+                          (proof.replace("for ode_common\n", ""), "refused: a line of a proof before any `for NAME`")):
+            path = os.path.join(self.dir, "more.proof")
+            with open(path, "w") as f: f.write(text)
+            said = self.run_files(self.statement, path)
+            self.assertTrue(said.startswith(why), said[:200])
         # and a proof's line in the statement is refused too
         with open(self.statement) as f: text = f.read()
         path = os.path.join(self.dir, "more.statement")
@@ -158,25 +166,25 @@ class Verify(unittest.TestCase):
     def test_the_kept_proof_shows_from_the_files(self):
         import lean_verify
         obj, kept = os.path.join(COMMON, "odecommon.o"), os.path.join(HERE, "proofs", "ode_common.proof")
-        self.assertEqual(lean_verify.verify(obj, "ode_common", self.spec, kept), (True, "shown"))
+        self.assertEqual(lean_verify.verify(self.spec, [(obj, "ode_common")], kept), (True, "shown"))
         self.assertEqual(self.spec.count("stack 40"), 1)
-        shown, said = lean_verify.verify(obj, "ode_common", self.spec.replace("stack 40", "stack 32"), kept)
-        self.assertFalse(shown); self.assertTrue(said.startswith("refused"), said[:200])
+        shown, said = lean_verify.verify(self.spec.replace("stack 40", "stack 32"), [(obj, "ode_common")], kept)
+        self.assertFalse(shown); self.assertTrue(said.startswith("refused"), said[:200]); self.assertTrue(said.endswith("\nin ode_common"), said[-200:])
         self.assertEqual(self.spec.count("a[at] != b[at]"), 1)
-        shown, said = lean_verify.verify(obj, "ode_common", self.spec.replace("a[at] != b[at]", "a[at] < b[at]"), kept)
+        shown, said = lean_verify.verify(self.spec.replace("a[at] != b[at]", "a[at] < b[at]"), [(obj, "ode_common")], kept)
         self.assertFalse(shown)
 
     def test_a_contract_line_the_account_lacks_is_refused(self):
         obj = os.path.join(COMMON, "odecommon.o")
         self.assertIn("    trace depends on a, b\n", self.spec)
-        statement.statement(obj, "ode_common", self.spec)                              # as it is: written
+        statement.statement(self.spec, [(obj, "ode_common")])                          # as it is: written
         for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
                                ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
                                ("the function needs an instruction set", "    stack 40\n", "    stack 40\n    needs sse41\n"),
                                ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n")):
             with self.subTest(what=what):
                 self.assertEqual(self.spec.count(old), 1)
-                with self.assertRaises(SystemExit) as e: statement.statement(obj, "ode_common", self.spec.replace(old, new))
+                with self.assertRaises(SystemExit) as e: statement.statement(self.spec.replace(old, new), [(obj, "ode_common")])
                 self.assertIn("does not", str(e.exception))
 
 

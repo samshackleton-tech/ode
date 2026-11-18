@@ -707,7 +707,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
   | some name =>
     match ctx.callees.lookup name with
-    | none => refuse s!"a call of {name}: its contract is not in what is to be shown"
+    | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c => do
       let s' ← symCall ctx s c
       pure [(s', .at i.next)]
@@ -819,5 +819,28 @@ def verdict (ctx : Ctx) (proof : List Item) : Option String :=
   match verify ctx proof with
   | .ok _ => none
   | .error why => some why
+
+/-- A function of a statement: its name, its instructions and its contract; and, the maker's, its place
+and its proof. -/
+structure Fn where
+  name : String
+  code : List (Nat × Instr) := []
+  contract : Contract := ⟨[], none, 0⟩
+  place : Option Place := none
+  proof : List Item := []
+
+/-- The functions one after another, `done` being those already shown, each with its contract. A call is
+taken by the contract of a function already shown, and by nothing else: so no function calls itself, or
+one that calls it, or one that is not in the statement. -/
+def verdictFrom (defs : List Def) : List (String × Contract) → List Fn → Option String
+  | _, [] => none
+  | done, f :: more =>
+    if done.any (fun d => d.1 == f.name) then some s!"refused: two functions are named {f.name}"
+    else match verdict { code := f.code, contract := f.contract, defs := defs, place := f.place, callees := done } f.proof with
+      | some why => some s!"{why}\nin {f.name}"
+      | none => verdictFrom defs ((f.name, f.contract) :: done) more
+
+/-- Do the functions of a statement meet their contracts, by these proofs? `none`: yes, every one. -/
+def verdictAll (defs : List Def) (fns : List Fn) : Option String := verdictFrom defs [] fns
 
 end Ode

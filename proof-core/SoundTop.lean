@@ -652,4 +652,56 @@ theorem verify_sound (world : List Program) (ctx : Ctx) (p : Program) (proof : L
         obtain ⟨ρ'', Hg, pos, _⟩ := G ρ1 st' A
         exact place_runs E W pl hpl hn g d first wg hd G e4 (ev ρ'' d).toNat ρ'' st' Hg hrip' (by omega)
 
+/-! ## The functions of a statement, together -/
+
+/-- The functions there are have, under each function's name, the instructions the statement gives for it,
+lying in memory. -/
+def Linked (world : List Program) (fns : List Fn) : Prop :=
+  ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ p.code = f.code ∧ p.fits
+
+theorem verdictFrom_sound (world : List Program) (defs : List Def) :
+    ∀ (fns : List Fn) (done : List (String × Contract)),
+    (∀ name c, done.lookup name = some c → ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world c defs q) →
+    Linked world fns → verdictFrom defs done fns = none →
+    ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world f.contract defs p
+  | [], _, _, _, _ => fun f m => nomatch m
+  | f :: more, done, I, L, h => by
+    simp only [verdictFrom] at h
+    split at h
+    · cases h
+    · cases hv : verdict { code := f.code, contract := f.contract, defs := defs, place := f.place, callees := done } f.proof with
+      | some why => simp [hv] at h
+      | none =>
+        simp only [hv] at h
+        obtain ⟨p, hp, hc, hf⟩ := L f (List.mem_cons_self ..)
+        have M : Meets world f.contract defs p :=
+          verify_sound world { code := f.code, contract := f.contract, defs := defs, place := f.place, callees := done } p f.proof hc I hv
+        have I' : ∀ name c, ((f.name, f.contract) :: done).lookup name = some c →
+            ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world c defs q := by
+          intro name c hl
+          rw [List.lookup_cons] at hl
+          cases hn : (name == f.name) with
+          | true =>
+            rw [hn] at hl
+            injection hl with hl
+            have e : name = f.name := by simpa using hn
+            subst hl e
+            exact ⟨p, hp, hf, M⟩
+          | false =>
+            rw [hn] at hl
+            exact I name c hl
+        intro g m
+        cases m with
+        | head => exact ⟨p, hp, M⟩
+        | tail _ m => exact verdictFrom_sound world defs more _ I' (fun g m => L g (List.mem_cons_of_mem _ m)) h g m
+
+/-- **What the verifier's yes of a statement stands for.** If the verifier says yes of the functions of a
+statement, whatever the proofs are, then every one of them meets its contract: given only that the
+functions there are have, under each name, the instructions the statement gives, lying in memory. Nothing
+is assumed of any function: each one called is itself in the statement, and is shown before its caller. -/
+theorem verify_all_sound (world : List Program) (defs : List Def) (fns : List Fn) (L : Linked world fns)
+    (h : verdictAll defs fns = none) :
+    ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world f.contract defs p :=
+  verdictFrom_sound world defs fns [] (fun name c hl => by simp [List.lookup] at hl) L h
+
 end Ode

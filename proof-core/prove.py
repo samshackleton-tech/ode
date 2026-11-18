@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """prove: the prover for the verifier in Lean (Core.lean). Relied on for nothing.
 
-    python3 prove.py OBJECT SYMBOL SPEC PLACES OUT.statement OUT.proof
+    python3 prove.py SPEC OUT.statement OUT.proof OBJECT:SYMBOL[:PLACES] [OBJECT:SYMBOL[:PLACES] …]
 
-What is to be shown is written by statement.py (OUT.statement). The proof (OUT.proof) starts with the
-places of PLACES and is then found by asking: the verifier is run, says what it needs next (`need …`), an
-answer is added to the proof, and it is run again, until it says `shown`. The answers are found here:
+What is to be shown is written by statement.py (OUT.statement). The proof (OUT.proof) has a part for each
+function, a function after those it calls. A part starts with the places of PLACES (a file) and is then
+found by asking: the verifier is run, says what it needs next (`need …`), an answer is added to the proof,
+and it is run again, until it has no more to ask of that function. The answers are found here:
 
     need entail / branch    a proof of arithmetic, by elimination (../kcheck/kprove.py's derive)
     need compare            which of lt, eq, gt has such a proof
@@ -20,7 +21,7 @@ KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, KCHECK)
 import kbyte, klin, kprove, varith
 sys.path.insert(0, HERE)
-from statement import sexp, statement
+from statement import sexp, statement, ordered
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
@@ -80,8 +81,16 @@ class Unkept(Exception): pass
 
 
 class Prover:
-    def __init__(self, statement_path, place_lines, out):
-        self.statement, self.lines, self.out, self.runs = statement_path, place_lines, out, 0
+    """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
+    functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
+    def __init__(self, statement_path, head, out, later=()):
+        self.statement, self.lines, self.out, self.runs, self.later = statement_path, head, out, 0, set(later)
+
+    def finished(self, said):
+        """The verifier has no more to ask of this function: all is shown, or it speaks of a later function."""
+        if said.startswith("shown"): return True
+        m = re.search(r"^in (\S+)$", said, re.M)
+        return bool(m) and m.group(1) in self.later
 
     def ask(self, proof):
         with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
@@ -95,7 +104,7 @@ class Prover:
         """The proof extended until the verifier says shown; None if this way does not get there."""
         while True:
             said = self.ask(proof)
-            if said.startswith("shown"): return proof
+            if self.finished(said): return proof
             m = re.search(r"at the place register (\d+) does not hold", said)
             if m: raise Unkept(int(m.group(1)))
             if not said.startswith("need "): self.last = said; self.note(proof, said); return None
@@ -127,29 +136,48 @@ class Prover:
             else: raise SystemExit(f"prove: the verifier needs what this prover does not know: {said}")
 
 
-def prove(obj, symbol, spec_text, places_text, statement_out, out):
-    keep, runs = None, 0
-    with open(statement_out, "w") as f: f.write("\n".join(statement(obj, symbol, spec_text)) + "\n")
-    while True:
-        p = Prover(statement_out, places(places_text, keep), out)
-        p.last = ""
-        try: proof = p.solve([])
-        except Unkept as e:
-            keep = [r for r in (keep if keep is not None else REGISTERS) if r != REGISTERS[e.args[0]]]
-            runs += p.runs
-            continue
-        if proof is None: raise SystemExit(f"prove: no proof found. The verifier's last word:\n{p.last}")
-        k = len(proof) - 1
-        while k >= 0:                                  # a use of a definition opened to no purpose is taken out
-            if proof[k].startswith("t open") and p.ask(proof[:k] + proof[k + 1:]).startswith("shown"): del proof[k]
-            k -= 1
-        with open(out, "w") as f: f.write("\n".join(p.lines + proof) + "\n")
-        return runs + p.runs, len(proof)
+def prove(spec_text, targets, statement_out, out):
+    """targets: [(object, symbol, the text of its places)]. Writes the statement and the proof; gives
+    {symbol: (runs of the verifier, lines found)}."""
+    functions = ordered([(obj, symbol) for obj, symbol, _ in targets])
+    places_of = {symbol: text for _, symbol, text in targets}
+    with open(statement_out, "w") as f: f.write("\n".join(statement(spec_text, functions)) + "\n")
+    done, numbers = [], {}
+    for at, (obj, symbol) in enumerate(functions):
+        later = [s for _, s in functions[at + 1:]]
+        keep, runs = None, 0
+        while True:
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep), out, later)
+            p.last = ""
+            try: proof = p.solve([])
+            except Unkept as e:
+                keep = [r for r in (keep if keep is not None else REGISTERS) if r != REGISTERS[e.args[0]]]
+                runs += p.runs
+                continue
+            if proof is None: raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+            k = len(proof) - 1
+            while k >= 0:                              # a use of a definition opened to no purpose is taken out
+                if proof[k].startswith("t open") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]
+                k -= 1
+            done = p.lines + proof
+            numbers[symbol] = (runs + p.runs, len(proof))
+            break
+    with open(out, "w") as f: f.write("\n".join(done) + "\n")
+    return numbers
 
 
 if __name__ == "__main__":
-    obj, symbol, spec, places_path, statement_out, out = sys.argv[1:]
+    if len(sys.argv) < 5: raise SystemExit(__doc__)
+    spec, statement_out, out = sys.argv[1:4]
+    targets = []
+    for w in sys.argv[4:]:
+        parts = w.split(":")
+        if len(parts) not in (2, 3): raise SystemExit(f"prove: {w}: write OBJECT:SYMBOL or OBJECT:SYMBOL:PLACES")
+        text = ""
+        if len(parts) == 3:
+            with open(parts[2]) as f: text = f.read()
+        targets.append((parts[0], parts[1], text))
     with open(spec) as f: spec_text = f.read()
-    with open(places_path) as f: places_text = f.read()
-    runs, items = prove(obj, symbol, spec_text, places_text, statement_out, out)
-    print(f"{symbol}: shown; the proof has {items} lines, found in {runs} runs of the verifier; {os.path.getsize(out)} bytes in {out}")
+    numbers = prove(spec_text, targets, statement_out, out)
+    for symbol, (runs, items) in numbers.items(): print(f"{symbol}: its part of the proof has {items} lines, found in {runs} runs of the verifier")
+    print(f"shown: {', '.join(numbers)}; the proof: {os.path.getsize(out)} bytes in {out}")
