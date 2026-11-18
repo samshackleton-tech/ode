@@ -582,10 +582,21 @@ def flagWays : Flag → Option (List (Bool × List Row))
   | .equal a b => some [(true, [Lin.sub a b, Lin.sub b a]), (false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
   | .below a b => some [(true, [Lin.sub (Lin.sub b a) (Lin.const 1)]), (false, [Lin.sub a b])]
 
+/-- An effect is a return, a jump, or statements that set registers, flags and memory. -/
+inductive Shape where
+  | ret
+  | jump (target : Expr) (cond : Option (String × Bool))
+  | plain
+
+def shape : List Stmt → Shape
+  | [.ret] => .ret
+  | [.jump target cond] => .jump target cond
+  | _ => .plain
+
 def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
-  match i.effect with
-  | [.ret] => do symReturn ctx s; pure [(s, .returned)]
-  | [.jump target cond] =>
+  match shape i.effect with
+  | .ret => do symReturn ctx s; pure [(s, .returned)]
+  | .jump target cond =>
     match jumpTarget i.bind target with
     | none => refuse "a jump to a place that cannot be read"
     | some t =>
@@ -595,8 +606,8 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
         match flagWays (if flag == "zf" then s.zf else s.cf) with
         | none => refuse "a jump on a flag of which nothing is known"
         | some w => ways s want t i.next w
-  | effect => do
-    let s ← fold (symStmt ctx i.bind) s effect
+  | .plain => do
+    let s ← fold (symStmt ctx i.bind) s i.effect
     let s ← settle ctx s
     pure [(s, .at i.next)]
 
