@@ -1,9 +1,25 @@
 name = "odecore"
-defaultTargets = ["arith"]
+defaultTargets = ["arith", "odeverify"]
 
 [[lean_lib]]
 name = "Arithmetic"
 
+[[lean_lib]]
+name = "Table"
+
+[[lean_lib]]
+name = "Machine"
+
+[[lean_lib]]
+name = "Contract"
+
+[[lean_lib]]
+name = "Core"
+
 [[lean_exe]]
 name = "arith"
 root = "ArithMain"
+
+[[lean_exe]]
+name = "odeverify"
+root = "Main"

@@ -26,6 +26,8 @@ done
 for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t" "" & done
 one core test_core.py "" &
 one lang test_asm.py "" &
+one proof-core test_arith.py "" &
+one proof-core test_verify.py "" &
 wait
 total=$(grep -c '' "$out")
 good=$(grep -c -E ' OK( \(skipped=[0-9]+\))? *$' "$out")
