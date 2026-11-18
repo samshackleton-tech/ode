@@ -184,19 +184,38 @@ class Data(unittest.TestCase):
 
 
 class Decoder(unittest.TestCase):
-    """Bytes the decoder read as instructions and a processor stops on (a fault for the one that is too long, an
-    illegal instruction for the others: seen on one, November 17): a function with them was shown to return."""
+    """Bytes are read as an instruction only where the table of instructions writes those very bytes for an
+    instance of a row (../core/encode.py). Until November 17, 2026 a reader written by hand took more: an
+    instruction of more than fifteen bytes (a processor faults on it) and VEX forms that are no instruction (a
+    processor stops on them), and a function with them was shown to return. And it took an instruction
+    written with bits and bytes it had no need of (a prefix that says nothing, a displacement of zero written
+    out): what a processor does with each such form was a question apart for each."""
     def decode(self, code): return kdecode.decode(bytes.fromhex(code), 0, None, b"", 0, 0, 0)
 
+    def refused(self, code):
+        with self.assertRaisesRegex(kdecode.Stop, "an instruction this verifier does not know"): self.decode(code)
+
     def test_an_instruction_is_at_most_fifteen_bytes(self):
-        self.assertEqual(self.decode("66" * 14 + "90"), (15, ".nop"))
-        with self.assertRaisesRegex(kdecode.Stop, "more than fifteen bytes"): self.decode("66" * 20 + "90")
-        with self.assertRaisesRegex(kdecode.Stop, "more than fifteen bytes"): self.decode("66" * 12 + "0f1f840000000000")
+        self.assertEqual(self.decode("6690"), (2, ".nop"))
+        self.assertEqual(self.decode("6666666666662e0f1f840000000000"), (15, ".nop"))        # the longest the table writes
+        for code in ("66" * 14 + "90", "66" * 20 + "90", "66" * 12 + "0f1f840000000000"): self.refused(code)
 
     def test_vex_has_no_instruction_at_the_older_encodings_escapes(self):
         self.assertEqual(self.decode("660f3800c1"), (5, ".xpshufb 0 0 1"))             # PSHUFB as SSSE3 writes it
-        for code in ("c5f93800c1", "c5f93a0ec105", "c4e1793800c1"):
-            with self.assertRaisesRegex(kdecode.Stop, "a VEX instruction this does not know"): self.decode(code)
+        for code in ("c5f93800c1", "c5f93a0ec105", "c4e1793800c1"): self.refused(code)
+
+    def test_only_the_bytes_the_table_writes_are_read(self):
+        for code, row in (("4801c8", ".add 64 (.reg .rax) (.reg .rcx)"), ("89c8", ".mov 32 (.reg .rax) (.reg .rcx)"), ("488b00", ".mov 64 (.reg .rax) (.mem .rax 0x0)"),
+                          ("488b4008", ".mov 64 (.reg .rax) (.mem .rax 0x8)"), ("488b0424", ".mov 64 (.reg .rax) (.mem .rsp 0x0)"), ("c5f1fec2", ".xpaddd 0 1 2"),
+                          ("c5f96fc1", ".xmov 0 1"), ("62f17548fec2", ".zpaddd 0 1 2"), ("440fb6c7", ".movzx8 .r8 (.reg .rdi)"), ("400fb6c7", ".movzx8 .rax (.reg .rdi)")):
+            self.assertEqual(self.decode(code), (len(code) // 2, row))
+        for code, what in (("4089c8", "a REX prefix that says nothing"), ("4a01c8", "a REX bit that names no register here"), ("488b0420", "a SIB byte with no need of one"),
+                           ("488b4000", "a displacement of zero, written out"), ("488b8008000000", "four bytes of displacement where one holds it"),
+                           ("488b0460", "a scale"), ("4803c1", "an add of registers the other way about"), ("c4e171fec2", "three bytes of VEX prefix where two say it"),
+                           ("c5f16fc1", "a second source named where there is none"), ("c5f5fec2", "256 bits"), ("62f175c8fec2", "EVEX zeroing"),
+                           ("62f17558fec2", "an EVEX broadcast"), ("62f17548fe4208", "an EVEX add from memory with no index"), ("0fb6c7", "the low byte of rdi with no REX prefix (that is bh)"),
+                           ("54", "a push of the stack pointer"), ("66" + "4801c8", "a prefix before an instruction that has none")):
+            with self.subTest(what): self.refused(code)
 
 
 class Proof(unittest.TestCase):

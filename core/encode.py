@@ -86,7 +86,14 @@ class Way:
         given = {h for hs in self.fields.values() for h in hs if isinstance(h, str)} | set(self.fixed) | set(self.late[1] if self.late else ())
         wanted = {x.lstrip(".") for x in re.findall(r"[^\s()]+", row.row)} & set(table.REGISTERS + table.VECTORS + table.NUMBERS + table.MASKS)
         if wanted - given: raise ValueError(f"{row.name}: `{text}` does not say where {sorted(wanted - given)} are")
-        if self.modrm != bool({"reg", "rm", "base"} & set(self.fields) or self.digit is not None or self.rip): raise ValueError(f"{row.name}: `{text}`: a ModRM byte, or not?")
+        # every placeholder the way names must be in the bytes it writes: a field that `encode` would not write is refused here
+        f, call = set(self.fields), self.late is not None and not self.rip
+        ok = (self.modrm == bool({"reg", "rm", "base"} & f or self.digit is not None or self.rip)
+              and not ("reg" in f and self.digit is not None) and not ("rm" in f and ("base" in f or self.rip)) and not ("base" in f and self.rip)
+              and ("imm" in f) == (self.imm in NUMBER) and ("rel" in f or call) == (self.imm in ("rel8", "rel32")) and not ("rel" in f and call)
+              and (not call or self.imm == "rel32" and not self.modrm) and ("r" in f) == self.plus and (self.below is None or "imm" in f)
+              and ("vvvv" not in f or self.kind in "VE") and ("k" not in f or self.kind == "E") and (self.scale8 == 1 or self.kind == "E" and "base" in f))
+        if not ok: raise ValueError(f"{row.name}: `{text}`: the operands are not all in the bytes this writes")
 
     def fill(self, bind):
         """The decoded row of this instance, as the table's ROW writes it."""

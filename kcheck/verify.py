@@ -113,11 +113,14 @@ def main():
     print(f"   {'in all':<26} {total:>5} lines of code, {len(ran)} files")
     step = sys.modules.get("step")
     if step is not None:
-        # what each instruction does is not in those lines: it is the table's rows, which ../core/step.py reads
+        # what each instruction does, and how it is written in bytes, is not in those lines: it is the table's rows
+        # and the ways under them, which ../core/step.py and ../core/encode.py read
         digest = ""
         if "--digests" in sys.argv:
             with open(step.TABLE, "rb") as fh: digest = "   BLAKE3 " + kshow.b3(fh.read())
-        print(f"   {os.path.relpath(step.TABLE, HERE):<26} {sum(len(rows) for rows in step.HEADS.values()):>5} rows: the table of instructions (what each one does)" + digest)
+        rows = [r for rows in step.HEADS.values() for r in rows]
+        print(f"   {os.path.relpath(step.TABLE, HERE):<26} {len(rows):>5} rows, with {sum(len(r.bytes) for r in rows)} ways of writing them in bytes: the table of instructions (what each one does, and what bytes are one)" + digest)
+        print("   (of ../core/decode.py, the part that proposes what bytes might be is relied on for nothing: only what ../core/encode.py writes is read)")
     if more:
         print("   and for the one line about the specification's definitions coming to an end (no part of what shows the code meets the contract):")
         for f, n, digest in more: print(f"   {f:<26} {n:>5} lines of code" + (f"   BLAKE3 {digest}" if digest else ""))

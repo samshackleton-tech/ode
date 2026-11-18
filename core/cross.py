@@ -130,7 +130,10 @@ def instance(row, rng):
         if re.search(rf"mm{h}\b", asm): bind[h] = rng.randrange(32 if "zmm" + h in asm else 16)
     if re.search(r"\bkM\b", asm): bind["M"] = rng.randrange(1, 8)
     if re.search(r"\bI\b", asm): bind["I"] = number(asm, rng)
-    if re.search(r"\bN\b", asm): bind["N"] = 64 * rng.randrange(-2, 3) if "vmovdqa32" in asm else rng.randrange(-128, 129)
+    if re.search(r"\bN\b", asm):
+        # a displacement: none, one that a byte holds, one that needs four; the bytes addressed stay within the memory the case has
+        top = ROOM - 64 - (STACK if bind.get("B") == "rsp" else BASE) + SCRATCH - (256 if index else 0)
+        bind["N"] = 64 * rng.randrange(-4, top // 64 + 1) if "vmovdqa32" in asm else rng.choice([0, rng.randrange(-128, 128), rng.randrange(-256, top + 1)])
     if "DATA4" in asm: bind.update({h: rng.getrandbits(32) for h in "IJKL"})
     if re.search(r"DATA1\b", asm): bind["I"] = rng.getrandbits(32)
     if "DATA16" in asm: bind["K"] = rng.getrandbits(512)
