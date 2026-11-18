@@ -9,10 +9,11 @@
 //
 // Ode has one layer since November 18, 2026: a function is its instructions. These nine functions were first written in a
 // word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
-// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
-// bytes are the same. The comment before a group of instructions says what the group does, in the old
-// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
-// for values that a scratch register would hold): it is to be written again by hand, function by function.
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction, but
+// where a function says it was written by hand (`node_out`, so far). The comment before a group of
+// instructions says what the group does, in the old layer's words. The compiler's code is longer than it
+// need be (every value goes through rax, and registers are saved for values that a scratch register would
+// hold): it is to be written again by hand, function by function.
 
 // A chunk's last block as a compression reads it: the n bytes at src (at most 64), then zeros to 64.
 // pad(block, src, n): arguments in rdi, rsi, rdx, as C passes them. Saved and restored: rbx, rbp, r12, r13.
@@ -182,78 +183,35 @@ fn chunk_node as "b3l_chunk_node" {
 }
 
 // A node's compression: its chaining value, or with root = ROOT the hash.
-// node_out(out, nd, root, plat): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
-//   rbp, r12, r13, r14, r15. Kept: out in rbx, nd in rbp, root in r12, plat in r13, blk in r14, len in r15, t
-//   at [rsp + 0], f at [rsp + 8]. Frame: 24 bytes.
+// node_out(out, nd, root, plat): arguments in rdi, rsi, rdx, rcx, as C passes them.
+//   Written by hand (November 18, 2026; the compiler's was 58 instructions). The kernels take (h, block,
+//   length, counter, flags) in rdi, rsi, rdx, rcx, r8 and compress in place, so the node's chaining value
+//   goes to out first and out is the kernel's h: rdi stays as it came. plat waits in rax. No register a
+//   caller keeps is used, so none is saved. Frame: 8 bytes, there only to put the stack pointer on a
+//   16-byte boundary for the call.
 fn node_out as "b3l_node_out" {
-  push rbx
-  push rbp
-  push r12
-  push r13
-  push r14
-  push r15
-  sub rsp, 24
-  mov rbx, rdi
-  mov rbp, rsi
-  mov r12, rdx
-  mov r13, rcx
-  // blk = nd + 32
-  mov rax, rbp
-  add rax, 32
-  mov r14, rax
-  // len = u64[nd + 104]
-  mov rax, rbp
-  add rax, 104
-  mov rax, qword ptr [rax]
-  mov r15, rax
-  // t = u64[nd + 96]
-  mov rax, rbp
-  add rax, 96
-  mov rax, qword ptr [rax]
-  mov qword ptr [rsp + 0], rax
-  // f = u64[nd + 112] | root
-  mov rax, rbp
-  add rax, 112
-  mov rax, qword ptr [rax]
-  or rax, r12
-  mov qword ptr [rsp + 8], rax
-  // copy 32 bytes: out <- nd
-  mov rax, rbp
-  mov rcx, rbx
-  movups xmm0, xmmword ptr [rax + 0]
-  movups xmmword ptr [rcx + 0], xmm0
-  movups xmm0, xmmword ptr [rax + 16]
-  movups xmmword ptr [rcx + 16], xmm0
+  // out[0 .. 32] = the node's chaining value
+  movups xmm0, xmmword ptr [rsi + 0]
+  movups xmmword ptr [rdi + 0], xmm0
+  movups xmm0, xmmword ptr [rsi + 16]
+  movups xmmword ptr [rdi + 16], xmm0
+  // flags = u64[nd + 112] | root; length = u64[nd + 104]; counter = u64[nd + 96]; block = nd + 32
+  mov r8, qword ptr [rsi + 112]
+  or r8, rdx
+  mov rdx, qword ptr [rsi + 104]
+  mov rax, rcx
+  mov rcx, qword ptr [rsi + 96]
+  add rsi, 32
+  sub rsp, 8
   // if plat == 5
-  mov rax, r13
-  mov rcx, 5
-  cmp rax, rcx
-  jne @l0
-  // blake3_servil_compress_in_place_avx512(out, blk, len, t, f)
-  mov rdi, rbx
-  mov rsi, r14
-  mov rdx, r15
-  mov rcx, qword ptr [rsp + 0]
-  mov r8, qword ptr [rsp + 8]
+  cmp rax, 5
+  jne @sse41
   call blake3_servil_compress_in_place_avx512
-  jmp @l1
-@l0:
-  // else
-  // blake3_servil_compress_in_place_sse41(out, blk, len, t, f)
-  mov rdi, rbx
-  mov rsi, r14
-  mov rdx, r15
-  mov rcx, qword ptr [rsp + 0]
-  mov r8, qword ptr [rsp + 8]
+  jmp @done
+@sse41:
   call blake3_servil_compress_in_place_sse41
-@l1:
-  add rsp, 24
-  pop r15
-  pop r14
-  pop r13
-  pop r12
-  pop rbp
-  pop rbx
+@done:
+  add rsp, 8
   ret
 }
 

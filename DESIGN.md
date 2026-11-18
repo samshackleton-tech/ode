@@ -408,7 +408,7 @@ unproved.
 | other programs than BLAKE3 | twelve functions in eight files: Adler-32, an LZ4 decoder and two encoders, a framed format that calls two of them, UTF-8 validation, base-64, variable-length integers, the Internet checksum |
 | as fast as the best | 97% of the library's speed at 1 MiB, 60% at 16 to 32 KiB (a 16-lane path for 2 to 16 chunks is unwritten) |
 | a small core with justified rules (R1) | the verifier is about 3,170 lines of unverified Python for the hash and a table of 93 rows with 150 ways of writing them in bytes, 1,200 lines more to show its definitions end. What an instruction does, and what bytes are one, is no longer in those lines (it is the table); the rules for memory, calls, places and the specification still are, as code. Only arithmetic is decided by a carried proof, in a core of 58 lines with a second implementation in C. Six faults of the kind "shown, of something false" were found by reading in one day, and closed; its soundness is not established |
-| the coder chooses the machine code | every function is now its instructions in the source, and nothing is chosen between source and bytes (since November 18, 2026: the word-level layer and its compiler are gone). The five kernels were written so, and are the reference kernels byte for byte. The nine other functions of the hash and the thirteen of the programs are, for now, what the old compiler last printed, with each old statement as a comment: longer than they need be, to be written again by hand |
+| the coder chooses the machine code | every function is now its instructions in the source, and nothing is chosen between source and bytes (since November 18, 2026: the word-level layer and its compiler are gone). The five kernels were written so, and are the reference kernels byte for byte. Of the nine other functions of the hash one is written by hand (`node_out`: 18 instructions where the compiler printed 58); the other eight and the thirteen of the programs are, for now, what the old compiler last printed, with each old statement as a comment: longer than they need be, to be written again by hand |
 | the coder's types carried to the bytes | a place in a loop (three forms), inner contracts, layouts, lemmas. No type system for Ode source; no verifier of source |
 | the verifier's own contract | deterministic and offline; 17 kept cases it must refuse, and a gate that fails if the kept bad binary is accepted. Its limits are partial: a wrong lemma can take minutes to refuse |
 | three answers | "shown" and "not shown" from the verifier; "false, with an input" from a tester that runs the binary on a processor (x86-64 Linux) |
@@ -448,8 +448,8 @@ Each is open on purpose, with what will close it.
    Every function, kernel or not, is written as its instructions, where each instruction, register and
    stack byte is the coder's choice. The word-level layer and its compiler are gone: its 22 functions
    stand in the sources as the instructions it last printed (the shipped files' bytes did not change),
-   and are to be written again by hand (a trial: `node_out` by hand is 18 instructions where the compiler
-   printed 58, and the same verifier takes it against the same contract). *Open:* the conveniences, and
+   and are to be written again by hand (the first is: `node_out` by hand is 18 instructions where the
+   compiler printed 58, and the same verifier takes it against the same contract). *Open:* the conveniences, and
    the assembler by the table (section 8: then no outside assembler stands between source and bytes).
    The one language will grow a compiler, of this
    kind only: it may check what the coder declares, expand a convenience in a fixed and documented way
