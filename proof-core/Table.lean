@@ -54,6 +54,7 @@ inductive Expr where
 /-- An EFFECT's statement. -/
 inductive Stmt where
   | set (place value : Expr)
+  | vset (place value : Expr)             -- the same of a vector register, or of sixteen bytes of memory
   | jump (target : Expr) (cond : Option (String × Bool))
   | call (target : Expr)
   | ret
@@ -105,10 +106,20 @@ def splitAt (sign : String) : List String → Option (List String × List String
   | [] => none
   | t :: rest => if t == sign then some ([], rest) else (splitAt sign rest).map fun (a, b) => (t :: a, b)
 
+/-- What a statement sets is a vector register (`X`, `Y`, `Z`), the vector registers' bits above the low
+128 (`above128`), or sixteen bytes of memory (`mem128`). -/
+def isVectorPlace : Expr → Bool
+  | .name n => n == "X" || n == "Y" || n == "Z" || n == "above128"
+  | .call f _ => f == "mem128"
+  | _ => false
+
 def parseStmt (text : String) : Option Stmt :=
   let t := effectTokens text
   match splitAt "=" t with
-  | some (place, value) => do some (.set (← wholeExpr place) (← wholeExpr value))
+  | some (place, value) => do
+    let p ← wholeExpr place
+    let v ← wholeExpr value
+    some (if isVectorPlace p then .vset p v else .set p v)
   | none =>
     match t with
     | ["return"] => some .ret

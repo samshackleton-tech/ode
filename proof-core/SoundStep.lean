@@ -1181,6 +1181,7 @@ theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   | ret => simp only [symStmt] at h; exact (refuse_ok h).elim
   | call t => simp only [symStmt] at h; exact (refuse_ok h).elim
   | jump t c => simp only [symStmt] at h; exact (refuse_ok h).elim
+  | vset _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
   | set place v =>
     simp only [symStmt] at h
     split at h

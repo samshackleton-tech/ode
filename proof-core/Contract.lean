@@ -55,11 +55,6 @@ structure Def where
   body : SExpr
   deriving Repr, Inhabited
 
-def W32 : Nat := 2 ^ 32
-
-/-- A word turned right by `n` bits: its low `n` bits go to the top. -/
-def rotr (w n : Nat) : Nat := w / 2 ^ n + w % 2 ^ n * 2 ^ (32 - n)
-
 /-- `+`, `^`, `|` of two words: the sum's low 32 bits; bit by bit, one or the other; bit by bit, either. -/
 def wordop (op : String) (a b : Nat) : Option Val :=
   if op == "+" then some (.word ((a + b) % W32))

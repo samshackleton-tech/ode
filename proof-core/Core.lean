@@ -447,6 +447,7 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s
+  | .vset _ _ => refuse "a row over a vector register: not here yet"
   | .set place v =>
     if isUnknown v then
       match place with

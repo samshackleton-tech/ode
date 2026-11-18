@@ -6,9 +6,10 @@ What a row's EFFECT does to registers, two flags and memory, on whole numbers. T
 contract's meaning is stated over (`Contract.lean`), and it is meant to say what `../core/conc.py` says,
 which processors are compared with (`../core/cross.py`).
 
-Here so far: the rows over the general registers, the two flags, and memory of 1, 4 and 8 bytes, and
-calls of functions by name. A row that uses anything else (a vector register) has no meaning here yet, and
-a function that has such a row is not verified.
+Here so far: the rows over the general registers, the two flags, and memory of 1, 4 and 8 bytes; calls
+of functions by name; and the rows over the low 128 bits of the vector registers, four lanes of 32 bits
+each. A row that uses anything else (512 bits, a mask register, the address of the file's data) has no
+meaning here yet, and a function that has such a row is not verified.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -55,6 +56,7 @@ structure State where
   cf : Bool
   mem : Nat → Nat          -- the byte at an address
   rip : Nat
+  vec : Nat → Nat → Nat    -- the vector registers: a register's lanes of 32 bits, lane 0 the lowest
 
 /-- The bytes a function may read, and may write. -/
 structure Perm where
@@ -98,7 +100,45 @@ def prim (f : String) (args : List Nat) : Option Nat :=
     else none
   | _ => none
 
+def W32 : Nat := 2 ^ 32
+
+/-- A word turned right by `n` bits: its low `n` bits go to the top. -/
+def rotr (w n : Nat) : Nat := w / 2 ^ n + w % 2 ^ n * 2 ^ (32 - n)
+
+/-- What each primitive on two lanes means (conc.py's CONC). -/
+def prim32 (f : String) (a b : Nat) : Option Nat :=
+  if f == "add32" then some ((a + b) % W32)
+  else if f == "xor32" then some (a ^^^ b)
+  else if f == "or32" then some (a ||| b)
+  else if f == "ror32" then some (rotr a (b % 32))
+  else if f == "shl32" then some ((a <<< b) % W32)
+  else if f == "shr32" then some (a >>> b)
+  else none
+
+/-- Byte `j` (of sixteen, the lowest first) of four lanes. -/
+def byteOf (lanes : List Nat) (j : Nat) : Nat := lanes.getD (j / 4) 0 / 256 ^ (j % 4) % 256
+
+/-- Each byte of the result is the byte of `a` that the same byte of `b` names by its low four bits, or
+zero where that byte of `b` has its top bit set. -/
+def shuffleBytes (a b : List Nat) : List Nat :=
+  (List.range 4).map fun k =>
+    let out (j : Nat) : Nat := if 128 ≤ byteOf b j then 0 else byteOf a (byteOf b j % 16)
+    out (4 * k) + 256 * out (4 * k + 1) + 65536 * out (4 * k + 2) + 16777216 * out (4 * k + 3)
+
+/-- Half `h` (of eight halves of 16 bits, the lowest first) of four lanes. -/
+def halfOf (lanes : List Nat) (h : Nat) : Nat := lanes.getD (h / 2) 0 / 65536 ^ (h % 2) % 65536
+
+/-- Each half of 16 bits of the result is `b`'s where the bit of `i` for it is set, else `a`'s. -/
+def blendHalves (a b : List Nat) (i : Nat) : List Nat :=
+  (List.range 4).map fun k =>
+    let pick (h : Nat) : Nat := halfOf (if i / 2 ^ h % 2 = 1 then b else a) h
+    pick (2 * k) + 65536 * pick (2 * k + 1)
+
 def isRegisterLetter (n : String) : Bool := n == "D" || n == "S" || n == "B" || n == "P"
+def isVectorLetter (n : String) : Bool := n == "X" || n == "Y" || n == "Z"
+
+/-- The vector register a letter of an EFFECT stands for, in an instance: its number. -/
+def vecOf (bind : Bind) (n : String) : Option Nat := if isVectorLetter n then (bind.lookup n).bind String.toNat? else none
 def isNumberLetter (n : String) : Bool := n == "I" || n == "J" || n == "K" || n == "L" || n == "N"
 
 /-- The register a name of an EFFECT stands for, in an instance. -/
@@ -133,6 +173,68 @@ mutual
       | _, _ => none
 end
 
+/-- The four low lanes of the vector register a letter stands for. -/
+def vecArg (bind : Bind) (s : State) : Expr → Option (List Nat)
+  | .name n => (vecOf bind n).map fun r => (List.range 4).map (s.vec r)
+  | _ => none
+
+/-- One lane, as an EFFECT names it (`Y.2`). -/
+def laneArg (bind : Bind) (s : State) : Expr → Option Nat
+  | .lane n k => (vecOf bind n).map fun r => s.vec r k
+  | _ => none
+
+/-- Four lanes: what a vector register is set to, or what sixteen bytes of memory are (conc.py). -/
+def lanesOf (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List Nat)
+  | .name n => vecArg bind s (.name n)
+  | .call f args =>
+    if f == "mem128" then
+      match values perm bind s args with
+      | some vs =>
+        let a := sumList vs % M64
+        if allowed perm.read a 16 then some ((List.range 4).map fun k => load s.mem (a + 4 * k) 4) else none
+      | none => none
+    else if f == "words" then
+      match values perm bind s args with
+      | some vs => if vs.length == 4 then some (vs.map (· % W32)) else none
+      | none => none
+    else if f == "lanes_of64" then
+      match values perm bind s args with
+      | some [a] => some [a % W32, a / W32 % W32, 0, 0]
+      | _ => none
+    else if f == "lanes" then
+      if args.length == 4 then args.mapM (laneArg bind s) else none
+    else if f == "each32" then
+      match args with
+      | [.name op, a, b] =>
+        match vecArg bind s a with
+        | some x =>
+          match vecArg bind s b with
+          | some y => (x.zip y).mapM fun (p, q) => prim32 op p q
+          | none =>                                               -- (a number: the same for every lane)
+            match value perm bind s b with
+            | some n => x.mapM fun p => prim32 op p n
+            | none => none
+        | none => none
+      | _ => none
+    else
+      match args with
+      | [a, b] => if f == "shuffle_bytes" then (vecArg bind s a).bind fun x => (vecArg bind s b).map fun y => shuffleBytes x y else none
+      | [a, b, i] =>
+        match vecArg bind s a, vecArg bind s b, value perm bind s i with
+        | some x, some y, some i =>
+          if f == "pick4" then some [x.getD (i % 4) 0, x.getD (i / 4 % 4) 0, y.getD (i / 16 % 4) 0, y.getD (i / 64 % 4) 0]
+          else if f == "blend4" then some ((List.range 4).map fun k => if i / 2 ^ k % 2 = 1 then y.getD k 0 else x.getD k 0)
+          else if f == "blend_halves" then some (blendHalves x y i)
+          else none
+        | _, _, _ => none
+      | _ => none
+  | _ => none
+
+/-- A vector register's four low lanes set; of its lanes above them the row says nothing: they are what
+`u` makes them. -/
+def setVec (s : State) (r : Nat) (lanes : List Nat) (u : Nat) : State :=
+  { s with vec := fun x k => if x = r then (if k < 4 then lanes.getD k 0 else u / W32 ^ k % W32) else s.vec x k }
+
 /-- `unknown`: the row says nothing of what it sets. -/
 def isUnknown : Expr → Bool
   | .name n => n == "unknown"
@@ -145,6 +247,25 @@ def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → O
   | .nothing => some s
   | .ret => none
   | .call _ => none
+  | .vset place v =>
+    match place with
+    | .name n =>
+      if n == "above128" then
+        -- of every vector register's lanes above the low four the row says nothing
+        if isUnknown v then some { s with vec := fun x k => if k < 4 then s.vec x k else u / W32 ^ (16 * x + k) % W32 } else none
+      else
+        match vecOf bind n, lanesOf perm bind s v with
+        | some r, some l => some (setVec s r l u)
+        | _, _ => none
+    | .call _ args =>                                             -- (`mem128`: sixteen bytes, lane 0 lowest)
+      match values perm bind s args, vecArg bind s v with
+      | some vs, some l =>
+        let a := sumList vs % M64
+        if allowed perm.write a 16 then
+          some { s with mem := store (store (store (store s.mem a (l.getD 0 0) 4) (a + 4) (l.getD 1 0) 4) (a + 8) (l.getD 2 0) 4) (a + 12) (l.getD 3 0) 4 }
+        else none
+      | _, _ => none
+    | _ => none
   | .jump target cond =>
     let taken := match cond with
       | none => true
@@ -212,7 +333,7 @@ def findProgram (world : List Program) (name : String) : Option Program := world
 pointer, the stack pointer points at it, and the next instruction is the called function's first. -/
 def afterCall (p q : Program) (i : Instr) (s : State) : State :=
   { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base }
+    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec }
 
 /-- From `s`, whatever the unknowns turn out to be: the function `p` runs on instructions it has, touches
 only what `perm` lets it, and returns after finitely many of them in a state of which `Q` holds.
