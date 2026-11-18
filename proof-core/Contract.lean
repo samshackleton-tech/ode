@@ -7,7 +7,7 @@ they mean, as a value or as nothing (a definition that does not come to an end, 
 a difference below zero: the numbers of a specification are zero and up).
 `Meets` is what it is for a function's code to meet a contract: the statement the verifier's yes stands for.
 
-Here so far: definitions that are one expression (numbers, `if`, comparisons, `+ - *`, `a[i]`, `len`,
+Here so far: definitions that are one expression (numbers, `if`, comparisons, `+ - * / %`, `a[i]`, `len`,
 uses of definitions); contracts whose arguments are numbers and runs of `n` bytes that the function only
 reads, with `returns` and `stack`. Not here yet: `requires`, `ensures` (memory written), `trace`, calls.
 -/
@@ -48,6 +48,7 @@ def binop (op : String) : Val → Val → Option Val
     else if op == ">" then some (.bool (b < a))
     else if op == ">=" then some (.bool (b ≤ a))
     else if op == "%" then (if 0 < b then some (.int (a % b)) else none)     -- (the remainder by a number above zero)
+    else if op == "/" then (if 0 < b then some (.int (a / b)) else none)     -- (and the quotient, rounded down)
     else none
   | _, _ => none
 

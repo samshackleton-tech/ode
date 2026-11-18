@@ -7,3 +7,12 @@ fn low as "ode_low" {
   add rax, rcx
   ret
 }
+
+// A number's quotient by eight, by a shift. The specification's `a / 8` is a quotient the verifier opens for
+// itself; that it is the code's is shown by arithmetic.
+// eighth(a): the argument in rdi.
+fn eighth as "ode_eighth" {
+  mov rax, rdi
+  shr rax, 3
+  ret
+}

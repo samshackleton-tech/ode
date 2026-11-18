@@ -499,6 +499,15 @@ def smod (s : Sym) (x y : Row) : V (SRes × Sym) :=
     else refuse "a remainder by a number that is not above zero"
   | none => refuse "a remainder by what is no number of the specification: not here yet"
 
+/-- The quotient of `x` by a number of the specification above zero: the quotient of the two new unknowns
+of `Sym.divide`. -/
+def sdiv (s : Sym) (x y : Row) : V (SRes × Sym) :=
+  match Lin.isConst y with
+  | some m =>
+    if 0 < m then pure (.val (.lin (Lin.var s.nvars)), s.divide x m)
+    else refuse "a quotient by a number that is not above zero"
+  | none => refuse "a quotient by what is no number of the specification: not here yet"
+
 def insert (c : SCall) (l : List SCall) : List SCall := if l.contains c then l else l ++ [c]
 
 def reachStep (seen : List SCall) : SFact → List SCall
@@ -602,7 +611,7 @@ def sevalWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (env : List (String
     let (y, s) ← sevalWith ctx deeper env s b
     let (x, s) ← numberV deeper s x
     let (y, s) ← numberV deeper s y
-    if op == "%" then smod s x y else sbin op s x y
+    if op == "%" then smod s x y else if op == "/" then sdiv s x y else sbin op s x y
   | s, .ifx c a b => do
     let (c, s) ← sevalWith ctx deeper env s c
     match c with

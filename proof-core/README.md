@@ -97,9 +97,9 @@ Lean itself (test_sound.py checks this, the statements above, and that no proof 
 | | |
 |---|---|
 | covered by the theorem, so not to be read | the verifier's rules: Core.lean (706 lines of code) and the arithmetic rule of Arithmetic.lean. Everything clever is here or in the prover |
-| what the theorem is about: to be read, or relied on some other way | the account: Table.lean (reads `../core/x86.tab`), Machine.lean (what a row's effect does to registers, flags and memory; what a call and a return do), Contract.lean (what a contract and a definition mean, `Meets`). 441 lines of code |
+| what the theorem is about: to be read, or relied on some other way | the account: Table.lean (reads `../core/x86.tab`), Machine.lean (what a row's effect does to registers, flags and memory; what a call and a return do), Contract.lean (what a contract and a definition mean, `Meets`). 442 lines of code |
 | that the proofs are proofs | Lean's kernel, or any other checker of Lean's proofs |
-| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). What a definition means (`evalSpec` in Contract.lean) against `../kcheck/ode.py`, which the reader's tester takes it from: 1,800 uses of twelve definitions, 4,000 random expressions, and 300 places of Adler-32's two sequences as `statement.py` writes them (test_spec.py). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
+| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). What a definition means (`evalSpec` in Contract.lean) against `../kcheck/ode.py`, which the reader's tester takes it from: 2,100 uses of fourteen definitions, 4,000 random expressions, and 300 places of Adler-32's two sequences as `statement.py` writes them (test_spec.py). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
 
 Not covered by the theorem, and relied on today:
 
@@ -130,7 +130,8 @@ Functions whose instructions are rows over the general registers, the two flags,
 8 bytes; with jumps, places of loops (several a function, one loop inside another), and calls of functions
 of the same statement. Contracts
 whose arguments are numbers and runs of bytes that are only read, with `returns` and `stack`. Definitions
-that are one expression: numbers, names, arithmetic and comparison, a remainder by a number, `if`, a byte
+that are one expression: numbers, names, arithmetic and comparison, a remainder and a quotient by a number,
+`if`, a byte
 of a run, `len`, and uses of definitions (which may use themselves); and sequences. A use of a definition
 that is met while another is opened, and whose value nothing holds, is opened in turn where the proof says
 so, to eight deep. A difference has a
@@ -214,10 +215,11 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | wrong versions of `ode_adler32_blocks` | 14 changes of one place in the code (a shift by 15, a mask of 17 bits, the high part counted 8 times, a sum not reduced, …), the specification, the contract or the places (a place that does not keep the block's end, a number that does not decrease): none shown, and the prover finds no proof for any within the runs, and one and a half times the time, of the right one. Of every seventh line of the proof left out or changed (343 trials): each refused |
 | wrong versions of `ode_adler32_blocks4` | 4 changes of one place (four bytes taken where three are left, the third byte taken for the second, three bytes gone on after four are taken, the specification's second sum by the first sum of one place before): none shown, and the prover finds no proof for any within the runs, and three quarters of the time, of the right one. Of every eleventh line of the proof left out or changed (326 trials): each refused |
 | the low half and the low byte (`ode_low` of `examples/low/`: 4 instructions) | the proof 528 bytes, found in 8 runs of the verifier, verified in 3 ms; 4 changes of the code and 4 of the contract (the whole number for its low half, the other number's low byte, 7 bits for 8, …): none shown, and no proof found; each of the proof's lines left out: refused |
+| a quotient in a specification (`ode_eighth` of `examples/low/`: a shift right by three, against `a / 8`) | the proof 158 bytes; 3 changes of the code and 3 of the contract (a shift by two, a quotient by nine, the remainder for the quotient, …): none shown, and no proof found; each of the proof's lines left out: refused |
 | wrong versions of the caller | 11 changes of the caller's code (the count kept in a register a call may change, a run not handed over whole, the stack pointer moved, what a call leaves in rcx used, …) and 5 of the contracts: none shown, no proof found, and for each the test names what the verifier then lacks or refuses. The caller before its callee, a function that calls itself, a callee left out, two functions of one name: refused. Two other ways of writing the caller and two of writing its contract: shown |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
-| size | the account 441 lines of code; the verifier 905 (Core.lean 746, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 4,092 |
+| size | the account 442 lines of code; the verifier 911 (Core.lean 752, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 4,122 |
 
 ## The files
 
@@ -227,7 +229,7 @@ second for `ode_common`, 16 runs more for `ode_equal`, 763 runs and 20 seconds f
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the theorems | `SoundLin.lean` (arithmetic on rows), `SoundState.lean` (what the verifier's state says of the machine's), `SoundStep.lean` (one statement of an effect), `SoundSpec.lean` (the specification on symbols), `SoundPlace.lean` (a place), `SoundCall.lean` (a call), `SoundTop.lean` (paths and places: `explore_sound`, by induction on a place's number; `verify_sound`, `verify_all_sound`) |
 | what is to be shown (relied on) | `statement.py` |
-| for a reader | `lean_verify.py`; `proofs/ode_common.proof`, `proofs/ode_equal.proof`, `proofs/ode_adler32.proof`, `proofs/ode_adler32_blocks.proof`, `proofs/ode_adler32_blocks4.proof`, `proofs/ode_low.proof`; `examples/equal/` and `examples/low/` (a source, its specification, and the object the source makes); `examples/adler32/adler32.places`, `blocks.places` and `blocks4.places` (the places the prover starts from) |
+| for a reader | `lean_verify.py`; `proofs/ode_common.proof`, `proofs/ode_equal.proof`, `proofs/ode_adler32.proof`, `proofs/ode_adler32_blocks.proof`, `proofs/ode_adler32_blocks4.proof`, `proofs/ode_low.proof`, `proofs/ode_eighth.proof`; `examples/equal/` and `examples/low/` (a source, its specification, and the object the source makes); `examples/adler32/adler32.places`, `blocks.places` and `blocks4.places` (the places the prover starts from) |
 | the prover (relied on for nothing) | `prove.py` |
 | tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_low.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run |
 

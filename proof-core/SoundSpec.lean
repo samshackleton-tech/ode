@@ -517,6 +517,28 @@ theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes
       simp [binop, semv, nr, ym, pos]
     next => exact (refuse_ok h).elim
 
+/-- A quotient: the first of the two new unknowns is the quotient there is. -/
+theorem sdiv_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    (h : sdiv s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hx : bounded s.nvars x) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ v, res = .val v ∧ v.bounded s'.nvars ∧
+      binop "/" (.int (ev ρ x)) (.int (ev ρ y)) = some (semv ctx s0 ρ' v) := by
+  cases hm : Lin.isConst y with
+  | none => simp only [sdiv, hm] at h; exact (refuse_ok h).elim
+  | some m =>
+    simp only [sdiv, hm] at h
+    split at h
+    next pos =>
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      obtain ⟨ρ', c, nq, _⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
+      refine ⟨ρ', c, _, rfl, bounded_var (show s.nvars < s.nvars + 2 by omega), ?_⟩
+      have ym : ev ρ y = m := ev_isConst hm
+      simp [binop, semv, nq, ym, pos]
+    next => exact (refuse_ok h).elim
+
 theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownValue facts c = some v → SFact.value c v ∈ facts
   | [], _, _, h => by simp [knownValue] at h
   | .same _ _ :: more, c, v, h => by
@@ -814,9 +836,19 @@ theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       rw [← semEnv_agree hb4 c5.agree, eop]
       exact Value.bin vx4 vy4 hz
     next =>
-      obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c4.holds.facts bx4 by'
-      subst hs hres
-      exact ⟨ρ4, ((c1.then c2).then c3).then c4, Value.bin vx4 vy4 hz, bv⟩
+      split at h
+      next hop =>
+        have eop : op = "/" := by simpa using hop
+        obtain ⟨ρ5, c5, v, hres, bv, hz⟩ := sdiv_sound h c4.holds c4.wf bx4
+        subst hres
+        refine ⟨ρ5, (((c1.then c2).then c3).then c4).then c5, ?_, bv⟩
+        show Value ctx.defs (semEnv ctx s0 ρ5 env) (.bin op a b) (semv ctx s0 ρ5 v)
+        rw [← semEnv_agree hb4 c5.agree, eop]
+        exact Value.bin vx4 vy4 hz
+      next =>
+        obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c4.holds.facts bx4 by'
+        subst hs hres
+        exact ⟨ρ4, ((c1.then c2).then c3).then c4, Value.bin vx4 vy4 hz, bv⟩
   | index a i iha ihi =>
     intro s s' res items rest ρ st h H wf hb
     simp only [sevalWith] at h

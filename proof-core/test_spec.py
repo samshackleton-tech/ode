@@ -33,10 +33,12 @@ def never(x) { 1 + never(x) }
 def past(a) { a[len(a)] }
 def order(x, y) { if x > y then 2 else if x >= y then 1 else 0 }
 def rest(x, y) { x % y }
+def share(x, y) { x / y }
+def digits(x) { if x < 10 then 1 else 1 + digits(x / 10) }
 def fold(a, at, s) { if at == len(a) then s else fold(a, at + 1, (s + a[at]) % 251) }
 """
 KINDS = {"alike": "bbn", "common": "bb", "gap": "nn", "under": "nn", "mix": "bn", "count": "bnn", "total": "bn", "never": "n", "past": "b", "order": "nn",
-         "rest": "nn", "fold": "bnn"}
+         "rest": "nn", "fold": "bnn", "share": "nn", "digits": "n"}
 
 
 def value(kind, rng, like=None):
@@ -55,7 +57,7 @@ def expression(rng, names, depth):
         pick = rng.randrange(10 if d > 0 else 3)
         if pick == 0: return ("num", rng.choice([0, 1, 2, 7, 255, 1000]))
         if pick in (1, 2): return ("name", rng.choice(numbers))
-        if pick in (3, 4, 5): return ("bin", rng.choice("+-*%"), number(d - 1), number(d - 1))
+        if pick in (3, 4, 5): return ("bin", rng.choice("+-*%/"), number(d - 1), number(d - 1))
         if pick == 6: return ("ifx", truth(d - 1), number(d - 1), number(d - 1))
         if pick == 7: return ("index", ("name", rng.choice(runs)), number(d - 1))
         if pick == 8: return ("call", "len", [("name", rng.choice(runs))])
