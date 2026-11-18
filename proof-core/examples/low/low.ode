@@ -1,0 +1,9 @@
+// The low byte of one number and the low half of another, added. The first function shown by the verifier
+// in Lean that uses the rows which write the low half of a register (`movzx eax, dil`, `mov ecx, esi`).
+// low(a, b): arguments in rdi, rsi.
+fn low as "ode_low" {
+  movzx eax, dil
+  mov ecx, esi
+  add rax, rcx
+  ret
+}

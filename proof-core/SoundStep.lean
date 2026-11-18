@@ -644,6 +644,53 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
 
 theorem M64_cast : (M64 : Int) = 2 ^ 64 := by decide
 
+theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' (symLow s x m).2 st ∧ ev ρ' (symLow s x m).1 = ev ρ x % m ∧
+      bounded (symLow s x m).2.nvars (symLow s x m).1 := by
+  cases hk : Lin.isConst x with
+  | some k =>
+    simp only [symLow, hk]
+    exact ⟨ρ, Carried.here H wf, by rw [ev_const, ev_isConst hk], bounded_const _ _⟩
+  | none =>
+    simp only [symLow, hk]
+    obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
+    exact ⟨ρ', c, hr, br⟩
+
+/-- A primitive of one number: what the verifier holds for it is what the account says of it; and it is no
+reading of memory. -/
+theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : Row} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State}
+    (h : symPrim1 f s x items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (xa : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) :
+    memSize f = none ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa] = some z ∧ EV.sem ρ' s'.nvars z v := by
+  obtain ⟨hx1, hx2, hx3⟩ := hx
+  have hx1' : xa < M64 := hx1
+  unfold symPrim1 at h
+  split at h
+  next hc =>
+    have fe : f = "low32" := by simpa using hc
+    subst fe
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    obtain ⟨ρ', c, hr, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := 2 ^ 32) H wf hx3 (by decide) (by rw [← hx2]; omega)
+    refine ⟨by decide, ρ', c, xa % 2 ^ 32, by simp [prim], Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1', ?_, br⟩
+    rw [hr, ← hx2]; omega
+  next =>
+    split at h
+    next hc =>
+      have fe : f = "low8" := by simpa using hc
+      subst fe
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      obtain ⟨ρ', c, hr, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := 256) H wf hx3 (by decide) (by rw [← hx2]; omega)
+      refine ⟨by decide, ρ', c, xa % 256, by simp [prim], Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1', ?_, br⟩
+      rw [hr, ← hx2]; omega
+    next => exact (refuse_ok h).elim
+
 theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
     ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : List Item} {ρ : Nat → Int} {st : State},
     symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF s →
@@ -723,9 +770,17 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   | .call f [], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
-  | .call f [_], s, s', v, items, rest, ρ, st, h, H, wf => by
+  | .call f [a], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
-    exact (refuse_ok h).elim
+    obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨ρ1, xa, c1, va, sa⟩ := symValue_sound E bind a e1 H wf
+    cases x with
+    | equal _ _ => exact (refuse_ok h).elim
+    | below _ _ => exact (refuse_ok h).elim
+    | lin x =>
+      simp only at h
+      obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
+      exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz], sz⟩
   | .call f (_ :: _ :: _ :: _), s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim

@@ -348,6 +348,19 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
     | none => refuse "an and with what is no number of the table: not here yet"
   else refuse s!"no rule for {f}"
 
+/-- The remainder of a number by a divisor above zero: worked out where the number is one of the table's,
+and else by the one division of it the state knows of. -/
+def symLow (s : Sym) (x : Row) (m : Int) : Row × Sym :=
+  match Lin.isConst x with
+  | some k => (Lin.const (k % m), s)
+  | none => ((symDivide s x m).2.1, (symDivide s x m).2.2)
+
+/-- A primitive of one number: its low half, or its low byte (the remainder by 2^32, by 256). -/
+def symPrim1 (f : String) (s : Sym) (x : Row) : V (EV × Sym) :=
+  if f == "low32" then pure (.lin (symLow s x (2 ^ 32)).1, (symLow s x (2 ^ 32)).2)
+  else if f == "low8" then pure (.lin (symLow s x 256).1, (symLow s x 256).2)
+  else refuse s!"no rule for {f}"
+
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .number n => if n < 2 ^ 64 then pure (.lin (Lin.const n), s) else refuse "a number of the table that is no 64-bit number"
   | _, .lane _ _ => refuse "a vector register: not here yet"
@@ -359,6 +372,11 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
     else match regOf bind n with
       | some r => pure (.lin (s.reg r), s)
       | none => refuse s!"no rule for {n}"
+  | s, .call f [a] => do
+    let (x, s) ← symValue ctx bind s a
+    match x with
+    | .lin x => symPrim1 f s x
+    | _ => refuse "a flag's value where a number is expected"
   | s, .call f [a, b] => do
     let (x, s) ← symValue ctx bind s a
     let (y, s) ← symValue ctx bind s b
