@@ -1,4 +1,4 @@
-import SoundStep
+import SoundSpec
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
 -/
@@ -183,11 +183,11 @@ theorem calleeSaved_spec {r : Nat} (h : r ∈ calleeSaved) : r < 16 ∧ r ≠ RS
   unfold RSP
   omega
 
-/-- At a return the verifier has passed (of a contract that returns nothing said): the machine's return is
-allowed, and leaves what the contract promises. -/
+/-- At a return the verifier has passed: the machine's return is allowed, and leaves what the contract
+promises. -/
 theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : List Item}
     {r : Unit × List Item} {ρ : Nat → Int} {st : State}
-    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (hret : ctx.contract.returns = none) :
+    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) :
     allowed (ctx.contract.perm s0).read (st.reg RSP) 8 = true ∧
     ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
   unfold symReturn at h
@@ -229,8 +229,36 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       · intro a ha
         exact H.mem a ha
       · intro e he
-        rw [hret] at he
-        cases he
+        simp only [he] at h
+        obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
+        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 H wf ((symEnv_bounded ctx.contract).mono wf.base)
+        rw [semEnv_symEnv ctx s0 ρ1 c1.holds.entry] at sem
+        show Value ctx.defs (ctx.contract.env s0) e (.int ((if 0 = RSP then (st.reg RSP + 8) % M64 else st.reg 0 : Nat)))
+        rw [if_neg (by decide)]
+        have hrax := c1.holds.reg 0 (by decide)
+        cases res with
+        | list _ => exact (refuse_ok h).elim
+        | val v =>
+          cases v with
+          | region _ => exact (refuse_ok h).elim
+          | bool _ => exact (refuse_ok h).elim
+          | lin v =>
+            simp only at h
+            obtain ⟨_, r2, g1, h⟩ := V.bind_ok h
+            have g1 := entail_sound g1 ρ1 c1.holds.facts
+            have g2 := entail_sound h ρ1 c1.holds.facts
+            simp only [ev_sub] at g1 g2
+            simp only [SRes.sem, semv] at sem
+            have : ev ρ1 v = (st.reg 0 : Int) := by omega
+            rw [this] at sem
+            exact sem
+        | tail c =>
+          simp only at h
+          obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
+          obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg 0 (by decide)⟩
+          simp only [SFact.holds] at gh
+          rw [← ev_agree (c1.wf.reg 0 (by decide)) c2.agree, ← hrax] at gh
+          exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
 
 /-! ## An instruction -/
 
@@ -249,8 +277,7 @@ does not fault; if it returns, the contract's promise holds; if it goes on, it g
 the verifier went on at, in a state of which what the verifier holds there is so. -/
 theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {i : Instr}
     {nexts : List (Sym × Next)} {items rest : List Item} {ρ : Nat → Int} {st : State}
-    (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (hret : ctx.contract.returns = none) (u : Nat → Nat) :
+    (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (u : Nat → Nat) :
     ∃ o, exec (ctx.contract.perm s0) p i u st = some o ∧
       match o with
       | .next st' => ∃ s' pc ρ', (s', Next.at pc) ∈ nexts ∧ st'.rip = p.base + pc ∧ Holds ctx s0 ρ' s' st' ∧ WF s'
@@ -260,7 +287,7 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     have heff := shape_ret hs
     simp only [symInstr, hs] at h
     obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
-    obtain ⟨al, post⟩ := symReturn_sound E e1 (H.rip (p.base + i.next)) hret
+    obtain ⟨al, post⟩ := symReturn_sound E e1 (H.rip (p.base + i.next)) wf
     refine ⟨_, by simp only [exec, heff, execAll]; rw [if_pos al], post⟩
   | jump target cond =>
     have heff := shape_jump hs
@@ -333,7 +360,7 @@ theorem fold_mem {α β : Type} {f : β → α → V β} : ∀ {l : List α} {b 
 /-- Every path the verifier has gone, of a function with no loop: from a state of which what the verifier
 holds is so, the machine runs to the function's return, and leaves what the contract promises. -/
 theorem explore_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
-    (hplace : ctx.place = none) (hret : ctx.contract.returns = none) :
+    (hplace : ctx.place = none) :
     ∀ (fuel : Nat) {s : Sym} {pc : Nat} {items rest : List Item} {found : List Sym} {ρ : Nat → Int} {st : State},
     explore ctx none fuel s pc items = .ok (found, rest) → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
     Runs (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
@@ -352,11 +379,11 @@ theorem explore_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         exact hl
       apply Runs.step st i hfetch
       · intro u hn
-        obtain ⟨o, ho, _⟩ := symInstr_sound E e1 H wf hret u
+        obtain ⟨o, ho, _⟩ := symInstr_sound E e1 H wf u
         rw [ho] at hn
         cases hn
       · intro u st' hx
-        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E e1 H wf hret u
+        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E e1 H wf u
         rw [hx] at ho
         injection ho with ho
         subst ho
@@ -364,9 +391,9 @@ theorem explore_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         obtain ⟨b', items', r', hbody⟩ := fold_mem h (s', Next.at pc') m
         simp only [hplace] at hbody
         obtain ⟨more, r2, e2, _⟩ := V.bind_ok hbody
-        exact explore_sound E hplace hret fuel e2 H' wf' hrip'
+        exact explore_sound E hplace fuel e2 H' wf' hrip'
       · intro u st' hx
-        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E e1 H wf hret u
+        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E e1 H wf u
         rw [hx] at ho
         injection ho with ho
         subst ho
@@ -425,14 +452,14 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   · intro v r o m; cases m
   · intro f m; cases m
 
-/-- **What the verifier's yes stands for**, so far for a function with no loop and a contract that does not
-say what is returned: if the verifier says yes of a proof, whatever the proof is, the function's code meets
-its contract (`Meets`): from every state at entry of which the caller has seen to what the contract asks, the
-machine runs on instructions of the function, touches only memory the contract allows, and returns to its
-caller with the stack pointer, the registers a callee keeps and all memory outside its frame as they were. -/
-theorem verify_sound_straight (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
-    (hplace : ctx.place = none) (hret : ctx.contract.returns = none) (h : verdict ctx proof = none) :
-    Meets ctx.contract ctx.defs p := by
+/-- **What the verifier's yes stands for**, so far for a function with no loop: if the verifier says yes of a
+proof, whatever the proof is, the function's code meets its contract (`Meets`): from every state at entry of
+which the caller has seen to what the contract asks, the machine runs on instructions of the function, touches
+only memory the contract allows, and returns to its caller with the stack pointer, the registers a callee
+keeps and all memory outside its frame as they were, and in rax the value the contract's `returns` has by the
+specification's definitions. -/
+theorem verify_sound_noloop (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
+    (hplace : ctx.place = none) (h : verdict ctx proof = none) : Meets ctx.contract ctx.defs p := by
   intro s0 pre
   have E : Setting ctx p s0 := ⟨hcode, pre⟩
   cases hv : verify ctx proof with
@@ -441,6 +468,6 @@ theorem verify_sound_straight (ctx : Ctx) (p : Program) (proof : List Item) (hco
     unfold verify at hv
     obtain ⟨arrivals, r1, e1, _⟩ := V.bind_ok hv
     obtain ⟨H, wf⟩ := entry_holds E
-    exact explore_sound E hplace hret PATH e1 H wf (by rw [E.rip]; rfl)
+    exact explore_sound E hplace PATH e1 H wf (by rw [E.rip]; rfl)
 
 end Ode

@@ -113,7 +113,16 @@ def entail (facts : List Row) (g : Row) : V Unit :=
 
 inductive Cmp where
   | lt | eq | gt
-  deriving DecidableEq
+
+def Cmp.isLt : Cmp → Bool
+  | .lt => true
+  | _ => false
+def Cmp.isEq : Cmp → Bool
+  | .eq => true
+  | _ => false
+def Cmp.isGt : Cmp → Bool
+  | .gt => true
+  | _ => false
 
 /-- Which of the two is the greater, by the facts. -/
 def compare (facts : List Row) (a b : Row) : V Cmp :=
@@ -398,12 +407,12 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     | _, _ => refuse "a product of two unknowns: not here yet"
   else do
     let c ← compare s.facts x y
-    if op == "==" then pure (.val (.bool (c == .eq)), s)
-    else if op == "!=" then pure (.val (.bool (c != .eq)), s)
-    else if op == "<" then pure (.val (.bool (c == .lt)), s)
-    else if op == "<=" then pure (.val (.bool (c != .gt)), s)
-    else if op == ">" then pure (.val (.bool (c == .gt)), s)
-    else if op == ">=" then pure (.val (.bool (c != .lt)), s)
+    if op == "==" then pure (.val (.bool c.isEq), s)
+    else if op == "!=" then pure (.val (.bool (!c.isEq)), s)
+    else if op == "<" then pure (.val (.bool c.isLt), s)
+    else if op == "<=" then pure (.val (.bool (!c.isGt)), s)
+    else if op == ">" then pure (.val (.bool c.isGt), s)
+    else if op == ">=" then pure (.val (.bool (!c.isLt)), s)
     else refuse s!"no rule for {op}"
 
 def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) :=
@@ -433,8 +442,11 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
   | s, .ifx c a b => do
     let (c, s) ← seval ctx env s c
     match c with
-    | .val (.bool true) => seval ctx env s a
-    | .val (.bool false) => seval ctx env s b
+    | .val (.bool t) => do
+      let (r, s) ← if t then seval ctx env s a else seval ctx env s b
+      match r with
+      | .list _ => refuse "a list of things where a value is expected"
+      | _ => pure (r, s)
     | _ => refuse "a condition that is not true or false"
   | s, .index a i => do
     let (a, s) ← seval ctx env s a

@@ -225,7 +225,7 @@ theorem EV.sem_agree {ρ ρ' : Nat → Int} {n m x : Nat} {v : EV} (h : EV.sem �
   | equal x y => exact ⟨by rw [← ev_agree h.2.1 a, ← ev_agree h.2.2 a]; exact h.1, bounded_mono le h.2.1, bounded_mono le h.2.2⟩
   | below x y => exact ⟨by rw [← ev_agree h.2.1 a, ← ev_agree h.2.2 a]; exact h.1, bounded_mono le h.2.1, bounded_mono le h.2.2⟩
 
-theorem lookup_mem {β : Type} : ∀ {l : List (Int × β)} {a : Int} {b : β}, l.lookup a = some b → (a, b) ∈ l
+theorem lookup_mem {α β : Type} [BEq α] [LawfulBEq α] : ∀ {l : List (α × β)} {a : α} {b : β}, l.lookup a = some b → (a, b) ∈ l
   | [], _, _, h => by simp [List.lookup] at h
   | (a', b') :: rest, a, b, h => by
     simp only [List.lookup] at h
