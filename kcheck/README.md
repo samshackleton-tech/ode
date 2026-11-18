@@ -1743,15 +1743,16 @@ the instruction layer), one verifier, and for the loops a proof the compiler wri
 **Not yet so.**
 - The whole audit of the state before holes 5 and 6 were closed (355,704 single-bit changes across its
   steps, 18,278 accepted, 0 with no verdict; every accepted change ran as its specification on the
-  processor) is in `audit/`. It could not see those holes. `gate.py` is the five-minute gate Sam asked
+  processor) is in `audit/`, with `kfn-flip-node_out.txt` re-run on November 18 after `node_out` was
+  written by hand (63 bytes, 504 single-bit changes: 245 stopped, 194 refused, 65 accepted, all 65 the
+  same on the processor). It could not see those holes. `gate.py` is the five-minute gate Sam asked
   for before a merge or a post: the adversarial copies, every shipped file verified, the ELF outside code
   and proof flipped bit by bit, the lemma tests, and a positive control that `backdoor.o` is refused. The
   exhaustive sweep remains a soak, not a gate.
 - The place's language is three forms; a loop of a function of `hash.ode` whose count is not fixed would
   need more (none has one).
-- In the instruction layer the programmer writes the place by hand. A loop written in Ode's word-level
-  language, from which the compiler would derive it, is not there for kernels.
-- `kcheck.py`'s machine (a kernel run to its end for a fixed number of blocks; `output16`), `kglue.py` and
-  `check_all.py` are earlier trials that no verification of a shipped file loads; they still have audits.
+- In the instruction layer the programmer writes the place by hand.
+- `kcheck.py`'s machine (a kernel run to its end for a fixed number of blocks) is an earlier trial that no
+  verification of a shipped file loads; it still has audits.
 - AArch64; the hash's incremental interface; the kernels the library has beside these five (AVX2, SSE4.1
   wide, the batch kernels).
