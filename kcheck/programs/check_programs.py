@@ -3,14 +3,14 @@
 
     python3 programs/check_programs.py [FOLDER]
 
-FOLDER holds the objects (adler32.o, lz4_decode.o, ...). Without it they are assembled here from the assembly
-the Ode compiler printed (programs/NAME/*.S), with clang where there is one. Each function's bytes are read
+FOLDER holds the objects (adler32.o, lz4_decode.o, ...). Without it they are made here from the Ode sources
+(programs/NAME/*.ode: ../lang/odec.py, then clang where there is one). Each function's bytes are read
 by kdecode.py and checked by kbyte.py against the contract in programs/NAME/NAME.spec, with its proof
 (programs/NAME/FUNCTION.proof: the places of its loops; none where the verifier runs the loop itself)."""
 import os, shutil, sys, tempfile, time
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(HERE))
-import kbyte, kcheck, kdecode, kends, ode
+sys.path.insert(0, os.path.dirname(HERE)); sys.path.insert(0, os.path.join(os.path.dirname(HERE), "..", "lang"))
+import kbyte, kcheck, kdecode, kends, ode, odec
 from test_kcheck import assemble
 
 PROGRAMS = [("adler32", "adler32", "Adler-32 of any bytes"),
@@ -49,7 +49,7 @@ def composed(folder, program, function, parts, made=True):
         symbol, where, name = todo.pop(0)
         if symbol in seen: continue
         seen.add(symbol)
-        if made: assemble(os.path.join(HERE, where, name + ".S"), os.path.join(folder, name + ".o"))
+        if made: odec.build(odec.source_of(os.path.join(HERE, where), name), name, os.path.join(folder, name + ".o"))
         t0 = time.time()
         rows = kbyte.load(os.path.join(folder, name + ".o"), symbol)
         tally = kbyte.check(rows, spec, symbol, read(where, name + ".proof"))
@@ -66,7 +66,7 @@ def main():
     failed, total, t_all = 0, 0, time.time()
     try:
         for program, function, what in PROGRAMS:
-            if made: assemble(os.path.join(HERE, program, function + ".S"), os.path.join(folder, function + ".o"))
+            if made: odec.build(odec.source_of(os.path.join(HERE, program), function), function, os.path.join(folder, function + ".o"))
             with open(os.path.join(HERE, program, program + ".spec")) as f: spec_text = f.read()
             with open(os.path.join(HERE, program, function + ".proof")) as f: proof = f.read()
             lines = lambda s: sum(1 for l in s.split("\n") if l.strip() and not l.strip().startswith("//"))

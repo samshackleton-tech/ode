@@ -53,7 +53,8 @@ def main():
         ("test_kbinary (hash file as object and shared object)", [sys.executable, "test_kbinary.py"]),
         ("kfile_flip frame (ELF outside code/proof)", [sys.executable, "kfile_flip.py", "frame", "--jobs", str(jobs)]),
         ("test_lemma_audit (changed lemmas judged on numbers)", [sys.executable, "test_lemma_audit.py"]),
-        ("the table of instructions (rows on this processor, rules on numbers)", [sys.executable, os.path.join("..", "core", "test_core.py")]),
+        ("the table of instructions (rows and bytes on this processor, rules on numbers)", [sys.executable, os.path.join("..", "core", "test_core.py")]),
+        ("test_made (the shipped files' code is what the Ode sources give)", [sys.executable, "test_made.py"]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

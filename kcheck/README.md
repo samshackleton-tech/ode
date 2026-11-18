@@ -6,6 +6,9 @@ order it happened. For what Ode is and where it is going read [../DESIGN.md](../
 (fork `samshackleton-tech/BLAKE3`, `tools/verify/machine/kcheck/`, to commit `dca7275f`). Paths in the older
 sections are that tree's: its `c/` and `test_vectors/` are `../reference/blake3-servil/` here, and its
 Lean folders (`../lang/*.lean`, `../one/`, `../spec/`), `kcheck_cross.py` and `earlier/` stayed there.
+Since November 18, 2026 Ode has one layer, a function's instructions: where this record speaks of
+`glue/*.S`, of a compiler that prints functions (`Lang.lean`), of `check_all.py` or `kglue.py`, or of a
+decoder written by hand, it speaks of what was (this repository's history has them to commit `d1b06be`).
 
 **To verify a shipped binary yourself: `VERIFY.md`** (one page) and `python3 verify.py FILE`, which prints
 the contract you are asked to rely on, the verification, and the files that ran to reach it.

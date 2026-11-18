@@ -4,13 +4,12 @@ contract and a changed specification are refused.
 
     python3 test_kfn.py
 
-glue/pad.S, chunk_node.S, node_out.S, wide32.S, wide128.S, take.S, part32.S, subtree.S and hashr.S are hash.ode as the Ode compiler prints it
-(copies: the compiler needs Lean); they are assembled here (clang where there is one, else cc)."""
+hash.ode's nine functions are printed as assembly (../lang/odec.py) and assembled here (clang where there is one, else cc)."""
 import json, os, shutil, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import kcheck, kfn, kspec, ode
+sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+import kcheck, kfn, kspec, ode, odec
 from test_kcheck import assemble
 
 NAMES = ["pad", "chunk_node", "node_out", "wide32", "wide128", "take", "part32", "subtree", "hashr"]
@@ -83,7 +82,7 @@ class Kfn(unittest.TestCase):
         cls.tmp = tempfile.mkdtemp(prefix="kfn-")
         cls.rows = {}
         for name in NAMES:
-            assemble(os.path.join(HERE, "glue", name + ".S"), os.path.join(cls.tmp, name + ".o"))
+            odec.build(os.path.join(HERE, "hash.ode"), name, os.path.join(cls.tmp, name + ".o"))
             cls.rows[name] = kfn.load(os.path.join(cls.tmp, name + ".o"), name)
 
     @classmethod

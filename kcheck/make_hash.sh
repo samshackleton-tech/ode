@@ -1,10 +1,10 @@
 #!/bin/sh
 # b3hashr.o made again from its sources, and compared with the file kept here.
 #
-#     sh make_hash.sh OUT        (needs python3, clang, and Lean's `lake` for the word-level functions)
+#     sh make_hash.sh OUT        (needs python3 and an assembler: clang, or cc on x86-64 Linux)
 #
-# 1. hash.ode's nine functions: the Ode compiler prints each as assembly (../lang/build.sh), clang assembles.
-# 2. The five kernels: ../wide/*.ode, Ode's instruction layer (kernels.py), clang assembles.
+# 1. hash.ode's nine functions: ../lang/odec.py prints each one's instructions as assembly, the assembler assembles.
+# 2. The five kernels: ../wide/*.ode, likewise (kernels.py, which also writes the proofs of their loops).
 # 3. klink.py takes the functions' bytes from those objects, lays them out as one section with nothing left
 #    for a linker to fill in, finds the arithmetic proofs, and writes OUT/b3hashr.o with the specification
 #    and the proof inside (about a minute).
@@ -17,7 +17,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 out=$1
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
-sh "$here/../lang/build.sh" "$here/hash.ode" b3l_ "$out" pad chunk_node node_out wide32 wide128 take part32 subtree hashr
+python3 "$here/../lang/odec.py" "$here/hash.ode" --all "$out" > "$out/odec.txt"
 python3 "$here/kernels.py" "$out" > "$out/kernels.txt"
 python3 "$here/klink.py" "$out" "$out/b3hashr.o" > "$out/klink.txt"
 if cmp -s "$out/b3hashr.o" "$here/b3hashr.o"; then

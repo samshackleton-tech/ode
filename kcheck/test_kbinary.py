@@ -46,8 +46,8 @@ class Binary(unittest.TestCase):
         cls.dir = tempfile.mkdtemp(prefix="kbinary-")
         for obj, src in (("lib32.o", "c/blake3_avx512_32.S"), ("avx512.o", "c/blake3_avx512_x86-64_unix.S"), ("sse41.o", "c/blake3_sse41_x86-64_unix.S")):
             assemble(os.path.join(ROOT, src), os.path.join(cls.dir, obj))
-        for name in klink.HASH: assemble(os.path.join(HERE, "glue", name + ".S"), os.path.join(cls.dir, name + ".o"))
-        import kernels
+        import kernels, odec          # (kernels.py puts ../lang on the path)
+        for name in klink.HASH: odec.build(os.path.join(HERE, "hash.ode"), name, os.path.join(cls.dir, name + ".o"))
         kernels.make(cls.dir)                   # the five kernels from their Ode sources, as klink.py takes them
         image, where, sizes, align = klink.link(cls.dir)
         cls.where, cls.blob = where, klink.elf(image, where, sizes, align)

@@ -10,7 +10,7 @@
 
 data one_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
-kernel compress1 replaces "blake3_servil_compress_in_place_avx512" {
+fn compress1 as "blake3_servil_compress_in_place_avx512" {
   .p2align 6
   // half of a round: the four columns (or, the rows turned, the four diagonals) mixed with eight words of the block
   def g(x, y) {
@@ -90,7 +90,7 @@ kernel compress1 replaces "blake3_servil_compress_in_place_avx512" {
 data one_rot8 = 0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D
 data one_rot16 = 0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E
 
-kernel compress1_sse41 replaces "blake3_servil_compress_in_place_sse41" {
+fn compress1_sse41 as "blake3_servil_compress_in_place_sse41" {
   .p2align 6
   // half of a round
   def g(x, y) {

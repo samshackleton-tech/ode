@@ -135,7 +135,7 @@ A highly desirable property of an interface and its contract: the user learns th
 - Read each change to a verifier as an attacker: what does it take to be so that the processor, the linker or the arithmetic does not? A fault found becomes a kept test (`kcheck/test_kholes.py`) with evidence from a processor.
 - Try a thing before writing that it is beyond the verifier's reach.
 
-**The coder decides.** The compiler does what the source says or refuses. Two tests hold that line: the same source gives the same bytes (`lang/test_glue.py`, `kcheck/make_hash.sh`), and the kernels written in Ode are the reference kernels byte for byte (`wide/test_sources.py`).
+**The coder decides.** The compiler does what the source says or refuses. Two tests hold that line: the shipped files' code is what the sources give, byte for byte (`kcheck/test_made.py`; `kcheck/make_hash.sh` makes the whole hash file again), and the kernels written in Ode are the reference kernels byte for byte (`wide/test_sources.py`).
 
 **Before a merge or a public number:** `python3 kcheck/gate.py --jobs N` (under five minutes; the parts that run code need x86-64 Linux with AVX-512). `sh tests.sh` is the whole suite (about nine minutes on 64 threads). `kcheck/audit.sh` is a soak of hours: start it on a tree that then stays as it is, and try its tools small on its machine first.
 

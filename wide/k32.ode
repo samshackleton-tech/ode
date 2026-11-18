@@ -1,16 +1,15 @@
 // K32 (and P32, its second entry), transcribed from the production kernel at commit
 // 399563ec6dbb4e8f2db025a9cf5125fc61ac8a3a: `blake3_servil_avx512_k32` of c/blake3_avx512_32.S. The same
 // instructions in the same order, alignment, unwind directives and constants; nothing added or left out.
-// `@p32` is where the library's `blake3_servil_avx512_p32` enters (no counter increment); here it is a label
-// of this kernel, not a symbol. Not yet proved.
+// `entry "blake3_servil_avx512_p32"` is where the library's function of that name enters (no counter
+// increment). Verified by kcheck/kfn.py against its contract (kcheck/proofs/inner.spec), with the place of
+// its loop written here (`place b { ... }`).
 
 data k32_iv = 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a
 data k32_indices = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
 data k32_schedule = 0, 64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 128, 384, 192, 640, 448, 0, 256, 832, 64, 704, 768, 320, 576, 896, 960, 512, 192, 256, 640, 768, 832, 128, 448, 896, 384, 320, 576, 0, 704, 960, 512, 64, 640, 448, 768, 576, 896, 192, 832, 960, 256, 0, 704, 128, 320, 512, 64, 384, 768, 832, 576, 704, 960, 640, 896, 512, 448, 128, 320, 192, 0, 64, 384, 256, 576, 896, 704, 320, 512, 768, 960, 64, 832, 192, 0, 640, 128, 384, 256, 448, 704, 960, 320, 0, 64, 576, 512, 384, 896, 640, 128, 768, 192, 256, 448, 832
 
-kernel k32 meets K32.contract(k: Blake3.CV, base: BitVec 64, n: BitVec 64, flags: BitVec 64, bytes: List (BitVec 8))
-
-kernel k32 replaces "blake3_servil_avx512_k32" {
+fn k32 as "blake3_servil_avx512_k32" {
   .p2align 6
   .cfi_startproc
   endbr64

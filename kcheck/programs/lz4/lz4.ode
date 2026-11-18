@@ -4,85 +4,408 @@
 // `state`: 0 while it goes on; 1 at the block's end; 2 where it gives NO. `count`: the literals, then the
 // match's bytes, still to be written. It refuses where the specification fails, and nowhere else: each test
 // here is one of the specification's. (A count read from a block of less than 2^56 bytes is less than 2^64.)
+//
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
 
-const NO = 0xFFFFFFFFFFFFFFFF
-
-fn lz4_decode(out, cap, input, n)
-  reg out, cap, input, n, i, o
-{
-  var i = 0
-  var o = 0
-  var state = 0
-  var token = 0
-  var count = 0
-  var b = 0
-  var offset = 0
-  var more = 0
-  while state == 0 {
-    if i >= n { state = 2 } else {
-      token = u8[input + i]
-      i = i + 1
-      count = token >> 4
-      if count >= 15 {
-        more = 1
-        while more == 1 {
-          if i >= n { state = 2  more = 0 } else {
-            b = u8[input + i]
-            i = i + 1
-            count = count + b
-            if b < 255 { more = 0 }
-          }
-        }
-      }
-      if state == 0 {
-        if count > n - i { state = 2 } else {
-          if count > cap - o { state = 2 } else {
-            while count > 0 {
-              u8[out + o] = u8[input + i]
-              o = o + 1
-              i = i + 1
-              count = count - 1
-            }
-            if i == n { state = 1 } else {
-              if n - i < 2 { state = 2 } else {
-                offset = u8[input + i] + (u8[input + i + 1] << 8)
-                i = i + 2
-                if offset == 0 { state = 2 } else {
-                  if offset > o { state = 2 } else {
-                    count = token & 15
-                    if count >= 15 {
-                      more = 1
-                      while more == 1 {
-                        if i >= n { state = 2  more = 0 } else {
-                          b = u8[input + i]
-                          i = i + 1
-                          count = count + b
-                          if b < 255 { more = 0 }
-                        }
-                      }
-                    }
-                    if state == 0 {
-                      if cap - o < 4 { state = 2 } else {
-                        if count > cap - o - 4 { state = 2 } else {
-                          count = count + 4
-                          while count > 0 {
-                            u8[out + o] = u8[out + o - offset]
-                            o = o + 1
-                            count = count - 1
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  var result = o
-  if state == 2 { result = NO }
-  return result
+// lz4_decode(out, cap, input, n): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
+//   rbp, r12, r13, r14, r15. Kept: out in rbx, cap in rbp, input in r12, n in r13, i in r14, o in r15, state
+//   at [rsp + 0], token at [rsp + 8], count at [rsp + 16], b at [rsp + 24], offset at [rsp + 32], more at
+//   [rsp + 40], result at [rsp + 48]. Frame: 56 bytes.
+fn lz4_decode as "ode_lz4_decode" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 56
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // i = 0
+  mov rax, 0
+  mov r14, rax
+  // o = 0
+  mov rax, 0
+  mov r15, rax
+  // state = 0
+  mov rax, 0
+  mov qword ptr [rsp + 0], rax
+  // token = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8], rax
+  // count = 0
+  mov rax, 0
+  mov qword ptr [rsp + 16], rax
+  // b = 0
+  mov rax, 0
+  mov qword ptr [rsp + 24], rax
+  // offset = 0
+  mov rax, 0
+  mov qword ptr [rsp + 32], rax
+  // more = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+  // while state == 0
+@l0:
+  mov rax, qword ptr [rsp + 0]
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l1
+  // if i < n
+  mov rax, r14
+  mov rcx, r13
+  cmp rax, rcx
+  jae @l2
+  // token = u8[input + i]
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  mov qword ptr [rsp + 8], rax
+  // i = i + 1
+  mov rax, r14
+  add rax, 1
+  mov r14, rax
+  // count = token >> 4
+  mov rax, qword ptr [rsp + 8]
+  shr rax, 4
+  mov qword ptr [rsp + 16], rax
+  // if count < 15
+  mov rax, qword ptr [rsp + 16]
+  mov rcx, 15
+  cmp rax, rcx
+  jae @l4
+  jmp @l5
+@l4:
+  // else
+  // more = 1
+  mov rax, 1
+  mov qword ptr [rsp + 40], rax
+  // while more == 1
+@l6:
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l7
+  // if i < n
+  mov rax, r14
+  mov rcx, r13
+  cmp rax, rcx
+  jae @l8
+  // b = u8[input + i]
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  mov qword ptr [rsp + 24], rax
+  // i = i + 1
+  mov rax, r14
+  add rax, 1
+  mov r14, rax
+  // count = count + b
+  mov rax, qword ptr [rsp + 16]
+  add rax, qword ptr [rsp + 24]
+  mov qword ptr [rsp + 16], rax
+  // if b < 255
+  mov rax, qword ptr [rsp + 24]
+  mov rcx, 255
+  cmp rax, rcx
+  jae @l10
+  // more = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+@l10:
+  jmp @l9
+@l8:
+  // else
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  // more = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+@l9:
+  jmp @l6
+@l7:
+@l5:
+  // if state == 0
+  mov rax, qword ptr [rsp + 0]
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l12
+  // if n - i < count
+  mov rax, r13
+  sub rax, r14
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jae @l14
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l15
+@l14:
+  // else
+  // if cap - o < count
+  mov rax, rbp
+  sub rax, r15
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jae @l16
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l17
+@l16:
+  // else
+  // while 0 < count
+@l18:
+  mov rax, 0
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jae @l19
+  // u8[out + o] = u8[input + i]
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  mov rcx, rbx
+  add rcx, r15
+  mov byte ptr [rcx], al
+  // o = o + 1
+  mov rax, r15
+  add rax, 1
+  mov r15, rax
+  // i = i + 1
+  mov rax, r14
+  add rax, 1
+  mov r14, rax
+  // count = count - 1
+  mov rax, qword ptr [rsp + 16]
+  sub rax, 1
+  mov qword ptr [rsp + 16], rax
+  jmp @l18
+@l19:
+  // if i == n
+  mov rax, r14
+  mov rcx, r13
+  cmp rax, rcx
+  jne @l20
+  // state = 1
+  mov rax, 1
+  mov qword ptr [rsp + 0], rax
+  jmp @l21
+@l20:
+  // else
+  // if n - i < 2
+  mov rax, r13
+  sub rax, r14
+  mov rcx, 2
+  cmp rax, rcx
+  jae @l22
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l23
+@l22:
+  // else
+  // offset = u8[input + i] + (u8[(input + i) + 1] << 8)
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  mov rcx, r12
+  add rcx, r14
+  add rcx, 1
+  movzx ecx, byte ptr [rcx]
+  shl rcx, 8
+  add rax, rcx
+  mov qword ptr [rsp + 32], rax
+  // i = i + 2
+  mov rax, r14
+  add rax, 2
+  mov r14, rax
+  // if offset == 0
+  mov rax, qword ptr [rsp + 32]
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l24
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l25
+@l24:
+  // else
+  // if o < offset
+  mov rax, r15
+  mov rcx, qword ptr [rsp + 32]
+  cmp rax, rcx
+  jae @l26
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l27
+@l26:
+  // else
+  // count = token & 15
+  mov rax, qword ptr [rsp + 8]
+  and rax, 15
+  mov qword ptr [rsp + 16], rax
+  // if count < 15
+  mov rax, qword ptr [rsp + 16]
+  mov rcx, 15
+  cmp rax, rcx
+  jae @l28
+  jmp @l29
+@l28:
+  // else
+  // more = 1
+  mov rax, 1
+  mov qword ptr [rsp + 40], rax
+  // while more == 1
+@l30:
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l31
+  // if i < n
+  mov rax, r14
+  mov rcx, r13
+  cmp rax, rcx
+  jae @l32
+  // b = u8[input + i]
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  mov qword ptr [rsp + 24], rax
+  // i = i + 1
+  mov rax, r14
+  add rax, 1
+  mov r14, rax
+  // count = count + b
+  mov rax, qword ptr [rsp + 16]
+  add rax, qword ptr [rsp + 24]
+  mov qword ptr [rsp + 16], rax
+  // if b < 255
+  mov rax, qword ptr [rsp + 24]
+  mov rcx, 255
+  cmp rax, rcx
+  jae @l34
+  // more = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+@l34:
+  jmp @l33
+@l32:
+  // else
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  // more = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+@l33:
+  jmp @l30
+@l31:
+@l29:
+  // if state == 0
+  mov rax, qword ptr [rsp + 0]
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l36
+  // if cap - o < 4
+  mov rax, rbp
+  sub rax, r15
+  mov rcx, 4
+  cmp rax, rcx
+  jae @l38
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l39
+@l38:
+  // else
+  // if (cap - o) - 4 < count
+  mov rax, rbp
+  sub rax, r15
+  sub rax, 4
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jae @l40
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+  jmp @l41
+@l40:
+  // else
+  // count = count + 4
+  mov rax, qword ptr [rsp + 16]
+  add rax, 4
+  mov qword ptr [rsp + 16], rax
+  // while 0 < count
+@l42:
+  mov rax, 0
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jae @l43
+  // u8[out + o] = u8[(out + o) - offset]
+  mov rax, rbx
+  add rax, r15
+  sub rax, qword ptr [rsp + 32]
+  movzx eax, byte ptr [rax]
+  mov rcx, rbx
+  add rcx, r15
+  mov byte ptr [rcx], al
+  // o = o + 1
+  mov rax, r15
+  add rax, 1
+  mov r15, rax
+  // count = count - 1
+  mov rax, qword ptr [rsp + 16]
+  sub rax, 1
+  mov qword ptr [rsp + 16], rax
+  jmp @l42
+@l43:
+@l41:
+@l39:
+@l36:
+@l27:
+@l25:
+@l23:
+@l21:
+@l17:
+@l15:
+@l12:
+  jmp @l3
+@l2:
+  // else
+  // state = 2
+  mov rax, 2
+  mov qword ptr [rsp + 0], rax
+@l3:
+  jmp @l0
+@l1:
+  // result = o
+  mov rax, r15
+  mov qword ptr [rsp + 48], rax
+  // if state == 2
+  mov rax, qword ptr [rsp + 0]
+  mov rcx, 2
+  cmp rax, rcx
+  jne @l44
+  // result = 0xffffffffffffffff
+  mov rax, 18446744073709551615
+  mov qword ptr [rsp + 48], rax
+@l44:
+  mov rax, qword ptr [rsp + 48]
+  add rsp, 56
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

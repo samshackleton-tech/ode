@@ -84,7 +84,7 @@ class Stack(unittest.TestCase):
     def kernel(self, source):
         p = os.path.join(self.work, "k.ode")
         with open(p, "w") as f: f.write(source)
-        with open(os.path.join(self.work, "k.S"), "w") as f: f.write(odec.kernel_x86(p, "compress1", prefix="x_").replace("x_compress1", KERNEL))
+        with open(os.path.join(self.work, "k.S"), "w") as f: f.write(odec.assembly(p, "compress1"))
         assemble(os.path.join(self.work, "k.S"), os.path.join(self.work, "k.o"))
         kspec.SPEC = self.spec; kfn.CONTRACTS.clear()
         kfn.check(kfn.load(os.path.join(self.work, "k.o"), None, KERNEL), None, symbol=KERNEL)
@@ -112,7 +112,7 @@ class Stack(unittest.TestCase):
         kbyte.check(kbyte.load(os.path.join(self.work, "c.o"), "ode_common"), spec, "ode_common", read("common", "common.proof").replace("place +0x34", "place " + place))
 
     def test_a_program_of_bytes_that_writes_below_its_argument(self):
-        with open(os.path.join(HERE, "programs", "common", "common.S")) as f: text = f.read()
+        text = odec.assembly(os.path.join(HERE, "programs", "common", "common.ode"), "common")
         at = "_ode_common:\n    push rbx\n"
         self.assertEqual(text.count(at), 1)
         self.common(text, "+0x34")                                          # as shipped
@@ -128,7 +128,7 @@ class Calls(unittest.TestCase):
         cls.work = tempfile.mkdtemp()
         read = lambda *p: open(os.path.join(HERE, "programs", *p)).read()
         cls.spec = ode.with_proof(read("frame", "frame.spec"), read("frame", "unframe.inner") + check_programs.lemmas("frame"))
-        cls.source, cls.proof = read("frame", "unframe.S"), read("frame", "unframe.proof")
+        cls.source, cls.proof = odec.assembly(os.path.join(HERE, "programs", "frame", "frame.ode"), "unframe"), read("frame", "unframe.proof")
 
     @classmethod
     def tearDownClass(cls): shutil.rmtree(cls.work)

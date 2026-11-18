@@ -4,8 +4,8 @@ and the processor's word on each change a proof is found for.
 
     python3 kfn_flip.py pad|chunk_node|node_out|wide32|wide128|take|part32|subtree|hashr FOLDER [--jobs N] [--native CASES]
 
-FOLDER holds an object for each of those names (glue/NAME.S assembled) and the
-kernels' objects (*.o beside them: they are linked in, not changed). As kflip.py: each bit of the function's
+FOLDER holds an object for each of those names (hash.ode's functions: `python3 ../lang/odec.py hash.ode --all
+FOLDER`) and the kernels' objects (*.o beside them: they are linked in, not changed). As kflip.py: each bit of the function's
 code is flipped in turn; "stopped" (the decoder does not know the bytes), "refused" (no proof is found),
 "ACCEPTED" (a proof is found and the verifier takes it). With --native every accepted object is linked with
 the others, the kernels and khash_native.c, and the whole hash is run on some two thousand lengths and

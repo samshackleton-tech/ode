@@ -19,7 +19,7 @@ BASELINE_SHA256 = '1ef109be28848a619d0b36911b62c332e4caaefa1f6c0e085431e585aba7c
 
 
 def canonical(source):
-    _, data, kernels = odec.kernels(odec.contracts_of(source)[2])
+    data, kernels = odec.functions(source)
     name, _, lines = next(k for k in kernels if k[0] == 'p16')
     expanded = odec.expand(name, lines, {}, {})
     assert expanded[0] == '.p2align 6'
@@ -46,8 +46,8 @@ class P16Source(unittest.TestCase):
         self.assertNotEqual(changed, baseline)
 
     def test_entry_alignment_precedes_symbols(self):
-        asm = odec.kernel_x86(str(SOURCE), 'p16')
-        self.assertIn('.p2align 6\nb3l_p16:\n_b3l_p16:\n', asm)
+        asm = odec.assembly(str(SOURCE), 'p16')
+        self.assertIn('.p2align 6\nblake3_servil_avx512_p16:\n_blake3_servil_avx512_p16:\n', asm)
         self.assertIn('.p2align 5\n.Lode_p16_round16:', asm)
         self.assertIn('.Lode_data_p16_iv:', asm)
         self.assertEqual(asm.count('.p2align 5'), 1)

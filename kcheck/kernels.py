@@ -5,8 +5,8 @@ by no verification.
     python3 kernels.py FOLDER [--proofs]
 
 The sources are ../wide/one.ode (the two one-block kernels), ../wide/k32.ode (the 32-lane kernel, entered
-two ways) and ../wide/p16.ode (the 16-lane one): Ode's instruction layer. The Ode compiler (../lang/odec.py)
-prints each as assembly, adding and changing no instruction, and an assembler makes FOLDER/NAME.o of it,
+two ways) and ../wide/p16.ode (the 16-lane one). odec.py (../lang) prints each as assembly, adding and
+changing no instruction, and an assembler makes FOLDER/NAME.o of it,
 which klink.py takes. (Each is, byte for byte, the kernel of BLAKE3-Servil's own assembly files:
 ../wide/test_sources.py.)
 
@@ -27,18 +27,14 @@ KERNELS = [("one.ode", "compress1", "one.o", {"blake3_servil_compress_in_place_a
            ("p16.ode", "p16", "p16.o", {"blake3_servil_avx512_p16": "p16"})]
 
 
-def assemble(s_path, o_path):
-    for cc in (["clang", "--target=x86_64-unknown-linux-gnu"], ["cc"]):
-        if shutil.which(cc[0]) and subprocess.run(cc + ["-c", "-o", o_path, s_path], capture_output=True).returncode == 0: return
-    raise SystemExit(f"kernels: no assembler here makes an x86-64 ELF object of {s_path}")
+assemble = odec.assemble
 
 
 def make(folder, proofs=False):
     out = []
     for source, kernel, obj, entries in KERNELS:
         src = os.path.join(HERE, "..", "wide", source)
-        with open(os.path.join(folder, obj[:-2] + ".S"), "w") as f: f.write(odec.kernel_x86(src, kernel, shipped=True))
-        assemble(os.path.join(folder, obj[:-2] + ".S"), os.path.join(folder, obj))
+        odec.build(src, kernel, os.path.join(folder, obj))
         held = odec.place_of(src, kernel)
         if held is None: out.append((obj, kernel, None)); continue
         place, = struct.unpack("<I", kdecode.Elf(os.path.join(folder, obj)).bytes_of(".ode.place"))

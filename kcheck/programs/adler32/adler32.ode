@@ -1,17 +1,87 @@
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
+
 // Adler-32, written to be proved against adler32.spec: the two sums, a byte at a time, each kept below
 // 65521 by taking 65521 from it when it reaches it.
-fn adler32(input, len)
-  reg input, len, a, b, i
-{
-  var a = 1
-  var b = 0
-  var i = 0
-  while i < len {
-    a = a + u8[input + i]
-    if a >= 65521 { a = a - 65521 }
-    b = b + a
-    if b >= 65521 { b = b - 65521 }
-    i = i + 1
-  }
-  return (b << 16) + a
+// adler32(input, len): arguments in rdi, rsi, as C passes them. Saved and restored: rbx, rbp, r12, r13, r14.
+//   Kept: input in rbx, len in rbp, a in r12, b in r13, i in r14. Frame: 0 bytes.
+fn adler32 as "ode_adler32" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  mov rbx, rdi
+  mov rbp, rsi
+  // a = 1
+  mov rax, 1
+  mov r12, rax
+  // b = 0
+  mov rax, 0
+  mov r13, rax
+  // i = 0
+  mov rax, 0
+  mov r14, rax
+  // while i < len
+@l0:
+  mov rax, r14
+  mov rcx, rbp
+  cmp rax, rcx
+  jae @l1
+  // a = a + u8[input + i]
+  mov rax, r12
+  mov rcx, rbx
+  add rcx, r14
+  movzx ecx, byte ptr [rcx]
+  add rax, rcx
+  mov r12, rax
+  // if a < 65521
+  mov rax, r12
+  mov rcx, 65521
+  cmp rax, rcx
+  jae @l2
+  jmp @l3
+@l2:
+  // else
+  // a = a - 65521
+  mov rax, r12
+  sub rax, 65521
+  mov r12, rax
+@l3:
+  // b = b + a
+  mov rax, r13
+  add rax, r12
+  mov r13, rax
+  // if b < 65521
+  mov rax, r13
+  mov rcx, 65521
+  cmp rax, rcx
+  jae @l4
+  jmp @l5
+@l4:
+  // else
+  // b = b - 65521
+  mov rax, r13
+  sub rax, 65521
+  mov r13, rax
+@l5:
+  // i = i + 1
+  mov rax, r14
+  add rax, 1
+  mov r14, rax
+  jmp @l0
+@l1:
+  mov rax, r13
+  shl rax, 16
+  add rax, r12
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

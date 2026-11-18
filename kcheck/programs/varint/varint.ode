@@ -1,13 +1,55 @@
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
+
 // A varint's bytes, written to be proved against varint.spec.
-fn varint(out, v)
-  reg out, v, k
-{
-  var k = 0
-  while v > 127 {
-    u8[out + k] = 128 + (v & 127)
-    v = v >> 7
-    k = k + 1
-  }
-  u8[out + k] = v
-  return k + 1
+// varint(out, v): arguments in rdi, rsi, as C passes them. Saved and restored: rbx, rbp, r12. Kept: out in
+//   rbx, v in rbp, k in r12. Frame: 0 bytes.
+fn varint as "ode_varint" {
+  push rbx
+  push rbp
+  push r12
+  mov rbx, rdi
+  mov rbp, rsi
+  // k = 0
+  mov rax, 0
+  mov r12, rax
+  // while 127 < v
+@l0:
+  mov rax, 127
+  mov rcx, rbp
+  cmp rax, rcx
+  jae @l1
+  // u8[out + k] = 128 + (v & 127)
+  mov rax, 128
+  mov rcx, rbp
+  and rcx, 127
+  add rax, rcx
+  mov rcx, rbx
+  add rcx, r12
+  mov byte ptr [rcx], al
+  // v = v >> 7
+  mov rax, rbp
+  shr rax, 7
+  mov rbp, rax
+  // k = k + 1
+  mov rax, r12
+  add rax, 1
+  mov r12, rax
+  jmp @l0
+@l1:
+  // u8[out + k] = v
+  mov rax, rbp
+  mov rcx, rbx
+  add rcx, r12
+  mov byte ptr [rcx], al
+  mov rax, r12
+  add rax, 1
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

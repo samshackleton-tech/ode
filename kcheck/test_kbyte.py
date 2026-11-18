@@ -5,8 +5,8 @@ specification, contract, proof or instruction does not (but for instructions tha
     python3 test_kbyte.py"""
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import kbyte, kcheck, kdecode, ode
+sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+import kbyte, kcheck, kdecode, ode, odec
 from test_kcheck import assemble
 
 
@@ -17,7 +17,7 @@ def text(*path):
 class Program:
     def __init__(self, folder, name, symbol):
         self.dir = tempfile.mkdtemp(prefix="kbyte-")
-        assemble(os.path.join(HERE, "programs", folder, name + ".S"), os.path.join(self.dir, name + ".o"))
+        odec.build(odec.source_of(os.path.join(HERE, "programs", folder), name), name, os.path.join(self.dir, name + ".o"))
         self.rows = kbyte.load(os.path.join(self.dir, name + ".o"), symbol)
         self.spec, self.proof, self.symbol = text(folder, folder + ".spec"), text(folder, name + ".proof"), symbol
         if os.path.exists(os.path.join(HERE, "programs", folder, name + ".inner")): self.spec += "\n" + text(folder, name + ".inner")   # the contracts of what it calls

@@ -3,8 +3,8 @@
 
     python3 klink.py FOLDER OUT.o [OUT.proof]
 
-FOLDER holds the objects an assembler made (as check_all.py's: lib32.o, avx512.o, sse41.o, and one for each
-function of hash.ode). This takes from each the bytes of the functions the hash calls, from the function's
+FOLDER holds the objects an assembler made of the Ode sources: one for each function of hash.ode
+(../lang/odec.py) and the kernels' (kernels.py). This takes from each the bytes of the functions the hash calls, from the function's
 first byte to its `ret`, and the read-only data of the objects that have any; lays them out in one section
 (code, then data); and writes into each instruction the distance to what it names, which a linker would have
 written. OUT.o is an ELF object with one section of code and constants, the functions' names, and no

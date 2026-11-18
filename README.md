@@ -38,9 +38,8 @@ what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o prog
     python3 kcheck/gate.py --jobs 16     # the check before a merge: under five minutes
     sh tests.sh                          # every test file
 
-Making needs clang and Lean's `lake` (the word-level compiler's printer is 358 lines of Lean; nothing is
-proved in Lean). The gate and some tests run code on a processor and need x86-64 Linux with AVX-512; they
-skip elsewhere. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
+Making needs Python 3 and an assembler (clang). The gate and some tests run code on a processor and need
+x86-64 Linux with AVX-512; they skip elsewhere. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
 judge each change the verifier accepts: hours, run in the background.
 
 ## What is where
@@ -53,8 +52,8 @@ judge each change the verifier accepts: hours, run in the background.
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
-| `wide/` | BLAKE3's five kernels in Ode's instruction layer (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
-| `lang/` | the Ode compiler: `odec.py` (reader; kernels to assembly) and `Lang.lean` (word-level functions to assembly); `build.sh` |
+| `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
+| `lang/` | `odec.py`: Ode source to assembly. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`) and chooses nothing |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |
 
 Inside `kcheck/`, by what a file is relied on for:
@@ -64,9 +63,9 @@ Inside `kcheck/`, by what a file is relied on for:
 | what Bob is given | `VERIFY.md`, `verify.py`, `LANGUAGE.md`; `blake3.spec` and `b3hashr.o`; `programs/NAME/NAME.spec` and `programs/NAME/odeNAME.o` |
 | the verifier (relied on) | `check_binary.py`, `programs/check_file.py`, `kdecode.py`, `kfn.py`, `kbyte.py`, `kspec.py`, `ode.py`, `klin.py`, `kterms.py`, `kproof.py`, `kshow.py`, `kends.py`, `varith.py`; and from `core/` (below) the table and the files that read it |
 | provers (relied on for nothing) | `kprove.py`, `kguess.py`, `kplace.py`, `kwide.py` |
-| makers | `hash.ode`, `glue/` (its functions as the compiler prints them), `kernels.py`, `klink.py`, `make_hash.sh`, `programs/kpack.py`, `proofs/` |
+| makers | `hash.ode` and `programs/NAME/*.ode` (the sources), `kernels.py`, `klink.py`, `make_hash.sh`, `programs/kpack.py`, `proofs/` |
 | testers and audits | `refute.py` (looks for an input that breaks a contract), `gate.py`, `test_*.py`, `audit.sh` and the `k*_flip.py` tools, `lemma_audit.py`, `kadversary.py`, `kfile_flip.py`, `audit/` (the last whole audit's output), `backdoor.o` (a wrong binary that must be refused), `varith2.c` (a second verifier of arithmetic proofs) |
-| earlier pieces, loaded by no verification | `kcheck.py`, `kglue.py`, `check_all.py`, `kremove.py`, `lift_one.py` |
+| earlier pieces, loaded by no verification | `kcheck.py`, `kremove.py`, `lift_one.py` |
 
 Inside `core/`:
 

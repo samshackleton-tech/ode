@@ -8,7 +8,7 @@
 # for (or, for a kernel, that the verifier accepts) is linked with BLAKE3 written out in C and run on the
 # processor on inputs the contract allows. The outputs go to audit/*.txt; the last lines here are one a
 # function. Exit 1 if any accepted change is told from BLAKE3 by the processor, or any change has no verdict.
-# Run it after any change of kdecode.py, kfn.py, kbyte.py, kspec.py, kterms.py, kcheck.py, kglue.py,
+# Run it after any change of kdecode.py, kfn.py, kbyte.py, kspec.py, kterms.py, kcheck.py,
 # ode.py, klin.py, blake3.spec, proofs/inner.spec or a program's specification or proof: an unverified
 # verifier is worth what its audits are worth.
 # (The functions of hash.ode are judged by the whole hash: each accepted change of one of them is linked with
@@ -19,12 +19,11 @@ root=$(cd ../reference/blake3-servil && pwd)
 jobs=${1:-$(nproc)}
 only=${2:-all}
 grep -q avx512vl /proc/cpuinfo || { echo "this machine has no AVX-512 VL: the processor cannot judge"; exit 2; }
-work=$(mktemp -d); mkdir -p "$work/glue" "$work/hash" audit
-for f in push merge add; do clang -c -o "$work/glue/$f.o" "glue/$f.S" || exit 2; done
-for f in pad chunk_node node_out wide32 wide128 take part32 subtree hashr; do clang -c -o "$work/hash/$f.o" "glue/$f.S" || exit 2; done
-# the five kernels: made from their Ode sources (kernels.py), as the file shipped has them since November 17, 2026
+work=$(mktemp -d); mkdir -p "$work/one" "$work/hash" audit
+# every function from its Ode source: hash.ode's nine (odec.py), the five kernels (kernels.py)
+python3 ../lang/odec.py hash.ode --all "$work/hash" > /dev/null || exit 2
 python3 kernels.py "$work/hash" > /dev/null || exit 2
-cp "$work/hash/one.o" "$work/glue/avx512.o" && cp "$work/hash/one_sse41.o" "$work/glue/sse41.o" || exit 2
+cp "$work/hash/one.o" "$work/one/avx512.o" && cp "$work/hash/one_sse41.o" "$work/one/sse41.o" || exit 2
 bad=0
 run() {     # OUTPUT COMMAND...
     out=$1; shift
@@ -38,8 +37,7 @@ for k in p16 k32 p32; do
     # (kcheck.py's machine, a fixed number of blocks: what no verification of a shipped file loads any more)
     run "kflip-$k.txt" python3 kflip.py $k "$obj" --jobs "$jobs" --native 1000 --refused-sample 400 --detail
 done
-for f in push merge add; do run "kglue-flip-$f.txt" python3 kglue_flip.py $f "$work/glue" --jobs "$jobs" --native 3000; done
-for f in avx512 sse41; do run "kone-flip-$f.txt" python3 kglue_flip.py $f "$work/glue" --jobs "$jobs" --native 20000; done
+for f in avx512 sse41; do run "kone-flip-$f.txt" python3 kone_flip.py $f "$work/one" --jobs "$jobs" --native 20000; done
 fi
 if [ "$only" != programs ]; then
 for f in pad chunk_node node_out wide32 wide128 take part32 subtree hashr; do run "kfn-flip-$f.txt" env LIMIT="${LIMIT:-900}" python3 kfn_flip.py $f "$work/hash" --jobs "$jobs" --native 200; done
@@ -47,7 +45,7 @@ fi
 if [ "$only" != hash ]; then
 # the programs of programs/ (kbyte.py): every single-bit change, the processor's word on each one accepted
 mkdir -p "$work/p"
-for f in adler32/adler32 adler32/adler32_blocks adler32/adler32_blocks4 lz4/lz4_decode lz4/lz4_store lz4/lz4_pack varint/varint common/common utf8/utf8 base64/base64 inet/inet frame/unframe; do cc -c -o "$work/p/$(basename $f).o" "programs/$f.S" || exit 2; done
+for f in adler32/adler32 adler32/adler32_blocks adler32/adler32_blocks4 lz4/lz4_decode lz4/lz4_store lz4/lz4_pack varint/varint common/common utf8/utf8 base64/base64 inet/inet frame/unframe; do python3 ../lang/odec.py --from "programs/$(dirname $f)" "$(basename $f)" "$work/p/$(basename $f).o" || exit 2; done
 export LIMIT="${LIMIT:-900}"
 export JOBS="$jobs"
 flip() {    # PROGRAM FUNCTION HARNESS ARGS...
@@ -113,7 +111,7 @@ if [ "$only" != hash ]; then
 (LIBS=-lz python3 kadversary.py adler32 adler32 "$work/p/adler32.o" programs/adler32/native.c 200 --jobs "$jobs" && python3 kadversary.py common common "$work/p/common.o" programs/common/native.c 3000 --jobs "$jobs" && python3 kadversary.py utf8 utf8 "$work/p/utf8.o" programs/utf8/native.c 3000 --jobs "$jobs" --limit 60) > audit/kadversary.txt 2>&1 || { bad=1; echo "FAILED: kadversary.txt"; }
 fi
 rm -rf "$work"
-grep -H "single-bit changes" audit/kflip-*.txt audit/kglue-flip-*.txt audit/kone-flip-*.txt audit/kfn-flip-*.txt audit/kbyte-flip-*.txt | sed "s|^audit/||" | cut -c1-250
+grep -H "single-bit changes" audit/kflip-*.txt audit/kone-flip-*.txt audit/kfn-flip-*.txt audit/kbyte-flip-*.txt | sed "s|^audit/||" | cut -c1-250
 grep -h "accepted changes on this processor" audit/*.txt | sort | uniq -c | cut -c1-160
 grep -h "with one left out" audit/kbyte-nop-*.txt | cut -c1-200
 grep -h "^lemma_audit" audit/lemma_audit.txt audit/lemma_audit-control.txt | cut -c1-200

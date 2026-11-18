@@ -8,8 +8,7 @@ for a linker to fill in.
 The claim (the last lines of blake3.spec) is about FUNCTION. Its bytes are read from the file as a loader
 maps it (kdecode.py: whole pages, the parts without leave to write), and so are the bytes of every function
 it calls, and of those they call: each found by where the `call` goes, and checked against the specification by
-the verifier for its kind, as check_all.py does for the objects an assembler makes. No assembler and no
-linker is relied on: what they made is what is read.
+the verifier for its kind. No assembler and no linker is relied on: what they made is what is read.
 
 The proof may be in the file: klink.py puts it in a section that is not loaded (`.ode.proof`), and a linker
 carries that section into what it makes. It holds the contracts of the functions inside and the kernels'
@@ -115,7 +114,7 @@ def main():
     option = lambda name: sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
     e = kdecode.Elf(path)
     if not kdecode.settled(e):
-        print(f"{os.path.basename(path)}: its code has relocations for a linker to fill in: check_all.py reads such objects"); return 2
+        print(f"{os.path.basename(path)}: its code has relocations for a linker to fill in"); return 2
     offered = {}
     if e.type == 1:
         # an object to be linked: read only in the one shape whose every part a linker takes is read here

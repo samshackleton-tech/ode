@@ -1,58 +1,299 @@
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
+
 // Base 64 of n bytes, written to be proved against base64.spec. The caller gives room for the letters. It
 // returns their count.
 //
 // i: bytes taken; o: letters written. Three bytes are four numbers below 64 (s0 to s3), each written as its
 // letter; what is left at the end (one byte or two) is two or three letters and "=" to make four.
-fn base64(out, cap, input, n)
-  reg out, cap, input, n, i, o
-{
-  var i = 0
-  var o = 0
-  var s0 = 0
-  var s1 = 0
-  var s2 = 0
-  var s3 = 0
-  var k = 0
-  var v = 0
-  var left = 0
-  var go = 1
-  while go == 1 {
-    left = n - i
-    if left == 0 { go = 0 } else {
-      // the numbers of this group: k of them are letters, the rest "="
-      s0 = u8[input + i] >> 2
-      s1 = (u8[input + i] & 3) << 4
-      s2 = 64
-      s3 = 64
-      if left >= 2 {
-        s1 = s1 + (u8[input + i + 1] >> 4)
-        s2 = (u8[input + i + 1] & 15) << 2
-        if left >= 3 {
-          s2 = s2 + (u8[input + i + 2] >> 6)
-          s3 = u8[input + i + 2] & 63
-        }
-      }
-      k = 0
-      while k < 4 {
-        v = s0
-        if k == 1 { v = s1 }
-        if k == 2 { v = s2 }
-        if k == 3 { v = s3 }
-        if v < 26 { v = v + 65 } else {
-          if v < 52 { v = v + 71 } else {
-            if v < 62 { v = v - 4 } else {
-              if v == 62 { v = 43 } else {
-                if v == 63 { v = 47 } else { v = 61 }
-              }
-            }
-          }
-        }
-        u8[out + o + k] = v
-        k = k + 1
-      }
-      o = o + 4
-      if left >= 3 { i = i + 3 } else { go = 0 }
-    }
-  }
-  return o
+// base64(out, cap, input, n): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
+//   rbp, r12, r13, r14, r15. Kept: out in rbx, cap in rbp, input in r12, n in r13, i in r14, o in r15, s0 at
+//   [rsp + 0], s1 at [rsp + 8], s2 at [rsp + 16], s3 at [rsp + 24], k at [rsp + 32], v at [rsp + 40], left at
+//   [rsp + 48], go at [rsp + 56]. Frame: 72 bytes.
+fn base64 as "ode_base64" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 72
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // i = 0
+  mov rax, 0
+  mov r14, rax
+  // o = 0
+  mov rax, 0
+  mov r15, rax
+  // s0 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 0], rax
+  // s1 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8], rax
+  // s2 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 16], rax
+  // s3 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 24], rax
+  // k = 0
+  mov rax, 0
+  mov qword ptr [rsp + 32], rax
+  // v = 0
+  mov rax, 0
+  mov qword ptr [rsp + 40], rax
+  // left = 0
+  mov rax, 0
+  mov qword ptr [rsp + 48], rax
+  // go = 1
+  mov rax, 1
+  mov qword ptr [rsp + 56], rax
+  // while go == 1
+@l0:
+  mov rax, qword ptr [rsp + 56]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l1
+  // left = n - i
+  mov rax, r13
+  sub rax, r14
+  mov qword ptr [rsp + 48], rax
+  // if left == 0
+  mov rax, qword ptr [rsp + 48]
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l2
+  // go = 0
+  mov rax, 0
+  mov qword ptr [rsp + 56], rax
+  jmp @l3
+@l2:
+  // else
+  // s0 = u8[input + i] >> 2
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  shr rax, 2
+  mov qword ptr [rsp + 0], rax
+  // s1 = (u8[input + i] & 3) << 4
+  mov rax, r12
+  add rax, r14
+  movzx eax, byte ptr [rax]
+  and rax, 3
+  shl rax, 4
+  mov qword ptr [rsp + 8], rax
+  // s2 = 64
+  mov rax, 64
+  mov qword ptr [rsp + 16], rax
+  // s3 = 64
+  mov rax, 64
+  mov qword ptr [rsp + 24], rax
+  // if left < 2
+  mov rax, qword ptr [rsp + 48]
+  mov rcx, 2
+  cmp rax, rcx
+  jae @l4
+  jmp @l5
+@l4:
+  // else
+  // s1 = s1 + (u8[(input + i) + 1] >> 4)
+  mov rax, qword ptr [rsp + 8]
+  mov rcx, r12
+  add rcx, r14
+  add rcx, 1
+  movzx ecx, byte ptr [rcx]
+  shr rcx, 4
+  add rax, rcx
+  mov qword ptr [rsp + 8], rax
+  // s2 = (u8[(input + i) + 1] & 15) << 2
+  mov rax, r12
+  add rax, r14
+  add rax, 1
+  movzx eax, byte ptr [rax]
+  and rax, 15
+  shl rax, 2
+  mov qword ptr [rsp + 16], rax
+  // if left < 3
+  mov rax, qword ptr [rsp + 48]
+  mov rcx, 3
+  cmp rax, rcx
+  jae @l6
+  jmp @l7
+@l6:
+  // else
+  // s2 = s2 + (u8[(input + i) + 2] >> 6)
+  mov rax, qword ptr [rsp + 16]
+  mov rcx, r12
+  add rcx, r14
+  add rcx, 2
+  movzx ecx, byte ptr [rcx]
+  shr rcx, 6
+  add rax, rcx
+  mov qword ptr [rsp + 16], rax
+  // s3 = u8[(input + i) + 2] & 63
+  mov rax, r12
+  add rax, r14
+  add rax, 2
+  movzx eax, byte ptr [rax]
+  and rax, 63
+  mov qword ptr [rsp + 24], rax
+@l7:
+@l5:
+  // k = 0
+  mov rax, 0
+  mov qword ptr [rsp + 32], rax
+  // while k < 4
+@l8:
+  mov rax, qword ptr [rsp + 32]
+  mov rcx, 4
+  cmp rax, rcx
+  jae @l9
+  // v = s0
+  mov rax, qword ptr [rsp + 0]
+  mov qword ptr [rsp + 40], rax
+  // if k == 1
+  mov rax, qword ptr [rsp + 32]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l10
+  // v = s1
+  mov rax, qword ptr [rsp + 8]
+  mov qword ptr [rsp + 40], rax
+@l10:
+  // if k == 2
+  mov rax, qword ptr [rsp + 32]
+  mov rcx, 2
+  cmp rax, rcx
+  jne @l12
+  // v = s2
+  mov rax, qword ptr [rsp + 16]
+  mov qword ptr [rsp + 40], rax
+@l12:
+  // if k == 3
+  mov rax, qword ptr [rsp + 32]
+  mov rcx, 3
+  cmp rax, rcx
+  jne @l14
+  // v = s3
+  mov rax, qword ptr [rsp + 24]
+  mov qword ptr [rsp + 40], rax
+@l14:
+  // if v < 26
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 26
+  cmp rax, rcx
+  jae @l16
+  // v = v + 65
+  mov rax, qword ptr [rsp + 40]
+  add rax, 65
+  mov qword ptr [rsp + 40], rax
+  jmp @l17
+@l16:
+  // else
+  // if v < 52
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 52
+  cmp rax, rcx
+  jae @l18
+  // v = v + 71
+  mov rax, qword ptr [rsp + 40]
+  add rax, 71
+  mov qword ptr [rsp + 40], rax
+  jmp @l19
+@l18:
+  // else
+  // if v < 62
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 62
+  cmp rax, rcx
+  jae @l20
+  // v = v - 4
+  mov rax, qword ptr [rsp + 40]
+  sub rax, 4
+  mov qword ptr [rsp + 40], rax
+  jmp @l21
+@l20:
+  // else
+  // if v == 62
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 62
+  cmp rax, rcx
+  jne @l22
+  // v = 43
+  mov rax, 43
+  mov qword ptr [rsp + 40], rax
+  jmp @l23
+@l22:
+  // else
+  // if v == 63
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, 63
+  cmp rax, rcx
+  jne @l24
+  // v = 47
+  mov rax, 47
+  mov qword ptr [rsp + 40], rax
+  jmp @l25
+@l24:
+  // else
+  // v = 61
+  mov rax, 61
+  mov qword ptr [rsp + 40], rax
+@l25:
+@l23:
+@l21:
+@l19:
+@l17:
+  // u8[(out + o) + k] = v
+  mov rax, qword ptr [rsp + 40]
+  mov rcx, rbx
+  add rcx, r15
+  add rcx, qword ptr [rsp + 32]
+  mov byte ptr [rcx], al
+  // k = k + 1
+  mov rax, qword ptr [rsp + 32]
+  add rax, 1
+  mov qword ptr [rsp + 32], rax
+  jmp @l8
+@l9:
+  // o = o + 4
+  mov rax, r15
+  add rax, 4
+  mov r15, rax
+  // if left < 3
+  mov rax, qword ptr [rsp + 48]
+  mov rcx, 3
+  cmp rax, rcx
+  jae @l26
+  // go = 0
+  mov rax, 0
+  mov qword ptr [rsp + 56], rax
+  jmp @l27
+@l26:
+  // else
+  // i = i + 3
+  mov rax, r14
+  add rax, 3
+  mov r14, rax
+@l27:
+@l3:
+  jmp @l0
+@l1:
+  mov rax, r15
+  add rsp, 72
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

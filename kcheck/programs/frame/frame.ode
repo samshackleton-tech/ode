@@ -1,27 +1,113 @@
 // A frame opened: an LZ4 block decoded and the Adler-32 after it compared, by two functions used through
 // their contracts. Written to be proved against frame.spec. It gives the count of bytes at out, or NO.
+//
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
 
-const NO = 0xFFFFFFFFFFFFFFFF
-
-extern lz4_decode/4 = "ode_lz4_decode"
-extern adler32/2    = "ode_adler32_blocks4"
-
-fn unframe(out, cap, input, n)
-  reg out, cap, input, n
-{
-  var result = NO
-  var m = 0
-  var r = 0
-  var s = 0
-  var t = 0
-  if n >= 4 {
-    m = n - 4
-    r = lz4_decode(out, cap, input, m)
-    if r != NO {
-      s = adler32(out, r)
-      t = (u8[input + m] << 24) + (u8[input + m + 1] << 16) + (u8[input + m + 2] << 8) + u8[input + m + 3]
-      if s == t { result = r }
-    }
-  }
-  return result
+// unframe(out, cap, input, n): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
+//   rbp, r12, r13, r14, r15. Kept: out in rbx, cap in rbp, input in r12, n in r13, result in r14, m in r15, r
+//   at [rsp + 0], s at [rsp + 8], t at [rsp + 16]. Frame: 24 bytes.
+fn unframe as "ode_unframe" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 24
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // result = 0xffffffffffffffff
+  mov rax, 18446744073709551615
+  mov r14, rax
+  // m = 0
+  mov rax, 0
+  mov r15, rax
+  // r = 0
+  mov rax, 0
+  mov qword ptr [rsp + 0], rax
+  // s = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8], rax
+  // t = 0
+  mov rax, 0
+  mov qword ptr [rsp + 16], rax
+  // if n < 4
+  mov rax, r13
+  mov rcx, 4
+  cmp rax, rcx
+  jae @l0
+  jmp @l1
+@l0:
+  // else
+  // m = n - 4
+  mov rax, r13
+  sub rax, 4
+  mov r15, rax
+  // r = ode_lz4_decode(out, cap, input, m)
+  mov rdi, rbx
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, r15
+  call ode_lz4_decode
+  mov qword ptr [rsp + 0], rax
+  // if r != 0xffffffffffffffff
+  mov rax, qword ptr [rsp + 0]
+  mov rcx, 18446744073709551615
+  cmp rax, rcx
+  je @l2
+  // s = ode_adler32_blocks4(out, r)
+  mov rdi, rbx
+  mov rsi, qword ptr [rsp + 0]
+  call ode_adler32_blocks4
+  mov qword ptr [rsp + 8], rax
+  // t = (((u8[input + m] << 24) + (u8[(input + m) + 1] << 16)) + (u8[(input + m) + 2] << 8)) + u8[(input + m) + 3]
+  mov rax, r12
+  add rax, r15
+  movzx eax, byte ptr [rax]
+  shl rax, 24
+  mov rcx, r12
+  add rcx, r15
+  add rcx, 1
+  movzx ecx, byte ptr [rcx]
+  shl rcx, 16
+  add rax, rcx
+  mov rcx, r12
+  add rcx, r15
+  add rcx, 2
+  movzx ecx, byte ptr [rcx]
+  shl rcx, 8
+  add rax, rcx
+  mov rcx, r12
+  add rcx, r15
+  add rcx, 3
+  movzx ecx, byte ptr [rcx]
+  add rax, rcx
+  mov qword ptr [rsp + 16], rax
+  // if s == t
+  mov rax, qword ptr [rsp + 8]
+  mov rcx, qword ptr [rsp + 16]
+  cmp rax, rcx
+  jne @l4
+  // result = r
+  mov rax, qword ptr [rsp + 0]
+  mov r14, rax
+@l4:
+@l2:
+@l1:
+  mov rax, r14
+  add rsp, 24
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

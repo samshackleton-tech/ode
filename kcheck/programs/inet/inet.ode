@@ -1,26 +1,120 @@
 // The Internet checksum of n bytes, written to be proved against inet.spec. Of 2^49 bytes or more (their
 // plain sum might not fit 64 bits) it says NO. No branch and no address depends on the bytes: only on n.
-const NO = 0xFFFFFFFFFFFFFFFF
+//
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
 
-fn inet(input, n)
-  reg input, n, i, s
-{
-  var i = 0
-  var s = 0
-  var result = NO
-  // n < 2^49, asked as the verifier can follow it today: it reads no constant above 32 bits and no shift
-  // by more than 16
-  if (((n >> 16) >> 16) >> 16) >> 1 == 0 {
-    while n - i > 1 {
-      s = s + (u8[input + i] << 8) + u8[input + i + 1]
-      i = i + 2
-    }
-    if n - i == 1 { s = s + (u8[input + i] << 8) }
-    s = (s & 65535) + (s >> 16)
-    s = (s & 65535) + (s >> 16)
-    s = (s & 65535) + (s >> 16)
-    s = (s & 65535) + (s >> 16)
-    result = 65535 - s
-  }
-  return result
+// inet(input, n): arguments in rdi, rsi, as C passes them. Saved and restored: rbx, rbp, r12, r13, r14. Kept:
+//   input in rbx, n in rbp, i in r12, s in r13, result in r14. Frame: 0 bytes.
+fn inet as "ode_inet" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  mov rbx, rdi
+  mov rbp, rsi
+  // i = 0
+  mov rax, 0
+  mov r12, rax
+  // s = 0
+  mov rax, 0
+  mov r13, rax
+  // result = 0xffffffffffffffff
+  mov rax, 18446744073709551615
+  mov r14, rax
+  // if (((n >> 16) >> 16) >> 16) >> 1 == 0
+  mov rax, rbp
+  shr rax, 16
+  shr rax, 16
+  shr rax, 16
+  shr rax, 1
+  mov rcx, 0
+  cmp rax, rcx
+  jne @l0
+  // while 1 < n - i
+@l2:
+  mov rax, 1
+  mov rcx, rbp
+  sub rcx, r12
+  cmp rax, rcx
+  jae @l3
+  // s = (s + (u8[input + i] << 8)) + u8[(input + i) + 1]
+  mov rax, r13
+  mov rcx, rbx
+  add rcx, r12
+  movzx ecx, byte ptr [rcx]
+  shl rcx, 8
+  add rax, rcx
+  mov rcx, rbx
+  add rcx, r12
+  add rcx, 1
+  movzx ecx, byte ptr [rcx]
+  add rax, rcx
+  mov r13, rax
+  // i = i + 2
+  mov rax, r12
+  add rax, 2
+  mov r12, rax
+  jmp @l2
+@l3:
+  // if n - i == 1
+  mov rax, rbp
+  sub rax, r12
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l4
+  // s = s + (u8[input + i] << 8)
+  mov rax, r13
+  mov rcx, rbx
+  add rcx, r12
+  movzx ecx, byte ptr [rcx]
+  shl rcx, 8
+  add rax, rcx
+  mov r13, rax
+@l4:
+  // s = (s & 65535) + (s >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  add rax, rcx
+  mov r13, rax
+  // s = (s & 65535) + (s >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  add rax, rcx
+  mov r13, rax
+  // s = (s & 65535) + (s >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  add rax, rcx
+  mov r13, rax
+  // s = (s & 65535) + (s >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  add rax, rcx
+  mov r13, rax
+  // result = 65535 - s
+  mov rax, 65535
+  sub rax, r13
+  mov r14, rax
+@l0:
+  mov rax, r14
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

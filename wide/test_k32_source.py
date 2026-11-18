@@ -22,7 +22,7 @@ NAMES = {'.Lode_data_k32_iv': '.Liv32', '.Lode_data_k32_indices': '.Lindices32',
 
 
 def canonical(source):
-    _, data, kernels = odec.kernels(odec.contracts_of(source)[2])
+    data, kernels = odec.functions(source)
     name, _, lines = next(k for k in kernels if k[0] == 'k32')
     expanded = odec.expand(name, lines, {}, {})
     assert expanded[0] == '.p2align 6'
@@ -66,8 +66,8 @@ class K32Source(unittest.TestCase):
         self.assertNotEqual(changed, baseline)
 
     def test_entry_alignment_precedes_symbols(self):
-        asm = odec.kernel_x86(str(SOURCE), 'k32')
-        self.assertIn('.p2align 6\nb3l_k32:\n_b3l_k32:\n', asm)
+        asm = odec.assembly(str(SOURCE), 'k32')
+        self.assertIn('.p2align 6\nblake3_servil_avx512_k32:\n_blake3_servil_avx512_k32:\n', asm)
         self.assertIn('.p2align 5\n.Lode_k32_round32:', asm)
         for name in ('iv', 'indices', 'schedule'):
             self.assertIn(f'.Lode_data_k32_{name}:', asm)

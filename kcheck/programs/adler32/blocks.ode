@@ -1,30 +1,164 @@
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
+
 // Adler-32 with the two sums brought below 65521 once in 5552 bytes, not at every byte: the usual way to
 // make it fast (zlib's NMAX), written to be proved against adler32.spec, which reduces at every byte.
 //
 // Within a block the sums only grow: a by at most 255 a byte, b by a. 5552 bytes keep b below 2^33.
 // 65536 is 15 more than 65521, so of a sum what is above 16 bits counts 15 times: two such steps and one
 // subtraction bring either sum below 65521.
-fn adler32_blocks(input, n)
-  reg input, n, i, a, b, end
-{
-  var i = 0
-  var a = 1
-  var b = 0
-  var end = 0
-  while i < n {
-    end = n
-    if n - i > 5552 { end = i + 5552 }
-    while i < end {
-      a = a + u8[input + i]
-      b = b + a
-      i = i + 1
-    }
-    a = (a & 65535) + ((a >> 16) << 4) - (a >> 16)
-    a = (a & 65535) + ((a >> 16) << 4) - (a >> 16)
-    if a >= 65521 { a = a - 65521 }
-    b = (b & 65535) + ((b >> 16) << 4) - (b >> 16)
-    b = (b & 65535) + ((b >> 16) << 4) - (b >> 16)
-    if b >= 65521 { b = b - 65521 }
-  }
-  return (b << 16) + a
+// adler32_blocks(input, n): arguments in rdi, rsi, as C passes them. Saved and restored: rbx, rbp, r12, r13,
+//   r14, r15. Kept: input in rbx, n in rbp, i in r12, a in r13, b in r14, end in r15. Frame: 8 bytes.
+fn adler32_blocks as "ode_adler32_blocks" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 8
+  mov rbx, rdi
+  mov rbp, rsi
+  // i = 0
+  mov rax, 0
+  mov r12, rax
+  // a = 1
+  mov rax, 1
+  mov r13, rax
+  // b = 0
+  mov rax, 0
+  mov r14, rax
+  // end = 0
+  mov rax, 0
+  mov r15, rax
+  // while i < n
+@l0:
+  mov rax, r12
+  mov rcx, rbp
+  cmp rax, rcx
+  jae @l1
+  // end = n
+  mov rax, rbp
+  mov r15, rax
+  // if 5552 < n - i
+  mov rax, 5552
+  mov rcx, rbp
+  sub rcx, r12
+  cmp rax, rcx
+  jae @l2
+  // end = i + 5552
+  mov rax, r12
+  add rax, 5552
+  mov r15, rax
+@l2:
+  // while i < end
+@l4:
+  mov rax, r12
+  mov rcx, r15
+  cmp rax, rcx
+  jae @l5
+  // a = a + u8[input + i]
+  mov rax, r13
+  mov rcx, rbx
+  add rcx, r12
+  movzx ecx, byte ptr [rcx]
+  add rax, rcx
+  mov r13, rax
+  // b = b + a
+  mov rax, r14
+  add rax, r13
+  mov r14, rax
+  // i = i + 1
+  mov rax, r12
+  add rax, 1
+  mov r12, rax
+  jmp @l4
+@l5:
+  // a = ((a & 65535) + ((a >> 16) << 4)) - (a >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  shl rcx, 4
+  add rax, rcx
+  mov rcx, r13
+  shr rcx, 16
+  sub rax, rcx
+  mov r13, rax
+  // a = ((a & 65535) + ((a >> 16) << 4)) - (a >> 16)
+  mov rax, r13
+  and rax, 65535
+  mov rcx, r13
+  shr rcx, 16
+  shl rcx, 4
+  add rax, rcx
+  mov rcx, r13
+  shr rcx, 16
+  sub rax, rcx
+  mov r13, rax
+  // if a < 65521
+  mov rax, r13
+  mov rcx, 65521
+  cmp rax, rcx
+  jae @l6
+  jmp @l7
+@l6:
+  // else
+  // a = a - 65521
+  mov rax, r13
+  sub rax, 65521
+  mov r13, rax
+@l7:
+  // b = ((b & 65535) + ((b >> 16) << 4)) - (b >> 16)
+  mov rax, r14
+  and rax, 65535
+  mov rcx, r14
+  shr rcx, 16
+  shl rcx, 4
+  add rax, rcx
+  mov rcx, r14
+  shr rcx, 16
+  sub rax, rcx
+  mov r14, rax
+  // b = ((b & 65535) + ((b >> 16) << 4)) - (b >> 16)
+  mov rax, r14
+  and rax, 65535
+  mov rcx, r14
+  shr rcx, 16
+  shl rcx, 4
+  add rax, rcx
+  mov rcx, r14
+  shr rcx, 16
+  sub rax, rcx
+  mov r14, rax
+  // if b < 65521
+  mov rax, r14
+  mov rcx, 65521
+  cmp rax, rcx
+  jae @l8
+  jmp @l9
+@l8:
+  // else
+  // b = b - 65521
+  mov rax, r14
+  sub rax, 65521
+  mov r14, rax
+@l9:
+  jmp @l0
+@l1:
+  mov rax, r14
+  shl rax, 16
+  add rax, r13
+  add rsp, 8
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

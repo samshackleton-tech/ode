@@ -1,13 +1,73 @@
+// Ode has one layer since November 18, 2026: a function is its instructions. This function was first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
+
 // The count of bytes two runs have alike at their start, written to be proved against common.spec.
-fn common(a, b, n)
-  reg a, b, n, i, go
-{
-  var i = 0
-  var go = 1
-  while go == 1 {
-    if i >= n { go = 0 } else {
-      if u8[a + i] == u8[b + i] { i = i + 1 } else { go = 0 }
-    }
-  }
-  return i
+// common(a, b, n): arguments in rdi, rsi, rdx, as C passes them. Saved and restored: rbx, rbp, r12, r13, r14.
+//   Kept: a in rbx, b in rbp, n in r12, i in r13, go in r14. Frame: 0 bytes.
+fn common as "ode_common" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  // i = 0
+  mov rax, 0
+  mov r13, rax
+  // go = 1
+  mov rax, 1
+  mov r14, rax
+  // while go == 1
+@l0:
+  mov rax, r14
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l1
+  // if i < n
+  mov rax, r13
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l2
+  // if u8[a + i] == u8[b + i]
+  mov rax, rbx
+  add rax, r13
+  movzx eax, byte ptr [rax]
+  mov rcx, rbp
+  add rcx, r13
+  movzx ecx, byte ptr [rcx]
+  cmp rax, rcx
+  jne @l4
+  // i = i + 1
+  mov rax, r13
+  add rax, 1
+  mov r13, rax
+  jmp @l5
+@l4:
+  // else
+  // go = 0
+  mov rax, 0
+  mov r14, rax
+@l5:
+  jmp @l3
+@l2:
+  // else
+  // go = 0
+  mov rax, 0
+  mov r14, rax
+@l3:
+  jmp @l0
+@l1:
+  mov rax, r13
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

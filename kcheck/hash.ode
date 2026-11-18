@@ -1,332 +1,2405 @@
 // BLAKE3's hash of a message, written to be proved.
 //
-// The code is in the shape of the specification (blake3.ode): `subtree` is the specification's `subtree`, in two
+// The code is in the shape of the specification (blake3.spec): `subtree` is the specification's `subtree`, in two
 // parts by the same rule, each part by a call of itself; `chunk_node` and `node_out` are the specification's.
 // So nothing has to be shown about a stack of subtrees or a counter of them: the verifier (kfn.py) follows each
 // function once, takes a call by the callee's contract (a call of itself by its own), and compares what is
 // left with the specification's definition unfolded once. No loop here needs a proof: each runs a number of
 // times the paths fix (a chunk's 16 blocks, a block's 64 bytes, the 54 doublings of a count of chunks).
 //
-// This is the language of lang/ (Ode); the compiler is lang/odec.py and lang/Lang.lean.
-
-const CHUNK_START = 1
-const CHUNK_END   = 2
-const PARENT      = 4
-const ROOT        = 8
-const AVX512      = 5
-
-extern compress_avx512/5  = "blake3_servil_compress_in_place_avx512"
-extern compress_sse41/5   = "blake3_servil_compress_in_place_sse41"
-extern chunks32/6         = "blake3_servil_avx512_k32"
-extern parents16/6        = "blake3_servil_avx512_p16"
-
-// The one-block kernel the platform has.
-def compress(cv, block, block_len, counter, flags) {
-  if plat == AVX512 { compress_avx512(cv, block, block_len, counter, flags) }
-  else              { compress_sse41(cv, block, block_len, counter, flags) }
-}
+// Ode has one layer since November 18, 2026: a function is its instructions. These nine functions were first written in a
+// word-level layer (variables, `if`, `while`), which a compiler turned into instructions. That layer and its
+// compiler are gone. What stands here is what the compiler last printed, instruction for instruction: the
+// bytes are the same. The comment before a group of instructions says what the group does, in the old
+// layer's words. The code is longer than it need be (every value goes through rax, and registers are saved
+// for values that a scratch register would hold): it is to be written again by hand, function by function.
 
 // A chunk's last block as a compression reads it: the n bytes at src (at most 64), then zeros to 64.
-fn pad(block, src, n)
-{
-  var i = 64
-  while i > 0 {
-    i = i - 1
-    if i < n { u8[block + i] = u8[src + i] }
-    else     { u8[block + i] = 0 }
-  }
+// pad(block, src, n): arguments in rdi, rsi, rdx, as C passes them. Saved and restored: rbx, rbp, r12, r13.
+//   Kept: block in rbx, src in rbp, n in r12, i in r13. Frame: 8 bytes.
+fn pad as "b3l_pad" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  sub rsp, 8
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  // i = 64
+  mov rax, 64
+  mov r13, rax
+  // while 0 < i
+@l0:
+  mov rax, 0
+  mov rcx, r13
+  cmp rax, rcx
+  jae @l1
+  // i = i - 1
+  mov rax, r13
+  sub rax, 1
+  mov r13, rax
+  // if i < n
+  mov rax, r13
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l2
+  // u8[block + i] = u8[src + i]
+  mov rax, rbp
+  add rax, r13
+  movzx eax, byte ptr [rax]
+  mov rcx, rbx
+  add rcx, r13
+  mov byte ptr [rcx], al
+  jmp @l3
+@l2:
+  // else
+  // u8[block + i] = 0
+  mov rax, 0
+  mov rcx, rbx
+  add rcx, r13
+  mov byte ptr [rcx], al
+@l3:
+  jmp @l0
+@l1:
+  add rsp, 8
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // A chunk's node: h, the chaining value after every block but the last (the key is in the node's h at the
 // call); the last block, padded; the chunk's number; the last block's length; its flags. 120 bytes.
-fn chunk_node(nd, input, len, counter, flags, plat)
-  reg p, rem, first, nd, counter, plat
-{
-  var first = CHUNK_START
-  var p = input
-  var rem = len
-  while rem > 64 {
-    var f = flags | first
-    compress(nd, p, 64, counter, f)
-    first = 0
-    p = p + 64
-    rem = rem - 64
-  }
-  var blk = nd + 32
-  pad(blk, p, rem)
-  u64[nd + 96] = counter
-  u64[nd + 104] = rem
-  u64[nd + 112] = flags | first | CHUNK_END
+// chunk_node(nd, input, len, counter, flags, plat): arguments in rdi, rsi, rdx, rcx, r8, r9, as C passes
+//   them. Saved and restored: rbx, rbp, r12, r13, r14, r15. Kept: nd in r13, counter in r14, plat in r15,
+//   first in r12, p in rbx, rem in rbp, input at [rsp + 0], len at [rsp + 8], flags at [rsp + 16], f at [rsp
+//   + 24], blk at [rsp + 32]. Frame: 40 bytes.
+fn chunk_node as "b3l_chunk_node" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 40
+  mov r13, rdi
+  mov qword ptr [rsp + 0], rsi
+  mov qword ptr [rsp + 8], rdx
+  mov r14, rcx
+  mov qword ptr [rsp + 16], r8
+  mov r15, r9
+  // first = 1
+  mov rax, 1
+  mov r12, rax
+  // p = input
+  mov rax, qword ptr [rsp + 0]
+  mov rbx, rax
+  // rem = len
+  mov rax, qword ptr [rsp + 8]
+  mov rbp, rax
+  // while 64 < rem
+@l0:
+  mov rax, 64
+  mov rcx, rbp
+  cmp rax, rcx
+  jae @l1
+  // f = flags | first
+  mov rax, qword ptr [rsp + 16]
+  or rax, r12
+  mov qword ptr [rsp + 24], rax
+  // if plat == 5
+  mov rax, r15
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l2
+  // blake3_servil_compress_in_place_avx512(nd, p, 64, counter, f)
+  mov rdi, r13
+  mov rsi, rbx
+  mov rdx, 64
+  mov rcx, r14
+  mov r8, qword ptr [rsp + 24]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l3
+@l2:
+  // else
+  // blake3_servil_compress_in_place_sse41(nd, p, 64, counter, f)
+  mov rdi, r13
+  mov rsi, rbx
+  mov rdx, 64
+  mov rcx, r14
+  mov r8, qword ptr [rsp + 24]
+  call blake3_servil_compress_in_place_sse41
+@l3:
+  // first = 0
+  mov rax, 0
+  mov r12, rax
+  // p = p + 64
+  mov rax, rbx
+  add rax, 64
+  mov rbx, rax
+  // rem = rem - 64
+  mov rax, rbp
+  sub rax, 64
+  mov rbp, rax
+  jmp @l0
+@l1:
+  // blk = nd + 32
+  mov rax, r13
+  add rax, 32
+  mov qword ptr [rsp + 32], rax
+  // b3l_pad(blk, p, rem)
+  mov rdi, qword ptr [rsp + 32]
+  mov rsi, rbx
+  mov rdx, rbp
+  call b3l_pad
+  // u64[nd + 96] = counter
+  mov rax, r14
+  mov rcx, r13
+  add rcx, 96
+  mov qword ptr [rcx], rax
+  // u64[nd + 104] = rem
+  mov rax, rbp
+  mov rcx, r13
+  add rcx, 104
+  mov qword ptr [rcx], rax
+  // u64[nd + 112] = (flags | first) | 2
+  mov rax, qword ptr [rsp + 16]
+  or rax, r12
+  or rax, 2
+  mov rcx, r13
+  add rcx, 112
+  mov qword ptr [rcx], rax
+  add rsp, 40
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // A node's compression: its chaining value, or with root = ROOT the hash.
-fn node_out(out, nd, root, plat)
-{
-  var blk = nd + 32
-  var len = u64[nd + 104]
-  var t = u64[nd + 96]
-  var f = u64[nd + 112] | root
-  copy 32 out <- nd
-  compress(out, blk, len, t, f)
-}
-
-// The count of chunks in the left part of len bytes (more than 1024): the greatest power of two k with
-// 1024 k < len. c is the count of chunks; k doubles while it stays below c.
-def left_chunks() {
-  c = ((len - 1) >> 10) + 1
-  k = 1
-  k2 = 2
-  while k2 < c {
-    k = k2
-    k2 = k2 << 1
-  }
-}
-
-// The table of addresses a wide kernel is given: lane j of the first m gets base + (j << shift), every lane
-// past them base again (it hashes the first input once more; its result is not used).
-def fill(base, shift, m, lanes) {
-  i = 0
-  while i < lanes {
-    if i < m { u64[ptrs + (i << 3)] = base + (i << shift) }
-    else     { u64[ptrs + (i << 3)] = base }
-    i = i + 1
-  }
+// node_out(out, nd, root, plat): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
+//   rbp, r12, r13, r14, r15. Kept: out in rbx, nd in rbp, root in r12, plat in r13, blk in r14, len in r15, t
+//   at [rsp + 0], f at [rsp + 8]. Frame: 24 bytes.
+fn node_out as "b3l_node_out" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 24
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // blk = nd + 32
+  mov rax, rbp
+  add rax, 32
+  mov r14, rax
+  // len = u64[nd + 104]
+  mov rax, rbp
+  add rax, 104
+  mov rax, qword ptr [rax]
+  mov r15, rax
+  // t = u64[nd + 96]
+  mov rax, rbp
+  add rax, 96
+  mov rax, qword ptr [rax]
+  mov qword ptr [rsp + 0], rax
+  // f = u64[nd + 112] | root
+  mov rax, rbp
+  add rax, 112
+  mov rax, qword ptr [rax]
+  or rax, r12
+  mov qword ptr [rsp + 8], rax
+  // copy 32 bytes: out <- nd
+  mov rax, rbp
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // if plat == 5
+  mov rax, r13
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l0
+  // blake3_servil_compress_in_place_avx512(out, blk, len, t, f)
+  mov rdi, rbx
+  mov rsi, r14
+  mov rdx, r15
+  mov rcx, qword ptr [rsp + 0]
+  mov r8, qword ptr [rsp + 8]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l1
+@l0:
+  // else
+  // blake3_servil_compress_in_place_sse41(out, blk, len, t, f)
+  mov rdi, rbx
+  mov rsi, r14
+  mov rdx, r15
+  mov rcx, qword ptr [rsp + 0]
+  mov r8, qword ptr [rsp + 8]
+  call blake3_servil_compress_in_place_sse41
+@l1:
+  add rsp, 24
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The chaining value of the tree over 32 whole chunks (32768 bytes), numbered from t, on a machine with
 // AVX-512: the 32 chunks' values by the 32-lane chunk kernel, then their parents, 16, 8, 4, 2 and 1 of them,
 // by the 16-lane parent kernel.
-fn wide32(out, input, kf, t)
-  reg out, input, kf, t
-{
-  buf ptrs[256]
-  buf cvs[1024]
-  buf a[512]
-  buf b[512]
-  var flags = u64[kf + 32]
-  var kp = flags | 0x40020100           // the chunk's start and end flags and a last block of 64 bytes, packed above the mode's
-  var pp = flags | 0x40000004           // PARENT, and a block of 64 bytes
-  var i = 0
-  fill(input, 10, 32, 32)
-  chunks32(ptrs, 16, kf, t, kp, cvs)
-  fill(cvs, 6, 16, 16)
-  parents16(ptrs, 1, kf, 0, pp, a)
-  fill(a, 6, 8, 16)
-  parents16(ptrs, 1, kf, 0, pp, b)
-  fill(b, 6, 4, 16)
-  parents16(ptrs, 1, kf, 0, pp, a)
-  fill(a, 6, 2, 16)
-  parents16(ptrs, 1, kf, 0, pp, b)
-  fill(b, 6, 1, 16)
-  parents16(ptrs, 1, kf, 0, pp, a)
-  copy 32 out <- a
+// wide32(out, input, kf, t): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx, rbp,
+//   r12, r13, r14, r15. Kept: out in rbx, input in rbp, kf in r12, t in r13, flags in r14, kp in r15, pp at
+//   [rsp + 2304], i at [rsp + 2312]. Buffers: ptrs at [rsp + 0], cvs at [rsp + 256], a at [rsp + 1280], b at
+//   [rsp + 1792]. Frame: 2328 bytes.
+fn wide32 as "b3l_wide32" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 2328
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // flags = u64[kf + 32]
+  mov rax, r12
+  add rax, 32
+  mov rax, qword ptr [rax]
+  mov r14, rax
+  // kp = flags | 0x40020100
+  mov rax, r14
+  or rax, 1073873152
+  mov r15, rax
+  // pp = flags | 0x40000004
+  mov rax, r14
+  or rax, 1073741828
+  mov qword ptr [rsp + 2304], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 32
+@l0:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l1
+  // if i < 32
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l2
+  // u64[ptrs + (i << 3)] = input + (i << 10)
+  mov rax, rbp
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l3
+@l2:
+  // else
+  // u64[ptrs + (i << 3)] = input
+  mov rax, rbp
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l3:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l0
+@l1:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, t, kp, cvs)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r12
+  mov rcx, r13
+  mov r8, r15
+  lea r9, [rsp + 256]
+  call blake3_servil_avx512_k32
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 16
+@l4:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l5
+  // if i < 16
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l6
+  // u64[ptrs + (i << 3)] = cvs + (i << 6)
+  lea rax, [rsp + 256]
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l7
+@l6:
+  // else
+  // u64[ptrs + (i << 3)] = cvs
+  lea rax, [rsp + 256]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l7:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l4
+@l5:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, a)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 2304]
+  lea r9, [rsp + 1280]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 16
+@l8:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l9
+  // if i < 8
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 8
+  cmp rax, rcx
+  jae @l10
+  // u64[ptrs + (i << 3)] = a + (i << 6)
+  lea rax, [rsp + 1280]
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l11
+@l10:
+  // else
+  // u64[ptrs + (i << 3)] = a
+  lea rax, [rsp + 1280]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l11:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l8
+@l9:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, b)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 2304]
+  lea r9, [rsp + 1792]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 16
+@l12:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l13
+  // if i < 4
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 4
+  cmp rax, rcx
+  jae @l14
+  // u64[ptrs + (i << 3)] = b + (i << 6)
+  lea rax, [rsp + 1792]
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l15
+@l14:
+  // else
+  // u64[ptrs + (i << 3)] = b
+  lea rax, [rsp + 1792]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l15:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l12
+@l13:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, a)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 2304]
+  lea r9, [rsp + 1280]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 16
+@l16:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l17
+  // if i < 2
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 2
+  cmp rax, rcx
+  jae @l18
+  // u64[ptrs + (i << 3)] = a + (i << 6)
+  lea rax, [rsp + 1280]
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l19
+@l18:
+  // else
+  // u64[ptrs + (i << 3)] = a
+  lea rax, [rsp + 1280]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l19:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l16
+@l17:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, b)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 2304]
+  lea r9, [rsp + 1792]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 2312], rax
+  // while i < 16
+@l20:
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l21
+  // if i < 1
+  mov rax, qword ptr [rsp + 2312]
+  mov rcx, 1
+  cmp rax, rcx
+  jae @l22
+  // u64[ptrs + (i << 3)] = b + (i << 6)
+  lea rax, [rsp + 1792]
+  mov rcx, qword ptr [rsp + 2312]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l23
+@l22:
+  // else
+  // u64[ptrs + (i << 3)] = b
+  lea rax, [rsp + 1792]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 2312]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l23:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 2312]
+  add rax, 1
+  mov qword ptr [rsp + 2312], rax
+  jmp @l20
+@l21:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, a)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 2304]
+  lea r9, [rsp + 1280]
+  call blake3_servil_avx512_p16
+  // copy 32 bytes: out <- a
+  lea rax, [rsp + 1280]
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  add rsp, 2328
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The chaining value of the tree over 128 whole chunks (131072 bytes), numbered from t, on a machine with
 // AVX-512: four calls of the chunk kernel, then the parents level by level, sixteen to a call of the parent
 // kernel while a level has as many (64, 32 and 16 parents; then 8, 4, 2 and 1).
-fn wide128(out, input, kf, t)
-  reg out, input, kf, t
-{
-  buf ptrs[256]
-  buf cvs[4096]
-  buf a[2048]
-  buf b[1024]
-  buf c[512]
-  buf d[512]
-  var flags = u64[kf + 32]
-  var kp = flags | 0x40020100           // the chunk's start and end flags and a last block of 64 bytes, packed above the mode's
-  var pp = flags | 0x40000004           // PARENT, and a block of 64 bytes
-  var i = 0
-  var p = 0
-  var q = 0
-  var tt = 0
-  for g in 0..4 {
-    p = input + (g << 15)
-    q = cvs + (g << 10)
-    tt = t + (g << 5)
-    fill(p, 10, 32, 32)
-    chunks32(ptrs, 16, kf, tt, kp, q)
-  }
-  for g in 0..4 {
-    p = cvs + (g << 10)
-    q = a + (g << 9)
-    fill(p, 6, 16, 16)
-    parents16(ptrs, 1, kf, 0, pp, q)
-  }
-  for g in 0..2 {
-    p = a + (g << 10)
-    q = b + (g << 9)
-    fill(p, 6, 16, 16)
-    parents16(ptrs, 1, kf, 0, pp, q)
-  }
-  fill(b, 6, 16, 16)
-  parents16(ptrs, 1, kf, 0, pp, c)
-  fill(c, 6, 8, 16)
-  parents16(ptrs, 1, kf, 0, pp, d)
-  fill(d, 6, 4, 16)
-  parents16(ptrs, 1, kf, 0, pp, c)
-  fill(c, 6, 2, 16)
-  parents16(ptrs, 1, kf, 0, pp, d)
-  fill(d, 6, 1, 16)
-  parents16(ptrs, 1, kf, 0, pp, c)
-  copy 32 out <- c
+// wide128(out, input, kf, t): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx,
+//   rbp, r12, r13, r14, r15. Kept: out in rbx, input in rbp, kf in r12, t in r13, flags in r14, kp in r15, pp
+//   at [rsp + 8448], i at [rsp + 8456], p at [rsp + 8464], q at [rsp + 8472], tt at [rsp + 8480]. Buffers:
+//   ptrs at [rsp + 0], cvs at [rsp + 256], a at [rsp + 4352], b at [rsp + 6400], c at [rsp + 7424], d at [rsp
+//   + 7936]. Frame: 8488 bytes.
+fn wide128 as "b3l_wide128" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 8488
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  // flags = u64[kf + 32]
+  mov rax, r12
+  add rax, 32
+  mov rax, qword ptr [rax]
+  mov r14, rax
+  // kp = flags | 0x40020100
+  mov rax, r14
+  or rax, 1073873152
+  mov r15, rax
+  // pp = flags | 0x40000004
+  mov rax, r14
+  or rax, 1073741828
+  mov qword ptr [rsp + 8448], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // p = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8464], rax
+  // q = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8472], rax
+  // tt = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8480], rax
+  // p = input + 0
+  mov rax, rbp
+  add rax, 0
+  mov qword ptr [rsp + 8464], rax
+  // q = cvs + 0
+  lea rax, [rsp + 256]
+  add rax, 0
+  mov qword ptr [rsp + 8472], rax
+  // tt = t + 0
+  mov rax, r13
+  add rax, 0
+  mov qword ptr [rsp + 8480], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 32
+@l0:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l1
+  // if i < 32
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l2
+  // u64[ptrs + (i << 3)] = p + (i << 10)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l3
+@l2:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l3:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l0
+@l1:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, tt, kp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r12
+  mov rcx, qword ptr [rsp + 8480]
+  mov r8, r15
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_k32
+  // p = input + 32768
+  mov rax, rbp
+  add rax, 32768
+  mov qword ptr [rsp + 8464], rax
+  // q = cvs + 1024
+  lea rax, [rsp + 256]
+  add rax, 1024
+  mov qword ptr [rsp + 8472], rax
+  // tt = t + 32
+  mov rax, r13
+  add rax, 32
+  mov qword ptr [rsp + 8480], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 32
+@l4:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l5
+  // if i < 32
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l6
+  // u64[ptrs + (i << 3)] = p + (i << 10)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l7
+@l6:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l7:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l4
+@l5:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, tt, kp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r12
+  mov rcx, qword ptr [rsp + 8480]
+  mov r8, r15
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_k32
+  // p = input + 0x10000
+  mov rax, rbp
+  add rax, 65536
+  mov qword ptr [rsp + 8464], rax
+  // q = cvs + 2048
+  lea rax, [rsp + 256]
+  add rax, 2048
+  mov qword ptr [rsp + 8472], rax
+  // tt = t + 64
+  mov rax, r13
+  add rax, 64
+  mov qword ptr [rsp + 8480], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 32
+@l8:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l9
+  // if i < 32
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l10
+  // u64[ptrs + (i << 3)] = p + (i << 10)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l11
+@l10:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l11:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l8
+@l9:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, tt, kp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r12
+  mov rcx, qword ptr [rsp + 8480]
+  mov r8, r15
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_k32
+  // p = input + 0x18000
+  mov rax, rbp
+  add rax, 98304
+  mov qword ptr [rsp + 8464], rax
+  // q = cvs + 3072
+  lea rax, [rsp + 256]
+  add rax, 3072
+  mov qword ptr [rsp + 8472], rax
+  // tt = t + 96
+  mov rax, r13
+  add rax, 96
+  mov qword ptr [rsp + 8480], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 32
+@l12:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l13
+  // if i < 32
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l14
+  // u64[ptrs + (i << 3)] = p + (i << 10)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l15
+@l14:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l15:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l12
+@l13:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, tt, kp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r12
+  mov rcx, qword ptr [rsp + 8480]
+  mov r8, r15
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_k32
+  // p = cvs + 0
+  lea rax, [rsp + 256]
+  add rax, 0
+  mov qword ptr [rsp + 8464], rax
+  // q = a + 0
+  lea rax, [rsp + 4352]
+  add rax, 0
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l16:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l17
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l18
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l19
+@l18:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l19:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l16
+@l17:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // p = cvs + 1024
+  lea rax, [rsp + 256]
+  add rax, 1024
+  mov qword ptr [rsp + 8464], rax
+  // q = a + 512
+  lea rax, [rsp + 4352]
+  add rax, 512
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l20:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l21
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l22
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l23
+@l22:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l23:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l20
+@l21:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // p = cvs + 2048
+  lea rax, [rsp + 256]
+  add rax, 2048
+  mov qword ptr [rsp + 8464], rax
+  // q = a + 1024
+  lea rax, [rsp + 4352]
+  add rax, 1024
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l24:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l25
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l26
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l27
+@l26:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l27:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l24
+@l25:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // p = cvs + 3072
+  lea rax, [rsp + 256]
+  add rax, 3072
+  mov qword ptr [rsp + 8464], rax
+  // q = a + 1536
+  lea rax, [rsp + 4352]
+  add rax, 1536
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l28:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l29
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l30
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l31
+@l30:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l31:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l28
+@l29:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // p = a + 0
+  lea rax, [rsp + 4352]
+  add rax, 0
+  mov qword ptr [rsp + 8464], rax
+  // q = b + 0
+  lea rax, [rsp + 6400]
+  add rax, 0
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l32:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l33
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l34
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l35
+@l34:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l35:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l32
+@l33:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // p = a + 1024
+  lea rax, [rsp + 4352]
+  add rax, 1024
+  mov qword ptr [rsp + 8464], rax
+  // q = b + 512
+  lea rax, [rsp + 6400]
+  add rax, 512
+  mov qword ptr [rsp + 8472], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l36:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l37
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l38
+  // u64[ptrs + (i << 3)] = p + (i << 6)
+  mov rax, qword ptr [rsp + 8464]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l39
+@l38:
+  // else
+  // u64[ptrs + (i << 3)] = p
+  mov rax, qword ptr [rsp + 8464]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l39:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l36
+@l37:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, q)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  mov r9, qword ptr [rsp + 8472]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l40:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l41
+  // if i < 16
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l42
+  // u64[ptrs + (i << 3)] = b + (i << 6)
+  lea rax, [rsp + 6400]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l43
+@l42:
+  // else
+  // u64[ptrs + (i << 3)] = b
+  lea rax, [rsp + 6400]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l43:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l40
+@l41:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, c)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  lea r9, [rsp + 7424]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l44:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l45
+  // if i < 8
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 8
+  cmp rax, rcx
+  jae @l46
+  // u64[ptrs + (i << 3)] = c + (i << 6)
+  lea rax, [rsp + 7424]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l47
+@l46:
+  // else
+  // u64[ptrs + (i << 3)] = c
+  lea rax, [rsp + 7424]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l47:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l44
+@l45:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, d)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  lea r9, [rsp + 7936]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l48:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l49
+  // if i < 4
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 4
+  cmp rax, rcx
+  jae @l50
+  // u64[ptrs + (i << 3)] = d + (i << 6)
+  lea rax, [rsp + 7936]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l51
+@l50:
+  // else
+  // u64[ptrs + (i << 3)] = d
+  lea rax, [rsp + 7936]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l51:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l48
+@l49:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, c)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  lea r9, [rsp + 7424]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l52:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l53
+  // if i < 2
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 2
+  cmp rax, rcx
+  jae @l54
+  // u64[ptrs + (i << 3)] = c + (i << 6)
+  lea rax, [rsp + 7424]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l55
+@l54:
+  // else
+  // u64[ptrs + (i << 3)] = c
+  lea rax, [rsp + 7424]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l55:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l52
+@l53:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, d)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  lea r9, [rsp + 7936]
+  call blake3_servil_avx512_p16
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 8456], rax
+  // while i < 16
+@l56:
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 16
+  cmp rax, rcx
+  jae @l57
+  // if i < 1
+  mov rax, qword ptr [rsp + 8456]
+  mov rcx, 1
+  cmp rax, rcx
+  jae @l58
+  // u64[ptrs + (i << 3)] = d + (i << 6)
+  lea rax, [rsp + 7936]
+  mov rcx, qword ptr [rsp + 8456]
+  shl rcx, 6
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l59
+@l58:
+  // else
+  // u64[ptrs + (i << 3)] = d
+  lea rax, [rsp + 7936]
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 8456]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l59:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 8456]
+  add rax, 1
+  mov qword ptr [rsp + 8456], rax
+  jmp @l56
+@l57:
+  // blake3_servil_avx512_p16(ptrs, 1, kf, 0, pp, c)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 8448]
+  lea r9, [rsp + 7424]
+  call blake3_servil_avx512_p16
+  // copy 32 bytes: out <- c
+  lea rax, [rsp + 7424]
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  add rsp, 8488
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The chaining value of the tree over the len bytes at input (1 or more; chunks numbered from t), where the
 // values of its chunks of 1024 bytes are at cvs already, one after another (the contract says what each is).
 // The specification's two parts again; a chunk of 1024 bytes is taken from cvs, a shorter last one is hashed.
-fn take(out, input, len, kf, t, cvs)
-  reg out, input, len, kf, t, cvs
-{
-  buf nd[120]
-  buf blk[64]
-  var flags = u64[kf + 32]
-  var c = 0
-  var k = 0
-  var k2 = 0
-  if len > 1024 {
-    left_chunks()
-    var n = k << 10
-    var right = blk + 32
-    var rest = input + n
-    var restlen = len - n
-    var rt = t + k
-    var rcvs = cvs + (k << 5)
-    var pf = flags | PARENT
-    take(blk, input, n, kf, t, cvs)
-    take(right, rest, restlen, kf, rt, rcvs)
-    copy 32 out <- kf
-    compress_avx512(out, blk, 64, 0, pf)
-  } else {
-    if len == 1024 {
-      copy 32 out <- cvs
-    } else {
-      copy 32 nd <- kf
-      chunk_node(nd, input, len, t, flags, AVX512)
-      node_out(out, nd, 0, AVX512)
-    }
-  }
+// take(out, input, len, kf, t, cvs): arguments in rdi, rsi, rdx, rcx, r8, r9, as C passes them. Saved and
+//   restored: rbx, rbp, r12, r13, r14, r15. Kept: out in rbx, input in rbp, len in r12, kf in r13, t in r14,
+//   cvs in r15, flags at [rsp + 192], c at [rsp + 200], k at [rsp + 208], k2 at [rsp + 216], n at [rsp +
+//   224], right at [rsp + 232], rest at [rsp + 240], restlen at [rsp + 248], rt at [rsp + 256], rcvs at [rsp
+//   + 264], pf at [rsp + 272]. Buffers: nd at [rsp + 0], blk at [rsp + 128]. Frame: 280 bytes.
+fn take as "b3l_take" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 280
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  mov r14, r8
+  mov r15, r9
+  // flags = u64[kf + 32]
+  mov rax, r13
+  add rax, 32
+  mov rax, qword ptr [rax]
+  mov qword ptr [rsp + 192], rax
+  // c = 0
+  mov rax, 0
+  mov qword ptr [rsp + 200], rax
+  // k = 0
+  mov rax, 0
+  mov qword ptr [rsp + 208], rax
+  // k2 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 216], rax
+  // if 1024 < len
+  mov rax, 1024
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l0
+  // c = ((len - 1) >> 10) + 1
+  mov rax, r12
+  sub rax, 1
+  shr rax, 10
+  add rax, 1
+  mov qword ptr [rsp + 200], rax
+  // k = 1
+  mov rax, 1
+  mov qword ptr [rsp + 208], rax
+  // k2 = 2
+  mov rax, 2
+  mov qword ptr [rsp + 216], rax
+  // while k2 < c
+@l2:
+  mov rax, qword ptr [rsp + 216]
+  mov rcx, qword ptr [rsp + 200]
+  cmp rax, rcx
+  jae @l3
+  // k = k2
+  mov rax, qword ptr [rsp + 216]
+  mov qword ptr [rsp + 208], rax
+  // k2 = k2 << 1
+  mov rax, qword ptr [rsp + 216]
+  shl rax, 1
+  mov qword ptr [rsp + 216], rax
+  jmp @l2
+@l3:
+  // n = k << 10
+  mov rax, qword ptr [rsp + 208]
+  shl rax, 10
+  mov qword ptr [rsp + 224], rax
+  // right = blk + 32
+  lea rax, [rsp + 128]
+  add rax, 32
+  mov qword ptr [rsp + 232], rax
+  // rest = input + n
+  mov rax, rbp
+  add rax, qword ptr [rsp + 224]
+  mov qword ptr [rsp + 240], rax
+  // restlen = len - n
+  mov rax, r12
+  sub rax, qword ptr [rsp + 224]
+  mov qword ptr [rsp + 248], rax
+  // rt = t + k
+  mov rax, r14
+  add rax, qword ptr [rsp + 208]
+  mov qword ptr [rsp + 256], rax
+  // rcvs = cvs + (k << 5)
+  mov rax, r15
+  mov rcx, qword ptr [rsp + 208]
+  shl rcx, 5
+  add rax, rcx
+  mov qword ptr [rsp + 264], rax
+  // pf = flags | 4
+  mov rax, qword ptr [rsp + 192]
+  or rax, 4
+  mov qword ptr [rsp + 272], rax
+  // b3l_take(blk, input, n, kf, t, cvs)
+  lea rdi, [rsp + 128]
+  mov rsi, rbp
+  mov rdx, qword ptr [rsp + 224]
+  mov rcx, r13
+  mov r8, r14
+  mov r9, r15
+  call b3l_take
+  // b3l_take(right, rest, restlen, kf, rt, rcvs)
+  mov rdi, qword ptr [rsp + 232]
+  mov rsi, qword ptr [rsp + 240]
+  mov rdx, qword ptr [rsp + 248]
+  mov rcx, r13
+  mov r8, qword ptr [rsp + 256]
+  mov r9, qword ptr [rsp + 264]
+  call b3l_take
+  // copy 32 bytes: out <- kf
+  mov rax, r13
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // blake3_servil_compress_in_place_avx512(out, blk, 64, 0, pf)
+  mov rdi, rbx
+  lea rsi, [rsp + 128]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 272]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l1
+@l0:
+  // else
+  // if len == 1024
+  mov rax, r12
+  mov rcx, 1024
+  cmp rax, rcx
+  jne @l4
+  // copy 32 bytes: out <- cvs
+  mov rax, r15
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  jmp @l5
+@l4:
+  // else
+  // copy 32 bytes: nd <- kf
+  mov rax, r13
+  lea rcx, [rsp + 0]
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // b3l_chunk_node(nd, input, len, t, flags, 5)
+  lea rdi, [rsp + 0]
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, r14
+  mov r8, qword ptr [rsp + 192]
+  mov r9, 5
+  call b3l_chunk_node
+  // b3l_node_out(out, nd, 0, 5)
+  mov rdi, rbx
+  lea rsi, [rsp + 0]
+  mov rdx, 0
+  mov rcx, 5
+  call b3l_node_out
+@l5:
+@l1:
+  add rsp, 280
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The chaining value of the tree over 2 to 32 chunks (more than 1024 bytes, at most 32768), on a machine with
 // AVX-512: the values of the chunks of 1024 bytes by one call of the 32-lane chunk kernel (the lanes past
 // them hash the first chunk again, unused), then the tree by `take`.
-fn part32(out, input, len, kf, t)
-  reg out, input, len, kf, t
-{
-  buf ptrs[256]
-  buf cvs[1024]
-  var flags = u64[kf + 32]
-  var kp = flags | 0x40020100           // the chunk's start and end flags and a last block of 64 bytes, packed above the mode's
-  var whole = len >> 10
-  var i = 0
-  fill(input, 10, whole, 32)
-  chunks32(ptrs, 16, kf, t, kp, cvs)
-  take(out, input, len, kf, t, cvs)
+// part32(out, input, len, kf, t): arguments in rdi, rsi, rdx, rcx, r8, as C passes them. Saved and restored:
+//   rbx, rbp, r12, r13, r14, r15. Kept: out in rbx, input in rbp, len in r12, kf in r13, t in r14, flags in
+//   r15, kp at [rsp + 1280], whole at [rsp + 1288], i at [rsp + 1296]. Buffers: ptrs at [rsp + 0], cvs at
+//   [rsp + 256]. Frame: 1304 bytes.
+fn part32 as "b3l_part32" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 1304
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  mov r14, r8
+  // flags = u64[kf + 32]
+  mov rax, r13
+  add rax, 32
+  mov rax, qword ptr [rax]
+  mov r15, rax
+  // kp = flags | 0x40020100
+  mov rax, r15
+  or rax, 1073873152
+  mov qword ptr [rsp + 1280], rax
+  // whole = len >> 10
+  mov rax, r12
+  shr rax, 10
+  mov qword ptr [rsp + 1288], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1296], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1296], rax
+  // while i < 32
+@l0:
+  mov rax, qword ptr [rsp + 1296]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l1
+  // if i < whole
+  mov rax, qword ptr [rsp + 1296]
+  mov rcx, qword ptr [rsp + 1288]
+  cmp rax, rcx
+  jae @l2
+  // u64[ptrs + (i << 3)] = input + (i << 10)
+  mov rax, rbp
+  mov rcx, qword ptr [rsp + 1296]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 1296]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l3
+@l2:
+  // else
+  // u64[ptrs + (i << 3)] = input
+  mov rax, rbp
+  lea rcx, [rsp + 0]
+  mov rdx, qword ptr [rsp + 1296]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l3:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 1296]
+  add rax, 1
+  mov qword ptr [rsp + 1296], rax
+  jmp @l0
+@l1:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, t, kp, cvs)
+  lea rdi, [rsp + 0]
+  mov rsi, 16
+  mov rdx, r13
+  mov rcx, r14
+  mov r8, qword ptr [rsp + 1280]
+  lea r9, [rsp + 256]
+  call blake3_servil_avx512_k32
+  // b3l_take(out, input, len, kf, t, cvs)
+  mov rdi, rbx
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, r13
+  mov r8, r14
+  lea r9, [rsp + 256]
+  call b3l_take
+  add rsp, 1304
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The chaining value of the tree over the len bytes at input (1 or more), whose chunks are numbered from t.
 // kf: the key (32 bytes) and the flags (8 bytes). Where the machine has AVX-512, a whole tree of 32 chunks
 // or of 128 goes to the wide kernels, and a smaller one of more than one chunk to the chunk kernel.
-fn subtree(out, input, len, kf, t, plat)
-  reg out, input, len, kf, t, plat
-{
-  buf nd[120]
-  buf blk[64]
-  var flags = u64[kf + 32]
-  var c = 0
-  var k = 0
-  var k2 = 0
-  var wide = 0
-  if plat == AVX512 {
-    if len == 131072 { wide = 3 }
-    else {
-      if len == 32768 { wide = 1 }
-      else { if len > 1024 { if len < 32768 { wide = 2 } } }
-    }
-  }
-  if wide == 3 {
-    wide128(out, input, kf, t)
-  } else {
-  if wide == 1 {
-    wide32(out, input, kf, t)
-  } else {
-  if wide == 2 {
-    part32(out, input, len, kf, t)
-  } else {
-  if len > 1024 {
-    left_chunks()
-    var n = k << 10
-    var right = blk + 32
-    var rest = input + n
-    var restlen = len - n
-    var rt = t + k
-    var pf = flags | PARENT
-    subtree(blk, input, n, kf, t, plat)
-    subtree(right, rest, restlen, kf, rt, plat)
-    copy 32 out <- kf
-    compress(out, blk, 64, 0, pf)
-  } else {
-    copy 32 nd <- kf
-    chunk_node(nd, input, len, t, flags, plat)
-    node_out(out, nd, 0, plat)
-  }
-  }
-  }
-  }
+// subtree(out, input, len, kf, t, plat): arguments in rdi, rsi, rdx, rcx, r8, r9, as C passes them. Saved and
+//   restored: rbx, rbp, r12, r13, r14, r15. Kept: out in rbx, input in rbp, len in r12, kf in r13, t in r14,
+//   plat in r15, flags at [rsp + 192], c at [rsp + 200], k at [rsp + 208], k2 at [rsp + 216], wide at [rsp +
+//   224], n at [rsp + 232], right at [rsp + 240], rest at [rsp + 248], restlen at [rsp + 256], rt at [rsp +
+//   264], pf at [rsp + 272]. Buffers: nd at [rsp + 0], blk at [rsp + 128]. Frame: 280 bytes.
+fn subtree as "b3l_subtree" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 280
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  mov r14, r8
+  mov r15, r9
+  // flags = u64[kf + 32]
+  mov rax, r13
+  add rax, 32
+  mov rax, qword ptr [rax]
+  mov qword ptr [rsp + 192], rax
+  // c = 0
+  mov rax, 0
+  mov qword ptr [rsp + 200], rax
+  // k = 0
+  mov rax, 0
+  mov qword ptr [rsp + 208], rax
+  // k2 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 216], rax
+  // wide = 0
+  mov rax, 0
+  mov qword ptr [rsp + 224], rax
+  // if plat == 5
+  mov rax, r15
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l0
+  // if len == 0x20000
+  mov rax, r12
+  mov rcx, 131072
+  cmp rax, rcx
+  jne @l2
+  // wide = 3
+  mov rax, 3
+  mov qword ptr [rsp + 224], rax
+  jmp @l3
+@l2:
+  // else
+  // if len == 32768
+  mov rax, r12
+  mov rcx, 32768
+  cmp rax, rcx
+  jne @l4
+  // wide = 1
+  mov rax, 1
+  mov qword ptr [rsp + 224], rax
+  jmp @l5
+@l4:
+  // else
+  // if 1024 < len
+  mov rax, 1024
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l6
+  // if len < 32768
+  mov rax, r12
+  mov rcx, 32768
+  cmp rax, rcx
+  jae @l8
+  // wide = 2
+  mov rax, 2
+  mov qword ptr [rsp + 224], rax
+@l8:
+@l6:
+@l5:
+@l3:
+@l0:
+  // if wide == 3
+  mov rax, qword ptr [rsp + 224]
+  mov rcx, 3
+  cmp rax, rcx
+  jne @l10
+  // b3l_wide128(out, input, kf, t)
+  mov rdi, rbx
+  mov rsi, rbp
+  mov rdx, r13
+  mov rcx, r14
+  call b3l_wide128
+  jmp @l11
+@l10:
+  // else
+  // if wide == 1
+  mov rax, qword ptr [rsp + 224]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l12
+  // b3l_wide32(out, input, kf, t)
+  mov rdi, rbx
+  mov rsi, rbp
+  mov rdx, r13
+  mov rcx, r14
+  call b3l_wide32
+  jmp @l13
+@l12:
+  // else
+  // if wide == 2
+  mov rax, qword ptr [rsp + 224]
+  mov rcx, 2
+  cmp rax, rcx
+  jne @l14
+  // b3l_part32(out, input, len, kf, t)
+  mov rdi, rbx
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, r13
+  mov r8, r14
+  call b3l_part32
+  jmp @l15
+@l14:
+  // else
+  // if 1024 < len
+  mov rax, 1024
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l16
+  // c = ((len - 1) >> 10) + 1
+  mov rax, r12
+  sub rax, 1
+  shr rax, 10
+  add rax, 1
+  mov qword ptr [rsp + 200], rax
+  // k = 1
+  mov rax, 1
+  mov qword ptr [rsp + 208], rax
+  // k2 = 2
+  mov rax, 2
+  mov qword ptr [rsp + 216], rax
+  // while k2 < c
+@l18:
+  mov rax, qword ptr [rsp + 216]
+  mov rcx, qword ptr [rsp + 200]
+  cmp rax, rcx
+  jae @l19
+  // k = k2
+  mov rax, qword ptr [rsp + 216]
+  mov qword ptr [rsp + 208], rax
+  // k2 = k2 << 1
+  mov rax, qword ptr [rsp + 216]
+  shl rax, 1
+  mov qword ptr [rsp + 216], rax
+  jmp @l18
+@l19:
+  // n = k << 10
+  mov rax, qword ptr [rsp + 208]
+  shl rax, 10
+  mov qword ptr [rsp + 232], rax
+  // right = blk + 32
+  lea rax, [rsp + 128]
+  add rax, 32
+  mov qword ptr [rsp + 240], rax
+  // rest = input + n
+  mov rax, rbp
+  add rax, qword ptr [rsp + 232]
+  mov qword ptr [rsp + 248], rax
+  // restlen = len - n
+  mov rax, r12
+  sub rax, qword ptr [rsp + 232]
+  mov qword ptr [rsp + 256], rax
+  // rt = t + k
+  mov rax, r14
+  add rax, qword ptr [rsp + 208]
+  mov qword ptr [rsp + 264], rax
+  // pf = flags | 4
+  mov rax, qword ptr [rsp + 192]
+  or rax, 4
+  mov qword ptr [rsp + 272], rax
+  // b3l_subtree(blk, input, n, kf, t, plat)
+  lea rdi, [rsp + 128]
+  mov rsi, rbp
+  mov rdx, qword ptr [rsp + 232]
+  mov rcx, r13
+  mov r8, r14
+  mov r9, r15
+  call b3l_subtree
+  // b3l_subtree(right, rest, restlen, kf, rt, plat)
+  mov rdi, qword ptr [rsp + 240]
+  mov rsi, qword ptr [rsp + 248]
+  mov rdx, qword ptr [rsp + 256]
+  mov rcx, r13
+  mov r8, qword ptr [rsp + 264]
+  mov r9, r15
+  call b3l_subtree
+  // copy 32 bytes: out <- kf
+  mov rax, r13
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // if plat == 5
+  mov rax, r15
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l20
+  // blake3_servil_compress_in_place_avx512(out, blk, 64, 0, pf)
+  mov rdi, rbx
+  lea rsi, [rsp + 128]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 272]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l21
+@l20:
+  // else
+  // blake3_servil_compress_in_place_sse41(out, blk, 64, 0, pf)
+  mov rdi, rbx
+  lea rsi, [rsp + 128]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 272]
+  call blake3_servil_compress_in_place_sse41
+@l21:
+  jmp @l17
+@l16:
+  // else
+  // copy 32 bytes: nd <- kf
+  mov rax, r13
+  lea rcx, [rsp + 0]
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // b3l_chunk_node(nd, input, len, t, flags, plat)
+  lea rdi, [rsp + 0]
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, r14
+  mov r8, qword ptr [rsp + 192]
+  mov r9, r15
+  call b3l_chunk_node
+  // b3l_node_out(out, nd, 0, plat)
+  mov rdi, rbx
+  lea rsi, [rsp + 0]
+  mov rdx, 0
+  mov rcx, r15
+  call b3l_node_out
+@l17:
+@l15:
+@l13:
+@l11:
+  add rsp, 280
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }
 
 // The hash: the tree over the whole message, its last compression with ROOT. Where the machine has AVX-512
 // and the message is of 2 to 32 chunks, their values come from one call of the chunk kernel, as in part32.
-fn hashr(out, input, len, key, flags, plat)
-  reg out, input, len, key, flags, plat
-{
-  buf kf[40]
-  buf nd[120]
-  buf blk[64]
-  buf ptrs[256]
-  buf cvs[1024]
-  var c = 0
-  var k = 0
-  var k2 = 0
-  var i = 0
-  var wide = 0
-  copy 32 kf <- key
-  u64[kf + 32] = flags
-  if plat == AVX512 { if len > 1024 { if len <= 32768 { wide = 1 } } }
-  if wide == 1 {
-    var kp = flags | 0x40020100         // the chunk's start and end flags and a last block of 64 bytes, packed above the mode's
-    var whole = len >> 10
-    fill(input, 10, whole, 32)
-    chunks32(ptrs, 16, kf, 0, kp, cvs)
-    left_chunks()
-    var wn = k << 10
-    var wright = blk + 32
-    var wrest = input + wn
-    var wrestlen = len - wn
-    var wcvs = cvs + (k << 5)
-    var wpf = flags | PARENT | ROOT
-    take(blk, input, wn, kf, 0, cvs)
-    take(wright, wrest, wrestlen, kf, k, wcvs)
-    copy 32 out <- key
-    compress_avx512(out, blk, 64, 0, wpf)
-  } else {
-  if len > 1024 {
-    left_chunks()
-    var n = k << 10
-    var right = blk + 32
-    var rest = input + n
-    var restlen = len - n
-    var pf = flags | PARENT | ROOT
-    subtree(blk, input, n, kf, 0, plat)
-    subtree(right, rest, restlen, kf, k, plat)
-    copy 32 out <- key
-    compress(out, blk, 64, 0, pf)
-  } else {
-    copy 32 nd <- key
-    chunk_node(nd, input, len, 0, flags, plat)
-    node_out(out, nd, ROOT, plat)
-  }
-  }
+// hashr(out, input, len, key, flags, plat): arguments in rdi, rsi, rdx, rcx, r8, r9, as C passes them. Saved
+//   and restored: rbx, rbp, r12, r13, r14, r15. Kept: out in rbx, input in rbp, len in r12, key in r13, flags
+//   in r14, plat in r15, c at [rsp + 1520], k at [rsp + 1528], k2 at [rsp + 1536], i at [rsp + 1544], wide at
+//   [rsp + 1552], kp at [rsp + 1560], whole at [rsp + 1568], wn at [rsp + 1576], wright at [rsp + 1584],
+//   wrest at [rsp + 1592], wrestlen at [rsp + 1600], wcvs at [rsp + 1608], wpf at [rsp + 1616], n at [rsp +
+//   1624], right at [rsp + 1632], rest at [rsp + 1640], restlen at [rsp + 1648], pf at [rsp + 1656]. Buffers:
+//   kf at [rsp + 0], nd at [rsp + 48], blk at [rsp + 176], ptrs at [rsp + 240], cvs at [rsp + 496]. Frame:
+//   1672 bytes.
+fn hashr as "b3l_hashr" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 1672
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  mov r14, r8
+  mov r15, r9
+  // c = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1520], rax
+  // k = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1528], rax
+  // k2 = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1536], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1544], rax
+  // wide = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1552], rax
+  // copy 32 bytes: kf <- key
+  mov rax, r13
+  lea rcx, [rsp + 0]
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // u64[kf + 32] = flags
+  mov rax, r14
+  lea rcx, [rsp + 0]
+  add rcx, 32
+  mov qword ptr [rcx], rax
+  // if plat == 5
+  mov rax, r15
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l0
+  // if 1024 < len
+  mov rax, 1024
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l2
+  // if 32768 < len
+  mov rax, 32768
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l4
+  jmp @l5
+@l4:
+  // else
+  // wide = 1
+  mov rax, 1
+  mov qword ptr [rsp + 1552], rax
+@l5:
+@l2:
+@l0:
+  // if wide == 1
+  mov rax, qword ptr [rsp + 1552]
+  mov rcx, 1
+  cmp rax, rcx
+  jne @l6
+  // kp = flags | 0x40020100
+  mov rax, r14
+  or rax, 1073873152
+  mov qword ptr [rsp + 1560], rax
+  // whole = len >> 10
+  mov rax, r12
+  shr rax, 10
+  mov qword ptr [rsp + 1568], rax
+  // i = 0
+  mov rax, 0
+  mov qword ptr [rsp + 1544], rax
+  // while i < 32
+@l8:
+  mov rax, qword ptr [rsp + 1544]
+  mov rcx, 32
+  cmp rax, rcx
+  jae @l9
+  // if i < whole
+  mov rax, qword ptr [rsp + 1544]
+  mov rcx, qword ptr [rsp + 1568]
+  cmp rax, rcx
+  jae @l10
+  // u64[ptrs + (i << 3)] = input + (i << 10)
+  mov rax, rbp
+  mov rcx, qword ptr [rsp + 1544]
+  shl rcx, 10
+  add rax, rcx
+  lea rcx, [rsp + 240]
+  mov rdx, qword ptr [rsp + 1544]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+  jmp @l11
+@l10:
+  // else
+  // u64[ptrs + (i << 3)] = input
+  mov rax, rbp
+  lea rcx, [rsp + 240]
+  mov rdx, qword ptr [rsp + 1544]
+  shl rdx, 3
+  add rcx, rdx
+  mov qword ptr [rcx], rax
+@l11:
+  // i = i + 1
+  mov rax, qword ptr [rsp + 1544]
+  add rax, 1
+  mov qword ptr [rsp + 1544], rax
+  jmp @l8
+@l9:
+  // blake3_servil_avx512_k32(ptrs, 16, kf, 0, kp, cvs)
+  lea rdi, [rsp + 240]
+  mov rsi, 16
+  lea rdx, [rsp + 0]
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 1560]
+  lea r9, [rsp + 496]
+  call blake3_servil_avx512_k32
+  // c = ((len - 1) >> 10) + 1
+  mov rax, r12
+  sub rax, 1
+  shr rax, 10
+  add rax, 1
+  mov qword ptr [rsp + 1520], rax
+  // k = 1
+  mov rax, 1
+  mov qword ptr [rsp + 1528], rax
+  // k2 = 2
+  mov rax, 2
+  mov qword ptr [rsp + 1536], rax
+  // while k2 < c
+@l12:
+  mov rax, qword ptr [rsp + 1536]
+  mov rcx, qword ptr [rsp + 1520]
+  cmp rax, rcx
+  jae @l13
+  // k = k2
+  mov rax, qword ptr [rsp + 1536]
+  mov qword ptr [rsp + 1528], rax
+  // k2 = k2 << 1
+  mov rax, qword ptr [rsp + 1536]
+  shl rax, 1
+  mov qword ptr [rsp + 1536], rax
+  jmp @l12
+@l13:
+  // wn = k << 10
+  mov rax, qword ptr [rsp + 1528]
+  shl rax, 10
+  mov qword ptr [rsp + 1576], rax
+  // wright = blk + 32
+  lea rax, [rsp + 176]
+  add rax, 32
+  mov qword ptr [rsp + 1584], rax
+  // wrest = input + wn
+  mov rax, rbp
+  add rax, qword ptr [rsp + 1576]
+  mov qword ptr [rsp + 1592], rax
+  // wrestlen = len - wn
+  mov rax, r12
+  sub rax, qword ptr [rsp + 1576]
+  mov qword ptr [rsp + 1600], rax
+  // wcvs = cvs + (k << 5)
+  lea rax, [rsp + 496]
+  mov rcx, qword ptr [rsp + 1528]
+  shl rcx, 5
+  add rax, rcx
+  mov qword ptr [rsp + 1608], rax
+  // wpf = (flags | 4) | 8
+  mov rax, r14
+  or rax, 4
+  or rax, 8
+  mov qword ptr [rsp + 1616], rax
+  // b3l_take(blk, input, wn, kf, 0, cvs)
+  lea rdi, [rsp + 176]
+  mov rsi, rbp
+  mov rdx, qword ptr [rsp + 1576]
+  lea rcx, [rsp + 0]
+  mov r8, 0
+  lea r9, [rsp + 496]
+  call b3l_take
+  // b3l_take(wright, wrest, wrestlen, kf, k, wcvs)
+  mov rdi, qword ptr [rsp + 1584]
+  mov rsi, qword ptr [rsp + 1592]
+  mov rdx, qword ptr [rsp + 1600]
+  lea rcx, [rsp + 0]
+  mov r8, qword ptr [rsp + 1528]
+  mov r9, qword ptr [rsp + 1608]
+  call b3l_take
+  // copy 32 bytes: out <- key
+  mov rax, r13
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // blake3_servil_compress_in_place_avx512(out, blk, 64, 0, wpf)
+  mov rdi, rbx
+  lea rsi, [rsp + 176]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 1616]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l7
+@l6:
+  // else
+  // if 1024 < len
+  mov rax, 1024
+  mov rcx, r12
+  cmp rax, rcx
+  jae @l14
+  // c = ((len - 1) >> 10) + 1
+  mov rax, r12
+  sub rax, 1
+  shr rax, 10
+  add rax, 1
+  mov qword ptr [rsp + 1520], rax
+  // k = 1
+  mov rax, 1
+  mov qword ptr [rsp + 1528], rax
+  // k2 = 2
+  mov rax, 2
+  mov qword ptr [rsp + 1536], rax
+  // while k2 < c
+@l16:
+  mov rax, qword ptr [rsp + 1536]
+  mov rcx, qword ptr [rsp + 1520]
+  cmp rax, rcx
+  jae @l17
+  // k = k2
+  mov rax, qword ptr [rsp + 1536]
+  mov qword ptr [rsp + 1528], rax
+  // k2 = k2 << 1
+  mov rax, qword ptr [rsp + 1536]
+  shl rax, 1
+  mov qword ptr [rsp + 1536], rax
+  jmp @l16
+@l17:
+  // n = k << 10
+  mov rax, qword ptr [rsp + 1528]
+  shl rax, 10
+  mov qword ptr [rsp + 1624], rax
+  // right = blk + 32
+  lea rax, [rsp + 176]
+  add rax, 32
+  mov qword ptr [rsp + 1632], rax
+  // rest = input + n
+  mov rax, rbp
+  add rax, qword ptr [rsp + 1624]
+  mov qword ptr [rsp + 1640], rax
+  // restlen = len - n
+  mov rax, r12
+  sub rax, qword ptr [rsp + 1624]
+  mov qword ptr [rsp + 1648], rax
+  // pf = (flags | 4) | 8
+  mov rax, r14
+  or rax, 4
+  or rax, 8
+  mov qword ptr [rsp + 1656], rax
+  // b3l_subtree(blk, input, n, kf, 0, plat)
+  lea rdi, [rsp + 176]
+  mov rsi, rbp
+  mov rdx, qword ptr [rsp + 1624]
+  lea rcx, [rsp + 0]
+  mov r8, 0
+  mov r9, r15
+  call b3l_subtree
+  // b3l_subtree(right, rest, restlen, kf, k, plat)
+  mov rdi, qword ptr [rsp + 1632]
+  mov rsi, qword ptr [rsp + 1640]
+  mov rdx, qword ptr [rsp + 1648]
+  lea rcx, [rsp + 0]
+  mov r8, qword ptr [rsp + 1528]
+  mov r9, r15
+  call b3l_subtree
+  // copy 32 bytes: out <- key
+  mov rax, r13
+  mov rcx, rbx
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // if plat == 5
+  mov rax, r15
+  mov rcx, 5
+  cmp rax, rcx
+  jne @l18
+  // blake3_servil_compress_in_place_avx512(out, blk, 64, 0, pf)
+  mov rdi, rbx
+  lea rsi, [rsp + 176]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 1656]
+  call blake3_servil_compress_in_place_avx512
+  jmp @l19
+@l18:
+  // else
+  // blake3_servil_compress_in_place_sse41(out, blk, 64, 0, pf)
+  mov rdi, rbx
+  lea rsi, [rsp + 176]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, qword ptr [rsp + 1656]
+  call blake3_servil_compress_in_place_sse41
+@l19:
+  jmp @l15
+@l14:
+  // else
+  // copy 32 bytes: nd <- key
+  mov rax, r13
+  lea rcx, [rsp + 48]
+  movups xmm0, xmmword ptr [rax + 0]
+  movups xmmword ptr [rcx + 0], xmm0
+  movups xmm0, xmmword ptr [rax + 16]
+  movups xmmword ptr [rcx + 16], xmm0
+  // b3l_chunk_node(nd, input, len, 0, flags, plat)
+  lea rdi, [rsp + 48]
+  mov rsi, rbp
+  mov rdx, r12
+  mov rcx, 0
+  mov r8, r14
+  mov r9, r15
+  call b3l_chunk_node
+  // b3l_node_out(out, nd, 8, plat)
+  mov rdi, rbx
+  lea rsi, [rsp + 48]
+  mov rdx, 8
+  mov rcx, r15
+  call b3l_node_out
+@l15:
+@l7:
+  add rsp, 1672
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
 }

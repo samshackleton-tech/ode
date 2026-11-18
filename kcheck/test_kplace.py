@@ -55,7 +55,7 @@ class Places(unittest.TestCase):
         from test_kcheck import assemble
         for folder, name, swap in (("common", "common", ("r13", "r14")), ("adler32", "adler32", ("r12", "r13")), ("utf8", "utf8", ("r12", "r13"))):
             p = T.Program(folder, name, "ode_" + name)
-            src = T.text(folder, name + ".S")
+            src = T.odec.assembly(T.odec.source_of(os.path.join(T.HERE, "programs", folder), name), name)
             a, b = swap
             other = re.sub(r"\b(%s|%s)([dwb]?)\b" % (a, b), lambda m: (b if m.group(1) == a else a) + m.group(2), src)
             self.assertNotEqual(other, src)

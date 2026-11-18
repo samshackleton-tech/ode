@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
-"""kglue_flip: every single-bit change of push, merge or add, given to the decoder, the prover and the verifier,
-and the processor's word on each change a proof is found for.
+"""kone_flip: every single-bit change of a one-block kernel, given to the reader of code and the verifier, and
+the processor's word on each change the verifier accepts.
 
-    python3 kglue_flip.py push|merge|add|avx512|sse41 FOLDER [--jobs N] [--native CASES]
+    python3 kone_flip.py avx512|sse41 FOLDER [--jobs N] [--native CASES]
 
-(avx512, sse41: the one-block kernels, verified by kfn.py since November 17, 2026 and run by kone_native.c.)
-
-FOLDER holds push.o, merge.o, add.o (lang/NAME.S assembled) and the one-block kernels' objects (*.o beside
-them: they are linked in, not changed). As kflip.py: each bit of the function's code is flipped in turn;
-"stopped" (the decoder does not know the bytes), "refused" (no proof is found), "ACCEPTED" (a proof is found
-and the verifier takes it). With --native every accepted object is linked with kglue_native.c and run on CASES
-random stacks and arguments the contract allows: an accepted change the processor tells from the merge
-machine is an error of the decoder or the verifier, and the exit status is 1."""
+FOLDER holds avx512.o and sse41.o: the two one-block kernels' objects (kernels.py makes them, as one.o and
+one_sse41.o; the other is linked in, not changed). Each bit of the kernel's code is flipped in turn: "stopped"
+(the bytes are no instruction the table writes), "refused" (the verifier of functions, kfn.py, does not take
+it), "ACCEPTED". With --native every accepted object is linked with kone_native.c and run on CASES random
+blocks: an accepted change the processor tells from BLAKE3's compression is an error of the table or the
+verifier, and the exit status is 1."""
 import multiprocessing, os, signal, subprocess, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import kcheck, kdecode, kfn, kglue, kspec
+import kcheck, kdecode, kfn, kspec
 
 ONE = {"avx512": "blake3_servil_compress_in_place_avx512", "sse41": "blake3_servil_compress_in_place_sse41"}
 
 
-def symbol(name): return ONE.get(name, "b3l_" + name)
+def symbol(name): return ONE[name]
 
 LIMIT = 30
 
@@ -33,13 +31,12 @@ def time_up(*_): raise TimeUp()
 
 def verdict(obj, name):
     try:
-        rows, _ = kdecode.read(obj, symbol(name), kglue.BASE, kglue.DATA)
+        rows, _ = kdecode.read(obj, symbol(name), kfn.BASE, kfn.DATA)
     except kdecode.Stop as e: return "stopped", str(e)
     except (IndexError, ValueError, KeyError, StopIteration) as e: return "stopped", f"the decoder ran off the bytes ({type(e).__name__})"
     try:
         kspec.fits(obj, symbol(name))
-        if name in ONE: kfn.check(rows, None, symbol=symbol(name))          # (since November 17, 2026: by the verifier of functions)
-        else: kglue.find(rows, name)
+        kfn.check(rows, None, symbol=symbol(name))
     except kcheck.Fail as e: return "refused", str(e)
     except (KeyError, IndexError, ValueError, TypeError, AssertionError, RecursionError) as e: return "refused", f"the verifier cannot run it ({type(e).__name__}: {e})"
     return "ACCEPTED", ""
@@ -88,8 +85,8 @@ def main():
     e = kdecode.Elf(obj)
     sec = e.sections[e.index[".text"]]
     start = kdecode.address(obj, symbol(name))
-    rows, _ = kdecode.read(obj, symbol(name), kglue.BASE, kglue.DATA)
-    size = rows[-1][1] - kglue.BASE
+    rows, _ = kdecode.read(obj, symbol(name), kfn.BASE, kfn.DATA)
+    size = rows[-1][1] - kfn.BASE
     first = (sec["off"] + start) * 8
     t0 = time.time()
     with multiprocessing.Pool(jobs) as pool:
@@ -102,17 +99,17 @@ def main():
     accepted = [bit for bit, (v, _) in results if v == "ACCEPTED"]
     for bit in accepted:
         at = bit // 8 - sec["off"] - start
-        row = next(r for r in rows if r[0] - kglue.BASE <= at < r[1] - kglue.BASE)
+        row = next(r for r in rows if r[0] - kfn.BASE <= at < r[1] - kfn.BASE)
         b = bytearray(obj); b[bit // 8] ^= 1 << (bit % 8)
-        rows2, _ = kdecode.read(bytes(b), symbol(name), kglue.BASE, kglue.DATA)
+        rows2, _ = kdecode.read(bytes(b), symbol(name), kfn.BASE, kfn.DATA)
         new = next((x[2] for x in rows2 if x[0] == row[0]), "?")
-        print(f"  accepted: +0x{row[0] - kglue.BASE:X} byte {at - (row[0] - kglue.BASE)} bit {bit % 8}: {row[2]}  ->  {new}")
+        print(f"  accepted: +0x{row[0] - kfn.BASE:X} byte {at - (row[0] - kfn.BASE)} bit {bit % 8}: {row[2]}  ->  {new}")
     if "--native" in sys.argv:
         cases = int(sys.argv[sys.argv.index("--native") + 1])
         here = os.path.dirname(os.path.abspath(__file__))
-        work = tempfile.mkdtemp(prefix="kglue-flip-")
+        work = tempfile.mkdtemp(prefix="kone-flip-")
         cc = os.environ.get("CC", "cc")
-        subprocess.run([cc, "-O1", "-c", "-o", f"{work}/h.o", f"{here}/{'kone' if name in ONE else 'kglue'}_native.c"], check=True)
+        subprocess.run([cc, "-O1", "-c", "-o", f"{work}/h.o", f"{here}/kone_native.c"], check=True)
         subprocess.run([cc, "-c", "-o", f"{work}/t.o", f"{here}/kflip_thunk.S"], check=True)
         print(f"control: the unchanged object on this processor, {cases} cases: {native((name, obj, None, folder, work, cases))[1]}")
         refused = next((bit for bit, (v, why) in results if v == "refused" and ("not one turn" in why or "not what the contract says" in why or "not the specification's" in why)), None)
