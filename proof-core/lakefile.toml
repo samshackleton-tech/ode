@@ -18,7 +18,7 @@ name = "Core"
 
 [[lean_lib]]
 name = "Sound"
-roots = ["SoundLin", "SoundState", "SoundStep", "SoundSpec", "SoundTop"]
+roots = ["SoundLin", "SoundState", "SoundStep", "SoundSpec", "SoundPlace", "SoundTop"]
 
 [[lean_exe]]
 name = "arith"

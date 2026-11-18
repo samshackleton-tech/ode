@@ -636,78 +636,92 @@ def entryFacts (ctx : Ctx) : List Row :=
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16 }
 
+/-- The state that stands for every coming to the place: the kept registers and the frame as in `s`, every
+other register any number below 2^64; nothing else is known but what is known at entry. -/
+def Sym.general (ctx : Ctx) (p : Place) (s : Sym) : Sym :=
+  { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
+    zf := .unknown, cf := .unknown, frame := s.frame, bytes := [], spec := [], nvars := s.nvars + 16,
+    facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ entryFacts ctx }
+
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for
-every coming there (the kept registers and the frame as they are now, every other register any number,
-and of the named ones the place's facts), and its number that decreases. -/
-def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row) :=
-  if !p.keep.contains RSP || p.names.any (fun (_, r) => p.keep.contains r) then refuse "a place must keep the stack pointer, and no register it names"
+every coming there, of which the place's facts are taken as known, and its number that decreases, which is
+shown to be no less than zero. Given back with them: the state as it first came, with which every later
+coming is compared. -/
+def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
+  if !p.keep.contains RSP || p.names.any (fun (_, r) => p.keep.contains r || decide (16 ≤ r)) then
+    refuse "a place must keep the stack pointer, and name registers it does not keep"
   else do
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
-    let fresh := (List.range 16).filter fun r => !p.keep.contains r
-    let g : Sym := { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
-                     zf := .unknown, cf := .unknown, frame := s.frame, bytes := [], spec := [], nvars := s.nvars + 16,
-                     facts := (fresh.map fun r => ranged (s.nvars + r)).flatten ++ entryFacts ctx }
-    let env := placeEnv ctx p g.reg
-    let g ← fold (suppose ctx env) g p.facts
-    let (d, g) ← seval ctx env g p.decreases
+    let g ← fold (suppose ctx (placeEnv ctx p (s.general ctx p).reg)) (s.general ctx p) p.facts
+    let (d, g) ← seval ctx (placeEnv ctx p (s.general ctx p).reg) g p.decreases
     match d with
     | .val (.lin d) => do
       entail g.facts d
-      pure (g, d)
+      pure (g, d, s)
     | _ => refuse "a place's number that decreases is no number"
 
-/-- On coming to the place again: this state is one the general state stands for, and the number is less. -/
-def arrive (ctx : Ctx) (p : Place) (g : Sym) (d : Row) (s : Sym) : V Unit :=
-  match p.keep.find? fun r => s.reg r != g.reg r with
+/-- On coming to the place again: this state is one the general state stands for (it keeps what the first
+coming had in the kept registers and the frame, and the place's facts are shown of it), and the number is
+less than `d`, the number of the general state the path began in. -/
+def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
+  match p.keep.find? fun r => s.reg r != first.reg r with
   | some r => refuse s!"at the place register {r} does not hold what it held on first coming there"
   | none =>
-  if !(g.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
+  if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
-    let env := placeEnv ctx p s.reg
-    let s ← fold (establish ctx env) s p.facts
-    let (d', s) ← seval ctx env s p.decreases
+    let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
+    let (d', s2) ← seval ctx (placeEnv ctx p s.reg) s1 p.decreases
     match d' with
-    | .val (.lin d') => entail s.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
+    | .val (.lin d') => entail s2.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
     | _ => refuse "a place's number that decreases is no number"
+
+/-- Where a path goes on after an instruction. At the function's return it ends. At the place: with no
+general state yet, the state is given back; with one, the coming there is shown to be one of its. Anywhere
+else the path is gone on with (`go`). -/
+def onward (ctx : Ctx) (general : Option (Row × Sym)) (go : Sym → Nat → V (List Sym)) (found : List Sym) (next : Sym × Next) : V (List Sym) :=
+  match next.2 with
+  | .returned => pure found
+  | .at pc' =>
+    match ctx.place with
+    | some p =>
+      if p.pc == pc' then
+        match general with
+        | some (d, first) => do arrive ctx p first d next.1; pure found
+        | none => pure (found ++ [next.1])
+      else do
+        let more ← go next.1 pc'
+        pure (found ++ more)
+    | none => do
+      let more ← go next.1 pc'
+      pure (found ++ more)
 
 /-- Every path from `pc`, to the function's return or to the place. With no general state yet, the states
 in which the place is come to are given back; with one, each coming there is shown to be one of its. -/
-def explore (ctx : Ctx) (general : Option (Sym × Row)) : Nat → Sym → Nat → V (List Sym)
+def explore (ctx : Ctx) (general : Option (Row × Sym)) : Nat → Sym → Nat → V (List Sym)
   | 0, _, _ => refuse "a path longer than the verifier goes"
   | fuel + 1, s, pc =>
     match ctx.code.lookup pc with
     | none => refuse s!"no instruction at {pc}"
     | some i => do
       let nexts ← symInstr ctx s i
-      fold (fun found (next : Sym × Next) =>
-        match next.2 with
-        | .returned => pure found
-        | .at pc' =>
-          match ctx.place with
-          | some p =>
-            if p.pc == pc' then
-              match general with
-              | some (g, d) => do arrive ctx p g d next.1; pure found
-              | none => pure (found ++ [next.1])
-            else do
-              let more ← explore ctx general fuel next.1 pc'
-              pure (found ++ more)
-          | none => do
-            let more ← explore ctx general fuel next.1 pc'
-            pure (found ++ more)) [] nexts
+      fold (onward ctx general (explore ctx general fuel)) [] nexts
 
 def PATH : Nat := 100000
+
+/-- From the place, if the paths from the entry came to it: the general state, and every path from it. -/
+def fromPlace (ctx : Ctx) (arrivals : List Sym) : V Unit :=
+  match ctx.place, arrivals with
+  | _, [] => pure ()
+  | some p, [s] => do
+    let (g, d, first) ← generalize ctx p s
+    let _ ← explore ctx (some (d, first)) PATH g p.pc
+    pure ()
+  | _, _ => refuse "more than one way from the entry to the place: not here yet"
 
 /-- The verifier. -/
 def verify (ctx : Ctx) : V Unit := do
   let arrivals ← explore ctx none PATH (entrySym ctx) 0
-  match ctx.place, arrivals with
-  | _, [] => pure ()
-  | some p, [s] => do
-    let (g, d) ← generalize ctx p s
-    let _ ← explore ctx (some (g, d)) PATH g p.pc
-    pure ()
-  | _, _ => refuse "more than one way from the entry to the place: not here yet"
+  fromPlace ctx arrivals
   if ← finished then pure () else refuse "the proof says more than is asked of it"
 
 /-- Does the function meet its contract, by this proof? `none`: yes. -/
