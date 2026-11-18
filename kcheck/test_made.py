@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """The shipped files' code is what the Ode sources give.
 
-    python3 test_made.py        (needs an assembler: clang, or cc on x86-64 Linux)
+    python3 test_made.py
 
 Every function of every shipped file (b3hashr.o, programs/NAME/odeNAME.o) is made again from its source
-(../lang/odec.py prints its instructions, an assembler assembles them) and compared, byte for byte, with the
+(../lang/odec.py expands its instructions, ../core/asm.py writes their bytes by the table) and compared, byte for byte, with the
 function in the shipped file. Left out of the comparison: the four bytes a linker writes where a function is
 called or the file's data is named (the makers of the shipped files, klink.py and programs/kpack.py, wrote
 them; the verifier reads what they stand for from the shipped file itself).

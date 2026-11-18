@@ -1,9 +1,10 @@
 #!/bin/sh
 # b3hashr.o made again from its sources, and compared with the file kept here.
 #
-#     sh make_hash.sh OUT        (needs python3 and an assembler: clang, or cc on x86-64 Linux)
+#     sh make_hash.sh OUT        (needs python3)
 #
-# 1. hash.ode's nine functions: ../lang/odec.py prints each one's instructions as assembly, the assembler assembles.
+# 1. hash.ode's nine functions: ../lang/odec.py expands each one's instructions, ../core/asm.py writes their bytes
+#    by the instruction table (core/x86.tab).
 # 2. The five kernels: ../wide/*.ode, likewise (kernels.py, which also writes the proofs of their loops).
 # 3. klink.py takes the functions' bytes from those objects, lays them out as one section with nothing left
 #    for a linker to fill in, finds the arithmetic proofs, and writes OUT/b3hashr.o with the specification

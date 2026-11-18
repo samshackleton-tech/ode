@@ -38,7 +38,8 @@ what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o prog
     python3 kcheck/gate.py --jobs 16     # the check before a merge: under five minutes
     sh tests.sh                          # every test file
 
-Making needs Python 3 and an assembler (clang). The gate and some tests run code on a processor and need
+Making needs Python 3 and nothing else: `core/asm.py` writes a function's bytes by the instruction table. (clang
+is used by tests only: `lang/test_asm.py` compares the two assemblers on every function.) The gate and some tests run code on a processor and need
 x86-64 Linux with AVX-512; they skip elsewhere. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
 judge each change the verifier accepts: hours, run in the background.
 
@@ -53,7 +54,7 @@ judge each change the verifier accepts: hours, run in the background.
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
-| `lang/` | `odec.py`: Ode source to assembly. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`) and chooses nothing |
+| `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |
 
 Inside `kcheck/`, by what a file is relied on for:
@@ -73,6 +74,7 @@ Inside `core/`:
 |---|---|
 | relied on: what each instruction does, and what bytes are one | `x86.tab` (93 rows, 150 ways of writing them in bytes), `table.py` (reads it), `step.py` (does a row's effect on the verifier's machine: a rule on symbols for each primitive, none about one instruction), `encode.py` (writes an instance's bytes in one of its row's ways: one byte string), `decode.py` (reads the bytes at a place as an instance only if `encode.py` writes those very bytes for it; the part of it that proposes what the bytes might be is relied on for nothing) |
 | the rules, written down | `RULES.md`: every rule the verifier follows, with why it is right: which instruction the bytes are, what a row concludes, memory in regions, calls by contract, paths and splits, loop places and lemmas, returns, traces, and whole-file checks |
+| maker (relied on for nothing) | `asm.py`: the assembler. An instruction of an Ode source becomes the bytes `encode.py` writes for its row (the shortest way; a jump short where it reaches); what comes out is read back by the verifier like any other bytes |
 | testers | `conc.py` (each primitive's meaning on numbers), `cross.py` (every row, as an assembler writes it and in each way the table writes its bytes, run on this machine's processor from random states and compared), `decoder.py` (what an assembler writes for each row's instances is read as that row), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
 
 ## Where this came from

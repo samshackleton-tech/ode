@@ -2,7 +2,7 @@
 """odec: Ode source to assembly, and to an object.
 
     python3 odec.py SOURCE.ode NAME            prints the assembly of the function NAME
-    python3 odec.py SOURCE.ode NAME OUT.o      makes the object (an assembler, clang, takes the assembly)
+    python3 odec.py SOURCE.ode NAME OUT.o      makes the object from the instruction table, without clang
     python3 odec.py SOURCE.ode --all FOLDER    makes FOLDER/NAME.o for every function of the source
     python3 odec.py --from FOLDER NAME OUT.o   makes the object of the function NAME of whichever source in FOLDER has it
 
@@ -148,10 +148,17 @@ def assemble(s_path, o_path):
 
 
 def build(src, name, obj, symbol=None):
-    """The object of a function of the source: its assembly beside it (OBJ's name with .S), assembled."""
-    s_path = obj[:-2] + ".S" if obj.endswith(".o") else obj + ".S"
-    with open(s_path, "w") as f: f.write(assembly(src, name, symbol))
-    assemble(s_path, obj)
+    """Write a function's ELF object using the instruction table."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core"))
+    from asm import build_elf
+    data, own, lines = found(src, name)
+    notes = []
+    expanded = expand(name, lines, {}, {}, notes)
+    try:
+        blob = build_elf(name, symbol or own, expanded, notes, data)
+    except (ValueError, KeyError, IndexError) as e:
+        raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
+    with open(obj, "wb") as f: f.write(blob)
 
 
 def source_of(folder, name):
@@ -163,7 +170,7 @@ def source_of(folder, name):
 
 def place_of(src, name):
     """What a function's source says holds at its loop's place, as the proof kfn.py's verifier reads (without
-    the place's number of bytes into the function, which the assembler knows: assembly()); None if the source
+    the place's number of bytes into the function, which build() writes in `.ode.place`); None if the source
     has no place. The lines of `place b { ... }`:
         keep rsp, rbp, r12            these registers hold what they held when the code first came back here
         keep zmm9                     a ZMM register, likewise
@@ -219,7 +226,7 @@ def main():
         os.makedirs(a[2], exist_ok=True)
         names = [n for n, _, _ in functions(read_source(a[0]), a[0])[1]]
         for n in names: build(a[0], n, os.path.join(a[2], n + ".o"))
-        print(f"{len(names)} functions of {os.path.basename(a[0])}: assembly and objects in {a[2]}"); return
+        print(f"{len(names)} functions of {os.path.basename(a[0])}: objects in {a[2]}"); return
     if len(a) == 4 and a[0] == "--from": build(source_of(a[1], a[2]), a[2], a[3]); return
     if len(a) == 2: sys.stdout.write(assembly(a[0], a[1])); return
     if len(a) == 3: build(a[0], a[1], a[2]); return

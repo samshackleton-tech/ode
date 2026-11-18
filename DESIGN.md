@@ -326,7 +326,9 @@ route, of his choosing, from his question to his tool's answer.
   inverse of writing by construction: whatever proposes what the bytes might be is relied on for nothing,
   and no form is read that the table does not write (a prefix that says nothing, a displacement longer
   than needed, a bit an encoding leaves unused: each was a question of its own for a reader written by
-  hand). The same function is the assembler that the one language of section 14, item 5, needs.
+  hand). The same function is the assembler of the one language (section 14, item 5): `core/asm.py`
+  writes every function of the sources with it, and no outside assembler stands between an Ode source
+  and its bytes (for each of the 26 functions it gives the bytes clang gives: `lang/test_asm.py`).
 - **Compared with processors.** Each form is run on real processors on random states and compared
   (Ode 0.1 did this for its AArch64 subset, and the Lean experiments for x86-64). Each change to a binary
   that the verifier accepts in an audit is run on a processor against the specification.
@@ -449,8 +451,8 @@ Each is open on purpose, with what will close it.
    stack byte is the coder's choice. The word-level layer and its compiler are gone: its 22 functions
    stand in the sources as the instructions it last printed (the shipped files' bytes did not change),
    and are to be written again by hand (the first is: `node_out` by hand is 18 instructions where the
-   compiler printed 58, and the same verifier takes it against the same contract). *Open:* the conveniences, and
-   the assembler by the table (section 8: then no outside assembler stands between source and bytes).
+   compiler printed 58, and the same verifier takes it against the same contract). The assembler goes by the table
+   (section 8): no outside assembler stands between source and bytes. *Open:* the conveniences.
    The one language will grow a compiler, of this
    kind only: it may check what the coder declares, expand a convenience in a fixed and documented way
    (a name bound to a register, an `if` over a flag the coder sets), and carry the coder's types and
