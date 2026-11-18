@@ -603,19 +603,27 @@ theorem sameUse_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
       simp only [CallValue, ef, ea]
     next => exact (refuse_ok h).elim
 
+/-- What is asked of a way to open a use of a definition: what the verifier holds after it is so. -/
+def DeeperSound (ctx : Ctx) (s0 : State) (deeper : Sym → SCall → V Sym) : Prop :=
+  ∀ {s s' : Sym} {c : SCall} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    deeper s c items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → c.bounded s.nvars → ∃ ρ', Carried ctx s0 ρ s ρ' s' st
+
 /-- The value the verifier takes a use of a definition to have is its value. -/
-theorem heldFor_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {c : SCall} {x : Row} {items rest : List Item} (h : heldFor s c items = .ok (x, rest)) :
-    CallValue ctx s0 ρ c (.int (ev ρ x)) ∧ bounded s.nvars x := by
+theorem heldFor_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {c : SCall} (hc : c.bounded s.nvars) {x : Row} {s' : Sym} {items rest : List Item}
+    (h : heldFor deeper s c items = .ok ((x, s'), rest)) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ CallValue ctx s0 ρ' c (.int (ev ρ' x)) ∧ bounded s'.nvars x := by
   unfold heldFor at h
   cases hk : knownValue s.spec c with
   | some v =>
     simp only [hk] at h
     have := V.pure_ok h
     injection this with h1 _
-    subst h1
+    injection h1 with h1 h2
+    subst h1 h2
     have m := knownValue_mem hk
-    exact ⟨H.spec _ m, (wf.spec _ m).2⟩
+    exact ⟨ρ, Carried.here H wf, H.spec _ m, (wf.spec _ m).2⟩
   | none =>
     simp only [hk] at h
     obtain ⟨item, r1, _, h⟩ := V.bind_ok h
@@ -636,17 +644,34 @@ theorem heldFor_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
             obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
             have := V.pure_ok h
             injection this with h1 _
-            subst h1
+            injection h1 with h1 h2
+            subst h1 h2
             have m := heldValues_mem (List.mem_of_getElem? hv)
             have same := sameUse_sound H e2
-            exact ⟨(same _).mpr (H.spec _ m), (wf.spec _ m).2⟩
-        next => exact (refuse_ok h).elim
+            exact ⟨ρ, Carried.here H wf, (same _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+        next =>
+          split at h
+          next =>
+            obtain ⟨s1, r2, e2, h⟩ := V.bind_ok h
+            obtain ⟨ρ1, c1⟩ := D e2 H wf hc
+            cases hk1 : knownValue s1.spec c with
+            | none => simp only [hk1] at h; exact (refuse_ok h).elim
+            | some v =>
+              simp only [hk1] at h
+              have := V.pure_ok h
+              injection this with h1 _
+              injection h1 with h1 h2
+              subst h1 h2
+              have m := knownValue_mem hk1
+              exact ⟨ρ1, c1, c1.holds.spec _ m, (c1.wf.spec _ m).2⟩
+          next => exact (refuse_ok h).elim
 
 /-- A result taken where a number is needed: the expression has that number as its value. -/
-theorem numberV_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row} {items rest : List Item}
-    (h : numberV s res items = .ok (x, rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
-    Value ctx.defs env e (.int (ev ρ x)) ∧ bounded s.nvars x := by
+theorem numberV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row} {s' : Sym} {items rest : List Item}
+    (h : numberV deeper s res items = .ok ((x, s'), rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Value ctx.defs env e (.int (ev ρ' x)) ∧ bounded s'.nvars x := by
   cases res with
   | list _ => simp only [numberV] at h; exact (refuse_ok h).elim
   | val v =>
@@ -657,45 +682,50 @@ theorem numberV_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
       simp only [numberV] at h
       have := V.pure_ok h
       injection this with h1 _
-      subst h1
-      exact ⟨sem, bd⟩
+      injection h1 with h1 h2
+      subst h1 h2
+      exact ⟨ρ, Carried.here H wf, sem, bd⟩
   | tail c =>
     simp only [numberV] at h
-    obtain ⟨cv, b⟩ := heldFor_sound H wf h
-    exact ⟨(sem _).mpr cv, b⟩
+    obtain ⟨ρ1, c1, cv, b⟩ := heldFor_sound D H wf bd h
+    exact ⟨ρ1, c1, (sem _).mpr ((CallValue_agree bd c1.agree _).mpr cv), b⟩
 
 /-- A result taken as one of the things a definition is used with: the expression has that value. -/
-theorem argumentV_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal} {items rest : List Item}
-    (h : argumentV s res items = .ok (v, rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
-    Value ctx.defs env e (semv ctx s0 ρ v) ∧ v.bounded s.nvars := by
+theorem argumentV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal} {s' : Sym} {items rest : List Item}
+    (h : argumentV deeper s res items = .ok ((v, s'), rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Value ctx.defs env e (semv ctx s0 ρ' v) ∧ v.bounded s'.nvars := by
   cases res with
   | list _ => simp only [argumentV] at h; exact (refuse_ok h).elim
   | val w =>
     simp only [argumentV] at h
     have := V.pure_ok h
     injection this with h1 _
-    subst h1
-    exact ⟨sem, bd⟩
+    injection h1 with h1 h2
+    subst h1 h2
+    exact ⟨ρ, Carried.here H wf, sem, bd⟩
   | tail c =>
     simp only [argumentV] at h
-    obtain ⟨x, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
     have := V.pure_ok h
     injection this with h1 _
-    subst h1
-    obtain ⟨cv, b⟩ := heldFor_sound H wf e1
-    exact ⟨(sem _).mpr cv, b⟩
+    injection h1 with h1 h2
+    subst h1 h2
+    obtain ⟨ρ1, c1, cv, b⟩ := heldFor_sound D H wf bd e1
+    exact ⟨ρ1, c1, (sem _).mpr ((CallValue_agree bd c1.agree _).mpr cv), b⟩
 
 /-- An expression of the specification worked out on symbols: what comes out is what the expression means. -/
-theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
+theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {deeper : Sym → SCall → V Sym}
+    (D : DeeperSound ctx s0 deeper) (env : List (String × SVal)) :
     ∀ (e : SExpr) {s s' : Sym} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State},
-    seval ctx env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    sevalWith ctx deeper env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ res.sem ctx s0 ρ' (semEnv ctx s0 ρ' env) e ∧ res.bounded s'.nvars := by
   intro e
   induction e with
   | num n =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     split at h
     next => exact (refuse_ok h).elim
     next hn =>
@@ -706,7 +736,7 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       exact ⟨ρ, Carried.here H wf, by simpa [SRes.sem, semv] using Value.num (Int.not_lt.mp hn), bounded_const _ _⟩
   | name x =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     cases hl : env.lookup x with
     | none => simp only [hl] at h; exact (refuse_ok h).elim
     | some v =>
@@ -718,7 +748,7 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       exact ⟨ρ, Carried.here H wf, Value.name (by rw [lookup_semEnv, hl]; rfl), hb _ (lookup_mem hl)⟩
   | nil =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     have := V.pure_ok h
     injection this with hp _
     injection hp with e1 e2
@@ -726,15 +756,17 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     exact ⟨ρ, Carried.here H wf, Values.nil, fun _ m => by cases m⟩
   | cons a more iha ihm =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     obtain ⟨⟨v, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨⟨vs, s2⟩, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨ρ1, c1, sa, ba⟩ := iha e1 H wf hb
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sm, bm⟩ := ihm e2 c1.holds c1.wf hb1
+    have hb2 := hb1.mono c2.mono
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    obtain ⟨av, r3, e3, h⟩ := V.bind_ok h
-    obtain ⟨va, bva⟩ := argumentV_sound c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
+    obtain ⟨⟨av, s3⟩, r3, e3, h⟩ := V.bind_ok h
+    obtain ⟨ρ3, c3, va, bva⟩ := argumentV_sound D c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
+    have sm3 := SRes.sem_agree sm bm hb2 c3.agree
     cases vs with
     | tail _ => exact (refuse_ok h).elim
     | val _ => exact (refuse_ok h).elim
@@ -744,40 +776,50 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       injection this with hp _
       injection hp with e1 e2
       subst e1 e2
-      refine ⟨ρ2, c1.then c2, Values.cons va sm, ?_⟩
-      intro w m
-      cases m with
-      | head => exact bva
-      | tail _ m => exact bm w m
+      refine ⟨ρ3, (c1.then c2).then c3, Values.cons ?_ sm3, ?_⟩
+      · rw [← semEnv_agree hb2 c3.agree]; exact va
+      · intro w m
+        cases m with
+        | head => exact bva
+        | tail _ m => exact SVal.bounded_mono c3.mono (bm w m)
   | bin op a b iha ihb =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨⟨y, s2⟩, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨ρ1, c1, sa, ba⟩ := iha e1 H wf hb
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sb, bb⟩ := ihb e2 c1.holds c1.wf hb1
+    have hb2 := hb1.mono c2.mono
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    obtain ⟨xr, r3, e3, h⟩ := V.bind_ok h
-    obtain ⟨yr, r4, e4, h⟩ := V.bind_ok h
-    obtain ⟨vx, bx⟩ := numberV_sound c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
-    obtain ⟨vy, by'⟩ := numberV_sound c2.holds c2.wf e4 sb bb
+    obtain ⟨⟨xr, s3⟩, r3, e3, h⟩ := V.bind_ok h
+    obtain ⟨⟨yr, s4⟩, r4, e4, h⟩ := V.bind_ok h
+    obtain ⟨ρ3, c3, vx, bx⟩ := numberV_sound D c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
+    have hb3 := hb2.mono c3.mono
+    have sb3 := SRes.sem_agree sb bb hb2 c3.agree
+    obtain ⟨ρ4, c4, vy, by'⟩ := numberV_sound D c3.holds c3.wf e4 sb3 (SRes.bounded_mono c3.mono bb)
+    have hb4 := hb3.mono c4.mono
+    have vx4 : Value ctx.defs (semEnv ctx s0 ρ4 env) a (.int (ev ρ4 xr)) := by
+      rw [← semEnv_agree hb3 c4.agree, ← semEnv_agree hb2 c3.agree, ← ev_agree bx c4.agree]; exact vx
+    have vy4 : Value ctx.defs (semEnv ctx s0 ρ4 env) b (.int (ev ρ4 yr)) := by
+      rw [← semEnv_agree hb3 c4.agree]; exact vy
+    have bx4 := bounded_mono c4.mono bx
     split at h
     next hop =>
       have eop : op = "%" := by simpa using hop
-      obtain ⟨ρ3, c3, v, hres, bv, hz⟩ := smod_sound h c2.holds c2.wf bx
+      obtain ⟨ρ5, c5, v, hres, bv, hz⟩ := smod_sound h c4.holds c4.wf bx4
       subst hres
-      refine ⟨ρ3, (c1.then c2).then c3, ?_, bv⟩
-      show Value ctx.defs (semEnv ctx s0 ρ3 env) (.bin op a b) (semv ctx s0 ρ3 v)
-      rw [← semEnv_agree (hb1.mono c2.mono) c3.agree, eop]
-      exact Value.bin vx vy hz
+      refine ⟨ρ5, (((c1.then c2).then c3).then c4).then c5, ?_, bv⟩
+      show Value ctx.defs (semEnv ctx s0 ρ5 env) (.bin op a b) (semv ctx s0 ρ5 v)
+      rw [← semEnv_agree hb4 c5.agree, eop]
+      exact Value.bin vx4 vy4 hz
     next =>
-      obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
+      obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c4.holds.facts bx4 by'
       subst hs hres
-      exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
+      exact ⟨ρ4, ((c1.then c2).then c3).then c4, Value.bin vx4 vy4 hz, bv⟩
   | index a i iha ihi =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨⟨y, s2⟩, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨ρ1, c1, sa, ba⟩ := iha e1 H wf hb
@@ -816,7 +858,7 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
             exact Value.index sa3 sb3 g1 (runBytes_get s0 base len _ (by omega))
   | call f args iha =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     obtain ⟨⟨vs, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨ρ1, c1, sa, ba⟩ := iha e1 H wf hb
     cases vs with
@@ -829,7 +871,7 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       exact ⟨ρ1, c1, sem, bd⟩
   | ifx c a b ihc iha ihb =>
     intro s s' res items rest ρ st h H wf hb
-    simp only [seval] at h
+    simp only [sevalWith] at h
     obtain ⟨⟨cv, s1⟩, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨ρ1, c1, sc, bc⟩ := ihc e1 H wf hb
     have hb1 := hb.mono c1.mono
@@ -906,20 +948,19 @@ theorem WF.withSpec {s : Sym} (wf : WF s) (f : SFact) (hf : f.bounded s.nvars) :
      | head => exact hf
      | tail _ m => exact wf.spec g m⟩
 
-theorem openCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : SCall}
-    {items rest : List Item} {ρ : Nat → Int} {st : State}
-    (h : openCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hc : c.bounded s.nvars) :
-    ∃ ρ', Carried ctx s0 ρ s ρ' s' st := by
+theorem openCallWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {deeper : Sym → SCall → V Sym}
+    (D : DeeperSound ctx s0 deeper) : DeeperSound ctx s0 (openCallWith ctx deeper) := by
+  intro s s' c items rest ρ st h H wf hc
   cases hd : findDef ctx.defs c.f with
-  | none => simp only [openCall, hd] at h; exact (refuse_ok h).elim
+  | none => simp only [openCallWith, hd] at h; exact (refuse_ok h).elim
   | some d =>
-    simp only [openCall, hd] at h
+    simp only [openCallWith, hd] at h
     split at h
     next => exact (refuse_ok h).elim
     next =>
       obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
       have hbenv : EnvB s.nvars (d.params.zip c.args) := fun nv m => hc nv.2 (mem_zip_right m)
-      obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ d.body e1 H wf hbenv
+      obtain ⟨ρ1, c1, sem, bd⟩ := sevalWith_sound E D _ d.body e1 H wf hbenv
       rw [semEnv_zip] at sem
       have hc1 := SCall.bounded_mono c1.mono hc
       cases res with
@@ -945,6 +986,30 @@ theorem openCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           refine ⟨ρ1, c1.agree, c1.mono, c1.holds.withSpec _ ?_, c1.wf.withSpec _ ⟨hc1, bd⟩⟩
           simp only [SFact.holds, CallValue, hd]
           exact sem
+
+/-- Opening a use of a definition, to any depth: what the verifier holds after it is so. -/
+theorem opener_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) : ∀ n, DeeperSound ctx s0 (opener ctx n)
+  | 0 => by
+    intro h H wf hc
+    simp only [opener] at h
+    exact (refuse_ok h).elim
+  | n + 1 => by
+    intro h H wf hc
+    simp only [opener] at h
+    exact openCallWith_sound E (opener_sound E n) h H wf hc
+
+/-- An expression of the specification worked out on symbols: what comes out is what the expression means. -/
+theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
+    ∀ (e : SExpr) {s s' : Sym} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State},
+    seval ctx env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ res.sem ctx s0 ρ' (semEnv ctx s0 ρ' env) e ∧ res.bounded s'.nvars :=
+  fun e => sevalWith_sound E (opener_sound E DEEP) env e
+
+theorem openCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : SCall}
+    {items rest : List Item} {ρ : Nat → Int} {st : State}
+    (h : openCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hc : c.bounded s.nvars) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st :=
+  openCallWith_sound E (opener_sound E DEEP) h H wf hc
 
 theorem holdsSpec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {facts : List SFact} {goal : SFact}
     (h : holdsSpec facts goal = true) (hf : ∀ f ∈ facts, f.holds ctx s0 ρ) : goal.holds ctx s0 ρ := by

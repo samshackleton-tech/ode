@@ -90,6 +90,88 @@ def bearing(system, seed):
     return [f for k, f in enumerate(system) if k in chosen]
 
 
+def derive_eq(system, limit=30000, last=frozenset()):
+    """As kprove.derive (a proof that the rows cannot all hold, or None), with the equalities used first. An
+    equality is a row given together with its opposite. Where it has an unknown once (multiple 1 or -1) that
+    no row multiplies (`last`: the unknowns some row multiplies), that unknown is put out of every other row
+    by adding the equality to it, so many times; the rows stay as many as they were. What is left goes by
+    elimination, the multiplied unknowns last."""
+    norm = klin.Facts.norm
+    how, live = {}, []
+    for f in system:
+        if f not in how: how[f] = None; live.append(f)
+    def done(final):
+        index = {}
+        def visit(f):
+            if f in index: return
+            h = how[f]
+            if h is not None: visit(h[0]); visit(h[2])
+            index[f] = None
+        visit(final)
+        used = list(index)
+        starts = [f for f in used if how[f] is None]
+        if system[-1] in starts: starts.remove(system[-1])
+        starts.append(system[-1])
+        for k, f in enumerate(starts): index[f] = k
+        steps = []
+        for f in used:
+            if how[f] is not None:
+                p, a, q, b = how[f]; index[f] = len(starts) + len(steps); steps.append((index[p], a, index[q], b))
+        if how[final] is None: k = starts.index(final); steps.append((k, 1, k, 1))
+        return [kprove.row(f) for f in starts], steps
+    for f in live:
+        if not f.c and f.k < 0: return done(f)
+    rows = [f for f in live if f.c]
+    again = True
+    while again:
+        again = False
+        have = set(rows)
+        for p in rows:
+            n = -p
+            if n not in have: continue
+            once = [s for s, a in p.c if abs(a) == 1 and s not in last]
+            if not once: continue
+            s = once[0]
+            up, down = (p, n) if dict(p.c)[s] > 0 else (n, p)          # up: +s ...; down: -s ...
+            new = []
+            for r in rows:
+                if r is p or r is n or r == p or r == n: continue
+                b = dict(r.c).get(s, 0)
+                if b:
+                    e = down if b > 0 else up
+                    made = norm(r + e.scale(abs(b)))
+                    if made not in how: how[made] = (r, 1, e, abs(b))
+                    if not made.c:
+                        if made.k < 0: return done(made)
+                        continue
+                    r = made
+                new.append(r)
+            rows, again = list(dict.fromkeys(new)), True
+            break
+    rows = set(rows)
+    while rows:
+        count = {}
+        for f in rows:
+            for s, a in f.c:
+                p = count.setdefault(s, [0, 0]); p[0 if a > 0 else 1] += 1
+        s = min(count, key=lambda s: (s in last, count[s][0] * count[s][1], s))
+        pos = [f for f in rows if dict(f.c).get(s, 0) > 0]
+        neg = [f for f in rows if dict(f.c).get(s, 0) < 0]
+        rows = {f for f in rows if s not in dict(f.c)}
+        if len(rows) + len(pos) * len(neg) > limit: return None
+        for p in pos:
+            a = dict(p.c)[s]
+            for n in neg:
+                b = -dict(n.c)[s]
+                g = gcd(a, b)
+                r = norm(p.scale(b // g) + n.scale(a // g))
+                if r not in how: how[r] = (p, b // g, n, a // g)
+                if not r.c:
+                    if r.k < 0: return done(r)
+                else: rows.add(r)
+    return None
+
+
 def near(system, seed, steps):
     """The rows within so many steps of the row at `seed`: a row is one step from a row it shares an unknown with."""
     names, chosen = set(n for n, _ in system[seed].c), {seed}
@@ -118,6 +200,14 @@ def refutation(system, seed=-1, quick=False):
         if not found:
             rows = bearing(system, seed % len(system))
             if len(rows) < len(system): found = kprove.derive(rows, 600)
+            if not found and not quick:                # the equalities first, on the rows near the one asked about
+                tried = None
+                for steps in (2, 3, 4, 6):
+                    close = near(system, seed % len(system), steps)
+                    if close == tried: break
+                    tried = close
+                    found = derive_eq(close, 30000, last=frozenset(n for f in close for n, c in f.c if abs(c) > 1))
+                    if found: break
             if not found and not quick:
                 for room in (30000, 300000):           # the rows near the one asked about, the quotients left for last
                     tried = None
@@ -212,7 +302,9 @@ class Prover:
                 for k in reversed(range(count)):
                     done = self.solve(proof + [f"t held {k}"])
                     if done is not None: return done
-                self.last = said; self.note(proof, said + ' (no value held fits)')
+                done = self.solve(proof + ["t open"])           # no value held fits: the use is opened where it is met
+                if done is not None: return done
+                self.last = said; self.note(proof, said + ' (no value held fits, and opening the use does not do)')
                 return None
             else: raise SystemExit(f"prove: the verifier needs what this prover does not know: {said}")
 

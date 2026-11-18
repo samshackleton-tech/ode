@@ -522,10 +522,11 @@ def sameUse (s : Sym) (c c' : SCall) : V Unit :=
   else refuse "the value held is of another use"
 
 /-- The value of a use of a definition, where a number is needed: the one held for it; or, where the proof
-says which (`held K`), the K-th value held, shown to be of a use with the same value. -/
-def heldFor (s : Sym) (c : SCall) : V Row :=
+says which (`held K`), the K-th value held, shown to be of a use with the same value; or, where the proof
+says to open it (`open`), the value its definition then gives it (`deeper` opens it). -/
+def heldFor (deeper : Sym → SCall → V Sym) (s : Sym) (c : SCall) : V (Row × Sym) :=
   match knownValue s.spec c with
-  | some v => pure v
+  | some v => pure (v, s)
   | none => do
     match ← pop with
     | some (.tag name k) =>
@@ -533,24 +534,29 @@ def heldFor (s : Sym) (c : SCall) : V Row :=
         match (heldValues s.spec)[k]? with
         | some (c', v) => do
           sameUse s c c'
-          pure v
+          pure (v, s)
         | none => refuse "no such value is held"
+      else if name == "open" then do
+        let s' ← deeper s c
+        match knownValue s'.spec c with
+        | some v => pure (v, s')
+        | none => refuse "a use of a definition opened where a number is needed, and its value is still no number"
       else refuse "a number is expected (or a use of a definition whose value is held)"
     | some (.proof ..) => refuse "a number is expected (or a use of a definition whose value is held)"
     | none => fun _ => .error s!"need held\nc {(heldValues s.spec).length}\n"
 
-/-- A result where a number is needed: a number, or a use of a definition whose value is held. -/
-def numberV (s : Sym) : SRes → V Row
-  | .val (.lin x) => pure x
-  | .tail c => heldFor s c
+/-- A result where a number is needed: a number, or a use of a definition whose value is held or found. -/
+def numberV (deeper : Sym → SCall → V Sym) (s : Sym) : SRes → V (Row × Sym)
+  | .val (.lin x) => pure (x, s)
+  | .tail c => heldFor deeper s c
   | _ => refuse "a number is expected (or a use of a definition whose value is held)"
 
-/-- A result as one of the things a definition is used with: a value, or a use whose value is held. -/
-def argumentV (s : Sym) : SRes → V SVal
-  | .val v => pure v
+/-- A result as one of the things a definition is used with: a value, or a use whose value is held or found. -/
+def argumentV (deeper : Sym → SCall → V Sym) (s : Sym) : SRes → V (SVal × Sym)
+  | .val v => pure (v, s)
   | .tail c => do
-    let v ← heldFor s c
-    pure (.lin v)
+    let (v, s) ← heldFor deeper s c
+    pure (.lin v, s)
   | .list _ => refuse "a use of a definition inside another, whose value is not held"
 
 def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) :=
@@ -565,60 +571,75 @@ def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) 
     | some d => if d.params.length == vs.length then pure (.tail ⟨f, vs⟩, s) else refuse s!"{f} takes another number of things"
     | none => refuse s!"no definition {f}"
 
-def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes × Sym)
+/-- An expression of the specification, on symbols. `deeper`: how a use of a definition whose value is
+needed and not held is opened. -/
+def sevalWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (env : List (String × SVal)) : Sym → SExpr → V (SRes × Sym)
   | s, .num n => if n < 0 then refuse "a number below zero" else pure (.val (.lin (Lin.const n)), s)
   | s, .name x =>
     match env.lookup x with
     | some v => pure (.val v, s)
     | none => refuse s!"the name {x} stands for nothing here"
   | s, .bin op a b => do
-    let (x, s) ← seval ctx env s a
-    let (y, s) ← seval ctx env s b
-    let x ← numberV s x
-    let y ← numberV s y
+    let (x, s) ← sevalWith ctx deeper env s a
+    let (y, s) ← sevalWith ctx deeper env s b
+    let (x, s) ← numberV deeper s x
+    let (y, s) ← numberV deeper s y
     if op == "%" then smod s x y else sbin op s x y
   | s, .ifx c a b => do
-    let (c, s) ← seval ctx env s c
+    let (c, s) ← sevalWith ctx deeper env s c
     match c with
     | .val (.bool t) => do
-      let (r, s) ← if t then seval ctx env s a else seval ctx env s b
+      let (r, s) ← if t then sevalWith ctx deeper env s a else sevalWith ctx deeper env s b
       match r with
       | .list _ => refuse "a list of things where a value is expected"
       | _ => pure (r, s)
     | _ => refuse "a condition that is not true or false"
   | s, .index a i => do
-    let (a, s) ← seval ctx env s a
-    let (i, s) ← seval ctx env s i
+    let (a, s) ← sevalWith ctx deeper env s a
+    let (i, s) ← sevalWith ctx deeper env s i
     match a, i with
     | .val (.region r), .val (.lin o) => do
       let (v, s) ← readByte ctx s r o
       pure (.val (.lin v), s)
     | _, _ => refuse "a byte of what is no run of bytes"
   | s, .call f args => do
-    let (vs, s) ← seval ctx env s args
+    let (vs, s) ← sevalWith ctx deeper env s args
     match vs with
     | .list vs => scall ctx f vs s
     | _ => refuse "a definition used with what is no list of things"
   | s, .nil => pure (.list [], s)
   | s, .cons a rest => do
-    let (v, s) ← seval ctx env s a
-    let (vs, s) ← seval ctx env s rest
-    let v ← argumentV s v
+    let (v, s) ← sevalWith ctx deeper env s a
+    let (vs, s) ← sevalWith ctx deeper env s rest
+    let (v, s) ← argumentV deeper s v
     match vs with
     | .list vs => pure (.list (v :: vs), s)
     | _ => refuse "what a definition is used with is no list of things"
 
 /-- A use of a definition, opened once: a fact of what it is the same as, or of its value. -/
-def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym :=
+def openCallWith (ctx : Ctx) (deeper : Sym → SCall → V Sym) (s : Sym) (c : SCall) : V Sym :=
   match findDef ctx.defs c.f with
   | none => refuse s!"no definition {c.f}"
   | some d =>
     if d.params.length != c.args.length then refuse s!"{c.f} takes another number of things" else do
-      let (res, s) ← seval ctx (d.params.zip c.args) s d.body
+      let (res, s) ← sevalWith ctx deeper (d.params.zip c.args) s d.body
       match res with
       | .tail c' => pure { s with spec := .same c c' :: s.spec }
       | .val (.lin v) => pure { s with spec := .value c v :: s.spec }
       | _ => refuse "a definition whose value is no number: not here yet"
+
+/-- Opening a use of a definition, the uses met inside it opened in turn where the proof says so, to so
+many deep. -/
+def opener (ctx : Ctx) : Nat → Sym → SCall → V Sym
+  | 0 => fun _ _ => refuse "definitions opened one inside another, too many deep"
+  | n + 1 => openCallWith ctx (opener ctx n)
+
+def DEEP : Nat := 8
+
+def seval (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : SExpr) : V (SRes × Sym) :=
+  sevalWith ctx (opener ctx DEEP) env s e
+
+def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym := openCallWith ctx (opener ctx DEEP) s c
 
 def holdsSpec (facts : List SFact) : SFact → Bool
   | .same a b => (reach facts (facts.length + 1) [a]).contains b
