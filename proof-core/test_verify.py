@@ -118,7 +118,7 @@ class Verify(unittest.TestCase):
             trials = [("left out", None)]
             if l.startswith("t live"): trials.append(("live made dead", "t dead"))
             if l.startswith("t dead"): trials.append(("dead made live", "t live"))
-            if l.startswith("t open"): trials.append(("another opened", "t open 0" if l != "t open 0" else "t open 1"))
+            if l.startswith("t open "): trials.append(("another opened", "t open 0" if l != "t open 0" else "t open 1"))     # (a plain `t open` is where a number is needed: it names no use)
             if l in ("t lt", "t eq", "t gt"): trials.append(("another order", "t gt" if l != "t gt" else "t lt"))
             if l.startswith("p "): w = l.split(); trials.append(("another row to start from", " ".join(w[:1] + [str(int(w[1]) + 1)] + w[2:])))
             if l.startswith("s "): w = l.split(); trials.append(("a step's multiplier", " ".join(w[:2] + [str(int(w[2]) + 1)] + w[3:])))

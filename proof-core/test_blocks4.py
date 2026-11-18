@@ -107,7 +107,7 @@ class Blocks4(unittest.TestCase):
             trials = [("left out", None)]
             if l.startswith("t held"): trials.append(("another value held", "t held 0" if l != "t held 0" else "t held 1"))
             if l.startswith("t carry"): trials.append(("another value carried", "t carry 1" if l != "t carry 1" else "t carry 0"))
-            if l.startswith("t open"): trials.append(("another opened", "t open 0" if l != "t open 0" else "t open 1"))
+            if l.startswith("t open "): trials.append(("another opened", "t open 0" if l != "t open 0" else "t open 1"))     # (a plain `t open` is where a number is needed: it names no use)
             if l in ("t lt", "t eq", "t gt"): trials.append(("another order", "t gt" if l != "t gt" else "t lt"))
             if l.startswith("s "): w = l.split(); trials.append(("a step's multiplier", " ".join(w[:2] + [str(int(w[2]) + 1)] + w[3:])))
             for kind, new in trials:
