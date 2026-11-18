@@ -511,8 +511,10 @@ class Spec:
                 whole = self.size_of_kind(f["kind"]) * (f["count"] or 1)
                 if f["at"] < 0 or f["at"] + whole > lay["size"]:
                     raise Err(f"layout {name}: its {field} ({f['count'] or 1} of {f['kind']}, at {f['at']}) does not lie within its {lay['size']} bytes")
-                if f["below"] is not None and f["below"] < 1:
-                    raise Err(f"layout {name}: its {field} is below {f['below']}: no number is, so no value of the layout is")
+                if f["below"] is not None and (f["kind"] != "number" or f["count"] is not None):
+                    raise Err(f"layout {name}: its {field} has `below`, and is not a single number")
+                if f["below"] is not None and (f["below"] < 1 or f["below"] > 1 << 64):
+                    raise Err(f"layout {name}: its {field} is below {f['below']}: no number is, or the bound is above 2^64")
                 if f["count"] is not None and f["count"] < 1:
                     raise Err(f"layout {name}: its {field} holds nothing")
                 for o in range(f["at"], f["at"] + whole):

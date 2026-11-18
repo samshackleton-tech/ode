@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Six holes found by reading (four on November 17, 2026 in kfn.py and the kernels' verifiers, to merge them, and
+"""Eight holes found by reading (four on November 17, 2026 in kfn.py and the kernels' verifiers, to merge them, and
 then again with the question the first two had taught; two more that day in the afternoon, in the proof's part
-and the specification's sequences); each was "shown, of something false". The copies that were shown then are
-refused now; these are the copies.
+and the specification's sequences; two more on November 18 while writing the memory and call rules down); each
+was "shown, of something false". The copies that were shown then are refused now; these are the copies.
 
 1. The stack pointer (kfn.py's machine, which is kbyte.py's too). `mov rsp, rdi`, `lea rsp, [rdi]` and
    `pop rsp` put an argument's address in the stack pointer, and the machine then took a push to go to the
@@ -38,6 +38,18 @@ refused now; these are the copies.
 6. A `sequence` whose value changes shape each turn (kspec.py). What cannot be run was named by the shape of
    its first value: `sequence grow(n) { h[0] = [0]  h[b + 1] = h[b] ++ [0]  for b in 0..n }` made
    `len(grow(n))` 1, and a function returning the constant 1 was shown.
+7. What a call assumes and leaves at an address (kfn.py). Three ways the caller and callee disagreed on
+   memory: (a) an address argument the callee only reads, of a kind other than bytes (`cv`, `block`, a
+   `layout`), was read lazily, so where `ensures` did not mention it the caller never checked that it lay in
+   the caller's memory or apart from the callee's stack frame - `b3l_hashr` calling `b3l_twice(rsp - 24, out)`
+   let `b3l_twice`'s stack write overwrite its own input between two reads, verified against the unmodified
+   blake3.spec in default by-proof mode, and failed the first official vector on a processor; (b) a `layout`
+   argument in `writes` (`ensures p = make(p.a)`) gave the callee every field's `below` and `byte` invariant
+   on entry while the caller checked only `p.a`; (c) `writes p` without `ensures` put a fresh `of_kind(p)`
+   record (with `below` facts) into the caller after a `ret` callee.
+8. Stack places in a byte program's proof (kbyte.py). `any stack[N]` put an eight-byte entry at `rsp + N`
+   without checking that it lay below the return address in the function's own frame, letting a function
+   that reads `[rsp + 0x10000000]` (a segmentation fault on a processor) be shown to return 0.
 
 And one of that day's own changes, caught the same way before it was shipped: counting down (`dec`) and
 `test` were taken to set the flags as a compare does; a jump on the order after them is refused now.
@@ -269,8 +281,8 @@ class Proof(unittest.TestCase):
         in check_binary.py asked that the calls come to an end (only programs/check_file.py did). Each
         function's own check passes (each call is taken by the other's contract, its stack covered: a ring of
         constant stacks cannot pass, but one whose stack grows with an argument can, and nothing bound it);
-        the ring is refused by the driver. (For the two functions themselves, on a processor, see
-        blake3-reports/p16-20261113/hole-layout/ring.out: they run for ever.)"""
+        the ring is refused by the driver. (On a processor two functions calling one another stop on a stack
+        fault once the stack runs out.)"""
         import check_binary
         self.assertEqual(check_binary.ring_of({"a": ["b"], "b": ["a"]}), {"a", "b"})
         self.assertEqual(check_binary.ring_of({"a": ["b"], "b": ["c"], "c": ["a"]}), {"a", "b", "c"})
@@ -312,6 +324,138 @@ contract demo(n: number) {
         shoff, = struct.unpack_from("<Q", b, 40)
         struct.pack_into("<Q", b, shoff + 24, 1 << 40)          # the first section's offset, past the file
         with self.assertRaises(kdecode.Stop): kdecode.Elf(bytes(b))
+
+
+class CallMemory(unittest.TestCase):
+    """Hole 7 (memory at a call in kfn.py) and hole 8 (`stack[N]` in a proof of kbyte.py)."""
+
+    def tearDown(self):
+        kspec.SPEC = ode.load(); kfn.CONTRACTS.clear()
+
+    def with_inner(self, inner):
+        with open(os.path.join(HERE, "blake3.spec")) as f: text = f.read()
+        kspec.SPEC = ode.with_proof(text, inner); kfn.CONTRACTS.clear()
+
+    def test_an_unread_address_argument_at_a_call_must_lie_in_the_callers_memory(self):
+        """Hole 7(a): `b3l_twice(p: cv, h: cv)` has `ensures h = h` and XORs two reads of `[p]` around a stack
+        write into `h`. When a caller passes `rsp - 24` (inside `b3l_twice`'s stack frame) or an out-of-bounds
+        address, the call is refused."""
+        self.with_inner("""
+contract b3l_twice(p: cv, h: cv) {
+    requires no_overlap(p, h)
+    ensures h = h
+    stack 16
+    needs sse41
+}
+contract b3l_caller(h: cv) {
+    ensures h = h
+    stack 64
+    needs sse41
+}
+""")
+        B = kfn.BASE
+        twice = [
+            (B,      B + 4,  ".sub 64 (.reg .rsp) (.imm 0x10)"),
+            (B + 4,  B + 6,  ".xor 32 (.reg .rax) (.reg .rax)"),
+            (B + 6,  B + 10, ".mov 64 (.mem .rsp 0x0) (.reg .rax)"),
+            (B + 10, B + 14, ".xloadu 0 .rdi 0x0"),
+            (B + 14, B + 19, ".mov 32 (.reg .rax) (.imm 0xDEADBEEF)"),
+            (B + 19, B + 23, ".mov 64 (.mem .rsp 0x0) (.reg .rax)"),
+            (B + 23, B + 27, ".xloadu 1 .rdi 0x0"),
+            (B + 27, B + 31, ".xpxor 0 0 1"),
+            (B + 31, B + 35, ".xloadu 2 .rsi 0x0"),
+            (B + 35, B + 39, ".xpxor 2 2 0"),
+            (B + 39, B + 43, ".xstoreu .rsi 0x0 2"),
+            (B + 43, B + 47, ".add 64 (.reg .rsp) (.imm 0x10)"),
+            (B + 47, B + 48, ".ret"),
+        ]
+        kfn.check(twice, None, symbol="b3l_twice")
+        for bad_lea, why in ((".lea .rdi .rsp -24", "do not lie in the caller's live frame"),
+                             (".lea .rdi .rsp 0x10", "do not lie in the caller's live frame"),
+                             (".lea .rdi .rsi 0x20", "not shown to lie within h")):
+            caller = [
+                (B,      B + 4,  ".sub 64 (.reg .rsp) (.imm 0x8)"),
+                (B + 4,  B + 7,  ".mov 64 (.reg .rsi) (.reg .rdi)"),
+                (B + 7,  B + 12, bad_lea),
+                (B + 12, B + 17, ".call b3l_twice"),
+                (B + 17, B + 21, ".add 64 (.reg .rsp) (.imm 0x8)"),
+                (B + 21, B + 22, ".ret"),
+            ]
+            with self.subTest(bad_lea):
+                with self.assertRaisesRegex(kcheck.Fail, why):
+                    kfn.check(caller, None, symbol="b3l_caller")
+
+    def test_a_written_layouts_unmentioned_fields_are_not_assumed_on_entry(self):
+        """Hole 7(b): `ensures p = make_rec(p.a)` mentions only `p.a`, so `b3l_edit` may not assume `p.b < 65`
+        (or read `p.b` at all) before writing `p.b`."""
+        self.with_inner("""
+layout partial_rec 16 { a: number at 0, b: number at 8 below 65 }
+def make_rec(x) { { a: x, b: 0 } }
+contract b3l_edit(p: partial_rec) {
+    ensures p = make_rec(p.a)
+    stack 0
+}
+""")
+        B = kfn.BASE
+        edit = [
+            (B,      B + 4,  ".mov 64 (.reg .rax) (.mem .rdi 0x8)"),
+            (B + 4,  B + 8,  ".cmp 64 (.reg .rax) (.imm 0x41)"),
+            (B + 8,  B + 10, f".jae 0x{B + 18:X}"),
+            (B + 10, B + 17, ".mov 64 (.reg .rax) (.imm 0x0)"),
+            (B + 17, B + 18, ".nop"),
+            (B + 18, B + 22, ".mov 64 (.mem .rdi 0x8) (.reg .rax)"),
+            (B + 22, B + 23, ".ret"),
+        ]
+        with self.assertRaisesRegex(kcheck.Fail, "nothing has been written there"):
+            kfn.check(edit, None, symbol="b3l_edit")
+
+    def test_writes_without_ensures_leaves_no_invariant_for_the_caller(self):
+        """Hole 7(c): `writes p` means `p` may hold anything afterwards; calling a `ret` function with
+        `writes p` on a constrained layout leaves nothing readable in the caller's frame, not `p.v < 65`."""
+        self.with_inner("""
+layout constrained 8 { v: number at 0 below 65 }
+contract b3l_spoil(p: constrained) {
+    writes p
+    stack 0
+}
+contract b3l_caller(out: 1 bytes) {
+    ensures out = [0]
+    stack 32
+}
+""")
+        B = kfn.BASE
+        kfn.check([(B, B + 1, ".ret")], None, symbol="b3l_spoil")
+        caller = [
+            (B,      B + 1,  ".push .rbx"),
+            (B + 1,  B + 5,  ".sub 64 (.reg .rsp) (.imm 0x10)"),
+            (B + 5,  B + 8,  ".mov 64 (.reg .rbx) (.reg .rdi)"),
+            (B + 8,  B + 15, ".mov 64 (.reg .rax) (.imm 0x3E7)"),
+            (B + 15, B + 19, ".mov 64 (.mem .rsp 0x0) (.reg .rax)"),
+            (B + 19, B + 22, ".mov 64 (.reg .rdi) (.reg .rsp)"),
+            (B + 22, B + 27, ".call b3l_spoil"),
+            (B + 27, B + 31, ".mov 64 (.reg .rax) (.mem .rsp 0x0)"),
+            (B + 31, B + 35, ".cmp 64 (.reg .rax) (.imm 0x64)"),
+            (B + 35, B + 37, f".jae 0x{B + 40:X}"),
+            (B + 37, B + 40, ".mov 8 (.mem .rbx 0x0) (.imm 0x0)"),
+            (B + 40, B + 44, ".add 64 (.reg .rsp) (.imm 0x10)"),
+            (B + 44, B + 45, ".pop .rbx"),
+            (B + 45, B + 46, ".ret"),
+        ]
+        with self.assertRaisesRegex(kcheck.Fail, "nothing was written there"):
+            kfn.check(caller, None, symbol="b3l_caller")
+
+    def test_a_proof_in_kbyte_cannot_name_stack_cells_outside_the_frame(self):
+        """Hole 8: `any stack[268435456]` in a `.proof` file placed a readable cell 256 MiB above `rsp`."""
+        spec = ode.Spec("contract f(n: number) {\n returns 0\n stack 0\n}\n")
+        B = kbyte.BASE
+        rows = [(B, B + 2, f".jmp 0x{B + 2:X}"),
+                (B + 2, B + 9, ".mov 64 (.reg .rcx) (.mem .rsp 0x10000000)"),
+                (B + 9, B + 11, ".xor 32 (.reg .rax) (.reg .rax)"),
+                (B + 11, B + 12, ".ret")]
+        with self.assertRaisesRegex(kcheck.Fail, "outside the function's own frame"):
+            kbyte.check(rows, spec, "f", "place +0x2 {\n any stack[268435456], rcx\n}\n")
+        with self.assertRaisesRegex(kcheck.Fail, "outside the function's own frame"):
+            kbyte.check(rows, spec, "f", "place +0x2 {\n any stack[0], rcx\n}\n")
 
 
 if __name__ == "__main__":

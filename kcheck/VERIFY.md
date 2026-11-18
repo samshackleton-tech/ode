@@ -71,18 +71,22 @@ file; the verifier uses them and trusts none of them. A wrong one makes the veri
 
 ## What you rely on
 
-- **The files listed under "What ran"**: about 3,100 lines of Python for the hash, 4,300 for the other
+- **The files listed under "What ran"**: about 3,300 lines of Python for the hash, 4,400 for the other
   programs (they load more than they use). None of them searches for anything. They hold: how the file's bytes are read as instructions; what
-  each instruction does; how a specification is read and worked out; how a proof of arithmetic is added up.
+  each instruction does; how a specification is read and worked out; how a proof of arithmetic is added up
+  (`../core/RULES.md` states the rules they follow).
   They are tested and audited, **not proved**: that is the weakest part of this, and the work under way is
-  to make that list short enough to scrutinize ([DESIGN.md](../DESIGN.md#7-what-the-verifier-establishes-and-why-it-can-be-believed), section 7). On November 17, 2026 six faults
+  to make that list short enough to scrutinize ([DESIGN.md](../DESIGN.md#7-what-the-verifier-establishes-and-why-it-can-be-believed), section 7). On November 17 and 18, 2026 eight faults
   were found in them by reading, each one a way to have a wrong file shown (a function that wrote below its
   argument; a kernel that read its constants from an address of the maker's choosing; a register taken to
   hold what a call had written over; two unknown registers taken for one; a layout in the proof that let
   writes run past a caller's room or deleted a path from checking; a sequence whose value changed shape
-  being named by its first value). They are closed, and the files that were wrongly shown are kept as tests;
+  being named by its first value; a call that left an unread address argument unchecked against the callee's
+  frame, assumed uninitialized fields of a written layout, or invented layout bounds after `writes`; a stack
+  slot named outside the frame in a byte program's proof). They are closed, and the copies that were wrongly
+  shown are kept as tests (`test_kholes.py`);
   the audits, which change one bit at a time, could not have found any of them (`README.md`, last section).
-  There may be more: the reading is finished, but reading is not a proof.
+  There may be more: reading is not a proof.
 - **Python**, and that the processor does what its manual says.
 - Nothing else. Not the compiler that made the binary, not the assembler, not the linker, not the source,
   not the prover that found the proof: the verifier reads the bytes that will run.

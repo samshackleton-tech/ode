@@ -111,32 +111,44 @@ def size_of(kind):
     raise Fail(f"a kind whose size is not a plain number: {kind}")
 
 
-class Lazy(dict):
-    """A record in memory that no call has left whole: each field is read when it is asked for."""
-    def __init__(self, fields, read):
-        super().__init__(); self.fields, self.read = list(fields), read
-    def __contains__(self, k): return k in self.fields
-    def __getitem__(self, k):
-        if not dict.__contains__(self, k):
-            if k not in self.fields: raise KeyError(k)
-            dict.__setitem__(self, k, self.read(k))
-        return dict.__getitem__(self, k)
-    def all(self):
-        for k in self.fields: self[k]
-    def keys(self): self.all(); return dict.keys(self)
-    def items(self): self.all(); return dict.items(self)
-    def __iter__(self): self.all(); return dict.__iter__(self)
-    def __len__(self): return len(self.fields)
+def merge_fields(*sets):
+    return None if any(s is None for s in sets) else set().union(*sets)
 
 
-class Env(dict):
-    """A callee's arguments in the specification's terms: what lies at an address is read when it is asked for."""
-    def __init__(self, values, later):
-        super().__init__(values); self.later = later
-    def __contains__(self, k): return dict.__contains__(self, k) or k in self.later
-    def __getitem__(self, k):
-        if not dict.__contains__(self, k): dict.__setitem__(self, k, self.later[k]())
-        return dict.__getitem__(self, k)
+def fields_read(e, name, shadowed=()):
+    """Which fields of `name` an expression reads (`set`), or `None` if it reads `name` whole."""
+    if not isinstance(e, tuple) or not e: return set()
+    if e[0] == "name": return None if e[1] == name and name not in shadowed else set()
+    if e[0] == "field" and e[1] == ("name", name) and name not in shadowed: return {e[2]}
+    if e[0] == "the":
+        s = set() if e[3][0] == "powers" else merge_fields(fields_read(e[3][1], name, shadowed), fields_read(e[3][2], name, shadowed))
+        return merge_fields(s, fields_read(e[4], name, shadowed + (e[2],)))
+    if e[0] == "each": return merge_fields(fields_read(e[3], name, shadowed), fields_read(e[4], name, shadowed), fields_read(e[1], name, shadowed + (e[2],)))
+    kids = [z for x in e[1:] for z in ([x] if isinstance(x, tuple) else [w for y in x for w in (y if isinstance(y, tuple) and len(y) == 2 and isinstance(y[0], tuple) else [y[1]] if isinstance(y, tuple) and len(y) == 2 and isinstance(y[0], str) else [y] if isinstance(y, tuple) else [])] if isinstance(x, list) else [])]
+    return merge_fields(*(fields_read(z, name, shadowed) for z in kids))
+
+
+def uninit_kind(kind, count=None):
+    """What lies in a place of `kind` before anything is written there (or after `writes` leaves anything there)."""
+    if kind in ("cv", "block"): return [None] * (8 if kind == "cv" else 16)
+    if lanes_kind(kind, "cvs") is not None: return [[None] * 8 for _ in range(lanes_kind(kind, "cvs"))]
+    n = count if count is not None else bytes_kind(kind)
+    if bytes_kind(kind) is not None: return [None] * n if isinstance(n, int) else MISSING
+    if kind in kspec.SPEC.layouts:
+        return {fn: Arr(None, f["count"]) if f["count"] is not None else uninit_kind(f["kind"]) for fn, f in kspec.SPEC.layouts[kind]["fields"].items()}
+    return MISSING
+
+
+def initialized(kind, v):
+    """Every part of `v` has been written (nothing in it is `MISSING` or `None`)."""
+    if v is MISSING or v is None: return False
+    if isinstance(v, list): return all(initialized("cv", c) for c in v) if lanes_kind(kind, "cvs") is not None else all(x is not None and x is not MISSING for x in v)
+    if kind not in kspec.SPEC.layouts or not isinstance(v, dict): return True
+    for fn, f in kspec.SPEC.layouts[kind]["fields"].items():
+        fv = v.get(fn, MISSING)
+        if f["count"] is None and not initialized(f["kind"], fv): return False
+        if f["count"] is not None and not ((isinstance(fv, Arr) and (fv.base is not None or all(i in fv.over for i in range(f["count"])))) or (isinstance(fv, list) and len(fv) == f["count"] and all(initialized("cv", c) for c in fv))): return False
+    return True
 
 
 class Contract:
@@ -175,6 +187,26 @@ class Contract:
         for callee, cond in c["calls"]:
             if not (cond[0] == "bin" and cond[1] == "==" and cond[2][0] == "name" and cond[3][0] == "num"): raise Fail(f"{symbol}: a condition on a call that is not NAME == NUMBER")
             self.calls[callee] = (cond[2][1], cond[3][1])
+        # For each argument in `writes`: what the contract itself reads of its entry value (`None`: the whole
+        # thing; a `set`: those fields of a layout; `False`: nothing of a non-layout). Unread parts of a written
+        # layout are not assumed to hold valid values on entry, nor required of the caller.
+        leaved = {leaf["name"] for leaf in c["leaves"]}
+        self.entry_fields = {}
+        for name in self.writes:
+            exprs = [(e, ()) for e in c["asks"]]
+            exprs += [(leaf["expr"], (leaf["index"],) if leaf["index"] else ()) for leaf in c["leaves"]]
+            if c["returns"] is not None and name not in leaved: exprs.append((c["returns"], ()))
+            for g in c["given"]: exprs += [(g["expr"], (g["index"],)), (g["each"][0], ()), (g["each"][1], ())]
+            if c["decreases"] is not None: exprs.append((c["decreases"], ()))
+            if isinstance(c["stack"], tuple): exprs.append((c["stack"][1], ()))
+            used = merge_fields(*(fields_read(e, name, sh) for e, sh in exprs))
+            kind = self.kind[name]
+            if kind in kspec.SPEC.layouts:
+                if used is not None and any(fn not in kspec.SPEC.layouts[kind]["fields"] for fn in used):
+                    raise Fail(f"{symbol}: {name} has no field among {sorted(used)}")
+                self.entry_fields[name] = used
+            else:
+                self.entry_fields[name] = None if used is None or used else False
 
 
 def stack_of(c, A, env, bound):
@@ -279,7 +311,19 @@ class Machine:
             elif lanes_kind(kind, "cvs") is not None:                       # chaining values the function leaves: of what is there before nothing is said
                 if name not in c.writes: raise Fail(f"{c.name}: {name} is {kind}, and the contract does not say what is left there")
                 v = [[Word(T.mk("part", name, i, w)) for w in range(8)] for i in range(lanes_kind(kind, "cvs"))]
-            elif n is None: v = A.of_kind(kspec.SPEC, kind, name)
+            elif n is None:
+                need = c.entry_fields.get(name) if name in c.writes else None
+                if kind in kspec.SPEC.layouts and need is not None:
+                    v = uninit_kind(kind)
+                    for fn in sorted(need):
+                        f = kspec.SPEC.layouts[kind]["fields"][fn]
+                        if f["count"] is not None:
+                            if f["kind"] != "cv": raise Fail(f"{c.name}: an array that is not of chaining values")
+                            v[fn] = Arr(f"{name}.{fn}", f["count"])
+                        else:
+                            v[fn] = A.of_kind(kspec.SPEC, f["kind"], f"{name}.{fn}")
+                            if f["below"] is not None: self.facts.add(f["below"] - 1 - v[fn])
+                else: v = A.of_kind(kspec.SPEC, kind, name)
             elif name in c.writes:
                 if not isinstance(n, int): raise Fail(f"{c.name}: {name} is written, and its length is not a plain number")
                 v = [A.index(Named(name, n), i) for i in range(n)]
@@ -342,14 +386,23 @@ class Machine:
 
     def read_in(self, kind, v, off, size, where):
         A, T = self.A(), self.T
+        if v is MISSING or v is None: raise Fail(f"a read at {where}: nothing has been written there")
         try:
             if kind in ("q", "x"):
                 if off == 0 and size == (8 if kind == "q" else 16): return v
             elif kind in ("cv", "block"):
-                if size == 16 and isinstance(off, int) and off % 16 == 0 and 0 <= off < 4 * len(v): return tuple(w.v for w in v[off // 4:off // 4 + 4])
-                if size == 4 and isinstance(off, int) and off % 4 == 0 and 0 <= off < 4 * len(v): return ("t", v[off // 4].v)
+                if size == 16 and isinstance(off, int) and off % 16 == 0 and 0 <= off < 4 * len(v):
+                    part = v[off // 4:off // 4 + 4]
+                    if any(w is None for w in part): raise Fail(f"a read at {where}: not all of those words were written")
+                    return tuple(w.v for w in part)
+                if size == 4 and isinstance(off, int) and off % 4 == 0 and 0 <= off < 4 * len(v):
+                    if v[off // 4] is None: raise Fail(f"a read at {where}: that word was not written")
+                    return ("t", v[off // 4].v)
             elif lanes_kind(kind, "cvs") is not None:
-                if size == 16 and isinstance(off, int) and off % 16 == 0 and 0 <= off < 32 * len(v): return tuple(w.v for w in v[off // 32][off % 32 // 4:off % 32 // 4 + 4])
+                if size == 16 and isinstance(off, int) and off % 16 == 0 and 0 <= off < 32 * len(v):
+                    part = v[off // 32][off % 32 // 4:off % 32 // 4 + 4]
+                    if any(w is None for w in part): raise Fail(f"a read at {where}: not all of those words were written")
+                    return tuple(w.v for w in part)
             elif kind == "cvs":
                 for half in (0, 16):
                     i = (Lin.of(off) - half).over(32)
@@ -359,11 +412,17 @@ class Machine:
             elif kind == "byte":
                 if off == 0 and size == 8: return ("p", (term_byte(T, v.v),) + (0,) * 7)
             elif bytes_kind(kind) is not None:
-                if size == 1: return ("z", A.index(v, off))
+                if size == 1:
+                    b = A.index(v, off)
+                    if b is None: raise Fail(f"a read at {where}: that byte was not written")
+                    return ("z", b)
                 if size == 16:
                     if isinstance(v, Named):
                         if isinstance(off, int) and off % 4 == 0 and 0 <= off <= v.n - 16: return tuple(w.v for w in A.words(v)[off // 4:off // 4 + 4])
-                    else: return tuple(w.v for w in A.words(A.slice(v, off, Lin.of(off) + 16)))
+                    else:
+                        part = A.slice(v, off, Lin.of(off) + 16)
+                        if isinstance(part, list) and any(b is None for b in part): raise Fail(f"a read at {where}: not all of those bytes were written")
+                        return tuple(w.v for w in A.words(part))
             elif kind in kspec.SPEC.layouts:
                 name, f, sub = self.field_at(kind, off, size)
                 if f["count"] is None: return self.read_in(f["kind"], v[name], sub, size, where)
@@ -472,31 +531,35 @@ class Machine:
 
     # -- what lies at an address, as a value of the specification
     def descend(self, okind, v, sub, kind, count):
+        if v is MISSING or v is None: return MISSING
         A = self.A()
+        need = count if bytes_kind(kind) is not None else size_of(kind)
         if bytes_kind(kind) is not None:
             # some bytes: of a message, those from here; of bytes that were left whole, all of them
             if bytes_kind(okind) is not None:
                 if isinstance(v, Slice): return A.slice(v, sub, Lin.of(sub) + count)
-                if isinstance(sub, int) and sub == 0 and A.facts.zero(Lin.of(A.length(v)) - count) is True: return v
+                if isinstance(sub, int) and sub == 0 and initialized(okind, v) and A.facts.zero(Lin.of(A.length(v)) - count) is True: return v
                 return MISSING
         elif lanes_kind(okind, "cvs") is not None:
-            if kind == okind and isinstance(sub, int) and sub == 0: return v
-            if kind == "cv" and isinstance(sub, int) and sub % 32 == 0 and 0 <= sub < 32 * len(v): return v[sub // 32]
+            if kind == okind and isinstance(sub, int) and sub == 0 and initialized(okind, v): return v
+            if kind == "cv" and isinstance(sub, int) and sub % 32 == 0 and 0 <= sub < 32 * len(v) and initialized("cv", v[sub // 32]): return v[sub // 32]
             return MISSING
         elif isinstance(sub, int) and sub == 0:
-            if okind == kind: return v
-            if kind == "block" and bytes_kind(okind) == 64: return A.words(v)
-        if okind in kspec.SPEC.layouts:
-            try: name, f, s2 = self.field_at(okind, sub, 1)
+            if okind == kind: return v if initialized(okind, v) else MISSING
+            if kind == "block" and bytes_kind(okind) == 64 and initialized(okind, v): return A.words(v)
+        if okind in kspec.SPEC.layouts and isinstance(v, dict):
+            try: name, f, s2 = self.field_at(okind, sub, need)
             except Fail: return MISSING
             if f["count"] is None: return self.descend(f["kind"], v[name], s2, kind, count)
             i = Lin.of(s2).over(32)
-            if i is not None and kind == "cv": return A.index(v[name], plain(i))
+            if i is not None and kind == "cv":
+                cv = A.index(v[name], plain(i))
+                return cv if initialized("cv", cv) else MISSING
         return MISSING
 
     def view(self, region, off, kind, count=None):
         """What a callee given the address region + off is given, as a value of `kind` (`count`: the bytes of a
-        kind of bytes)."""
+        kind of bytes). Every part of `kind` is read and checked here."""
         try:
             hit = self.within(region, off, 1)
             if hit is not None and hit[1][1] not in ("q", "x"):
@@ -505,26 +568,27 @@ class Machine:
                 if found is not MISSING: return found
             if kind == "cv": return [Word(t) for i in range(2) for t in self.load(region, plain(Lin.of(off) + 16 * i), 16)]
             if kind == "block": return [Word(t) for i in range(4) for t in self.load(region, plain(Lin.of(off) + 16 * i), 16)]
-            if kind in kspec.SPEC.layouts and region == "frame":
+            if kind in kspec.SPEC.layouts:
                 fields = kspec.SPEC.layouts[kind]["fields"]
-                return Lazy(fields, lambda name: self.view_field(off, fields[name]))
+                return {name: self.view_field(region, off, f) for name, f in fields.items()}
         except Err as e: raise Fail(f"what lies at {region} + {off} as a {kind}: {e}")
         raise Fail(f"what lies at {region} + {off} is not a {kind}")
 
-    def view_field(self, off, f):
-        """A field of a record in the frame that no call has left whole."""
-        at = off + f["at"]
-        if f["count"] is not None: return Arr(None, f["count"])                    # nothing was put there (what the code wrote there by hand is not seen)
+    def view_field(self, region, off, f):
+        """One field of a record at region + off."""
+        at = plain(Lin.of(off) + f["at"])
+        if f["count"] is not None:
+            if f["kind"] != "cv": raise Fail("an array that is not of chaining values")
+            return [self.view(region, plain(Lin.of(at) + 32 * i), "cv") for i in range(f["count"])]
         if f["kind"] == "number":
-            x = lin(self.load("frame", at, 8))
-            if x is None or (f["below"] is not None and not self.facts.ge0(f["below"] - 1 - x)): raise Fail(f"frame + {at}: not a number as its kind says")
+            x = lin(self.load(region, at, 8))
+            if x is None or (f["below"] is not None and not self.facts.ge0(f["below"] - 1 - x)): raise Fail(f"{region} + {at}: not a number as its kind says")
             return plain(x)
-        if f["kind"] == "byte": return Word(byte_term(self.T, one_byte(self.load("frame", at, 8))))
-        return self.view("frame", at, f["kind"], bytes_kind(f["kind"]))
+        if f["kind"] == "byte": return Word(byte_term(self.T, one_byte(self.load(region, at, 8))))
+        return self.view(region, at, f["kind"], bytes_kind(f["kind"]))
 
     def put(self, region, off, kind, v):
         """A value of `kind` is left at region + off (by a callee)."""
-        A = self.A()
         if region in self.readonly: raise Fail(f"a callee writes to {region}, which the contract gives to read")
         try:
             hit = self.within(region, off, 1)
@@ -540,10 +604,23 @@ class Machine:
         self.clear(off, size)
         self.mem["frame"][off] = (size, kind, v)
 
+    def spoil(self, region, off, kind, count=None):
+        """`writes arg` without `ensures`: nothing is known of `arg`'s bytes afterwards."""
+        if region in self.readonly: raise Fail(f"a callee writes to {region}, which the contract gives to read")
+        size = count if bytes_kind(kind) is not None else size_of(kind)
+        hit = self.within(region, off, 1)
+        if hit is not None and hit[1][1] not in ("q", "x") and not (region == "frame" and off == hit[0] and size == hit[1][0]):
+            try: self.mem[region][hit[0]] = (hit[1][0], hit[1][1], self.replace(hit[1][1], hit[1][2], plain(Lin.of(off) - hit[0]), kind, uninit_kind(kind, count))); return
+            except Err as e: raise Fail(f"a callee writes a {kind} at {region} + {off}: {e}")
+        if region != "frame" or not isinstance(off, int) or not isinstance(size, int) or off < self.floor() or off + size > 0:
+            raise Fail(f"a callee writes a {kind} at {region} + {off}: outside the function's own frame")
+        self.clear(off, size)
+
     def replace(self, okind, old, sub, kind, v):
         if isinstance(sub, int) and sub == 0 and okind == kind: return v
-        if okind in kspec.SPEC.layouts:
-            name, f, s2 = self.field_at(okind, sub, 1)
+        if okind in kspec.SPEC.layouts and isinstance(old, dict):
+            need = size_of(kind) if bytes_kind(kind) is None else (len(v) if isinstance(v, list) else v.n if isinstance(v, (Named, Slice)) else 1)
+            name, f, s2 = self.field_at(okind, sub, need)
             out = dict(old)
             if f["count"] is None: out[name] = self.replace(f["kind"], old[name], s2, kind, v)
             else:
@@ -692,15 +769,45 @@ class Machine:
             if not ((passed == ("q", mine[0]) and cond[1] == mine[1]) or (passed[0] == "n" and passed[1] != cond[1])):
                 raise Fail(f"{name} needs {feature} if its {cond[0]} is {cond[1]}: what it is given for {cond[0]} is not shown to be so only where {mine[0]} is {mine[1]}")
 
-    def no_overlap(self, name, written, others):
-        """What a callee writes overlaps nothing else it is given the address of: its own check took
-        it so. (region, offset, bytes); things of different regions do not overlap."""
-        for region, off, size in written:
+    def own_span(self, name, region, off, size):
+        """Every byte of (region, off, size) passed to `name` lies within memory this function owns and apart
+        from `name`'s own stack frame (which begins below `self.floor()`)."""
+        if size is None: raise Fail(f"{name}: the extent of {region} + {off} is not known")
+        off, size = Lin.of(off), Lin.of(size)
+        if not self.facts.ge0(size): raise Fail(f"{name}: a negative size {size} at {region} + {off}")
+        if region == "frame":
+            if not self.facts.ge0(off - self.floor()) or not self.facts.ge0(-off - size):
+                raise Fail(f"{name}: {size} bytes at frame + {off} do not lie in the caller's live frame [{self.floor()}, 0]")
+            return
+        if region not in self.mem: raise Fail(f"{name}: an address in {region}: no such memory")
+        _, okind, ov = self.mem[region][0]
+        if okind == "blocks": lo, hi = Lin.of(0), self.given["n"].scale(64)
+        elif lanes_kind(okind, "inputs") is not None: lo, hi = Lin.of(0), Lin.of(8 * lanes_kind(okind, "inputs"))
+        elif okind == "cvs":
+            a0, b0 = (Lin.of(kspec.SPEC.eval(self.A(), e, ov.env)) for e in ov.clause["each"])
+            lo, hi = (a0.scale(32), a0.scale(32)) if self.facts.ge0(a0 - b0) else (a0.scale(32), b0.scale(32))
+        elif bytes_kind(okind) is not None:
+            n = bytes_kind(okind)
+            lo, hi = Lin.of(0), Lin.of(self.given[n] if isinstance(n, str) else n)
+        else: lo, hi = Lin.of(0), Lin.of(size_of(okind))
+        if not self.facts.ge0(off - lo) or not self.facts.ge0(hi - off - size):
+            raise Fail(f"{name}: {size} bytes at {region} + {off} are not shown to lie within {region}")
+
+    def no_overlap(self, name, first, others):
+        """Two sets of (region, offset, bytes) have no byte in common."""
+        mine_apart = set(self.contract.text["no_overlap"] or ())
+        top = lambda r: r[0] if isinstance(r, tuple) else r
+        for region, off, size in first:
             for r, o, n in others:
-                if r != region: continue
-                if isinstance(off, Lin) or isinstance(o, Lin) or isinstance(size, Lin) or isinstance(n, Lin) or size is None or n is None:
-                    raise Fail(f"{name}: what it writes and something else it is given are both in {region}, and are not shown to have no byte in common")
-                if off < o + n and o < off + size: raise Fail(f"{name}: what it writes at {region} + {off} lies across something else it is given, at {region} + {o}")
+                if r != region:
+                    if r != "frame" and region != "frame" and top(r) != top(region) and (top(r) not in mine_apart or top(region) not in mine_apart):
+                        raise Fail(f"{name}: this function's contract does not say {top(region)} and {top(r)} have no byte in common")
+                    continue
+                if size is None or n is None:
+                    raise Fail(f"{name}: two arguments in {region} are not shown to have no byte in common")
+                o1, s1, o2, s2 = Lin.of(off), Lin.of(size), Lin.of(o), Lin.of(n)
+                if self.facts.ge0(o1 - o2 - s2) or self.facts.ge0(o2 - o1 - s1): continue
+                raise Fail(f"{name}: {region} + {off} ({size} bytes) lies across {region} + {o} ({n} bytes)")
 
     def told(self, A, name, c, clause, at, env):
         """`asks NAME[i] == E for i in a..b` of a callee: each of those values in this function's memory is E.
@@ -708,8 +815,6 @@ class Machine:
         that it is within a..b."""
         region, off, _ = at
         a, b = (kspec.SPEC.eval(A, e, env) for e in clause["each"])
-        for k in env.later:
-            if k not in c.writes and k not in c.given: env[k]               # what the callee is given to read, read now
         def one(i):
             got = self.view(region, plain(Lin.of(off) + Lin.of(i).scale(32)), "cv")       # first: what the memory holds names what it can
             want = kspec.SPEC.eval(self.A(), clause["expr"], dict(env, **{clause["index"]: plain(i)}))
@@ -733,6 +838,7 @@ class Machine:
         counter, length, flags). Where the kernel reads the length and the flags from is its contract's."""
         cv, block, length, counter, flags = (self.g[r] for r in ARGS[:5])
         if cv[0] != "a" or block[0] != "a": raise Fail(f"{name} called with something that is not an address")
+        self.own_span(name, cv[1], cv[2], 32); self.own_span(name, block[1], block[2], 64)
         self.no_overlap(name, [(cv[1], cv[2], 32)], [(block[1], block[2], 64)])
         h, m = self.view(cv[1], cv[2], "cv"), self.view(block[1], block[2], "block")
         if lin(length) is None or lin(counter) is None: raise Fail(f"{name} called with a length or a counter that is not a number: {length}, {counter}")
@@ -756,7 +862,7 @@ class Machine:
         if not self.facts.ge0(its) or not self.facts.ge0(mine - 1 - its): raise Fail(f"{name} calls itself with {its}, not shown to be less than {mine}")
 
     def call_contract(self, A, name, c):
-        v, later, where = {}, {}, {}
+        v, where, counts = {}, {}, {}
         # what the callee calls only on a condition, this function calls only on its own: the callee's
         # condition is on an argument, which must be this function's own (with the same number), or a plain
         # number that is not the callee's, or anything on a path where this function's condition holds
@@ -783,61 +889,81 @@ class Machine:
                 for nm, b in zip(packed_kind(kind), a[1]): v[nm] = number(b)
         spans = {}
         for reg, kind, arg in c.args:
-            if kind in ("number", "byte", "any", "counter") or packed_kind(kind) is not None: continue
+            if kind in ("number", "byte", "any", "counter", "cvs") or packed_kind(kind) is not None: continue
             a = self.g[reg]
             if a[0] != "a": raise Fail(f"{name}: {arg} is not an address")
             n = bytes_kind(kind)
             count = v[n] if isinstance(n, str) else n
+            counts[arg] = count
             where[arg] = (a[1], a[2], kind)
             lanes = lanes_kind(kind, "inputs")
             if lanes is not None:
                 # a table of addresses, each of an input of n blocks of 64 bytes
                 blocks = A.plain(v["n"])
+                if not 0 <= 64 * blocks <= WORD64: raise Fail(f"{name}: 64 * {blocks} is not within 64 bits")
+                self.own_span(name, a[1], a[2], 8 * lanes)
                 table = [self.load(a[1], plain(Lin.of(a[2]) + 8 * i), 8) for i in range(lanes)]
                 if any(e[0] != "a" for e in table): raise Fail(f"{name}: {arg} is not a table of addresses")
+                for e in table: self.own_span(name, e[1], e[2], 64 * blocks)
                 v[arg] = [[self.view(e[1], plain(Lin.of(e[2]) + 64 * b), "block") for b in range(blocks)] for e in table]
                 spans[arg] = [(a[1], a[2], 8 * lanes)] + [(e[1], e[2], 64 * blocks) for e in table]
                 continue
-            if kind == "cvs":
-                # as many values as the contract speaks of, where that is a plain number here
-                try: extent = 32 * A.plain(kspec.SPEC.eval(A, c.given[arg]["each"][1], v))
-                except Err: extent = None
-                spans[arg] = [(a[1], a[2], extent)]
-            else: spans[arg] = [(a[1], a[2], count if n is not None else size_of(kind))]
-            later[arg] = (lambda a=a, kind=kind, count=count: self.view(a[1], a[2], kind, count))
-            if arg not in c.writes and n is not None: later[arg]()             # bytes given to read are there to be read
+            span_size = count if n is not None else size_of(kind)
+            self.own_span(name, a[1], a[2], span_size)
+            spans[arg] = [(a[1], a[2], span_size)]
+            if arg not in c.writes:
+                v[arg] = self.view(a[1], a[2], kind, count)
+            else:
+                need = c.entry_fields[arg]
+                if need is None: v[arg] = self.view(a[1], a[2], kind, count)
+                elif need:
+                    fields = kspec.SPEC.layouts[kind]["fields"]
+                    v[arg] = {fn: self.view_field(a[1], a[2], fields[fn]) for fn in sorted(need)}
+        for reg, kind, arg in c.args:
+            if kind != "cvs": continue
+            a = self.g[reg]
+            if a[0] != "a": raise Fail(f"{name}: {arg} is not an address")
+            where[arg] = (a[1], a[2], kind)
+            a_i, b_i = (Lin.of(kspec.SPEC.eval(A, e, v)) for e in c.given[arg]["each"])
+            if self.facts.ge0(a_i - b_i): span = (a[1], plain(Lin.of(a[2]) + a_i.scale(32)), 0)
+            else:
+                if not self.facts.ge0(b_i - a_i): raise Fail(f"{name}: {arg}'s count is not shown to be at least 0")
+                span = (a[1], plain(Lin.of(a[2]) + a_i.scale(32)), (b_i - a_i).scale(32))
+            self.own_span(name, *span)
+            spans[arg] = [span]
+        ap = c.text["no_overlap"] or []
+        for idx, x in enumerate(ap):
+            for y in ap[idx + 1:]: self.no_overlap(name, spans[x], spans[y])
         for arg in c.writes: self.no_overlap(name, spans[arg], [s for other, ss in spans.items() if other != arg for s in ss])
-        env = Env(v, later)
-        if name == self.contract.name: self.lessens(A, name, c, env)
-        for arg, clause in c.given.items(): self.told(A, name, c, clause, where[arg], env)
-        for f in kspec.asked(c.text, A, env):
+        if name == self.contract.name: self.lessens(A, name, c, v)
+        for arg, clause in c.given.items(): self.told(A, name, c, clause, where[arg], v)
+        for f in kspec.asked(c.text, A, v):
             if not self.facts.ge0(f): raise Fail(f"{name}: the caller does not show what it asks ({f} >= 0)")
         left = {}
         A.fold = True
         try:
             for leaf in c.text["leaves"]:
-                if leaf["index"] is None: left[leaf["name"]] = kspec.SPEC.eval(A, leaf["expr"], env)
+                if leaf["index"] is None: left[leaf["name"]] = kspec.SPEC.eval(A, leaf["expr"], v)
                 else:
                     # each of the chaining values at the address: `out[i] = E for i in 0..N`
-                    for k in later:
-                        if k not in c.writes: env[k]                    # what is read at an address: read now, for each lane
-                    frozen, facts, memo = dict(env), self.facts.clone(), dict(self.memo)
+                    frozen, facts, memo = dict(v), self.facts.clone(), dict(self.memo)
                     def lane(i, leaf=leaf, frozen=frozen, facts=facts, memo=memo):
                         # a lane's value, when something reads it: from what the kernel was given at the call,
                         # and by the facts as they were at the call (a later path's facts are not asked)
                         return kspec.SPEC.eval(kspec.Symbols(self.T, facts.clone(), dict(memo)), leaf["expr"], dict(frozen, **{leaf["index"]: i}))
-                    for name, v in frozen.items():
-                        if isinstance(v, kspec.Count) and not self.facts.ge0(WORD64 - Lin.of(v.n) - lanes_kind(c.kind[leaf["name"]], "cvs")): raise Fail(f"{name}: the counter is not shown to stay within 64 bits over the lanes")
+                    for _, kv in frozen.items():
+                        if isinstance(kv, kspec.Count) and not self.facts.ge0(WORD64 - Lin.of(kv.n) - lanes_kind(c.kind[leaf["name"]], "cvs")): raise Fail(f"{name}: the counter is not shown to stay within 64 bits over the lanes")
                     left[leaf["name"]] = Lanes(lanes_kind(c.kind[leaf["name"]], "cvs"), lane)
         finally: A.fold = False
         for arg, new in left.items(): self.put(*where[arg], new)
-        for arg in c.text["spoils"]: self.put(*where[arg], A.of_kind(kspec.SPEC, c.kind[arg], f"{arg} as {name} leaves it, #{next(FRESH)}"))
+        for arg in c.text["spoils"]:
+            if arg not in left: self.spoil(*where[arg], counts.get(arg))
         if c.text["returns"] is not None:
-            result = Lin.of(kspec.SPEC.eval(A, c.text["returns"], Env(dict(v, **left), {k: f for k, f in later.items() if k not in left})))
+            result = Lin.of(kspec.SPEC.eval(A, c.text["returns"], dict(v, **left)))
             self.facts.add(result); self.facts.add(WORD64 - result)
             self.g["rax"] = value(result)
         else: self.g["rax"] = ("q", "left by a call")
-        return 8 + stack_of(c, A, env, "most")
+        return 8 + stack_of(c, A, v, "most")
 
     # -- one instruction
     def one(self):

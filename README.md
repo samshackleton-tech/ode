@@ -26,7 +26,7 @@ line by line.
 Python 3, this folder and `core/` beside it are all it needs: nothing is installed, no solver runs, no network is used. In
 about 25 seconds it prints the public contract (seven lines), the verification ("`b3l_hashr` in this file
 meets its public contract, with all it calls: 14 functions, from the file's bytes"), and the files that ran
-to reach it (3,168 lines of Python in fourteen files, and the table of instructions: 93 rows, and under them
+to reach it (3,291 lines of Python in fourteen files, and the table of instructions: 93 rows, and under them
 150 ways of writing them in bytes). Exit status 0
 means shown.
 [kcheck/VERIFY.md](kcheck/VERIFY.md) is the page for a reader: what is shown, what is left unshown, and
@@ -72,7 +72,7 @@ Inside `core/`:
 | role | files |
 |---|---|
 | relied on: what each instruction does, and what bytes are one | `x86.tab` (93 rows, 150 ways of writing them in bytes), `table.py` (reads it), `step.py` (does a row's effect on the verifier's machine: a rule on symbols for each primitive, none about one instruction), `encode.py` (writes an instance's bytes in one of its row's ways: one byte string), `decode.py` (reads the bytes at a place as an instance only if `encode.py` writes those very bytes for it; the part of it that proposes what the bytes might be is relied on for nothing) |
-| the rules, written down | `RULES.md`: which instruction the bytes are, what the verifier concludes from a row, rule by rule, and what holds after every instruction (memory, calls and places are not yet written there) |
+| the rules, written down | `RULES.md`: every rule the verifier follows, with why it is right: which instruction the bytes are, what a row concludes, memory in regions, calls by contract, paths and splits, loop places and lemmas, returns, traces, and whole-file checks |
 | testers | `conc.py` (each primitive's meaning on numbers), `cross.py` (every row, as an assembler writes it and in each way the table writes its bytes, run on this machine's processor from random states and compared), `decoder.py` (what an assembler writes for each row's instances is read as that row), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
 
 ## Where this came from

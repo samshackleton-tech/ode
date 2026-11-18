@@ -736,7 +736,10 @@ def get(e, loc):
 
 def put(m, loc, v):
     if loc[0] == "reg": m.g[loc[1]] = v
-    else: m.mem["frame"][m.g["rsp"][2] + loc[1]] = (8, "q", v)
+    else:
+        at = m.g["rsp"][2] + loc[1]
+        if at < m.floor() or at + 8 > 0: raise Fail(f"the proof names {show(loc)} (frame + {at}): outside the function's own frame")
+        m.mem["frame"][at] = (8, "q", v)
 
 
 def show(loc): return loc[1] if loc[0] == "reg" else f"stack[{loc[1]}]"
