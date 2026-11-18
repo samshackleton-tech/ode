@@ -304,6 +304,18 @@ Therefore the core is designed so that it *could* be written in Ode: small, plai
 Bob himself need not read the account of the machine or the soundness argument. He needs a justified
 route, of his choosing, from his question to his tool's answer.
 
+**A first core exists (November 18, 2026): `proof-core/`.** It is a verifier in Lean 4 that decides by a
+proof it is handed, with a theorem that Lean checks: whatever the proof is, if the verifier says yes, the
+function's code meets its contract on the machine the table describes (`verify_sound`). The account it is
+about is 420 lines; the verifier's own 727 lines are under the theorem and need not be read. It reads a
+first part of what the full verifier reads: instructions over the general registers, the flags and memory;
+one loop place, by induction on the place's number; a contract with runs of bytes that are only read,
+`returns` and `stack`. One shipped function, `ode_common`, is shown by it from a proof of 1,773 bytes in
+4 ms. This is the third way of the disjunction, begun. Reading the file's bytes and the specification's
+text is outside the theorem, as are calls, vector registers and memory written for the caller:
+`proof-core/README.md` says what a yes there rests on. Lean is the language of that implementation and is
+asked of no reader: the proof is text that a verifier in any language can read.
+
 ## 8. The account of the machine
 
 - **One authoritative account** of each instruction form Ode uses, from which every reading is taken. The
@@ -399,7 +411,7 @@ An unverified verifier is worth what its audits are worth, and a verified one st
 4. A launcher small enough to read, held by Bob, that admits the verifier by the hash of its bytes and runs
    exactly those bytes: a program cannot vouch for its own copy.
 
-## 13. Where it stands (November 17, 2026)
+## 13. Where it stands (November 18, 2026)
 
 What is built is a prototype of the outer architecture. The part Bob relies on is still large and
 unproved.
@@ -409,7 +421,7 @@ unproved.
 | a substantial program verified from its bytes | the one-shot BLAKE3 hash for x86-64 with AVX-512: 14 functions from Ode source, shipped as one file, against a specification of 185 lines and a contract of 7. About a tenth of the target crate's x86-64 kernels by bytes; no incremental hasher, no extendable output, no AVX2, no AArch64 |
 | other programs than BLAKE3 | twelve functions in eight files: Adler-32, an LZ4 decoder and two encoders, a framed format that calls two of them, UTF-8 validation, base-64, variable-length integers, the Internet checksum |
 | as fast as the best | 97% of the library's speed at 1 MiB, 60% at 16 to 32 KiB (a 16-lane path for 2 to 16 chunks is unwritten) |
-| a small core with justified rules (R1) | the verifier is about 3,290 lines of unverified Python for the hash and a table of 93 rows with 150 ways of writing them in bytes, 1,200 lines more to show its definitions end. What an instruction does, and what bytes are one, is in the table; the rules for memory, calls, paths, places, returns, traces and files are now written down with their arguments in `core/RULES.md`, though still carried out by the full verifier rather than a small proof-replaying core. Only arithmetic is decided by a carried proof, in a core of 58 lines with a second implementation in C. Eight faults of the kind "shown, of something false" were found by reading on November 17 and 18, and closed; its soundness is not established |
+| a small core with justified rules (R1) | the verifier is about 3,290 lines of unverified Python for the hash and a table of 93 rows with 150 ways of writing them in bytes, 1,200 lines more to show its definitions end. What an instruction does, and what bytes are one, is in the table; the rules for memory, calls, paths, places, returns, traces and files are now written down with their arguments in `core/RULES.md`, though still carried out by the full verifier rather than a small proof-replaying core. Only arithmetic is decided by a carried proof, in a core of 58 lines with a second implementation in C. Eight faults of the kind "shown, of something false" were found by reading on November 17 and 18, and closed; its soundness is not established. Beside it, since November 18, stands a first small core whose soundness is a theorem checked by Lean (`proof-core/`: 727 lines under the theorem, an account of 420 lines the theorem is about); it shows one shipped function with a loop, and does not yet read calls, vector registers or memory written for the caller |
 | the coder chooses the machine code | every function is now its instructions in the source, and nothing is chosen between source and bytes (since November 18, 2026: the word-level layer and its compiler are gone). The five kernels were written so, and are the reference kernels byte for byte. Of the nine other functions of the hash one is written by hand (`node_out`: 18 instructions where the compiler printed 58); the other eight and the thirteen of the programs are, for now, what the old compiler last printed, with each old statement as a comment: longer than they need be, to be written again by hand |
 | the coder's types carried to the bytes | a place in a loop (three forms), inner contracts, layouts, lemmas. No type system for Ode source; no verifier of source |
 | the verifier's own contract | deterministic and offline; 22 kept cases it must refuse, and a gate that fails if the kept bad binary is accepted. Its limits are partial: a wrong lemma can take minutes to refuse |

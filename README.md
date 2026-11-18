@@ -40,7 +40,7 @@ what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o prog
 
 Making needs Python 3 and nothing else: `core/asm.py` writes a function's bytes by the instruction table. (clang
 is used by tests only: `lang/test_asm.py` compares the two assemblers on every function.) The gate and some tests run code on a processor and need
-x86-64 Linux with AVX-512; they skip elsewhere. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
+x86-64 Linux with AVX-512; they skip elsewhere. The tests of `proof-core/` need Lean's `lake` and skip where it is not installed. `kcheck/audit.sh` changes every bit of every verified function in turn and has a processor
 judge each change the verifier accepts: hours, run in the background.
 
 ## What is where
@@ -53,6 +53,7 @@ judge each change the verifier accepts: hours, run in the background.
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
+| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_sound`); it shows `ode_common` so far. Its `README.md` says what that rests on. No other folder needs Lean |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |

@@ -1,63 +1,35 @@
 #!/usr/bin/env python3
 """prove: the prover for the verifier in Lean (Core.lean). Relied on for nothing.
 
-    python3 prove.py OBJECT SYMBOL SPEC PLACES OUT.task
+    python3 prove.py OBJECT SYMBOL SPEC PLACES OUT.statement OUT.proof
 
-It writes what the verifier is to judge (the function's instructions as ../kcheck/kdecode.py reads them from
-OBJECT, the contract and the definitions of SPEC, the places of PLACES), and then finds the proof by asking:
-the verifier is run, says what it needs next (`need …`), an answer is added to the proof, and it is run
-again, until it says `shown`. The answers are found here:
+What is to be shown is written by statement.py (OUT.statement). The proof (OUT.proof) starts with the
+places of PLACES and is then found by asking: the verifier is run, says what it needs next (`need …`), an
+answer is added to the proof, and it is run again, until it says `shown`. The answers are found here:
 
     need entail / branch    a proof of arithmetic, by elimination (../kcheck/kprove.py's derive)
     need compare            which of lt, eq, gt has such a proof
     need spec               which use of a definition to open: each is tried
     a kept register refused the register is left out of the place's `keep`
 
-What comes out is a file the verifier accepts by itself: `odeverify ../core/x86.tab OUT.task`."""
+What comes out is a proof the verifier accepts by itself: `odeverify ../core/x86.tab OUT.statement OUT.proof`."""
 import os, re, subprocess, sys
 from math import gcd
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, KCHECK)
-import kbyte, kdecode, klin, kprove, ode, varith
+import kbyte, klin, kprove, varith
+sys.path.insert(0, HERE)
+from statement import sexp, statement
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
 REGISTERS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
 
 
-def sexp(e):
-    kind = e[0]
-    if kind == "num": return f"(num {e[1]})"
-    if kind == "name": return f"(name {e[1]})"
-    if kind == "bin": return f"(bin {e[1]} {sexp(e[2])} {sexp(e[3])})"
-    if kind == "ifx": return f"(ifx {sexp(e[1])} {sexp(e[2])} {sexp(e[3])})"
-    if kind == "index": return f"(index {sexp(e[1])} {sexp(e[2])})"
-    if kind == "call": return "(call " + " ".join([e[1]] + [sexp(a) for a in e[2]]) + ")"
-    raise SystemExit(f"prove: an expression of a kind the verifier in Lean does not read yet: {e!r}")
-
-
-def statement(obj, symbol, spec_text, places_text, keep=None):
-    """The lines that say what is to be judged; and the registers each place might keep."""
-    out = []
-    rows, _ = kdecode.read(obj, symbol, 0, 0)
-    for a, b, text in rows: out.append(f"i {a} {b} {text}")
-    spec = ode.Spec(spec_text)
-    c = spec.contracts[symbol]
-    for name, kind in c["args"]:
-        m = re.fullmatch(r"(\w+) bytes", kind)
-        if kind == "number": out.append(f"arg {name} number")
-        elif m and not m.group(1).isdigit(): out.append(f"arg {name} bytes {m.group(1)}")
-        else: raise SystemExit(f"prove: an argument of a kind the verifier in Lean does not read yet: {name}: {kind}")
-    for key in ("asks", "calls", "conditions", "given", "leaves", "needs", "spoils"):
-        if c[key]: raise SystemExit(f"prove: the contract has `{key}`, which the verifier in Lean does not read yet")
-    if c["no_overlap"] or c["decreases"]: raise SystemExit("prove: the contract has a line the verifier in Lean does not read yet")
-    if c["returns"] is not None: out.append("returns " + sexp(c["returns"]))
-    out.append(f"stack {c['stack']}")
-    for name, (params, body) in spec.fns.items():
-        if len(body) != 1 or body[0][0] != "expr": raise SystemExit(f"prove: the definition {name} is more than one expression")
-        out.append(" ".join(["def", name] + params + ["=", sexp(body[0][1])]))
-    named = []
+def places(places_text, keep=None):
+    """The places as the verifier reads them; `keep`: the registers each place might keep (None: all it does not name)."""
+    out, named = [], []
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
         if not line or line == "}": continue
@@ -108,13 +80,13 @@ class Unkept(Exception): pass
 
 
 class Prover:
-    def __init__(self, statement_lines, out):
-        self.lines, self.out, self.runs = statement_lines, out, 0
+    def __init__(self, statement_path, place_lines, out):
+        self.statement, self.lines, self.out, self.runs = statement_path, place_lines, out, 0
 
     def ask(self, proof):
         with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
         self.runs += 1
-        return subprocess.run([EXE, TABLE, self.out], capture_output=True, text=True).stdout
+        return subprocess.run([EXE, TABLE, self.statement, self.out], capture_output=True, text=True).stdout
 
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
@@ -155,10 +127,11 @@ class Prover:
             else: raise SystemExit(f"prove: the verifier needs what this prover does not know: {said}")
 
 
-def prove(obj, symbol, spec_text, places_text, out):
+def prove(obj, symbol, spec_text, places_text, statement_out, out):
     keep, runs = None, 0
+    with open(statement_out, "w") as f: f.write("\n".join(statement(obj, symbol, spec_text)) + "\n")
     while True:
-        p = Prover(statement(obj, symbol, spec_text, places_text, keep), out)
+        p = Prover(statement_out, places(places_text, keep), out)
         p.last = ""
         try: proof = p.solve([])
         except Unkept as e:
@@ -175,8 +148,8 @@ def prove(obj, symbol, spec_text, places_text, out):
 
 
 if __name__ == "__main__":
-    obj, symbol, spec, places, out = sys.argv[1:]
+    obj, symbol, spec, places_path, statement_out, out = sys.argv[1:]
     with open(spec) as f: spec_text = f.read()
-    with open(places) as f: places_text = f.read()
-    runs, items = prove(obj, symbol, spec_text, places_text, out)
+    with open(places_path) as f: places_text = f.read()
+    runs, items = prove(obj, symbol, spec_text, places_text, statement_out, out)
     print(f"{symbol}: shown; the proof has {items} lines, found in {runs} runs of the verifier; {os.path.getsize(out)} bytes in {out}")

@@ -1,8 +1,9 @@
 import Core
 /-!
-The verifier as a program:  `odeverify TABLE TASK`
+The verifier as a program:  `odeverify TABLE STATEMENT PROOF`
 
-TABLE is `../core/x86.tab`. TASK is text, a line a thing:
+TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by the one who asks
+(statement.py makes it from a file's bytes and a specification's text). A line a thing:
 
     i START END ROW…          an instruction of the function, as the reader of code writes it
     arg NAME number           the contract's arguments, in order
@@ -10,12 +11,16 @@ TABLE is `../core/x86.tab`. TASK is text, a line a thing:
     returns EXPRESSION
     stack N
     def NAME PARAMETER… = EXPRESSION      a definition of the specification
-    place PC                  the proof: a place, then what holds there
+
+PROOF is the maker's, and may be anything: no line of it adds to what is to be shown, and a line of the
+statement's kinds in it is refused.
+
+    place PC                  a place, then what holds there
     name NAME REGISTER
     keep REGISTER…
     fact EXPRESSION
     decreases EXPRESSION
-    t NAME [N]                the proof: what the verifier asks for, in the order it asks
+    t NAME [N]                what the verifier asks for, in the order it asks
     r … / s … / q             a proof of arithmetic (as ArithMain.lean reads it)
 
 An EXPRESSION is written with brackets: (num 1) (name x) (bin + A B) (ifx C A B) (index A I) (call f A…).
@@ -60,11 +65,18 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
-def Job.line (table : Array TRow) (t : Job) (line : String) : Except String Job := do
+def statementKinds : List String := ["i", "arg", "returns", "stack", "def"]
+
+def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
   let inPlace (f : Place → Place) : Except String Job :=
     match t.place with
     | some p => pure { t with place := some (f p) }
     | none => throw s!"outside a place: {line}"
+  match (words line).head? with
+  | some kind =>
+    if inProof && statementKinds.contains kind then throw s!"refused: a line of the statement in the proof: {line}"
+    if !inProof && !statementKinds.contains kind then throw s!"refused: a line of a proof in the statement: {line}"
+  | none => pure ()
   match words line with
   | [] => pure t
   | "i" :: a :: b :: _ =>
@@ -106,15 +118,19 @@ def Job.ctx (t : Job) : Ctx :=
 
 def main (args : List String) : IO UInt32 := do
   match args with
-  | [tablePath, taskPath] =>
+  | [tablePath, statementPath, proofPath] =>
     let table ← match readTable (← IO.FS.readFile tablePath) with
       | .ok t => pure t
       | .error e => IO.println e; return 2
-    let lines := ((← IO.FS.readFile taskPath).splitOn "\n").map fun l => (l.replace "\r" "")
-    match lines.foldlM (Job.line table) {} with
+    let lines (path : String) : IO (List String) := do
+      pure (((← IO.FS.readFile path).splitOn "\n").map fun l => (l.replace "\r" ""))
+    match (← lines statementPath).foldlM (Job.line table false) {} with
     | .error e => IO.println e; return 2
-    | .ok task =>
-      match verdict task.ctx task.items with
-      | none => IO.println "shown"; return 0
-      | some why => IO.println why; return 1
-  | _ => IO.println "odeverify TABLE TASK"; return 2
+    | .ok job =>
+      match (← lines proofPath).foldlM (Job.line table true) job with
+      | .error e => IO.println e; return 2
+      | .ok job =>
+        match verdict job.ctx job.items with
+        | none => IO.println "shown"; return 0
+        | some why => IO.println why; return 1
+  | _ => IO.println "odeverify TABLE STATEMENT PROOF"; return 2
