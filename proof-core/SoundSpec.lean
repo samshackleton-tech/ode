@@ -1340,6 +1340,14 @@ theorem symEnvIn_bounded (c : Contract) : ∀ (args : List (String × Kind)) (re
     intro nv m
     simp only [symEnvIn] at m
     exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
+  | (n, .fixed _) :: args, r :: regs, k, hr => by
+    intro nv m
+    simp only [symEnvIn] at m
+    exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
+  | (n, .inout _) :: args, r :: regs, k, hr => by
+    intro nv m
+    simp only [symEnvIn] at m
+    exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
   | (n, .bytes len) :: args, r :: regs, k, hr => by
     intro nv m
     simp only [symEnvIn] at m
@@ -1365,6 +1373,16 @@ theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r
     simp only [symEnvIn, envIn, semEnv, List.map_cons, semv, ev_var] at ih ⊢
     rw [hρ r (hr r (List.mem_cons_self ..)), ih]
   | (n, .out _) :: args, r :: regs, k, hr, hj => by
+    have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
+      (by intro j; have := hj j; simpa only [regionsIn] using this)
+    simp only [symEnvIn, envIn]
+    exact ih
+  | (n, .fixed _) :: args, r :: regs, k, hr, hj => by
+    have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
+      (by intro j; have := hj j; simpa only [regionsIn] using this)
+    simp only [symEnvIn, envIn]
+    exact ih
+  | (n, .inout _) :: args, r :: regs, k, hr, hj => by
     have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
       (by intro j; have := hj j; simpa only [regionsIn] using this)
     simp only [symEnvIn, envIn]

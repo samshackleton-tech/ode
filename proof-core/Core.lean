@@ -229,6 +229,8 @@ def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → Lis
     | some _ => (n, .region k) :: symEnvIn c args regs (k + 1)
     | none => symEnvIn c args regs k
   | (_, .out _) :: args, _ :: regs, k => symEnvIn c args regs k
+  | (_, .fixed _) :: args, _ :: regs, k => symEnvIn c args regs k
+  | (_, .inout _) :: args, _ :: regs, k => symEnvIn c args regs k
   | _, _, _ => []
 
 /-- The contract's names on symbols: a number is its register at entry; a run of bytes is a run by its number. -/
@@ -932,6 +934,7 @@ entry, the runs given to write hold what each `ensures` says, and rax holds what
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
+  else if !ctx.contract.ensuresW.isEmpty then refuse "an `ensures` of a whole run by words: not here yet"
   else do
     let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
     match ctx.contract.returns with
@@ -1022,6 +1025,8 @@ def calleeEnv (ctx : Ctx) (c : Contract) (s : Sym) : List (String × Kind) → L
       | _, _ => none
     | none => calleeEnv ctx c s args regs
   | (_, .out _) :: _, _ :: _ => none            -- (a called function that writes for its caller: not here yet)
+  | (_, .fixed _) :: _, _ :: _ => none          -- (a called function given a run of a fixed count: not here yet)
+  | (_, .inout _) :: _, _ :: _ => none
   | _, _ => some []
 
 /-- The state after a call, before anything is known of what was returned: the stack pointer and the
@@ -1045,7 +1050,7 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   | some sp =>
     if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
-    else if !(c.outs.isEmpty && c.ensures.isEmpty) then
+    else if !(c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) then
       refuse "a called function that writes for its caller: not here yet"
     else
       match calleeEnv ctx c s c.args argRegs with
@@ -1060,6 +1065,13 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           | .tail call => pure { s2 with spec := .value call (Lin.var s.nvars) :: s2.spec }
           | _ => refuse "a function returns a number"
 
+/-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The
+machine of the account has every row of the table, so no theorem asks this. A reader of this function's
+contract is told what processor it wants, and that must cover the functions it calls.) -/
+def needsOf (ctx : Ctx) (c : Contract) : V Unit :=
+  if c.needs.all (fun n => ctx.contract.needs.contains n) then pure ()
+  else refuse "a called function needs of the processor what this function's contract does not say it needs"
+
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
@@ -1067,6 +1079,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     match ctx.callees.lookup name with
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c => do
+      needsOf ctx c
       let s' ← symCall ctx s c
       pure [(s', .at i.next)]
   | none => symInstr ctx s i

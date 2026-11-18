@@ -34,7 +34,7 @@ theorem outRegion {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs)
 theorem outOut {i j : Nat} {x x' : String} {r n r' n' : Nat} (hi : ctx.contract.outs[i]? = some (x, r, n))
     (hj : ctx.contract.outs[j]? = some (x', r', n')) (ne : i ≠ j) :
     s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r := by
-  have P := List.pairwise_iff_getElem.mp E.pre.2.2.2.2.2.2.2
+  have P := List.pairwise_iff_getElem.mp E.pre.2.2.2.2.2.2.2.1
   obtain ⟨li, ei⟩ := List.getElem?_eq_some_iff.mp hi
   obtain ⟨lj, ej⟩ := List.getElem?_eq_some_iff.mp hj
   rcases Nat.lt_or_gt_of_ne ne with lt | gt
@@ -104,6 +104,14 @@ theorem regionsIn_mem (c : Contract) : ∀ (args : List (String × Kind)) (regs 
     have := regionsIn_mem c args regs b l h
     exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
   | (_, .out _) :: args, x :: regs, b, l, h => by
+    simp only [regionsIn] at h
+    have := regionsIn_mem c args regs b l h
+    exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
+  | (_, .fixed _) :: args, x :: regs, b, l, h => by
+    simp only [regionsIn] at h
+    have := regionsIn_mem c args regs b l h
+    exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
+  | (_, .inout _) :: args, x :: regs, b, l, h => by
     simp only [regionsIn] at h
     have := regionsIn_mem c args regs b l h
     exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
@@ -327,6 +335,14 @@ theorem outsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : S
   | (name, .bytes _) :: args, reg :: regs, x, r, n, h => by
     simp only [outsIn] at h
     exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
+  | (name, .fixed _) :: args, reg :: regs, x, r, n, h => by
+    simp only [outsIn] at h
+    exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
+  | (name, .inout k) :: args, reg :: regs, x, r, n, h => by
+    simp only [outsIn, List.mem_cons] at h
+    rcases h with e | h
+    · injection e with _ e; injection e with e _; rw [e]; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
 
 theorem outs_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.outs) : r < 16 :=
   argRegs_lt (outsIn_mem c.args argRegs x r n h)
@@ -444,7 +460,7 @@ theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   refine ⟨allowed_of _ _ _ ?_, allowed_of _ _ _ ?_, by omega⟩
   · intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
-    left; left; omega
+    left; left; left; omega
   · intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
     left; omega
@@ -523,7 +539,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         rw [← hadr] at hbyte
         refine ⟨ρ', c1, ?_, ?_, ?_, bv⟩
         · simp only [allowed, Bool.and_true, Contract.perm, Bool.or_eq_true]
-          right
+          left; right
           exact List.any_eq_true.mpr ⟨(base, len), hmem, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         · simp only [load]; unfold M64; omega
         · rw [g3, ← hadr]; simp only [load, hmem0]; omega

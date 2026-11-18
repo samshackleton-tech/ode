@@ -51,6 +51,8 @@ SPECS = [
     ("both contracts allow less stack, the caller's just what the call then takes", ("    stack 40\n", "    stack 56\n"), ("    stack 32\n", "    stack 48\n"), "ode_common", "need entail"),
     ("the called function's contract returns one less", "    returns common(a, b)\n", "    returns common(a, b) - 1\n", "ode_common", UNDECIDED),
     ("the caller's contract says 1 for runs that differ", "if common(a, b) == len(a) then 1 else 0", "if common(a, b) == len(a) then 1 else 1", "ode_equal", UNDECIDED),
+    ("the called function needs an instruction set that the caller's contract does not name", "    stack 40\n", "    stack 40\n    needs sse41\n", "ode_equal",
+     "a called function needs of the processor what this function's contract does not say it needs"),
     ("the caller's contract compares with another length", "if common(a, b) == len(a) then 1 else 0", "if common(a, b) == len(a) + 1 then 1 else 0", "ode_equal", UNDECIDED),
 ]
 
@@ -59,6 +61,7 @@ SPECS = [
 SPEC_WAYS = [
     ("the two sides exchanged", "if common(a, b) == len(a) then 1 else 0", "if len(a) == common(a, b) then 1 else 0"),
     ("by what differs", "if common(a, b) == len(a) then 1 else 0", "if common(a, b) != len(a) then 0 else 1"),
+    ("both contracts name the instruction set the called function needs", ("    stack 40\n", "    stack 56\n"), ("    stack 40\n    needs sse41\n", "    stack 56\n    needs sse41\n")),
 ]
 
 

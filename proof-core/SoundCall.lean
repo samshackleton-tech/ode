@@ -316,13 +316,18 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     next hguard =>
       have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack := by simpa using hguard
       -- the called function writes nothing for its caller (the verifier has no rule for that yet)
-      have hw : (c.outs.isEmpty && c.ensures.isEmpty) = true := by
-        cases hw : (c.outs.isEmpty && c.ensures.isEmpty) with
+      have hw : (c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) = true := by
+        cases hw : (c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) with
         | true => rfl
         | false => simp only [hw, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
       simp only [hw, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-      have hout : c.outs = [] ∧ c.ensures = [] := by simpa using hw
+      have hall : (c.outs = [] ∧ c.ensures = []) ∧ c.fixeds = [] ∧ c.inouts = [] ∧ c.ensuresW = [] := by simpa using hw
+      have hout := hall.1
+      have hfx := hall.2.1
+      have hio := hall.2.2.1
+      have hew := hall.2.2.2
       have hno : ∀ (x : State) (a : Nat), c.inOut x a = false := fun x a => by simp [Contract.inOut, hout.1]
+      have hnf : ∀ (x : State) (a : Nat), c.inFixed x a = false := fun x a => by simp [Contract.inFixed, hfx, hio]
       cases henv : calleeEnv ctx c s c.args argRegs with
       | none => simp only [henv] at h; exact (refuse_ok h).elim
       | some env =>
@@ -360,7 +365,8 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             rw [e2, ev_var, H.entry l0 lt.2] at this
             omega
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), by rw [hout.1]; exact List.Pairwise.nil⟩
+          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
+            (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m)⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega
@@ -379,11 +385,11 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             exact E.byte hm k (by omega)
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          simp only [Contract.perm, hnf, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           rcases ha with (ha | ha) | ha
-          · left; left; omega
-          · left; left; omega
-          · right
+          · left; left; left; omega
+          · left; left; left; omega
+          · left; right
             obtain ⟨⟨r, l⟩, m, hin⟩ := List.any_eq_true.mp ha
             obtain ⟨b0, l0, hm, er, el⟩ := hregion r l m
             simp only [Bool.and_eq_true, decide_eq_true_eq, er, el] at hin

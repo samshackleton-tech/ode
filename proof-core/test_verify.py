@@ -178,9 +178,10 @@ class Verify(unittest.TestCase):
         obj = os.path.join(COMMON, "odecommon.o")
         self.assertIn("    trace depends on a, b\n", self.spec)
         statement.statement(self.spec, [(obj, "ode_common")])                          # as it is: written
+        # what the function needs of the processor is carried, a line of the statement (the caller of such a function must say it too: test_call.py)
+        self.assertIn("needs sse41", statement.statement(self.spec.replace("    stack 40\n", "    stack 40\n    needs sse41\n"), [(obj, "ode_common")]))
         for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
                                ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
-                               ("the function needs an instruction set", "    stack 40\n", "    stack 40\n    needs sse41\n"),
                                ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n"),
                                ("the specification has a layout", "def common(a, b)", "layout pair 16 { x: number at 0, y: number at 8 }\n\ndef common(a, b)"),
                                ("a definition may fail", "def common(a, b) { alike(a, b, 0) }", "def common(a, b) {\n    fails 1 if len(a) > 4096\n    alike(a, b, 0)\n}")):

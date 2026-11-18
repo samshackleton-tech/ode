@@ -91,6 +91,8 @@ The caller's obligations (`Contract.pre`):
   address;
 - every output buffer is mapped memory and does not overlap the stack frame, the return address, any input
   buffer, or any other output buffer;
+- a contract can also name a fixed-size read-only buffer, and a fixed-size buffer that is both read and
+  written. They have the same obligations, and the read-and-written one counts as an output buffer;
 - the function's code is in memory.
 
 ### The one assumption: `Linked`
@@ -155,8 +157,8 @@ offset equals the corresponding element.
 
 | | |
 |---|---|
-| Proved, so you need not read it | The verifier's rules: Core.lean (905 lines of code) and the arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. |
-| What the theorem is *about*. You need to read it, or trust it for some other reason | The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 686 lines of code. |
+| Proved, so you need not read it | The verifier's rules: Core.lean (914 lines of code) and the arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. |
+| What the theorem is *about*. You need to read it, or trust it for some other reason | The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 731 lines of code. |
 | That the Lean proofs are valid | Lean's kernel, or any independent checker for Lean proofs. |
 | Tested, not proved | See the next list. |
 
@@ -219,8 +221,10 @@ same value in the code, or a later `/` or `%` of it in the specification, refers
 is what lets shift-and-mask code be matched against a specification written with `/` and `%`.
 
 `statement.py` refuses any contract line it does not support, so that nothing is silently dropped. Today
-it refuses `requires` (other than `requires no_overlap`), other forms of `ensures`, `writes`, `needs` and
-`calls`. It refuses a contract that promises that the execution trace is independent of a buffer's contents
+it refuses `requires` (other than `requires no_overlap`), other forms of `ensures`, `writes` and `calls`.
+A `needs` line (the processor feature a function requires, such as `needs avx512`) is carried through. It
+has no meaning in the machine model, which has every instruction of the table. The verifier does check
+that a caller's contract repeats every `needs` of the functions it calls. It refuses a contract that promises that the execution trace is independent of a buffer's contents
 (the constant-time property), because the model here does not define a trace. It refuses specifications that use a layout, a kind, a lemma, or a definition that can fail.
 A contract with an output buffer and another buffer must state `requires no_overlap` over all of them,
 because the model demands that of the caller.
@@ -232,6 +236,14 @@ operations, counters, list comprehensions, slices, list update, records, "the le
 `../kcheck/blake3.spec` uses. The verifier rejects a function whose verification would need to unfold one
 of these forms, with the message "not here yet". The machine model likewise already defines the 128-bit
 vector instructions, and the verifier rejects them.
+
+The same is true of the contract of BLAKE3's one-block compression kernel
+(`blake3_servil_compress_in_place_avx512`). `statement.py` can now express it in the model's terms: 32
+bytes that are read and written, 64 bytes that are read, three numbers, and a postcondition saying that the
+32 bytes end up holding `compress(...)` of what they and the other arguments held at entry
+(`test_kernel.py`). The verifier rejects the function, because it has no rules for vector instructions
+yet. One promise of the kernel's real contract is left out: that its execution trace does not depend on
+the data (constant time). The model does not define a trace.
 
 ### Known limitations
 
@@ -365,8 +377,8 @@ the same registers, flags, memory, low 128 bits of each vector register, and nex
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 686 lines. The verifier: 1,064 lines (Core.lean 905, Arithmetic.lean 159
-including its proofs). The file parser: 146 lines. The proofs of the theorems: 5,043 lines.
+**Code size.** The formal model: 731 lines. The verifier: 1,073 lines (Core.lean 914, Arithmetic.lean 159
+including its proofs). The file parser: 156 lines. The proofs of the theorems: 5,089 lines.
 
 ## The files
 
@@ -378,6 +390,6 @@ including its proofs). The file parser: 146 lines. The proofs of the theorems: 5
 | writes the input file (trusted) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/` and `examples/low/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from) |
 | the prover (not trusted) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

@@ -191,6 +191,11 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     split at h
     next => exact (refuse_ok h).elim
     next hcs =>
+      have hew : ctx.contract.ensuresW = [] := by
+        cases hx : ctx.contract.ensuresW.isEmpty with
+        | true => simpa using hx
+        | false => simp only [hx, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
+      simp only [hew, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
       -- every `ensures` first: of the state the return leaves, whose memory and rax are this state's
       obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
       have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
@@ -225,10 +230,10 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hrsp : st.reg RSP = s0.reg RSP := by omega
       have hstack := E.stack
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens⟩
+      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens, (fun e he => by rw [hew] at he; cases he)⟩
       · intro x hx1 hx2
         simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
-        left; right; omega
+        left; left; right; omega
       · show load st.mem (st.reg RSP) 8 = load s0.mem (s0.reg RSP) 8
         rw [hrsp]
         apply load_congr
@@ -414,6 +419,7 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
     | none => simp only [hl2] at h; exact (refuse_ok h).elim
     | some c =>
       simp only [hl2] at h
+      obtain ⟨_, _, _, h⟩ := V.bind_ok h
       obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
       have := V.pure_ok h
       injection this with hn _

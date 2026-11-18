@@ -210,9 +210,33 @@ def sequences(spec):
     return {name: len(seq[0]) for name, seq in spec.seqs.items()}
 
 
+# The kinds of argument that say how a value lies in a register or in memory (LANGUAGE.md), as the account in
+# Lean has them: (the line's kind, or None for a register; the bytes; what the argument's name stands for in
+# the contract's expressions, of the name as the account has it: a number, or a run's bytes).
+WORDS = lambda x: ("call", "words", [x])
+KINDS = {"cv": (32, WORDS),                                        # eight words: 32 bytes, the lowest byte of a word first
+         "block": (64, WORDS),                                     # sixteen words
+         "counter": (None, lambda x: ("call", "counter", [x])),    # a register: 64 bits as a counter
+         "low byte": (None, lambda x: ("bin", "%", x, ("num", 256)))}   # a register: its low byte, the rest being anything
+
+
+def by_kind(e, kinds, name):
+    """The expression with each argument's name replaced by what its kind makes it stand for."""
+    if e[0] == "name": return KINDS[kinds[e[1]]][1](e) if e[1] in kinds else e
+    if e[0] == "num": return e
+    if e[0] == "bin": return ("bin", e[1], by_kind(e[2], kinds, name), by_kind(e[3], kinds, name))
+    if e[0] == "call": return ("call", e[1], [by_kind(a, kinds, name) for a in e[2]])
+    if e[0] == "list": return ("list", [by_kind(a, kinds, name) for a in e[1]])
+    if e[0] == "index": return ("index", by_kind(e[1], kinds, name), by_kind(e[2], kinds, name))
+    # (a form that gives a name, a `let` or a list made thing by thing, could give an argument's name again)
+    raise SystemExit(f"statement: the contract of {name}: with arguments of the kinds {', '.join(sorted(set(kinds.values())))} "
+                     f"an expression of this form is not read yet: {e!r}")
+
+
 def contract_lines(c, name, seqs={}, consts=()):
     """A contract as the lines Reader.lean reads."""
     out = []
+    kinds = {arg: kind for arg, kind in c["args"] if kind in KINDS}
     names = [arg for arg, _ in c["args"]]
     if len(set(names)) != len(names): raise SystemExit(f"statement: the contract of {name} has two arguments of one name")
     # `returns r`, r no name of the specification's (LANGUAGE.md): the number returned is called r in `ensures` lines.
@@ -227,13 +251,20 @@ def contract_lines(c, name, seqs={}, consts=()):
         if kind == "number" and arg not in written: out.append(f"arg {arg} number")
         elif m and not m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} bytes {m.group(1)}")
         elif m and m.group(1).isdigit() and arg in written: out.append(f"arg {arg} out {int(m.group(1))}")
+        # a run of words: read and written where an `ensures` speaks of it, only read where none does
+        elif kind in KINDS and KINDS[kind][0] is not None: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {KINDS[kind][0]}")
+        elif kind in KINDS and arg not in written: out.append(f"arg {arg} number")
         else: raise SystemExit(f"statement: {name}: an argument of a kind the verifier in Lean does not read yet: {arg}: {kind}")
-    for key in ("asks", "calls", "conditions", "given", "needs", "spoils"):
+    for what, more in c["needs"]:
+        if more is not None or not re.fullmatch(r"[a-z0-9]+", what): raise SystemExit(f"statement: the contract of {name} has a `needs` line the verifier in Lean does not read yet")
+        out.append(f"needs {what}")
+    for key in ("asks", "calls", "conditions", "given", "spoils"):
         if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")
     if c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
     # What is written is taken to overlap nothing else given (the account in Lean asks it of the caller), so the
     # contract must ask it of the caller too: `requires no_overlap` of every address among the arguments.
-    addresses = [arg for arg, kind in c["args"] if kind != "number"]
+    in_register = lambda kind: kind == "number" or (kind in KINDS and KINDS[kind][0] is None)
+    addresses = [arg for arg, kind in c["args"] if not in_register(kind)]
     if written and len(addresses) > 1:
         if sorted(c["no_overlap"] or []) != sorted(addresses):
             raise SystemExit(f"statement: the contract of {name} does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap nothing else it is given")
@@ -242,15 +273,23 @@ def contract_lines(c, name, seqs={}, consts=()):
     # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that: a
     # run only read must be named there. (A run written is never read in that account, so nothing depends on
     # what it held; and it is not to be named, since nothing may then depend on it.)
-    quiet = [arg for arg, kind in c["args"] if kind != "number" and arg not in c["trace"] and arg not in written]
+    # (A run of words that is written is also read: it too must be named.)
+    quiet = [arg for arg, kind in c["args"] if not in_register(kind) and arg not in c["trace"] and (arg not in written or arg in kinds)]
     if quiet: raise SystemExit(f"statement: the contract of {name} promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
                                "the verifier in Lean does not show that yet")
-    if [arg for arg in written if arg in c["trace"]]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
+    if [arg for arg in written if arg in c["trace"] and arg not in kinds]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
+    if r is not None and kinds: raise SystemExit(f"statement: the contract of {name} returns a number beside arguments of the kinds {', '.join(sorted(set(kinds.values())))}: not read yet")
     if result is not None: out.append(f"result {result}")
     elif r is not None: out.append("returns " + sexp(r, seqs))
     for leaf in c["leaves"]:
         if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
             raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")
+        if leaf["name"] in kinds:
+            # a whole run of words: its bytes are those of the words said, the lowest byte of each first
+            if leaf["part"] is not None: raise SystemExit(f"statement: the contract of {name} has an `ensures` of a part of a run of words, which the verifier in Lean does not read yet")
+            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [by_kind(leaf["expr"], kinds, name)]), seqs))
+            continue
+        if kinds: raise SystemExit(f"statement: the contract of {name} has an `ensures` of bytes beside arguments of the kinds {', '.join(sorted(set(kinds.values())))}: not read yet")
         count = next(int(re.fullmatch(r"(\d+) bytes", kind).group(1)) for arg, kind in c["args"] if arg == leaf["name"])
         lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
         out.append(f"ensures {leaf['name']} {sexp(lo, seqs)} {sexp(hi, seqs)} {sexp(leaf['expr'], seqs)}")

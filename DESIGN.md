@@ -307,7 +307,7 @@ route, of his choosing, from his question to his tool's answer.
 **A first core exists (November 18, 2026): `proof-core/`.** It is a verifier in Lean 4 that decides by a
 proof it is handed, with a theorem that Lean checks: whatever the proofs are, if the verifier says yes of
 the functions of a statement, every one of them meets its contract on the machine the table describes
-(`verify_all_sound`). The account it is about is 686 lines; the verifier's own 1,064 lines are under the
+(`verify_all_sound`). The account it is about is 731 lines; the verifier's own 1,073 lines are under the
 theorem and need not be read. It reads a first part of what the full verifier reads: instructions over the
 general registers, the flags and memory; loops by places (several a function), by induction on a place's
 number; a call, by the contract of a function the verifier has shown before, after showing what that
