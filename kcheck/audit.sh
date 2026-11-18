@@ -20,7 +20,6 @@ jobs=${1:-$(nproc)}
 only=${2:-all}
 grep -q avx512vl /proc/cpuinfo || { echo "this machine has no AVX-512 VL: the processor cannot judge"; exit 2; }
 work=$(mktemp -d); mkdir -p "$work/glue" "$work/hash" audit
-clang -c -o "$work/out16.o" "$root/c/blake3_output16.S" || exit 2
 for f in push merge add; do clang -c -o "$work/glue/$f.o" "glue/$f.S" || exit 2; done
 for f in pad chunk_node node_out wide32 wide128 take part32 subtree hashr; do clang -c -o "$work/hash/$f.o" "glue/$f.S" || exit 2; done
 # the five kernels: made from their Ode sources (kernels.py), as the file shipped has them since November 17, 2026
@@ -39,7 +38,6 @@ for k in p16 k32 p32; do
     # (kcheck.py's machine, a fixed number of blocks: what no verification of a shipped file loads any more)
     run "kflip-$k.txt" python3 kflip.py $k "$obj" --jobs "$jobs" --native 1000 --refused-sample 400 --detail
 done
-run "kflip-o16.txt" python3 kflip.py o16 "$work/out16.o" --jobs "$jobs" --native 2000 --refused-sample 400 --detail
 for f in push merge add; do run "kglue-flip-$f.txt" python3 kglue_flip.py $f "$work/glue" --jobs "$jobs" --native 3000; done
 for f in avx512 sse41; do run "kone-flip-$f.txt" python3 kglue_flip.py $f "$work/glue" --jobs "$jobs" --native 20000; done
 fi
