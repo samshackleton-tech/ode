@@ -26,7 +26,9 @@ statement's kinds in it is refused.
     fact EXPRESSION
     decreases EXPRESSION
     t NAME [N]                what the verifier asks for, in the order it asks
-    r … / s … / q             a proof of arithmetic (as ArithMain.lean reads it)
+    p … / s … / q             a proof of arithmetic: the rows it starts from, by their numbers among the
+                              rows the verifier holds (0: the first); its steps (as ArithMain.lean reads
+                              them); the end
 
 An EXPRESSION is written with brackets: (num 1) (name x) (bin + A B) (ifx C A B) (index A I) (call f A…).
 It answers `shown` (every function of the statement meets its contract), or what it needs or why it

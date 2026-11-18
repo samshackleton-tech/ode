@@ -96,7 +96,7 @@ class Adler(unittest.TestCase):
                 lines = list(self.lines); lines[hits[0]] = lines[hits[0]].replace(old, new)
                 self.assertFalse(self.says(lines).startswith("shown"), what)
                 # and no other proof is found for it
-                rest = [l for l in lines if not (l[:2] in ("t ", "r ", "s ") or l == "q")]
+                rest = [l for l in lines if not (l[:2] in ("t ", "p ", "s ") or l == "q")]
                 statement_path, _ = self.split(rest, "again")
                 p = prove.Prover(statement_path, [l for l in rest if l.split()[0] not in STATEMENT], os.path.join(self.dir, "again.found"),
                                  budget=4 * self.runs)
@@ -106,7 +106,7 @@ class Adler(unittest.TestCase):
                 self.assertIsNone(found, f"{what}: the prover found a proof")
 
     def test_the_proof_changed(self):
-        proof_at = [k for k, l in enumerate(self.lines) if l[:2] in ("t ", "r ", "s ") or l == "q"]
+        proof_at = [k for k, l in enumerate(self.lines) if l[:2] in ("t ", "p ", "s ") or l == "q"]
         kinds = {}
         for k in proof_at:
             l = self.lines[k]
@@ -117,7 +117,6 @@ class Adler(unittest.TestCase):
             if l in ("t lt", "t eq", "t gt"): trials.append(("another order", "t gt" if l != "t gt" else "t lt"))
             if l.startswith("s "): w = l.split(); trials.append(("a step's multiplier", " ".join(w[:2] + [str(int(w[2]) + 1)] + w[3:])))
             for kind, new in trials:
-                if kind == "left out" and l.startswith("r "): continue       # (a start row a proof does not use may go: test_verify.py counts those)
                 lines = list(self.lines)
                 if new is None: del lines[k]
                 else: lines[k] = new

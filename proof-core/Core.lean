@@ -48,7 +48,7 @@ end Lin
 
 inductive Item where
   | tag (name : String) (n : Nat)
-  | proof (starts : List Row) (steps : List Step)
+  | proof (starts : List Nat) (steps : List Step)   -- of arithmetic: the rows it starts from, by their numbers among those the verifier holds
   deriving Inhabited
 
 /-- A step of the verifier: it takes what it needs from the front of the proof, and gives an answer and the
@@ -101,13 +101,16 @@ def plain (facts : List Row) (g : Row) : Bool :=
     | some k => decide (0 ≤ k)
     | none => false
 
+/-- The rows a proof of arithmetic starts from: those of the rows given that it names by their numbers. -/
+def pick (given : List Row) (numbers : List Nat) : List Row := numbers.filterMap fun k => given[k]?
+
 /-- `g ≥ 0` follows from the facts. `what`: the word by which a proof that has no step for it is asked for
 one. -/
 def entailAs (what : String) (facts : List Row) (g : Row) : V Unit :=
   if plain facts g then pure () else do
     match ← pop with
     | some (.proof starts steps) =>
-      if Arithmetic.refutes (negation g :: facts) starts steps then pure ()
+      if Arithmetic.refutes (negation g :: facts) (pick (negation g :: facts) starts) steps then pure ()
       else refuse "a proof of arithmetic does not show what is to be shown"
     | some (.tag ..) => refuse "a proof of arithmetic is expected"
     | none => need what facts [g]
@@ -435,7 +438,7 @@ def assume (s : Sym) (rows : List Row) : V (Option Sym) :=
       else if name == "dead" then do
         match ← pop with
         | some (.proof starts steps) =>
-          if Arithmetic.refutes (rows ++ s.facts) starts steps then pure none
+          if Arithmetic.refutes (rows ++ s.facts) (pick (rows ++ s.facts) starts) steps then pure none
           else refuse "a proof of arithmetic does not show that no input goes this way"
         | _ => refuse "a proof of arithmetic is expected"
       else refuse "live or dead is expected"

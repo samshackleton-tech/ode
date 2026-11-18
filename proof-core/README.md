@@ -24,11 +24,14 @@ plain text that a verifier in any language can read.
             ../kcheck/programs/adler32/odeadler32.o:ode_adler32
 
 Each prints the contracts and `shown`. `ode_common` counts the bytes two runs have alike at their start:
-45 instructions, one loop. Its proof is 69 lines of text (1,788 bytes), and the verifier decides in 4 ms.
+45 instructions, one loop. Its proof is 55 lines of text (646 bytes), and the verifier decides in 4 ms.
 `ode_equal` says whether two runs are the same by calling `ode_common`: ten instructions, and nine more
 lines of proof. The verifier shows `ode_common` first and then takes the call by its contract alone.
 `ode_adler32` is the Adler-32 checksum: 55 instructions, one loop, two sums each kept below 65521. Its
-proof is about 400 lines (16 kB), most of it the arithmetic of remainders, and the verifier decides in 6 ms.
+proof is 265 lines (3 kB), most of it the arithmetic of remainders, and the verifier decides in 5 ms.
+`ode_adler32_blocks` is the same checksum taken in blocks of at most 5552 bytes, the sums reduced once a
+block by shifts and masks: 116 instructions, a loop inside a loop. Its proof is about 1,400 lines (19 kB),
+and the verifier decides in 77 ms.
 
 ## The theorem
 
@@ -177,7 +180,8 @@ A proof is text too, one line a thing, in the order the verifier comes to need i
                                   shown to be the same (of one definition, with numbers shown equal)
     t live / t dead               a way a jump can go: some input takes it / none does (then why, by arithmetic)
     t lt / t eq / t gt            which of two numbers is the greater (then why, by arithmetic)
-    r 0 0 1 …  /  s 0 1 2 1 1  /  q      a proof of arithmetic: rows it starts from, steps that add two rows up
+    p 0 3 17  /  s 0 1 2 1 1  /  q       a proof of arithmetic: the rows it starts from, by their numbers
+                                  among the rows the verifier holds; steps that add two rows up; the end
 
 The verifier replays the instructions itself by the table and opens definitions itself; the proof carries
 only what would otherwise be searched for. A proof of arithmetic starts from rows the verifier already
@@ -192,18 +196,18 @@ an answer (the arithmetic by elimination), and runs it again: 47 runs and a fift
 
 | | |
 |---|---|
-| `ode_common`: the proof | 69 lines, 1,788 bytes: the place 8 lines, 7 proofs of arithmetic |
-| `ode_equal`, which calls it: its part of the proof | 9 lines, 77 bytes (the two together: 79 lines, 1,865 bytes; the statement 2,262 bytes) |
-| `ode_adler32`: the proof | about 400 lines, 16 kB: the place 11 lines, 39 proofs of arithmetic (the prover's elimination does not give the same proof every run); found in 204 runs of the verifier, 1.0 s |
-| `ode_adler32_blocks` (116 instructions, two loops): the proof | about 2,200 lines, 135 kB: two places (24 lines), 174 proofs of arithmetic; found in 763 runs of the verifier, 20 s. Most of its bytes are the rows each proof of arithmetic starts from, written out in full though the verifier holds them: a proof that named them by their numbers would be a fraction of the size. Not done yet |
-| the verifier's time | 4 ms for `ode_common`; 4 ms for it and `ode_equal` together; 6 ms for `ode_adler32`; 83 ms for `ode_adler32_blocks` |
-| wrong versions of `ode_common` | 18 changes of one place in the code, the specification, the contract or the place: each refused, and the prover finds no proof for any. Every line of the proof left out or changed: refused, but for two rows an arithmetic proof starts from and does not use |
-| wrong versions of `ode_adler32` | 19 changes of one place in the code (another modulus, a sum not reduced, the shift by 15, …), the specification, the contract or the place: none shown, and the prover finds no proof for any in four times the runs it needs for the right one. Every line of the proof but a start row left out, and 167 changed: refused |
-| wrong versions of `ode_adler32_blocks` | 14 changes of one place in the code (a shift by 15, a mask of 17 bits, the high part counted 8 times, a sum not reduced, …), the specification, the contract or the places (a place that does not keep the block's end, a number that does not decrease): none shown, and the prover finds no proof for any within the runs, and one and a half times the time, of the right one. Of every seventh line of the proof left out or changed (319 trials): each refused |
+| `ode_common`: the proof | 55 lines, 646 bytes: the place 8 lines, 7 proofs of arithmetic |
+| `ode_equal`, which calls it: its part of the proof | 9 lines, 77 bytes (the two together: 65 lines, 723 bytes; the statement 2,262 bytes) |
+| `ode_adler32`: the proof | 265 lines, 3 kB: the place 11 lines, 39 proofs of arithmetic (the prover's elimination does not give the same proof every run); found in 204 runs of the verifier, 1.0 s |
+| `ode_adler32_blocks` (116 instructions, two loops): the proof | about 1,400 lines, 19 kB: two places (24 lines), 174 proofs of arithmetic; found in 763 runs of the verifier, 20 s. (It was 135 kB while a proof of arithmetic wrote out the rows it starts from; it names them by number now) |
+| the verifier's time | 4 ms for `ode_common`; 4 ms for it and `ode_equal` together; 5 ms for `ode_adler32`; 77 ms for `ode_adler32_blocks` |
+| wrong versions of `ode_common` | 18 changes of one place in the code, the specification, the contract or the place: each refused, and the prover finds no proof for any. Every line of the proof left out or changed (85 trials): refused |
+| wrong versions of `ode_adler32` | 19 changes of one place in the code (another modulus, a sum not reduced, the shift by 15, …), the specification, the contract or the place: none shown, and the prover finds no proof for any in four times the runs it needs for the right one. Every line of the proof left out, and 167 changed: refused |
+| wrong versions of `ode_adler32_blocks` | 14 changes of one place in the code (a shift by 15, a mask of 17 bits, the high part counted 8 times, a sum not reduced, …), the specification, the contract or the places (a place that does not keep the block's end, a number that does not decrease): none shown, and the prover finds no proof for any within the runs, and one and a half times the time, of the right one. Of every seventh line of the proof left out or changed (343 trials): each refused |
 | wrong versions of the caller | 11 changes of the caller's code (the count kept in a register a call may change, a run not handed over whole, the stack pointer moved, what a call leaves in rcx used, …) and 5 of the contracts: none shown, no proof found, and for each the test names what the verifier then lacks or refuses. The caller before its callee, a function that calls itself, a callee left out, two functions of one name: refused. Two other ways of writing the caller and two of writing its contract: shown |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
-| size | the account 441 lines of code; the verifier 879 (Core.lean 720, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 3,983 |
+| size | the account 441 lines of code; the verifier 880 (Core.lean 721, Arithmetic.lean 159 with its proofs); the reader of lines 117; the proofs of the theorems 3,983 |
 
 ## The files
 

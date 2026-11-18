@@ -25,7 +25,7 @@ structure Job where
   fns : List Fn := []               -- the statement's functions, in its order
   defs : List Def := []
   cur : Option String := none       -- in the proof: the function the lines are for
-  starts : List Row := []
+  starts : List Nat := []
   steps : List Step := []
 
 def words (line : String) : List String := (line.splitOn " ").filter (· ≠ "")
@@ -98,9 +98,9 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["t", name, n] => match n.toNat? with
     | some n => onCur fun g => pure { g with proof := g.proof ++ [.tag name n] }
     | none => throw s!"cannot read {line}"
-  | "r" :: numbers => match numbers.mapM String.toInt? with
-    | some (k :: cs) => pure { t with starts := t.starts ++ [⟨cs, k⟩] }
-    | _ => throw s!"cannot read {line}"
+  | "p" :: numbers => match numbers.mapM String.toNat? with
+    | some ns => pure { t with starts := t.starts ++ ns }
+    | none => throw s!"cannot read {line}"
   | "s" :: numbers => match numbers.mapM String.toNat? with
     | some [i, a, j, b, d] => pure { t with steps := t.steps ++ [⟨i, a, j, b, d⟩] }
     | _ => throw s!"cannot read {line}"

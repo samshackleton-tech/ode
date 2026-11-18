@@ -87,7 +87,7 @@ class Verify(unittest.TestCase):
         said = self.says(self.lines)
         took = time.time() - t
         self.assertEqual(said, "shown\n")
-        proof = [l for l in self.lines if l[:2] in ("t ", "r ", "s ") or l == "q"]
+        proof = [l for l in self.lines if l[:2] in ("t ", "p ", "s ") or l == "q"]
         self.assertEqual(len(proof), self.items)
         with open(self.proof) as f: whole = f.read()
         print(f"\node_common: shown in {1000 * took:.0f} ms; the proof: {whole.count(chr(10))} lines, {len(whole)} bytes "
@@ -103,7 +103,7 @@ class Verify(unittest.TestCase):
                 said = self.says(lines)
                 self.assertFalse(said.startswith("shown"), what)
                 # and no other proof is found for it
-                rest = [l for l in lines if not (l[:2] in ("t ", "r ", "s ") or l == "q")]
+                rest = [l for l in lines if not (l[:2] in ("t ", "p ", "s ") or l == "q")]
                 statement_path, _ = self.split(rest, "again")
                 p = prove.Prover(statement_path, [l for l in rest if l.split()[0] not in STATEMENT], os.path.join(self.dir, "again.found")); p.last = ""
                 try: found = p.solve([])
@@ -111,7 +111,7 @@ class Verify(unittest.TestCase):
                 self.assertIsNone(found, f"{what}: the prover found a proof")
 
     def test_the_proof_changed(self):
-        proof_at = [k for k, l in enumerate(self.lines) if l[:2] in ("t ", "r ", "s ") or l == "q"]
+        proof_at = [k for k, l in enumerate(self.lines) if l[:2] in ("t ", "p ", "s ") or l == "q"]
         kinds = {}
         for k in proof_at:
             l = self.lines[k]
@@ -120,7 +120,7 @@ class Verify(unittest.TestCase):
             if l.startswith("t dead"): trials.append(("dead made live", "t live"))
             if l.startswith("t open"): trials.append(("another opened", "t open 0" if l != "t open 0" else "t open 1"))
             if l in ("t lt", "t eq", "t gt"): trials.append(("another order", "t gt" if l != "t gt" else "t lt"))
-            if l.startswith("r "): w = l.split(); trials.append(("a row's number", " ".join(w[:1] + [str(int(w[1]) + 1)] + w[2:])))
+            if l.startswith("p "): w = l.split(); trials.append(("another row to start from", " ".join(w[:1] + [str(int(w[1]) + 1)] + w[2:])))
             if l.startswith("s "): w = l.split(); trials.append(("a step's multiplier", " ".join(w[:2] + [str(int(w[2]) + 1)] + w[3:])))
             for kind, new in trials:
                 lines = list(self.lines)
@@ -128,8 +128,8 @@ class Verify(unittest.TestCase):
                 else: lines[k] = new
                 said = self.says(lines)
                 if said.startswith("shown"):
-                    # a proof of arithmetic may start from a row it does not use: without it the same is shown
-                    self.assertTrue(kind == "left out" and l.startswith("r "), (k, l, kind))
+                    # a proof of arithmetic that starts from another row the verifier holds may be a proof too
+                    self.assertEqual(kind, "another row to start from", (k, l, kind))
                     kinds[kind + ": still shown"] = kinds.get(kind + ": still shown", 0) + 1
                 else: kinds[kind] = kinds.get(kind, 0) + 1
         print(f"\nthe proof changed in one place: {kinds}", file=sys.stderr)

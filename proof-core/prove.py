@@ -62,9 +62,13 @@ def row_text(c, k):
     return " ".join([str(k)] + [str(c.get(f"v{i:05d}", 0)) for i in range(top + 1)])
 
 
-def proof_text(proof):
+def proof_text(proof, given):
+    """A proof of arithmetic as the verifier reads it: the rows it starts from by their numbers among the rows
+    the verifier holds (`given`, in its order), then the steps."""
     starts, steps = proof
-    out = ["r " + row_text(c, k) for c, k in starts]
+    at = {}
+    for number, f in enumerate(given): at.setdefault((frozenset(dict(f.c).items()), f.k), number)
+    out = ["p " + " ".join(str(at[(frozenset((n, v) for n, v in c.items() if v), k)]) for c, k in starts)]
     rows = [(dict(c), k) for c, k in starts]
     for i, a, j, b in steps:
         g = 0
@@ -179,10 +183,10 @@ class Prover:
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
                 if p is None: self.last = said; self.note(proof, said + ' (no proof found)'); return None
-                proof = proof + proof_text(p)
+                proof = proof + proof_text(p, [negation(goals[0])] + facts)
             elif what == "branch":
                 p = refutation(facts, 0)                       # (the newest fact is first)
-                proof = proof + (["t live"] if p is None else ["t dead"] + proof_text(p))
+                proof = proof + (["t live"] if p is None else ["t dead"] + proof_text(p, facts))
             elif what == "compare":
                 d = goals[0]
                 if refutation(facts + [negation(d)]) and refutation(facts + [negation(-d)]): proof = proof + ["t eq"]
