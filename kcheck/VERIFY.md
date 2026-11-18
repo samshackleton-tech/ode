@@ -9,8 +9,8 @@ The tool answers for one exact text, the contract you give it. Choosing that tex
 
 ## Run it
 
-You need Python 3, this folder and `../core` beside it (the table of instructions and the two files that
-read it). Nothing is installed, nothing is downloaded, no solver runs.
+You need Python 3, this folder and `../core` beside it (the table of instructions and the files that read
+it). Nothing is installed, nothing is downloaded, no solver runs.
 
     python3 verify.py programs/lz4/odelz4.o        # an LZ4 decoder and two encoders: 0.3 s
     python3 verify.py programs/utf8/odeutf8.o      # a UTF-8 validator: 0.03 s

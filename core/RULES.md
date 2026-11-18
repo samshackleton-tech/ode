@@ -1,15 +1,57 @@
 # The rules the verifier steps by
 
-What the verifier does with one instruction, written down. This page covers the part that was taken out of
-the verifier's code on November 17, 2026: what an instruction does is a row of `x86.tab`, and what the
-verifier concludes from a row is the rules below (`step.py`, and the end of `one` in `../kcheck/kfn.py`).
-The rules for memory, calls, places in loops, the return and the specification are still only code
-(`../kcheck/kfn.py`, `kbyte.py`, `kspec.py`); section 5 lists them. Each rule here has a test that it can
-fail: `meaning.py` puts random values of every form to every rule and compares the answer with the
-operation's meaning on numbers (`conc.py`), and `cross.py` compares each row's effect on numbers with
-processors.
+What the verifier does with one instruction, written down.
 
-## 1. What the verifier holds at a point of a path
+Two things were taken out of the verifier's code on November 17 and 18, 2026, and put in the table
+`x86.tab`: which instruction the bytes at a place are, and what an instruction does. The rules below say
+what the verifier concludes from the table. They are carried out by `encode.py`, `decode.py`, `step.py`
+and the end of `one` in `../kcheck/kfn.py`.
+
+The rules for memory, calls, places in loops, the return and the specification are still only code
+(`../kcheck/kfn.py`, `kbyte.py`, `kspec.py`). Section 6 lists them.
+
+Each rule here has a test that it can fail. `cross.py` runs each row's bytes on processors and compares
+what they leave with the row's effect on numbers (`conc.py`). `meaning.py` puts random values of every form
+to every rule on symbols and compares the answer with the operation's meaning on numbers.
+
+## 1. Which instruction the bytes are
+
+1. Under each row the table has the ways an instance of the row (these registers, these numbers) is
+   written in bytes. For a way and an instance `encode.py` writes one byte string, part by part:
+   - the prefix the way names;
+   - a REX prefix, only where the way says W, a register numbered 8 or more is named, or the low byte of
+     rsp, rbp, rsi or rdi is named;
+   - the opcode;
+   - the ModRM byte, with a SIB byte only where the base is rsp or r12 or there is an index;
+   - the shortest displacement that holds the number: none for zero (one byte of zero with rbp or r13 as
+     the base), else one byte in the way's units, else four bytes;
+   - the number, in as many bytes as the way says.
+
+   A VEX prefix is the two-byte one wherever that says it. A bit the way does not name has the value that
+   says nothing. No instruction so written is longer than fifteen bytes.
+2. The bytes at a place are an instance of a row when rule 1, for a way of the row and an instance, writes
+   those very bytes. The instruction is then those bytes and no more. The decoded row is written from that
+   way and instance.
+3. What finds the way and the instance (`candidates` in `decode.py`) is relied on for nothing. What it
+   proposes is taken only by rule 2.
+4. The decoded row must be an instance of that same row before any other row of the table. So the row the
+   verifier steps by is the row whose bytes were read.
+5. Four bytes may stand for a place in the file's read-only data, or for a function called. What they
+   stand for is the file's to say (`../kcheck/kdecode.py`): by its relocations, or by the bytes themselves
+   where its addresses are settled. A place outside the data read is refused.
+
+Why this is right. A processor reads bytes in one way only. What the bytes of rule 1 do is compared with
+the row's effect on processors, way by way, with random registers, numbers and displacements of every
+length (`cross.py`). What an assembler writes for an instance is read as that instance (`decoder.py`).
+
+A processor accepts other forms for the same instruction: a prefix that says nothing, a longer
+displacement, a bit an encoding ignores. They are not read, so nothing has to be shown about them, and a
+function written with them is not verified.
+
+Not run on a processor: the call, the return and the address of the file's data. A jump is run only over
+the next five bytes.
+
+## 2. What the verifier holds at a point of a path
 
 A value of a 64-bit register is in one of these forms. Each form means a number, or some bits of one,
 once every unknown has a value; `meaning.py` has the same list as code.
@@ -30,22 +72,22 @@ A lane of a vector register is a term over 32-bit unknowns (a constant, a sum mo
 rotation, a comparison, a choice), or half of a rotation (`("shl", w, n)` or `("shr", w, n)`). The zero flag
 is `("zero", L)` (set exactly when L is 0), `("cond", (name, k))` (set exactly when the unknown word is k),
 or unsaid; the carry flag is `("neg", L)` (set exactly when L is below 0), or unsaid. Beside these: the
-facts in play (inequalities between unknowns), and memory, which is the machine's own (section 5).
+facts in play (inequalities between unknowns), and memory, which is the machine's own (section 6).
 
-## 2. One instruction
+## 3. One instruction
 
 1. The instruction's row is the first row of the table whose ROW the decoded instruction is an instance
    of. With no such row the function is not verified.
 2. The row's statements are done left to right. `PLACE = EXPRESSION`: the expression's primitives are
-   answered by the rules of section 3, registers and memory read as they stand at that statement. `= unknown`
+   answered by the rules of section 4, registers and memory read as they stand at that statement. `= unknown`
    makes the place unsaid. `jump T if FLAG`: the flag must decide (by the facts), or the path splits in
    two, one with each answer assumed. `call T`: the callee's contract is used, and nothing else of it.
    `return`: the stack pointer must be where it was at entry and the return address untouched.
 3. A rule that has no answer refuses, and the function is not verified. A path may split only before the
    instruction has written anything.
-4. Then section 4.
+4. Then section 5.
 
-## 3. The primitives on symbols
+## 4. The primitives on symbols
 
 Where a rule answers, the answer means the operation's result for every value of the unknowns that the
 facts allow. Where no case below applies, it refuses.
@@ -73,17 +115,17 @@ facts allow. Where no case below applies, it refuses.
 | `lane32` | a word, a known number, one byte | a 32-bit value as a lane |
 | `ult32`, `choose16` | whole lanes; a mask of comparisons | terms: a comparison, a choice |
 
-## 4. After every instruction
+## 5. After every instruction
 
 - A jump back counts; a loop that has turned more than `TURNS` times on one path is not run further (a
-  loop whose count the path does not fix needs a place: section 5).
+  loop whose count the path does not fix needs a place: section 6).
 - The stack pointer is in the function's own frame, a known number of bytes at or below where it was at
   entry (or, after being rounded down to a 64-byte boundary, in the part of the frame below that). Else
   the function is not verified. The stack used is counted from wherever it is.
 - Nothing is remembered of the stack below the stack pointer: a call writes there, and so may whatever
   interrupts the program.
 
-## 5. Not yet written down here
+## 6. Not yet written down here
 
 Rules the verifier follows that are still only its code: memory in pieces (`load`, `store`: what lies at
 an address, bounds, what a contract gives to read or to write, `no_overlap`); a call by the callee's

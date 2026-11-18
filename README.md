@@ -26,7 +26,8 @@ line by line.
 Python 3, this folder and `core/` beside it are all it needs: nothing is installed, no solver runs, no network is used. In
 about 25 seconds it prints the public contract (seven lines), the verification ("`b3l_hashr` in this file
 meets its public contract, with all it calls: 14 functions, from the file's bytes"), and the files that ran
-to reach it (3,247 lines of Python in twelve files, and the table of instructions: 93 rows). Exit status 0
+to reach it (3,168 lines of Python in fourteen files, and the table of instructions: 93 rows, and under them
+150 ways of writing them in bytes). Exit status 0
 means shown.
 [kcheck/VERIFY.md](kcheck/VERIFY.md) is the page for a reader: what is shown, what is left unshown, and
 what you rely on. Another program: `python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
@@ -51,7 +52,7 @@ judge each change the verifier accepts: hours, run in the background.
 | `LESSONS.md` | what the work has taught, October and November 2026 |
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
-| `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, how the decoder writes it, what it does) and what reads it (second table below) |
+| `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
 | `wide/` | BLAKE3's five kernels in Ode's instruction layer (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | the Ode compiler: `odec.py` (reader; kernels to assembly) and `Lang.lean` (word-level functions to assembly); `build.sh` |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |
@@ -61,7 +62,7 @@ Inside `kcheck/`, by what a file is relied on for:
 | role | files |
 |---|---|
 | what Bob is given | `VERIFY.md`, `verify.py`, `LANGUAGE.md`; `blake3.spec` and `b3hashr.o`; `programs/NAME/NAME.spec` and `programs/NAME/odeNAME.o` |
-| the verifier (relied on) | `check_binary.py`, `programs/check_file.py`, `kdecode.py`, `kfn.py`, `kbyte.py`, `kspec.py`, `ode.py`, `klin.py`, `kterms.py`, `kproof.py`, `kshow.py`, `kends.py`, `varith.py`; and from `core/` (below) the table and the two files that read it |
+| the verifier (relied on) | `check_binary.py`, `programs/check_file.py`, `kdecode.py`, `kfn.py`, `kbyte.py`, `kspec.py`, `ode.py`, `klin.py`, `kterms.py`, `kproof.py`, `kshow.py`, `kends.py`, `varith.py`; and from `core/` (below) the table and the files that read it |
 | provers (relied on for nothing) | `kprove.py`, `kguess.py`, `kplace.py`, `kwide.py` |
 | makers | `hash.ode`, `glue/` (its functions as the compiler prints them), `kernels.py`, `klink.py`, `make_hash.sh`, `programs/kpack.py`, `proofs/` |
 | testers and audits | `refute.py` (looks for an input that breaks a contract), `gate.py`, `test_*.py`, `audit.sh` and the `k*_flip.py` tools, `lemma_audit.py`, `kadversary.py`, `kfile_flip.py`, `audit/` (the last whole audit's output), `backdoor.o` (a wrong binary that must be refused), `varith2.c` (a second verifier of arithmetic proofs) |
@@ -71,9 +72,9 @@ Inside `core/`:
 
 | role | files |
 |---|---|
-| relied on: what each instruction does | `x86.tab` (93 rows), `table.py` (reads it), `step.py` (does a row's effect on the verifier's machine: a rule on symbols for each primitive, none about one instruction) |
-| the rules, written down | `RULES.md`: what the verifier concludes from a row, rule by rule, and what holds after every instruction (memory, calls and places are not yet written there) |
-| testers | `conc.py` (each primitive's meaning on numbers), `decoder.py` (the verifier's decoder reads each row's assembled instances as that row), `cross.py` (every row run on this machine's processor from random states and compared), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
+| relied on: what each instruction does, and what bytes are one | `x86.tab` (93 rows, 150 ways of writing them in bytes), `table.py` (reads it), `step.py` (does a row's effect on the verifier's machine: a rule on symbols for each primitive, none about one instruction), `encode.py` (writes an instance's bytes in one of its row's ways: one byte string), `decode.py` (reads the bytes at a place as an instance only if `encode.py` writes those very bytes for it; the part of it that proposes what the bytes might be is relied on for nothing) |
+| the rules, written down | `RULES.md`: which instruction the bytes are, what the verifier concludes from a row, rule by rule, and what holds after every instruction (memory, calls and places are not yet written there) |
+| testers | `conc.py` (each primitive's meaning on numbers), `cross.py` (every row, as an assembler writes it and in each way the table writes its bytes, run on this machine's processor from random states and compared), `decoder.py` (what an assembler writes for each row's instances is read as that row), `meaning.py` (every rule on symbols against the meaning on numbers), `test_core.py` |
 
 ## Where this came from
 
