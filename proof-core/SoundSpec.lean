@@ -452,6 +452,49 @@ theorem ifx_finish {r res : SRes} {s2 s' : Sym} {r2 rest : List Item}
     injection hp with e1 e2
     exact ⟨e1.symm, e2.symm, fun vs h => by cases h⟩
 
+/-- Two uses of definitions have the same values. -/
+def Eqv (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (a b : SCall) : Prop := ∀ x, CallValue ctx s0 ρ a x ↔ CallValue ctx s0 ρ b x
+
+theorem mem_insert {c x : SCall} {l : List SCall} (h : c ∈ insert x l) : c ∈ l ∨ c = x := by
+  unfold insert at h
+  split at h
+  · exact Or.inl h
+  · simpa using h
+
+theorem reachStep_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) {f : SFact} {seen : List SCall}
+    (hf : f.holds ctx s0 ρ) (hs : ∀ c ∈ seen, Eqv ctx s0 ρ a c) : ∀ c ∈ reachStep seen f, Eqv ctx s0 ρ a c := by
+  cases f with
+  | value _ _ => exact hs
+  | same x y =>
+    intro c m
+    simp only [reachStep] at m
+    split at m
+    next hx =>
+      rcases mem_insert m with m | rfl
+      · exact hs c m
+      · have := hs x (by simpa using hx)
+        exact fun v => (this v).trans (hf v)
+    next =>
+      split at m
+      next hy =>
+        rcases mem_insert m with m | rfl
+        · exact hs c m
+        · have := hs y (by simpa using hy)
+          exact fun v => (this v).trans (hf v).symm
+      next => exact hs c m
+
+theorem foldl_reach {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) : ∀ (facts : List SFact) (seen : List SCall),
+    (∀ f ∈ facts, f.holds ctx s0 ρ) → (∀ c ∈ seen, Eqv ctx s0 ρ a c) → ∀ c ∈ facts.foldl reachStep seen, Eqv ctx s0 ρ a c
+  | [], _, _, hs => hs
+  | f :: more, seen, hf, hs =>
+    foldl_reach a more (reachStep seen f) (fun g m => hf g (List.mem_cons_of_mem _ m))
+      (reachStep_sound a (hf f (List.mem_cons_self ..)) hs)
+
+theorem reach_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) (facts : List SFact) (hf : ∀ f ∈ facts, f.holds ctx s0 ρ) :
+    ∀ (fuel : Nat) (seen : List SCall), (∀ c ∈ seen, Eqv ctx s0 ρ a c) → ∀ c ∈ reach facts fuel seen, Eqv ctx s0 ρ a c
+  | 0, _, hs => hs
+  | fuel + 1, seen, hs => reach_sound a facts hf fuel _ (foldl_reach a facts seen hf hs)
+
 /-- A remainder: the two new unknowns are the quotient and the remainder there are. -/
 theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : List Item} {ρ : Nat → Int} {st : State}
     (h : smod s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -540,49 +583,159 @@ theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownVa
       exact List.mem_cons_self ..
     next => exact List.mem_cons_of_mem _ (knownValue_mem h)
 
+theorem heldValues_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, (c, v) ∈ heldValues facts → SFact.value c v ∈ facts
+  | [], _, _, h => by simp [heldValues] at h
+  | .same _ _ :: more, c, v, h => by
+    simp only [heldValues] at h
+    exact List.mem_cons_of_mem _ (heldValues_mem h)
+  | .value c' v' :: more, c, v, h => by
+    simp only [heldValues, List.mem_cons] at h
+    rcases h with h | h
+    · injection h with h1 h2
+      subst h1 h2
+      exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (heldValues_mem h)
+
+/-- The things two uses are used with, shown the same, mean the same. -/
+theorem sameArgs_sound (ctx : Ctx) (s0 : State) {facts : List Row} {ρ : Nat → Int} (hf : ∀ g ∈ facts, g.holds ρ) :
+    ∀ (as bs : List SVal) {items rest : List Item}, sameArgs facts as bs items = .ok ((), rest) →
+    as.map (semv ctx s0 ρ) = bs.map (semv ctx s0 ρ)
+  | [], [], _, _, _ => rfl
+  | [], _ :: _, _, _, h => by simp only [sameArgs] at h; exact (refuse_ok h).elim
+  | _ :: _, [], _, _, h => by simp only [sameArgs] at h; exact (refuse_ok h).elim
+  | a :: as, b :: bs, items, rest, h => by
+    cases a with
+    | lin x =>
+      cases b with
+      | lin y =>
+        simp only [sameArgs] at h
+        obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+        obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
+        have g1 := entail_sound e1 ρ hf
+        have g2 := entail_sound e2 ρ hf
+        rw [ev_sub] at g1 g2
+        have e : ev ρ x = ev ρ y := by omega
+        simp only [List.map_cons, semv, e, sameArgs_sound ctx s0 hf as bs h]
+      | region r =>
+        simp only [sameArgs] at h
+        split at h
+        next hc => cases hc
+        next => exact (refuse_ok h).elim
+      | bool t =>
+        simp only [sameArgs] at h
+        split at h
+        next hc => cases hc
+        next => exact (refuse_ok h).elim
+    | region r =>
+      simp only [sameArgs] at h
+      split at h
+      next hc => subst hc; simp only [List.map_cons, sameArgs_sound ctx s0 hf as bs h]
+      next => exact (refuse_ok h).elim
+    | bool t =>
+      simp only [sameArgs] at h
+      split at h
+      next hc => subst hc; simp only [List.map_cons, sameArgs_sound ctx s0 hf as bs h]
+      next => exact (refuse_ok h).elim
+
+/-- Two uses the verifier takes to have the same value have the same value. -/
+theorem sameUse_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    {c c' : SCall} {items rest : List Item} (h : sameUse s c c' items = .ok ((), rest)) : Eqv ctx s0 ρ c c' := by
+  unfold sameUse at h
+  split at h
+  next hm =>
+    have m : c' ∈ reach s.spec (s.spec.length + 1) [c] := by simpa using hm
+    exact reach_sound c s.spec H.spec _ [c] (fun x mx => by simp only [List.mem_singleton] at mx; subst mx; exact fun _ => Iff.rfl) c' m
+  next =>
+    split at h
+    next hf =>
+      have ef : c'.f = c.f := by simpa using hf
+      have ea := sameArgs_sound ctx s0 H.facts c.args c'.args h
+      intro x
+      simp only [CallValue, ef, ea]
+    next => exact (refuse_ok h).elim
+
+/-- The value the verifier takes a use of a definition to have is its value. -/
+theorem heldFor_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {c : SCall} {x : Row} {items rest : List Item} (h : heldFor s c items = .ok (x, rest)) :
+    CallValue ctx s0 ρ c (.int (ev ρ x)) ∧ bounded s.nvars x := by
+  unfold heldFor at h
+  cases hk : knownValue s.spec c with
+  | some v =>
+    simp only [hk] at h
+    have := V.pure_ok h
+    injection this with h1 _
+    subst h1
+    have m := knownValue_mem hk
+    exact ⟨H.spec _ m, (wf.spec _ m).2⟩
+  | none =>
+    simp only [hk] at h
+    obtain ⟨item, r1, _, h⟩ := V.bind_ok h
+    cases item with
+    | none => cases h
+    | some it =>
+      cases it with
+      | proof _ _ => exact (refuse_ok h).elim
+      | tag name k =>
+        simp only at h
+        split at h
+        next =>
+          cases hv : (heldValues s.spec)[k]? with
+          | none => simp only [hv] at h; exact (refuse_ok h).elim
+          | some cv =>
+            obtain ⟨c', v⟩ := cv
+            simp only [hv] at h
+            obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
+            have := V.pure_ok h
+            injection this with h1 _
+            subst h1
+            have m := heldValues_mem (List.mem_of_getElem? hv)
+            have same := sameUse_sound H e2
+            exact ⟨(same _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+        next => exact (refuse_ok h).elim
+
 /-- A result taken where a number is needed: the expression has that number as its value. -/
-theorem number_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row}
-    (h : number s res = some x) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+theorem numberV_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row} {items rest : List Item}
+    (h : numberV s res items = .ok (x, rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
     Value ctx.defs env e (.int (ev ρ x)) ∧ bounded s.nvars x := by
   cases res with
-  | list _ => simp [number] at h
+  | list _ => simp only [numberV] at h; exact (refuse_ok h).elim
   | val v =>
     cases v with
-    | region _ => simp [number] at h
-    | bool _ => simp [number] at h
+    | region _ => simp only [numberV] at h; exact (refuse_ok h).elim
+    | bool _ => simp only [numberV] at h; exact (refuse_ok h).elim
     | lin y =>
-      simp only [number] at h
-      injection h with h
-      subst h
+      simp only [numberV] at h
+      have := V.pure_ok h
+      injection this with h1 _
+      subst h1
       exact ⟨sem, bd⟩
   | tail c =>
-    simp only [number] at h
-    have m := knownValue_mem h
-    exact ⟨(sem _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+    simp only [numberV] at h
+    obtain ⟨cv, b⟩ := heldFor_sound H wf h
+    exact ⟨(sem _).mpr cv, b⟩
 
 /-- A result taken as one of the things a definition is used with: the expression has that value. -/
-theorem argument_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal}
-    (h : argument s res = some v) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
+theorem argumentV_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal} {items rest : List Item}
+    (h : argumentV s res items = .ok (v, rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
     Value ctx.defs env e (semv ctx s0 ρ v) ∧ v.bounded s.nvars := by
   cases res with
-  | list _ => simp [argument] at h
+  | list _ => simp only [argumentV] at h; exact (refuse_ok h).elim
   | val w =>
-    simp only [argument] at h
-    injection h with h
-    subst h
+    simp only [argumentV] at h
+    have := V.pure_ok h
+    injection this with h1 _
+    subst h1
     exact ⟨sem, bd⟩
   | tail c =>
-    simp only [argument] at h
-    cases hk : knownValue s.spec c with
-    | none => simp [hk] at h
-    | some x =>
-      simp only [hk, Option.map] at h
-      injection h with h
-      subst h
-      have m := knownValue_mem hk
-      exact ⟨(sem _).mpr (H.spec _ m), (wf.spec _ m).2⟩
+    simp only [argumentV] at h
+    obtain ⟨x, r1, e1, h⟩ := V.bind_ok h
+    have := V.pure_ok h
+    injection this with h1 _
+    subst h1
+    obtain ⟨cv, b⟩ := heldFor_sound H wf e1
+    exact ⟨(sem _).mpr cv, b⟩
 
 /-- An expression of the specification worked out on symbols: what comes out is what the expression means. -/
 theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
@@ -631,24 +784,22 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sm, bm⟩ := ihm e2 c1.holds c1.wf hb1
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    cases ha : argument s2 v with
-    | none => cases vs <;> simp only [ha] at h <;> exact (refuse_ok h).elim
-    | some av =>
-      cases vs with
-      | tail _ => simp only [ha] at h; exact (refuse_ok h).elim
-      | val _ => simp only [ha] at h; exact (refuse_ok h).elim
-      | list vs =>
-        simp only [ha] at h
-        have := V.pure_ok h
-        injection this with hp _
-        injection hp with e1 e2
-        subst e1 e2
-        obtain ⟨va, bva⟩ := argument_sound c2.holds c2.wf ha sa2 (SRes.bounded_mono c2.mono ba)
-        refine ⟨ρ2, c1.then c2, Values.cons va sm, ?_⟩
-        intro w m
-        cases m with
-        | head => exact bva
-        | tail _ m => exact bm w m
+    obtain ⟨av, r3, e3, h⟩ := V.bind_ok h
+    obtain ⟨va, bva⟩ := argumentV_sound c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
+    cases vs with
+    | tail _ => exact (refuse_ok h).elim
+    | val _ => exact (refuse_ok h).elim
+    | list vs =>
+      simp only at h
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with e1 e2
+      subst e1 e2
+      refine ⟨ρ2, c1.then c2, Values.cons va sm, ?_⟩
+      intro w m
+      cases m with
+      | head => exact bva
+      | tail _ m => exact bm w m
   | bin op a b iha ihb =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h
@@ -658,31 +809,23 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     have hb1 := hb.mono c1.mono
     obtain ⟨ρ2, c2, sb, bb⟩ := ihb e2 c1.holds c1.wf hb1
     have sa2 := SRes.sem_agree sa ba hb1 c2.agree
-    cases hx : number s2 x with
-    | none =>
-      cases hy : number s2 y with
-      | none => simp only [hx, hy] at h; exact (refuse_ok h).elim
-      | some _ => simp only [hx, hy] at h; exact (refuse_ok h).elim
-    | some xr =>
-      cases hy : number s2 y with
-      | none => simp only [hx, hy] at h; exact (refuse_ok h).elim
-      | some yr =>
-        simp only [hx, hy] at h
-        obtain ⟨vx, bx⟩ := number_sound c2.holds c2.wf hx sa2 (SRes.bounded_mono c2.mono ba)
-        obtain ⟨vy, by'⟩ := number_sound c2.holds c2.wf hy sb bb
-        split at h
-        next hop =>
-          have eop : op = "%" := by simpa using hop
-          obtain ⟨ρ3, c3, v, hres, bv, hz⟩ := smod_sound h c2.holds c2.wf bx
-          subst hres
-          refine ⟨ρ3, (c1.then c2).then c3, ?_, bv⟩
-          show Value ctx.defs (semEnv ctx s0 ρ3 env) (.bin op a b) (semv ctx s0 ρ3 v)
-          rw [← semEnv_agree (hb1.mono c2.mono) c3.agree, eop]
-          exact Value.bin vx vy hz
-        next =>
-          obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
-          subst hs hres
-          exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
+    obtain ⟨xr, r3, e3, h⟩ := V.bind_ok h
+    obtain ⟨yr, r4, e4, h⟩ := V.bind_ok h
+    obtain ⟨vx, bx⟩ := numberV_sound c2.holds c2.wf e3 sa2 (SRes.bounded_mono c2.mono ba)
+    obtain ⟨vy, by'⟩ := numberV_sound c2.holds c2.wf e4 sb bb
+    split at h
+    next hop =>
+      have eop : op = "%" := by simpa using hop
+      obtain ⟨ρ3, c3, v, hres, bv, hz⟩ := smod_sound h c2.holds c2.wf bx
+      subst hres
+      refine ⟨ρ3, (c1.then c2).then c3, ?_, bv⟩
+      show Value ctx.defs (semEnv ctx s0 ρ3 env) (.bin op a b) (semv ctx s0 ρ3 v)
+      rw [← semEnv_agree (hb1.mono c2.mono) c3.agree, eop]
+      exact Value.bin vx vy hz
+    next =>
+      obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c2.holds.facts bx by'
+      subst hs hres
+      exact ⟨ρ2, c1.then c2, Value.bin vx vy hz, bv⟩
   | index a i iha ihi =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h
@@ -854,49 +997,6 @@ theorem openCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           simp only [SFact.holds, CallValue, hd]
           exact sem
 
-/-- Two uses of definitions have the same values. -/
-def Eqv (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (a b : SCall) : Prop := ∀ x, CallValue ctx s0 ρ a x ↔ CallValue ctx s0 ρ b x
-
-theorem mem_insert {c x : SCall} {l : List SCall} (h : c ∈ insert x l) : c ∈ l ∨ c = x := by
-  unfold insert at h
-  split at h
-  · exact Or.inl h
-  · simpa using h
-
-theorem reachStep_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) {f : SFact} {seen : List SCall}
-    (hf : f.holds ctx s0 ρ) (hs : ∀ c ∈ seen, Eqv ctx s0 ρ a c) : ∀ c ∈ reachStep seen f, Eqv ctx s0 ρ a c := by
-  cases f with
-  | value _ _ => exact hs
-  | same x y =>
-    intro c m
-    simp only [reachStep] at m
-    split at m
-    next hx =>
-      rcases mem_insert m with m | rfl
-      · exact hs c m
-      · have := hs x (by simpa using hx)
-        exact fun v => (this v).trans (hf v)
-    next =>
-      split at m
-      next hy =>
-        rcases mem_insert m with m | rfl
-        · exact hs c m
-        · have := hs y (by simpa using hy)
-          exact fun v => (this v).trans (hf v).symm
-      next => exact hs c m
-
-theorem foldl_reach {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) : ∀ (facts : List SFact) (seen : List SCall),
-    (∀ f ∈ facts, f.holds ctx s0 ρ) → (∀ c ∈ seen, Eqv ctx s0 ρ a c) → ∀ c ∈ facts.foldl reachStep seen, Eqv ctx s0 ρ a c
-  | [], _, _, hs => hs
-  | f :: more, seen, hf, hs =>
-    foldl_reach a more (reachStep seen f) (fun g m => hf g (List.mem_cons_of_mem _ m))
-      (reachStep_sound a (hf f (List.mem_cons_self ..)) hs)
-
-theorem reach_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) (facts : List SFact) (hf : ∀ f ∈ facts, f.holds ctx s0 ρ) :
-    ∀ (fuel : Nat) (seen : List SCall), (∀ c ∈ seen, Eqv ctx s0 ρ a c) → ∀ c ∈ reach facts fuel seen, Eqv ctx s0 ρ a c
-  | 0, _, hs => hs
-  | fuel + 1, seen, hs => reach_sound a facts hf fuel _ (foldl_reach a facts seen hf hs)
-
 theorem holdsSpec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {facts : List SFact} {goal : SFact}
     (h : holdsSpec facts goal = true) (hf : ∀ f ∈ facts, f.holds ctx s0 ρ) : goal.holds ctx s0 ρ := by
   cases goal with
@@ -949,6 +1049,30 @@ theorem callsOf_bounded {n : Nat} {facts : List SFact} {goal : SFact} (hf : ∀ 
       subst hfm
       exact callsIn_bounded hg c hc
 
+/-- A fact of a value carried over from a value held: it is so. -/
+theorem carry_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    {goal : SFact} {k : Nat} {items rest : List Item} (h : carry s goal k items = .ok ((), rest)) : goal.holds ctx s0 ρ := by
+  unfold carry at h
+  cases goal with
+  | same a b => simp only at h; exact (refuse_ok h).elim
+  | value c v =>
+    cases hv : (heldValues s.spec)[k]? with
+    | none => simp only [hv] at h; exact (refuse_ok h).elim
+    | some cv =>
+      obtain ⟨c', v'⟩ := cv
+      simp only [hv] at h
+      obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+      obtain ⟨_, r2, e2, e3⟩ := V.bind_ok h
+      have g1 := entail_sound e2 ρ H.facts
+      have g2 := entail_sound e3 ρ H.facts
+      rw [ev_sub] at g1 g2
+      have e : ev ρ v = ev ρ v' := by omega
+      have m := heldValues_mem (List.mem_of_getElem? hv)
+      have same := sameUse_sound H e1
+      show CallValue ctx s0 ρ c (.int (ev ρ v))
+      rw [e]
+      exact (same _).mpr (H.spec _ m)
+
 /-- A fact of the specification the verifier has come to: it is so. -/
 theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
     ∀ (fuel : Nat) {s s' : Sym} {goal : SFact} {items rest : List Item} {ρ : Nat → Int} {st : State},
@@ -985,7 +1109,15 @@ theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               obtain ⟨ρ1, c1⟩ := openCall_sound E e1 H wf hcb
               obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E fuel h c1.holds c1.wf (SFact.bounded_mono c1.mono hg)
               exact ⟨ρ2, c1.then c2, gh⟩
-          next => exact (refuse_ok h).elim
+          next =>
+            split at h
+            next =>
+              obtain ⟨_, r2, e1, h⟩ := V.bind_ok h
+              have := V.pure_ok h
+              injection this with h1 _
+              subst h1
+              exact ⟨ρ, Carried.here H wf, carry_sound H e1⟩
+            next => exact (refuse_ok h).elim
 
 /-! ## The contract's names -/
 

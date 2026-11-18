@@ -10,7 +10,8 @@ and it is run again, until it has no more to ask of that function. The answers a
 
     need entail / branch    a proof of arithmetic, by elimination (../kcheck/kprove.py's derive)
     need compare            which of lt, eq, gt has such a proof
-    need spec               which use of a definition to open: each is tried
+    need spec               which value held to carry over, or which use of a definition to open: each is tried
+    need held               which value held is of a use with the same things: each is tried
     a kept register refused the register is left out of the place's `keep`
 
 What comes out is a proof the verifier accepts by itself: `odeverify ../core/x86.tab OUT.statement OUT.proof`."""
@@ -128,10 +129,23 @@ class Prover:
             elif what == "spec":
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])
+                held = int(([l for l in lines if l.startswith("h ")] or ["h 0"])[0].split()[1])
+                before = self.last
+                for k in reversed(range(held)):                # a value held, carried over to the fact asked for
+                    done = self.solve(proof + [f"t carry {k}"])
+                    if done is not None: return done
+                self.last = before or said                     # (a value that does not carry over is not why no proof is found)
                 if opened >= 3: return None
                 for k in reversed(range(count)):
                     done = self.solve(proof + [f"t open {k}"])
                     if done is not None: return done
+                return None
+            elif what == "held":                               # which value held is of a use with the same things
+                count = int([l for l in lines if l.startswith("c ")][0].split()[1])
+                for k in reversed(range(count)):
+                    done = self.solve(proof + [f"t held {k}"])
+                    if done is not None: return done
+                self.last = said; self.note(proof, said + ' (no value held fits)')
                 return None
             else: raise SystemExit(f"prove: the verifier needs what this prover does not know: {said}")
 

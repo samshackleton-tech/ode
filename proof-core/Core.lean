@@ -440,23 +440,77 @@ def smod (s : Sym) (x y : Row) : V (SRes × Sym) :=
     else refuse "a remainder by a number that is not above zero"
   | none => refuse "a remainder by what is no number of the specification: not here yet"
 
+def insert (c : SCall) (l : List SCall) : List SCall := if l.contains c then l else l ++ [c]
+
+def reachStep (seen : List SCall) : SFact → List SCall
+  | .same a b => if seen.contains a then insert b seen else if seen.contains b then insert a seen else seen
+  | .value .. => seen
+
+/-- The uses that the facts say are the same as one of `seen`. -/
+def reach (facts : List SFact) : Nat → List SCall → List SCall
+  | 0, seen => seen
+  | fuel + 1, seen => reach facts fuel (facts.foldl reachStep seen)
+
 /-- The value of a use of a definition, where the verifier holds one. -/
 def knownValue : List SFact → SCall → Option Row
   | [], _ => none
   | .value c' v :: more, c => if c' == c then some v else knownValue more c
   | .same _ _ :: more, c => knownValue more c
 
+/-- The values held, each with the use it is of. -/
+def heldValues : List SFact → List (SCall × Row)
+  | [] => []
+  | .value c v :: more => (c, v) :: heldValues more
+  | .same _ _ :: more => heldValues more
+
+/-- The things two uses of a definition are used with are the same: the same run of bytes, the same truth,
+or numbers shown equal. -/
+def sameArgs (facts : List Row) : List SVal → List SVal → V Unit
+  | [], [] => pure ()
+  | .lin a :: as, .lin b :: bs => do
+    entail facts (Lin.sub a b)
+    entail facts (Lin.sub b a)
+    sameArgs facts as bs
+  | a :: as, b :: bs => if a = b then sameArgs facts as bs else refuse "two uses of a definition with other things"
+  | _, _ => refuse "two uses of a definition with other things"
+
+/-- Two uses have the same value: the facts held say so, or they are of one definition with the same things. -/
+def sameUse (s : Sym) (c c' : SCall) : V Unit :=
+  if (reach s.spec (s.spec.length + 1) [c]).contains c' then pure ()
+  else if c'.f == c.f then sameArgs s.facts c.args c'.args
+  else refuse "the value held is of another use"
+
+/-- The value of a use of a definition, where a number is needed: the one held for it; or, where the proof
+says which (`held K`), the K-th value held, shown to be of a use with the same value. -/
+def heldFor (s : Sym) (c : SCall) : V Row :=
+  match knownValue s.spec c with
+  | some v => pure v
+  | none => do
+    match ← pop with
+    | some (.tag name k) =>
+      if name == "held" then
+        match (heldValues s.spec)[k]? with
+        | some (c', v) => do
+          sameUse s c c'
+          pure v
+        | none => refuse "no such value is held"
+      else refuse "a number is expected (or a use of a definition whose value is held)"
+    | some (.proof ..) => refuse "a number is expected (or a use of a definition whose value is held)"
+    | none => fun _ => .error s!"need held\nc {(heldValues s.spec).length}\n"
+
 /-- A result where a number is needed: a number, or a use of a definition whose value is held. -/
-def number (s : Sym) : SRes → Option Row
-  | .val (.lin x) => some x
-  | .tail c => knownValue s.spec c
-  | _ => none
+def numberV (s : Sym) : SRes → V Row
+  | .val (.lin x) => pure x
+  | .tail c => heldFor s c
+  | _ => refuse "a number is expected (or a use of a definition whose value is held)"
 
 /-- A result as one of the things a definition is used with: a value, or a use whose value is held. -/
-def argument (s : Sym) : SRes → Option SVal
-  | .val v => some v
-  | .tail c => (knownValue s.spec c).map SVal.lin
-  | .list _ => none
+def argumentV (s : Sym) : SRes → V SVal
+  | .val v => pure v
+  | .tail c => do
+    let v ← heldFor s c
+    pure (.lin v)
+  | .list _ => refuse "a use of a definition inside another, whose value is not held"
 
 def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) :=
   if f == "len" then
@@ -479,9 +533,9 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
   | s, .bin op a b => do
     let (x, s) ← seval ctx env s a
     let (y, s) ← seval ctx env s b
-    match number s x, number s y with
-    | some x, some y => if op == "%" then smod s x y else sbin op s x y
-    | _, _ => refuse "a number is expected (or a use of a definition whose value is held)"
+    let x ← numberV s x
+    let y ← numberV s y
+    if op == "%" then smod s x y else sbin op s x y
   | s, .ifx c a b => do
     let (c, s) ← seval ctx env s c
     match c with
@@ -508,9 +562,10 @@ def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes 
   | s, .cons a rest => do
     let (v, s) ← seval ctx env s a
     let (vs, s) ← seval ctx env s rest
-    match argument s v, vs with
-    | some v, .list vs => pure (.list (v :: vs), s)
-    | _, _ => refuse "a use of a definition inside another, whose value is not held"
+    let v ← argumentV s v
+    match vs with
+    | .list vs => pure (.list (v :: vs), s)
+    | _ => refuse "what a definition is used with is no list of things"
 
 /-- A use of a definition, opened once: a fact of what it is the same as, or of its value. -/
 def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym :=
@@ -524,17 +579,6 @@ def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym :=
       | .val (.lin v) => pure { s with spec := .value c v :: s.spec }
       | _ => refuse "a definition whose value is no number: not here yet"
 
-def insert (c : SCall) (l : List SCall) : List SCall := if l.contains c then l else l ++ [c]
-
-def reachStep (seen : List SCall) : SFact → List SCall
-  | .same a b => if seen.contains a then insert b seen else if seen.contains b then insert a seen else seen
-  | .value .. => seen
-
-/-- The uses that the facts say are the same as one of `seen`. -/
-def reach (facts : List SFact) : Nat → List SCall → List SCall
-  | 0, seen => seen
-  | fuel + 1, seen => reach facts fuel (facts.foldl reachStep seen)
-
 def holdsSpec (facts : List SFact) : SFact → Bool
   | .same a b => (reach facts (facts.length + 1) [a]).contains b
   | .value c v => (reach facts (facts.length + 1) [c]).any fun c' => facts.contains (.value c' v)
@@ -546,7 +590,18 @@ def callsIn : SFact → List SCall
 def callsOf (facts : List SFact) (goal : SFact) : List SCall :=
   ((facts.reverse ++ [goal]).map callsIn).flatten.foldl (fun l c => insert c l) []
 
-/-- A fact of the specification, from the facts held and uses of definitions the proof says to open. -/
+/-- A fact of a value, from the K-th value held: that one is of a use with the same value, and the two
+values are shown equal. -/
+def carry (s : Sym) (goal : SFact) (k : Nat) : V Unit :=
+  match goal, (heldValues s.spec)[k]? with
+  | .value c v, some (c', v') => do
+    sameUse s c c'
+    entail s.facts (Lin.sub v v')
+    entail s.facts (Lin.sub v' v)
+  | _, _ => refuse "no such value is held, or the fact is not of a value"
+
+/-- A fact of the specification, from the facts held, uses of definitions the proof says to open (`open K`),
+and values held that the proof says to carry over (`carry K`). -/
 def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
   | 0, _, _ => refuse "too many definitions opened for one fact"
   | fuel + 1, s, goal =>
@@ -559,9 +614,12 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
             let s ← openCall ctx s c
             specGoal ctx fuel s goal
           | none => refuse "no such use of a definition to open"
-        else refuse "open is expected"
-      | some (.proof ..) => refuse "open is expected"
-      | none => fun _ => .error s!"need spec\nc {(callsOf s.spec goal).length}\no {15 - fuel}\n"
+        else if name == "carry" then do
+          carry s goal n
+          pure s
+        else refuse "open or carry is expected"
+      | some (.proof ..) => refuse "open or carry is expected"
+      | none => fun _ => .error s!"need spec\nc {(callsOf s.spec goal).length}\no {15 - fuel}\nh {(heldValues s.spec).length}\n"
 
 /-- What a line `fact …` of a place says: rows, and facts of the specification. -/
 def assertion (ctx : Ctx) (env : List (String × SVal)) (s : Sym) : SExpr → V (List Row × List SFact × Sym)
