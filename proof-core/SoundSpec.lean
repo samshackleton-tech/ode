@@ -125,7 +125,7 @@ theorem Values.unique {defs : List Def} {env : List (String × Val)} {l : SExpr}
 section
 variable {defs : List Def} {env : List (String × Val)}
 
-theorem Value.num (n : Int) : Value defs env (.num n) (.int n) := ⟨1, rfl⟩
+theorem Value.num {n : Int} (h : 0 ≤ n) : Value defs env (.num n) (.int n) := ⟨1, by simp [evalSpec, h]⟩
 
 theorem Value.name {x : String} {v : Val} (h : env.lookup x = some v) : Value defs env (.name x) v := ⟨1, by simp [evalSpec, h]⟩
 
@@ -295,11 +295,16 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
   next h1 =>
     split at h
     next h2 =>
+      obtain ⟨_, r1, g1, h⟩ := V.bind_ok h
+      have g := entail_sound g1 ρ hf
+      rw [ev_sub] at g
       have := V.pure_ok h
       injection this with hp _
       injection hp with e1 e2
       subst e1 e2
-      exact ⟨rfl, _, rfl, bounded_sub hx hy, by simp [binop, h1, h2, semv]⟩
+      refine ⟨rfl, _, rfl, bounded_sub hx hy, ?_⟩
+      simp only [binop, h1, h2, semv, Bool.false_eq_true, if_false, if_true, ev_sub]
+      rw [if_pos (by omega)]
     next h2 =>
       split at h
       next h3 =>
@@ -457,11 +462,14 @@ theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   | num n =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h
-    have := V.pure_ok h
-    injection this with hp _
-    injection hp with e1 e2
-    subst e1 e2
-    exact ⟨ρ, Carried.here H wf, by simpa [SRes.sem, semv] using Value.num n, bounded_const _ _⟩
+    split at h
+    next => exact (refuse_ok h).elim
+    next hn =>
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with e1 e2
+      subst e1 e2
+      exact ⟨ρ, Carried.here H wf, by simpa [SRes.sem, semv] using Value.num (Int.not_lt.mp hn), bounded_const _ _⟩
   | name x =>
     intro s s' res items rest ρ st h H wf hb
     simp only [seval] at h

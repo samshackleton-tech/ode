@@ -53,10 +53,10 @@ Lean itself (test_sound.py checks this, and that no proof is left open).
 
 | | |
 |---|---|
-| covered by the theorem, so not to be read | the verifier's rules: Core.lean (568 lines of code) and the arithmetic rule of Arithmetic.lean. Everything clever is here or in the prover |
+| covered by the theorem, so not to be read | the verifier's rules: Core.lean (570 lines of code) and the arithmetic rule of Arithmetic.lean. Everything clever is here or in the prover |
 | what the theorem is about: to be read, or relied on some other way | the account: Table.lean (reads `../core/x86.tab`), Machine.lean (what a row's effect does to registers, flags and memory), Contract.lean (what a contract and a definition mean, `Meets`). 420 lines of code |
 | that the proofs are proofs | Lean's kernel, or any other checker of Lean's proofs |
-| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
+| compared by tests, not proved | Machine.lean against `../core/conc.py` on every row it gives a meaning (48 rows, from random states: test_machine.py). `conc.py` is what three processors were compared with, row by row (`../core/cross.py`). What a definition means (`evalSpec` in Contract.lean) against `../kcheck/ode.py`, which the reader's tester takes it from: 1,500 uses of ten definitions and 4,000 random expressions (test_spec.py). The arithmetic rule against `../kcheck/varith.py` on the 7,649 proofs the shipped files carry (test_arith.py) |
 
 Not covered by the theorem, and relied on today:
 
@@ -65,7 +65,7 @@ Not covered by the theorem, and relied on today:
   writing a row in bytes), and those files are Python. The reading of the ELF file is there too.
 - **From the specification's text to the definitions.** `statement.py` has `../kcheck/ode.py` read the
   specification and writes the contract and the definitions as the lines Main.lean reads.
-- **Main.lean**, which reads those lines and the proof's and takes each instruction for the first row of
+- **Reader.lean**, which reads those lines and the proof's and takes each instruction for the first row of
   the table it is an instance of; and the program Lean's compiler makes of the verifier. The theorem is
   about the function `verdict`, as Lean's logic defines it.
 - **That the table is true of processors.** That is `cross.py`'s comparison, and it does not run a return:
@@ -80,7 +80,8 @@ A function whose instructions are rows over the general registers, the two flags
 8 bytes; with jumps and one loop place; no calls. A contract whose arguments are numbers and runs of bytes
 that are only read, with `returns` and `stack`. Definitions that are one expression: numbers, names,
 arithmetic and comparison, `if`, a byte of a run, `len`, and uses of definitions (which may use
-themselves).
+themselves). A difference has a value only where it is not below zero, as in the language, and the
+verifier asks for that to be shown wherever it meets one.
 
 `statement.py` refuses a contract with any other line, so that none is dropped: `requires`, `ensures`,
 `writes`, `needs`, `calls`; and a contract that promises that the trace does not depend on some run's
@@ -117,18 +118,18 @@ an answer (the arithmetic by elimination), and runs it again: 101 runs and half 
 | wrong versions | 18 changes of one place in the code, the specification, the contract or the place: each refused, and the prover finds no proof for any. Every line of the proof left out or changed: refused, but for two rows an arithmetic proof starts from and does not use |
 | the arithmetic rule | all 7,649 proofs of arithmetic the shipped files carry (17,505 steps) add up, in 0.3 s; of 3,000 changed proofs Lean and `varith.py` say the same, proof by proof |
 | the machine | 48 rows, 60 instances a row in the tests (14,400 in a longer run): Machine.lean and `conc.py` leave the same registers, flags, memory and place to go on at |
-| size | the account 420 lines of code; the verifier 727 (Core.lean 568, Arithmetic.lean 159 with its proofs); the reader of lines 98; the proofs of the theorems 3,213 |
+| size | the account 420 lines of code; the verifier 729 (Core.lean 570, Arithmetic.lean 159 with its proofs); the reader of lines 100; the proofs of the theorems 3,221 |
 
 ## The files
 
 | | |
 |---|---|
 | the account | `Table.lean`, `Machine.lean`, `Contract.lean` |
-| the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and `refutes_sound`); `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
+| the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the theorem | `SoundLin.lean` (arithmetic on rows), `SoundState.lean` (what the verifier's state says of the machine's), `SoundStep.lean` (one statement of an effect), `SoundSpec.lean` (the specification on symbols), `SoundPlace.lean` (a place), `SoundTop.lean` (paths, induction, `verify_sound`) |
 | what is to be shown (relied on) | `statement.py` |
 | for a reader | `lean_verify.py`; `proofs/ode_common.proof` |
 | the prover (relied on for nothing) | `prove.py` |
-| tests | `test_sound.py`, `test_verify.py`, `test_machine.py`, `test_arith.py`; `ArithMain.lean` and `MachineMain.lean` are the programs the last two run |
+| tests | `test_sound.py`, `test_verify.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`; `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are the programs the last three run |
 
 The tests skip where Lean's `lake` is not installed.

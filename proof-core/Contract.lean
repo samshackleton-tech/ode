@@ -3,7 +3,8 @@ import Machine
 # What a specification says, and what a contract promises
 
 A specification's definitions are expressions over whole numbers and runs of bytes; `evalSpec` is what
-they mean, as a value or as nothing (a definition that does not come to an end, an index outside its run).
+they mean, as a value or as nothing (a definition that does not come to an end, an index outside its run,
+a difference below zero: the numbers of a specification are zero and up).
 `Meets` is what it is for a function's code to meet a contract: the statement the verifier's yes stands for.
 
 Here so far: definitions that are one expression (numbers, `if`, comparisons, `+ - *`, `a[i]`, `len`,
@@ -38,7 +39,7 @@ structure Def where
 def binop (op : String) : Val → Val → Option Val
   | .int a, .int b =>
     if op == "+" then some (.int (a + b))
-    else if op == "-" then some (.int (a - b))
+    else if op == "-" then (if b ≤ a then some (.int (a - b)) else none)     -- (no number is below zero)
     else if op == "*" then some (.int (a * b))
     else if op == "==" then some (.bool (a == b))
     else if op == "!=" then some (.bool (a != b))
@@ -66,7 +67,7 @@ def evalSpec (defs : List Def) : Nat → List (String × Val) → SExpr → Opti
   | 0, _, _ => none
   | fuel + 1, env, e =>
     match e with
-    | .num n => some (.int n)
+    | .num n => if 0 ≤ n then some (.int n) else none
     | .name x => env.lookup x
     | .bin op a b =>
       match evalSpec defs fuel env a, evalSpec defs fuel env b with

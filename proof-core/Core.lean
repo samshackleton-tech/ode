@@ -399,7 +399,9 @@ inductive SRes where
 
 def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
   if op == "+" then pure (.val (.lin (Lin.add x y)), s)
-  else if op == "-" then pure (.val (.lin (Lin.sub x y)), s)
+  else if op == "-" then do
+    entail s.facts (Lin.sub x y)                  -- a difference has a value only where it is not below zero
+    pure (.val (.lin (Lin.sub x y)), s)
   else if op == "*" then
     match Lin.isConst x, Lin.isConst y with
     | some k, _ => pure (.val (.lin (Lin.scale k y)), s)
@@ -428,7 +430,7 @@ def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) 
     | none => refuse s!"no definition {f}"
 
 def seval (ctx : Ctx) (env : List (String × SVal)) : Sym → SExpr → V (SRes × Sym)
-  | s, .num n => pure (.val (.lin (Lin.const n)), s)
+  | s, .num n => if n < 0 then refuse "a number below zero" else pure (.val (.lin (Lin.const n)), s)
   | s, .name x =>
     match env.lookup x with
     | some v => pure (.val v, s)
