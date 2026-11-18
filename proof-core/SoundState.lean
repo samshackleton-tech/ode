@@ -92,6 +92,7 @@ structure WF (s : Sym) : Prop where
   facts : ∀ f ∈ s.facts, bounded s.nvars f
   bytes : ∀ v r o, (v, r, o) ∈ s.bytes → v < s.nvars ∧ bounded s.nvars o
   spec : ∀ f ∈ s.spec, f.bounded s.nvars
+  wrote : ∀ w o x, (w, o, x) ∈ s.wrote → bounded s.nvars o ∧ bounded s.nvars x
 
 /-! ## What the verifier's state says -/
 
@@ -137,6 +138,8 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
     0 ≤ ev ρ o ∧ ev ρ o < s0.reg len ∧ ρ v = s0.mem (s0.reg base + (ev ρ o).toNat)
   spec : ∀ f ∈ s.spec, f.holds ctx s0 ρ
   mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
+  wrote : ∀ w o x, (w, o, x) ∈ s.wrote → ∃ name r n, ctx.contract.outs[w]? = some (name, r, n) ∧
+    0 ≤ ev ρ o ∧ ev ρ o < n ∧ (st.mem (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ x
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k
@@ -204,6 +207,11 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
     · rw [← e, ← a v (wf.bytes v r o m).1]; exact h4
   spec f m := SFact.holds_agree (wf.spec f m) a (h.spec f m)
   mem := h.mem
+  wrote w o x m := by
+    obtain ⟨name, r, n, h1, h2, h3, h4⟩ := h.wrote w o x m
+    have eo := ev_agree (wf.wrote w o x m).1 a
+    have ex := ev_agree (wf.wrote w o x m).2 a
+    exact ⟨name, r, n, h1, by rw [← eo]; exact h2, by rw [← eo]; exact h3, by rw [← eo, ← ex]; exact h4⟩
 
 /-- More unknowns in use: the verifier's state still speaks only of unknowns in use. -/
 theorem Flag.bounded_mono {n m : Nat} {f : Flag} (h : n ≤ m) (hb : f.bounded n) : f.bounded m := by

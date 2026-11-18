@@ -983,14 +983,15 @@ theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
      cases m with
      | head => exact hf
      | tail _ m => exact H.spec g m,
-   H.mem⟩
+   H.mem, H.wrote⟩
 
 theorem WF.withSpec {s : Sym} (wf : WF s) (f : SFact) (hf : f.bounded s.nvars) : WF { s with spec := f :: s.spec } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes,
-   fun g m => by
+   (fun g m => by
      cases m with
      | head => exact hf
-     | tail _ m => exact wf.spec g m⟩
+     | tail _ m => exact wf.spec g m),
+   wf.wrote⟩
 
 theorem openCallWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {deeper : Sym → SCall → V Sym}
     (D : DeeperSound ctx s0 deeper) : DeeperSound ctx s0 (openCallWith ctx deeper) := by

@@ -180,6 +180,7 @@ structure Sym where
   bytes : List (Nat × Nat × Row)  -- (unknown, run, place): the unknown is the byte at that place of that run
   spec : List SFact
   nvars : Nat                     -- unknowns in use: 0 to 15 are the registers at entry
+  wrote : List (Nat × Row × Row)  -- (run given to write, place, byte): what that place of that run now holds
   deriving Inhabited
 
 structure Place where
@@ -272,17 +273,41 @@ def readByte (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : V (Row × Sym) :=
 inductive Where where
   | frame (off : Int)
   | region (r : Nat) (off : Row)
+  | out (w : Nat) (off : Row)
 
 def findRegion (addr : Row) : List (Nat × Nat) → Nat → Option Where
   | [], _ => none
   | (base, _) :: more, k =>
     if Lin.coeffOf addr base == 1 then some (.region k (Lin.sub addr (Lin.var base))) else findRegion addr more (k + 1)
 
-/-- Where an address is: in the frame, or in a run of bytes given. -/
+def findOut (addr : Row) : List (String × Nat × Nat) → Nat → Option Where
+  | [], _ => none
+  | (_, base, _) :: more, k =>
+    if Lin.coeffOf addr base == 1 then some (.out k (Lin.sub addr (Lin.var base))) else findOut addr more (k + 1)
+
+/-- Where an address is: in the frame, in a run of bytes given to read, or in one given to write. -/
 def locate (ctx : Ctx) (addr : Row) : Option Where :=
   match Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c => some (.frame c)
-  | none => findRegion addr ctx.contract.regions 0
+  | none =>
+    match findRegion addr ctx.contract.regions 0 with
+    | some w => some w
+    | none => findOut addr ctx.contract.outs 0
+
+/-- What is known written, when one byte is written at place `o` of the run `w`: what was known of another
+run stays; of this run, what was at this very place goes, what was at a place that differs from it by a
+number other than zero stays; and where a place is not known to be this one or another, there is no
+answer. So the places known of one run are always different places. -/
+def keepWrote (w : Nat) (o : Row) : List (Nat × Row × Row) → Option (List (Nat × Row × Row))
+  | [] => some []
+  | (w', o', x') :: more =>
+    match keepWrote w o more with
+    | none => none
+    | some rest =>
+      if w' ≠ w then some ((w', o', x') :: rest)
+      else match Lin.isConst (Lin.sub o o') with
+        | some k => if k = 0 then some rest else some ((w', o', x') :: rest)
+        | none => none
 
 /-- A number of 2^63 or more, as the number below zero that is the same modulo 2^64. -/
 def signed (r : Row) : Row :=
@@ -322,6 +347,7 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
       let (v, s) ← readByte ctx s r o
       pure (.lin v, s)
     else refuse "a read of a run of bytes that is not one byte: not here yet"
+  | some (.out _ _) => refuse "a read of a run given only to write"
   | none => refuse "a read that is neither of the frame nor of a run given"
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
@@ -437,7 +463,21 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
             if memSize f = some 8 ∧ inFrame ctx s c = true then
               pure { s with frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
             else refuse "a write that is not eight bytes of the frame in use"
-          | _ => refuse "a write outside the frame: not here yet"
+          | some (.out w o) =>
+            -- one byte, at a place shown to be within the run, the byte shown to be one (0 to 255)
+            match ctx.contract.outs[w]? with
+            | some (_, _, n) =>
+              if memSize f = some 1 then do
+                entail s.facts o
+                entail s.facts (Lin.sub (Lin.const ((n : Int) - 1)) o)
+                entail s.facts x
+                entail s.facts (Lin.sub (Lin.const 255) x)
+                match keepWrote w o s.wrote with
+                | some rest => pure { s with wrote := (w, o, x) :: rest }
+                | none => refuse "a write at a place not known apart from one written before: not here yet"
+              else refuse "a write of more than one byte to a run given to write: not here yet"
+            | none => refuse "no such run of bytes"
+          | _ => refuse "a write to a run given only to read, or to no run given"
         | _, _, _ => refuse "a flag's value where a number is expected"
       | _ => refuse "a row that sets what is no place"
   | _ => refuse "a jump, a call or a return among other statements"
@@ -860,7 +900,7 @@ def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
     zf := .unknown, cf := .unknown,
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
     facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
-    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 }
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote }
 
 /-- A call, taken by the called function's contract `c` and nothing else. What the contract asks is shown
 first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
@@ -909,7 +949,8 @@ def entryFacts (ctx : Ctx) : List Row :=
   ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)
 
 def entrySym (ctx : Ctx) : Sym :=
-  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16 }
+  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,
+    wrote := [] }
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept
 registers and the frame as in `s`, every other register any number below 2^64. What `s` knows of the
@@ -918,6 +959,7 @@ those unknowns are what they were. -/
 def Sym.general (p : Place) (s : Sym) : Sym :=
   { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
+    wrote := [],    -- (what was written before a loop is not carried into it yet)
     facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for

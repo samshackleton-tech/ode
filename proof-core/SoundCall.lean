@@ -12,10 +12,10 @@ open Arithmetic
 theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (rows : List Row) (hr : ∀ r ∈ rows, r.holds ρ) : Holds ctx s0 ρ { s with facts := rows ++ s.facts } st :=
   ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
-   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem⟩
+   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote⟩
 
 theorem WF.more {s : Sym} (wf : WF s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF { s with facts := rows ++ s.facts } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec⟩
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec, wf.wrote⟩
 
 /-- Every function this one calls is among the functions there are, lies in memory, and meets the contract
 its call is taken by. -/
@@ -204,7 +204,7 @@ theorem callerSaved_lt {r : Nat} (h : r ∈ callerSaved) : r < 16 := by
   omega
 
 theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := by
-  refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_⟩
+  refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_⟩
   · intro r hr
     show bounded (s.nvars + 16) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
@@ -228,6 +228,8 @@ theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := b
     exact ⟨Nat.lt_of_lt_of_le this.1 (Nat.le_add_right _ _), bounded_mono (Nat.le_add_right _ _) this.2⟩
   · intro f m
     exact SFact.bounded_mono (Nat.le_add_right _ _) (wf.spec f m)
+  · intro w o x m
+    exact ⟨bounded_mono (Nat.le_add_right _ _) (wf.wrote w o x m).1, bounded_mono (Nat.le_add_right _ _) (wf.wrote w o x m).2⟩
 
 /-- Of the machine's state when the called function has returned, what the verifier holds after the call is
 so: given that the registers a callee keeps and the stack pointer are as before the call, and memory is as
@@ -238,11 +240,13 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     (hstack : ctx.contract.stack ≤ s0.reg RSP)
     (hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
-    (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a) :
+    (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
+    (hout : ∀ x r n, (x, r, n) ∈ ctx.contract.outs →
+      s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :
     Holds ctx s0 (afterRho s.nvars ρ s2) (s.afterCall sp) s2 := by
   have ag := afterRho_agree s.nvars ρ s2
   have H' := H.agree wf ag
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_⟩
+  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : callerSaved.contains r with
@@ -282,6 +286,13 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
       omega
     rw [hmem a hfr]
     exact H.mem a ha ho
+  · -- what this function wrote for its caller lies outside its own frame, so outside the called function's
+    intro w o x m
+    obtain ⟨name, r, n, g1, g2, g3, g4⟩ := H'.wrote w o x m
+    refine ⟨name, r, n, g1, g2, g3, ?_⟩
+    have ho := hout name r n (List.mem_of_getElem? g1)
+    rw [hmem _ (by omega)]
+    exact g4
 
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
@@ -349,7 +360,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             rw [e2, ev_var, H.entry l0 lt.2] at this
             omega
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, fun x r n m => by rw [hout.1] at m; cases m⟩
+          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), by rw [hout.1]; exact List.Pairwise.nil⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega
@@ -407,7 +418,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           intro a ha
           rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega) (hno _ a)]
           exact s1mem a (by omega)
-        have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2
+        have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.out m).2)
         have wafter := afterCall_wf wf sp
         have ag := afterRho_agree s.nvars ρ s2
         cases hret' : c.returns with

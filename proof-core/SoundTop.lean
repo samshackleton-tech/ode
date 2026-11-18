@@ -7,7 +7,7 @@ open Arithmetic
 
 theorem Holds.rip {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : Nat) :
     Holds ctx s0 ρ s { st with rip := x } :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem⟩
+  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩
 
 /-- The statements of an effect, one after another. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
@@ -46,8 +46,8 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : List It
       injection this with h1 _
       subst h1
       exact ⟨Agree.refl _ _, Nat.le_refl _,
-        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem⟩,
-        ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec⟩⟩
+        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩,
+        ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote⟩⟩
     next => exact (refuse_ok h).elim
 
 /-! ## A jump on a flag -/
@@ -505,8 +505,9 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   have hstack := E.stack
   have habove := E.above
   unfold M64 at habove
-  refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, fun _ _ _ => rfl⟩,
-          ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_⟩⟩
+  refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ => rfl),
+           (fun _ _ _ m => nomatch m)⟩,
+          ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m)⟩⟩
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m

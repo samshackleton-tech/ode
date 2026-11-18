@@ -205,10 +205,10 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   (∀ r l, (r, l) ∈ c.regions →
     s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
     ∀ k, k < s.reg l → s.mem (s.reg r + k) < 256) ∧
-  ∀ x r n, (x, r, n) ∈ c.outs →
+  (∀ x r n, (x, r, n) ∈ c.outs →
     s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
-    (∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
-    ∀ x' r' n', (x', r', n') ∈ c.outs → x' = x ∨ s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r
+    ∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
+  c.outs.Pairwise fun (_, r, n) (_, r', n') => s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/

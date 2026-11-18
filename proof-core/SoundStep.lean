@@ -27,11 +27,23 @@ theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k
 /-- A run given to write: in memory, and apart from the frame and the address to return to. -/
 theorem out {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) :
     s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
-  ⟨(E.pre.2.2.2.2.2.2 x r n h).1, (E.pre.2.2.2.2.2.2 x r n h).2.1⟩
+  ⟨(E.pre.2.2.2.2.2.2.1 x r n h).1, (E.pre.2.2.2.2.2.2.1 x r n h).2.1⟩
 theorem outRegion {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) {r' l : Nat} (h' : (r', l) ∈ ctx.contract.regions) :
-    s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + s0.reg l ≤ s0.reg r := (E.pre.2.2.2.2.2.2 x r n h).2.2.1 r' l h'
-theorem outOut {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) {x' : String} {r' n' : Nat} (h' : (x', r', n') ∈ ctx.contract.outs) :
-    x' = x ∨ s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r := (E.pre.2.2.2.2.2.2 x r n h).2.2.2 x' r' n' h'
+    s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + s0.reg l ≤ s0.reg r := (E.pre.2.2.2.2.2.2.1 x r n h).2.2 r' l h'
+/-- Two runs given to write, not the same one, lie apart. -/
+theorem outOut {i j : Nat} {x x' : String} {r n r' n' : Nat} (hi : ctx.contract.outs[i]? = some (x, r, n))
+    (hj : ctx.contract.outs[j]? = some (x', r', n')) (ne : i ≠ j) :
+    s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r := by
+  have P := List.pairwise_iff_getElem.mp E.pre.2.2.2.2.2.2.2
+  obtain ⟨li, ei⟩ := List.getElem?_eq_some_iff.mp hi
+  obtain ⟨lj, ej⟩ := List.getElem?_eq_some_iff.mp hj
+  rcases Nat.lt_or_gt_of_ne ne with lt | gt
+  · have := P i j li lj lt
+    rw [ei, ej] at this
+    exact this
+  · have := P j i lj li gt
+    rw [ei, ej] at this
+    exact this.symm
 /-- An address in a run given to read is in no run given to write. -/
 theorem region_notOut {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) {a : Nat} (h1 : s0.reg r ≤ a) (h2 : a < s0.reg r + s0.reg l) :
     ctx.contract.inOut s0 a = false := by
@@ -199,7 +211,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, bounded_var (Nat.lt_succ_self _), base, len, rfl, by rw [eo]; exact g1, by rw [eo]; omega, ?_⟩
       · exact {
           entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-          spec := H'.spec, mem := H'.mem,
+          spec := H'.spec, mem := H'.mem, wrote := H'.wrote,
           facts := by
             intro f hf
             simp only [List.mem_cons] at hf
@@ -225,6 +237,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           cf := Flag.bounded_mono le wf.cf
           frame := fun o v m => bounded_mono le (wf.frame o v m)
           spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+          wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
           facts := by
             intro f hf
             simp only [List.mem_cons] at hf
@@ -284,14 +297,91 @@ theorem findRegion_spec {addr : Row} : ∀ {l : List (Nat × Nat)} {k : Nat} {w 
       have : r - k = (r - (k + 1)) + 1 := by omega
       rw [this, List.getElem?_cons_succ]; exact hr
 
+theorem findOut_spec {addr : Row} : ∀ {l : List (String × Nat × Nat)} {k : Nat} {w : Where}, findOut addr l k = some w →
+    ∃ r o name base n, w = .out r o ∧ k ≤ r ∧ l[r - k]? = some (name, base, n) ∧ o = Lin.sub addr (Lin.var base)
+  | [], _, _, h => by simp [findOut] at h
+  | (name, base, n) :: more, k, w, h => by
+    simp only [findOut] at h
+    split at h
+    next =>
+      injection h with h; subst h
+      exact ⟨k, _, name, base, n, rfl, Nat.le_refl _, by simp, rfl⟩
+    next =>
+      obtain ⟨r, o, nm, b, n', hw, hk, hr, ho⟩ := findOut_spec h
+      refine ⟨r, o, nm, b, n', hw, by omega, ?_, ho⟩
+      have : r - k = (r - (k + 1)) + 1 := by omega
+      rw [this, List.getElem?_cons_succ]; exact hr
+
+theorem outsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
+    (x, r, n) ∈ outsIn args regs → r ∈ regs
+  | [], _, _, _, _, h => by simp [outsIn] at h
+  | _ :: _, [], _, _, _, h => by simp [outsIn] at h
+  | (name, .out k) :: args, reg :: regs, x, r, n, h => by
+    simp only [outsIn, List.mem_cons] at h
+    rcases h with e | h
+    · injection e with _ e; injection e with e _; rw [e]; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
+  | (name, .number) :: args, reg :: regs, x, r, n, h => by
+    simp only [outsIn] at h
+    exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
+  | (name, .bytes _) :: args, reg :: regs, x, r, n, h => by
+    simp only [outsIn] at h
+    exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
+
+theorem outs_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.outs) : r < 16 :=
+  argRegs_lt (outsIn_mem c.args argRegs x r n h)
+
+/-- What `keepWrote` keeps was known before, and is of another run or of another place of this run. -/
+theorem keepWrote_spec {w : Nat} {o : Row} : ∀ {l rest : List (Nat × Row × Row)}, keepWrote w o l = some rest →
+    ∀ w' o' x', (w', o', x') ∈ rest → (w', o', x') ∈ l ∧ (w' ≠ w ∨ w' = w ∧ ∃ k, Lin.isConst (Lin.sub o o') = some k ∧ k ≠ 0)
+  | [], rest, h => by
+    simp only [keepWrote] at h
+    injection h with h; subst h
+    intro _ _ _ m; cases m
+  | (w1, o1, x1) :: more, rest, h => by
+    simp only [keepWrote] at h
+    cases hr : keepWrote w o more with
+    | none => simp [hr] at h
+    | some rest' =>
+      simp only [hr] at h
+      have ih := keepWrote_spec hr
+      intro w' o' x' m
+      split at h
+      next ne =>
+        injection h with h; subst h
+        rcases List.mem_cons.mp m with e | m
+        · injection e with e1 e2; injection e2 with e2 e3; subst e1 e2 e3
+          exact ⟨List.mem_cons_self .., Or.inl ne⟩
+        · exact ⟨List.mem_cons_of_mem _ (ih w' o' x' m).1, (ih w' o' x' m).2⟩
+      next eq =>
+        have eq : w1 = w := Decidable.of_not_not eq
+        split at h
+        next k hk =>
+          split at h
+          next k0 => injection h with h; subst h; exact ⟨List.mem_cons_of_mem _ (ih w' o' x' m).1, (ih w' o' x' m).2⟩
+          next kne =>
+            injection h with h; subst h
+            rcases List.mem_cons.mp m with e | m
+            · injection e with e1 e2; injection e2 with e2 e3; subst e1 e2 e3
+              exact ⟨List.mem_cons_self .., Or.inr ⟨eq, k, hk, kne⟩⟩
+            · exact ⟨List.mem_cons_of_mem _ (ih w' o' x' m).1, (ih w' o' x' m).2⟩
+        next => cases h
+
 theorem locate_frame {ctx : Ctx} {addr : Row} {c : Int} (h : locate ctx addr = some (.frame c)) :
     Lin.isConst (Lin.sub addr (Lin.var RSP)) = some c := by
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; injection h with h; rw [h]
   | none =>
     simp only [locate, hk] at h
-    obtain ⟨r, o, b, l, hw, _⟩ := findRegion_spec h
-    cases hw
+    cases hf : findRegion addr ctx.contract.regions 0 with
+    | some w =>
+      simp only [hf] at h
+      obtain ⟨r, o, b, l, hw, _⟩ := findRegion_spec hf
+      injection h with h; rw [hw] at h; cases h
+    | none =>
+      simp only [hf] at h
+      obtain ⟨r, o, nm, b, n, hw, _⟩ := findOut_spec h
+      cases hw
 
 theorem locate_region {ctx : Ctx} {addr : Row} {r : Nat} {o : Row} (h : locate ctx addr = some (.region r o)) :
     ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧ o = Lin.sub addr (Lin.var base) := by
@@ -299,10 +389,39 @@ theorem locate_region {ctx : Ctx} {addr : Row} {r : Nat} {o : Row} (h : locate c
   | some c' => simp only [locate, hk] at h; injection h with h; cases h
   | none =>
     simp only [locate, hk] at h
-    obtain ⟨r', o', b, l, hw, _, hr, ho⟩ := findRegion_spec h
-    injection hw with h1 h2
-    subst h1 h2
-    exact ⟨b, l, by simpa using hr, ho⟩
+    cases hf : findRegion addr ctx.contract.regions 0 with
+    | some w =>
+      simp only [hf] at h
+      injection h with h
+      subst h
+      obtain ⟨r', o', b, l, hw, _, hr, ho⟩ := findRegion_spec hf
+      injection hw with h1 h2
+      subst h1 h2
+      exact ⟨b, l, by simpa using hr, ho⟩
+    | none =>
+      simp only [hf] at h
+      obtain ⟨r', o', nm, b, n, hw, _⟩ := findOut_spec h
+      cases hw
+
+theorem locate_out {ctx : Ctx} {addr : Row} {w : Nat} {o : Row} (h : locate ctx addr = some (.out w o)) :
+    ∃ name base n, ctx.contract.outs[w]? = some (name, base, n) ∧ o = Lin.sub addr (Lin.var base) := by
+  cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
+  | some c' => simp only [locate, hk] at h; injection h with h; cases h
+  | none =>
+    simp only [locate, hk] at h
+    cases hf : findRegion addr ctx.contract.regions 0 with
+    | some w' =>
+      simp only [hf] at h
+      injection h with h
+      subst h
+      obtain ⟨r', o', b, l, hw, _⟩ := findRegion_spec hf
+      cases hw
+    | none =>
+      simp only [hf] at h
+      obtain ⟨r', o', nm, b, n, hw, _, hr, ho⟩ := findOut_spec h
+      injection hw with h1 h2
+      subst h1 h2
+      exact ⟨nm, b, n, by simpa using hr, ho⟩
 
 theorem inFrame_spec {ctx : Ctx} {s : Sym} {c : Int} (h : inFrame ctx s c = true) :
     ∃ sp, s.sp = some sp ∧ sp ≤ c ∧ c + 8 ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ c := by
@@ -343,6 +462,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   | none => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
   | some w =>
     cases w with
+    | out _ _ => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
     | frame c =>
       simp only [symLoad, hl] at h
       split at h
@@ -437,7 +557,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
   refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, nq, nr⟩
   · exact {
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-      spec := H'.spec, mem := H'.mem, bytes := H'.bytes,
+      spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote,
       facts := by
         intro f hf
         simp only [Sym.divide, List.mem_cons] at hf
@@ -456,6 +576,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
       cf := Flag.bounded_mono le wf.cf
       frame := fun o v m => bounded_mono le (wf.frame o v m)
       spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+      wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
       bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
       facts := by
         intro f hf
@@ -498,7 +619,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     refine ⟨ρ', ⟨c.agree, c.mono, ?_, ?_⟩, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr, bq, br⟩
     · exact {
         entry := c.holds.entry, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
-        frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes,
+        frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote,
         facts := by
           intro f hf
           simp only [List.mem_cons] at hf
@@ -507,7 +628,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
           · exact c.holds.facts f hf }
     · exact {
         base := c.wf.base, reg := c.wf.reg, zf := c.wf.zf, cf := c.wf.cf, frame := c.wf.frame, spec := c.wf.spec,
-        bytes := c.wf.bytes,
+        bytes := c.wf.bytes, wrote := c.wf.wrote,
         facts := by
           intro f hf
           simp only [List.mem_cons] at hf
@@ -820,17 +941,17 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem Holds.setZf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with zf := f } { st with zf := b } :=
-  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem⟩
+  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩
 
 theorem Holds.setCf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with cf := f } { st with cf := b } :=
-  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem⟩
+  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩
 
 theorem WF.setZf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with zf := f } :=
-  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec⟩
+  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote⟩
 
 theorem WF.setCf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with cf := f } :=
-  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec⟩
+  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote⟩
 
 theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (r x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) : Holds ctx s0 ρ (s.put r xr) (setReg st r x) where
@@ -852,6 +973,7 @@ theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
   bytes := H.bytes
   spec := H.spec
   mem := H.mem
+  wrote := H.wrote
 
 theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars xr) : WF (s.put r xr) where
   base := wf.base
@@ -866,6 +988,7 @@ theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars 
   facts := wf.facts
   bytes := wf.bytes
   spec := wf.spec
+  wrote := wf.wrote
 
 theorem Flag.equal_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev ρ a = ev ρ b then 1 else 0) :
     (Flag.equal a b).holds ρ (x != 0) := by
@@ -915,6 +1038,14 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     apply H.mem _ _ ho
     simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
     exact hx'
+  wrote w o v m := by
+    obtain ⟨name, r, n, g1, g2, g3, g4⟩ := H.wrote w o v m
+    refine ⟨name, r, n, g1, g2, g3, ?_⟩
+    have hs := E.stack
+    have ho := (E.out (List.mem_of_getElem? g1)).2
+    show (store st.mem a x 8 (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ v
+    rw [store_other _ _ _ _ _ (by omega)]
+    exact g4
 
 theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
     WF { s with frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
@@ -925,11 +1056,85 @@ theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvar
   facts := wf.facts
   bytes := wf.bytes
   spec := wf.spec
+  wrote := wf.wrote
   frame o v m := by
     simp only [List.mem_cons] at m
     rcases m with heq | m
     · injection heq with e1 e2; subst e2; exact hb
     · exact wf.frame o v (List.mem_filter.mp m).1
+
+/-- One byte written into a run given to write. -/
+theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+    (H : Holds ctx s0 ρ s st) {w : Nat} {name : String} {r n : Nat} (hw : ctx.contract.outs[w]? = some (name, r, n))
+    (o xr : Row) (h1 : 0 ≤ ev ρ o) (h2 : ev ρ o < n) (x : Nat) (hx : x < 256) (hxr : (x : Int) = ev ρ xr)
+    {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest)
+    (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat) :
+    Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest } { st with mem := store st.mem a x 1 } where
+  entry := H.entry
+  reg := H.reg
+  small := H.small
+  zf := H.zf
+  cf := H.cf
+  facts := H.facts
+  spec := H.spec
+  bytes := H.bytes
+  frame o' v m := by
+    obtain ⟨g1, g2, g3⟩ := H.frame o' v m
+    refine ⟨g1, g2, ?_⟩
+    have hs := E.stack
+    have ho := (E.out (List.mem_of_getElem? hw)).2
+    rw [load_store_other _ _ _ _ _ _ (by omega)]
+    exact g3
+  mem x' hx' ho' := by
+    show store st.mem a x 1 x' = s0.mem x'
+    have hne : x' ≠ a := by
+      intro e
+      have : ctx.contract.inOut s0 x' = true := by
+        unfold Contract.inOut
+        exact List.any_eq_true.mpr ⟨(name, r, n), List.mem_of_getElem? hw, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+      rw [this] at ho'; cases ho'
+    rw [store_other _ _ _ _ _ (by omega)]
+    exact H.mem x' hx' ho'
+  wrote w' o' v m := by
+    rcases List.mem_cons.mp m with e | m
+    · injection e with e1 e2; injection e2 with e2 e3; subst e1 e2 e3
+      refine ⟨name, r, n, hw, h1, h2, ?_⟩
+      show (store st.mem a x 1 (s0.reg r + (ev ρ o').toNat) : Int) = ev ρ v
+      rw [← ha, ← hxr]
+      simp only [store, if_pos]
+      omega
+    · obtain ⟨m', apart⟩ := keepWrote_spec hk w' o' v m
+      obtain ⟨name', r', n', g1, g2, g3, g4⟩ := H.wrote w' o' v m'
+      refine ⟨name', r', n', g1, g2, g3, ?_⟩
+      show (store st.mem a x 1 (s0.reg r' + (ev ρ o').toNat) : Int) = ev ρ v
+      have hne : s0.reg r' + (ev ρ o').toNat < a ∨ a + 1 ≤ s0.reg r' + (ev ρ o').toNat := by
+        rcases apart with ne | ⟨eq, k, hk', kne⟩
+        · have := E.outOut hw g1 (Ne.symm ne)
+          omega
+        · subst eq
+          rw [hw] at g1
+          injection g1 with g1; injection g1 with _ g1; injection g1 with g1 gn
+          subst g1 gn
+          have e := ev_isConst (ρ := ρ) hk'
+          simp only [ev_sub] at e
+          omega
+      rw [store_other _ _ _ _ _ hne]
+      exact g4
+
+theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
+    {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) : WF { s with wrote := (w, o, xr) :: rest } where
+  base := wf.base
+  reg := wf.reg
+  zf := wf.zf
+  cf := wf.cf
+  frame := wf.frame
+  facts := wf.facts
+  bytes := wf.bytes
+  spec := wf.spec
+  wrote w' o' v m := by
+    rcases List.mem_cons.mp m with e | m
+    · injection e with e1 e2; injection e2 with e2 e3; subst e2 e3; exact ⟨ho, hx⟩
+    · exact wf.wrote w' o' v (keepWrote_spec hk w' o' v m).1
 
 theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb : Nat}
     (h1 : value perm bind st a = some xa) (h2 : value perm bind st b = some xb) : values perm bind st [a, b] = some [xa, xb] := by
@@ -1065,6 +1270,59 @@ theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                     | some w =>
                       cases w with
                       | region _ _ => simp only [hl] at h; exact (refuse_ok h).elim
+                      | out w o =>
+                        simp only [hl] at h
+                        obtain ⟨name, base, n, hw, ho⟩ := locate_out hl
+                        simp only [hw] at h
+                        split at h
+                        next hsize =>
+                          obtain ⟨_, r4, g1, h⟩ := V.bind_ok h
+                          obtain ⟨_, r5, g2, h⟩ := V.bind_ok h
+                          obtain ⟨_, r6, g3, h⟩ := V.bind_ok h
+                          obtain ⟨_, r7, g4, h⟩ := V.bind_ok h
+                          cases hkw : keepWrote w o s3.wrote with
+                          | none => simp only [hkw] at h; exact (refuse_ok h).elim
+                          | some rest =>
+                            simp only [hkw] at h
+                            have := V.pure_ok h
+                            injection this with h1 _
+                            subst h1
+                            have g1 := entail_sound g1 ρ3 c3.holds.facts
+                            have g2 := entail_sound g2 ρ3 c3.holds.facts
+                            have g3 := entail_sound g3 ρ3 c3.holds.facts
+                            have g4 := entail_sound g4 ρ3 c3.holds.facts
+                            simp only [ev_sub, ev_const] at g2 g4
+                            have hm := List.mem_of_getElem? hw
+                            have hbase : ρ3 base = s0.reg base := c3.holds.entry base (outs_lt hm)
+                            have hfit := (E.out hm).1
+                            have eo : ev ρ3 o = ev ρ3 (signed ar) + ev ρ3 (signed br) - s0.reg base := by
+                              rw [ho, ev_sub, ev_add, ev_var, hbase]
+                            have sgx := signed_ev ρ3 ar
+                            have sgy := signed_ev ρ3 br
+                            have hx1 := sa3.1
+                            have hy1 := sb.1
+                            have hx2 := sa3.2.1
+                            have hy2 := sb.2.1
+                            unfold M64 at hx1 hy1 hfit
+                            have hadr : (xa + xb) % M64 = s0.reg base + (ev ρ3 o).toNat := by unfold M64; omega
+                            have hx8 : x < 256 := by have := sx3.2.1; omega
+                            have hw1 : allowed (ctx.contract.perm s0).write ((xa + xb) % M64) 1 = true := by
+                              apply allowed_of
+                              intro y hy1' hy2'
+                              simp only [Contract.perm, Bool.or_eq_true]
+                              right
+                              unfold Contract.inOut
+                              exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+                            have hbo : bounded s3.nvars o := by
+                              rw [ho]
+                              exact bounded_sub (bounded_add (bounded_signed sa3.2.2) (bounded_signed sb.2.2)) (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) c3.wf.base))
+                            refine ⟨ρ3, { st with mem := store st.mem ((xa + xb) % M64) x 1 },
+                              ⟨Agree.trans c1.mono c1.agree (Agree.trans c2.mono c2.agree c3.agree),
+                               Nat.le_trans c1.mono (Nat.le_trans c2.mono c3.mono),
+                               c3.holds.writeOut E hw o xr g1 (by omega) x hx8 sx3.2.1 hkw _ hadr,
+                               c3.wf.writeOut hbo sx3.2.2 hkw⟩, ?_, rfl⟩
+                            simp [execStmt, hu, vx, hsize, values_two va vb, sumList, hw1]
+                        next => exact (refuse_ok h).elim
                       | frame c =>
                         simp only [hl] at h
                         split at h
