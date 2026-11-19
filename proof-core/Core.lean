@@ -316,6 +316,27 @@ def shuffleTurn (ks : List Int) : Option Nat :=
   else if ks = [0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E] then some 16
   else none
 
+/-! ## Numbers that are no rows
+
+A row is a sum of multiples of unknowns. Some numbers the verifier follows are none: eight bytes of memory
+as one number, two numbers' bits put together, the words a definition gives of what it is used with. Each
+is held as an unknown (or as terms of the table) of which it is known what it is. -/
+
+/-- A thing a definition is used with, as the verifier holds it: a number, the counter of a number, or a
+list of words by their terms. -/
+inductive Key where
+  | num (r : Row)
+  | counter (r : Row)
+  | words (ids : List Nat)
+  deriving DecidableEq, Repr, Inhabited
+
+/-- What is known beyond the facts. -/
+inductive Known where
+  | load (v j c : Nat)            -- the unknown `v` is the eight bytes at place `c` of the run `j` (of a fixed count, given to read) as they were at entry: one number, the lowest byte first
+  | or (v : Nat) (x y : Row)      -- the unknown `v` is `x | y`: the bits of both
+  | held (f : String) (keys : List Key) (ids : List Nat)    -- the definition `f`, used with these things, is the list of the words of these terms
+  deriving DecidableEq, Repr, Inhabited
+
 structure Sym where
   reg : Nat → Row                 -- the sixteen registers
   zf : Flag
@@ -330,6 +351,7 @@ structure Sym where
   vec : List (Nat × List Nat) := []   -- (vector register, its four low words by their numbers in the table): the first for a register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
+  known : List Known := []        -- what is known of numbers that are no rows
   deriving Inhabited
 
 structure Place where
@@ -492,6 +514,33 @@ def inRange (facts : List Row) (r : Row) : V Unit := do
   entail facts r
   entail facts (Lin.sub (Lin.const top) r)
 
+/-- The unknown the state knows as the eight bytes at place `c` of the run `j`. -/
+def knownLoad (j c : Nat) : List Known → Option Nat
+  | [] => none
+  | .load v j' c' :: more => if j' = j ∧ c' = c then some v else knownLoad j c more
+  | _ :: more => knownLoad j c more
+
+/-- Eight bytes of a run of a fixed count given to read, at a place that is a number: one number, the
+lowest byte first. One unknown stands for one place of one run. It is a number below 2^64, and below what
+the contract says of the number at that place (`mbounds`: the caller has seen to it). -/
+def symLoadFixed (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
+  match findOut addr ctx.contract.fixeds 0 with
+  | some (.out j off) =>
+    match Lin.isConst off, ctx.contract.fixeds[j]? with
+    | some c, some (name, _, count) =>
+      if size = 8 ∧ 0 ≤ c ∧ c + 8 ≤ count then
+        match knownLoad j c.toNat s.known with
+        | some v => pure (.lin (Lin.var v), s)
+        | none =>
+          pure (.lin (Lin.var s.nvars),
+            { s with nvars := s.nvars + 1, known := .load s.nvars j c.toNat :: s.known,
+                     facts := ranged s.nvars ++
+                       (ctx.contract.mbounds.filterMap fun (x, o, b) =>
+                         if x == name ∧ o = c.toNat then some (Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var s.nvars)) else none) ++ s.facts })
+      else refuse "a read of a run of a fixed count that is not eight bytes within it: not here yet"
+    | _, _ => refuse "a read of a run of a fixed count at a place that is no number: not here yet"
+  | _ => refuse "a read that is neither of the frame nor of a run given"
+
 def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
   match locate ctx addr with
   | some (.frame c) =>
@@ -506,7 +555,7 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
       pure (.lin v, s)
     else refuse "a read of a run of bytes that is not one byte: not here yet"
   | some (.out _ _) => refuse "a read of a run given only to write"
-  | none => refuse "a read that is neither of the frame nor of a run given"
+  | none => symLoadFixed ctx s addr size
 
 /-- The remainder of a number by a divisor above zero: worked out where every multiple in the number is a
 multiple of the divisor (so where the number is one of the table's), and else by the one division of it the
@@ -519,6 +568,29 @@ def symLow (s : Sym) (x : Row) (m : Int) : Row × Sym :=
 def symQuot (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (⟨Lin.strip (x.coeff.map (· / m)), x.constant / m⟩, s)
   else ((symDivide s x m).1, (symDivide s x m).2.2)
+
+/-- The unknown the state knows as the two numbers' bits put together (in either order). -/
+def knownOr (x y : Row) : List Known → Option Nat
+  | [] => none
+  | .or v x' y' :: more => if (x' = x ∧ y' = y) ∨ (x' = y ∧ y' = x) then some v else knownOr x y more
+  | _ :: more => knownOr x y more
+
+/-- Where both numbers are seen at once to lie below 2^8, 2^16 or 2^32, the unknown `v` that is their bits
+put together lies below it too. -/
+def orBound (facts : List Row) (x y : Row) (v : Nat) : List Row :=
+  match [8, 16, 32].find? fun (k : Nat) => plain facts (Lin.sub (Lin.const (2 ^ k - 1)) x) && plain facts (Lin.sub (Lin.const (2 ^ k - 1)) y) with
+  | some k => [Lin.sub (Lin.const (2 ^ k - 1)) (Lin.var v)]
+  | none => []
+
+/-- Two numbers' bits put together (`x | y`). It is no row: one unknown stands for one pair of numbers. It
+is a number below 2^64, no less than either of the two. -/
+def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
+  match knownOr x y s.known with
+  | some v => pure (.lin (Lin.var v), s)
+  | none =>
+    pure (.lin (Lin.var s.nvars),
+      { s with nvars := s.nvars + 1, known := .or s.nvars x y :: s.known,
+               facts := ranged s.nvars ++ [Lin.sub (Lin.var s.nvars) x, Lin.sub (Lin.var s.nvars) y] ++ orBound s.facts x y s.nvars ++ s.facts })
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
@@ -596,7 +668,7 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
     | .lin x, .lin y =>
       match memSize f with
       | some size => symLoad ctx s (Lin.add (signed x) (signed y)) size
-      | none => symPrim f s x y
+      | none => if f == "or64" then symOr s x y else symPrim f s x y
     | _, _ => refuse "a flag's value where a number is expected"
   | _, .call f _ => refuse s!"no rule for {f}"
 
@@ -1342,6 +1414,7 @@ def knownNonneg (s : Sym) (r : Row) : Bool :=
 /-- The remainder by a number above zero, where it is known without a new unknown (as `symLow` has it). -/
 def lowOf (s : Sym) (x : Row) (m : Int) : Option Row :=
   if x.coeff.all (fun c => c % m == 0) then some (Lin.const (x.constant % m))
+  else if knownNonneg s x && plain s.facts (Lin.sub (Lin.const (m - 1)) x) then some x     -- (a number seen at once to be below the divisor is its own remainder)
   else (divided s x m).map fun q => Lin.var (q + 1)
 
 /-- The quotient by 2^32, where it is known without a new unknown (as the halves of a register are found). -/
@@ -1623,7 +1696,8 @@ def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
     facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
-    terms := s.terms }      -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
+    terms := s.terms,       -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
+    known := s.known }
 
 /-- A call, taken by the called function's contract `c` and nothing else. What the contract asks is shown
 first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
@@ -1682,13 +1756,15 @@ def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVa
   p.names.map (fun (n, r) => (n, SVal.lin (value r))) ++ symEnv ctx.contract
 
 /-- What is known at entry: each register a number below 2^64; the frame the contract allows and the return
-address lie in memory; so does each run of bytes given, to read or to write. -/
+address lie in memory; so does each run of bytes given, to read or to write; a number the contract bounds is
+below its bound. (The runs of a fixed count given to read come last: the facts before them keep their numbers.) -/
 def entryFacts (ctx : Ctx) : List Row :=
   ((List.range 16).map ranged).flatten ++
   [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 9)) (Lin.var RSP)] ++
   (ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)) ++
   (ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
-  ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)
+  (ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)) ++
+  ctx.contract.fixeds.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,
@@ -1703,6 +1779,7 @@ def Sym.general (p : Place) (s : Sym) : Sym :=
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
     terms := s.terms,       -- (nor what a vector register held, nor that a run is as it was at entry)
+    known := s.known,
     facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for

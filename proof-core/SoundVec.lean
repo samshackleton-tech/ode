@@ -129,12 +129,14 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
       refine ⟨h1, fun b hb => ?_⟩
       show st.mem _ = den (inpOf ctx s0) ρ T' i / 256 ^ b % 256
       rw [den_ext wf.words.table e (wf.words.wrote w j i m)]
-      exact h2 b hb⟩⟩
+      exact h2 b hb⟩,
+   fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m)⟩
 
 theorem WF.terms {s : Sym} (wf : WF s) {T' : List Node} (e : Ext s.terms T') (ok : TableOk s.nvars T') : WF { s with terms := T' } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
    ⟨ok.wf, ok.atoms, fun x ids h => ⟨(wf.words.vec x ids h).1, fun i mi => Nat.lt_of_lt_of_le ((wf.words.vec x ids h).2 i mi) e.le⟩,
-    ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le⟩⟩
+    ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le⟩,
+   fun k m => Known.wf_mono (Nat.le_refl _) e.le (wf.known k m)⟩
 
 theorem Carried.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
     {T' : List Node} (e : Ext s.terms T') (ok : TableOk s.nvars T') : Carried ctx s0 ρ s ρ { s with terms := T' } st :=
@@ -248,56 +250,6 @@ theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
   | call _ _ => simp [symReg] at h
 
 /-! ## Sixteen bytes read -/
-
-namespace Setting
-variable {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
-include E
-/-- A run of a fixed count given to read: in memory, apart from the frame and the address to return to,
-holding bytes, and apart from every run given to write. -/
-theorem fixed {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.fixeds) :
-    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) ∧
-    (∀ k, k < n → s0.mem (s0.reg r + k) < 256) ∧
-    ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.1 x r n h
-theorem inoutByte {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.inouts) {k : Nat} (hk : k < n) :
-    s0.mem (s0.reg r + k) < 256 := E.pre.2.2.2.2.2.2.2.2.2.1 x r n h k hk
-
-/-- A number the contract bounds is below its bound at entry. -/
-theorem bound {x : String} {b r : Nat}
-    (h : (x, b) ∈ ctx.contract.bounds) (hr : ctx.contract.regOf x = some r) : s0.reg r < b :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.1 x b h r hr
-
-/-- A number in memory the contract bounds (the eight bytes at a place of a run given to read) is below its
-bound at entry. -/
-theorem mbound {x : String} {off b r n : Nat}
-    (h : (x, off, b) ∈ ctx.contract.mbounds) (hf : (x, r, n) ∈ ctx.contract.fixeds) : load s0.mem (s0.reg r + off) 8 < b :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2 x off b h r n hf
-end Setting
-
-theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
-    (x, r, n) ∈ fixedsIn args regs → r ∈ regs
-  | [], _, _, _, _, h => by simp [fixedsIn] at h
-  | _ :: _, [], _, _, _, h => by simp [fixedsIn] at h
-  | (name, .fixed k) :: args, reg :: regs, x, r, n, h => by
-    simp only [fixedsIn, List.mem_cons] at h
-    rcases h with e | h
-    · injection e with _ e; injection e with e _; rw [e]; exact List.mem_cons_self ..
-    · exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
-  | (name, .number) :: args, reg :: regs, x, r, n, h => by
-    simp only [fixedsIn] at h
-    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
-  | (name, .bytes _) :: args, reg :: regs, x, r, n, h => by
-    simp only [fixedsIn] at h
-    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
-  | (name, .out _) :: args, reg :: regs, x, r, n, h => by
-    simp only [fixedsIn] at h
-    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
-  | (name, .inout _) :: args, reg :: regs, x, r, n, h => by
-    simp only [fixedsIn] at h
-    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
-
-theorem fixeds_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.fixeds) : r < 16 :=
-  argRegs_lt (fixedsIn_mem c.args argRegs x r n h)
 
 theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}, runAt r l k = some j →
     k ≤ j ∧ ∃ x n, l[j - k]? = some (x, r, n)
@@ -1367,6 +1319,7 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             omega
         rw [store4_other _ _ _ _ _ _ _ hne]
         exact g3 b hb
+  known := H.known
 
 /-! ## A row that sets a vector register, or stores one -/
 
@@ -1395,7 +1348,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             ⟨fun x ids hx k hk => by
                show (if k < 4 then st.vec x k else _) = _
                rw [if_pos hk]; exact H.words.1 x ids hx k hk,
-             H.words.2.1, H.words.2.2⟩⟩
+             H.words.2.1, H.words.2.2⟩, H.known⟩
         · simp [execStmt, hn, hu]
       next => exact (refuse_ok h).elim
     next hn =>
@@ -1420,14 +1373,14 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
                  · rw [if_pos e, if_pos hk, e2]; exact dn k hk
                  · rw [if_neg ne]; exact c.holds.words.1 x ids hx' k hk,
-               c.holds.words.2.1, c.holds.words.2.2⟩⟩
+               c.holds.words.2.1, c.holds.words.2.2⟩, c.holds.known⟩
           · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
               ⟨c.wf.words.table, c.wf.words.atoms,
                fun x ids hx => by
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
                  · rw [e2]; exact ⟨len, lt⟩
                  · exact c.wf.words.vec x ids hx',
-               c.wf.words.rotrs, c.wf.words.wrote⟩⟩
+               c.wf.words.rotrs, c.wf.words.wrote⟩, c.wf.known⟩
           · simp [execStmt, hn, hr, hl]
         next => exact (refuse_ok h).elim
   | call f args =>
@@ -1501,7 +1454,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                            injection e2 with _ e3
                            rw [← e3]
                            exact lt _ (getD4_mem len (List.mem_range.mp mq))
-                         · exact wf.words.wrote w' j i (List.mem_filter.mp m).1⟩⟩
+                         · exact wf.words.wrote w' j i (List.mem_filter.mp m).1⟩, wf.known⟩
                   · simp [execStmt, values_two vb vn, hva, sumList, hw1]
       next => exact (refuse_ok h).elim
     · exact (refuse_ok h).elim

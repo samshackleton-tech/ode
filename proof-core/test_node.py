@@ -13,12 +13,15 @@ Here:
   not read is refused;
 - what those lines mean: `number.le`, the number that bytes are, and the record of a layout, worked out by
   the account in Lean (`odespec`) on bytes drawn at random, against Python's own reading of the layout;
-- what the verifier says of the function."""
-import os, random, shutil, subprocess, sys, tempfile, unittest
+- what the verifier says of the function: it follows the function's reads of the record and its `or`, and
+  stops at the call (the rule for a call of a function that writes is not there yet); the function built
+  again from its source (../kcheck/hash.ode) with a read moved outside the record is refused, each with
+  the reason."""
+import os, random, re, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
-sys.path.insert(0, HERE); sys.path.insert(0, KCHECK)
-import built, lean_verify, statement
+sys.path.insert(0, HERE); sys.path.insert(0, KCHECK); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+import built, lean_verify, odec, prove, statement
 
 OBJ = os.path.join(KCHECK, "b3hashr.o")
 NODE, AVX512, SSE41 = "b3l_node_out", "blake3_servil_compress_in_place_avx512", "blake3_servil_compress_in_place_sse41"
@@ -31,8 +34,10 @@ CONTRACT = ["arg out inout 32", "arg nd fixed 120", "arg root number", "arg plat
             "(name root)))",
             "stack 128"]
 LAYOUT = "layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }"
-# What the verifier in Lean says of the function today (it reads the contract; the rule it lacks first is named).
-TODAY = "refused: a read that is neither of the frame nor of a run given"
+# What the verifier in Lean says of the function today: the rule it lacks first.
+TODAY = "refused: a called function that writes for its caller: not here yet"
+NOT_WITHIN = "refused: a read of a run of a fixed count that is not eight bytes within it: not here yet"
+NO_RUN = "refused: a read that is neither of the frame nor of a run given"
 IF, TRACE = "if plat == 5", "\n    trace depends on out, nd"       # (the hash's own contract in blake3.spec has the same condition)
 
 
@@ -169,23 +174,66 @@ class Meaning(unittest.TestCase):
         self.assertTrue(got[0].startswith("bytes ") and got[0] != want[0], got[0])
 
 
+def last_word(functions, change=lambda t: t):
+    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
+    for: `shown`, or the word the prover has no answer to."""
+    with tempfile.TemporaryDirectory() as d:
+        try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
+        except SystemExit as e:
+            lines = [l for l in str(e).split("\n") if l.startswith(("refused:", "need "))]
+            return lines[0] if lines else str(e)
+        return "shown"
+
+
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
 class Verify(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        built.built("odeverify")
+        cls.dir = tempfile.mkdtemp(prefix="odenode-")
+        with open(os.path.join(KCHECK, "hash.ode")) as f: cls.source = f.read()
+    @classmethod
+    def tearDownClass(cls): shutil.rmtree(cls.dir)
+
+    def node_from(self, old=None, new=None):
+        """The function built again from its source, with one line of it changed: the functions to show."""
+        text = self.source
+        if old is not None:
+            start = text.index('fn node_out as "b3l_node_out" {'); end = text.index("\n}\n", start)
+            body = text[start:end]
+            self.assertEqual(body.count(old), 1, old)
+            text = text[:start] + body.replace(old, new) + text[end:]
+        src, obj = os.path.join(self.dir, "changed.ode"), os.path.join(self.dir, "changed.o")
+        with open(src, "w") as f: f.write(text)
+        odec.build(src, "node_out", obj)
+        return [(obj, NODE)] + FUNCTIONS[1:]
+
     def test_what_the_verifier_says_of_the_function_today(self):
-        """The two kernels it calls are shown by their kept proofs; of the function itself the verifier names
-        the first rule it lacks."""
-        with tempfile.TemporaryDirectory() as d:
-            proof = os.path.join(d, "proof")
-            with open(proof, "w") as out:
-                for symbol in (AVX512, SSE41):
-                    with open(os.path.join(HERE, "proofs", symbol + ".proof")) as f: out.write(f.read())
-            # the kernels alone are shown by this file
-            shown, said = lean_verify.verify(spec_text(), FUNCTIONS[1:], proof)
-            self.assertTrue(shown, said)
-            with open(proof, "a") as out: out.write(f"for {NODE}\n")
-            shown, said = lean_verify.verify(spec_text(), FUNCTIONS, proof)
-            self.assertFalse(shown)
-            self.assertEqual(said.split("\n"), [TODAY, f"in {NODE}"])
+        """The two kernels it calls are shown; the function's reads of the record, its `or` and its sum are
+        followed; at the call the verifier names the rule it lacks."""
+        self.assertEqual(last_word(FUNCTIONS[1:]), "shown")
+        self.assertEqual(last_word(FUNCTIONS), TODAY)
+
+    def test_the_function_built_again_from_its_source_is_the_same(self):
+        instructions = lambda fns: [l for l in statement.statement(spec_text(), fns) if l.startswith("i ")]
+        self.assertEqual(instructions(self.node_from()), instructions(FUNCTIONS))
+        self.assertEqual(last_word(self.node_from()), TODAY)
+
+    def test_a_read_outside_the_record_is_refused(self):
+        for what, old, new, word in (
+                ("eight bytes that end past the record", "mov r8, qword ptr [rsi + 112]", "mov r8, qword ptr [rsi + 113]", NOT_WITHIN),
+                ("eight bytes after the record", "mov rdx, qword ptr [rsi + 104]", "mov rdx, qword ptr [rsi + 120]", NOT_WITHIN),
+                ("eight bytes before the record", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rsi - 8]", NOT_WITHIN),
+                ("eight bytes of the run given to write", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rdi + 8]", "refused: a read of a run given only to write"),
+                ("eight bytes at an address that is no run's", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rdx + 96]", NO_RUN),
+                # the record may end where memory ends: its address and 121 need not be an address
+                ("the record's address moved past the record", "add rsi, 32", "add rsi, 121", "need entail")):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(self.node_from(old, new)), word)
+        # controls: other reads within the record are followed, and so is a move of the address within it
+        for old, new in (("mov r8, qword ptr [rsi + 112]", "mov r8, qword ptr [rsi + 105]"), ("add rsi, 32", "add rsi, 119")):
+            with self.subTest(new=new):
+                self.assertEqual(last_word(self.node_from(old, new)), TODAY)
 
 
 if __name__ == "__main__":

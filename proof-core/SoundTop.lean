@@ -10,7 +10,7 @@ open Arithmetic
 
 theorem Holds.rip {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : Nat) :
     Holds ctx s0 ρ s { st with rip := x } :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩
+  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
 
 /-- The statements of an effect, one after another. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
@@ -50,9 +50,9 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
       injection this with h1 _
       subst h1
       exact ⟨Agree.refl _ _, Nat.le_refl _,
-        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩,
+        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩,
         ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote,
-         wf.words.mono rfl rfl rfl (Nat.le_refl _)⟩⟩
+         wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩⟩
     next => exact (refuse_ok h).elim
 
 /-! ## A jump on a flag -/
@@ -539,14 +539,16 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   unfold M64 at habove
   refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ => rfl),
            (fun _ _ _ m => nomatch m),
-           ⟨fun x ids h => by simp [entrySym] at h, fun _ _ _ _ _ _ _ _ => rfl, fun w j i m => by simp [entrySym] at m⟩⟩,
+           ⟨fun x ids h => by simp [entrySym] at h, fun _ _ _ _ _ _ _ _ => rfl, fun w j i m => by simp [entrySym] at m⟩,
+           (fun k m => by simp [entrySym] at m)⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m),
            ⟨fun i n h => by simp [entrySym] at h, fun j r h => by simp [entrySym] at h, fun x ids h => by simp [entrySym] at h,
-            fun j a n h => by simp [entrySym] at h, fun w j i h => by simp [entrySym] at h⟩⟩⟩
+            fun j a n h => by simp [entrySym] at h, fun w j i h => by simp [entrySym] at h⟩,
+           (fun k m => by simp [entrySym] at m)⟩⟩
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with (((m | m) | m) | m) | m
+    rcases m with ((((m | m) | m) | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, _, rfl⟩ := List.mem_map.mp hl
       have := E.small r
@@ -575,12 +577,16 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         subst hf
         have := E.bound hm hr
         rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
+    · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
+      have := (E.fixed hm).1
+      unfold M64 at this
+      rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
   · intro v r o m; cases m
   · intro f m; cases m
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with (((m | m) | m) | m) | m
+    rcases m with ((((m | m) | m) | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
       have hr := List.mem_range.mp hr
@@ -604,6 +610,8 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         simp only [hr, Option.map_some, Option.some.injEq] at hf
         subst hf
         exact bounded_sub (bounded_const _ _) (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args argRegs r hr)))
+    · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
+      exact bounded_sub (bounded_const _ _) (bounded_var (fixeds_lt hm))
   · intro v r o m; cases m
   · intro f m; cases m
 

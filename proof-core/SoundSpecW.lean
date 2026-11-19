@@ -130,6 +130,14 @@ theorem divided_spec (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m
   have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
   exact ⟨u.1.symm, u.2.symm⟩
 
+theorem knownNonneg_sound (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg s r = true) : 0 ≤ ev ρ r := by
+  unfold knownNonneg at h
+  split at h
+  next k hk => rw [ev_isConst hk]; simpa using h
+  next =>
+    have := H.facts r (List.contains_iff_mem.mp h)
+    rw [holds_iff] at this; exact this
+
 theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : lowOf s x m = some r) : ev ρ r = ev ρ x % m := by
   unfold lowOf at h
   split at h
@@ -137,12 +145,21 @@ theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < 
     injection h with h; subst h
     rw [ev_const, ev_low_exact hk]
   next =>
-    cases hd : divided s x m with
-    | none => simp [hd] at h
-    | some q =>
-      simp only [hd, Option.map_some] at h
+    split at h
+    next hs =>
       injection h with h; subst h
-      rw [ev_var]; exact (divided_spec H pos hd).2
+      simp only [Bool.and_eq_true] at hs
+      have g0 := knownNonneg_sound H hs.1
+      have g1 := plain_sound hs.2 ρ H.facts
+      simp only [ev_sub, ev_const] at g1
+      exact (Int.emod_eq_of_lt g0 (by omega)).symm
+    next =>
+      cases hd : divided s x m with
+      | none => simp [hd] at h
+      | some q =>
+        simp only [hd, Option.map_some] at h
+        injection h with h; subst h
+        rw [ev_var]; exact (divided_spec H pos hd).2
 
 theorem highOf_sound (H : Holds ctx s0 ρ s st) {x q : Row} (h : highOf s x = some q) : ev ρ q = ev ρ x / W32i := by
   unfold highOf at h
@@ -170,14 +187,6 @@ theorem highOf_sound (H : Holds ctx s0 ρ s st) {x q : Row} (h : highOf s x = so
         unfold W32i at eh c0 c1 ⊢
         omega
     next => cases h
-
-theorem knownNonneg_sound (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg s r = true) : 0 ≤ ev ρ r := by
-  unfold knownNonneg at h
-  split at h
-  next k hk => rw [ev_isConst hk]; simpa using h
-  next =>
-    have := H.facts r (List.contains_iff_mem.mp h)
-    rw [holds_iff] at this; exact this
 
 /-- Every term of the state's table is a word. -/
 theorem Holds.den_lt (wf : WF s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i < W32 :=

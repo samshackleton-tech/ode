@@ -227,10 +227,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 733 lines of code. | saying what the processor does and what a contract means. This is what the soundness theorem is *about* | Read it. Parts of it are tested against second implementations: see the first list below. |
+| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 743 lines of code. | saying what the processor does and what a contract means. This is what the soundness theorem is *about* | Read it. Parts of it are tested against second implementations: see the first list below. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,375 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,431 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -295,6 +295,16 @@ form 2^k - 1, taking the low 32 bits or low 8 bits of a register (`mov ecx, esi`
 8-byte stores to a stack slot, 1-byte stores to an output buffer, and setting or decrementing the low
 byte of a register (`mov al, 7`, `dec al`).
 
+Two rules deal with numbers that are not sums of multiples of unknowns. For each of them the verifier
+introduces one unknown and remembers what it stands for, so that the code and the specification refer to
+the same unknown:
+
+- an 8-byte read at a constant offset of a read-only buffer of fixed size (a field of a record). The
+  buffer cannot change while the function runs, so one unknown stands for one offset. It is below the
+  bound that the record's layout gives for that field;
+- the bitwise OR of two registers. The result is at least as large as each operand. Where both operands
+  are known to be below 2^8, 2^16 or 2^32, so is the result.
+
 It also has rules for the 128-bit vector instructions that the two one-block kernels use:
 
 - 16-byte loads and stores, and loading a constant;
@@ -329,7 +339,7 @@ A `needs` line (the processor feature a function requires, such as `needs avx512
 has no meaning in the machine model, which has every instruction of the table. The verifier does check
 that a caller's contract repeats every `needs` of the functions it calls. `statement.py` checks that a
 function's own instructions are of kinds its `needs` lines name. It refuses a contract that promises that the execution trace is independent of a buffer's contents
-(the constant-time property), because the model here does not define a trace. It refuses specifications that use a layout, a kind, a lemma, or a definition that can fail.
+(the constant-time property), because the model here does not define a trace. It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
 A contract with an output buffer and another buffer must state `requires no_overlap` over all of them,
 because the model demands that of the caller.
 
@@ -392,9 +402,12 @@ first step, the input file can now state its contract:
 - `needs avx512 if plat == 5` becomes a line `needsif`.
 
 `test_node.py` checks that these lines mean what the layout says. It evaluates them in Lean on random
-bytes, and compares the contract's value for one-block messages with BLAKE3 itself. The verifier reads the
-input file and accepts the two kernels. It rejects the function at its first 8-byte read from the record,
-because the rule for that read does not exist yet.
+bytes, and compares the contract's value for one-block messages with BLAKE3 itself.
+
+The verifier accepts the two kernels. In the function itself it follows the reads of the record, the OR of
+the flags and the pointer arithmetic, and it stops at the call. The rule for calling a function that
+writes memory for its caller does not exist yet. The test also builds the function again from its source
+with a read moved outside the record, in five ways, and each is rejected for the reason expected.
 
 ## The two input files
 
@@ -529,9 +542,9 @@ the same registers, flags, memory, low 128 bits of each vector register, and nex
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 733 lines. The verifier: 1,534 lines (Core.lean 1,375, Arithmetic.lean
-159 including its proofs); the rules for vector registers and words are 459 of them. The file parser: 159
-lines. The proofs of the theorems: 8,017 lines.
+**Code size.** The formal model: 743 lines. The verifier: 1,590 lines (Core.lean 1,431, Arithmetic.lean
+159 including its proofs); the rules for vector registers and words are 459 of them. The file parser: 165
+lines. The proofs of the theorems: 8,390 lines.
 
 ## The files
 

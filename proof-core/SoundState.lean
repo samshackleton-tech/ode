@@ -82,6 +82,18 @@ def SFact.bounded (n : Nat) : SFact → Prop
   | .same a b => a.bounded n ∧ b.bounded n
   | .value c v => c.bounded n ∧ Ode.bounded n v
 
+def Key.wf (n t : Nat) : Key → Prop
+  | .num r => bounded n r
+  | .counter r => bounded n r
+  | .words ids => ∀ i ∈ ids, i < t
+
+/-- What is known of a number that is no row speaks only of unknowns in use (`n` of them) and of terms of
+the table (`t` of them). -/
+def Known.wf (n t : Nat) : Known → Prop
+  | .load v _ _ => v < n
+  | .or v x y => v < n ∧ bounded n x ∧ bounded n y
+  | .held _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
+
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; and what is held of a vector register is four terms of the table. -/
 structure WordsWF (s : Sym) : Prop where
@@ -103,6 +115,7 @@ structure WF (s : Sym) : Prop where
   spec : ∀ f ∈ s.spec, f.bounded s.nvars
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → bounded s.nvars o ∧ bounded s.nvars x
   words : WordsWF s
+  known : ∀ k ∈ s.known, k.wf s.nvars s.terms.length
 
 /-! ## What the verifier's state says -/
 
@@ -121,6 +134,19 @@ def VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : P
   (∀ w ∈ s.intact, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → st.mem (s0.reg r + k) = s0.mem (s0.reg r + k)) ∧
   ∀ w j i, (w, j, i) ∈ s.wroteW → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
     4 * j + 4 ≤ n ∧ ∀ b, b < 4 → st.mem (s0.reg r + 4 * j + b) = den (inpOf ctx s0) ρ s.terms i / 256 ^ b % 256
+
+/-- What a thing a definition is used with stands for: a value of the account. -/
+def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key → Val
+  | .num r => .int (ev ρ r)
+  | .counter r => .counter ((ev ρ r).toNat % 2 ^ 64)
+  | .words ids => .list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i))
+
+/-- What is known of a number that is no row is so. -/
+def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Known → Prop
+  | .load v j c => ∃ x r n, ctx.contract.fixeds[j]? = some (x, r, n) ∧ c + 8 ≤ n ∧ ρ v = (Ode.load s0.mem (s0.reg r + c) 8 : Nat)
+  | .or v x y => 0 ≤ ev ρ x ∧ 0 ≤ ev ρ y ∧ ρ v = (((ev ρ x).toNat ||| (ev ρ y).toNat : Nat) : Int)
+  | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -167,6 +193,7 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → ∃ name r n, ctx.contract.outs[w]? = some (name, r, n) ∧
     0 ≤ ev ρ o ∧ ev ρ o < n ∧ (st.mem (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ x
   words : VecOk ctx s0 ρ s st
+  known : ∀ k ∈ s.known, k.holds ctx s0 ρ s.terms
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k
@@ -231,6 +258,62 @@ theorem VecOk.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
     refine ⟨h1, fun b hb => ?_⟩
     rw [h2 b hb, den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) (W.wrote w j i m)]
 
+/-- A term of the table is the same word under other unknowns that agree on those in use, and in a table
+with more terms after it. -/
+theorem den_mono {inp : Nat → Nat → Nat} {ρ ρ' : Nat → Int} {T T' : List Node} {n : Nat} (hw : WFT T)
+    (ha : ∀ (j : Nat) (r : Row), T[j]? = some (Node.atom r) → bounded n r) (a : Agree n ρ ρ') (e : Ext T T') {i : Nat} (hi : i < T.length) :
+    den inp ρ' T' i = den inp ρ T i := by
+  rw [den_ext hw e hi]
+  exact den_agree hw (fun j r hj => (ev_agree (ha j r hj) a).symm) hi
+
+theorem Key.val_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : List Node} {n : Nat} {k : Key}
+    (wk : k.wf n T.length) (a : Agree n ρ ρ') (hw : WFT T)
+    (ha : ∀ (j : Nat) (r : Row), T[j]? = some (Node.atom r) → bounded n r) (e : Ext T T') :
+    k.val ctx s0 ρ' T' = k.val ctx s0 ρ T := by
+  cases k with
+  | num r => simp only [Key.val]; rw [← ev_agree wk a]
+  | counter r => simp only [Key.val]; rw [← ev_agree wk a]
+  | words ids =>
+    simp only [Key.val]
+    congr 1
+    exact List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk i hi)]
+
+/-- What is known of numbers that are no rows stays so under other unknowns that agree on those in use,
+and in a table with more terms after it. -/
+theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : List Node} {n : Nat} {k : Known}
+    (wk : k.wf n T.length) (a : Agree n ρ ρ') (hw : WFT T)
+    (ha : ∀ (j : Nat) (r : Row), T[j]? = some (Node.atom r) → bounded n r) (e : Ext T T')
+    (h : k.holds ctx s0 ρ T) : k.holds ctx s0 ρ' T' := by
+  cases k with
+  | load v j c =>
+    obtain ⟨x, r, m, h1, h2, h3⟩ := h
+    exact ⟨x, r, m, h1, h2, by rw [← a v wk]; exact h3⟩
+  | or v x y =>
+    obtain ⟨h1, h2, h3⟩ := h
+    simp only [Known.holds]
+    rw [← ev_agree wk.2.1 a, ← ev_agree wk.2.2 a, ← a v wk.1]
+    exact ⟨h1, h2, h3⟩
+  | held f keys ids =>
+    obtain ⟨d, h1, h2, h3⟩ := h
+    refine ⟨d, h1, h2, ?_⟩
+    have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
+      List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
+    have ei : (ids.map fun i => Val.word (den (inpOf ctx s0) ρ' T' i)) = ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i) :=
+      List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
+    rw [ek, ei]; exact h3
+
+theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
+  cases k with
+  | load v j c => exact Nat.lt_of_lt_of_le wk hn
+  | or v x y => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, bounded_mono hn wk.2.1, bounded_mono hn wk.2.2⟩
+  | held f keys ids =>
+    refine ⟨fun k hk => ?_, fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
+    have := wk.1 k hk
+    cases k with
+    | num r => exact bounded_mono hn this
+    | counter r => exact bounded_mono hn this
+    | words js => exact fun i hi => Nat.lt_of_lt_of_le (this i hi) ht
+
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
     (h : Holds ctx s0 ρ s st) (wf : WF s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
@@ -261,6 +344,7 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
     have ex := ev_agree (wf.wrote w o x m).2 a
     exact ⟨name, r, n, h1, by rw [← eo]; exact h2, by rw [← eo]; exact h3, by rw [← eo, ← ex]; exact h4⟩
   words := VecOk.agree wf.words a h.words
+  known k m := Known.holds_mono (wf.known k m) a wf.words.table wf.words.atoms (Ext.refl _) (h.known k m)
 
 /-- More unknowns in use: the verifier's state still speaks only of unknowns in use. -/
 theorem Flag.bounded_mono {n m : Nat} {f : Flag} (h : n ≤ m) (hb : f.bounded n) : f.bounded m := by

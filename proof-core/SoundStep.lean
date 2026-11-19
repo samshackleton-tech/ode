@@ -167,6 +167,50 @@ theorem Carried.then {ctx : Ctx} {s0 : State} {ρ ρ1 ρ2 : Nat → Int} {s s1 s
     (a : Carried ctx s0 ρ s ρ1 s1 st1) (b : Carried ctx s0 ρ1 s1 ρ2 s2 st2) : Carried ctx s0 ρ s ρ2 s2 st2 :=
   ⟨Agree.trans a.mono a.agree b.agree, Nat.le_trans a.mono b.mono, b.holds, b.wf⟩
 
+/-- The unknowns with one more given a value. -/
+def extend (ρ : Nat → Int) (n : Nat) (x : Int) : Nat → Int := fun k => if k = n then x else ρ k
+
+theorem extend_new (ρ : Nat → Int) (n : Nat) (x : Int) : extend ρ n x n = x := by simp [extend]
+
+theorem extend_agree (ρ : Nat → Int) (n : Nat) (x : Int) : Agree n ρ (extend ρ n x) := fun k hk => by
+  show ρ k = if k = n then x else ρ k
+  rw [if_neg (by omega)]
+
+/-- One more unknown, with facts of it and one thing known of it: what the state held stays so, where the
+facts and the thing known are so of the value the unknown is given. -/
+theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (x : Int) (rows : List Row) (k : Known)
+    (hb : ∀ f ∈ rows, bounded (s.nvars + 1) f) (hk : k.wf (s.nvars + 1) s.terms.length)
+    (hrows : ∀ f ∈ rows, f.holds (extend ρ s.nvars x)) (hknown : k.holds ctx s0 (extend ρ s.nvars x) s.terms) :
+    Carried ctx s0 ρ s (extend ρ s.nvars x) { s with nvars := s.nvars + 1, known := k :: s.known, facts := rows ++ s.facts } st := by
+  have ag := extend_agree ρ s.nvars x
+  have H' := H.agree wf ag
+  have le : s.nvars ≤ s.nvars + 1 := Nat.le_succ _
+  refine ⟨ag, le, ?_, ?_⟩
+  · exact {
+      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
+      spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
+      facts := fun f m => (List.mem_append.mp m).elim (hrows f) (H'.facts f),
+      known := fun k' m => by
+        rcases List.mem_cons.mp m with rfl | m
+        · exact hknown
+        · exact H'.known k' m }
+  · exact {
+      base := Nat.le_trans wf.base le
+      reg := fun r hr => bounded_mono le (wf.reg r hr)
+      zf := Flag.bounded_mono le wf.zf
+      cf := Flag.bounded_mono le wf.cf
+      frame := fun o v m => bounded_mono le (wf.frame o v m)
+      bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
+      spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+      wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
+      words := wf.words.mono rfl rfl rfl le
+      facts := fun f m => (List.mem_append.mp m).elim (hb f) (fun m => bounded_mono le (wf.facts f m))
+      known := fun k' m => by
+        rcases List.mem_cons.mp m with rfl | m
+        · exact hk
+        · exact Known.wf_mono le (Nat.le_refl _) (wf.known k' m) }
+
 theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {r : Nat} {o v : Row}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : readByte ctx s r o items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars o) :
@@ -219,7 +263,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, bounded_var (Nat.lt_succ_self _), base, len, rfl, by rw [eo]; exact g1, by rw [eo]; omega, ?_⟩
       · exact {
           entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-          spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
+          spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, known := H'.known,
           facts := by
             intro f hf
             simp only [List.mem_cons] at hf
@@ -247,6 +291,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           spec := fun f m => SFact.bounded_mono le (wf.spec f m)
           wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
           words := wf.words.mono rfl rfl rfl le
+          known := fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m)
           facts := by
             intro f hf
             simp only [List.mem_cons] at hf
@@ -466,6 +511,181 @@ theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
     left; omega
 
+/-! ## Runs of a fixed count -/
+
+namespace Setting
+variable {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
+include E
+/-- A run of a fixed count given to read: in memory, apart from the frame and the address to return to,
+holding bytes, and apart from every run given to write. -/
+theorem fixed {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.fixeds) :
+    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) ∧
+    (∀ k, k < n → s0.mem (s0.reg r + k) < 256) ∧
+    ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
+  E.pre.2.2.2.2.2.2.2.2.1 x r n h
+theorem inoutByte {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.inouts) {k : Nat} (hk : k < n) :
+    s0.mem (s0.reg r + k) < 256 := E.pre.2.2.2.2.2.2.2.2.2.1 x r n h k hk
+
+/-- A number the contract bounds is below its bound at entry. -/
+theorem bound {x : String} {b r : Nat}
+    (h : (x, b) ∈ ctx.contract.bounds) (hr : ctx.contract.regOf x = some r) : s0.reg r < b :=
+  E.pre.2.2.2.2.2.2.2.2.2.2.1 x b h r hr
+
+/-- A number in memory the contract bounds (the eight bytes at a place of a run given to read) is below its
+bound at entry. -/
+theorem mbound {x : String} {off b r n : Nat}
+    (h : (x, off, b) ∈ ctx.contract.mbounds) (hf : (x, r, n) ∈ ctx.contract.fixeds) : load s0.mem (s0.reg r + off) 8 < b :=
+  E.pre.2.2.2.2.2.2.2.2.2.2.2 x off b h r n hf
+end Setting
+
+theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
+    (x, r, n) ∈ fixedsIn args regs → r ∈ regs
+  | [], _, _, _, _, h => by simp [fixedsIn] at h
+  | _ :: _, [], _, _, _, h => by simp [fixedsIn] at h
+  | (name, .fixed k) :: args, reg :: regs, x, r, n, h => by
+    simp only [fixedsIn, List.mem_cons] at h
+    rcases h with e | h
+    · injection e with _ e; injection e with e _; rw [e]; exact List.mem_cons_self ..
+    · exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
+  | (name, .number) :: args, reg :: regs, x, r, n, h => by
+    simp only [fixedsIn] at h
+    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
+  | (name, .bytes _) :: args, reg :: regs, x, r, n, h => by
+    simp only [fixedsIn] at h
+    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
+  | (name, .out _) :: args, reg :: regs, x, r, n, h => by
+    simp only [fixedsIn] at h
+    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
+  | (name, .inout _) :: args, reg :: regs, x, r, n, h => by
+    simp only [fixedsIn] at h
+    exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
+
+theorem fixeds_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.fixeds) : r < 16 :=
+  argRegs_lt (fixedsIn_mem c.args argRegs x r n h)
+
+theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j c l = some v → Known.load v j c ∈ l
+  | [], _, h => by simp [knownLoad] at h
+  | k :: more, v, h => by
+    cases k with
+    | load v' j' c' =>
+      simp only [knownLoad] at h
+      split at h
+      next e =>
+        injection h with h
+        obtain ⟨e1, e2⟩ := e
+        subst h e1 e2
+        exact List.mem_cons_self ..
+      next => exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | or _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | held _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+
+/-- Eight bytes read of a run of a fixed count given to read: the number the state knows there. The run is
+as it was at entry (the function may not write it), so the number is what `load` reads there at entry. -/
+theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symLoadFixed ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
+  unfold symLoadFixed at h
+  cases hf : findOut addr ctx.contract.fixeds 0 with
+  | none => simp only [hf] at h; exact (refuse_ok h).elim
+  | some w =>
+    obtain ⟨j, off, name, base, count, hw, _, hj, ho⟩ := findOut_spec hf
+    subst hw
+    simp only [hf] at h
+    have hj' : ctx.contract.fixeds[j]? = some (name, base, count) := by simpa using hj
+    cases hc : Lin.isConst off with
+    | none => simp only [hc] at h; exact (refuse_ok h).elim
+    | some c =>
+      simp only [hc, hj'] at h
+      split at h
+      next hcond =>
+        obtain ⟨hsize, c0, cle⟩ := hcond
+        subst hsize
+        have hm := List.mem_of_getElem? hj'
+        have b16 := fixeds_lt hm
+        obtain ⟨fit, apart, _, outs⟩ := E.fixed hm
+        have e := ev_isConst (ρ := ρ) hc
+        rw [ho, ev_sub, ev_var, H.entry base b16] at e
+        unfold M64 at hlt fit
+        have hadr : a = s0.reg base + c.toNat := by omega
+        -- the run is as it was at entry
+        have same : ∀ x, s0.reg base ≤ x → x < s0.reg base + count → st.mem x = s0.mem x := by
+          intro x h1 h2
+          apply H.mem
+          · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+            omega
+          · unfold Contract.inOut
+            rw [List.any_eq_false]
+            intro ⟨x', r', n'⟩ hm'
+            have := outs x' r' n' hm'
+            simp only [Bool.and_eq_true, decide_eq_true_eq]
+            omega
+        have hload : load st.mem a 8 = load s0.mem (s0.reg base + c.toNat) 8 := by
+          rw [hadr]
+          exact load_congr _ _ _ _ fun x h1 h2 => same x (by omega) (by omega)
+        have hread : allowed (ctx.contract.perm s0).read a 8 = true := by
+          apply allowed_of
+          intro x h1 h2
+          simp only [Contract.perm, Contract.inFixed, Bool.or_eq_true]
+          right; left
+          exact List.any_eq_true.mpr ⟨(name, base, count), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+        have lt := load_lt s0.mem (s0.reg base + c.toNat) 8
+        have lt2 : load s0.mem (s0.reg base + c.toNat) 8 < 2 ^ 64 := by have := lt; rw [pow8] at this; unfold M64 at this; exact this
+        rw [pow8] at lt
+        cases hk : knownLoad j c.toNat s.known with
+        | some v0 =>
+          simp only [hk] at h
+          have := V.pure_ok h
+          injection this with hp _
+          injection hp with h1 h2
+          subst h1 h2
+          have m := knownLoad_mem hk
+          obtain ⟨x', r', n', g1, _, g3⟩ := H.known _ m
+          rw [hj'] at g1
+          injection g1 with g1; injection g1 with _ g1; injection g1 with g1 _
+          subst g1
+          exact ⟨ρ, Carried.here H wf, hread, by rw [hload]; exact lt, by rw [ev_var, g3, hload], bounded_var (wf.known _ m)⟩
+        | none =>
+          simp only [hk] at h
+          have := V.pure_ok h
+          injection this with hp _
+          injection hp with h1 h2
+          subst h1 h2
+          have new := extend_new ρ s.nvars (load s0.mem (s0.reg base + c.toNat) 8 : Nat)
+          have bv : bounded (s.nvars + 1) (Lin.var s.nvars) := bounded_var (Nat.lt_succ_self _)
+          refine ⟨_, Carried.fresh H wf (load s0.mem (s0.reg base + c.toNat) 8 : Nat) _ (.load s.nvars j c.toNat) ?_ (Nat.lt_succ_self _) ?_
+            ⟨name, base, count, hj', by omega, new⟩, hread, by rw [hload]; exact lt, by rw [ev_var, new, hload], bv⟩
+          · intro f m
+            rcases List.mem_append.mp m with m | m
+            · simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at m
+              rcases m with rfl | rfl
+              · exact bv
+              · exact bounded_sub (bounded_const _ _) bv
+            · obtain ⟨⟨x, o, b⟩, _, e⟩ := List.mem_filterMap.mp m
+              split at e
+              · injection e with e; subst e
+                exact bounded_sub (bounded_const _ _) bv
+              · cases e
+          · intro f m
+            rcases List.mem_append.mp m with m | m
+            · simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at m
+              rcases m with rfl | rfl
+              · rw [holds_iff, ev_var, new]; exact Int.natCast_nonneg _
+              · rw [holds_iff, ev_sub, ev_const, ev_var, new]; simp only [top]; omega
+            · obtain ⟨⟨x, o, b⟩, mb, e⟩ := List.mem_filterMap.mp m
+              split at e
+              next hx =>
+                injection e with e; subst e
+                obtain ⟨hx1, hx2⟩ := hx
+                have hx1' : x = name := by simpa using hx1
+                subst hx1' hx2
+                have := E.mbound mb hm
+                rw [holds_iff, ev_sub, ev_const, ev_var, new]
+                omega
+              next => cases e
+      next => exact (refuse_ok h).elim
+
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars addr)
@@ -476,7 +696,9 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by decide)
   unfold M64 at hlt habove
   cases hl : locate ctx addr with
-  | none => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [symLoad, hl] at h
+    exact symLoadFixed_sound E h H wf a (by unfold M64; exact hlt) ha
   | some w =>
     cases w with
     | out _ _ => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
@@ -574,7 +796,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
   refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, nq, nr⟩
   · exact {
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-      spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words,
+      spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words, known := H'.known,
       facts := by
         intro f hf
         simp only [Sym.divide, List.mem_cons] at hf
@@ -595,6 +817,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
       spec := fun f m => SFact.bounded_mono le (wf.spec f m)
       wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
       words := wf.words.mono rfl rfl rfl le
+      known := fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m)
       bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
       facts := by
         intro f hf
@@ -664,7 +887,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     refine ⟨ρ', ⟨c.agree, c.mono, ?_, ?_⟩, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr, bq, br⟩
     · exact {
         entry := c.holds.entry, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
-        frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote, words := c.holds.words,
+        frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote, words := c.holds.words, known := c.holds.known,
         facts := by
           intro f hf
           simp only [List.mem_cons] at hf
@@ -673,7 +896,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
           · exact c.holds.facts f hf }
     · exact {
         base := c.wf.base, reg := c.wf.reg, zf := c.wf.zf, cf := c.wf.cf, frame := c.wf.frame, spec := c.wf.spec,
-        bytes := c.wf.bytes, wrote := c.wf.wrote, words := c.wf.words.mono rfl rfl rfl (Nat.le_refl _),
+        bytes := c.wf.bytes, wrote := c.wf.wrote, words := c.wf.words.mono rfl rfl rfl (Nat.le_refl _), known := c.wf.known,
         facts := by
           intro f hf
           simp only [List.mem_cons] at hf
@@ -707,6 +930,113 @@ theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     simp only [symQuot, hk, Bool.false_eq_true, ↓reduceIte]
     obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
     exact ⟨ρ', c, hq, bq⟩
+
+theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l = some v → Known.or v x y ∈ l ∨ Known.or v y x ∈ l
+  | [], _, h => by simp [knownOr] at h
+  | k :: more, v, h => by
+    cases k with
+    | or v' x' y' =>
+      simp only [knownOr] at h
+      split at h
+      next e =>
+        injection h with h
+        subst h
+        rcases e with ⟨e1, e2⟩ | ⟨e1, e2⟩
+        · subst e1 e2; exact Or.inl (List.mem_cons_self ..)
+        · subst e1 e2; exact Or.inr (List.mem_cons_self ..)
+      next => exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | load _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | held _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+
+/-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
+theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
+  obtain ⟨hx1, hx2, hx3⟩ := hx
+  obtain ⟨hy1, hy2, hy3⟩ := hy
+  have lt : xa ||| xb < M64 := by unfold M64 at *; exact Nat.or_lt_two_pow hx1 hy1
+  unfold symOr at h
+  cases hk : knownOr x y s.known with
+  | some v0 =>
+    simp only [hk] at h
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    rcases knownOr_mem hk with m | m
+    · obtain ⟨_, _, g⟩ := H.known _ m
+      refine ⟨ρ, Carried.here H wf, lt, lt, ?_, bounded_var (wf.known _ m).1⟩
+      rw [ev_var, g, ← hx2, ← hy2]; simp
+    · obtain ⟨_, _, g⟩ := H.known _ m
+      refine ⟨ρ, Carried.here H wf, lt, lt, ?_, bounded_var (wf.known _ m).1⟩
+      rw [ev_var, g, ← hx2, ← hy2]; simp [Nat.or_comm]
+  | none =>
+    simp only [hk] at h
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    have new := extend_new ρ s.nvars ((xa ||| xb : Nat) : Int)
+    have bv : bounded (s.nvars + 1) (Lin.var s.nvars) := bounded_var (Nat.lt_succ_self _)
+    have le : s.nvars ≤ s.nvars + 1 := Nat.le_succ _
+    have ag := extend_agree ρ s.nvars ((xa ||| xb : Nat) : Int)
+    have ex : ev (extend ρ s.nvars ((xa ||| xb : Nat) : Int)) x = xa := by rw [← ev_agree hx3 ag]; exact hx2.symm
+    have ey : ev (extend ρ s.nvars ((xa ||| xb : Nat) : Int)) y = xb := by rw [← ev_agree hy3 ag]; exact hy2.symm
+    have bx := bounded_mono le hx3
+    have by' := bounded_mono le hy3
+    have l1 : xa ≤ xa ||| xb := Nat.left_le_or
+    have l2 : xb ≤ xa ||| xb := Nat.right_le_or
+    have lt2 : xa ||| xb < 2 ^ 64 := by have := lt; unfold M64 at this; exact this
+    refine ⟨_, Carried.fresh H wf ((xa ||| xb : Nat) : Int) _ (.or s.nvars x y) ?_ ⟨Nat.lt_succ_self _, bx, by'⟩ ?_ ?_, lt, lt, by rw [ev_var, new], bv⟩
+    · intro f m
+      rcases List.mem_append.mp m with m | m
+      · rcases List.mem_append.mp m with m | m
+        · simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at m
+          rcases m with rfl | rfl
+          · exact bv
+          · exact bounded_sub (bounded_const _ _) bv
+        · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+          rcases m with rfl | rfl
+          · exact bounded_sub bv bx
+          · exact bounded_sub bv by'
+      · unfold orBound at m
+        split at m
+        · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+          subst m
+          exact bounded_sub (bounded_const _ _) bv
+        · cases m
+    · intro f m
+      rcases List.mem_append.mp m with m | m
+      · rcases List.mem_append.mp m with m | m
+        · simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at m
+          rcases m with rfl | rfl
+          · rw [holds_iff, ev_var, new]; exact Int.natCast_nonneg _
+          · rw [holds_iff, ev_sub, ev_const, ev_var, new]; simp only [top]; omega
+        · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+          rcases m with rfl | rfl
+          · rw [holds_iff, ev_sub, ev_var, new, ex]; omega
+          · rw [holds_iff, ev_sub, ev_var, new, ey]; omega
+      · unfold orBound at m
+        split at m
+        next k hfind =>
+          simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+          subst m
+          have hp := List.find?_some hfind
+          simp only [Bool.and_eq_true] at hp
+          have g1 := plain_sound hp.1 ρ H.facts
+          have g2 := plain_sound hp.2 ρ H.facts
+          simp only [ev_sub, ev_const] at g1 g2
+          have cast : ((2 ^ k : Nat) : Int) = (2 : Int) ^ k := by simp
+          have a1 : xa < 2 ^ k := Int.ofNat_lt.mp (by rw [cast]; omega)
+          have a2 : xb < 2 ^ k := Int.ofNat_lt.mp (by rw [cast]; omega)
+          have a3 : ((xa ||| xb : Nat) : Int) < ((2 ^ k : Nat) : Int) := Int.ofNat_lt.mpr (Nat.or_lt_two_pow a1 a2)
+          rw [holds_iff, ev_sub, ev_const, ev_var, new]
+          rw [cast] at a3
+          omega
+        next => cases m
+    · refine ⟨by rw [ex]; exact Int.natCast_nonneg _, by rw [ey]; exact Int.natCast_nonneg _, ?_⟩
+      rw [new, ex, ey]; simp
 
 theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -1035,8 +1365,16 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           exact ⟨ρ3, _, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, sumList, al, if_true], sv⟩
         | none =>
           simp only [hm] at h
-          obtain ⟨ρ3, c3, z, hz, sz⟩ := symPrim_sound h c2.holds c2.wf xa xb sa2 sb
-          exact ⟨ρ3, z, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], sz⟩
+          split at h
+          next hor =>
+            have fe : f = "or64" := by simpa using hor
+            obtain ⟨ρ3, c3, lt, sem⟩ := symOr_sound h c2.holds c2.wf xa xb sa2 sb
+            have hz : prim f [xa, xb] = some ((xa ||| xb) % M64) := by rw [fe]; simp [prim]
+            refine ⟨ρ3, (xa ||| xb) % M64, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], ?_⟩
+            rw [Nat.mod_eq_of_lt lt]; exact sem
+          next =>
+            obtain ⟨ρ3, c3, z, hz, sz⟩ := symPrim_sound h c2.holds c2.wf xa xb sa2 sb
+            exact ⟨ρ3, z, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], sz⟩
   | .call f [], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
@@ -1059,17 +1397,17 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem Holds.setZf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with zf := f } { st with zf := b } :=
-  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩
+  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
 
 theorem Holds.setCf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with cf := f } { st with cf := b } :=
-  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩
+  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
 
 theorem WF.setZf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with zf := f } :=
-  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _)⟩
+  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
 
 theorem WF.setCf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with cf := f } :=
-  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _)⟩
+  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
 
 theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (r x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) : Holds ctx s0 ρ (s.put r xr) (setReg st r x) where
@@ -1093,6 +1431,7 @@ theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
   mem := H.mem
   wrote := H.wrote
   words := H.words
+  known := H.known
 
 theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars xr) : WF (s.put r xr) where
   base := wf.base
@@ -1109,6 +1448,7 @@ theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars 
   spec := wf.spec
   wrote := wf.wrote
   words := wf.words.mono rfl rfl rfl (Nat.le_refl _)
+  known := wf.known
 
 theorem Flag.equal_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev ρ a = ev ρ b then 1 else 0) :
     (Flag.equal a b).holds ρ (x != 0) := by
@@ -1181,6 +1521,7 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       show store st.mem a x 8 (s0.reg r + 4 * j + b) = _
       rw [store_other _ _ _ _ _ (by omega)]
       exact g3 b hb
+  known := H.known
 
 theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
     WF { s with frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
@@ -1198,6 +1539,7 @@ theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvar
     · injection heq with e1 e2; subst e2; exact hb
     · exact wf.frame o v (List.mem_filter.mp m).1
   words := wf.words.mono rfl rfl rfl (Nat.le_refl _)
+  known := wf.known
 
 /-- One byte written into a run given to write. -/
 theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
@@ -1278,6 +1620,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       show store st.mem a x 1 (s0.reg r' + 4 * j + b) = _
       rw [store_other _ _ _ _ _ (by omega)]
       exact g3 b hb
+  known := H.known
 
 theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) :
@@ -1295,6 +1638,7 @@ theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s
     · injection e with e1 e2; injection e2 with e2 e3; subst e2 e3; exact ⟨ho, hx⟩
     · exact wf.wrote w' o' v (keepWrote_spec hk w' o' v m).1
   words := wf.words.mono rfl rfl rfl (Nat.le_refl _)
+  known := wf.known
 
 theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb : Nat}
     (h1 : value perm bind st a = some xa) (h2 : value perm bind st b = some xb) : values perm bind st [a, b] = some [xa, xb] := by
