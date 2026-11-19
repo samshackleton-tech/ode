@@ -257,7 +257,22 @@ theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
   | lane _ _ => simp [symReg] at h
   | call _ _ => simp [symReg] at h
 
-/-! ## Sixteen bytes read -/
+theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : symReg bind s b = some x) (hk : symNumber bind n = some k) :
+    ∃ xb, values (ctx.contract.perm s0) bind st [b, n] = some [xb, k.toNat] ∧
+      ∀ A : Nat, (A : Int) = ev ρ (Lin.add (signed x) (signed (Lin.const k))) → A < M64 → (xb + k.toNat) % M64 = A := by
+  obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound H wf hx
+  obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hk
+  refine ⟨xb, values_two vb vn, ?_⟩
+  have sgx := signed_ev ρ x
+  have sgk := signed_ev ρ (Lin.const k)
+  rw [ev_const] at sgk
+  intro A hA hlt
+  rw [ev_add] at hA
+  unfold M64 at xb_lt hlt ⊢
+  omega
+
+/-! ## Read a run of words -/
 
 theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}, runAt r l k = some j →
     k ≤ j ∧ ∃ x n, l[j - k]? = some (x, r, n)
@@ -274,26 +289,24 @@ theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}
       have : j - k = (j - (k + 1)) + 1 := by omega
       rw [this]; simpa using hj
 
-/-- The four words of a run at a place divisible by four, where memory there is as it was at entry: the
-terms made for them are the words the machine reads. -/
-theorem load128_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {j : Nat} {x : String} {r n c : Nat} (hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x, r, n))
-    (hmem : ∀ k, k < 16 → st.mem (s0.reg r + c + k) = s0.mem (s0.reg r + c + k)) (hc : c % 4 = 0) :
-    Carried ctx s0 ρ s ρ { s with terms := (termsOf intern ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms).2 } st ∧
-    (∀ i ∈ (termsOf intern ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms).1,
-      i < (termsOf intern ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms).2.length) ∧
-    ∀ k, k < 4 → load st.mem (s0.reg r + c + 4 * k) 4 =
-      den (inpOf ctx s0) ρ (termsOf intern ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms).2
-        ((termsOf intern ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms).1.getD k 0) := by
+/-- The terms for a load stand for the words in memory when those bytes still have their entry values. -/
+theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {j : Nat} {x : String} {r n c width : Nat} (hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x, r, n))
+    (hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c + k) = s0.mem (s0.reg r + c + k)) (hc : c % 4 = 0) :
+    let made := termsOf intern ((List.range width).map fun i => Node.input j (c / 4 + i)) s.terms
+    Carried ctx s0 ρ s ρ { s with terms := made.2 } st ∧ made.1.length = width ∧
+    (∀ i ∈ made.1, i < made.2.length) ∧
+    ∀ k, k < width → load st.mem (s0.reg r + c + 4 * k) 4 = den (inpOf ctx s0) ρ made.2 (made.1.getD k 0) := by
+  dsimp only
   obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := intern)
     (val := fun nd => match nd with | .input j k => inpOf ctx s0 j k | _ => 0)
-    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ((List.range 4).map fun i => Node.input j (c / 4 + i)) s.terms
+    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ((List.range width).map fun i => Node.input j (c / 4 + i)) s.terms
     (by
       intro a ma T eT okT
       obtain ⟨i, _, rfl⟩ := List.mem_map.mp ma
       exact input_step okT)
     (Ext.refl _) wf.words.ok
-  refine ⟨Carried.terms H wf e ok, lt, ?_⟩
+  refine ⟨Carried.terms H wf e ok, by simpa using len, lt, ?_⟩
   intro k hk
   rw [dn k (by simpa using hk)]
   simp only [List.getElem_map, List.getElem_range]
@@ -308,13 +321,15 @@ theorem load128_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
   have ey : s0.reg r + c + (y - (s0.reg r + c)) = y := by omega
   rw [ey] at this; exact this
 
-theorem symLoad128_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s1 : Sym} {addr : Row} {l : List Nat}
-    {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symLoad128 ctx s addr items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (a : Nat)
+theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s1 : Sym} {addr : Row} {l : List Nat}
+    {items rest : Items} {ρ : Nat → Int} {st : State} {width : Nat}
+    (h : symLoadWords ctx s addr width items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (nonempty : 0 < width) (a : Nat)
     (ha : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
-    allowed (ctx.contract.perm s0).read a 16 = true ∧ Carried ctx s0 ρ s ρ s1 st ∧ (∀ i ∈ l, i < s1.terms.length) ∧
-    ∀ k, k < 4 → load st.mem (a + 4 * k) 4 = den (inpOf ctx s0) ρ s1.terms (l.getD k 0) := by
-  unfold symLoad128 at h
+    allowed (ctx.contract.perm s0).read a (4 * width) = true ∧ Carried ctx s0 ρ s ρ s1 st ∧ l.length = width ∧
+    (∀ i ∈ l, i < s1.terms.length) ∧
+    ∀ k, k < width → load st.mem (a + 4 * k) 4 = den (inpOf ctx s0) ρ s1.terms (l.getD k 0) := by
+  simp only [symLoadWords] at h
   cases hf : findOut addr ctx.contract.fixeds 0 with
   | some w0 =>
     obtain ⟨j, off, x, r, n, rfl, _, hj, ho⟩ := findOut_spec hf
@@ -341,7 +356,7 @@ theorem symLoad128_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         have hjj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x, r, n) := by
           rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp hj').1]; exact hj'
         have hstack := E.stack
-        have hmem : ∀ k, k < 16 → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
+        have hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
           intro k hk
           apply H.mem
           · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega
@@ -351,8 +366,8 @@ theorem symLoad128_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have := f4 x' r' n' hm'
             simp only [Bool.and_eq_true, decide_eq_true_eq]
             omega
-        obtain ⟨cr, lt, dn⟩ := load128_terms (ρ := ρ) H wf hjj hmem (by omega)
-        refine ⟨allowed_of _ _ _ ?_, cr, lt, ?_⟩
+        obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf hjj hmem (by omega)
+        refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
         · intro y hy1 hy2
           simp only [Contract.perm, Bool.or_eq_true]
           right
@@ -400,12 +415,12 @@ theorem symLoad128_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
               have eoff := ev_isConst (ρ := ρ) hc
               rw [ho, ev_sub, ev_var, hr] at eoff
               have hA : a = s0.reg r + c.toNat := ha (s0.reg r + c.toNat) (by omega) (by unfold M64 at hfit ⊢; omega)
-              have hmem : ∀ k, k < 16 → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
+              have hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
                 intro k hk
                 have := H.words.2.1 w hin' x r n hw' (c.toNat + k) (by omega)
                 rw [← Nat.add_assoc] at this; exact this
-              obtain ⟨cr, lt, dn⟩ := load128_terms (ρ := ρ) H wf hj' hmem (by omega)
-              refine ⟨allowed_of _ _ _ ?_, cr, lt, ?_⟩
+              obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf hj' hmem (by omega)
+              refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
               · intro y hy1 hy2
                 simp only [Contract.perm, Bool.or_eq_true]
                 right
@@ -431,9 +446,13 @@ theorem isConst_constant {a : Row} {k : Int} (h : Lin.isConst a = some k) : k = 
 theorem vec4_getD {f : Nat → Nat} {k : Nat} (hk : k < 4) : [f 0, f 1, f 2, f 3].getD k 0 = f k := by
   rcases lt4 hk with rfl | rfl | rfl | rfl <;> rfl
 
+theorem getD_index {α : Type} {xs : List α} {k : Nat} (h : k < xs.length) (d : α) : xs.getD k d = xs[k] := by
+  simp only [List.getD, List.getElem?_eq_getElem h, Option.getD_some]
+
 theorem getD4_mem {l : List Nat} (h : l.length = 4) {k : Nat} (hk : k < 4) : l.getD k 0 ∈ l := by
-  obtain ⟨a, b, c, d, rfl⟩ := list4 h
-  rcases lt4 hk with rfl | rfl | rfl | rfl <;> simp
+  have h' : k < l.length := by simpa only [h] using hk
+  rw [getD_index h']
+  exact List.getElem_mem h'
 
 theorem word_of_const (ρ : Nat → Int) {k : Int} (h : 0 ≤ k) : k.toNat % W32 = (ev ρ (Lin.const k) % W32i).toNat := by
   rw [ev_const]; unfold W32 W32i; omega
@@ -1076,18 +1095,10 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           | none => simp only [hx, hk] at h; exact (refuse_ok h).elim
           | some k =>
             simp only [hx, hk] at h
-            obtain ⟨xb, vb, xb_lt, xb_ev, xb_b⟩ := symReg_sound H wf hx
-            obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hk
-            have sgx := signed_ev ρ x
-            have sgk := signed_ev ρ (Lin.const k)
-            rw [ev_const] at sgk
-            obtain ⟨hal, cr, lt, dn⟩ := symLoad128_sound E h H wf ((xb + k.toNat) % M64) (by
-              intro A hA hlt
-              rw [ev_add] at hA
-              unfold M64 at xb_lt hlt ⊢
-              omega)
+            obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+            obtain ⟨hal, cr, _, lt, dn⟩ := symLoadWords_sound E h H wf (by decide) ((xb + k.toNat) % M64) ha
             refine ⟨ρ, cr, (List.range 4).map (fun i => load st.mem ((xb + k.toNat) % M64 + 4 * i) 4), ?_, lt, ?_⟩
-            · simp [lanesOf, values_two vb vn, sumList, hal]
+            · simp [lanesOf, vs, sumList, hal]
             · intro k' hk'
               rw [← dn k' hk']
               rcases lt4 hk' with rfl | rfl | rfl | rfl <;> rfl
@@ -1188,7 +1199,7 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                 exact symShuffle_sound bind h H wf
               next hf6 => exact symMoved_sound bind h H wf
 
-/-! ## Sixteen bytes written -/
+/-! ## Store a run of words -/
 
 theorem store_at : ∀ (n : Nat) (mem : Nat → Nat) (a v b : Nat), b < n → store mem a v n (a + b) = v / 256 ^ b % 256
   | 0, _, _, _, _, h => absurd h (Nat.not_lt_zero _)
@@ -1202,22 +1213,29 @@ theorem store_at : ∀ (n : Nat) (mem : Nat → Nat) (a v b : Nat), b < n → st
       have e : a + (b + 1) = (a + 1) + b := by omega
       rw [e, store_at n _ (a + 1) (v / 256) b (by omega), Nat.div_div_eq_div_mul, Nat.pow_succ, Nat.mul_comm]
 
-theorem store4_other (mem : Nat → Nat) (a v0 v1 v2 v3 y : Nat) (h : y < a ∨ a + 16 ≤ y) :
-    store (store (store (store mem a v0 4) (a + 4) v1 4) (a + 8) v2 4) (a + 12) v3 4 y = mem y := by
-  rw [store_other _ _ _ _ _ (by omega), store_other _ _ _ _ _ (by omega), store_other _ _ _ _ _ (by omega),
-      store_other _ _ _ _ _ (by omega)]
+theorem storeWords_other (mem : Nat → Nat) (a : Nat) (ls : List Nat) (y : Nat) (h : y < a ∨ a + 4 * ls.length ≤ y) :
+    storeWords mem a ls y = mem y := by
+  induction ls generalizing a mem with
+  | nil => rfl
+  | cons v ls ih =>
+    simp only [List.length_cons] at h
+    rw [storeWords, ih _ _ (by omega), store_other _ _ _ _ _ (by omega)]
 
-theorem store4_at (mem : Nat → Nat) (a v0 v1 v2 v3 : Nat) {i b : Nat} (hi : i < 4) (hb : b < 4) :
-    store (store (store (store mem a v0 4) (a + 4) v1 4) (a + 8) v2 4) (a + 12) v3 4 (a + 4 * i + b) =
-      [v0, v1, v2, v3].getD i 0 / 256 ^ b % 256 := by
-  rcases lt4 hi with rfl | rfl | rfl | rfl
-  · rw [store_other _ _ _ _ _ (by omega), store_other _ _ _ _ _ (by omega), store_other _ _ _ _ _ (by omega)]
-    exact store_at 4 mem a v0 b hb
-  · rw [store_other _ _ _ _ _ (by omega), store_other _ _ _ _ _ (by omega)]
-    exact store_at 4 _ (a + 4) v1 b hb
-  · rw [store_other _ _ _ _ _ (by omega)]
-    exact store_at 4 _ (a + 8) v2 b hb
-  · exact store_at 4 _ (a + 12) v3 b hb
+theorem storeWords_at (mem : Nat → Nat) (a : Nat) (ls : List Nat) (i b : Nat) (hi : i < ls.length) (hb : b < 4) :
+    storeWords mem a ls (a + 4 * i + b) = ls.getD i 0 / 256 ^ b % 256 := by
+  induction ls generalizing mem a i with
+  | nil => simp at hi
+  | cons v ls ih =>
+    simp only [List.length_cons] at hi
+    cases i with
+    | zero =>
+      simp only [Nat.mul_zero, Nat.add_zero, storeWords, List.getD, List.getElem?_cons_zero, Option.getD_some]
+      rw [storeWords_other _ _ _ _ (by omega)]
+      exact store_at 4 mem a v b hb
+    | succ i =>
+      have e : a + 4 * (i + 1) + b = a + 4 + 4 * i + b := by omega
+      rw [e, storeWords, ih _ _ _ (by omega)]
+      rfl
 
 theorem lookup_cons_cases {x r : Nat} {l ids : List Nat} {more : List (Nat × List Nat)} (h : ((r, l) :: more).lookup x = some ids) :
     (x = r ∧ ids = l) ∨ (x ≠ r ∧ more.lookup x = some ids) := by
@@ -1232,18 +1250,14 @@ theorem lookup_cons_cases {x r : Nat} {l ids : List Nat} {more : List (Nat × Li
     simp only [List.lookup, ne] at h
     exact h
 
-/-- Four words of a vector register stored into a run given to write, at a place divisible by four: the
-run's words there are now the register's terms; what was known of other words and other runs is still so. -/
-theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+/-- A store replaces the words at its destination and preserves facts about other words and runs. -/
+theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) {w : Nat} {name : String} {r n : Nat} (hw : ctx.contract.outs[w]? = some (name, r, n))
-    {c : Nat} (hc4 : c % 4 = 0) (hcn : c + 16 ≤ n) (hnw : (s.wrote.any fun e => e.1 == w) = false)
-    {rv : Nat} {l : List Nat} (hd : ∀ k, k < 4 → st.vec rv k = den (inpOf ctx s0) ρ s.terms (l.getD k 0))
+    {c : Nat} {l lanes : List Nat} (hl : lanes.length = l.length)
+    (hc4 : c % 4 = 0) (hcn : c + 4 * l.length ≤ n) (hnw : (s.wrote.any fun e => e.1 == w) = false)
+    (hd : ∀ k, k < l.length → lanes.getD k 0 = den (inpOf ctx s0) ρ s.terms (l.getD k 0))
     (a : Nat) (ha : a = s0.reg r + c) :
-    Holds ctx s0 ρ { s with intact := s.intact.filter (· != w),
-                            wroteW := ((List.range 4).map fun i => (w, c / 4 + i, l.getD i 0)) ++
-                                      s.wroteW.filter fun e => !(e.1 == w && decide (c / 4 ≤ e.2.1) && decide (e.2.1 < c / 4 + 4)) }
-      { st with mem := store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4)
-                         (a + 12) (st.vec rv 3) 4 } where
+    Holds ctx s0 ρ (rememberStore s w (c / 4) l) { st with mem := storeWords st.mem a lanes } where
   entry := H.entry
   reg := H.reg
   small := H.small
@@ -1257,21 +1271,19 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     refine ⟨g1, g2, ?_⟩
     have hs := E.stack
     have ho := (E.out (List.mem_of_getElem? hw)).2
-    have e : load (store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4)
-          (a + 12) (st.vec rv 3) 4) ((s0.reg RSP : Int) + o').toNat 8 = load st.mem ((s0.reg RSP : Int) + o').toNat 8 :=
-      load_congr _ _ _ _ (fun y h1 h2 => store4_other _ _ _ _ _ _ _ (by omega))
-    show ((load (store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4)
-          (a + 12) (st.vec rv 3) 4) ((s0.reg RSP : Int) + o').toNat 8 : Nat) : Int) = ev ρ v
+    have e : load (storeWords st.mem a lanes) ((s0.reg RSP : Int) + o').toNat 8 = load st.mem ((s0.reg RSP : Int) + o').toNat 8 :=
+      load_congr _ _ _ _ (fun y h1 h2 => storeWords_other _ _ _ _ (by omega))
+    show ((load (storeWords st.mem a lanes) ((s0.reg RSP : Int) + o').toNat 8 : Nat) : Int) = ev ρ v
     rw [e]; exact g3
   mem y hy ho' := by
-    show store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4 y = s0.mem y
-    have hne : y < a ∨ a + 16 ≤ y := by
+    show storeWords st.mem a lanes y = s0.mem y
+    have hne : y < a ∨ a + 4 * lanes.length ≤ y := by
       refine Decidable.by_contra fun hin => ?_
       have : ctx.contract.inOut s0 y = true := by
         unfold Contract.inOut
         exact List.any_eq_true.mpr ⟨(name, r, n), List.mem_of_getElem? hw, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
       rw [this] at ho'; cases ho'
-    rw [store4_other _ _ _ _ _ _ _ hne]
+    rw [storeWords_other _ _ _ _ hne]
     exact H.mem y hy ho'
   wrote w' o' v m := by
     obtain ⟨name', r', n', g1, g2, g3, g4⟩ := H.wrote w' o' v m
@@ -1281,9 +1293,8 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       rw [e] at m
       exact (List.any_eq_false.mp hnw) _ m (by simp)
     have := E.outOut hw g1 (Ne.symm ne')
-    show (store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4
-      (s0.reg r' + (ev ρ o').toNat) : Int) = ev ρ v
-    rw [store4_other _ _ _ _ _ _ _ (by omega)]
+    show (storeWords st.mem a lanes (s0.reg r' + (ev ρ o').toNat) : Int) = ev ρ v
+    rw [storeWords_other _ _ _ _ (by omega)]
     exact g4
   words := by
     refine ⟨H.words.1, ?_, ?_⟩
@@ -1291,14 +1302,13 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       obtain ⟨m', ne⟩ := List.mem_filter.mp m
       have ne' : w' ≠ w := by simpa using ne
       have := E.outOut hw g1 (Ne.symm ne')
-      show store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4
-        (s0.reg r' + k) = s0.mem (s0.reg r' + k)
-      rw [store4_other _ _ _ _ _ _ _ (by omega)]
+      show storeWords st.mem a lanes (s0.reg r' + k) = s0.mem (s0.reg r' + k)
+      rw [storeWords_other _ _ _ _ (by omega)]
       exact H.words.2.1 w' m' x' r' n' g1 k hk'
     · intro w' j i m x' r' n' g1
       rcases List.mem_append.mp m with m | m
       · obtain ⟨q, mq, eq⟩ := List.mem_map.mp m
-        have hq : q < 4 := List.mem_range.mp mq
+        have hq : q < l.length := List.mem_range.mp mq
         injection eq with e1 e2
         injection e2 with e2 e3
         subst e1 e2 e3
@@ -1306,16 +1316,15 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         injection g1 with g1; injection g1 with _ g1; injection g1 with g1 gn
         subst g1 gn
         refine ⟨by omega, fun b hb => ?_⟩
-        show store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4
-          (s0.reg r + 4 * (c / 4 + q) + b) = _
+        show storeWords st.mem a lanes (s0.reg r + 4 * (c / 4 + q) + b) = _
         have e : s0.reg r + 4 * (c / 4 + q) + b = a + 4 * q + b := by omega
-        rw [e, store4_at _ _ _ _ _ _ hq hb, vec4_getD (f := st.vec rv) hq, hd q hq]
+        rw [e, storeWords_at _ _ _ _ _ (by omega) hb, hd q hq]
+        rfl
       · obtain ⟨m', keep⟩ := List.mem_filter.mp m
         obtain ⟨g2, g3⟩ := H.words.2.2 w' j i m' x' r' n' g1
         refine ⟨g2, fun b hb => ?_⟩
-        show store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4
-          (s0.reg r' + 4 * j + b) = _
-        have hne : s0.reg r' + 4 * j + b < a ∨ a + 16 ≤ s0.reg r' + 4 * j + b := by
+        show storeWords st.mem a lanes (s0.reg r' + 4 * j + b) = _
+        have hne : s0.reg r' + 4 * j + b < a ∨ a + 4 * lanes.length ≤ s0.reg r' + 4 * j + b := by
           by_cases e : w' = w
           · subst e
             rw [hw] at g1
@@ -1325,9 +1334,70 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             omega
           · have := E.outOut hw g1 (Ne.symm e)
             omega
-        rw [store4_other _ _ _ _ _ _ _ hne]
+        rw [storeWords_other _ _ _ _ hne]
         exact g3 b hb
   known := H.known
+
+theorem symStoreWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym}
+    {addr : Row} {l lanes : List Nat} {width a : Nat} {items rest : Items} (E : Setting ctx p s0)
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (nonempty : 0 < width)
+    (h : symStoreWords ctx s addr l width items = .ok (s', rest))
+    (ha : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A)
+    (hl : lanes.length = width) (hlt : ∀ i ∈ l, i < s.terms.length)
+    (hd : ∀ k, k < width → lanes.getD k 0 = den (inpOf ctx s0) ρ s.terms (l.getD k 0)) :
+    allowed (ctx.contract.perm s0).write a (4 * width) = true ∧
+      Carried ctx s0 ρ s ρ s' { st with mem := storeWords st.mem a lanes } := by
+  simp only [symStoreWords] at h
+  cases hfo : findOut addr ctx.contract.outs 0 with
+  | none => simp only [hfo] at h; exact (refuse_ok h).elim
+  | some w0 =>
+    obtain ⟨w, off, name, r, n, rfl, _, hw, ho⟩ := findOut_spec hfo
+    have hw' : ctx.contract.outs[w]? = some (name, r, n) := by simpa using hw
+    simp only [hfo, hw'] at h
+    cases hc : Lin.isConst off with
+    | none => simp only [hc] at h; exact (refuse_ok h).elim
+    | some c =>
+      simp only [hc] at h
+      split at h
+      next => exact (refuse_ok h).elim
+      next hcond =>
+        split at h
+        next => exact (refuse_ok h).elim
+        next hnw =>
+          split at h
+          next => exact (refuse_ok h).elim
+          next hlen =>
+            have hs := V.pure_ok h
+            injection hs with h1 _; subst s'
+            have hc3 : 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ n := by simpa using hcond
+            have hnw' : (s.wrote.any fun e => e.1 == w) = false := by
+              cases hb : (s.wrote.any fun e => e.1 == w) with
+              | false => rfl
+              | true => exact (hnw hb).elim
+            have len : l.length = width := by simpa using hlen
+            have hm := List.mem_of_getElem? hw'
+            have fit := (E.out hm).1
+            have hr : ρ r = s0.reg r := H.entry r (outs_lt hm)
+            have eoff := ev_isConst (ρ := ρ) hc
+            rw [ho, ev_sub, ev_var, hr] at eoff
+            have hA : a = s0.reg r + c.toNat := ha _ (by omega) (by unfold M64 at fit ⊢; omega)
+            refine ⟨allowed_of _ _ _ ?_, ⟨Agree.refl _ _, Nat.le_refl _,
+              H.storeRunWords E hw' (c := c.toNat) (hl.trans len.symm) (by omega) (by omega) hnw' (fun k hk => hd k (by omega)) a hA, ?_⟩⟩
+            · intro y hy1 hy2
+              simp only [Contract.perm, Bool.or_eq_true]
+              right
+              unfold Contract.inOut
+              exact List.any_eq_true.mpr ⟨(name, r, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+            · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
+                ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs,
+                 fun w' j i m => by
+                   rcases List.mem_append.mp m with m | m
+                   · obtain ⟨q, mq, eq⟩ := List.mem_map.mp m
+                     injection eq with _ e2
+                     injection e2 with _ e3
+                     rw [← e3, getD_index (List.mem_range.mp mq)]
+                     exact hlt _ (List.getElem_mem (List.mem_range.mp mq))
+                   · exact wf.words.wrote w' j i (List.mem_filter.mp m).1⟩, wf.known⟩
 
 /-! ## A row that sets a vector register, or stores one -/
 
@@ -1432,69 +1502,13 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         cases hl : symVec bind s v <;> cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp only [hl, hx, hk] at h
         all_goals try exact (refuse_ok h).elim
         rename_i l x k
-        cases hfo : findOut (Lin.add (signed x) (signed (Lin.const k))) ctx.contract.outs 0 with
-        | none => simp only [hfo] at h; exact (refuse_ok h).elim
-        | some w0 =>
-          obtain ⟨w, off, name, r, n', rfl, _, hw, ho⟩ := findOut_spec hfo
-          simp only [hfo] at h
-          have hw' : ctx.contract.outs[w]? = some (name, r, n') := by simpa using hw
-          simp only [hw'] at h
-          cases hc : Lin.isConst off with
-          | none => simp only [hc] at h; exact (refuse_ok h).elim
-          | some c =>
-            simp only [hc] at h
-            split at h
-            next => exact (refuse_ok h).elim
-            next hcond =>
-              split at h
-              next => exact (refuse_ok h).elim
-              next hnw =>
-                split at h
-                next => exact (refuse_ok h).elim
-                next hlen =>
-                  have := V.pure_ok h
-                  injection this with h1 _
-                  subst h1
-                  have hc3 : 0 ≤ c ∧ c % 4 = 0 ∧ c + 16 ≤ n' := by simpa using hcond
-                  have hnw' : (s.wrote.any fun e => e.1 == w) = false := by
-                    cases hb : (s.wrote.any fun e => e.1 == w) with
-                    | false => rfl
-                    | true => exact (hnw hb).elim
-                  have len : l.length = 4 := by simpa using hlen
-                  obtain ⟨rv, _, lt, hva, hd⟩ := symVec_sound H wf hl
-                  obtain ⟨xb, vb, xb_lt, xb_ev, xb_b⟩ := symReg_sound H wf hx
-                  obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hk
-                  have sgx := signed_ev ρ x
-                  have sgk := signed_ev ρ (Lin.const k)
-                  rw [ev_const] at sgk
-                  have hm := List.mem_of_getElem? hw'
-                  have hfit := (E.out hm).1
-                  have hr : ρ r = s0.reg r := H.entry r (outs_lt hm)
-                  have eoff := ev_isConst (ρ := ρ) hc
-                  rw [ho, ev_sub, ev_add, ev_var, hr] at eoff
-                  have hA : (xb + k.toNat) % M64 = s0.reg r + c.toNat := by
-                    unfold M64 at xb_lt hfit ⊢
-                    omega
-                  have hw1 : allowed (ctx.contract.perm s0).write ((xb + k.toNat) % M64) 16 = true := by
-                    apply allowed_of
-                    intro y hy1 hy2
-                    simp only [Contract.perm, Bool.or_eq_true]
-                    right
-                    unfold Contract.inOut
-                    exact List.any_eq_true.mpr ⟨(name, r, n'), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-                  refine ⟨ρ, _, ⟨Agree.refl _ _, Nat.le_refl _,
-                    H.store128 E hw' (c := c.toNat) (by omega) (by omega) hnw' hd ((xb + k.toNat) % M64) hA, ?_⟩, ?_, rfl⟩
-                  · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
-                      ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs,
-                       fun w' j i m => by
-                         rcases List.mem_append.mp m with m | m
-                         · obtain ⟨q, mq, eq⟩ := List.mem_map.mp m
-                           injection eq with _ e2
-                           injection e2 with _ e3
-                           rw [← e3]
-                           exact lt _ (getD4_mem len (List.mem_range.mp mq))
-                         · exact wf.words.wrote w' j i (List.mem_filter.mp m).1⟩, wf.known⟩
-                  · simp [execStmt, values_two vb vn, hva, sumList, hw1]
+        obtain ⟨rv, _, lt, hv, hd⟩ := symVec_sound H wf hl
+        obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+        let lanes := [st.vec rv 0, st.vec rv 1, st.vec rv 2, st.vec rv 3]
+        obtain ⟨al, c⟩ := symStoreWords_sound (lanes := lanes) E H wf (by decide) h ha rfl lt (fun j hj => by
+          simp only [lanes, vec4_getD hj, hd j hj])
+        refine ⟨ρ, _, c, ?_, rfl⟩
+        simp [execStmt, vs, hv, sumList, al, storeWords, lanes, Nat.add_assoc]
       next => exact (refuse_ok h).elim
     · exact (refuse_ok h).elim
 

@@ -177,6 +177,62 @@ class Verify(unittest.TestCase):
         self.assertEqual(self.wide([".zpxord 0 0 0", ".zmov 1 0"]), "shown\n")
         self.assertIn("a 512-bit register whose lanes are not all known", self.wide([".zmov 0 1"]))
 
+    def test_wide_fixed_buffers(self):
+        buffers = ("arg out out 68", "arg a fixed 64", "arg b fixed 64")
+        result = "(bin ++ (list (index (call words (name a)) (num 0))) (call words (name b)))"
+        contract = (*buffers, f"ensuresw out (call bytes_of {result})")
+        ops = [".zload false 0 .rsi 0", ".zload false 1 .rdx 0", ".zstore false .rdi 0 0", ".zstore false .rdi 4 1"]
+        # The second store replaces the last fifteen words written by the first store.
+        self.assertEqual(self.wide(ops, contract), "shown\n")
+        shifted = [".lea .rsi .rsi 4", ".zload false 0 .rsi -4", *ops[1:]]
+        self.assertEqual(self.wide(shifted, contract), "shown\n")
+        self.assertIn("a word of the run is not known", self.wide([*ops[:2], ops[3], ops[2]], contract))
+        for arg, shorter in ((0, "arg out out 67"), (1, "arg a fixed 63"), (2, "arg b fixed 63")):
+            with self.subTest(arg=arg):
+                self.assertIn("sixty-four bytes that are not sixteen words of the run",
+                              self.wide(ops, [*buffers[:arg], shorter, *buffers[arg + 1:]]))
+        self.assertIn("no proof rule", self.wide([".zload true 0 .rsi 0"], buffers))
+        self.assertIn("no proof rule", self.wide([*ops[:2], ".zstore true .rdi 0 0"], buffers))
+
+    def test_wide_add_from_object_bytes(self):
+        sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+        import lean_verify, odec
+        source = """fn wide_add as "wide_add" {
+  vmovdqu32 zmm0, zmmword ptr [rsi]
+  vmovdqu32 zmm1, zmmword ptr [rdx]
+  vpaddd zmm2, zmm0, zmm1
+  vmovdqu32 zmmword ptr [rdi], zmm2
+  vzeroupper
+  ret
+}
+"""
+        spec = """def add(a, b) { [a[i] + b[i] for i in 0..16] }
+contract wide_add(out: block, a: block, b: block) {
+  requires no_overlap(out, a, b)
+  ensures out = add(a, b)
+  stack 0
+  needs avx512
+  trace depends on out, a, b
+}
+"""
+        src, obj, proof = (os.path.join(self.dir, name) for name in ("wide_add.ode", "wide_add.o", "wide_add.proof"))
+        with open(proof, "w") as f:
+            f.write("for wide_add\n")
+        for operand, want in (("zmm1", True), ("zmm0", False)):
+            with self.subTest(operand=operand):
+                with open(src, "w") as f:
+                    f.write(source.replace("vpaddd zmm2, zmm0, zmm1", f"vpaddd zmm2, zmm0, {operand}"))
+                odec.build(src, "wide_add", obj)
+                shown, said = lean_verify.verify(spec, [(obj, "wide_add")], proof)
+                self.assertEqual(shown, want, said)
+
+    def test_wide_load_does_not_read_the_entry_value_after_a_store(self):
+        buffers = ("arg out inout 64", "arg a fixed 64")
+        self.assertEqual(self.wide([".zload false 1 .rdi 0"], buffers), "shown\n")
+        ops = [".zload false 0 .rsi 0", ".zstore false .rdi 0 0", ".zload false 1 .rdi 0"]
+        self.assertIn("a read of a run given to read and write after it was written to", self.wide(ops, buffers))
+        self.assertIn("sixty-four bytes of a run given only to write", self.wide(ops, ("arg out out 64", buffers[1])))
+
     def test_a_proof_cannot_add_to_what_is_to_be_shown(self):
         with open(self.proof) as f: proof = f.read()
         for extra in ("stack 4000", "returns (num 0)", "def common a b = (num 0)", "arg x number", "i 0 1 .ret", "fn other"):

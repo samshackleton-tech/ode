@@ -706,19 +706,20 @@ def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
   | [], _ => none
   | (_, r', _) :: more, j => if r' = r then some j else runAt r more (j + 1)
 
-/-- Sixteen bytes read as four words: of a run of a fixed count given to read, or of a run given to read
-and write that nothing has been written to yet, at a place that is a number divisible by four. The words
-are those of the run as it was at entry. -/
-def symLoad128 (ctx : Ctx) (s : Sym) (addr : Row) : V (List Nat × Sym) :=
+/-- Read words at a fixed offset divisible by four. They must lie in a read-only run or a read/write run
+that has not been written since entry. -/
+def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat × Sym) :=
+  let bytes := if width = 4 then "sixteen" else "sixty-four"
+  let badSize := if width = 4 then "sixteen bytes that are not four words of the run" else "sixty-four bytes that are not sixteen words of the run"
   match findOut addr ctx.contract.fixeds 0 with
   | some (.out j off) =>
     match Lin.isConst off, ctx.contract.fixeds[j]? with
     | some c, some (_, _, count) =>
-      if 0 ≤ c ∧ c % 4 = 0 ∧ c + 16 ≤ count then
-        let made := termsOf intern ((List.range 4).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
+      if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count then
+        let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
         pure (made.1, { s with terms := made.2 })
-      else refuse "sixteen bytes that are not four words of the run"
-    | _, _ => refuse "sixteen bytes at a place of a run that is no number"
+      else refuse badSize
+    | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
   | _ =>
     match findOut addr ctx.contract.outs 0 with
     | some (.out w off) =>
@@ -729,14 +730,14 @@ def symLoad128 (ctx : Ctx) (s : Sym) (addr : Row) : V (List Nat × Sym) :=
           match (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? with
           | some (_, _, n') =>
             if !s.intact.contains w then refuse "a read of a run given to read and write after it was written to: not here yet"
-            else if 0 ≤ c ∧ c % 4 = 0 ∧ c + 16 ≤ n ∧ c + 16 ≤ n' then
-              let made := termsOf intern ((List.range 4).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
+            else if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ n ∧ c + 4 * width ≤ n' then
+              let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
               pure (made.1, { s with terms := made.2 })
-            else refuse "sixteen bytes that are not four words of the run"
-          | none => refuse "sixteen bytes of a run given only to write"
-        | none => refuse "sixteen bytes of a run given only to write"
-      | _, _ => refuse "sixteen bytes at a place of a run that is no number"
-    | _ => refuse "sixteen bytes that are of no run of words given to read"
+            else refuse badSize
+          | none => refuse s!"{bytes} bytes of a run given only to write"
+        | none => refuse s!"{bytes} bytes of a run given only to write"
+      | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
+    | _ => refuse s!"{bytes} bytes that are of no run of words given to read"
 
 /-- The two halves of what a general register holds, and two zeros. The low half is the register's number
 as a word. The high half: where the number has no multiple of 2^32 in it, its quotient by 2^32, by a
@@ -841,7 +842,7 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
       match args with
       | [b, n] =>
         match symReg bind s b, symNumber bind n with
-        | some x, some k => symLoad128 ctx s (Lin.add (signed x) (signed (Lin.const k)))
+        | some x, some k => symLoadWords ctx s (Lin.add (signed x) (signed (Lin.const k))) 4
         | _, _ => refuse "sixteen bytes at an address that is not a register and a number of the table"
       | _ => refuse "a row over a vector register of a form that is not read"
     else if f == "words" then
@@ -921,6 +922,14 @@ def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (L
       else refuse "no proof rule for this 512-bit shuffle"
   | _ => refuse "no proof rule for this 512-bit value"
 
+def symLoad512 (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
+  match args with
+  | [b, n] =>
+    match symReg bind s b, symNumber bind n with
+    | some x, some k => symLoadWords ctx s (Lin.add (signed x) (signed (Lin.const k))) 16
+    | _, _ => refuse "a 512-bit load needs a base register and displacement"
+  | _ => refuse "a 512-bit load needs a base register and displacement"
+
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
     match symVec512 bind s (.name n) with
@@ -938,12 +947,33 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       match args with
       | [.name op, a, b] => symEach512 bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
+    else if f == "mem512" then symLoad512 ctx bind s args
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
 /-- Keep only the lanes the machine model preserves across `above128 = unknown`. -/
 def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
   vec.map fun (r, lanes) => (r, if r < 16 then lanes.take 4 else lanes)
+
+/-- Replace the known words at the store's offsets. Other word stores remain in force. -/
+def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
+  { s with intact := s.intact.filter (· != w),
+           wroteW := ((List.range l.length).map fun i => (w, j + i, l.getD i 0)) ++
+                     s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + l.length)) }
+
+def symStoreWords (ctx : Ctx) (s : Sym) (addr : Row) (l : List Nat) (width : Nat) : V Sym :=
+  let bytes := if width = 4 then "sixteen" else "sixty-four"
+  match findOut addr ctx.contract.outs 0 with
+  | some (.out w off) =>
+    match Lin.isConst off, ctx.contract.outs[w]? with
+    | some c, some (_, _, count) =>
+      if !(0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count) then
+        refuse (if width = 4 then "sixteen bytes that are not four words of the run" else "sixty-four bytes that are not sixteen words of the run")
+      else if s.wrote.any (fun e => e.1 == w) then refuse "words written to a run that bytes were written to: not here yet"
+      else if l.length != width then refuse "the vector store's width does not match its known lanes"
+      else pure (rememberStore s w (c.toNat / 4) l)
+    | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
+  | _ => refuse s!"{bytes} bytes written to what is no run given to write"
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s
@@ -955,6 +985,12 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
         let (l, s) ← symLanes512 ctx bind s v
         if l.length == 16 then pure { s with vec := (r, l) :: s.vec } else refuse "expected sixteen lanes"
       | none => refuse "a row that sets what is no 512-bit register"
+    | .call f [b, n] =>
+      if f == "mem512" then
+        match symVec512 bind s v, symReg bind s b, symNumber bind n with
+        | some l, some x, some k => symStoreWords ctx s (Lin.add (signed x) (signed (Lin.const k))) l 16
+        | _, _, _ => refuse "a 512-bit store needs a known register, a base register and a displacement"
+      else refuse "no proof rule for this 512-bit destination"
     | _ => refuse "no proof rule for this 512-bit destination"
   | .vset place v =>
     match place with
@@ -972,21 +1008,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
       -- of it now hold the register's four words
       if f == "mem128" then
         match symVec bind s v, symReg bind s b, symNumber bind n with
-        | some l, some x, some k =>
-          match findOut (Lin.add (signed x) (signed (Lin.const k))) ctx.contract.outs 0 with
-          | some (.out w off) =>
-            match Lin.isConst off, ctx.contract.outs[w]? with
-            | some c, some (_, _, count) =>
-              if !(0 ≤ c ∧ c % 4 = 0 ∧ c + 16 ≤ count) then refuse "sixteen bytes that are not four words of the run"
-              else if s.wrote.any (fun e => e.1 == w) then refuse "words written to a run that bytes were written to: not here yet"
-              else if l.length != 4 then refuse "four words are not four"
-              else
-                let j := c.toNat / 4
-                pure { s with intact := s.intact.filter (· != w),
-                              wroteW := ((List.range 4).map fun i => (w, j + i, l.getD i 0)) ++
-                                        s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + 4)) }
-            | _, _ => refuse "sixteen bytes at a place of a run that is no number"
-          | _ => refuse "sixteen bytes written to what is no run given to write"
+        | some l, some x, some k => symStoreWords ctx s (Lin.add (signed x) (signed (Lin.const k))) l 4
         | _, _, _ => refuse "a store of a vector register whose words are not known, or at an address that is not a register and a number"
       else refuse "a store of a vector register of a form that is not read"
     | _ => refuse "a store of a vector register of a form that is not read"

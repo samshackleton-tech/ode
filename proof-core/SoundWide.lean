@@ -175,9 +175,6 @@ theorem symEach512_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : 
         exact each512_binary_sound H wf hx hy he (fun _ _ => rfl) (fun _ _ _ ok hp hq => wXor_step ok hp hq)
       next => exact (refuse_ok he).elim
 
-theorem getD_index {α : Type} {xs : List α} {k : Nat} (h : k < xs.length) (d : α) : xs.getD k d = xs[k] := by
-  simp only [List.getD, List.getElem?_eq_getElem h, Option.getD_some]
-
 theorem getD_map_index {xs : List Nat} {k : Nat} (h : k < xs.length) (d : Nat → Nat) :
     (xs.map d).getD k 0 = d (xs.getD k 0) := by
   rw [getD_index (by simpa using h), getD_index h, List.getElem_map]
@@ -278,6 +275,36 @@ theorem symShuffle512_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s'
     next => exact (refuse_ok he).elim
   next => exact (refuse_ok h).elim
 
+theorem wideAddress {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : symReg bind s b = some x) (hk : symNumber bind n = some k) :
+    ∃ a, addr512 (ctx.contract.perm s0) bind st "mem512" [b, n] = some a ∧
+      ∀ A : Nat, (A : Int) = ev ρ (Lin.add (signed x) (signed (Lin.const k))) → A < M64 → a = A := by
+  obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+  exact ⟨(xb + k.toNat) % M64, by simp [addr512, vs, sumList], ha⟩
+
+theorem symLoad512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {bind : Bind} {args : List Expr} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symLoad512 ctx bind s args items = .ok ((l, s'), rest)) :
+    ∃ lanes, Carried ctx s0 ρ s ρ s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "mem512" args) = some lanes ∧
+      WideValue ctx s0 ρ s' l lanes := by
+  unfold symLoad512 at h
+  rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨_, _⟩⟩⟩
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp only [hx, hk] at h
+    all_goals try exact (refuse_ok h).elim
+    obtain ⟨a, va, ha⟩ := wideAddress H wf hx hk
+    obtain ⟨al, c, len, lt, dn⟩ := symLoadWords_sound E h H wf (by decide) a ha
+    refine ⟨(List.range 16).map (fun k => load st.mem (a + 4 * k) 4), c, ?_, len, lt, ?_⟩
+    · simp [lanesOf512, va, al]
+    · apply List.ext_getElem
+      · simp [len]
+      · intro k h1 h2
+        have hk : k < 16 := by simpa using h1
+        simp only [List.getElem_map, List.getElem_range]
+        simpa only [getD_index (by rw [len]; exact hk)] using dn k hk
+  · exact (refuse_ok h).elim
+
 theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
     {s s' : Sym} {v : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
     (h : symLanes512 ctx bind s v items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
@@ -328,8 +355,15 @@ theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
             exact ⟨ρ, lanes, c, eval, val⟩
           next => exact (refuse_ok h).elim
         next =>
-          obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
-          exact ⟨ρ, lanes, c, eval, val⟩
+          split at h
+          next hf =>
+            simp only [beq_iff_eq] at hf
+            subst f
+            obtain ⟨lanes, c, eval, val⟩ := symLoad512_sound E H wf h
+            exact ⟨ρ, lanes, c, eval, val⟩
+          next =>
+            obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
+            exact ⟨ρ, lanes, c, eval, val⟩
 
 theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {place v : Expr}
     {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -339,7 +373,32 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   cases place with
   | number _ => simp only [symStmt] at h; exact (refuse_ok h).elim
   | lane _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
-  | call _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
+  | call f args =>
+    rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨_, _⟩⟩⟩
+    · simp only [symStmt] at h; exact (refuse_ok h).elim
+    · simp only [symStmt] at h; exact (refuse_ok h).elim
+    · simp only [symStmt] at h
+      split at h
+      next hf =>
+        simp only [beq_iff_eq] at hf
+        subst f
+        cases hv : symVec512 bind s v <;> cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp only [hv, hx, hk] at h
+        all_goals try exact (refuse_ok h).elim
+        rename_i l x k
+        obtain ⟨len, lt, src⟩ := symVec512_sound H wf hv
+        let d := den (inpOf ctx s0) ρ s.terms
+        let lanes := l.map d
+        have load : lanesOf512 (ctx.contract.perm s0) bind st v = some lanes := by
+          cases v with
+          | name n => exact src
+          | number _ | lane _ _ | call _ _ => simp [vecArg512] at src
+        have hl : lanes.length = 16 := by simp [lanes, len]
+        obtain ⟨a, va, ha⟩ := wideAddress H wf hx hk
+        obtain ⟨al, c⟩ := symStoreWords_sound E H wf (by decide) h ha hl lt (fun j hj => getD_map_index (by omega) d)
+        refine ⟨ρ, _, c, ?_, rfl⟩
+        simp [execStmt, execVec512, load, hl, va, al]
+      next => exact (refuse_ok h).elim
+    · simp only [symStmt] at h; exact (refuse_ok h).elim
   | name n =>
     simp only [symStmt] at h
     cases hr : vecOf512 bind n <;> simp only [hr] at h
