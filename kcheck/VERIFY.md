@@ -76,7 +76,7 @@ file; the verifier uses them and relies on none of them. A wrong one makes the v
   each instruction does; how a specification is read and worked out; how a proof of arithmetic is added up
   (`../core/RULES.md` states the rules they follow).
   They are tested and audited, **not proved**: that is the weakest part of this, and the work under way is
-  to make that list short enough to scrutinize ([DESIGN.md](../DESIGN.md#7-what-the-verifier-establishes-and-why-it-can-be-believed), section 7). On November 17 and 18, 2026 eight faults
+  to make that list short enough to scrutinize ([DESIGN.md](../DESIGN.md#7-what-the-verifier-establishes-and-why-bob-can-be-confident-in-it), section 7). On November 17 and 18, 2026 eight faults
   were found in them by reading, each one a way to have a wrong file shown (a function that wrote below its
   argument; a kernel that read its constants from an address of the maker's choosing; a register taken to
   hold what a call had written over; two unknown registers taken for one; a layout in the proof that let
