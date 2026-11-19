@@ -126,7 +126,7 @@ A highly desirable property of an interface and its contract: the user learns th
 - A **contract** is always the formal text: a **public contract** is what Bob reads, **inner contracts** are steps of a proof, a **full contract** is a contract with every definition it uses. What Bob wants, which may still be changing, is **Bob's intent**.
 - A specification is declarative: say what it defines.
 - **Bob** audits and may be a person, an agent or a team; **Bob's verifier** is his tool; **Carol** maintains; the **coder** writes Ode; the **maker** ships a binary and may be an attacker.
-- Never "trust", "trusted" or "untrusted" (after Mark S. Miller; `DESIGN.md` section 2 has the reasons). Write "A relies on X for P" for what the design is built on by intention, always with the "for what"; write "A is vulnerable to X" for what is left open or for a party who may be an attacker, with the harm. A negative is "does not rely on X for P"; "taken on trust" is "accepted unchecked".
+- Never "trust", "trusted" or "untrusted" (after Mark S. Miller; `DESIGN.md` section 2 has the reasons). Write "A relies on X for P" for what the design is built on by intention, always with the "for what"; write "A is vulnerable to X" for what is left open or for a party who may be an attacker, with the harm. A negative is "does not rely on X for P"; "taken on trust" is "accepted without checking". Each actor has a **reliance set** of his own for each conclusion (Miller, *Robust Composition*, section 5.1); say whose set a thing is in.
 - Name the kind of every fault: **shown, of something false** (soundness, the hard requirement) or **not shown, of something true**.
 
 **Guard soundness first.**

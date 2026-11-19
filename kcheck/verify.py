@@ -10,7 +10,7 @@ It prints, in this order:
   1. what you are asked to rely on: the public contract(s), from SPEC if you give one (your own copy), else
      from the specification the file carries, with that text's BLAKE3 hash. Read it: it is what is shown.
   2. the verification itself (check_binary.py for the hash, programs/check_file.py for the others), which
-     reads the file's bytes as a loader maps them and accepts nothing else from the file unchecked;
+     reads the file's bytes as a loader maps them and accepts nothing else from the file without checking it;
   3. what ran: every file of this folder (and of ../core) that was loaded to reach the verdict, with its lines of code
      (and, with --digests, its BLAKE3 hash). That list is what you relied on, beside Python itself. The prover's files are not on it.
 

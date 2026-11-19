@@ -8,7 +8,7 @@
 
 What is to be shown is written from each OBJECT's bytes and SPEC's text (statement.py); PROOF is the
 maker's and adds nothing to it. Every function that one of the functions calls must be among them: a call
-is taken by the contract of a function that is itself shown, never unchecked. The verifier (Core.lean, built
+is taken by the contract of a function that is itself shown, never by one accepted without checking. The verifier (Core.lean, built
 by `lake build`) says `shown` of all of them, or why not. Exit 0 only for shown. README.md says what a
 `shown` rests on, and what it does not cover."""
 import os, re, shutil, subprocess, sys, tempfile

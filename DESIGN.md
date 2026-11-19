@@ -72,7 +72,8 @@ We say *rely*, after Mark S. Miller: reliance names a property of a mechanism th
 points at what breaks if the property fails. We do not use the word "trust". In ordinary life it names
 something good; in security writing a "trusted" part is one that can hurt you; and it draws attention to
 the nature of the part and away from the question that matters: relied on *for what*? Two sentences take
-its place, and they state one fact from two sides.
+its place, and they state one fact from two sides. (Miller defines "relies upon" as dependence that a
+specification allows, on top of the plain fact "is vulnerable to"; the two uses below follow him.)
 
 - **"A relies on X for P"** is for what the design is built on by intention: P is something X is there
   to deliver, and the reader is asked to examine X or to have a reason for believing P. The table below is
@@ -85,11 +86,20 @@ its place, and they state one fact from two sides.
 for the small core that Bob is asked to examine would hide the open exposures among alarms. A negative
 takes the first form: "the verdict does not rely on the prover" claims exactly what the verifier's
 checking gives, while "Bob is not vulnerable to the prover" would claim more than is so, since a prover
-can still withhold a proof. Where other writing says "trusted computing base", this page says what Bob
-relies on; where it says "untrusted", this page says what the verdict does not rely on.
+can still withhold a proof.
 
-The list of what Bob relies on follows. Bob's conclusion "this binary does what I require" rests on
-the entries below and on nothing else. The compiler, the assembler, the linker, the prover, the coder and
+Everything an actor relies on for a conclusion is that actor's **reliance set** (Miller, *Robust
+Composition*, 2006, section 5.1: "We will refer to the set of all elements on which P relies as P's
+reliance set"). Two actors can have different reliance sets. The maker relies on the prover for getting a
+proof at all; Bob relies on the prover for nothing. Two Bobs can differ as well: section 7 gives each Bob
+a choice of what to rely on for the verifier's soundness. What lies in the reliance sets of all of them
+is, in Miller's words, a central point of failure, and is what most needs to be small and checkable. The
+older term "trusted computing base" is used for a reliance set, for a platform, and for that
+intersection, and does not say which.
+
+The table below lists the properties every Bob relies on. For R1 the things that deliver the property
+differ from Bob to Bob (section 7), and their reliance sets differ with them. Bob's conclusion "this
+binary does what I require" rests on the entries below and on nothing else. The compiler, the assembler, the linker, the prover, the coder and
 the maker are absent from the list: whatever they produce is accepted only where the verifier accepts it.
 
 | | Bob relies on | why it cannot be removed | what keeps it small and honest |
@@ -252,9 +262,9 @@ chosen registers, the aligned scratch) and proof (the bounds, the invariant, the
 
 Two rules bound this:
 
-- **An annotation creates an obligation; facts come only from what the verifier has shown.** Nothing
-  in a proof (inner contracts, layouts, lemmas, kinds, places) is relied on as given. The verifier may use
-  it only after showing it, and describing an impossible thing gives the verifier no value of that thing.
+- **An annotation creates an obligation; facts come only from what the verifier has shown.** The verifier relies on
+  nothing in a proof (inner contracts, layouts, lemmas, kinds, places) before it has shown it. It may use
+  each of them only after showing it, and describing an impossible thing gives the verifier no value of that thing.
 - **The final verdict is about the binary.** A proof about source says nothing of a compiler that emitted
   something else. A verifier of Ode *source* is wanted as the coder's tool, for exact messages early; the
   verifier of the binary stays Bob's.

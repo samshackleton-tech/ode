@@ -129,7 +129,7 @@ class Binary(unittest.TestCase):
             import kspec, kfn, ode
             kspec.SPEC = ode.load(); kfn.CONTRACTS.clear(); check_binary.PLACES.clear()
 
-    def test_a_kind_the_proof_gives_a_definition_is_not_accepted_unchecked(self):
+    def test_a_kind_the_proof_gives_a_definition_is_not_accepted_without_checking(self):
         """The proof's part says of three definitions what kind of thing each is (`kind subtree: cv`), for the
         places where a definition is named and not gone into. Specifications in which that is not so (a tree's
         value of nine words, or seven; a padded block of 63 bytes; a node whose length may be 65): the function

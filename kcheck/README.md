@@ -1308,7 +1308,7 @@ change, with the processor as judge (`kglue_flip.py`, `audit/kglue-flip-*.txt`):
 **What that audit found.** Run first, it had 24 changes of `merge` accepted that the processor told from the
 machine: all in `mov rdx, 64`, the block length given to the kernel. I had written the two kernels' contract
 by hand as "the low byte of the length"; the SSE4.1 kernel reads all of EDX. The contract was wrong, not the
-verifier's logic: a callee's contract accepted unchecked is a hole until it is itself checked against the callee's
+verifier's logic: a callee's contract accepted without checking is a hole until it is itself checked against the callee's
 bytes (the Lean proofs have it right for that reason). Reading the accepted changes then showed a second
 thing: `mov rcx, 5` (the platform word that selects the AVX-512 kernel) could become any number, and the
 AVX-512 kernel be called on a machine without it, with the contract none the wiser. The contract now says the
@@ -1506,13 +1506,13 @@ an 8-bit `or` read as 32 bits.
 For the whole hash the two are not of the same code: Lean checked the earlier code (`levels/levels.ode`:
 `ladd`, `lroot`, `chunk_node`, `hashl`, and the fast path `wide`, `group`, `groupf`, `finish`, `hashw`,
 `hashf`), each function from a proof with invariants and lemmas written by hand, and with the 32-lane kernel
-accepted unchecked (a stand-in). A whole run of those chains on the workhorse, 12 at a time, took 3,120 s
+accepted without checking (a stand-in). A whole run of those chains on the workhorse, 12 at a time, took 3,120 s
 (`hashw` alone 1,360 s, `hashl` 690 s, `groupf` 630 s; pinned run `wide-model-check4`, November 15: every
 chain checked but one, a listing compared across two versions of `llvm-objdump`, which is not a proof).
 Written by hand for that code, beside its 924 lines of source with their invariants: fourteen files of
 lemmas (`lang/Lemmas_*.lean`, 2,516 lines), the contracts in Lean (`lang/Spec_*.lean`), and the tree's part
 (`alg/`). Here `hash.ode` is 332 lines with no invariant and no lemma; its eight inner contracts are 56
-lines of `proofs/inner.spec` (and two layouts and three kinds); nothing about a callee is accepted unchecked; and
+lines of `proofs/inner.spec` (and two layouts and three kinds); nothing about a callee is accepted without checking; and
 `check_all.py` takes 19 s on a laptop.
 
 Also tried the same day: SAW 1.6 on P16 with a Cryptol specification stops at the kernel's first AVX-512

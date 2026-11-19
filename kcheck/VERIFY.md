@@ -81,7 +81,7 @@ file; the verifier uses them and relies on none of them. A wrong one makes the v
   argument; a kernel that read its constants from an address of the maker's choosing; a register taken to
   hold what a call had written over; two unknown registers taken for one; a layout in the proof that let
   writes run past a caller's room or deleted a path from checking; a sequence whose value changed shape
-  being named by its first value; a call that left an unread address argument unchecked against the callee's
+  being named by its first value; a call that did not check an address argument the function never reads against the callee's
   frame, assumed uninitialized fields of a written layout, or invented layout bounds after `writes`; a stack
   slot named outside the frame in a byte program's proof). They are closed, and the copies that were wrongly
   shown are kept as tests (`test_kholes.py`);

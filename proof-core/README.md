@@ -189,17 +189,36 @@ The kernel's loop runs seven times, counted down in a one-byte register. The ver
 counter as a known number, so it executes the seven iterations one after the other. No loop invariant is
 needed.
 
-## What a verdict relies on, and for what
+## Reliance sets: who relies on what, and for what
 
-Suppose the verifier accepts a function. The table lists everything that must be right for the function
-really to meet its contract on a real processor, and says what each thing is relied on for.
+A *reliance set* belongs to one reader and one conclusion. It is everything that must work correctly for
+that reader's conclusion to be right. The term is Mark S. Miller's; [DESIGN.md](../DESIGN.md) section 2
+says more. The conclusion here is: "the verifier accepted this function, so the function meets its
+contract on a real processor". Two readers can have different reliance sets for it, because there is more
+than one way to become confident in the verifier's rules.
 
-| A verdict relies on | for | How you can check it |
+**In every reader's reliance set.** No reader can avoid these two.
+
+| A reader relies on | for | How it can be checked |
 |---|---|---|
-| The verifier's rules: Core.lean (1,304 lines of code) and the arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. | accepting only what the formal model implies | It is proved: the soundness theorem above, which Lean checks. You need not read these files. |
-| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 731 lines of code. | saying what the processor does and what a contract means. This is what the theorem is *about* | Read it, or have another reason to believe it. Parts of it are tested against second implementations: see the first list below. |
-| Lean's kernel | the Lean proofs being valid | An independent checker of Lean proofs can check them again. We have not yet run one on these proofs. |
+| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 731 lines of code. | saying what the processor does and what a contract means. This is what the soundness theorem is *about* | Read it. Parts of it are tested against second implementations: see the first list below. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
+
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,304 lines of code) and the
+arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
+for accepting only what the formal model implies.
+
+| A reader who | relies on | and does not rely on |
+|---|---|---|
+| accepts Lean's proof checker | Lean's kernel, for the soundness theorem above really being proved. An independent checker of Lean proofs can check the proofs again. We have not yet run one on them. | his own reading of Core.lean. He need not read it. |
+| does not accept it | his own reading of Core.lean and Arithmetic.lean | Lean |
+
+Two more ways are planned and not built: a second verifier written independently, and a verifier written
+in Ode that verifies itself ([DESIGN.md](../DESIGN.md) sections 7 and 12).
+
+**In no reader's reliance set:** the prover, the compiler, the assembler and the author. Whatever they
+produce is checked. They are in the *author's* reliance set, for another conclusion: "my function will be
+accepted".
 
 Tested but not proved:
 
@@ -215,7 +234,7 @@ Tested but not proved:
 - **The arithmetic rule against a second implementation**, `../kcheck/varith.py`, on the 7,649 arithmetic
   proofs in the shipped files (`test_arith.py`).
 
-Outside the theorem. A verdict relies on each of these today, for what its entry says:
+Outside the theorem. Every reader relies on each of these today, for what its entry says:
 
 - **Decoding bytes into instructions.** The theorem is about functions given as a list of instruction
   forms from the table. Turning the object file's bytes into that list is done by `statement.py` using
