@@ -262,13 +262,9 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     have m2' : sp ≤ o := by simpa using m2
     obtain ⟨h1, h2, h3⟩ := H'.frame o v m1
     refine ⟨h1, h2, ?_⟩
-    rw [← h3]
-    congr 1
-    apply load_congr
-    intro x hx1 hx2
-    apply hmem
-    right
-    omega
+    have e : load s2.mem ((s0.reg RSP : Int) + o).toNat 8 = load st.mem ((s0.reg RSP : Int) + o).toNat 8 :=
+      load_congr _ _ _ _ (fun x hx1 hx2 => hmem x (Or.inr (by omega)))
+    rw [e]; exact h3
   · intro f m
     simp only [Sym.afterCall, List.mem_append] at m
     rcases m with m | m

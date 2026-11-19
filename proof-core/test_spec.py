@@ -164,13 +164,23 @@ class Spec(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): shutil.rmtree(cls.dir)
 
-    def answers(self, defs_text, lines):
-        """What `odespec` says of each case line, as it writes it."""
-        defs, path = os.path.join(self.dir, "rich.defs"), os.path.join(self.dir, "rich.cases")
+    def answers(self, defs_text, lines, jobs=1):
+        """What `odespec` says of each case line, as it writes it. `jobs`: so many runs of `odespec` side by
+        side, each with every `jobs`-th line (the answers are put back in the lines' order)."""
+        defs = os.path.join(self.dir, "rich.defs")
         with open(defs, "w") as f: f.write("\n".join(statement.definitions(defs_text)) + "\n")
-        with open(path, "w") as f: f.write("\n".join(lines) + "\n")
-        out = subprocess.run([os.path.join(HERE, ".lake", "build", "bin", "odespec"), defs, path], capture_output=True, text=True, check=True).stdout.split("\n")[:len(lines)]
-        self.assertEqual(len(out), len(lines))
+        runs = []
+        for j in range(min(jobs, len(lines))):
+            mine = lines[j::jobs]
+            path = os.path.join(self.dir, f"rich.{j}.cases")
+            with open(path, "w") as f: f.write("\n".join(mine) + "\n")
+            runs.append((j, len(mine), subprocess.Popen([os.path.join(HERE, ".lake", "build", "bin", "odespec"), defs, path], stdout=subprocess.PIPE, text=True)))
+        out = [None] * len(lines)
+        for j, count, run in runs:
+            said = run.communicate()[0].split("\n")[:count]
+            self.assertEqual((run.returncode, len(said)), (0, count))
+            out[j::jobs] = said
+        self.assertNotIn(None, out)
         return out
 
     def test_words_lists_records_and_sequences_mean_the_same(self):
@@ -224,7 +234,7 @@ class Spec(unittest.TestCase):
                       f"m=b:{m} c=b:{context} | (call blake3_derive_key (name c) (name m))"]
             want += ["bytes " + c["hash"][:64], "bytes " + c["keyed_hash"][:64], "bytes " + c["derive_key"][:64]]
         self.assertEqual(len(lines), 105)
-        got = self.answers(text, lines)
+        got = self.answers(text, lines, jobs=min(12, os.cpu_count() or 1))        # (a tenth of the work is the longest vector)
         for i, (w, g) in enumerate(zip(want, got)): self.assertEqual(w, g, f"vector {i // 3} ({v['cases'][i // 3]['input_len']} bytes), mode {i % 3}")
         # a control: the specification with one number of it changed gives other hashes
         changed = text.replace("let b1 = (v[b] ^ c1) >>> 12", "let b1 = (v[b] ^ c1) >>> 11")

@@ -949,7 +949,6 @@ theorem lookup_cons_cases {x r : Nat} {l ids : List Nat} {more : List (Nat × Li
     simp only [List.lookup, ne] at h
     exact h
 
-set_option maxHeartbeats 2000000 in
 /-- Four words of a vector register stored into a run given to write, at a place divisible by four: the
 run's words there are now the register's terms; what was known of other words and other runs is still so. -/
 theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
@@ -975,11 +974,12 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     refine ⟨g1, g2, ?_⟩
     have hs := E.stack
     have ho := (E.out (List.mem_of_getElem? hw)).2
-    rw [← g3]
-    congr 1
-    apply load_congr
-    intro y h1 h2
-    exact store4_other _ _ _ _ _ _ _ (by omega)
+    have e : load (store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4)
+          (a + 12) (st.vec rv 3) 4) ((s0.reg RSP : Int) + o').toNat 8 = load st.mem ((s0.reg RSP : Int) + o').toNat 8 :=
+      load_congr _ _ _ _ (fun y h1 h2 => store4_other _ _ _ _ _ _ _ (by omega))
+    show ((load (store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4)
+          (a + 12) (st.vec rv 3) 4) ((s0.reg RSP : Int) + o').toNat 8 : Nat) : Int) = ev ρ v
+    rw [e]; exact g3
   mem y hy ho' := by
     show store (store (store (store st.mem a (st.vec rv 0) 4) (a + 4) (st.vec rv 1) 4) (a + 8) (st.vec rv 2) 4) (a + 12) (st.vec rv 3) 4 y = s0.mem y
     have hne : y < a ∨ a + 16 ≤ y := by
