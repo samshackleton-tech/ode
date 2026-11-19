@@ -1038,6 +1038,17 @@ theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {
     · refine ⟨by rw [ex]; exact Int.natCast_nonneg _, by rw [ey]; exact Int.natCast_nonneg _, ?_⟩
       rw [new, ex, ey]; simp
 
+/-- The 64-bit mask ending in six zero bits rounds an address down to a multiple of 64. -/
+theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64) := by
+  have div : (x &&& (M64 - 64)) / 64 = x / 64 := by
+    change (x &&& (M64 - 64)) / 2 ^ 6 = _
+    rw [Nat.and_div_two_pow, show (M64 - 64) / (2 ^ 6) = 2 ^ 58 - 1 by decide]
+    exact Nat.and_two_pow_sub_one_of_lt_two_pow (by unfold M64 at hx; omega)
+  have rem : (x &&& (M64 - 64)) % 64 = 0 := by
+    change (x &&& (M64 - 64)) % (2 ^ 6) = 0
+    rw [Nat.and_mod_two_pow, show (M64 - 64) % (2 ^ 6) = 0 by decide, Nat.and_zero]
+  omega
+
 theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
@@ -1191,26 +1202,41 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
                 | none => simp only [hk] at h; exact (refuse_ok h).elim
                 | some m =>
                   simp only [hk] at h
-                  cases hfind : (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
-                  | none => simp only [hfind] at h; exact (refuse_ok h).elim
-                  | some k =>
-                    simp only [hfind] at h
+                  have ym : (xb : Int) = m := by rw [hy2]; exact ev_isConst hk
+                  split at h
+                  next hm =>
+                    simp only [beq_iff_eq] at hm
+                    have xbm : xb = M64 - 64 := by unfold M64; omega
+                    subst xb
                     have := V.pure_ok h
                     injection this with hp _
                     injection hp with h1 h2
                     subst h1 h2
-                    have hm : (2 : Int) ^ k - 1 = m := by simpa using List.find?_some hfind
-                    have ym : (xb : Int) = m := by rw [hy2]; exact ev_isConst hk
-                    have pos : (0 : Int) < 2 ^ k := Int.pow_pos (by decide)
-                    have cast : ((2 ^ k : Nat) : Int) = (2 : Int) ^ k := by simp
-                    have xbk : xb = 2 ^ k - 1 := by
-                      have := Nat.two_pow_pos k
-                      omega
-                    subst xbk
-                    obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
-                    have lt : xa % 2 ^ k < M64 := Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1'
-                    refine ⟨ρ', c, (xa &&& (2 ^ k - 1)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, br⟩
-                    rw [hr, ← hx2, Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt lt, Int.natCast_emod, cast]
+                    obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := 64) H wf hx3 (by decide) (by rw [← hx2]; omega)
+                    have lt : 64 * (xa / 64) < M64 := by unfold M64 at hx1' ⊢; omega
+                    refine ⟨ρ', c, (xa &&& (M64 - 64)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale 64 bq⟩
+                    rw [align64_mask hx1', Nat.mod_eq_of_lt lt, ev_scale, hq, ← hx2]
+                    simp [Int.natCast_ediv]
+                  next =>
+                    cases hfind : (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
+                    | none => simp only [hfind] at h; exact (refuse_ok h).elim
+                    | some k =>
+                      simp only [hfind] at h
+                      have := V.pure_ok h
+                      injection this with hp _
+                      injection hp with h1 h2
+                      subst h1 h2
+                      have hm : (2 : Int) ^ k - 1 = m := by simpa using List.find?_some hfind
+                      have pos : (0 : Int) < 2 ^ k := Int.pow_pos (by decide)
+                      have cast : ((2 ^ k : Nat) : Int) = (2 : Int) ^ k := by simp
+                      have xbk : xb = 2 ^ k - 1 := by
+                        have := Nat.two_pow_pos k
+                        omega
+                      subst xbk
+                      obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
+                      have lt : xa % 2 ^ k < M64 := Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1'
+                      refine ⟨ρ', c, (xa &&& (2 ^ k - 1)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, br⟩
+                      rw [hr, ← hx2, Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt lt, Int.natCast_emod, cast]
               next =>
                 split at h
                 next hc8 =>

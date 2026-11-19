@@ -40,10 +40,41 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     | jump _ _ => simp only [execAll, x1]; exact x2
     | call _ => simp only [execAll, x1]; exact x2
 
+theorem entails_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
+    ∀ {goals : List Row} {items rest : Items}, each (entail facts) goals items = .ok ((), rest) →
+      ∀ g ∈ goals, g.holds ρ
+  | [], _, _, _, _, m => by simp at m
+  | k :: more, _, _, h, g, m => by
+    simp only [each] at h
+    obtain ⟨_, _, hk, hm⟩ := V.bind_ok h
+    rcases List.mem_cons.mp m with rfl | m
+    · exact entail_sound hk ρ hf
+    · exact entails_sound hf hm g m
+
+theorem stackGoals_bounded {ctx : Ctx} {s : Sym} (wf : WF s) {g : Row} (m : g ∈ stackGoals ctx s) : bounded s.nvars g := by
+  have off := bounded_sub (wf.reg RSP (by decide)) (bounded_var (x := RSP) (Nat.lt_of_lt_of_le (by decide) wf.base))
+  simp only [stackGoals, List.mem_cons, List.mem_map] at m
+  rcases m with rfl | rfl | ⟨⟨o, v⟩, _, rfl⟩
+  · exact bounded_add off (bounded_const _ _)
+  · exact bounded_scale (-1) off
+  · exact bounded_sub (bounded_const _ _) off
+
 theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : settle ctx s items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
   cases hsp : s.sp with
-  | none => simp only [settle, hsp] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [settle, hsp] at h
+    obtain ⟨q, _, hc, he⟩ := V.bind_ok h
+    cases q
+    have hs := V.pure_ok he
+    injection hs with heq _; subst s'
+    exact ⟨Agree.refl _ _, Nat.le_refl _,
+      ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
+       fun g m => (List.mem_append.mp m).elim (entails_sound H.facts hc g) (H.facts g),
+       H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩,
+      ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
+       fun _ m => (List.mem_append.mp m).elim (fun mg => stackGoals_bounded wf (List.mem_filter.mp mg).1) (wf.facts _),
+       wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩⟩
   | some sp =>
     simp only [settle, hsp] at h
     split at h

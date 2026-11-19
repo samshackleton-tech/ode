@@ -10,7 +10,8 @@ with a line the account in Lean says nothing of is refused before the verifier s
 import os, shutil, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import prove, statement
+sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+import lean_verify, odec, prove, statement
 import built
 COMMON = os.path.join(HERE, "..", "kcheck", "programs", "common")
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
@@ -194,9 +195,14 @@ class Verify(unittest.TestCase):
         self.assertIn("no proof rule", self.wide([".zload true 0 .rsi 0"], buffers))
         self.assertIn("no proof rule", self.wide([*ops[:2], ".zstore true .rdi 0 0"], buffers))
 
+    def build_one(self, name, source):
+        src, obj = (os.path.join(self.dir, name + suffix) for suffix in (".ode", ".o"))
+        with open(src, "w") as f:
+            f.write(source)
+        odec.build(src, name, obj)
+        return obj
+
     def test_wide_add_from_object_bytes(self):
-        sys.path.insert(0, os.path.join(HERE, "..", "lang"))
-        import lean_verify, odec
         source = """fn wide_add as "wide_add" {
   vmovdqu32 zmm0, zmmword ptr [rsi]
   vmovdqu32 zmm1, zmmword ptr [rdx]
@@ -215,16 +221,50 @@ contract wide_add(out: block, a: block, b: block) {
   trace depends on out, a, b
 }
 """
-        src, obj, proof = (os.path.join(self.dir, name) for name in ("wide_add.ode", "wide_add.o", "wide_add.proof"))
+        proof = os.path.join(self.dir, "wide_add.proof")
         with open(proof, "w") as f:
             f.write("for wide_add\n")
         for operand, want in (("zmm1", True), ("zmm0", False)):
             with self.subTest(operand=operand):
-                with open(src, "w") as f:
-                    f.write(source.replace("vpaddd zmm2, zmm0, zmm1", f"vpaddd zmm2, zmm0, {operand}"))
-                odec.build(src, "wide_add", obj)
+                obj = self.build_one("wide_add", source.replace("vpaddd zmm2, zmm0, zmm1", f"vpaddd zmm2, zmm0, {operand}"))
                 shown, said = lean_verify.verify(spec, [(obj, "wide_add")], proof)
                 self.assertEqual(shown, want, said)
+
+    def test_stack_realignment_and_restore(self):
+        source = """fn stack_align as "stack_align" {
+  push rbp
+  mov rbp, rsp
+  push rbx
+  and rsp, -64
+  sub rsp, 256
+  mov rbx, 1
+  lea rsp, [rbp - 8]
+  pop rbx
+  pop rbp
+  mov rax, 42
+  ret
+}
+"""
+        # Two pushes, at most 63 bytes of rounding, and 256 more bytes.
+        spec = "contract stack_align() {\n  returns 42\n  stack 335\n}\n"
+        obj = self.build_one("stack_align", source)
+        st, pf = (os.path.join(self.dir, f"stack_align.{kind}") for kind in ("statement", "proof"))
+        self.assertIn("stack_align", prove.prove(spec, [(obj, "stack_align", "")], st, pf))
+        self.assertEqual(lean_verify.verify(spec, [(obj, "stack_align")], pf), (True, "shown"))
+        with open(pf, "rb") as f:
+            kept = f.read()
+        padded = self.build_one("stack_align", source.replace("  mov rbx, 1\n", "  nop\n" * 80 + "  mov rbx, 1\n"))
+        prove.prove(spec, [(padded, "stack_align", "")], st, pf)
+        with open(pf, "rb") as f:
+            self.assertEqual(f.read(), kept)
+        with self.assertRaisesRegex(SystemExit, "need entail"):
+            prove.prove(spec.replace("stack 335", "stack 334"), [(padded, "stack_align", "")], st, pf)
+        # This stack adjustment can put the saved RBX below RSP, even while RSP remains in the frame.
+        lost = self.build_one("stack_align", source.replace("sub rsp, 256", "add rsp, 8"))
+        with self.assertRaisesRegex(SystemExit, "need entail"):
+            prove.prove(spec, [(lost, "stack_align", "")], st, pf)
+        wrong = self.build_one("stack_align", source.replace("pop rbx", "pop r12"))
+        self.assertFalse(lean_verify.verify(spec, [(wrong, "stack_align")], pf)[0])
 
     def test_indexed_wide_load_and_broadcast_from_memory(self):
         buffers = ("arg out out 64", "arg a fixed 68")
@@ -270,7 +310,6 @@ contract wide_add(out: block, a: block, b: block) {
         self.assertTrue(self.run_files(path, self.proof).startswith("refused: a line of a proof in the statement"))
 
     def test_the_kept_proof_shows_from_the_files(self):
-        import lean_verify
         obj, kept = os.path.join(COMMON, "odecommon.o"), os.path.join(HERE, "proofs", "ode_common.proof")
         self.assertEqual(lean_verify.verify(self.spec, [(obj, "ode_common")], kept), (True, "shown"))
         self.assertEqual(self.spec.count("stack 40"), 1)

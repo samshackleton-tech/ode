@@ -242,7 +242,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,696 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,707 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -408,8 +408,16 @@ A broadcast can read one word from a buffer and repeat it in every lane. A store
 at exactly the words it replaces. These load rules reject a read from a buffer after a store to it.
 
 A test verifies a six-instruction function from its object file against a contract that adds sixteen
-pairs of words. It refuses a version that reads both operands from the same vector. The 16-way kernel
-still needs rules for aligned stack access, indirect loads through its pointer array, and its loop.
+pairs of words. It refuses a version that reads both operands from the same vector.
+
+The verifier can also follow an `and` that rounds the stack pointer down to a 64-byte boundary. When
+the exact offset from the entry stack pointer is unknown, the proof must show that the new pointer
+stays within the frame and that any saved words stay at or above it. The verifier records those facts
+rather than asking for the same proof at each instruction. A test checks the same proof with and
+without 80 intervening instructions that do not change the stack pointer.
+
+The 16-way kernel still needs rules for its aligned stack loads and stores, indirect loads through its
+pointer array, and its loop.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -580,8 +588,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 807 lines. The verifier: 1,855 lines (Core.lean 1,696, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,246 lines.
+**Code size.** The formal model: 807 lines. The verifier: 1,866 lines (Core.lean 1,707, Arithmetic.lean
+159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,299 lines.
 
 ## The files
 

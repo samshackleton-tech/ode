@@ -620,12 +620,17 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "and64" then
-    -- the bits below a power of two (an and with one less than it): the remainder by it
     match Lin.isConst y with
     | some m =>
-      match (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
-      | some k => pure (.lin (symDivide s x (2 ^ k)).2.1, (symDivide s x (2 ^ k)).2.2)
-      | none => refuse "an and with a number that is not one less than a power of two: not here yet"
+      if m == 2 ^ 64 - 64 then
+        -- Round down to a 64-byte boundary, keeping the quotient explicit.
+        let d := symDivide s x 64
+        pure (.lin (Lin.scale 64 d.1), d.2.2)
+      else
+        -- A mask of low bits takes the remainder by a power of two.
+        match (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
+        | some k => pure (.lin (symDivide s x (2 ^ k)).2.1, (symDivide s x (2 ^ k)).2.2)
+        | none => refuse "no proof rule for this AND mask"
     | none => refuse "an and with what is no number of the table: not here yet"
   else if f == "sub8" then
     -- a byte less a byte, wrapping: the remainder by 256 of the one, and 256, less the other's low byte
@@ -1085,12 +1090,22 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
 
 /-- After an instruction: the stack pointer is in the frame the contract allows, and nothing is remembered
 below it. -/
+def stackGoals (ctx : Ctx) (s : Sym) : List Row :=
+  let off := Lin.sub (s.reg RSP) (Lin.var RSP)
+  Lin.add off (Lin.const ctx.contract.stack) :: Lin.scale (-1) off ::
+    s.frame.map fun (o, _) => Lin.sub (Lin.const o) off
+
 def settle (ctx : Ctx) (s : Sym) : V Sym :=
   match s.sp with
   | some sp =>
     if sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp then pure { s with frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
     else refuse "the stack pointer leaves the frame the contract allows"
-  | none => refuse "the stack pointer is not in the frame"
+  | none => do
+    -- Every saved word must remain at or above the stack pointer. Remember these facts so
+    -- instructions that leave the stack pointer in place do not need another copy of the proofs.
+    let missing := (stackGoals ctx s).filter fun g => !plain s.facts g
+    each (entail s.facts) missing
+    pure { s with facts := missing ++ s.facts }
 
 def constBelowZero (r : Row) : Bool :=
   match Lin.isConst r with
