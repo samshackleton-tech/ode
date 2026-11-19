@@ -22,6 +22,9 @@ where the AVX-512 kernel takes 20 ms as the thirteenth of a whole run. The small
 shown in the same run). Its kept proof is its own three lines; the run measured is of the three functions,
 against kcheck's times for the three, one after the other.
 
+The 16-way kernel (`blake3_servil_avx512_p16`, for every count of blocks, by its loop's place) is measured
+the same way as the one-block kernels: kcheck's verifier with it as the only function verified in a process.
+
 On November 18 the Lean verifier was five and six times slower on the two larger functions, and it was
 seen only when the times were measured for a report. This test is so that it is seen at once.
 
@@ -29,7 +32,7 @@ seen only when the times were measured for a report. This test is so that it is 
 import os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import built, lean_verify, statement, test_kernel, test_node
+import built, lean_verify, statement, test_kernel, test_node, test_p16
 KCHECK = os.path.join(HERE, "..", "kcheck")
 PROGRAMS = os.path.join(KCHECK, "programs")
 # (the folder of ../kcheck/programs, the object, the specification, the function)
@@ -124,6 +127,29 @@ class Limits(unittest.TestCase):
         with self.subTest(symbol=test_node.NODE):
             self.assertLessEqual(size, SIZE)
             self.assertTrue(lean <= SMALL or lean <= TIMES * three, f"b3l_node_out: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * three:.1f} ms")
+        # the 16-way kernel, for every count of blocks
+        size = os.path.getsize(os.path.join(HERE, "proofs", test_p16.NAME + ".proof"))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "statement")
+            with open(path, "w") as f: f.write("\n".join(statement.statement(test_p16.spec_text(), [(test_p16.OBJ, test_p16.NAME)])) + "\n")
+            lean = None
+            for _ in range(7):
+                t = time.time()
+                r = subprocess.run([lean_verify.EXE, lean_verify.TABLE, path, os.path.join(HERE, "proofs", test_p16.NAME + ".proof")], capture_output=True, text=True)
+                took = time.time() - t
+                self.assertEqual(r.stdout, "shown\n", test_p16.NAME)
+                lean = took if lean is None else min(lean, took)
+        python = None
+        for _ in range(5):
+            r = subprocess.run([sys.executable, "-c", ONE, KCHECK, test_p16.OBJ, test_p16.NAME], capture_output=True, text=True)
+            said = r.stdout.split(None, 2)
+            self.assertEqual((r.returncode, said[0], said[2]), (0, "460", "a wide kernel: every number of blocks, by induction at the place its proof names\n"), (r.stdout[-300:], r.stderr[-300:]))
+            took = float(said[1]) / 1000
+            python = took if python is None else min(python, took)
+        lines.append(f"  {'the 16-way kernel':<20} the proof {size:>6} bytes; the Lean verifier {1000 * lean:6.1f} ms; kcheck's {1000 * python:5.1f} ms; {lean / python:4.1f} times")
+        with self.subTest(symbol=test_p16.NAME):
+            self.assertLessEqual(size, SIZE)
+            self.assertTrue(lean <= SMALL or lean <= TIMES * python, f"the 16-way kernel: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * python:.1f} ms")
         print("\nthe limits (a proof under 100 kB; verifying no more than five times kcheck's time):\n" + "\n".join(lines), file=sys.stderr)
 
 

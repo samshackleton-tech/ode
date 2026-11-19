@@ -410,10 +410,10 @@ reproduces the 105 official test vectors.
 
 As of November 19, 2026 it verifies five of the twelve small shipped functions, a function that calls one
 of them, and four of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
-compresses one block (proofs of 131 and 137 bytes, verified in 12 and 13 ms); `b3l_node_out`, which
+compresses one block (proofs of 131 and 137 bytes, verified in 5 ms each); `b3l_node_out`, which
 reads a 120-byte node record and calls one of them (a 38-byte proof, verified together with both kernels
-in 22 ms); and the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
-in 1.1 s). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
+in 7 ms); and the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
+in 0.37 s). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
 
 That page also says what is left out. Reading the object file and the text of the specification happens
 outside the theorem. So do the link step and the check of which processor features a function needs. The

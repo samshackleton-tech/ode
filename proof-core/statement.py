@@ -125,6 +125,17 @@ def definition_lines(name, params, body, seqs, consts):
             text += f"(let {s[1]} {sexp(s[2], seqs, scope)} "; closing += 1
             scope = Scope(consts, scope.given | {s[1]}, lifted, name)
         elif s[0] == "expr": text += sexp(s[1], seqs, scope) + ")" * closing
+    # A sequence's value at a place that is a number, used more than once (`s[7][i] ^ s[7][i + 8]`), is had
+    # once, by a `let` around the whole (the name `s.7` is none a specification can write). So where the
+    # sequence is of the definition's own things alone: they are given before anything else. (The value is
+    # then asked for even where no use of it would have been reached: the definition has no fewer values
+    # for that in ../kcheck/ode.py than here, and where it has none here nothing is shown.)
+    for s in local:
+        if not set(things) <= set(params): continue
+        head = "(call " + " ".join([f"{name}.{s}"] + [f"(name {x})" for x in things]) + " (num "
+        for k in sorted({int(part.split(")")[0]) for part in text.split(head)[1:]}):
+            use = f"{head}{k}))"
+            if text.count(use) > 1: text = f"(let {s}.{k} {use} " + text.replace(use, f"(name {s}.{k})") + ")"
     out.append(" ".join(["def", name] + params + ["=", text]))
     # its sequences
     for s, eqs in local.items():

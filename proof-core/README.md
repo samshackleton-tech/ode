@@ -69,10 +69,10 @@ The functions it verifies today:
 | `ode_adler32_blocks` | Adler-32, reducing once per block of up to 5552 bytes, by shifts and masks | 116 instructions, 2 nested loops | 1,154 lines, 15 kB | 14 ms |
 | `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | 1,815 lines, 23 kB | 22 ms |
 | `ode_varint` | encodes a number as a varint into a 10-byte buffer supplied by the caller; returns the length | 35 instructions, 1 loop of at most 10 iterations | 79 lines, 453 bytes | 5 ms |
-| `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 12 ms |
-| `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 13 ms |
-| `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 22 ms with both kernels |
-| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 1.1 s |
+| `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
+| `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
+| `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
+| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.37 s |
 
 `ode_equal`, `ode_low` and `ode_eighth` are small examples written for this folder. Five are shipped
 functions from `kcheck/programs/`. The last four are four of the fourteen functions in the shipped
@@ -505,7 +505,7 @@ its value after `K` steps. `prove.py` writes that line for the verifier as a use
 loop leaves alone.
 
 With that invariant the verifier accepts the contract as it stands, for every `n` from 1 up. The proof is
-2,350 bytes and the verifier takes 1.1 s. It walks six paths: the first block with `n` equal to 1 and
+2,350 bytes and the verifier takes 0.37 s. It walks six paths: the first block with `n` equal to 1 and
 with `n` greater; from the invariant to the return, twice; and once round the loop to a block that is
 the last and to one that is not. Without the invariant the path goes round the loop without end, and a
 test records that the prover gives up.
@@ -526,8 +526,8 @@ loop changes.
 
 The same test file also narrows the contract by one line, `requires n < 2` or `requires n < 3`, and gives
 no invariant. The verifier then follows each count of blocks as a path of its own. For one block a lane
-the proof is 921 bytes and the verifier takes 0.20 s. For one or two blocks the proof is 1,440 bytes and
-the verifier takes 0.66 s. Those tests refuse ten changed contracts and four changed instructions.
+the proof is 921 bytes and the verifier takes 0.06 s. For one or two blocks the proof is 1,440 bytes and
+the verifier takes 0.19 s. Those tests refuse ten changed contracts and four changed instructions.
 
 Two more rules were needed. A broadcast of a register's low 32 bits makes the word of the register's
 number directly, so that the specification's `lo(t)` is the same term. And in the specification, numbers
@@ -649,16 +649,16 @@ identical answers at every prefix of three stored proofs.
 ## Measurements (November 19, 2026)
 
 **Speed of the verifier.** 3.5 ms for `ode_common`, 4 ms for `ode_adler32`, 14 ms for `ode_adler32_blocks`,
-22 ms for `ode_adler32_blocks4`, 5 ms for `ode_varint`, 12 ms and 13 ms for the two BLAKE3 kernels. Each
+22 ms for `ode_adler32_blocks4`, 5 ms for `ode_varint`, 5 ms for each of the two BLAKE3 kernels. Each
 figure is a whole run, including process start and reading three files, on an Apple M6 (the median of
 eleven runs). The Python verifier in `kcheck/` takes 4, 4, 14 and 27 ms for the first four, 17 ms for
 `ode_varint` and 7 and 8 ms for the kernels, not counting its start-up. So the Lean verifier is about as
-fast as the Python one on the first four, three times faster on `ode_varint`, and one and a half times
-slower on the two kernels.
+fast as the Python one on the first four, three times faster on `ode_varint`, and somewhat faster on the
+two kernels.
 
 The 16-way kernel was where this verifier was slow: one block a lane, a path of 1,070 instructions, took
 4.1 s, and one or two blocks took 17 s. Three things took nearly all of that time, and each grew with the
-square of the path's length. They are mended, and the same two runs now take 0.20 s and 0.66 s:
+square of the path's length. They are mended, and the same two runs then took 0.20 s and 0.66 s:
 
 - **Finding a term in the table of terms.** The table was a list scanned from its start, and a new term
   was put at its end by copying it. It is now an array, with a hash map that says where a term may be
@@ -673,18 +673,18 @@ square of the path's length. They are mended, and the same two runs now take 0.2
   division made is now noted, and only the unknowns noted for that number and divisor are looked at.
   The note is advice as well: the four facts that make an unknown a quotient are asked for as before.
 
-The stored proofs did not change by a byte through any of the three. What takes the time now, for the
-16-way kernel, is evaluating the specification: 81% of the run for every `n`. At the loop invariant the
-verifier works out one block's compression for each of the sixteen lanes, on each of four arrivals there,
-and each compression works out its final state sixteen times, as the definition is written.
+The stored proofs did not change by a byte through any of the three.
 
-For every `n` this verifier takes 1.08 s on the 16-way kernel, and the Python verifier in `kcheck/` takes
-0.20 s. That is 5.4 times as long, which is over the limit of five times described below. The limit's
-test does not include this kernel yet; removing the repeated work in the specification's evaluation is
-the next change.
-
-For the AVX-512 one-block kernel the specification works out the final state 16 times: twice for each
-of the eight result words, as the definition is written.
+A fourth was in how the specification is written out for the verifier. `compress` ends with
+`[s[7][i] ^ s[7][i + 8] for i in 0..8]`, and `s[7]`, the state after seven rounds, was worked out again
+at each of its sixteen uses. `statement.py` now writes a `let` around the definition's value, so that
+such a value is worked out once. With the loop invariant the 16-way kernel for every `n` took 1.08 s,
+which was 5.4 times the Python verifier's 0.20 s and over the limit described below. It now takes 0.37 s,
+1.9 times. The two one-block kernels went from 12 and 13 ms to 5 ms each, and the two runs above to
+0.06 s and 0.19 s. The Lean evaluation of the specification still gives the 105 official test vectors.
+What takes the time now, for the 16-way kernel, is still evaluating the specification: at the loop
+invariant the verifier works out one block's compression for each of the sixteen lanes, on each of four
+arrivals there.
 
 **Two limits that are enforced by a test** (`test_limits.py`): every stored proof must be under 100 kB,
 and a whole run of this verifier must take at most five times as long as the Python verifier takes for the
