@@ -10,7 +10,10 @@
 #
 # Where ODE_TEST_CACHE names a folder, a test that passed is written down there under a hash of every file
 # it can read, and is not run again on the same files (tests_key.py): after a change to proof-core alone
-# only proof-core's tests run. Its line then says `kept`. Without ODE_TEST_CACHE every test runs.
+# only proof-core's tests run. Its line then says `kept`. Without ODE_TEST_CACHE every test runs. A change to
+# a page (`.md`) alone runs nothing again.
+#
+#     ODE_TESTS=proof-core sh tests.sh [OUTPUT]      only the tests of proof-core (under a minute on a laptop)
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here/tests.out}
 : > "$out"
@@ -36,6 +39,7 @@ one() {     # DIRECTORY FILE [CLASS]
         echo "$line" > "$f.new" && mv "$f.new" "$f"
     fi
 }
+if [ "${ODE_TESTS:-all}" != proof-core ]; then
 for t in test_ode.py test_kdecode.py test_kone.py test_kloop.py test_varith.py test_varith2.py \
          test_kbinary.py test_lemma_audit.py test_kguess.py test_kplace.py test_kfn.py test_kends.py \
          test_refute.py test_kholes.py test_made.py programs/test_files.py programs/test_specs.py programs/test_decimal.py; do
@@ -48,6 +52,7 @@ for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t"
 one core test_core.py "" &
 [ -n "${IN_TEST_TESTS:-}" ] || one . test_tests.py "" &         # (not inside itself)
 one lang test_asm.py "" &
+fi
 # proof-core: Lean's lake builds everything once, here; then its tests run side by side (ODE_LEAN_BUILT tells
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.
 lake=$(command -v lake || { [ -x "$HOME/.elan/bin/lake" ] && echo "$HOME/.elan/bin/lake"; })

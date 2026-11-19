@@ -12,8 +12,9 @@ failure is ever kept. Without ODE_TEST_CACHE every test runs, as before.
 The key is a hash of every file under this folder that the group's tests can read, with each file's path,
 and of what runs them (Python's version, the processor, the system). A test outside proof-core reads
 nothing in proof-core, and not tests.sh (which only starts it); a test of proof-core may read anything (the
-table, the Python verifier it is compared with, the shipped files). Left out of both: the pages and licences at the top and
-proof-core/README.md (no test reads them), and what a run itself writes (.lake, __pycache__, tests.out).
+table, the Python verifier it is compared with, the shipped files). Left out of both: every page (`.md`:
+no test reads one, and test_tests.py sees to it that no program names one), the licences at the top, and
+what a run itself writes (.lake, __pycache__, tests.out).
 
 The hash is BLAKE2 because Python has it everywhere. It names nothing for anybody: it is a key in our own
 machine's folder, and a wrong match could only come from a collision in 512 bits."""
@@ -35,7 +36,7 @@ def files(group):
             dirs[:] = sorted(d for d in dirs if d not in WRITTEN)
             for n in sorted(names):
                 rel = os.path.relpath(os.path.join(where, n), HERE)
-                if n.endswith(".pyc") or rel == os.path.join("proof-core", "README.md"): continue
+                if n.endswith((".pyc", ".md")): continue
                 yield rel
 
 

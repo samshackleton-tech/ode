@@ -6,7 +6,8 @@ its name down and passes (or fails, where told to). Then tests.sh is run with OD
 is read:
 - the first time everything runs; the second time nothing does, and every line says `kept`;
 - after a change in proof-core only proof-core's tests run; after a change outside it, all of them;
-- a page at the top changes nothing;
+- a page changes nothing, at the top or in a folder (and no program names a page, so none can read one);
+- with ODE_TESTS=proof-core only proof-core's tests run;
 - a failing test fails the run, is not kept, and runs again;
 - without ODE_TEST_CACHE everything runs every time."""
 import os, re, shutil, subprocess, tempfile, unittest
@@ -38,16 +39,17 @@ class Kept(unittest.TestCase):
             path = os.path.join(self.d, folder, t)
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "w") as f: f.write(STAND_IN)
-        for rel in ("README.md", "proof-core/Core.lean", "kcheck/kfn.py"):
+        for rel in ("README.md", "kcheck/VERIFY.md", "proof-core/Core.lean", "kcheck/kfn.py"):
             with open(os.path.join(self.d, rel), "w") as f: f.write("as it was\n")
         self.ran = os.path.join(tempfile.mkdtemp(), "ran")
         self.cache = tempfile.mkdtemp()
 
-    def run_all(self, cache=True):
+    def run_all(self, cache=True, only=None):
         """(exit status, the tests that ran, the lines of the output)"""
         if os.path.exists(self.ran): os.remove(self.ran)
         env = {"PATH": "/usr/bin:/bin:" + os.path.dirname(shutil.which("python3")), "HOME": self.d, "RAN": self.ran, "IN_TEST_TESTS": "1"}
         if cache: env["ODE_TEST_CACHE"] = self.cache
+        if only: env["ODE_TESTS"] = only
         out = os.path.join(os.path.dirname(self.ran), "out")
         r = subprocess.run(["sh", os.path.join(self.d, "tests.sh"), out], env=env, capture_output=True, text=True)
         ran = []
@@ -73,8 +75,28 @@ class Kept(unittest.TestCase):
         with open(os.path.join(self.d, "kcheck", "kfn.py"), "w") as f: f.write("as it is.\n")
         status, ran, lines = self.run_all()
         self.assertEqual((status, ran), (0, first))
-        with open(os.path.join(self.d, "README.md"), "w") as f: f.write("as it is.\n")
-        self.assertEqual(self.run_all()[:2], (0, []))
+        for page in ("README.md", os.path.join("kcheck", "VERIFY.md")):
+            with open(os.path.join(self.d, page), "w") as f: f.write("as it is.\n")
+            self.assertEqual(self.run_all()[:2], (0, []), page)
+
+    def test_no_program_names_a_page(self):
+        """The pages are left out of the keys because no test reads one. A program that names a page in a
+        string might read it: if one must, the pages belong in tests_key.py's keys again."""
+        found = []
+        for where, dirs, names in os.walk(HERE):
+            dirs[:] = [d for d in dirs if d not in (".lake", ".git", "__pycache__", "reference")]
+            for n in names:
+                if not n.endswith((".py", ".sh", ".lean")) or n in ("test_tests.py", "tests_key.py"): continue
+                with open(os.path.join(where, n), errors="replace") as f: text = f.read()
+                if re.search(r"\.md[\"']", text): found.append(os.path.relpath(os.path.join(where, n), HERE))
+        self.assertEqual(found, [])
+
+    def test_only_the_tests_of_proof_core_where_asked(self):
+        status, ran, lines = self.run_all(only="proof-core")
+        self.assertEqual(status, 0)
+        self.assertGreater(len(ran), 10)
+        self.assertTrue(all(t.startswith("proof-core/") for t in ran), ran[:3])
+        self.assertEqual(len(ran), len(lines))
 
     def test_a_failure_is_never_kept(self):
         self.assertEqual(self.run_all()[0], 0)
