@@ -1342,12 +1342,12 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         have := V.pure_ok h
         injection this with h1 _
         subst h1
-        refine ⟨ρ, { st with vec := fun x k => if k < 4 then st.vec x k else u / W32 ^ (16 * x + k) % W32 },
+        refine ⟨ρ, { st with vec := fun x k => if k < 4 ∨ 16 ≤ x then st.vec x k else u / W32 ^ (16 * x + k) % W32 },
           ⟨Agree.refl _ _, Nat.le_refl _, ?_, wf⟩, ?_, rfl⟩
         · exact ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
             ⟨fun x ids hx k hk => by
-               show (if k < 4 then st.vec x k else _) = _
-               rw [if_pos hk]; exact H.words.1 x ids hx k hk,
+               show (if k < 4 ∨ 16 ≤ x then st.vec x k else _) = _
+               rw [if_pos (Or.inl hk)]; exact H.words.1 x ids hx k hk,
              H.words.2.1, H.words.2.2⟩, H.known⟩
         · simp [execStmt, hn, hu]
       next => exact (refuse_ok h).elim
@@ -1467,6 +1467,7 @@ theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with
   | vset place v => exact symVset_sound E bind h H wf base u
+  | vset512 _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
   | nothing => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
   | ret => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
   | call t => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)

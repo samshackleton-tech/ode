@@ -6,10 +6,8 @@ What a row's EFFECT does to registers, two flags and memory, on whole numbers. T
 contract's meaning is stated over (`Contract.lean`), and it is meant to say what `../core/conc.py` says,
 which processors are compared with (`../core/cross.py`).
 
-Here so far: the rows over the general registers, the two flags, and memory of 1, 4 and 8 bytes; calls
-of functions by name; and the rows over the low 128 bits of the vector registers, four lanes of 32 bits
-each. A row that uses anything else (512 bits, a mask register, the address of the file's data) has no
-meaning here yet, and a function that has such a row is not verified.
+The model covers general registers, two flags, calls by name, and vector operations on four or sixteen
+32-bit lanes. It does not yet model mask registers or addresses of the file's data.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -242,17 +240,89 @@ def isUnknown : Expr → Bool
 
 def setReg (s : State) (r v : Nat) : State := { s with reg := fun k => if k = r then v % M64 else s.reg k }
 
+def vecOf512 (bind : Bind) (n : String) : Option Nat :=
+  if n == "X512" then vecOf bind "X" else if n == "Y512" then vecOf bind "Y"
+  else if n == "Z512" then vecOf bind "Z" else none
+
+def vecArg512 (bind : Bind) (s : State) : Expr → Option (List Nat)
+  | .name n => (vecOf512 bind n).map fun r => (List.range 16).map (s.vec r)
+  | _ => none
+
+/-- An aligned 512-bit memory operand faults unless the address is a multiple of 64. -/
+def addr512 (perm : Perm) (bind : Bind) (s : State) (f : String) (args : List Expr) : Option Nat := do
+  let vs ← values perm bind s args
+  let a := sumList vs % M64
+  if f == "mem512" || (f == "mem512a" && a % 64 == 0) then some a else none
+
+/-- Pick four words independently in each quarter. Numbers 0 through 3 select from the first
+register, and 4 through 7 select from the second. -/
+def inQuarters (x y : List Nat) (pick : List Nat) : List Nat :=
+  (List.range 4).flatMap fun q => pick.map fun i =>
+    (if i < 4 then x else y).getD (4 * q + i % 4) 0
+
+/-- Pick two quarters from the first register and two from the second. -/
+def quarters (x y : List Nat) (i : Nat) : List Nat :=
+  (List.range 16).map fun j =>
+    let q := j / 4
+    (if q < 2 then x else y).getD (4 * (i / 4 ^ q % 4) + j % 4) 0
+
+def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List Nat)
+  | .name n => vecArg512 bind s (.name n)
+  | .call f args =>
+    if f == "mem512" || f == "mem512a" then do
+      let a ← addr512 perm bind s f args
+      if allowed perm.read a 64 then some ((List.range 16).map fun k => load s.mem (a + 4 * k) 4) else none
+    else match f, args with
+      | "spread16", [.call "lane32" [a]] => (value perm bind s a).map fun v => List.replicate 16 (v % W32)
+      | "zeros16", [] => some (List.replicate 16 0)
+      | "each32", [.name op, a, b] => do
+        let x ← vecArg512 bind s a
+        match vecArg512 bind s b with
+        | some y => (x.zip y).mapM fun (p, q) => prim32 op p q
+        | none => do
+          let n ← value perm bind s b
+          x.mapM fun p => prim32 op p n
+      | "in_quarters", [a, b, .number p0, .number p1, .number p2, .number p3] => do
+        let x ← vecArg512 bind s a
+        let y ← vecArg512 bind s b
+        if [p0, p1, p2, p3].all (· < 8) then some (inQuarters x y [p0, p1, p2, p3]) else none
+      | "quarters", [a, b, i] => do
+        let x ← vecArg512 bind s a
+        let y ← vecArg512 bind s b
+        let sel ← value perm bind s i
+        some (quarters x y sel)
+      | _, _ => none
+  | _ => none
+
+def storeWords (mem : Nat → Nat) (a : Nat) : List Nat → (Nat → Nat)
+  | [] => mem
+  | w :: ws => storeWords (store mem a w 4) (a + 4) ws
+
+def setVec512 (s : State) (r : Nat) (lanes : List Nat) : State :=
+  { s with vec := fun x k => if x = r then lanes.getD k 0 else s.vec x k }
+
+def execVec512 (perm : Perm) (bind : Bind) (s : State) (place rhs : Expr) : Option State := do
+  let lanes ← lanesOf512 perm bind s rhs
+  if lanes.length != 16 then none else
+  match place with
+  | .name n => (vecOf512 bind n).map fun r => setVec512 s r lanes
+  | .call f args => do
+    let a ← addr512 perm bind s f args
+    if allowed perm.write a 64 then some { s with mem := storeWords s.mem a lanes } else none
+  | _ => none
+
 /-- One statement of an effect. `u` is what an `unknown` turns out to be this time. -/
 def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → Option State
   | .nothing => some s
   | .ret => none
   | .call _ => none
+  | .vset512 place v => execVec512 perm bind s place v
   | .vset place v =>
     match place with
     | .name n =>
       if n == "above128" then
-        -- of every vector register's lanes above the low four the row says nothing
-        if isUnknown v then some { s with vec := fun x k => if k < 4 then s.vec x k else u / W32 ^ (16 * x + k) % W32 } else none
+        -- The high lanes of registers 0 through 15 are not specified by this row.
+        if isUnknown v then some { s with vec := fun x k => if k < 4 ∨ 16 ≤ x then s.vec x k else u / W32 ^ (16 * x + k) % W32 } else none
       else
         match vecOf bind n, lanesOf perm bind s v with
         | some r, some l => some (setVec s r l u)

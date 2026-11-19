@@ -141,6 +141,16 @@ class Verify(unittest.TestCase):
         self.assertFalse(self.says([l.replace(".ret", ".hlt") for l in self.lines]).startswith("shown"))            # no row of the table
         self.assertFalse(self.says([]).startswith("shown"))
 
+    def test_the_model_can_read_a_wide_instruction_before_the_verifier_can_prove_it(self):
+        path = os.path.join(self.dir, "wide.statement")
+        proof = os.path.join(self.dir, "wide.proof")
+        with open(proof, "w") as f: f.write("for wide\n")
+        for op, want in ((".nop", "shown\n"), (".zmov 0 1", "refused: 512-bit vector instructions have no proof rule yet")):
+            with self.subTest(op=op):
+                with open(path, "w") as f:
+                    f.write(f"fn wide\ni 0 6 {op}\ni 6 7 .ret\nstack 0\nneeds avx512\n")
+                self.assertTrue(self.run_files(path, proof).startswith(want))
+
     def test_a_proof_cannot_add_to_what_is_to_be_shown(self):
         with open(self.proof) as f: proof = f.read()
         for extra in ("stack 4000", "returns (num 0)", "def common a b = (num 0)", "arg x number", "i 0 1 .ret", "fn other"):

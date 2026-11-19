@@ -36,6 +36,7 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     | nothing => simp only [execAll, x1]; exact x2
     | set _ _ => simp only [execAll, x1]; exact x2
     | vset _ _ => simp only [execAll, x1]; exact x2
+    | vset512 _ _ => simp only [execAll, x1]; exact x2
     | jump _ _ => simp only [execAll, x1]; exact x2
     | call _ => simp only [execAll, x1]; exact x2
 

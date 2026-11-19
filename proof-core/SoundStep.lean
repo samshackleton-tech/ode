@@ -1660,6 +1660,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   | call t => simp only [symStmt] at h; exact (refuse_ok h).elim
   | jump t c => simp only [symStmt] at h; exact (refuse_ok h).elim
   | vset place v => exact (hv place v rfl).elim
+  | vset512 _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
   | set place v =>
     simp only [symStmt] at h
     split at h

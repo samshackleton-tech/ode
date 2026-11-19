@@ -875,6 +875,7 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s
+  | .vset512 _ _ => refuse "512-bit vector instructions have no proof rule yet"
   | .vset place v =>
     match place with
     | .name n =>

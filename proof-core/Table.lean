@@ -54,7 +54,8 @@ inductive Expr where
 /-- An EFFECT's statement. -/
 inductive Stmt where
   | set (place value : Expr)
-  | vset (place value : Expr)             -- the same of a vector register, or of sixteen bytes of memory
+  | vset (place value : Expr)             -- a 128-bit vector or its memory operand
+  | vset512 (place value : Expr)          -- a 512-bit vector or its memory operand
   | jump (target : Expr) (cond : Option (String × Bool))
   | call (target : Expr)
   | ret
@@ -113,13 +114,18 @@ def isVectorPlace : Expr → Bool
   | .call f _ => f == "mem128"
   | _ => false
 
+def isWidePlace : Expr → Bool
+  | .name n => n == "X512" || n == "Y512" || n == "Z512"
+  | .call f _ => f == "mem512" || f == "mem512a"
+  | _ => false
+
 def parseStmt (text : String) : Option Stmt :=
   let t := effectTokens text
   match splitAt "=" t with
   | some (place, value) => do
     let p ← wholeExpr place
     let v ← wholeExpr value
-    some (if isVectorPlace p then .vset p v else .set p v)
+    some (if isVectorPlace p then .vset p v else if isWidePlace p then .vset512 p v else .set p v)
   | none =>
     match t with
     | ["return"] => some .ret

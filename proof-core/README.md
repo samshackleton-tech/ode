@@ -239,10 +239,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 743 lines of code. | saying what the processor does and what a contract means. This is what the soundness theorem is *about* | Read it. Parts of it are tested against second implementations: see the first list below. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,596 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,597 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -260,10 +260,9 @@ accepted".
 
 Tested but not proved:
 
-- **The machine model against a second model.** Machine.lean is compared with the Python model
-  `../core/conc.py` on every instruction form it supports: 68 forms, 20 of them 128-bit vector
-  instructions, from random states (`test_machine.py`). `conc.py` in turn was compared with three real
-  processors, instruction form by instruction form (`../core/cross.py`).
+- **The machine model against a second model.** `test_machine.py` compares Machine.lean with the Python
+  model `../core/conc.py` on 86 instruction forms from random states. This includes the 512-bit forms
+  used by P16, the 16-way kernel. `core/cross.py` compares the Python model with real processors.
 - **The specification evaluator against a second evaluator.** `evalSpec` in Contract.lean is compared with
   `../kcheck/ode.py`: 2,700 evaluations of 18 definitions, 600 lists, 4,000 random expressions, 300
   sequence elements, and 2,040 evaluations of 17 further definitions that use the newer forms (words,
@@ -400,7 +399,9 @@ These are cases where the verifier rejects a correct function:
   flags register are the same value, but the verifier holds them as two different terms. A test records
   this (`test_kernel.py`).
 
-The next part to build is the loop of the 16-way kernel.
+The next part to verify is the 16-way kernel's loop. The machine model now describes the effects of all
+512-bit instructions that this kernel uses. The verifier still refuses those instructions until it has
+proof rules for them.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -561,17 +562,18 @@ every alteration that these tests try.
 **The arithmetic rule.** All 7,649 arithmetic proofs in the shipped files (17,505 steps) check, in 0.3 s.
 On 3,000 deliberately altered proofs, Lean and the Python implementation `varith.py` agree on every one.
 
-**The machine model.** 68 instruction forms, 60 random instances each: Machine.lean and `conc.py` produce
-the same registers, flags, memory, low 128 bits of each vector register, and next instruction address.
-24 instruction forms are not yet defined in Machine.lean: the 512-bit ones, one that uses a mask register,
-`lea_data` (the address of the file's data), and `call`.
+**The machine model.** On 5,160 instances of 86 instruction forms, Machine.lean and `conc.py` agree on
+registers, flags, memory and the next instruction address. The comparison checks all 16 lanes of each
+vector register wherever the table specifies their values. Separate tests check that aligned 512-bit
+loads and stores fault on a misaligned address. The single-instruction comparison does not cover
+`lea_data`, `call`, or the four other 512-bit forms for memory-operand addition and masks.
 
 **The BLAKE3 specification.** Evaluating `../kcheck/blake3.spec` (29 definitions) in Lean gives the 105
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 743 lines. The verifier: 1,755 lines (Core.lean 1,596, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 9,738 lines.
+**Code size.** The formal model: 807 lines. The verifier: 1,756 lines (Core.lean 1,597, Arithmetic.lean
+159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 9,741 lines.
 
 ## The files
 

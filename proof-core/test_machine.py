@@ -7,21 +7,23 @@ The theorem in SoundTop.lean is about the machine of Machine.lean. Processors we
 (../core/cross.py). Both read the same table; each works a row's EFFECT out in its own code. Here every row
 of the table is run from random states by both: random registers and numbers, the flags, 1024 bytes of
 memory that a base register and the stack pointer point into, random vector registers. Part by part they
-must leave the same: the sixteen registers, the two flags, memory, the low 128 bits of each vector register
-(four lanes of 32 bits), and where a jump goes. A part conc.py calls unknown is left out.
+must leave the same: the general registers, the flags, memory, every 32-bit lane of each vector register,
+and where a jump goes. The comparison skips values conc.py leaves unspecified. The aligned 512-bit
+memory operations must also fault on a misaligned address.
 
-A row that has no meaning in Machine.lean (a 512-bit vector, a mask, a call, the address of the file's data)
-is named, and no function that has such a row is verified there. A return is no row conc.py runs; what
+The test lists rows whose effects it does not compare. A return is no row conc.py runs; what
 Machine.lean does at one is compared with what is said here: the address at the stack pointer is taken and
 the stack pointer goes up by eight.
 
-Two controls: with one row's effect changed in the table Machine.lean reads (one over the general registers,
-one over a vector register), the two must differ."""
+The control changes an effect in the table that Machine.lean reads and requires the comparison to find
+the difference."""
 import os, random, re, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.join(HERE, "..", "core")
+KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, CORE)
-import conc, cross, table
+sys.path.insert(0, KCHECK)
+import conc, cross, kdecode, table
 import built
 
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
@@ -33,6 +35,8 @@ NEEDED = ["mov64_rr", "mov64_ri", "mov64_rm", "mov64_mr", "add64_rr", "add64_ri"
 # the 128-bit rows the two one-block kernels are made of
 VECTOR = ["loadu128", "storeu128", "const128", "mov128", "movq128", "paddd128", "pxor128", "prord128", "pslld128", "psrld128",
           "por128", "pshufb128", "pshufd128", "shufps128", "unpckldq", "unpckhdq", "unpcklqdq", "pblendd128", "pblendw128"]
+WIDE = ["broadcast_r", "broadcast_i", "broadcast_m", "mov512", "load512a", "load512", "load512i", "store512a", "store512",
+        "paddd512", "pxord512_same", "pxord512", "prord512", "unpckldq512", "unpckhdq512", "unpcklqdq512", "unpckhqdq512", "shufi32x4"]
 
 
 def fill(row, bind):
@@ -49,7 +53,7 @@ def cases(rows, n, rng):
     next instruction is, the vector registers' lanes)."""
     out = []
     for row in rows:
-        if row.asm == "-" or ("DATA" in row.asm and "DATA4" not in row.asm) or "zmm" in row.asm or "ymm" in row.asm: continue
+        if row.name not in WIDE and (row.asm == "-" or ("DATA" in row.asm and "DATA4" not in row.asm) or "zmm" in row.asm or "ymm" in row.asm): continue
         if any(v in row.row.split() for v in table.MASKS): continue
         for _ in range(n):
             bind, _, fixed = cross.instance(row, rng)
@@ -73,7 +77,7 @@ def lean(tab, todo, work):
     for line in got[:len(todo)]:
         w = line.split()
         out.append(line if len(w) < 22 else (w[0], int(w[1]), int(w[2]), int(w[3]), [int(x) for x in w[4:20]], bytes.fromhex(w[20]),
-                                             [int(w[21][8 * i:8 * i + 8], 16) for i in range(128)]))
+                                             [int(w[21][8 * i:8 * i + 8], 16) for i in range(32 * 16)]))
     assert len(out) == len(todo), "the Lean program answered fewer cases than it was given"
     return out
 
@@ -88,7 +92,8 @@ def compare(todo, answers):
         kind, rip, lzf, lcf, regs, lmem, lanes = got
         wrong = [n for n, v in zip(G64, regs) if s.g[n] != table.UNKNOWN and s.g[n] != v]
         wrong += [n for n, v, w in (("zf", s.zf, lzf), ("cf", s.cf, lcf)) if v != table.UNKNOWN and int(v) != w]
-        wrong += [f"xmm{i} lane {k}" for i in range(32) for k in range(4) if s.x[i][k] != table.UNKNOWN and s.x[i][k] != lanes[4 * i + k]]
+        wrong += [f"vector register {i} lane {k}" for i in range(32) for k in range(16)
+                  if s.x[i][k] != table.UNKNOWN and s.x[i][k] != lanes[16 * i + k]]
         wrong += ["memory"] if bytes(s.mem[SCRATCH + i] for i in range(ROOM)) != lmem else []
         wrong += ["where it goes on"] if rip != FUNCTION + (nxt if s.to is None else s.to) or kind != "next" else []
         if wrong: differs.setdefault(row.name, f"{fill(row, bind)}: {', '.join(wrong)}")
@@ -104,14 +109,15 @@ class Machine(unittest.TestCase):
         cls.n = int(os.environ.get("MACHINE_CASES", "60"))
         cls.rows = table.read()
         cls.work = tempfile.mkdtemp()
+        cls.addClassCleanup(shutil.rmtree, cls.work)
 
     def test_every_row_that_has_a_meaning_in_lean_means_what_conc_says(self):
         todo = cases(self.rows, self.n, random.Random(1))
         same, differs, none = compare(todo, lean(os.path.join(CORE, "x86.tab"), todo, self.work))
         self.assertEqual(differs, {})
         self.assertEqual(none & set(same), set(), "a row with a meaning for some instances and none for others")
-        for name in NEEDED + VECTOR: self.assertIn(name, same)
-        self.assertGreaterEqual(len(same), 60)
+        for name in NEEDED + VECTOR + WIDE: self.assertIn(name, same)
+        self.assertGreaterEqual(len(same), 78)
         left = [r.name for r in self.rows if r.name not in same and r.name != "ret"]
         print(f"\nmachine: {len(same)} rows, {sum(same.values())} instances: Machine.lean leaves what conc.py leaves; "
               f"{len(left)} rows have no meaning in Machine.lean yet: {' '.join(left)}", file=sys.stderr)
@@ -124,13 +130,39 @@ class Machine(unittest.TestCase):
         for (row, bind, g, zf, cf, mem, u, nxt, x), got in zip(todo, lean(os.path.join(CORE, "x86.tab"), todo, self.work)):
             at = g["rsp"] - SCRATCH
             want = ("returned", int.from_bytes(mem[at:at + 8], "little"), zf, cf, [g[r] + 8 if r == "rsp" else g[r] for r in G64], mem,
-                    [i for i in range(32) for _ in range(4)])
+                    [i for i in range(32) for _ in range(16)])
             self.assertEqual(got, want)
+
+    def test_p16_uses_only_wide_forms_compared_here(self):
+        rows, _ = kdecode.read(os.path.join(KCHECK, "b3hashr.o"), "blake3_servil_avx512_p16", FUNCTION, SCRATCH)
+        heads = table.by_head(self.rows)
+        used = set()
+        for _, _, instruction in rows:
+            row, _ = table.find(heads, table.parse_row(instruction))
+            self.assertIsNotNone(row, instruction)
+            if "zmm" in row.asm:
+                used.add(row.name)
+        self.assertTrue(used)
+        self.assertEqual(used - set(WIDE), set())
+
+    def test_aligned_vector_memory_operands_require_alignment(self):
+        rows = {r.name: r for r in self.rows}
+        for aligned, unaligned in (("load512a", "load512"), ("store512a", "store512")):
+            row, bind, g, zf, cf, mem, u, nxt, x = cases([rows[aligned]], 1, random.Random(4))[0]
+            args = (bind, g, zf, cf, mem, u, nxt, x)
+            g2 = {**g, bind["B"]: g[bind["B"]] + 1}
+            bad = (bind, g2, zf, cf, mem, u, nxt, x)
+            can, cannot, control = lean(os.path.join(CORE, "x86.tab"),
+                                        [(row, *args), (row, *bad), (rows[unaligned], *bad)], self.work)
+            self.assertIsInstance(can, tuple)
+            self.assertEqual(cannot, "none")
+            self.assertIsInstance(control, tuple)
 
     def test_a_changed_table_is_told(self):
         with open(os.path.join(CORE, "x86.tab")) as f: text = f.read()
         for name, old, new in (("add64_rr", "add64(D, S)", "sub64(D, S)"), ("paddd128", "each32(add32, Y, Z)", "each32(xor32, Y, Z)"),
-                               ("pshufd128", "pick4(Y, Y, I)", "Y")):
+                               ("pshufd128", "pick4(Y, Y, I)", "Y"),
+                               ("shufi32x4", "quarters(Y512, Z512, I)", "quarters(Z512, Y512, I)")):
             changed = None
             for line in text.split("\n"):
                 if line.startswith(name + " "):

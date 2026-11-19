@@ -393,17 +393,18 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 743 lines.
-The verifier's own 1,755 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 807 lines.
+The verifier's own 1,756 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
 the flags and memory; loops, by loop invariants and induction; calls, by the contract of a function that
 has already been verified (both functions that return a number and functions that write a buffer of words
 for their caller); contracts with input buffers, output buffers, records laid out in memory, `returns` and
-`stack`; and 128-bit vector instructions that compute on 32-bit words. Its model of the specification
-language covers all of `kcheck/blake3.spec`. Evaluated in Lean, that specification reproduces the 105
-official test vectors.
+`stack`; and 128-bit vector instructions that compute on 32-bit words. The machine model already
+covers the 512-bit instructions used by the 16-way kernel, but the verifier still needs proof rules for
+them. The specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that specification
+reproduces the 105 official test vectors.
 
 As of November 19, 2026 it verifies five of the twelve small shipped functions, a function that calls one
 of them, and three of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
