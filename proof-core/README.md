@@ -423,7 +423,15 @@ saved vector. It verifies a copy from object bytes that clears the register betw
 reload. Tests reject a reload from another slot, a store whose address lacks the required alignment,
 and a stack adjustment that would leave the slot below the stack pointer.
 
-The 16-way kernel still needs rules for reading through its input pointer array and for its loop.
+`test_p16_one.py` combines those rules on a 418-instruction fixture taken from `../wide/p16.ode`: P16's
+prologue, stack realignment, key broadcasts, 64-instruction input transpose, seven compression rounds with
+four aligned stack spills and reloads, feed-forward XORs, output transpose, stores, and epilogue, with 16
+contiguous block loads in place of the pointer array and outer block loop. The verifier accepts its
+408-byte proof against sixteen `compress` calls from `../kcheck/blake3.spec` at the exact 367-byte stack
+bound, and rejects a 366-byte bound as well as changed rotations, shuffles, spill slots, and store offsets.
+
+The shipped 16-way kernel still needs rules for reading through its input pointer array and for its loop
+over blocks.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
