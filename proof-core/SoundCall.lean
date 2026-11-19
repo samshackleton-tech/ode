@@ -372,7 +372,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
             (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m),
-            (fun x b m => by rw [hb] at m; cases m)⟩
+            (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf)⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega

@@ -265,7 +265,13 @@ theorem inoutByte {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.inout
 /-- A number the contract bounds is below its bound at entry. -/
 theorem bound {x : String} {b r : Nat}
     (h : (x, b) ∈ ctx.contract.bounds) (hr : ctx.contract.regOf x = some r) : s0.reg r < b :=
-  E.pre.2.2.2.2.2.2.2.2.2.2 x b h r hr
+  E.pre.2.2.2.2.2.2.2.2.2.2.1 x b h r hr
+
+/-- A number in memory the contract bounds (the eight bytes at a place of a run given to read) is below its
+bound at entry. -/
+theorem mbound {x : String} {off b r n : Nat}
+    (h : (x, off, b) ∈ ctx.contract.mbounds) (hf : (x, r, n) ∈ ctx.contract.fixeds) : load s0.mem (s0.reg r + off) 8 < b :=
+  E.pre.2.2.2.2.2.2.2.2.2.2.2 x off b h r n hf
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),

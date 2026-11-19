@@ -1653,9 +1653,17 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 
 /-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The
 machine of the account has every row of the table, so no theorem asks this. A reader of this function's
-contract is told what processor it wants, and that must cover the functions it calls.) -/
-def needsOf (ctx : Ctx) (c : Contract) : V Unit :=
-  if c.needs.all (fun n => ctx.contract.needs.contains n) then pure ()
+contract is told what processor it wants, and that must cover the functions it calls. Where the contract says
+`needs avx512 if plat == 5`, a call of a function that needs AVX-512 is covered on a path on which `plat` is 5.) -/
+def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
+  if !c.needsIf.isEmpty then refuse "a called function that needs something of the processor on a condition: not here yet"
+  else if c.needs.all (fun n => ctx.contract.needs.contains n ||
+      -- or this function's contract says it needs that if an argument is a number, and on this path the
+      -- argument is seen at once to be that number
+      ctx.contract.needsIf.any fun (what, arg, k) => what == n &&
+        match ctx.contract.regOf arg with
+        | some r => plain s.facts (Lin.sub (Lin.var r) (Lin.const k)) && plain s.facts (Lin.sub (Lin.const k) (Lin.var r))
+        | none => false) then pure ()
   else refuse "a called function needs of the processor what this function's contract does not say it needs"
 
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
@@ -1665,7 +1673,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     match ctx.callees.lookup name with
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c => do
-      needsOf ctx c
+      needsOf ctx s c
       let s' ← symCall ctx s c
       pure [(s', .at i.next)]
   | none => symInstr ctx s i

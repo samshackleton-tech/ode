@@ -57,7 +57,7 @@ fi
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.
 lake=$(command -v lake || { [ -x "$HOME/.elan/bin/lake" ] && echo "$HOME/.elan/bin/lake"; })
 lean=""
-pc="test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py test_session.py test_kernel.py"
+pc="test_sound.py test_arith.py test_machine.py test_spec.py test_verify.py test_call.py test_low.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py test_session.py test_kernel.py test_node.py"
 torun=""
 for t in $pc; do { f=$(kept proof-core "$t" "") && [ -f "$f" ]; } || torun="$torun $t"; done
 if [ -n "$lake" ] && [ -n "$torun" ]; then

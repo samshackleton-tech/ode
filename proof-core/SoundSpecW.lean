@@ -879,7 +879,8 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
           obtain ⟨bs, eo, len, hm⟩ := written_words H wf hw rest _ (j + 1) h2 hrest
           have dw := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hi
           refine ⟨[𝔻 i % 256, 𝔻 i / 256 % 256, 𝔻 i / 65536 % 256, 𝔻 i / 16777216 % 256] ++ bs, ?_, ?_, ?_⟩
-          · rw [← dw]; simp [ofWords, eo]
+          · have lt := Holds.den_lt (ctx := ctx) (s0 := s0) (ρ := ρ) wf i
+            rw [← dw]; simp [ofWords, eo, lt]
           · simp only [List.length_append, List.length_cons, List.length_nil, len]; omega
           · intro k hk
             match k, hk with

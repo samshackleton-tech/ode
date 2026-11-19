@@ -380,6 +380,22 @@ These are cases where the verifier rejects a correct function:
 
 The next parts to build are the function that calls the two kernels, and the loop of the 16-way kernel.
 
+**The function that calls the two kernels is not verified yet.** It is `b3l_node_out`. It reads a record
+of 120 bytes (a node of the hash tree) and calls one of the two kernels, depending on the processor. As a
+first step, the input file can now state its contract:
+
+- An argument can be a record in memory, described by a `layout` in the specification. `statement.py`
+  writes the record out field by field. A field of eight bytes that holds a number is written with
+  `number.le`, "the number that these bytes are, lowest byte first". No specification can define that name.
+- What a layout requires of such a number (`length: number at 104 below 65`) becomes a line `mbelow`. The
+  caller has to guarantee it, and the formal model's precondition says so.
+- `needs avx512 if plat == 5` becomes a line `needsif`.
+
+`test_node.py` checks that these lines mean what the layout says. It evaluates them in Lean on random
+bytes, and compares the contract's value for one-block messages with BLAKE3 itself. The verifier reads the
+input file and accepts the two kernels. It rejects the function at its first 8-byte read from the record,
+because the rule for that read does not exist yet.
+
 ## The two input files
 
 **What is to be proved** is a text file written by `statement.py` from the object file's bytes and the
@@ -390,6 +406,8 @@ specification. (The code and file names call this file the "statement".)
     arg a bytes n                 an input buffer of n bytes (`arg out out 10`: an output buffer of 10 bytes)
     returns (call common (name a) (name b))
     below length 4294967296       the caller keeps this number argument below the bound
+    mbelow nd 104 65              the caller keeps the 8-byte number at offset 104 of the buffer `nd` below the bound
+    needsif avx512 plat 5         the function needs AVX-512 if the argument `plat` is 5
     stack 40
     fn ode_equal                  the next function; it may call the ones before it
     …
@@ -523,8 +541,8 @@ lines. The proofs of the theorems: 8,017 lines.
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (loop invariants), `SoundCall.lean` (calls), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/` and `examples/low/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract` and `kernel_sse41.contract` (the two BLAKE3 kernels' contracts as they are proved here) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/` and `examples/low/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract` and `kernel_sse41.contract` (the two BLAKE3 kernels' contracts as they are proved here); `examples/kernel/node_out.contract` (the contract of the function that calls them, not verified yet) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

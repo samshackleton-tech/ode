@@ -96,19 +96,29 @@ def toWords : List Val → Option (List Val)
     else none
   | _ => none
 
-/-- Each word's four bytes, the lowest first. -/
+/-- Each word's four bytes, the lowest first. (A word is 32 bits: of a number of 2^32 or more there are none.) -/
 def ofWords : List Val → Option (List Val)
   | [] => some []
   | .word w :: rest =>
-    (ofWords rest).map fun bs =>
-      .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: bs
+    if w < W32 then
+      (ofWords rest).map fun bs =>
+        .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: bs
+    else none
   | _ => none
 
-/-- The language's own names, but `len`: a specification defines none of them. -/
-def own : List String := ["word", "counter", "lo", "hi", "words", "bytes_of"]
+/-- The number that bytes are, the lowest first (as `load` of the machine reads them from memory). -/
+def numberLE : List Val → Option Nat
+  | [] => some 0
+  | .int b :: rest => if 0 ≤ b ∧ b < 256 then (numberLE rest).map fun n => b.toNat + 256 * n else none
+  | _ => none
+
+/-- The language's own names, but `len`: a specification defines none of them. (`number.le` is no name a
+specification can write: a statement uses it for a number that lies in a record in memory.) -/
+def own : List String := ["word", "counter", "lo", "hi", "words", "bytes_of", "number.le"]
 
 /-- What the language's own names mean. `word(n)`, `counter(n)`: the word of a number's low 32 bits, the
-counter of its low 64; `lo(t)`, `hi(t)`: a counter's low and high word. -/
+counter of its low 64; `lo(t)`, `hi(t)`: a counter's low and high word; `words(l)`, `bytes_of(l)`: every four
+bytes a word, and back; `number.le(l)`: the number that bytes are, the lowest first. -/
 def builtin (f : String) : List Val → Option Val
   | [.int n] =>
     if f == "word" then (if 0 ≤ n then some (.word (n.toNat % W32)) else none)
@@ -123,6 +133,7 @@ def builtin (f : String) : List Val → Option Val
   | [.list l] =>
     if f == "words" then (toWords l).map .list
     else if f == "bytes_of" then (ofWords l).map .list
+    else if f == "number.le" then (numberLE l).map fun (n : Nat) => .int n
     else none
   | _ => none
 
@@ -270,6 +281,10 @@ structure Contract where
   needs : List String := []           -- what the processor must have (`avx512`). The machine of Machine.lean has every row of
                                       -- the table, so this says nothing here; it is carried for the caller to see.
   bounds : List (String × Nat) := []  -- (an argument that is a number, n): the caller sees to it that the number is below n
+  mbounds : List (String × Nat × Nat) := []   -- (a run of a fixed count given to read, a place in it, n): the eight bytes there,
+                                      -- as one number (the lowest byte first), are below n; the caller sees to it
+  needsIf : List (String × String × Nat) := []   -- (what, an argument that is a number, n): the processor must have `what`
+                                      -- if that argument is n. (As `needs`, it says nothing of the machine here.)
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -378,7 +393,7 @@ lies in memory, apart from that frame and from the address to return to, and hol
 write lies in memory, apart from that frame, from the address to return to, from every run given to read
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
 from the frame, the address to return to and every run given to write, and holds bytes; a run given to read
-and to write holds bytes. A number the contract bounds is below its bound. -/
+and to write holds bytes. A number the contract bounds is below its bound, in a register or in memory. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
@@ -394,7 +409,8 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
     (∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x r n, (x, r, n) ∈ c.inouts → ∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
-  ∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b
+  (∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b) ∧
+  ∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/

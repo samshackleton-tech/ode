@@ -183,7 +183,7 @@ class Verify(unittest.TestCase):
         for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
                                ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
                                ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n"),
-                               ("the specification has a layout", "def common(a, b)", "layout pair 16 { x: number at 0, y: number at 8 }\n\ndef common(a, b)"),
+                               ("the specification has a kind", "def common(a, b)", "kind pair: 16 bytes\n\ndef common(a, b)"),
                                ("a definition may fail", "def common(a, b) { alike(a, b, 0) }", "def common(a, b) {\n    fails 1 if len(a) > 4096\n    alike(a, b, 0)\n}")):
             with self.subTest(what=what):
                 self.assertEqual(self.spec.count(old), 1)
