@@ -7,7 +7,7 @@ adds up, and of some thousands of proofs changed in one place the two say the sa
 
 A proof goes to the Lean program as text (ArithMain.lean says how). A step there also names the number it
 divides by; here that is the greatest number dividing the step's multiples, which is what varith.py divides by."""
-import glob, os, random, shutil, subprocess, sys, time, unittest
+import glob, json, os, random, shutil, subprocess, sys, time, unittest
 from math import gcd
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -41,6 +41,31 @@ def first_says(proof):
     starts, steps = proof
     try: return varith.refutes({varith.key(r) for r in starts}, proof)
     except Exception: return False
+
+
+class ProofOrder(unittest.TestCase):
+    def test_first_possible_derivation_does_not_depend_on_hash_order(self):
+        # Each system has two contradictions. The first pair in input order wins,
+        # including after the prover uses an equality to replace x with y.
+        program = """
+import json
+import prove
+from klin import sym
+from kprove import derive
+x, y = sym('x'), sym('y')
+print(json.dumps([derive([x - 4, x - 5, 3 - x]),
+                  prove.derive_eq([x - y, y - x, x - 4, y - 5, 3 - y])]))
+"""
+        expected = [
+            [[[{'x': 1}, -4], [{'x': -1}, 3]], [[0, 1, 1, 1]]],
+            [[[{'x': 1}, -4], [{'x': -1, 'y': 1}, 0], [{'y': -1}, 3]], [[0, 1, 1, 1], [3, 1, 2, 1]]],
+        ]
+        for seed in ("0", "1", "2", "3", "random"):
+            with self.subTest(seed=seed):
+                r = subprocess.run([sys.executable, "-c", program], cwd=HERE,
+                                   env=dict(os.environ, PYTHONHASHSEED=seed),
+                                   capture_output=True, text=True, timeout=10, check=True)
+                self.assertEqual(json.loads(r.stdout), expected)
 
 
 class Lean(unittest.TestCase):

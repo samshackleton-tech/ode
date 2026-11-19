@@ -73,9 +73,22 @@ def bounds(system, rounds=12):
 def row(f): return (dict(f.c), f.k)
 
 
+def split_rows(rows, symbol):
+    """Partition in first-seen order, with the positive scale for each row that mentions symbol."""
+    keep, pos, neg = {}, [], []
+    for f in rows:
+        a = dict(f.c).get(symbol, 0)
+        if a > 0: pos.append((f, a))
+        elif a < 0: neg.append((f, -a))
+        else: keep[f] = None
+    return keep, pos, neg
+
+
 def derive(system, limit=30000, last=frozenset(), order=None):
     """A proof (rows to start from, steps) that `system` cannot hold, the goal's row last among the starts; or None."""
-    how, rows = {}, set()                     # row -> None (given) or (p, a, n, b)
+    # Visit given and derived rows in insertion order. Several pairs can prove the same
+    # fact, and iteration over a set would let the Python runtime choose between them.
+    how, rows = {}, {}                     # how maps a row to None (given) or (p, a, n, b)
     def done(final):
         index = {}
         def visit(f):
@@ -101,27 +114,23 @@ def derive(system, limit=30000, last=frozenset(), order=None):
         how.setdefault(f, None)
         if not f.c:
             if f.k < 0: return done(f)
-        else: rows.add(f)
+        else: rows[f] = None
     while rows:
         count = {}
         for f in rows:
             for s, a in f.c:
                 p = count.setdefault(s, [0, 0]); p[0 if a > 0 else 1] += 1
         s = min(count, key=(lambda s: (s in last, count[s][0] * count[s][1], s)) if order is None else order)
-        pos = [f for f in rows if dict(f.c).get(s, 0) > 0]
-        neg = [f for f in rows if dict(f.c).get(s, 0) < 0]
-        rows = {f for f in rows if s not in dict(f.c)}
+        rows, pos, neg = split_rows(rows, s)
         if len(rows) + len(pos) * len(neg) > limit: return None
-        for p in pos:
-            a = dict(p.c)[s]
-            for n in neg:
-                b = -dict(n.c)[s]
+        for p, a in pos:
+            for n, b in neg:
                 g = math.gcd(a, b)
                 r = Facts.norm(p.scale(b // g) + n.scale(a // g))
                 if r not in how: how[r] = (p, b // g, n, a // g)
                 if not r.c:
                     if r.k < 0: return done(r)
-                else: rows.add(r)
+                else: rows[r] = None
     return None
 
 

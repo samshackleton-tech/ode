@@ -10,7 +10,7 @@ is read:
 - with ODE_TESTS=proof-core only proof-core's tests run;
 - a failing test fails the run, is not kept, and runs again;
 - without ODE_TEST_CACHE everything runs every time."""
-import os, re, shutil, subprocess, tempfile, unittest
+import os, re, shlex, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 STAND_IN = '''import os, sys
 name = os.path.basename(os.getcwd()) + "/" + " ".join(sys.argv)
@@ -44,10 +44,10 @@ class Kept(unittest.TestCase):
         self.ran = os.path.join(tempfile.mkdtemp(), "ran")
         self.cache = tempfile.mkdtemp()
 
-    def run_all(self, cache=True, only=None):
+    def run_all(self, cache=True, only=None, python=sys.executable):
         """(exit status, the tests that ran, the lines of the output)"""
         if os.path.exists(self.ran): os.remove(self.ran)
-        env = {"PATH": "/usr/bin:/bin:" + os.path.dirname(shutil.which("python3")), "HOME": self.d, "RAN": self.ran, "IN_TEST_TESTS": "1"}
+        env = {"PATH": "/usr/bin:/bin", "HOME": self.d, "RAN": self.ran, "IN_TEST_TESTS": "1", "PYTHON": python}
         if cache: env["ODE_TEST_CACHE"] = self.cache
         if only: env["ODE_TESTS"] = only
         out = os.path.join(os.path.dirname(self.ran), "out")
@@ -97,6 +97,17 @@ class Kept(unittest.TestCase):
         self.assertGreater(len(ran), 10)
         self.assertTrue(all(t.startswith("proof-core/") for t in ran), ran[:3])
         self.assertEqual(len(ran), len(lines))
+
+    def test_the_requested_python_runs_the_tests_and_computes_the_keys(self):
+        log = os.path.join(self.cache, "python.calls")
+        python = os.path.join(self.cache, "chosen python")
+        with open(python, "w") as f:
+            f.write(f'#!/bin/sh\nprintf "%s\\n" "$1" >> {shlex.quote(log)}\nexec {shlex.quote(sys.executable)} "$@"\n')
+        os.chmod(python, 0o755)
+        self.assertEqual(self.run_all(only="proof-core", python=python)[0], 0)
+        with open(log) as f: calls = f.read().splitlines()
+        self.assertEqual(calls[:2], [os.path.join(self.d, "tests_key.py")] * 2)
+        self.assertIn("test_sound.py", calls[2:])
 
     def test_a_failure_is_never_kept(self):
         self.assertEqual(self.run_all()[0], 0)

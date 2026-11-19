@@ -2,6 +2,7 @@
 # Every test file of this repository, each in a process of its own, all at once.
 #
 #     sh tests.sh [OUTPUT]         (default OUTPUT: tests.out here; one line a file as each ends)
+#     PYTHON=pypy3 sh tests.sh     (choose the interpreter; the default is python3)
 #
 # kcheck/test_kbyte.py is run a class at a time (whole, it takes over twenty minutes; so, about seven).
 # Tests that run code on a processor need x86-64 Linux with AVX-512 and skip elsewhere; the tests of
@@ -16,11 +17,13 @@
 #     ODE_TESTS=proof-core sh tests.sh [OUTPUT]      only the tests of proof-core (under a minute on a laptop)
 here=$(cd "$(dirname "$0")" && pwd)
 out=${1:-$here/tests.out}
+python=${PYTHON:-python3}
+command -v "$python" >/dev/null || { echo "tests: cannot find $python" >&2; exit 1; }
 : > "$out"
 cache=${ODE_TEST_CACHE:-}
 key_rest=""; key_pc=""
 if [ -n "$cache" ]; then
-    mkdir -p "$cache" && key_rest=$(python3 "$here/tests_key.py" rest) && key_pc=$(python3 "$here/tests_key.py" proof-core) || cache=""
+    mkdir -p "$cache" && key_rest=$("$python" "$here/tests_key.py" rest) && key_pc=$("$python" "$here/tests_key.py" proof-core) || cache=""
 fi
 kept() {    # DIRECTORY FILE [CLASS]: the file of this test's passing on these very files
     [ -n "$cache" ] || return 1
@@ -32,7 +35,7 @@ one() {     # DIRECTORY FILE [CLASS]
         echo "$1/$2 $3| kept ($(cut -d'|' -f2 "$f" | tr -d ' ') then) | $(cut -d'|' -f3- "$f")" >> "$out"; return
     fi
     s=$(date +%s)
-    last=$(cd "$here/$1" && python3 "$2" $3 2>&1 | tail -n 4 | tr '\n' ' ')
+    last=$(cd "$here/$1" && "$python" "$2" $3 2>&1 | tail -n 4 | tr '\n' ' ')
     line="$1/$2 $3| $(( $(date +%s) - s )) s | $last"
     echo "$line" >> "$out"
     if f=$(kept "$1" "$2" "$3") && echo "$line" | grep -q -E ' OK( \(skipped=[0-9]+\))? *$'; then

@@ -14,8 +14,8 @@ It is not finished. Today it handles a subset of what the Python verifier in `kc
 enough for five of the twelve small shipped functions and for a function that calls one of them. It is
 also enough for three of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one 64-byte block (one written with AVX-512 instructions and one with SSE4.1 instructions),
-and `b3l_node_out`, the function that reads a node record from memory and calls whichever kernel the
-processor supports. For the rest of the hash and the other programs, `kcheck/` is still the verifier to
+and `b3l_node_out`, the function that reads a node record and calls the kernel selected by its `plat`
+argument. For the rest of the hash and the other programs, `kcheck/` is still the verifier to
 use.
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
@@ -63,8 +63,8 @@ The functions it verifies today:
 | `ode_common` | length of the common prefix of two buffers | 45 instructions, 1 loop | 55 lines, 646 bytes | 4 ms |
 | `ode_equal` | whether two buffers are equal, by calling `ode_common` | 10 instructions | 9 more lines | 4 ms for both |
 | `ode_adler32` | the Adler-32 checksum, reducing modulo 65521 at every byte | 55 instructions, 1 loop | 260 lines, 3 kB | 5 ms |
-| `ode_adler32_blocks` | Adler-32, reducing once per block of up to 5552 bytes, by shifts and masks | 116 instructions, 2 nested loops | about 1,400 lines, 18 kB | 43 ms |
-| `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | about 2,000 lines, 26 kB | 88 ms |
+| `ode_adler32_blocks` | Adler-32, reducing once per block of up to 5552 bytes, by shifts and masks | 116 instructions, 2 nested loops | 1,226 lines, 16 kB | 43 ms |
+| `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | 1,887 lines, 24 kB | 88 ms |
 | `ode_varint` | encodes a number as a varint into a 10-byte buffer supplied by the caller; returns the length | 35 instructions, 1 loop of at most 10 iterations | 790 lines, 9 kB | 29 ms |
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 130 bytes | 17 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 20 ms |
@@ -96,10 +96,10 @@ objection"). Then every function in the list satisfies its contract (`Meets`).
 any machine state that satisfies the caller's obligations (listed next). Then:
 
 - **Control flow.** The machine executes only instructions of this function and of the functions it calls.
-- **Memory safety.** The function reads only the input buffers named in the contract, its own stack frame
-  and its return address. It writes only its own stack frame and the output buffers named in the contract.
-  It does not read an output buffer. The stack frame is exactly the number of bytes the contract's `stack`
-  line states. Functions it calls obey the same limits.
+- **Memory safety.** The function reads only the buffers declared for reading, its own stack frame, and
+  its return address. It writes only its own stack frame and the buffers declared for writing. A buffer
+  declared as output-only cannot be read. The `stack` line gives the size of the stack frame in bytes.
+  Functions it calls obey the same limits.
 - **Termination.** After finitely many instructions it returns to the return address its caller pushed.
 - **Result.** At that point: the stack pointer is just above the return address; the callee-saved
   registers (rbx, rbp, r12 to r15) have their original values; memory outside the stack frame and the
@@ -476,8 +476,10 @@ a wrong or hostile prover can only produce something the verifier rejects, or no
 
 It works as a dialogue. It gives the verifier the proof so far; the verifier replies with the next thing
 it needs (for example, "prove that these inequalities imply that one"); the prover finds it and appends
-it. Arithmetic is found by variable elimination. The prover is deterministic: it finds the same proof on
-every run, and the tests compare each stored proof with what the prover finds.
+it. The prover finds arithmetic proofs by eliminating variables. When two rows can serve the same role,
+it considers them in the order it received or derived them. That order does not depend on Python's hash
+seed. The tests compare the stored proofs with what the prover finds. You can run them with either
+CPython or PyPy: `ODE_TESTS=proof-core PYTHON=pypy3 sh tests.sh` from the repository root.
 
 The verifier executable `odeverify` re-checks the whole proof from the first line every time it is asked.
 For `ode_adler32_blocks4`, whose proof has 2,023 lines, that meant re-reading 1.2 million proof lines in
@@ -552,9 +554,9 @@ Also rejected: a caller listed before its callee, a function that calls itself, 
 functions with the same name.
 
 **Wrong proofs are rejected.** The tests delete or alter single lines of the stored proofs: every line
-for `ode_common` (85 trials), `ode_adler32` (414 trials) and the two BLAKE3 kernels (14 and 16 trials),
-every third line for `ode_varint` (443 trials), every seventh for `ode_adler32_blocks` (332 trials),
-every eleventh for `ode_adler32_blocks4` (309 trials). Every altered proof is rejected.
+for `ode_common`, `ode_adler32` and the two BLAKE3 kernels; every third line for `ode_varint`; every
+seventh for `ode_adler32_blocks`; and every eleventh for `ode_adler32_blocks4`. The verifier rejects
+every alteration that these tests try.
 
 **The arithmetic rule.** All 7,649 arithmetic proofs in the shipped files (17,505 steps) check, in 0.3 s.
 On 3,000 deliberately altered proofs, Lean and the Python implementation `varith.py` agree on every one.

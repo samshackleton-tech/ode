@@ -233,8 +233,7 @@ class KernelTests:
         numbers = self.found(self.spec, self.obj, "shown")
         self.assertEqual(list(numbers), [symbol])
         self.assertEqual(lean_verify.verify(self.spec, [(self.obj, symbol)], self.kept), (True, "shown"))
-        if os.environ.get("PYTHONHASHSEED") == "0":
-            with open(self.kept) as f, open(self.path("shown.proof")) as g: self.assertEqual(f.read(), g.read())
+        with open(self.kept) as f, open(self.path("shown.proof")) as g: self.assertEqual(f.read(), g.read())
         self.assertLess(os.path.getsize(self.kept), 1000)
         with open(self.path("shown.statement")) as f: lines = f.read().splitlines()
         for line in self.K.landmarks: self.assertIn(line, lines)

@@ -151,27 +151,23 @@ def derive_eq(system, limit=30000, last=frozenset()):
                 new.append(r)
             rows, again = list(dict.fromkeys(new)), True
             break
-    rows = set(rows)
+    rows = dict.fromkeys(rows)
     while rows:
         count = {}
         for f in rows:
             for s, a in f.c:
                 p = count.setdefault(s, [0, 0]); p[0 if a > 0 else 1] += 1
         s = min(count, key=lambda s: (s in last, count[s][0] * count[s][1], s))
-        pos = [f for f in rows if dict(f.c).get(s, 0) > 0]
-        neg = [f for f in rows if dict(f.c).get(s, 0) < 0]
-        rows = {f for f in rows if s not in dict(f.c)}
+        rows, pos, neg = kprove.split_rows(rows, s)
         if len(rows) + len(pos) * len(neg) > limit: return None
-        for p in pos:
-            a = dict(p.c)[s]
-            for n in neg:
-                b = -dict(n.c)[s]
+        for p, a in pos:
+            for n, b in neg:
                 g = gcd(a, b)
                 r = norm(p.scale(b // g) + n.scale(a // g))
                 if r not in how: how[r] = (p, b // g, n, a // g)
                 if not r.c:
                     if r.k < 0: return done(r)
-                else: rows.add(r)
+                else: rows[r] = None
     return None
 
 
@@ -370,7 +366,6 @@ def prove(spec_text, targets, statement_out, out):
 
 
 if __name__ == "__main__":
-    built.same_every_run()          # the same proof every run
     if len(sys.argv) < 5: raise SystemExit(__doc__)
     spec, statement_out, out = sys.argv[1:4]
     targets = []

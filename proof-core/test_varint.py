@@ -82,8 +82,7 @@ class Varint(unittest.TestCase):
         numbers = self.found(self.spec, self.obj, "shown")
         self.assertEqual(list(numbers), [SYMBOL])
         self.assertEqual(lean_verify.verify(self.spec, [(self.obj, SYMBOL)], self.kept), (True, "shown"))
-        if os.environ.get("PYTHONHASHSEED") == "0":
-            with open(self.kept) as f, open(self.path("shown.proof")) as g: self.assertEqual(f.read(), g.read())
+        with open(self.kept) as f, open(self.path("shown.proof")) as g: self.assertEqual(f.read(), g.read())
         with open(self.path("shown.statement")) as f: lines = f.read().splitlines()
         # what is to be shown says the run is written, names the number returned, and has the `ensures`
         self.assertIn("arg out out 10", lines)
@@ -165,5 +164,4 @@ class Varint(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    built.same_every_run()          # the prover finds the same proof every run
     unittest.main()

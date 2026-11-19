@@ -129,5 +129,4 @@ class Low(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    built.same_every_run()          # the prover finds the same proof every run
     unittest.main()

@@ -10,7 +10,7 @@ stands: a change to proof-core alone leaves the keys of the forty tests outside 
 failure is ever kept. Without ODE_TEST_CACHE every test runs, as before.
 
 The key is a hash of every file under this folder that the group's tests can read, with each file's path,
-and of what runs them (Python's version, the processor, the system). A test outside proof-core reads
+and of what runs them (Python's implementation and version, the processor, the system). A test outside proof-core reads
 nothing in proof-core, and not tests.sh (which only starts it); a test of proof-core may read anything (the
 table, the Python verifier it is compared with, the shipped files). Left out of both: every page (`.md`:
 no test reads one, and test_tests.py sees to it that no program names one), the licences at the top, and
@@ -43,7 +43,8 @@ def files(group):
 def key(group):
     h = hashlib.blake2b()
     # (the Lean that builds proof-core is named by a file of that folder, lean-toolchain)
-    h.update(repr((group, platform.python_version(), platform.machine(), platform.system())).encode())
+    impl = sys.implementation
+    h.update(repr((group, impl.name, tuple(impl.version), platform.python_version(), platform.machine(), platform.system())).encode())
     for rel in files(group):
         with open(os.path.join(HERE, rel), "rb") as f: data = f.read()
         h.update(repr((rel, len(data))).encode()); h.update(data)

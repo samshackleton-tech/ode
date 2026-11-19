@@ -81,8 +81,7 @@ class Blocks4(unittest.TestCase):
 
     def test_the_kept_proof_shows_from_the_files(self):
         self.assertEqual(lean_verify.verify(self.spec, [(self.obj, SYMBOL)], self.kept), (True, "shown"))
-        if os.environ.get("PYTHONHASHSEED") == "0":         # in a fixed order (built.same_every_run) the prover finds the kept proof again
-            with open(self.kept) as f, open(self.proof) as g: self.assertEqual(f.read(), g.read())
+        with open(self.kept) as f, open(self.proof) as g: self.assertEqual(f.read(), g.read())
 
     def test_changed_in_one_place(self):
         for what, old, new in CHANGED:
@@ -123,5 +122,4 @@ class Blocks4(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    built.same_every_run()          # the prover finds the same proof every run
     unittest.main()
