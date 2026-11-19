@@ -55,7 +55,7 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
-def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "stack", "def"]
+def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "stack", "def"]
 
 def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
   -- a line of the statement is of the function last named there; a line of the proof, of the one its `for` names
@@ -110,6 +110,10 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["mbelow", name, off, n] => match off.toNat?, n.toNat? with
     | some off, some n => onLast fun g => { g with contract := { g.contract with mbounds := g.contract.mbounds ++ [(name, off, n)] } }
     | _, _ => throw s!"cannot read {line}"
+  | ["lanes", table, count] => onLast fun g => { g with contract := { g.contract with lanes := g.contract.lanes ++ [(table, count)] } }
+  | ["atleast", name, n] => match n.toNat? with
+    | some n => onLast fun g => { g with contract := { g.contract with atLeast := g.contract.atLeast ++ [(name, n)] } }
+    | none => throw s!"cannot read {line}"
   | ["needsif", what, name, n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with needsIf := g.contract.needsIf ++ [(what, name, n)] } }
     | none => throw s!"cannot read {line}"

@@ -411,7 +411,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
         · intro y hy1 hy2
           simp only [Contract.perm, Bool.or_eq_true]
-          right
+          left; right
           unfold Contract.inFixed
           simp only [Bool.or_eq_true]
           left
@@ -464,7 +464,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
               · intro y hy1 hy2
                 simp only [Contract.perm, Bool.or_eq_true]
-                right
+                left; right
                 unfold Contract.inFixed
                 simp only [Bool.or_eq_true]
                 rcases List.mem_append.mp (List.mem_of_getElem? hj') with m | m

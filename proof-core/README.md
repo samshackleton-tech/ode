@@ -239,10 +239,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 830 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,747 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,791 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -430,8 +430,28 @@ contiguous block loads in place of the pointer array and outer block loop. The v
 408-byte proof against sixteen `compress` calls from `../kcheck/blake3.spec` at the exact 367-byte stack
 bound, and rejects a 366-byte bound as well as changed rotations, shuffles, spill slots, and store offsets.
 
-The shipped 16-way kernel still needs rules for reading through its input pointer array and for its loop
-over blocks.
+A contract can now give a function a table of addresses. The table is a run of a fixed number of bytes.
+Each eight bytes of it are the address of `n` blocks of 64 bytes that the function may read, where `n` is
+another argument. The formal model asks the caller to keep those blocks in memory, apart from the stack
+frame and from every run the function writes. A contract can also say that a number is at least some
+value. In the specification the table's name is the list of its lanes, and each lane is the list of its
+blocks, sixteen words each.
+
+The verifier follows a 64-byte load through an address that it read from such a table. The proof must show
+that the load lies within that lane's blocks. The offset may be a number that is only known through the
+facts, such as 64 times a loop's count. The sixteen words become new unknowns, and the verifier records
+which block of which lane they are. When the specification asks for a block of a lane, the verifier finds
+the words that the function read at that offset.
+
+`test_p16_table.py` uses the same instructions as `test_p16_one.py` and also keeps P16's sixteen pairs of
+a table read and a block load. The 437-instruction fixture is verified against a contract that gives
+sixteen lanes of `n` blocks with `n` at least 1. The proof is 760 bytes. The verifier refuses the same
+code when the lower bound is missing, when the contract names another block, when the run is not declared
+as a table, when one lane reads another lane's address, when an address is taken from between two table
+entries, and when the load starts before the lane's blocks.
+
+The shipped 16-way kernel still needs rules for its loop over blocks and for the packed flag bytes it is
+given.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -602,8 +622,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 807 lines. The verifier: 1,906 lines (Core.lean 1,747, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,572 lines.
+**Code size.** The formal model: 830 lines. The verifier: 1,950 lines (Core.lean 1,791, Arithmetic.lean
+159 including its proofs). The file parser: 169 lines. The proofs of the theorems: 11,049 lines.
 
 ## The files
 

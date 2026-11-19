@@ -335,6 +335,7 @@ inductive Known where
   | load (v j c : Nat)            -- the unknown `v` is the eight bytes at place `c` of the run `j` (of a fixed count, given to read) as they were at entry: one number, the lowest byte first
   | or (v : Nat) (x y : Row)      -- the unknown `v` is `x | y`: the bits of both
   | held (f : String) (keys : List Key) (ids : List Nat)    -- the definition `f`, used with these things, is the list of the words of these terms
+  | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
   deriving DecidableEq, Repr, Inhabited
 
 structure Sym where
@@ -986,6 +987,30 @@ def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : Li
     else refuse "the vector store's address is not known to be 64-byte aligned"
   | none => refuse "the aligned vector store needs a known address"
 
+/-- The unknown in an address that the state knows as an address a table holds: the unknown, the table,
+the place in it, and the register with the count of blocks. -/
+def findLane (c : Contract) (addr : Row) : List Known → Option (Nat × Nat × Nat × Nat)
+  | [] => none
+  | .load v j p :: more =>
+    match c.tableAt j with
+    | some (_, _, _, l) => if Lin.coeffOf addr v == 1 then some (v, j, p, l) else findLane c addr more
+    | none => findLane c addr more
+  | _ :: more => findLane c addr more
+
+/-- Sixty-four bytes read through an address a table holds: a block's sixteen words, at a place shown to
+lie within the lane's blocks. Each word is a new unknown, and the state knows which words of the blocks
+they are. (The blocks are only read, and lie apart from everything written: they hold what they held at
+entry. No fact is added of the unknowns: they are used as words only, and a fact a word would be gone
+through at every later step.) -/
+def symLoadBlock (s : Sym) (v j p l : Nat) (addr : Row) : V (List Nat × Sym) :=
+  if p % 8 != 0 then refuse "a read through an address that is not one of a table's"
+  else do
+    let off := Lin.sub addr (Lin.var v)
+    entail s.facts off
+    entail s.facts (Lin.sub (Lin.sub (Lin.scale 64 (Lin.var l)) off) (Lin.const 64))
+    let vs := (List.range 16).map (s.nvars + ·)
+    symLaneTerms { s with nvars := s.nvars + 16, known := .block j p off vs :: s.known } wAtom (vs.map Lin.var)
+
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
     match symVec512 bind s (.name n) with
@@ -1003,7 +1028,10 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       match args with
       | [.name op, a, b] => symEach512 bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
-    else if f == "mem512" then symMemWords ctx bind s args 16
+    else if f == "mem512" then
+      match (symWordAddr bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
+      | some (a, v, j, p, l) => symLoadBlock s v j p l a
+      | none => symMemWords ctx bind s args 16
     else if f == "mem512a" then symSpillLoad ctx bind s args
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
@@ -1578,6 +1606,8 @@ inductive WVal where
   | part (r off n : Nat)          -- `n` of those bytes, from place `off` on
   | wbytes (ids : List Nat)       -- the bytes of the words of these terms, four a word, the lowest first
   | record (fields : List (String × WVal))    -- a record: its names, each with its thing
+  | lanes (j count l : Nat)       -- the table of addresses that the fixed run `j` is: its `count` lanes
+  | lane (j c l : Nat)            -- the blocks that the address at place `c` of that table points to (as many as register `l` held at entry)
   | other                         -- a thing that is not followed here
   deriving Inhabited
 
@@ -1726,6 +1756,27 @@ def heldIds (f : String) (keys : List Key) : List Known → Option (List Nat)
   | .held f' keys' ids :: more => if f' = f ∧ keys' = keys then some ids else heldIds f keys more
   | _ :: more => heldIds f keys more
 
+/-- Two rows are one number: the same row, or each seen at once to be no less than the other. -/
+def sameRow (facts : List Row) (a b : Row) : Bool := a == b || (plain facts (Lin.sub a b) && plain facts (Lin.sub b a))
+
+/-- The unknowns the state knows as the words of the block at byte `off` of the lane at place `c` of the table `j`. -/
+def knownBlock (facts : List Row) (j c : Nat) (off : Row) : List Known → Option (List Nat)
+  | [] => none
+  | .block j' c' off' vs :: more => if j' = j ∧ c' = c ∧ sameRow facts off' off = true then some vs else knownBlock facts j c off more
+  | _ :: more => knownBlock facts j c off more
+
+/-- Each unknown as the word it is: its term must be in the table. -/
+def atomWords (look : Node → Option Nat) : List Nat → Option (List WVal)
+  | [] => some []
+  | v :: more =>
+    match look (.atom (Lin.word (Lin.var v))), atomWords look more with
+    | some i, some rest => some (.word [i] :: rest)
+    | _, _ => none
+
+/-- The block at byte `off` of a lane, where the function has read it: its sixteen words. -/
+def blockAt (look : Node → Option Nat) (s : Sym) (j c : Nat) (off : Row) : Option WVal :=
+  (knownBlock s.facts j c off s.known).bind fun vs => (atomWords look vs).map .list
+
 /-- The value of an expression on words (as `evalSpec` of the account has it on numbers), where it is
 followed: `none` where it is not. A use of a definition whose value the state knows (a called function's
 contract has said it) has that value; any other use is worked out by the definition. -/
@@ -1747,6 +1798,9 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
     | .index a i =>
       match weval ctx look s fuel env a, weval ctx look s fuel env i with
       | some (.list l), some (.int k) => if 0 ≤ k then l[k.toNat]? else none
+      | some (.lanes j count l), some (.int k) => if 0 ≤ k ∧ k.toNat < count then some (.lane j (8 * k.toNat) l) else none
+      | some (.lane j c _), some (.int k) => if 0 ≤ k then blockAt look s j c (Lin.const (64 * k)) else none
+      | some (.lane j c _), some (.num r) => blockAt look s j c (Lin.scale 64 r)
       | _, _ => none
     | .call f args =>
       match wevalList (weval ctx look s fuel env) args with
@@ -1806,6 +1860,13 @@ def wenvIn (c : Contract) : List (String × Kind) → List Nat → List (String 
   | (n, .inout count) :: args, r :: regs => (n, .run r count) :: wenvIn c args regs
   | _, _ => []
 
+/-- The tables of addresses by their names (as `lanesEnv` of the account has them). -/
+def lanesW (c : Contract) : List (String × WVal) :=
+  (List.range c.fixeds.length).filterMap fun j => (c.tableAt j).map fun (x, _, count, l) => (x, WVal.lanes j count l)
+
+/-- The names of the contract for an `ensures` of a whole run (as `envW` of the account has them). -/
+def wenv (c : Contract) : List (String × WVal) := lanesW c ++ wenvIn c c.args argRegs
+
 def WFUEL : Nat := 1000
 
 /-- Each word of the list, from word `j` of the run `w` on, is the term known written there. -/
@@ -1826,7 +1887,7 @@ def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
       match findOutNamed e.run ctx.contract.outs 0 with
       | some (w, n) =>
         let index := termIndex s.terms
-        match weval ctx (fun n => index[n]?) s WFUEL (wenvIn ctx.contract ctx.contract.args argRegs) x with
+        match weval ctx (fun n => index[n]?) s WFUEL (wenv ctx.contract) x with
         | some (.list l) =>
           if l.length * 4 = n ∧ wordsWritten (fun n => index[n]?) s.wroteW w 0 l = true then pure ()
           else refuse "a word of the run is not known to hold what the specification says"
@@ -2122,7 +2183,9 @@ def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 /-- A call: by the rule for a function that writes nothing for its caller, or by the rule for one that
 writes a run of words. -/
 def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
-  if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
+  if !(c.lanes.isEmpty && c.atLeast.isEmpty) then
+    refuse "a called function that is given a table of addresses, or asks that a number be no less than another: not here yet"
+  else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else symCallW ctx s c
 
 /-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The
@@ -2157,14 +2220,17 @@ def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVa
 
 /-- What is known at entry: each register a number below 2^64; the frame the contract allows and the return
 address lie in memory; so does each run of bytes given, to read or to write; a number the contract bounds is
-below its bound. (The runs of a fixed count given to read come last: the facts before them keep their numbers.) -/
+below its bound, and one it asks to be no less than another is so; the blocks a table's addresses point to
+lie in memory. (What is newer comes later: the facts before keep their numbers, by which proofs name them.) -/
 def entryFacts (ctx : Ctx) : List Row :=
   ((List.range 16).map ranged).flatten ++
   [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 9)) (Lin.var RSP)] ++
   (ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)) ++
   (ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
   (ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)) ++
-  ctx.contract.fixeds.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)
+  (ctx.contract.fixeds.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
+  (ctx.contract.atLeast.filterMap fun (name, k) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.var r) (Lin.const k)) ++
+  ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64)) (Lin.scale 64 (Lin.var l))) else none
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,

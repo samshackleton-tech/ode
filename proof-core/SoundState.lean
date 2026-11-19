@@ -93,6 +93,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .load v _ _ => v < n
   | .or v x y => v < n ∧ bounded n x ∧ bounded n y
   | .held _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
+  | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
@@ -117,6 +118,60 @@ structure WF (s : Sym) : Prop where
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → bounded s.nvars o ∧ bounded s.nvars x
   words : WordsWF s
   known : ∀ k ∈ s.known, k.wf s.nvars s.terms.length
+
+/-! ## A contract with no table of addresses -/
+
+theorem tableAt_none {c : Contract} (h : c.lanes = []) (j : Nat) : c.tableAt j = none := by
+  unfold Contract.tableAt
+  rw [h]
+  cases c.fixeds[j]? with
+  | none => rfl
+  | some x => rfl
+
+theorem tables_nil {c : Contract} (h : c.lanes = []) : c.tables = [] := by
+  unfold Contract.tables
+  exact List.filterMap_eq_nil_iff.mpr fun j _ => tableAt_none h j
+
+theorem inLane_false {c : Contract} (h : c.lanes = []) (s : State) (a : Nat) : c.inLane s a = false := by
+  simp [Contract.inLane, tables_nil h]
+
+theorem lanesEnv_nil {c : Contract} (h : c.lanes = []) (s : State) : c.lanesEnv s = [] := by
+  simp [Contract.lanesEnv, tables_nil h]
+
+theorem envW_plain {c : Contract} (h : c.lanes = []) (s : State) : c.envW s = envWIn c s c.args argRegs := by
+  simp [Contract.envW, lanesEnv_nil h]
+
+/-- A table of the contract is one of its tables. -/
+theorem tableAt_mem {c : Contract} {j : Nat} {t : String × Nat × Nat × Nat} (h : c.tableAt j = some t) : t ∈ c.tables := by
+  unfold Contract.tables
+  refine List.mem_filterMap.mpr ⟨j, List.mem_range.mpr ?_, h⟩
+  unfold Contract.tableAt at h
+  cases hj : c.fixeds[j]? with
+  | none => rw [hj] at h; cases h
+  | some x => exact (List.getElem?_eq_some_iff.mp hj).1
+
+/-- A table is the fixed run of its number: its register, and an eighth of its bytes as its count. -/
+theorem tableAt_fixed {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : c.tableAt j = some (x, r, count, l)) :
+    ∃ n, c.fixeds[j]? = some (x, r, n) ∧ count = n / 8 := by
+  unfold Contract.tableAt at h
+  cases hj : c.fixeds[j]? with
+  | none => rw [hj] at h; cases h
+  | some t =>
+    obtain ⟨x', r', n⟩ := t
+    rw [hj] at h
+    simp only at h
+    cases hl : c.lanes.lookup x' with
+    | none => rw [hl] at h; cases h
+    | some y =>
+      rw [hl] at h
+      simp only at h
+      cases hr : c.regOf y with
+      | none => rw [hr] at h; cases h
+      | some l' =>
+        rw [hr] at h
+        simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
+        obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+        exact ⟨n, rfl, rfl⟩
 
 /-! ## What the verifier's state says -/
 
@@ -153,6 +208,9 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
   | .or v x y => 0 ≤ ev ρ x ∧ 0 ≤ ev ρ y ∧ ρ v = (((ev ρ x).toNat ||| (ev ρ y).toNat : Nat) : Int)
   | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
+  | .block j c off vs => ∃ x r count l, ctx.contract.tableAt j = some (x, r, count, l) ∧ c % 8 = 0 ∧ c / 8 < count ∧
+      0 ≤ ev ρ off ∧ ev ρ off + 64 ≤ 64 * (s0.reg l : Int) ∧ vs.length = 16 ∧
+      ∀ w, w < 16 → ρ (vs.getD w 0) = (Ode.load s0.mem (lanePtr s0 r (c / 8) + (ev ρ off).toNat + 4 * w) 4 : Nat)
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -319,6 +377,14 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     have ei : (ids.map fun i => Val.word (den (inpOf ctx s0) ρ' T' i)) = ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i) :=
       List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
     rw [ek, ei]; exact h3
+  | block j c off vs =>
+    obtain ⟨x, r, count, l, h1, h2, h3, h4, h5, h6, h7⟩ := h
+    have eo := ev_agree wk.1 a
+    refine ⟨x, r, count, l, h1, h2, h3, by rw [← eo]; exact h4, by rw [← eo]; exact h5, h6, fun w hw => ?_⟩
+    have hm : vs.getD w 0 ∈ vs := by
+      rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega)]
+      exact List.getElem_mem _
+    rw [← eo, ← a _ (wk.2 _ hm)]; exact h7 w hw
 
 theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -331,6 +397,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
     | num r => exact bounded_mono hn this
     | counter r => exact bounded_mono hn this
     | words js => exact fun i hi => Nat.lt_of_lt_of_le (this i hi) ht
+  | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}

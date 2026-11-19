@@ -329,6 +329,167 @@ theorem symLoad512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat →
       simp only [List.getElem_map, List.getElem_range]
       simpa only [getD_index (by rw [len]; exact hk)] using dn k hk
 
+/-! ## A block read through an address a table holds -/
+
+theorem findLane_spec {c : Contract} {addr : Row} : ∀ {l : List Known} {v j p lr : Nat},
+    findLane c addr l = some (v, j, p, lr) → Known.load v j p ∈ l ∧ ∃ x r count, c.tableAt j = some (x, r, count, lr)
+  | [], _, _, _, _, h => by simp [findLane] at h
+  | k :: more, v, j, p, lr, h => by
+    cases k with
+    | load v' j' p' =>
+      simp only [findLane] at h
+      cases ht : c.tableAt j' with
+      | none =>
+        simp only [ht] at h
+        obtain ⟨m, t⟩ := findLane_spec h
+        exact ⟨List.mem_cons_of_mem _ m, t⟩
+      | some t =>
+        obtain ⟨x, r, count, l'⟩ := t
+        simp only [ht] at h
+        split at h
+        next =>
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl, rfl, rfl⟩ := h
+          exact ⟨List.mem_cons_self .., x, r, count, ht⟩
+        next =>
+          obtain ⟨m, t⟩ := findLane_spec h
+          exact ⟨List.mem_cons_of_mem _ m, t⟩
+    | or _ _ _ | held _ _ _ | block _ _ _ _ =>
+      simp only [findLane] at h
+      obtain ⟨m, t⟩ := findLane_spec h
+      exact ⟨List.mem_cons_of_mem _ m, t⟩
+
+/-- Sixty-four bytes read through an address a table holds: the read is one the contract allows, within the
+lane's blocks, which hold what they held at entry; the sixteen new unknowns can be the block's words. -/
+theorem symLoadBlock_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {v j pl lr : Nat} {addr : Row} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hk : Known.load v j pl ∈ s.known) {x : String} {r count : Nat} (ht : ctx.contract.tableAt j = some (x, r, count, lr))
+    (hb : bounded s.nvars addr)
+    (h : symLoadBlock s v j pl lr addr items = .ok ((l, s'), rest)) (a : Nat)
+    (ha : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
+    allowed (ctx.contract.perm s0).read a 64 = true ∧
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ WideValue ctx s0 ρ' s' l ((List.range 16).map fun k => load st.mem (a + 4 * k) 4) := by
+  unfold symLoadBlock at h
+  split at h
+  · exact (refuse_ok h).elim
+  next hp8 =>
+    have p8 : pl % 8 = 0 := by simpa using hp8
+    obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
+    have g1 := entail_sound e1 ρ H.facts
+    have g2 := entail_sound e2 ρ H.facts
+    simp only [ev_sub, ev_scale, ev_var, ev_const] at g1 g2
+    -- the address the table holds
+    obtain ⟨x', r', n, hj, pn, hv⟩ := H.known _ hk
+    obtain ⟨n', hj', hcount⟩ := tableAt_fixed ht
+    rw [hj] at hj'
+    simp only [Option.some.injEq, Prod.mk.injEq] at hj'
+    obtain ⟨rfl, rfl, rfl⟩ := hj'
+    have vlt : v < s.nvars := wf.known _ hk
+    have ilt : pl / 8 < count := by rw [hcount]; omega
+    have eptr : lanePtr s0 r' (pl / 8) = load s0.mem (s0.reg r' + pl) 8 := by
+      unfold lanePtr; rw [show 8 * (pl / 8) = pl by omega]
+    obtain ⟨fit, apart, bytes, outs⟩ := E.lane ht ilt
+    have lr16 : lr < 16 := tableAt_lt ht
+    have hlr := H.entry lr lr16
+    rw [hlr, hv, ← eptr] at g2
+    rw [hv, ← eptr] at g1
+    have boff : bounded s.nvars (Lin.sub addr (Lin.var v)) := bounded_sub hb (bounded_var vlt)
+    have eoff : ev ρ (Lin.sub addr (Lin.var v)) = ev ρ addr - (lanePtr s0 r' (pl / 8) : Nat) := by rw [ev_sub, ev_var, hv, ← eptr]
+    have A : a = lanePtr s0 r' (pl / 8) + (ev ρ (Lin.sub addr (Lin.var v))).toNat := by
+      apply ha
+      · rw [eoff]; omega
+      · rw [eoff]; unfold M64 at fit ⊢; omega
+    have inside : ∀ y, a ≤ y → y < a + 64 → lanePtr s0 r' (pl / 8) ≤ y ∧ y < lanePtr s0 r' (pl / 8) + 64 * s0.reg lr := by
+      intro y h1 h2
+      rw [A, eoff] at h1 h2
+      omega
+    have same : ∀ y, a ≤ y → y < a + 64 → st.mem y = s0.mem y := by
+      intro y h1 h2
+      obtain ⟨i1, i2⟩ := inside y h1 h2
+      apply H.mem
+      · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+        omega
+      · unfold Contract.inOut
+        rw [List.any_eq_false]
+        intro ⟨x'', r'', n''⟩ m
+        have := outs x'' r'' n'' m
+        simp only [Bool.and_eq_true, decide_eq_true_eq]
+        omega
+    have hread : allowed (ctx.contract.perm s0).read a 64 = true := by
+      apply allowed_of
+      intro y h1 h2
+      obtain ⟨i1, i2⟩ := inside y h1 h2
+      simp only [Contract.perm, Bool.or_eq_true]
+      right
+      unfold Contract.inLane
+      exact List.any_eq_true.mpr ⟨(x', r', count, lr), tableAt_mem ht,
+        List.any_eq_true.mpr ⟨pl / 8, List.mem_range.mpr ilt, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩⟩
+    refine ⟨hread, ?_⟩
+    -- the sixteen unknowns: the block's words
+    let ρ' : Nat → Int := fun k => if s.nvars ≤ k ∧ k < s.nvars + 16 then ((load s0.mem (a + 4 * (k - s.nvars)) 4 : Nat) : Int) else ρ k
+    have ag : Agree s.nvars ρ ρ' := by
+      intro k hk'
+      show ρ k = if s.nvars ≤ k ∧ k < s.nvars + 16 then ((load s0.mem (a + 4 * (k - s.nvars)) 4 : Nat) : Int) else ρ k
+      rw [if_neg (by omega)]
+    have new : ∀ w, w < 16 → ρ' (s.nvars + w) = (load s0.mem (a + 4 * w) 4 : Nat) := by
+      intro w hw
+      show (if s.nvars ≤ s.nvars + w ∧ s.nvars + w < s.nvars + 16 then ((load s0.mem (a + 4 * (s.nvars + w - s.nvars)) 4 : Nat) : Int) else ρ (s.nvars + w)) = _
+      rw [if_pos (by omega), Nat.add_sub_cancel_left]
+    have word : ∀ w, load s0.mem (a + 4 * w) 4 < 4294967296 := by
+      intro w
+      have lt := load_lt s0.mem (a + 4 * w) 4
+      have p4 : (256 : Nat) ^ 4 = 4294967296 := by decide
+      rw [p4] at lt; exact lt
+    have eoff' : ev ρ' (Lin.sub addr (Lin.var v)) = ev ρ (Lin.sub addr (Lin.var v)) := (ev_agree boff ag).symm
+    have c1 := Carried.more (ctx := ctx) (s0 := s0) (st := st) H wf 16 ag []
+      (.block j pl (Lin.sub addr (Lin.var v)) ((List.range 16).map (s.nvars + ·)))
+      (fun f m => nomatch m)
+      ⟨bounded_mono (Nat.le_add_right _ _) boff, by
+        intro u hu
+        obtain ⟨w, hw, rfl⟩ := List.mem_map.mp hu
+        have := List.mem_range.mp hw
+        omega⟩
+      (fun f m => nomatch m)
+      ⟨x', r', count, lr, ht, p8, ilt, by rw [eoff', eoff]; omega, by rw [eoff', eoff]; omega, by simp, by
+        intro w hw
+        have e : ((List.range 16).map (s.nvars + ·)).getD w 0 = s.nvars + w := by
+          rw [getD_index (by simpa using hw) 0]; simp
+        rw [e, new w hw, eoff', ← A]⟩
+    have c2 := symLaneTerms_sound (val := fun r => (ev ρ' r % W32i).toNat) h c1.holds c1.wf (by simp)
+      (fun r m T _ ok => wAtom_step ok (by
+        obtain ⟨u, hu, rfl⟩ := List.mem_map.mp m
+        obtain ⟨w, hw, rfl⟩ := List.mem_map.mp hu
+        have := List.mem_range.mp hw
+        exact bounded_var (show s.nvars + w < s.nvars + 16 by omega)))
+    refine ⟨ρ', c1.then c2.1, c2.2.1, c2.2.2.1, ?_⟩
+    rw [← c2.2.2.2]
+    apply List.ext_getElem
+    · simp
+    · intro w h1 h2
+      have hw : w < 16 := by simpa using h1
+      simp only [List.getElem_map, List.getElem_range, ev_var]
+      rw [new w hw]
+      have := word w
+      have hl : load st.mem (a + 4 * w) 4 = load s0.mem (a + 4 * w) 4 :=
+        load_congr _ _ _ _ fun y h1 h2 => same y (by omega) (by omega)
+      rw [hl]
+      unfold W32i
+      omega
+
+/-- A 512-bit load through an address a table holds, as the machine does it. -/
+theorem symLoadLane512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {bind : Bind} {args : List Expr} {addr : Row} {v j pl lr : Nat} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hw : symWordAddr bind s args = some addr) (hf : findLane ctx.contract addr s.known = some (v, j, pl, lr))
+    (h : symLoadBlock s v j pl lr addr items = .ok ((l, s'), rest)) :
+    ∃ ρ' lanes, Carried ctx s0 ρ s ρ' s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "mem512" args) = some lanes ∧
+      WideValue ctx s0 ρ' s' l lanes := by
+  obtain ⟨vs, vv, ba, loc⟩ := symWordAddr_sound H wf hw
+  obtain ⟨hk, x, r, count, ht⟩ := findLane_spec hf
+  obtain ⟨al, ρ', c, val⟩ := symLoadBlock_sound E H wf hk ht ba h (sumList vs % M64) loc
+  refine ⟨ρ', _, c, ?_, val⟩
+  simp [lanesOf512, addr512, vv, al]
+
 private theorem dot_aligned : ∀ (cs : List Int) (ρ : Nat → Int), cs.all (fun x => x % 64 == 0) = true → (64 : Int) ∣ dot cs ρ
   | [], _, _ => Int.dvd_zero _
   | c :: cs, ρ, h => by
@@ -443,8 +604,19 @@ theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
           next hf =>
             simp only [beq_iff_eq] at hf
             subst f
-            obtain ⟨lanes, c, eval, val⟩ := symLoad512_sound E H wf h
-            exact ⟨ρ, lanes, c, eval, val⟩
+            cases hfl : (symWordAddr bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
+            | none =>
+              simp only [hfl] at h
+              obtain ⟨lanes, c, eval, val⟩ := symLoad512_sound E H wf h
+              exact ⟨ρ, lanes, c, eval, val⟩
+            | some t =>
+              obtain ⟨a, v, j, pl, lr⟩ := t
+              simp only [hfl] at h
+              obtain ⟨a', hw, hx⟩ := Option.bind_eq_some_iff.mp hfl
+              obtain ⟨y, hfy, hy⟩ := Option.map_eq_some_iff.mp hx
+              simp only [Prod.mk.injEq] at hy
+              obtain ⟨rfl, rfl⟩ := hy
+              exact symLoadLane512_sound E H wf hw hfy h
           next =>
             split at h
             next hf =>

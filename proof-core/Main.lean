@@ -10,9 +10,18 @@ TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by t
     arg NAME number           the contract's arguments, in order
     arg NAME bytes LEN        (the address of LEN bytes to read, LEN another argument)
     arg NAME out N            (the address of N bytes to write, which the function does not read)
+    arg NAME fixed N          (the address of N bytes to read)
+    arg NAME inout N          (the address of N bytes to read and to write)
+    lanes NAME COUNT          the run NAME of a fixed number of bytes is a table of addresses, eight bytes each:
+                              each is the address of COUNT blocks of 64 bytes to read, COUNT another argument
+    below NAME N              the caller sees to it that the number NAME is below N
+    atleast NAME N            the caller sees to it that the number NAME is no less than N
+    mbelow NAME PLACE N       the eight bytes at PLACE of the run NAME, as one number, are below N
+    needs WHAT                what the processor must have (`needsif WHAT NAME N`: if the number NAME is N)
     returns EXPRESSION        the number returned
     result NAME               or: the number returned is called NAME in the `ensures` lines
     ensures NAME LO HI LIST   at the return the bytes LO to HI of the run NAME are the things of LIST
+    ensuresw NAME EXPRESSION  at the return the whole run NAME is the bytes the expression gives
     stack N
     def NAME PARAMETER… = EXPRESSION      a definition of the specification (for every function)
 

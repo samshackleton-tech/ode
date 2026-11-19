@@ -304,7 +304,7 @@ contract lets it return in, what the verifier holds after the call is so, at the
 theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallPlain ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
@@ -376,7 +376,8 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
             (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m),
-            (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf)⟩
+            (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf),
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m)⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega
@@ -395,7 +396,8 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             exact E.byte hm k (by omega)
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, hnf, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          simp only [Contract.perm, hnf, inLane_false hl, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          left
           rcases ha with (ha | ha) | ha
           · left; left; left; omega
           · left; left; left; omega

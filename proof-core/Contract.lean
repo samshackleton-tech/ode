@@ -11,9 +11,10 @@ Here so far: definitions with `let` (numbers, `if`, comparisons, `+ - * / % |`, 
 `a[i]`, `a[i .. j]`, `len`, lists written out, joined, made thing by thing (`[e for x in a..b]`) and with
 places replaced (`with`), records, `the least number`, `the greatest power of two`, uses of definitions; a
 sequence is the definition it is, its place a last thing it is used with); contracts whose arguments are
-numbers, runs of `n` bytes that the function only reads, and runs of so many bytes that it may write and
-does not read; with `returns`, `stack`, and `ensures RUN[lo .. hi] = LIST`. Not here yet: other `requires`
-and `ensures`, `trace`, `fails`.
+numbers, runs of `n` bytes that the function only reads, runs of so many bytes that it may write and
+does not read, and tables of addresses of blocks that it only reads; with `returns`, `stack`, a number that
+is no less than another, and `ensures RUN[lo .. hi] = LIST`. Not here yet: other `requires` and `ensures`,
+`trace`, `fails`.
 -/
 namespace Ode
 
@@ -285,6 +286,9 @@ structure Contract where
                                       -- as one number (the lowest byte first), are below n; the caller sees to it
   needsIf : List (String × String × Nat) := []   -- (what, an argument that is a number, n): the processor must have `what`
                                       -- if that argument is n. (As `needs`, it says nothing of the machine here.)
+  lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
+                                      -- bytes of the run are the address of that many blocks of 64 bytes, given to read
+  atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -339,6 +343,36 @@ def Contract.fixeds (c : Contract) : List (String × Nat × Nat) := fixedsIn c.a
 /-- The runs the function may read and may write. -/
 def Contract.inouts (c : Contract) : List (String × Nat × Nat) := inoutsIn c.args argRegs
 
+/-- The fixed run of number `j` is a table of addresses (`lanes` names it): the table's name, the register
+with its address, how many addresses it holds (eight bytes each), and the register with the count of blocks. -/
+def Contract.tableAt (c : Contract) (j : Nat) : Option (String × Nat × Nat × Nat) :=
+  match c.fixeds[j]? with
+  | some (x, r, n) =>
+    match c.lanes.lookup x with
+    | some y => (c.regOf y).map fun l => (x, r, n / 8, l)
+    | none => none
+  | none => none
+
+/-- The tables of addresses, in the order of the runs they are. -/
+def Contract.tables (c : Contract) : List (String × Nat × Nat × Nat) := (List.range c.fixeds.length).filterMap c.tableAt
+
+/-- The address a table holds at its place `i`: eight bytes as one number, the lowest byte first. -/
+def lanePtr (s : State) (r i : Nat) : Nat := load s.mem (s.reg r + 8 * i) 8
+
+/-- The address is in the blocks a table of addresses points to, `s` being the state at entry. -/
+def Contract.inLane (c : Contract) (s : State) (a : Nat) : Bool :=
+  c.tables.any fun (_, r, count, l) => (List.range count).any fun i => lanePtr s r i ≤ a && a < lanePtr s r i + 64 * s.reg l
+
+/-- A block as the specification has it: sixteen words, each four bytes, the lowest first. -/
+def blockWords (mem : Nat → Nat) (a : Nat) : Val := .list ((List.range 16).map fun w => Val.word (load mem (a + 4 * w) 4))
+
+/-- The blocks at an address, one after another: a list of `n` blocks. -/
+def laneBlocks (mem : Nat → Nat) (p n : Nat) : Val := .list ((List.range n).map fun b => blockWords mem (p + 64 * b))
+
+/-- A table's name as a value, in a state at entry: the list of its lanes, each the list of its blocks. -/
+def Contract.lanesEnv (c : Contract) (s : State) : List (String × Val) :=
+  c.tables.map fun (x, r, count, l) => (x, .list ((List.range count).map fun i => laneBlocks s.mem (lanePtr s r i) (s.reg l)))
+
 /-- The address is in a run of a fixed number of bytes that the function may read, `s` being the state at entry. -/
 def Contract.inFixed (c : Contract) (s : State) (a : Nat) : Bool :=
   (c.fixeds.any fun (_, r, n) => s.reg r ≤ a && a < s.reg r + n) || (c.inouts.any fun (_, r, n) => s.reg r ≤ a && a < s.reg r + n)
@@ -373,15 +407,17 @@ what memory holds there. -/
 def Contract.env (c : Contract) (s : State) : List (String × Val) := envIn c s c.args argRegs
 
 /-- The same, with the runs of a fixed count as well (those only read, and those read and written): each is
-the bytes memory holds there in the state at entry. An `EnsureW` is said by these names. -/
-def Contract.envW (c : Contract) (s : State) : List (String × Val) := envWIn c s c.args argRegs
+the bytes memory holds there in the state at entry. An `EnsureW` is said by these names. A table of
+addresses comes first, by its name: there the name is the list of its lanes (the first of a name counts). -/
+def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEnv s ++ envWIn c s c.args argRegs
 
 def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
 
 /-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
-read, its own frame and the return address above it; it may write its own frame and the runs given to write. -/
+read, its own frame and the return address above it, and the blocks a table of addresses points to; it may
+write its own frame and the runs given to write. -/
 def Contract.perm (c : Contract) (s : State) : Perm where
-  read a := ((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a
+  read a := (((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a
   write a := c.inFrame s a || c.inOut s a
 
 /-- The function's code lies in memory below 2^64. -/
@@ -393,7 +429,9 @@ lies in memory, apart from that frame and from the address to return to, and hol
 write lies in memory, apart from that frame, from the address to return to, from every run given to read
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
 from the frame, the address to return to and every run given to write, and holds bytes; a run given to read
-and to write holds bytes. A number the contract bounds is below its bound, in a register or in memory. -/
+and to write holds bytes. A number the contract bounds is below its bound, in a register or in memory. The
+blocks each address of a table points to lie in memory, apart from the frame, the address to return to and
+every run given to write, and hold bytes. A number the contract asks to be no less than another is so. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
@@ -410,7 +448,13 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x r n, (x, r, n) ∈ c.inouts → ∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
   (∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b) ∧
-  ∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b
+  (∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b) ∧
+  (∀ j x r count l, c.tableAt j = some (x, r, count, l) → ∀ i, i < count →
+    lanePtr s r i + 64 * s.reg l ≤ M64 ∧
+    (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ lanePtr s r i) ∧
+    (∀ k, k < 64 * s.reg l → s.mem (lanePtr s r i + k) < 256) ∧
+    ∀ x' r' n', (x', r', n') ∈ c.outs → lanePtr s r i + 64 * s.reg l ≤ s.reg r' ∨ s.reg r' + n' ≤ lanePtr s r i) ∧
+  ∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/

@@ -37,6 +37,10 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
   | rnil : WDen ctx s0 ρ T (.record []) (.record [])
   | rcons {x : String} {v : WVal} {a : Val} {fs : List (String × WVal)} {fs' : List (String × Val)} :
       WDen ctx s0 ρ T v a → WDen ctx s0 ρ T (.record fs) (.record fs') → WDen ctx s0 ρ T (.record ((x, v) :: fs)) (.record ((x, a) :: fs'))
+  | lanes (j count l : Nat) (x : String) (r : Nat) (h : ctx.contract.tableAt j = some (x, r, count, l)) :
+      WDen ctx s0 ρ T (.lanes j count l) (.list ((List.range count).map fun i => laneBlocks s0.mem (lanePtr s0 r i) (s0.reg l)))
+  | lane (j c l : Nat) (x : String) (r count : Nat) (h : ctx.contract.tableAt j = some (x, r, count, l)) (hc : c % 8 = 0) (hi : c / 8 < count) :
+      WDen ctx s0 ρ T (.lane j c l) (laneBlocks s0.mem (lanePtr s0 r (c / 8)) (s0.reg l))
   | other (a : Val) : WDen ctx s0 ρ T .other a
 
 section
@@ -166,6 +170,7 @@ theorem heldIds_mem {f : String} {keys : List Key} : ∀ {l : List Known} {ids :
       next => exact List.mem_cons_of_mem _ (heldIds_mem h)
     | load v j c => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
     | or v x y => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
+    | block j c off vs => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
 
 /-- Every use of a definition that the state holds the words of: the definition gives those words within
 `B` steps. -/
@@ -198,6 +203,12 @@ theorem held_bound_list (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List No
       · cases e
       · exact hB _ _ _ m
     | or v x y =>
+      refine ⟨B, ?_⟩
+      intro f' keys' ids' m
+      rcases List.mem_cons.mp m with e | m
+      · cases e
+      · exact hB _ _ _ m
+    | block j c off vs =>
       refine ⟨B, ?_⟩
       intro f' keys' ids' m
       rcases List.mem_cons.mp m with e | m
@@ -323,6 +334,102 @@ theorem WDen.wordsOf (wf : WF s) : ∀ (ids : List Nat),
     WDen ctx s0 ρ s.terms (.list (ids.map fun i => WVal.word [i])) (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)))
   | [] => WDen.nil
   | i :: rest => WDen.cons (WDen.one wf i) (WDen.wordsOf wf rest)
+
+/-! ## A block of a lane -/
+
+theorem sameRow_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) {a b : Row}
+    (h : sameRow facts a b = true) : ev ρ a = ev ρ b := by
+  simp only [sameRow, Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true] at h
+  rcases h with h | ⟨h1, h2⟩
+  · rw [h]
+  · have g1 := plain_sound h1 ρ hf
+    have g2 := plain_sound h2 ρ hf
+    rw [ev_sub] at g1 g2
+    omega
+
+theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : List Known} {vs : List Nat},
+    knownBlock facts j c off l = some vs → ∃ off', Known.block j c off' vs ∈ l ∧ sameRow facts off' off = true
+  | [], _, h => by simp [knownBlock] at h
+  | k :: more, vs, h => by
+    cases k with
+    | block j' c' off' vs' =>
+      simp only [knownBlock] at h
+      split at h
+      next e =>
+        injection h with h
+        obtain ⟨e1, e2, e3⟩ := e
+        subst h e1 e2
+        exact ⟨off', List.mem_cons_self .., e3⟩
+      next =>
+        obtain ⟨o, m, hs⟩ := knownBlock_mem h
+        exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
+    | load _ _ _ | or _ _ _ | held _ _ _ =>
+      simp only [knownBlock] at h
+      obtain ⟨o, m, hs⟩ := knownBlock_mem h
+      exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
+
+/-- Unknowns whose terms are in the table, as words: each is its unknown's remainder by 2^32. -/
+theorem atomWords_sound (wf : WF s) : ∀ {vs : List Nat} {ws : List WVal},
+    atomWords (fun n => findNode n s.terms 0) vs = some ws →
+    WDen ctx s0 ρ s.terms (.list ws) (.list (vs.map fun v => Val.word ((ρ v % W32i).toNat)))
+  | [], _, h => by simp only [atomWords, Option.some.injEq] at h; subst h; exact WDen.nil
+  | v :: more, ws, h => by
+    simp only [atomWords] at h
+    cases hf : findNode (.atom (Lin.word (Lin.var v))) s.terms 0 with
+    | none => simp [hf] at h
+    | some i =>
+      cases hr : atomWords (fun n => findNode n s.terms 0) more with
+      | none => simp [hf, hr] at h
+      | some rest =>
+        simp only [hf, hr, Option.some.injEq] at h; subst h
+        have hd := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
+        simp only [Node.value] at hd
+        rw [ev_word, ev_var] at hd
+        have one := WDen.one (ctx := ctx) (s0 := s0) (ρ := ρ) wf i
+        rw [hd] at one
+        exact WDen.cons one (atomWords_sound wf hr)
+
+/-- The block `weval` finds at byte `off` of a lane is the block the account has at that place of the lane:
+the function read it there, within the lane's blocks. -/
+theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {j c : Nat} {off : Row} {v : WVal}
+    (h : blockAt (fun n => findNode n s.terms 0) s j c off = some v) {k : Int} (hk : ev ρ off = 64 * k)
+    {x : String} {r count l : Nat} (ht : ctx.contract.tableAt j = some (x, r, count, l)) :
+    0 ≤ k ∧ ∃ a, ((List.range (s0.reg l)).map fun b => blockWords s0.mem (lanePtr s0 r (c / 8) + 64 * b))[k.toNat]? = some a ∧
+      WDen ctx s0 ρ s.terms v a := by
+  unfold blockAt at h
+  obtain ⟨vs, hkb, hws⟩ := Option.bind_eq_some_iff.mp h
+  obtain ⟨ws, haw, rfl⟩ := Option.map_eq_some_iff.mp hws
+  obtain ⟨off', m, same⟩ := knownBlock_mem hkb
+  obtain ⟨x', r', count', l', ht', c8, clt, o0, o1, len, words⟩ := H.known _ m
+  rw [ht] at ht'
+  simp only [Option.some.injEq, Prod.mk.injEq] at ht'
+  obtain ⟨rfl, rfl, rfl, rfl⟩ := ht'
+  have eo := sameRow_sound H.facts same
+  rw [eo, hk] at o0 o1
+  have k0 : 0 ≤ k := by omega
+  have klt : k.toNat < s0.reg l := by omega
+  refine ⟨k0, _, by rw [List.getElem?_map, List.getElem?_range klt]; rfl, ?_⟩
+  have hw := atomWords_sound (ctx := ctx) (s0 := s0) (ρ := ρ) wf haw
+  have e : (vs.map fun v => Val.word ((ρ v % W32i).toNat)) =
+      (List.range 16).map fun w => Val.word (load s0.mem (lanePtr s0 r (c / 8) + 64 * k.toNat + 4 * w) 4) := by
+    apply List.ext_getElem
+    · simp [len]
+    · intro w h1 h2
+      have hw16 : w < 16 := by simpa using h2
+      simp only [List.getElem_map, List.getElem_range]
+      have hval := words w hw16
+      rw [getD_index (by omega) 0, eo, hk] at hval
+      have lt := load_lt s0.mem (lanePtr s0 r (c / 8) + (64 * k).toNat + 4 * w) 4
+      have p4 : (256 : Nat) ^ 4 = 4294967296 := by decide
+      rw [p4] at lt
+      have ek : (64 * k).toNat = 64 * k.toNat := by omega
+      rw [ek] at hval lt
+      rw [hval]
+      congr 1
+      unfold W32i
+      omega
+  rw [e] at hw
+  exact hw
 
 /-- The terms of a list of words, where each is one: the words are those terms'. -/
 theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : List Nat},
@@ -1021,6 +1128,43 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
             simp only [evalSpec, ea, ei]; rw [if_pos k0]; exact er
           next => simp at h
         | _ => simp at h
+      | lanes j count l =>
+        cases iv with
+        | int k =>
+          cases di
+          cases da with
+          | lanes _ _ _ x r ht =>
+            simp only at h
+            split at h
+            next hk =>
+              simp only [Option.some.injEq] at h; subst h
+              refine ⟨laneBlocks s0.mem (lanePtr s0 r k.toNat) (s0.reg l), ?_, ?_⟩
+              · simp only [evalSpec, ea, ei]; rw [if_pos hk.1, List.getElem?_map, List.getElem?_range hk.2]; rfl
+              · have := WDen.lane (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) j (8 * k.toNat) l x r count ht (by omega) (by omega)
+                rw [Nat.mul_div_cancel_left _ (by decide : 0 < 8)] at this
+                exact this
+            next => simp at h
+        | _ => simp at h
+      | lane j c l =>
+        cases da with
+        | lane _ _ _ x r count ht c8 clt =>
+          cases iv with
+          | int k =>
+            cases di
+            simp only at h
+            split at h
+            next k0 =>
+              obtain ⟨_, a', ha', hd⟩ := blockAt_sound H wf h (k := k) (by simp) ht
+              refine ⟨a', ?_, hd⟩
+              simp only [evalSpec, ea, ei, laneBlocks]; rw [if_pos k0]; exact ha'
+            next => simp at h
+          | num r' =>
+            cases di
+            simp only at h
+            obtain ⟨k0, a', ha', hd⟩ := blockAt_sound H wf h (k := ev ρ r') (by simp) ht
+            refine ⟨a', ?_, hd⟩
+            simp only [evalSpec, ea, ei, laneBlocks]; rw [if_pos k0]; exact ha'
+          | _ => simp at h
       | _ => cases iv <;> simp at h
     | call f args =>
       simp only [weval] at h
@@ -1266,10 +1410,36 @@ theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
       simp only [Val.bytes, List.map_map]
       exact WDen.run r count (hi n r count (by simp [inoutsIn]))
 
-theorem wenv_sound {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
-    EnvDen ctx s0 ρ T (wenvIn ctx.contract ctx.contract.args argRegs) (ctx.contract.envW s0) :=
+theorem EnvDen.append {T : List Node} : ∀ {a : List (String × WVal)} {a' : List (String × Val)} {b : List (String × WVal)} {b' : List (String × Val)},
+    EnvDen ctx s0 ρ T a a' → EnvDen ctx s0 ρ T b b' → EnvDen ctx s0 ρ T (a ++ b) (a' ++ b')
+  | [], [], _, _, _, hb => hb
+  | [], _ :: _, _, _, ha, _ => by simp [EnvDen] at ha
+  | _ :: _, [], _, _, ha, _ => by simp [EnvDen] at ha
+  | (x, v) :: a, (y, w) :: a', _, _, ha, hb => ⟨ha.1, ha.2.1, EnvDen.append ha.2.2 hb⟩
+
+/-- The tables of addresses by their names: each stands for the list of its lanes. -/
+theorem lanesW_den {T : List Node} : ∀ (js : List Nat),
+    EnvDen ctx s0 ρ T (js.filterMap fun j => (ctx.contract.tableAt j).map fun (x, _, count, l) => (x, WVal.lanes j count l))
+      ((js.filterMap ctx.contract.tableAt).map fun (x, r, count, l) =>
+        (x, Val.list ((List.range count).map fun i => laneBlocks s0.mem (lanePtr s0 r i) (s0.reg l))))
+  | [] => by simp [EnvDen]
+  | j :: js => by
+    cases ht : ctx.contract.tableAt j with
+    | none => simp only [List.filterMap_cons, ht, Option.map_none]; exact lanesW_den js
+    | some t =>
+      obtain ⟨x, r, count, l⟩ := t
+      simp only [List.filterMap_cons, ht, Option.map_some, List.map_cons]
+      exact ⟨rfl, WDen.lanes j count l x r ht, lanesW_den js⟩
+
+theorem wenvIn_all {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
+    EnvDen ctx s0 ρ T (wenvIn ctx.contract ctx.contract.args argRegs) (envWIn ctx.contract s0 ctx.contract.args argRegs) :=
   wenvIn_sound H ctx.contract ctx.contract.args argRegs (fun _ m => argRegs_lt m)
     (fun _ _ _ m k hk => (E.fixed m).2.2.1 k hk) (fun _ _ _ m _ hk => E.inoutByte m hk)
+
+/-- The contract's names on words stand for its names in the account, a table's name first. -/
+theorem wenv_sound {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
+    EnvDen ctx s0 ρ T (wenv ctx.contract) (ctx.contract.envW s0) :=
+  EnvDen.append (lanesW_den _) (wenvIn_all E H)
 
 /-- The words the specification gives are the words known written: the bytes of the run are the bytes of
 those words, four a word, the lowest first. -/
@@ -1343,7 +1513,7 @@ theorem symEnsureW_sound {p : Program} (E : Setting ctx p s0) {e : EnsureW} {ite
             rw [hl] at h
             obtain ⟨rr, _, hw⟩ := findOutNamed_spec hfo
             have hw' : ctx.contract.outs[w]? = some (e.run, rr, n) := by simpa using hw
-            cases hwv : weval ctx (fun n => findNode n s.terms 0) s WFUEL (wenvIn ctx.contract ctx.contract.args argRegs) x with
+            cases hwv : weval ctx (fun n => findNode n s.terms 0) s WFUEL (wenv ctx.contract) x with
             | none => simp only [hwv] at h; exact (refuse_ok h).elim
             | some v =>
               cases v with
