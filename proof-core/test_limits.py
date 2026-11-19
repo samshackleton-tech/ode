@@ -18,6 +18,10 @@ takes 16 seconds to verify whole. Its own time for a kernel is measured with the
 verified in a process (as check_binary.py does it for each): 7 and 8 ms on the machine this was written on,
 where the AVX-512 kernel takes 20 ms as the thirteenth of a whole run. The smaller number is the one used.
 
+`b3l_node_out` calls the two kernels and is shown with them (a call is taken by the contract of a function
+shown in the same run). Its kept proof is its own three lines; the run measured is of the three functions,
+against kcheck's times for the three, one after the other.
+
 On November 18 the Lean verifier was five and six times slower on the two larger functions, and it was
 seen only when the times were measured for a report. This test is so that it is seen at once.
 
@@ -25,7 +29,7 @@ seen only when the times were measured for a report. This test is so that it is 
 import os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import built, lean_verify, statement, test_kernel
+import built, lean_verify, statement, test_kernel, test_node
 KCHECK = os.path.join(HERE, "..", "kcheck")
 PROGRAMS = os.path.join(KCHECK, "programs")
 # (the folder of ../kcheck/programs, the object, the specification, the function)
@@ -54,7 +58,7 @@ SMALL = 0.015           # seconds: under this a program's start is most of the t
 class Limits(unittest.TestCase):
     def test_no_proof_is_large_and_no_verification_five_times_slower_than_kchecks(self):
         built.built("odeverify")
-        lines = []
+        lines, kchecks = [], {}
         for folder, obj, spec, symbol in SHOWN + [(None, "b3hashr.o", k, k.symbol) for k, _ in KERNELS]:
             proof = os.path.join(HERE, "proofs", symbol + ".proof")
             if folder is None: obj, spec_text = os.path.join(KCHECK, obj), test_kernel.spec_text(contract=spec.contract)
@@ -85,11 +89,41 @@ class Limits(unittest.TestCase):
                     self.assertTrue(m, (symbol, r.stdout[-300:]))
                     took = float(m.group(1)) / 1000
                 python = took if python is None else min(python, took)
+            kchecks[symbol] = python
             name = symbol if folder is not None else dict((k.symbol, n) for k, n in KERNELS)[symbol]
             lines.append(f"  {name:<20} the proof {size:>6} bytes; the Lean verifier {1000 * lean:6.1f} ms; kcheck's {1000 * python:5.1f} ms; {lean / python:4.1f} times")
             with self.subTest(symbol=symbol):
                 self.assertLessEqual(size, SIZE, f"{symbol}: the proof is {size} bytes")
                 self.assertTrue(lean <= SMALL or lean <= TIMES * python, f"{symbol}: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * python:.1f} ms")
+        # the function that calls both kernels, with them
+        symbols = [test_node.NODE, test_node.AVX512, test_node.SSE41]
+        size = os.path.getsize(os.path.join(HERE, "proofs", test_node.NODE + ".proof"))
+        with tempfile.TemporaryDirectory() as d:
+            path, proof = os.path.join(d, "statement"), os.path.join(d, "proof")
+            with open(path, "w") as f: f.write("\n".join(statement.statement(test_node.spec_text(), test_node.FUNCTIONS)) + "\n")
+            with open(proof, "w") as out:
+                for symbol in symbols:
+                    with open(os.path.join(HERE, "proofs", symbol + ".proof")) as f: out.write(f.read())
+            lean = None
+            for _ in range(7):
+                t = time.time()
+                r = subprocess.run([lean_verify.EXE, lean_verify.TABLE, path, proof], capture_output=True, text=True)
+                took = time.time() - t
+                self.assertEqual(r.stdout, "shown\n", test_node.NODE)
+                lean = took if lean is None else min(lean, took)
+        python = None
+        for _ in range(5):
+            r = subprocess.run([sys.executable, "-c", ONE, KCHECK, test_node.OBJ, test_node.NODE], capture_output=True, text=True)
+            said = r.stdout.split(None, 2)
+            self.assertEqual((r.returncode, said[0], said[2]), (0, "18", "everything its contract allows\n"), (r.stdout[-300:], r.stderr[-300:]))
+            took = float(said[1]) / 1000
+            python = took if python is None else min(python, took)
+        three = python + kchecks[test_node.AVX512] + kchecks[test_node.SSE41]
+        lines.append(f"  {'b3l_node_out':<20} the proof {size:>6} bytes; with the two kernels: the Lean verifier {1000 * lean:6.1f} ms; "
+                     f"kcheck's {1000 * three:5.1f} ms ({1000 * python:.1f} ms its own); {lean / three:4.1f} times")
+        with self.subTest(symbol=test_node.NODE):
+            self.assertLessEqual(size, SIZE)
+            self.assertTrue(lean <= SMALL or lean <= TIMES * three, f"b3l_node_out: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * three:.1f} ms")
         print("\nthe limits (a proof under 100 kB; verifying no more than five times kcheck's time):\n" + "\n".join(lines), file=sys.stderr)
 
 

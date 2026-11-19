@@ -295,13 +295,14 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     rw [hmem _ (by omega)]
     exact g4
 
-/-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
+/-- **A call, by contract, of a function that writes nothing for its caller.** If the verifier has gone
+through such a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
 caller has seen to; what the called function may touch, this function may touch; and of every state the
 contract lets it return in, what the verifier holds after the call is so, at the next instruction. -/
-theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
+theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symCallPlain ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
@@ -309,9 +310,9 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
-  | none => simp only [symCall, hsp] at h; exact (refuse_ok h).elim
+  | none => simp only [symCallPlain, hsp] at h; exact (refuse_ok h).elim
   | some sp =>
-    simp only [symCall, hsp] at h
+    simp only [symCallPlain, hsp] at h
     split at h
     next => exact (refuse_ok h).elim
     next hguard =>

@@ -58,8 +58,9 @@ main thing we are working on.
 
 The folder `proof-core/` holds a second, much smaller verifier, written in Lean 4. With it comes a
 soundness theorem that Lean checks: if this verifier accepts a function, the function satisfies its
-contract, whatever proof it was given. So far it can verify five of the twelve small functions and two of
-the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block.
+contract, whatever proof it was given. So far it can verify five of the twelve small functions and three
+of the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block,
+and `b3l_node_out`, which reads a node record and calls whichever kernel the processor supports.
 Extending it until it covers all of the BLAKE3 code is the current work.
 [proof-core/README.md](proof-core/README.md) says exactly what its theorem assumes.
 

@@ -1396,6 +1396,9 @@ inductive WVal where
   | counter (r : Row)             -- the counter of a number that is no less than zero
   | list (l : List WVal)
   | run (r n : Nat)               -- the `n` bytes at the address register `r` held at entry, as they were at entry
+  | part (r off n : Nat)          -- `n` of those bytes, from place `off` on
+  | wbytes (ids : List Nat)       -- the bytes of the words of these terms, four a word, the lowest first
+  | record (fields : List (String × WVal))    -- a record: its names, each with its thing
   | other                         -- a thing that is not followed here
   deriving Inhabited
 
@@ -1443,6 +1446,7 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
       | none => none
     else none
   | .num r, .int m => if op == "%" ∧ 0 < m then (lowOf s r m).map .num else none
+  | .num x, .num y => if op == "|" then (knownOr x y s.known).map fun v => .num (Lin.var v) else none   -- (the unknown the state knows as both numbers' bits)
   | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none
   | _, _ => none
 
@@ -1475,6 +1479,15 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
     if f == "words" ∧ n % 4 = 0 then
       (runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0).bind fun j => (inputWords look j (n / 4) 0).map .list
     else none
+  | [.part r off n] =>
+    -- a part of a run that begins and ends at whole words: those words; eight bytes of a run only read: the
+    -- unknown the state knows as that number
+    if f == "words" ∧ off % 4 = 0 ∧ n % 4 = 0 then
+      (runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
+    else if f == "number.le" ∧ n = 8 then
+      (runAt r ctx.contract.fixeds 0).bind fun j => (knownLoad j off s.known).map fun v => .num (Lin.var v)
+    else none
+  | [.wbytes ids] => if f == "words" then some (.list (ids.map fun i => WVal.word [i])) else none
   | _ => none
 
 def wevalList (ev : SExpr → Option WVal) : SExpr → Option (List WVal)
@@ -1497,8 +1510,46 @@ def wputAll : List WVal → List WVal → Option (List WVal)
   | l, .int i :: x :: rest => if 0 ≤ i ∧ i.toNat < l.length then wputAll (l.set i.toNat x) rest else none
   | _, _ => none
 
+/-- The terms of a list of words (a sum must be in the table). -/
+def wordIds (look : Node → Option Nat) : List WVal → Option (List Nat)
+  | [] => some []
+  | .word xs :: rest =>
+    match idOf look xs, wordIds look rest with
+    | some i, some is => some (i :: is)
+    | _, _ => none
+  | _ => none
+
+/-- A thing a definition is used with, as a key: a number, a counter, or a list of words by their terms.
+(Two things of one key are one value.) -/
+def flatKey (look : Node → Option Nat) : WVal → Option Key
+  | .int n => some (.num (Lin.const n))
+  | .num r => some (.num r)
+  | .counter r => some (.counter r)
+  | .list l => (wordIds look l).map .words
+  | _ => none
+
+def flatKeys (look : Node → Option Nat) : List WVal → Option (List Key)
+  | [] => some []
+  | v :: rest =>
+    match flatKey look v, flatKeys look rest with
+    | some k, some ks => some (k :: ks)
+    | _, _ => none
+
+/-- A key speaks only of unknowns in use (`n` of them) and of terms of the table (`t` of them). -/
+def Key.ok (n t : Nat) : Key → Bool
+  | .num r => decide (r.coeff.length ≤ n)
+  | .counter r => decide (r.coeff.length ≤ n)
+  | .words ids => ids.all (· < t)
+
+/-- The words the state knows the definition `f` to give of these things. -/
+def heldIds (f : String) (keys : List Key) : List Known → Option (List Nat)
+  | [] => none
+  | .held f' keys' ids :: more => if f' = f ∧ keys' = keys then some ids else heldIds f keys more
+  | _ :: more => heldIds f keys more
+
 /-- The value of an expression on words (as `evalSpec` of the account has it on numbers), where it is
-followed: `none` where it is not. -/
+followed: `none` where it is not. A use of a definition whose value the state knows (a called function's
+contract has said it) has that value; any other use is worked out by the definition. -/
 def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option WVal
   | 0, _, _ => none
   | fuel + 1, env, e =>
@@ -1525,9 +1576,12 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
         if f == "len" then none
         else if own.contains f then wown ctx look s f vs
         else
-          match findDef ctx.defs f with
-          | some d => if d.params.length == vs.length then weval ctx look s fuel (d.params.zip vs) d.body else none
-          | none => none
+          match (flatKeys look vs).bind fun keys => heldIds f keys s.known with
+          | some ids => some (.list (ids.map fun i => WVal.word [i]))
+          | none =>
+            match findDef ctx.defs f with
+            | some d => if d.params.length == vs.length then weval ctx look s fuel (d.params.zip vs) d.body else none
+            | none => none
     | .list items => (wevalList (weval ctx look s fuel env) items).map .list
     | .letx x e rest =>
       match weval ctx look s fuel env e with
@@ -1542,6 +1596,22 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
       match weval ctx look s fuel env a, wevalList (weval ctx look s fuel env) puts with
       | some (.list l), some ps => (wputAll l ps).map .list
       | _, _ => none
+    | .slice a lo hi =>
+      -- a part of a run of bytes (of a list of things, none here)
+      match weval ctx look s fuel env a, weval ctx look s fuel env lo, weval ctx look s fuel env hi with
+      | some (.run r n), some (.int i), some (.int j) =>
+        if 0 ≤ i ∧ i ≤ j ∧ j ≤ n then some (.part r i.toNat (j - i).toNat) else none
+      | some (.part r off n), some (.int i), some (.int j) =>
+        if 0 ≤ i ∧ i ≤ j ∧ j ≤ n then some (.part r (off + i.toNat) (j - i).toNat) else none
+      | _, _, _ => none
+    | .record names items =>
+      match wevalList (weval ctx look s fuel env) items with
+      | some vs => if names.length == vs.length then some (.record (names.zip vs)) else none
+      | none => none
+    | .field e x =>
+      match weval ctx look s fuel env e with
+      | some (.record fields) => fields.lookup x
+      | _ => none
     | _ => none
 
 /-- The names of the contract for an `ensures` of a whole run (as `envWIn` of the account has them): a
@@ -1703,7 +1773,7 @@ def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
 first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
 given is one this function was given (so it lies in memory, apart from that frame, as the contract
 asks). Then the state is what the contract leaves: `Sym.afterCall`, and rax holds what `returns` says. -/
-def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+def symCallPlain (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
@@ -1724,6 +1794,157 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           | .val (.lin v) => pure { s2 with facts := [Lin.sub v (Lin.var s.nvars), Lin.sub (Lin.var s.nvars) v] ++ s2.facts }
           | .tail call => pure { s2 with spec := .value call (Lin.var s.nvars) :: s2.spec }
           | _ => refuse "a function returns a number"
+
+/-! ## A call of a function that writes a run of words for its caller
+
+The called function reads and writes one run of words, and reads parts of runs of a fixed count; its
+contract says the run then holds the bytes of the words a definition gives of its arguments. The call is
+taken by that: what the contract asks is shown first; after it each word of the run is a new unknown, and
+the definition, used with what the function was given, is known to be those words. -/
+
+def ranged32 (v : Nat) : List Row := [Lin.var v, Lin.sub (Lin.const (W32i - 1)) (Lin.var v)]
+
+/-- The terms of the words of the run `w` known written, from word `k` on, `count` of them. -/
+def writtenIds (wroteW : List (Nat × Nat × Nat)) (w : Nat) : Nat → Nat → Option (List Nat)
+  | 0, _ => some []
+  | count + 1, k =>
+    match wroteW.find? (fun e => e.1 == w && e.2.1 == k), writtenIds wroteW w count (k + 1) with
+    | some e, some rest => some (e.2.2 :: rest)
+    | _, _ => none
+
+/-- The run this function may read and write that a called function is given to read and write: the
+register `r` holds its address as it was at entry, it is `n` bytes, no single byte of it was written, and
+every word of it is known written. Its number among the runs given to write, and the words' terms. -/
+def callRun (ctx : Ctx) (s : Sym) (r n : Nat) : Option (Nat × List Nat) :=
+  match findOut (s.reg r) ctx.contract.outs 0 with
+  | some (.out w off) =>
+    match ctx.contract.outs[w]? with
+    | some (x, b, n0) =>
+      if Lin.isConst off = some 0 ∧ n0 = n ∧ n % 4 = 0 ∧ ctx.contract.inouts.contains (x, b, n0) = true ∧
+          s.wrote.all (fun e => e.1 != w) = true then
+        (writtenIds s.wroteW w (n / 4) 0).map fun ids => (w, ids)
+      else none
+    | none => none
+  | _ => none
+
+/-- The part of a run of a fixed count this function was given to read that a called function is given to
+read: the register `r` holds an address so far from where the run begins, and `n` bytes from there lie in
+the run. (The run by its number, the register its address was in at entry, and the place.) -/
+def fixedPart (ctx : Ctx) (s : Sym) (r n : Nat) : Option (Nat × Nat × Nat) :=
+  match findOut (s.reg r) ctx.contract.fixeds 0 with
+  | some (.out j off) =>
+    match Lin.isConst off, ctx.contract.fixeds[j]? with
+    | some c, some (_, b, n0) => if 0 ≤ c ∧ c + n ≤ n0 then some (j, b, c.toNat) else none
+    | _, _ => none
+  | _ => none
+
+/-- A called function's names on words, where its arguments are numbers, parts of runs of a fixed count
+this function was given, and the run it reads and writes (the bytes of the words of `ids`). -/
+def calleeW (ctx : Ctx) (s : Sym) (ids : List Nat) : List (String × Kind) → List Nat → Option (List (String × WVal))
+  | (x, .number) :: args, r :: regs => (calleeW ctx s ids args regs).map fun env => (x, WVal.num (s.reg r)) :: env
+  | (x, .fixed n) :: args, r :: regs =>
+    match fixedPart ctx s r n, calleeW ctx s ids args regs with
+    | some (_, b, c), some env => some ((x, WVal.part b c n) :: env)
+    | _, _ => none
+  | (x, .inout _) :: args, _ :: regs => (calleeW ctx s ids args regs).map fun env => (x, WVal.wbytes ids) :: env
+  | (_, .bytes _) :: _, _ :: _ => none
+  | (_, .out _) :: _, _ :: _ => none
+  | _, _ => some []
+
+/-- The words of the parts of runs handed to a called function, as terms to be in the table (so that the
+specification's `words` of such a part finds them). -/
+def partNodes (ctx : Ctx) (s : Sym) : List (String × Kind) → List Nat → List Node
+  | (_, .fixed n) :: args, r :: regs =>
+    (match fixedPart ctx s r n with
+     | some (j, _, c) => if c % 4 = 0 then (List.range (n / 4)).map fun k => Node.input j (c / 4 + k) else []
+     | none => []) ++ partNodes ctx s args regs
+  | _ :: args, _ :: regs => partNodes ctx s args regs
+  | _, _ => []
+
+/-- The state after a call of a function that has written the run `w`, of `m` words: as after any call
+(`Sym.afterCall`); and each word of the run is a new unknown from 0 to 2^32 - 1, the run's words are those,
+and the definition `g`, used with `keys`, is known to be the list of them. What was known of the other runs
+given to write stays. -/
+def Sym.afterCallW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) : Sym :=
+  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.terms
+  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+    zf := .unknown, cf := .unknown,
+    frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
+    facts := ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
+             ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
+    terms := made.2,
+    intact := s.intact.filter (· != w),
+    wroteW := ((List.range m).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW.filter fun e => e.1 != w,
+    known := .held g keys made.1 :: s.known }
+
+/-- What a call of a function that writes a run of words is taken by: the run of this function that it
+writes (its number among the runs given to write, and how many words it has), the definition its contract
+names, the keys of the things the definition is used with there, and the table with the words of the parts
+handed over put in. -/
+structure CallW where
+  w : Nat
+  words : Nat
+  g : String
+  keys : List Key
+  terms : List Node
+
+/-- That, where the call can be taken so; else why not. (No proof is read here.) -/
+def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
+  if !c.mbounds.isEmpty then .error "a called function whose contract bounds a number in memory: not here yet"
+  else
+    match c.outs, c.inouts, c.ensuresW with
+    | [(run, r, n)], [(run', r', n')], [e] =>
+      if !(run == run' && r == r' && n == n' && e.run == run) then
+        .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
+      else
+        match callRun ctx s r n with
+        | none => .error "a called function is given to write what is not a run this function may read and write, whole, with every word of it known"
+        | some (w, ids) =>
+          match calleeW ctx s ids c.args argRegs with
+          | none => .error "a called function is given a run that is no part of a run of a fixed count this function was given"
+          | some env =>
+            -- its promise: the run is the bytes of the words a definition gives of its arguments
+            match e.value with
+            | .call f (.cons (.call g args) .nil) =>
+              if f == "bytes_of" && !own.contains g && g != "len" then
+                let T := (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2
+                let index := termIndex T
+                match wevalList (weval ctx (fun n => index[n]?) { s with terms := T } WFUEL env) args, findDef ctx.defs g with
+                | some vs, some d =>
+                  match flatKeys (fun n => index[n]?) vs with
+                  | some keys =>
+                    if !(keys.all (Key.ok s.nvars T.length)) then .error "what a called function's contract says of its arguments is not followed"
+                    else if d.params.length == keys.length then .ok ⟨w, n / 4, g, keys, T⟩
+                    else .error "a called function's contract uses a definition with another number of things"
+                  | none => .error "what a called function's contract says of its arguments is not followed"
+                | _, _ => .error "what a called function's contract says of its arguments is not followed"
+              else .error "a called function's `ensures` that is not the bytes of the words a definition gives: not here yet"
+            | _ => .error "a called function's `ensures` that is not the bytes of the words a definition gives: not here yet"
+    | _, _, _ => .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
+
+def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+  match s.sp with
+  | none => refuse "at a call the stack pointer is not known"
+  | some sp =>
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+      refuse "a call needs more stack than this function's contract allows"
+    else
+      match callW ctx s c with
+      | .error what => refuse what
+      | .ok plan => do
+        -- what its contract asks of the numbers it is given
+        each (fun (xb : String × Nat) =>
+          match c.regOf xb.1 with
+          | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
+          | none => pure ()) c.bounds
+        pure (Sym.afterCallW { s with terms := plan.terms } sp plan.w plan.words plan.g plan.keys)
+
+/-- A call: by the rule for a function that writes nothing for its caller, or by the rule for one that
+writes a run of words. -/
+def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+  if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
+  else symCallW ctx s c
 
 /-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The
 machine of the account has every row of the table, so no theorem asks this. A reader of this function's

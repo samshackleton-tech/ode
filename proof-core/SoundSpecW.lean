@@ -14,6 +14,11 @@ namespace Ode
 
 open Arithmetic
 
+/-- The four bytes of each word, the lowest first (as `ofWords` of the account gives them). -/
+def wordBytes : List Nat → List Val
+  | [] => []
+  | w :: rest => .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: wordBytes rest
+
 /-- What a value on words stands for, the unknowns being `ρ` and the table `T`: a value of the account. -/
 inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVal → Val → Prop
   | int (n : Int) : WDen ctx s0 ρ T (.int n) (.int n)
@@ -26,6 +31,12 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
       WDen ctx s0 ρ T v a → WDen ctx s0 ρ T (.list vs) (.list as) → WDen ctx s0 ρ T (.list (v :: vs)) (.list (a :: as))
   | run (r n : Nat) (hb : ∀ k, k < n → s0.mem (s0.reg r + k) < 256) :
       WDen ctx s0 ρ T (.run r n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + k))))
+  | part (r off n : Nat) (hb : ∀ k, k < n → s0.mem (s0.reg r + off + k) < 256) :
+      WDen ctx s0 ρ T (.part r off n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + off + k))))
+  | wbytes (ids : List Nat) : WDen ctx s0 ρ T (.wbytes ids) (.list (wordBytes (ids.map (den (inpOf ctx s0) ρ T))))
+  | rnil : WDen ctx s0 ρ T (.record []) (.record [])
+  | rcons {x : String} {v : WVal} {a : Val} {fs : List (String × WVal)} {fs' : List (String × Val)} :
+      WDen ctx s0 ρ T v a → WDen ctx s0 ρ T (.record fs) (.record fs') → WDen ctx s0 ρ T (.record ((x, v) :: fs)) (.record ((x, a) :: fs'))
   | other (a : Val) : WDen ctx s0 ρ T .other a
 
 section
@@ -108,7 +119,91 @@ theorem EnvDen.zip : ∀ {ps : List String} {vs : List WVal} {as : List Val}, WD
     cases h with
     | cons h1 h2 => exact ⟨rfl, h1, EnvDen.zip h2⟩
 
+theorem WDen.record_inv {fs : List (String × WVal)} {a : Val} (h : WDen ctx s0 ρ T (.record fs) a) : ∃ fs', a = .record fs' := by
+  cases h with
+  | rnil => exact ⟨_, rfl⟩
+  | rcons _ _ => exact ⟨_, rfl⟩
+
+/-- A record of the things of a list, by names: of both sides alike. -/
+theorem WDen.zipRecord : ∀ {ps : List String} {vs : List WVal} {as : List Val}, WDen ctx s0 ρ T (.list vs) (.list as) →
+    WDen ctx s0 ρ T (.record (ps.zip vs)) (.record (ps.zip as))
+  | [], _, _, _ => by simp only [List.zip_nil_left]; exact WDen.rnil
+  | _ :: _, [], _, h => by cases h; simp only [List.zip_nil_right]; exact WDen.rnil
+  | p :: ps, _ :: _, _, h => by
+    cases h with
+    | cons h1 h2 => exact WDen.rcons h1 (WDen.zipRecord h2)
+
+theorem WDen.lookupRecord {x : String} : ∀ {fs : List (String × WVal)} {fs' : List (String × Val)} {v : WVal},
+    WDen ctx s0 ρ T (.record fs) (.record fs') → fs.lookup x = some v → ∃ a, fs'.lookup x = some a ∧ WDen ctx s0 ρ T v a
+  | [], _, _, _, h => by simp at h
+  | (y, w) :: fs, _, v, hd, h => by
+    cases hd with
+    | rcons hw hrest =>
+      simp only [List.lookup] at h ⊢
+      cases hxy : x == y with
+      | true =>
+        simp only [hxy] at h ⊢
+        injection h with h; subst h
+        exact ⟨_, rfl, hw⟩
+      | false =>
+        simp only [hxy] at h ⊢
+        exact WDen.lookupRecord hrest h
+
 end
+
+theorem heldIds_mem {f : String} {keys : List Key} : ∀ {l : List Known} {ids : List Nat}, heldIds f keys l = some ids → Known.held f keys ids ∈ l
+  | [], _, h => by simp [heldIds] at h
+  | k :: more, ids, h => by
+    cases k with
+    | held f' keys' ids' =>
+      simp only [heldIds] at h
+      split at h
+      next e =>
+        injection h with h
+        obtain ⟨e1, e2⟩ := e
+        subst h e1 e2
+        exact List.mem_cons_self ..
+      next => exact List.mem_cons_of_mem _ (heldIds_mem h)
+    | load v j c => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
+    | or v x y => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
+
+/-- Every use of a definition that the state holds the words of: the definition gives those words within
+`B` steps. -/
+def HeldWithin (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) (known : List Known) (B : Nat) : Prop :=
+  ∀ f keys ids, Known.held f keys ids ∈ known → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+    evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body =
+      some (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
+
+/-- There is such a number of steps: the largest any of them needs. -/
+theorem held_bound_list (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : ∀ (l : List Known),
+    (∀ k ∈ l, k.holds ctx s0 ρ T) → ∃ B, HeldWithin ctx s0 ρ T l B
+  | [], _ => ⟨0, fun _ _ _ m => nomatch m⟩
+  | k :: more, h => by
+    obtain ⟨B, hB⟩ := held_bound_list ctx s0 ρ T more (fun k' m => h k' (List.mem_cons_of_mem _ m))
+    cases k with
+    | held f keys ids =>
+      obtain ⟨d, hd, hlen, fuel, hev⟩ := h _ (List.mem_cons_self ..)
+      refine ⟨max B fuel, ?_⟩
+      intro f' keys' ids' m
+      rcases List.mem_cons.mp m with e | m
+      · injection e with e1 e2 e3
+        subst e1 e2 e3
+        exact ⟨d, hd, hlen, evalSpec_mono _ fuel hev _ (Nat.le_max_right _ _)⟩
+      · obtain ⟨d', hd', hlen', hev'⟩ := hB f' keys' ids' m
+        exact ⟨d', hd', hlen', evalSpec_mono _ B hev' _ (Nat.le_max_left _ _)⟩
+    | load v j c =>
+      refine ⟨B, ?_⟩
+      intro f' keys' ids' m
+      rcases List.mem_cons.mp m with e | m
+      · cases e
+      · exact hB _ _ _ m
+    | or v x y =>
+      refine ⟨B, ?_⟩
+      intro f' keys' ids' m
+      rcases List.mem_cons.mp m with e | m
+      · cases e
+      · exact hB _ _ _ m
+
 
 /-! ## What is looked up -/
 
@@ -223,6 +318,81 @@ theorem WDen.one (wf : WF s) (i : Nat) :
   simp only [List.map, sumList, Nat.add_zero, Nat.mod_eq_of_lt (Holds.den_lt (ctx := ctx) (s0 := s0) (ρ := ρ) wf i)] at h
   exact h
 
+/-- The terms of a list, each as a word. -/
+theorem WDen.wordsOf (wf : WF s) : ∀ (ids : List Nat),
+    WDen ctx s0 ρ s.terms (.list (ids.map fun i => WVal.word [i])) (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)))
+  | [] => WDen.nil
+  | i :: rest => WDen.cons (WDen.one wf i) (WDen.wordsOf wf rest)
+
+/-- The terms of a list of words, where each is one: the words are those terms'. -/
+theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : List Nat},
+    WDen ctx s0 ρ s.terms (.list l) (.list l') → wordIds (fun n => findNode n s.terms 0) l = some ids →
+    l' = ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)
+  | [], _, _, hd, h => by
+    cases hd
+    simp only [wordIds, Option.some.injEq] at h; subst h; rfl
+  | v :: rest, _, ids, hd, h => by
+    cases hd with
+    | cons hv hrest =>
+      cases v with
+      | word xs =>
+        cases hv
+        simp only [wordIds] at h
+        cases hi : idOf (fun n => findNode n s.terms 0) xs <;> cases hr : wordIds (fun n => findNode n s.terms 0) rest <;>
+          simp only [hi, hr, reduceCtorEq, Option.some.injEq] at h
+        rename_i i is
+        subst h
+        rw [wordIds_den wf hrest hr, ← idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hi]
+        rfl
+      | _ => simp [wordIds] at h
+
+/-- A thing a definition is used with, as a key: the key's value is the thing's. -/
+theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
+    (hd : WDen ctx s0 ρ s.terms v a) (h : flatKey (fun n => findNode n s.terms 0) v = some k) : a = k.val ctx s0 ρ s.terms := by
+  cases v with
+  | int n =>
+    cases hd
+    simp only [flatKey, Option.some.injEq] at h; subst h
+    simp only [Key.val, ev_const]
+  | num r =>
+    cases hd
+    simp only [flatKey, Option.some.injEq] at h; subst h
+    rfl
+  | counter r =>
+    cases hd
+    simp only [flatKey, Option.some.injEq] at h; subst h
+    rfl
+  | list l =>
+    obtain ⟨l', rfl⟩ := WDen.list_inv hd
+    simp only [flatKey] at h
+    cases hw : wordIds (fun n => findNode n s.terms 0) l with
+    | none => simp [hw] at h
+    | some ids =>
+      simp only [hw, Option.map_some, Option.some.injEq] at h; subst h
+      rw [wordIds_den wf hd hw]
+      rfl
+  | _ => simp [flatKey] at h
+
+theorem flatKeys_den (wf : WF s) : ∀ {vs : List WVal} {as : List Val} {keys : List Key},
+    WDen ctx s0 ρ s.terms (.list vs) (.list as) → flatKeys (fun n => findNode n s.terms 0) vs = some keys →
+    as = keys.map (Key.val ctx s0 ρ s.terms)
+  | [], _, _, hd, h => by
+    cases hd
+    simp only [flatKeys, Option.some.injEq] at h; subst h; rfl
+  | v :: rest, _, keys, hd, h => by
+    cases hd with
+    | cons hv hrest =>
+      simp only [flatKeys] at h
+      cases hk : flatKey (fun n => findNode n s.terms 0) v <;> cases hr : flatKeys (fun n => findNode n s.terms 0) rest <;>
+        simp only [hk, hr, reduceCtorEq, Option.some.injEq] at h
+      rename_i k ks
+      subst h
+      rw [flatKey_den wf hv hk, flatKeys_den wf hrest hr]
+      rfl
+
+theorem held_bound (H : Holds ctx s0 ρ s st) : ∃ B, HeldWithin ctx s0 ρ s.terms s.known B :=
+  held_bound_list ctx s0 ρ s.terms s.known H.known
+
 end
 
 /-! ## Operators -/
@@ -327,6 +497,27 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
           refine ⟨.int (ev ρ r % m), by simp [binop, mpos], ?_⟩
           rw [← lowOf_sound H mpos hl]; exact WDen.num r'
       next => simp at h
+    | num y2 =>
+      cases hx; cases hy
+      simp only [wbin] at h
+      split at h
+      next hop =>
+        have oe : op = "|" := by simpa using hop
+        subst oe
+        cases hk : knownOr r y2 s.known with
+        | none => simp [hk] at h
+        | some v =>
+          simp only [hk, Option.map_some, Option.some.injEq] at h; subst h
+          have hv : 0 ≤ ev ρ r ∧ 0 ≤ ev ρ y2 ∧ ρ v = (((ev ρ r).toNat ||| (ev ρ y2).toNat : Nat) : Int) := by
+            rcases knownOr_mem hk with m | m
+            · exact H.known _ m
+            · obtain ⟨g1, g2, g3⟩ := H.known _ m
+              exact ⟨g2, g1, by rw [g3, Nat.or_comm]⟩
+          refine ⟨.int (((ev ρ r).toNat ||| (ev ρ y2).toNat : Nat) : Int), by simp [binop, hv.1, hv.2.1], ?_⟩
+          have := WDen.num (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) (Lin.var v)
+          rw [ev_var, hv.2.2] at this
+          exact this
+      next => simp at h
     | _ => simp [wbin] at h
   | list a =>
     cases y with
@@ -355,6 +546,45 @@ theorem map_range_succ {α : Type} (f : Nat → α) (n : Nat) :
 theorem map_range_add4 {α : Type} (f : Nat → α) (n : Nat) :
     (List.range (n + 4)).map f = f 0 :: f 1 :: f 2 :: f 3 :: (List.range n).map (fun i => f (i + 4)) := by
   rw [show n + 4 = n + 1 + 1 + 1 + 1 from rfl, map_range_succ, map_range_succ, map_range_succ, map_range_succ]
+
+/-- A part of a run of bytes, cut out of the list of them. -/
+theorem slice_run (mem : Nat → Nat) (base n a b : Nat) (h : a + b ≤ n) :
+    (((List.range n).map fun k => Val.int (mem (base + k))).drop a).take b = (List.range b).map fun k => Val.int (mem (base + a + k)) := by
+  apply List.ext_getElem
+  · simp; omega
+  · intro i h1 h2
+    simp [Nat.add_assoc]
+
+/-- The number that bytes of memory are, the lowest first: what the machine's `load` reads there. -/
+theorem numberLE_load (mem : Nat → Nat) : ∀ (n a : Nat), (∀ k, k < n → mem (a + k) < 256) →
+    numberLE ((List.range n).map fun k => Val.int (mem (a + k))) = some (load mem a n)
+  | 0, a, _ => by simp [numberLE, load]
+  | n + 1, a, hb => by
+    have ih := numberLE_load mem n (a + 1) (fun k hk => by
+      have := hb (k + 1) (by omega)
+      rwa [show a + (k + 1) = a + 1 + k by omega] at this)
+    have b0 := hb 0 (by omega)
+    rw [Nat.add_zero] at b0
+    have e : (fun i => Val.int (mem (a + (i + 1)))) = fun k => Val.int (mem (a + 1 + k)) := by
+      funext k
+      rw [show a + (k + 1) = a + 1 + k by omega]
+    rw [map_range_succ, e]
+    simp only [numberLE, Nat.add_zero, ih, load]
+    rw [if_pos ⟨by omega, by omega⟩]
+    simp only [Option.map_some, Int.toNat_natCast, Nat.mod_eq_of_lt b0]
+
+/-- The words of the bytes of words are those words. -/
+theorem toWords_wordBytes : ∀ (ws : List Nat), (∀ w ∈ ws, w < W32) → toWords (wordBytes ws) = some (ws.map Val.word)
+  | [], _ => rfl
+  | w :: rest, h => by
+    have lt := h w (List.mem_cons_self ..)
+    unfold W32 at lt
+    simp only [wordBytes, toWords]
+    rw [if_pos ⟨by omega, by omega, by omega, by omega, by omega, by omega, by omega, by omega⟩,
+      toWords_wordBytes rest (fun x m => h x (List.mem_cons_of_mem _ m))]
+    simp only [Option.map_some, List.map_cons, Option.some.injEq, List.cons.injEq, Val.word.injEq, and_true, Int.toNat_natCast]
+    omega
+
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
@@ -562,6 +792,86 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
                 rw [en] at hw
                 exact ⟨.list ws, by simp [builtin, hw], hd⟩
           next => simp at h
+      | part r off n =>
+        cases hx with
+        | part _ _ _ hb =>
+          simp only [wown] at h
+          split at h
+          next hc =>
+            obtain ⟨hf, o4, n4⟩ := hc
+            have fe : f = "words" := by simpa using hf
+            subst fe
+            cases hra : runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0 with
+            | none => simp [hra] at h
+            | some j =>
+              simp only [hra, Option.bind_some] at h
+              cases hin : inputWords (fun n => findNode n s.terms 0) j (n / 4) (off / 4) with
+              | none => simp [hin] at h
+              | some wvs =>
+                simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
+                obtain ⟨_, x', n', hj⟩ := runAt_spec hra
+                have hj' : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x', r, n') := by simpa using hj
+                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) (off / 4) (fun i => s0.mem (s0.reg r + off + i)) wvs hin
+                  (fun i hi => hb i (by omega))
+                  (fun q a ha hq => by
+                    subst ha
+                    have b0 := hb (4 * q) (by omega)
+                    have b1 := hb (4 * q + 1) (by omega)
+                    have b2 := hb (4 * q + 2) (by omega)
+                    have b3 := hb (4 * q + 3) (by omega)
+                    have ea : s0.reg r + 4 * (off / 4 + q) = s0.reg r + off + 4 * q := by omega
+                    have e0 : inpOf ctx s0 j (off / 4 + q) = load s0.mem (s0.reg r + off + 4 * q) 4 := by simp only [inpOf, hj', ea]
+                    have e1 : s0.reg r + off + 4 * q + 1 = s0.reg r + off + (4 * q + 1) := by omega
+                    have e2 : s0.reg r + off + 4 * q + 1 + 1 = s0.reg r + off + (4 * q + 2) := by omega
+                    have e3 : s0.reg r + off + 4 * q + 1 + 1 + 1 = s0.reg r + off + (4 * q + 3) := by omega
+                    rw [e0, load4, e3, e2, e1]
+                    omega)
+                have en : 4 * (n / 4) = n := by omega
+                rw [en] at hw
+                exact ⟨.list ws, by simp [builtin, hw], hd⟩
+          next =>
+            split at h
+            next hc =>
+              obtain ⟨hf, n8⟩ := hc
+              have fe : f = "number.le" := by simpa using hf
+              subst fe
+              subst n8
+              cases hra : runAt r ctx.contract.fixeds 0 with
+              | none => simp [hra] at h
+              | some j =>
+                simp only [hra, Option.bind_some] at h
+                cases hk : knownLoad j off s.known with
+                | none => simp [hk] at h
+                | some v =>
+                  simp only [hk, Option.map_some, Option.some.injEq] at h; subst h
+                  obtain ⟨_, x', n', hj⟩ := runAt_spec hra
+                  have hj' : ctx.contract.fixeds[j]? = some (x', r, n') := by simpa using hj
+                  obtain ⟨x2, r2, n2, g1, g2, g3⟩ := H.known _ (knownLoad_mem hk)
+                  rw [hj'] at g1
+                  injection g1 with g1
+                  injection g1 with _ g1
+                  injection g1 with g1 _
+                  subst g1
+                  refine ⟨.int (load s0.mem (s0.reg r + off) 8 : Nat), ?_, ?_⟩
+                  · simp [builtin, numberLE_load s0.mem 8 (s0.reg r + off) hb]
+                  · have := WDen.num (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) (Lin.var v)
+                    rw [ev_var, g3] at this
+                    exact this
+            next => simp at h
+      | wbytes ids =>
+        cases hx
+        simp only [wown] at h
+        split at h
+        next hf =>
+          have fe : f = "words" := by simpa using hf
+          subst fe
+          simp only [Option.some.injEq] at h; subst h
+          refine ⟨.list (ids.map fun i => Val.word (𝔻 i)), ?_, WDen.wordsOf wf ids⟩
+          have e := toWords_wordBytes (ids.map 𝔻) (fun w m => by
+            obtain ⟨i, _, rfl⟩ := List.mem_map.mp m
+            exact Holds.den_lt wf i)
+          simp [builtin, e]
+        next => simp at h
       | _ => simp [wown] at h
   · cases x <;> simp [wown] at h
 
@@ -633,15 +943,18 @@ end
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 
-/-- What `weval` gives of an expression stands for what `evalSpec` gives of it with the same fuel, the names
-on words standing for the names of the account. -/
-theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
+/-- What `weval` gives of an expression stands for what `evalSpec` gives of it with the same fuel and `B`
+more, the names on words standing for the names of the account: `B` being steps enough for every use of a
+definition whose words the state holds (such a use costs `weval` nothing, and `evalSpec` works it out). -/
+theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldWithin ctx s0 ρ s.terms s.known B) :
     ∀ (fuel : Nat) (env : List (String × WVal)) (env' : List (String × Val)) (e : SExpr) (v : WVal),
       weval ctx (fun n => findNode n s.terms 0) s fuel env e = some v → EnvDen ctx s0 ρ s.terms env env' →
-      ∃ a, evalSpec ctx.defs fuel env' e = some a ∧ WDen ctx s0 ρ s.terms v a
+      ∃ a, evalSpec ctx.defs (fuel + B) env' e = some a ∧ WDen ctx s0 ρ s.terms v a
   | 0, _, _, _, _, h, _ => by simp [weval] at h
   | fuel + 1, env, env', e, v, h, hE => by
-    have ih := weval_sound H wf fuel
+    have ih := weval_sound H wf hB fuel
+    have e1 : fuel + 1 + B = (fuel + B) + 1 := by omega
+    rw [e1]
     cases e with
     | num n =>
       simp only [weval] at h
@@ -715,7 +1028,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
       | none => simp [hl] at h
       | some vs =>
         simp only [hl] at h
-        obtain ⟨as, el, dl⟩ := wevalList_sound (ev' := evalSpec ctx.defs fuel env') (fun e v hv => ih env env' e v hv hE) args vs hl
+        obtain ⟨as, el, dl⟩ := wevalList_sound (ev' := evalSpec ctx.defs (fuel + B) env') (fun e v hv => ih env env' e v hv hE) args vs hl
         split at h
         next => simp at h
         next hlen =>
@@ -725,24 +1038,37 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
             refine ⟨r, ?_, dr⟩
             simp only [evalSpec, el]; rw [if_neg hlen, if_pos hown]; exact er
           next hown =>
-            cases hd : findDef ctx.defs f with
-            | none => simp [hd] at h
-            | some d =>
-              simp only [hd] at h
-              split at h
-              next hp =>
-                obtain ⟨r, er, dr⟩ := ih (d.params.zip vs) (d.params.zip as) d.body v h (EnvDen.zip dl)
-                have hp' : (d.params.length == as.length) = true := by rw [← WDen.length dl]; exact hp
-                refine ⟨r, ?_, dr⟩
-                simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp']; exact er
-              next => simp at h
+            cases hh : ((flatKeys (fun n => findNode n s.terms 0) vs).bind fun keys => heldIds f keys s.known) with
+            | some ids =>
+              -- a use the state holds the words of: the definition gives them within `B` steps
+              simp only [hh, Option.some.injEq] at h; subst h
+              obtain ⟨keys, hk, hi⟩ := Option.bind_eq_some_iff.mp hh
+              obtain ⟨d, hd, hlen', hev⟩ := hB f keys ids (heldIds_mem hi)
+              have eas : as = keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf dl hk
+              have hp' : (d.params.length == as.length) = true := by rw [eas, List.length_map]; simpa using hlen'
+              refine ⟨.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)), ?_, WDen.wordsOf wf ids⟩
+              simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp', eas]
+              exact evalSpec_mono ctx.defs B hev (fuel + B) (Nat.le_add_left _ _)
+            | none =>
+              simp only [hh] at h
+              cases hd : findDef ctx.defs f with
+              | none => simp [hd] at h
+              | some d =>
+                simp only [hd] at h
+                split at h
+                next hp =>
+                  obtain ⟨r, er, dr⟩ := ih (d.params.zip vs) (d.params.zip as) d.body v h (EnvDen.zip dl)
+                  have hp' : (d.params.length == as.length) = true := by rw [← WDen.length dl]; exact hp
+                  refine ⟨r, ?_, dr⟩
+                  simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp']; exact er
+                next => simp at h
     | list items =>
       simp only [weval] at h
       cases hl : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) items with
       | none => simp [hl] at h
       | some vs =>
         simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
-        obtain ⟨as, el, dl⟩ := wevalList_sound (ev' := evalSpec ctx.defs fuel env') (fun e v hv => ih env env' e v hv hE) items vs hl
+        obtain ⟨as, el, dl⟩ := wevalList_sound (ev' := evalSpec ctx.defs (fuel + B) env') (fun e v hv => ih env env' e v hv hE) items vs hl
         refine ⟨.list as, ?_, dl⟩
         simp only [evalSpec, el, Option.map_some]
     | letx x e rest =>
@@ -772,7 +1098,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
           | none => simp [hl] at h
           | some vs =>
             simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
-            obtain ⟨as, el, dl⟩ := wevalEach_sound (ev' := fun i => evalSpec ctx.defs fuel ((x, .int i) :: env') e)
+            obtain ⟨as, el, dl⟩ := wevalEach_sound (ev' := fun i => evalSpec ctx.defs (fuel + B) ((x, .int i) :: env') e)
               (fun i v hv => ih ((x, .int i) :: env) ((x, .int i) :: env') e v hv ⟨rfl, WDen.int i, hE⟩) (hi - lo).toNat lo vs hl
             refine ⟨.list as, ?_, dl⟩
             simp only [evalSpec, ea, eb, el, Option.map_some]
@@ -784,7 +1110,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
         simp only [ha, hp, reduceCtorEq] at h
       rename_i av ps
       obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
-      obtain ⟨ps', ep, dp⟩ := wevalList_sound (ev' := evalSpec ctx.defs fuel env') (fun e v hv => ih env env' e v hv hE) puts ps hp
+      obtain ⟨ps', ep, dp⟩ := wevalList_sound (ev' := evalSpec ctx.defs (fuel + B) env') (fun e v hv => ih env env' e v hv hE) puts ps hp
       cases av with
       | list l =>
         obtain ⟨l', rfl⟩ := WDen.list_inv da
@@ -797,6 +1123,91 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) :
           refine ⟨.list l2', ?_, d2⟩
           simp only [evalSpec, ea, ep, e2, Option.map_some]
       | _ => simp at h
+    | slice a lo hi =>
+      simp only [weval] at h
+      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hlo : weval ctx (fun n => findNode n s.terms 0) s fuel env lo <;>
+        cases hhi : weval ctx (fun n => findNode n s.terms 0) s fuel env hi <;> simp only [ha, hlo, hhi, reduceCtorEq] at h
+      rename_i av lv hv
+      obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
+      obtain ⟨la, elo, dlo⟩ := ih env env' lo lv hlo hE
+      obtain ⟨ha', ehi, dhi⟩ := ih env env' hi hv hhi hE
+      cases av with
+      | run r n =>
+        cases lv with
+        | int i =>
+          cases hv with
+          | int j =>
+            cases dlo; cases dhi
+            cases da with
+            | run _ _ hb =>
+              simp only at h
+              split at h
+              next hc =>
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨i0, ij, jn⟩ := hc
+                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + i.toNat + k) < 256 := fun k hk => by
+                  have := hb (i.toNat + k) (by omega)
+                  rwa [← Nat.add_assoc] at this
+                refine ⟨_, ?_, WDen.part r i.toNat (j - i).toNat hb'⟩
+                simp only [evalSpec, ea, elo, ehi]
+                rw [if_pos ⟨i0, ij, by simpa using jn⟩, slice_run s0.mem (s0.reg r) n i.toNat (j - i).toNat (by omega)]
+              next => simp at h
+          | _ => simp at h
+        | _ => cases hv <;> simp at h
+      | part r off n =>
+        cases lv with
+        | int i =>
+          cases hv with
+          | int j =>
+            cases dlo; cases dhi
+            cases da with
+            | part _ _ _ hb =>
+              simp only at h
+              split at h
+              next hc =>
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨i0, ij, jn⟩ := hc
+                have eo : ∀ k, s0.reg r + (off + i.toNat) + k = s0.reg r + off + i.toNat + k := fun k => by omega
+                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + (off + i.toNat) + k) < 256 := fun k hk => by
+                  have := hb (i.toNat + k) (by omega)
+                  rw [eo]; rwa [← Nat.add_assoc] at this
+                have key := WDen.part (ctx := ctx) (ρ := ρ) (T := s.terms) (s0 := s0) r (off + i.toNat) (j - i).toNat hb'
+                simp only [eo] at key
+                refine ⟨_, ?_, key⟩
+                simp only [evalSpec, ea, elo, ehi]
+                rw [if_pos ⟨i0, ij, by simpa using jn⟩, slice_run s0.mem (s0.reg r + off) n i.toNat (j - i).toNat (by omega)]
+              next => simp at h
+          | _ => simp at h
+        | _ => cases hv <;> simp at h
+      | _ => cases lv <;> cases hv <;> simp at h
+    | record names items =>
+      simp only [weval] at h
+      cases hl : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) items with
+      | none => simp [hl] at h
+      | some vs =>
+        simp only [hl] at h
+        obtain ⟨as, el, dl⟩ := wevalList_sound (ev' := evalSpec ctx.defs (fuel + B) env') (fun e v hv => ih env env' e v hv hE) items vs hl
+        split at h
+        next hn =>
+          simp only [Option.some.injEq] at h; subst h
+          have hn' : (names.length == as.length) = true := by rw [← WDen.length dl]; exact hn
+          refine ⟨.record (names.zip as), ?_, WDen.zipRecord dl⟩
+          simp only [evalSpec, el]; rw [if_pos hn']
+        next => simp at h
+    | field e x =>
+      simp only [weval] at h
+      cases he : weval ctx (fun n => findNode n s.terms 0) s fuel env e with
+      | none => simp [he] at h
+      | some rv =>
+        obtain ⟨ra, ee, de⟩ := ih env env' e rv he hE
+        cases rv with
+        | record fields =>
+          simp only [he] at h
+          obtain ⟨fs', rfl⟩ := WDen.record_inv de
+          obtain ⟨a, ha, hd⟩ := WDen.lookupRecord de h
+          refine ⟨a, ?_, hd⟩
+          simp only [evalSpec, ee]; exact ha
+        | _ => simp [he] at h
     | _ => simp [weval] at h
 
 end
@@ -941,10 +1352,11 @@ theorem symEnsureW_sound {p : Program} (E : Setting ctx p s0) {e : EnsureW} {ite
                 split at h
                 next hc =>
                   obtain ⟨hlen, hww⟩ := hc
-                  obtain ⟨a, ea, da⟩ := weval_sound H wf WFUEL _ _ x _ hwv (wenv_sound E H)
+                  obtain ⟨B, hB⟩ := held_bound H
+                  obtain ⟨a, ea, da⟩ := weval_sound H wf hB WFUEL _ _ x _ hwv (wenv_sound E H)
                   obtain ⟨ws, rfl⟩ := WDen.list_inv da
                   obtain ⟨bs, eo, blen, hm⟩ := written_words H wf hw' l ws 0 hww da
-                  refine ⟨rr, n, bs, List.mem_of_getElem? hw', ⟨WFUEL + 1, ?_⟩, by omega, ?_⟩
+                  refine ⟨rr, n, bs, List.mem_of_getElem? hw', ⟨WFUEL + B + 1, ?_⟩, by omega, ?_⟩
                   · rw [hv]
                     simp only [evalSpec, evalList, ea]
                     simp [own, builtin, eo, Val.bytes]

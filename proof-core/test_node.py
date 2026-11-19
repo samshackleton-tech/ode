@@ -13,10 +13,15 @@ Here:
   not read is refused;
 - what those lines mean: `number.le`, the number that bytes are, and the record of a layout, worked out by
   the account in Lean (`odespec`) on bytes drawn at random, against Python's own reading of the layout;
-- what the verifier says of the function: it follows the function's reads of the record and its `or`, and
-  stops at the call (the rule for a call of a function that writes is not there yet); the function built
-  again from its source (../kcheck/hash.ode) with a read moved outside the record is refused, each with
-  the reason."""
+- the function is shown, with the two kernels it calls (each taken by its contract): the kept proof
+  (proofs/b3l_node_out.proof) is three lines, one for each way the comparison of `plat` with 5 can go. The
+  function built again from its source (../kcheck/hash.ode) with one line changed is refused where the
+  change makes it wrong, each with the reason, and shown where the changed function is still right; the
+  same with the contract and the layout changed.
+
+What is shown is the statement's contract, where `out` is a run the function may read and write: the kernel
+it is handed to reads it. (../kcheck's contract lets the function only write `out`; the function reads no
+byte of it before it has written it, which kcheck shows and the verifier here does not.)"""
 import os, random, re, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -34,8 +39,18 @@ CONTRACT = ["arg out inout 32", "arg nd fixed 120", "arg root number", "arg plat
             "(name root)))",
             "stack 128"]
 LAYOUT = "layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }"
-# What the verifier in Lean says of the function today: the rule it lacks first.
-TODAY = "refused: a called function that writes for its caller: not here yet"
+# Why the verifier refuses a function or a contract that is wrong.
+FOLLOW = "refused: the specification's words are not followed on the terms the function made"
+ARGS = "refused: what a called function's contract says of its arguments is not followed"
+NO_PART = "refused: a called function is given a run that is no part of a run of a fixed count this function was given"
+NEEDS = "refused: a called function needs of the processor what this function's contract does not say it needs"
+NOT_WHOLE = "refused: a called function is given to write what is not a run this function may read and write, whole, with every word of it known"
+VEC = "refused: a store of a vector register whose words are not known, or at an address that is not a register and a number"
+BYTE_W = "refused: a byte written to a run that words were written to: not here yet"
+NO_WRITE = "refused: a write to a run given only to read, or to no run given"
+LEAVES = "refused: the stack pointer leaves the frame the contract allows"
+MORE_STACK = "refused: a call needs more stack than this function's contract allows"
+NOT_BACK = "refused: at the return the stack pointer is not where it was at entry"
 NOT_WITHIN = "refused: a read of a run of a fixed count that is not eight bytes within it: not here yet"
 NO_RUN = "refused: a read that is neither of the frame nor of a run given"
 IF, TRACE = "if plat == 5", "\n    trace depends on out, nd"       # (the hash's own contract in blake3.spec has the same condition)
@@ -208,16 +223,48 @@ class Verify(unittest.TestCase):
         odec.build(src, "node_out", obj)
         return [(obj, NODE)] + FUNCTIONS[1:]
 
-    def test_what_the_verifier_says_of_the_function_today(self):
-        """The two kernels it calls are shown; the function's reads of the record, its `or` and its sum are
-        followed; at the call the verifier names the rule it lacks."""
-        self.assertEqual(last_word(FUNCTIONS[1:]), "shown")
-        self.assertEqual(last_word(FUNCTIONS), TODAY)
+    def kept(self, symbols=(NODE, AVX512, SSE41)):
+        """The kept proofs of these functions, in one file."""
+        path = os.path.join(self.dir, "kept.proof")
+        with open(path, "w") as out:
+            for symbol in symbols:
+                with open(os.path.join(HERE, "proofs", symbol + ".proof")) as f: out.write(f.read())
+        return path
+
+    def test_the_function_is_shown_with_the_kernels_it_calls(self):
+        self.assertEqual(lean_verify.verify(spec_text(), FUNCTIONS, self.kept()), (True, "shown"))
+        # the prover finds the kept proof again
+        statement_path, proof_path = os.path.join(self.dir, "s"), os.path.join(self.dir, "p")
+        prove.prove(spec_text(), [(obj, symbol, "") for obj, symbol in FUNCTIONS], statement_path, proof_path)
+        with open(proof_path) as f: found = f.read()
+        with open(os.path.join(HERE, "proofs", NODE + ".proof")) as f: kept = f.read()
+        self.assertEqual(kept, "for b3l_node_out\nt live\nt live\nt live\n")
+        self.assertEqual(found[found.index("for " + NODE):], kept)
+        # controls: the kernels are not taken as shown without their proofs, nor left out of what is to be shown
+        shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NODE,)))
+        self.assertFalse(shown)
+        self.assertEqual(said.split("\n")[-1], "in " + AVX512)
+        with self.assertRaises(SystemExit) as e: lean_verify.verify(spec_text(), FUNCTIONS[:1], self.kept())
+        self.assertIn("which is not among the functions to be shown", str(e.exception))
+
+    def test_a_changed_proof_is_refused(self):
+        with open(os.path.join(HERE, "proofs", NODE + ".proof")) as f: lines = f.read().split("\n")[:-1]
+        changed = [("a line left out", lines[:k] + lines[k + 1:]) for k in range(1, len(lines))] + \
+                  [("dead for live", lines[:k] + ["t dead"] + lines[k + 1:]) for k in range(1, len(lines))] + \
+                  [("a line more", lines + ["t live"]), ("another function's name", ["for " + SSE41] + lines[1:])]
+        for what, new in changed:
+            with self.subTest(what=what):
+                path = os.path.join(self.dir, "changed.proof")
+                with open(path, "w") as out:
+                    out.write("\n".join(new) + "\n")
+                    for symbol in (AVX512, SSE41):
+                        with open(os.path.join(HERE, "proofs", symbol + ".proof")) as f: out.write(f.read())
+                self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, path)[0])
 
     def test_the_function_built_again_from_its_source_is_the_same(self):
         instructions = lambda fns: [l for l in statement.statement(spec_text(), fns) if l.startswith("i ")]
         self.assertEqual(instructions(self.node_from()), instructions(FUNCTIONS))
-        self.assertEqual(last_word(self.node_from()), TODAY)
+        self.assertEqual(lean_verify.verify(spec_text(), self.node_from(), self.kept()), (True, "shown"))
 
     def test_a_read_outside_the_record_is_refused(self):
         for what, old, new, word in (
@@ -230,10 +277,86 @@ class Verify(unittest.TestCase):
                 ("the record's address moved past the record", "add rsi, 32", "add rsi, 121", "need entail")):
             with self.subTest(what=what):
                 self.assertEqual(last_word(self.node_from(old, new)), word)
-        # controls: other reads within the record are followed, and so is a move of the address within it
-        for old, new in (("mov r8, qword ptr [rsi + 112]", "mov r8, qword ptr [rsi + 105]"), ("add rsi, 32", "add rsi, 119")):
-            with self.subTest(new=new):
-                self.assertEqual(last_word(self.node_from(old, new)), TODAY)
+
+    def test_a_wrong_function_is_refused(self):
+        for what, old, new, word in (
+                ("the or left out", "  or r8, rdx\n", "", FOLLOW),
+                ("the or of another register", "or r8, rdx", "or r8, rsi", ARGS),
+                ("the flags added, not or-ed", "or r8, rdx", "add r8, rdx", ARGS),
+                ("the length read at the counter's place", "mov rdx, qword ptr [rsi + 104]", "mov rdx, qword ptr [rsi + 96]", ARGS),
+                ("the counter read at the length's place", "mov rcx, qword ptr [rsi + 96]", "mov rcx, qword ptr [rsi + 104]", FOLLOW),
+                ("the flags read at the length's place", "mov r8, qword ptr [rsi + 112]", "mov r8, qword ptr [rsi + 104]", FOLLOW),
+                ("the block four bytes early", "add rsi, 32", "add rsi, 28", FOLLOW),
+                ("the block four bytes late", "add rsi, 32", "add rsi, 36", FOLLOW),
+                ("the block two bytes late", "add rsi, 32", "add rsi, 34", ARGS),
+                ("the block past the record's end", "add rsi, 32", "add rsi, 60", NO_PART),
+                ("the block is the run given to write", "add rsi, 32", "mov rsi, rdi", NO_PART),
+                ("the kernels exchanged", "jne @sse41", "je @sse41", NEEDS),
+                ("the wide kernel for another number", "cmp rax, 5", "cmp rax, 6", NEEDS),
+                ("plat taken from root", "mov rax, rcx", "mov rax, rdx", NEEDS),
+                ("the second half not stored", "  movups xmmword ptr [rdi + 16], xmm0\n", "", NOT_WHOLE),
+                ("the first half stored twice", "movups xmmword ptr [rdi + 16], xmm0", "movups xmmword ptr [rdi + 0], xmm0", NOT_WHOLE),
+                ("the value taken from the block", "movups xmm0, xmmword ptr [rsi + 16]", "movups xmm0, xmmword ptr [rsi + 32]", FOLLOW),
+                ("the halves exchanged", "movups xmmword ptr [rdi + 16], xmm0",
+                 "movups xmmword ptr [rdi + 0], xmm0\n  movups xmm0, xmmword ptr [rsi + 0]\n  movups xmmword ptr [rdi + 16], xmm0", FOLLOW),
+                ("sixteen bytes stored after the call", "@done:\n", "@done:\n  movups xmmword ptr [rdi + 0], xmm0\n", VEC),
+                ("a byte stored after the call", "@done:\n", "@done:\n  mov byte ptr [rdi + 0], al\n", NO_WRITE),
+                ("a byte stored before the call", "  sub rsp, 8\n", "  mov byte ptr [rdi + 3], al\n  sub rsp, 8\n", BYTE_W),
+                ("the run given to write moved before the call", "  sub rsp, 8\n", "  add rdi, 4\n  sub rsp, 8\n", NOT_WHOLE),
+                ("the record handed over to be written", "  sub rsp, 8\n", "  mov rdi, rsi\n  sub rsp, 8\n", NOT_WHOLE),
+                ("no frame", "sub rsp, 8", "sub rsp, 0", LEAVES),
+                ("a frame too large", "sub rsp, 8", "sub rsp, 128", MORE_STACK),
+                ("the frame not given back", "add rsp, 8", "add rsp, 0", NOT_BACK),
+                ("no call", "  jne @sse41\n  call blake3_servil_compress_in_place_avx512\n  jmp @done\n@sse41:\n  call blake3_servil_compress_in_place_sse41\n", "@sse41:\n", FOLLOW),
+                ("called twice", "@done:\n", "@done:\n  call blake3_servil_compress_in_place_sse41\n", NOT_WHOLE)):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(self.node_from(old, new)), word)
+
+    def test_a_changed_function_that_is_right_is_shown(self):
+        for what, old, new in (
+                ("the or the other way", "or r8, rdx", "or rdx, r8\n  mov r8, rdx"),
+                ("the SSE4.1 kernel whatever `plat` is", "  jne @sse41\n  call blake3_servil_compress_in_place_avx512\n  jmp @done\n", ""),
+                ("another read within the record, of no use", "  sub rsp, 8\n", "  mov r9, qword ptr [rsi + 73]\n  sub rsp, 8\n")):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(self.node_from(old, new)), "shown")
+
+    def test_a_wrong_contract_is_refused(self):
+        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on out, nd"
+        for what, old, new, word in (
+                ("the length's bound left out", "length: number at 104 below 65", "length: number at 104", ARGS),
+                ("the length up to 256", "below 65", "below 257", ARGS),
+                ("the length up to 2^32", "below 65", "below 4294967297", ARGS),
+                ("the flags any number", "flags: byte at 112", "flags: number at 112", ARGS),
+                ("root any number", "root: byte", "root: number", ARGS),
+                ("the counter and the length at each other's places", "counter: number at 96, length: number at 104 below 65",
+                 "counter: number at 104, length: number at 96 below 65", ARGS),
+                ("the wide kernel for another number", needs, needs.replace("plat == 5", "plat == 6"), NEEDS),
+                ("the wide kernel not said", needs, needs.replace("    needs avx512 if plat == 5\n", ""), NEEDS),
+                ("sse41 not said", needs, needs.replace("    needs sse41\n", ""), NEEDS),
+                ("too little stack", "stack 128", "stack 15", MORE_STACK)):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(FUNCTIONS, once(old, new)), word)
+        # refused before the verifier: what the statement cannot say
+        for what, old, new, word in (
+                ("the value with `plat` for root", "node_value(nd, root)", "node_value(nd, plat)", "of the kind `any`: an expression cannot speak of it"),
+                ("no `no_overlap`", "    requires no_overlap(out, nd)\n", "", "does not say `requires no_overlap(out, nd)`"),
+                ("the block at another place", "block: 64 bytes at 32", "block: 64 bytes at 28", "have a byte in common")):
+            with self.subTest(what=what):
+                try: said = last_word(FUNCTIONS, once(old, new))
+                except Exception as e: said = str(e)          # (a layout that is no layout: ../kcheck/ode.py says so)
+                self.assertIn(word, said)
+
+    def test_a_changed_contract_that_is_true_is_shown(self):
+        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on out, nd"
+        for what, old, new in (
+                ("the length up to 255", "below 65", "below 256"),
+                ("the length a byte", "length: number at 104 below 65", "length: byte at 104"),
+                ("a counter with a bound", "counter: number at 96", "counter: number at 96 below 4294967296"),
+                ("as little stack as it uses", "stack 128", "stack 16"),
+                ("a record of one byte more", "layout node120 120", "layout node120 121"),
+                ("avx512 whatever `plat` is", needs, needs.replace(" if plat == 5", ""))):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(FUNCTIONS, once(old, new)), "shown")
 
 
 if __name__ == "__main__":
