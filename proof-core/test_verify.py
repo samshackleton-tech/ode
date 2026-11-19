@@ -141,15 +141,41 @@ class Verify(unittest.TestCase):
         self.assertFalse(self.says([l.replace(".ret", ".hlt") for l in self.lines]).startswith("shown"))            # no row of the table
         self.assertFalse(self.says([]).startswith("shown"))
 
-    def test_the_model_can_read_a_wide_instruction_before_the_verifier_can_prove_it(self):
+    def wide(self, ops, contract=()):
         path = os.path.join(self.dir, "wide.statement")
         proof = os.path.join(self.dir, "wide.proof")
-        with open(proof, "w") as f: f.write("for wide\n")
-        for op, want in ((".nop", "shown\n"), (".zmov 0 1", "refused: 512-bit vector instructions have no proof rule yet")):
+        with open(proof, "w") as f:
+            f.write("for wide\n")
+        with open(path, "w") as f:
+            f.write("fn wide\nstack 0\nneeds avx512\n")
+            for line in contract:
+                f.write(line + "\n")
+            for i, op in enumerate([*ops, ".ret"]):
+                f.write(f"i {i * 6} {(i + 1) * 6} {op}\n")
+        return self.run_files(path, proof)
+
+    def test_wide_registers(self):
+        a, b = "(call word (num 9))", "(call word (num 3))"
+        add, rotate = f"(bin + {a} {b})", f"(bin >>> (bin ^ {a} {b}) (num 1))"
+        contract = ("arg out out 16", "arg pad fixed 16", f"ensuresw out (call bytes_of (list {rotate} {add} {rotate} {add}))")
+        ops = [".zbroadcast 16 (.imm 9)", ".zbroadcast 17 (.imm 3)", ".zpxord 18 18 18", ".vzeroupper",
+               ".zpaddd 0 16 17", ".zpxord 1 16 17", ".zprord 1 1 1", ".zshufi32x4 2 0 1 0",
+               ".zmov 3 2", ".zshufi32x4 4 3 18 2", ".zunpckldq 5 4 0", ".xstoreu .rdi 0 5"]
+        # The output uses words from the third quarter, moved down to the first.
+        # vzeroupper does not lose the words of registers 16 through 31.
+        self.assertEqual(self.wide(ops, contract), "shown\n")
+        for index, op in ((6, ".zprord 1 1 2"), (9, ".zshufi32x4 4 3 18 0"), (10, ".zunpcklqdq 5 4 0")):
             with self.subTest(op=op):
-                with open(path, "w") as f:
-                    f.write(f"fn wide\ni 0 6 {op}\ni 6 7 .ret\nstack 0\nneeds avx512\n")
-                self.assertTrue(self.run_files(path, proof).startswith(want))
+                changed = ops[:index] + [op] + ops[index + 1:]
+                self.assertTrue(self.wide(changed, contract).startswith("refused:"))
+        for op in (".vzeroupper", ".xloadu 3 .rsi 0"):
+            with self.subTest(op=op):
+                said = self.wide(ops[:9] + [op] + ops[9:], contract)
+                self.assertIn("a 512-bit register whose lanes are not all known", said)
+
+    def test_wide_move_requires_known_lanes(self):
+        self.assertEqual(self.wide([".zpxord 0 0 0", ".zmov 1 0"]), "shown\n")
+        self.assertIn("a 512-bit register whose lanes are not all known", self.wide([".zmov 0 1"]))
 
     def test_a_proof_cannot_add_to_what_is_to_be_shown(self):
         with open(self.proof) as f: proof = f.read()

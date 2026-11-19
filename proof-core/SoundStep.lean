@@ -1647,7 +1647,7 @@ theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb 
 theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat)
-    (hv : ∀ place v, stmt ≠ .vset place v) :
+    (hv : ∀ place v, stmt ≠ .vset place v) (hw : ∀ place v, stmt ≠ .vset512 place v) :
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with
   | nothing =>
@@ -1660,7 +1660,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   | call t => simp only [symStmt] at h; exact (refuse_ok h).elim
   | jump t c => simp only [symStmt] at h; exact (refuse_ok h).elim
   | vset place v => exact (hv place v rfl).elim
-  | vset512 _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
+  | vset512 place v => exact (hw place v rfl).elim
   | set place v =>
     simp only [symStmt] at h
     split at h

@@ -117,11 +117,10 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
     {T' : List Node} (e : Ext s.terms T') : Holds ctx s0 ρ { s with terms := T' } st :=
   ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
    ⟨fun x ids hx k hk => by
-      obtain ⟨len, lt⟩ := wf.words.vec x ids hx
-      have hk' : k < ids.length := by omega
-      have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk']
+      have lt := (wf.words.vec x ids hx).2
+      have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
       show st.vec x k = den (inpOf ctx s0) ρ T' (ids.getD k 0)
-      rw [den_ext wf.words.table e (by rw [eq]; exact lt _ (List.getElem_mem hk'))]
+      rw [den_ext wf.words.table e (by rw [eq]; exact lt _ (List.getElem_mem hk))]
       exact H.words.1 x ids hx k hk,
     H.words.2.1,
     fun w j i m x r n ho => by
@@ -166,8 +165,16 @@ theorem symVec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
     | none => simp [hv] at h
     | some r =>
       simp only [hv, Option.bind_some] at h
-      obtain ⟨len, lt⟩ := wf.words.vec r l h
-      exact ⟨r, len, lt, by simp only [vecArg, hv]; rfl, H.words.1 r l h⟩
+      cases hi : s.vec.lookup r with
+      | none => simp [hi] at h
+      | some ids =>
+        simp only [hi, Option.map_some, Option.some.injEq] at h
+        subst l
+        obtain ⟨len, lt⟩ := wf.words.vec r ids hi
+        refine ⟨r, by rw [List.length_take]; omega, fun i m => lt i (List.mem_of_mem_take m), by simp only [vecArg, hv]; rfl, ?_⟩
+        intro k hk
+        have dn := H.words.1 r ids hi k (by omega)
+        simpa only [List.getD, List.getElem?_take_of_lt hk] using dn
   | number _ => simp [symVec] at h
   | lane _ _ => simp [symVec] at h
   | call _ _ => simp [symVec] at h
@@ -190,7 +197,8 @@ theorem symLane_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
           simp only [hl, Option.bind_some] at h
           have e : l.getD k 0 = i := by simp [List.getD, h]
           refine ⟨(wf.words.vec r l hl).2 i (List.mem_of_getElem? h), st.vec r k, by simp [laneArg, hv], ?_⟩
-          rw [← e]; exact H.words.1 r l hl k hk
+          have len := (wf.words.vec r l hl).1
+          rw [← e]; exact H.words.1 r l hl k (by omega)
     next => cases h
   | number _ => simp [symLane] at h
   | name _ => simp [symLane] at h
@@ -1323,6 +1331,20 @@ theorem Holds.store128 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 /-! ## A row that sets a vector register, or stores one -/
 
+theorem forgetHigh_lookup {vec : List (Nat × List Nat)} {x : Nat} {ids : List Nat}
+    (h : (forgetHigh vec).lookup x = some ids) :
+    ∃ old, vec.lookup x = some old ∧ ids = (if x < 16 then old.take 4 else old) := by
+  induction vec with
+  | nil => simp [forgetHigh] at h
+  | cons p ps ih =>
+    obtain ⟨r, lanes⟩ := p
+    change ((r, if r < 16 then lanes.take 4 else lanes) :: forgetHigh ps).lookup x = _ at h
+    rcases lookup_cons_cases h with ⟨rfl, eq⟩ | ⟨ne, tail⟩
+    · exact ⟨lanes, List.lookup_cons_self, eq⟩
+    · obtain ⟨old, ho, eq⟩ := ih tail
+      have bn : (x == r) = false := by simpa using ne
+      exact ⟨old, by simpa only [List.lookup, bn] using ho, eq⟩
+
 theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {place v : Expr}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symStmt ctx bind s (.vset place v) items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
@@ -1336,19 +1358,35 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     dsimp only at h
     split at h
     next hn =>
-      -- the lanes above the low four: nothing is held of them
       split at h
       next hu =>
         have := V.pure_ok h
         injection this with h1 _
         subst h1
         refine ⟨ρ, { st with vec := fun x k => if k < 4 ∨ 16 ≤ x then st.vec x k else u / W32 ^ (16 * x + k) % W32 },
-          ⟨Agree.refl _ _, Nat.le_refl _, ?_, wf⟩, ?_, rfl⟩
+          ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩, ?_, rfl⟩
         · exact ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
             ⟨fun x ids hx k hk => by
+               obtain ⟨old, ho, rfl⟩ := forgetHigh_lookup hx
                show (if k < 4 ∨ 16 ≤ x then st.vec x k else _) = _
-               rw [if_pos (Or.inl hk)]; exact H.words.1 x ids hx k hk,
+               by_cases low : x < 16
+               · rw [ite_eq_left low, List.length_take] at hk
+                 have h4 : k < 4 := by omega
+                 rw [ite_eq_left (Or.inl h4), ite_eq_left low]
+                 simpa only [List.getD, List.getElem?_take_of_lt h4] using H.words.1 x old ho k (by omega)
+               · rw [ite_eq_left (Or.inr (by omega)), ite_eq_right low]
+                 rw [ite_eq_right low] at hk
+                 exact H.words.1 x old ho k hk,
              H.words.2.1, H.words.2.2⟩, H.known⟩
+        · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
+            ⟨wf.words.table, wf.words.atoms,
+             fun x ids hx => by
+               obtain ⟨old, ho, rfl⟩ := forgetHigh_lookup hx
+               obtain ⟨len, lt⟩ := wf.words.vec x old ho
+               split
+               · exact ⟨Or.inl (by rw [List.length_take]; omega), fun i m => lt i (List.mem_of_mem_take m)⟩
+               · exact ⟨len, lt⟩,
+             wf.words.rotrs, wf.words.wrote⟩, wf.known⟩
         · simp [execStmt, hn, hu]
       next => exact (refuse_ok h).elim
     next hn =>
@@ -1371,14 +1409,15 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
               ⟨fun x ids hx k hk => by
                  show (if x = r then (if k < 4 then lanes.getD k 0 else _) else st.vec x k) = _
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
-                 · rw [if_pos e, if_pos hk, e2]; exact dn k hk
+                 · have h4 : k < 4 := by simpa only [e2, len] using hk
+                   rw [if_pos e, if_pos h4, e2]; exact dn k h4
                  · rw [if_neg ne]; exact c.holds.words.1 x ids hx' k hk,
                c.holds.words.2.1, c.holds.words.2.2⟩, c.holds.known⟩
           · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
               ⟨c.wf.words.table, c.wf.words.atoms,
                fun x ids hx => by
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
-                 · rw [e2]; exact ⟨len, lt⟩
+                 · rw [e2]; exact ⟨Or.inl len, lt⟩
                  · exact c.wf.words.vec x ids hx',
                c.wf.words.rotrs, c.wf.words.wrote⟩, c.wf.known⟩
           · simp [execStmt, hn, hr, hl]
@@ -1458,20 +1497,5 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                   · simp [execStmt, values_two vb vn, hva, sumList, hw1]
       next => exact (refuse_ok h).elim
     · exact (refuse_ok h).elim
-
-/-- One statement of an effect that the verifier has passed: the machine carries it out, and what the
-verifier then holds is so of the machine's state. -/
-theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
-    {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
-    ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
-  cases stmt with
-  | vset place v => exact symVset_sound E bind h H wf base u
-  | vset512 _ _ => simp only [symStmt] at h; exact (refuse_ok h).elim
-  | nothing => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
-  | ret => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
-  | call t => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
-  | jump t c => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
-  | set place v => exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e)
 
 end Ode

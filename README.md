@@ -61,7 +61,8 @@ soundness theorem that Lean checks: if this verifier accepts a function, the fun
 contract, whatever proof it was given. So far it can verify five of the twelve small functions and three
 of the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block,
 and `b3l_node_out`, which reads a node record and calls whichever kernel the processor supports.
-Extending it until it covers all of the BLAKE3 code is the current work.
+It can follow arithmetic and shuffles on 512-bit registers. The 16-way kernel still needs proof rules
+for its memory operations and loop.
 [proof-core/README.md](proof-core/README.md) says exactly what its theorem assumes.
 
 Section 13 of DESIGN.md compares the current state with the design, point by point.

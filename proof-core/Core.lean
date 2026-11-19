@@ -348,7 +348,7 @@ structure Sym where
   nvars : Nat                     -- unknowns in use: 0 to 15 are the registers at entry
   wrote : List (Nat × Row × Row)  -- (run given to write, place, byte): what that place of that run now holds
   terms : List Node := []         -- the table of words
-  vec : List (Nat × List Nat) := []   -- (vector register, its four low words by their numbers in the table): the first for a register counts
+  vec : List (Nat × List Nat) := []   -- (vector register, known low lanes as term numbers); the first entry for each register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
   known : List Known := []        -- what is known of numbers that are no rows
@@ -672,11 +672,11 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
     | _, _ => refuse "a flag's value where a number is expected"
   | _, .call f _ => refuse s!"no rule for {f}"
 
-/-! ## Vector registers: four words each -/
+/-! ## Vector registers -/
 
-/-- The words of the vector register a letter of an EFFECT stands for, where they are known. -/
+/-- The four low lanes of the vector register named by an effect. -/
 def symVec (bind : Bind) (s : Sym) : Expr → Option (List Nat)
-  | .name n => (vecOf bind n).bind fun r => s.vec.lookup r
+  | .name n => (vecOf bind n).bind fun r => (s.vec.lookup r).map (·.take 4)
   | _ => none
 
 /-- One lane, as an EFFECT names it (`Y.2`): one of the four low ones. -/
@@ -873,15 +873,94 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
     else symMoved bind s f args
   | _ => refuse "a row over a vector register of a form that is not read"
 
+/-- A wide read requires all sixteen lanes. -/
+def symVec512 (bind : Bind) (s : Sym) : Expr → Option (List Nat)
+  | .name n => ((vecOf512 bind n).bind fun r => s.vec.lookup r).filter (·.length == 16)
+  | _ => none
+
+/-- Replicate the low word of a scalar value into a wide register. -/
+def symSpread16 (ctx : Ctx) (bind : Bind) (s : Sym) (a : Expr) : V (List Nat × Sym) := do
+  let (v, s) ← symValue ctx bind s a
+  match v with
+  | .lin x =>
+    let made := wAtom x s.terms
+    pure (List.replicate 16 made.1, { s with terms := made.2 })
+  | _ => refuse "a flag where a word is expected"
+
+def symPair512 (bind : Bind) (s : Sym) (a b : Expr) (f : List Nat → List Nat → V (List Nat × Sym)) : V (List Nat × Sym) :=
+  match symVec512 bind s a, symVec512 bind s b with
+  | some x, some y => f x y
+  | _, _ => refuse "a 512-bit register whose lanes are not all known"
+
+def symLaneTerms {α : Type} (s : Sym) (mk : α → List Node → Nat × List Node) (xs : List α) : V (List Nat × Sym) :=
+  let made := termsOf mk xs s.terms
+  pure (made.1, { s with terms := made.2 })
+
+def symEach512 (bind : Bind) (s : Sym) (op : String) (a b : Expr) : V (List Nat × Sym) :=
+  if op == "ror32" then
+    match symVec512 bind s a, symNumber bind b with
+    | some x, some n => symLaneTerms s (fun p => wRotr p (n.toNat % 32)) x
+    | _, _ => refuse "a rotate needs a known 512-bit register and an immediate"
+  else symPair512 bind s a b fun x y =>
+    if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y)
+    else if op == "xor32" then symLaneTerms s (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y)
+    else refuse "no proof rule for this 512-bit operation"
+
+def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
+  match args with
+  | [a, b, .number p0, .number p1, .number p2, .number p3] =>
+    symPair512 bind s a b fun x y =>
+      if f == "in_quarters" && [p0, p1, p2, p3].all (· < 8) then pure (inQuarters x y [p0, p1, p2, p3], s)
+      else refuse "invalid shuffle within quarters"
+  | [a, b, i] =>
+    symPair512 bind s a b fun x y =>
+      if f == "quarters" then
+        match symNumber bind i with
+        | some n => pure (quarters x y n.toNat, s)
+        | none => refuse "shuffling quarters needs an immediate"
+      else refuse "no proof rule for this 512-bit shuffle"
+  | _ => refuse "no proof rule for this 512-bit value"
+
+def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
+  | .name n =>
+    match symVec512 bind s (.name n) with
+    | some l => pure (l, s)
+    | none => refuse "a 512-bit register whose lanes are not all known"
+  | .call f args =>
+    if f == "zeros16" && args.isEmpty then
+      let made := wAtom (Lin.const 0) s.terms
+      pure (List.replicate 16 made.1, { s with terms := made.2 })
+    else if f == "spread16" then
+      match args with
+      | [.call g [a]] => if g == "lane32" then symSpread16 ctx bind s a else refuse "expected a 32-bit broadcast source"
+      | _ => refuse "expected a 32-bit broadcast source"
+    else if f == "each32" then
+      match args with
+      | [.name op, a, b] => symEach512 bind s op a b
+      | _ => refuse "expected a 32-bit operation and two operands"
+    else symShuffle512 bind s f args
+  | _ => refuse "no proof rule for this 512-bit value"
+
+/-- Keep only the lanes the machine model preserves across `above128 = unknown`. -/
+def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
+  vec.map fun (r, lanes) => (r, if r < 16 then lanes.take 4 else lanes)
+
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s
-  | .vset512 _ _ => refuse "512-bit vector instructions have no proof rule yet"
+  | .vset512 place v =>
+    match place with
+    | .name n =>
+      match vecOf512 bind n with
+      | some r => do
+        let (l, s) ← symLanes512 ctx bind s v
+        if l.length == 16 then pure { s with vec := (r, l) :: s.vec } else refuse "expected sixteen lanes"
+      | none => refuse "a row that sets what is no 512-bit register"
+    | _ => refuse "no proof rule for this 512-bit destination"
   | .vset place v =>
     match place with
     | .name n =>
       if n == "above128" then
-        -- (of the lanes above the low four nothing is held, so nothing is lost)
-        if isUnknown v then pure s else refuse "a row that sets the high lanes: not here yet"
+        if isUnknown v then pure { s with vec := forgetHigh s.vec } else refuse "a row that sets the high lanes: not here yet"
       else
         match vecOf bind n with
         | some r => do

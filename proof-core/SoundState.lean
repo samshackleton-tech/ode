@@ -95,11 +95,11 @@ def Known.wf (n t : Nat) : Known → Prop
   | .held _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
-speak of unknowns in use; and what is held of a vector register is four terms of the table. -/
+speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
 structure WordsWF (s : Sym) : Prop where
   table : WFT s.terms
   atoms : ∀ (j : Nat) (r : Row), s.terms[j]? = some (Node.atom r) → bounded s.nvars r
-  vec : ∀ x ids, s.vec.lookup x = some ids → ids.length = 4 ∧ ∀ i ∈ ids, i < s.terms.length
+  vec : ∀ x ids, s.vec.lookup x = some ids → (ids.length = 4 ∨ ids.length = 16) ∧ ∀ i ∈ ids, i < s.terms.length
   rotrs : ∀ (j a n : Nat), s.terms[j]? = some (Node.rotr a n) → n ≤ 32
   wrote : ∀ w j i, (w, j, i) ∈ s.wroteW → i < s.terms.length
 
@@ -126,11 +126,10 @@ def inpOf (ctx : Ctx) (s0 : State) (j k : Nat) : Nat :=
   | some (_, r, _) => load s0.mem (s0.reg r + 4 * k) 4
   | none => 0
 
-/-- What the verifier holds of words is so. Each vector register it knows the words of holds them: its four
-low lanes are the terms. A run given to write that nothing has been written to holds what it held at entry.
-A word known written is in memory: its four bytes are the term's, the lowest first. -/
+/-- A vector register agrees with its known low lanes. A run given to write retains its entry contents
+until a write. A word known to have been written holds the term's four bytes, lowest first. -/
 def VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop :=
-  (∀ x ids, s.vec.lookup x = some ids → ∀ k, k < 4 → st.vec x k = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) ∧
+  (∀ x ids, s.vec.lookup x = some ids → ∀ k, k < ids.length → st.vec x k = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) ∧
   (∀ w ∈ s.intact, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → st.mem (s0.reg r + k) = s0.mem (s0.reg r + k)) ∧
   ∀ w j i, (w, j, i) ∈ s.wroteW → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
     4 * j + 4 ≤ n ∧ ∀ b, b < 4 → st.mem (s0.reg r + 4 * j + b) = den (inpOf ctx s0) ρ s.terms i / 256 ^ b % 256

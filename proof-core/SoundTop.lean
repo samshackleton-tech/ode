@@ -1,7 +1,7 @@
 import SoundCall
 import SoundCallW
 import SoundSpecW
-import SoundVec
+import SoundWide
 import SoundList
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem

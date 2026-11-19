@@ -242,7 +242,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,597 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,666 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -399,9 +399,11 @@ These are cases where the verifier rejects a correct function:
   flags register are the same value, but the verifier holds them as two different terms. A test records
   this (`test_kernel.py`).
 
-The next part to verify is the 16-way kernel's loop. The machine model now describes the effects of all
-512-bit instructions that this kernel uses. The verifier still refuses those instructions until it has
-proof rules for them.
+The verifier can follow 512-bit register moves, broadcasts, adds, exclusive ORs, rotations and shuffles.
+It must know all sixteen lanes before reading a wide register. A 128-bit write forgets the upper lanes
+of its destination, and `vzeroupper` forgets the upper lanes of registers 0 through 15. The machine model
+also describes the 16-way kernel's memory operations. Verifying that kernel still needs rules for its
+memory operations and loop.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -572,8 +574,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 807 lines. The verifier: 1,756 lines (Core.lean 1,597, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 9,741 lines.
+**Code size.** The formal model: 807 lines. The verifier: 1,825 lines (Core.lean 1,666, Arithmetic.lean
+159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,123 lines.
 
 ## The files
 
