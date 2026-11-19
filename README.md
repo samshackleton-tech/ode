@@ -58,9 +58,9 @@ main thing we are working on.
 
 The folder `proof-core/` holds a second, much smaller verifier, written in Lean 4. With it comes a
 soundness theorem that Lean checks: if this verifier accepts a function, the function satisfies its
-contract, whatever proof it was given. So far it can verify five of the twelve small functions and one of
-the fourteen functions of BLAKE3: the kernel that compresses one 64-byte block. Extending it until it
-covers all of the BLAKE3 code is the current work.
+contract, whatever proof it was given. So far it can verify five of the twelve small functions and two of
+the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block.
+Extending it until it covers all of the BLAKE3 code is the current work.
 [proof-core/README.md](proof-core/README.md) says exactly what its theorem assumes.
 
 Section 13 of DESIGN.md compares the current state with the design, point by point.
@@ -113,7 +113,7 @@ on a real processor and compared with a reference implementation. It takes hours
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
-| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_all_sound`); it shows five shipped functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, and `ode_varint`, which writes its result into memory its caller gives it), a function that calls the first, and the hash's one-block AVX-512 kernel, so far. Its `README.md` says what that rests on. No other folder needs Lean |
+| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_all_sound`); it shows five shipped functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, and `ode_varint`, which writes its result into memory its caller gives it), a function that calls the first, and the hash's two one-block kernels (AVX-512 and SSE4.1), so far. Its `README.md` says what that rests on. No other folder needs Lean |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |

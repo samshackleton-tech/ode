@@ -788,26 +788,43 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
               simp only [hk] at h
               split at h
               next hk2 =>
-                obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
-                unfold inRange at e1
-                obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
-                have g1 := entail_sound e2 ρ hf
-                have g2 := entail_sound e3 ρ hf
-                simp only [ev_sub, ev_scale, ev_const, top] at g1 g2
-                have := V.pure_ok h
-                injection this with hp _
-                injection hp with h1 h2
-                subst h1 h2
                 have yk : (xb : Int) = k := by rw [hy2]; exact ev_isConst hk
                 have e : xb = k.toNat := by omega
                 subst e
+                have k64 : k.toNat < 64 := by omega
                 have cast : ((2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat := by simp
-                have lt : xa * 2 ^ k.toNat < M64 := by
-                  have : ((xa * 2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat * ev ρ x := by
-                    rw [Int.natCast_mul, cast, ← hx2, Int.mul_comm]
-                  unfold M64; omega
-                refine ⟨ρ, Carried.here H wf, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
-                rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
+                have castm : ((2 ^ (64 - k.toNat) : Nat) : Int) = (2 : Int) ^ (64 - k.toNat) := by simp
+                have full : 2 ^ (64 - k.toNat) * 2 ^ k.toNat = M64 := by
+                  rw [← Nat.pow_add, show 64 - k.toNat + k.toNat = 64 by omega]; rfl
+                obtain ⟨kept, rest1, ek, h⟩ := V.bind_ok h
+                cases kept with
+                | true =>
+                  -- the number is shown to be small enough: the doublings stay below 2^64
+                  have g2 := staysBelow_sound ek ρ hf
+                  simp only [if_true] at h
+                  have := V.pure_ok h
+                  injection this with hp _
+                  injection hp with h1 h2
+                  subst h1 h2
+                  have small : xa < 2 ^ (64 - k.toNat) := by
+                    have : ((xa : Nat) : Int) < ((2 ^ (64 - k.toNat) : Nat) : Int) := by rw [castm, hx2]; omega
+                    exact Int.ofNat_lt.mp this
+                  have lt : xa * 2 ^ k.toNat < M64 := by
+                    rw [← full]; exact Nat.mul_lt_mul_of_pos_right small (Nat.pow_pos (by decide))
+                  refine ⟨ρ, Carried.here H wf, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
+                  rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
+                | false =>
+                  -- else: so many doublings of the remainder by 2^(64 - k)
+                  simp only [Bool.false_eq_true, if_false] at h
+                  have := V.pure_ok h
+                  injection this with hp _
+                  injection hp with h1 h2
+                  subst h1 h2
+                  have pos : (0 : Int) < 2 ^ (64 - k.toNat) := Int.pow_pos (by decide)
+                  obtain ⟨ρ', hc, er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := 2 ^ (64 - k.toNat)) H wf hx3 pos (by rw [← hx2]; omega)
+                  refine ⟨ρ', hc, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ br⟩
+                  rw [ev_scale, er, ← hx2, Nat.shiftLeft_eq, ← full, Nat.mul_mod_mul_right, Int.natCast_mul, cast, Int.natCast_emod, castm,
+                    Int.mul_comm]
               next => exact (refuse_ok h).elim
           next hc5 =>
             split at h

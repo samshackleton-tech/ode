@@ -336,7 +336,7 @@ route, of his choosing, from his question to his tool's answer.
 **A first core exists (November 18, 2026): `proof-core/`.** It is a verifier in Lean 4 that decides by a
 proof it is handed, with a theorem that Lean checks: whatever the proofs are, if the verifier says yes of
 the functions of a statement, every one of them meets its contract on the machine the table describes
-(`verify_all_sound`). The account it is about is 731 lines; the verifier's own 1,463 lines are under the
+(`verify_all_sound`). The account it is about is 733 lines; the verifier's own 1,534 lines are under the
 theorem and need not be read. It reads a first part of what the full verifier reads: instructions over the
 general registers, the flags and memory; loops by places (several a function), by induction on a place's
 number; a call, by the contract of a function the verifier has shown before, after showing what that
@@ -345,13 +345,14 @@ a run of bytes the function writes for its caller, with an `ensures` that says w
 specification those bytes are. Five
 shipped functions are shown by it: `ode_common` from a proof of 646 bytes in 4 ms, the Adler-32 checksum
 from one of 3 kB in 5 ms, the Adler-32 that reduces its sums once a block (two loops, shifts and masks)
-from one of 19 kB in 40 ms, and the Adler-32 that takes four bytes a turn (the fast one, at 87% of the
-usual C) from one of 26 kB in 80 ms, and the varint encoder, which writes up to ten bytes for its caller,
-from one of 9 kB in 35 ms; and a function that calls the first, from 77 bytes more. The account's reading of the
+from one of 18 kB in 43 ms, and the Adler-32 that takes four bytes a turn (the fast one, at 87% of the
+usual C) from one of 26 kB in 88 ms, and the varint encoder, which writes up to ten bytes for its caller,
+from one of 9 kB in 29 ms; and a function that calls the first, from 77 bytes more. The account's reading of the
 specification language covers the whole of `kcheck/blake3.spec` (words, lists, records, sequences): worked out
-by it, the specification gives the 105 official test vectors. One function of the hash is shown by it (November 19,
-2026): the one-block kernel `blake3_servil_compress_in_place_avx512`, 76 instructions, from a proof of 189 bytes
-in 17 ms. The verifier follows each 32-bit word of a vector register as a term over the words read at entry, and
+by it, the specification gives the 105 official test vectors. Two functions of the hash are shown by it (November 19,
+2026): the one-block kernels `blake3_servil_compress_in_place_avx512` (76 instructions, a proof of 130 bytes,
+17 ms) and `blake3_servil_compress_in_place_sse41` (94 instructions, 137 bytes, 18 ms; a turn of a word made of
+two shifts and an or, or of a shuffle of bytes, is taken as the turn it is). The verifier follows each 32-bit word of a vector register as a term over the words read at entry, and
 at the return works the specification's `compress` out on the same terms; what the kernel's contract promises of
 its trace is not in the account and is not shown there. This is the third way of the disjunction, begun. Reading
 the file's bytes and the specification's text is outside the theorem, as are the link step, what a processor must

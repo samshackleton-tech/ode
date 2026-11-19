@@ -217,7 +217,10 @@ WORDS = lambda x: ("call", "words", [x])
 KINDS = {"cv": (32, WORDS),                                        # eight words: 32 bytes, the lowest byte of a word first
          "block": (64, WORDS),                                     # sixteen words
          "counter": (None, lambda x: ("call", "counter", [x])),    # a register: 64 bits as a counter
-         "low byte": (None, lambda x: ("bin", "%", x, ("num", 256)))}   # a register: its low byte, the rest being anything
+         "low byte": (None, lambda x: ("bin", "%", x, ("num", 256))),   # a register: its low byte, the rest being anything
+         "low word": (None, lambda x: ("bin", "%", x, ("num", 2 ** 32))),   # a register: its low 32 bits, the rest being anything
+         "word": (None, lambda x: x)}                              # a register: a number the caller keeps below 2^32 (BOUNDS)
+BOUNDS = {"word": 2 ** 32}                                         # the kinds that ask something of the caller: the number is below this
 
 
 def by_kind(e, kinds, name):
@@ -255,6 +258,8 @@ def contract_lines(c, name, seqs={}, consts=()):
         elif kind in KINDS and KINDS[kind][0] is not None: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {KINDS[kind][0]}")
         elif kind in KINDS and arg not in written: out.append(f"arg {arg} number")
         else: raise SystemExit(f"statement: {name}: an argument of a kind the verifier in Lean does not read yet: {arg}: {kind}")
+    for arg, kind in c["args"]:
+        if kind in BOUNDS: out.append(f"below {arg} {BOUNDS[kind]}")
     for what, more in c["needs"]:
         if more is not None or not re.fullmatch(r"[a-z0-9]+", what): raise SystemExit(f"statement: the contract of {name} has a `needs` line the verifier in Lean does not read yet")
         out.append(f"needs {what}")

@@ -320,6 +320,12 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         | true => rfl
         | false => simp only [hw, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
       simp only [hw, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      -- nor does its contract bound a number
+      have hb : c.bounds = [] := by
+        cases hb : c.bounds.isEmpty with
+        | true => simpa using hb
+        | false => simp only [hb, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
+      simp only [hb, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
       have hall : (c.outs = [] ∧ c.ensures = []) ∧ c.fixeds = [] ∧ c.inouts = [] ∧ c.ensuresW = [] := by simpa using hw
       have hout := hall.1
       have hfx := hall.2.1
@@ -365,7 +371,8 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             omega
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
-            (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m)⟩
+            (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m),
+            (fun x b m => by rw [hb] at m; cases m)⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega

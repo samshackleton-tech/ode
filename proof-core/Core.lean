@@ -12,7 +12,9 @@ comes to need it:
   * that some whole numbers satisfy an inequality: a proof of arithmetic (`Arithmetic.refutes`);
   * which of two numbers is the greater, or that they are equal (`lt`, `eq`, `gt`), then the proofs;
   * that a way a jump can go is taken by no input (`dead`, then the proof), or is to be gone (`live`);
-  * which use of a definition to open (`open N`) on the way to a fact of the specification.
+  * which use of a definition to open (`open N`) on the way to a fact of the specification;
+  * at a shift to the left, whether the number shifted is shown to be small enough that no bit is lost
+    (`exact`, then the proof) or only its low part is doubled (`wrap`).
 
 A loop is taken once, from a place the proof names: what holds there (`Place`), and a number that is less
 at each coming back and never below zero.
@@ -169,6 +171,19 @@ def isBelow (facts : List Row) (a b : Row) : V Bool :=
     | some (.proof ..) => refuse "lt or ge is expected"
     | none => need "below" facts [Lin.sub a b]
 
+/-- At a shift to the left: is the number shown to stay below `m`, so that no doubling is lost? Seen at once;
+or the proof says which: `exact`, and a proof of arithmetic follows, or `wrap`. -/
+def staysBelow (facts : List Row) (x : Row) (m : Int) : V Bool :=
+  if plain facts (Lin.sub (Lin.const (m - 1)) x) then pure true
+  else do
+    match ← pop with
+    | some (.tag name _) =>
+      if name == "exact" then do entail facts (Lin.sub (Lin.const (m - 1)) x); pure true
+      else if name == "wrap" then pure false
+      else refuse "exact or wrap is expected"
+    | some (.proof ..) => refuse "exact or wrap is expected"
+    | none => need "shift" facts [Lin.sub (Lin.const (m - 1)) x]
+
 /-! ## What is held at a point of a path -/
 
 inductive Flag where
@@ -210,6 +225,8 @@ inductive Node where
   | add (xs : List Nat)         -- the terms of these numbers summed, wrapping
   | xor (a b : Nat)
   | rotr (a n : Nat)            -- the term turned right by `n` bits
+  | shl (a n : Nat)             -- the term shifted left by `n` bits, what passes 32 bits dropped
+  | shr (a n : Nat)             -- the term shifted right by `n` bits
   deriving DecidableEq, Repr, Inhabited, Hashable
 
 /-- The terms a term is made of, by their numbers. -/
@@ -219,6 +236,8 @@ def Node.parts : Node → List Nat
   | .add xs => xs
   | .xor a b => [a, b]
   | .rotr a _ => [a]
+  | .shl a _ => [a]
+  | .shr a _ => [a]
 
 def findNode (n : Node) : List Node → Nat → Option Nat
   | [], _ => none
@@ -262,6 +281,40 @@ def wAdd (a b : Nat) (T : List Node) : Nat × List Node :=
 def wXor (a b : Nat) (T : List Node) : Nat × List Node := intern (.xor (min a b) (max a b)) T
 
 def wRotr (a n : Nat) (T : List Node) : Nat × List Node := intern (.rotr a n) T
+
+def wShl (a n : Nat) (T : List Node) : Nat × List Node := intern (.shl a n) T
+
+def wShr (a n : Nat) (T : List Node) : Nat × List Node := intern (.shr a n) T
+
+/-- The or of two terms that is a turn: one is a term shifted left by `32 - n` bits, the other the same term
+shifted right by `n`. (The term turned, and by how much.) -/
+def orTurn (T : List Node) (a b : Nat) : Option (Nat × Nat) :=
+  match T[a]?, T[b]? with
+  | some (.shl x k), some (.shr y n) => if x = y ∧ k + n = 32 ∧ 0 < n ∧ 0 < k then some (x, n) else none
+  | some (.shr y n), some (.shl x k) => if x = y ∧ k + n = 32 ∧ 0 < n ∧ 0 < k then some (x, n) else none
+  | _, _ => none
+
+def orTurns (T : List Node) : List (Nat × Nat) → Option (List (Nat × Nat))
+  | [] => some []
+  | (a, b) :: more =>
+    match orTurn T a b, orTurns T more with
+    | some t, some ts => some (t :: ts)
+    | _, _ => none
+
+/-- The numbers that terms are, where each is a number of the table. -/
+def constWords (T : List Node) : List Nat → Option (List Int)
+  | [] => some []
+  | a :: more =>
+    match T[a]?, constWords T more with
+    | some (.atom r), some ks => (Lin.isConst r).map fun k => k :: ks
+    | _, _ => none
+
+/-- A shuffle of bytes by these four words is a turn of each word to the right by so many bits: the two
+shuffles a rotation by 8 and by 16 bits is written as. -/
+def shuffleTurn (ks : List Int) : Option Nat :=
+  if ks = [0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D] then some 8
+  else if ks = [0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E] then some 16
+  else none
 
 structure Sym where
   reg : Nat → Row                 -- the sixteen registers
@@ -477,12 +530,14 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   else if f == "equal" then pure (.equal x y, s)
   else if f == "below" then pure (.below x y, s)
   else if f == "shl64" then
-    -- a shift to the left by a number of the table: so many doublings, shown to stay below 2^64
+    -- a shift to the left by a number of the table: so many doublings of what stays below 2^64, which is
+    -- the number itself where it is shown to be small enough, else its remainder (the proof says which)
     match Lin.isConst y with
     | some k =>
       if 0 ≤ k ∧ k < 64 then do
-        inRange s.facts (Lin.scale (2 ^ k.toNat) x)
-        pure (.lin (Lin.scale (2 ^ k.toNat) x), s)
+        let kept ← staysBelow s.facts x (2 ^ (64 - k.toNat))
+        if kept then pure (.lin (Lin.scale (2 ^ k.toNat) x), s)
+        else pure (.lin (Lin.scale (2 ^ k.toNat) (symLow s x (2 ^ (64 - k.toNat))).1), (symLow s x (2 ^ (64 - k.toNat))).2)
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "shr64" then
@@ -628,6 +683,81 @@ def symHalves (s : Sym) (x : Row) : V (List Nat × Sym) :=
       pure (made.1, { s with terms := made.2 })
     else pure (made.1, { s with terms := made.2 })
 
+/-- `each32(op, X, Y)`, `each32(op, X, N)`: each word of a register with the same word of another, or with a number. -/
+def symEach32 (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
+  match args with
+  | [e1, a, b] =>
+    match e1 with
+    | .name op =>
+        match symVec bind s a with
+        | some x =>
+          match symVec bind s b with
+          | some y =>
+            if op == "add32" then
+              let made := termsOf (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y) s.terms
+              pure (made.1, { s with terms := made.2 })
+            else if op == "xor32" then
+              let made := termsOf (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y) s.terms
+              pure (made.1, { s with terms := made.2 })
+            else if op == "or32" then
+              -- the or of a word shifted left and the same word shifted right: the word turned
+              match orTurns s.terms (x.zip y) with
+              | some turns =>
+                let made := termsOf (fun (p : Nat × Nat) => wRotr p.1 p.2) turns s.terms
+                pure (made.1, { s with terms := made.2 })
+              | none => refuse "an or of two vector registers that is no turn of each word: not here yet"
+            else refuse s!"no rule for {op} of two vector registers: not here yet"
+          | none =>
+            match symNumber bind b with
+            | some n =>
+              if op == "ror32" then
+                let made := termsOf (fun p => wRotr p (n.toNat % 32)) x s.terms
+                pure (made.1, { s with terms := made.2 })
+              else if op == "shl32" then
+                let made := termsOf (fun p => wShl p n.toNat) x s.terms
+                pure (made.1, { s with terms := made.2 })
+              else if op == "shr32" then
+                let made := termsOf (fun p => wShr p n.toNat) x s.terms
+                pure (made.1, { s with terms := made.2 })
+              else refuse s!"no rule for {op} of a vector register and a number: not here yet"
+            | none => refuse "a vector register whose words are not known"
+        | none => refuse "a vector register whose words are not known"
+    | _ => refuse "a row over a vector register of a form that is not read"
+  | _ => refuse "a row over a vector register of a form that is not read"
+
+/-- `shuffle_bytes(X, Z)`: the bytes of each word moved round within the word. -/
+def symShuffle (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
+  -- the bytes of each word moved round within the word: a turn of the word, by a register of four numbers
+  match args with
+  | [a, b] =>
+    match symVec bind s a, symVec bind s b with
+    | some x, some y =>
+      match (constWords s.terms y).bind shuffleTurn with
+      | some n =>
+        let made := termsOf (fun p => wRotr p n) x s.terms
+        pure (made.1, { s with terms := made.2 })
+      | none => refuse "a shuffle of bytes that is no turn of each word by 8 or 16 bits: not here yet"
+    | _, _ => refuse "a vector register whose words are not known"
+  | _ => refuse "a row over a vector register of a form that is not read"
+
+/-- `pick4`, `blend4`, `blend_halves`: words of two registers, moved. -/
+def symMoved (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
+  match args with
+  | [a, b, i] =>
+    match symVec bind s a, symVec bind s b, symNumber bind i with
+    | some x, some y, some i =>
+      let i := i.toNat
+      if f == "pick4" then pure ([x.getD (i % 4) 0, x.getD (i / 4 % 4) 0, y.getD (i / 16 % 4) 0, y.getD (i / 64 % 4) 0], s)
+      else if f == "blend4" then pure ((List.range 4).map (fun k => if i / 2 ^ k % 2 = 1 then y.getD k 0 else x.getD k 0), s)
+      else if f == "blend_halves" then
+        -- each word wholly from the one register or the other: the two bits of a word are alike
+        if (List.range 4).all (fun k => i / 4 ^ k % 4 == 0 || i / 4 ^ k % 4 == 3) then
+          pure ((List.range 4).map (fun k => if i / 4 ^ k % 4 = 3 then y.getD k 0 else x.getD k 0), s)
+        else refuse "a blend of halves that splits a word: not here yet"
+      else refuse s!"no rule for {f}: not here yet"
+    | _, _, _ => refuse "a vector register whose words are not known"
+  | _ => refuse s!"no rule for {f}: not here yet"
+
 /-- The four words an EFFECT sets a vector register to (as `lanesOf` of the machine has them), as terms. -/
 def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
@@ -666,44 +796,9 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
         | some ia, some ib, some ic, some id => pure ([ia, ib, ic, id], s)
         | _, _, _, _ => refuse "a lane of a vector register whose words are not known"
       | _ => refuse "four lanes are not four"
-    else if f == "each32" then
-      match args with
-      | [e1, a, b] =>
-        match e1 with
-        | .name op =>
-            match symVec bind s a with
-            | some x =>
-              match symVec bind s b with
-              | some y =>
-                if op == "add32" then
-                  let made := termsOf (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y) s.terms
-                  pure (made.1, { s with terms := made.2 })
-                else if op == "xor32" then
-                  let made := termsOf (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y) s.terms
-                  pure (made.1, { s with terms := made.2 })
-                else refuse s!"no rule for {op} of two vector registers: not here yet"
-              | none =>
-                match symNumber bind b with
-                | some n =>
-                  if op == "ror32" then
-                    let made := termsOf (fun p => wRotr p (n.toNat % 32)) x s.terms
-                    pure (made.1, { s with terms := made.2 })
-                  else refuse s!"no rule for {op} of a vector register and a number: not here yet"
-                | none => refuse "a vector register whose words are not known"
-            | none => refuse "a vector register whose words are not known"
-        | _ => refuse "a row over a vector register of a form that is not read"
-      | _ => refuse "a row over a vector register of a form that is not read"
-    else
-      match args with
-      | [a, b, i] =>
-        match symVec bind s a, symVec bind s b, symNumber bind i with
-        | some x, some y, some i =>
-          let i := i.toNat
-          if f == "pick4" then pure ([x.getD (i % 4) 0, x.getD (i / 4 % 4) 0, y.getD (i / 16 % 4) 0, y.getD (i / 64 % 4) 0], s)
-          else if f == "blend4" then pure ((List.range 4).map (fun k => if i / 2 ^ k % 2 = 1 then y.getD k 0 else x.getD k 0), s)
-          else refuse s!"no rule for {f}: not here yet"
-        | _, _, _ => refuse "a vector register whose words are not known"
-      | _ => refuse s!"no rule for {f}: not here yet"
+    else if f == "each32" then symEach32 bind s args
+    else if f == "shuffle_bytes" then symShuffle bind s args
+    else symMoved bind s f args
   | _ => refuse "a row over a vector register of a form that is not read"
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
@@ -1542,6 +1637,7 @@ def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
       refuse "a call needs more stack than this function's contract allows"
     else if !(c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) then
       refuse "a called function that writes for its caller: not here yet"
+    else if !c.bounds.isEmpty then refuse "a called function whose contract bounds a number: not here yet"
     else
       match calleeEnv ctx c s c.args argRegs with
       | none => refuse "a called function is given a run of bytes that is not one this function was given, whole"
@@ -1583,7 +1679,8 @@ def entryFacts (ctx : Ctx) : List Row :=
   ((List.range 16).map ranged).flatten ++
   [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 9)) (Lin.var RSP)] ++
   (ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)) ++
-  ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)
+  (ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
+  ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,

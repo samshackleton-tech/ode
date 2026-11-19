@@ -546,7 +546,7 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with ((m | m) | m) | m
+    rcases m with (((m | m) | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, _, rfl⟩ := List.mem_map.mp hl
       have := E.small r
@@ -567,12 +567,20 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       have := (E.out hm).1
       unfold M64 at this
       rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
+    · obtain ⟨⟨x, b⟩, hm, hf⟩ := List.mem_filterMap.mp m
+      cases hr : ctx.contract.regOf x with
+      | none => simp [hr] at hf
+      | some r =>
+        simp only [hr, Option.map_some, Option.some.injEq] at hf
+        subst hf
+        have := E.bound hm hr
+        rw [holds_iff]; simp only [ev_sub, ev_const, ev_var]; omega
   · intro v r o m; cases m
   · intro f m; cases m
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
-    rcases m with ((m | m) | m) | m
+    rcases m with (((m | m) | m) | m) | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
       have hr := List.mem_range.mp hr
@@ -589,6 +597,13 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       exact bounded_sub (bounded_sub (bounded_const _ _) (bounded_var this.1)) (bounded_var this.2)
     · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
       exact bounded_sub (bounded_const _ _) (bounded_var (outs_lt hm))
+    · obtain ⟨⟨x, b⟩, hm, hf⟩ := List.mem_filterMap.mp m
+      cases hr : ctx.contract.regOf x with
+      | none => simp [hr] at hf
+      | some r =>
+        simp only [hr, Option.map_some, Option.some.injEq] at hf
+        subst hf
+        exact bounded_sub (bounded_const _ _) (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args argRegs r hr)))
   · intro v r o m; cases m
   · intro f m; cases m
 

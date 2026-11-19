@@ -119,6 +119,38 @@ theorem entail_sound {facts : List Row} {g : Row} {items : Items} {r : Unit × I
     (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g :=
   entailAs_sound (what := "entail") h ρ hf
 
+theorem staysBelow_sound {facts : List Row} {x : Row} {m : Int} {items rest : Items}
+    (h : staysBelow facts x m items = .ok (true, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
+    ev ρ x ≤ m - 1 := by
+  have goal : ∀ {items : Items} {r : Unit × Items}, entail facts (Lin.sub (Lin.const (m - 1)) x) items = .ok r → ev ρ x ≤ m - 1 := by
+    intro items r e
+    have g := entail_sound e ρ hf
+    simp only [ev_sub, ev_const] at g
+    omega
+  unfold staysBelow at h
+  split at h
+  next hp =>
+    have g := plain_sound hp ρ hf
+    simp only [ev_sub, ev_const] at g
+    omega
+  next =>
+    obtain ⟨item, rest1, _, h2⟩ := V.bind_ok h
+    split at h2
+    next name n =>
+      split at h2
+      next =>
+        obtain ⟨_, r1, e1, _⟩ := V.bind_ok h2
+        exact goal e1
+      next =>
+        split at h2
+        next =>
+          have := V.pure_ok h2
+          injection this with hc _
+          cases hc
+        next => exact (refuse_ok h2).elim
+    next => exact (refuse_ok h2).elim
+    next => exact (need_ok h2).elim
+
 theorem isBelow_sound {facts : List Row} {a b : Row} {items : Items} {t : Bool} {rest : Items}
     (h : isBelow facts a b items = .ok (t, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
     t = decide (ev ρ a < ev ρ b) := by

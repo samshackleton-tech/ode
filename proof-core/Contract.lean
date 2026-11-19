@@ -269,6 +269,7 @@ structure Contract where
   ensuresW : List EnsureW := []
   needs : List String := []           -- what the processor must have (`avx512`). The machine of Machine.lean has every row of
                                       -- the table, so this says nothing here; it is carried for the caller to see.
+  bounds : List (String × Nat) := []  -- (an argument that is a number, n): the caller sees to it that the number is below n
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -377,7 +378,7 @@ lies in memory, apart from that frame and from the address to return to, and hol
 write lies in memory, apart from that frame, from the address to return to, from every run given to read
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
 from the frame, the address to return to and every run given to write, and holds bytes; a run given to read
-and to write holds bytes. -/
+and to write holds bytes. A number the contract bounds is below its bound. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
@@ -392,7 +393,8 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
     s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
     (∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
-  ∀ x r n, (x, r, n) ∈ c.inouts → ∀ k, k < n → s.mem (s.reg r + k) < 256
+  (∀ x r n, (x, r, n) ∈ c.inouts → ∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
+  ∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/

@@ -13,10 +13,10 @@ the other:
 and fails where the Lean verifier takes more than five times kcheck's time. (Under 15 ms the two are not
 compared: a program's start is most of it.) The numbers are printed, so every run of the tests has them.
 
-The hash's one-block kernel is one of the fourteen functions of ../kcheck/b3hashr.o, which kcheck takes 16
-seconds to verify whole. Its own time for the kernel is measured with the kernel as the only function
-verified in a process (as check_binary.py does it for each): 7 ms on the machine this was written on,
-where the same function takes 20 ms as the thirteenth of a whole run. The smaller number is the one used.
+The hash's two one-block kernels are two of the fourteen functions of ../kcheck/b3hashr.o, which kcheck
+takes 16 seconds to verify whole. Its own time for a kernel is measured with the kernel as the only function
+verified in a process (as check_binary.py does it for each): 7 and 8 ms on the machine this was written on,
+where the AVX-512 kernel takes 20 ms as the thirteenth of a whole run. The smaller number is the one used.
 
 On November 18 the Lean verifier was five and six times slower on the two larger functions, and it was
 seen only when the times were measured for a report. This test is so that it is seen at once.
@@ -32,7 +32,7 @@ PROGRAMS = os.path.join(KCHECK, "programs")
 SHOWN = [("common", "odecommon.o", "common.spec", "ode_common"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32"),
          ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks4"),
          ("varint", "odevarint.o", "varint.spec", "ode_varint")]
-KERNEL = test_kernel.SYMBOL
+KERNELS = [(test_kernel.AVX512, "the AVX-512 kernel"), (test_kernel.SSE, "the SSE4.1 kernel")]
 # kcheck's verifier on one function of the hash's file, as check_binary.py's `main` does it for each: the
 # arithmetic by the proofs the file carries, nothing searched for. Prints its time in milliseconds.
 ONE = '''import sys, time
@@ -55,9 +55,9 @@ class Limits(unittest.TestCase):
     def test_no_proof_is_large_and_no_verification_five_times_slower_than_kchecks(self):
         built.built("odeverify")
         lines = []
-        for folder, obj, spec, symbol in SHOWN + [(None, "b3hashr.o", None, KERNEL)]:
+        for folder, obj, spec, symbol in SHOWN + [(None, "b3hashr.o", k, k.symbol) for k, _ in KERNELS]:
             proof = os.path.join(HERE, "proofs", symbol + ".proof")
-            if folder is None: obj, spec_text = os.path.join(KCHECK, obj), test_kernel.spec_text()
+            if folder is None: obj, spec_text = os.path.join(KCHECK, obj), test_kernel.spec_text(contract=spec.contract)
             else:
                 obj = os.path.join(PROGRAMS, folder, obj)
                 with open(os.path.join(PROGRAMS, folder, spec)) as f: spec_text = f.read()
@@ -77,7 +77,7 @@ class Limits(unittest.TestCase):
                 if folder is None:
                     r = subprocess.run([sys.executable, "-c", ONE, KCHECK, obj, symbol], capture_output=True, text=True)
                     said = r.stdout.split(None, 2)
-                    self.assertEqual((r.returncode, said[0], said[2]), (0, "76", "a one-block kernel\n"), (r.stdout[-300:], r.stderr[-300:]))
+                    self.assertEqual((r.returncode, said[0], said[2]), (0, str(spec.instructions), "a one-block kernel\n"), (r.stdout[-300:], r.stderr[-300:]))
                     took = float(said[1]) / 1000
                 else:
                     r = subprocess.run([sys.executable, os.path.join(PROGRAMS, "check_file.py"), obj, "--maintain"], capture_output=True, text=True)
@@ -85,7 +85,7 @@ class Limits(unittest.TestCase):
                     self.assertTrue(m, (symbol, r.stdout[-300:]))
                     took = float(m.group(1)) / 1000
                 python = took if python is None else min(python, took)
-            name = symbol if len(symbol) <= 20 else "the one-block kernel"
+            name = symbol if folder is not None else dict((k.symbol, n) for k, n in KERNELS)[symbol]
             lines.append(f"  {name:<20} the proof {size:>6} bytes; the Lean verifier {1000 * lean:6.1f} ms; kcheck's {1000 * python:5.1f} ms; {lean / python:4.1f} times")
             with self.subTest(symbol=symbol):
                 self.assertLessEqual(size, SIZE, f"{symbol}: the proof is {size} bytes")

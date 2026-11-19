@@ -17,6 +17,8 @@ def Node.value (inp : Nat → Nat → Nat) (ρ : Nat → Int) (g : Nat → Nat) 
   | .add xs => sumList (xs.map g) % W32
   | .xor a b => g a ^^^ g b
   | .rotr a n => Ode.rotr (g a) n
+  | .shl a n => (g a <<< n) % W32
+  | .shr a n => g a >>> n
 
 def denF (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T : List Node) : Nat → Nat → Nat
   | 0, _ => 0
@@ -45,6 +47,12 @@ theorem Node.value_congr {inp : Nat → Nat → Nat} {ρ ρ' : Nat → Int} {g g
     simp only [Node.value]
     rw [hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
   | rotr a k =>
+    simp only [Node.value]
+    rw [hg a (by simp [Node.parts])]
+  | shl a k =>
+    simp only [Node.value]
+    rw [hg a (by simp [Node.parts])]
+  | shr a k =>
     simp only [Node.value]
     rw [hg a (by simp [Node.parts])]
 
@@ -235,6 +243,8 @@ theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List No
     | input r k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | xor x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | rotr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | shl x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | shr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
 
 /-- What each term the verifier makes is, the table having grown by it at most. -/
 structure Made (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T T' : List Node) (i : Nat) (v : Nat) : Prop where
@@ -392,6 +402,8 @@ theorem den_lt {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} (h
         simp only [Node.value]
         exact Nat.xor_lt_two_pow (ih a (hw i _ h a (by simp [Node.parts]))) (ih b (hw i _ h b (by simp [Node.parts])))
       | rotr a n => exact rotr_lt (ih a (hw i _ h a (by simp [Node.parts]))) (hrot i a n h)
+      | shl a n => exact Nat.mod_lt _ (by decide)
+      | shr a n => exact Nat.lt_of_le_of_lt (Nat.shiftRight_le _ _) (ih a (hw i _ h a (by simp [Node.parts])))
 
 /-! ## The index of a table -/
 
@@ -426,5 +438,86 @@ theorem termIndex_spec (T : List Node) (n : Node) : (termIndex T)[n]? = findNode
   unfold termIndex
   rw [termIndexFrom_spec]
   simp
+
+/-! ## Shifts, and the or of two shifts that is a turn -/
+
+theorem wShl_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a n i : Nat} (h : wShl a n T = (i, T'))
+    (hw : WFT T) (ha : a < T.length) : Made inp ρ T T' i ((den inp ρ T a <<< n) % W32) := by
+  have m := made (inp := inp) (ρ := ρ) h hw (by
+    intro j mj
+    simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
+    rw [mj]; exact ha)
+  exact ⟨m.ext, m.wf, m.lt, m.den⟩
+
+theorem wShr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a n i : Nat} (h : wShr a n T = (i, T'))
+    (hw : WFT T) (ha : a < T.length) : Made inp ρ T T' i (den inp ρ T a >>> n) := by
+  have m := made (inp := inp) (ρ := ρ) h hw (by
+    intro j mj
+    simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
+    rw [mj]; exact ha)
+  exact ⟨m.ext, m.wf, m.lt, m.den⟩
+
+/-- A word shifted left by `k` bits, or the same word shifted right by `n`, the two shifts making up 32
+bits: the word turned right by `n`. -/
+theorem shl_or_shr {w k n : Nat} (hw : w < W32) (hkn : k + n = 32) :
+    (w <<< k) % W32 ||| w >>> n = Ode.rotr w n := by
+  have full : 2 ^ n * 2 ^ k = W32 := by rw [← Nat.pow_add, show n + k = 32 by omega]; rfl
+  have e1 : (w <<< k) % W32 = (w % 2 ^ n) <<< k := by
+    rw [Nat.shiftLeft_eq, Nat.shiftLeft_eq, ← full, Nat.mul_mod_mul_right]
+  have small : w >>> n < 2 ^ k := by
+    rw [Nat.shiftRight_eq_div_pow]
+    exact Nat.div_lt_of_lt_mul (by rw [full]; exact hw)
+  rw [e1, ← Nat.shiftLeft_add_eq_or_of_lt small]
+  unfold Ode.rotr
+  rw [Nat.shiftLeft_eq, Nat.shiftRight_eq_div_pow, show 32 - n = k by omega, Nat.add_comm]
+
+/-- What `orTurn` finds is so: the term it names is in the table before the two, the turn is by 32 bits at
+most, and the or of the two terms is that term turned. -/
+theorem orTurn_sound {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} {a b : Nat} {t : Nat × Nat} (hw : WFT T)
+    (hlt : ∀ i, den inp ρ T i < W32) (h : orTurn T a b = some t) :
+    t.1 < T.length ∧ t.2 ≤ 32 ∧ den inp ρ T a ||| den inp ρ T b = Ode.rotr (den inp ρ T t.1) t.2 := by
+  unfold orTurn at h
+  cases ha : T[a]? with
+  | none => simp [ha] at h
+  | some na =>
+    cases hb : T[b]? with
+    | none => cases na <;> simp [ha, hb] at h
+    | some nb =>
+      have alt : a < T.length := by
+        refine Decidable.by_contra fun c => ?_
+        rw [List.getElem?_eq_none_iff.mpr (by omega)] at ha; cases ha
+      have blt : b < T.length := by
+        refine Decidable.by_contra fun c => ?_
+        rw [List.getElem?_eq_none_iff.mpr (by omega)] at hb; cases hb
+      cases na with
+      | shl x k =>
+        cases nb with
+        | shr y n =>
+          simp only [ha, hb] at h
+          split at h
+          next hc =>
+            obtain ⟨rfl, hkn, n0, k0⟩ := hc
+            injection h with h; subst h
+            have xlt : x < a := hw a _ ha x (by simp [Node.parts])
+            refine ⟨by show x < T.length; omega, by show n ≤ 32; omega, ?_⟩
+            rw [den_node hw ha, den_node hw hb]
+            exact shl_or_shr (hlt x) hkn
+          next => cases h
+        | _ => simp [ha, hb] at h
+      | shr y n =>
+        cases nb with
+        | shl x k =>
+          simp only [ha, hb] at h
+          split at h
+          next hc =>
+            obtain ⟨rfl, hkn, n0, k0⟩ := hc
+            injection h with h; subst h
+            have xlt : x < b := hw b _ hb x (by simp [Node.parts])
+            refine ⟨by show x < T.length; omega, by show n ≤ 32; omega, ?_⟩
+            rw [den_node hw ha, den_node hw hb, Nat.or_comm]
+            exact shl_or_shr (hlt x) hkn
+          next => cases h
+        | _ => simp [ha, hb] at h
+      | _ => simp [ha, hb] at h
 
 end Ode

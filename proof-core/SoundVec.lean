@@ -260,7 +260,12 @@ theorem fixed {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.fixeds) :
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
   E.pre.2.2.2.2.2.2.2.2.1 x r n h
 theorem inoutByte {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.inouts) {k : Nat} (hk : k < n) :
-    s0.mem (s0.reg r + k) < 256 := E.pre.2.2.2.2.2.2.2.2.2 x r n h k hk
+    s0.mem (s0.reg r + k) < 256 := E.pre.2.2.2.2.2.2.2.2.2.1 x r n h k hk
+
+/-- A number the contract bounds is below its bound at entry. -/
+theorem bound {x : String} {b r : Nat}
+    (h : (x, b) ∈ ctx.contract.bounds) (hr : ctx.contract.regOf x = some r) : s0.reg r < b :=
+  E.pre.2.2.2.2.2.2.2.2.2.2 x b h r hr
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
@@ -578,6 +583,495 @@ theorem pure_pair {α β : Type} {a x : α} {b y : β} {items rest : Items}
   injection h1 with h1 h2
   exact ⟨h1, h2⟩
 
+/-! ## Shifts, shuffles of bytes and blends of halves -/
+
+theorem wShl_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a n : Nat} (ok : TableOk nv T)
+    (ha : a < T.length) : Step inp ρ nv T (wShl a n T).2 (wShl a n T).1 ((den inp ρ T a <<< n) % W32) :=
+  step_of_made ok (wShl_made (T' := (wShl a n T).2) (i := (wShl a n T).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
+
+theorem wShr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a n : Nat} (ok : TableOk nv T)
+    (ha : a < T.length) : Step inp ρ nv T (wShr a n T).2 (wShr a n T).1 (den inp ρ T a >>> n) :=
+  step_of_made ok (wShr_made (T' := (wShr a n T).2) (i := (wShr a n T).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
+
+theorem orTurns4 {T : List Node} {x0 x1 x2 x3 y0 y1 y2 y3 : Nat} {turns : List (Nat × Nat)}
+    (h : orTurns T ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) = some turns) :
+    ∃ t0 t1 t2 t3, turns = [t0, t1, t2, t3] ∧ orTurn T x0 y0 = some t0 ∧ orTurn T x1 y1 = some t1 ∧
+      orTurn T x2 y2 = some t2 ∧ orTurn T x3 y3 = some t3 := by
+  simp only [List.zip_cons_cons, List.zip_nil_right, orTurns] at h
+  cases h0 : orTurn T x0 y0 <;> cases h1 : orTurn T x1 y1 <;> cases h2 : orTurn T x2 y2 <;> cases h3 : orTurn T x3 y3 <;>
+    simp only [h0, h1, h2, h3, reduceCtorEq] at h
+  rename_i t0 t1 t2 t3
+  injection h with h
+  exact ⟨t0, t1, t2, t3, h.symm, rfl, rfl, rfl, rfl⟩
+
+theorem constWords_cons {T : List Node} {a : Nat} {more : List Nat} {ks : List Int} (h : constWords T (a :: more) = some ks) :
+    ∃ r k ks', T[a]? = some (.atom r) ∧ Lin.isConst r = some k ∧ constWords T more = some ks' ∧ ks = k :: ks' := by
+  simp only [constWords] at h
+  cases ha : T[a]? with
+  | none => simp [ha] at h
+  | some n =>
+    cases hm : constWords T more with
+    | none => cases n <;> simp [ha, hm] at h
+    | some ks' =>
+      cases n with
+      | atom r =>
+        simp only [ha, hm] at h
+        cases hk : Lin.isConst r with
+        | none => simp [hk] at h
+        | some k =>
+          simp only [hk, Option.map_some, Option.some.injEq] at h
+          exact ⟨r, k, ks', rfl, hk, rfl, h.symm⟩
+      | _ => simp [ha, hm] at h
+
+/-- A term that is a number of the table is that number as a word. -/
+theorem constWord_den {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} {y : Nat} {r : Row} {k : Int} (hw : WFT T)
+    (hy : T[y]? = some (.atom r)) (hk : Lin.isConst r = some k) : den inp ρ T y = (k % W32i).toNat := by
+  rw [den_node hw hy]
+  simp only [Node.value, ev_isConst hk]
+
+/-- The shuffle of bytes a turn by 8 bits is written as: each word turned right by 8 bits. -/
+theorem shuffle_rot8 {a0 a1 a2 a3 : Nat} (h0 : a0 < W32) (h1 : a1 < W32) (h2 : a2 < W32) (h3 : a3 < W32) :
+    shuffleBytes [a0, a1, a2, a3] [0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D] =
+      [rotr a0 8, rotr a1 8, rotr a2 8, rotr a3 8] := by
+  unfold W32 at h0 h1 h2 h3
+  simp [shuffleBytes, byteOf, rotr, List.range, List.range.loop]
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> omega
+
+theorem shuffle_rot16 {a0 a1 a2 a3 : Nat} (h0 : a0 < W32) (h1 : a1 < W32) (h2 : a2 < W32) (h3 : a3 < W32) :
+    shuffleBytes [a0, a1, a2, a3] [0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E] =
+      [rotr a0 16, rotr a1 16, rotr a2 16, rotr a3 16] := by
+  unfold W32 at h0 h1 h2 h3
+  simp [shuffleBytes, byteOf, rotr, List.range, List.range.loop]
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> omega
+
+/-- A blend of halves in which the two halves of each word come from one register: each word whole. -/
+theorem blend_words {a0 a1 a2 a3 b0 b1 b2 b3 i : Nat} (ha0 : a0 < W32) (ha1 : a1 < W32) (ha2 : a2 < W32) (ha3 : a3 < W32)
+    (hb0 : b0 < W32) (hb1 : b1 < W32) (hb2 : b2 < W32) (hb3 : b3 < W32)
+    (hi : (List.range 4).all (fun k => i / 4 ^ k % 4 == 0 || i / 4 ^ k % 4 == 3) = true) :
+    blendHalves [a0, a1, a2, a3] [b0, b1, b2, b3] i =
+      (List.range 4).map (fun k => if i / 4 ^ k % 4 = 3 then [b0, b1, b2, b3].getD k 0 else [a0, a1, a2, a3].getD k 0) := by
+  unfold W32 at *
+  simp [List.range, List.range.loop] at hi
+  obtain ⟨c0, c1, c2, c3⟩ := hi
+  simp [blendHalves, halfOf, List.range, List.range.loop]
+  refine ⟨?_, ?_, ?_, ?_⟩
+  all_goals (repeat' split)
+  all_goals (try simp only [List.getElem?_cons_zero, List.getElem?_cons_succ, Option.getD_some])
+  all_goals omega
+
+/-- `each32`: what the verifier takes the four words to be, the machine sets. -/
+theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {args : List Expr} {l : List Nat}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symEach32 bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm s0) bind st (.call "each32" args) = some lanes ∧
+      (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
+  unfold symEach32 at h
+  rcases args with _ | ⟨e1, _ | ⟨a, _ | ⟨b, _ | ⟨e4, more⟩⟩⟩⟩
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · cases e1 with
+    | number _ => exact (refuse_ok h).elim
+    | lane _ _ => exact (refuse_ok h).elim
+    | call _ _ => exact (refuse_ok h).elim
+    | name op =>
+      cases hx : symVec bind s a with
+      | none => simp only [hx] at h; exact (refuse_ok h).elim
+      | some x =>
+        simp only [hx] at h
+        obtain ⟨rx, lenx, ltx, hvx, hdx⟩ := symVec_sound H wf hx
+        obtain ⟨x0, x1, x2, x3, rfl⟩ := list4 lenx
+        cases hy : symVec bind s b with
+        | some y =>
+          simp only [hy] at h
+          obtain ⟨ry, leny, lty, hvy, hdy⟩ := symVec_sound H wf hy
+          obtain ⟨y0, y1, y2, y3, rfl⟩ := list4 leny
+          split at h
+          next hop =>
+            have oe : op = "add32" := by simpa using hop
+            subst oe
+            obtain ⟨rfl, rfl⟩ := pure_pair h
+            obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wAdd q.1 q.2)
+              (val := fun q => (den (inpOf ctx s0) ρ s.terms q.1 + den (inpOf ctx s0) ρ s.terms q.2) % W32)
+              (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
+              (by
+                intro q mq T eT okT
+                have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
+                have m2 := lty q.2 (List.of_mem_zip (a := q.1) (b := q.2) mq).2
+                have S := wAdd_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le m1 eT.le) (Nat.lt_of_lt_of_le m2 eT.le)
+                rw [den_ext wf.words.table eT m1, den_ext wf.words.table eT m2] at S
+                exact S)
+              (Ext.refl _) wf.words.ok
+            refine ⟨ρ, Carried.terms H wf e ok,
+              [(st.vec rx 0 + st.vec ry 0) % W32, (st.vec rx 1 + st.vec ry 1) % W32, (st.vec rx 2 + st.vec ry 2) % W32,
+               (st.vec rx 3 + st.vec ry 3) % W32], ?_, lt, ?_⟩
+            · simp [lanesOf, hvx, hvy, prim32]
+            · intro k hk
+              rcases lt4 hk with rfl | rfl | rfl | rfl
+              · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; rfl
+              · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; rfl
+              · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; rfl
+              · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
+          next hop =>
+            split at h
+            next hop2 =>
+              have oe : op = "xor32" := by simpa using hop2
+              subst oe
+              obtain ⟨rfl, rfl⟩ := pure_pair h
+              obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wXor q.1 q.2)
+                (val := fun q => den (inpOf ctx s0) ρ s.terms q.1 ^^^ den (inpOf ctx s0) ρ s.terms q.2)
+                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
+                (by
+                  intro q mq T eT okT
+                  have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
+                  have m2 := lty q.2 (List.of_mem_zip (a := q.1) (b := q.2) mq).2
+                  have S := wXor_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le m1 eT.le) (Nat.lt_of_lt_of_le m2 eT.le)
+                  rw [den_ext wf.words.table eT m1, den_ext wf.words.table eT m2] at S
+                  exact S)
+                (Ext.refl _) wf.words.ok
+              refine ⟨ρ, Carried.terms H wf e ok,
+                [st.vec rx 0 ^^^ st.vec ry 0, st.vec rx 1 ^^^ st.vec ry 1, st.vec rx 2 ^^^ st.vec ry 2, st.vec rx 3 ^^^ st.vec ry 3],
+                ?_, lt, ?_⟩
+              · simp [lanesOf, hvx, hvy, prim32]
+              · intro k hk
+                rcases lt4 hk with rfl | rfl | rfl | rfl
+                · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; rfl
+                · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; rfl
+                · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; rfl
+                · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
+            next hop2 =>
+              split at h
+              next hop3 =>
+                -- the or of a word shifted left and the same word shifted right: the word turned
+                have oe : op = "or32" := by simpa using hop3
+                subst oe
+                cases ht : orTurns s.terms ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) with
+                | none => simp only [ht] at h; exact (refuse_ok h).elim
+                | some turns =>
+                  simp only [ht] at h
+                  obtain ⟨rfl, rfl⟩ := pure_pair h
+                  obtain ⟨t0, t1, t2, t3, rfl, g0, g1, g2, g3⟩ := orTurns4 ht
+                  have dl : ∀ i, den (inpOf ctx s0) ρ s.terms i < W32 := fun i => den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
+                  have o0 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g0
+                  have o1 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g1
+                  have o2 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g2
+                  have o3 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g3
+                  obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wRotr q.1 q.2)
+                    (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q.1) q.2)
+                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [t0, t1, t2, t3] s.terms
+                    (by
+                      intro q mq T eT okT
+                      have hq : q.1 < s.terms.length ∧ q.2 ≤ 32 := by
+                        simp only [List.mem_cons, List.mem_nil_iff, or_false] at mq
+                        rcases mq with rfl | rfl | rfl | rfl
+                        · exact ⟨o0.1, o0.2.1⟩
+                        · exact ⟨o1.1, o1.2.1⟩
+                        · exact ⟨o2.1, o2.2.1⟩
+                        · exact ⟨o3.1, o3.2.1⟩
+                      have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le hq.1 eT.le) hq.2
+                      rw [den_ext wf.words.table eT hq.1] at S
+                      exact S)
+                    (Ext.refl _) wf.words.ok
+                  refine ⟨ρ, Carried.terms H wf e ok,
+                    [st.vec rx 0 ||| st.vec ry 0, st.vec rx 1 ||| st.vec ry 1, st.vec rx 2 ||| st.vec ry 2, st.vec rx 3 ||| st.vec ry 3],
+                    ?_, lt, ?_⟩
+                  · simp [lanesOf, hvx, hvy, prim32]
+                  · intro k hk
+                    rcases lt4 hk with rfl | rfl | rfl | rfl
+                    · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; exact o0.2.2
+                    · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; exact o1.2.2
+                    · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; exact o2.2.2
+                    · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; exact o3.2.2
+              next => exact (refuse_ok h).elim
+        | none =>
+          simp only [hy] at h
+          cases hn : symNumber bind b with
+          | none => simp only [hn] at h; exact (refuse_ok h).elim
+          | some n =>
+            simp only [hn] at h
+            split at h
+            next hop =>
+              have oe : op = "ror32" := by simpa using hop
+              subst oe
+              obtain ⟨rfl, rfl⟩ := pure_pair h
+              obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
+              obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wRotr q (n.toNat % 32))
+                (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q) (n.toNat % 32))
+                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                (by
+                  intro q mq T eT okT
+                  have m1 := ltx q mq
+                  have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) (n := n.toNat % 32) okT (Nat.lt_of_lt_of_le m1 eT.le) (by omega)
+                  rw [den_ext wf.words.table eT m1] at S
+                  exact S)
+                (Ext.refl _) wf.words.ok
+              refine ⟨ρ, Carried.terms H wf e ok,
+                [rotr (st.vec rx 0) (n.toNat % 32), rotr (st.vec rx 1) (n.toNat % 32), rotr (st.vec rx 2) (n.toNat % 32),
+                 rotr (st.vec rx 3) (n.toNat % 32)], ?_, lt, ?_⟩
+              · simp [lanesOf, hvx, vecn, vn, prim32]
+              · intro k hk
+                rcases lt4 hk with rfl | rfl | rfl | rfl
+                · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega)]; rfl
+                · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega)]; rfl
+                · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega)]; rfl
+                · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega)]; rfl
+            next hop =>
+              split at h
+              next hop2 =>
+                have oe : op = "shl32" := by simpa using hop2
+                subst oe
+                obtain ⟨rfl, rfl⟩ := pure_pair h
+                obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
+                obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wShl q n.toNat)
+                  (val := fun q => (den (inpOf ctx s0) ρ s.terms q <<< n.toNat) % W32)
+                  (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                  (by
+                    intro q mq T eT okT
+                    have m1 := ltx q mq
+                    have S := wShl_step (inp := inpOf ctx s0) (ρ := ρ) (n := n.toNat) okT (Nat.lt_of_lt_of_le m1 eT.le)
+                    rw [den_ext wf.words.table eT m1] at S
+                    exact S)
+                  (Ext.refl _) wf.words.ok
+                refine ⟨ρ, Carried.terms H wf e ok,
+                  [(st.vec rx 0 <<< n.toNat) % W32, (st.vec rx 1 <<< n.toNat) % W32, (st.vec rx 2 <<< n.toNat) % W32,
+                   (st.vec rx 3 <<< n.toNat) % W32], ?_, lt, ?_⟩
+                · simp [lanesOf, hvx, vecn, vn, prim32]
+                · intro k hk
+                  rcases lt4 hk with rfl | rfl | rfl | rfl
+                  · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega)]; rfl
+                  · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega)]; rfl
+                  · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega)]; rfl
+                  · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega)]; rfl
+              next hop2 =>
+                split at h
+                next hop3 =>
+                  have oe : op = "shr32" := by simpa using hop3
+                  subst oe
+                  obtain ⟨rfl, rfl⟩ := pure_pair h
+                  obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
+                  obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wShr q n.toNat)
+                    (val := fun q => den (inpOf ctx s0) ρ s.terms q >>> n.toNat)
+                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                    (by
+                      intro q mq T eT okT
+                      have m1 := ltx q mq
+                      have S := wShr_step (inp := inpOf ctx s0) (ρ := ρ) (n := n.toNat) okT (Nat.lt_of_lt_of_le m1 eT.le)
+                      rw [den_ext wf.words.table eT m1] at S
+                      exact S)
+                    (Ext.refl _) wf.words.ok
+                  refine ⟨ρ, Carried.terms H wf e ok,
+                    [st.vec rx 0 >>> n.toNat, st.vec rx 1 >>> n.toNat, st.vec rx 2 >>> n.toNat, st.vec rx 3 >>> n.toNat], ?_, lt, ?_⟩
+                  · simp [lanesOf, hvx, vecn, vn, prim32]
+                  · intro k hk
+                    rcases lt4 hk with rfl | rfl | rfl | rfl
+                    · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega)]; rfl
+                    · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega)]; rfl
+                    · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega)]; rfl
+                    · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega)]; rfl
+                next => exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+
+/-- `shuffle_bytes`: what the verifier takes the four words to be, the machine sets. -/
+theorem symShuffle_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {args : List Expr} {l : List Nat}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symShuffle bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm s0) bind st (.call "shuffle_bytes" args) = some lanes ∧
+      (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
+  unfold symShuffle at h
+  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨c, more⟩⟩⟩
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> simp only [hx, hy] at h
+    all_goals try exact (refuse_ok h).elim
+    rename_i x y
+    obtain ⟨rx, lenx, ltx, hvx, hdx⟩ := symVec_sound H wf hx
+    obtain ⟨ry, leny, lty, hvy, hdy⟩ := symVec_sound H wf hy
+    obtain ⟨x0, x1, x2, x3, rfl⟩ := list4 lenx
+    obtain ⟨y0, y1, y2, y3, rfl⟩ := list4 leny
+    cases hn : (constWords s.terms [y0, y1, y2, y3]).bind shuffleTurn with
+    | none => simp only [hn] at h; exact (refuse_ok h).elim
+    | some n =>
+      simp only [hn] at h
+      obtain ⟨rfl, rfl⟩ := pure_pair h
+      obtain ⟨ks, hks, htn⟩ := Option.bind_eq_some_iff.mp hn
+      obtain ⟨r0, k0, ks0, a0, c0, m0, rfl⟩ := constWords_cons hks
+      obtain ⟨r1, k1, ks1, a1, c1, m1, rfl⟩ := constWords_cons m0
+      obtain ⟨r2, k2, ks2, a2, c2, m2, rfl⟩ := constWords_cons m1
+      obtain ⟨r3, k3, ks3, a3, c3, m3, rfl⟩ := constWords_cons m2
+      have e3 : ks3 = [] := by simp only [constWords, Option.some.injEq] at m3; exact m3.symm
+      subst e3
+      have dl : ∀ i, den (inpOf ctx s0) ρ s.terms i < W32 := fun i => den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
+      have vx : ∀ k, k < 4 → st.vec rx k < W32 := fun k hk => by rw [hdx k hk]; exact dl _
+      have d0 : st.vec ry 0 = (k0 % W32i).toNat := by rw [hdy 0 (by omega)]; exact constWord_den wf.words.table a0 c0
+      have d1 : st.vec ry 1 = (k1 % W32i).toNat := by rw [hdy 1 (by omega)]; exact constWord_den wf.words.table a1 c1
+      have d2 : st.vec ry 2 = (k2 % W32i).toNat := by rw [hdy 2 (by omega)]; exact constWord_den wf.words.table a2 c2
+      have d3 : st.vec ry 3 = (k3 % W32i).toNat := by rw [hdy 3 (by omega)]; exact constWord_den wf.words.table a3 c3
+      have turn : n ≤ 32 ∧ shuffleBytes [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3] [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3] =
+          [rotr (st.vec rx 0) n, rotr (st.vec rx 1) n, rotr (st.vec rx 2) n, rotr (st.vec rx 3) n] := by
+        rw [d0, d1, d2, d3]
+        unfold shuffleTurn at htn
+        split at htn
+        next e8 =>
+          injection htn with htn; subst htn
+          injection e8 with e0 e8; injection e8 with e1 e8; injection e8 with e2 e8; injection e8 with e3 _
+          subst e0 e1 e2 e3
+          exact ⟨by decide, shuffle_rot8 (vx 0 (by omega)) (vx 1 (by omega)) (vx 2 (by omega)) (vx 3 (by omega))⟩
+        next =>
+          split at htn
+          next e16 =>
+            injection htn with htn; subst htn
+            injection e16 with e0 e16; injection e16 with e1 e16; injection e16 with e2 e16; injection e16 with e3 _
+            subst e0 e1 e2 e3
+            exact ⟨by decide, shuffle_rot16 (vx 0 (by omega)) (vx 1 (by omega)) (vx 2 (by omega)) (vx 3 (by omega))⟩
+          next => cases htn
+      obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wRotr q n)
+        (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q) n)
+        (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+        (by
+          intro q mq T eT okT
+          have m1 := ltx q mq
+          have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) (n := n) okT (Nat.lt_of_lt_of_le m1 eT.le) turn.1
+          rw [den_ext wf.words.table eT m1] at S
+          exact S)
+        (Ext.refl _) wf.words.ok
+      refine ⟨ρ, Carried.terms H wf e ok,
+        [rotr (st.vec rx 0) n, rotr (st.vec rx 1) n, rotr (st.vec rx 2) n, rotr (st.vec rx 3) n], ?_, lt, ?_⟩
+      · simp [lanesOf, hvx, hvy, turn.2]
+      · intro k hk
+        rcases lt4 hk with rfl | rfl | rfl | rfl
+        · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega)]; rfl
+        · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega)]; rfl
+        · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega)]; rfl
+        · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega)]; rfl
+  · exact (refuse_ok h).elim
+
+/-- `pick4`, `blend4`, `blend_halves`: what the verifier takes the four words to be, the machine sets. -/
+theorem symMoved_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {f : String} {args : List Expr} {l : List Nat}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symMoved bind s f args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm s0) bind st (.call f args) = some lanes ∧
+      (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
+  unfold symMoved at h
+  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨i, _ | ⟨e4, more⟩⟩⟩⟩
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hi : symNumber bind i <;>
+      simp only [hx, hy, hi] at h
+    all_goals try exact (refuse_ok h).elim
+    rename_i x y iv
+    obtain ⟨rx, lenx, ltx, hvx, hdx⟩ := symVec_sound H wf hx
+    obtain ⟨ry, leny, lty, hvy, hdy⟩ := symVec_sound H wf hy
+    obtain ⟨i0, i_lt, vi, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hi
+    have m4 : ∀ j, j % 4 < 4 := fun j => Nat.mod_lt _ (by decide)
+    split at h
+    next hp =>
+      have fe : f = "pick4" := by simpa using hp
+      subst fe
+      obtain ⟨rfl, rfl⟩ := pure_pair h
+      refine ⟨ρ, Carried.here H wf,
+        [[st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat % 4) 0,
+         [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat / 4 % 4) 0,
+         [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 16 % 4) 0,
+         [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 64 % 4) 0], ?_, ?_, ?_⟩
+      · simp [lanesOf, hvx, hvy, vi]
+      · intro j mj
+        simp only [List.mem_cons, List.mem_nil_iff, or_false] at mj
+        rcases mj with rfl | rfl | rfl | rfl
+        · exact ltx _ (getD4_mem lenx (m4 _))
+        · exact ltx _ (getD4_mem lenx (m4 _))
+        · exact lty _ (getD4_mem leny (m4 _))
+        · exact lty _ (getD4_mem leny (m4 _))
+      · intro k hk
+        rcases lt4 hk with rfl | rfl | rfl | rfl
+        · show [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat % 4) 0 = _
+          rw [vec4_getD (f := st.vec rx) (m4 _)]; exact hdx _ (m4 _)
+        · show [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat / 4 % 4) 0 = _
+          rw [vec4_getD (f := st.vec rx) (m4 _)]; exact hdx _ (m4 _)
+        · show [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 16 % 4) 0 = _
+          rw [vec4_getD (f := st.vec ry) (m4 _)]; exact hdy _ (m4 _)
+        · show [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 64 % 4) 0 = _
+          rw [vec4_getD (f := st.vec ry) (m4 _)]; exact hdy _ (m4 _)
+    next hp =>
+      split at h
+      next hb =>
+        have fe : f = "blend4" := by simpa using hb
+        subst fe
+        obtain ⟨rfl, rfl⟩ := pure_pair h
+        refine ⟨ρ, Carried.here H wf,
+          (List.range 4).map (fun k => if iv.toNat / 2 ^ k % 2 = 1 then [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD k 0
+            else [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD k 0), ?_, ?_, ?_⟩
+        · simp [lanesOf, hvx, hvy, vi]
+        · intro j mj
+          obtain ⟨k, mk, rfl⟩ := List.mem_map.mp mj
+          have hk : k < 4 := List.mem_range.mp mk
+          split
+          · exact lty _ (getD4_mem leny hk)
+          · exact ltx _ (getD4_mem lenx hk)
+        · intro k hk
+          rcases lt4 hk with rfl | rfl | rfl | rfl
+          · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+            split
+            · exact hdy 0 (by omega)
+            · exact hdx 0 (by omega)
+          · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+            split
+            · exact hdy 1 (by omega)
+            · exact hdx 1 (by omega)
+          · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+            split
+            · exact hdy 2 (by omega)
+            · exact hdx 2 (by omega)
+          · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+            split
+            · exact hdy 3 (by omega)
+            · exact hdx 3 (by omega)
+      next hb =>
+        split at h
+        next hh =>
+          -- each word wholly from the one register or the other
+          have fe : f = "blend_halves" := by simpa using hh
+          subst fe
+          split at h
+          next hall =>
+            have dl : ∀ i, den (inpOf ctx s0) ρ s.terms i < W32 := fun i => den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
+            have vx : ∀ k, k < 4 → st.vec rx k < W32 := fun k hk => by rw [hdx k hk]; exact dl _
+            have vy : ∀ k, k < 4 → st.vec ry k < W32 := fun k hk => by rw [hdy k hk]; exact dl _
+            obtain ⟨rfl, rfl⟩ := pure_pair h
+            refine ⟨ρ, Carried.here H wf,
+              (List.range 4).map (fun k => if iv.toNat / 4 ^ k % 4 = 3 then [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD k 0
+                else [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD k 0), ?_, ?_, ?_⟩
+            · rw [← blend_words (vx 0 (by omega)) (vx 1 (by omega)) (vx 2 (by omega)) (vx 3 (by omega))
+                (vy 0 (by omega)) (vy 1 (by omega)) (vy 2 (by omega)) (vy 3 (by omega)) hall]
+              simp [lanesOf, hvx, hvy, vi]
+            · intro j mj
+              obtain ⟨k, mk, rfl⟩ := List.mem_map.mp mj
+              have hk : k < 4 := List.mem_range.mp mk
+              split
+              · exact lty _ (getD4_mem leny hk)
+              · exact ltx _ (getD4_mem lenx hk)
+            · intro k hk
+              rcases lt4 hk with rfl | rfl | rfl | rfl
+              · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+                split
+                · exact hdy 0 (by omega)
+                · exact hdx 0 (by omega)
+              · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+                split
+                · exact hdy 1 (by omega)
+                · exact hdx 1 (by omega)
+              · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+                split
+                · exact hdy 2 (by omega)
+                · exact hdx 2 (by omega)
+              · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
+                split
+                · exact hdy 3 (by omega)
+                · exact hdx 3 (by omega)
+          next => exact (refuse_ok h).elim
+        next => exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+
 /-- What the verifier takes the four words to be that a row sets a vector register to: the machine sets
 those lanes. -/
 theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s1 : Sym} {v : Expr} {l : List Nat}
@@ -719,191 +1213,14 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               -- lane by lane
               have fe : f = "each32" := by simpa using hf5
               subst fe
-              rcases args with _ | ⟨e1, _ | ⟨a, _ | ⟨b, _ | ⟨e4, more⟩⟩⟩⟩
-              · exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
-              · cases e1 with
-                | number _ => exact (refuse_ok h).elim
-                | lane _ _ => exact (refuse_ok h).elim
-                | call _ _ => exact (refuse_ok h).elim
-                | name op =>
-                  cases hx : symVec bind s a with
-                  | none => simp only [hx] at h; exact (refuse_ok h).elim
-                  | some x =>
-                    simp only [hx] at h
-                    obtain ⟨rx, lenx, ltx, hvx, hdx⟩ := symVec_sound H wf hx
-                    obtain ⟨x0, x1, x2, x3, rfl⟩ := list4 lenx
-                    cases hy : symVec bind s b with
-                    | some y =>
-                      simp only [hy] at h
-                      obtain ⟨ry, leny, lty, hvy, hdy⟩ := symVec_sound H wf hy
-                      obtain ⟨y0, y1, y2, y3, rfl⟩ := list4 leny
-                      split at h
-                      next hop =>
-                        have oe : op = "add32" := by simpa using hop
-                        subst oe
-                        obtain ⟨rfl, rfl⟩ := pure_pair h
-                        obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wAdd q.1 q.2)
-                          (val := fun q => (den (inpOf ctx s0) ρ s.terms q.1 + den (inpOf ctx s0) ρ s.terms q.2) % W32)
-                          (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
-                          (by
-                            intro q mq T eT okT
-                            have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
-                            have m2 := lty q.2 (List.of_mem_zip (a := q.1) (b := q.2) mq).2
-                            have S := wAdd_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le m1 eT.le) (Nat.lt_of_lt_of_le m2 eT.le)
-                            rw [den_ext wf.words.table eT m1, den_ext wf.words.table eT m2] at S
-                            exact S)
-                          (Ext.refl _) wf.words.ok
-                        refine ⟨ρ, Carried.terms H wf e ok,
-                          [(st.vec rx 0 + st.vec ry 0) % W32, (st.vec rx 1 + st.vec ry 1) % W32, (st.vec rx 2 + st.vec ry 2) % W32,
-                           (st.vec rx 3 + st.vec ry 3) % W32], ?_, lt, ?_⟩
-                        · simp [lanesOf, hvx, hvy, prim32]
-                        · intro k hk
-                          rcases lt4 hk with rfl | rfl | rfl | rfl
-                          · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; rfl
-                          · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; rfl
-                          · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; rfl
-                          · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
-                      next hop =>
-                        split at h
-                        next hop2 =>
-                          have oe : op = "xor32" := by simpa using hop2
-                          subst oe
-                          obtain ⟨rfl, rfl⟩ := pure_pair h
-                          obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wXor q.1 q.2)
-                            (val := fun q => den (inpOf ctx s0) ρ s.terms q.1 ^^^ den (inpOf ctx s0) ρ s.terms q.2)
-                            (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
-                            (by
-                              intro q mq T eT okT
-                              have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
-                              have m2 := lty q.2 (List.of_mem_zip (a := q.1) (b := q.2) mq).2
-                              have S := wXor_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le m1 eT.le) (Nat.lt_of_lt_of_le m2 eT.le)
-                              rw [den_ext wf.words.table eT m1, den_ext wf.words.table eT m2] at S
-                              exact S)
-                            (Ext.refl _) wf.words.ok
-                          refine ⟨ρ, Carried.terms H wf e ok,
-                            [st.vec rx 0 ^^^ st.vec ry 0, st.vec rx 1 ^^^ st.vec ry 1, st.vec rx 2 ^^^ st.vec ry 2, st.vec rx 3 ^^^ st.vec ry 3],
-                            ?_, lt, ?_⟩
-                          · simp [lanesOf, hvx, hvy, prim32]
-                          · intro k hk
-                            rcases lt4 hk with rfl | rfl | rfl | rfl
-                            · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; rfl
-                            · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; rfl
-                            · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; rfl
-                            · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
-                        next => exact (refuse_ok h).elim
-                    | none =>
-                      simp only [hy] at h
-                      cases hn : symNumber bind b with
-                      | none => simp only [hn] at h; exact (refuse_ok h).elim
-                      | some n =>
-                        simp only [hn] at h
-                        split at h
-                        next hop =>
-                          have oe : op = "ror32" := by simpa using hop
-                          subst oe
-                          obtain ⟨rfl, rfl⟩ := pure_pair h
-                          obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
-                          obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wRotr q (n.toNat % 32))
-                            (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q) (n.toNat % 32))
-                            (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
-                            (by
-                              intro q mq T eT okT
-                              have m1 := ltx q mq
-                              have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) (n := n.toNat % 32) okT (Nat.lt_of_lt_of_le m1 eT.le) (by omega)
-                              rw [den_ext wf.words.table eT m1] at S
-                              exact S)
-                            (Ext.refl _) wf.words.ok
-                          refine ⟨ρ, Carried.terms H wf e ok,
-                            [rotr (st.vec rx 0) (n.toNat % 32), rotr (st.vec rx 1) (n.toNat % 32), rotr (st.vec rx 2) (n.toNat % 32),
-                             rotr (st.vec rx 3) (n.toNat % 32)], ?_, lt, ?_⟩
-                          · simp [lanesOf, hvx, vecn, vn, prim32]
-                          · intro k hk
-                            rcases lt4 hk with rfl | rfl | rfl | rfl
-                            · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega)]; rfl
-                            · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega)]; rfl
-                            · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega)]; rfl
-                            · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega)]; rfl
-                        next => exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
+              exact symEach32_sound bind h H wf
             next hf5 =>
-              rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨i, _ | ⟨e4, more⟩⟩⟩⟩
-              · exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
-              · cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hi : symNumber bind i <;>
-                  simp only [hx, hy, hi] at h
-                all_goals try exact (refuse_ok h).elim
-                rename_i x y iv
-                obtain ⟨rx, lenx, ltx, hvx, hdx⟩ := symVec_sound H wf hx
-                obtain ⟨ry, leny, lty, hvy, hdy⟩ := symVec_sound H wf hy
-                obtain ⟨i0, i_lt, vi, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hi
-                have m4 : ∀ j, j % 4 < 4 := fun j => Nat.mod_lt _ (by decide)
-                split at h
-                next hp =>
-                  have fe : f = "pick4" := by simpa using hp
-                  subst fe
-                  obtain ⟨rfl, rfl⟩ := pure_pair h
-                  refine ⟨ρ, Carried.here H wf,
-                    [[st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat % 4) 0,
-                     [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat / 4 % 4) 0,
-                     [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 16 % 4) 0,
-                     [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 64 % 4) 0], ?_, ?_, ?_⟩
-                  · simp [lanesOf, hvx, hvy, vi]
-                  · intro j mj
-                    simp only [List.mem_cons, List.mem_nil_iff, or_false] at mj
-                    rcases mj with rfl | rfl | rfl | rfl
-                    · exact ltx _ (getD4_mem lenx (m4 _))
-                    · exact ltx _ (getD4_mem lenx (m4 _))
-                    · exact lty _ (getD4_mem leny (m4 _))
-                    · exact lty _ (getD4_mem leny (m4 _))
-                  · intro k hk
-                    rcases lt4 hk with rfl | rfl | rfl | rfl
-                    · show [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat % 4) 0 = _
-                      rw [vec4_getD (f := st.vec rx) (m4 _)]; exact hdx _ (m4 _)
-                    · show [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD (iv.toNat / 4 % 4) 0 = _
-                      rw [vec4_getD (f := st.vec rx) (m4 _)]; exact hdx _ (m4 _)
-                    · show [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 16 % 4) 0 = _
-                      rw [vec4_getD (f := st.vec ry) (m4 _)]; exact hdy _ (m4 _)
-                    · show [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD (iv.toNat / 64 % 4) 0 = _
-                      rw [vec4_getD (f := st.vec ry) (m4 _)]; exact hdy _ (m4 _)
-                next hp =>
-                  split at h
-                  next hb =>
-                    have fe : f = "blend4" := by simpa using hb
-                    subst fe
-                    obtain ⟨rfl, rfl⟩ := pure_pair h
-                    refine ⟨ρ, Carried.here H wf,
-                      (List.range 4).map (fun k => if iv.toNat / 2 ^ k % 2 = 1 then [st.vec ry 0, st.vec ry 1, st.vec ry 2, st.vec ry 3].getD k 0
-                        else [st.vec rx 0, st.vec rx 1, st.vec rx 2, st.vec rx 3].getD k 0), ?_, ?_, ?_⟩
-                    · simp [lanesOf, hvx, hvy, vi]
-                    · intro j mj
-                      obtain ⟨k, mk, rfl⟩ := List.mem_map.mp mj
-                      have hk : k < 4 := List.mem_range.mp mk
-                      split
-                      · exact lty _ (getD4_mem leny hk)
-                      · exact ltx _ (getD4_mem lenx hk)
-                    · intro k hk
-                      rcases lt4 hk with rfl | rfl | rfl | rfl
-                      · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
-                        split
-                        · exact hdy 0 (by omega)
-                        · exact hdx 0 (by omega)
-                      · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
-                        split
-                        · exact hdy 1 (by omega)
-                        · exact hdx 1 (by omega)
-                      · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
-                        split
-                        · exact hdy 2 (by omega)
-                        · exact hdx 2 (by omega)
-                      · show (if _ then _ else _) = den _ _ _ (if _ then _ else _)
-                        split
-                        · exact hdy 3 (by omega)
-                        · exact hdx 3 (by omega)
-                  next => exact (refuse_ok h).elim
-              · exact (refuse_ok h).elim
+              split at h
+              next hf6 =>
+                have fe : f = "shuffle_bytes" := by simpa using hf6
+                subst fe
+                exact symShuffle_sound bind h H wf
+              next hf6 => exact symMoved_sound bind h H wf
 
 /-! ## Sixteen bytes written -/
 
