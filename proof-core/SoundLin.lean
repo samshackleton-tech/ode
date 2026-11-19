@@ -76,6 +76,18 @@ theorem need_ok {what : String} {facts goals : List Row} {items : Items} {r : α
 
 /-! ## What follows from facts -/
 
+/-- Two lists of multiples that are the same but for zeros at their ends are the same sum. -/
+theorem dot_sameCoeff : ∀ (xs ys : List Int) (ρ : Nat → Int), Lin.sameCoeff xs ys = true → dot xs ρ = dot ys ρ
+  | [], ys, ρ, h => by
+    simp only [Lin.sameCoeff] at h
+    simp [dot, dot_allZero ys ρ h]
+  | x :: xs, [], ρ, h => by
+    simp only [Lin.sameCoeff] at h
+    rw [dot_allZero (x :: xs) ρ h]; rfl
+  | x :: xs, y :: ys, ρ, h => by
+    simp only [Lin.sameCoeff, Bool.and_eq_true, beq_iff_eq] at h
+    simp only [dot, h.1, dot_sameCoeff xs ys _ h.2]
+
 theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ : Nat → Int)
     (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
   unfold plain at h
@@ -83,15 +95,12 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
   next k hk => rw [ev_isConst hk]; simpa using h
   next =>
     obtain ⟨f, fin, hfk⟩ := List.any_eq_true.mp h
-    split at hfk
-    next k hk =>
-      have e := ev_isConst (ρ := ρ) hk
-      have := hf f fin
-      rw [holds_iff] at this
-      simp only [ev_sub] at e
-      have : 0 ≤ k := by simpa using hfk
-      omega
-    next => contradiction
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at hfk
+    have f0 := hf f fin
+    rw [holds_iff] at f0
+    have e := dot_sameCoeff g.coeff f.coeff ρ hfk.1
+    simp only [ev] at f0 ⊢
+    omega
 
 theorem plainTimes_sound {facts : List Row} {g : Row} (h : plainTimes facts g = true) (ρ : Nat → Int)
     (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by

@@ -31,23 +31,22 @@ structure Step (inp : Nat → Nat → Nat) (ρ : Nat → Int) (nv : Nat) (T T' :
   lt : i < T'.length
   den : den inp ρ T' i = v
 
-theorem intern_keeps {P : Node → Prop} {n : Node} {T : List Node} (hT : ∀ (j : Nat) (m : Node), T[j]? = some m → P m) (hn : P n) :
-    ∀ (j : Nat) (m : Node), (intern n T).2[j]? = some m → P m := by
+theorem intern_keeps {P : Node → Prop} {n : Node} {t : Tab} (hT : ∀ (j : Nat) (m : Node), t.list[j]? = some m → P m) (hn : P n) :
+    ∀ (j : Nat) (m : Node), (intern n t).2.list[j]? = some m → P m := by
   intro j m h
-  unfold intern at h
-  split at h
-  · exact hT j m h
-  · simp only at h
-    by_cases hj : j < T.length
+  rcases intern_list (n := n) (t := t) (t' := (intern n t).2) (i := (intern n t).1) rfl with ⟨e, _⟩ | ⟨e, _⟩
+  · rw [e] at h; exact hT j m h
+  · rw [e] at h
+    by_cases hj : j < t.list.length
     · rw [List.getElem?_append_left hj] at h; exact hT j m h
     · rw [List.getElem?_append_right (by omega)] at h
-      cases hk : j - T.length with
+      cases hk : j - t.list.length with
       | zero => rw [hk] at h; simp at h; rw [← h]; exact hn
       | succ k => rw [hk] at h; simp at h
 
-theorem step_of_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {n : Node} {T : List Node} {v : Nat} (ok : TableOk nv T)
-    (m : Made inp ρ T (intern n T).2 (intern n T).1 v) (ha : ∀ r, n = .atom r → bounded nv r) (hr : ∀ a k, n = .rotr a k → k ≤ 32) :
-    Step inp ρ nv T (intern n T).2 (intern n T).1 v :=
+theorem step_of_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {n : Node} {t : Tab} {v : Nat} (ok : TableOk nv t.list)
+    (m : Made inp ρ t.list (intern n t).2.list (intern n t).1 v) (ha : ∀ r, n = .atom r → bounded nv r) (hr : ∀ a k, n = .rotr a k → k ≤ 32) :
+    Step inp ρ nv t.list (intern n t).2.list (intern n t).1 v :=
   ⟨m.ext,
    ⟨m.wf,
     fun j r h => intern_keeps (P := fun m => ∀ r, m = .atom r → bounded nv r) (fun j m hj r e => ok.atoms j r (e ▸ hj)) ha j _ h r rfl,
@@ -60,41 +59,41 @@ theorem bounded_word {nv : Nat} {r : Row} (hb : bounded nv r) : bounded nv (Lin.
 theorem bounded_high {nv : Nat} {r : Row} (hb : bounded nv r) : bounded nv (Lin.high r) :=
   Nat.le_trans (strip_length _) (by rw [List.length_map]; exact hb)
 
-theorem wAtom_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {r : Row} (ok : TableOk nv T) (hb : bounded nv r) :
-    Step inp ρ nv T (wAtom r T).2 (wAtom r T).1 (ev ρ r % W32i).toNat :=
-  step_of_made ok (wAtom_made (T' := (wAtom r T).2) (i := (wAtom r T).1) rfl ok.wf)
+theorem wAtom_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {r : Row} (ok : TableOk nv t.list) (hb : bounded nv r) :
+    Step inp ρ nv t.list (wAtom r t).2.list (wAtom r t).1 (ev ρ r % W32i).toNat :=
+  step_of_made ok (wAtom_made (t' := (wAtom r t).2) (i := (wAtom r t).1) rfl ok.wf)
     (fun r' e => by injection e with e; rw [← e]; exact bounded_word hb) (fun a k e => by cases e)
 
-theorem wAdd_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a b : Nat} (ok : TableOk nv T)
-    (ha : a < T.length) (hb : b < T.length) :
-    Step inp ρ nv T (wAdd a b T).2 (wAdd a b T).1 ((den inp ρ T a + den inp ρ T b) % W32) :=
-  step_of_made ok (wAdd_made (T' := (wAdd a b T).2) (i := (wAdd a b T).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
+theorem wAdd_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wAdd a b t).2.list (wAdd a b t).1 ((den inp ρ t.list a + den inp ρ t.list b) % W32) :=
+  step_of_made ok (wAdd_made (t' := (wAdd a b t).2) (i := (wAdd a b t).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
 
-theorem wXor_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a b : Nat} (ok : TableOk nv T)
-    (ha : a < T.length) (hb : b < T.length) :
-    Step inp ρ nv T (wXor a b T).2 (wXor a b T).1 (den inp ρ T a ^^^ den inp ρ T b) :=
-  step_of_made ok (wXor_made (T' := (wXor a b T).2) (i := (wXor a b T).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
+theorem wXor_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wXor a b t).2.list (wXor a b t).1 (den inp ρ t.list a ^^^ den inp ρ t.list b) :=
+  step_of_made ok (wXor_made (t' := (wXor a b t).2) (i := (wXor a b t).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
 
-theorem wRotr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a n : Nat} (ok : TableOk nv T)
-    (ha : a < T.length) (hn : n ≤ 32) :
-    Step inp ρ nv T (wRotr a n T).2 (wRotr a n T).1 (rotr (den inp ρ T a) n) :=
-  step_of_made ok (wRotr_made (T' := (wRotr a n T).2) (i := (wRotr a n T).1) rfl ok.wf ha) (fun r e => by cases e)
+theorem wRotr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a n : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hn : n ≤ 32) :
+    Step inp ρ nv t.list (wRotr a n t).2.list (wRotr a n t).1 (rotr (den inp ρ t.list a) n) :=
+  step_of_made ok (wRotr_made (t' := (wRotr a n t).2) (i := (wRotr a n t).1) rfl ok.wf ha) (fun r e => by cases e)
     (fun a k e => by injection e with _ e; rw [← e]; exact hn)
 
-theorem input_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {j k : Nat} (ok : TableOk nv T) :
-    Step inp ρ nv T (intern (.input j k) T).2 (intern (.input j k) T).1 (inp j k) :=
-  step_of_made ok (made (T' := (intern (.input j k) T).2) (i := (intern (.input j k) T).1) rfl ok.wf (by intro x mx; simp [Node.parts] at mx))
+theorem input_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {j k : Nat} (ok : TableOk nv t.list) :
+    Step inp ρ nv t.list (intern (.input j k) t).2.list (intern (.input j k) t).1 (inp j k) :=
+  step_of_made ok (made (t' := (intern (.input j k) t).2) (i := (intern (.input j k) t).1) rfl ok.wf (by intro x mx; simp [Node.parts] at mx))
     (fun r e => by cases e) (fun a k e => by cases e)
 
 /-- The terms made for a list, one after another: each is what it is to be (`val`), in the table at the end. -/
-theorem termsOf_step {α : Type} {mk : α → List Node → Nat × List Node} {val : α → Nat} {inp : Nat → Nat → Nat} {ρ : Nat → Int}
+theorem termsOf_step {α : Type} {mk : α → Tab → Nat × Tab} {val : α → Nat} {inp : Nat → Nat → Nat} {ρ : Nat → Int}
     {nv : Nat} {T0 : List Node} :
-    ∀ (xs : List α) (T : List Node), (∀ a ∈ xs, ∀ T, Ext T0 T → TableOk nv T → Step inp ρ nv T (mk a T).2 (mk a T).1 (val a)) →
-      Ext T0 T → TableOk nv T →
-      Ext T (termsOf mk xs T).2 ∧ TableOk nv (termsOf mk xs T).2 ∧ (termsOf mk xs T).1.length = xs.length ∧
-      (∀ i ∈ (termsOf mk xs T).1, i < (termsOf mk xs T).2.length) ∧
-      ∀ k (hk : k < xs.length), den inp ρ (termsOf mk xs T).2 ((termsOf mk xs T).1.getD k 0) = val xs[k]
-  | [], T, _, _, ok => ⟨Ext.refl T, ok, rfl, (fun i m => nomatch m), (fun k hk => absurd hk (Nat.not_lt_zero k))⟩
+    ∀ (xs : List α) (T : Tab), (∀ a ∈ xs, ∀ T : Tab, Ext T0 T.list → TableOk nv T.list → Step inp ρ nv T.list (mk a T).2.list (mk a T).1 (val a)) →
+      Ext T0 T.list → TableOk nv T.list →
+      Ext T.list (termsOf mk xs T).2.list ∧ TableOk nv (termsOf mk xs T).2.list ∧ (termsOf mk xs T).1.length = xs.length ∧
+      (∀ i ∈ (termsOf mk xs T).1, i < (termsOf mk xs T).2.list.length) ∧
+      ∀ k (hk : k < xs.length), den inp ρ (termsOf mk xs T).2.list ((termsOf mk xs T).1.getD k 0) = val xs[k]
+  | [], T, _, _, ok => ⟨Ext.refl T.list, ok, rfl, (fun i m => nomatch m), (fun k hk => absurd hk (Nat.not_lt_zero k))⟩
   | a :: as, T, hmk, e, ok => by
     have S := hmk a (List.mem_cons_self ..) T e ok
     obtain ⟨e2, ok2, len, lt, dn⟩ := termsOf_step as (mk a T).2 (fun b mb => hmk b (List.mem_cons_of_mem _ mb)) (e.trans S.ext) S.ok
@@ -107,37 +106,37 @@ theorem termsOf_step {α : Type} {mk : α → List Node → Nat × List Node} {v
     · intro k hk
       cases k with
       | zero =>
-        show den inp ρ (termsOf mk as (mk a T).2).2 (mk a T).1 = val a
+        show den inp ρ (termsOf mk as (mk a T).2).2.list (mk a T).1 = val a
         rw [den_ext S.ok.wf e2 S.lt]; exact S.den
       | succ k => exact dn k (by simpa using hk)
 
 /-! ## The state, with more terms -/
 
 theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {T' : List Node} (e : Ext s.terms T') : Holds ctx s0 ρ { s with terms := T' } st :=
+    {t' : Tab} (e : Ext s.terms t'.list) : Holds ctx s0 ρ { s with tab := t' } st :=
   ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
    ⟨fun x ids hx k hk => by
       have lt := (wf.words.vec x ids hx).2
       have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
-      show st.vec x k = den (inpOf ctx s0) ρ T' (ids.getD k 0)
+      show st.vec x k = den (inpOf ctx s0) ρ t'.list (ids.getD k 0)
       rw [den_ext wf.words.table e (by rw [eq]; exact lt _ (List.getElem_mem hk))]
       exact H.words.vec x ids hx k hk,
     H.words.intact,
     fun w j i m x r n ho => by
       obtain ⟨h1, h2⟩ := H.words.wrote w j i m x r n ho
       refine ⟨h1, fun b hb => ?_⟩
-      show st.mem _ = den (inpOf ctx s0) ρ T' i / 256 ^ b % 256
+      show st.mem _ = den (inpOf ctx s0) ρ t'.list i / 256 ^ b % 256
       rw [den_ext wf.words.table e (wf.words.wrote w j i m)]
       exact h2 b hb,
     fun o ids hs k hk => by
       have lt := (wf.words.spill o ids hs).2.2
       have hc : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
-      show Ode.load st.mem _ 4 = den (inpOf ctx s0) ρ T' (ids.getD k 0)
+      show Ode.load st.mem _ 4 = den (inpOf ctx s0) ρ t'.list (ids.getD k 0)
       rw [den_ext wf.words.table e (by rw [hc]; exact lt _ (List.getElem_mem hk))]
       exact H.words.spill o ids hs k hk⟩,
    fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m)⟩
 
-theorem WF.terms {s : Sym} (wf : WF s) {T' : List Node} (e : Ext s.terms T') (ok : TableOk s.nvars T') : WF { s with terms := T' } :=
+theorem WF.terms {s : Sym} (wf : WF s) {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : WF { s with tab := t' } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
    ⟨ok.wf, ok.atoms, fun x ids h => ⟨(wf.words.vec x ids h).1, fun i mi => Nat.lt_of_lt_of_le ((wf.words.vec x ids h).2 i mi) e.le⟩,
     ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le,
@@ -147,7 +146,7 @@ theorem WF.terms {s : Sym} (wf : WF s) {T' : List Node} (e : Ext s.terms T') (ok
    fun k m => Known.wf_mono (Nat.le_refl _) e.le (wf.known k m)⟩
 
 theorem Carried.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {T' : List Node} (e : Ext s.terms T') (ok : TableOk s.nvars T') : Carried ctx s0 ρ s ρ { s with terms := T' } st :=
+    {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : Carried ctx s0 ρ s ρ { s with tab := t' } st :=
   ⟨Agree.refl _ _, Nat.le_refl _, H.terms wf e, wf.terms e ok⟩
 
 /-! ## What an EFFECT names -/
@@ -334,14 +333,14 @@ theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}
 theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
     {j : Nat} {x : String} {r n c width : Nat} (hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x, r, n))
     (hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c + k) = s0.mem (s0.reg r + c + k)) (hc : c % 4 = 0) :
-    let made := termsOf intern ((List.range width).map fun i => Node.input j (c / 4 + i)) s.terms
-    Carried ctx s0 ρ s ρ { s with terms := made.2 } st ∧ made.1.length = width ∧
-    (∀ i ∈ made.1, i < made.2.length) ∧
-    ∀ k, k < width → load st.mem (s0.reg r + c + 4 * k) 4 = den (inpOf ctx s0) ρ made.2 (made.1.getD k 0) := by
+    let made := termsOf intern ((List.range width).map fun i => Node.input j (c / 4 + i)) s.tab
+    Carried ctx s0 ρ s ρ { s with tab := made.2 } st ∧ made.1.length = width ∧
+    (∀ i ∈ made.1, i < made.2.list.length) ∧
+    ∀ k, k < width → load st.mem (s0.reg r + c + 4 * k) 4 = den (inpOf ctx s0) ρ made.2.list (made.1.getD k 0) := by
   dsimp only
   obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := intern)
     (val := fun nd => match nd with | .input j k => inpOf ctx s0 j k | _ => 0)
-    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ((List.range width).map fun i => Node.input j (c / 4 + i)) s.terms
+    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ((List.range width).map fun i => Node.input j (c / 4 + i)) s.tab
     (by
       intro a ma T eT okT
       obtain ⟨i, _, rfl⟩ := List.mem_map.mp ma
@@ -529,7 +528,7 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
     have ex : ev ρ' x = ev ρ x := (ev_agree hb c.agree).symm
     obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ' r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ')
       (nv := (symDivide s x W32i).2.2.nvars) (T0 := (symDivide s x W32i).2.2.terms)
-      [x, (symDivide s x W32i).1, Lin.const 0, Lin.const 0] (symDivide s x W32i).2.2.terms
+      [x, (symDivide s x W32i).1, Lin.const 0, Lin.const 0] (symDivide s x W32i).2.2.tab
       (by
         intro r mr T eT okT
         apply wAtom_step okT
@@ -557,8 +556,8 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
       rw [ev_const]; rfl
   next =>
     have hw : (0 ≤ ev ρ (Lin.word x) ∧ ev ρ (Lin.word x) < W32i) ∧
-        (l, s1) = ((termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.terms).1,
-                   { s with terms := (termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.terms).2 }) := by
+        (l, s1) = ((termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).1,
+                   { s with tab := (termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab).2 }) := by
       split at h
       next =>
         obtain ⟨_, r1, g1, h⟩ := V.bind_ok h
@@ -585,7 +584,7 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
     subst h1 h2
     have eh := ev_high ρ x
     obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ)
-      (nv := s.nvars) (T0 := s.terms) [x, Lin.high x, Lin.const 0, Lin.const 0] s.terms
+      (nv := s.nvars) (T0 := s.terms) [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
       (by
         intro r mr T eT okT
         apply wAtom_step okT
@@ -624,13 +623,13 @@ theorem pure_pair {α β : Type} {a x : α} {b y : β} {items rest : Items}
 
 /-! ## Shifts, shuffles of bytes and blends of halves -/
 
-theorem wShl_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a n : Nat} (ok : TableOk nv T)
-    (ha : a < T.length) : Step inp ρ nv T (wShl a n T).2 (wShl a n T).1 ((den inp ρ T a <<< n) % W32) :=
-  step_of_made ok (wShl_made (T' := (wShl a n T).2) (i := (wShl a n T).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
+theorem wShl_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a n : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) : Step inp ρ nv t.list (wShl a n t).2.list (wShl a n t).1 ((den inp ρ t.list a <<< n) % W32) :=
+  step_of_made ok (wShl_made (t' := (wShl a n t).2) (i := (wShl a n t).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
 
-theorem wShr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {T : List Node} {a n : Nat} (ok : TableOk nv T)
-    (ha : a < T.length) : Step inp ρ nv T (wShr a n T).2 (wShr a n T).1 (den inp ρ T a >>> n) :=
-  step_of_made ok (wShr_made (T' := (wShr a n T).2) (i := (wShr a n T).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
+theorem wShr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a n : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) : Step inp ρ nv t.list (wShr a n t).2.list (wShr a n t).1 (den inp ρ t.list a >>> n) :=
+  step_of_made ok (wShr_made (t' := (wShr a n t).2) (i := (wShr a n t).1) rfl ok.wf ha) (fun r e => by cases e) (fun a k e => by cases e)
 
 theorem orTurns4 {T : List Node} {x0 x1 x2 x3 y0 y1 y2 y3 : Nat} {turns : List (Nat × Nat)}
     (h : orTurns T ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) = some turns) :
@@ -732,7 +731,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
             obtain ⟨rfl, rfl⟩ := pure_pair h
             obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wAdd q.1 q.2)
               (val := fun q => (den (inpOf ctx s0) ρ s.terms q.1 + den (inpOf ctx s0) ρ s.terms q.2) % W32)
-              (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
+              (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.tab
               (by
                 intro q mq T eT okT
                 have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
@@ -759,7 +758,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
               obtain ⟨rfl, rfl⟩ := pure_pair h
               obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wXor q.1 q.2)
                 (val := fun q => den (inpOf ctx s0) ρ s.terms q.1 ^^^ den (inpOf ctx s0) ρ s.terms q.2)
-                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.terms
+                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.tab
                 (by
                   intro q mq T eT okT
                   have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
@@ -797,7 +796,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
                   have o3 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g3
                   obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wRotr q.1 q.2)
                     (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q.1) q.2)
-                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [t0, t1, t2, t3] s.terms
+                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [t0, t1, t2, t3] s.tab
                     (by
                       intro q mq T eT okT
                       have hq : q.1 < s.terms.length ∧ q.2 ≤ 32 := by
@@ -836,7 +835,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
               obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
               obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wRotr q (n.toNat % 32))
                 (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q) (n.toNat % 32))
-                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.tab
                 (by
                   intro q mq T eT okT
                   have m1 := ltx q mq
@@ -863,7 +862,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
                 obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
                 obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wShl q n.toNat)
                   (val := fun q => (den (inpOf ctx s0) ρ s.terms q <<< n.toNat) % W32)
-                  (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                  (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.tab
                   (by
                     intro q mq T eT okT
                     have m1 := ltx q mq
@@ -890,7 +889,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
                   obtain ⟨n0, n_lt, vn, vecn⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hn
                   obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wShr q n.toNat)
                     (val := fun q => den (inpOf ctx s0) ρ s.terms q >>> n.toNat)
-                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.tab
                     (by
                       intro q mq T eT okT
                       have m1 := ltx q mq
@@ -965,7 +964,7 @@ theorem symShuffle_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {ar
           next => cases htn
       obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun q => wRotr q n)
         (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q) n)
-        (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.terms
+        (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [x0, x1, x2, x3] s.tab
         (by
           intro q mq T eT okT
           have m1 := ltx q mq
@@ -1166,7 +1165,7 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           obtain ⟨c0, _, vc, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hc
           obtain ⟨d0, _, vd, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hd
           obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ)
-            (nv := s.nvars) (T0 := s.terms) [Lin.const ka, Lin.const kb, Lin.const kc, Lin.const kd] s.terms
+            (nv := s.nvars) (T0 := s.terms) [Lin.const ka, Lin.const kb, Lin.const kc, Lin.const kd] s.tab
             (by
               intro r mr T eT okT
               apply wAtom_step okT

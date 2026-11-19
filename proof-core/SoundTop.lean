@@ -567,8 +567,9 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
             (fun w j i m => by simp [entrySym] at m), fun _ _ h => nomatch h⟩,
            (fun k m => by simp [entrySym] at m)⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m),
-           ⟨fun i n h => by simp [entrySym] at h, fun j r h => by simp [entrySym] at h, fun x ids h => by simp [entrySym] at h,
-            (fun j a n h => by simp [entrySym] at h), (fun w j i h => by simp [entrySym] at h), fun _ _ h => nomatch h⟩,
+           ⟨fun i n h => by simp [entrySym, Sym.terms, Tab.list] at h, fun j r h => by simp [entrySym, Sym.terms, Tab.list] at h,
+            fun x ids h => by simp [entrySym] at h,
+            (fun j a n h => by simp [entrySym, Sym.terms, Tab.list] at h), (fun w j i h => by simp [entrySym] at h), fun _ _ h => nomatch h⟩,
            (fun k m => by simp [entrySym] at m)⟩⟩
   · intro o v m; cases m
   · intro f m

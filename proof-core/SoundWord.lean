@@ -141,23 +141,17 @@ theorem findNode_spec (n : Node) : ∀ (T : List Node) (k i : Nat), findNode n T
 
 /-- A term put into the table: it stands at the number given; what was there is there still; and where its
 parts are terms of the table before, the table is still made of terms that stand after their parts. -/
-theorem intern_spec {n : Node} {T T' : List Node} {i : Nat} (h : intern n T = (i, T')) :
+theorem interned_spec {n : Node} {T T' : List Node} {i : Nat}
+    (h : (T' = T ∧ T[i]? = some n) ∨ (T' = T ++ [n] ∧ i = T.length)) :
     T'[i]? = some n ∧ Ext T T' ∧ i < T'.length ∧ (WFT T → (∀ j ∈ n.parts, j < T.length) → WFT T') := by
-  unfold intern at h
-  cases hf : findNode n T 0 with
-  | some k =>
-    simp only [hf] at h
-    injection h with h1 h2; subst h1; subst h2
-    obtain ⟨_, at_⟩ := findNode_spec n T 0 k hf
-    simp only [Nat.sub_zero] at at_
-    have lt : k < T.length := by
-      cases Nat.lt_or_ge k T.length with
+  rcases h with ⟨e, at_⟩ | ⟨e, ei⟩
+  · subst T'
+    have lt : i < T.length := by
+      cases Nat.lt_or_ge i T.length with
       | inl lt => exact lt
       | inr ge => rw [List.getElem?_eq_none ge] at at_; cases at_
     exact ⟨at_, Ext.refl _, lt, fun w _ => w⟩
-  | none =>
-    simp only [hf] at h
-    injection h with h1 h2; subst h1; subst h2
+  · subst T'; subst i
     refine ⟨by simp, ⟨by simp, fun j hj => List.getElem?_append_left hj⟩, by simp, ?_⟩
     intro w hp j m hm
     cases Nat.lt_or_ge j T.length with
@@ -171,10 +165,35 @@ theorem intern_spec {n : Node} {T T' : List Node} {i : Nat} (h : intern n T = (i
       | inr gt =>
         rw [List.getElem?_eq_none (by simp; omega)] at hm; cases hm
 
+/-- What putting a term into the table does to the list of its terms: the list is as it was and the term
+stands at the number given, or the term is at the list's end and its number is that place. (Whether the
+number is the first place the term stands at is not said: the advice the table keeps is relied on for
+nothing.) -/
+theorem intern_list {n : Node} {t t' : Tab} {i : Nat} (h : intern n t = (i, t')) :
+    (t'.list = t.list ∧ t.list[i]? = some n) ∨ (t'.list = t.list ++ [n] ∧ i = t.list.length) := by
+  unfold intern at h
+  split at h
+  next k _ =>
+    split at h
+    next hat =>
+      injection h with h1 h2; subst h1; subst h2
+      exact Or.inl ⟨rfl, by simpa [Tab.list] using hat⟩
+    next =>
+      injection h with h1 h2; subst h1; subst h2
+      exact Or.inr ⟨by simp [Tab.list], by simp [Tab.list]⟩
+  next =>
+    injection h with h1 h2; subst h1; subst h2
+    exact Or.inr ⟨by simp [Tab.list], by simp [Tab.list]⟩
+
+theorem intern_spec {n : Node} {t t' : Tab} {i : Nat} (h : intern n t = (i, t')) :
+    t'.list[i]? = some n ∧ Ext t.list t'.list ∧ i < t'.list.length ∧
+      (WFT t.list → (∀ j ∈ n.parts, j < t.list.length) → WFT t'.list) :=
+  interned_spec (intern_list h)
+
 /-- What a new term is: what its node says of the terms of the table before. -/
-theorem intern_den {inp : Nat → Nat → Nat} {ρ : Nat → Int} {n : Node} {T T' : List Node} {i : Nat} (h : intern n T = (i, T'))
-    (hw : WFT T) (hp : ∀ j ∈ n.parts, j < T.length) :
-    den inp ρ T' i = n.value inp ρ (den inp ρ T) := by
+theorem intern_den {inp : Nat → Nat → Nat} {ρ : Nat → Int} {n : Node} {t t' : Tab} {i : Nat} (h : intern n t = (i, t'))
+    (hw : WFT t.list) (hp : ∀ j ∈ n.parts, j < t.list.length) :
+    den inp ρ t'.list i = n.value inp ρ (den inp ρ t.list) := by
   obtain ⟨at_, e, _, w⟩ := intern_spec h
   rw [den_node (w hw hp) at_]
   apply Node.value_congr
@@ -228,9 +247,12 @@ theorem mem_sorted {j : Nat} : ∀ {l : List Nat}, j ∈ l.foldr insertSorted []
     · exact List.mem_cons_of_mem _ (mem_sorted h)
 
 /-- What a term is a sum of: summed and wrapped they are the term, wrapped; and they are terms of the table. -/
-theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} (hw : WFT T) {a : Nat} (ha : a < T.length) :
-    sumList ((addends T a).map (den inp ρ T)) % W32 = den inp ρ T a % W32 ∧ ∀ j ∈ addends T a, j < T.length := by
+theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t : Tab} (hw : WFT t.list) {a : Nat} (ha : a < t.list.length) :
+    sumList ((addends t a).map (den inp ρ t.list)) % W32 = den inp ρ t.list a % W32 ∧ ∀ j ∈ addends t a, j < t.list.length := by
   unfold addends
+  have at_list : t.arr[a]? = t.list[a]? := by simp [Tab.list]
+  rw [at_list]
+  generalize t.list = T at *
   cases h : T[a]? with
   | none => rw [List.getElem?_eq_none_iff] at h; omega
   | some n =>
@@ -253,12 +275,13 @@ structure Made (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T T' : List Node)
   lt : i < T'.length
   den : den inp ρ T' i = v
 
-theorem made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {n : Node} {T T' : List Node} {i : Nat} (h : intern n T = (i, T'))
-    (hw : WFT T) (hp : ∀ j ∈ n.parts, j < T.length) : Made inp ρ T T' i (n.value inp ρ (Ode.den inp ρ T)) :=
+theorem made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {n : Node} {t t' : Tab} {i : Nat} (h : intern n t = (i, t'))
+    (hw : WFT t.list) (hp : ∀ j ∈ n.parts, j < t.list.length) : Made inp ρ t.list t'.list i (n.value inp ρ (Ode.den inp ρ t.list)) :=
   ⟨(intern_spec h).2.1, (intern_spec h).2.2.2 hw hp, (intern_spec h).2.2.1, intern_den h hw hp⟩
 
-theorem wAdd_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a b i : Nat} (h : wAdd a b T = (i, T'))
-    (hw : WFT T) (ha : a < T.length) (hb : b < T.length) : Made inp ρ T T' i ((den inp ρ T a + den inp ρ T b) % W32) := by
+theorem wAdd_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a b i : Nat} (h : wAdd a b t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) (hb : b < t.list.length) :
+    Made inp ρ t.list t'.list i ((den inp ρ t.list a + den inp ρ t.list b) % W32) := by
   obtain ⟨sa, la⟩ := addends_spec (inp := inp) (ρ := ρ) hw ha
   obtain ⟨sb, lb⟩ := addends_spec (inp := inp) (ρ := ρ) hw hb
   have m := made (inp := inp) (ρ := ρ) h hw (by
@@ -272,8 +295,9 @@ theorem wAdd_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List No
   simp only [Node.value]
   rw [sumList_sorted, sumList_append, Nat.add_mod, sa, sb, ← Nat.add_mod]
 
-theorem wXor_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a b i : Nat} (h : wXor a b T = (i, T'))
-    (hw : WFT T) (ha : a < T.length) (hb : b < T.length) : Made inp ρ T T' i (den inp ρ T a ^^^ den inp ρ T b) := by
+theorem wXor_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a b i : Nat} (h : wXor a b t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) (hb : b < t.list.length) :
+    Made inp ρ t.list t'.list i (den inp ρ t.list a ^^^ den inp ρ t.list b) := by
   have m := made (inp := inp) (ρ := ρ) h hw (by
     intro j mj
     simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
@@ -285,8 +309,8 @@ theorem wXor_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List No
   | inl le => rw [Nat.min_eq_left le, Nat.max_eq_right le]
   | inr le => rw [Nat.min_eq_right le, Nat.max_eq_left le, Nat.xor_comm]
 
-theorem wRotr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a n i : Nat} (h : wRotr a n T = (i, T'))
-    (hw : WFT T) (ha : a < T.length) : Made inp ρ T T' i (rotr (den inp ρ T a) n) := by
+theorem wRotr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a n i : Nat} (h : wRotr a n t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) : Made inp ρ t.list t'.list i (rotr (den inp ρ t.list a) n) := by
   have m := made (inp := inp) (ρ := ρ) h hw (by
     intro j mj
     simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
@@ -352,8 +376,8 @@ theorem ev_high (ρ : Nat → Int) (r : Row) : ev ρ r = ev ρ (Lin.word r) + W3
   have := Int.emod_add_mul_ediv r.constant W32i
   omega
 
-theorem wAtom_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {r : Row} {i : Nat} (h : wAtom r T = (i, T'))
-    (hw : WFT T) : Made inp ρ T T' i (ev ρ r % W32i).toNat := by
+theorem wAtom_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {r : Row} {i : Nat} (h : wAtom r t = (i, t'))
+    (hw : WFT t.list) : Made inp ρ t.list t'.list i (ev ρ r % W32i).toNat := by
   have m := made (inp := inp) (ρ := ρ) h hw (by intro j mj; simp [Node.parts] at mj)
   refine ⟨m.ext, m.wf, m.lt, ?_⟩
   rw [m.den]
@@ -441,16 +465,16 @@ theorem termIndex_spec (T : List Node) (n : Node) : (termIndex T)[n]? = findNode
 
 /-! ## Shifts, and the or of two shifts that is a turn -/
 
-theorem wShl_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a n i : Nat} (h : wShl a n T = (i, T'))
-    (hw : WFT T) (ha : a < T.length) : Made inp ρ T T' i ((den inp ρ T a <<< n) % W32) := by
+theorem wShl_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a n i : Nat} (h : wShl a n t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) : Made inp ρ t.list t'.list i ((den inp ρ t.list a <<< n) % W32) := by
   have m := made (inp := inp) (ρ := ρ) h hw (by
     intro j mj
     simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
     rw [mj]; exact ha)
   exact ⟨m.ext, m.wf, m.lt, m.den⟩
 
-theorem wShr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T T' : List Node} {a n i : Nat} (h : wShr a n T = (i, T'))
-    (hw : WFT T) (ha : a < T.length) : Made inp ρ T T' i (den inp ρ T a >>> n) := by
+theorem wShr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a n i : Nat} (h : wShr a n t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) : Made inp ρ t.list t'.list i (den inp ρ t.list a >>> n) := by
   have m := made (inp := inp) (ρ := ρ) h hw (by
     intro j mj
     simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj

@@ -45,6 +45,13 @@ def sub (a b : Row) : Row := add a (scale (-1) b)
 def isConst (a : Row) : Option Int := if a.coeff.isEmpty then some a.constant else none
 def coeffOf (a : Row) (x : Nat) : Int := a.coeff.getD x 0
 
+/-- Whether two lists of multiples are the same but for zeros at their ends: the difference of the two
+rows is then a number alone. (Asked without making the difference.) -/
+def sameCoeff : List Int → List Int → Bool
+  | [], ys => Arithmetic.allZero ys
+  | x :: xs, [] => Arithmetic.allZero (x :: xs)
+  | x :: xs, y :: ys => x == y && sameCoeff xs ys
+
 end Lin
 
 /-! ## The proof, and asking it -/
@@ -109,10 +116,7 @@ def negation (g : Row) : Row := Lin.sub (Lin.const (-1)) g
 def plain (facts : List Row) (g : Row) : Bool :=
   match Lin.isConst g with
   | some k => decide (0 ≤ k)
-  | none => facts.any fun f =>
-    match Lin.isConst (Lin.sub g f) with
-    | some k => decide (0 ≤ k)
-    | none => false
+  | none => facts.any fun f => Lin.sameCoeff g.coeff f.coeff && decide (f.constant ≤ g.constant)
 
 /-- The rows a proof of arithmetic starts from: those of the rows given that it names by their numbers. -/
 def pick (given : List Row) (numbers : List Nat) : List Row := numbers.filterMap fun k => given[k]?
@@ -214,8 +218,9 @@ inductive SFact where
 
 A word is 32 bits. What a vector register holds is not followed as arithmetic on unknowns (a sum that wraps
 is no row): each word is a term, and the terms are kept in a table, a term being named by its number
-there. Equal terms have one number, so two words are known to be the same where their numbers are. A sum is
-kept as the list of what is summed, in order of number: `(a + m) + b` and `(a + b) + m` are one term. -/
+there. Two words are known to be the same where their numbers are; a term made again gets the number it has
+(where the table's advice finds it: see `Tab`). A sum is kept as the list of what is summed, in order of
+number: `(a + m) + b` and `(a + b) + m` are one term. -/
 
 def W32i : Int := 4294967296
 
@@ -251,11 +256,25 @@ def termIndexFrom : List Node → Nat → Std.HashMap Node Nat → Std.HashMap N
 
 def termIndex (T : List Node) : Std.HashMap Node Nat := termIndexFrom T 0 ∅
 
-/-- The number of a term in the table; a term that is not there is put at the end. -/
-def intern (n : Node) (T : List Node) : Nat × List Node :=
-  match findNode n T 0 with
-  | some i => (i, T)
-  | none => (T.length, T ++ [n])
+/-- The table of words. `arr`: the terms, each named by its number there. `idx`: where a term may be found,
+so that one is looked up at once. The second is advice, and nothing that is shown rests on it: `intern` takes
+a number from it only where that term stands at that number, and puts the term at the end otherwise. -/
+structure Tab where
+  arr : Array Node := #[]
+  idx : Std.HashMap Node Nat := ∅
+  deriving Inhabited
+
+/-- The table's terms in order: what the reasoning speaks of. (The verifier's own steps read `arr`.) -/
+def Tab.list (t : Tab) : List Node := t.arr.toList
+
+/-- The number of a term in the table; a term that is not found there is put at the end. (Marked so that a
+proof opens it only by asking to: what is reasoned of it is `intern_list` in SoundWord.lean.) -/
+@[irreducible] def intern (n : Node) (t : Tab) : Nat × Tab :=
+  match t.idx[n]? with
+  | some i =>
+    if t.arr[i]? = some n then (i, t)
+    else (t.arr.size, { arr := t.arr.push n, idx := t.idx.insert n t.arr.size })
+  | none => (t.arr.size, { arr := t.arr.push n, idx := t.idx.insert n t.arr.size })
 
 def insertSorted (a : Nat) : List Nat → List Nat
   | [] => [a]
@@ -267,24 +286,24 @@ def Lin.word (r : Row) : Row := ⟨Lin.strip (r.coeff.map (· % W32i)), r.consta
 /-- The row of the quotients by 2^32: `r` is `Lin.word r` and 2^32 times this. -/
 def Lin.high (r : Row) : Row := ⟨Lin.strip (r.coeff.map (· / W32i)), r.constant / W32i⟩
 
-def wAtom (r : Row) (T : List Node) : Nat × List Node := intern (.atom (Lin.word r)) T
+def wAtom (r : Row) (t : Tab) : Nat × Tab := intern (.atom (Lin.word r)) t
 
 /-- What a term is a sum of: itself, or the terms it sums. -/
-def addends (T : List Node) (a : Nat) : List Nat :=
-  match T[a]? with
+def addends (t : Tab) (a : Nat) : List Nat :=
+  match t.arr[a]? with
   | some (.add xs) => xs
   | _ => [a]
 
-def wAdd (a b : Nat) (T : List Node) : Nat × List Node :=
-  intern (.add ((addends T a ++ addends T b).foldr insertSorted [])) T
+def wAdd (a b : Nat) (t : Tab) : Nat × Tab :=
+  intern (.add ((addends t a ++ addends t b).foldr insertSorted [])) t
 
-def wXor (a b : Nat) (T : List Node) : Nat × List Node := intern (.xor (min a b) (max a b)) T
+def wXor (a b : Nat) (t : Tab) : Nat × Tab := intern (.xor (min a b) (max a b)) t
 
-def wRotr (a n : Nat) (T : List Node) : Nat × List Node := intern (.rotr a n) T
+def wRotr (a n : Nat) (t : Tab) : Nat × Tab := intern (.rotr a n) t
 
-def wShl (a n : Nat) (T : List Node) : Nat × List Node := intern (.shl a n) T
+def wShl (a n : Nat) (t : Tab) : Nat × Tab := intern (.shl a n) t
 
-def wShr (a n : Nat) (T : List Node) : Nat × List Node := intern (.shr a n) T
+def wShr (a n : Nat) (t : Tab) : Nat × Tab := intern (.shr a n) t
 
 /-- The or of two terms that is a turn: one is a term shifted left by `32 - n` bits, the other the same term
 shifted right by `n`. (The term turned, and by how much.) -/
@@ -348,13 +367,17 @@ structure Sym where
   spec : List SFact
   nvars : Nat                     -- unknowns in use: 0 to 15 are the registers at entry
   wrote : List (Nat × Row × Row)  -- (run given to write, place, byte): what that place of that run now holds
-  terms : List Node := []         -- the table of words
+  tab : Tab := {}                 -- the table of words
   vec : List (Nat × List Nat) := []   -- (vector register, known low lanes as term numbers); the first entry for each register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
   spill : Option (Row × List Nat) := none  -- entry-relative offset and lane terms of the last aligned vector spill
   known : List Known := []        -- what is known of numbers that are no rows
+  divs : List (Row × Int × Nat) := []   -- the divisions made (the number, the divisor, the quotient's unknown): advice for `divided`, and nothing rests on it
   deriving Inhabited
+
+/-- The terms of the table of words, in order. -/
+abbrev Sym.terms (s : Sym) : List Node := s.tab.list
 
 structure Place where
   pc : Nat
@@ -400,15 +423,13 @@ and what is so of them: x = m * q + r and 0 <= r < m. -/
 def Sym.divide (s : Sym) (x : Row) (m : Int) : Sym :=
   let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))
   { s with nvars := s.nvars + 2,
-           facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts }
+           facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts,
+           divs := (x, m, s.nvars) :: s.divs }
 
-/-- The unknowns a fact names as a quotient of `x` by `m`: the fact is `x` less `m` times that unknown, less
-the next unknown. (Only to look at few unknowns in `divided`: nothing rests on it.) -/
+/-- The unknowns made as quotients of `x` by `m` (`Sym.divide` notes each division it makes). (Only to look
+at few unknowns in `divided`: nothing rests on it.) -/
 def quotients (s : Sym) (x : Row) (m : Int) : List Nat :=
-  s.facts.filterMap fun f =>
-    let e := Lin.sub x f
-    let q := e.coeff.length - 2
-    if 2 ≤ e.coeff.length && e == Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)) then some q else none
+  s.divs.filterMap fun d => if d.1 == x && d.2.1 == m then some d.2.2 else none
 
 /-- The quotient's unknown, where the facts held already say what `x` divided by `m` is: the four facts of
 `Sym.divide`, of one unknown and the next. -/
@@ -725,9 +746,9 @@ def symReg (bind : Bind) (s : Sym) : Expr → Option Row
   | _ => none
 
 /-- A term for each thing of a list, made one after another: their numbers, and the table then. -/
-def termsOf {α : Type} (mk : α → List Node → Nat × List Node) : List α → List Node → List Nat × List Node
-  | a :: as, T => ((mk a T).1 :: (termsOf mk as (mk a T).2).1, (termsOf mk as (mk a T).2).2)
-  | [], T => ([], T)
+def termsOf {α : Type} (mk : α → Tab → Nat × Tab) : List α → Tab → List Nat × Tab
+  | a :: as, t => ((mk a t).1 :: (termsOf mk as (mk a t).2).1, (termsOf mk as (mk a t).2).2)
+  | [], t => ([], t)
 
 /-- Which run of words (the runs of a fixed count given to read, then those given to read and write) is at
 the address a register held at entry. -/
@@ -747,8 +768,8 @@ def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat 
     match Lin.isConst off, ctx.contract.fixeds[j]? with
     | some c, some (_, _, count) =>
       if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ count then
-        let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
-        pure (made.1, { s with terms := made.2 })
+        let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
+        pure (made.1, { s with tab := made.2 })
       else refuse badSize
     | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
   | _ =>
@@ -762,8 +783,8 @@ def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat 
           | some (_, _, n') =>
             if !s.intact.contains w then refuse "a read of a run given to read and write after it was written to: not here yet"
             else if 0 ≤ c ∧ c % 4 = 0 ∧ c + 4 * width ≤ n ∧ c + 4 * width ≤ n' then
-              let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.terms
-              pure (made.1, { s with terms := made.2 })
+              let made := termsOf intern ((List.range width).map fun i => Node.input j (c.toNat / 4 + i)) s.tab
+              pure (made.1, { s with tab := made.2 })
             else refuse badSize
           | none => refuse s!"{bytes} bytes of a run given only to write"
         | none => refuse s!"{bytes} bytes of a run given only to write"
@@ -795,15 +816,15 @@ division; else the row of the quotients by 2^32, the row of the remainders being
 def symHalves (s : Sym) (x : Row) : V (List Nat × Sym) :=
   if Lin.high x == Lin.const 0 && (Lin.isConst x).isNone then
     let d := symDivide s x W32i
-    let made := termsOf wAtom [x, d.1, Lin.const 0, Lin.const 0] d.2.2.terms
-    pure (made.1, { d.2.2 with terms := made.2 })
+    let made := termsOf wAtom [x, d.1, Lin.const 0, Lin.const 0] d.2.2.tab
+    pure (made.1, { d.2.2 with tab := made.2 })
   else
-    let made := termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.terms
+    let made := termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
     if (Lin.isConst (Lin.word x)).isNone then do
       entail s.facts (Lin.word x)
       entail s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x))
-      pure (made.1, { s with terms := made.2 })
-    else pure (made.1, { s with terms := made.2 })
+      pure (made.1, { s with tab := made.2 })
+    else pure (made.1, { s with tab := made.2 })
 
 /-- `each32(op, X, Y)`, `each32(op, X, N)`: each word of a register with the same word of another, or with a number. -/
 def symEach32 (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
@@ -816,31 +837,31 @@ def symEach32 (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :
           match symVec bind s b with
           | some y =>
             if op == "add32" then
-              let made := termsOf (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y) s.terms
-              pure (made.1, { s with terms := made.2 })
+              let made := termsOf (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y) s.tab
+              pure (made.1, { s with tab := made.2 })
             else if op == "xor32" then
-              let made := termsOf (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y) s.terms
-              pure (made.1, { s with terms := made.2 })
+              let made := termsOf (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y) s.tab
+              pure (made.1, { s with tab := made.2 })
             else if op == "or32" then
               -- the or of a word shifted left and the same word shifted right: the word turned
               match orTurns s.terms (x.zip y) with
               | some turns =>
-                let made := termsOf (fun (p : Nat × Nat) => wRotr p.1 p.2) turns s.terms
-                pure (made.1, { s with terms := made.2 })
+                let made := termsOf (fun (p : Nat × Nat) => wRotr p.1 p.2) turns s.tab
+                pure (made.1, { s with tab := made.2 })
               | none => refuse "an or of two vector registers that is no turn of each word: not here yet"
             else refuse s!"no rule for {op} of two vector registers: not here yet"
           | none =>
             match symNumber bind b with
             | some n =>
               if op == "ror32" then
-                let made := termsOf (fun p => wRotr p (n.toNat % 32)) x s.terms
-                pure (made.1, { s with terms := made.2 })
+                let made := termsOf (fun p => wRotr p (n.toNat % 32)) x s.tab
+                pure (made.1, { s with tab := made.2 })
               else if op == "shl32" then
-                let made := termsOf (fun p => wShl p n.toNat) x s.terms
-                pure (made.1, { s with terms := made.2 })
+                let made := termsOf (fun p => wShl p n.toNat) x s.tab
+                pure (made.1, { s with tab := made.2 })
               else if op == "shr32" then
-                let made := termsOf (fun p => wShr p n.toNat) x s.terms
-                pure (made.1, { s with terms := made.2 })
+                let made := termsOf (fun p => wShr p n.toNat) x s.tab
+                pure (made.1, { s with tab := made.2 })
               else refuse s!"no rule for {op} of a vector register and a number: not here yet"
             | none => refuse "a vector register whose words are not known"
         | none => refuse "a vector register whose words are not known"
@@ -856,8 +877,8 @@ def symShuffle (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) 
     | some x, some y =>
       match (constWords s.terms y).bind shuffleTurn with
       | some n =>
-        let made := termsOf (fun p => wRotr p n) x s.terms
-        pure (made.1, { s with terms := made.2 })
+        let made := termsOf (fun p => wRotr p n) x s.tab
+        pure (made.1, { s with tab := made.2 })
       | none => refuse "a shuffle of bytes that is no turn of each word by 8 or 16 bits: not here yet"
     | _, _ => refuse "a vector register whose words are not known"
   | _ => refuse "a row over a vector register of a form that is not read"
@@ -894,8 +915,8 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
       | [a, b, c, d] =>
         match symNumber bind a, symNumber bind b, symNumber bind c, symNumber bind d with
         | some ka, some kb, some kc, some kd =>
-          let made := termsOf wAtom [Lin.const ka, Lin.const kb, Lin.const kc, Lin.const kd] s.terms
-          pure (made.1, { s with terms := made.2 })
+          let made := termsOf wAtom [Lin.const ka, Lin.const kb, Lin.const kc, Lin.const kd] s.tab
+          pure (made.1, { s with tab := made.2 })
         | _, _, _, _ => refuse "a word that is no number of the table"
       | _ => refuse "four words are not four"
     else if f == "lanes_of64" then
@@ -927,8 +948,8 @@ def symSpreadScalar16 (ctx : Ctx) (bind : Bind) (s : Sym) (a : Expr) : V (List N
   let (v, s) ← symValue ctx bind s a
   match v with
   | .lin x =>
-    let made := wAtom x s.terms
-    pure (List.replicate 16 made.1, { s with terms := made.2 })
+    let made := wAtom x s.tab
+    pure (List.replicate 16 made.1, { s with tab := made.2 })
   | _ => refuse "a flag where a word is expected"
 
 def symSpread16 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
@@ -949,9 +970,9 @@ def symPair512 (bind : Bind) (s : Sym) (a b : Expr) (f : List Nat → List Nat �
   | some x, some y => f x y
   | _, _ => refuse "a 512-bit register whose lanes are not all known"
 
-def symLaneTerms {α : Type} (s : Sym) (mk : α → List Node → Nat × List Node) (xs : List α) : V (List Nat × Sym) :=
-  let made := termsOf mk xs s.terms
-  pure (made.1, { s with terms := made.2 })
+def symLaneTerms {α : Type} (s : Sym) (mk : α → Tab → Nat × Tab) (xs : List α) : V (List Nat × Sym) :=
+  let made := termsOf mk xs s.tab
+  pure (made.1, { s with tab := made.2 })
 
 def symEach512 (bind : Bind) (s : Sym) (op : String) (a b : Expr) : V (List Nat × Sym) :=
   if op == "ror32" then
@@ -1045,8 +1066,8 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
     | none => refuse "a 512-bit register whose lanes are not all known"
   | .call f args =>
     if f == "zeros16" && args.isEmpty then
-      let made := wAtom (Lin.const 0) s.terms
-      pure (List.replicate 16 made.1, { s with terms := made.2 })
+      let made := wAtom (Lin.const 0) s.tab
+      pure (List.replicate 16 made.1, { s with tab := made.2 })
     else if f == "spread16" then
       match args with
       | [.call g [a]] => if g == "lane32" then symSpread16 ctx bind s a else refuse "expected a 32-bit broadcast source"
@@ -2065,8 +2086,8 @@ def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
     facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
-    terms := s.terms,       -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
-    known := s.known }
+    tab := s.tab,         -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
+    known := s.known, divs := s.divs }
 
 /-- A call, taken by the called function's contract `c` and nothing else. What the contract asks is shown
 first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
@@ -2165,17 +2186,17 @@ def partNodes (ctx : Ctx) (s : Sym) : List (String × Kind) → List Nat → Lis
 and the definition `g`, used with `keys`, is known to be the list of them. What was known of the other runs
 given to write stays. -/
 def Sym.afterCallW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) : Sym :=
-  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.terms
+  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
   { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
     facts := ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
              ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
-    terms := made.2,
+    tab := made.2,
     intact := s.intact.filter (· != w),
     wroteW := ((List.range m).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW.filter fun e => e.1 != w,
-    known := .held g keys made.1 :: s.known }
+    known := .held g keys made.1 :: s.known, divs := s.divs }
 
 /-- What a call of a function that writes a run of words is taken by: the run of this function that it
 writes (its number among the runs given to write, and how many words it has), the definition its contract
@@ -2186,7 +2207,10 @@ structure CallW where
   words : Nat
   g : String
   keys : List Key
-  terms : List Node
+  tab : Tab
+
+/-- The terms of the table a call is taken by, in order. -/
+abbrev CallW.terms (p : CallW) : List Node := p.tab.list
 
 /-- That, where the call can be taken so; else why not. (No proof is read here.) -/
 def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
@@ -2207,13 +2231,13 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
             match e.value with
             | .call f (.cons (.call g args) .nil) =>
               if f == "bytes_of" && !own.contains g && g != "len" then
-                let T := (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2
-                let index := termIndex T
-                match wevalList (weval ctx (fun n => index[n]?) { s with terms := T } WFUEL env) args, findDef ctx.defs g with
+                let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
+                let index := termIndex T.list
+                match wevalList (weval ctx (fun n => index[n]?) { s with tab := T } WFUEL env) args, findDef ctx.defs g with
                 | some vs, some d =>
                   match flatKeys (fun n => index[n]?) vs with
                   | some keys =>
-                    if !(keys.all (Key.ok s.nvars T.length)) then .error "what a called function's contract says of its arguments is not followed"
+                    if !(keys.all (Key.ok s.nvars T.list.length)) then .error "what a called function's contract says of its arguments is not followed"
                     else if d.params.length == keys.length then .ok ⟨w, n / 4, g, keys, T⟩
                     else .error "a called function's contract uses a definition with another number of things"
                   | none => .error "what a called function's contract says of its arguments is not followed"
@@ -2237,7 +2261,7 @@ def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           match c.regOf xb.1 with
           | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
           | none => pure ()) c.bounds
-        pure (Sym.afterCallW { s with terms := plan.terms } sp plan.w plan.words plan.g plan.keys)
+        pure (Sym.afterCallW { s with tab := plan.tab } sp plan.w plan.words plan.g plan.keys)
 
 /-- A call: by the rule for a function that writes nothing for its caller, or by the rule for one that
 writes a run of words. -/
@@ -2303,8 +2327,8 @@ def Sym.general (p : Place) (s : Sym) : Sym :=
   { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
-    terms := s.terms,       -- (nor what a vector register held, nor that a run is as it was at entry)
-    known := s.known,
+    tab := s.tab,         -- (nor what a vector register held, nor that a run is as it was at entry)
+    known := s.known, divs := s.divs,
     facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for

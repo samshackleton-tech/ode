@@ -313,9 +313,9 @@ theorem partNodes_inputs {ctx : Ctx} {s : Sym} : ∀ (args : List (String × Kin
 
 /-- With words of runs put into it, the table is still one the verifier may hold, and has grown at most. -/
 theorem inputs_table {s : Sym} (wf : WF s) (nodes : List Node) (hn : ∀ nd ∈ nodes, ∃ j k, nd = Node.input j k) :
-    Ext s.terms (termsOf intern nodes s.terms).2 ∧ TableOk s.nvars (termsOf intern nodes s.terms).2 := by
+    Ext s.terms (termsOf intern nodes s.tab).2.list ∧ TableOk s.nvars (termsOf intern nodes s.tab).2.list := by
   obtain ⟨e, ok, _, _, _⟩ := termsOf_step (mk := intern) (val := fun nd => match nd with | .input _ _ => 0 | _ => 0)
-    (inp := fun _ _ => 0) (ρ := fun _ => 0) (nv := s.nvars) (T0 := s.terms) nodes s.terms
+    (inp := fun _ _ => 0) (ρ := fun _ => 0) (nv := s.nvars) (T0 := s.terms) nodes s.tab
     (fun a ma T _ okT => by
       obtain ⟨j, k, rfl⟩ := hn a ma
       exact input_step okT) (Ext.refl _) wf.words.ok
@@ -325,7 +325,8 @@ theorem inputs_table {s : Sym} (wf : WF s) (nodes : List Node) (hn : ∀ nd ∈ 
 
 /-- The terms made for the words of the run the called function wrote, and the table with them. -/
 def madeW (s : Sym) (m : Nat) : List Nat × List Node :=
-  termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.terms
+  ((termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab).1,
+   (termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab).2.list)
 
 theorem afterCallW_facts (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
     (s.afterCallW sp w m g keys).facts = ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
@@ -349,7 +350,7 @@ theorem madeW_table {s : Sym} (wf : WF s) (m : Nat) (inp : Nat → Nat → Nat) 
     ∀ k, k < m → den inp ρ (madeW s m).2 ((madeW s m).1.getD k 0) = (ev ρ (Lin.var (s.nvars + 16 + k)) % W32i).toNat := by
   obtain ⟨ext, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ r % W32i).toNat)
     (inp := inp) (ρ := ρ) (nv := s.nvars + 16 + m) (T0 := s.terms)
-    ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.terms
+    ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
     (fun a ma T _ okT => wAtom_step okT (by
       obtain ⟨k, hk, rfl⟩ := List.mem_map.mp ma
       have := List.mem_range.mp hk
@@ -603,8 +604,8 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
       c.mbounds = [] ∧ c.outs = [(run, r, n)] ∧ c.inouts = [(run, r, n)] ∧ c.ensuresW = [e] ∧ e.run = run ∧
       callRun ctx s r n = some (plan.w, ids) ∧ calleeW ctx s ids c.args argRegs = some env ∧
       e.value = .call "bytes_of" (.cons (.call plan.g args) .nil) ∧ own.contains plan.g = false ∧ plan.g ≠ "len" ∧
-      plan.terms = (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2 ∧
-      wevalList (weval ctx (fun n => findNode n plan.terms 0) { s with terms := plan.terms } WFUEL env) args = some vs ∧
+      plan.tab = (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 ∧
+      wevalList (weval ctx (fun n => findNode n plan.terms 0) { s with tab := plan.tab } WFUEL env) args = some vs ∧
       findDef ctx.defs plan.g = some d ∧ flatKeys (fun n => findNode n plan.terms 0) vs = some plan.keys ∧
       (∀ k ∈ plan.keys, k.wf s.nvars plan.terms.length) ∧ d.params.length = plan.keys.length ∧ plan.words = n / 4 := by
   unfold callW at h
@@ -646,8 +647,8 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
                         next hfg =>
                           have hfg' : (f = "bytes_of" ∧ own.contains g = false) ∧ g ≠ "len" := by simpa using hfg
                           obtain ⟨⟨rfl, hown⟩, hlen⟩ := hfg'
-                          have hl : (fun n => (termIndex (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2)[n]?) =
-                              fun n => findNode n (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2 0 :=
+                          have hl : (fun n => (termIndex (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list)[n]?) =
+                              fun n => findNode n (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list 0 :=
                             funext fun n => termIndex_spec _ n
                           simp only [hl] at h
                           split at h
@@ -661,7 +662,7 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
                                 next hdl =>
                                   injection h with h
                                   subst h
-                                  have hok' : (keys.all (Key.ok s.nvars (termsOf intern (partNodes ctx s c.args argRegs) s.terms).2.length)) = true := by
+                                  have hok' : (keys.all (Key.ok s.nvars (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list.length)) = true := by
                                     simpa using hok
                                   exact ⟨run, r, n, e, ids, env, args, vs, d, hmb', rfl, rfl, rfl, erun, hcr, hce, hv, hown, hlen, rfl, hwl, hfd, hfk,
                                     (fun k mk => Key.ok_wf (List.all_eq_true.mp hok' k mk)), by simpa using hdl, rfl⟩

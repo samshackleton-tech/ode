@@ -45,8 +45,8 @@ def WideValue (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (l lanes : L
 
 theorem wideReplicate {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {r : Row}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars r) :
-    let made := wAtom r s.terms
-    let s' := { s with terms := made.2 }
+    let made := wAtom r s.tab
+    let s' := { s with tab := made.2 }
     Carried ctx s0 ρ s ρ s' st ∧ WideValue ctx s0 ρ s' (List.replicate 16 made.1) (List.replicate 16 (ev ρ r % W32i).toNat) := by
   have h := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok hb
   exact ⟨Carried.terms H wf h.ext h.ok, by simp [WideValue, h.lt, h.den]⟩
@@ -118,19 +118,20 @@ theorem symSpread16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
 
 /-- Lane-wise arithmetic uses the existing word terms and their soundness lemmas. -/
 theorem symLaneTerms_sound {α : Type} {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
-    {mk : α → List Node → Nat × List Node} {xs : List α} {val : α → Nat} {items rest : Items}
+    {mk : α → Tab → Nat × Tab} {xs : List α} {val : α → Nat} {items rest : Items}
     (h : symLaneTerms s mk xs items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xlen : xs.length = 16)
-    (step : ∀ a ∈ xs, ∀ T, Ext s.terms T → TableOk s.nvars T → Step (inpOf ctx s0) ρ s.nvars T (mk a T).2 (mk a T).1 (val a)) :
+    (step : ∀ a ∈ xs, ∀ T : Tab, Ext s.terms T.list → TableOk s.nvars T.list →
+      Step (inpOf ctx s0) ρ s.nvars T.list (mk a T).2.list (mk a T).1 (val a)) :
     Carried ctx s0 ρ s ρ s' st ∧ WideValue ctx s0 ρ s' l (xs.map val) := by
   unfold symLaneTerms at h
   obtain ⟨rfl, rfl⟩ := pure_pair h
-  obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step xs s.terms step (Ext.refl _) wf.words.ok
+  obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step xs s.tab step (Ext.refl _) wf.words.ok
   refine ⟨Carried.terms H wf e ok, len.trans xlen, lt, ?_⟩
   apply List.ext_getElem
   · simp [len]
   · intro k h1 h2
-    have hmk : k < (termsOf mk xs s.terms).1.length := by simpa only [List.length_map] using h2
+    have hmk : k < (termsOf mk xs s.tab).1.length := by simpa only [List.length_map] using h2
     simpa only [List.getElem_map, List.getD, List.getElem?_eq_getElem hmk, Option.getD_some] using (dn k (by simpa using h1)).symm
 
 theorem symPair512_ok {bind : Bind} {s s' : Sym} {a b : Expr} {f : List Nat → List Nat → V (List Nat × Sym)}
@@ -158,13 +159,14 @@ theorem symNumber_notWide {bind : Bind} {e : Expr} {n : Int} (h : symNumber bind
     xs.mapM (fun a => some (f a)) = some (xs.map f) := List.mapM_pure (m := Option)
 
 theorem each512_binary_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l x y : List Nat}
-    {bind : Bind} {a b : Expr} {op : String} {mk : Nat → Nat → List Node → Nat × List Node} {fn : Nat → Nat → Nat}
+    {bind : Bind} {a b : Expr} {op : String} {mk : Nat → Nat → Tab → Nat × Tab} {fn : Nat → Nat → Nat}
     {items rest : Items} (H : Holds ctx s0 ρ s st) (wf : WF s)
     (hx : symVec512 bind s a = some x) (hy : symVec512 bind s b = some y)
     (h : symLaneTerms s (fun (q : Nat × Nat) => mk q.1 q.2) (x.zip y) items = .ok ((l, s'), rest))
     (prim : ∀ p q, prim32 op p q = some (fn p q))
-    (step : ∀ (T : List Node) (p q : Nat), TableOk s.nvars T → p < T.length → q < T.length →
-      Step (inpOf ctx s0) ρ s.nvars T (mk p q T).2 (mk p q T).1 (fn (den (inpOf ctx s0) ρ T p) (den (inpOf ctx s0) ρ T q))) :
+    (step : ∀ (T : Tab) (p q : Nat), TableOk s.nvars T.list → p < T.list.length → q < T.list.length →
+      Step (inpOf ctx s0) ρ s.nvars T.list (mk p q T).2.list (mk p q T).1
+        (fn (den (inpOf ctx s0) ρ T.list p) (den (inpOf ctx s0) ρ T.list q))) :
     ∃ lanes, Carried ctx s0 ρ s ρ s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "each32" [.name op, a, b]) = some lanes ∧
       WideValue ctx s0 ρ s' l lanes := by
   obtain ⟨lx, ltx, evx⟩ := symVec512_sound H wf hx

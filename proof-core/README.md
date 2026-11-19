@@ -60,15 +60,15 @@ The functions it verifies today:
 
 | function | what it does | size | proof | time to verify |
 |---|---|---|---|---|
-| `ode_common` | length of the common prefix of two buffers | 45 instructions, 1 loop | 55 lines, 646 bytes | 4 ms |
-| `ode_equal` | whether two buffers are equal, by calling `ode_common` | 10 instructions | 9 more lines | 4 ms for both |
-| `ode_adler32` | the Adler-32 checksum, reducing modulo 65521 at every byte | 55 instructions, 1 loop | 260 lines, 3 kB | 5 ms |
-| `ode_adler32_blocks` | Adler-32, reducing once per block of up to 5552 bytes, by shifts and masks | 116 instructions, 2 nested loops | 1,154 lines, 15 kB | 41 ms |
-| `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | 1,815 lines, 23 kB | 86 ms |
-| `ode_varint` | encodes a number as a varint into a 10-byte buffer supplied by the caller; returns the length | 35 instructions, 1 loop of at most 10 iterations | 79 lines, 453 bytes | 12 ms |
-| `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 18 ms |
-| `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 20 ms |
-| `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 35 ms with both kernels |
+| `ode_common` | length of the common prefix of two buffers | 45 instructions, 1 loop | 55 lines, 646 bytes | 3.5 ms |
+| `ode_equal` | whether two buffers are equal, by calling `ode_common` | 10 instructions | 9 more lines | 3.5 ms for both |
+| `ode_adler32` | the Adler-32 checksum, reducing modulo 65521 at every byte | 55 instructions, 1 loop | 260 lines, 3 kB | 4 ms |
+| `ode_adler32_blocks` | Adler-32, reducing once per block of up to 5552 bytes, by shifts and masks | 116 instructions, 2 nested loops | 1,154 lines, 15 kB | 14 ms |
+| `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | 1,815 lines, 23 kB | 22 ms |
+| `ode_varint` | encodes a number as a varint into a 10-byte buffer supplied by the caller; returns the length | 35 instructions, 1 loop of at most 10 iterations | 79 lines, 453 bytes | 5 ms |
+| `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 12 ms |
+| `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 13 ms |
+| `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 22 ms with both kernels |
 
 `ode_equal`, `ode_low` and `ode_eighth` are small examples written for this folder. Five are shipped
 functions from `kcheck/programs/`. The last three are three of the fourteen functions in the shipped
@@ -242,7 +242,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 830 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,835 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,844 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -282,7 +282,8 @@ Outside the theorem. Every reader relies on each of these today, for what its en
   given by a first element and a step is written out as the recursive definition it stands for.
 - **Reader.lean and the compiled program.** Reader.lean parses the input and proof files. The theorem is
   about the Lean function `verdictAll`. For the compiled executable computing that function, a verdict
-  relies on Lean's compiler and runtime library (which now includes Lean's hash map, used to look terms up).
+  relies on Lean's compiler and runtime library (which includes Lean's array and hash map: the table of
+  terms is an array, and a hash map says where a term may be found).
 - **Processor features.** The machine model has every instruction in the table. A real processor has only
   the instruction sets it supports. So `statement.py` looks at the kind of each instruction: AVX-512, AVX
   or SSE4.1, recognized by the encoding prefix as in `kcheck`. It refuses a function that contains a kind
@@ -468,7 +469,7 @@ of each of them. `bytes flags start end length` is one register whose four low b
 The kernel loops over the blocks of a chunk, and the verifier has no loop invariant for vector registers
 yet. So the test adds one line to the contract, `requires n < 2` or `requires n < 3`, and the verifier
 follows each count of blocks as a path of its own. For one block a lane the proof is 921 bytes and the
-verifier takes 4.1 s. For one or two blocks the proof is 1,440 bytes and the verifier takes 17 s. The
+verifier takes 0.20 s. For one or two blocks the proof is 1,440 bytes and the verifier takes 0.66 s. The
 verifier refuses the contract as it stands, for every `n`; a test records that, and it is the next thing
 to change. The tests also refuse ten changed contracts and four changed instructions, among them the
 last block's flags and its length exchanged, the next counter, another lane's blocks, and a shift that
@@ -591,24 +592,37 @@ identical answers at every prefix of three stored proofs.
 
 ## Measurements (November 19, 2026)
 
-**Speed of the verifier.** 4 ms for `ode_common`, 5 ms for `ode_adler32`, 41 ms for `ode_adler32_blocks`,
-86 ms for `ode_adler32_blocks4`, 12 ms for `ode_varint`, 18 ms and 20 ms for the two BLAKE3 kernels. Each
-figure is a whole run, including process start and reading three files, on an Apple M6. The Python
-verifier in `kcheck/` takes 4, 4, 14 and 27 ms for the first four, 17 ms for `ode_varint` and 7 and 8 ms
-for the kernels, not counting its start-up. So the Lean verifier is about as fast on small functions and
-two to three times slower on the large ones. Most of its time goes into the representation of inequalities, which are stored as dense
-lists with one slot per unknown.
+**Speed of the verifier.** 3.5 ms for `ode_common`, 4 ms for `ode_adler32`, 14 ms for `ode_adler32_blocks`,
+22 ms for `ode_adler32_blocks4`, 5 ms for `ode_varint`, 12 ms and 13 ms for the two BLAKE3 kernels. Each
+figure is a whole run, including process start and reading three files, on an Apple M6 (the median of
+eleven runs). The Python verifier in `kcheck/` takes 4, 4, 14 and 27 ms for the first four, 17 ms for
+`ode_varint` and 7 and 8 ms for the kernels, not counting its start-up. So the Lean verifier is about as
+fast as the Python one on the first four, three times faster on `ode_varint`, and one and a half times
+slower on the two kernels.
 
-The 16-way kernel shows where this verifier is slow. One block a lane is 1,070 instructions on the path and
-takes 4.1 s. A profile gives 60% of that to finding each new term in the table of terms, which is a list
-scanned from its start, and 36% to checking the facts about the stack pointer again after every
-instruction. Both grow with the square of the path's length: two blocks take 13 s.
+The 16-way kernel was where this verifier was slow: one block a lane, a path of 1,070 instructions, took
+4.1 s, and one or two blocks took 17 s. Three things took nearly all of that time, and each grew with the
+square of the path's length. They are mended, and the same two runs now take 0.20 s and 0.66 s:
 
-For the AVX-512 kernel, 7 of the 17 ms go to executing the 362 instructions that the seven rounds run. Another
-7 ms go to evaluating the specification, which works out the final state 16 times: twice for each of the
-eight result words, as the definition is written. The first version looked each term up by scanning the
-table, and took 65 ms. That was nine times the Python verifier's time. With a hash index built once at
-the return it takes 17 ms.
+- **Finding a term in the table of terms.** The table was a list scanned from its start, and a new term
+  was put at its end by copying it. It is now an array, with a hash map that says where a term may be
+  found. The hash map is advice: the verifier takes a number from it only where it finds that term at
+  that number in the array, and otherwise puts the term at the end. So no proof says anything about the
+  hash map, and a wrong entry could cost a term a second number and nothing else.
+- **Seeing at once that a fact gives a goal.** After every instruction the verifier asks of the stack
+  pointer's bounds whether a fact gives each at once. It built the difference of the goal and every fact
+  to see whether a number alone was left. It now compares the two lists of multiples where they stand.
+- **Finding a quotient the state already knows.** The specification's `hi(t)` and the flag bytes are
+  quotients. To find the unknown that is one, the verifier built a difference with every fact. Each
+  division made is now noted, and only the unknowns noted for that number and divisor are looked at.
+  The note is advice as well: the four facts that make an unknown a quotient are asked for as before.
+
+The stored proofs did not change by a byte through any of the three. What takes the time now, for the
+16-way kernel, is evaluating the specification at the return: 86% of the run with two blocks. It works
+out all sixteen lanes one after another, and parts that are the same for every lane sixteen times.
+
+For the AVX-512 one-block kernel the specification works out the final state 16 times: twice for each
+of the eight result words, as the definition is written.
 
 **Two limits that are enforced by a test** (`test_limits.py`): every stored proof must be under 100 kB,
 and a whole run of this verifier must take at most five times as long as the Python verifier takes for the
@@ -660,8 +674,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 830 lines. The verifier: 1,994 lines (Core.lean 1,835, Arithmetic.lean
-159 including its proofs). The file parser: 169 lines. The proofs of the theorems: 11,228 lines.
+**Code size.** The formal model: 830 lines. The verifier: 2,003 lines (Core.lean 1,844, Arithmetic.lean
+159 including its proofs). The file parser: 169 lines. The proofs of the theorems: 11,256 lines.
 
 ## The files
 
