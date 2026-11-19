@@ -125,13 +125,13 @@ Each choice is a different reliance set:
 2. A second core, written independently, accepts the same proof. His set contains "the two cores do not
    share a soundness bug".
 3. The core is proved sound in a proof system that Bob already relies on, such as Lean or HOL Light. His
-   set contains that system's proof checker and his reading of the theorem.
-4. The core is written in Ode and verified by Ode's own verifier. This is circular alone. Combined with
+   set contains the program that verifies that system's proofs, and his own reading of the theorem.
+4. The core is written in Ode and verified by Ode's own verifier. Alone this is circular. Combined with
    any one of the other three it is strong.
 
 **Other actors, other conclusions.** The maker's conclusion is "Bob's verifier will accept my binary". For
 that she relies on the prover, the compiler and her other tools. None of them is in any Bob's reliance
-set. The coder relies on his tools for telling him early, and precisely, why a proof fails. Carol relies on
+set. The coder relies on tools that say, early and precisely, why a proof fails. Carol relies on
 names and messages that Bob never sees.
 
 **What all the Bobs share** is R2 to R6, and the property in R1. These are the central points of failure.
@@ -637,7 +637,7 @@ design.
   `samshackleton-tech/BLAKE3`, branch `experiment/sam-wide-model`, under `tools/verify/machine/` (`lang/`,
   `one/`, `spec/`, `alg/`, `arm/`, `wide/`). They hold theorems in Lean about the whole hash over a model
   of the processor, with generated proofs. Each function took days. The proofs broke when the code was
-  rebuilt. And they depended on about 2,500 solver axioms, which an independent checker of Lean proofs
+  rebuilt. And they depended on about 2,500 solver axioms, which an independent verifier of Lean proofs
   rejects. A verifier built for the purpose does the same work in seconds and lets Bob rely on less.
   `lang/DESIGN.md` there records the decisions of those days. The ones that still bind are in sections
   4, 5 and 11 above.

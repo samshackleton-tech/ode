@@ -236,7 +236,7 @@ for accepting only what the formal model implies.
 
 | A reader who | relies on | and does not rely on |
 |---|---|---|
-| accepts Lean's proof checker | Lean's kernel, for the soundness theorem above really being proved. An independent checker of Lean proofs can check the proofs again. We have not yet run one on them. | his own reading of Core.lean. He need not read it. |
+| accepts Lean's kernel, the program that verifies Lean's proofs | Lean's kernel, for the soundness theorem above really being proved. An independent verifier of Lean proofs can check the proofs again. We have not yet run one on them. | his own reading of Core.lean. He need not read it. |
 | does not accept it | his own reading of Core.lean and Arithmetic.lean | Lean |
 
 Two more ways are planned and not built: a second verifier written independently, and a verifier written
