@@ -1,5 +1,6 @@
 import SoundCall
 import SoundCallW
+import SoundLoop
 import SoundSpecW
 import SoundWide
 import SoundList
@@ -478,7 +479,7 @@ theorem Relied.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : St
   obtain ⟨hn, hf, hd, run⟩ := T e m
   refine ⟨hn, Nat.le_trans hf le, bounded_mono le hd, ?_⟩
   intro ρx stx A hrip ⟨k, val, lt⟩
-  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.kept, A.small, A.frame, A.mem, A.facts⟩ hrip ⟨k, val, ?_⟩
+  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes⟩ hrip ⟨k, val, ?_⟩
   rw [ev_agree hd a]
   exact lt
 
@@ -542,7 +543,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
                 refine ⟨hn, leg, hd, ?_⟩
                 intro ρy sty Ay hripy ⟨k, valy, lty⟩
                 have Ay1 : AtPlace ctx pl s0 first ρ1 ρy sty :=
-                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts⟩
+                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes⟩
                 obtain ⟨ρz, _, _, posz, valz⟩ := G ρy sty Ay1
                 have samez := Value.unique valy valz
                 injection samez with samez
@@ -621,8 +622,11 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
         injection hf with hf; subst hf
         unfold Contract.tables at hm
         obtain ⟨j, _, hj⟩ := List.mem_filterMap.mp hm
-        have := (E.lane hj hc).1
-        unfold M64 at this
+        -- the blocks end below 2^64, and lie apart from the eight bytes of the address to return to: so
+        -- they end at least 64 bytes below 2^64
+        obtain ⟨fit, apart, _, _⟩ := E.lane hj hc
+        have above := E.above
+        unfold M64 at fit above
         rw [holds_iff]; simp only [ev_sub, ev_const, ev_scale, ev_var]; omega
       next => cases hf
   · intro v r o m; cases m

@@ -24,7 +24,7 @@ KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, KCHECK)
 import kbyte, klin, kprove, varith
 sys.path.insert(0, HERE)
-from statement import sexp, statement, ordered, sequences
+from statement import sexp, statement, ordered, sequences, kinds_of, by_kind
 import built, ode, session
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
@@ -33,23 +33,47 @@ FROM_THE_START = bool(os.environ.get("ODE_PROVE_FROM_START"))     # ask `odeveri
 REGISTERS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
 
 
-def places(places_text, keep={}, seqs={}):
+def lane_line(var, regs, use, after, seqs, kinds, counted, name):
+    """`lane I: zmmA .. zmmB = SEQUENCE(things) after K`, a line of a place, as the verifier reads it: in each
+    lane I (0 to 15) the words of the vector registers, in their order, are the value of the counted sequence
+    after K of its steps. That value is the use of the definition SEQUENCE.STATE the sequence is written as
+    (statement.machine_lines), with K for its place. `kinds`: what the names of the function's contract stand
+    for (statement.kinds_of); `counted`: {a counted sequence's name: the name of its state}."""
+    rs = []
+    for part in regs.split(","):
+        m = re.fullmatch(r"\s*zmm(\d+)(?:\s*\.\.\s*zmm(\d+))?\s*", part)
+        if not m: raise SystemExit(f"prove: a place's lanes are of vector registers zmmA, or zmmA .. zmmB: {part.strip()!r}")
+        a, b = int(m.group(1)), int(m.group(2) or m.group(1))
+        if not a <= b < 32: raise SystemExit(f"prove: no such vector registers: {part.strip()!r}")
+        rs += range(a, b + 1)
+    e, k = kbyte.expression(use), kbyte.expression(after)
+    if e[0] != "call" or e[1] not in counted: raise SystemExit(f"prove: a place's lanes are said by a sequence with a count: {use!r}")
+    if var in kinds: raise SystemExit(f"prove: a place's lanes count by a name the contract gives: {var}")
+    full = ("call", f"{e[1]}.{counted[e[1]]}", [by_kind(a, kinds, name) for a in e[2]] + [by_kind(k, kinds, name)])
+    return f"lane {var} " + " ".join(f"zmm{r}" for r in rs) + " = " + sexp(full, seqs)
+
+
+def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name=""):
     """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
-    (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences)."""
-    out, named, also, at = [], [], [], None
+    (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
+    `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
+    out, named, also, lanes, at = [], [], [], [], None
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
         if not line or line == "}": continue
         m = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", line)
-        if m: at = int(m.group(1), 16); out.append(f"place {at}"); named, also = [], []; continue
+        if m: at = int(m.group(1), 16); out.append(f"place {at}"); named, also, lanes = [], [], []; continue
         m = re.fullmatch(r"keep ((?:\w+ ?)+)", line)              # registers a place names and keeps all the same
         if m: also += m.group(1).split(); continue
         m = re.fullmatch(r"name (\w+) = (\w+)", line)
         if m: out.append(f"name {m.group(1)} {m.group(2)}"); named.append(m.group(2)); continue
         if line.startswith("fact "): out.append("fact " + sexp(kbyte.expression(line[5:]), seqs)); continue
+        m = re.fullmatch(r"lane (\w+): (.+?) = (.+) after (.+)", line)
+        if m: lanes.append(lane_line(*m.groups(), seqs, kinds, counted, name)); continue
         if line.startswith("decreases "):
             out.append("keep " + " ".join(r for r in REGISTERS if (r not in named or r in also) and r in keep.get(at, REGISTERS)))
-            out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs)); continue
+            out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs))
+            out += lanes; continue
         raise SystemExit(f"prove: a line of a place the verifier in Lean does not read yet: {line}")
     return out
 
@@ -334,14 +358,17 @@ def prove(spec_text, targets, statement_out, out):
     {symbol: (runs of the verifier, lines found)}."""
     functions = ordered([(obj, symbol) for obj, symbol, _ in targets])
     places_of = {symbol: text for _, symbol, text in targets}
-    seqs = sequences(ode.Spec(spec_text))
+    spec = ode.Spec(spec_text)
+    seqs = sequences(spec)
+    counted = {name: m["state"] for name, m in ode.Parser(spec_text).file()[2].items()}
     with open(statement_out, "w") as f: f.write("\n".join(statement(spec_text, functions)) + "\n")
     done, numbers = [], {}
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
         keep, runs = {}, 0
         while True:
-            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs), out, later)
+            kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol), out, later)
             p.last = ""
             try: proof = p.solve([])
             except Unkept as e:

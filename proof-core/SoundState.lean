@@ -86,6 +86,7 @@ def Key.wf (n t : Nat) : Key → Prop
   | .num r => bounded n r
   | .counter r => bounded n r
   | .words ids => ∀ i ∈ ids, i < t
+  | .lane _ _ _ => True
 
 /-- What is known of a number that is no row speaks only of unknowns in use (`n` of them) and of terms of
 the table (`t` of them). -/
@@ -201,6 +202,10 @@ def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key �
   | .num r => .int (ev ρ r)
   | .counter r => .counter ((ev ρ r).toNat % 2 ^ 64)
   | .words ids => .list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i))
+  | .lane j c l =>
+    match ctx.contract.tableAt j with
+    | some (_, r, _, _) => laneBlocks s0.mem (lanePtr s0 r (c / 8)) (s0.reg l)
+    | none => .list []
 
 /-- What is known of a number that is no row is so. -/
 def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Known → Prop
@@ -353,6 +358,7 @@ theorem Key.val_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : Lis
     simp only [Key.val]
     congr 1
     exact List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk i hi)]
+  | lane j c l => rfl
 
 /-- What is known of numbers that are no rows stays so under other unknowns that agree on those in use,
 and in a table with more terms after it. -/
@@ -397,6 +403,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
     | num r => exact bounded_mono hn this
     | counter r => exact bounded_mono hn this
     | words js => exact fun i hi => Nat.lt_of_lt_of_le (this i hi) ht
+    | lane j c l => trivial
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/

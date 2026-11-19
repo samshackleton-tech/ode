@@ -341,12 +341,13 @@ A row is a sum of multiples of unknowns. Some numbers the verifier follows are n
 as one number, two numbers' bits put together, the words a definition gives of what it is used with. Each
 is held as an unknown (or as terms of the table) of which it is known what it is. -/
 
-/-- A thing a definition is used with, as the verifier holds it: a number, the counter of a number, or a
-list of words by their terms. -/
+/-- A thing a definition is used with, as the verifier holds it: a number, the counter of a number, a list
+of words by their terms, or the blocks an address of a table points to. -/
 inductive Key where
   | num (r : Row)
   | counter (r : Row)
   | words (ids : List Nat)
+  | lane (j c l : Nat)            -- the blocks that the address at place `c` of the table `j` points to (as many as register `l` held at entry)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What is known beyond the facts. -/
@@ -379,12 +380,23 @@ structure Sym where
 /-- The terms of the table of words, in order. -/
 abbrev Sym.terms (s : Sym) : List Node := s.tab.list
 
+/-- What a place says of vector registers: for each lane `x` from 0 to 15, the words in that lane of the
+registers `regs`, in their order, are the list of words the definition `f` gives of the things `args` (in
+which `x` is the lane's number). -/
+structure PlaceLanes where
+  regs : List Nat
+  x : String
+  f : String
+  args : SExpr
+  deriving Inhabited
+
 structure Place where
   pc : Nat
   names : List (String × Nat)     -- a name for what a register holds there
   keep : List Nat                 -- registers that hold there what they held when the path first came there
   facts : List SExpr
   decreases : SExpr
+  lanes : List PlaceLanes := []   -- what the vector registers hold there
   deriving Inhabited
 
 structure Ctx where
@@ -1818,6 +1830,7 @@ def flatKey (look : Node → Option Nat) : WVal → Option Key
   | .num r => some (.num r)
   | .counter r => some (.counter r)
   | .list l => (wordIds look l).map .words
+  | .lane j c l => some (.lane j c l)
   | _ => none
 
 def flatKeys (look : Node → Option Nat) : List WVal → Option (List Key)
@@ -1832,12 +1845,25 @@ def Key.ok (n t : Nat) : Key → Bool
   | .num r => decide (r.coeff.length ≤ n)
   | .counter r => decide (r.coeff.length ≤ n)
   | .words ids => ids.all (· < t)
+  | .lane _ _ _ => true
+
+/-- Two keys are one thing: the same key; or two numbers, or the counters of two numbers, that the facts
+say at once are one number. -/
+def sameKey (facts : List Row) : Key → Key → Bool
+  | .num a, .num b => sameRow facts a b
+  | .counter a, .counter b => sameRow facts a b
+  | a, b => a == b
+
+def sameKeys (facts : List Row) : List Key → List Key → Bool
+  | [], [] => true
+  | a :: as, b :: bs => sameKey facts a b && sameKeys facts as bs
+  | _, _ => false
 
 /-- The words the state knows the definition `f` to give of these things. -/
-def heldIds (f : String) (keys : List Key) : List Known → Option (List Nat)
+def heldIds (facts : List Row) (f : String) (keys : List Key) : List Known → Option (List Nat)
   | [] => none
-  | .held f' keys' ids :: more => if f' = f ∧ keys' = keys then some ids else heldIds f keys more
-  | _ :: more => heldIds f keys more
+  | .held f' keys' ids :: more => if f' = f ∧ sameKeys facts keys' keys = true then some ids else heldIds facts f keys more
+  | _ :: more => heldIds facts f keys more
 
 /-- The unknowns the state knows as the words of the block at byte `off` of the lane at place `c` of the table `j`. -/
 def knownBlock (facts : List Row) (j c : Nat) (off : Row) : List Known → Option (List Nat)
@@ -1889,7 +1915,7 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
         if f == "len" then none
         else if own.contains f then wown ctx look s f vs
         else
-          match (flatKeys look vs).bind fun keys => heldIds f keys s.known with
+          match (flatKeys look vs).bind fun keys => heldIds s.facts f keys s.known with
           | some ids => some (.list (ids.map fun i => WVal.word [i]))
           | none =>
             match findDef ctx.defs f with
@@ -2313,7 +2339,7 @@ def entryFacts (ctx : Ctx) : List Row :=
   (ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)) ++
   (ctx.contract.fixeds.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
   (ctx.contract.atLeast.filterMap fun (name, k) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.var r) (Lin.const k)) ++
-  ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64)) (Lin.scale 64 (Lin.var l))) else none
+  ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,
@@ -2327,9 +2353,75 @@ def Sym.general (p : Place) (s : Sym) : Sym :=
   { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
-    tab := s.tab,         -- (nor what a vector register held, nor that a run is as it was at entry)
+    tab := s.tab,         -- (nor that a run is as it was at entry; what the vector registers hold is said by the place's lanes)
     known := s.known, divs := s.divs,
     facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
+
+/-! ### What a place says of vector registers -/
+
+/-- The names at a place, on words: a name the place gives is the row of its register; then the contract's. -/
+def placeW (ctx : Ctx) (p : Place) (s : Sym) : List (String × WVal) :=
+  p.names.map (fun nr => (nr.1, WVal.num (s.reg nr.2))) ++ wenv ctx.contract
+
+/-- The terms the state holds in lane `i` of these vector registers, where it holds one for each. -/
+def laneTerms (s : Sym) (i : Nat) : List Nat → Option (List Nat)
+  | [] => some []
+  | r :: more =>
+    match (s.vec.lookup r).bind (·[i]?), laneTerms s i more with
+    | some a, some rest => some (a :: rest)
+    | _, _ => none
+
+/-- What the place says of lane `i` is so of this state: the words the definition gives, worked out on the
+terms, are the terms the registers hold in that lane. (No proof is read here.) -/
+def laneShown (ctx : Ctx) (look : Node → Option Nat) (env : List (String × WVal)) (s : Sym) (L : PlaceLanes) (i : Nat) : Bool :=
+  match weval ctx look s WFUEL ((L.x, .int i) :: env) (.call L.f L.args) with
+  | some (.list l) =>
+    match wordIds look l, laneTerms s i L.regs with
+    | some ids, some held => ids == held
+    | _, _ => false
+  | _ => false
+
+/-- What the place says of vector registers is so of this state, lane by lane. -/
+def lanesShown (ctx : Ctx) (p : Place) (s : Sym) (L : PlaceLanes) : Bool :=
+  let index := termIndex s.terms
+  (List.range 16).all fun i => laneShown ctx (fun n => index[n]?) (placeW ctx p s) s L i
+
+/-- The things the place's definition is used with in lane `i`, as keys: in the state `g`. -/
+def laneKey (ctx : Ctx) (look : Node → Option Nat) (env : List (String × WVal)) (g : Sym) (L : PlaceLanes) (i : Nat) : Option (List Key) :=
+  match wevalList (weval ctx look g WFUEL ((L.x, .int i) :: env)) L.args with
+  | some vs =>
+    match flatKeys look vs with
+    | some keys => if keys.all (Key.ok g.nvars g.terms.length) then some keys else none
+    | none => none
+  | none => none
+
+def laneKeysOf (key : Nat → Option (List Key)) : List Nat → Option (List (List Key))
+  | [] => some []
+  | i :: more =>
+    match key i, laneKeysOf key more with
+    | some k, some ks => some (k :: ks)
+    | _, _ => none
+
+/-- The state with what a place says of vector registers taken as known. Each word of each lane is a new
+unknown: with `m` registers, the unknown `g.nvars + m * i + k` is the word in lane `i` of the `k`-th of
+them. The registers hold those words, and the definition, used with the things of each lane (`keys`: lane
+by lane), is known to be that lane's words. (No fact is added of the unknowns: they are used as words only.) -/
+def Sym.withLanes (g : Sym) (L : PlaceLanes) (keys : List (List Key)) : Sym :=
+  let m := L.regs.length
+  let made := termsOf wAtom ((List.range (16 * m)).map fun u => Lin.var (g.nvars + u)) g.tab
+  { g with
+    nvars := g.nvars + 16 * m, tab := made.2,
+    vec := ((List.range m).map fun k => (L.regs.getD k 0, (List.range 16).map fun i => made.1.getD (m * i + k) 0)) ++ g.vec,
+    known := ((List.range 16).map fun i => Known.held L.f (keys.getD i []) ((List.range m).map fun k => made.1.getD (m * i + k) 0)) ++ g.known }
+
+/-- What the place says of vector registers, taken as known of the general state. -/
+def supposeLanes (ctx : Ctx) (p : Place) (g : Sym) (L : PlaceLanes) : V Sym :=
+  if L.f == "len" || own.contains L.f then refuse "a place's lanes are said by a definition of the specification"
+  else
+    let index := termIndex g.terms
+    match laneKeysOf (laneKey ctx (fun n => index[n]?) (placeW ctx p g) g L) (List.range 16) with
+    | some keys => pure (g.withLanes L keys)
+    | none => refuse "what a place says of vector registers is not followed in its general state"
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for
 every coming there, of which the place's facts are taken as known, and its number that decreases, which is
@@ -2340,13 +2432,16 @@ def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
     refuse "a place must keep the stack pointer, and name registers"
   else do
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
-    let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
-    let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
-    match d with
-    | .val (.lin d) => do
-      entail g.facts d
-      pure (g, d, s)
-    | _ => refuse "a place's number that decreases is no number"
+    if !(p.lanes.all (lanesShown ctx p s)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
+    else do
+      let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
+      let g ← fold (supposeLanes ctx p) g p.lanes
+      let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
+      match d with
+      | .val (.lin d) => do
+        entail g.facts d
+        pure (g, d, s)
+      | _ => refuse "a place's number that decreases is no number"
 
 /-- On coming to the place again: this state is one the general state stands for (it keeps what the first
 coming had in the kept registers and the frame, and the place's facts are shown of it), and the number is
@@ -2358,10 +2453,12 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
     let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
-    let (d', s2) ← seval ctx (placeEnv ctx p s.reg) s1 p.decreases
-    match d' with
-    | .val (.lin d') => entail s2.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
-    | _ => refuse "a place's number that decreases is no number"
+    if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
+    else do
+      let (d', s2) ← seval ctx (placeEnv ctx p s.reg) s1 p.decreases
+      match d' with
+      | .val (.lin d') => entail s2.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
+      | _ => refuse "a place's number that decreases is no number"
 
 /-- A place a path has come to: the place, the number of its general state, and the state as the path first
 came there. -/

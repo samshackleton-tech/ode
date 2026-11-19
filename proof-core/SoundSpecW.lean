@@ -155,7 +155,10 @@ theorem WDen.lookupRecord {x : String} : ∀ {fs : List (String × WVal)} {fs' :
 
 end
 
-theorem heldIds_mem {f : String} {keys : List Key} : ∀ {l : List Known} {ids : List Nat}, heldIds f keys l = some ids → Known.held f keys ids ∈ l
+/-- The words found for a use of a definition are those the state holds of a use with keys that are the
+same things. -/
+theorem heldIds_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l : List Known} {ids : List Nat},
+    heldIds facts f keys l = some ids → ∃ keys', Known.held f keys' ids ∈ l ∧ sameKeys facts keys' keys = true
   | [], _, h => by simp [heldIds] at h
   | k :: more, ids, h => by
     cases k with
@@ -165,12 +168,23 @@ theorem heldIds_mem {f : String} {keys : List Key} : ∀ {l : List Known} {ids :
       next e =>
         injection h with h
         obtain ⟨e1, e2⟩ := e
-        subst h e1 e2
-        exact List.mem_cons_self ..
-      next => exact List.mem_cons_of_mem _ (heldIds_mem h)
-    | load v j c => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
-    | or v x y => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
-    | block j c off vs => simp only [heldIds] at h; exact List.mem_cons_of_mem _ (heldIds_mem h)
+        subst h e1
+        exact ⟨keys', List.mem_cons_self .., e2⟩
+      next =>
+        obtain ⟨k', m, same⟩ := heldIds_mem h
+        exact ⟨k', List.mem_cons_of_mem _ m, same⟩
+    | load v j c =>
+      simp only [heldIds] at h
+      obtain ⟨k', m, same⟩ := heldIds_mem h
+      exact ⟨k', List.mem_cons_of_mem _ m, same⟩
+    | or v x y =>
+      simp only [heldIds] at h
+      obtain ⟨k', m, same⟩ := heldIds_mem h
+      exact ⟨k', List.mem_cons_of_mem _ m, same⟩
+    | block j c off vs =>
+      simp only [heldIds] at h
+      obtain ⟨k', m, same⟩ := heldIds_mem h
+      exact ⟨k', List.mem_cons_of_mem _ m, same⟩
 
 /-- Every use of a definition that the state holds the words of: the definition gives those words within
 `B` steps. -/
@@ -346,6 +360,24 @@ theorem sameRow_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ fact
     have g2 := plainTimes_sound h2 ρ hf
     rw [ev_sub] at g1 g2
     omega
+
+/-- Two keys the verifier takes for one thing are one value. -/
+theorem sameKey_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {facts : List Row} (hf : ∀ f ∈ facts, f.holds ρ)
+    {a b : Key} (h : sameKey facts a b = true) : a.val ctx s0 ρ T = b.val ctx s0 ρ T := by
+  cases a <;> cases b
+  all_goals first
+    | (simp only [Key.val]; rw [sameRow_sound hf h])
+    | exact congrArg (Key.val ctx s0 ρ T) (eq_of_beq h)
+
+theorem sameKeys_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {facts : List Row} (hf : ∀ f ∈ facts, f.holds ρ) :
+    ∀ {as bs : List Key}, sameKeys facts as bs = true → as.map (Key.val ctx s0 ρ T) = bs.map (Key.val ctx s0 ρ T)
+  | [], [], _ => rfl
+  | [], _ :: _, h => by simp [sameKeys] at h
+  | _ :: _, [], h => by simp [sameKeys] at h
+  | a :: as, b :: bs, h => by
+    simp only [sameKeys, Bool.and_eq_true] at h
+    simp only [List.map_cons]
+    rw [sameKey_sound hf h.1, sameKeys_sound hf h.2]
 
 /-- Two numbers held as rows: what `wnum` gives of them is what the account's `binop` gives of the numbers. -/
 theorem wnum_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
@@ -532,6 +564,11 @@ theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
       simp only [hw, Option.map_some, Option.some.injEq] at h; subst h
       rw [wordIds_den wf hd hw]
       rfl
+  | lane j c l =>
+    cases hd with
+    | lane _ _ _ x r count ht c8 clt =>
+      simp only [flatKey, Option.some.injEq] at h; subst h
+      simp only [Key.val, ht]
   | _ => simp [flatKey] at h
 
 theorem flatKeys_den (wf : WF s) : ∀ {vs : List WVal} {as : List Val} {keys : List Key},
@@ -1288,16 +1325,19 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
             refine ⟨r, ?_, dr⟩
             simp only [evalSpec, el]; rw [if_neg hlen, if_pos hown]; exact er
           next hown =>
-            cases hh : ((flatKeys (fun n => findNode n s.terms 0) vs).bind fun keys => heldIds f keys s.known) with
+            cases hh : ((flatKeys (fun n => findNode n s.terms 0) vs).bind fun keys => heldIds s.facts f keys s.known) with
             | some ids =>
-              -- a use the state holds the words of: the definition gives them within `B` steps
+              -- a use the state holds the words of (of the same things, by the facts): the definition gives
+              -- them within `B` steps
               simp only [hh, Option.some.injEq] at h; subst h
               obtain ⟨keys, hk, hi⟩ := Option.bind_eq_some_iff.mp hh
-              obtain ⟨d, hd, hlen', hev⟩ := hB f keys ids (heldIds_mem hi)
+              obtain ⟨keys', hm, same⟩ := heldIds_mem hi
+              obtain ⟨d, hd, hlen', hev⟩ := hB f keys' ids hm
               have eas : as = keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf dl hk
-              have hp' : (d.params.length == as.length) = true := by rw [eas, List.length_map]; simpa using hlen'
+              have ekeys : keys'.map (Key.val ctx s0 ρ s.terms) = keys.map (Key.val ctx s0 ρ s.terms) := sameKeys_sound H.facts same
+              have hp' : (d.params.length == as.length) = true := by rw [eas, ← ekeys, List.length_map]; simpa using hlen'
               refine ⟨.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)), ?_, WDen.wordsOf wf ids⟩
-              simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp', eas]
+              simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp', eas, ← ekeys]
               exact evalSpec_mono ctx.defs B hev (fuel + B) (Nat.le_add_left _ _)
             | none =>
               simp only [hh] at h

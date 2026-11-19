@@ -394,7 +394,7 @@ expertise of his team.
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
 processor that the instruction table describes. The formal model that the theorem is about is 830 lines.
-The verifier's own 2,003 lines are covered by the theorem, so a Bob who takes the third route does not
+The verifier's own 2,071 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -403,16 +403,17 @@ has already been verified (both functions that return a number and functions tha
 for their caller); contracts with input buffers, output buffers, records laid out in memory, `returns` and
 `stack`; and vector instructions that compute on 32-bit words. The verifier can follow operations on
 512-bit registers and loads and stores at fixed offsets in buffers. It can follow a stack pointer
-rounded down to a 64-byte boundary and the stores and loads in that frame. It still needs rules for
-the 16-way kernel's indirect loads through its pointer array and its loop. The
+rounded down to a 64-byte boundary and the stores and loads in that frame. It can follow loads through
+a table of addresses, and a loop invariant can say what vector registers hold. The
 specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that specification
 reproduces the 105 official test vectors.
 
 As of November 19, 2026 it verifies five of the twelve small shipped functions, a function that calls one
-of them, and three of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
-compresses one block (proofs of 131 and 137 bytes, verified in 12 and 13 ms) and `b3l_node_out`, which
+of them, and four of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+compresses one block (proofs of 131 and 137 bytes, verified in 12 and 13 ms); `b3l_node_out`, which
 reads a 120-byte node record and calls one of them (a 38-byte proof, verified together with both kernels
-in 22 ms). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
+in 22 ms); and the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
+in 1.1 s). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
 
 That page also says what is left out. Reading the object file and the text of the specification happens
 outside the theorem. So do the link step and the check of which processor features a function needs. The

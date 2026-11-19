@@ -245,6 +245,29 @@ theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {
         · exact hk
         · exact Known.wf_mono le (Nat.le_refl _) (wf.known k' m) }
 
+/-- More unknowns at once, of which nothing is said: what the state held stays so. -/
+theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (m : Nat) (ag : Agree s.nvars ρ ρ') :
+    Carried ctx s0 ρ s ρ' { s with nvars := s.nvars + m } st := by
+  have H' := H.agree wf ag
+  have le : s.nvars ≤ s.nvars + m := Nat.le_add_right _ _
+  refine ⟨ag, le, ?_, ?_⟩
+  · exact {
+      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
+      spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, facts := H'.facts, known := H'.known }
+  · exact {
+      base := Nat.le_trans wf.base le
+      reg := fun r hr => bounded_mono le (wf.reg r hr)
+      zf := Flag.bounded_mono le wf.zf
+      cf := Flag.bounded_mono le wf.cf
+      frame := fun o v m => bounded_mono le (wf.frame o v m)
+      bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
+      spec := fun f m => SFact.bounded_mono le (wf.spec f m)
+      wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
+      words := wf.words.mono rfl rfl rfl le
+      facts := fun f m => bounded_mono le (wf.facts f m)
+      known := fun k' m => Known.wf_mono le (Nat.le_refl _) (wf.known k' m) }
+
 /-- The register with a table's count of blocks is one of the sixteen. -/
 theorem tableAt_lt {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : c.tableAt j = some (x, r, count, l)) : l < 16 := by
   unfold Contract.tableAt at h

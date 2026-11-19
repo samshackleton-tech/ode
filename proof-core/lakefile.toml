@@ -21,7 +21,7 @@ name = "Reader"
 
 [[lean_lib]]
 name = "Sound"
-roots = ["SoundLin", "SoundWord", "SoundState", "SoundStep", "SoundVec", "SoundWide", "SoundSpec", "SoundList", "SoundPlace", "SoundCall", "SoundSpecW", "SoundCallW", "SoundTop"]
+roots = ["SoundLin", "SoundWord", "SoundState", "SoundStep", "SoundVec", "SoundWide", "SoundSpec", "SoundList", "SoundPlace", "SoundCall", "SoundSpecW", "SoundCallW", "SoundLoop", "SoundTop"]
 
 [[lean_exe]]
 name = "arith"

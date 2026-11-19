@@ -292,6 +292,26 @@ def by_kind(e, kinds, name):
                      f"an expression of this form is not read yet: {e!r}")
 
 
+def kinds_of(c, name, layouts={}):
+    """The names of a contract that stand for something other than a register's number or a run's bytes:
+    for each, the function that says what it stands for, of the name as the account in Lean has it (`by_kind`).
+    An argument of a kind that says how a value lies in a register or in memory (KINDS); a record in memory
+    (a layout); the four bytes an argument of the kind `bytes a b c d` names."""
+    laid = {arg: layout_kind(arg, kind, layouts[kind]) for arg, kind in c["args"] if kind in layouts}
+    kinds = {arg: KINDS[kind][1] for arg, kind in c["args"] if kind in KINDS}
+    kinds.update({arg: laid[arg][1] for arg in laid})
+    kinds.update({arg: no_value(arg) for arg, kind in c["args"] if kind == "any"})
+    names = [arg for arg, _ in c["args"]]
+    if len(set(names)) != len(names): raise SystemExit(f"statement: the contract of {name} has two arguments of one name")
+    packed = {arg: kind.split()[1:] for arg, kind in c["args"] if re.fullmatch(r"bytes( \w+)+", kind)}
+    for arg, parts in packed.items():
+        for part, e in named_bytes(arg, parts).items():
+            if part in names or part in kinds: raise SystemExit(f"statement: the contract of {name} gives the name {part} twice")
+            kinds[part] = (lambda e: lambda x: e)(e)
+        kinds[arg] = no_value(arg, "is a number of which only four bytes are named")
+    return kinds
+
+
 def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     """A contract as the lines Reader.lean reads."""
     out = []
@@ -301,11 +321,8 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     sizes = {arg: KINDS[kind][0] for arg, kind in c["args"] if kind in KINDS}
     sizes.update({arg: laid[arg][0] for arg in laid})
     sizes.update({arg: None for arg, kind in c["args"] if kind == "any"})
-    kinds = {arg: KINDS[kind][1] for arg, kind in c["args"] if kind in KINDS}
-    kinds.update({arg: laid[arg][1] for arg in laid})
-    kinds.update({arg: no_value(arg) for arg, kind in c["args"] if kind == "any"})
+    kinds = kinds_of(c, name, layouts)
     names = [arg for arg, _ in c["args"]]
-    if len(set(names)) != len(names): raise SystemExit(f"statement: the contract of {name} has two arguments of one name")
     # `N inputs`: the address of a table of N addresses, each of n blocks of 64 bytes given to read (n: the
     # argument of that name, a number). `N cvs`: the address of N chaining values, one after another.
     # `bytes a b c d`: a number in a register whose four low bytes those names stand for.
@@ -316,11 +333,6 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     sizes.update({arg: 8 * count for arg, count in tables.items()})
     sizes.update({arg: 32 * count for arg, count in values.items()})
     sizes.update({arg: None for arg in packed})
-    for arg, parts in packed.items():
-        for part, e in named_bytes(arg, parts).items():
-            if part in names or part in kinds: raise SystemExit(f"statement: the contract of {name} gives the name {part} twice")
-            kinds[part] = (lambda e: lambda x: e)(e)
-        kinds[arg] = no_value(arg, "is a number of which only four bytes are named")
     said = sorted({kind for arg, kind in c["args"] if arg in kinds})     # (for messages)
     # `returns r`, r no name of the specification's (LANGUAGE.md): the number returned is called r in `ensures` lines.
     r = c["returns"]

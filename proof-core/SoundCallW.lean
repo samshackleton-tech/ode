@@ -105,6 +105,7 @@ theorem Key.ok_wf {n t : Nat} {k : Key} (h : k.ok n t = true) : k.wf n t := by
     intro i mi
     have := List.all_eq_true.mp h i mi
     simpa using this
+  | lane j c l => trivial
 
 /-- The words whose bytes the account's `bytes_of` gives: each is below 2^32, and the bytes are theirs. -/
 theorem ofWords_spec : ∀ {ws bs : List Val}, ofWords ws = some bs →

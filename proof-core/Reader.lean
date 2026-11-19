@@ -55,6 +55,12 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
+/-- A vector register by its name: `zmm0` to `zmm31`. -/
+def vecOrFail (name : String) : Except String Nat :=
+  match if name.startsWith "zmm" then (name.drop 3).toNat? else none with
+  | some r => if r < 32 then pure r else throw s!"no vector register {name}"
+  | none => throw s!"no vector register {name}"
+
 def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "stack", "def"]
 
 def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
@@ -141,12 +147,19 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["place", pc] => onCur fun g => match pc.toNat? with
     | some pc =>
       if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
-      else pure { g with places := g.places ++ [⟨pc, [], [], [], .num 0⟩] }
+      else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0 }] }
     | none => throw s!"cannot read {line}"
   | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
   | "fact" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with facts := p.facts ++ [e] }
   | "decreases" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with decreases := e }
+  | "lane" :: x :: more => do
+    -- lane X REG … = (call F THING …): in each lane X, the words of the vector registers are what F gives
+    let regs := more.takeWhile (· ≠ "=")
+    let rs ← regs.mapM vecOrFail
+    match ← readSExpr (rest line (3 + regs.length)) with
+    | .call f args => inPlace fun p => { p with lanes := p.lanes ++ [⟨rs, x, f, args⟩] }
+    | _ => throw s!"refused: a place's lanes are said by the use of a definition: {line}"
   | ["t", name] => onCur fun g => pure { g with proof := g.proof ++ [.tag name 0] }
   | ["t", name, n] => match n.toNat? with
     | some n => onCur fun g => pure { g with proof := g.proof ++ [.tag name n] }
