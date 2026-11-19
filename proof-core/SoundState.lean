@@ -1,4 +1,4 @@
-import SoundLin
+import SoundWord
 /-!
 # Why the verifier's yes is right, 2: what a state on symbols says of a state of the machine
 
@@ -82,6 +82,15 @@ def SFact.bounded (n : Nat) : SFact → Prop
   | .same a b => a.bounded n ∧ b.bounded n
   | .value c v => c.bounded n ∧ Ode.bounded n v
 
+/-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
+speak of unknowns in use; and what is held of a vector register is four terms of the table. -/
+structure WordsWF (s : Sym) : Prop where
+  table : WFT s.terms
+  atoms : ∀ (j : Nat) (r : Row), s.terms[j]? = some (Node.atom r) → bounded s.nvars r
+  vec : ∀ x ids, s.vec.lookup x = some ids → ids.length = 4 ∧ ∀ i ∈ ids, i < s.terms.length
+  rotrs : ∀ (j a n : Nat), s.terms[j]? = some (Node.rotr a n) → n ≤ 32
+  wrote : ∀ w j i, (w, j, i) ∈ s.wroteW → i < s.terms.length
+
 /-- The verifier's state speaks only of unknowns in use. -/
 structure WF (s : Sym) : Prop where
   base : 16 ≤ s.nvars
@@ -93,8 +102,25 @@ structure WF (s : Sym) : Prop where
   bytes : ∀ v r o, (v, r, o) ∈ s.bytes → v < s.nvars ∧ bounded s.nvars o
   spec : ∀ f ∈ s.spec, f.bounded s.nvars
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → bounded s.nvars o ∧ bounded s.nvars x
+  words : WordsWF s
 
 /-! ## What the verifier's state says -/
+
+/-- Word `k` of the run of words of number `j` (the runs of a fixed count given to read, then those given to
+read and to write), as memory held it at entry. -/
+def inpOf (ctx : Ctx) (s0 : State) (j k : Nat) : Nat :=
+  match (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? with
+  | some (_, r, _) => load s0.mem (s0.reg r + 4 * k) 4
+  | none => 0
+
+/-- What the verifier holds of words is so. Each vector register it knows the words of holds them: its four
+low lanes are the terms. A run given to write that nothing has been written to holds what it held at entry.
+A word known written is in memory: its four bytes are the term's, the lowest first. -/
+def VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop :=
+  (∀ x ids, s.vec.lookup x = some ids → ∀ k, k < 4 → st.vec x k = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) ∧
+  (∀ w ∈ s.intact, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → st.mem (s0.reg r + k) = s0.mem (s0.reg r + k)) ∧
+  ∀ w j i, (w, j, i) ∈ s.wroteW → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
+    4 * j + 4 ≤ n ∧ ∀ b, b < 4 → st.mem (s0.reg r + 4 * j + b) = den (inpOf ctx s0) ρ s.terms i / 256 ^ b % 256
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -140,6 +166,7 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → ∃ name r n, ctx.contract.outs[w]? = some (name, r, n) ∧
     0 ≤ ev ρ o ∧ ev ρ o < n ∧ (st.mem (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ x
+  words : VecOk ctx s0 ρ s st
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k
@@ -183,6 +210,27 @@ theorem Flag.holds_agree {n : Nat} {ρ ρ' : Nat → Int} {f : Flag} {set : Bool
   | equal x y => simp only [Flag.holds] at h ⊢; rw [← ev_agree hb.1 a, ← ev_agree hb.2 a]; exact h
   | below x y => simp only [Flag.holds] at h ⊢; rw [← ev_agree hb.1 a, ← ev_agree hb.2 a]; exact h
 
+theorem WordsWF.mono {s s' : Sym} (W : WordsWF s) (ht : s'.terms = s.terms) (hv : s'.vec = s.vec) (hw : s'.wroteW = s.wroteW)
+    (le : s.nvars ≤ s'.nvars) : WordsWF s' :=
+  ⟨by rw [ht]; exact W.table, fun j r h => by rw [ht] at h; exact bounded_mono le (W.atoms j r h),
+   fun x ids h => by rw [hv] at h; rw [ht]; exact W.vec x ids h, fun j a n h => by rw [ht] at h; exact W.rotrs j a n h,
+   fun w j i h => by rw [hw] at h; rw [ht]; exact W.wrote w j i h⟩
+
+theorem VecOk.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
+    (W : WordsWF s) (a : Agree s.nvars ρ ρ') (h : VecOk ctx s0 ρ s st) : VecOk ctx s0 ρ' s st := by
+  refine ⟨?_, h.2.1, ?_⟩
+  · intro x ids hx k hk
+    obtain ⟨len, lt⟩ := W.vec x ids hx
+    have hk' : k < ids.length := by omega
+    have e : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk']
+    rw [h.1 x ids hx k hk]
+    refine (den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) ?_).symm
+    rw [e]; exact lt _ (List.getElem_mem hk')
+  · intro w j i m x r n ho
+    obtain ⟨h1, h2⟩ := h.2.2 w j i m x r n ho
+    refine ⟨h1, fun b hb => ?_⟩
+    rw [h2 b hb, den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) (W.wrote w j i m)]
+
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
     (h : Holds ctx s0 ρ s st) (wf : WF s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
@@ -212,6 +260,7 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
     have eo := ev_agree (wf.wrote w o x m).1 a
     have ex := ev_agree (wf.wrote w o x m).2 a
     exact ⟨name, r, n, h1, by rw [← eo]; exact h2, by rw [← eo]; exact h3, by rw [← eo, ← ex]; exact h4⟩
+  words := VecOk.agree wf.words a h.words
 
 /-- More unknowns in use: the verifier's state still speaks only of unknowns in use. -/
 theorem Flag.bounded_mono {n m : Nat} {f : Flag} (h : n ≤ m) (hb : f.bounded n) : f.bounded m := by
@@ -245,6 +294,12 @@ theorem load_lt (mem : Nat → Nat) (a n : Nat) : load mem a n < 256 ^ n := by
     have h256 : mem a % 256 < 256 := Nat.mod_lt _ (by decide)
     rw [Nat.pow_succ]
     omega
+
+theorem inpOf_lt (ctx : Ctx) (s0 : State) (j k : Nat) : inpOf ctx s0 j k < W32 := by
+  unfold inpOf
+  split
+  · exact load_lt _ _ 4
+  · decide
 
 theorem store_other (mem : Nat → Nat) (a v n x : Nat) (h : x < a ∨ a + n ≤ x) : store mem a v n x = mem x := by
   induction n generalizing mem a v with

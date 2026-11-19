@@ -23,7 +23,7 @@ namespace Ode.Arithmetic
 structure Row where
   coeff : List Int
   constant : Int
-  deriving Repr, DecidableEq, Inhabited
+  deriving Repr, DecidableEq, Inhabited, Hashable
 
 structure Step where
   i : Nat

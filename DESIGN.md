@@ -307,7 +307,7 @@ route, of his choosing, from his question to his tool's answer.
 **A first core exists (November 18, 2026): `proof-core/`.** It is a verifier in Lean 4 that decides by a
 proof it is handed, with a theorem that Lean checks: whatever the proofs are, if the verifier says yes of
 the functions of a statement, every one of them meets its contract on the machine the table describes
-(`verify_all_sound`). The account it is about is 731 lines; the verifier's own 1,073 lines are under the
+(`verify_all_sound`). The account it is about is 731 lines; the verifier's own 1,463 lines are under the
 theorem and need not be read. It reads a first part of what the full verifier reads: instructions over the
 general registers, the flags and memory; loops by places (several a function), by induction on a place's
 number; a call, by the contract of a function the verifier has shown before, after showing what that
@@ -320,10 +320,13 @@ from one of 19 kB in 40 ms, and the Adler-32 that takes four bytes a turn (the f
 usual C) from one of 26 kB in 80 ms, and the varint encoder, which writes up to ten bytes for its caller,
 from one of 9 kB in 35 ms; and a function that calls the first, from 77 bytes more. The account's reading of the
 specification language covers the whole of `kcheck/blake3.spec` (words, lists, records, sequences): worked out
-by it, the specification gives the 105 official test vectors; the verifier does not yet work such definitions
-out on symbols, so no function of the hash is shown by it. This is the third way of the disjunction, begun. Reading the file's bytes and the
-specification's text is outside the theorem, as are the link step, vector registers and loops that write
-for the caller: `proof-core/README.md` says what a yes there rests on. Lean is the language of that
+by it, the specification gives the 105 official test vectors. One function of the hash is shown by it (November 19,
+2026): the one-block kernel `blake3_servil_compress_in_place_avx512`, 76 instructions, from a proof of 189 bytes
+in 17 ms. The verifier follows each 32-bit word of a vector register as a term over the words read at entry, and
+at the return works the specification's `compress` out on the same terms; what the kernel's contract promises of
+its trace is not in the account and is not shown there. This is the third way of the disjunction, begun. Reading
+the file's bytes and the specification's text is outside the theorem, as are the link step, what a processor must
+have (`needs`), and loops that write for the caller: `proof-core/README.md` says what a yes there rests on. Lean is the language of that
 implementation and is asked of no reader: the proof is text that a verifier in any language can read.
 
 ## 8. The account of the machine

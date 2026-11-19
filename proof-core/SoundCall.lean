@@ -12,10 +12,10 @@ open Arithmetic
 theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (rows : List Row) (hr : ∀ r ∈ rows, r.holds ρ) : Holds ctx s0 ρ { s with facts := rows ++ s.facts } st :=
   ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
-   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote⟩
+   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote, H.words⟩
 
 theorem WF.more {s : Sym} (wf : WF s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF { s with facts := rows ++ s.facts } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec, wf.wrote⟩
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _)⟩
 
 /-- Every function this one calls is among the functions there are, lies in memory, and meets the contract
 its call is taken by. -/
@@ -204,7 +204,9 @@ theorem callerSaved_lt {r : Nat} (h : r ∈ callerSaved) : r < 16 := by
   omega
 
 theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := by
-  refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
+    ⟨wf.words.table, fun j r h => bounded_mono (Nat.le_add_right _ _) (wf.words.atoms j r h), fun x ids h => by simp [Sym.afterCall] at h,
+     wf.words.rotrs, fun w j i h => by simp [Sym.afterCall] at h⟩⟩
   · intro r hr
     show bounded (s.nvars + 16) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
@@ -246,7 +248,8 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     Holds ctx s0 (afterRho s.nvars ρ s2) (s.afterCall sp) s2 := by
   have ag := afterRho_agree s.nvars ρ s2
   have H' := H.agree wf ag
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_⟩
+  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
+    ⟨fun x ids h => by simp [Sym.afterCall] at h, fun w m => by simp [Sym.afterCall] at m, fun w j i m => by simp [Sym.afterCall] at m⟩⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : callerSaved.contains r with

@@ -379,10 +379,10 @@ theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   exact ⟨ρ1, c1.agree, c1.mono,
     ⟨H1.entry, H1.reg, H1.small, H1.zf, H1.cf, H1.frame,
      fun f m => (List.mem_append.mp m).elim (hr f) (H1.facts f), H1.bytes,
-     fun f m => (List.mem_append.mp m).elim (hf f) (H1.spec f), H1.mem, H1.wrote⟩,
+     fun f m => (List.mem_append.mp m).elim (hf f) (H1.spec f), H1.mem, H1.wrote, H1.words⟩,
     ⟨w1.base, w1.reg, w1.zf, w1.cf, w1.frame,
      fun f m => (List.mem_append.mp m).elim (br f) (w1.facts f), w1.bytes,
-     fun f m => (List.mem_append.mp m).elim (bf f) (w1.spec f), w1.wrote⟩⟩
+     fun f m => (List.mem_append.mp m).elim (bf f) (w1.spec f), w1.wrote, w1.words.mono rfl rfl rfl (Nat.le_refl _)⟩⟩
 
 theorem suppose_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
@@ -450,7 +450,9 @@ theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.genera
   have le : first.nvars ≤ first.nvars + 16 := Nat.le_add_right _ _
   refine ⟨Nat.le_add_left _ _, ?_, trivial, trivial, ?_, ?_,
           (fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩),
-          (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m)⟩
+          (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m),
+          ⟨wf.words.table, fun j r h => bounded_mono le (wf.words.atoms j r h), fun x ids h => by simp [Sym.general] at h,
+           wf.words.rotrs, fun w j i h => by simp [Sym.general] at h⟩⟩
   · intro r hr
     show bounded (first.nvars + 16) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     split
@@ -488,7 +490,8 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
     rw [if_neg (by omega)]
     exact A.entry r hr
   have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)
-  refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m)⟩
+  refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
+    ⟨fun x ids h => by simp [Sym.general] at h, fun w m => by simp [Sym.general] at m, fun w j i m => by simp [Sym.general] at m⟩⟩
   · intro r hr
     show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     by_cases hk : pl.keep.contains r = true

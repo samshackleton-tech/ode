@@ -352,6 +352,14 @@ def statement(spec_text, functions):
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
         out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts)
+        # The machine of the account in Lean has every instruction of the table. A processor has those of the
+        # kinds it has: so a function's instructions must be of kinds its contract says it needs (as
+        # ../kcheck/kspec.py `fits` has it: a processor with AVX-512 has AVX and SSE4.1; one with AVX, SSE4.1).
+        have = {what for what, _ in spec.contracts[symbol]["needs"]}
+        if "avx512" in have: have |= {"avx", "sse41"}
+        if "avx" in have: have.add("sse41")
+        extra = kdecode.features(obj, symbol) - have
+        if extra: raise SystemExit(f"statement: {symbol} holds instructions of a kind its contract does not say it needs: {', '.join(sorted(extra))}")
     out += definitions(spec_text)
     return [one_line(l) for l in out]
 

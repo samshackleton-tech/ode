@@ -13,6 +13,11 @@ the other:
 and fails where the Lean verifier takes more than five times kcheck's time. (Under 15 ms the two are not
 compared: a program's start is most of it.) The numbers are printed, so every run of the tests has them.
 
+The hash's one-block kernel is one of the fourteen functions of ../kcheck/b3hashr.o, which kcheck takes 16
+seconds to verify whole. Its own time for the kernel is measured with the kernel as the only function
+verified in a process (as check_binary.py does it for each): 7 ms on the machine this was written on,
+where the same function takes 20 ms as the thirteenth of a whole run. The smaller number is the one used.
+
 On November 18 the Lean verifier was five and six times slower on the two larger functions, and it was
 seen only when the times were measured for a report. This test is so that it is seen at once.
 
@@ -20,12 +25,26 @@ seen only when the times were measured for a report. This test is so that it is 
 import os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import built, lean_verify, statement
-PROGRAMS = os.path.join(HERE, "..", "kcheck", "programs")
+import built, lean_verify, statement, test_kernel
+KCHECK = os.path.join(HERE, "..", "kcheck")
+PROGRAMS = os.path.join(KCHECK, "programs")
 # (the folder of ../kcheck/programs, the object, the specification, the function)
 SHOWN = [("common", "odecommon.o", "common.spec", "ode_common"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32"),
          ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks"), ("adler32", "odeadler32.o", "adler32.spec", "ode_adler32_blocks4"),
          ("varint", "odevarint.o", "varint.spec", "ode_varint")]
+KERNEL = test_kernel.SYMBOL
+# kcheck's verifier on one function of the hash's file, as check_binary.py's `main` does it for each: the
+# arithmetic by the proofs the file carries, nothing searched for. Prints its time in milliseconds.
+ONE = '''import sys, time
+sys.path.insert(0, sys.argv[1])
+import check_binary, kdecode, klin, varith
+path, symbol = sys.argv[2], sys.argv[3]
+check_binary.take(check_binary.carried(kdecode.Elf(path).bytes_of(".ode.proof")), None)
+klin.Facts.PROOFS = varith.unpack(check_binary.ARITH[symbol]) if symbol in check_binary.ARITH else {}
+t = time.time()
+rows, what, _ = check_binary.check(path, symbol)
+print(len(rows), 1000 * (time.time() - t), what)
+'''
 SIZE = 100_000          # bytes of a proof
 TIMES = float(os.environ.get("ODE_LIMIT_TIMES", "5"))          # the Lean verifier's time over kcheck's (to see the test fail: ODE_LIMIT_TIMES=1)
 SMALL = 0.015           # seconds: under this a program's start is most of the time
@@ -36,10 +55,13 @@ class Limits(unittest.TestCase):
     def test_no_proof_is_large_and_no_verification_five_times_slower_than_kchecks(self):
         built.built("odeverify")
         lines = []
-        for folder, obj, spec, symbol in SHOWN:
-            obj, spec, proof = os.path.join(PROGRAMS, folder, obj), os.path.join(PROGRAMS, folder, spec), os.path.join(HERE, "proofs", symbol + ".proof")
+        for folder, obj, spec, symbol in SHOWN + [(None, "b3hashr.o", None, KERNEL)]:
+            proof = os.path.join(HERE, "proofs", symbol + ".proof")
+            if folder is None: obj, spec_text = os.path.join(KCHECK, obj), test_kernel.spec_text()
+            else:
+                obj = os.path.join(PROGRAMS, folder, obj)
+                with open(os.path.join(PROGRAMS, folder, spec)) as f: spec_text = f.read()
             size = os.path.getsize(proof)
-            with open(spec) as f: spec_text = f.read()
             with tempfile.TemporaryDirectory() as d:
                 path = os.path.join(d, "statement")
                 with open(path, "w") as f: f.write("\n".join(statement.statement(spec_text, [(obj, symbol)])) + "\n")
@@ -52,12 +74,19 @@ class Limits(unittest.TestCase):
                     lean = took if lean is None else min(lean, took)
             python = None
             for _ in range(5):
-                r = subprocess.run([sys.executable, os.path.join(PROGRAMS, "check_file.py"), obj, "--maintain"], capture_output=True, text=True)
-                m = re.search(r"^\s+" + re.escape(symbol) + r"\s+at\s.*?([0-9.]+) ms\s+meets its public contract", r.stdout, re.M)
-                self.assertTrue(m, (symbol, r.stdout[-300:]))
-                took = float(m.group(1)) / 1000
+                if folder is None:
+                    r = subprocess.run([sys.executable, "-c", ONE, KCHECK, obj, symbol], capture_output=True, text=True)
+                    said = r.stdout.split(None, 2)
+                    self.assertEqual((r.returncode, said[0], said[2]), (0, "76", "a one-block kernel\n"), (r.stdout[-300:], r.stderr[-300:]))
+                    took = float(said[1]) / 1000
+                else:
+                    r = subprocess.run([sys.executable, os.path.join(PROGRAMS, "check_file.py"), obj, "--maintain"], capture_output=True, text=True)
+                    m = re.search(r"^\s+" + re.escape(symbol) + r"\s+at\s.*?([0-9.]+) ms\s+meets its public contract", r.stdout, re.M)
+                    self.assertTrue(m, (symbol, r.stdout[-300:]))
+                    took = float(m.group(1)) / 1000
                 python = took if python is None else min(python, took)
-            lines.append(f"  {symbol:<20} the proof {size:>6} bytes; the Lean verifier {1000 * lean:6.1f} ms; kcheck's {1000 * python:5.1f} ms; {lean / python:4.1f} times")
+            name = symbol if len(symbol) <= 20 else "the one-block kernel"
+            lines.append(f"  {name:<20} the proof {size:>6} bytes; the Lean verifier {1000 * lean:6.1f} ms; kcheck's {1000 * python:5.1f} ms; {lean / python:4.1f} times")
             with self.subTest(symbol=symbol):
                 self.assertLessEqual(size, SIZE, f"{symbol}: the proof is {size} bytes")
                 self.assertTrue(lean <= SMALL or lean <= TIMES * python, f"{symbol}: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * python:.1f} ms")

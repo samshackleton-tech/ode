@@ -1,4 +1,6 @@
 import SoundCall
+import SoundSpecW
+import SoundVec
 import SoundList
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
@@ -8,7 +10,7 @@ open Arithmetic
 
 theorem Holds.rip {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : Nat) :
     Holds ctx s0 ρ s { st with rip := x } :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩
+  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩
 
 /-- The statements of an effect, one after another. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
@@ -48,8 +50,9 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
       injection this with h1 _
       subst h1
       exact ⟨Agree.refl _ _, Nat.le_refl _,
-        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote⟩,
-        ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote⟩⟩
+        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words⟩,
+        ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote,
+         wf.words.mono rfl rfl rfl (Nat.le_refl _)⟩⟩
     next => exact (refuse_ok h).elim
 
 /-! ## A jump on a flag -/
@@ -191,11 +194,13 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     split at h
     next => exact (refuse_ok h).elim
     next hcs =>
-      have hew : ctx.contract.ensuresW = [] := by
-        cases hx : ctx.contract.ensuresW.isEmpty with
-        | true => simpa using hx
-        | false => simp only [hx, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
-      simp only [hew, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      -- every `ensures` of a whole run of words: of this state's memory, which the return leaves as it is
+      obtain ⟨_, rW, enW, h⟩ := V.bind_ok h
+      have hensW : ∀ e ∈ ctx.contract.ensuresW,
+          e.holds ctx.contract ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+        intro e me
+        obtain ⟨items', r', hr⟩ := each_mem enW e me
+        exact symEnsureW_sound E hr H wf rfl
       -- every `ensures` first: of the state the return leaves, whose memory and rax are this state's
       obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
       have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
@@ -230,7 +235,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hrsp : st.reg RSP = s0.reg RSP := by omega
       have hstack := E.stack
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens, (fun e he => by rw [hew] at he; cases he)⟩
+      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens, hensW⟩
       · intro x hx1 hx2
         simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
         left; left; right; omega
@@ -533,8 +538,11 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   have habove := E.above
   unfold M64 at habove
   refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ => rfl),
-           (fun _ _ _ m => nomatch m)⟩,
-          ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m)⟩⟩
+           (fun _ _ _ m => nomatch m),
+           ⟨fun x ids h => by simp [entrySym] at h, fun _ _ _ _ _ _ _ _ => rfl, fun w j i m => by simp [entrySym] at m⟩⟩,
+          ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m),
+           ⟨fun i n h => by simp [entrySym] at h, fun j r h => by simp [entrySym] at h, fun x ids h => by simp [entrySym] at h,
+            fun j a n h => by simp [entrySym] at h, fun w j i h => by simp [entrySym] at h⟩⟩⟩
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m
