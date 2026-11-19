@@ -7,7 +7,7 @@
     file NAME LENGTH                    and then LENGTH bytes: the specification; the places of loops; the
                                         contracts of the functions inside; lemmas; the arithmetic's proofs
 
-Nothing of it is trusted: each part is something a verifier checks or only uses to find its way."""
+Nothing of it is relied on: each part is something a verifier checks or only uses to find its way."""
 import kterms
 
 

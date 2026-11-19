@@ -67,7 +67,7 @@ with a tool, not by eye. What a file carries is printed with every control chara
 a maker's comment cannot move your terminal's cursor.
 
 You do not read the proof, the lemmas, the contracts of the functions inside, or the source. They are in the
-file; the verifier uses them and trusts none of them. A wrong one makes the verification fail.
+file; the verifier uses them and relies on none of them. A wrong one makes the verification fail.
 
 ## What you rely on
 

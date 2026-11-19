@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of kguess.py (a prover: trusted for nothing): the numbers that decrease are found again from the
+"""Tests of kguess.py (a prover: relied on for nothing): the numbers that decrease are found again from the
 specifications, and what it prints is shown by the verifier."""
 import os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))

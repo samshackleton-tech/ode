@@ -14,7 +14,7 @@ The proof may be in the file: klink.py puts it in a section that is not loaded (
 carries that section into what it makes. It holds the contracts of the functions inside and the kernels'
 places, and where each function is in the code, for a file whose names have been stripped. If the file has
 none (a `strip` takes it out with the names), `--proof` gives it (klink.py's OUT.proof), and without that
-the files of proofs/ are read. The proof is not trusted: a wrong one makes the check fail.
+the files of proofs/ are read. The proof is relied on for nothing: a wrong one makes the check fail.
 
 The specification is what the reader relies on, so it is his to read. With `--spec` it is his own file, and
 the check says whether it is the one the maker had. Without it, the specification the file carries is used

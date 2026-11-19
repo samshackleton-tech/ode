@@ -12,7 +12,7 @@ The specification is what the reader relies on. Given SPEC, it is his own file, 
 it is the one the maker had. Without SPEC the specification the file carries is used, and the check says so:
 what is then shown is that the code meets THAT text; `--show-spec` prints it for him to read. The proof (the places of the loops) is
 taken from the file's section `.ode.proof`, where kpack.py puts it and a linker carries it, or from PROOF;
-it is not trusted: a wrong one makes the check fail. In a file whose names have been stripped the code is
+it is relied on for nothing: a wrong one makes the check fail. In a file whose names have been stripped the code is
 looked for by its bytes, and the proof says where each function begins in it.
 
 `--json OUT.json` writes what was checked, for tools that carry it on (a benchmark's record of what it ran):
@@ -68,7 +68,7 @@ def main():
         print(f"{os.path.basename(path)}: NOT shown: the proof's part cannot be read with the specification: {err}"); return 1
     wanted = [name for name in spec.contracts if name in proof["at"]]
     if not wanted: print("the specification has a contract for no function the proof speaks of"); return 1
-    # Which functions are verified is the proof's to say (`at`), and the proof is not trusted: a public contract
+    # Which functions are verified is the proof's to say (`at`), and the proof is relied on for nothing: a public contract
     # of the specification that the proof leaves out is said, and if the file has a function of that name the
     # verification is "NOT shown" (a reader would take a file's function with a contract in front of him as verified).
     left_out = sorted(name for name in public if name not in proof["at"])

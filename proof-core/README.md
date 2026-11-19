@@ -1,7 +1,8 @@
 # proof-core: a small verifier with a machine-checked soundness theorem
 
-[DESIGN.md](../DESIGN.md) section 7 asks for a small core that an auditor can trust for stated reasons.
-This folder is the first version of it. It contains:
+[DESIGN.md](../DESIGN.md) section 7 asks that the verifier's verdict (its answer: accept or reject) rely on
+a small core only, and that an auditor be given reasons he can check for relying on that core. This folder
+is the first version of such a core. It contains:
 
 - a **verifier**, written in Lean 4. It takes a compiled function, a contract and a proof, and either
   accepts or rejects;
@@ -188,14 +189,17 @@ The kernel's loop runs seven times, counted down in a one-byte register. The ver
 counter as a known number, so it executes the seven iterations one after the other. No loop invariant is
 needed.
 
-## What you have to trust
+## What a verdict relies on, and for what
 
-| | |
-|---|---|
-| Proved, so you need not read it | The verifier's rules: Core.lean (1,304 lines of code) and the arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. |
-| What the theorem is *about*. You need to read it, or trust it for some other reason | The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 731 lines of code. |
-| That the Lean proofs are valid | Lean's kernel, or any independent checker for Lean proofs. |
-| Tested, not proved | See the next list. |
+Suppose the verifier accepts a function. The table lists everything that must be right for the function
+really to meet its contract on a real processor, and says what each thing is relied on for.
+
+| A verdict relies on | for | How you can check it |
+|---|---|---|
+| The verifier's rules: Core.lean (1,304 lines of code) and the arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. | accepting only what the formal model implies | It is proved: the soundness theorem above, which Lean checks. You need not read these files. |
+| The formal model: Table.lean (reads the instruction table `../core/x86.tab`), Machine.lean (what each instruction does to registers, flags, memory and the low 128 bits of vector registers; what call and return do), and Contract.lean (what a contract and a specification definition mean; the definition of `Meets`). 731 lines of code. | saying what the processor does and what a contract means. This is what the theorem is *about* | Read it, or have another reason to believe it. Parts of it are tested against second implementations: see the first list below. |
+| Lean's kernel | the Lean proofs being valid | An independent checker of Lean proofs can check them again. We have not yet run one on these proofs. |
+| The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
 Tested but not proved:
 
@@ -211,7 +215,7 @@ Tested but not proved:
 - **The arithmetic rule against a second implementation**, `../kcheck/varith.py`, on the 7,649 arithmetic
   proofs in the shipped files (`test_arith.py`).
 
-Not covered by the theorem, and trusted today:
+Outside the theorem. A verdict relies on each of these today, for what its entry says:
 
 - **Decoding bytes into instructions.** The theorem is about functions given as a list of instruction
   forms from the table. Turning the object file's bytes into that list is done by `statement.py` using
@@ -221,8 +225,8 @@ Not covered by the theorem, and trusted today:
   and writes the contracts and definitions in the line format that the Lean program reads. A sequence
   given by a first element and a step is written out as the recursive definition it stands for.
 - **Reader.lean and the compiled program.** Reader.lean parses the input and proof files. The theorem is
-  about the Lean function `verdictAll`. That the compiled executable computes that function is trusted to
-  Lean's compiler and runtime library (which now includes Lean's hash map, used to look terms up).
+  about the Lean function `verdictAll`. For the compiled executable computing that function, a verdict
+  relies on Lean's compiler and runtime library (which now includes Lean's hash map, used to look terms up).
 - **Processor features.** The machine model has every instruction in the table. A real processor has only
   the instruction sets it supports. So `statement.py` looks at the kind of each instruction: AVX-512, AVX
   or SSE4.1, recognized by the encoding prefix as in `kcheck`. It refuses a function that contains a kind
@@ -352,7 +356,8 @@ specification. (The code and file names call this file the "statement".)
 
 ## The prover
 
-`prove.py` finds proofs. It is not trusted: whatever it produces is checked by the verifier.
+`prove.py` finds proofs. A verdict does not rely on it: whatever it produces is checked by the verifier, so
+a wrong or hostile prover can only produce something the verifier rejects, or nothing.
 
 It works as a dialogue. It gives the verifier the proof so far; the verifier replies with the next thing
 it needs (for example, "prove that these inequalities imply that one"); the prover finds it and appends
@@ -378,7 +383,7 @@ Time to find each proof, on a 64-thread Zen 4 machine:
 | `ode_varint` | 186 | 2.2 s | 6.2 s |
 
 Both ways find byte-for-byte the same proofs (`ODE_PROVE_FROM_START=1` selects the old way). The remaining
-time is the prover's own search for arithmetic proofs. `odeprove` is not trusted either: `prove.py`
+time is the prover's own search for arithmetic proofs. A verdict does not rely on `odeprove` either: `prove.py`
 returns a proof only after `odeverify` has accepted it, and `test_session.py` checks that the two give
 identical answers at every prefix of three stored proofs.
 
@@ -456,9 +461,9 @@ lines. The proofs of the theorems: 7,577 lines.
 | the formal model | `Table.lean`, `Machine.lean`, `Contract.lean` |
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (loop invariants), `SoundCall.lean` (calls), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`) |
-| writes the input file (trusted) | `statement.py` |
+| writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/` and `examples/low/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract` (the BLAKE3 kernel's contract as it is proved here) |
-| the prover (not trusted) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
+| the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
 | tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

@@ -231,7 +231,7 @@ class Decoder(unittest.TestCase):
 
 
 class Proof(unittest.TestCase):
-    """What an untrusted proof's `layout` can be made to say (hole 5), and the file that was shown by it."""
+    """What a proof's `layout` can be made to say (hole 5), and the file that was shown by it."""
 
     def read(self, inner):
         with open(os.path.join(HERE, "blake3.spec")) as f: text = f.read()

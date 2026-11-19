@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """kplace: a prover that guesses the place of a loop: what a function's registers hold, in the specification's
-terms, each time the code comes round. Trusted for nothing: what it prints is a proof like one written by hand,
+terms, each time the code comes round. Relied on for nothing: what it prints is a proof like one written by hand,
 and the verifier (kbyte.py) shows the function by it or does not.
 
     python3 kplace.py SPEC SYMBOL OBJECT [LEMMAS]        prints the proof it found (a `.proof` file's text)

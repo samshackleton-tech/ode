@@ -4,7 +4,7 @@
 A definition that uses itself could go on for ever on some input; a contract written with it would then say
 nothing of that input, and reading the contract would not show it. A lemma may name a number that
 `decreases` (kbyte.py's prove_lemmas shows it). That alone is not enough to say "it comes to an end", for a
-lemma speaks only where its `requires` holds, and a lemma comes with the proof, which is not trusted: one
+lemma speaks only where its `requires` holds, and a lemma comes with the proof, which is relied on for nothing: one
 that requires the impossible (`requires at < at`) is shown, of nothing. Until November 16, 2026 the line a
 verification printed counted such a lemma. So, for a contract:
 

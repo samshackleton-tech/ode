@@ -5,7 +5,7 @@
 
 The file's header, its sections' headers, its table of names and their strings are read by a linker by rules
 of its own, and by this folder's reader of files (kdecode.Elf; kdecode.linkable answers for an object's shape).
-The single-bit audits of the functions change the code, and the proof is trusted for nothing; this changes
+The single-bit audits of the functions change the code, and the proof is relied on for nothing; this changes
 each bit of the rest in turn and gives the changed file to the driver as a reader would (check_binary.py for
 the hash, programs/check_file.py for the others).
 

@@ -9,7 +9,7 @@ A proof is the rows it starts from, then steps. Each row it starts from must be 
 
 The last row must have no name left and a number below zero: the rows given cannot all hold.
 
-Nothing here searches. Which rows, which steps: a prover found them (kprove.py), and is trusted for nothing:
+Nothing here searches. Which rows, which steps: a prover found them (kprove.py), and is relied on for nothing:
 a proof that does not add up shows nothing. A table of proofs is what a binary carries for a function
 (`FUNCTION.arith.z` in its proof section): {the last row given: the proofs for questions that end in it}.
 klin.py asks it in place of its own elimination when `klin.Facts.PROOFS` is set."""

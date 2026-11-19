@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests of kends.py: "its definitions come to an end on everything the contract allows" is said only where
-it is shown from the contract inward. A lemma comes with the proof, which is not trusted: one that requires
+it is shown from the contract inward. A lemma comes with the proof, which is relied on for nothing: one that requires
 the impossible is shown (of nothing) and must not make the line say what is not so."""
 import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))

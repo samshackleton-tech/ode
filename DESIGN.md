@@ -68,8 +68,27 @@ does a good maker use this, and how does an evil one?
 
 ## 2. What Bob relies on
 
-We say *rely*, after Mark Miller: reliance names a property of a mechanism that a conclusion rests on, and
-points at what breaks if the property fails. Bob's conclusion "this binary does what I require" rests on
+We say *rely*, after Mark S. Miller: reliance names a property of a mechanism that a conclusion rests on, and
+points at what breaks if the property fails. We do not use the word "trust". In ordinary life it names
+something good; in security writing a "trusted" part is one that can hurt you; and it draws attention to
+the nature of the part and away from the question that matters: relied on *for what*? Two sentences take
+its place, and they state one fact from two sides.
+
+- **"A relies on X for P"** is for what the design is built on by intention: P is something X is there
+  to deliver, and the reader is asked to examine X or to have a reason for believing P. The table below is
+  of this kind. It is never written without the "for what".
+- **"A is vulnerable to X"** is for what is left open: X is in a position to do harm and nothing checks
+  it, as with a step that no proof covers yet, or a party who may be an attacker. It is written with the
+  harm, and with what would close it where that is known.
+
+"Relies on" used for an exposure nobody chose would make a risk look like a decision. "Vulnerable to" used
+for the small core that Bob is asked to examine would hide the open exposures among alarms. A negative
+takes the first form: "the verdict does not rely on the prover" claims exactly what the verifier's
+checking gives, while "Bob is not vulnerable to the prover" would claim more than is so, since a prover
+can still withhold a proof. Where other writing says "trusted computing base", this page says what Bob
+relies on; where it says "untrusted", this page says what the verdict does not rely on.
+
+The list of what Bob relies on follows. Bob's conclusion "this binary does what I require" rests on
 the entries below and on nothing else. The compiler, the assembler, the linker, the prover, the coder and
 the maker are absent from the list: whatever they produce is accepted only where the verifier accepts it.
 
@@ -233,9 +252,9 @@ chosen registers, the aligned scratch) and proof (the bounds, the invariant, the
 
 Two rules bound this:
 
-- **An annotation creates an obligation; facts come only from what the verifier has shown.** Everything
-  in a proof (inner contracts, layouts, lemmas, kinds, places) is untrusted. The verifier may use it only
-  after showing it, and describing an impossible thing gives the verifier no value of that thing.
+- **An annotation creates an obligation; facts come only from what the verifier has shown.** Nothing
+  in a proof (inner contracts, layouts, lemmas, kinds, places) is relied on as given. The verifier may use
+  it only after showing it, and describing an impossible thing gives the verifier no value of that thing.
 - **The final verdict is about the binary.** A proof about source says nothing of a compiler that emitted
   something else. A verifier of Ode *source* is wanted as the coder's tool, for exact messages early; the
   verifier of the binary stays Bob's.
@@ -250,7 +269,7 @@ meets the contract's `requires` satisfies the contract, under the stated account
 result, the memory read and written, the registers preserved, termination, the stack, the processor
 features needed, and the trace.
 
-**The proof is untrusted and carried in the binary.** The specification the maker used travels there too,
+**The proof is relied on for nothing, and is carried in the binary.** The specification the maker used travels there too,
 as a convenience: Bob verifies against his own copy, or reads the carried one first.
 
 **The verifier's own contract.**

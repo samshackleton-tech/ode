@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kernels: the hash's five kernels made from their Ode sources. A maker's step: trusted for nothing, loaded
+"""kernels: the hash's five kernels made from their Ode sources. A maker's step: relied on for nothing, loaded
 by no verification.
 
     python3 kernels.py FOLDER [--proofs]

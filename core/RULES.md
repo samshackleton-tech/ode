@@ -211,7 +211,7 @@ invariant because `returned` checks none for it.
    definition asks a question left open by the current facts, the path splits into two copies (`Fork`):
    `L == 0` vs `L != 0`, `L >= 0` vs `-L - 1 >= 0`, `(word_name, k)` true vs false, or defined vs failed.
    A branch assumption inconsistent with the path's facts is dropped because no input takes that branch.
-   Everywhere else, contradictions come from untrusted obligations and refuse verification.
+   Everywhere else, contradictions come from what a proof supplied (obligations, not facts) and refuse verification.
 3. Without `--search`, `varith.py` checks a carried witness: non-negative integer multipliers on known
    rows `>= 0` (dividing and rounding the constant down when coefficients share a factor) summing to
    `-1 >= 0`. No search runs during verification.

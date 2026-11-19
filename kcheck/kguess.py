@@ -10,7 +10,7 @@ that decreases, by trying the few such numbers there are and asking the verifier
                                              (a field or a number not below one it was given; a list no
                                              shorter than one it was given; place k of a sequence k longer)
 
-Trusted for nothing: what it prints is a lemma like one written by hand, and the verifier shows it or not
+Relied on for nothing: what it prints is a lemma like one written by hand, and the verifier shows it or not
 (kbyte.py's prove_lemmas). It is here to show where guessing belongs, and how little of it this takes.
 
 What it tries, for a definition `f(p1, p2, ...)` in a ring of definitions that use each other:

@@ -10,7 +10,7 @@ It prints, in this order:
   1. what you are asked to rely on: the public contract(s), from SPEC if you give one (your own copy), else
      from the specification the file carries, with that text's BLAKE3 hash. Read it: it is what is shown.
   2. the verification itself (check_binary.py for the hash, programs/check_file.py for the others), which
-     reads the file's bytes as a loader maps them and takes nothing else from the file on trust;
+     reads the file's bytes as a loader maps them and accepts nothing else from the file unchecked;
   3. what ran: every file of this folder (and of ../core) that was loaded to reach the verdict, with its lines of code
      (and, with --digests, its BLAKE3 hash). That list is what you relied on, beside Python itself. The prover's files are not on it.
 
@@ -128,7 +128,7 @@ def main():
     names = " ".join([f for f, _, _ in ran + more] + ([os.path.relpath(step.TABLE, HERE)] if step is not None else []))
     if "--digests" in sys.argv: print("   (the digits: BLAKE3, worked out by ode.py from blake3.spec of this folder; `b3sum` gives the same)")
     else: print(f"   to name them (a program cannot vouch for itself; --digests prints BLAKE3's digits here all the same):\n      b3sum {names}")
-    if absent: print(f"   not loaded (a prover's or a maker's, trusted for nothing): {', '.join(absent)}")
+    if absent: print(f"   not loaded (a prover's or a maker's, relied on for nothing): {', '.join(absent)}")
     return code
 
 

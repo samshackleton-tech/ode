@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """kpack: a program of this folder as one file to ship: its functions' bytes, their names, and the proof in a
-section that is not loaded. Trusted for nothing: check_file.py reads what it wrote.
+section that is not loaded. Relied on for nothing: check_file.py reads what it wrote.
 
     python3 programs/kpack.py PROGRAM FOLDER OUT.o [OUT.proof]
 

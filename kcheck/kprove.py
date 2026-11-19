@@ -1,4 +1,4 @@
-"""kprove: the prover's side of the arithmetic. Trusted for nothing: varith.py verifies what it writes.
+"""kprove: the prover's side of the arithmetic. Relied on for nothing: varith.py verifies what it writes.
 
 `search` and `bounds` answer "can these whole numbers not all be >= 0?" by elimination and by the bounds of
 the names: the search itself. klin.py calls them only where it is given no table of proofs.

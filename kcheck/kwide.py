@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kwide: a prover of a wide kernel's loop, for kfn.py's verifier. Nothing here is trusted, and no verification
+"""kwide: a prover of a wide kernel's loop, for kfn.py's verifier. Nothing here is relied on, and no verification
 loads this file.
 
     python3 kwide.py SYMBOL OBJECT --find PROOF.json [--smallest] [--from START]

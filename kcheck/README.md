@@ -16,7 +16,7 @@ verification of a shipped file had loaded them since November 17.
 **To verify a shipped binary yourself: `VERIFY.md`** (one page) and `python3 verify.py FILE`, which prints
 the contract you are asked to rely on, the verification, and the files that ran to reach it.
 
-**Two words, kept apart** (since November 15): a **prover** finds or writes out a proof and is trusted for
+**Two words, kept apart** (since November 15): a **prover** finds or writes out a proof and is relied on for
 nothing; a **verifier** decides whether the code is shown to meet its contract, and is what a reader relies
 on. The programs of this folder (`kfn.py`, `kbyte.py` and the others) are each both at once today: they
 search (which facts to add up, which way to open a definition) and they decide. They are called verifiers
@@ -67,7 +67,7 @@ this way, not all programs. The languages are our own.
 - **The code is written to be proved** (in Ode), as code is written to be fast: in the specification's
   shape where it can be (`hash.ode`: `subtree` splits its bytes by the specification's rule and calls itself
   on each part), and with a place for each loop where it cannot (`programs/`).
-- **The proof is whatever the verifier needs beside the binary**, and is not trusted: the contracts of the
+- **The proof is whatever the verifier needs beside the binary**, and is relied on for nothing: the contracts of the
   functions inside, and for a loop a place (what holds each time round, and what decreases). For the hash's
   own nine functions there is none to write. It travels in the binary, in a section that is not loaded.
 - **The verifier does not search.** It runs each function's machine code on symbols along every path; a call
@@ -381,9 +381,9 @@ a whole tree of 32 go to the 16-lane kernel).
 
 Until here what was checked was the objects an assembler makes, one a source file, each with places left
 for a linker to fill in: how far away the function an instruction calls is, or the constant it reads. The
-verifier took those from the relocation's name, and a linker was trusted to write them so. Now:
+verifier took those from the relocation's name, and relied on a linker to write them so. Now:
 
-- **`klink.py`** (134 lines, trusted for nothing) takes from the assembler's objects the bytes of the
+- **`klink.py`** (134 lines, relied on for nothing) takes from the assembler's objects the bytes of the
   thirteen bodies `hashr` runs (the nine functions of `hash.ode`, the two one-block kernels, K32 with its
   second entry, P16), from each one's first byte to its `ret`, and the read-only data of the three objects
   that have any; lays them out in one section, each on the boundary it had; and writes the distances itself.
@@ -424,7 +424,7 @@ out of the shared object and out of the Rust executable, stripped or not.)
 **The proof is in the file.** `klink.py` writes a section the loader does not map, `.ode.proof`: the inner
 contracts, the wide kernels' places, where each function begins, and the BLAKE3 hash of the specification the
 maker had. A linker carries the section into what it makes. `check_binary.py` takes the proof from there
-(or from `--proof FILE`, or from `proofs/`), and trusts none of it: a wrong inner contract or place makes
+(or from `--proof FILE`, or from `proofs/`), and relies on none of it: a wrong inner contract or place makes
 the check fail. **The file carries the specification too** (since November 15, at Sam's word), so that a
 reader with the file alone has everything: `--show-spec` prints it. It is the one thing in the file he must
 read, because it is what is shown: with no `--spec` the check is against the text the file carries and
@@ -561,11 +561,11 @@ place for each loop:
 From each place the code is run on symbols to the next place or to the return; what the next place says must
 hold there; the numbers after `decreases` must have got less, the first, or the first no greater and the
 second less, and so on. There is no induction in the verifier and no solver: a fact about the whole input is
-carried from place to place by the specification's own equations, opened one step. The proof is not
-trusted: a wrong place is refused where it does not hold. Finding the places is the prover's work: here
+carried from place to place by the specification's own equations, opened one step. The proof is relied on
+for nothing: a wrong place is refused where it does not hold. Finding the places is the prover's work: here
 the model that wrote the code wrote them, from the verifier's refusals. Nothing searches for them.
 
-**Shipped as files, as the hash is.** `programs/kpack.py` (trusted for nothing) makes one file of a
+**Shipped as files, as the hash is.** `programs/kpack.py` (relied on for nothing) makes one file of a
 program: its functions' bytes, their names, and the proof in a section that is not loaded
 (`programs/NAME/odeNAME.o`). `python3 programs/check_file.py FILE SPEC` reads a file as a loader maps it,
 finds each function the specification has a contract for (by its name, or in a stripped file by the code's
@@ -777,7 +777,7 @@ called, once, and not again at each use. What it taught:
 numbers cannot all be >= 0") was found by elimination inside the verifier: a search, most of which shows
 nothing (the `DESIGN.md` of that day had the counts). Now the search is the prover's:
 
-- `kprove.py` (the prover's, trusted for nothing) does the same elimination and remembers how each row was
+- `kprove.py` (the prover's, relied on for nothing) does the same elimination and remembers how each row was
   made; when it comes to a contradiction it writes out the rows it started from and the steps that led there.
 - `varith.py` (the verifier's, 90 lines with the reading of a table) takes such a proof and adds up: a step is
   "a times this row plus b times that one, divided through, rounded down"; the last row must be a number
@@ -950,7 +950,7 @@ beside the rest (`kbyte.py` and `kends.py`, 1,063 and 116 lines of code: it is n
 **Kind: shown, of something false** (in the line a verification prints about the specification; not in
 whether the code meets the contract). The line said "each is shown to come to an end" when every definition
 that uses itself had a lemma with a number that decreases, and the lemmas were shown. But a lemma speaks
-only where its `requires` holds, and a lemma comes with the proof, which is not trusted:
+only where its `requires` holds, and a lemma comes with the proof, which is relied on for nothing:
 
     lemma points(bytes: bytes, at: number, count: number): number {
         requires at < at
@@ -1100,7 +1100,7 @@ and with what it wrote, in place of `lz4.lemmas`, the decoder, both encoders and
 shown** (with no lemmas the decoder is refused). For UTF-8 and the common start it also finds what nobody
 had asked (`points`' count is not below the count before; `alike`'s place not below where it began).
 
-It is trusted for nothing: what it prints is a lemma like any other, and the verifier shows it or does
+It is relied on for nothing: what it prints is a lemma like any other, and the verifier shows it or does
 not. It is here for what it shows about the design: the guessing costs the reader nothing wherever it is
 put, so it is put outside what he relies on. The shapes are few and fitted to these programs; the next
 program will want one more, and adding it touches nothing a reader relies on. (The shipped files carry the
@@ -1237,7 +1237,7 @@ loops: the proof is a small text the prover finds, and the verifier reads it and
   identity with the specification's next state. That is Floyd's method. "Is this the last block?" is decided
   from two linear facts (`b >= 1`, `b <= n-1`) by adding them up.
 - **The prover** runs the loop twice, compares the second and third visits of the place, guesses, and weakens
-  the guess where the verifier refuses. Nothing it does is trusted.
+  the guess where the verifier refuses. Nothing it does is relied on.
 
 | kernel | proof found in | proof checked in | paths of the step |
 |---|---|---|---|
@@ -1308,7 +1308,7 @@ change, with the processor as judge (`kglue_flip.py`, `audit/kglue-flip-*.txt`):
 **What that audit found.** Run first, it had 24 changes of `merge` accepted that the processor told from the
 machine: all in `mov rdx, 64`, the block length given to the kernel. I had written the two kernels' contract
 by hand as "the low byte of the length"; the SSE4.1 kernel reads all of EDX. The contract was wrong, not the
-verifier's logic: a callee's contract taken on trust is a hole until it is itself checked against the callee's
+verifier's logic: a callee's contract accepted unchecked is a hole until it is itself checked against the callee's
 bytes (the Lean proofs have it right for that reason). Reading the accepted changes then showed a second
 thing: `mov rcx, 5` (the platform word that selects the AVX-512 kernel) could become any number, and the
 AVX-512 kernel be called on a machine without it, with the contract none the wiser. The contract now says the
@@ -1345,23 +1345,23 @@ specification. (The hash above does not use them: it has no stack.)
 | `check_binary.py` | 140 | what a reader runs on the binary, or on what a linker made of it |
 | `programs/` | | six other programs (Sigil a specification only): each its specification and public contract, its Ode source, the compiler's assembly, its proof, a harness for the processor; `check_programs.py`, `test_specs.py`, `bench.c`; `blake3-rust/` |
 | `kbyte.py`, `test_kbyte.py` | 1,356 + 804 | the verifier of those programs (bytes, numbers, places, calls by contract, lemmas, definitions that come to an end); its tests |
-| `varith.py`, `kprove.py`, `kproof.py`, `test_varith.py` | 90 + 185 + 29 + 174 | the arithmetic: the verifier's side (a proof added up; nothing searched for), the prover's side (the search and the writing of proofs; trusted for nothing), the reading of a proof's form, their tests |
+| `varith.py`, `kprove.py`, `kproof.py`, `test_varith.py` | 90 + 185 + 29 + 174 | the arithmetic: the verifier's side (a proof added up; nothing searched for), the prover's side (the search and the writing of proofs; relied on for nothing), the reading of a proof's form, their tests |
 | `varith2.c`, `test_varith2.py` | 310 + 129 | a second verifier of the arithmetic's proofs, in C, written apart; the two put against each other on changed proofs |
-| `kguess.py`, `test_kguess.py` | 406 + 78 | a prover that guesses lemmas (the number that decreases; what a definition ensures, of a few shapes); trusted for nothing |
-| `kplace.py`, `test_kplace.py` | 235 + 65 | a prover that guesses the place of a loop, led by the verifier's refusals; trusted for nothing |
+| `kguess.py`, `test_kguess.py` | 406 + 78 | a prover that guesses lemmas (the number that decreases; what a definition ensures, of a few shapes); relied on for nothing |
+| `kplace.py`, `test_kplace.py` | 235 + 65 | a prover that guesses the place of a loop, led by the verifier's refusals; relied on for nothing |
 | `lemma_audit.py`, `test_lemma_audit.py` | 464 + 82 | the audit of the part that shows lemmas: changed lemmas and changed specifications, judged on numbers |
 | `kends.py`, `test_kends.py` | 137 + 85 | whether the definitions a public contract speaks through come to an end on everything it allows (the lemmas' `requires` met from the contract inward) |
 | `refute.py`, `refute_run.c`, `test_refute.py` | 421 + 145 + 76 | "false, and here is the input": a contract worked out on numbers beside the code run on the processor (a prover's tool); its tests |
 | `kbyte_flip.py`, `kbyte_nop.py` | 117 + 37 | their single-bit audit and every instruction left out, the processor judging |
-| `programs/kpack.py`, `programs/check_file.py`, `programs/test_files.py` | 55 + 78 + 82 | a program as one file with its proof (untrusted); what a reader runs on it, or on what a linker made of it (`--json`: what was checked, for a benchmark's record); tests |
-| `klink.py`, `klink_flip.py`, `test_kbinary.py` | 134 + 72 + 182 | makes the binary of the assembler's objects (untrusted); every single-bit change of what a linker would have written; tests of the reading of a linked file |
+| `programs/kpack.py`, `programs/check_file.py`, `programs/test_files.py` | 55 + 78 + 82 | a program as one file with its proof (relied on for nothing); what a reader runs on it, or on what a linker made of it (`--json`: what was checked, for a benchmark's record); tests |
+| `klink.py`, `klink_flip.py`, `test_kbinary.py` | 134 + 72 + 182 | makes the binary of the assembler's objects (relied on for nothing); every single-bit change of what a linker would have written; tests of the reading of a linked file |
 | `check_all.py` | 120 | every function from an assembler's objects, and that the hash's functions end |
 | `ode.py`, `kspec.py`, `klin.py` | 754 + 565 + 249 | the specification's reader; its algebra on symbols; numbers that depend on counts and the facts about them (no search: that is `kprove.py`'s) |
 | `kdecode.py` | 581 | reads the ELF file (an object's sections, names and relocations; a linked file as a loader maps it) and decodes the instruction forms the code uses, and no others; no disassembler |
 | `kfn.py`, `test_kfn.py` | 1,360 + 131 | the verifier of functions (since November 17 of the kernels too: a place, by induction); its tests |
 | `kfn_flip.py`, `khash_native.c` | 133 + 176 | its single-bit audit; the whole hash on a processor against BLAKE3 in C |
 | `khash_bench.c`, `earlier/*.S` | 37 | the speed of `hashr`, of the library, and of the earlier `hashf` (its assembly), in one harness |
-| `kwide.py`, `test_kloop.py` | 126 + 131 | the prover of a wide kernel's place (trusted for nothing; the audits' adversary); the wide kernels' tests, through `kfn.py` |
+| `kwide.py`, `test_kloop.py` | 126 + 131 | the prover of a wide kernel's place (relied on for nothing; the audits' adversary); the wide kernels' tests, through `kfn.py` |
 | `kone_native.c`, `test_kone.py` | 86 + 122 | the one-block kernels on the processor; their tests, through `kfn.py` |
 | `kernels.py`, `../wide/*.ode`, `../wide/test_sources.py` | 55 + 1,270 + 104 | the five kernels made from their Ode sources (a maker's step); the sources; that each is the library's kernel byte for byte |
 | `kterms.py` | 79 | 32-bit terms compared by identity; the reading of an instruction's text; the registers' names |
@@ -1468,13 +1468,13 @@ and in the same run the lemmas' audit and the prover's (see the end of "Programs
 Before these fixes the first audit (cross-checking, item 3) had found two more: `vzeroupper` read as a no-op and
 an 8-bit `or` read as 32 bits.
 
-## What it rests on (what a reader must trust or check)
+## What it rests on (what a reader relies on or checks)
 
 - The specification and the public contract (`blake3.spec`, 185 lines; for another program, its own
   `.spec`), with what they mean (`LANGUAGE.md`), and the programs that read them and the
   bytes: for the hash `ode.py`, `kspec.py`, `klin.py`, `kdecode.py`, `kterms.py`, `kfn.py` (and the
   drivers; since November 17, when the kernels' own verifiers went: `verify.py` lists them, 3,072 lines of code); for the programs of `programs/`, `kbyte.py` in place of the last four: 910 more;
-  `kglue.py`, 569 (their provers, about 150 of those, need no trust). And Python.
+  `kglue.py`, 569 (their provers, about 150 of those, are relied on for nothing). And Python.
 - No assembler and no linker, when the file checked is the file run (`check_binary.py`). A loader that
   maps the file as its program headers say, and nothing else in the process writing over the code.
 - That the things `hashr` is given the addresses of overlap neither one another nor the stack (the
@@ -1500,25 +1500,25 @@ an 8-bit `or` read as 32 bits.
 | K32 | the round, the round loop, the counters and the loads proved in 3 hours; an estimated 15 hours more | 0.6 s |
 | P32 | not attempted | 0.6 s; written for it: one line in `KERNELS` |
 | `output16` | not attempted | 0.03 s; a few minutes' additions (above) |
-| what is trusted | Lean's kernel, the model (cross-checked on processors), `bv_decide`'s axioms, the lifter (`llvm-objdump`) | these two programs |
+| what the result relies on | Lean's kernel, the model (cross-checked on processors), `bv_decide`'s axioms, the lifter (`llvm-objdump`) | these two programs |
 | usable by a caller's Lean proof | yes | no: a caller's theorem would name the kernel's contract as a hypothesis this verifier discharges |
 
 For the whole hash the two are not of the same code: Lean checked the earlier code (`levels/levels.ode`:
 `ladd`, `lroot`, `chunk_node`, `hashl`, and the fast path `wide`, `group`, `groupf`, `finish`, `hashw`,
 `hashf`), each function from a proof with invariants and lemmas written by hand, and with the 32-lane kernel
-taken on trust (a stand-in). A whole run of those chains on the workhorse, 12 at a time, took 3,120 s
+accepted unchecked (a stand-in). A whole run of those chains on the workhorse, 12 at a time, took 3,120 s
 (`hashw` alone 1,360 s, `hashl` 690 s, `groupf` 630 s; pinned run `wide-model-check4`, November 15: every
 chain checked but one, a listing compared across two versions of `llvm-objdump`, which is not a proof).
 Written by hand for that code, beside its 924 lines of source with their invariants: fourteen files of
 lemmas (`lang/Lemmas_*.lean`, 2,516 lines), the contracts in Lean (`lang/Spec_*.lean`), and the tree's part
 (`alg/`). Here `hash.ode` is 332 lines with no invariant and no lemma; its eight inner contracts are 56
-lines of `proofs/inner.spec` (and two layouts and three kinds); nothing is taken on trust of a callee; and
+lines of `proofs/inner.spec` (and two layouts and three kinds); nothing about a callee is accepted unchecked; and
 `check_all.py` takes 19 s on a laptop.
 
 Also tried the same day: SAW 1.6 on P16 with a Cryptol specification stops at the kernel's first AVX-512
 instruction ("Could not decode instruction 62d2").
 
-## Ways to make it trusted (undecided)
+## Ways to give a reader reasons to rely on it (undecided)
 
 1. Write it in Lean and prove it sound once against `one/Machine.lean`; each kernel is then a theorem by
    evaluation. The cost is that one proof.

@@ -442,14 +442,14 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
 in use and `ρ` what they are: from every state of the machine at that place of which the place says what
 it says, whose number is less than the number of the place's general state on this path, the machine runs
 to the function's return and leaves what the contract promises. -/
-def Trusted (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
+def Relied (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
   ∀ e ∈ seen, (∀ nr ∈ e.place.names, nr.2 < 16) ∧ e.first.nvars ≤ n ∧ bounded n e.d ∧
     ∀ ρ' st', AtPlace ctx e.place s0 e.first ρ ρ' st' → st'.rip = p.base + e.place.pc →
       (∃ m : Int, Value ctx.defs (placeVals ctx e.place s0 st') e.place.decreases (.int m) ∧ m + 1 ≤ ev ρ e.d) →
       Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st'
 
-theorem Trusted.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} {seen : List Seen} {n n' : Nat} {ρ ρ' : Nat → Int}
-    (T : Trusted world ctx p s0 seen n ρ) (le : n ≤ n') (a : Agree n ρ ρ') : Trusted world ctx p s0 seen n' ρ' := by
+theorem Relied.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} {seen : List Seen} {n n' : Nat} {ρ ρ' : Nat → Int}
+    (T : Relied world ctx p s0 seen n ρ) (le : n ≤ n') (a : Agree n ρ ρ') : Relied world ctx p s0 seen n' ρ' := by
   intro e m
   obtain ⟨hn, hf, hd, run⟩ := T e m
   refine ⟨hn, Nat.le_trans hf le, bounded_mono le hd, ?_⟩
@@ -464,7 +464,7 @@ place's number, which every way round to it makes less and which is never below 
 theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx) :
     ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State},
     explore ctx fuel seen s pc items = .ok r → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
-    Trusted world ctx p s0 seen s.nvars ρ →
+    Relied world ctx p s0 seen s.nvars ρ →
     Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) st
   | 0, seen, s, pc, items, r, ρ, st, h, H, wf, hrip, T => by
     simp only [explore] at h
@@ -499,7 +499,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
           simp only [hs] at hbody
           obtain ⟨⟨g, d, first⟩, r2, e2, hgo⟩ := V.bind_ok hbody
           obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
-          have T1 : Trusted world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
+          have T1 : Relied world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
           have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
               Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
               Runs world (ctx.contract.perm s0) p (ctx.contract.post ctx.defs s0) stx := by

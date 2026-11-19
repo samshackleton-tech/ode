@@ -113,7 +113,7 @@ class Binary(unittest.TestCase):
                                                   "proofs/blake3.lemmas", "proofs/inner.spec", "proofs/k32.json", "proofs/p16.json", "proofs/p32.json", "specification"])
         self.assertEqual(proof["files"]["specification"], spec, "the specification the file carries is the one here")
         try:
-            # the proof is not trusted: one of its contracts changed, and the function it is of is refused
+            # the proof is relied on for nothing: one of its contracts changed, and the function it is of is refused
             self.assertTrue(check_binary.take(proof, os.path.join(HERE, "blake3.spec")))
             self.assertEqual(verdict(shipped, "b3l_chunk_node"), "accepted")
             inner = proof["files"]["proofs/inner.spec"]
@@ -129,7 +129,7 @@ class Binary(unittest.TestCase):
             import kspec, kfn, ode
             kspec.SPEC = ode.load(); kfn.CONTRACTS.clear(); check_binary.PLACES.clear()
 
-    def test_a_kind_the_proof_gives_a_definition_is_not_taken_on_trust(self):
+    def test_a_kind_the_proof_gives_a_definition_is_not_accepted_unchecked(self):
         """The proof's part says of three definitions what kind of thing each is (`kind subtree: cv`), for the
         places where a definition is named and not gone into. Specifications in which that is not so (a tree's
         value of nine words, or seven; a padded block of 63 bytes; a node whose length may be 65): the function

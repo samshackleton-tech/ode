@@ -10,7 +10,7 @@ first byte to its `ret`, and the read-only data of the objects that have any; la
 written. OUT.o is an ELF object with one section of code and constants, the functions' names, and no
 relocations: a linker has only to place it, on a 64-byte boundary.
 
-Nothing here is trusted. check_binary.py reads OUT.o, or whatever a linker makes of it, from its bytes."""
+Nothing here is relied on. check_binary.py reads OUT.o, or whatever a linker makes of it, from its bytes."""
 import hashlib, os, struct, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -100,7 +100,7 @@ def proof(image, where, more=()):
 def arithmetic(path, top="b3l_hashr"):
     """The prover's part of making the file: each function of `path` is verified with the search, and the proofs
     of the arithmetic it needed are kept (kprove.py), to be carried in the file: [(SYMBOL.arith.z, bytes)].
-    With them check_binary.py searches for nothing. Trusted for nothing: a table that is wrong shows nothing."""
+    With them check_binary.py searches for nothing. Relied on for nothing: a table that is wrong shows nothing."""
     import check_binary, kdecode, kprove, varith
     e = kdecode.Elf(path)
     check_binary.take(check_binary.carried(e.bytes_of(".ode.proof")), None)

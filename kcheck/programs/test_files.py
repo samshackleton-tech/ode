@@ -157,7 +157,7 @@ class Files(unittest.TestCase):
         obj, spec = self.paths("lz4")
         carried = kdecode.Elf(obj).bytes_of(".ode.proof")
         with tempfile.TemporaryDirectory() as d:
-            # the proof is not trusted: one fact of one place left out (the lengths the container gives kept right)
+            # the proof is relied on for nothing: one fact of one place left out (the lengths the container gives kept right)
             line = b"    fact a <= p\n"
             self.assertGreaterEqual(carried.count(line), 1)
             at = carried.index(line)
@@ -201,7 +201,7 @@ class Files(unittest.TestCase):
         r = subprocess.run([sys.executable, tool, obj], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         for words in ("contract ode_utf8(input: n bytes, n: number)", "returns if failed(utf8(input)) then NO else utf8(input)", "meets its public contract",
-                      "nothing was searched for", "varith.py", "kdecode.py", "not loaded (a prover's or a maker's, trusted for nothing): kprove.py, refute.py"):
+                      "nothing was searched for", "varith.py", "kdecode.py", "not loaded (a prover's or a maker's, relied on for nothing): kprove.py, refute.py"):
             self.assertIn(words, r.stdout)
         ran = r.stdout[r.stdout.index("3. What ran"):]
         self.assertNotIn("kprove.py   ", ran)

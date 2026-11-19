@@ -2,7 +2,8 @@
 
 Ode is a research project in proof-carrying native code. The goal is fast machine code that ships with a
 machine-checkable proof that it does what a short, readable contract says. A skeptical user can then check
-the proof himself. He does not have to trust the author, the compiler or the build.
+the proof himself. He does not rely on the author, the compiler or the build for the code doing what the
+contract says.
 
 ## The idea in one example
 
@@ -15,20 +16,21 @@ Take a hash function. Its author ships three things:
    feature the function needs (AVX-512).
 3. A proof that the binary satisfies the contract.
 
-The user, whom we call **Bob**, is an auditor who trusts nobody. Bob reads the contract and decides whether
-it is what he wants. Then he runs a **verifier** on the binary, the contract and the proof. The verifier
-either accepts ("this binary satisfies this contract") or rejects. Bob has no need to read the
-implementation.
+The user, whom we call **Bob**, is an auditor who assumes that anyone who touched the code may be mistaken
+or hostile. Bob reads the contract and decides whether it is what he wants. Then he runs a **verifier** on
+the binary, the contract and the proof. The verifier gives a verdict: it either accepts ("this binary
+satisfies this contract") or rejects. Bob has no need to read the implementation.
 
 Three design decisions follow from that picture:
 
-- The verifier checks the bytes that will run. Source code is not what it reads. So the compiler, the
-  assembler and the author's tools need no trust: whatever they produced is accepted only if the proof
-  checks.
+- The verifier checks the bytes that will run. Source code is not what it reads. So the verdict does not
+  rely on the compiler, the assembler or the author's tools: whatever they produced is accepted only if
+  the proof checks.
 - The programmer chooses the machine code, instruction by instruction where speed needs it. Ode's tools
   leave optimizing to the programmer. Their job is to produce the proof.
-- Whatever Bob must trust should be small and itself checkable. Finding a proof is the clever part, and an
-  untrusted program called the **prover** does it. The verifier only checks the result.
+- Whatever the verdict does rely on should be small and itself checkable. Finding a proof is the clever
+  part, and a separate program called the **prover** does it. The verdict does not rely on the prover: the
+  verifier checks whatever the prover produces.
 
 [DESIGN.md](DESIGN.md) is the full design.
 
@@ -82,7 +84,7 @@ Exit status 0 means the binary was accepted. In these shipped examples the proof
 object file; `--proof FILE` reads it from a separate file instead, which is where proofs are moving.
 
 [kcheck/VERIFY.md](kcheck/VERIFY.md) is written for someone verifying: what exactly was established,
-what was not, and what you are trusting. Another example:
+what was not, and what the result relies on. Another example:
 `python3 verify.py programs/lz4/odelz4.o programs/lz4/lz4.spec`.
 
 ## Rebuild it and run the tests

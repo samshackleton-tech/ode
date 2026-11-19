@@ -501,7 +501,7 @@ class Spec:
 
     def check_layouts(self):
         """A `layout`'s fields lie within its size, do not overlap, and their `below` is at least 1. (A layout
-        comes with the proof, which is not trusted: until November 17, 2026 a layout whose field ran past its
+        comes with the proof, which is relied on for nothing: until November 17, 2026 a layout whose field ran past its
         size let a verified function write past what its caller had room for, and one with `below 0` put facts
         that cannot hold into a caller, whose path was then dropped as no path. `node120` and `keyed` are the
         layouts the hash's proof carries.)"""

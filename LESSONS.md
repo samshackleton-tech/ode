@@ -244,7 +244,7 @@ model, what does the verifier take to be so that the processor, the linker
 or the arithmetic does not? Keep every attack found as a test with
 evidence from a processor. Run the sweeps as background soaks.
 
-## 15. Everything in a proof is untrusted, and so is every line printed from it
+## 15. Nothing in a proof may be relied on unchecked, nor may any line printed from it
 
 - A line told the reader "its definitions come to an end" by counting
   lemmas; a lemma that required the impossible was shown, of nothing, and

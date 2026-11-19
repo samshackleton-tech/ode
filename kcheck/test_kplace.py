@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of kplace.py (a prover: trusted for nothing): for three functions with one loop the proof is found from
+"""Tests of kplace.py (a prover: relied on for nothing): for three functions with one loop the proof is found from
 the binary and the specification alone, the lemmas too (kguess.py), and the verifier shows each function by
 what was found. And where its few shapes do not reach, it says so."""
 import os, re, sys, unittest
