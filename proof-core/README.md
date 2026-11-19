@@ -242,7 +242,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,685 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,696 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -403,8 +403,9 @@ The verifier can follow 512-bit register moves, broadcasts, adds, exclusive ORs,
 It must know all sixteen lanes before reading a wide register. A 128-bit write forgets the upper lanes
 of its destination, and `vzeroupper` forgets the upper lanes of registers 0 through 15. The same load
 and store rules cover both four and sixteen words. The 512-bit rules support unaligned instructions
-that use a base register and a fixed offset in a buffer. A store forgets the old values at exactly the
-words it replaces. A read from a buffer that the function has written to is still refused.
+at fixed offsets in a buffer. A load can add an index register if the resulting offset is still fixed.
+A broadcast can read one word from a buffer and repeat it in every lane. A store forgets the old values
+at exactly the words it replaces. These load rules reject a read from a buffer after a store to it.
 
 A test verifies a six-instruction function from its object file against a contract that adds sixteen
 pairs of words. It refuses a version that reads both operands from the same vector. The 16-way kernel
@@ -579,8 +580,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 807 lines. The verifier: 1,844 lines (Core.lean 1,685, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,194 lines.
+**Code size.** The formal model: 807 lines. The verifier: 1,855 lines (Core.lean 1,696, Arithmetic.lean
+159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,246 lines.
 
 ## The files
 

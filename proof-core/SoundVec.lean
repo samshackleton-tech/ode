@@ -272,6 +272,35 @@ theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
   unfold M64 at xb_lt hlt ⊢
   omega
 
+theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {args : List Expr} {addr : Row}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symWordAddr bind s args = some addr) :
+    ∃ vs, values (ctx.contract.perm s0) bind st args = some vs ∧
+      ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → sumList vs % M64 = A := by
+  rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨i, _ | ⟨_, _⟩⟩⟩⟩
+  · simp [symWordAddr] at h
+  · simp [symWordAddr] at h
+  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp [symWordAddr, hx, hk] at h
+    subst addr
+    obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+    exact ⟨_, vs, by simpa only [sumList, Nat.add_zero] using ha⟩
+  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> cases hy : symReg bind s i <;> simp [symWordAddr, hx, hk, hy] at h
+    subst addr
+    rename_i x k y
+    obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound H wf hx
+    obtain ⟨yb, vi, yb_lt, yb_ev, _⟩ := symReg_sound H wf hy
+    obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hk
+    refine ⟨[xb, k.toNat, yb], by simp [values, vb, vn, vi], ?_⟩
+    have sgx := signed_ev ρ x
+    have sgy := signed_ev ρ y
+    have sgk := signed_ev ρ (Lin.const k)
+    rw [ev_const] at sgk
+    intro A hA hlt
+    simp only [ev_add] at hA
+    simp only [sumList, Nat.add_zero]
+    unfold M64 at xb_lt yb_lt hlt ⊢
+    omega
+  · simp [symWordAddr] at h
+
 /-! ## Read a run of words -/
 
 theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}, runAt r l k = some j →
@@ -434,6 +463,19 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               · intro k hk
                 rw [hA]; exact dn k hk
             next => exact (refuse_ok h).elim
+
+theorem symMemWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {bind : Bind} {args : List Expr} {width : Nat} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (nonempty : 0 < width) (h : symMemWords ctx bind s args width items = .ok ((l, s'), rest)) :
+    ∃ vs, values (ctx.contract.perm s0) bind st args = some vs ∧
+      let a := sumList vs % M64
+      allowed (ctx.contract.perm s0).read a (4 * width) = true ∧ Carried ctx s0 ρ s ρ s' st ∧ l.length = width ∧
+      (∀ i ∈ l, i < s'.terms.length) ∧ ∀ k, k < width → load st.mem (a + 4 * k) 4 = den (inpOf ctx s0) ρ s'.terms (l.getD k 0) := by
+  unfold symMemWords at h
+  cases ha : symWordAddr bind s args <;> simp only [ha] at h
+  · exact (refuse_ok h).elim
+  · obtain ⟨vs, vv, loc⟩ := symWordAddr_sound H wf ha
+    exact ⟨vs, vv, symLoadWords_sound E h H wf nonempty _ loc⟩
 
 /-! ## The four words a row sets a vector register to -/
 
@@ -1082,27 +1124,15 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     simp only [symLanes] at h
     split at h
     next hf =>
-      -- sixteen bytes of memory
       have fe : f = "mem128" := by simpa using hf
-      subst fe
-      rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨c, more⟩⟩⟩
-      · exact (refuse_ok h).elim
-      · exact (refuse_ok h).elim
-      · cases hx : symReg bind s b with
-        | none => cases hk : symNumber bind n <;> simp only [hx, hk] at h <;> exact (refuse_ok h).elim
-        | some x =>
-          cases hk : symNumber bind n with
-          | none => simp only [hx, hk] at h; exact (refuse_ok h).elim
-          | some k =>
-            simp only [hx, hk] at h
-            obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
-            obtain ⟨hal, cr, _, lt, dn⟩ := symLoadWords_sound E h H wf (by decide) ((xb + k.toNat) % M64) ha
-            refine ⟨ρ, cr, (List.range 4).map (fun i => load st.mem ((xb + k.toNat) % M64 + 4 * i) 4), ?_, lt, ?_⟩
-            · simp [lanesOf, vs, sumList, hal]
-            · intro k' hk'
-              rw [← dn k' hk']
-              rcases lt4 hk' with rfl | rfl | rfl | rfl <;> rfl
-      · exact (refuse_ok h).elim
+      subst f
+      obtain ⟨vs, vv, al, c, _, lt, dn⟩ := symMemWords_sound E H wf (by decide) h
+      let a := sumList vs % M64
+      refine ⟨ρ, c, (List.range 4).map (fun i => Ode.load st.mem (a + 4 * i) 4), ?_, lt, ?_⟩
+      · simp [lanesOf, vv, al, a]
+      · intro k hk
+        rw [← dn k hk]
+        rcases lt4 hk with rfl | rfl | rfl | rfl <;> rfl
     next hf =>
       split at h
       next hf2 =>

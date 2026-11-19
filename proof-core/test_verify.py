@@ -226,6 +226,20 @@ contract wide_add(out: block, a: block, b: block) {
                 shown, said = lean_verify.verify(spec, [(obj, "wide_add")], proof)
                 self.assertEqual(shown, want, said)
 
+    def test_indexed_wide_load_and_broadcast_from_memory(self):
+        buffers = ("arg out out 64", "arg a fixed 68")
+        words = "(call words (slice (name a) (num 4) (num 68)))"
+        add = " ".join(f"(bin + (index {words} (num {j})) (index {words} (num 1)))" for j in range(16))
+        contract = (*buffers, f"ensuresw out (call bytes_of (list {add}))")
+        ops = [".mov 64 (.reg .rax) (.imm 4)", ".zloadi 0 .rsi .rax 0", ".zbroadcast 1 (.mem .rsi 8)",
+               ".zpaddd 2 0 1", ".zstore false .rdi 0 2"]
+        self.assertEqual(self.wide(ops, contract), "shown\n")
+        self.assertEqual(self.wide([".mov 64 (.reg .rax) (.imm 8)", ".zloadi 0 .rsi .rax -4", *ops[2:]], contract), "shown\n")
+        self.assertIn("sixty-four bytes at a place of a run that is no number", self.wide(ops[1:], buffers))
+        self.assertIn("sixty-four bytes that are not sixteen words of the run", self.wide([ops[0], ".zloadi 0 .rsi .rax 4"], buffers))
+        self.assertIn("four bytes that are not a word of the run", self.wide([".zbroadcast 0 (.mem .rsi 68)"], buffers))
+        self.assertTrue(self.wide([*ops[:2], ".zbroadcast 1 (.mem .rsi 12)", *ops[3:]], contract).startswith("refused:"))
+
     def test_wide_load_does_not_read_the_entry_value_after_a_store(self):
         buffers = ("arg out inout 64", "arg a fixed 64")
         self.assertEqual(self.wide([".zload false 1 .rdi 0"], buffers), "shown\n")

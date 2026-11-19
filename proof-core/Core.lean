@@ -709,8 +709,10 @@ def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
 /-- Read words at a fixed offset divisible by four. They must lie in a read-only run or a read/write run
 that has not been written since entry. -/
 def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat × Sym) :=
-  let bytes := if width = 4 then "sixteen" else "sixty-four"
-  let badSize := if width = 4 then "sixteen bytes that are not four words of the run" else "sixty-four bytes that are not sixteen words of the run"
+  let bytes := if width = 4 then "sixteen" else if width = 1 then "four" else "sixty-four"
+  let badSize := if width = 4 then "sixteen bytes that are not four words of the run"
+                 else if width = 1 then "four bytes that are not a word of the run"
+                 else "sixty-four bytes that are not sixteen words of the run"
   match findOut addr ctx.contract.fixeds 0 with
   | some (.out j off) =>
     match Lin.isConst off, ctx.contract.fixeds[j]? with
@@ -738,6 +740,24 @@ def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat 
         | none => refuse s!"{bytes} bytes of a run given only to write"
       | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
     | _ => refuse s!"{bytes} bytes that are of no run of words given to read"
+
+/-- An unscaled address consists of a base register, a displacement and an optional index register. -/
+def symWordAddr (bind : Bind) (s : Sym) : List Expr → Option Row
+  | [b, n] => do
+    let x ← symReg bind s b
+    let k ← symNumber bind n
+    some (Lin.add (signed x) (signed (Lin.const k)))
+  | [b, n, i] => do
+    let x ← symReg bind s b
+    let k ← symNumber bind n
+    let y ← symReg bind s i
+    some (Lin.add (Lin.add (signed x) (signed (Lin.const k))) (signed y))
+  | _ => none
+
+def symMemWords (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (width : Nat) : V (List Nat × Sym) :=
+  match symWordAddr bind s args with
+  | some a => symLoadWords ctx s a width
+  | none => refuse "a word load needs a base register, a displacement and at most one index register"
 
 /-- The two halves of what a general register holds, and two zeros. The low half is the register's number
 as a word. The high half: where the number has no multiple of 2^32 in it, its quotient by 2^32, by a
@@ -838,13 +858,7 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
     | some l => pure (l, s)
     | none => refuse "a vector register whose words are not known"
   | .call f args =>
-    if f == "mem128" then
-      match args with
-      | [b, n] =>
-        match symReg bind s b, symNumber bind n with
-        | some x, some k => symLoadWords ctx s (Lin.add (signed x) (signed (Lin.const k))) 4
-        | _, _ => refuse "sixteen bytes at an address that is not a register and a number of the table"
-      | _ => refuse "a row over a vector register of a form that is not read"
+    if f == "mem128" then symMemWords ctx bind s args 4
     else if f == "words" then
       -- four numbers of the table
       match args with
@@ -880,13 +894,21 @@ def symVec512 (bind : Bind) (s : Sym) : Expr → Option (List Nat)
   | _ => none
 
 /-- Replicate the low word of a scalar value into a wide register. -/
-def symSpread16 (ctx : Ctx) (bind : Bind) (s : Sym) (a : Expr) : V (List Nat × Sym) := do
+def symSpreadScalar16 (ctx : Ctx) (bind : Bind) (s : Sym) (a : Expr) : V (List Nat × Sym) := do
   let (v, s) ← symValue ctx bind s a
   match v with
   | .lin x =>
     let made := wAtom x s.terms
     pure (List.replicate 16 made.1, { s with terms := made.2 })
   | _ => refuse "a flag where a word is expected"
+
+def symSpread16 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
+  | .call f args =>
+    if f == "mem32" then do
+      let (l, s) ← symMemWords ctx bind s args 1
+      pure (List.replicate 16 (l.getD 0 0), s)
+    else symSpreadScalar16 ctx bind s (.call f args)
+  | a => symSpreadScalar16 ctx bind s a
 
 def symPair512 (bind : Bind) (s : Sym) (a b : Expr) (f : List Nat → List Nat → V (List Nat × Sym)) : V (List Nat × Sym) :=
   match symVec512 bind s a, symVec512 bind s b with
@@ -922,14 +944,6 @@ def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (L
       else refuse "no proof rule for this 512-bit shuffle"
   | _ => refuse "no proof rule for this 512-bit value"
 
-def symLoad512 (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
-  match args with
-  | [b, n] =>
-    match symReg bind s b, symNumber bind n with
-    | some x, some k => symLoadWords ctx s (Lin.add (signed x) (signed (Lin.const k))) 16
-    | _, _ => refuse "a 512-bit load needs a base register and displacement"
-  | _ => refuse "a 512-bit load needs a base register and displacement"
-
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
     match symVec512 bind s (.name n) with
@@ -947,7 +961,7 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       match args with
       | [.name op, a, b] => symEach512 bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
-    else if f == "mem512" then symLoad512 ctx bind s args
+    else if f == "mem512" then symMemWords ctx bind s args 16
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 

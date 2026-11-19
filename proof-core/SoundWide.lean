@@ -51,12 +51,12 @@ theorem wideReplicate {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {
   have h := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok hb
   exact ⟨Carried.terms H wf h.ext h.ok, by simp [WideValue, h.lt, h.den]⟩
 
-theorem symSpread16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
+theorem symSpreadScalar16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
     {s s' : Sym} {a : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
-    (h : symSpread16 ctx bind s a items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : symSpreadScalar16 ctx bind s a items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
     ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm s0) bind st a = some x ∧
       WideValue ctx s0 ρ' s' l (List.replicate 16 (x % W32)) := by
-  unfold symSpread16 at h
+  unfold symSpreadScalar16 at h
   obtain ⟨⟨v, s1⟩, r1, h1, h⟩ := V.bind_ok h
   obtain ⟨ρ1, x, c, hx, sem⟩ := symValue_sound E bind a h1 H wf
   cases v with
@@ -71,6 +71,37 @@ theorem symSpread16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
     exact ⟨ρ1, x, c.then c', hx, eq ▸ val⟩
   | equal _ _ => exact (refuse_ok h).elim
   | below _ _ => exact (refuse_ok h).elim
+
+theorem symSpread16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
+    {s s' : Sym} {a : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
+    (h : symSpread16 ctx bind s a items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm s0) bind st a = some x ∧
+      WideValue ctx s0 ρ' s' l (List.replicate 16 (x % W32)) := by
+  cases a with
+  | number _ | name _ | lane _ _ => exact symSpreadScalar16_sound E bind h H wf
+  | call f args =>
+    simp only [symSpread16] at h
+    split at h
+    next hf =>
+      simp only [beq_iff_eq] at hf; subst f
+      obtain ⟨⟨ids, s1⟩, r1, h1, h⟩ := V.bind_ok h
+      obtain ⟨vs, vv, al, c, len, lt, dn⟩ := symMemWords_sound E H wf (by decide) h1
+      obtain ⟨rfl, rfl⟩ := pure_pair h
+      let b := sumList vs % M64
+      have hword : Ode.load st.mem b 4 < W32 := load_lt _ _ _
+      have h0 : 0 < ids.length := by omega
+      have i0 := lt (ids.getD 0 0) (by rw [getD_index h0]; exact List.getElem_mem h0)
+      have eq0 := dn 0 (by decide)
+      simp only [Nat.mul_zero, Nat.add_zero] at eq0
+      refine ⟨ρ, Ode.load st.mem b 4, c, ?_, ?_⟩
+      · simp [value, vv, memSize, b, al]
+      · rw [Nat.mod_eq_of_lt hword]
+        refine ⟨List.length_replicate, fun i m => ?_, ?_⟩
+        · rw [(List.mem_replicate.mp m).2]; exact i0
+        · have h0 := eq0
+          change Ode.load st.mem b 4 = _ at h0
+          rw [List.map_replicate, h0]
+    next => exact symSpreadScalar16_sound E bind h H wf
 
 /-- Lane-wise arithmetic uses the existing word terms and their soundness lemmas. -/
 theorem symLaneTerms_sound {α : Type} {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
@@ -192,7 +223,7 @@ theorem wideInQuarters {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {x 
     let d := den (inpOf ctx s0) ρ s.terms
     WideValue ctx s0 ρ s (inQuarters x y pick) (inQuarters (x.map d) (y.map d) pick) := by
   dsimp only
-  refine ⟨by simp [inQuarters, List.length_flatMap, lp, List.map_const', List.sum_replicate_nat], ?_, ?_⟩
+  refine ⟨by simp [inQuarters, List.length_flatMap, lp, List.map_const'], ?_, ?_⟩
   · intro i hi
     simp only [inQuarters] at hi
     obtain ⟨q, hq, hi⟩ := List.mem_flatMap.mp hi
@@ -284,26 +315,19 @@ theorem wideAddress {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bi
 
 theorem symLoad512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
     {bind : Bind} {args : List Expr} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (h : symLoad512 ctx bind s args items = .ok ((l, s'), rest)) :
+    (h : symMemWords ctx bind s args 16 items = .ok ((l, s'), rest)) :
     ∃ lanes, Carried ctx s0 ρ s ρ s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "mem512" args) = some lanes ∧
       WideValue ctx s0 ρ s' l lanes := by
-  unfold symLoad512 at h
-  rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨_, _⟩⟩⟩
-  · exact (refuse_ok h).elim
-  · exact (refuse_ok h).elim
-  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp only [hx, hk] at h
-    all_goals try exact (refuse_ok h).elim
-    obtain ⟨a, va, ha⟩ := wideAddress H wf hx hk
-    obtain ⟨al, c, len, lt, dn⟩ := symLoadWords_sound E h H wf (by decide) a ha
-    refine ⟨(List.range 16).map (fun k => load st.mem (a + 4 * k) 4), c, ?_, len, lt, ?_⟩
-    · simp [lanesOf512, va, al]
-    · apply List.ext_getElem
-      · simp [len]
-      · intro k h1 h2
-        have hk : k < 16 := by simpa using h1
-        simp only [List.getElem_map, List.getElem_range]
-        simpa only [getD_index (by rw [len]; exact hk)] using dn k hk
-  · exact (refuse_ok h).elim
+  obtain ⟨vs, vv, al, c, len, lt, dn⟩ := symMemWords_sound E H wf (by decide) h
+  let a := sumList vs % M64
+  refine ⟨(List.range 16).map (fun k => Ode.load st.mem (a + 4 * k) 4), c, ?_, len, lt, ?_⟩
+  · simp [lanesOf512, addr512, vv, al, a]
+  · apply List.ext_getElem
+    · simp [len]
+    · intro k h1 h2
+      have hk : k < 16 := by simpa using h1
+      simp only [List.getElem_map, List.getElem_range]
+      simpa only [getD_index (by rw [len]; exact hk)] using dn k hk
 
 theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
     {s s' : Sym} {v : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
