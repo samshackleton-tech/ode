@@ -93,6 +93,51 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
       omega
     next => contradiction
 
+theorem plainTimes_sound {facts : List Row} {g : Row} (h : plainTimes facts g = true) (ρ : Nat → Int)
+    (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
+  unfold plainTimes at h
+  rcases Bool.or_eq_true_iff.mp h with h | h
+  · exact plain_sound h ρ hf
+  · obtain ⟨f, fin, hfk⟩ := List.any_eq_true.mp h
+    split at hfk
+    next a b _ _ =>
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hfk
+      obtain ⟨⟨_, k0⟩, hc⟩ := hfk
+      split at hc
+      next k hk =>
+        have e := ev_isConst (ρ := ρ) hk
+        have f0 := hf f fin
+        rw [holds_iff] at f0
+        simp only [ev_sub, ev_scale] at e
+        have c0 : 0 ≤ k := by simpa using hc
+        have := Int.mul_nonneg k0 f0
+        omega
+      next => contradiction
+    next => contradiction
+
+/-- The least of some numbers is one of them. -/
+theorem least_mem : ∀ {l : List Int} {c : Int}, least l = some c → c ∈ l
+  | [], _, h => by simp [least] at h
+  | a :: l, c, h => by
+    simp only [least] at h
+    cases hl : least l with
+    | none => simp only [hl, Option.some.injEq] at h; subst h; exact List.mem_cons_self ..
+    | some b =>
+      simp only [hl, Option.some.injEq] at h
+      split at h
+      next => subst h; exact List.mem_cons_self ..
+      next => subst h; exact List.mem_cons_of_mem _ (least_mem hl)
+
+/-- A number the facts say at once that a row is no more than: it is no more than that. -/
+theorem boundOf_sound {facts : List Row} {x : Row} {c : Int} (h : boundOf facts x = some c) (ρ : Nat → Int)
+    (hf : ∀ f ∈ facts, f.holds ρ) : ev ρ x ≤ c := by
+  obtain ⟨f, fin, hk⟩ := List.mem_filterMap.mp (least_mem h)
+  have e := ev_isConst (ρ := ρ) hk
+  have f0 := hf f fin
+  rw [holds_iff] at f0
+  rw [ev_add] at e
+  omega
+
 theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : Items} {r : Unit × Items}
     (h : entailAs what facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
   unfold entailAs at h

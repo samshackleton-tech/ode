@@ -224,9 +224,9 @@ KINDS = {"cv": (32, WORDS),                                        # eight words
 BOUNDS = {"word": 2 ** 32, "byte": 256}                            # the kinds that ask something of the caller: the number is below this
 
 
-def no_value(arg):
+def no_value(arg, why="is of the kind `any`"):
     """An argument of the kind `any` is a register of which the contract says nothing: no expression speaks of it."""
-    def refuse(x): raise SystemExit(f"statement: the argument {arg} is of the kind `any`: an expression cannot speak of it")
+    def refuse(x): raise SystemExit(f"statement: the argument {arg} {why}: an expression cannot speak of it")
     return refuse
 
 
@@ -251,6 +251,31 @@ def layout_kind(arg, kind, lay):
         else: raise SystemExit(f"statement: the layout {kind} has a field of a kind the verifier in Lean does not read yet: {field}: {f['kind']}")
         fields.append((field, x))
     return lay["size"], (lambda x: ("record", fields)), lines
+
+
+def named_bytes(arg, names):
+    """An argument of the kind `bytes a b c d` is a number in a register; a, b, c, d name the four low bytes of
+    it, the lowest first, and of the four bytes above them nothing is said. What each name stands for, said
+    of the register's number x: x % 256; x % 2^32 / 2^8 % 256; x % 2^32 / 2^16 % 256; x % 2^32 / 2^24.
+    (Each is that byte whatever the form; these are the forms in which a function that moves the register's
+    low half and shifts it comes to the bytes, so that the verifier meets the same numbers.)"""
+    if len(names) != 4 or len(set(names + [arg])) != 5: raise SystemExit(f"statement: the argument {arg} names its bytes twice, or not four of them")
+    x = ("name", arg)
+    low = ("bin", "%", x, ("num", 2 ** 32))
+    byte = lambda e: ("bin", "%", e, ("num", 256))
+    part = lambda k: ("bin", "/", low, ("num", 2 ** (8 * k)))
+    return dict(zip(names, [byte(x), byte(part(1)), byte(part(2)), part(3)]))
+
+
+def with_number(e, var, k, name):
+    """The expression with the number k for the name var. (The forms `by_kind` reads.)"""
+    if e[0] == "name": return ("num", k) if e[1] == var else e
+    if e[0] == "num": return e
+    if e[0] == "bin": return ("bin", e[1], with_number(e[2], var, k, name), with_number(e[3], var, k, name))
+    if e[0] == "call": return ("call", e[1], [with_number(a, var, k, name) for a in e[2]])
+    if e[0] == "list": return ("list", [with_number(a, var, k, name) for a in e[1]])
+    if e[0] == "index": return ("index", with_number(e[1], var, k, name), with_number(e[2], var, k, name))
+    raise SystemExit(f"statement: the contract of {name}: an `ensures` of each of some values with an expression of this form is not read yet: {e!r}")
 
 
 def by_kind(e, kinds, name):
@@ -279,9 +304,24 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     kinds = {arg: KINDS[kind][1] for arg, kind in c["args"] if kind in KINDS}
     kinds.update({arg: laid[arg][1] for arg in laid})
     kinds.update({arg: no_value(arg) for arg, kind in c["args"] if kind == "any"})
-    said = sorted({kind for arg, kind in c["args"] if arg in kinds})     # (for messages)
     names = [arg for arg, _ in c["args"]]
     if len(set(names)) != len(names): raise SystemExit(f"statement: the contract of {name} has two arguments of one name")
+    # `N inputs`: the address of a table of N addresses, each of n blocks of 64 bytes given to read (n: the
+    # argument of that name, a number). `N cvs`: the address of N chaining values, one after another.
+    # `bytes a b c d`: a number in a register whose four low bytes those names stand for.
+    tables = {arg: int(kind.split()[0]) for arg, kind in c["args"] if re.fullmatch(r"\d+ inputs", kind)}
+    values = {arg: int(kind.split()[0]) for arg, kind in c["args"] if re.fullmatch(r"\d+ cvs", kind)}
+    packed = {arg: kind.split()[1:] for arg, kind in c["args"] if re.fullmatch(r"bytes( \w+)+", kind)}
+    if tables and dict(c["args"]).get("n") != "number": raise SystemExit(f"statement: the contract of {name} has a table of inputs and no number n of their blocks")
+    sizes.update({arg: 8 * count for arg, count in tables.items()})
+    sizes.update({arg: 32 * count for arg, count in values.items()})
+    sizes.update({arg: None for arg in packed})
+    for arg, parts in packed.items():
+        for part, e in named_bytes(arg, parts).items():
+            if part in names or part in kinds: raise SystemExit(f"statement: the contract of {name} gives the name {part} twice")
+            kinds[part] = (lambda e: lambda x: e)(e)
+        kinds[arg] = no_value(arg, "is a number of which only four bytes are named")
+    said = sorted({kind for arg, kind in c["args"] if arg in kinds})     # (for messages)
     # `returns r`, r no name of the specification's (LANGUAGE.md): the number returned is called r in `ensures` lines.
     r = c["returns"]
     result = r[1] if r is not None and r[0] == "name" and r[1] not in names and r[1] not in consts else None
@@ -294,6 +334,9 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         if kind == "number" and arg not in written: out.append(f"arg {arg} number")
         elif m and not m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} bytes {m.group(1)}")
         elif m and m.group(1).isdigit() and arg in written: out.append(f"arg {arg} out {int(m.group(1))}")
+        elif arg in tables and arg not in written: out += [f"arg {arg} fixed {8 * tables[arg]}", f"lanes {arg} n"]
+        elif arg in values and arg in written: out.append(f"arg {arg} out {32 * values[arg]}")
+        elif arg in packed and arg not in written: out.append(f"arg {arg} number")
         # a run of words: read and written where an `ensures` speaks of it, only read where none does
         elif kind in KINDS and KINDS[kind][0] is not None: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {KINDS[kind][0]}")
         # a record in memory: only read
@@ -311,7 +354,12 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         elif (more[0] == "bin" and more[1] == "==" and more[2][0] == "name" and more[2][1] in names and in_register(more[2][1])
               and more[3][0] == "num" and 0 <= more[3][1] < 2 ** 64): out.append(f"needsif {what} {more[2][1]} {more[3][1]}")
         else: raise SystemExit(f"statement: the contract of {name} has a `needs` line with a condition the verifier in Lean does not read yet")
-    for key in ("asks", "calls", "conditions", "given", "spoils"):
+    for e in c["asks"]:
+        # `requires NAME >= K`, `requires NAME < K`: what the caller sees to, of a number in a register
+        if (e[0] == "bin" and e[1] in (">=", "<") and e[2][0] == "name" and dict(c["args"]).get(e[2][1]) == "number"
+                and e[3][0] == "num" and 0 <= e[3][1] < 2 ** 64): out.append(f"{'atleast' if e[1] == '>=' else 'below'} {e[2][1]} {e[3][1]}")
+        else: raise SystemExit(f"statement: the contract of {name} has a `requires` the verifier in Lean does not read yet")
+    for key in ("calls", "conditions", "given", "spoils"):
         if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")
     if c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
     # What is written is taken to overlap nothing else given (the account in Lean asks it of the caller), so the
@@ -334,6 +382,17 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     if result is not None: out.append(f"result {result}")
     elif r is not None: out.append("returns " + sexp(r, seqs))
     for leaf in c["leaves"]:
+        if leaf["name"] in values and leaf["index"] is not None and leaf["cond"] is None and leaf["part"] is None:
+            # `ensures NAME[i] = E for i in 0..N`, NAME being N chaining values: its bytes are those of the
+            # words of E with 0 for i, then of E with 1 for i, and so on to N - 1
+            count, var = values[leaf["name"]], leaf["index"]
+            if leaf["each"] != (("num", 0), ("num", count)) or var in names or var in kinds:
+                raise SystemExit(f"statement: the contract of {name} has an `ensures` of each of some values that is not of all of them, or counts by a name given before")
+            each = [by_kind(with_number(leaf["expr"], var, k, name), kinds, name) for k in range(count)]
+            joined = each[-1]
+            for e in reversed(each[:-1]): joined = ("bin", "++", e, joined)
+            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [joined]), seqs))
+            continue
         if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
             raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")
         if leaf["name"] in kinds:

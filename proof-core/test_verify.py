@@ -380,9 +380,12 @@ contract wide_add(out: block, a: block, b: block) {
         statement.statement(self.spec, [(obj, "ode_common")])                          # as it is: written
         # what the function needs of the processor is carried, a line of the statement (the caller of such a function must say it too: test_call.py)
         self.assertIn("needs sse41", statement.statement(self.spec.replace("    stack 40\n", "    stack 40\n    needs sse41\n"), [(obj, "ode_common")]))
+        # so is a bound that the function asks its caller to keep a number within
+        for bound, line in (("requires n < 4096", "below n 4096"), ("requires n >= 1", "atleast n 1")):
+            self.assertIn(line, statement.statement(self.spec.replace("    returns common(a, b)\n", f"    {bound}\n    returns common(a, b)\n"), [(obj, "ode_common")]))
         for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
                                ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
-                               ("the function asks something of its caller", "    returns common(a, b)\n", "    requires n < 4096\n    returns common(a, b)\n"),
+                               ("the function asks of its caller what is no bound of a number", "    returns common(a, b)\n", "    requires n != 4096\n    returns common(a, b)\n"),
                                ("the specification has a kind", "def common(a, b)", "kind pair: 16 bytes\n\ndef common(a, b)"),
                                ("a definition may fail", "def common(a, b) { alike(a, b, 0) }", "def common(a, b) {\n    fails 1 if len(a) > 4096\n    alike(a, b, 0)\n}")):
             with self.subTest(what=what):

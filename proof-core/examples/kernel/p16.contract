@@ -1,0 +1,12 @@
+// The 16-way AVX-512 kernel of the hash (the function is in ../../../kcheck/b3hashr.o): sixteen chunks at
+// once, each of n blocks, every lane with the same counter. Its contract in ../../../kcheck/proofs/inner.spec
+// has no `trace` line: there the trace depends on no byte of the blocks or of the key. The account in Lean
+// says nothing of the trace yet, so that promise is not made here.
+contract blake3_servil_avx512_p16(inputs: 16 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 16 cvs) {
+    requires n >= 1
+    requires no_overlap(inputs, key, out)
+    ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..16
+    stack 4096
+    needs avx512
+    trace depends on inputs, key
+}

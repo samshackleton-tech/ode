@@ -420,13 +420,34 @@ def divided (s : Sym) (x : Row) (m : Int) : Option Nat :=
      s.facts.contains d && s.facts.contains (Lin.scale (-1) d) && s.facts.contains (Lin.var (q + 1)) &&
        s.facts.contains (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1))))
 
+/-- The least of some numbers. -/
+def least : List Int → Option Int
+  | [] => none
+  | a :: l =>
+    match least l with
+    | some b => some (if a ≤ b then a else b)
+    | none => some a
+
+/-- The least number the facts held say at once that `x` is no more than: a fact is that number less `x`. -/
+def boundOf (facts : List Row) (x : Row) : Option Int :=
+  least (facts.filterMap fun f => Lin.isConst (Lin.add f x))
+
+/-- Where a number is seen at once to be no more than some number, its quotient `q` by a number above zero
+is no more than that number's quotient. -/
+def quotientBound (facts : List Row) (x : Row) (m : Int) (q : Nat) : List Row :=
+  match boundOf facts x with
+  | some c => [Lin.sub (Lin.const (c / m)) (Lin.var q)]
+  | none => []
+
 /-- A number of the machine (from 0 to 2^64 - 1) divided by a number above zero: its quotient and its
 remainder, and the state that knows of them. They are found once for one number and one divisor; the
-quotient is no less than zero. -/
+quotient is no less than zero, and no more than the quotient of a number the dividend is seen at once to
+be no more than. -/
 def symDivide (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
   match divided s x m with
   | some q => (Lin.var q, Lin.var (q + 1), s)
-  | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), { s.divide x m with facts := Lin.var s.nvars :: (s.divide x m).facts })
+  | none => (Lin.var s.nvars, Lin.var (s.nvars + 1),
+      { s.divide x m with facts := quotientBound s.facts x m s.nvars ++ Lin.var s.nvars :: (s.divide x m).facts })
 
 /-- The quotient and the remainder of any number by a number above zero: the unknowns the facts held
 already say they are, where they say it; else the two new unknowns of `Sym.divide`. -/
@@ -560,10 +581,11 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
   | none => symLoadFixed ctx s addr size
 
 /-- The remainder of a number by a divisor above zero: worked out where every multiple in the number is a
-multiple of the divisor (so where the number is one of the table's), and else by the one division of it the
-state knows of. -/
+multiple of the divisor (so where the number is one of the table's); the number itself where it is seen at
+once to be below the divisor; and else by the one division of it the state knows of. -/
 def symLow (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (Lin.const (x.constant % m), s)
+  else if plain s.facts (Lin.sub (Lin.const (m - 1)) x) then (x, s)
   else ((symDivide s x m).2.1, (symDivide s x m).2.2)
 
 /-- The quotient likewise. -/
@@ -914,6 +936,11 @@ def symSpread16 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
     if f == "mem32" then do
       let (l, s) ← symMemWords ctx bind s args 1
       pure (List.replicate 16 (l.getD 0 0), s)
+    else if f == "low32" then
+      -- (the low half of a number, as a word, is the number as a word: no remainder is taken first)
+      match args with
+      | [a] => symSpreadScalar16 ctx bind s a
+      | _ => refuse "the low half of what is no one number"
     else symSpreadScalar16 ctx bind s (.call f args)
   | a => symSpreadScalar16 ctx bind s a
 
@@ -1635,6 +1662,32 @@ def highOf (s : Sym) (r : Row) : Option Row :=
   else if (Lin.isConst (Lin.word r)).isSome then some (Lin.high r)
   else none
 
+/-- Seen at once, a fact being taken more than once: a number not below zero; or so many times a fact (no
+fewer than none) and such a number. -/
+def plainTimes (facts : List Row) (g : Row) : Bool :=
+  plain facts g || facts.any fun f =>
+    match f.coeff.getLast?, g.coeff.getLast? with
+    | some a, some b =>
+      a != 0 && b % a == 0 && decide (0 ≤ b / a) &&
+        (match Lin.isConst (Lin.sub g (Lin.scale (b / a) f)) with
+         | some k => decide (0 ≤ k)
+         | none => false)
+    | _, _ => false
+
+/-- Two rows are one number: the same row, or each seen at once to be no less than the other. -/
+def sameRow (facts : List Row) (a b : Row) : Bool := a == b || (plainTimes facts (Lin.sub a b) && plainTimes facts (Lin.sub b a))
+
+/-- Two numbers held as rows: their sum; their difference, where it is seen at once to be no less than zero;
+whether they are equal, where the facts say at once that they are, or that one is the greater. -/
+def wnum (s : Sym) (op : String) (x y : Row) : Option WVal :=
+  if op == "+" then some (.num (Lin.add x y))
+  else if op == "-" then (if plain s.facts (Lin.sub x y) then some (.num (Lin.sub x y)) else none)
+  else if op == "==" then
+    if sameRow s.facts x y then some (.bool true)
+    else if plain s.facts (Lin.sub (Lin.sub x y) (Lin.const 1)) || plain s.facts (Lin.sub (Lin.sub y x) (Lin.const 1)) then some (.bool false)
+    else none
+  else none
+
 def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal → Option WVal
   | .int a, .int b =>
     match binop op (.int a) (.int b) with
@@ -1654,8 +1707,17 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
       | some a => (look (.rotr a n.toNat)).map fun i => .word [i]
       | none => none
     else none
-  | .num r, .int m => if op == "%" ∧ 0 < m then (lowOf s r m).map .num else none
-  | .num x, .num y => if op == "|" then (knownOr x y s.known).map fun v => .num (Lin.var v) else none   -- (the unknown the state knows as both numbers' bits)
+  | .num r, .int m =>
+    if op == "%" then (if 0 < m then (lowOf s r m).map .num else none)
+    else if op == "/" then (if 0 < m then (divided s r m).map fun q => .num (Lin.var q) else none)   -- (the quotient the state knows of)
+    else if op == "|" then (if m = 0 ∧ knownNonneg s r = true then some (.num r) else none)         -- (no bit is added)
+    else wnum s op r (Lin.const m)
+  | .int m, .num r =>
+    if op == "|" then (if m = 0 ∧ knownNonneg s r = true then some (.num r) else none)
+    else wnum s op (Lin.const m) r
+  | .num x, .num y =>
+    if op == "|" then (knownOr x y s.known).map fun v => .num (Lin.var v)    -- (the unknown the state knows as both numbers' bits)
+    else wnum s op x y
   | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none
   | _, _ => none
 
@@ -1755,9 +1817,6 @@ def heldIds (f : String) (keys : List Key) : List Known → Option (List Nat)
   | [] => none
   | .held f' keys' ids :: more => if f' = f ∧ keys' = keys then some ids else heldIds f keys more
   | _ :: more => heldIds f keys more
-
-/-- Two rows are one number: the same row, or each seen at once to be no less than the other. -/
-def sameRow (facts : List Row) (a b : Row) : Bool := a == b || (plain facts (Lin.sub a b) && plain facts (Lin.sub b a))
 
 /-- The unknowns the state knows as the words of the block at byte `off` of the lane at place `c` of the table `j`. -/
 def knownBlock (facts : List Row) (j c : Nat) (off : Row) : List Known → Option (List Nat)

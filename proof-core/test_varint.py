@@ -116,7 +116,7 @@ class Varint(unittest.TestCase):
         with open(self.kept) as f: proof = f.read().splitlines()
         with open(self.path("s.statement"), "w") as f: f.write("\n".join(statement.statement(self.spec, [(self.obj, SYMBOL)])) + "\n")
         kinds = {}
-        for k in range(1, len(proof), 3):                                  # (the first line names the function)
+        for k in range(1, len(proof)):                                     # (the first line names the function)
             l = proof[k]
             trials = [("left out", None)]
             if l in ("t lt", "t ge"): trials.append(("the other order", "t ge" if l == "t lt" else "t lt"))
@@ -132,7 +132,8 @@ class Varint(unittest.TestCase):
                 self.assertNotEqual(r.stdout, "shown\n", (k, l, kind))
                 kinds[kind] = kinds.get(kind, 0) + 1
         print(f"\nthe proof of {SYMBOL} changed in one place: {kinds}", file=sys.stderr)
-        self.assertGreater(kinds.get("left out", 0), 200)
+        self.assertEqual(kinds.get("left out", 0), len(proof) - 1)
+        self.assertGreater(len(proof), 60)
 
     def test_a_line_of_the_statement_in_the_proof_is_refused(self):
         with open(self.kept) as f: proof = f.read()

@@ -101,7 +101,20 @@ theorem symSpread16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
         · have h0 := eq0
           change Ode.load st.mem b 4 = _ at h0
           rw [List.map_replicate, h0]
-    next => exact symSpreadScalar16_sound E bind h H wf
+    next =>
+      split at h
+      next hl =>
+        -- the low half of a number, as a word, is the number as a word
+        simp only [beq_iff_eq] at hl; subst f
+        match args, h with
+        | [b], h =>
+          obtain ⟨ρ', y, c, hy, val⟩ := symSpreadScalar16_sound E bind h H wf
+          refine ⟨ρ', y % 2 ^ 32, c, by simp [value, values, hy, memSize, prim], ?_⟩
+          have e : y % 2 ^ 32 % W32 = y % W32 := by unfold W32; exact Nat.mod_mod _ _
+          rw [e]; exact val
+        | [], h => exact (refuse_ok h).elim
+        | _ :: _ :: _, h => exact (refuse_ok h).elim
+      next => exact symSpreadScalar16_sound E bind h H wf
 
 /-- Lane-wise arithmetic uses the existing word terms and their soundness lemmas. -/
 theorem symLaneTerms_sound {α : Type} {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}

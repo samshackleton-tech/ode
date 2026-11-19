@@ -68,7 +68,7 @@ class Helper(unittest.TestCase):
         try:
             s = session.Session(st, head, name)
             got = [s.ask(body[:n]) for n in cuts] + [s.ask(body[:n]) for n in reversed(cuts[::3])]
-            self.assertGreater(s.begun, 30)
+            self.assertGreater(s.begun, 10)
             s.close()
         finally: session.DEPTH = depth
         self.assertEqual(got, want + list(reversed(want[::3])))

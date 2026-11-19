@@ -960,19 +960,36 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
         frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote, words := c.holds.words, known := c.holds.known,
         facts := by
           intro f hf
-          simp only [List.mem_cons] at hf
-          rcases hf with rfl | hf
-          · rw [holds_iff, ev_var, hq]; exact Int.ediv_nonneg x0 (by omega)
-          · exact c.holds.facts f hf }
+          rcases List.mem_append.mp hf with hb | hf
+          · -- the quotient's bound
+            unfold quotientBound at hb
+            split at hb
+            next k hk =>
+              simp only [List.mem_cons, List.not_mem_nil, or_false] at hb; subst hb
+              rw [holds_iff, ev_sub, ev_const, ev_var, hq]
+              have le := Int.ediv_le_ediv pos (boundOf_sound hk ρ H.facts)
+              omega
+            next => cases hb
+          · simp only [List.mem_cons] at hf
+            rcases hf with rfl | hf
+            · rw [holds_iff, ev_var, hq]; exact Int.ediv_nonneg x0 (by omega)
+            · exact c.holds.facts f hf }
     · exact {
         base := c.wf.base, reg := c.wf.reg, zf := c.wf.zf, cf := c.wf.cf, frame := c.wf.frame, spec := c.wf.spec,
         bytes := c.wf.bytes, wrote := c.wf.wrote, words := c.wf.words.mono rfl rfl rfl (Nat.le_refl _), known := c.wf.known,
         facts := by
           intro f hf
-          simp only [List.mem_cons] at hf
-          rcases hf with rfl | hf
-          · exact bq
-          · exact c.wf.facts f hf }
+          rcases List.mem_append.mp hf with hb | hf
+          · unfold quotientBound at hb
+            split at hb
+            next k hk =>
+              simp only [List.mem_cons, List.not_mem_nil, or_false] at hb; subst hb
+              exact bounded_sub (bounded_const _ _) bq
+            next => cases hb
+          · simp only [List.mem_cons] at hf
+            rcases hf with rfl | hf
+            · exact bq
+            · exact c.wf.facts f hf }
 
 theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
@@ -983,9 +1000,17 @@ theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
     simp only [symLow, hk, ↓reduceIte]
     exact ⟨ρ, Carried.here H wf, by rw [ev_const, ev_low_exact hk], bounded_const _ _⟩
   | false =>
-    simp only [symLow, hk, Bool.false_eq_true, ↓reduceIte]
-    obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
-    exact ⟨ρ', c, hr, br⟩
+    cases hp : plain s.facts (Lin.sub (Lin.const (m - 1)) x) with
+    | true =>
+      -- a number seen at once to be below the divisor is its own remainder
+      simp only [symLow, hk, hp, Bool.false_eq_true, ↓reduceIte]
+      have g := plain_sound hp ρ H.facts
+      rw [ev_sub, ev_const] at g
+      exact ⟨ρ, Carried.here H wf, (Int.emod_eq_of_lt x0 (by omega)).symm, hx⟩
+    | false =>
+      simp only [symLow, hk, hp, Bool.false_eq_true, ↓reduceIte]
+      obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
+      exact ⟨ρ', c, hr, br⟩
 
 theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
