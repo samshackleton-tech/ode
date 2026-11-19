@@ -452,7 +452,7 @@ theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.genera
           (fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩),
           (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m),
           ⟨wf.words.table, fun j r h => bounded_mono le (wf.words.atoms j r h), fun x ids h => by simp [Sym.general] at h,
-           wf.words.rotrs, fun w j i h => by simp [Sym.general] at h⟩,
+           wf.words.rotrs, (fun w j i h => by simp [Sym.general] at h), fun _ _ h => nomatch h⟩,
           fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m)⟩
   · intro r hr
     show bounded (first.nvars + 16) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
@@ -492,7 +492,8 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
     exact A.entry r hr
   have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)
   refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
-    ⟨fun x ids h => by simp [Sym.general] at h, fun w m => by simp [Sym.general] at m, fun w j i m => by simp [Sym.general] at m⟩,
+    ⟨(fun x ids h => by simp [Sym.general] at h), (fun w m => by simp [Sym.general] at m),
+     (fun w j i m => by simp [Sym.general] at m), fun _ _ h => nomatch h⟩,
     Hg.known⟩
   · intro r hr
     show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))

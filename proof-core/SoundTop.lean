@@ -40,24 +40,14 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     | jump _ _ => simp only [execAll, x1]; exact x2
     | call _ => simp only [execAll, x1]; exact x2
 
-theorem entails_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
-    ∀ {goals : List Row} {items rest : Items}, each (entail facts) goals items = .ok ((), rest) →
-      ∀ g ∈ goals, g.holds ρ
-  | [], _, _, _, _, m => by simp at m
-  | k :: more, _, _, h, g, m => by
-    simp only [each] at h
-    obtain ⟨_, _, hk, hm⟩ := V.bind_ok h
-    rcases List.mem_cons.mp m with rfl | m
-    · exact entail_sound hk ρ hf
-    · exact entails_sound hf hm g m
-
 theorem stackGoals_bounded {ctx : Ctx} {s : Sym} (wf : WF s) {g : Row} (m : g ∈ stackGoals ctx s) : bounded s.nvars g := by
   have off := bounded_sub (wf.reg RSP (by decide)) (bounded_var (x := RSP) (Nat.lt_of_lt_of_le (by decide) wf.base))
-  simp only [stackGoals, List.mem_cons, List.mem_map] at m
-  rcases m with rfl | rfl | ⟨⟨o, v⟩, _, rfl⟩
+  simp only [stackGoals, List.mem_cons, List.mem_append, List.mem_map, Option.mem_toList] at m
+  rcases m with rfl | rfl | ⟨⟨o, _⟩, _, rfl⟩ | ⟨⟨o, ids⟩, hs, rfl⟩
   · exact bounded_add off (bounded_const _ _)
   · exact bounded_scale (-1) off
   · exact bounded_sub (bounded_const _ _) off
+  · exact bounded_sub (wf.words.spill o ids hs).1 off
 
 theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : settle ctx s items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
@@ -83,7 +73,8 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
       injection this with h1 _
       subst h1
       exact ⟨Agree.refl _ _, Nat.le_refl _,
-        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩,
+        ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote,
+         ⟨H.words.vec, H.words.intact, H.words.wrote, fun _ _ h => nomatch h⟩, H.known⟩,
         ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote,
          wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩⟩
     next => exact (refuse_ok h).elim
@@ -572,11 +563,12 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   unfold M64 at habove
   refine ⟨⟨fun _ _ => rfl, fun r _ => by simp [entrySym], E.small, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ => rfl),
            (fun _ _ _ m => nomatch m),
-           ⟨fun x ids h => by simp [entrySym] at h, fun _ _ _ _ _ _ _ _ => rfl, fun w j i m => by simp [entrySym] at m⟩,
+           ⟨(fun x ids h => by simp [entrySym] at h), (fun _ _ _ _ _ _ _ _ => rfl),
+            (fun w j i m => by simp [entrySym] at m), fun _ _ h => nomatch h⟩,
            (fun k m => by simp [entrySym] at m)⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m),
            ⟨fun i n h => by simp [entrySym] at h, fun j r h => by simp [entrySym] at h, fun x ids h => by simp [entrySym] at h,
-            fun j a n h => by simp [entrySym] at h, fun w j i h => by simp [entrySym] at h⟩,
+            (fun j a n h => by simp [entrySym] at h), (fun w j i h => by simp [entrySym] at h), fun _ _ h => nomatch h⟩,
            (fun k m => by simp [entrySym] at m)⟩⟩
   · intro o v m; cases m
   · intro f m

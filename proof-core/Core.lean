@@ -351,6 +351,7 @@ structure Sym where
   vec : List (Nat × List Nat) := []   -- (vector register, known low lanes as term numbers); the first entry for each register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
+  spill : Option (Row × List Nat) := none  -- entry-relative offset and lane terms of the last aligned vector spill
   known : List Known := []        -- what is known of numbers that are no rows
   deriving Inhabited
 
@@ -949,6 +950,42 @@ def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (L
       else refuse "no proof rule for this 512-bit shuffle"
   | _ => refuse "no proof rule for this 512-bit value"
 
+def frameOffset (a : Row) : Row := Lin.sub a (Lin.var RSP)
+
+def frameSpanGoals (ctx : Ctx) (s : Sym) (a : Row) (size : Nat) : List Row :=
+  let o := frameOffset a
+  [Lin.sub a (s.reg RSP), Lin.add o (Lin.const ctx.contract.stack), Lin.sub (Lin.const (-(size : Int))) o]
+
+def savedWordGoals (s : Sym) (a : Row) (size : Nat) : List Row :=
+  s.frame.map fun (o, _) => Lin.sub (Lin.const (o - size)) (frameOffset a)
+
+def aligned64 (a : Row) : Bool := a.coeff.all (fun x => x % 64 == 0) && a.constant % 64 == 0
+
+/-- Touch the first byte of the current frame without recording a value that can be read back. -/
+def symTouchFrame (ctx : Ctx) (s : Sym) (a : Row) : V Sym := do
+  each (entail s.facts) (frameSpanGoals ctx s a 1)
+  each (entail s.facts) (savedWordGoals s a 1)
+  pure { s with spill := none }
+
+def symSpillLoad (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
+  match symWordAddr bind s args, s.spill with
+  | some a, some (o, l) =>
+    if aligned64 a && frameOffset a == o then do
+      each (entail s.facts) (frameSpanGoals ctx s a 64)
+      pure (l, s)
+    else refuse "the aligned load does not match the saved stack vector"
+  | _, _ => refuse "no saved stack vector for this aligned load"
+
+def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : List Nat) : V Sym :=
+  match symWordAddr bind s args with
+  | some a =>
+    if aligned64 a then do
+      each (entail s.facts) (frameSpanGoals ctx s a 64)
+      each (entail s.facts) (savedWordGoals s a 64)
+      pure { s with spill := some (frameOffset a, l) }
+    else refuse "the vector store's address is not known to be 64-byte aligned"
+  | none => refuse "the aligned vector store needs a known address"
+
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
     match symVec512 bind s (.name n) with
@@ -967,6 +1004,7 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       | [.name op, a, b] => symEach512 bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
     else if f == "mem512" then symMemWords ctx bind s args 16
+    else if f == "mem512a" then symSpillLoad ctx bind s args
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
@@ -976,7 +1014,7 @@ def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
 
 /-- Replace the known words at the store's offsets. Other word stores remain in force. -/
 def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
-  { s with intact := s.intact.filter (· != w),
+  { s with intact := s.intact.filter (· != w), spill := none,
            wroteW := ((List.range l.length).map fun i => (w, j + i, l.getD i 0)) ++
                      s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + l.length)) }
 
@@ -1009,6 +1047,10 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
         match symVec512 bind s v, symReg bind s b, symNumber bind n with
         | some l, some x, some k => symStoreWords ctx s (Lin.add (signed x) (signed (Lin.const k))) l 16
         | _, _, _ => refuse "a 512-bit store needs a known register, a base register and a displacement"
+      else if f == "mem512a" then
+        match symVec512 bind s v with
+        | some l => symSpillStore ctx bind s [b, n] l
+        | none => refuse "the spilled vector register needs all sixteen lanes"
       else refuse "no proof rule for this 512-bit destination"
     | _ => refuse "no proof rule for this 512-bit destination"
   | .vset place v =>
@@ -1065,7 +1107,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
           match locate ctx (Lin.add (signed a) (signed b)) with
           | some (.frame c) =>
             if memSize f = some 8 ∧ inFrame ctx s c = true then
-              pure { s with frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+              pure { s with spill := none, frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
             else refuse "a write that is not eight bytes of the frame in use"
           | some (.out w o) =>
             -- one byte, at a place shown to be within the run, the byte shown to be one (0 to 255)
@@ -1079,10 +1121,14 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
                 if s.wroteW.any (fun e => e.1 == w) then refuse "a byte written to a run that words were written to: not here yet"
                 else
                 match keepWrote w o s.wrote with
-                | some rest => pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w) }
+                | some rest => pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := none }
                 | none => refuse "a write at a place not known apart from one written before: not here yet"
               else refuse "a write of more than one byte to a run given to write: not here yet"
             | none => refuse "no such run of bytes"
+          | none =>
+            let addr := Lin.add (signed a) (signed b)
+            if memSize f = some 1 ∧ addr = s.reg RSP then symTouchFrame ctx s addr
+            else refuse "a write to a run given only to read, or to no run given"
           | _ => refuse "a write to a run given only to read, or to no run given"
         | _, _, _ => refuse "a flag's value where a number is expected"
       | _ => refuse "a row that sets what is no place"
@@ -1093,12 +1139,14 @@ below it. -/
 def stackGoals (ctx : Ctx) (s : Sym) : List Row :=
   let off := Lin.sub (s.reg RSP) (Lin.var RSP)
   Lin.add off (Lin.const ctx.contract.stack) :: Lin.scale (-1) off ::
-    s.frame.map fun (o, _) => Lin.sub (Lin.const o) off
+    ((s.frame.map fun (o, _) => Lin.sub (Lin.const o) off) ++
+     (s.spill.toList.map fun (o, _) => Lin.sub o off))
 
 def settle (ctx : Ctx) (s : Sym) : V Sym :=
   match s.sp with
   | some sp =>
-    if sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp then pure { s with frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
+    if sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp then
+      pure { s with spill := none, frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
     else refuse "the stack pointer leaves the frame the contract allows"
   | none => do
     -- Every saved word must remain at or above the stack pointer. Remember these facts so

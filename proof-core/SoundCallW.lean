@@ -369,7 +369,7 @@ theorem afterCallW_wf {s : Sym} (wf : WF s) (sp : Int) (w m : Nat) (g : String) 
   have le : s.nvars ≤ s.nvars + 16 + m := by omega
   obtain ⟨ext, ok, len, lt, _⟩ := madeW_table wf m (fun _ _ => 0) (fun _ => 0)
   refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
-    ⟨ok.wf, ok.atoms, fun x ids h => by simp [Sym.afterCallW] at h, ok.rotrs, ?_⟩, ?_⟩
+    ⟨ok.wf, ok.atoms, (fun x ids h => by simp [Sym.afterCallW] at h), ok.rotrs, ?_, fun _ _ h => nomatch h⟩, ?_⟩
   · intro r hr
     show bounded (s.nvars + 16 + m) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
@@ -480,7 +480,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   have hold : ∀ i, i < s.terms.length →
       den (inpOf ctx s0) (afterRhoW s.nvars ρ s2 nums) (madeW s m).2 i = den (inpOf ctx s0) ρ s.terms i :=
     fun i hi => den_mono wf.words.table wf.words.atoms ag ext hi
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨fun x ids h => by simp [Sym.afterCallW] at h, ?_, ?_⟩, ?_⟩
+  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : callerSaved.contains r with
@@ -549,7 +549,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     have hor := E.out (List.mem_of_getElem? ho')
     have ap := E.outOut ho' hw ne'
     rw [hmem _ (by omega) (by omega)]
-    exact H.words.2.1 w' mi x' r' n' ho' k hk
+    exact H.words.intact w' mi x' r' n' ho' k hk
   · -- the words known written: those of the run handed over are the new ones; the others are as they were
     intro w' j i mw' x' r' n' ho'
     rw [afterCallW_wroteW] at mw'
@@ -568,7 +568,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       rw [hrun k hk bb hbb, afterCallW_terms, hden k hk]
     · obtain ⟨mo, ne⟩ := List.mem_filter.mp mo
       have ne' : w' ≠ w := by simpa using ne
-      obtain ⟨h1, h2⟩ := H.words.2.2 w' j i mo x' r' n' ho'
+      obtain ⟨h1, h2⟩ := H.words.wrote w' j i mo x' r' n' ho'
       have hor := E.out (List.mem_of_getElem? ho')
       have ap := E.outOut ho' hw ne'
       refine ⟨h1, fun bb hbb => ?_⟩
@@ -868,7 +868,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           intro j hj bb hbb
           have m := hwritten j hj
           rw [Nat.zero_add] at m
-          obtain ⟨g1, g2⟩ := HT.words.2.2 plan.w j (ids.getD j 0) m xw b n how
+          obtain ⟨g1, g2⟩ := HT.words.wrote plan.w j (ids.getD j 0) m xw b n how
           rw [s1mem _ (by omega)]
           exact g2 bb hbb
         have hiobytes : (List.range n).map (fun k => Val.int ((afterCall p q i st).mem ((afterCall p q i st).reg r + k))) =

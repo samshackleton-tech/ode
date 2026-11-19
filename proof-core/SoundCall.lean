@@ -206,7 +206,7 @@ theorem callerSaved_lt {r : Nat} (h : r ∈ callerSaved) : r < 16 := by
 theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := by
   refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
     ⟨wf.words.table, fun j r h => bounded_mono (Nat.le_add_right _ _) (wf.words.atoms j r h), fun x ids h => by simp [Sym.afterCall] at h,
-     wf.words.rotrs, fun w j i h => by simp [Sym.afterCall] at h⟩,
+     wf.words.rotrs, (fun _ _ _ h => by simp [Sym.afterCall] at h), fun _ _ h => nomatch h⟩,
     fun k m => Known.wf_mono (Nat.le_add_right _ _) (Nat.le_refl _) (wf.known k m)⟩
   · intro r hr
     show bounded (s.nvars + 16) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
@@ -250,7 +250,8 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
   have ag := afterRho_agree s.nvars ρ s2
   have H' := H.agree wf ag
   refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
-    ⟨fun x ids h => by simp [Sym.afterCall] at h, fun w m => by simp [Sym.afterCall] at m, fun w j i m => by simp [Sym.afterCall] at m⟩,
+    ⟨(fun x ids h => by simp [Sym.afterCall] at h), (fun w m => by simp [Sym.afterCall] at m),
+     (fun w j i m => by simp [Sym.afterCall] at m), fun _ _ h => nomatch h⟩,
     H'.known⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)

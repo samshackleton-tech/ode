@@ -121,20 +121,29 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
       have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
       show st.vec x k = den (inpOf ctx s0) ρ T' (ids.getD k 0)
       rw [den_ext wf.words.table e (by rw [eq]; exact lt _ (List.getElem_mem hk))]
-      exact H.words.1 x ids hx k hk,
-    H.words.2.1,
+      exact H.words.vec x ids hx k hk,
+    H.words.intact,
     fun w j i m x r n ho => by
-      obtain ⟨h1, h2⟩ := H.words.2.2 w j i m x r n ho
+      obtain ⟨h1, h2⟩ := H.words.wrote w j i m x r n ho
       refine ⟨h1, fun b hb => ?_⟩
       show st.mem _ = den (inpOf ctx s0) ρ T' i / 256 ^ b % 256
       rw [den_ext wf.words.table e (wf.words.wrote w j i m)]
-      exact h2 b hb⟩,
+      exact h2 b hb,
+    fun o ids hs k hk => by
+      have lt := (wf.words.spill o ids hs).2.2
+      have hc : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
+      show Ode.load st.mem _ 4 = den (inpOf ctx s0) ρ T' (ids.getD k 0)
+      rw [den_ext wf.words.table e (by rw [hc]; exact lt _ (List.getElem_mem hk))]
+      exact H.words.spill o ids hs k hk⟩,
    fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m)⟩
 
 theorem WF.terms {s : Sym} (wf : WF s) {T' : List Node} (e : Ext s.terms T') (ok : TableOk s.nvars T') : WF { s with terms := T' } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
    ⟨ok.wf, ok.atoms, fun x ids h => ⟨(wf.words.vec x ids h).1, fun i mi => Nat.lt_of_lt_of_le ((wf.words.vec x ids h).2 i mi) e.le⟩,
-    ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le⟩,
+    ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le,
+    fun o ids hs => by
+      obtain ⟨bo, len, lt⟩ := wf.words.spill o ids hs
+      exact ⟨bo, len, fun i mi => Nat.lt_of_lt_of_le (lt i mi) e.le⟩⟩,
    fun k m => Known.wf_mono (Nat.le_refl _) e.le (wf.known k m)⟩
 
 theorem Carried.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -173,7 +182,7 @@ theorem symVec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
         obtain ⟨len, lt⟩ := wf.words.vec r ids hi
         refine ⟨r, by rw [List.length_take]; omega, fun i m => lt i (List.mem_of_mem_take m), by simp only [vecArg, hv]; rfl, ?_⟩
         intro k hk
-        have dn := H.words.1 r ids hi k (by omega)
+        have dn := H.words.vec r ids hi k (by omega)
         simpa only [List.getD, List.getElem?_take_of_lt hk] using dn
   | number _ => simp [symVec] at h
   | lane _ _ => simp [symVec] at h
@@ -198,7 +207,7 @@ theorem symLane_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
           have e : l.getD k 0 = i := by simp [List.getD, h]
           refine ⟨(wf.words.vec r l hl).2 i (List.mem_of_getElem? h), st.vec r k, by simp [laneArg, hv], ?_⟩
           have len := (wf.words.vec r l hl).1
-          rw [← e]; exact H.words.1 r l hl k (by omega)
+          rw [← e]; exact H.words.vec r l hl k (by omega)
     next => cases h
   | number _ => simp [symLane] at h
   | name _ => simp [symLane] at h
@@ -274,7 +283,7 @@ theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
 
 theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {args : List Expr} {addr : Row}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symWordAddr bind s args = some addr) :
-    ∃ vs, values (ctx.contract.perm s0) bind st args = some vs ∧
+    ∃ vs, values (ctx.contract.perm s0) bind st args = some vs ∧ bounded s.nvars addr ∧
       ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → sumList vs % M64 = A := by
   rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨i, _ | ⟨_, _⟩⟩⟩⟩
   · simp [symWordAddr] at h
@@ -282,14 +291,17 @@ theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
   · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp [symWordAddr, hx, hk] at h
     subst addr
     obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
-    exact ⟨_, vs, by simpa only [sumList, Nat.add_zero] using ha⟩
+    obtain ⟨_, _, _, _, bx⟩ := symReg_sound H wf hx
+    exact ⟨_, vs, bounded_add (bounded_signed bx) (bounded_signed (bounded_const _ _)),
+      by simpa only [sumList, Nat.add_zero] using ha⟩
   · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> cases hy : symReg bind s i <;> simp [symWordAddr, hx, hk, hy] at h
     subst addr
     rename_i x k y
-    obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound H wf hx
-    obtain ⟨yb, vi, yb_lt, yb_ev, _⟩ := symReg_sound H wf hy
+    obtain ⟨xb, vb, xb_lt, xb_ev, bx⟩ := symReg_sound H wf hx
+    obtain ⟨yb, vi, yb_lt, yb_ev, by'⟩ := symReg_sound H wf hy
     obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm s0) (st := st) hk
-    refine ⟨[xb, k.toNat, yb], by simp [values, vb, vn, vi], ?_⟩
+    refine ⟨[xb, k.toNat, yb], by simp [values, vb, vn, vi],
+      bounded_add (bounded_add (bounded_signed bx) (bounded_signed (bounded_const _ _))) (bounded_signed by'), ?_⟩
     have sgx := signed_ev ρ x
     have sgy := signed_ev ρ y
     have sgk := signed_ev ρ (Lin.const k)
@@ -446,7 +458,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               have hA : a = s0.reg r + c.toNat := ha (s0.reg r + c.toNat) (by omega) (by unfold M64 at hfit ⊢; omega)
               have hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c.toNat + k) = s0.mem (s0.reg r + c.toNat + k) := by
                 intro k hk
-                have := H.words.2.1 w hin' x r n hw' (c.toNat + k) (by omega)
+                have := H.words.intact w hin' x r n hw' (c.toNat + k) (by omega)
                 rw [← Nat.add_assoc] at this; exact this
               obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf hj' hmem (by omega)
               refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
@@ -474,7 +486,7 @@ theorem symMemWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
   unfold symMemWords at h
   cases ha : symWordAddr bind s args <;> simp only [ha] at h
   · exact (refuse_ok h).elim
-  · obtain ⟨vs, vv, loc⟩ := symWordAddr_sound H wf ha
+  · obtain ⟨vs, vv, _, loc⟩ := symWordAddr_sound H wf ha
     exact ⟨vs, vv, symLoadWords_sound E h H wf nonempty _ loc⟩
 
 /-! ## The four words a row sets a vector register to -/
@@ -1327,14 +1339,14 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
     rw [storeWords_other _ _ _ _ (by omega)]
     exact g4
   words := by
-    refine ⟨H.words.1, ?_, ?_⟩
+    refine ⟨H.words.vec, ?_, ?_, (fun _ _ h => nomatch h)⟩
     · intro w' m x' r' n' g1 k hk'
       obtain ⟨m', ne⟩ := List.mem_filter.mp m
       have ne' : w' ≠ w := by simpa using ne
       have := E.outOut hw g1 (Ne.symm ne')
       show storeWords st.mem a lanes (s0.reg r' + k) = s0.mem (s0.reg r' + k)
       rw [storeWords_other _ _ _ _ (by omega)]
-      exact H.words.2.1 w' m' x' r' n' g1 k hk'
+      exact H.words.intact w' m' x' r' n' g1 k hk'
     · intro w' j i m x' r' n' g1
       rcases List.mem_append.mp m with m | m
       · obtain ⟨q, mq, eq⟩ := List.mem_map.mp m
@@ -1351,7 +1363,7 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
         rw [e, storeWords_at _ _ _ _ _ (by omega) hb, hd q hq]
         rfl
       · obtain ⟨m', keep⟩ := List.mem_filter.mp m
-        obtain ⟨g2, g3⟩ := H.words.2.2 w' j i m' x' r' n' g1
+        obtain ⟨g2, g3⟩ := H.words.wrote w' j i m' x' r' n' g1
         refine ⟨g2, fun b hb => ?_⟩
         show storeWords st.mem a lanes (s0.reg r' + 4 * j + b) = _
         have hne : s0.reg r' + 4 * j + b < a ∨ a + 4 * lanes.length ≤ s0.reg r' + 4 * j + b := by
@@ -1427,7 +1439,8 @@ theorem symStoreWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
                      injection e2 with _ e3
                      rw [← e3, getD_index (List.mem_range.mp mq)]
                      exact hlt _ (List.getElem_mem (List.mem_range.mp mq))
-                   · exact wf.words.wrote w' j i (List.mem_filter.mp m).1⟩, wf.known⟩
+                   · exact wf.words.wrote w' j i (List.mem_filter.mp m).1,
+                 fun _ _ hs => nomatch hs⟩, wf.known⟩
 
 /-! ## A row that sets a vector register, or stores one -/
 
@@ -1473,11 +1486,11 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                · rw [ite_eq_left low, List.length_take] at hk
                  have h4 : k < 4 := by omega
                  rw [ite_eq_left (Or.inl h4), ite_eq_left low]
-                 simpa only [List.getD, List.getElem?_take_of_lt h4] using H.words.1 x old ho k (by omega)
+                 simpa only [List.getD, List.getElem?_take_of_lt h4] using H.words.vec x old ho k (by omega)
                · rw [ite_eq_left (Or.inr (by omega)), ite_eq_right low]
                  rw [ite_eq_right low] at hk
-                 exact H.words.1 x old ho k hk,
-             H.words.2.1, H.words.2.2⟩, H.known⟩
+                 exact H.words.vec x old ho k hk,
+             H.words.intact, H.words.wrote, H.words.spill⟩, H.known⟩
         · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
             ⟨wf.words.table, wf.words.atoms,
              fun x ids hx => by
@@ -1486,7 +1499,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                split
                · exact ⟨Or.inl (by rw [List.length_take]; omega), fun i m => lt i (List.mem_of_mem_take m)⟩
                · exact ⟨len, lt⟩,
-             wf.words.rotrs, wf.words.wrote⟩, wf.known⟩
+             wf.words.rotrs, wf.words.wrote, wf.words.spill⟩, wf.known⟩
         · simp [execStmt, hn, hu]
       next => exact (refuse_ok h).elim
     next hn =>
@@ -1511,15 +1524,15 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
                  · have h4 : k < 4 := by simpa only [e2, len] using hk
                    rw [if_pos e, if_pos h4, e2]; exact dn k h4
-                 · rw [if_neg ne]; exact c.holds.words.1 x ids hx' k hk,
-               c.holds.words.2.1, c.holds.words.2.2⟩, c.holds.known⟩
+                 · rw [if_neg ne]; exact c.holds.words.vec x ids hx' k hk,
+               c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known⟩
           · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
               ⟨c.wf.words.table, c.wf.words.atoms,
                fun x ids hx => by
                  rcases lookup_cons_cases hx with ⟨e, e2⟩ | ⟨ne, hx'⟩
                  · rw [e2]; exact ⟨Or.inl len, lt⟩
                  · exact c.wf.words.vec x ids hx',
-               c.wf.words.rotrs, c.wf.words.wrote⟩, c.wf.known⟩
+               c.wf.words.rotrs, c.wf.words.wrote, c.wf.words.spill⟩, c.wf.known⟩
           · simp [execStmt, hn, hr, hl]
         next => exact (refuse_ok h).elim
   | call f args =>

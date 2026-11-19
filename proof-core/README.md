@@ -242,7 +242,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 807 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,707 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,747 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -416,8 +416,14 @@ stays within the frame and that any saved words stay at or above it. The verifie
 rather than asking for the same proof at each instruction. A test checks the same proof with and
 without 80 intervening instructions that do not change the stack pointer.
 
-The 16-way kernel still needs rules for its aligned stack loads and stores, indirect loads through its
-pointer array, and its loop.
+The verifier can also write and reload one 64-byte vector in the aligned stack frame. It checks the
+whole slot, its alignment, and that the store ends before any saved scalar word. It remembers only the
+most recent vector store. A scalar store, a call or exit from the aligned frame makes it forget the
+saved vector. It verifies a copy from object bytes that clears the register between the store and
+reload. Tests reject a reload from another slot, a store whose address lacks the required alignment,
+and a stack adjustment that would leave the slot below the stack pointer.
+
+The 16-way kernel still needs rules for reading through its input pointer array and for its loop.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -588,8 +594,8 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 807 lines. The verifier: 1,866 lines (Core.lean 1,707, Arithmetic.lean
-159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,299 lines.
+**Code size.** The formal model: 807 lines. The verifier: 1,906 lines (Core.lean 1,747, Arithmetic.lean
+159 including its proofs). The file parser: 165 lines. The proofs of the theorems: 10,572 lines.
 
 ## The files
 

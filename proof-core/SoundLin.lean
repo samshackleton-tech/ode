@@ -119,6 +119,17 @@ theorem entail_sound {facts : List Row} {g : Row} {items : Items} {r : Unit × I
     (h : entail facts g items = .ok r) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g :=
   entailAs_sound (what := "entail") h ρ hf
 
+theorem entails_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
+    ∀ {goals : List Row} {items rest : Items}, each (entail facts) goals items = .ok ((), rest) →
+      ∀ g ∈ goals, g.holds ρ
+  | [], _, _, _, _, m => by simp at m
+  | k :: more, _, _, h, g, m => by
+    simp only [each] at h
+    obtain ⟨_, _, hk, hm⟩ := V.bind_ok h
+    rcases List.mem_cons.mp m with rfl | m
+    · exact entail_sound hk ρ hf
+    · exact entails_sound hf hm g m
+
 theorem staysBelow_sound {facts : List Row} {x : Row} {m : Int} {items rest : Items}
     (h : staysBelow facts x m items = .ok (true, rest)) (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) :
     ev ρ x ≤ m - 1 := by

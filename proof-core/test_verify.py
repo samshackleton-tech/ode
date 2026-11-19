@@ -192,8 +192,8 @@ class Verify(unittest.TestCase):
             with self.subTest(arg=arg):
                 self.assertIn("sixty-four bytes that are not sixteen words of the run",
                               self.wide(ops, [*buffers[:arg], shorter, *buffers[arg + 1:]]))
-        self.assertIn("no proof rule", self.wide([".zload true 0 .rsi 0"], buffers))
-        self.assertIn("no proof rule", self.wide([*ops[:2], ".zstore true .rdi 0 0"], buffers))
+        self.assertIn("no saved stack vector", self.wide([".zload true 0 .rsi 0"], buffers))
+        self.assertIn("address is not known to be 64-byte aligned", self.wide([*ops[:2], ".zstore true .rdi 0 0"], buffers))
 
     def build_one(self, name, source):
         src, obj = (os.path.join(self.dir, name + suffix) for suffix in (".ode", ".o"))
@@ -265,6 +265,61 @@ contract wide_add(out: block, a: block, b: block) {
             prove.prove(spec, [(lost, "stack_align", "")], st, pf)
         wrong = self.build_one("stack_align", source.replace("pop rbx", "pop r12"))
         self.assertFalse(lean_verify.verify(spec, [(wrong, "stack_align")], pf)[0])
+
+    def test_spill_and_reload_at_an_aligned_stack_address(self):
+        source = """fn spill_copy as "spill_copy" {
+  push rbp
+  mov rbp, rsp
+  push rbx
+  and rsp, -64
+  sub rsp, 128
+  mov byte ptr [rsp], 0
+  vmovdqu32 zmm0, zmmword ptr [rsi]
+  vmovdqa32 zmmword ptr [rsp + 64], zmm0
+  vpxord zmm0, zmm0, zmm0
+  vmovdqa32 zmm0, zmmword ptr [rsp + 64]
+  vmovdqu32 zmmword ptr [rdi], zmm0
+  lea rsp, [rbp - 8]
+  pop rbx
+  pop rbp
+  vzeroupper
+  ret
+}
+"""
+        spec = """contract spill_copy(out: block, input: block) {
+  requires no_overlap(out, input)
+  ensures out = input
+  stack 207
+  needs avx512
+  trace depends on out, input
+}
+"""
+        name = "spill_copy"
+        st, pf = (os.path.join(self.dir, f"{name}.{kind}") for kind in ("statement", "proof"))
+        obj = self.build_one(name, source)
+        self.assertIn(name, prove.prove(spec, [(obj, name, "")], st, pf))
+        self.assertEqual(lean_verify.verify(spec, [(obj, name)], pf), (True, "shown"))
+        for old, new, why in (
+            ("[rsp + 64], zmm0", "[rsp + 32], zmm0", "address is not known to be 64-byte aligned"),
+            ("zmm0, zmmword ptr [rsp + 64]", "zmm0, zmmword ptr [rsp]", "aligned load does not match"),
+            ("[rsp + 64], zmm0", "[rsp + 128], zmm0", "need entail"),
+            ("mov byte ptr [rsp], 0", "mov byte ptr [rsp - 1], 0", "write to a run given only to read"),
+        ):
+            with self.subTest(why=why):
+                self.assertEqual(source.count(old), 1)
+                changed = self.build_one(name, source.replace(old, new))
+                with self.assertRaisesRegex(SystemExit, why):
+                    prove.prove(spec, [(changed, name, "")], st, pf)
+        # The store at the stack pointer is fine. Moving RSP above it would drop the slot.
+        lowest = source.replace("[rsp + 64]", "[rsp]")
+        obj = self.build_one(name, lowest)
+        prove.prove(spec, [(obj, name, "")], st, pf)
+        changed = self.build_one(name, lowest.replace("  vpxord zmm0", "  add rsp, 64\n  vpxord zmm0"))
+        with self.assertRaisesRegex(SystemExit, "need entail"):
+            prove.prove(spec, [(changed, name, "")], st, pf)
+        touched = self.build_one(name, lowest.replace("  vpxord zmm0", "  mov byte ptr [rsp], 1\n  vpxord zmm0"))
+        with self.assertRaisesRegex(SystemExit, "no saved stack vector"):
+            prove.prove(spec, [(touched, name, "")], st, pf)
 
     def test_indexed_wide_load_and_broadcast_from_memory(self):
         buffers = ("arg out out 64", "arg a fixed 68")

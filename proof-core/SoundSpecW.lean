@@ -1295,7 +1295,7 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
         | some i =>
           simp only [hi] at h1
           have m : (w, j, i) ∈ s.wroteW := List.contains_iff_mem.mp h1
-          obtain ⟨g1, g2⟩ := H.words.2.2 w j i m x r n hw
+          obtain ⟨g1, g2⟩ := H.words.wrote w j i m x r n hw
           obtain ⟨bs, eo, len, hm⟩ := written_words H wf hw rest _ (j + 1) h2 hrest
           have dw := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hi
           refine ⟨[𝔻 i % 256, 𝔻 i / 256 % 256, 𝔻 i / 65536 % 256, 𝔻 i / 16777216 % 256] ++ bs, ?_, ?_, ?_⟩

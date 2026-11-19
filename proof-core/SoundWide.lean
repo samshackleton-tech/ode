@@ -33,7 +33,7 @@ theorem symVec512_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
           · intro k h1 h2
             simp only [List.getElem_map, List.getElem_range]
             have hk : k < ids.length := by simpa only [List.length_map] using h2
-            simpa only [List.getD, List.getElem?_eq_getElem hk, Option.getD_some] using H.words.1 r ids hl k hk
+            simpa only [List.getD, List.getElem?_eq_getElem hk, Option.getD_some] using H.words.vec r ids hl k hk
         next => cases h
   | number _ => simp [symVec512] at h
   | lane _ _ => simp [symVec512] at h
@@ -329,6 +329,66 @@ theorem symLoad512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat →
       simp only [List.getElem_map, List.getElem_range]
       simpa only [getD_index (by rw [len]; exact hk)] using dn k hk
 
+private theorem dot_aligned : ∀ (cs : List Int) (ρ : Nat → Int), cs.all (fun x => x % 64 == 0) = true → (64 : Int) ∣ dot cs ρ
+  | [], _, _ => Int.dvd_zero _
+  | c :: cs, ρ, h => by
+    simp only [List.all_cons, Bool.and_eq_true, beq_iff_eq] at h
+    exact Int.dvd_add (Int.dvd_mul_of_dvd_left (Int.dvd_of_emod_eq_zero h.1)) (dot_aligned cs _ h.2)
+
+private theorem aligned64_sound {addr : Row} (h : aligned64 addr = true) (ρ : Nat → Int) : ev ρ addr % 64 = 0 := by
+  simp only [aligned64, Bool.and_eq_true, beq_iff_eq] at h
+  exact Int.dvd_iff_emod_eq_zero.mp (Int.dvd_add (dot_aligned addr.coeff ρ h.1) (Int.dvd_of_emod_eq_zero h.2))
+
+theorem alignedFrameAddress {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym} {addr : Row}
+    {bind : Bind} {args : List Expr} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hw : symWordAddr bind s args = some addr) (hm : aligned64 addr = true)
+    (ok : ∀ g ∈ frameSpanGoals ctx s addr 64, g.holds ρ) :
+    ∃ a, addr512 (ctx.contract.perm s0) bind st "mem512a" args = some a ∧ (a : Int) = ev ρ addr ∧
+      s0.reg RSP - ctx.contract.stack ≤ a ∧ a + 64 ≤ s0.reg RSP ∧ bounded s.nvars (frameOffset addr) := by
+  obtain ⟨vs, vv, b, mod⟩ := symWordAddr_sound H wf hw
+  obtain ⟨a, ea, lt, lo, hi⟩ := frameSpan_sound E H ok
+  have hmod := mod a ea lt
+  have dal := aligned64_sound hm ρ
+  rw [← ea] at dal
+  change (a : Int) % ((64 : Nat) : Int) = 0 at dal
+  rw [← Int.natCast_emod a 64] at dal
+  have ha : a % 64 = 0 := by exact_mod_cast dal
+  refine ⟨a, by simp [addr512, vv, hmod, ha], ea, lo, hi, ?_⟩
+  exact bounded_sub b (bounded_var (x := RSP) (Nat.lt_of_lt_of_le (by decide) wf.base))
+
+theorem symSpillLoad_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {bind : Bind} {args : List Expr} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symSpillLoad ctx bind s args items = .ok ((l, s'), rest)) :
+    ∃ lanes, Carried ctx s0 ρ s ρ s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "mem512a" args) = some lanes ∧
+      WideValue ctx s0 ρ s' l lanes := by
+  unfold symSpillLoad at h
+  cases ha : symWordAddr bind s args <;> cases hs : s.spill <;> simp only [ha, hs] at h
+  all_goals try exact (refuse_ok h).elim
+  rename_i addr pair
+  obtain ⟨o, ids⟩ := pair
+  simp only at h
+  split at h
+  next hal =>
+    simp only [Bool.and_eq_true, beq_iff_eq] at hal
+    obtain ⟨_, _, hc, he⟩ := V.bind_ok h
+    obtain ⟨hl, hstate⟩ := pure_pair he
+    subst l s'
+    obtain ⟨a, va, ea, lo, hi, _⟩ := alignedFrameAddress E H wf ha hal.1 (entails_sound H.facts hc)
+    have perm := (frameSpan_perm (ctx := ctx) lo hi).1
+    obtain ⟨_, len, lt⟩ := wf.words.spill o ids hs
+    have ea' : ((s0.reg RSP : Int) + ev ρ o).toNat = a := by
+      rw [← hal.2, frameOffset_eval H, ← ea]
+      omega
+    refine ⟨(List.range 16).map (fun k => Ode.load st.mem (a + 4 * k) 4), Carried.here H wf, ?_, len, lt, ?_⟩
+    · simp [lanesOf512, va, perm]
+    · apply List.ext_getElem
+      · simp [len]
+      · intro k h1 h2
+        have hk : k < ids.length := by simpa only [List.length_map] using h2
+        simp only [List.getElem_map, List.getElem_range]
+        simpa only [ea', getD_index hk] using H.words.spill o ids hs k hk
+  next => exact (refuse_ok h).elim
+
 theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
     {s s' : Sym} {v : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
     (h : symLanes512 ctx bind s v items = .ok ((l, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
@@ -386,8 +446,71 @@ theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
             obtain ⟨lanes, c, eval, val⟩ := symLoad512_sound E H wf h
             exact ⟨ρ, lanes, c, eval, val⟩
           next =>
-            obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
-            exact ⟨ρ, lanes, c, eval, val⟩
+            split at h
+            next hf =>
+              simp only [beq_iff_eq] at hf; subst f
+              obtain ⟨lanes, c, eval, val⟩ := symSpillLoad_sound E H wf h
+              exact ⟨ρ, lanes, c, eval, val⟩
+            next =>
+              obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
+              exact ⟨ρ, lanes, c, eval, val⟩
+
+theorem load_spilled_word (mem : Nat → Nat) (a : Nat) (lanes : List Nat) {k : Nat} (hk : k < lanes.length)
+    (hv : lanes.getD k 0 < W32) : load (storeWords mem a lanes) (a + 4 * k) 4 = lanes.getD k 0 := by
+  let base := a + 4 * k
+  calc
+    _ = load (store mem base (lanes.getD k 0) 4) base 4 := by
+      apply load_congr
+      intro y hy1 hy2
+      have e : y = base + (y - base) := by omega
+      rw [e]
+      exact (storeWords_at mem a lanes k (y - base) hk (by omega)).trans (store_at 4 mem base _ _ (by omega)).symm
+    _ = _ := load_store_same _ _ _ _ hv
+
+theorem symSpillStore_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
+    {bind : Bind} {args : List Expr} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symSpillStore ctx bind s args l items = .ok (s', rest)) (len : l.length = 16) (lt : ∀ i ∈ l, i < s.terms.length) :
+    ∃ a, addr512 (ctx.contract.perm s0) bind st "mem512a" args = some a ∧ allowed (ctx.contract.perm s0).write a 64 = true ∧
+      Carried ctx s0 ρ s ρ s' { st with mem := storeWords st.mem a (l.map (den (inpOf ctx s0) ρ s.terms)) } := by
+  unfold symSpillStore at h
+  cases ha : symWordAddr bind s args <;> simp only [ha] at h
+  · exact (refuse_ok h).elim
+  rename_i addr
+  split at h
+  next hm =>
+    obtain ⟨_, _, hc, h1⟩ := V.bind_ok h
+    obtain ⟨_, _, hd, he⟩ := V.bind_ok h1
+    have hy := V.pure_ok he
+    injection hy with e _; subst s'
+    obtain ⟨a, va, ea, lo, hi, ba⟩ := alignedFrameAddress E H wf ha hm (entails_sound H.facts hc)
+    have apart := savedWordSpan_sound H ea (entails_sound H.facts hd)
+    have off := frameOffset_eval H addr
+    let lanes := l.map (den (inpOf ctx s0) ρ s.terms)
+    have hlen : lanes.length = 16 := by simp [lanes, len]
+    refine ⟨a, va, (frameSpan_perm (ctx := ctx) lo hi).2, ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩⟩
+    · refine H.frameSpanWrite E lo hi apart (fun y hy => storeWords_other _ _ _ _ (by rw [hlen]; exact hy)) ?_
+      intro o ids hs k hk
+      simp only [Option.some.injEq, Prod.mk.injEq] at hs
+      obtain ⟨rfl, rfl⟩ := hs
+      have aa : ((s0.reg RSP : Int) + ev ρ (frameOffset addr)).toNat = a := by rw [off, ← ea]; omega
+      have kl : k < lanes.length := by simpa only [lanes, List.length_map] using hk
+      have ev := getD_map_index hk (den (inpOf ctx s0) ρ s.terms)
+      have val : lanes.getD k 0 < W32 := by
+        rw [ev]
+        exact den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs _
+      rw [aa, load_spilled_word _ _ _ kl val, ev]
+    · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
+        ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs, wf.words.wrote, fun o ids h => by
+          simp only [Option.some.injEq, Prod.mk.injEq] at h
+          obtain ⟨rfl, rfl⟩ := h
+          exact ⟨ba, len, lt⟩⟩, wf.known⟩
+  next => exact (refuse_ok h).elim
+
+theorem lanesOf512_of_vecArg {perm : Perm} {bind : Bind} {st : State} {v : Expr} {lanes : List Nat}
+    (h : vecArg512 bind st v = some lanes) : lanesOf512 perm bind st v = some lanes := by
+  cases v with
+  | name _ => exact h
+  | number _ | lane _ _ | call _ _ => simp [vecArg512] at h
 
 theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {place v : Expr}
     {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -412,16 +535,24 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         obtain ⟨len, lt, src⟩ := symVec512_sound H wf hv
         let d := den (inpOf ctx s0) ρ s.terms
         let lanes := l.map d
-        have load : lanesOf512 (ctx.contract.perm s0) bind st v = some lanes := by
-          cases v with
-          | name n => exact src
-          | number _ | lane _ _ | call _ _ => simp [vecArg512] at src
+        have load := lanesOf512_of_vecArg (perm := ctx.contract.perm s0) src
         have hl : lanes.length = 16 := by simp [lanes, len]
         obtain ⟨a, va, ha⟩ := wideAddress H wf hx hk
         obtain ⟨al, c⟩ := symStoreWords_sound E H wf (by decide) h ha hl lt (fun j hj => getD_map_index (by omega) d)
         refine ⟨ρ, _, c, ?_, rfl⟩
-        simp [execStmt, execVec512, load, hl, va, al]
-      next => exact (refuse_ok h).elim
+        simp [execStmt, execVec512, load, len, va, al, lanes, d]
+      next =>
+        split at h
+        next hf =>
+          simp only [beq_iff_eq] at hf; subst f
+          cases hv : symVec512 bind s v <;> simp only [hv] at h
+          · exact (refuse_ok h).elim
+          obtain ⟨len, lt, src⟩ := symVec512_sound H wf hv
+          obtain ⟨a, va, al, c⟩ := symSpillStore_sound E H wf h len lt
+          have load := lanesOf512_of_vecArg (perm := ctx.contract.perm s0) src
+          refine ⟨ρ, _, c, ?_, rfl⟩
+          simp [execStmt, execVec512, load, len, va, al]
+        next => exact (refuse_ok h).elim
     · simp only [symStmt] at h; exact (refuse_ok h).elim
   | name n =>
     simp only [symStmt] at h
@@ -441,15 +572,15 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           rcases lookup_cons_cases hx with ⟨rfl, rfl⟩ | ⟨ne, hx'⟩
           · rw [ite_eq_left rfl, eq]
             simp only [List.getD, List.getElem?_eq_getElem hk, List.getElem?_map, Option.map_some, Option.getD_some]
-          · rw [ite_eq_right ne]; exact c.holds.words.1 x ids hx' k hk,
-         c.holds.words.2.1, c.holds.words.2.2⟩, c.holds.known⟩
+          · rw [ite_eq_right ne]; exact c.holds.words.vec x ids hx' k hk,
+         c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known⟩
     · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
         ⟨c.wf.words.table, c.wf.words.atoms,
          fun x ids hx => by
            rcases lookup_cons_cases hx with ⟨_, rfl⟩ | ⟨_, hx'⟩
            · exact ⟨Or.inr len, lt⟩
            · exact c.wf.words.vec x ids hx',
-         c.wf.words.rotrs, c.wf.words.wrote⟩, c.wf.known⟩
+         c.wf.words.rotrs, c.wf.words.wrote, c.wf.words.spill⟩, c.wf.known⟩
     · have l16 : lanes.length = 16 := by simp [eq, len]
       simp [execStmt, execVec512, ev, l16, hr]
 

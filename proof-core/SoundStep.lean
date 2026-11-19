@@ -1490,7 +1490,7 @@ theorem Flag.below_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev
 theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) (c : Int) (h1 : -(ctx.contract.stack : Int) ≤ c) (h2 : c + 8 ≤ 0)
     (a : Nat) (ha : (a : Int) = (s0.reg RSP : Int) + c) (x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) :
-    Holds ctx s0 ρ { s with frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+    Holds ctx s0 ρ { s with spill := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
       { st with mem := store st.mem a x 8 } where
   entry := H.entry
   reg := H.reg
@@ -1534,14 +1534,14 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     exact g4
   words := by
     have hs := E.stack
-    refine ⟨H.words.1, ?_, ?_⟩
+    refine ⟨H.words.vec, ?_, ?_, (fun _ _ h => nomatch h)⟩
     · intro w m x' r n g1 k hk
       have ho := (E.out (List.mem_of_getElem? g1)).2
       show store st.mem a x 8 (s0.reg r + k) = s0.mem (s0.reg r + k)
       rw [store_other _ _ _ _ _ (by omega)]
-      exact H.words.2.1 w m x' r n g1 k hk
+      exact H.words.intact w m x' r n g1 k hk
     · intro w j i m x' r n g1
-      obtain ⟨g2, g3⟩ := H.words.2.2 w j i m x' r n g1
+      obtain ⟨g2, g3⟩ := H.words.wrote w j i m x' r n g1
       have ho := (E.out (List.mem_of_getElem? g1)).2
       refine ⟨g2, fun b hb => ?_⟩
       show store st.mem a x 8 (s0.reg r + 4 * j + b) = _
@@ -1550,7 +1550,7 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   known := H.known
 
 theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
-    WF { s with frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
+    WF { s with spill := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1574,7 +1574,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest)
     (hnw : (s.wroteW.any fun e => e.1 == w) = false)
     (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat) :
-    Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w) }
+    Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := none }
       { st with mem := store st.mem a x 1 } where
   entry := H.entry
   reg := H.reg
@@ -1627,16 +1627,16 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       rw [store_other _ _ _ _ _ hne]
       exact g4
   words := by
-    refine ⟨H.words.1, ?_, ?_⟩
+    refine ⟨H.words.vec, ?_, ?_, (fun _ _ h => nomatch h)⟩
     · intro w' m x' r' n' g1 k hk'
       obtain ⟨m', ne⟩ := List.mem_filter.mp m
       have ne' : w' ≠ w := by simpa using ne
       have := E.outOut hw g1 (Ne.symm ne')
       show store st.mem a x 1 (s0.reg r' + k) = s0.mem (s0.reg r' + k)
       rw [store_other _ _ _ _ _ (by omega)]
-      exact H.words.2.1 w' m' x' r' n' g1 k hk'
+      exact H.words.intact w' m' x' r' n' g1 k hk'
     · intro w' j i m x' r' n' g1
-      obtain ⟨g2, g3⟩ := H.words.2.2 w' j i m x' r' n' g1
+      obtain ⟨g2, g3⟩ := H.words.wrote w' j i m x' r' n' g1
       have ne' : w' ≠ w := by
         intro e
         rw [e] at m
@@ -1650,7 +1650,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) :
-    WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w) } where
+    WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := none } where
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1669,6 +1669,108 @@ theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s
 theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb : Nat}
     (h1 : value perm bind st a = some xa) (h2 : value perm bind st b = some xb) : values perm bind st [a, b] = some [xa, xb] := by
   simp [values, h1, h2]
+
+theorem frameOffset_eval {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} (H : Holds ctx s0 ρ s st) (addr : Row) :
+    ev ρ (frameOffset addr) = ev ρ addr - s0.reg RSP := by
+  simp only [frameOffset, ev_sub, ev_var, H.entry RSP (by decide)]
+
+theorem frameSpan_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym} {addr : Row} {n : Nat}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (ok : ∀ g ∈ frameSpanGoals ctx s addr n, g.holds ρ) :
+    ∃ a : Nat, (a : Int) = ev ρ addr ∧ a < M64 ∧ s0.reg RSP - ctx.contract.stack ≤ a ∧ a + n ≤ s0.reg RSP := by
+  let o := frameOffset addr
+  have lo := ok (Lin.add o (Lin.const ctx.contract.stack)) (by simp [frameSpanGoals, o])
+  have hi := ok (Lin.sub (Lin.const (-(n : Int))) o) (by simp [frameSpanGoals, o])
+  simp only [holds_iff, ev_add, ev_sub, ev_const, o, frameOffset_eval H] at lo hi
+  have hs := E.stack
+  have hl := E.small RSP
+  exact ⟨(ev ρ addr).toNat, by omega, by omega, by omega, by omega⟩
+
+theorem frameSpan_perm {ctx : Ctx} {s0 : State} {a n : Nat}
+    (lo : s0.reg RSP - ctx.contract.stack ≤ a) (hi : a + n ≤ s0.reg RSP) :
+    allowed (ctx.contract.perm s0).read a n = true ∧ allowed (ctx.contract.perm s0).write a n = true := by
+  have inside (x : Nat) (hx : a ≤ x) (hy : x < a + n) : ctx.contract.inFrame s0 x = true := by
+    simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
+    omega
+  exact ⟨allowed_of _ _ _ (fun x h1 h2 => by simp [Contract.perm, inside x h1 h2]),
+    allowed_of _ _ _ (fun x h1 h2 => by simp [Contract.perm, inside x h1 h2])⟩
+
+/-- A store wholly inside the frame and below the saved scalar words does not affect other regions. -/
+theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {mem' : Nat → Nat} {a n : Nat} {spill : Option (Row × List Nat)}
+    (lo : s0.reg RSP - ctx.contract.stack ≤ a) (hi : a + n ≤ s0.reg RSP)
+    (apart : ∀ o v, (o, v) ∈ s.frame → a + n ≤ ((s0.reg RSP : Int) + o).toNat)
+    (same : ∀ y, y < a ∨ a + n ≤ y → mem' y = st.mem y)
+    (saved : ∀ o ids, spill = some (o, ids) → ∀ k, k < ids.length →
+      load mem' (((s0.reg RSP : Int) + ev ρ o).toNat + 4 * k) 4 = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) :
+    Holds ctx s0 ρ { s with spill := spill } { st with mem := mem' } where
+  entry := H.entry
+  reg := H.reg
+  small := H.small
+  zf := H.zf
+  cf := H.cf
+  facts := H.facts
+  bytes := H.bytes
+  spec := H.spec
+  frame o v m := by
+    obtain ⟨h1, h2, h3⟩ := H.frame o v m
+    have space := apart o v m
+    have e := load_congr mem' st.mem ((s0.reg RSP : Int) + o).toNat 8 (fun y hy _ => same y (Or.inr (by omega)))
+    exact ⟨h1, h2, by rw [e]; exact h3⟩
+  mem y outside hout := by
+    have out := outside
+    simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at out
+    show mem' y = s0.mem y
+    rw [same y (by omega)]
+    exact H.mem y outside hout
+  wrote w o x m := by
+    obtain ⟨nm, r, count, hr, h1, h2, val⟩ := H.wrote w o x m
+    have disjoint := (E.out (List.mem_of_getElem? hr)).2
+    refine ⟨nm, r, count, hr, h1, h2, ?_⟩
+    show (mem' (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ x
+    rw [same _ (by omega)]
+    exact val
+  words := by
+    refine ⟨H.words.vec, ?_, ?_, saved⟩
+    · intro w m x r count hr k hk
+      have disjoint := (E.out (List.mem_of_getElem? hr)).2
+      show mem' (s0.reg r + k) = s0.mem (s0.reg r + k)
+      rw [same _ (by omega)]
+      exact H.words.intact w m x r count hr k hk
+    · intro w j i m x r count hr
+      obtain ⟨within, hh⟩ := H.words.wrote w j i m x r count hr
+      have disjoint := (E.out (List.mem_of_getElem? hr)).2
+      refine ⟨within, fun b hb => ?_⟩
+      show mem' (s0.reg r + 4 * j + b) = _
+      rw [same _ (by omega)]
+      exact hh b hb
+  known := H.known
+
+theorem savedWordSpan_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {addr : Row} {a n : Nat}
+    (H : Holds ctx s0 ρ s st) (ea : (a : Int) = ev ρ addr) (ok : ∀ g ∈ savedWordGoals s addr n, g.holds ρ) :
+    ∀ o v, (o, v) ∈ s.frame → a + n ≤ ((s0.reg RSP : Int) + o).toNat := by
+  intro o v m
+  have hh := ok (Lin.sub (Lin.const (o - n)) (frameOffset addr)) (List.mem_map.mpr ⟨(o, v), m, rfl⟩)
+  simp only [holds_iff, ev_sub, ev_const, frameOffset_eval H, ← ea] at hh
+  omega
+
+theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {addr : Row}
+    {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symTouchFrame ctx s addr items = .ok (s', rest)) (a x : Nat)
+    (matchAddr : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
+    allowed (ctx.contract.perm s0).write a 1 = true ∧ Carried ctx s0 ρ s ρ s' { st with mem := store st.mem a x 1 } := by
+  unfold symTouchFrame at h
+  obtain ⟨_, _, hc, h1⟩ := V.bind_ok h
+  obtain ⟨_, _, hd, he⟩ := V.bind_ok h1
+  have hs := V.pure_ok he
+  injection hs with eq _; subst s'
+  obtain ⟨A, ea, lt, lo, hi⟩ := frameSpan_sound E H (entails_sound H.facts hc)
+  have e := matchAddr A ea lt
+  subst a
+  refine ⟨(frameSpan_perm (ctx := ctx) lo hi).2, ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩⟩
+  · exact H.frameSpanWrite E lo hi (savedWordSpan_sound H ea (entails_sound H.facts hd))
+      (fun y hy => store_other _ _ _ _ _ hy) (fun _ _ h => nomatch h)
+  · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
+      wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
 
 theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -1799,7 +1901,24 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                   | lin br =>
                     simp only at h
                     cases hl : locate ctx (Lin.add (signed ar) (signed br)) with
-                    | none => simp only [hl] at h; exact (refuse_ok h).elim
+                    | none =>
+                      simp only [hl] at h
+                      split at h
+                      next hs =>
+                        have sgx := signed_ev ρ3 ar
+                        have sgy := signed_ev ρ3 br
+                        have hx := sa3.1
+                        have hy := sb.1
+                        have ex := sa3.2.1
+                        have ey := sb.2.1
+                        obtain ⟨perm, c4⟩ := symTouchFrame_sound E c3.holds c3.wf h ((xa + xb) % M64) x (by
+                          intro A ea lt
+                          rw [ev_add] at ea
+                          unfold M64 at hx hy lt ⊢
+                          omega)
+                        refine ⟨ρ3, _, c1.then (c2.then (c3.then c4)), ?_, rfl⟩
+                        simp [execStmt, hu, vx, hs.1, values_two va vb, sumList, perm]
+                      next => exact (refuse_ok h).elim
                     | some w =>
                       cases w with
                       | region _ _ => simp only [hl] at h; exact (refuse_ok h).elim

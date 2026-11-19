@@ -102,6 +102,7 @@ structure WordsWF (s : Sym) : Prop where
   vec : ∀ x ids, s.vec.lookup x = some ids → (ids.length = 4 ∨ ids.length = 16) ∧ ∀ i ∈ ids, i < s.terms.length
   rotrs : ∀ (j a n : Nat), s.terms[j]? = some (Node.rotr a n) → n ≤ 32
   wrote : ∀ w j i, (w, j, i) ∈ s.wroteW → i < s.terms.length
+  spill : ∀ off ids, s.spill = some (off, ids) → bounded s.nvars off ∧ ids.length = 16 ∧ ∀ i ∈ ids, i < s.terms.length
 
 /-- The verifier's state speaks only of unknowns in use. -/
 structure WF (s : Sym) : Prop where
@@ -126,13 +127,19 @@ def inpOf (ctx : Ctx) (s0 : State) (j k : Nat) : Nat :=
   | some (_, r, _) => load s0.mem (s0.reg r + 4 * k) 4
   | none => 0
 
-/-- A vector register agrees with its known low lanes. A run given to write retains its entry contents
-until a write. A word known to have been written holds the term's four bytes, lowest first. -/
-def VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop :=
-  (∀ x ids, s.vec.lookup x = some ids → ∀ k, k < ids.length → st.vec x k = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) ∧
-  (∀ w ∈ s.intact, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → st.mem (s0.reg r + k) = s0.mem (s0.reg r + k)) ∧
-  ∀ w j i, (w, j, i) ∈ s.wroteW → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
-    4 * j + 4 ≤ n ∧ ∀ b, b < 4 → st.mem (s0.reg r + 4 * j + b) = den (inpOf ctx s0) ρ s.terms i / 256 ^ b % 256
+/-- Known words agree with the machine's vector registers and memory. -/
+structure WordFacts (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (terms : List Node)
+    (vectors : List (Nat × List Nat)) (untouched : List Nat) (written : List (Nat × Nat × Nat))
+    (saved : Option (Row × List Nat)) (reg : Nat → Nat → Nat) (mem : Nat → Nat) : Prop where
+  vec : ∀ x ids, vectors.lookup x = some ids → ∀ k, k < ids.length → reg x k = den (inpOf ctx s0) ρ terms (ids.getD k 0)
+  intact : ∀ w ∈ untouched, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → mem (s0.reg r + k) = s0.mem (s0.reg r + k)
+  wrote : ∀ w j i, (w, j, i) ∈ written → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
+    4 * j + 4 ≤ n ∧ ∀ b, b < 4 → mem (s0.reg r + 4 * j + b) = den (inpOf ctx s0) ρ terms i / 256 ^ b % 256
+  spill : ∀ off ids, saved = some (off, ids) → ∀ k, k < ids.length →
+    load mem (((s0.reg RSP : Int) + ev ρ off).toNat + 4 * k) 4 = den (inpOf ctx s0) ρ terms (ids.getD k 0)
+
+abbrev VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop :=
+  WordFacts ctx s0 ρ s.terms s.vec s.intact s.wroteW s.spill st.vec st.mem
 
 /-- What a thing a definition is used with stands for: a value of the account. -/
 def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key → Val
@@ -237,25 +244,37 @@ theorem Flag.holds_agree {n : Nat} {ρ ρ' : Nat → Int} {f : Flag} {set : Bool
   | below x y => simp only [Flag.holds] at h ⊢; rw [← ev_agree hb.1 a, ← ev_agree hb.2 a]; exact h
 
 theorem WordsWF.mono {s s' : Sym} (W : WordsWF s) (ht : s'.terms = s.terms) (hv : s'.vec = s.vec) (hw : s'.wroteW = s.wroteW)
-    (le : s.nvars ≤ s'.nvars) : WordsWF s' :=
+    (le : s.nvars ≤ s'.nvars)
+    (hs : s'.spill = s.spill ∨ s'.spill = none := by first | exact Or.inl rfl | exact Or.inr rfl) : WordsWF s' :=
   ⟨by rw [ht]; exact W.table, fun j r h => by rw [ht] at h; exact bounded_mono le (W.atoms j r h),
    fun x ids h => by rw [hv] at h; rw [ht]; exact W.vec x ids h, fun j a n h => by rw [ht] at h; exact W.rotrs j a n h,
-   fun w j i h => by rw [hw] at h; rw [ht]; exact W.wrote w j i h⟩
+   fun w j i h => by rw [hw] at h; rw [ht]; exact W.wrote w j i h,
+   fun o ids h => by
+     rcases hs with e | e
+     · rw [e] at h
+       obtain ⟨bound, len, lt⟩ := W.spill o ids h
+       rw [ht]; exact ⟨bounded_mono le bound, len, lt⟩
+     · rw [e] at h; cases h⟩
 
 theorem VecOk.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
     (W : WordsWF s) (a : Agree s.nvars ρ ρ') (h : VecOk ctx s0 ρ s st) : VecOk ctx s0 ρ' s st := by
-  refine ⟨?_, h.2.1, ?_⟩
+  refine ⟨?_, h.intact, ?_, ?_⟩
   · intro x ids hx k hk
     obtain ⟨len, lt⟩ := W.vec x ids hx
     have hk' : k < ids.length := by omega
     have e : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk']
-    rw [h.1 x ids hx k hk]
+    rw [h.vec x ids hx k hk]
     refine (den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) ?_).symm
     rw [e]; exact lt _ (List.getElem_mem hk')
   · intro w j i m x r n ho
-    obtain ⟨h1, h2⟩ := h.2.2 w j i m x r n ho
+    obtain ⟨h1, h2⟩ := h.wrote w j i m x r n ho
     refine ⟨h1, fun b hb => ?_⟩
     rw [h2 b hb, den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) (W.wrote w j i m)]
+  · intro o ids hs k hk
+    obtain ⟨bo, _, lt⟩ := W.spill o ids hs
+    have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
+    rw [← ev_agree bo a, h.spill o ids hs k hk, eq]
+    exact (den_agree W.table (fun j r hj => (ev_agree (W.atoms j r hj) a).symm) (lt _ (List.getElem_mem hk))).symm
 
 /-- A term of the table is the same word under other unknowns that agree on those in use, and in a table
 with more terms after it. -/
