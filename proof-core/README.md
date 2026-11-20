@@ -135,7 +135,7 @@ The caller's obligations (`Contract.pre`):
 - the function's code is in memory;
 - about marks (`Contract.quietAt`): no general register is marked except the callee-saved ones (rbx, rbp,
   r12 to r15), which may hold anything; the return address is not marked; and no byte of an input buffer
-  is marked, except in the fixed-size buffers that the contract lists as `hidden`. A buffer is `hidden`
+  is marked, except in the buffers that the contract lists as `hidden`. A read-only buffer is `hidden`
   when the contract's `trace depends on` line does not name it.
 
 ### The second theorem: what an observer can see
@@ -312,7 +312,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 976 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,037 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,048 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -426,7 +426,7 @@ it refuses `requires` (other than `requires no_overlap`), other forms of `ensure
 A `needs` line (the processor feature a function requires, such as `needs avx512`) is carried through. It
 has no meaning in the machine model, which has every instruction of the table. The verifier does check
 that a caller's contract repeats every `needs` of the functions it calls. `statement.py` checks that a
-function's own instructions are of kinds its `needs` lines name. A fixed-size read-only buffer that the `trace depends on` line does not name becomes a `hidden` line: its bytes may be secret. For a buffer whose length is an argument, `statement.py` still refuses a contract that does not name it in `trace depends on`. It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
+function's own instructions are of kinds its `needs` lines name. A read-only buffer that the `trace depends on` line does not name becomes a `hidden` line: its bytes may be secret. This holds for a fixed-size buffer and for one whose length is an argument. (A function that calls another may hand it a hidden buffer only if the called function's contract hides it too.) It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
 A contract with an output buffer and another buffer must state `requires no_overlap` over all of them,
 because the model demands that of the caller.
 
@@ -799,9 +799,9 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 976 lines (Table.lean 152, Machine.lean 461, Contract.lean 363). The
-verifier: 2,196 lines (Core.lean 2,037, Arithmetic.lean 159 including its proofs). The file parser: 159
-lines. The proofs of the theorems: 13,479 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
+**Code size.** The formal model: 977 lines (Table.lean 152, Machine.lean 461, Contract.lean 364). The
+verifier: 2,207 lines (Core.lean 2,048, Arithmetic.lean 159 including its proofs). The file parser: 159
+lines. The proofs of the theorems: 13,486 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
 
 ## The files
 

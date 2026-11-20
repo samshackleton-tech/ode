@@ -156,10 +156,10 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         | frame c => simp [hl] at h
         | out w o => simp [hl] at h
         | region r o =>
-          simp only [hl, Bool.and_eq_true, beq_iff_eq] at h
-          obtain ⟨hsize, hlook⟩ := h
-          subst hsize
           obtain ⟨base, len, hreg, ho⟩ := locate_region hl
+          simp only [hl, hreg, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
+          obtain ⟨⟨hsize, hlook⟩, hnh⟩ := h
+          subst hsize
           cases hv : lookupByte r o s1.bytes with
           | none => simp [hv] at hlook
           | some v =>
@@ -180,7 +180,7 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have hk : (ev ρ1 o).toNat < s0.reg len := by omega
             simp only [anyMarked, Bool.or_false]
             rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
-            exact E.quiet.2.2.1 base len hmem _ hk
+            exact E.quiet.2.2.1 base len hmem hnh _ hk
       | none =>
         simp only [hl] at h
         cases hf : findOut (Lin.add (signed x) (signed y)) ctx.contract.fixeds 0 with
@@ -666,16 +666,23 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       ¬ (st.reg RSP - 8 ≤ a ∧ a < st.reg RSP - 8 + 8) := fun a hf ho hin => by
     have := allowed_at hw a hin.1 hin.2
     simp [Contract.perm, hf, ho] at this
-  refine ⟨regs RSP (by decide), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm k hk => ?_, fun x r n hm hnot => ?_⟩, ?_⟩
+  refine ⟨regs RSP (by decide), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_⟩, ?_⟩
   · show markBytes st.marks.mem (st.reg RSP - 8) 8 false ((if RSP = RSP then st.reg RSP - 8 else st.reg RSP) + k) = false
     rw [if_pos rfl]
     unfold markBytes
     rw [if_pos ⟨by omega, by omega⟩]
   · have hfound := List.all_eq_true.mp hrun (r, l) hm
+    simp only [hnh, Bool.false_or] at hfound
     cases hf : findRun s r l ctx.contract.regions 0 with
     | none => simp [hf] at hfound
     | some j =>
       obtain ⟨b0, l0, _, hget, er, el⟩ := findRun_spec hf
+      have hnh0 : ctx.contract.hiddenAt b0 = false := by
+        rw [hf] at hfound
+        simp only at hfound
+        have hget' : ctx.contract.regions[j]? = some (b0, l0) := by simpa using hget
+        rw [hget'] at hfound
+        simpa using hfound
       have hmem : (b0, l0) ∈ ctx.contract.regions := List.mem_of_getElem? hget
       obtain ⟨hb0, hl0⟩ := regions_lt hmem
       obtain ⟨ra, la⟩ := regions_args hm
@@ -700,7 +707,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       · rfl
       · obtain ⟨_, r2⟩ := E.region hmem
         rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
-        exact E.quiet.2.2.1 b0 l0 hmem k hk
+        exact E.quiet.2.2.1 b0 l0 hmem hnh0 k hk
   · have := List.all_eq_true.mp hfix (x, r, n) hm
     exact absurd (List.contains_iff_mem.mp this) hnot
   · intro s2 ⟨qr, qs⟩

@@ -429,6 +429,26 @@ contract wide_add(out: block, a: block, b: block) {
         shown, said = lean_verify.verify(self.spec.replace("a[at] != b[at]", "a[at] < b[at]"), [(obj, "ode_common")], kept)
         self.assertFalse(shown)
 
+    def test_a_run_of_bytes_can_be_hidden_and_the_function_is_then_refused(self):
+        """`ode_common` compares the bytes of its two runs and stops at the first that differ: which instructions
+        run depends on the bytes of both. Its contract says so (`trace depends on a, b`). With that line left
+        out, or naming one run only, the contract promises something false: the statement then says the run is
+        hidden, and no proof is found and the kept proof is refused."""
+        obj = os.path.join(COMMON, "odecommon.o")
+        kept = os.path.join(HERE, "proofs", "ode_common.proof")
+        for what, old, new, hidden in (("the trace may not depend on the bytes", "    trace depends on a, b\n", "", ["hidden a", "hidden b"]),
+                                       ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a", ["hidden b"])):
+            with self.subTest(what=what):
+                self.assertEqual(self.spec.count(old), 1)
+                spec = self.spec.replace(old, new)
+                self.assertEqual([l for l in statement.statement(spec, [(obj, "ode_common")]) if l.startswith("hidden")], hidden)
+                shown, said = lean_verify.verify(spec, [(obj, "ode_common")], kept)
+                self.assertFalse(shown)
+                self.assertIn("may depend on a secret", said)
+                st, pf = (os.path.join(self.dir, f"hidden.{kind}") for kind in ("statement", "proof"))
+                with self.assertRaisesRegex(SystemExit, "may depend on a secret"):
+                    prove.prove(spec, [(obj, "ode_common", "")], st, pf)
+
     def test_a_contract_line_the_account_lacks_is_refused(self):
         obj = os.path.join(COMMON, "odecommon.o")
         self.assertIn("    trace depends on a, b\n", self.spec)
@@ -436,11 +456,9 @@ contract wide_add(out: block, a: block, b: block) {
         # what the function needs of the processor is carried, a line of the statement (the caller of such a function must say it too: test_call.py)
         self.assertIn("needs sse41", statement.statement(self.spec.replace("    stack 40\n", "    stack 40\n    needs sse41\n"), [(obj, "ode_common")]))
         # so is a bound that the function asks its caller to keep a number within
-        for bound, line in (("requires n < 4096", "below n 4096"), ("requires n >= 1", "atleast n 1")):
+        for bound, line in (("requires n < 4096", "below n 4096"), ("requires n >= 1", "atleast n 1"), ("requires n <= 4096", "below n 4097")):
             self.assertIn(line, statement.statement(self.spec.replace("    returns common(a, b)\n", f"    {bound}\n    returns common(a, b)\n"), [(obj, "ode_common")]))
-        for what, old, new in (("the trace may not depend on the bytes", "    trace depends on a, b\n", ""),
-                               ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a"),
-                               ("the function asks of its caller what is no bound of a number", "    returns common(a, b)\n", "    requires n != 4096\n    returns common(a, b)\n"),
+        for what, old, new in (("the function asks of its caller what is no bound of a number", "    returns common(a, b)\n", "    requires n != 4096\n    returns common(a, b)\n"),
                                ("the specification has a kind", "def common(a, b)", "kind pair: 16 bytes\n\ndef common(a, b)"),
                                ("a definition may fail", "def common(a, b) { alike(a, b, 0) }", "def common(a, b) {\n    fails 1 if len(a) > 4096\n    alike(a, b, 0)\n}")):
             with self.subTest(what=what):

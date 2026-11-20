@@ -289,7 +289,7 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
-  hidden : List String := []              -- the runs of a fixed count given to read whose bytes may be marked (secret): what
+  hidden : List String := []              -- the runs given to read whose bytes may be marked (secret): what
                                           -- can be observed of a run of the function must not depend on them
   deriving Repr, Inhabited
 
@@ -496,13 +496,16 @@ def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
 was found. -/
 def quietRegs : List Nat := [0, 1, 2, 4, 6, 7, 8, 9, 10, 11]
 
+/-- Is the run whose address is in the register `r` one the contract says is hidden? -/
+def Contract.hiddenAt (c : Contract) (r : Nat) : Bool := c.hidden.any fun x => c.regOf x == some r
+
 /-- What the caller sees to about marks (what may depend on a secret): no general register is marked but
 those a callee keeps; the address to return to is not marked; no byte of a run given to read is marked,
-but for the runs of a fixed count the contract says are hidden. -/
+but for the runs the contract says are hidden. -/
 def Contract.quietAt (c : Contract) (s : State) : Prop :=
   (∀ r ∈ quietRegs, s.marks.reg r = false) ∧
   (∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false) ∧
-  (∀ r l, (r, l) ∈ c.regions → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
+  (∀ r l, (r, l) ∈ c.regions → c.hiddenAt r = false → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
   ∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false
 
 /-- What the function leaves of the marks, `s` being the state at entry: no general register is marked

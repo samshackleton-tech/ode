@@ -114,6 +114,17 @@ class Call(unittest.TestCase):
         odec.build(os.path.join(EQUAL, "equal.ode"), "equal", self.path("made.o"))
         with open(self.path("made.o"), "rb") as f, open(self.equal, "rb") as g: self.assertEqual(f.read(), g.read())
 
+    def test_a_caller_cannot_hide_a_run_from_a_called_function_that_does_not(self):
+        """`ode_equal` hands its two runs to `ode_common`, whose trace depends on their bytes. With the caller's
+        `trace depends on a, b` left out its contract promises something false: the call is refused. (With the
+        called function's line left out as well, the called function itself is refused: test_verify.py.)"""
+        spec = self.spec
+        old = "    returns equal(a, b)\n    trace depends on a, b\n"
+        self.assertEqual(spec.count(old), 1)
+        name, said = self.found(spec.replace(old, "    returns equal(a, b)\n"), self.equal, "hidden")
+        self.assertEqual(name, "ode_equal")
+        self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one", said)
+
     def test_shown(self):
         t = time.time()
         numbers = self.found(self.spec, self.equal, "shown")

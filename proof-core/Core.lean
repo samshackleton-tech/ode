@@ -2082,15 +2082,19 @@ def plainRow (bind : Bind) (s : Sym) : Expr → Option Row
   | _ => none
 
 /-- A load of `size` bytes at `a + b` reads memory that is given to read only and is not hidden: a byte
-of a run of bytes, at a place the statement has shown to be within the run (`s1` is the state after the
-statement: the byte is known there); or bytes at a place that is a number, within a run of a fixed count
+of a run of bytes that the contract does not say is hidden, at a place the statement has shown to be
+within the run (`s1` is the state after the statement: the byte is known there); or bytes at a place that is a number, within a run of a fixed count
 that the contract does not say is hidden. Such bytes are not marked at entry, and nothing can write them. -/
 def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) : Bool :=
   match plainRow bind s a, plainRow bind s b with
   | some x, some y =>
     let addr := Lin.add (signed x) (signed y)
     match locate ctx addr with
-    | some (.region r o) => size == 1 && (lookupByte r o s1.bytes).isSome
+    | some (.region r o) =>
+      size == 1 && (lookupByte r o s1.bytes).isSome &&
+        match ctx.contract.regions[r]? with
+        | some (base, _) => !ctx.contract.hiddenAt base
+        | none => false
     | some _ => false
     | none =>
       match findOut addr ctx.contract.fixeds 0 with
@@ -2460,13 +2464,21 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
   else refuse "a called function needs of the processor what this function's contract does not say it needs"
 
 /-- What a called function's contract asks about marks is so at the call: the general registers a callee
-does not keep are known not to be marked; each run of bytes it is given to read is one
-this function was given to read, whole; and a run of a fixed count it reads is one its contract says is
-hidden (so nothing is asked of its bytes). -/
+does not keep are known not to be marked; each run of bytes it is given to read is one its contract
+says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
+this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
+says is hidden. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   quietRegs.all s.q.regq.contains &&
   c.fixeds.all (fun x => c.hidden.contains x.1) &&
-  c.regions.all fun (r, l) => (findRun s r l ctx.contract.regions 0).isSome
+  c.regions.all fun (r, l) =>
+    c.hiddenAt r ||
+      match findRun s r l ctx.contract.regions 0 with
+      | some j =>
+        match ctx.contract.regions[j]? with
+        | some (base, _) => !ctx.contract.hiddenAt base
+        | none => false
+      | none => false
 
 /-- What is known not to be marked after a call: the general registers a callee does not keep (the called
 function's contract says so), and each register a callee keeps that was not marked before. -/
