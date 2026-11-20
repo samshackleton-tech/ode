@@ -311,6 +311,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallPlain, hsp] at h; exact (refuse_ok h).elim
@@ -418,7 +419,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
-        intro s2 post hdata2
+        intro s2 post hdata2 _
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]

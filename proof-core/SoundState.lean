@@ -87,6 +87,7 @@ def Key.wf (n t : Nat) : Key → Prop
   | .counter r => bounded n r
   | .words ids => ∀ i ∈ ids, i < t
   | .lane _ _ _ => True
+  | .span _ off len => bounded n off ∧ bounded n len
 
 /-- What is known of a number that is no row speaks only of unknowns in use (`n` of them) and of terms of
 the table (`t` of them). -/
@@ -94,6 +95,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .load v _ _ => v < n
   | .or v x y => v < n ∧ bounded n x ∧ bounded n y
   | .held _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
+  | .heldB _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
   | .div x _ q => bounded n x ∧ q + 1 < n
   | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
 
@@ -214,6 +216,11 @@ structure WordFacts (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (terms : List No
 abbrev VecOk (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop :=
   WordFacts ctx s0 ρ s.terms s.vec s.intact s.wroteW s.spill st.vec st.mem
 
+/-- The four bytes of each word, the lowest first (as `ofWords` of the account gives them). -/
+def wordBytes : List Nat → List Val
+  | [] => []
+  | w :: rest => .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: wordBytes rest
+
 /-- What a thing a definition is used with stands for: a value of the account. -/
 def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key → Val
   | .num r => .int (ev ρ r)
@@ -223,6 +230,7 @@ def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key �
     match ctx.contract.tableAt j with
     | some (_, r, _, _) => laneBlocks s0.mem (lanePtr s0 r (c / 8)) (s0.reg l)
     | none => .list []
+  | .span r off len => .list ((List.range (ev ρ len).toNat).map fun k => Val.int (s0.mem (s0.reg r + (ev ρ off).toNat + k)))
 
 /-- What is known of a number that is no row is so. -/
 def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Known → Prop
@@ -230,6 +238,8 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
   | .or v x y => 0 ≤ ev ρ x ∧ 0 ≤ ev ρ y ∧ ρ v = (((ev ρ x).toNat ||| (ev ρ y).toNat : Nat) : Int)
   | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
+  | .heldB f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (wordBytes (ids.map fun i => den (inpOf ctx s0) ρ T i)))
   | .div x m q => 0 < m → ρ q = ev ρ x / m ∧ ρ (q + 1) = ev ρ x % m
   | .block j c off vs => ∃ x r count l, ctx.contract.tableAt j = some (x, r, count, l) ∧ c % 8 = 0 ∧ c / 8 < count ∧
       0 ≤ ev ρ off ∧ ev ρ off + 64 ≤ 64 * (s0.reg l : Int) ∧ vs.length = 16 ∧
@@ -390,6 +400,7 @@ theorem Key.val_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : Lis
     congr 1
     exact List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk i hi)]
   | lane j c l => rfl
+  | span r off len => simp only [Key.val]; rw [← ev_agree wk.1 a, ← ev_agree wk.2 a]
 
 /-- What is known of numbers that are no rows stays so under other unknowns that agree on those in use,
 and in a table with more terms after it. -/
@@ -414,6 +425,14 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     have ei : (ids.map fun i => Val.word (den (inpOf ctx s0) ρ' T' i)) = ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i) :=
       List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
     rw [ek, ei]; exact h3
+  | heldB f keys ids =>
+    obtain ⟨d, h1, h2, h3⟩ := h
+    refine ⟨d, h1, h2, ?_⟩
+    have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
+      List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
+    have ei : (ids.map fun i => den (inpOf ctx s0) ρ' T' i) = ids.map fun i => den (inpOf ctx s0) ρ T i :=
+      List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
+    rw [ek, ei]; exact h3
   | div x m q =>
     intro pos
     have hq := h pos
@@ -429,18 +448,20 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
       exact List.getElem_mem _
     rw [← eo, ← a _ (wk.2 _ hm)]; exact h7 w hw
 
+theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
+  cases k with
+  | num r => exact bounded_mono hn wk
+  | counter r => exact bounded_mono hn wk
+  | words js => exact fun i hi => Nat.lt_of_lt_of_le (wk i hi) ht
+  | lane j c l => trivial
+  | span r off len => exact ⟨bounded_mono hn wk.1, bounded_mono hn wk.2⟩
+
 theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
   | load v j c => exact Nat.lt_of_lt_of_le wk hn
   | or v x y => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, bounded_mono hn wk.2.1, bounded_mono hn wk.2.2⟩
-  | held f keys ids =>
-    refine ⟨fun k hk => ?_, fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
-    have := wk.1 k hk
-    cases k with
-    | num r => exact bounded_mono hn this
-    | counter r => exact bounded_mono hn this
-    | words js => exact fun i hi => Nat.lt_of_lt_of_le (this i hi) ht
-    | lane j c l => trivial
+  | held f keys ids => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
+  | heldB f keys ids => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
   | div x m q => exact ⟨bounded_mono hn wk.1, Nat.lt_of_lt_of_le wk.2 hn⟩
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 

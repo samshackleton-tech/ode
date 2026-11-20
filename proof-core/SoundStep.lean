@@ -739,6 +739,7 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
       next => exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | or _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | held _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | heldB _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | div _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | block _ _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
 
@@ -992,6 +993,7 @@ theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x 
   | load _ _ _ => cases e
   | or _ _ _ => cases e
   | held _ _ _ => cases e
+  | heldB _ _ _ => cases e
   | block _ _ _ _ => cases e
 
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
@@ -1213,6 +1215,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
       next => exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | load _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | held _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | heldB _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | div _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | block _ _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 

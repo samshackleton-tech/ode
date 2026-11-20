@@ -1,0 +1,15 @@
+// The last block of a message, padded, in a record. The first function shown by the verifier in Lean that
+// calls a function which writes a run of bytes for its caller: `b3l_pad`, the hash's own. The record is 96
+// bytes: a chaining value that this function leaves alone, then a block of 64 bytes. `b3l_pad` is given
+// the address of the record's block to write, and the message from its byte 16 on to read.
+// tail(r, src, len): arguments in rdi, rsi, rdx, as C passes them. b3l_pad is given r + 32, src + 16 and
+//   len - 16.
+fn tail as "ode_tail" {
+  sub rsp, 8
+  add rdi, 32
+  add rsi, 16
+  sub rdx, 16
+  call b3l_pad
+  add rsp, 8
+  ret
+}

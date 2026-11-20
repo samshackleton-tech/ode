@@ -296,8 +296,8 @@ Memory and calls follow the same rule. This was decided in November 2026 and is 
   nothing is checked at run time and no instruction is added. It is affordable because the coder plans
   the memory use beforehand, commits to it, and proves it. Built so far, in `proof-core/`: the object
   file's read-only data as a piece; and lending of a part, where a called function is given a part of a
-  buffer of its caller: to read, a part of a read-only buffer; to read and write, whole words of a buffer
-  that the caller may read and write. The stack frame and the buffers of contracts still go by the
+  buffer of its caller: to read, a part of a read-only buffer; to write, or to read and write, whole
+  words of a buffer that the caller may read and write. The stack frame and the buffers of contracts still go by the
   earlier rules.
 - **The coder lays out memory, and the compiler does what is written or stops.** The pieces of a frame
   lie in the order written, each with the alignment written. An alignment is a number: "a multiple of
@@ -423,7 +423,7 @@ expertise of his team.
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
 processor that the instruction table describes. The formal model that the theorem is about is 1,021 lines.
-The verifier's own 2,527 lines are covered by the theorem, so a Bob who takes the third route does not
+The verifier's own 2,621 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,

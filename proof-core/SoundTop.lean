@@ -563,19 +563,20 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
       have hcode : (pc, i) ∈ p.code := by rw [E.code]; exact lookup_mem hl
       obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i (E.fits hcode)
       obtain ⟨hrsp, hquiet, hafter⟩ := callQuiet_sound E M H hcq q i hw hwrite
-      -- (the called function returns with the file's data where it was: `runs_data`)
+      -- (the called function returns with the file's data where it was, `runs_data`, and has changed
+      -- memory only by storing bytes, `runs_bytes`)
       exact Runs.call _ p _ st i name q (c.perm (afterCall p q i st))
-        (fun s2 => c.left ctx.defs (afterCall p q i st) s2 ∧ s2.data = st.data)
-        hfetch hc hq h8 hw hrsp hread hwrite (runs_data (meets _ hpre hquiet))
+        (fun s2 => (c.left ctx.defs (afterCall p q i st) s2 ∧ s2.data = st.data) ∧ BytesSince (afterCall p q i st).mem s2.mem)
+        hfetch hc hq h8 hw hrsp hread hwrite (runs_bytes (runs_data (meets _ hpre hquiet)))
         (fun s2 lf2 r hr => by
-          have lf := lf2.1
+          have lf := lf2.1.1
           have := lf.1.2.2.1 r hr
           have ne : r ≠ RSP := by intro e; subst e; revert hr; decide
           have e : (afterCall p q i st).reg r = st.reg r := by show (if r = RSP then _ else st.reg r) = st.reg r; rw [if_neg ne]
           rw [this, e])
         (fun s2 lf2 => by
-          have lf := lf2.1
-          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 lf.1 lf2.2
+          have lf := lf2.1.1
+          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 lf.1 lf2.1.2 lf2.2
           exact K _ i.next ρ' (backFrom st s2) (List.mem_cons_self ..) hrip2 ((c'.q _).fields rfl rfl rfl rfl rfl rfl) (hafter s2 lf.2))
 
 /-- What the verifier relies on along a path, of each place the path has come to, `n` being the unknowns
