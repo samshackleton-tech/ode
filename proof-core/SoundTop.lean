@@ -588,7 +588,7 @@ theorem Relied.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : St
   obtain ⟨hn, hf, hd, run⟩ := T e m
   refine ⟨hn, Nat.le_trans hf le, bounded_mono le hd, ?_⟩
   intro ρx stx A hrip Mx ⟨k, val, lt⟩
-  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.data, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes, A.wrote⟩ hrip Mx ⟨k, val, ?_⟩
+  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.data, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes, A.cells, A.wrote⟩ hrip Mx ⟨k, val, ?_⟩
   rw [ev_agree hd a]
   exact lt
 
@@ -653,7 +653,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
                 refine ⟨hn, leg, hd, ?_⟩
                 intro ρy sty Ay hripy My ⟨k, valy, lty⟩
                 have Ay1 : AtPlace ctx pl s0 first ρ1 ρy sty :=
-                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.data, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes, Ay.wrote⟩
+                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.data, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes, Ay.cells, Ay.wrote⟩
                 obtain ⟨ρz, _, _, posz, valz⟩ := G ρy sty Ay1
                 have samez := Value.unique valy valz
                 injection samez with samez

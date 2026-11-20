@@ -1038,33 +1038,6 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
         · exact bounded_sub (bounded_const _ _) br
         · exact bounded_mono le (wf.facts f hf) }
 
-/-- Any number divided by a number above zero: what `Sym.quotRem` gives is the quotient and the remainder. -/
-theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
-    ∃ ρ', Carried ctx s0 ρ s ρ' (s.quotRem x m).2.2 st ∧
-      ev ρ' (s.quotRem x m).1 = ev ρ x / m ∧ ev ρ' (s.quotRem x m).2.1 = ev ρ x % m ∧
-      bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).1 ∧ bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).2.1 := by
-  cases hd : divided s x m with
-  | some q =>
-    simp only [Sym.quotRem, hd]
-    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
-    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
-    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
-    have f1 := H.facts _ m1
-    have f2 := H.facts _ m2
-    have f3 := H.facts _ m3
-    have f4 := H.facts _ m4
-    rw [holds_iff] at f1 f2 f3 f4
-    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
-    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
-    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
-           bounded_var hlt, wf.facts _ m3⟩
-  | none =>
-    simp only [Sym.quotRem, hd]
-    obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
-    exact ⟨ρ', c, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr,
-           bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
-
 /-- A number of the machine divided by a number above zero: what `symDivide` gives is the quotient and the
 remainder. -/
 theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
@@ -1131,6 +1104,48 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
             rcases hf with rfl | hf
             · exact bq
             · exact c.wf.facts f hf }
+
+/-- A row seen at once to be no less than zero is no less than zero. -/
+theorem knownNonneg_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg s r = true) : 0 ≤ ev ρ r := by
+  unfold knownNonneg at h
+  split at h
+  next k hk => rw [ev_isConst hk]; simpa using h
+  next =>
+    have := H.facts r (among_iff.mp h)
+    rw [holds_iff] at this; exact this
+
+/-- Any number divided by a number above zero: what `Sym.quotRem` gives is the quotient and the remainder. -/
+theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' (s.quotRem x m).2.2 st ∧
+      ev ρ' (s.quotRem x m).1 = ev ρ x / m ∧ ev ρ' (s.quotRem x m).2.1 = ev ρ x % m ∧
+      bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).1 ∧ bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).2.1 := by
+  cases hn : knownNonneg s x with
+  | true =>
+    simp only [Sym.quotRem, hn, ↓reduceIte]
+    exact symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos (knownNonneg_sound H hn)
+  | false =>
+  cases hd : divided s x m with
+  | some q =>
+    simp only [Sym.quotRem, hn, hd, Bool.false_eq_true, ↓reduceIte]
+    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
+    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
+    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    have f1 := H.facts _ m1
+    have f2 := H.facts _ m2
+    have f3 := H.facts _ m3
+    have f4 := H.facts _ m4
+    rw [holds_iff] at f1 f2 f3 f4
+    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
+    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
+    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
+           bounded_var hlt, wf.facts _ m3⟩
+  | none =>
+    simp only [Sym.quotRem, hn, hd, Bool.false_eq_true, ↓reduceIte]
+    obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
+    exact ⟨ρ', c, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr,
+           bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
 
 theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :

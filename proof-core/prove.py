@@ -53,6 +53,20 @@ def lane_line(var, regs, use, after, seqs, kinds, counted, name):
     return f"lane {var} " + " ".join(f"zmm{r}" for r in rs) + " = " + sexp(full, seqs)
 
 
+def of_kinds(e, line, kinds, name):
+    """A place's fact with each name of the contract that stands for something other than a register's number
+    replaced by what it stands for (statement.by_kind), where the fact has such a name."""
+    return by_kind(e, kinds, name) if any(re.search(rf"\b{re.escape(k)}\b", line) for k in kinds) else e
+
+
+def cell_line(off, var, word, seqs, kinds, name):
+    """`cell [rsp + N]: word I = E`, a line of a place, as the verifier reads it: of the sixty-four bytes that
+    lie N bytes above the stack pointer (a cell of the frame that a vector was stored to), word I (0 to 15) is
+    the word E of the specification, in which I is the word's number."""
+    if var in kinds: raise SystemExit(f"prove: a place's cell counts its words by a name the contract gives: {var}")
+    return f"cell {int(off)} {var} " + sexp(by_kind(kbyte.expression(word), kinds, name), seqs)
+
+
 def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}):
     """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
@@ -67,11 +81,13 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
         if m: also += m.group(1).split(); continue
         m = re.fullmatch(r"name (\w+) = (\w+)", line)
         if m: out.append(f"name {m.group(1)} {m.group(2)}"); named.append(m.group(2)); continue
-        if line.startswith("fact "): out.append("fact " + sexp(kbyte.expression(line[5:]), seqs)); continue
+        if line.startswith("fact "): out.append("fact " + sexp(of_kinds(kbyte.expression(line[5:]), line, kinds, name), seqs)); continue
         m = re.fullmatch(r"wrote (\w+)\[(.+) \.\.\] = (.+)", line)       # from that place on, the run holds that list, place by place
         if m: lanes.append(f"wrote {m.group(1)} (index {sexp(kbyte.expression(m.group(3)), seqs)} {sexp(kbyte.expression(m.group(2)), seqs)})"); continue
         m = re.fullmatch(r"lane (\w+): (.+?) = (.+) after (.+)", line)
         if m: lanes.append(lane_line(*m.groups(), seqs, kinds, counted, name)); continue
+        m = re.fullmatch(r"cell \[rsp \+ (\d+)\]: word (\w+) = (.+)", line)
+        if m: lanes.append(cell_line(*m.groups(), seqs, kinds, name)); continue
         if line.startswith("decreases "):
             out.append("keep " + " ".join(r for r in REGISTERS if (r not in named or r in also) and r in keep.get(at, REGISTERS)))
             if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on a secret on a later coming there

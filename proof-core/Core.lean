@@ -436,6 +436,15 @@ structure PlaceLanes where
   args : SExpr
   deriving Inhabited
 
+/-- What a place says of a cell of the frame that a vector was stored to: of the sixty-four bytes that lie
+`off` bytes above the stack pointer, word `x` (from 0 to 15) is the word `e` (in which `x` is the word's
+number). -/
+structure PlaceCell where
+  off : Nat
+  x : String
+  e : SExpr
+  deriving Inhabited
+
 structure Place where
   pc : Nat
   names : List (String × Nat)     -- a name for what a register holds there
@@ -443,6 +452,7 @@ structure Place where
   facts : List SExpr
   decreases : SExpr
   lanes : List PlaceLanes := []   -- what the vector registers hold there
+  cells : List PlaceCell := []    -- what cells of the frame hold there
   marked : List Nat := []         -- registers that may depend on a secret on a later coming there (they need not on the first)
   wrote : Option (String × SExpr × String × SExpr) := none
                                   -- (run, lo, f, args): from the place `lo` on, the run given to write holds the list `f(args)`, place by place
@@ -538,12 +548,23 @@ def symDivide (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
   | none => (Lin.var s.nvars, Lin.var (s.nvars + 1),
       { s.divide x m with facts := quotientBound s.facts x m s.nvars ++ Lin.var s.nvars :: (s.divide x m).facts })
 
+/-- A row the facts held say is no less than zero: a number of the table, or a row that is itself a fact. -/
+def knownNonneg (s : Sym) (r : Row) : Bool :=
+  match Lin.isConst r with
+  | some k => decide (0 ≤ k)
+  | none => among s.facts r
+
 /-- The quotient and the remainder of any number by a number above zero: the unknowns the facts held
-already say they are, where they say it; else the two new unknowns of `Sym.divide`. -/
+already say they are, where they say it; else two new unknowns. Of a number seen at once to be no less than
+zero they are the ones `symDivide` makes, with what it says of the quotient (so that the specification's
+division and the code's of one number are one division, whichever comes first); of any other number, the
+two of `Sym.divide`. -/
 def Sym.quotRem (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
-  match divided s x m with
-  | some q => (Lin.var q, Lin.var (q + 1), s)
-  | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), s.divide x m)
+  if knownNonneg s x then symDivide s x m
+  else
+    match divided s x m with
+    | some q => (Lin.var q, Lin.var (q + 1), s)
+    | none => (Lin.var s.nvars, Lin.var (s.nvars + 1), s.divide x m)
 
 def lookupByte (r : Nat) (o : Row) : List (Nat × Nat × Row) → Option Nat
   | [] => none
@@ -1877,12 +1898,6 @@ def idOf (look : Node → Option Nat) : List Nat → Option Nat
   | [a] => some a
   | xs => look (.add xs)
 
-/-- A row the facts held say is no less than zero: a number of the table, or a row that is itself a fact. -/
-def knownNonneg (s : Sym) (r : Row) : Bool :=
-  match Lin.isConst r with
-  | some k => decide (0 ≤ k)
-  | none => among s.facts r
-
 /-- The remainder by a number above zero, where it is known without a new unknown (as `symLow` has it). -/
 def lowOf (s : Sym) (x : Row) (m : Int) : Option Row :=
   if x.coeff.all (fun c => c % m == 0) then some (Lin.const (x.constant % m))
@@ -2780,6 +2795,40 @@ def laneShown (ctx : Ctx) (look : Node → Option Nat) (env : List (String × WV
     | _, _ => false
   | _ => false
 
+/-- Each of some numbers by a thing that may give none. -/
+def eachSome (f : Nat → Option Nat) : List Nat → Option (List Nat)
+  | [] => some []
+  | i :: more =>
+    match f i, eachSome f more with
+    | some a, some rest => some (a :: rest)
+    | _, _ => none
+
+/-- The terms of the sixteen words the place says a cell holds, where each is a term of the table. -/
+def cellIds (ctx : Ctx) (look : Node → Option Nat) (env : List (String × WVal)) (s : Sym) (C : PlaceCell) : Option (List Nat) :=
+  eachSome (fun i =>
+    match weval ctx look s WFUEL ((C.x, .int i) :: env) C.e with
+    | some (.word xs) => (idOf look xs).filter fun a => decide (a < s.terms.length)
+    | _ => none) (List.range 16)
+
+/-- Where the cell lies: so far above the stack pointer the state holds, counted as the frame's cells are. -/
+def cellRow (s : Sym) (C : PlaceCell) : Row := Lin.add (frameOffset (s.reg RSP)) (Lin.const C.off)
+
+/-- What the place says of a cell of the frame is so of this state: the state holds a vector stored there,
+and its terms are the words the place says. (No proof is read here.) -/
+def cellShown (ctx : Ctx) (p : Place) (s : Sym) (C : PlaceCell) : Bool :=
+  let index := termIndex s.terms
+  match cellIds ctx (fun n => index[n]?) (placeW ctx p s) s C, s.spill.find? fun (o, _) => o == cellRow s C with
+  | some ids, some (_, held) => ids == held
+  | _, _ => false
+
+/-- What the place says of a cell of the frame, taken as known of the general state: the cell holds the
+words the place says, as terms worked out in that state. -/
+def supposeCell (ctx : Ctx) (p : Place) (g : Sym) (C : PlaceCell) : V Sym :=
+  let index := termIndex g.terms
+  match cellIds ctx (fun n => index[n]?) (placeW ctx p g) g C with
+  | some ids => pure { g with spill := (cellRow g C, ids) :: g.spill }
+  | none => refuse "what a place says of a cell of the frame is not followed in its general state"
+
 /-- What the place says of vector registers is so of this state, lane by lane. -/
 def lanesShown (ctx : Ctx) (p : Place) (s : Sym) (L : PlaceLanes) : Bool :=
   let index := termIndex s.terms
@@ -2890,10 +2939,12 @@ def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
   else do
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
     if !(p.lanes.all (lanesShown ctx p s)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
+    else if !(p.cells.all (cellShown ctx p s)) then refuse s!"at the place {p.pc} a cell of the frame is not shown to hold what the place says"
     else do
       let (_, s) ← rangeShown ctx p s
       let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
       let g ← fold (supposeLanes ctx p) g p.lanes
+      let g ← fold (supposeCell ctx p) g p.cells
       let g ← supposeRange ctx p g
       let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
       match d with
@@ -2914,7 +2965,8 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
     let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
-    if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
+    if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says, on coming there again"
+    else if !(p.cells.all (cellShown ctx p s1)) then refuse s!"at the place {p.pc} a cell of the frame is not shown to hold what the place says, on coming there again"
     else do
       let (_, s1) ← rangeShown ctx p s1
       let (d', s2) ← seval ctx (placeEnv ctx p s.reg) s1 p.decreases

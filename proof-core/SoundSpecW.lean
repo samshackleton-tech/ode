@@ -250,13 +250,6 @@ theorem divided_spec (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m
   have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
   exact ⟨u.1.symm, u.2.symm⟩
 
-theorem knownNonneg_sound (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg s r = true) : 0 ≤ ev ρ r := by
-  unfold knownNonneg at h
-  split at h
-  next k hk => rw [ev_isConst hk]; simpa using h
-  next =>
-    have := H.facts r (among_iff.mp h)
-    rw [holds_iff] at this; exact this
 
 theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : lowOf s x m = some r) : ev ρ r = ev ρ x % m := by
   unfold lowOf at h

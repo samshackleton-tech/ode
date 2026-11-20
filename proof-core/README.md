@@ -12,11 +12,12 @@ is the first version of such a core. It contains:
 
 It is not finished. Today it handles a subset of what the Python verifier in `kcheck/` handles. That is
 enough for five of the twelve small shipped functions and for a function that calls one of them. It is
-also enough for five of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+also enough for six of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one 64-byte block (one written with AVX-512 instructions and one with SSE4.1 instructions);
 `b3l_node_out`, the function that reads a node record and calls the kernel selected by its `plat`
-argument; the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop; and
-`b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros.
+argument; the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop; the
+32-way kernel, which does the same for thirty-two chunks, entered where every chunk gets the same
+counter; and `b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros.
 For the rest of the hash and the other programs, `kcheck/` is still the verifier to use.
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
@@ -76,10 +77,11 @@ The functions it verifies today:
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
 | `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.17 s |
+| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 1.2 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 
 `ode_equal`, `ode_low`, `ode_eighth` and the four functions of `examples/table/` (`ode_third` is one of
-them) are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last five are five of the fourteen functions in the shipped
+them) are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last six are six of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
@@ -351,7 +353,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,000 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,249 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,282 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -490,11 +492,11 @@ model defines them in general.
 
 **The constant-time promise of the kernels' contracts is proved.** The kernels' real contracts
 (`../kcheck/proofs/inner.spec`) have no `trace depends on` line: the execution trace must not depend on
-the message block, the key or the chaining value. The contracts used here (the three kernel files in
-`examples/kernel/`) now say the same, and the verifier accepts all three kernels. `test_kernel.py` changes
+the message block, the key or the chaining value. The contracts used here (the four kernel files in
+`examples/kernel/`) say the same, and the verifier accepts all four kernels. `test_kernel.py` changes
 each one-block kernel so that it branches on a word of the message block, and so that it leaves such a word
-in a general register: both are refused. `test_p16.py` marks the table of block addresses as secret too:
-refused, because the blocks are read at those addresses. The contract of `b3l_node_out` still says
+in a general register: both are refused. `test_p16.py` and `test_p32.py` mark the table of block addresses
+as secret too: refused, because the blocks are read at those addresses. The contract of `b3l_node_out` still says
 `trace depends on nd`, for the reason given above.
 
 **A loop that fills a buffer: `b3l_pad`** (`test_pad.py`). The function copies the `n` bytes of a chunk's
@@ -544,6 +546,9 @@ These are cases where the verifier rejects a correct function:
   definition that is a list built element by element from 0); a called function cannot write to the
   caller's output buffer. A store to the stack frame, a vector store, or a call makes the verifier forget
   what an invariant said about an output buffer.
+- A loop invariant's `lane` and `cell` lines are evaluated on values the verifier has already computed. A
+  number that such a line names, and that the code does not compute on every path to the invariant, must
+  also be named by a fact of the invariant (the 32-way kernel's invariant has two such facts).
 - `ensures` has one form for a buffer of bytes and one for a buffer of words, neither with a condition.
 - Buffers of words: 16-byte loads and stores only, at constant offsets that are multiples of 4. A buffer
   that is read and written cannot be read after the first store to it. Bytes and words cannot both be
@@ -687,11 +692,13 @@ With one block a lane, a contract that exchanges the first block's flags with th
 same thing, since all three bytes go into one word. The verifier refuses that contract. It refuses a true
 statement there; it does not accept a false one.
 
-**The 32-way kernel, for one block and for two.** `test_p32.py` verifies the shipped bytes of
-`blake3_servil_avx512_p32` (699 instructions in `../kcheck/b3hashr.o`) against the contract of
-`../kcheck/proofs/inner.spec` (here `examples/kernel/p32.contract`) narrowed by one line, `requires n < 2`
-or `requires n < 3`. For one block a lane the proof is 1,270 bytes and the verifier takes 0.15 s. For one
-or two blocks the proof is 2,127 bytes and the verifier takes 0.44 s.
+**The 32-way kernel.** `test_p32.py` verifies the shipped bytes of `blake3_servil_avx512_p32` (699
+instructions in `../kcheck/b3hashr.o`) against the contract of `../kcheck/proofs/inner.spec` (here
+`examples/kernel/p32.contract`). It does so twice: first with the contract narrowed by one line and no
+loop invariant, then with the contract as it stands.
+
+Narrowed by `requires n < 2`, for one block a lane, the proof is 1,270 bytes and the verifier takes 0.15 s.
+Narrowed by `requires n < 3`, for one or two blocks, the proof is 2,127 bytes and the verifier takes 0.44 s.
 
 This kernel differs from the 16-way kernel in two ways that needed new rules. First, it looks up the order
 of the message words for each round in a table in the object file (the rule for constants, above). Second,
@@ -706,10 +713,64 @@ refuses each. Among them: the two halves of the lanes exchanged; lane `i` given 
 is what the kernel's other entry computes; another message word added; sixty-four bytes read across two
 slots; the table's address moved by four bytes; one number of the table changed.
 
-Two things are not done. The contract as it stands, for every `n`, needs a loop invariant that speaks of
-two groups of registers and of the four slots of the frame that hold the counters. And the hash calls this
-code through its other entry, `blake3_servil_avx512_k32`, which gives lane `i` the counter `t + i`. That
-entry executes six more instructions, on mask registers, which the formal model does not have yet.
+The contract as it stands, for every `n`, needs a loop invariant, as the 16-way kernel's does. It is in
+`examples/kernel/p32.places`:
+
+    place +0xf44 {
+        name left = r13
+        name off = r14
+        fact left >= 1
+        fact left <= n
+        fact off == 64 * (n - left)
+        fact end <= 255
+        fact length <= 255
+        lane i: zmm0 .. zmm7 = chunk(key, t, flags, start, end, length, n, inputs[i]) after n - left + 1
+        lane i: zmm8 .. zmm15 = chunk(key, t, flags, start, end, length, n, inputs[i + 16]) after n - left + 1
+        cell [rsp + 2048]: word i = lo(t)
+        cell [rsp + 2112]: word i = hi(t)
+        cell [rsp + 2176]: word i = lo(t)
+        cell [rsp + 2240]: word i = hi(t)
+        decreases left
+    }
+
+Three things in it are new.
+
+- There are two `lane` lines, one for each half of the thirty-two lanes.
+- There are four `cell` lines. Before its loop the kernel stores the counter's low and high words in four
+  sixty-four-byte slots of its stack frame, and it reads them back in every iteration. A `cell` line says
+  what such a slot holds: word `i` of the sixty-four bytes at that distance above the stack pointer is the
+  given word of the specification. On every arrival at the invariant the verifier checks the line against
+  the vector it knows was stored there. In the iterations that follow it reads the slot as holding those
+  words. Without the line it would know nothing about the slot: what it knows about stored vectors is
+  forgotten at an invariant unless the invariant says it.
+- There are two facts that look idle, `end <= 255` and `length <= 255`. The kernel computes the last
+  block's flags and its length only when the block is the last one. The `lane` lines name both numbers on
+  every path. The verifier evaluates a `lane` line on values that it has already computed, and it computes
+  a number of the specification itself only where a fact names it. The two facts make it compute them.
+  Without them the invariant is still true, and the verifier refuses it. That is a limit of the verifier,
+  and a test records it.
+
+One rule of the verifier changed. When the specification divides a number that is known at once to be
+non-negative, the verifier now records the same facts about the quotient as it records when the code
+divides: the quotient is non-negative, and it is bounded where the dividend is. Before, a quotient first
+met in the specification was not recognized when the code computed it later. Two stored proofs
+(`ode_adler32_blocks` and `ode_adler32_blocks4`) were found again because of this change.
+
+With the invariant the verifier accepts the contract for every `n` from 1 up. The proof is 4,178 bytes.
+The verifier takes 1.2 s, and the Python verifier takes 0.40 s for the same function. That is within the
+limit of five times, and it is the slowest ratio of any function here. The cause is known. The verifier
+stores an inequality as a list with one entry for every unknown, this function has more than 1,300
+unknowns by its end, and the unknowns of a later iteration come last.
+
+The tests change the contract in twelve ways, the code in seven and the invariant in fourteen, and the
+verifier refuses each. Among the invariants: a slot said to hold the counter's low words where it holds the
+high ones; a slot four bytes further on; the two halves of the lanes exchanged; nothing said about a slot;
+nothing said about the upper half of the lanes. Among the instructions: the counter's low words read from
+the slot of its high words; a message word stored over one of the counter's slots.
+
+One thing is not done. The hash calls this code through its other entry, `blake3_servil_avx512_k32`, which
+gives lane `i` the counter `t + i`. That entry executes six more instructions, on mask registers, which
+the formal model does not have yet.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -772,6 +833,8 @@ specification. (The code and file names call this file the "statement".)
     decreases (bin - (name n) (name i))                the termination measure
     lane i zmm0 zmm1 = (call f …) in each lane `i` (0 to 15) the words of these vector registers are the
                                   list of words that the definition `f` gives of these things
+    cell 2048 i (call lo …)       word `i` (0 to 15) of the sixty-four bytes that lie 2048 bytes above the
+                                  stack pointer is the word that this expression gives
     wrote block (index (call f …) (name i))            from position `i` on, the output buffer `block` holds
                                   the list that the definition `f` gives, position by position
     marked rax                    registers that may depend on a secret on a later arrival
@@ -881,7 +944,9 @@ same bytes as before.
 What takes the time now, for the 16-way kernel, is still evaluating the specification: at the loop
 invariant the verifier works out one block's compression for each of the sixteen lanes, on each of four
 arrivals there. For the 32-way kernel, about a sixth of the time goes to checking the bounds of the stack
-frame again after every instruction.
+frame again after every instruction. For every number of blocks that kernel takes 1.2 s, three times the
+Python verifier's time: an inequality is a list with one entry for every unknown, and the function has
+more than 1,300 of them.
 
 **Two limits that are enforced by a test** (`test_limits.py`): every stored proof must be under 100 kB,
 and a whole run of this verifier must take at most five times as long as the Python verifier takes for the
@@ -914,6 +979,7 @@ version needs.
 | the SSE4.1 kernel | 38 | the same changes to the specification; in the contract: no bound on the length; in the code: a left shift by 19 bits instead of 20, an OR with another register, one byte of a shuffle constant, a blend that takes half a word, the flags not shifted |
 | the 16-way kernel, for every `n` | 30 | in the contract: the first and the last block's flags exchanged, one block fewer, another lane's blocks; in the code: the first block's flags kept for every block, the next block read two blocks on; in the loop invariant: the chaining value after one block more, two registers exchanged, nothing said of the vector registers |
 | `b3l_pad` | 19 | in the contract: less stack than the function uses; in the specification: padding with ones, one byte more or fewer of the input, a list of 63; in the invariant: one position more or fewer; in the code: a byte read past the end of the input, a jump on a byte of the input |
+| the 32-way kernel, for every `n` | 34 | in the contract: the first and the last block's flags exchanged, one block fewer, the two halves of the lanes exchanged; in the code: the counter's low words read from the slot of its high words, a message word stored over a slot of the counter; in the loop invariant: a slot said to hold the low words where it holds the high ones, a slot four bytes further on, nothing said of a slot or of half the lanes |
 | the 32-way kernel, one or two blocks | 25 | in the contract: the two halves of the lanes exchanged, lane `i` given the counter `t + i`; in the code: another message word added from the frame, sixty-four bytes read across two slots, the address of the table of constants moved; in the data: one number of that table changed |
 | the 16-way kernel, one or two blocks | 14 | the last block's flags and its length exchanged; the next counter; a shift that takes the first block's flags from the wrong bits |
 
@@ -941,8 +1007,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,000 lines (Table.lean 152, Machine.lean 474, Contract.lean 374). The
-verifier: 2,408 lines (Core.lean 2,249, Arithmetic.lean 159 including its proofs). The file parser: 174
-lines. The proofs of the theorems: 14,663 lines, of which Trace.lean (the second theorem) is 858 and Plain.lean (the machine without marks) is 249.
+verifier: 2,441 lines (Core.lean 2,282, Arithmetic.lean 159 including its proofs). The file parser: 178
+lines. The proofs of the theorems: 14,852 lines, of which Trace.lean (the second theorem) is 858 and Plain.lean (the machine without marks) is 249.
 
 ## The files
 
@@ -952,7 +1018,7 @@ lines. The proofs of the theorems: 14,663 lines, of which Trace.lean (the second
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`), `Trace.lean` (the second theorem, `ends_trace`), `Plain.lean` (the machine without marks, `runs_plain`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/` and `examples/table/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` (the 32-way kernel) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/` and `examples/table/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
 | tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_pad.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
 

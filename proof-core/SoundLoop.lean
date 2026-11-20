@@ -58,6 +58,13 @@ def LaneSays (ctx : Ctx) (pl : Place) (s0 st : State) (L : PlaceLanes) (i : Nat)
   Value ctx.defs ((L.x, Val.int (i : Int)) :: placeValsW ctx pl s0 st) (.call L.f L.args)
     (.list (L.regs.map fun r => Val.word (st.vec r i)))
 
+/-- What a place says of a cell of the frame, of a state of the machine there: word `i` of the sixty-four
+bytes that lie `C.off` bytes above the stack pointer is the word the place's expression gives, with the word's
+number under its name. -/
+def CellSays (ctx : Ctx) (pl : Place) (s0 st : State) (C : PlaceCell) : Prop :=
+  ∀ i : Nat, i < 16 → Value ctx.defs ((C.x, Val.int (i : Int)) :: placeValsW ctx pl s0 st) C.e
+    (.word (load st.mem (st.reg RSP + C.off + 4 * i) 4))
+
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 
@@ -454,6 +461,181 @@ theorem supposeLanes_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
     obtain ⟨ρ2, c2⟩ := supposeLanes_all E pl hn more h c1.holds c1.wf (fun L' m => says L' (List.mem_cons_of_mem _ m))
     exact ⟨ρ2, c1.then c2⟩
 
+/-! ### What a place says of cells of the frame -/
+
+theorem eachSome_spec {f : Nat → Option Nat} : ∀ {l ids : List Nat}, eachSome f l = some ids →
+    ids.length = l.length ∧ ∀ k (hk : k < l.length), f l[k] = some (ids.getD k 0)
+  | [], ids, h => by
+    simp only [eachSome, Option.some.injEq] at h
+    subst h
+    exact ⟨rfl, fun k hk => absurd hk (Nat.not_lt_zero _)⟩
+  | i :: more, ids, h => by
+    simp only [eachSome] at h
+    cases hi : f i with
+    | none => simp [hi] at h
+    | some a =>
+      cases hr : eachSome f more with
+      | none => simp [hi, hr] at h
+      | some rest =>
+        simp only [hi, hr, Option.some.injEq] at h
+        subst h
+        obtain ⟨len, each⟩ := eachSome_spec hr
+        refine ⟨by simp [len], ?_⟩
+        intro k hk
+        cases k with
+        | zero => simpa using hi
+        | succ k => simpa using each k (by simpa using hk)
+
+/-- The terms `cellIds` gives are sixteen, and each is the term, of the table, of the word the place's
+expression gives for that word's number. -/
+theorem cellIds_spec {s : Sym} {look : Node → Option Nat} {env : List (String × WVal)} {C : PlaceCell} {ids : List Nat}
+    (h : cellIds ctx look env s C = some ids) :
+    ids.length = 16 ∧ ∀ i : Nat, i < 16 → ∃ xs, weval ctx look s WFUEL ((C.x, .int i) :: env) C.e = some (.word xs) ∧
+      idOf look xs = some (ids.getD i 0) ∧ ids.getD i 0 < s.terms.length := by
+  unfold cellIds at h
+  obtain ⟨len, each⟩ := eachSome_spec h
+  refine ⟨by simpa using len, ?_⟩
+  intro i hi
+  have e := each i (by simpa using hi)
+  rw [List.getElem_range] at e
+  cases hw : weval ctx look s WFUEL ((C.x, .int i) :: env) C.e with
+  | none => simp [hw] at e
+  | some v =>
+    cases v with
+    | word xs =>
+      simp only [hw] at e
+      cases hid : idOf look xs with
+      | none => simp [hid] at e
+      | some a =>
+        simp only [hid, Option.filter] at e
+        split at e
+        next hlt =>
+          injection e with e
+          subst e
+          exact ⟨xs, rfl, hid, by simpa using hlt⟩
+        next => cases e
+    | _ => simp [hw] at e
+
+/-- Where the cell lies: `cellRow` is how far it is from where the stack pointer was at entry. -/
+theorem cellRow_eval {s : Sym} (H : Holds ctx s0 ρ s st) (C : PlaceCell) :
+    (s0.reg RSP : Int) + ev ρ (cellRow s C) = ((st.reg RSP + C.off : Nat) : Int) := by
+  have e1 := frameOffset_eval H (s.reg RSP)
+  have e2 := H.reg RSP (by decide)
+  simp only [cellRow, ev_add, ev_const, e1]
+  omega
+
+/-- What the verifier has shown of a cell of the frame is so of the machine's state. -/
+theorem cellShown_sound {p : Program} {s : Sym} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hn : ∀ nr ∈ pl.names, nr.2 < 16) {C : PlaceCell} (h : cellShown ctx pl s C = true) : CellSays ctx pl s0 st C := by
+  intro i hi
+  unfold cellShown at h
+  have hl : (fun n => (termIndex s.terms)[n]?) = fun n => findNode n s.terms 0 :=
+    funext fun n => termIndex_spec s.terms n
+  simp only [hl] at h
+  cases hids : cellIds ctx (fun n => findNode n s.terms 0) (placeW ctx pl s) s C with
+  | none => simp [hids] at h
+  | some ids =>
+    cases hf : s.spill.find? (fun (o, _) => o == cellRow s C) with
+    | none => simp [hids, hf] at h
+    | some found =>
+      obtain ⟨o, held⟩ := found
+      simp only [hids, hf, beq_iff_eq] at h
+      subst h
+      have hs : (o, ids) ∈ s.spill := List.mem_of_find?_eq_some hf
+      have heq : o = cellRow s C := by simpa only [beq_iff_eq] using List.find?_some hf
+      subst heq
+      obtain ⟨len, each⟩ := cellIds_spec hids
+      obtain ⟨xs, hw, hid, _⟩ := each i hi
+      obtain ⟨B, hB⟩ := held_bound H
+      obtain ⟨a, ea, da⟩ := weval_sound H wf hB WFUEL ((C.x, .int i) :: placeW ctx pl s)
+        ((C.x, Val.int (i : Int)) :: placeValsW ctx pl s0 st) _ _ hw ⟨rfl, WDen.int i, placeW_den E pl H hn⟩
+      cases da
+      have ew := (H.words.spill _ ids hs).2 i (by omega)
+      rw [cellRow_eval H C, Int.toNat_natCast] at ew
+      refine ⟨WFUEL + B, ?_⟩
+      rw [ea, ew, idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hid]
+
+/-- What a place says of a cell of the frame, taken as known of the general state: what the state then
+holds is so, of every state of the machine of which the place says it. -/
+theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+    {g g' : Sym} {C : PlaceCell} {items rest : Items}
+    (h : supposeCell ctx pl g C items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
+    (says : CellSays ctx pl s0 st C) : Carried ctx s0 ρ g ρ g' st := by
+  unfold supposeCell at h
+  have hl : (fun n => (termIndex g.terms)[n]?) = fun n => findNode n g.terms 0 :=
+    funext fun n => termIndex_spec g.terms n
+  simp only [hl] at h
+  cases hids : cellIds ctx (fun n => findNode n g.terms 0) (placeW ctx pl g) g C with
+  | none => simp only [hids] at h; exact (refuse_ok h).elim
+  | some ids =>
+    simp only [hids] at h
+    have hp := V.pure_ok h
+    injection hp with e1 _
+    subst e1
+    obtain ⟨len, each⟩ := cellIds_spec hids
+    obtain ⟨B, hB⟩ := held_bound H
+    have addr := cellRow_eval H C
+    have pos : 0 ≤ (s0.reg RSP : Int) + ev ρ (cellRow g C) := by rw [addr]; omega
+    have words : ∀ k, k < ids.length →
+        load st.mem (((s0.reg RSP : Int) + ev ρ (cellRow g C)).toNat + 4 * k) 4 = den (inpOf ctx s0) ρ g.terms (ids.getD k 0) := by
+      intro k hk
+      obtain ⟨xs, hw, hid, _⟩ := each k (by omega)
+      obtain ⟨a, ea, da⟩ := weval_sound H wf hB WFUEL ((C.x, .int k) :: placeW ctx pl g)
+        ((C.x, Val.int (k : Int)) :: placeValsW ctx pl s0 st) _ _ hw ⟨rfl, WDen.int k, placeW_den E pl H hn⟩
+      cases da
+      obtain ⟨fuel, hv⟩ := says k (by omega)
+      have u := Value.unique ⟨_, ea⟩ ⟨fuel, hv⟩
+      injection u with u
+      rw [addr, Int.toNat_natCast, ← u, idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hid]
+    have bd : bounded g.nvars (cellRow g C) :=
+      bounded_add (bounded_sub (wf.reg RSP (by decide)) (bounded_var (Nat.lt_of_lt_of_le (by decide : RSP < 17) wf.base)))
+        (bounded_const _ _)
+    have lt : ∀ i ∈ ids, i < g.terms.length := by
+      intro i mi
+      obtain ⟨k, hk, ek⟩ := List.getElem_of_mem mi
+      obtain ⟨_, _, _, l⟩ := each k (by omega)
+      have eg : ids.getD k 0 = i := by simp [List.getD, List.getElem?_eq_getElem hk, ek]
+      rw [eg] at l; exact l
+    refine ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩
+    · exact {
+        range := H.range
+        entry := H.entry, data := H.data, reg := H.reg, small := H.small, zf := H.zf, cf := H.cf, frame := H.frame, facts := H.facts,
+        bytes := H.bytes, spec := H.spec, mem := H.mem, wrote := H.wrote, known := H.known,
+        words := ⟨H.words.vec, H.words.intact, H.words.wrote, fun off ids' m =>
+          (List.mem_cons.mp m).elim
+            (fun e => by
+              injection e with eo ei
+              subst eo; subst ei
+              exact ⟨pos, words⟩)
+            (H.words.spill off ids')⟩ }
+    · exact {
+        range := wf.range
+        base := wf.base, reg := wf.reg, zf := wf.zf, cf := wf.cf, frame := wf.frame, facts := wf.facts, bytes := wf.bytes,
+        spec := wf.spec, wrote := wf.wrote, known := wf.known,
+        words := ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs, wf.words.wrote, fun off ids' m =>
+          (List.mem_cons.mp m).elim
+            (fun e => by
+              injection e with eo ei
+              subst eo; subst ei
+              exact ⟨bd, len, lt⟩)
+            (wf.words.spill off ids')⟩ }
+
+theorem supposeCells_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+    ∀ (cells : List PlaceCell) {g g' : Sym} {items rest : Items},
+    fold (supposeCell ctx pl) g cells items = .ok (g', rest) → Holds ctx s0 ρ g st → WF g →
+    (∀ C ∈ cells, CellSays ctx pl s0 st C) → Carried ctx s0 ρ g ρ g' st
+  | [], g, g', items, rest, h, H, wf, _ => by
+    simp only [fold] at h
+    have := V.pure_ok h
+    injection this with h1 _
+    subst h1
+    exact Carried.here H wf
+  | C :: more, g, g', items, rest, h, H, wf, says => by
+    simp only [fold] at h
+    obtain ⟨g1, r1, e1, h⟩ := V.bind_ok h
+    have c1 := supposeCell_sound E pl hn e1 H wf (says C (List.mem_cons_self ..))
+    exact c1.then (supposeCells_all E pl hn more h c1.holds c1.wf (fun C' m => says C' (List.mem_cons_of_mem _ m)))
+
 end
 
 /-! ## A place, and the general state -/
@@ -663,6 +845,7 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
   mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
   facts : ∀ e ∈ pl.facts, Asserts ctx.defs (placeVals ctx pl s0 st) e
   lanes : ∀ L ∈ pl.lanes, ∀ i, i < 16 → LaneSays ctx pl s0 st L i
+  cells : ∀ C ∈ pl.cells, CellSays ctx pl s0 st C
   wrote : RangeSays ctx pl s0 st
 
 theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
@@ -780,9 +963,17 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       intro L mL
       have all : pl.lanes.all (lanesShown ctx pl s1) = true := by simpa using hshown
       exact List.all_eq_true.mp all L mL
+    split at h
+    next => exact (refuse_ok h).elim
+    next hcells =>
+    have cshown : ∀ C ∈ pl.cells, cellShown ctx pl s1 C = true := by
+      intro C mC
+      have all : pl.cells.all (cellShown ctx pl s1) = true := by simpa using hcells
+      exact List.all_eq_true.mp all C mC
     obtain ⟨⟨got, s1b⟩, rb, eb, h⟩ := V.bind_ok h
     obtain ⟨g1, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨gl, rl, el, h⟩ := V.bind_ok h
+    obtain ⟨gc, rc, ec, h⟩ := V.bind_ok h
     obtain ⟨gr, rr, er, h⟩ := V.bind_ok h
     obtain ⟨⟨dres, g2⟩, r3, e3, h⟩ := V.bind_ok h
     have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hnames
@@ -795,7 +986,8 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     have first_at : AtPlace ctx pl s0 s1b ρ1b ρ1b st :=
       ⟨Agree.refl _ _, c1.holds.entry, c1.holds.data, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
        fun e m => by rw [← env1]; exact a1 e m,
-       fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hnames (shown L mL), says⟩
+       fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hnames (shown L mL),
+       fun C mC => cellShown_sound E pl c1'.holds c1'.wf hnames (cshown C mC), says⟩
     cases dres with
     | list _ => exact (refuse_ok h).elim
     | tail _ => exact (refuse_ok h).elim
@@ -824,7 +1016,8 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           have envb0 : EnvB (s1b.general pl).nvars (placeEnv ctx pl (s1b.general pl).reg) := placeEnv_bounded pl w0 hnames
           have env0 := semEnv_placeEnv (ctx := ctx) pl H0.entry H0.reg hnames
           obtain ⟨ρa, ca⟩ := suppose_all E _ pl.facts e2 H0 w0 envb0 (fun e m => by rw [env0]; exact A.facts e m)
-          obtain ⟨ρl, cl'⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
+          obtain ⟨ρl, cl0⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
+          have cl' := cl0.then (supposeCells_all E pl hnames pl.cells ec cl0.holds cl0.wf A.cells)
           obtain ⟨ρr, cr⟩ := supposeRange_sound E pl hnames er cl'.holds cl'.wf A.wrote
           have cl := cl'.then cr
           obtain ⟨ρb, cb, sem, bd⟩ := seval_sound E _ pl.decreases e3 cl.holds cl.wf (envb0.mono (ca.then cl).mono)
@@ -877,6 +1070,13 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         intro L mL
         have all : pl.lanes.all (lanesShown ctx pl s1) = true := by simpa using hshown
         exact List.all_eq_true.mp all L mL
+      split at h
+      next => exact (refuse_ok h).elim
+      next hcells =>
+      have cshown : ∀ C ∈ pl.cells, cellShown ctx pl s1 C = true := by
+        intro C mC
+        have all : pl.cells.all (cellShown ctx pl s1) = true := by simpa using hcells
+        exact List.all_eq_true.mp all C mC
       obtain ⟨⟨got, s1b⟩, rb, eb, h⟩ := V.bind_ok h
       obtain ⟨⟨dres, s2⟩, r2, e2, h⟩ := V.bind_ok h
       have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hn
@@ -891,7 +1091,8 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         rw [← semEnv_agree envb (c1.then c2).agree]; exact env0
       refine ⟨⟨Agree.refl _ _, H.entry, H.data, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
                (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m),
-               fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL), says⟩, ?_⟩
+               fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL),
+               fun C mC => cellShown_sound E pl c1'.holds c1'.wf hn (cshown C mC), says⟩, ?_⟩
       cases dres with
       | list _ => exact (refuse_ok h).elim
       | tail _ => exact (refuse_ok h).elim

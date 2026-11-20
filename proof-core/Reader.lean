@@ -174,6 +174,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     match ← readSExpr (rest line (3 + regs.length)) with
     | .call f args => inPlace fun p => { p with lanes := p.lanes ++ [⟨rs, x, f, args⟩] }
     | _ => throw s!"refused: a place's lanes are said by the use of a definition: {line}"
+  | "cell" :: off :: x :: _ => do
+    -- cell OFF X E: of the sixty-four bytes OFF above the stack pointer, word X (0 to 15) is the word E
+    match off.toNat? with
+    | some o => do let e ← readSExpr (rest line 3); inPlace fun p => { p with cells := p.cells ++ [⟨o, x, e⟩] }
+    | none => throw s!"refused: a place's cell lies a number of bytes above the stack pointer: {line}"
   | "wrote" :: run :: _ => do
     -- wrote RUN (index (call F THING …) LO): from the place LO on, the run holds the list F gives, place by place
     match ← readSExpr (rest line 2) with
