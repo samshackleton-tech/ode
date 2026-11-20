@@ -1220,14 +1220,14 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
     | block _ _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
-theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symOrKnown s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
   obtain ⟨hx1, hx2, hx3⟩ := hx
   obtain ⟨hy1, hy2, hy3⟩ := hy
   have lt : xa ||| xb < M64 := by unfold M64 at *; exact Nat.or_lt_two_pow hx1 hy1
-  unfold symOr at h
+  unfold symOrKnown at h
   cases hk : knownOr x y s.known with
   | some v0 =>
     simp only [hk] at h
@@ -1308,6 +1308,37 @@ theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {
         next => cases m
     · refine ⟨by rw [ex]; exact Int.natCast_nonneg _, by rw [ey]; exact Int.natCast_nonneg _, ?_⟩
       rw [new, ex, ey]; simp
+
+/-- Two numbers' bits put together, one of the two being the number zero or neither. -/
+theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
+  unfold symOr at h
+  split at h
+  next hy0 =>
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    have e := ev_isConst (ρ := ρ) hy0
+    have xb0 : xb = 0 := by have := hy.2.1; omega
+    subst xb0
+    rw [Nat.or_zero]
+    exact ⟨ρ, Carried.here H wf, hx.1, hx⟩
+  next =>
+    split at h
+    next hx0 =>
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      have e := ev_isConst (ρ := ρ) hx0
+      have xa0 : xa = 0 := by have := hx.2.1; omega
+      subst xa0
+      rw [Nat.zero_or]
+      exact ⟨ρ, Carried.here H wf, hy.1, hy⟩
+    next => exact symOrKnown_sound h H wf xa xb hx hy
 
 /-- The 64-bit mask ending in six zero bits rounds an address down to a multiple of 64. -/
 theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64) := by
@@ -2120,7 +2151,15 @@ theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
 theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat)
-    (hv : ∀ place v, stmt ≠ .vset place v) (hw : ∀ place v, stmt ≠ .vset512 place v) :
+    (hv : ∀ place v, stmt ≠ .vset place v) (hw : ∀ place v, stmt ≠ .vset512 place v)
+    -- (a store of eight bytes as two words of a run: its rule is shown where the words of runs are, SoundCallW.lean)
+    (h8 : ∀ {s s' : Sym} {w n base : Nat} {name : String} {o xr : Row} {items rest : Items} {ρ : Nat → Int} {st : State} (a x : Nat),
+      symStore8 ctx s w n o xr items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s →
+      ctx.contract.outs[w]? = some (name, base, n) →
+      (∀ c : Int, ev ρ o = c → 0 ≤ c → c + 8 ≤ n → a = s0.reg base + c.toNat) →
+      EV.sem ρ s.nvars x (.lin xr) →
+      allowed (ctx.contract.perm s0).write a 8 = true ∧
+        ∃ ρ', Carried ctx s0 ρ s ρ' s' { st with mem := store st.mem a x 8 }) :
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with
   | nothing =>
@@ -2327,7 +2366,26 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                                c3.holds.writeOut E hw o xr g1 (by omega) x hx8 sx3.2.1 hkw hnw _ hadr below,
                                c3.wf.writeOut hbo sx3.2.2 hkw⟩, ?_, rfl⟩
                             simp [execStmt, hu, vx, hsize, values_two va vb, sumList, hw1]
-                        next => exact (refuse_ok h).elim
+                        next =>
+                          split at h
+                          next hsize8 =>
+                            have hm := List.mem_of_getElem? hw
+                            have hbase : ρ3 base = s0.reg base := c3.holds.entry base (outs_lt hm)
+                            have hfit := (E.out hm).1
+                            have eo : ev ρ3 o = ev ρ3 (signed ar) + ev ρ3 (signed br) - s0.reg base := by
+                              rw [ho, ev_sub, ev_add, ev_var, hbase]
+                            have sgx := signed_ev ρ3 ar
+                            have sgy := signed_ev ρ3 br
+                            have hx1 := sa3.1
+                            have hy1 := sb.1
+                            have hx2 := sa3.2.1
+                            have hy2 := sb.2.1
+                            unfold M64 at hx1 hy1 hfit
+                            obtain ⟨perm, ρ4, c4⟩ := h8 ((xa + xb) % M64) x h c3.holds c3.wf hw
+                              (fun c ec c0 cn => by unfold M64; omega) sx3
+                            refine ⟨ρ4, _, c1.then (c2.then (c3.then c4)), ?_, rfl⟩
+                            simp [execStmt, hu, vx, hsize8, values_two va vb, sumList, perm]
+                          next => exact (refuse_ok h).elim
                       | frame c =>
                         simp only [hl] at h
                         split at h

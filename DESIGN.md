@@ -297,8 +297,9 @@ Memory and calls follow the same rule. This was decided in November 2026 and is 
   the memory use beforehand, commits to it, and proves it. Built so far, in `proof-core/`: the object
   file's read-only data as a piece; and lending of a part, where a called function is given a part of a
   buffer of its caller: to read, a part of a read-only buffer; to write, or to read and write, whole
-  words of a buffer that the caller may read and write. The stack frame and the buffers of contracts still go by the
-  earlier rules.
+  words of a buffer that the caller may read and write. With these, `b3l_chunk_node` of the hash is
+  verified: it lends parts of its input and of its record to three functions. The stack frame and the
+  buffers of contracts still go by the earlier rules.
 - **The coder lays out memory, and the compiler does what is written or stops.** The pieces of a frame
   lie in the order written, each with the alignment written. An alignment is a number: "a multiple of
   64", or "does not cross a multiple of 4096". The verifier proves such a statement about the addresses.
@@ -423,7 +424,7 @@ expertise of his team.
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
 processor that the instruction table describes. The formal model that the theorem is about is 1,021 lines.
-The verifier's own 2,621 lines are covered by the theorem, so a Bob who takes the third route does not
+The verifier's own 2,666 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -439,19 +440,22 @@ specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that 
 reproduces the 105 official test vectors.
 
 As of November 20, 2026 it verifies five of the twelve small shipped functions, a function that calls one
-of them, and seven of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+of them, and eight of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one block (proofs of 131 and 137 bytes, verified in 5 ms each); `b3l_node_out`, which
 reads a 120-byte node record and calls one of them (a 38-byte proof, verified together with both kernels
 in 7 ms); the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
 in 0.12 s); the 32-way kernel through each of its two entries, the one that gives every chunk the same
 counter and the one the hash calls, which gives chunk `i` the counter `t + i` (699 and 702 instructions,
-proofs of 4.2 and 4.3 kB, verified in 0.60 s and 0.59 s); and `b3l_pad`, which pads a chunk's last block (39
-instructions, a 451-byte proof). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
+proofs of 4.2 and 4.3 kB, verified in 0.60 s and 0.59 s); `b3l_pad`, which pads a chunk's last block (39
+instructions, a 451-byte proof); and `b3l_chunk_node`, which calls a one-block kernel for each block of a
+chunk but the last, calls `b3l_pad` for the last, and stores the chunk's number, the last block's length
+and the flags into the chunk's 120-byte record (81 instructions, a 5.4 kB proof, verified together with
+the three functions it calls in 0.16 s). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
 
 That page also says what is left out. Reading the object file and the text of the specification happens
 outside the theorem. So do the link step and the check of which processor features a function needs. The
 promise in the kernels' contracts that the trace does not depend on the data (constant time) is in the
-Lean model and is proved for the four kernels and for `b3l_pad`, at the level of which instructions run and
+Lean model and is proved for the four kernels, for `b3l_pad` and for `b3l_chunk_node`, at the level of which instructions run and
 which addresses are touched. A second theorem (`verify_all_trace`) states it without the model's
 bookkeeping: on a machine with no secrecy marks, two runs of an accepted function from inputs that differ
 only in what its contract hides produce the same trace. This is the third route of the list above, begun. Lean is the language of this

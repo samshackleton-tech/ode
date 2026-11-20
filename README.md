@@ -58,13 +58,14 @@ main thing we are working on.
 
 The folder `proof-core/` holds a second, much smaller verifier, written in Lean 4. With it comes a
 soundness theorem that Lean checks: if this verifier accepts a function, the function satisfies its
-contract, whatever proof it was given. So far it can verify five of the twelve small functions and seven
+contract, whatever proof it was given. So far it can verify five of the twelve small functions and eight
 of the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block;
 `b3l_node_out`, which reads a node record and calls whichever kernel the processor supports; the
 16-way kernel, with its loop over the blocks of sixteen chunks, for every number of blocks; the 32-way
 kernel, likewise for thirty-two chunks, through each of its two entries (one gives every chunk the same
-counter; the other, which the hash calls, gives chunk `i` the counter `t + i`); and `b3l_pad`, whose loop
-writes a padded block byte by byte.
+counter; the other, which the hash calls, gives chunk `i` the counter `t + i`); `b3l_pad`, whose loop
+writes a padded block byte by byte; and `b3l_chunk_node`, which calls a one-block kernel for each block
+of a chunk but the last, calls `b3l_pad` for the last, and stores three numbers into the chunk's record.
 It can follow arithmetic and shuffles on 512-bit registers, compares into mask registers and additions
 under a mask, loads and stores of 512-bit registers in buffers and on the stack, loads through a table of
 addresses, and loads of constants from the object file's read-only data.

@@ -97,7 +97,6 @@ class Statement(unittest.TestCase):
         for what, change, word in (
                 ("a field that is several things", once("h: cv at 0", "h[1]: cv at 0"), "several things"),
                 ("a field of a kind that is not read", once("block: 64 bytes at 32", "block: block at 32"), "does not read yet"),
-                ("a record that is written", once("ensures out = node_value(nd, root)", "ensures out = node_value(nd, root)\n    ensures nd = nd"), ""),
                 ("a need on a condition that is no argument's being a number", once(IF + TRACE, "if plat != 5" + TRACE), "condition"),
                 ("a need on a condition of what is no register", once(IF + TRACE, "if nd == 5" + TRACE), "condition"),
                 ("a need on a condition of a sum", once(IF + TRACE, "if plat + 1 == 6" + TRACE), "condition"),

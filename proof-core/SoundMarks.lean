@@ -522,7 +522,52 @@ theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           | some w =>
             cases w with
             | region _ _ => exact CellsOk.nil
-            | out _ _ => exact CellsOk.nil
+            | out w o =>
+              -- a store within a run given to write: the run is no part of the frame, so each cell stays as it was
+              simp only
+              obtain ⟨name, base, n, hw, ho⟩ := locate_out hl
+              simp only [hw]
+              cases hc : Lin.isConst o with
+              | none => exact CellsOk.nil
+              | some c =>
+                simp only
+                split
+                next hb =>
+                  simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+                  obtain ⟨va, ea, xa, la, ba⟩ := plainRow_value H wf hx
+                  obtain ⟨vb, eb, xb, lb, bb⟩ := plainRow_value H wf hy
+                  have sx := signed_ev ρ x
+                  have sy := signed_ev ρ y
+                  have hm := List.mem_of_getElem? hw
+                  have hbase : ρ base = s0.reg base := H.entry base (outs_lt hm)
+                  have hfit := (E.out hm).1
+                  have hfr := (E.out hm).2
+                  have hcv := ev_isConst (ρ := ρ) hc
+                  rw [ho, ev_sub, ev_add, ev_var, hbase] at hcv
+                  have hs := E.stack
+                  have hpos : 0 < size := by
+                    unfold memSize at hsz
+                    split at hsz
+                    · injection hsz with hsz; omega
+                    · split at hsz
+                      · injection hsz with hsz; omega
+                      · split at hsz
+                        · injection hsz with hsz; omega
+                        · cases hsz
+                  have had : (va + (vb + 0)) % M64 = s0.reg base + c.toNat := by unfold M64 at *; omega
+                  have e1 : addrOf bind st [a, b] = some ((va + (vb + 0)) % M64) := by
+                    simp only [addrOf, values, ea, eb, Option.map, sumList]
+                  have hmem : (marksAfter bind st (.set (.call f [a, b]) v)).mem =
+                      markBytes st.marks.mem ((va + (vb + 0)) % M64) size (exprMark bind st v) := by
+                    simp only [marksAfter, stmtParts, placeWidth, hsz, e1]
+                  rw [hmem, had]
+                  intro o' ho'
+                  obtain ⟨o1, o2, o3⟩ := M.frame o' ho'
+                  refine ⟨o1, o2, fun k hk => ?_⟩
+                  unfold markBytes
+                  rw [if_neg (by omega)]
+                  exact o3 k hk
+                next => exact CellsOk.nil
             | data _ => exact CellsOk.nil
             | frame c =>
               simp only
@@ -911,10 +956,13 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           rw [ev_sub, ev_var, H.entry RSP (by decide)] at h2
           omega
         have houts : (c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
-            ctx.contract.outs.any fun (_, b, n0) => s.reg r == Lin.var b && decide (b < 16) && decide (n ≤ n0)) = true := by
+            ctx.contract.outs.any fun (_, b, n0) =>
+              match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
+              | some k => decide (0 ≤ k) && decide (b < 16) && decide (k + n ≤ n0)
+              | none => false) = true := by
           cases he : s.q.fq.isEmpty with
           | true => rw [List.isEmpty_iff.mp he] at hin; cases hin
-          | false => simpa [he] using houts
+          | false => rw [he, Bool.false_or] at houts; exact houts
         generalize ha : ((s0.reg RSP : Int) + cc).toNat + k = a
         have hf : c.inFrame (afterCall p q i st) a = false := by
           simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
@@ -928,18 +976,22 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           intro ⟨x, r, n⟩ hm
           have := List.all_eq_true.mp houts (x, r, n) hm
           simp only [Bool.and_eq_true, decide_eq_true_eq, List.any_eq_true] at this
-          obtain ⟨⟨rne, r16⟩, ⟨x0, b, n0⟩, hm0, ⟨hrow, b16⟩, hn⟩ := this
-          have hrow : s.reg r = Lin.var b := by simpa using hrow
-          have vr : st.reg r = s0.reg b := by
-            have := H.reg r r16
-            rw [hrow, ev_var, H.entry b b16] at this
+          obtain ⟨⟨rne, r16⟩, ⟨x0, b, n0⟩, hm0, hpart⟩ := this
+          cases hk : Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
+          | none => simp [hk] at hpart
+          | some k =>
+            simp only [hk, Bool.and_eq_true, decide_eq_true_eq] at hpart
+            obtain ⟨⟨k0, b16⟩, hn⟩ := hpart
+            have vr : (st.reg r : Int) = s0.reg b + k := by
+              have h1 := H.reg r r16
+              have h2 := ev_isConst (ρ := ρ) hk
+              rw [ev_sub, ev_var, H.entry b b16] at h2
+              omega
+            obtain ⟨_, o2⟩ := E.out hm0
+            show ¬ ((decide ((if r = RSP then st.reg RSP - 8 else st.reg r) ≤ a) && decide (a < (if r = RSP then st.reg RSP - 8 else st.reg r) + n)) = true)
+            rw [if_neg rne]
+            simp only [Bool.and_eq_true, decide_eq_true_eq]
             omega
-          obtain ⟨_, o2⟩ := E.out hm0
-          have hn : n ≤ n0 := hn
-          show ¬ ((decide ((if r = RSP then st.reg RSP - 8 else st.reg r) ≤ a) && decide (a < (if r = RSP then st.reg RSP - 8 else st.reg r) + n)) = true)
-          rw [if_neg rne, vr]
-          simp only [Bool.and_eq_true, decide_eq_true_eq]
-          omega
         show s2.marks.mem a = false
         rw [qs a hf ho]
         show markBytes st.marks.mem (st.reg RSP - 8) 8 false a = false

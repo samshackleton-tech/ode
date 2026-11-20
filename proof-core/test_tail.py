@@ -30,11 +30,11 @@ import built, lean_verify, odec, prove, statement
 TAIL = os.path.join(HERE, "examples", "tail")
 NAME, PAD = "ode_tail", "b3l_pad"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), PAD), (os.path.join(TAIL, "odetail.o"), NAME)]
-# the record at entry, and the record the contract says it becomes, as statement.py writes them
-OLD = "(record (h (call words (slice (name r) (num 0) (num 32)))) (block (slice (name r) (num 32) (num 96))))"
-NEW = f"(record (h (field {OLD} h)) (block (call padded (slice (name src) (num 16) (name len)))))"
+# the record the contract says the run becomes, as statement.py writes it (`r.h`: the field of the record at entry);
+# the record is had once, by a `let`, and its bytes are those of its fields' words
+NEW = "(record (h (call words (slice (name r) (num 0) (num 32)))) (block (call padded (slice (name src) (num 16) (name len)))))"
 CONTRACT = ["arg r inout 96", "arg src bytes len", "arg len number", "atleast len 17", "below len 81", "hidden src",
-            f"ensuresw r (call bytes_of (bin ++ (field {NEW} h) (call words (field {NEW} block))))",
+            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ (field (name record) h) (call words (field (name record) block)))))",
             "stack 64"]
 # Why the verifier refuses, or what the prover cannot give it.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"

@@ -26,12 +26,12 @@ import built, lean_verify, odec, prove, statement
 RECORD = os.path.join(HERE, "examples", "record")
 NAME, SSE41 = "ode_absorb", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(RECORD, "oderecord.o"), NAME)]
-# the record at entry, and the record the contract says it becomes, as statement.py writes them
-OLD = "(record (tag (call words (slice (name r) (num 0) (num 32)))) (h (call words (slice (name r) (num 32) (num 64)))))"
-NEW = (f"(record (tag (field {OLD} tag)) (h (call compress (call compress (field {OLD} h) (call words (name m)) "
+# the record the contract says the run becomes, as statement.py writes it (`r.tag`, `r.h`: the fields of the record at entry)
+NEW = ("(record (tag (call words (slice (name r) (num 0) (num 32)))) (h (call compress (call compress "
+       "(call words (slice (name r) (num 32) (num 64))) (call words (name m)) "
        "(call counter (num 0)) (num 64) (num 0)) (call words (name m2)) (call counter (num 0)) (num 64) (num 0))))")
 CONTRACT = ["arg r inout 64", "arg m fixed 64", "arg m2 fixed 64", "needs sse41", "hidden m", "hidden m2",
-            f"ensuresw r (call bytes_of (bin ++ (field {NEW} tag) (field {NEW} h)))",
+            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ (field (name record) tag) (field (name record) h))))",
             "stack 32"]
 # Why the verifier refuses, or what the prover cannot give it.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
@@ -119,14 +119,28 @@ class Statement(unittest.TestCase):
         self.assertIn("does not say `requires no_overlap(r, m, m2)`", str(e.exception))
 
     def test_a_layout_this_reader_does_not_take_for_a_written_record(self):
-        # a field that is a number, and fields that leave a gap: said, not guessed at
-        cases = (("a number", "tag: number at 0, more: 24 bytes at 8, h: cv at 32", "tag: 0, more: r.more", "does not read there yet: tag: number"),
+        # bytes that are not whole words, and fields that leave a gap: said, not guessed at
+        cases = (("bytes that are not whole words", "tag: 30 bytes at 0, more: 2 bytes at 30, h: cv at 32", "tag: r.tag, more: r.more",
+                  "does not read there yet: tag: 30 bytes"),
                  ("a gap", "tag: 28 bytes at 0, h: cv at 32", "tag: r.tag", "do not lie one after another"))
         for what, layout, field, why in cases:
             with self.subTest(what=what):
                 change = lambda t: once("tag: r.tag", field)(once("tag: cv at 0, h: cv at 32", layout)(t))
                 with self.assertRaises(SystemExit) as e: statement.statement(spec_text(change), FUNCTIONS)
                 self.assertIn(why, str(e.exception))
+
+
+    def test_a_number_in_a_written_record_is_its_two_words(self):
+        # a field that is a number: the two words of its eight bytes, the low word first, where the number is
+        # below what the layout asks; where it is not, the expression has no value (so the `ensures` is false)
+        change = lambda t: once("tag: r.tag", "tag: 5, more: r.more")(once("tag: cv at 0, h: cv at 32", "tag: number at 0 below 9, more: 24 bytes at 8, h: cv at 32")(t))
+        lines = statement.statement(spec_text(change), FUNCTIONS)
+        (ensures,) = [l for l in lines[lines.index(f"fn {NAME}"):] if l.startswith("ensuresw ")]
+        self.assertIn("(let record (record (tag (num 5)) (more (slice (name r) (num 8) (num 32)))", ensures)
+        self.assertIn("(bin ++ (ifx (bin < (field (name record) tag) (num 9)) (list (call lo (call counter (field (name record) tag))) "
+                      "(call hi (call counter (field (name record) tag)))) (index (list (num 0)) (num 1))) "
+                      "(bin ++ (call words (field (name record) more)) (field (name record) h)))", ensures)
+        self.assertFalse([l for l in lines if l.startswith("mbelow ")])
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")

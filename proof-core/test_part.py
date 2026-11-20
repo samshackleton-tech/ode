@@ -33,7 +33,6 @@ CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs ss
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, or a number to be below its bound, and it is not so
-WRITE = "refused: a write of more than one byte to a run given to write: not here yet"
 NOT_KNOWN = "refused: a called function is given to write what is not whole words of a run this function may read and write, each of them known"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
@@ -56,7 +55,7 @@ SOURCES = [
     ("the kernel is given the block length 32", "  mov rdx, 64\n", "  mov rdx, 32\n", FOLLOW),
     ("the kernel is given the counter 1", "  mov rcx, 0\n", "  mov rcx, 1\n", FOLLOW),
     ("the kernel is given the flag 2", "  mov r8, 0\n", "  mov r8, 2\n", FOLLOW),
-    ("eight bytes of h are written before the call", "  sub rsp, 8\n", "  sub rsp, 8\n  mov qword ptr [rdi + 0], rdx\n", WRITE),
+    ("eight bytes of h are written before the call", "  sub rsp, 8\n", "  sub rsp, 8\n  mov qword ptr [rdi + 0], rdx\n", FOLLOW),
     ("one byte of h is written before the call", "  sub rsp, 8\n", "  sub rsp, 8\n  mov byte ptr [rdi + 0], 1\n", NOT_KNOWN),
 ]
 

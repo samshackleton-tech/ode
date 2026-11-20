@@ -27,6 +27,9 @@ the same way as the one-block kernels: kcheck's verifier with it as the only fun
 So are the 32-way kernel by each of its two entries (`blake3_servil_avx512_p32` and
 `blake3_servil_avx512_k32`, for every count of blocks) and `b3l_pad`.
 
+`b3l_chunk_node` calls the two one-block kernels and `b3l_pad` and is shown with them, as `b3l_node_out`
+is with the kernels: the run measured is of the four functions, against kcheck's times for the four.
+
 On November 18 the Lean verifier was five and six times slower on the two larger functions, and it was
 seen only when the times were measured for a report. This test is so that it is seen at once.
 
@@ -34,7 +37,7 @@ seen only when the times were measured for a report. This test is so that it is 
 import os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import built, lean_verify, statement, test_k32, test_kernel, test_node, test_p16, test_p32, test_pad
+import built, lean_verify, statement, test_chunk, test_k32, test_kernel, test_node, test_p16, test_p32, test_pad
 KCHECK = os.path.join(HERE, "..", "kcheck")
 PROGRAMS = os.path.join(KCHECK, "programs")
 # (the folder of ../kcheck/programs, the object, the specification, the function)
@@ -222,6 +225,35 @@ class Limits(unittest.TestCase):
         with self.subTest(symbol=test_pad.PAD):
             self.assertLessEqual(size, SIZE)
             self.assertTrue(lean <= SMALL or lean <= TIMES * python, f"b3l_pad: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * python:.1f} ms")
+        # b3l_chunk_node, with the two one-block kernels and b3l_pad that it calls
+        symbols = [test_chunk.AVX512, test_chunk.SSE41, test_chunk.PAD, test_chunk.CHUNK]
+        size = os.path.getsize(os.path.join(HERE, "proofs", test_chunk.CHUNK + ".proof"))
+        with tempfile.TemporaryDirectory() as d:
+            path, proof = os.path.join(d, "statement"), os.path.join(d, "proof")
+            with open(path, "w") as f: f.write("\n".join(statement.statement(test_chunk.spec_text(), test_chunk.FUNCTIONS)) + "\n")
+            with open(proof, "w") as out:
+                for symbol in symbols:
+                    with open(os.path.join(HERE, "proofs", symbol + ".proof")) as f: out.write(f.read())
+            lean = None
+            for _ in range(7):
+                t = time.time()
+                r = subprocess.run([lean_verify.EXE, lean_verify.TABLE, path, proof], capture_output=True, text=True)
+                took = time.time() - t
+                self.assertEqual(r.stdout, "shown\n", test_chunk.CHUNK)
+                lean = took if lean is None else min(lean, took)
+        own = None
+        for _ in range(5):
+            r = subprocess.run([sys.executable, "-c", ONE, KCHECK, test_chunk.OBJ, test_chunk.CHUNK], capture_output=True, text=True)
+            said = r.stdout.split(None, 2)
+            self.assertEqual((r.returncode, said[0], said[2]), (0, "81", "everything its contract allows\n"), (r.stdout[-300:], r.stderr[-300:]))
+            took = float(said[1]) / 1000
+            own = took if own is None else min(own, took)
+        four = own + kchecks[test_chunk.AVX512] + kchecks[test_chunk.SSE41] + python          # (python: b3l_pad's, measured just above)
+        lines.append(f"  {'b3l_chunk_node':<20} the proof {size:>6} bytes; with the three it calls: the Lean verifier {1000 * lean:6.1f} ms; "
+                     f"kcheck's {1000 * four:5.1f} ms ({1000 * own:.1f} ms its own); {lean / four:4.1f} times")
+        with self.subTest(symbol=test_chunk.CHUNK):
+            self.assertLessEqual(size, SIZE)
+            self.assertTrue(lean <= SMALL or lean <= TIMES * four, f"b3l_chunk_node: the Lean verifier takes {1000 * lean:.1f} ms, kcheck's {1000 * four:.1f} ms")
         print("\nthe limits (a proof under 100 kB; verifying no more than five times kcheck's time):\n" + "\n".join(lines), file=sys.stderr)
 
 

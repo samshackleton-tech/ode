@@ -1215,6 +1215,112 @@ theorem callTouch_carried {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
     · exact Carried.here H wf
   · exact Carried.here H wf
 
+/-! ## Eight bytes of a number stored as two words of a run -/
+
+/-- Eight bytes of a number stored: the number's low half stored as a word, and its high half as the next. -/
+theorem store8_words (mem : Nat → Nat) (a x : Nat) : storeWords mem a [x % 4294967296, x / 4294967296] = store mem a x 8 := by
+  funext y
+  by_cases hy : y < a ∨ a + 8 ≤ y
+  · rw [storeWords_other _ _ _ _ (by simpa using hy), store_other _ _ _ _ _ hy]
+  · obtain ⟨j, rfl, hj⟩ : ∃ j, y = a + j ∧ j < 8 := ⟨y - a, by omega, by omega⟩
+    rw [store_at 8 mem a x j hj]
+    have e : a + j = a + 4 * (j / 4) + j % 4 := by omega
+    rw [e, storeWords_at _ _ _ (j / 4) (j % 4) (by simp only [List.length_cons, List.length_nil]; omega) (by omega)]
+    have cases : j = 0 ∨ j = 1 ∨ j = 2 ∨ j = 3 ∨ j = 4 ∨ j = 5 ∨ j = 6 ∨ j = 7 := by omega
+    rcases cases with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> simp [List.getD] <;> omega
+
+theorem touch_wrote (ctx : Ctx) (s : Sym) (w : Nat) : (s.touch ctx w).wrote = s.wrote := by
+  unfold Sym.touch
+  split
+  · split
+    · split <;> rfl
+    · rfl
+  · rfl
+
+theorem symDivide_wrote (s : Sym) (x : Row) (m : Int) : (symDivide s x m).2.2.wrote = s.wrote := by
+  unfold symDivide
+  split <;> rfl
+
+/-- **Eight bytes of a number stored into a run given to write, as two words**: the store is allowed, and
+what the verifier then holds is so of the machine's state after it. -/
+theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {w n base : Nat} {name : String}
+    {o xr : Row} {items rest : Items} {ρ : Nat → Int} {st : State} (a x : Nat)
+    (h : symStore8 ctx s w n o xr items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (hw : ctx.contract.outs[w]? = some (name, base, n))
+    (ha : ∀ c : Int, ev ρ o = c → 0 ≤ c → c + 8 ≤ n → a = s0.reg base + c.toNat)
+    (sx : EV.sem ρ s.nvars x (.lin xr)) :
+    allowed (ctx.contract.perm s0).write a 8 = true ∧
+      ∃ ρ', Carried ctx s0 ρ s ρ' s' { st with mem := store st.mem a x 8 } := by
+  unfold symStore8 at h
+  cases hc : Lin.isConst o with
+  | none => simp only [hc] at h; exact (refuse_ok h).elim
+  | some c =>
+    simp only [hc] at h
+    split at h
+    next hcond =>
+      obtain ⟨c0, c4, cn, hnw⟩ := hcond
+      have hs := V.pure_ok h
+      injection hs with h1 _
+      subst h1
+      have hA : a = s0.reg base + c.toNat := ha c (ev_isConst hc) c0 cn
+      have hm := List.mem_of_getElem? hw
+      -- the run taken as written with the words it held; the number's high half; the terms of the two words
+      have CT := touch_carried E H wf w
+      have sxT := EV.sem_agree sx CT.agree CT.mono
+      have x0 : 0 ≤ ev ρ xr := by rw [← sxT.2.1]; exact Int.natCast_nonneg _
+      obtain ⟨ρ', CD, eq, _, bq, _⟩ := symDivide_sound CT.holds CT.wf sxT.2.2 (show (0 : Int) < W32i by decide) x0
+      have sxD := EV.sem_agree sxT CD.agree CD.mono
+      have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') CD.wf.words.ok sxD.2.2
+      have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') S1.ok bq
+      have C5 := Carried.terms CD.holds CD.wf (S1.ext.trans S2.ext) S2.ok
+      have hnw' : ((symDivide (s.touch ctx w) xr W32i).2.2.wrote.any fun e => e.1 == w) = false := by
+        rw [symDivide_wrote, touch_wrote, List.any_eq_false]
+        intro e me
+        have := List.all_eq_true.mp hnw e me
+        simpa using this
+      have hx1 := sx.1
+      have ex1 := sxT.2.1
+      have ex2 := sxD.2.1
+      have d1 := S1.den
+      have d2 := S2.den
+      have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ') S1.ok.wf S2.ext S1.lt
+      have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
+        (l := [(wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).1,
+               (wAtom (symDivide (s.touch ctx w) xr W32i).1 (wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).2).1])
+        (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
+        (by simp only [List.length_cons, List.length_nil]; omega) hnw'
+        (fun k hk => by
+          have hk : k = 0 ∨ k = 1 := by simp only [List.length_cons, List.length_nil] at hk; omega
+          rcases hk with rfl | rfl
+          · have e : x % 4294967296 = (ev ρ' xr % W32i).toNat := by unfold W32i; omega
+            exact e.trans (d1'.trans d1).symm
+          · have e : x / 4294967296 = (ev ρ' (symDivide (s.touch ctx w) xr W32i).1 % W32i).toNat := by
+              rw [eq]; unfold M64 at hx1; unfold W32i; omega
+            exact e.trans d2.symm) a hA
+      rw [store8_words] at Hs
+      refine ⟨allowed_of _ _ _ ?_, ρ', CT.then (CD.then (C5.then ⟨Agree.refl _ _, Nat.le_refl _, Hs, ?_⟩))⟩
+      · intro y hy1 hy2
+        simp only [Contract.perm, Bool.or_eq_true]
+        right
+        unfold Contract.inOut
+        exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+      · have wf5 := C5.wf
+        exact ⟨wf5.base, wf5.reg, wf5.zf, wf5.cf, wf5.frame, wf5.facts, wf5.bytes, wf5.spec, wf5.wrote,
+          ⟨wf5.words.table, wf5.words.atoms, wf5.words.vec, wf5.words.rotrs,
+           fun w' j i m => by
+             rcases List.mem_append.mp m with m | m
+             · obtain ⟨q, mq, eq'⟩ := List.mem_map.mp m
+               have hq : q = 0 ∨ q = 1 := by have := List.mem_range.mp mq; simp only [List.length_cons, List.length_nil] at this; omega
+               injection eq' with _ e2
+               injection e2 with _ e3
+               rw [← e3]
+               rcases hq with rfl | rfl
+               · exact Nat.lt_of_lt_of_le S1.lt S2.ext.le
+               · exact S2.lt
+             · exact wf5.words.wrote w' j i (List.mem_filter.mp m).1,
+           fun _ _ hs => nomatch hs⟩, wf5.known, fun _ h => nomatch h⟩
+    next => exact (refuse_ok h).elim
+
 /-- **A call, by contract, of a function that writes a run of words for its caller**, the run of this
 function it is given a part of being first taken as written with the words it held at entry. -/
 theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}

@@ -12,13 +12,15 @@ is the first version of such a core. It contains:
 
 It is not finished. Today it handles a subset of what the Python verifier in `kcheck/` handles. That is
 enough for five of the twelve small shipped functions and for a function that calls one of them. It is
-also enough for seven of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+also enough for eight of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one 64-byte block (one written with AVX-512 instructions and one with SSE4.1 instructions);
 `b3l_node_out`, the function that reads a node record and calls the kernel selected by its `plat`
 argument; the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop; the
 32-way kernel, which does the same for thirty-two chunks, through each of its two entries (one gives every
-chunk the same counter; the other, which the hash calls, gives chunk `i` the counter `t + i`); and
-`b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros.
+chunk the same counter; the other, which the hash calls, gives chunk `i` the counter `t + i`);
+`b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros; and
+`b3l_chunk_node`, which calls a one-block kernel for each block of a chunk but the last, calls `b3l_pad`
+for the last, and stores three numbers into the chunk's record.
 For the rest of the hash and the other programs, `kcheck/` is still the verifier to use.
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
@@ -84,9 +86,10 @@ The functions it verifies today:
 | `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.60 s |
 | `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.59 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
+| `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the bytes are secret | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
-them), `ode_second_block`, `ode_absorb` and `ode_tail` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last seven are seven of the fourteen functions in the shipped
+them), `ode_second_block`, `ode_absorb` and `ode_tail` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
@@ -384,7 +387,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,021 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,462 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,507 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -451,8 +454,9 @@ single plain word, and `statement.py` rejects a line containing a line break.
 memory operands of 1, 4 and 8 bytes; jumps; calls to functions in the same input. The verifier has rules
 for: add, subtract, compare, shift left by a constant, shift right by a constant, AND with a mask of the
 form 2^k - 1, taking the low 32 bits or low 8 bits of a register (`mov ecx, esi`, `movzx eax, dil`),
-8-byte stores to a stack slot, 1-byte stores to an output buffer, and setting or decrementing the low
-byte of a register (`mov al, 7`, `dec al`).
+8-byte stores to a stack slot, 1-byte stores to an output buffer, 8-byte stores of a number into a
+buffer of 32-bit words (as its two words), and setting or decrementing the low byte of a register
+(`mov al, 7`, `dec al`).
 
 Taking the low 32 bits or the low 8 bits of a number normally makes two new unknowns, a quotient and a
 remainder. Where the facts show at once that the number is already below 2^32 (or below 256), the low
@@ -577,7 +581,8 @@ These are cases where the verifier rejects a correct function:
   can be used where the caller's contract mentions the same definition with provably equal arguments.
 - No rule yet for: AND with a constant that is not a mask, OR, shift by a register, a 4-byte load.
 - Nothing may be written below the stack pointer.
-- Output buffers of bytes: only single-byte stores; the function cannot read back what it wrote; single
+- Output buffers of bytes: only single-byte stores (and, into a buffer kept as 32-bit words, 8-byte stores
+  of a number at an offset that is a known multiple of four); the function cannot read back what it wrote; single
   bytes written before a loop invariant are forgotten at the invariant, unless the invariant says what the
   buffer holds from some position on (one such line per invariant, growing downward, compared with a
   definition that is a list built element by element from 0); a called function cannot write to the
@@ -896,7 +901,7 @@ What is new:
   in SoundCallW.lean).
 - **`ensures` of a whole record.** `statement.py` writes the record that the contract names as the
   record's words, one field after another. It takes a layout whose fields are chaining values or runs of
-  bytes that fill the record without a gap. A field that is a number is not read there yet.
+  bytes that fill the record without a gap. (A field that is a number: see `b3l_chunk_node` below.)
 
 No arithmetic proof is needed: the stored proof is the function's name. The tests change the contract in
 seven ways and the code in thirteen, each making the statement false, and each is refused. Among them: the
@@ -945,9 +950,64 @@ the last word of the chaining value.
 statement is still true: `b3l_pad` is then given zero bytes to read. The verifier refuses it, because
 `src + 16` could then equal 2^64, and its rule for an addition requires the sum to stay below 2^64.
 
-Not yet: a number stored into a record; and an offset that is not a known number (a loop invariant about a
-walk through a message would need that). `b3l_chunk_node`, the next function of the hash, needs the
-first, and the specification's `chunk_node`.
+Not yet: an offset that is not a known number (a loop invariant about a walk through a message would
+need that).
+
+**`b3l_chunk_node` is verified, with the two one-block kernels and `b3l_pad` that it calls**
+(`test_chunk.py`). It is the function as it lies in `../kcheck/b3hashr.o`, 81 instructions, with the
+contract and the layout of `../kcheck/proofs/inner.spec` as they are written there:
+
+    layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
+    contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, flags: byte, plat: any) {
+        requires no_overlap(nd, input)
+        requires len <= 1024
+        ensures nd = chunk_node(nd.h, t, flags, input)
+        stack 256
+        needs sse41
+        needs avx512 if plat == 5
+    }
+
+A chunk is at most sixteen blocks of 64 bytes. The function gives each block but the last to a one-block
+kernel, which compresses it into the first 32 bytes of the record `nd`. It has `b3l_pad` write the last
+block into the record at byte 32. Then it stores three numbers of eight bytes each: the chunk's number,
+the last block's length and the flags. The contract has no `trace depends on` line, so the verifier also
+shows that the instructions run and the addresses touched depend on no byte of the input or the record.
+
+**The loop has no invariant.** The length is at most 1024, so the loop runs at most fifteen times, and the
+verifier goes through every number of iterations, each with the inequalities then known about the
+length. (An invariant would have to say "the chaining value after `k` blocks" for an unknown `k`, which
+the verifier's evaluation of the specification cannot follow yet.) The stored proof is 663 lines, 5.4 kB:
+the arithmetic for each number of iterations and each way the comparison of `plat` with 5 can go.
+
+What the verifier takes here that it refused before, each with its soundness proof:
+
+- **Eight bytes of a number stored into a buffer the function may read and write**, at an offset that is a
+  known multiple of four. Two 32-bit words of the buffer then hold the number's low half and its high
+  half (`symStore8` in Core.lean; `symStore8_sound` and `store8_words` in SoundCallW.lean). A buffer that
+  has not been written to yet is first recorded as holding its entry words, as before a call.
+- **A callee may write a part of such a buffer while cells of the stack frame are known not to depend on a
+  secret.** Before, the rule for secrecy at a call accepted only the whole buffer. Likewise, a store into
+  such a buffer at a known offset inside it leaves those cells as they were.
+- **`x | 0` in the code is `x`.** After the first block the function ORs the flags with 0.
+- **In the specification:** `the least number n in a..b with …`, each candidate decided by an inequality
+  the verifier already holds; `<` and `>=` between such numbers; `|` of such a number and a constant,
+  where the code has ORed the same two.
+- **A written record with number fields.** `statement.py` writes each number as the two words of its eight
+  bytes, low word first, under the condition that the number is below what the layout requires (`below`;
+  256 for a `byte`; otherwise 2^64). Where the number is not below that, the expression has no value,
+  the `ensures` is false, and nothing is accepted. The record that the contract names is bound once, by
+  a `let`, and each field is taken from it.
+
+`test_chunk.py` checks three things. First, the meaning of the lines `statement.py` writes: the formal
+model in Lean evaluates the `ensures` line on random inputs of 0 to 1024 bytes and gives the 120 bytes
+that `../kcheck/ode.py` gives for `chunk_node`; and the node of a one-chunk message, taken as the root,
+gives the BLAKE3 hash of the message. Second, the verifier accepts the stored proof and the prover finds
+it again; a proof with a line removed is rejected. Third, 33 false statements are refused, each with the
+expected reason: 12 changes to the contract and 21 to the code. Among them: the contract allows 1025
+bytes; the contract says the length field is below 64, which a last block of 64 bytes is not; the code
+marks no block, or every block, as the chunk's first; the code counts 60 bytes for a block, so that a
+kernel would read past the input; the code stores the flags four bytes past the record; the code calls
+the AVX-512 kernel where `plat` is not 5. Six changed versions that are still correct are accepted.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -1187,6 +1247,7 @@ version needs.
 | the AVX-512 kernel | 38 | in the specification: a rotation by 15 bits instead of 16, one constant, six rounds, two entries of the message permutation exchanged; in the code: the same kinds of change, a store past the end of the buffer, a store into the read-only block, reading back what was stored |
 | the SSE4.1 kernel | 38 | the same changes to the specification; in the contract: no bound on the length; in the code: a left shift by 19 bits instead of 20, an OR with another register, one byte of a shuffle constant, a blend that takes half a word, the flags not shifted |
 | the 16-way kernel, for every `n` | 30 | in the contract: the first and the last block's flags exchanged, one block fewer, another lane's blocks; in the code: the first block's flags kept for every block, the next block read two blocks on; in the loop invariant: the chaining value after one block more, two registers exchanged, nothing said of the vector registers |
+| `b3l_chunk_node` | 33 | in the contract: a chunk of 1025 bytes, the chunk's number and the flags exchanged, the length field's bound one lower, the flags any number, AVX-512 not said to be needed; in the code: no block or every block marked as the first, 60 bytes counted for a block, `b3l_pad` given the whole length, a number stored four bytes on or past the record, the flag for the chunk's end left out, a kernel told that a block is 63 bytes |
 | `b3l_pad` | 19 | in the contract: less stack than the function uses; in the specification: padding with ones, one byte more or fewer of the input, a list of 63; in the invariant: one position more or fewer; in the code: a byte read past the end of the input, a jump on a byte of the input |
 | the 32-way kernel, for every `n` | 34 | in the contract: the first and the last block's flags exchanged, one block fewer, the two halves of the lanes exchanged; in the code: the counter's low words read from the slot of its high words, a message word stored over a slot of the counter; in the loop invariant: a slot said to hold the low words where it holds the high ones, a slot four bytes further on, nothing said of a slot or of half the lanes |
 | the 32-way kernel, one or two blocks | 25 | in the contract: the two halves of the lanes exchanged, lane `i` given the counter `t + i`; in the code: another message word added from the frame, sixty-four bytes read across two slots, the address of the table of constants moved; in the data: one number of that table changed |
@@ -1216,8 +1277,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,021 lines (Table.lean 152, Machine.lean 495, Contract.lean 374). The
-verifier: 2,621 lines (Core.lean 2,462, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 16,534 lines, of which Trace.lean (two runs of the machine with marks; memory changes only by stores of bytes) is 1,032 and Plain.lean (the machine without marks, and two runs of it) is 632.
+verifier: 2,666 lines (Core.lean 2,507, Arithmetic.lean 159 including its proofs). The file parser: 178
+lines. The proofs of the theorems: 16,842 lines, of which Trace.lean (two runs of the machine with marks; memory changes only by stores of bytes) is 1,032 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 
@@ -1227,8 +1288,8 @@ lines. The proofs of the theorems: 16,534 lines, of which Trace.lean (two runs o
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/` and `examples/tail/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/` and `examples/tail/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

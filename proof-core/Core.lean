@@ -753,13 +753,20 @@ def orBound (facts : List Row) (x y : Row) (v : Nat) : List Row :=
 
 /-- Two numbers' bits put together (`x | y`). It is no row: one unknown stands for one pair of numbers. It
 is a number below 2^64, no less than either of the two. -/
-def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
+def symOrKnown (s : Sym) (x y : Row) : V (EV × Sym) :=
   match knownOr x y s.known with
   | some v => pure (.lin (Lin.var v), s)
   | none =>
     pure (.lin (Lin.var s.nvars),
       { s with nvars := s.nvars + 1, known := .or s.nvars x y :: s.known,
                facts := ranged s.nvars ++ [Lin.sub (Lin.var s.nvars) x, Lin.sub (Lin.var s.nvars) y] ++ orBound s.facts x y s.nvars ++ s.facts })
+
+/-- Two numbers' bits put together: where one of the two is the number zero, the other (zero adds no bit);
+else the unknown that stands for the pair. -/
+def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
+  if Lin.isConst y = some 0 then pure (.lin x, s)
+  else if Lin.isConst x = some 0 then pure (.lin y, s)
+  else symOrKnown s x y
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
@@ -1297,6 +1304,23 @@ def belowRange (s : Sym) (w : Nat) (o : Row) : V Unit :=
 def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
   vec.map fun (r, lanes) => (r, if r < 16 then lanes.take 4 else lanes)
 
+/-- A run given to read and write that nothing was written to yet, taken as written with the words it held
+at entry: the term of each of its words (the word as it was at entry) is put into the table and is known
+as the word written there. (A part of the run can then be written, and the other words stay known.) Any
+other run, and a run that is not whole words: the state as it was. -/
+def Sym.touch (ctx : Ctx) (s : Sym) (w : Nat) : Sym :=
+  match ctx.contract.outs[w]? with
+  | some (x, b, n) =>
+    if s.intact.contains w = true ∧ ctx.contract.inouts.contains (x, b, n) = true ∧ n % 4 = 0 then
+      match runAt b ctx.contract.wordRuns 0 with
+      | some j =>
+        let made := termsOf intern ((List.range (n / 4)).map fun k => Node.input j k) s.tab
+        { s with tab := made.2, intact := s.intact.filter (· != w),
+                 wroteW := ((List.range (n / 4)).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW }
+      | none => s
+    else s
+  | none => s
+
 /-- Replace the known words at the store's offsets. Other word stores remain in force. -/
 def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
   { s with intact := s.intact.filter (· != w), spill := [], range := none,
@@ -1316,6 +1340,22 @@ def symStoreWords (ctx : Ctx) (s : Sym) (addr : Row) (l : List Nat) (width : Nat
       else pure (rememberStore s w (c.toNat / 4) l)
     | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
   | _ => refuse s!"{bytes} bytes written to what is no run given to write"
+
+/-- Eight bytes, a number, stored at a place of the run `w` given to write (`n` bytes) that is a number
+divisible by four: two words of the run now hold the number's low half and its high half (the quotient by
+2^32, as a shift finds it). A run given to read and write that nothing was written to is first taken as
+written with the words it held at entry, so its other words stay known. No single byte of the run may have
+been written. -/
+def symStore8 (ctx : Ctx) (s : Sym) (w n : Nat) (o x : Row) : V Sym :=
+  match Lin.isConst o with
+  | some c =>
+    if 0 ≤ c ∧ c % 4 = 0 ∧ c + 8 ≤ n ∧ s.wrote.all (fun e => e.1 != w) = true then
+      let d := symDivide (s.touch ctx w) x W32i
+      let lo := wAtom x d.2.2.tab
+      let hi := wAtom d.1 lo.2
+      pure (rememberStore { d.2.2 with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
+    else refuse "eight bytes that are not two words of the run, or of a run that single bytes were written to"
+  | none => refuse "eight bytes at a place of a run that is no number"
 
 def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
   | .nothing => pure s
@@ -1410,7 +1450,8 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
                   belowRange s w o
                   pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := [] }
                 | none => refuse "a write at a place not known apart from one written before: not here yet"
-              else refuse "a write of more than one byte to a run given to write: not here yet"
+              else if memSize f = some 8 then symStore8 ctx s w n o x        -- (eight bytes: a number, as two words)
+              else refuse "a write of two or four bytes to a run given to write: not here yet"
             | none => refuse "no such run of bytes"
           | none =>
             let addr := Lin.add (signed a) (signed b)
@@ -1971,7 +2012,7 @@ def lowOf (s : Sym) (x : Row) (m : Int) : Option Row :=
 def highOf (s : Sym) (r : Row) : Option Row :=
   if Lin.high r == Lin.const 0 && (Lin.isConst r).isNone then (divided s r W32i).map Lin.var
   else if (Lin.isConst (Lin.word r)).isSome then some (Lin.high r)
-  else none
+  else (divided s r W32i).map Lin.var
 
 /-- Seen at once, a fact being taken more than once: a number not below zero; or so many times a fact (no
 fewer than none) and such a number. -/
@@ -1993,13 +2034,22 @@ def plainTimes (facts : List Row) (g : Row) : Bool :=
 def sameRow (facts : List Row) (a b : Row) : Bool := Lin.same a b || (plainTimes facts (Lin.sub a b) && plainTimes facts (Lin.sub b a))
 
 /-- Two numbers held as rows: their sum; their difference, where it is seen at once to be no less than zero;
-whether they are equal, where the facts say at once that they are, or that one is the greater. -/
+whether they are equal, where the facts say at once that they are, or that one is the greater; whether
+the first is below the second (`<`), or no less than it (`>=`), where one of the two answers is seen at once. -/
 def wnum (s : Sym) (op : String) (x y : Row) : Option WVal :=
   if op == "+" then some (.num (Lin.add x y))
   else if op == "-" then (if plain s.facts (Lin.sub x y) then some (.num (Lin.sub x y)) else none)
   else if op == "==" then
     if sameRow s.facts x y then some (.bool true)
     else if plain s.facts (Lin.sub (Lin.sub x y) (Lin.const 1)) || plain s.facts (Lin.sub (Lin.sub y x) (Lin.const 1)) then some (.bool false)
+    else none
+  else if op == "<" then
+    if plain s.facts (Lin.sub (Lin.sub y x) (Lin.const 1)) then some (.bool true)
+    else if plain s.facts (Lin.sub x y) then some (.bool false)
+    else none
+  else if op == ">=" then
+    if plain s.facts (Lin.sub x y) then some (.bool true)
+    else if plain s.facts (Lin.sub (Lin.sub y x) (Lin.const 1)) then some (.bool false)
     else none
   else none
 
@@ -2025,7 +2075,9 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
   | .num r, .int m =>
     if op == "%" then (if 0 < m then (lowOf s r m).map .num else none)
     else if op == "/" then (if 0 < m then (divided s r m).map fun q => .num (Lin.var q) else none)   -- (the quotient the state knows of)
-    else if op == "|" then (if m = 0 ∧ knownNonneg s r = true then some (.num r) else none)         -- (no bit is added)
+    else if op == "|" then
+      (if m = 0 ∧ knownNonneg s r = true then some (.num r)          -- (no bit is added)
+       else (knownOr r (Lin.const m) s.known).map fun v => .num (Lin.var v))
     else wnum s op r (Lin.const m)
   | .int m, .num r =>
     if op == "|" then (if m = 0 ∧ knownNonneg s r = true then some (.num r) else none)
@@ -2067,7 +2119,7 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
     else if f == "counter" then (if 0 ≤ n then some (.counter (Lin.const n)) else none)
     else none
   | [.num r] =>
-    if !knownNonneg s r then none
+    if !plain s.facts r then none
     else if f == "word" then (look (.atom (Lin.word r))).map fun i => .word [i]
     else if f == "counter" then some (.counter r)
     else none
@@ -2109,6 +2161,16 @@ def wevalEach (ev : Int → Option WVal) : Nat → Int → Option (List WVal)
     match ev i, wevalEach ev count (i + 1) with
     | some v, some vs => some (v :: vs)
     | _, _ => none
+
+/-- The first of the numbers of which `ev` says true, every one before it being one of which it says false
+(as `firstWith` of the account). -/
+def wfirstWith (ev : Int → Option WVal) : List Int → Option WVal
+  | [] => none
+  | n :: rest =>
+    match ev n with
+    | some (.bool true) => some (.int n)
+    | some (.bool false) => wfirstWith ev rest
+    | _ => none
 
 def wputAll : List WVal → List WVal → Option (List WVal)
   | l, [] => some l
@@ -2278,6 +2340,14 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
       match weval ctx look s fuel env e with
       | some (.record fields) => fields.lookup x
       | _ => none
+    | .theNumber greatest x a b cond =>
+      -- `the least number x in a..b with cond` (or the greatest): the first of them of which the condition
+      -- is followed and true, it being followed and false of every one before
+      match weval ctx look s fuel env a, weval ctx look s fuel env b with
+      | some (.int lo), some (.int hi) =>
+        let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
+        wfirstWith (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among)
+      | _, _ => none
     | _ => none
 
 /-- The names of the contract for an `ensures` of a whole run (as `envWIn` of the account has them): a
@@ -2442,7 +2512,8 @@ end
 /-- The cells of the frame known not to be marked, after a store to memory at `args` of something that
 may be marked (`m`) or may not. A store at a place of the frame that is a number: the cells apart from the
 bytes stored to stay, and where eight bytes are stored and what is stored is not marked, they are a cell
-known not to be marked. Any other store: nothing is known of any cell after it. -/
+known not to be marked. A store within a run given to write, at a place that is a number: every cell stays
+(the run is no part of the frame). Any other store: nothing is known of any cell after it. -/
 def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) : List Int :=
   match memSize f, args with
   | some size, [a, b] =>
@@ -2453,6 +2524,11 @@ def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Exp
         if decide (-(ctx.contract.stack : Int) ≤ c) && decide (c + size ≤ 0) then
           (if size == 8 && !m then [c] else []) ++ s.q.fq.filter fun o => decide (o + 8 ≤ c) || decide (c + size ≤ o)
         else []
+      | some (.out w o) =>
+        -- a store within a run given to write, at a place that is a number: no cell of the frame is stored to
+        match Lin.isConst o, ctx.contract.outs[w]? with
+        | some c, some (_, _, n) => if decide (0 ≤ c) && decide (c + size ≤ n) then s.q.fq else []
+        | _, _ => []
       | _ => []
     | _, _ => []
   | _, _ => []
@@ -2644,23 +2720,6 @@ def writtenIds (wroteW : List (Nat × Nat × Nat)) (w : Nat) : Nat → Nat → O
     match wroteW.find? (fun e => e.1 == w && e.2.1 == k), writtenIds wroteW w count (k + 1) with
     | some e, some rest => some (e.2.2 :: rest)
     | _, _ => none
-
-/-- A run given to read and write that nothing was written to yet, taken as written with the words it held
-at entry: the term of each of its words (the word as it was at entry) is put into the table and is known
-as the word written there. (A part of the run can then be written, and the other words stay known.) Any
-other run, and a run that is not whole words: the state as it was. -/
-def Sym.touch (ctx : Ctx) (s : Sym) (w : Nat) : Sym :=
-  match ctx.contract.outs[w]? with
-  | some (x, b, n) =>
-    if s.intact.contains w = true ∧ ctx.contract.inouts.contains (x, b, n) = true ∧ n % 4 = 0 then
-      match runAt b ctx.contract.wordRuns 0 with
-      | some j =>
-        let made := termsOf intern ((List.range (n / 4)).map fun k => Node.input j k) s.tab
-        { s with tab := made.2, intact := s.intact.filter (· != w),
-                 wroteW := ((List.range (n / 4)).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW }
-      | none => s
-    else s
-  | none => s
 
 /-- Before a call of a function that writes a run: where the register it is given in holds an
 address in a run of this function's that nothing was written to yet, that run is taken as written with
@@ -2954,7 +3013,10 @@ def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
   c.fixeds.all (fun x => c.hidden.contains x.1) &&
   (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
-    ctx.contract.outs.any fun (_, b, n0) => s.reg r == Lin.var b && decide (b < 16) && decide (n ≤ n0)) &&
+    ctx.contract.outs.any fun (_, b, n0) =>
+      match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
+      | some k => decide (0 ≤ k) && decide (b < 16) && decide (k + n ≤ n0)
+      | none => false) &&
   c.regions.all fun (r, l) =>
     c.hiddenAt r ||
       match findRun s r l ctx.contract.regions 0 with

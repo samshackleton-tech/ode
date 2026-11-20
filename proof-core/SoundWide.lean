@@ -1030,15 +1030,4 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     · have l16 : lanes.length = 16 := by simp [eq, len]
       simp [execStmt, execVec512, ev, l16, hr]
 
-/-- An effect the verifier accepts runs in the machine model and preserves the verifier's invariant. -/
-theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
-    {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
-    ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
-  cases stmt with
-  | vset _ _ => exact symVset_sound E bind h H wf base u
-  | vset512 _ _ => exact symVset512_sound E bind h H wf base u
-  | nothing | ret | call _ | jump _ _ | set _ _ =>
-    exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e) (fun _ _ e => by cases e)
-
 end Ode

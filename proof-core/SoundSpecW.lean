@@ -317,7 +317,13 @@ theorem highOf_sound (H : Holds ctx s0 ρ s st) {x q : Row} (h : highOf s x = so
         rw [e1, e2] at eh
         unfold W32i at eh c0 c1 ⊢
         omega
-    next => cases h
+    next =>
+      cases hd : divided s x W32i with
+      | none => simp [hd] at h
+      | some k =>
+        simp only [hd, Option.map_some] at h
+        injection h with h; subst h
+        rw [ev_var]; exact (divided_spec H (by decide) hd).1
 
 /-- Every term of the state's table is a word. -/
 theorem Holds.den_lt (wf : WF s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i < W32 :=
@@ -443,7 +449,49 @@ theorem wnum_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : S
                 omega
             exact ⟨.bool false, by simp [binop, ne], WDen.bool false⟩
           next => cases h
-      next => cases h
+      next =>
+        split at h
+        next hop =>
+          have oe : op = "<" := by simpa using hop
+          subst oe
+          split at h
+          next hp =>
+            injection h with h; subst h
+            have g := plain_sound hp ρ H.facts
+            simp only [ev_sub, ev_const] at g
+            have lt : ev ρ x < ev ρ y := by omega
+            exact ⟨.bool true, by simp [binop, lt], WDen.bool true⟩
+          next =>
+            split at h
+            next hp =>
+              injection h with h; subst h
+              have g := plain_sound hp ρ H.facts
+              simp only [ev_sub] at g
+              have nlt : ¬ ev ρ x < ev ρ y := by omega
+              exact ⟨.bool false, by simp [binop, nlt], WDen.bool false⟩
+            next => cases h
+        next =>
+          split at h
+          next hop =>
+            have oe : op = ">=" := by simpa using hop
+            subst oe
+            split at h
+            next hp =>
+              injection h with h; subst h
+              have g := plain_sound hp ρ H.facts
+              simp only [ev_sub] at g
+              have le : ev ρ y ≤ ev ρ x := by omega
+              exact ⟨.bool true, by simp [binop, le], WDen.bool true⟩
+            next =>
+              split at h
+              next hp =>
+                injection h with h; subst h
+                have g := plain_sound hp ρ H.facts
+                simp only [ev_sub, ev_const] at g
+                have nle : ¬ ev ρ y ≤ ev ρ x := by omega
+                exact ⟨.bool false, by simp [binop, nle], WDen.bool false⟩
+              next => cases h
+          next => cases h
 
 theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : List Known} {vs : List Nat},
     knownBlock facts j c off l = some vs → ∃ off', Known.block j c off' vs ∈ l ∧ sameRow facts off' off = true
@@ -766,7 +814,21 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
               injection h with h; subst h
               have r0 := knownNonneg_sound H hn
               exact ⟨.int (ev ρ r), by simp [binop, r0, Int.max_eq_left r0], WDen.num r⟩
-            next => cases h
+            next =>
+              cases hk : knownOr r (Lin.const m) s.known with
+              | none => simp [hk] at h
+              | some v =>
+                simp only [hk, Option.map_some, Option.some.injEq] at h; subst h
+                have hv : 0 ≤ ev ρ r ∧ 0 ≤ ev ρ (Lin.const m) ∧ ρ v = (((ev ρ r).toNat ||| (ev ρ (Lin.const m)).toNat : Nat) : Int) := by
+                  rcases knownOr_mem hk with mm | mm
+                  · exact H.known _ mm
+                  · obtain ⟨g1, g2, g3⟩ := H.known _ mm
+                    exact ⟨g2, g1, by rw [g3, Nat.or_comm]⟩
+                rw [ev_const] at hv
+                refine ⟨.int (((ev ρ r).toNat ||| m.toNat : Nat) : Int), by simp [binop, hv.1, hv.2.1], ?_⟩
+                have := WDen.num (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) (Lin.var v)
+                rw [ev_var, hv.2.2] at this
+                exact this
           next =>
             have := wnum_sound H h
             rwa [ev_const] at this
@@ -1029,7 +1091,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
         split at h
         next => simp at h
         next hk =>
-          have r0 : 0 ≤ ev ρ r := knownNonneg_sound H (by simpa using hk)
+          have r0 : 0 ≤ ev ρ r := plain_sound (g := r) (by simpa using hk) ρ H.facts
           split at h
           next hf =>
             have fe : f = "word" := by simpa using hf
@@ -1267,6 +1329,31 @@ theorem wevalEach_sound {ev : Int → Option WVal} {ev' : Int → Option Val}
     obtain ⟨a', ea, da⟩ := hev i v ha
     obtain ⟨as, eas, das⟩ := wevalEach_sound hev count (i + 1) vs' hr
     exact ⟨a' :: as, by simp only [evalEach, ea, eas], WDen.cons da das⟩
+
+/-- The first number of which the condition is true, found on the terms: the account finds the same. -/
+theorem wfirstWith_sound {ev : Int → Option WVal} {ev' : Int → Option Val}
+    (hev : ∀ i v, ev i = some v → ∃ a, ev' i = some a ∧ WDen ctx s0 ρ s.terms v a) :
+    ∀ (l : List Int) (v : WVal), wfirstWith ev l = some v →
+      ∃ a, firstWith ev' l = some a ∧ WDen ctx s0 ρ s.terms v a
+  | [], v, h => by simp [wfirstWith] at h
+  | n :: rest, v, h => by
+    simp only [wfirstWith] at h
+    cases hn : ev n with
+    | none => simp [hn] at h
+    | some r =>
+      obtain ⟨a, ea, da⟩ := hev n r hn
+      cases r with
+      | bool c =>
+        cases da
+        cases c with
+        | true =>
+          simp only [hn, Option.some.injEq] at h; subst h
+          exact ⟨.int n, by simp only [firstWith, ea], WDen.int n⟩
+        | false =>
+          simp only [hn] at h
+          obtain ⟨a, e, d⟩ := wfirstWith_sound hev rest v h
+          exact ⟨a, by simp only [firstWith, ea]; exact e, d⟩
+      | _ => simp [hn] at h
 
 theorem wputAll_sound : ∀ (ps : List WVal) (ps' : List Val) (l : List WVal) (l' : List Val) (l2 : List WVal),
     WDen ctx s0 ρ s.terms (.list l) (.list l') → WDen ctx s0 ρ s.terms (.list ps) (.list ps') → wputAll l ps = some l2 →
@@ -1695,6 +1782,26 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
           refine ⟨a, ?_, hd⟩
           simp only [evalSpec, ee]; exact ha
         | _ => simp [he] at h
+    | theNumber greatest x a b cond =>
+      simp only [weval] at h
+      cases ha : weval ctx look s fuel env a <;> cases hb : weval ctx look s fuel env b <;>
+        simp only [ha, hb, reduceCtorEq] at h
+      rename_i av bv
+      obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
+      obtain ⟨ba, eb, db⟩ := ih env env' b bv hb hE
+      cases av with
+      | int lo =>
+        cases bv with
+        | int hi =>
+          cases da; cases db
+          simp only at h
+          obtain ⟨r, er, dr⟩ := wfirstWith_sound (ev' := fun n => evalSpec ctx.defs (fuel + B) ((x, .int n) :: env') cond)
+            (fun i v hv => ih ((x, .int i) :: env) ((x, .int i) :: env') cond v hv ⟨rfl, WDen.int i, hE⟩) _ v h
+          refine ⟨r, ?_, dr⟩
+          simp only [evalSpec, ea, eb]
+          exact er
+        | _ => simp at h
+      | _ => cases bv <;> simp at h
     | _ => simp [weval] at h
 
 end
