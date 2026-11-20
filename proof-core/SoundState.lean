@@ -108,7 +108,7 @@ structure WordsWF (s : Sym) : Prop where
 
 /-- The verifier's state speaks only of unknowns in use. -/
 structure WF (s : Sym) : Prop where
-  base : 16 ≤ s.nvars
+  base : 17 ≤ s.nvars           -- (the sixteen registers at entry, and where the file's data lies)
   reg : ∀ r, r < 16 → bounded s.nvars (s.reg r)
   zf : s.zf.bounded s.nvars
   cf : s.cf.bounded s.nvars
@@ -120,6 +120,8 @@ structure WF (s : Sym) : Prop where
   words : WordsWF s
   known : ∀ k ∈ s.known, k.wf s.nvars s.terms.length
   range : ∀ rg, s.range = some rg → bounded s.nvars rg.lo ∧ ∀ v ∈ rg.args, v.bounded s.nvars
+
+theorem WF.base16 {s : Sym} (wf : WF s) : 16 ≤ s.nvars := Nat.le_of_succ_le wf.base
 
 /-! ## A contract with no table of addresses -/
 
@@ -136,6 +138,12 @@ theorem tables_nil {c : Contract} (h : c.lanes = []) : c.tables = [] := by
 
 theorem inLane_false {c : Contract} (h : c.lanes = []) (s : State) (a : Nat) : c.inLane s a = false := by
   simp [Contract.inLane, tables_nil h]
+
+theorem inData_false {c : Contract} (h : c.data = []) (s : State) (a : Nat) : c.inData s a = false := by
+  unfold Contract.inData
+  rw [h]
+  simp only [List.length_nil, Nat.add_zero, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+  omega
 
 theorem lanesEnv_nil {c : Contract} (h : c.lanes = []) (s : State) : c.lanesEnv s = [] := by
   simp [Contract.lanesEnv, tables_nil h]
@@ -258,6 +266,7 @@ def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : 
 state at the function's entry. -/
 structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop where
   entry : ∀ r, r < 16 → ρ r = s0.reg r
+  data : ρ 16 = s0.data ∧ st.data = s0.data      -- unknown 16 is where the file's data lies; it lies where it did
   reg : ∀ r, r < 16 → (st.reg r : Int) = ev ρ (s.reg r)
   small : ∀ r, st.reg r < M64
   zf : s.zf.holds ρ st.zf
@@ -433,7 +442,8 @@ theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : R
 
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
     (h : Holds ctx s0 ρ s st) (wf : WF s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
-  entry r hr := (a r (Nat.lt_of_lt_of_le hr wf.base)).symm.trans (h.entry r hr)
+  entry r hr := (a r (Nat.lt_of_lt_of_le hr wf.base16)).symm.trans (h.entry r hr)
+  data := ⟨(a 16 (Nat.lt_of_lt_of_le (by decide) wf.base)).symm.trans h.data.1, h.data.2⟩
   reg r hr := (h.reg r hr).trans (ev_agree (wf.reg r hr) a)
   small := h.small
   zf := Flag.holds_agree wf.zf a h.zf

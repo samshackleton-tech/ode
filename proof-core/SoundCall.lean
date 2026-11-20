@@ -11,7 +11,7 @@ open Arithmetic
 
 theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (rows : List Row) (hr : ∀ r ∈ rows, r.holds ρ) : Holds ctx s0 ρ { s with facts := rows ++ s.facts } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
    fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.more {s : Sym} (wf : WF s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF { s with facts := rows ++ s.facts } :=
@@ -245,11 +245,12 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     (hsmall : ∀ r, s2.reg r < M64)
     (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
     (hout : ∀ x r n, (x, r, n) ∈ ctx.contract.outs →
-      s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :
+      s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r)
+    (hdata : s2.data = st.data) :
     Holds ctx s0 (afterRho s.nvars ρ s2) (s.afterCall sp) s2 := by
   have ag := afterRho_agree s.nvars ρ s2
   have H' := H.agree wf ag
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
+  refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
     ⟨(fun x ids h => by simp [Sym.afterCall] at h), (fun w m => by simp [Sym.afterCall] at m),
      (fun w j i m => by simp [Sym.afterCall] at m), fun _ _ h => nomatch h⟩,
     H'.known, fun _ h => nomatch h⟩
@@ -304,12 +305,13 @@ contract lets it return in, what the verifier holds after the call is so, at the
 theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallPlain ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
-    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
+    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallPlain, hsp] at h; exact (refuse_ok h).elim
   | some sp =>
@@ -377,7 +379,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
             (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m),
             (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf),
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m)⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
           · intro r
             by_cases hr : r = RSP
             · rw [hr, s1rsp]; omega
@@ -396,8 +398,8 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             exact E.byte hm k (by omega)
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, hnf, inLane_false hl, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
-          left
+          simp only [Contract.perm, hnf, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          left; left
           rcases ha with (ha | ha) | ha
           · left; left; left; omega
           · left; left; left; omega
@@ -416,7 +418,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
-        intro s2 post
+        intro s2 post hdata2
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]
@@ -436,7 +438,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           intro a ha
           rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega) (hno _ a)]
           exact s1mem a (by omega)
-        have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.out m).2)
+        have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.out m).2) hdata2
         have wafter := afterCall_wf wf sp
         have ag := afterRho_agree s.nvars ρ s2
         cases hret' : c.returns with

@@ -41,7 +41,7 @@ theorem placeEnv_bounded {ctx : Ctx} (pl : Place) {s : Sym} (wf : WF s) (hn : �
   rcases List.mem_append.mp m with m | m
   · obtain ⟨⟨n, r⟩, hm, rfl⟩ := List.mem_map.mp m
     exact wf.reg r (hn (n, r) hm)
-  · exact (symEnv_bounded ctx.contract).mono wf.base nv m
+  · exact (symEnv_bounded ctx.contract).mono wf.base16 nv m
 
 /-! ## What a place says of vector registers -/
 
@@ -255,7 +255,7 @@ theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF g) (vec : List (Nat
   refine ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩
   · exact {
       range := H.range
-      entry := H.entry, reg := H.reg, small := H.small, zf := H.zf, cf := H.cf, frame := H.frame, facts := H.facts,
+      entry := H.entry, data := H.data, reg := H.reg, small := H.small, zf := H.zf, cf := H.cf, frame := H.frame, facts := H.facts,
       bytes := H.bytes, spec := H.spec, mem := H.mem, wrote := H.wrote,
       words := ⟨fun x ids hx k hk' => (lookup_append_or hx).elim (fun h => (hv x ids h).2.2 k hk') (fun h => H.words.vec x ids h k hk'),
                 H.words.intact, H.words.wrote, H.words.spill⟩,
@@ -471,7 +471,7 @@ def RangeSays (ctx : Ctx) (pl : Place) (s0 st : State) : Prop :=
 
 theorem Holds.setRange (H : Holds ctx s0 ρ s st) (rg : RangeF) (h : RangeHolds ctx s0 ρ rg st.mem) :
     Holds ctx s0 ρ { s with range := some rg } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known,
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known,
    fun rg' e => by injection e with e; subst e; exact h⟩
 
 theorem WF.setRange (wf : WF s) (rg : RangeF) (bl : bounded s.nvars rg.lo) (ba : ∀ v ∈ rg.args, v.bounded s.nvars) :
@@ -655,6 +655,7 @@ the place says of them. -/
 structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : Nat → Int) (st : State) : Prop where
   outer : Agree first.nvars ρs ρ
   entry : ∀ r, r < 16 → ρ r = s0.reg r
+  data : ρ 16 = s0.data ∧ st.data = s0.data
   kept : ∀ r, r < 16 → pl.keep.contains r = true → (st.reg r : Int) = ev ρ (first.reg r)
   small : ∀ r, st.reg r < M64
   frame : ∀ o v, (o, v) ∈ first.frame →
@@ -666,7 +667,7 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
 
 theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
   have le : first.nvars ≤ first.nvars + 16 := Nat.le_add_right _ _
-  refine ⟨Nat.le_add_left _ _, ?_, trivial, trivial, ?_, ?_,
+  refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_,
           (fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩),
           (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m),
           ⟨wf.words.table, fun j r h => bounded_mono le (wf.words.atoms j r h), fun x ids h => by simp [Sym.general] at h,
@@ -709,8 +710,12 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
     show (if first.nvars ≤ r ∧ r < first.nvars + 16 then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
     rw [if_neg (by omega)]
     exact A.entry r hr
+  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) 16 = s0.data := by
+    show (if first.nvars ≤ 16 ∧ 16 < first.nvars + 16 then (st.reg (16 - first.nvars) : Int) else ρ 16) = s0.data
+    rw [if_neg (by omega)]
+    exact A.data.1
   have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)
-  refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
+  refine ⟨hentry, ⟨hdata, A.data.2⟩, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
     ⟨(fun x ids h => by simp [Sym.general] at h), (fun w m => by simp [Sym.general] at m),
      (fun w j i m => by simp [Sym.general] at m), fun _ _ h => nomatch h⟩,
     Hg.known, fun _ h => nomatch h⟩
@@ -788,7 +793,7 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       rw [← semEnv_agree envb c1'.agree]
       exact semEnv_placeEnv pl H.entry H.reg hnames
     have first_at : AtPlace ctx pl s0 s1b ρ1b ρ1b st :=
-      ⟨Agree.refl _ _, c1.holds.entry, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
+      ⟨Agree.refl _ _, c1.holds.entry, c1.holds.data, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
        fun e m => by rw [← env1]; exact a1 e m,
        fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hnames (shown L mL), says⟩
     cases dres with
@@ -884,7 +889,7 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         rw [← semEnv_agree envb c1'.agree]; exact env0
       have env2 : semEnv ctx s0 ρ2 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
         rw [← semEnv_agree envb (c1.then c2).agree]; exact env0
-      refine ⟨⟨Agree.refl _ _, H.entry, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
+      refine ⟨⟨Agree.refl _ _, H.entry, H.data, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
                (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m),
                fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL), says⟩, ?_⟩
       cases dres with

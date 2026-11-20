@@ -377,7 +377,7 @@ theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   have H1 := c1.holds
   have w1 := c1.wf
   exact ⟨ρ1, c1.agree, c1.mono,
-    ⟨H1.entry, H1.reg, H1.small, H1.zf, H1.cf, H1.frame,
+    ⟨H1.entry, H1.data, H1.reg, H1.small, H1.zf, H1.cf, H1.frame,
      fun f m => (List.mem_append.mp m).elim (hr f) (H1.facts f), H1.bytes,
      fun f m => (List.mem_append.mp m).elim (hf f) (H1.spec f), H1.mem, H1.wrote, H1.words, H1.known, H1.range⟩,
     ⟨w1.base, w1.reg, w1.zf, w1.cf, w1.frame,

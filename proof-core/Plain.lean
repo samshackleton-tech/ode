@@ -185,7 +185,7 @@ def execP (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) 
 /-- The state a called function starts in, on the plain machine. -/
 def afterCallP (p q : Program) (i : Instr) (s : State) : State :=
   { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec,
+    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
     marks := {}, trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
 
 /-- `Runs` on the plain machine: no word about marks. -/

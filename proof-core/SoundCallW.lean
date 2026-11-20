@@ -458,6 +458,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     {w m : Nat} {x : String} {b n : Nat} (hw : ctx.contract.outs[w]? = some (x, b, n)) (hn : n = 4 * m)
     (hnow : ∀ e ∈ s.wrote, e.1 ≠ w)
     (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b ∨ s0.reg b + n ≤ a → s2.mem a = st.mem a)
+    (hdata : s2.data = st.data)
     {nums : List Nat} (hlen : nums.length = m) (hlt : ∀ v ∈ nums, v < W32)
     (hrun : ∀ k, k < m → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * k + bb) = nums.getD k 0 / 256 ^ bb % 256)
     {g : String} {keys : List Key} (hkeys : ∀ k ∈ keys, k.wf s.nvars s.terms.length)
@@ -482,7 +483,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   have hold : ∀ i, i < s.terms.length →
       den (inpOf ctx s0) (afterRhoW s.nvars ρ s2 nums) (madeW s m).2 i = den (inpOf ctx s0) ρ s.terms i :=
     fun i hi => den_mono wf.words.table wf.words.atoms ag ext hi
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
+  refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : callerSaved.contains r with
@@ -777,12 +778,13 @@ after the call is so, at the next instruction. -/
 theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallW ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
-    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
+    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallW, hsp] at h; exact (refuse_ok h).elim
   | some sp =>
@@ -893,7 +895,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               exact hiobytes) hce
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m)⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
           · intro r'
             by_cases hr : r' = RSP
             · rw [hr, s1rsp]; omega
@@ -946,8 +948,8 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           · intro x' off bd m; rw [hmb] at m; cases m
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, inLane_false hl, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
-          left
+          simp only [Contract.perm, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          left; left
           rcases ha with ((ha | ha) | ha) | ha
           · left; left; left; omega
           · left; left; left; omega
@@ -979,7 +981,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
-        intro s2 post
+        intro s2 post hdata2
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _, pensW⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]
@@ -1038,7 +1040,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           rw [s1r, ← Nat.add_assoc] at this
           rw [this, ← getD_of_lt l 0 lt']
           exact hlget k (by omega) bb hbb
-        have Hafter := afterCallW_holds E c.stack HT wfT hrsp hg.2 hg.1 hkeep psmall how (show n = 4 * (n / 4) by omega) hnow hmem2
+        have Hafter := afterCallW_holds E c.stack HT wfT hrsp hg.2 hg.1 hkeep psmall how (show n = 4 * (n / 4) by omega) hnow hmem2 hdata2
           hnums hlt hrun hkeys hheld
         have wafter := afterCallW_wf wfT sp plan.w (n / 4) plan.g hkeys
         rw [hwords]
@@ -1056,14 +1058,15 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
-    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
+    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h
   split at h
   · exact (refuse_ok h).elim
   next hno =>
-    have both : c.lanes = [] ∧ c.atLeast = [] := by simpa using hno
+    have both : (c.lanes = [] ∧ c.atLeast = []) ∧ c.data = [] := by simpa using hno
     split at h
-    · exact symCallPlain_sound E h H wf q hq i hret both.1 both.2
-    · exact symCallW_sound E h H wf q hq i hret both.1 both.2
+    · exact symCallPlain_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
+    · exact symCallW_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
 
 end Ode

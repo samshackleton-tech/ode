@@ -7,7 +7,8 @@ contract's meaning is stated over (`Contract.lean`), and it is meant to say what
 which processors are compared with (`../core/cross.py`).
 
 The model covers general registers, two flags, calls by name, and vector operations on four or sixteen
-32-bit lanes. It does not yet model mask registers or addresses of the file's data.
+32-bit lanes. It does not yet model mask registers. The read-only data of the function's file lies at an
+address the state holds (`State.data`): the linker and the loader decide it, and no instruction changes it.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -65,6 +66,7 @@ structure State where
   mem : Nat → Nat          -- the byte at an address
   rip : Nat
   vec : Nat → Nat → Nat    -- the vector registers: a register's lanes of 32 bits, lane 0 the lowest
+  data : Nat               -- where the read-only data of the function's file lies (no instruction changes it)
   marks : Marks := {}      -- what may depend on a secret
   trace : List (Nat × Nat) := []    -- what has been observed so far, the oldest first: (an instruction's address, 0); (an address touched, how many bytes)
 
@@ -174,7 +176,9 @@ mutual
         | some size =>
           let a := sumList vs % M64
           if allowed perm.read a size then some (load s.mem a size) else none
-        | none => prim f vs
+        | none =>
+          if f == "data" then some ((s.data + sumList vs) % M64)       -- the address of a place in the file's data
+          else prim f vs
   def values (perm : Perm) (bind : Bind) (s : State) : List Expr → Option (List Nat)
     | [] => some []
     | e :: es =>
@@ -582,7 +586,7 @@ def findProgram (world : List Program) (name : String) : Option Program := world
 pointer, the stack pointer points at it, and the next instruction is the called function's first. -/
 def afterCall (p q : Program) (i : Instr) (s : State) : State :=
   { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec,
+    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
     marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },      -- (the address to come back to is no secret)
     trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
 

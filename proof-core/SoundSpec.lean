@@ -555,7 +555,7 @@ theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s'
             injection hp with e1 e2
             subst e1 e2
             have hlt := (regions_lt (List.mem_of_getElem? hreg)).2
-            refine ⟨rfl, ?_, bounded_var (Nat.lt_of_lt_of_le hlt wf.base)⟩
+            refine ⟨rfl, ?_, bounded_var (Nat.lt_of_lt_of_le hlt wf.base16)⟩
             simp only [List.map, semv, hreg] at ha
             have := Value.len ha
             simp only [SRes.sem, semv, ev_var, H.entry len hlt]
@@ -1124,7 +1124,7 @@ theorem mem_zip_right {α β : Type} : ∀ {l : List α} {m : List β} {a : α} 
 
 theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : SFact) (hf : f.holds ctx s0 ρ) : Holds ctx s0 ρ { s with spec := f :: s.spec } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes,
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes,
    fun g m => by
      cases m with
      | head => exact hf

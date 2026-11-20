@@ -2557,8 +2557,8 @@ def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 /-- A call: by the rule for a function that writes nothing for its caller, or by the rule for one that
 writes a run of words. -/
 def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
-  if !(c.lanes.isEmpty && c.atLeast.isEmpty) then
-    refuse "a called function that is given a table of addresses, or asks that a number be no less than another: not here yet"
+  if !(c.lanes.isEmpty && c.atLeast.isEmpty && c.data.isEmpty) then
+    refuse "a called function that is given a table of addresses, asks that a number be no less than another, or takes the address of the file's data: not here yet"
   else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else symCallW ctx s c
 
@@ -2585,6 +2585,7 @@ says is hidden. And where a cell of the frame is known not to be marked, each ru
 may write is within a run this function was given to write (so it is no part of the frame). -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   quietRegs.all s.q.regq.contains &&
+  c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
   c.fixeds.all (fun x => c.hidden.contains x.1) &&
   (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
     ctx.contract.outs.any fun (_, b, n0) => s.reg r == Lin.var b && decide (b < 16) && decide (n ≤ n0)) &&
@@ -2638,7 +2639,7 @@ def entryFacts (ctx : Ctx) : List Row :=
   ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
 
 def entrySym (ctx : Ctx) : Sym :=
-  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,
+  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
     wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := quietRegs } }
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept

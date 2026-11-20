@@ -436,7 +436,7 @@ theorem symLoadBlock_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
       intro y h1 h2
       obtain ⟨i1, i2⟩ := inside y h1 h2
       simp only [Contract.perm, Bool.or_eq_true]
-      right
+      left; right
       unfold Contract.inLane
       exact List.any_eq_true.mpr ⟨(x', r', count, lr), tableAt_mem ht,
         List.any_eq_true.mpr ⟨pl / 8, List.mem_range.mpr ilt, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩⟩
@@ -782,7 +782,7 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     have he := V.pure_ok h
     injection he with h1 _; subst s'
     refine ⟨ρ', setVec512 st r lanes, ⟨c.agree, c.mono, ?_, ?_⟩, ?_, rfl⟩
-    · exact ⟨c.holds.entry, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.facts, c.holds.bytes,
+    · exact ⟨c.holds.entry, c.holds.data, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.facts, c.holds.bytes,
         c.holds.spec, c.holds.mem, c.holds.wrote,
         ⟨fun x ids hx k hk => by
           show (if x = r then lanes.getD k 0 else st.vec x k) = _

@@ -15,11 +15,12 @@ import Machine
 namespace Ode
 
 /-- Two states are alike in everything not marked: they have the same marks, are at the same place in
-the code, have let the same things be observed, and every register, flag and byte of memory that is not
-marked is the same in both. (Of the vector registers nothing is asked: they are always taken as marked.) -/
+the code, have their file's data at the same address, have let the same things be observed, and every
+register, flag and byte of memory that is not marked is the same in both. (Of the vector registers nothing is asked: they are always taken as marked.) -/
 structure Alike (a b : State) : Prop where
   marks : a.marks = b.marks
   rip : a.rip = b.rip
+  data : a.data = b.data
   trace : a.trace = b.trace
   reg : ∀ r, a.marks.reg r = false → a.reg r = b.reg r
   zf : a.marks.zf = false → a.zf = b.zf
@@ -156,7 +157,7 @@ mutual
         refine ⟨by simp only [exprMark, hmw, em], by simp only [touched, hmw, tm], by simp only [addrsQuiet, hmw, qb]; rfl, ?_⟩
         intro hm
         simp only [exprMark, hmw, Bool.or_false] at hm
-        simp only [value, vm hm, ms]
+        simp only [value, vm hm, ms, A.data]
       | some w =>
         simp only [hmw, Option.isNone_some, Bool.false_or, Bool.not_eq_true'] at hw
         have ve := vm hw
@@ -171,7 +172,7 @@ mutual
         | some vs =>
           simp only
           cases hs : memSize f with
-          | none => rfl
+          | none => simp only [A.data]
           | some size =>
             simp only
             have hsz : size = w := by rw [memSize_width hs] at hmw; injection hmw
@@ -284,7 +285,7 @@ theorem notes_alike {bind : Bind} {a b : State} (A : Alike a b) {st : Stmt} (hq 
 /-- A statement that sets a vector register or stores one changes no general register and no flag, does
 not move the place in the code, and changes memory only where it stores: `w` bytes at the place's address. -/
 def VecKept (bind : Bind) (w : Nat) (place : Expr) (s s' : State) : Prop :=
-  s'.reg = s.reg ∧ s'.zf = s.zf ∧ s'.cf = s.cf ∧ s'.rip = s.rip ∧
+  s'.reg = s.reg ∧ s'.zf = s.zf ∧ s'.cf = s.cf ∧ s'.rip = s.rip ∧ s'.data = s.data ∧
   match place with
   | .call _ args => ∃ ad, addrOf bind s args = some ad ∧ ∀ x, x < ad ∨ ad + w ≤ x → s'.mem x = s.mem x
   | _ => s'.mem = s.mem
@@ -296,10 +297,10 @@ theorem vset_kept {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} {pla
     simp only [execStmt] at h
     split at h
     · split at h
-      · injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+      · injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
       · cases h
     · split at h
-      · injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+      · injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
       · cases h
   | call f args =>
     simp only [execStmt] at h
@@ -307,7 +308,7 @@ theorem vset_kept {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} {pla
     next vs l hvs _ =>
       split at h
       · injection h with h; subst h
-        refine ⟨rfl, rfl, rfl, rfl, sumList vs % M64, by simp only [addrOf, values_all args hvs, Option.map], fun x hx => ?_⟩
+        refine ⟨rfl, rfl, rfl, rfl, rfl, sumList vs % M64, by simp only [addrOf, values_all args hvs, Option.map], fun x hx => ?_⟩
         show store _ _ _ 4 x = s.mem x
         rw [store_outside 4 _ _ _ x (by omega), store_outside 4 _ _ _ x (by omega), store_outside 4 _ _ _ x (by omega),
           store_outside 4 _ _ _ x (by omega)]
@@ -332,7 +333,7 @@ theorem vset512_kept {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} {
         simp only at h
         cases hr : vecOf512 bind n with
         | none => simp [hr] at h
-        | some r => simp only [hr, Option.map] at h; injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+        | some r => simp only [hr, Option.map] at h; injection h with h; subst h; exact ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
       | call f args =>
         simp only [addr512] at h
         cases hvs : values perm bind s args with
@@ -343,7 +344,7 @@ theorem vset512_kept {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} {
           · simp only [Option.bind_some] at h
             split at h
             · injection h with h; subst h
-              refine ⟨rfl, rfl, rfl, rfl, sumList vs % M64, by simp only [addrOf, values_all args hvs, Option.map], fun x hx => ?_⟩
+              refine ⟨rfl, rfl, rfl, rfl, rfl, sumList vs % M64, by simp only [addrOf, values_all args hvs, Option.map], fun x hx => ?_⟩
               exact storeWords_outside lanes _ _ x (by rw [hlen]; omega)
             · cases h
           · simp at h
@@ -363,8 +364,8 @@ theorem vec_alike {bind : Bind} {w : Nat} {place : Expr} {a b a' b' : State} {mk
       | _ => True) :
     a'.rip = b'.rip ∧ (∀ r, mk.reg r = false → a'.reg r = b'.reg r) ∧ (mk.zf = false → a'.zf = b'.zf) ∧
     (mk.cf = false → a'.cf = b'.cf) ∧ ∀ x, mk.mem x = false → a'.mem x = b'.mem x := by
-  obtain ⟨r1, z1, c1, i1, m1⟩ := ka
-  obtain ⟨r2, z2, c2, i2, m2⟩ := kb
+  obtain ⟨r1, z1, c1, i1, _, m1⟩ := ka
+  obtain ⟨r2, z2, c2, i2, _, m2⟩ := kb
   rw [r1, r2, z1, z2, c1, c2, i1, i2]
   cases place with
   | call f args =>
@@ -400,6 +401,40 @@ theorem execStmt_jump (perm : Perm) (bind : Bind) (base u : Nat) (s : State) (ta
   | none => rfl
   | some fw => rfl
 
+/-- No statement changes where the file's data lies. -/
+theorem execStmt_data {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} :
+    ∀ (st : Stmt), execStmt perm bind base u s st = some s' → s'.data = s.data
+  | .nothing, h => by simp only [execStmt] at h; injection h with h; subst h; rfl
+  | .ret, h => by simp only [execStmt] at h; cases h
+  | .call _, h => by simp only [execStmt] at h; cases h
+  | .vset512 _ _, h => (vset512_kept h).2.2.2.2.1
+  | .vset _ _, h => (vset_kept h).2.2.2.2.1
+  | .jump target cond, h => by
+    rw [execStmt_jump] at h
+    split at h
+    · cases hv : value perm bind s target with
+      | none => rw [hv] at h; cases h
+      | some t => rw [hv] at h; injection h with h; subst h; rfl
+    · injection h with h; subst h; rfl
+  | .set place v, h => by
+    simp only [execStmt] at h
+    split at h
+    next x n _ =>
+      split at h
+      · injection h with h; subst h; rfl
+      · split at h
+        · injection h with h; subst h; rfl
+        · cases hr : regOf bind n with
+          | none => simp [hr] at h
+          | some r => simp only [hr, Option.map] at h; injection h with h; subst h; rfl
+    next x f args _ =>
+      split at h
+      · split at h
+        · injection h with h; subst h; rfl
+        · cases h
+      · cases h
+    next => cases h
+
 theorem jumps_alike {a b : State} (A : Alike a b) {cond : Option (String × Bool)}
     (h : (match cond with
       | none => true
@@ -421,10 +456,11 @@ theorem stmt_alike {bind : Bind} {base : Nat} {a b a' b' : State} (A : Alike a b
     (h1 : execStmt p1 bind base u1 a st = some a') (h2 : execStmt p2 bind base u2 b st = some b') :
     Alike (noted bind a st a') (noted bind b st b') := by
   obtain ⟨mk, ob⟩ := notes_alike A hq
+  have hd : a'.data = b'.data := by rw [execStmt_data _ h1, execStmt_data _ h2]; exact A.data
   suffices h : a'.rip = b'.rip ∧ (∀ r, (marksAfter bind a st).reg r = false → a'.reg r = b'.reg r) ∧
       ((marksAfter bind a st).zf = false → a'.zf = b'.zf) ∧ ((marksAfter bind a st).cf = false → a'.cf = b'.cf) ∧
       ∀ x, (marksAfter bind a st).mem x = false → a'.mem x = b'.mem x from
-    ⟨mk, h.1, by simp only [noted, A.trace, ob], h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
+    ⟨mk, h.1, hd, by simp only [noted, A.trace, ob], h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
   cases st with
   | nothing =>
     simp only [execStmt] at h1 h2
@@ -596,7 +632,7 @@ theorem all_alike {bind : Bind} {base : Nat} {p1 p2 : Perm} {u1 u2 : Nat → Nat
           simp only [Bool.and_eq_true, quietRet, Bool.not_eq_true'] at hq
           have sp := A.reg RSP hq.1.1
           show Alike _ _
-          refine ⟨A.marks, ?_, ?_, fun k hk => ?_, A.zf, A.cf, A.mem⟩
+          refine ⟨A.marks, ?_, A.data, ?_, fun k hk => ?_, A.zf, A.cf, A.mem⟩
           · show load a.mem (a.reg RSP) 8 = load b.mem (b.reg RSP) 8
             rw [← sp]
             exact load_same _ _ 8 _ fun x x1 x2 => A.mem x (anyMarked_false hq.1.2 x x1 x2)
@@ -663,7 +699,7 @@ theorem execQ_alike {p : Program} {i : Instr} {p1 p2 : Perm} {u1 u2 : Nat → Na
   all_alike i.effect 0 0
     (a := { a with rip := p.base + i.next, trace := a.trace ++ [(a.rip, 0)] })
     (b := { b with rip := p.base + i.next, trace := b.trace ++ [(b.rip, 0)] })
-    ⟨A.marks, rfl, by show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]; rw [A.trace, A.rip], A.reg, A.zf, A.cf, A.mem⟩
+    ⟨A.marks, rfl, A.data, by show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]; rw [A.trace, A.rip], A.reg, A.zf, A.cf, A.mem⟩
     h1 h2
 
 /-- A call is not run as an instruction of the function it is in. -/
@@ -678,7 +714,7 @@ theorem execQ_call {p : Program} {i : Instr} {name : String} (h : callTarget i =
 theorem afterCall_alike {p q : Program} {i : Instr} {a b : State} (A : Alike a b) (h : a.marks.reg RSP = false) :
     Alike (afterCall p q i a) (afterCall p q i b) := by
   have sp := A.reg RSP h
-  refine ⟨?_, rfl, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_⟩
+  refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_⟩
   · show ({ a.marks with mem := markBytes a.marks.mem (a.reg RSP - 8) 8 false } : Marks) =
       { b.marks with mem := markBytes b.marks.mem (b.reg RSP - 8) 8 false }
     rw [A.marks, sp]
@@ -703,7 +739,7 @@ return, the registers a callee keeps holding in each what they held at the call.
 theorem backFrom_alike {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
     (ka : ∀ r ∈ calleeSaved, a1.reg r = a.reg r) (kb : ∀ r ∈ calleeSaved, b1.reg r = b.reg r) :
     Alike (backFrom a a1) (backFrom b b1) := by
-  refine ⟨?_, A1.rip, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem⟩
+  refine ⟨?_, A1.rip, A1.data, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem⟩
   · show ({ a1.marks with reg := fun r => if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r } : Marks) =
       { b1.marks with reg := fun r => if calleeSaved.contains r then b.marks.reg r else b1.marks.reg r }
     rw [A.marks, A1.marks]
@@ -840,5 +876,86 @@ theorem execAllQ_execAll {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → N
 theorem execQ_exec {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s : State} {o : Outcome}
     (h : execQ perm p i u s = some o) : exec perm p i u s = some o :=
   execAllQ_execAll i.effect 0 h
+
+/-! ## Where the file's data lies never changes
+
+No statement changes `State.data`, so no instruction does, no call does, and a function returns with it
+where it was. (A contract need not promise it: it is so of every run.) -/
+
+/-- Where the file's data lies in the state an instruction gives. -/
+def Outcome.data : Outcome → Nat
+  | .next s => s.data
+  | .returned s => s.data
+
+theorem execAllQ_data {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat} :
+    ∀ (stmts : List Stmt) (k : Nat) {s : State} {o : Outcome},
+    execAllQ perm bind base u k s stmts = some o → o.data = s.data
+  | [], _, _, _, h => by injection h with h; subst h; rfl
+  | st :: rest, k, s, o, h => by
+    have go : ∀ {s' : State}, execStmt perm bind base (u k) s st = some s' →
+        execAllQ perm bind base u (k + 1) (noted bind s st s') rest = some o → o.data = s.data :=
+      fun {s'} e r => by
+        have h1 : o.data = (noted bind s st s').data := execAllQ_data rest (k + 1) r
+        have h2 : s'.data = s.data := execStmt_data st e
+        exact h1.trans h2
+    cases st with
+    | ret =>
+      simp only [execAllQ] at h
+      split at h
+      next => injection h with h; subst h; rfl
+      next => cases h
+    | nothing =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+    | call _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+    | jump _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+    | set _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+    | vset _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+    | vset512 _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
+
+theorem execQ_data {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s : State} {o : Outcome}
+    (h : execQ perm p i u s = some o) : o.data = s.data :=
+  execAllQ_data i.effect 0 (s := { s with rip := p.base + i.next, trace := s.trace ++ [(s.rip, 0)] }) h
+
+/-- **The data stays where it is.** A function that runs from `s` to states of which `Q` holds runs to
+states of which `Q` holds and that have the file's data where `s` has it. -/
+theorem runs_data {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
+    (h : Runs world perm p Q s) : Runs world perm p (fun s' => Q s' ∧ s'.data = s.data) s := by
+  induction h with
+  | step perm p Q s i hf hn _ hr ih =>
+    refine Runs.step perm p _ s i hf hn (fun u s' e => ?_) (fun u s' e => ⟨hr u s' e, execQ_data e⟩)
+    have hd : s'.data = s.data := execQ_data e
+    have := ih u s' e
+    rw [hd] at this
+    exact this
+  | call perm p Q s i name q inner R hf hc hw h8 ha hm hir hiw _ hk _ ihq ihp =>
+    refine Runs.call perm p _ s i name q inner (fun s' => R s' ∧ s'.data = s.data) hf hc hw h8 ha hm hir hiw ihq
+      (fun s' hs' => hk s' hs'.1) (fun s' hs' => ?_)
+    have := ihp s' hs'.1
+    have hd : (backFrom s s').data = s.data := hs'.2
+    rw [hd] at this
+    exact this
 
 end Ode

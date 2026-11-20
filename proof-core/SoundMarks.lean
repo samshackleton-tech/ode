@@ -259,7 +259,7 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have hx : x = s0.reg base + (x - s0.reg base) := by omega
             rw [M.stable x (notFrame (by omega)) (fixed_notOut E hmem (by omega) (by omega))]
             rw [hx]
-            exact E.quiet.2.2.2 name base n hmem hnot _ hk
+            exact E.quiet.2.2.2.1 name base n hmem hnot _ hk
 
 /-! ## What an expression's value may be marked with -/
 
@@ -730,7 +730,7 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem Holds.q {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : SMarks) :
     Holds ctx s0 ρ { s with q := x } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.q {s : Sym} (wf : WF s) (x : SMarks) : WF { s with q := x } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
@@ -807,14 +807,16 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     st.marks.reg RSP = false ∧ c.quietAt (afterCall p q i st) ∧
     ∀ s2, c.quietAfter (afterCall p q i st) s2 → MarksOk ctx s0 (afterCallQ s) (backFrom st s2) := by
   simp only [callQuiet, Bool.and_eq_true] at hq
-  obtain ⟨⟨⟨hregs, hfix⟩, houts⟩, hrun⟩ := hq
+  obtain ⟨⟨⟨⟨hregs, hdata⟩, hfix⟩, houts⟩, hrun⟩ := hq
+  have hdata : c.data = [] := by simpa using hdata
   have regs : ∀ r ∈ quietRegs, st.marks.reg r = false := fun r hr =>
     M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hregs r hr))
   have notw : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false →
       ¬ (st.reg RSP - 8 ≤ a ∧ a < st.reg RSP - 8 + 8) := fun a hf ho hin => by
     have := allowed_at hw a hin.1 hin.2
     simp [Contract.perm, hf, ho] at this
-  refine ⟨regs RSP (by decide), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_⟩, ?_⟩
+  refine ⟨regs RSP (by decide), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_,
+    fun k hk => by rw [hdata] at hk; cases hk⟩, ?_⟩
   · show markBytes st.marks.mem (st.reg RSP - 8) 8 false ((if RSP = RSP then st.reg RSP - 8 else st.reg RSP) + k) = false
     rw [if_pos rfl]
     unfold markBytes

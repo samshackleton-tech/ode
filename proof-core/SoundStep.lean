@@ -190,7 +190,7 @@ theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
       range := H'.range
-      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
+      entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
       facts := fun f m => (List.mem_append.mp m).elim (hrows f) (H'.facts f),
       known := fun k' m => by
@@ -226,7 +226,7 @@ theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
       range := H'.range
-      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
+      entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
       facts := fun f m => (List.mem_append.mp m).elim (hrows f) (H'.facts f),
       known := fun k' m => by
@@ -259,7 +259,7 @@ theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sy
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
       range := H'.range
-      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
+      entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, facts := H'.facts, known := H'.known }
   · exact {
       range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
@@ -349,7 +349,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, bounded_var (Nat.lt_succ_self _), base, len, rfl, by rw [eo]; exact g1, by rw [eo]; omega, ?_⟩
       · exact {
           range := H'.range
-          entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
+          entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
           spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, known := H'.known,
           facts := by
             intro f hf
@@ -594,7 +594,7 @@ theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   refine ⟨allowed_of _ _ _ ?_, allowed_of _ _ _ ?_, by omega⟩
   · intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
-    left; left; left; omega
+    left; left; left; left; omega
   · intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
     left; omega
@@ -636,7 +636,10 @@ theorem lane {j : Nat} {x : String} {r count l : Nat} (h : ctx.contract.tableAt 
 
 /-- A number the contract asks to be no less than another is so at entry. -/
 theorem atLeast {x : String} {k r : Nat} (h : (x, k) ∈ ctx.contract.atLeast) (hr : ctx.contract.regOf x = some r) : k ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2 x k h r hr
+  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.1 x k h r hr
+/-- The file's read-only data, where the contract has it: in memory, each byte the file's, apart from the
+frame, the address to return to and the runs given to write. -/
+theorem dataAt : ctx.contract.dataAt s0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
@@ -730,7 +733,7 @@ theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           apply allowed_of
           intro x h1 h2
           simp only [Contract.perm, Contract.inFixed, Bool.or_eq_true]
-          left; right; left
+          left; left; right; left
           exact List.any_eq_true.mpr ⟨(name, base, count), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         have lt := load_lt s0.mem (s0.reg base + c.toNat) 8
         have lt2 : load s0.mem (s0.reg base + c.toNat) 8 < 2 ^ 64 := by have := lt; rw [pow8] at this; unfold M64 at this; exact this
@@ -844,7 +847,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         injection hp with h1 h2
         subst h1 h2
         have hbo : bounded s.nvars o := by
-          rw [ho]; exact bounded_sub hb (bounded_var (Nat.lt_of_lt_of_le hbl.1 wf.base))
+          rw [ho]; exact bounded_sub hb (bounded_var (Nat.lt_of_lt_of_le hbl.1 wf.base16))
         obtain ⟨ρ', c1, bv, base', len', hreg', g1, g2, g3⟩ := readByte_sound E e1 H wf hbo
         rw [hreg] at hreg'
         injection hreg' with hreg'
@@ -864,7 +867,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         rw [← hadr] at hbyte
         refine ⟨ρ', c1, ?_, ?_, ?_, bv⟩
         · simp only [allowed, Bool.and_true, Contract.perm, Bool.or_eq_true]
-          left; left; right
+          left; left; left; right
           exact List.any_eq_true.mpr ⟨(base, len), hmem, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         · simp only [load]; unfold M64; omega
         · rw [g3, ← hadr]; simp only [load, hmem0]; omega
@@ -898,7 +901,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
   refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, nq, nr⟩
   · exact {
       range := H'.range
-      entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
+      entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
       spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words, known := H'.known,
       facts := by
         intro f hf
@@ -991,7 +994,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     refine ⟨ρ', ⟨c.agree, c.mono, ?_, ?_⟩, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr, bq, br⟩
     · exact {
         range := c.holds.range
-        entry := c.holds.entry, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
+        entry := c.holds.entry, data := c.holds.data, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
         frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote, words := c.holds.words, known := c.holds.known,
         facts := by
           intro f hf
@@ -1528,11 +1531,17 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             have fe : f = "or64" := by simpa using hor
             obtain ⟨ρ3, c3, lt, sem⟩ := symOr_sound h c2.holds c2.wf xa xb sa2 sb
             have hz : prim f [xa, xb] = some ((xa ||| xb) % M64) := by rw [fe]; simp [prim]
-            refine ⟨ρ3, (xa ||| xb) % M64, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], ?_⟩
+            have hnd : (f == "data") = false := by rw [fe]; decide
+            refine ⟨ρ3, (xa ||| xb) % M64, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz, hnd, Bool.false_eq_true, if_false], ?_⟩
             rw [Nat.mod_eq_of_lt lt]; exact sem
           next =>
             obtain ⟨ρ3, c3, z, hz, sz⟩ := symPrim_sound h c2.holds c2.wf xa xb sa2 sb
-            exact ⟨ρ3, z, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz], sz⟩
+            have hnd : (f == "data") = false := by
+              cases hd : (f == "data") with
+              | false => rfl
+              | true => have fe : f = "data" := by simpa using hd
+                        rw [fe] at hz; simp [prim] at hz
+            exact ⟨ρ3, z, (c1.then c2).then c3, by simp only [value, values, va, vb, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
   | .call f [], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
@@ -1546,7 +1555,12 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     | lin x =>
       simp only at h
       obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
-      exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz], sz⟩
+      have hnd : (f == "data") = false := by
+        cases hd : (f == "data") with
+        | false => rfl
+        | true => have fe : f = "data" := by simpa using hd
+                  rw [fe] at hz; simp [prim] at hz
+      exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
   | .call f (_ :: _ :: _ :: _), s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
@@ -1555,11 +1569,11 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem Holds.setZf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with zf := f } { st with zf := b } :=
-  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+  ⟨H.entry, H.data, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem Holds.setCf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with cf := f } { st with cf := b } :=
-  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.setZf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with zf := f } :=
   ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
@@ -1571,6 +1585,7 @@ theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
     (r x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) : Holds ctx s0 ρ (s.put r xr) (setReg st r x) where
   range := H.range
   entry := H.entry
+  data := H.data
   reg r' hr' := by
     simp only [Sym.put, setReg]
     split
@@ -1628,6 +1643,7 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       { st with mem := store st.mem a x 8 } where
   range := fun _ h => nomatch h
   entry := H.entry
+  data := H.data
   reg := H.reg
   small := H.small
   zf := H.zf
@@ -1738,6 +1754,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     rw [store_other _ _ _ _ _ hne]
     exact g5 j lo hj
   entry := H.entry
+  data := H.data
   reg := H.reg
   small := H.small
   zf := H.zf
@@ -1867,6 +1884,7 @@ theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat
     Holds ctx s0 ρ { s with spill := spill, range := none } { st with mem := mem' } where
   range := fun _ h => nomatch h
   entry := H.entry
+  data := H.data
   reg := H.reg
   small := H.small
   zf := H.zf
@@ -2137,7 +2155,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                               exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
                             have hbo : bounded s3.nvars o := by
                               rw [ho]
-                              exact bounded_sub (bounded_add (bounded_signed sa3.2.2) (bounded_signed sb.2.2)) (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) c3.wf.base))
+                              exact bounded_sub (bounded_add (bounded_signed sa3.2.2) (bounded_signed sb.2.2)) (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) c3.wf.base16))
                             refine ⟨ρ3, { st with mem := store st.mem ((xa + xb) % M64) x 1 },
                               ⟨Agree.trans c1.mono c1.agree (Agree.trans c2.mono c2.agree c3.agree),
                                Nat.le_trans c1.mono (Nat.le_trans c2.mono c3.mono),

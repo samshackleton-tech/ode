@@ -114,7 +114,7 @@ theorem termsOf_step {α : Type} {mk : α → Tab → Nat × Tab} {val : α → 
 
 theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
     {t' : Tab} (e : Ext s.terms t'.list) : Holds ctx s0 ρ { s with tab := t' } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
    ⟨fun x ids hx k hk => by
       have lt := (wf.words.vec x ids hx).2
       have eq : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
@@ -410,7 +410,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
         · intro y hy1 hy2
           simp only [Contract.perm, Bool.or_eq_true]
-          left; right
+          left; left; right
           unfold Contract.inFixed
           simp only [Bool.or_eq_true]
           left
@@ -463,7 +463,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
               · intro y hy1 hy2
                 simp only [Contract.perm, Bool.or_eq_true]
-                left; right
+                left; left; right
                 unfold Contract.inFixed
                 simp only [Bool.or_eq_true]
                 rcases List.mem_append.mp (List.mem_of_getElem? hj') with m | m
@@ -1301,6 +1301,7 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
     Holds ctx s0 ρ (rememberStore s w (c / 4) l) { st with mem := storeWords st.mem a lanes } where
   range := fun _ h => nomatch h
   entry := H.entry
+  data := H.data
   reg := H.reg
   small := H.small
   zf := H.zf
@@ -1478,7 +1479,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         subst h1
         refine ⟨ρ, { st with vec := fun x k => if k < 4 ∨ 16 ≤ x then st.vec x k else u / W32 ^ (16 * x + k) % W32 },
           ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩, ?_, rfl⟩
-        · exact ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
+        · exact ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
             ⟨fun x ids hx k hk => by
                obtain ⟨old, ho, rfl⟩ := forgetHigh_lookup hx
                show (if k < 4 ∨ 16 ≤ x then st.vec x k else _) = _
@@ -1517,7 +1518,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           subst h1
           have len : l.length = 4 := by simpa using hlen
           refine ⟨ρ', setVec st r lanes u, ⟨c.agree, c.mono, ?_, ?_⟩, ?_, rfl⟩
-          · exact ⟨c.holds.entry, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.facts, c.holds.bytes,
+          · exact ⟨c.holds.entry, c.holds.data, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.facts, c.holds.bytes,
               c.holds.spec, c.holds.mem, c.holds.wrote,
               ⟨fun x ids hx k hk => by
                  show (if x = r then (if k < 4 then lanes.getD k 0 else _) else st.vec x k) = _
