@@ -152,7 +152,7 @@ class P16OneBlock(unittest.TestCase):
         cases = [
             ("rotation count", "    vprord $d0, $d0, 16\n", "    vprord $d0, $d0, 15\n", FOLLOW),
             ("input transpose", "  vshufi32x4 zmm30, zmm31, zmm18, 0x88\n", "  vshufi32x4 zmm30, zmm31, zmm18, 0xdd\n", FOLLOW),
-            ("spill reload slot", "  vmovdqa32 zmm16, ZMMWORD PTR [rsp + 64]\n", "  vmovdqa32 zmm16, ZMMWORD PTR [rsp + 0]\n", "aligned load does not match"),
+            ("spill reload slot", "  vmovdqa32 zmm16, ZMMWORD PTR [rsp + 64]\n", "  vmovdqa32 zmm16, ZMMWORD PTR [rsp + 0]\n", FOLLOW),     # (the other slot is known too: it holds another vector)
             ("output store offset", "  vmovdqu32 ZMMWORD PTR [r15 + 448], zmm4\n", "  vmovdqu32 ZMMWORD PTR [r15 + 384], zmm4\n", HOLD),
         ]
         for what, old, new, expected in cases:

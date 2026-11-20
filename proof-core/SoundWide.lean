@@ -538,22 +538,26 @@ theorem symSpillLoad_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
     ∃ lanes, Carried ctx s0 ρ s ρ s' st ∧ lanesOf512 (ctx.contract.perm s0) bind st (.call "mem512a" args) = some lanes ∧
       WideValue ctx s0 ρ s' l lanes := by
   unfold symSpillLoad at h
-  cases ha : symWordAddr bind s args <;> cases hs : s.spill <;> simp only [ha, hs] at h
-  all_goals try exact (refuse_ok h).elim
-  rename_i addr pair
+  cases ha : symWordAddr bind s args <;> simp only [ha] at h
+  · exact (refuse_ok h).elim
+  rename_i addr
+  cases hf : s.spill.find? (fun (o, _) => frameOffset addr == o) <;> simp only [hf] at h
+  · exact (refuse_ok h).elim
+  rename_i pair
   obtain ⟨o, ids⟩ := pair
+  have hs : (o, ids) ∈ s.spill := List.mem_of_find?_eq_some hf
+  have heq : frameOffset addr = o := by simpa only [beq_iff_eq] using List.find?_some hf
   simp only at h
   split at h
   next hal =>
-    simp only [Bool.and_eq_true, beq_iff_eq] at hal
     obtain ⟨_, _, hc, he⟩ := V.bind_ok h
     obtain ⟨hl, hstate⟩ := pure_pair he
     subst l s'
-    obtain ⟨a, va, ea, lo, hi, _⟩ := alignedFrameAddress E H wf ha hal.1 (entails_sound H.facts hc)
+    obtain ⟨a, va, ea, lo, hi, _⟩ := alignedFrameAddress E H wf ha hal (entails_sound H.facts hc)
     have perm := (frameSpan_perm (ctx := ctx) lo hi).1
     obtain ⟨_, len, lt⟩ := wf.words.spill o ids hs
     have ea' : ((s0.reg RSP : Int) + ev ρ o).toNat = a := by
-      rw [← hal.2, frameOffset_eval H, ← ea]
+      rw [← heq, frameOffset_eval H, ← ea]
       omega
     refine ⟨(List.range 16).map (fun k => Ode.load st.mem (a + 4 * k) 4), Carried.here H wf, ?_, len, lt, ?_⟩
     · simp [lanesOf512, va, perm]
@@ -562,8 +566,16 @@ theorem symSpillLoad_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
       · intro k h1 h2
         have hk : k < ids.length := by simpa only [List.length_map] using h2
         simp only [List.getElem_map, List.getElem_range]
-        simpa only [ea', getD_index hk] using H.words.spill o ids hs k hk
+        simpa only [ea', getD_index hk] using (H.words.spill o ids hs).2 k hk
   next => exact (refuse_ok h).elim
+
+/-- Two cells of the frame known apart are 64 bytes or more from one another, whatever the unknowns are. -/
+theorem cellsApart_sound {o o' : Row} (ρ : Nat → Int) (h : cellsApart o o' = true) :
+    ev ρ o + 64 ≤ ev ρ o' ∨ ev ρ o' + 64 ≤ ev ρ o := by
+  simp only [cellsApart, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at h
+  have e := dot_sameCoeff o.coeff o'.coeff ρ h.1
+  unfold ev
+  omega
 
 theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind)
     {s s' : Sym} {v : Expr} {items rest : Items} {ρ : Nat → Int} {st : State} {l : List Nat}
@@ -676,21 +688,39 @@ theorem symSpillStore_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
     have hlen : lanes.length = 16 := by simp [lanes, len]
     refine ⟨a, va, (frameSpan_perm (ctx := ctx) lo hi).2, ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩⟩
     · refine H.frameSpanWrite E lo hi apart (fun y hy => storeWords_other _ _ _ _ (by rw [hlen]; exact hy)) ?_
-      intro o ids hs k hk
-      simp only [Option.some.injEq, Prod.mk.injEq] at hs
-      obtain ⟨rfl, rfl⟩ := hs
+      intro o ids hs
       have aa : ((s0.reg RSP : Int) + ev ρ (frameOffset addr)).toNat = a := by rw [off, ← ea]; omega
-      have kl : k < lanes.length := by simpa only [lanes, List.length_map] using hk
-      have ev := getD_map_index hk (den (inpOf ctx s0) ρ s.terms)
-      have val : lanes.getD k 0 < W32 := by
-        rw [ev]
-        exact den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs _
-      rw [aa, load_spilled_word _ _ _ kl val, ev]
+      rcases List.mem_cons.mp hs with hs | hs
+      · simp only [Prod.mk.injEq] at hs
+        obtain ⟨rfl, rfl⟩ := hs
+        refine ⟨by rw [off, ← ea]; omega, fun k hk => ?_⟩
+        have kl : k < lanes.length := by simpa only [lanes, List.length_map] using hk
+        have ev := getD_map_index hk (den (inpOf ctx s0) ρ s.terms)
+        have val : lanes.getD k 0 < W32 := by
+          rw [ev]
+          exact den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs _
+        rw [aa, load_spilled_word _ _ _ kl val, ev]
+      · obtain ⟨hm, hap⟩ := List.mem_filter.mp hs
+        obtain ⟨nn, val⟩ := H.words.spill o ids hm
+        have far : ev ρ o + 64 ≤ ev ρ (frameOffset addr) ∨ ev ρ (frameOffset addr) + 64 ≤ ev ρ o := cellsApart_sound ρ hap
+        have len16 := (wf.words.spill o ids hm).2.1
+        refine ⟨nn, fun k hk => ?_⟩
+        rw [← val k hk]
+        apply load_congr
+        intro y hy1 hy2
+        refine storeWords_other _ _ _ _ ?_
+        rw [hlen]
+        have hA := Int.toNat_of_nonneg nn
+        have ha' : (a : Int) = (s0.reg RSP : Int) + ev ρ (frameOffset addr) := by rw [off, ← ea]; omega
+        generalize ((s0.reg RSP : Int) + ev ρ o).toNat = A at hA hy1 hy2
+        omega
     · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
         ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs, wf.words.wrote, fun o ids h => by
-          simp only [Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          exact ⟨ba, len, lt⟩⟩, wf.known⟩
+          rcases List.mem_cons.mp h with h | h
+          · simp only [Prod.mk.injEq] at h
+            obtain ⟨rfl, rfl⟩ := h
+            exact ⟨ba, len, lt⟩
+          · exact wf.words.spill o ids (List.mem_filter.mp h).1⟩, wf.known⟩
   next => exact (refuse_ok h).elim
 
 theorem lanesOf512_of_vecArg {perm : Perm} {bind : Bind} {st : State} {v : Expr} {lanes : List Nat}

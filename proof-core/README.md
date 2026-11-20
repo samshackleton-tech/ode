@@ -312,7 +312,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 976 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,032 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,037 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -496,12 +496,16 @@ stays within the frame and that any saved words stay at or above it. The verifie
 rather than asking for the same proof at each instruction. A test checks the same proof with and
 without 80 intervening instructions that do not change the stack pointer.
 
-The verifier can also write and reload one 64-byte vector in the aligned stack frame. It checks the
-whole slot, its alignment, and that the store ends before any saved scalar word. It remembers only the
-most recent vector store. A scalar store, a call or exit from the aligned frame makes it forget the
-saved vector. It verifies a copy from object bytes that clears the register between the store and
-reload. Tests reject a reload from another slot, a store whose address lacks the required alignment,
-and a stack adjustment that would leave the slot below the stack pointer.
+The verifier can also write and reload 64-byte vectors in the aligned stack frame. It checks the
+whole slot, its alignment, and that the store ends before any saved scalar word. It remembers every
+vector stored, each with its slot's offset. A new vector store keeps the slots that it can see are 64
+bytes or more away (their offsets differ from the new one's by a number alone) and forgets the others.
+A scalar store, a call or exit from the aligned frame makes it forget all of them. It verifies copies
+from object bytes that clear the registers between the stores and the reloads, with one slot and with
+two side by side. Tests reject a reload from another slot (with two slots: each read back from the
+other's, which is a false statement), a slot stored to twice and read as holding the first vector, a
+store whose address lacks the required alignment, and a stack adjustment that would leave the slot
+below the stack pointer.
 
 `test_p16_one.py` combines those rules on a 418-instruction fixture taken from `../wide/p16.ode`: P16's
 prologue, stack realignment, key broadcasts, 64-instruction input transpose, seven compression rounds with
@@ -796,8 +800,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 976 lines (Table.lean 152, Machine.lean 461, Contract.lean 363). The
-verifier: 2,191 lines (Core.lean 2,032, Arithmetic.lean 159 including its proofs). The file parser: 159
-lines. The proofs of the theorems: 13,449 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
+verifier: 2,196 lines (Core.lean 2,037, Arithmetic.lean 159 including its proofs). The file parser: 159
+lines. The proofs of the theorems: 13,479 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
 
 ## The files
 

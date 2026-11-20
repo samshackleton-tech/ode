@@ -1610,7 +1610,7 @@ theorem Flag.below_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev
 theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) (c : Int) (h1 : -(ctx.contract.stack : Int) ≤ c) (h2 : c + 8 ≤ 0)
     (a : Nat) (ha : (a : Int) = (s0.reg RSP : Int) + c) (x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) :
-    Holds ctx s0 ρ { s with spill := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+    Holds ctx s0 ρ { s with spill := [], frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
       { st with mem := store st.mem a x 8 } where
   entry := H.entry
   reg := H.reg
@@ -1670,7 +1670,7 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   known := H.known
 
 theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
-    WF { s with spill := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
+    WF { s with spill := [], frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1694,7 +1694,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest)
     (hnw : (s.wroteW.any fun e => e.1 == w) = false)
     (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat) :
-    Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := none }
+    Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] }
       { st with mem := store st.mem a x 1 } where
   entry := H.entry
   reg := H.reg
@@ -1770,7 +1770,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) :
-    WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := none } where
+    WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] } where
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1816,11 +1816,11 @@ theorem frameSpan_perm {ctx : Ctx} {s0 : State} {a n : Nat}
 
 /-- A store wholly inside the frame and below the saved scalar words does not affect other regions. -/
 theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
-    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {mem' : Nat → Nat} {a n : Nat} {spill : Option (Row × List Nat)}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {mem' : Nat → Nat} {a n : Nat} {spill : List (Row × List Nat)}
     (lo : s0.reg RSP - ctx.contract.stack ≤ a) (hi : a + n ≤ s0.reg RSP)
     (apart : ∀ o v, (o, v) ∈ s.frame → a + n ≤ ((s0.reg RSP : Int) + o).toNat)
     (same : ∀ y, y < a ∨ a + n ≤ y → mem' y = st.mem y)
-    (saved : ∀ o ids, spill = some (o, ids) → ∀ k, k < ids.length →
+    (saved : ∀ o ids, (o, ids) ∈ spill → 0 ≤ (s0.reg RSP : Int) + ev ρ o ∧ ∀ k, k < ids.length →
       load mem' (((s0.reg RSP : Int) + ev ρ o).toNat + 4 * k) 4 = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) :
     Holds ctx s0 ρ { s with spill := spill } { st with mem := mem' } where
   entry := H.entry

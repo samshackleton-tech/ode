@@ -128,12 +128,12 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
       show st.mem _ = den (inpOf ctx s0) ρ t'.list i / 256 ^ b % 256
       rw [den_ext wf.words.table e (wf.words.wrote w j i m)]
       exact h2 b hb,
-    fun o ids hs k hk => by
+    fun o ids hs => ⟨(H.words.spill o ids hs).1, fun k hk => by
       have lt := (wf.words.spill o ids hs).2.2
       have hc : ids.getD k 0 = ids[k] := by simp [List.getD, List.getElem?_eq_getElem hk]
       show Ode.load st.mem _ 4 = den (inpOf ctx s0) ρ t'.list (ids.getD k 0)
       rw [den_ext wf.words.table e (by rw [hc]; exact lt _ (List.getElem_mem hk))]
-      exact H.words.spill o ids hs k hk⟩,
+      exact (H.words.spill o ids hs).2 k hk⟩⟩,
    fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m)⟩
 
 theorem WF.terms {s : Sym} (wf : WF s) {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : WF { s with tab := t' } :=

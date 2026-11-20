@@ -380,7 +380,7 @@ structure Sym where
   vec : List (Nat × List Nat) := []   -- (vector register, known low lanes as term numbers); the first entry for each register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
-  spill : Option (Row × List Nat) := none  -- entry-relative offset and lane terms of the last aligned vector spill
+  spill : List (Row × List Nat) := []  -- the aligned vector spills still known: each one's entry-relative offset and lane terms
   known : List Known := []        -- what is known of numbers that are no rows
   divs : List (Row × Int × Nat) := []   -- the divisions made (the number, the divisor, the quotient's unknown): advice for `divided`, and nothing rests on it
   q : SMarks := {}                -- what is known not to be marked
@@ -1035,16 +1035,24 @@ def aligned64 (a : Row) : Bool := a.coeff.all (fun x => x % 64 == 0) && a.consta
 def symTouchFrame (ctx : Ctx) (s : Sym) (a : Row) : V Sym := do
   each (entail s.facts) (frameSpanGoals ctx s a 1)
   each (entail s.facts) (savedWordGoals s a 1)
-  pure { s with spill := none }
+  pure { s with spill := [] }
+
+/-- Two aligned 64-byte cells of the frame that are known not to overlap: their offsets differ by a
+number alone, of 64 or more. -/
+def cellsApart (o o' : Row) : Bool :=
+  Lin.sameCoeff o.coeff o'.coeff && (decide (o.constant + 64 ≤ o'.constant) || decide (o'.constant + 64 ≤ o.constant))
 
 def symSpillLoad (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
-  match symWordAddr bind s args, s.spill with
-  | some a, some (o, l) =>
-    if aligned64 a && frameOffset a == o then do
-      each (entail s.facts) (frameSpanGoals ctx s a 64)
-      pure (l, s)
-    else refuse "the aligned load does not match the saved stack vector"
-  | _, _ => refuse "no saved stack vector for this aligned load"
+  match symWordAddr bind s args with
+  | some a =>
+    match s.spill.find? fun (o, _) => frameOffset a == o with
+    | some (_, l) =>
+      if aligned64 a then do
+        each (entail s.facts) (frameSpanGoals ctx s a 64)
+        pure (l, s)
+      else refuse "the aligned load's address is not known to be 64-byte aligned"
+    | none => refuse "the aligned load does not match a saved stack vector"
+  | none => refuse "no saved stack vector for this aligned load"
 
 def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : List Nat) : V Sym :=
   match symWordAddr bind s args with
@@ -1052,7 +1060,7 @@ def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : Li
     if aligned64 a then do
       each (entail s.facts) (frameSpanGoals ctx s a 64)
       each (entail s.facts) (savedWordGoals s a 64)
-      pure { s with spill := some (frameOffset a, l) }
+      pure { s with spill := (frameOffset a, l) :: s.spill.filter fun (o, _) => cellsApart o (frameOffset a) }
     else refuse "the vector store's address is not known to be 64-byte aligned"
   | none => refuse "the aligned vector store needs a known address"
 
@@ -1111,7 +1119,7 @@ def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
 
 /-- Replace the known words at the store's offsets. Other word stores remain in force. -/
 def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
-  { s with intact := s.intact.filter (· != w), spill := none,
+  { s with intact := s.intact.filter (· != w), spill := [],
            wroteW := ((List.range l.length).map fun i => (w, j + i, l.getD i 0)) ++
                      s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + l.length)) }
 
@@ -1204,7 +1212,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
           match locate ctx (Lin.add (signed a) (signed b)) with
           | some (.frame c) =>
             if memSize f = some 8 ∧ inFrame ctx s c = true then
-              pure { s with spill := none, frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+              pure { s with spill := [], frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
             else refuse "a write that is not eight bytes of the frame in use"
           | some (.out w o) =>
             -- one byte, at a place shown to be within the run, the byte shown to be one (0 to 255)
@@ -1218,7 +1226,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
                 if s.wroteW.any (fun e => e.1 == w) then refuse "a byte written to a run that words were written to: not here yet"
                 else
                 match keepWrote w o s.wrote with
-                | some rest => pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := none }
+                | some rest => pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := [] }
                 | none => refuse "a write at a place not known apart from one written before: not here yet"
               else refuse "a write of more than one byte to a run given to write: not here yet"
             | none => refuse "no such run of bytes"
@@ -1237,13 +1245,13 @@ def stackGoals (ctx : Ctx) (s : Sym) : List Row :=
   let off := Lin.sub (s.reg RSP) (Lin.var RSP)
   Lin.add off (Lin.const ctx.contract.stack) :: Lin.scale (-1) off ::
     ((s.frame.map fun (o, _) => Lin.sub (Lin.const o) off) ++
-     (s.spill.toList.map fun (o, _) => Lin.sub o off))
+     (s.spill.map fun (o, _) => Lin.sub o off))
 
 def settle (ctx : Ctx) (s : Sym) : V Sym :=
   match s.sp with
   | some sp =>
     if sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp then
-      pure { s with spill := none, frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
+      pure { s with spill := [], frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
     else refuse "the stack pointer leaves the frame the contract allows"
   | none => do
     -- Every saved word must remain at or above the stack pointer. Remember these facts so

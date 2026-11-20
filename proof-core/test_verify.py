@@ -192,7 +192,7 @@ class Verify(unittest.TestCase):
             with self.subTest(arg=arg):
                 self.assertIn("sixty-four bytes that are not sixteen words of the run",
                               self.wide(ops, [*buffers[:arg], shorter, *buffers[arg + 1:]]))
-        self.assertIn("no saved stack vector", self.wide([".zload true 0 .rsi 0"], buffers))
+        self.assertIn("does not match a saved stack vector", self.wide([".zload true 0 .rsi 0"], buffers))
         self.assertIn("address is not known to be 64-byte aligned", self.wide([*ops[:2], ".zstore true .rdi 0 0"], buffers))
 
     def build_one(self, name, source):
@@ -318,8 +318,63 @@ contract wide_add(out: block, a: block, b: block) {
         with self.assertRaisesRegex(SystemExit, "need entail"):
             prove.prove(spec, [(changed, name, "")], st, pf)
         touched = self.build_one(name, lowest.replace("  vpxord zmm0", "  mov byte ptr [rsp], 1\n  vpxord zmm0"))
-        with self.assertRaisesRegex(SystemExit, "no saved stack vector"):
+        with self.assertRaisesRegex(SystemExit, "does not match a saved stack vector"):
             prove.prove(spec, [(touched, name, "")], st, pf)
+
+    def test_two_vectors_spilled_side_by_side(self):
+        """The frame holds more than one spilled vector: each is read back from its own cell. A cell stored
+        to again holds the newer vector; a store whose distance from a cell is not known forgets the cell."""
+        source = """fn spill_two as "spill_two" {
+  push rbp
+  mov rbp, rsp
+  push rbx
+  and rsp, -64
+  sub rsp, 192
+  mov byte ptr [rsp], 0
+  vmovdqu32 zmm0, zmmword ptr [rdx]
+  vmovdqu32 zmm1, zmmword ptr [rcx]
+  vmovdqa32 zmmword ptr [rsp + 64], zmm0
+  vmovdqa32 zmmword ptr [rsp + 128], zmm1
+  vpxord zmm0, zmm0, zmm0
+  vpxord zmm1, zmm1, zmm1
+  vmovdqa32 zmm0, zmmword ptr [rsp + 64]
+  vmovdqa32 zmm1, zmmword ptr [rsp + 128]
+  vmovdqu32 zmmword ptr [rdi], zmm0
+  vmovdqu32 zmmword ptr [rsi], zmm1
+  lea rsp, [rbp - 8]
+  pop rbx
+  pop rbp
+  vzeroupper
+  ret
+}
+"""
+        spec = """contract spill_two(p: block, q: block, a: block, b: block) {
+  requires no_overlap(p, q, a, b)
+  ensures p = a
+  ensures q = b
+  stack 271
+  needs avx512
+  trace depends on p, q, a, b
+}
+"""
+        name = "spill_two"
+        st, pf = (os.path.join(self.dir, f"{name}.{kind}") for kind in ("statement", "proof"))
+        obj = self.build_one(name, source)
+        self.assertIn(name, prove.prove(spec, [(obj, name, "")], st, pf))
+        self.assertEqual(lean_verify.verify(spec, [(obj, name)], pf), (True, "shown"))
+        # False statements: each must be refused.
+        for what, old, new, why in (
+            ("the two read back from one another's cells", "zmm0, zmmword ptr [rsp + 64]\n  vmovdqa32 zmm1, zmmword ptr [rsp + 128]",
+             "zmm0, zmmword ptr [rsp + 128]\n  vmovdqa32 zmm1, zmmword ptr [rsp + 64]", "a word of the run is not known to hold what the specification says"),
+            ("the second stored over the first", "[rsp + 128], zmm1", "[rsp + 64], zmm1", "does not match a saved stack vector"),
+            ("a cell read that was never stored to", "zmm1, zmmword ptr [rsp + 128]", "zmm1, zmmword ptr [rsp]", "does not match a saved stack vector"),
+        ):
+            with self.subTest(what=what):
+                self.assertEqual(source.count(old), 1)
+                changed = self.build_one(name, source.replace(old, new))
+                with self.assertRaisesRegex(SystemExit, why):
+                    prove.prove(spec, [(changed, name, "")], st, pf)
+                self.assertFalse(lean_verify.verify(spec, [(changed, name)], pf)[0])
 
     def test_indexed_wide_load_and_broadcast_from_memory(self):
         buffers = ("arg out out 64", "arg a fixed 68")
