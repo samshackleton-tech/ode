@@ -379,10 +379,10 @@ theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   exact ⟨ρ1, c1.agree, c1.mono,
     ⟨H1.entry, H1.reg, H1.small, H1.zf, H1.cf, H1.frame,
      fun f m => (List.mem_append.mp m).elim (hr f) (H1.facts f), H1.bytes,
-     fun f m => (List.mem_append.mp m).elim (hf f) (H1.spec f), H1.mem, H1.wrote, H1.words, H1.known⟩,
+     fun f m => (List.mem_append.mp m).elim (hf f) (H1.spec f), H1.mem, H1.wrote, H1.words, H1.known, H1.range⟩,
     ⟨w1.base, w1.reg, w1.zf, w1.cf, w1.frame,
      fun f m => (List.mem_append.mp m).elim (br f) (w1.facts f), w1.bytes,
-     fun f m => (List.mem_append.mp m).elim (bf f) (w1.spec f), w1.wrote, w1.words.mono rfl rfl rfl (Nat.le_refl _), w1.known⟩⟩
+     fun f m => (List.mem_append.mp m).elim (bf f) (w1.spec f), w1.wrote, w1.words.mono rfl rfl rfl (Nat.le_refl _), w1.known, w1.range⟩⟩
 
 theorem suppose_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},

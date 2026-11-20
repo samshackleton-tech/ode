@@ -53,7 +53,7 @@ def lane_line(var, regs, use, after, seqs, kinds, counted, name):
     return f"lane {var} " + " ".join(f"zmm{r}" for r in rs) + " = " + sexp(full, seqs)
 
 
-def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name=""):
+def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}):
     """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
     `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
@@ -68,10 +68,13 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name=""):
         m = re.fullmatch(r"name (\w+) = (\w+)", line)
         if m: out.append(f"name {m.group(1)} {m.group(2)}"); named.append(m.group(2)); continue
         if line.startswith("fact "): out.append("fact " + sexp(kbyte.expression(line[5:]), seqs)); continue
+        m = re.fullmatch(r"wrote (\w+)\[(.+) \.\.\] = (.+)", line)       # from that place on, the run holds that list, place by place
+        if m: lanes.append(f"wrote {m.group(1)} (index {sexp(kbyte.expression(m.group(3)), seqs)} {sexp(kbyte.expression(m.group(2)), seqs)})"); continue
         m = re.fullmatch(r"lane (\w+): (.+?) = (.+) after (.+)", line)
         if m: lanes.append(lane_line(*m.groups(), seqs, kinds, counted, name)); continue
         if line.startswith("decreases "):
             out.append("keep " + " ".join(r for r in REGISTERS if (r not in named or r in also) and r in keep.get(at, REGISTERS)))
+            if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on a secret on a later coming there
             out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs))
             out += lanes; continue
         raise SystemExit(f"prove: a line of a place the verifier in Lean does not read yet: {line}")
@@ -255,6 +258,9 @@ def negation(g): return klin.Lin([(n, -c) for n, c in g.c], -g.k - 1)
 class Unkept(Exception): pass
 
 
+class Marked(Exception): pass           # at a place, a register may depend on a secret that did not on first coming there
+
+
 class GaveUp(Exception): pass           # more runs of the verifier, or more time, than the prover was allowed
 
 
@@ -302,6 +308,8 @@ class Prover:
             if self.finished(said): return proof
             m = re.search(r"at the place (\d+) register (\d+) does not hold", said)
             if m: raise Unkept(int(m.group(1)), int(m.group(2)))
+            m = re.search(r"at the place (\d+) register (\d+) may depend on a secret", said)
+            if m: raise Marked(int(m.group(1)), int(m.group(2)))
             if not said.startswith("need "): self.last = said; self.note(proof, said); return None
             lines = said.split("\n")
             what = lines[0][5:]
@@ -365,14 +373,20 @@ def prove(spec_text, targets, statement_out, out):
     done, numbers = [], {}
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
-        keep, runs = {}, 0
+        keep, marked, runs = {}, {}, 0
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
-            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol), out, later)
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked), out, later)
             p.last = ""
             try: proof = p.solve([])
             except Unkept as e:
                 keep[e.args[0]] = [r for r in keep.get(e.args[0], REGISTERS) if r != REGISTERS[e.args[1]]]
+                runs += p.runs
+                p.close()
+                continue
+            except Marked as e:
+                if REGISTERS[e.args[1]] in marked.get(e.args[0], []): raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+                marked[e.args[0]] = marked.get(e.args[0], []) + [REGISTERS[e.args[1]]]
                 runs += p.runs
                 p.close()
                 continue

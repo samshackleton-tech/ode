@@ -254,12 +254,14 @@ theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF g) (vec : List (Nat
     Carried ctx s0 ρ g ρ { g with vec := vec ++ g.vec, known := known ++ g.known } st := by
   refine ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩
   · exact {
+      range := H.range
       entry := H.entry, reg := H.reg, small := H.small, zf := H.zf, cf := H.cf, frame := H.frame, facts := H.facts,
       bytes := H.bytes, spec := H.spec, mem := H.mem, wrote := H.wrote,
       words := ⟨fun x ids hx k hk' => (lookup_append_or hx).elim (fun h => (hv x ids h).2.2 k hk') (fun h => H.words.vec x ids h k hk'),
                 H.words.intact, H.words.wrote, H.words.spill⟩,
       known := fun k m => (List.mem_append.mp m).elim (fun m => (hk k m).2) (H.known k) }
   · exact {
+      range := wf.range
       base := wf.base, reg := wf.reg, zf := wf.zf, cf := wf.cf, frame := wf.frame, facts := wf.facts, bytes := wf.bytes,
       spec := wf.spec, wrote := wf.wrote,
       words := ⟨wf.words.table, wf.words.atoms,
@@ -456,6 +458,195 @@ end
 
 /-! ## A place, and the general state -/
 
+/-- What a place says a loop has written, of a state of the machine there: the run is one given to write;
+the definition is a list made thing by thing, of no more things than the run has places; and each place
+of the run from `lo` on holds the list's thing there. -/
+def RangeSays (ctx : Ctx) (pl : Place) (s0 st : State) : Prop :=
+  ∀ run lo f args, pl.wrote = some (run, lo, f, args) →
+    ∃ w r n a vs params x b hi, findOutNamed run ctx.contract.outs 0 = some (w, n) ∧ ctx.contract.outs[w]? = some (run, r, n) ∧
+      Value ctx.defs (placeVals ctx pl s0 st) lo (.int a) ∧ 0 ≤ a ∧
+      Values ctx.defs (placeVals ctx pl s0 st) args vs ∧
+      eachOf ctx f vs.length = some (params, x, b, hi) ∧ hi ≤ n ∧
+      ∀ j : Nat, a ≤ j → j < hi → Value ctx.defs ((x, .int (j : Int)) :: params.zip vs) b (.int (st.mem (s0.reg r + j)))
+
+theorem Holds.setRange (H : Holds ctx s0 ρ s st) (rg : RangeF) (h : RangeHolds ctx s0 ρ rg st.mem) :
+    Holds ctx s0 ρ { s with range := some rg } st :=
+  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known,
+   fun rg' e => by injection e with e; subst e; exact h⟩
+
+theorem WF.setRange (wf : WF s) (rg : RangeF) (bl : bounded s.nvars rg.lo) (ba : ∀ v ∈ rg.args, v.bounded s.nvars) :
+    WF { s with range := some rg } :=
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known,
+   fun rg' e => by injection e with e; subst e; exact ⟨bl, ba⟩⟩
+
+/-- What the verifier has gone through of what a place says a loop has written is so of the machine's state. -/
+theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+    {s' : Sym} {got : Option RangeF} {items rest : Items}
+    (h : rangeShown ctx pl s items = .ok ((got, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ RangeSays ctx pl s0 st := by
+  unfold rangeShown at h
+  cases hpw : pl.wrote with
+  | none =>
+    simp only [hpw] at h
+    obtain ⟨_, rfl⟩ := pure_pair h
+    exact ⟨ρ, Carried.here H wf, fun _ _ _ _ e => by rw [hpw] at e; cases e⟩
+  | some q =>
+    obtain ⟨run, lo, f, args⟩ := q
+    simp only [hpw] at h
+    cases hfo : findOutNamed run ctx.contract.outs 0 with
+    | none => simp only [hfo] at h; exact (refuse_ok h).elim
+    | some wn =>
+      obtain ⟨w, n⟩ := wn
+      simp only [hfo] at h
+      obtain ⟨r, _, hw⟩ := findOutNamed_spec hfo
+      simp only [Nat.sub_zero] at hw
+      have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hn
+      have env0 := semEnv_placeEnv (ctx := ctx) pl H.entry H.reg hn
+      obtain ⟨⟨rlo, s1⟩, r1, e1, h⟩ := V.bind_ok h
+      obtain ⟨⟨L, s2⟩, r2, e2, h⟩ := V.bind_ok h
+      obtain ⟨⟨res, s3⟩, r3, e3, h⟩ := V.bind_ok h
+      obtain ⟨ρ1, c1, sem1, bd1⟩ := seval_sound E _ lo e1 H wf envb
+      obtain ⟨ρ2, c2, vlo, bL⟩ := numberV_sound (opener_sound E DEEP) c1.holds c1.wf e2 sem1 bd1
+      have c12 := c1.then c2
+      obtain ⟨ρ3, c3, sem3, bd3⟩ := seval_sound E _ args e3 c2.holds c2.wf (envb.mono c12.mono)
+      have c13 := c12.then c3
+      cases res with
+      | val _ => exact (refuse_ok h).elim
+      | tail _ => exact (refuse_ok h).elim
+      | list vs =>
+        simp only at h
+        cases heach : eachOf ctx f vs.length with
+        | none => simp only [heach] at h; exact (refuse_ok h).elim
+        | some q =>
+          obtain ⟨params, x, b, hi⟩ := q
+          simp only [heach] at h
+          split at h
+          next => exact (refuse_ok h).elim
+          next hnhi =>
+          obtain ⟨_, r4, g1, h⟩ := V.bind_ok h
+          have g1 : 0 ≤ ev ρ3 L := entail_sound g1 ρ3 c3.holds.facts
+          cases hk : Lin.isConst (Lin.sub (rangeBase s3 w f vs hi) L) with
+          | none => simp only [hk] at h; exact (refuse_ok h).elim
+          | some k =>
+            simp only [hk] at h
+            split at h
+            next => exact (refuse_ok h).elim
+            next hkk =>
+            simp only [Bool.or_eq_true, decide_eq_true_eq, not_or, Int.not_lt] at hkk
+            obtain ⟨s4, r5, e5, h⟩ := V.bind_ok h
+            obtain ⟨_, rfl⟩ := pure_pair h
+            have bvs : ∀ v ∈ vs, v.bounded s3.nvars := bd3
+            obtain ⟨ρ4, c4, fill⟩ := filled_sound E hw k.toNat 0 e5 c3.holds c3.wf (EnvB.zip params vs bvs) (bounded_mono c3.mono bL)
+            refine ⟨ρ4, c13.then c4, ?_⟩
+            intro run' lo' f' args' e
+            rw [hpw] at e
+            injection e with e
+            injection e with e1 e; injection e with e2 e; injection e with e3 e4
+            subst e1 e2 e3 e4
+            have eL : ev ρ2 L = ev ρ4 L := ev_agree bL (c3.then c4).agree
+            have same : vs.map (semv ctx s0 ρ3) = vs.map (semv ctx s0 ρ4) :=
+              List.map_congr_left fun v hv => semv_agree (bvs v hv) c4.agree
+            have vlo' : Value ctx.defs (placeVals ctx pl s0 st) lo (.int (ev ρ4 L)) := by
+              rw [← eL, ← env0, semEnv_agree envb c1.agree]; exact vlo
+            have vargs : Values ctx.defs (placeVals ctx pl s0 st) args (vs.map (semv ctx s0 ρ4)) := by
+              rw [← same, ← env0, semEnv_agree envb c13.agree]; exact sem3
+            have g1' : 0 ≤ ev ρ4 L := by rw [← ev_agree (bounded_mono c3.mono bL) c4.agree]; exact g1
+            refine ⟨w, r, n, ev ρ4 L, vs.map (semv ctx s0 ρ4), params, x, b, hi, hfo, hw, vlo', g1', vargs,
+              by rw [List.length_map]; exact heach, by omega, ?_⟩
+            intro j lej hj
+            have ek := ev_isConst (ρ := ρ4) hk
+            rw [ev_sub] at ek
+            by_cases near : (j : Int) < ev ρ4 L + k
+            · -- a place gone through just now
+              have := fill (j - (ev ρ4 L).toNat) (by omega)
+              have e1 : ev ρ4 L + ((0 + (j - (ev ρ4 L).toNat) : Nat) : Int) = (j : Int) := by omega
+              rw [e1, semEnv_zip] at this
+              simpa using this
+            · -- a place held since an earlier coming
+              unfold rangeBase at ek
+              cases hr : s3.range with
+              | none => rw [hr] at ek; simp only [ev_const] at ek; omega
+              | some rg =>
+                rw [hr] at ek
+                simp only at ek
+                split at ek
+                next hsame =>
+                  simp only [Bool.and_eq_true, beq_iff_eq] at hsame
+                  obtain ⟨⟨hw', hf'⟩, hargs⟩ := hsame
+                  obtain ⟨name', r', n', params', x', b', hi', q1, q2, q3, q4, q5⟩ :=
+                    RangeHolds.agree (c3.wf.range rg hr).1 (c3.wf.range rg hr).2 c4.agree (c3.holds.range rg hr)
+                  rw [hw', hw] at q1
+                  injection q1 with q1; injection q1 with _ q1; injection q1 with q1 qn
+                  subst q1 qn
+                  rw [hf', hargs, heach] at q2
+                  injection q2 with q2
+                  injection q2 with p1 q2; injection q2 with p2 q2; injection q2 with p3 p4
+                  subst p1 p2 p3 p4
+                  have := q5 j (by omega) hj
+                  rw [hargs] at this
+                  exact this
+                next => simp only [ev_const] at ek; omega
+
+
+/-- What a place says a loop has written, taken as known in the place's general state: it is so there. -/
+theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+    {g' : Sym} {items rest : Items}
+    (h : supposeRange ctx pl g items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
+    (says : RangeSays ctx pl s0 st) : ∃ ρ', Carried ctx s0 ρ g ρ' g' st := by
+  unfold supposeRange at h
+  cases hpw : pl.wrote with
+  | none =>
+    simp only [hpw] at h
+    have := V.pure_ok h
+    injection this with h1 _
+    subst h1
+    exact ⟨ρ, Carried.here H wf⟩
+  | some q =>
+    obtain ⟨run, lo, f, args⟩ := q
+    simp only [hpw] at h
+    cases hfo : findOutNamed run ctx.contract.outs 0 with
+    | none => simp only [hfo] at h; exact (refuse_ok h).elim
+    | some wn =>
+      obtain ⟨w, n⟩ := wn
+      simp only [hfo] at h
+      have envb : EnvB g.nvars (placeEnv ctx pl g.reg) := placeEnv_bounded pl wf hn
+      have env0 := semEnv_placeEnv (ctx := ctx) pl H.entry H.reg hn
+      obtain ⟨⟨rlo, g1⟩, r1, e1, h⟩ := V.bind_ok h
+      obtain ⟨⟨L, g2⟩, r2, e2, h⟩ := V.bind_ok h
+      obtain ⟨⟨res, g3⟩, r3, e3, h⟩ := V.bind_ok h
+      obtain ⟨ρ1, c1, sem1, bd1⟩ := seval_sound E _ lo e1 H wf envb
+      obtain ⟨ρ2, c2, vlo, bL⟩ := numberV_sound (opener_sound E DEEP) c1.holds c1.wf e2 sem1 bd1
+      have c12 := c1.then c2
+      obtain ⟨ρ3, c3, sem3, bd3⟩ := seval_sound E _ args e3 c2.holds c2.wf (envb.mono c12.mono)
+      have c13 := c12.then c3
+      cases res with
+      | val _ => exact (refuse_ok h).elim
+      | tail _ => exact (refuse_ok h).elim
+      | list vs =>
+        simp only at h
+        have := V.pure_ok h
+        injection this with h1 _
+        subst h1
+        have bvs : ∀ v ∈ vs, v.bounded g3.nvars := bd3
+        obtain ⟨w', r, n', a, vsem, params, x, b, hi, hfo', hw, va, a0, vargs, heach, hin, hall⟩ := says run lo f args hpw
+        rw [hfo] at hfo'
+        injection hfo' with hfo'
+        injection hfo' with hw' hn'
+        subst hw' hn'
+        have eL : ev ρ2 L = ev ρ3 L := ev_agree bL c3.agree
+        have vlo' : Value ctx.defs (placeVals ctx pl s0 st) lo (.int (ev ρ3 L)) := by
+          rw [← eL, ← env0, semEnv_agree envb c1.agree]; exact vlo
+        have ea : a = ev ρ3 L := by
+          have := Value.unique va vlo'
+          injection this
+        have vargs' : Values ctx.defs (placeVals ctx pl s0 st) args (vs.map (semv ctx s0 ρ3)) := by
+          rw [← env0, semEnv_agree envb c13.agree]; exact sem3
+        have evs : vsem = vs.map (semv ctx s0 ρ3) := Values.unique vargs vargs'
+        subst evs
+        rw [List.length_map] at heach
+        refine ⟨ρ3, c13.agree, c13.mono, c3.holds.setRange ⟨w, L, f, vs⟩ ?_, c3.wf.setRange ⟨w, L, f, vs⟩ (bounded_mono c3.mono bL) bvs⟩
+        exact ⟨run, r, n, params, x, b, hi, hw, heach, hin, by rw [← ea]; exact a0, fun j lej hj => hall j (by rw [ea]; exact lej) hj⟩
+
 /-- What a place says of a state of the machine there, `first` being what the verifier held when a path
 first came there and `ρs` what its unknowns then were: those unknowns are still what they were, the
 registers kept and the frame are as `first` has them, memory outside the frame is as at entry, the
@@ -471,6 +662,7 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
   mem : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.mem a = s0.mem a
   facts : ∀ e ∈ pl.facts, Asserts ctx.defs (placeVals ctx pl s0 st) e
   lanes : ∀ L ∈ pl.lanes, ∀ i, i < 16 → LaneSays ctx pl s0 st L i
+  wrote : RangeSays ctx pl s0 st
 
 theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
   have le : first.nvars ≤ first.nvars + 16 := Nat.le_add_right _ _
@@ -479,7 +671,7 @@ theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.genera
           (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m),
           ⟨wf.words.table, fun j r h => bounded_mono le (wf.words.atoms j r h), fun x ids h => by simp [Sym.general] at h,
            wf.words.rotrs, (fun w j i h => by simp [Sym.general] at h), fun _ _ h => nomatch h⟩,
-          fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m)⟩
+          fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m), fun _ h => nomatch h⟩
   · intro r hr
     show bounded (first.nvars + 16) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     split
@@ -521,7 +713,7 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
   refine ⟨hentry, ?_, A.small, trivial, trivial, ?_, ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
     ⟨(fun x ids h => by simp [Sym.general] at h), (fun w m => by simp [Sym.general] at m),
      (fun w j i m => by simp [Sym.general] at m), fun _ _ h => nomatch h⟩,
-    Hg.known⟩
+    Hg.known, fun _ h => nomatch h⟩
   · intro r hr
     show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     by_cases hk : pl.keep.contains r = true
@@ -583,18 +775,22 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       intro L mL
       have all : pl.lanes.all (lanesShown ctx pl s1) = true := by simpa using hshown
       exact List.all_eq_true.mp all L mL
+    obtain ⟨⟨got, s1b⟩, rb, eb, h⟩ := V.bind_ok h
     obtain ⟨g1, r2, e2, h⟩ := V.bind_ok h
     obtain ⟨gl, rl, el, h⟩ := V.bind_ok h
+    obtain ⟨gr, rr, er, h⟩ := V.bind_ok h
     obtain ⟨⟨dres, g2⟩, r3, e3, h⟩ := V.bind_ok h
     have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hnames
-    obtain ⟨ρ1, c1, a1⟩ := establish_all E _ pl.facts e1 H wf envb
+    obtain ⟨ρ1, c1', a1⟩ := establish_all E _ pl.facts e1 H wf envb
+    obtain ⟨ρ1b, c1b, says⟩ := rangeShown_sound E pl hnames eb c1'.holds c1'.wf
+    have c1 := c1'.then c1b
     have env1 : semEnv ctx s0 ρ1 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
-      rw [← semEnv_agree envb c1.agree]
+      rw [← semEnv_agree envb c1'.agree]
       exact semEnv_placeEnv pl H.entry H.reg hnames
-    have first_at : AtPlace ctx pl s0 s1 ρ1 ρ1 st :=
+    have first_at : AtPlace ctx pl s0 s1b ρ1b ρ1b st :=
       ⟨Agree.refl _ _, c1.holds.entry, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
        fun e m => by rw [← env1]; exact a1 e m,
-       fun L mL => lanesShown_sound E pl c1.holds c1.wf hnames (shown L mL)⟩
+       fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hnames (shown L mL), says⟩
     cases dres with
     | list _ => exact (refuse_ok h).elim
     | tail _ => exact (refuse_ok h).elim
@@ -610,28 +806,30 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         injection h1 with hg h2
         injection h2 with hd hf
         rw [hg, hd, hf]
-        have G : ∀ ρ' st', AtPlace ctx pl s0 s1 ρ1 ρ' st' →
-            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF g2 ∧ s1.nvars ≤ g2.nvars ∧ Agree s1.nvars ρ' ρ'' ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
+        have G : ∀ ρ' st', AtPlace ctx pl s0 s1b ρ1b ρ' st' →
+            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF g2 ∧ s1b.nvars ≤ g2.nvars ∧ Agree s1b.nvars ρ' ρ'' ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
               Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d')) := by
           intro ρ' st' A
           have H0 := general_holds pl c1.wf c1.holds A
-          have ag0 : Agree s1.nvars ρ' (fun k => if s1.nvars ≤ k ∧ k < s1.nvars + 16 then (st'.reg (k - s1.nvars) : Int) else ρ' k) := by
+          have ag0 : Agree s1b.nvars ρ' (fun k => if s1b.nvars ≤ k ∧ k < s1b.nvars + 16 then (st'.reg (k - s1b.nvars) : Int) else ρ' k) := by
             intro k hk
-            show ρ' k = if s1.nvars ≤ k ∧ k < s1.nvars + 16 then (st'.reg (k - s1.nvars) : Int) else ρ' k
+            show ρ' k = if s1b.nvars ≤ k ∧ k < s1b.nvars + 16 then (st'.reg (k - s1b.nvars) : Int) else ρ' k
             rw [if_neg (by omega)]
           have w0 := general_wf pl c1.wf
-          have envb0 : EnvB (s1.general pl).nvars (placeEnv ctx pl (s1.general pl).reg) := placeEnv_bounded pl w0 hnames
+          have envb0 : EnvB (s1b.general pl).nvars (placeEnv ctx pl (s1b.general pl).reg) := placeEnv_bounded pl w0 hnames
           have env0 := semEnv_placeEnv (ctx := ctx) pl H0.entry H0.reg hnames
           obtain ⟨ρa, ca⟩ := suppose_all E _ pl.facts e2 H0 w0 envb0 (fun e m => by rw [env0]; exact A.facts e m)
-          obtain ⟨ρl, cl⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
+          obtain ⟨ρl, cl'⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
+          obtain ⟨ρr, cr⟩ := supposeRange_sound E pl hnames er cl'.holds cl'.wf A.wrote
+          have cl := cl'.then cr
           obtain ⟨ρb, cb, sem, bd⟩ := seval_sound E _ pl.decreases e3 cl.holds cl.wf (envb0.mono (ca.then cl).mono)
-          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1.general pl).reg) = placeVals ctx pl s0 st' := by
+          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1b.general pl).reg) = placeVals ctx pl s0 st' := by
             rw [← semEnv_agree envb0 (ca.then (cl.then cb)).agree]; exact env0
           rw [env2] at sem
           exact ⟨ρb, cb.holds, cb.wf, Nat.le_trans (Nat.le_add_right _ 16) (ca.then (cl.then cb)).mono,
                  Agree.trans (Nat.le_add_right _ 16) ag0 (ca.then (cl.then cb)).agree, bd, entail_sound e4 ρb cb.holds.facts, sem⟩
-        obtain ⟨ρx, Hx, wg, leg, _, bdd, _, _⟩ := G ρ1 st first_at
-        refine ⟨hnames, ρ1, c1.agree, c1.mono, first_at, wg, leg, bdd, ?_⟩
+        obtain ⟨ρx, Hx, wg, leg, _, bdd, _, _⟩ := G ρ1b st first_at
+        refine ⟨hnames, ρ1b, c1.agree, c1.mono, first_at, wg, leg, bdd, ?_⟩
         intro ρ' st' A
         obtain ⟨ρ'', Hh, _, _, agx, _, pos, val⟩ := G ρ' st' A
         exact ⟨ρ'', Hh, agx, pos, val⟩
@@ -674,18 +872,21 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         intro L mL
         have all : pl.lanes.all (lanesShown ctx pl s1) = true := by simpa using hshown
         exact List.all_eq_true.mp all L mL
+      obtain ⟨⟨got, s1b⟩, rb, eb, h⟩ := V.bind_ok h
       obtain ⟨⟨dres, s2⟩, r2, e2, h⟩ := V.bind_ok h
       have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hn
       have env0 := semEnv_placeEnv (ctx := ctx) pl H.entry H.reg hn
-      obtain ⟨ρ1, c1, a1⟩ := establish_all E _ pl.facts e1 H wf envb
+      obtain ⟨ρ1, c1', a1⟩ := establish_all E _ pl.facts e1 H wf envb
+      obtain ⟨ρ1b, c1b, says⟩ := rangeShown_sound E pl hn eb c1'.holds c1'.wf
+      have c1 := c1'.then c1b
       obtain ⟨ρ2, c2, sem, bd⟩ := seval_sound E _ pl.decreases e2 c1.holds c1.wf (envb.mono c1.mono)
       have env1 : semEnv ctx s0 ρ1 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
-        rw [← semEnv_agree envb c1.agree]; exact env0
+        rw [← semEnv_agree envb c1'.agree]; exact env0
       have env2 : semEnv ctx s0 ρ2 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
         rw [← semEnv_agree envb (c1.then c2).agree]; exact env0
       refine ⟨⟨Agree.refl _ _, H.entry, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
                (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m),
-               fun L mL => lanesShown_sound E pl c1.holds c1.wf hn (shown L mL)⟩, ?_⟩
+               fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL), says⟩, ?_⟩
       cases dres with
       | list _ => exact (refuse_ok h).elim
       | tail _ => exact (refuse_ok h).elim

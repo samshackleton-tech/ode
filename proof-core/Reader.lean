@@ -152,6 +152,7 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     | none => throw s!"cannot read {line}"
   | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
+  | "marked" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with marked := p.marked ++ rs }
   | "fact" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with facts := p.facts ++ [e] }
   | "decreases" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with decreases := e }
   | "lane" :: x :: more => do
@@ -161,6 +162,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     match ← readSExpr (rest line (3 + regs.length)) with
     | .call f args => inPlace fun p => { p with lanes := p.lanes ++ [⟨rs, x, f, args⟩] }
     | _ => throw s!"refused: a place's lanes are said by the use of a definition: {line}"
+  | "wrote" :: run :: _ => do
+    -- wrote RUN (index (call F THING …) LO): from the place LO on, the run holds the list F gives, place by place
+    match ← readSExpr (rest line 2) with
+    | .index (.call f args) lo => inPlace fun p => { p with wrote := some (run, lo, f, args) }
+    | _ => throw s!"refused: what a place says is written is said by the use of a definition, from a place on: {line}"
   | ["t", name] => onCur fun g => pure { g with proof := g.proof ++ [.tag name 0] }
   | ["t", name, n] => match n.toNat? with
     | some n => onCur fun g => pure { g with proof := g.proof ++ [.tag name n] }

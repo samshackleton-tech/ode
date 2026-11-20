@@ -15,7 +15,7 @@ so of any state with the same ones (whatever its place in the code, its marks an
 theorem Holds.fields {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st st' : State} (H : Holds ctx s0 ρ s st)
     (hr : st'.reg = st.reg) (hz : st'.zf = st.zf) (hc : st'.cf = st.cf) (hm : st'.mem = st.mem) (hv : st'.vec = st.vec) :
     Holds ctx s0 ρ s st' := by
-  refine ⟨H.entry, ?_, ?_, ?_, ?_, ?_, H.facts, H.bytes, H.spec, ?_, ?_, ?_, H.known⟩
+  refine ⟨H.entry, ?_, ?_, ?_, ?_, ?_, H.facts, H.bytes, H.spec, ?_, ?_, ?_, H.known, by rw [hm]; exact H.range⟩
   · rw [hr]; exact H.reg
   · rw [hr]; exact H.small
   · rw [hz]; exact H.zf
@@ -102,10 +102,10 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
     exact ⟨Agree.refl _ _, Nat.le_refl _,
       ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame,
        fun g m => (List.mem_append.mp m).elim (entails_sound H.facts hc g) (H.facts g),
-       H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩,
+       H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩,
       ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
        fun _ m => (List.mem_append.mp m).elim (fun mg => stackGoals_bounded wf (List.mem_filter.mp mg).1) (wf.facts _),
-       wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩⟩
+       wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩⟩
   | some sp =>
     simp only [settle, hsp] at h
     split at h
@@ -115,9 +115,9 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
       subst h1
       exact ⟨Agree.refl _ _, Nat.le_refl _,
         ⟨H.entry, H.reg, H.small, H.zf, H.cf, fun o v m => H.frame o v (List.mem_filter.mp m).1, H.facts, H.bytes, H.spec, H.mem, H.wrote,
-         ⟨H.words.vec, H.words.intact, H.words.wrote, fun _ _ h => nomatch h⟩, H.known⟩,
+         ⟨H.words.vec, H.words.intact, H.words.wrote, fun _ _ h => nomatch h⟩, H.known, H.range⟩,
         ⟨wf.base, wf.reg, wf.zf, wf.cf, fun o v m => wf.frame o v (List.mem_filter.mp m).1, wf.facts, wf.bytes, wf.spec, wf.wrote,
-         wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩⟩
+         wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩⟩
     next => exact (refuse_ok h).elim
 
 /-! ## A jump on a flag -/
@@ -580,7 +580,7 @@ theorem Relied.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : St
   obtain ⟨hn, hf, hd, run⟩ := T e m
   refine ⟨hn, Nat.le_trans hf le, bounded_mono le hd, ?_⟩
   intro ρx stx A hrip Mx ⟨k, val, lt⟩
-  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes⟩ hrip Mx ⟨k, val, ?_⟩
+  refine run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf a) A.outer, A.entry, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes, A.wrote⟩ hrip Mx ⟨k, val, ?_⟩
   rw [ev_agree hd a]
   exact lt
 
@@ -627,7 +627,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
           obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
           have T1 : Relied world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
           have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
-              MarksOk ctx s0 { regq := s'.q.regq } stx →
+              MarksOk ctx s0 { regq := placeQuiet pl s'.q.regq } stx →
               Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
               Runs world (ctx.contract.perm s0) p (ctx.contract.left ctx.defs s0) stx := by
             intro n
@@ -645,7 +645,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
                 refine ⟨hn, leg, hd, ?_⟩
                 intro ρy sty Ay hripy My ⟨k, valy, lty⟩
                 have Ay1 : AtPlace ctx pl s0 first ρ1 ρy sty :=
-                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes⟩
+                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes, Ay.wrote⟩
                 obtain ⟨ρz, _, _, posz, valz⟩ := G ρy sty Ay1
                 have samez := Value.unique valy valz
                 injection samez with samez
@@ -654,7 +654,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
                 exact ih k.toNat small ρy sty Ay1 hripy My (by rw [Int.toNat_of_nonneg (by omega)]; exact valy)
               | tail _ me => exact (T1.carried leg a1) e me
           obtain ⟨ρ'', _, _, pos, val⟩ := G ρ1 st' A1
-          exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip') ⟨M'.reg, (fun x => by cases x), (fun x => by cases x), M'.stable⟩ (by rw [Int.toNat_of_nonneg pos]; exact val)
+          exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip') (M'.fewer (placeQuiet_all pl s'.q.regq)) (by rw [Int.toNat_of_nonneg pos]; exact val)
 
 /-! ## The entry, and the theorem -/
 
@@ -668,12 +668,12 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
            (fun _ _ _ m => nomatch m),
            ⟨(fun x ids h => by simp [entrySym] at h), (fun _ _ _ _ _ _ _ _ => rfl),
             (fun w j i m => by simp [entrySym] at m), fun _ _ h => nomatch h⟩,
-           (fun k m => by simp [entrySym] at m)⟩,
+           (fun k m => by simp [entrySym] at m), fun _ h => nomatch h⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var hr, trivial, trivial, ?_, ?_, ?_, ?_, (fun _ _ _ m => nomatch m),
            ⟨fun i n h => by simp [entrySym, Sym.terms, Tab.list] at h, fun j r h => by simp [entrySym, Sym.terms, Tab.list] at h,
             fun x ids h => by simp [entrySym] at h,
             (fun j a n h => by simp [entrySym, Sym.terms, Tab.list] at h), (fun w j i h => by simp [entrySym] at h), fun _ _ h => nomatch h⟩,
-           (fun k m => by simp [entrySym] at m)⟩⟩
+           (fun k m => by simp [entrySym] at m), fun _ h => nomatch h⟩⟩
   · intro o v m; cases m
   · intro f m
     simp only [entrySym, entryFacts, List.mem_append] at m

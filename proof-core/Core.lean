@@ -366,6 +366,17 @@ structure SMarks where
   cq : Bool := false
   deriving Inhabited
 
+/-- What a loop has written so far, as a place says it: each place `j` of the run `w` (a run given to
+write, by its number), from the place `lo` on, holds thing `j` of the list that the definition `f` gives of
+the things `args`. The definition is a list made thing by thing, `[e for x in 0..hi]`: the places go up
+to `hi`. -/
+structure RangeF where
+  w : Nat
+  lo : Row
+  f : String
+  args : List SVal
+  deriving Inhabited
+
 structure Sym where
   reg : Nat → Row                 -- the sixteen registers
   zf : Flag
@@ -384,6 +395,7 @@ structure Sym where
   known : List Known := []        -- what is known of numbers that are no rows
   divs : List (Row × Int × Nat) := []   -- the divisions made (the number, the divisor, the quotient's unknown): advice for `divided`, and nothing rests on it
   q : SMarks := {}                -- what is known not to be marked
+  range : Option RangeF := none   -- what a place says a loop has written so far, where one says so
   deriving Inhabited
 
 /-- The terms of the table of words, in order. -/
@@ -406,6 +418,9 @@ structure Place where
   facts : List SExpr
   decreases : SExpr
   lanes : List PlaceLanes := []   -- what the vector registers hold there
+  marked : List Nat := []         -- registers that may depend on a secret on a later coming there (they need not on the first)
+  wrote : Option (String × SExpr × String × SExpr) := none
+                                  -- (run, lo, f, args): from the place `lo` on, the run given to write holds the list `f(args)`, place by place
   deriving Inhabited
 
 structure Ctx where
@@ -1035,7 +1050,7 @@ def aligned64 (a : Row) : Bool := a.coeff.all (fun x => x % 64 == 0) && a.consta
 def symTouchFrame (ctx : Ctx) (s : Sym) (a : Row) : V Sym := do
   each (entail s.facts) (frameSpanGoals ctx s a 1)
   each (entail s.facts) (savedWordGoals s a 1)
-  pure { s with spill := [] }
+  pure { s with spill := [], range := none }
 
 /-- Two aligned 64-byte cells of the frame that are known not to overlap: their offsets differ by a
 number alone, of 64 or more. -/
@@ -1060,7 +1075,7 @@ def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : Li
     if aligned64 a then do
       each (entail s.facts) (frameSpanGoals ctx s a 64)
       each (entail s.facts) (savedWordGoals s a 64)
-      pure { s with spill := (frameOffset a, l) :: s.spill.filter fun (o, _) => cellsApart o (frameOffset a) }
+      pure { s with range := none, spill := (frameOffset a, l) :: s.spill.filter fun (o, _) => cellsApart o (frameOffset a) }
     else refuse "the vector store's address is not known to be 64-byte aligned"
   | none => refuse "the aligned vector store needs a known address"
 
@@ -1113,13 +1128,20 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
+/-- Where a place has said what the run `w` holds from some place on, a byte written to the run at `o` goes
+below that. -/
+def belowRange (s : Sym) (w : Nat) (o : Row) : V Unit :=
+  match s.range with
+  | some rg => if rg.w == w then entail s.facts (Lin.sub (Lin.sub rg.lo o) (Lin.const 1)) else pure ()
+  | none => pure ()
+
 /-- Keep only the lanes the machine model preserves across `above128 = unknown`. -/
 def forgetHigh (vec : List (Nat × List Nat)) : List (Nat × List Nat) :=
   vec.map fun (r, lanes) => (r, if r < 16 then lanes.take 4 else lanes)
 
 /-- Replace the known words at the store's offsets. Other word stores remain in force. -/
 def rememberStore (s : Sym) (w j : Nat) (l : List Nat) : Sym :=
-  { s with intact := s.intact.filter (· != w), spill := [],
+  { s with intact := s.intact.filter (· != w), spill := [], range := none,
            wroteW := ((List.range l.length).map fun i => (w, j + i, l.getD i 0)) ++
                      s.wroteW.filter fun e => !(e.1 == w && decide (j ≤ e.2.1) && decide (e.2.1 < j + l.length)) }
 
@@ -1212,7 +1234,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
           match locate ctx (Lin.add (signed a) (signed b)) with
           | some (.frame c) =>
             if memSize f = some 8 ∧ inFrame ctx s c = true then
-              pure { s with spill := [], frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+              pure { s with spill := [], range := none, frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
             else refuse "a write that is not eight bytes of the frame in use"
           | some (.out w o) =>
             -- one byte, at a place shown to be within the run, the byte shown to be one (0 to 255)
@@ -1226,7 +1248,9 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
                 if s.wroteW.any (fun e => e.1 == w) then refuse "a byte written to a run that words were written to: not here yet"
                 else
                 match keepWrote w o s.wrote with
-                | some rest => pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := [] }
+                | some rest => do
+                  belowRange s w o
+                  pure { s with wrote := (w, o, x) :: rest, intact := s.intact.filter (· != w), spill := [] }
                 | none => refuse "a write at a place not known apart from one written before: not here yet"
               else refuse "a write of more than one byte to a run given to write: not here yet"
             | none => refuse "no such run of bytes"
@@ -1646,13 +1670,75 @@ def written (facts : List Row) (wrote : List (Nat × Row × Row)) (w : Nat) (lo 
       written facts wrote w lo (k + 1) more
     | none => refuse "an `ensures`: a byte of the run is not known written"
 
+/-- The definition `f`, where it is a list made thing by thing from 0 on, used with `n` things: its
+names, the name of the place, what the thing at a place is, and how many things there are. -/
+def eachOf (ctx : Ctx) (f : String) (n : Nat) : Option (List String × String × SExpr × Nat) :=
+  if f == "len" || own.contains f then none
+  else match findDef ctx.defs f with
+    | some d =>
+      match d.body with
+      | .each b x (.num 0) (.num hi) => if d.params.length == n && decide (0 ≤ hi) then some (d.params, x, b, hi.toNat) else none
+      | _ => none
+    | none => none
+
+/-- The places `lo + k`, `lo + k + 1`, … (`count` of them) of the run `w` are known written, each with the
+thing the list has there: `b` with the name `x` standing for the place. -/
+def filled (ctx : Ctx) (env : List (String × SVal)) (x : String) (b : SExpr) (w : Nat) (lo : Row) : Nat → Nat → Sym → V Sym
+  | _, 0, s => pure s
+  | k, count + 1, s => do
+    let here := Lin.add lo (Lin.const (k : Int))
+    match wroteAt w here s.wrote with
+    | none => refuse "a place: a byte of the run is not known written"
+    | some byte => do
+      let (v, s) ← seval ctx ((x, .lin here) :: env) s b
+      match v with
+      | .val (.lin v) => do
+        entail s.facts (Lin.sub v byte)
+        entail s.facts (Lin.sub byte v)
+        filled ctx env x b w lo (k + 1) count s
+      | _ => refuse "a place: a thing of the list is no number"
+
+/-- `ensures RUN[lo .. hi] = f(args)` by what a place has said is written of the run: the same list, from
+place 0 on, to its end. -/
+def symEnsureRange (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : Ensure) (w : Nat) (rg : RangeF) (args : SExpr) : V Sym := do
+  let (vs, s) ← seval ctx env s args
+  match vs with
+  | .list vs =>
+    if vs != rg.args then refuse "an `ensures`: the list is of other things than the place said"
+    else match eachOf ctx rg.f vs.length with
+      | none => refuse "an `ensures`: no list made thing by thing"
+      | some (_, _, _, hi) => do
+        let (lo, s) ← seval ctx env s e.lo
+        let (lo, s) ← numberV (opener ctx DEEP) s lo
+        let (top, s) ← seval ctx env s e.hi
+        let (top, s) ← numberV (opener ctx DEEP) s top
+        entail s.facts lo
+        entail s.facts (Lin.scale (-1) lo)
+        entail s.facts (Lin.sub top (Lin.const hi))
+        entail s.facts (Lin.sub (Lin.const hi) top)
+        entail s.facts (Lin.scale (-1) rg.lo)
+        if w != rg.w then refuse "an `ensures`: another run than the place said" else pure s
+  | _ => refuse "an `ensures`: a definition used with what is no list of things"
+
+/-- The list an `ensures` speaks of is the use of the definition of which a place has said what is written:
+what the place said, and the things the definition is used with here. -/
+def rangeFor (s : Sym) : SExpr → Option (RangeF × SExpr)
+  | .call f args =>
+    match s.range with
+    | some rg => if rg.f == f then some (rg, args) else none
+    | none => none
+  | _ => none
+
 /-- One `ensures RUN[lo .. hi] = LIST`, at the return: the list thing by thing, `lo` no less than zero,
 `hi - lo` as many as the list's things, `hi` within the run, and each of the places known written with
 the list's thing. -/
 def symEnsure (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : Ensure) : V Sym :=
   match findOutNamed e.run ctx.contract.outs 0 with
   | none => refuse "an `ensures` of what is no run given to write"
-  | some (w, n) => do
+  | some (w, n) =>
+    match rangeFor s e.value with
+    | some (rg, args) => symEnsureRange ctx env s e w rg args
+    | none => do
     let (rows, s) ← slist ctx LIST env s e.value
     let (lo, s) ← seval ctx env s e.lo
     let (lo, s) ← numberV (opener ctx DEEP) s lo
@@ -2598,6 +2684,64 @@ def supposeLanes (ctx : Ctx) (p : Place) (g : Sym) (L : PlaceLanes) : V Sym :=
     | some keys => pure (g.withLanes L keys)
     | none => refuse "what a place says of vector registers is not followed in its general state"
 
+/-- The place from which the state already holds the run `w` as written with the list `f(vs)`, by an earlier
+coming to the place; where it holds nothing of that, the list's end. -/
+def rangeBase (s : Sym) (w : Nat) (f : String) (vs : List SVal) (hi : Nat) : Row :=
+  match s.range with
+  | some rg => if rg.w == w && rg.f == f && rg.args == vs then rg.lo else Lin.const hi
+  | none => Lin.const hi
+
+/-- The most places a place's range may grow by at one coming there. -/
+def GROW : Int := 64
+
+/-- What the place says a loop has written is so of this state: the places from `lo` on that the state
+does not already hold as written by an earlier coming (`Sym.range`) are known written, each with the
+list's thing. Given back: the run's number, `lo`, and the things the definition is used with. -/
+def rangeShown (ctx : Ctx) (p : Place) (s : Sym) : V (Option RangeF × Sym) :=
+  match p.wrote with
+  | none => pure (none, s)
+  | some (run, lo, f, args) =>
+    match findOutNamed run ctx.contract.outs 0 with
+    | none => refuse "a place says what is written of what is no run given to write"
+    | some (w, n) => do
+      let env := placeEnv ctx p s.reg
+      let (lo, s) ← seval ctx env s lo
+      let (lo, s) ← numberV (opener ctx DEEP) s lo
+      let (vs, s) ← seval ctx env s args
+      match vs with
+      | .list vs =>
+        match eachOf ctx f vs.length with
+        | none => refuse "a place says what is written by what is no list made thing by thing from 0 on"
+        | some (params, x, b, hi) =>
+          if n < hi then refuse "a place says more is written than the run has places"
+          else do
+            entail s.facts lo
+            match Lin.isConst (Lin.sub (rangeBase s w f vs hi) lo) with
+            | some k =>
+              if k < 0 || GROW < k then refuse "a place: what is written does not reach from where the place says"
+              else do
+                let s ← filled ctx (params.zip vs) x b w lo 0 k.toNat s
+                pure (some ⟨w, lo, f, vs⟩, s)
+            | none => refuse "a place: where the written places begin is not known by a number from where they began before"
+      | _ => refuse "a place: a definition used with what is no list of things"
+
+/-- In the state that stands for every coming to the place: what the place says a loop has written is taken
+as known. -/
+def supposeRange (ctx : Ctx) (p : Place) (g : Sym) : V Sym :=
+  match p.wrote with
+  | none => pure g
+  | some (run, lo, f, args) =>
+    match findOutNamed run ctx.contract.outs 0 with
+    | none => refuse "a place says what is written of what is no run given to write"
+    | some (w, _) => do
+      let env := placeEnv ctx p g.reg
+      let (lo, g) ← seval ctx env g lo
+      let (lo, g) ← numberV (opener ctx DEEP) g lo
+      let (vs, g) ← seval ctx env g args
+      match vs with
+      | .list vs => pure { g with range := some ⟨w, lo, f, vs⟩ }
+      | _ => refuse "a place: a definition used with what is no list of things"
+
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for
 every coming there, of which the place's facts are taken as known, and its number that decreases, which is
 shown to be no less than zero. Given back with them: the state as it first came, with which every later
@@ -2609,8 +2753,10 @@ def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
     if !(p.lanes.all (lanesShown ctx p s)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
     else do
+      let (_, s) ← rangeShown ctx p s
       let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
       let g ← fold (supposeLanes ctx p) g p.lanes
+      let g ← supposeRange ctx p g
       let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
       match d with
       | .val (.lin d) => do
@@ -2625,13 +2771,14 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   match p.keep.find? fun r => s.reg r != first.reg r with
   | some r => refuse s!"at the place {p.pc} register {r} does not hold what it held on first coming there"
   | none =>
-  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} a register may depend on a secret that did not on first coming there"
+  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on a secret, which it did not on first coming there"
   else
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
     let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
     if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
     else do
+      let (_, s1) ← rangeShown ctx p s1
       let (d', s2) ← seval ctx (placeEnv ctx p s.reg) s1 p.decreases
       match d' with
       | .val (.lin d') => entail s2.facts (Lin.sub (Lin.sub d d') (Lin.const 1))
@@ -2643,6 +2790,11 @@ structure Seen where
   place : Place
   d : Row
   first : Sym
+
+/-- Of the registers known not to be marked on first coming to a place, those the place does not say may be
+marked on a later coming. -/
+def placeQuiet (p : Place) (regq : List Nat) : List Nat :=
+  regq.filter fun r => !p.marked.contains r
 
 /-- Where a path goes on after an instruction. At the function's return it ends. At a place this path has
 come to before, the coming there is shown to be one that place's general state stands for, with a number
@@ -2660,8 +2812,9 @@ def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V 
       | some e => arrive ctx e.place e.first e.d next.1
       | none => do
         let (g, d, first) ← generalize ctx p next.1
-        -- (what is known not to be marked at the place: the registers that are not on this first coming)
-        go (⟨p, d, { first with q := next.1.q }⟩ :: seen) { g with q := { regq := next.1.q.regq } } pc'
+        -- (what is known not to be marked at the place: the registers that are not on this first coming,
+        -- but for those the place says may be on a later one)
+        go (⟨p, d, { first with q := { regq := placeQuiet p next.1.q.regq } }⟩ :: seen) { g with q := { regq := placeQuiet p next.1.q.regq } } pc'
 
 /-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
 def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit

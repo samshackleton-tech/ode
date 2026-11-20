@@ -119,6 +119,7 @@ structure WF (s : Sym) : Prop where
   wrote : ∀ w o x, (w, o, x) ∈ s.wrote → bounded s.nvars o ∧ bounded s.nvars x
   words : WordsWF s
   known : ∀ k ∈ s.known, k.wf s.nvars s.terms.length
+  range : ∀ rg, s.range = some rg → bounded s.nvars rg.lo ∧ ∀ v ∈ rg.args, v.bounded s.nvars
 
 /-! ## A contract with no table of addresses -/
 
@@ -244,6 +245,15 @@ def Flag.holds (ρ : Nat → Int) (set : Bool) : Flag → Prop
   | .equal a b => set = decide (ev ρ a = ev ρ b)
   | .below a b => set = decide (ev ρ a < ev ρ b)
 
+/-- What a place has said a loop has written is so of memory: the run is one given to write; the definition
+is a list made thing by thing, of no more things than the run has places; and each place from `lo` on holds
+the list's thing there. -/
+def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : Nat → Nat) : Prop :=
+  ∃ name r n params x b hi, ctx.contract.outs[rg.w]? = some (name, r, n) ∧
+    eachOf ctx rg.f rg.args.length = some (params, x, b, hi) ∧ hi ≤ n ∧ 0 ≤ ev ρ rg.lo ∧
+    ∀ j : Nat, ev ρ rg.lo ≤ j → j < hi →
+      Value ctx.defs ((x, .int j) :: params.zip (rg.args.map (semv ctx s0 ρ))) b (.int (mem (s0.reg r + j)))
+
 /-- What the verifier holds (`s`) is so of the machine's state `st`, the unknowns being `ρ`, and `s0` the
 state at the function's entry. -/
 structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop where
@@ -263,6 +273,7 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
     0 ≤ ev ρ o ∧ ev ρ o < n ∧ (st.mem (s0.reg r + (ev ρ o).toNat) : Int) = ev ρ x
   words : VecOk ctx s0 ρ s st
   known : ∀ k ∈ s.known, k.holds ctx s0 ρ s.terms
+  range : ∀ rg, s.range = some rg → RangeHolds ctx s0 ρ rg st.mem
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k
@@ -409,6 +420,17 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
+theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Nat} {n : Nat}
+    (bl : bounded n rg.lo) (ba : ∀ v ∈ rg.args, v.bounded n) (a : Agree n ρ ρ') (h : RangeHolds ctx s0 ρ rg mem) :
+    RangeHolds ctx s0 ρ' rg mem := by
+  obtain ⟨name, r, m, params, x, b, hi, h1, h2, h3, h4, h5⟩ := h
+  have el := ev_agree bl a
+  have ea : rg.args.map (semv ctx s0 ρ') = rg.args.map (semv ctx s0 ρ) :=
+    List.map_congr_left fun v hv => (semv_agree (ba v hv) a).symm
+  refine ⟨name, r, m, params, x, b, hi, h1, h2, h3, by rw [← el]; exact h4, fun j lo hj => ?_⟩
+  rw [ea]
+  exact h5 j (by rw [el]; exact lo) hj
+
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
     (h : Holds ctx s0 ρ s st) (wf : WF s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
   entry r hr := (a r (Nat.lt_of_lt_of_le hr wf.base)).symm.trans (h.entry r hr)
@@ -439,6 +461,7 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
     exact ⟨name, r, n, h1, by rw [← eo]; exact h2, by rw [← eo]; exact h3, by rw [← eo, ← ex]; exact h4⟩
   words := VecOk.agree wf.words a h.words
   known k m := Known.holds_mono (wf.known k m) a wf.words.table wf.words.atoms (Ext.refl _) (h.known k m)
+  range rg hr := RangeHolds.agree (wf.range rg hr).1 (wf.range rg hr).2 a (h.range rg hr)
 
 /-- More unknowns in use: the verifier's state still speaks only of unknowns in use. -/
 theorem Flag.bounded_mono {n m : Nat} {f : Flag} (h : n ≤ m) (hb : f.bounded n) : f.bounded m := by

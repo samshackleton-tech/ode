@@ -720,7 +720,7 @@ theorem symSpillStore_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
           · simp only [Prod.mk.injEq] at h
             obtain ⟨rfl, rfl⟩ := h
             exact ⟨ba, len, lt⟩
-          · exact wf.words.spill o ids (List.mem_filter.mp h).1⟩, wf.known⟩
+          · exact wf.words.spill o ids (List.mem_filter.mp h).1⟩, wf.known, fun _ h => nomatch h⟩
   next => exact (refuse_ok h).elim
 
 theorem lanesOf512_of_vecArg {perm : Perm} {bind : Bind} {st : State} {v : Expr} {lanes : List Nat}
@@ -790,14 +790,14 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           · rw [ite_eq_left rfl, eq]
             simp only [List.getD, List.getElem?_eq_getElem hk, List.getElem?_map, Option.map_some, Option.getD_some]
           · rw [ite_eq_right ne]; exact c.holds.words.vec x ids hx' k hk,
-         c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known⟩
+         c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range⟩
     · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
         ⟨c.wf.words.table, c.wf.words.atoms,
          fun x ids hx => by
            rcases lookup_cons_cases hx with ⟨_, rfl⟩ | ⟨_, hx'⟩
            · exact ⟨Or.inr len, lt⟩
            · exact c.wf.words.vec x ids hx',
-         c.wf.words.rotrs, c.wf.words.wrote, c.wf.words.spill⟩, c.wf.known⟩
+         c.wf.words.rotrs, c.wf.words.wrote, c.wf.words.spill⟩, c.wf.known, c.wf.range⟩
     · have l16 : lanes.length = 16 := by simp [eq, len]
       simp [execStmt, execVec512, ev, l16, hr]
 

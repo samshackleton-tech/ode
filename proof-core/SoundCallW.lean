@@ -371,7 +371,7 @@ theorem afterCallW_wf {s : Sym} (wf : WF s) (sp : Int) (w m : Nat) (g : String) 
   have le : s.nvars ≤ s.nvars + 16 + m := by omega
   obtain ⟨ext, ok, len, lt, _⟩ := madeW_table wf m (fun _ _ => 0) (fun _ => 0)
   refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
-    ⟨ok.wf, ok.atoms, (fun x ids h => by simp [Sym.afterCallW] at h), ok.rotrs, ?_, fun _ _ h => nomatch h⟩, ?_⟩
+    ⟨ok.wf, ok.atoms, (fun x ids h => by simp [Sym.afterCallW] at h), ok.rotrs, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
   · intro r hr
     show bounded (s.nvars + 16 + m) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
@@ -482,7 +482,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   have hold : ∀ i, i < s.terms.length →
       den (inpOf ctx s0) (afterRhoW s.nvars ρ s2 nums) (madeW s m).2 i = den (inpOf ctx s0) ρ s.terms i :=
     fun i hi => den_mono wf.words.table wf.words.atoms ag ext hi
-  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_⟩
+  refine ⟨H'.entry, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_, ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : callerSaved.contains r with

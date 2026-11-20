@@ -1,0 +1,38 @@
+for b3l_pad
+place 29
+name i r13
+fact (bin <= (name i) (num 64))
+keep rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r14 r15
+marked rax
+decreases (name i)
+wrote block (index (call padded (name src)) (name i))
+t live
+t live
+t live
+t live
+p 2 22 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 1 44 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+p 4 26 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 47 5 0
+s 2 1 0 1 1
+s 3 1 1 1 1
+q
+t lt
+p 2 24 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 45 3 0
+s 2 1 0 1 1
+s 3 1 1 1 1
+q
+t ge

@@ -189,6 +189,7 @@ theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
   have le : s.nvars ≤ s.nvars + 1 := Nat.le_succ _
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
+      range := H'.range
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
       facts := fun f m => (List.mem_append.mp m).elim (hrows f) (H'.facts f),
@@ -197,6 +198,7 @@ theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
         · exact hknown
         · exact H'.known k' m }
   · exact {
+      range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
       base := Nat.le_trans wf.base le
       reg := fun r hr => bounded_mono le (wf.reg r hr)
       zf := Flag.bounded_mono le wf.zf
@@ -223,6 +225,7 @@ theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {
   have le : s.nvars ≤ s.nvars + m := Nat.le_add_right _ _
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
+      range := H'.range
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words,
       facts := fun f m => (List.mem_append.mp m).elim (hrows f) (H'.facts f),
@@ -231,6 +234,7 @@ theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {
         · exact hknown
         · exact H'.known k' m }
   · exact {
+      range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
       base := Nat.le_trans wf.base le
       reg := fun r hr => bounded_mono le (wf.reg r hr)
       zf := Flag.bounded_mono le wf.zf
@@ -254,9 +258,11 @@ theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sy
   have le : s.nvars ≤ s.nvars + m := Nat.le_add_right _ _
   refine ⟨ag, le, ?_, ?_⟩
   · exact {
+      range := H'.range
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame, bytes := H'.bytes,
       spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, facts := H'.facts, known := H'.known }
   · exact {
+      range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
       base := Nat.le_trans wf.base le
       reg := fun r hr => bounded_mono le (wf.reg r hr)
       zf := Flag.bounded_mono le wf.zf
@@ -342,6 +348,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       have le : s.nvars ≤ s.nvars + 1 := Nat.le_succ _
       refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, bounded_var (Nat.lt_succ_self _), base, len, rfl, by rw [eo]; exact g1, by rw [eo]; omega, ?_⟩
       · exact {
+          range := H'.range
           entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
           spec := H'.spec, mem := H'.mem, wrote := H'.wrote, words := H'.words, known := H'.known,
           facts := by
@@ -363,6 +370,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               exact ⟨base, len, hreg, by rw [eo]; exact g1, by rw [eo]; omega, by rw [new, eo]⟩
             · exact H'.bytes v1 r1 o1 hm }
       · exact {
+          range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
           base := Nat.le_trans wf.base le
           reg := fun r hr => bounded_mono le (wf.reg r hr)
           zf := Flag.bounded_mono le wf.zf
@@ -889,6 +897,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
     omega
   refine ⟨ρ', ⟨ag, le, ?_, ?_⟩, nq, nr⟩
   · exact {
+      range := H'.range
       entry := H'.entry, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
       spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words, known := H'.known,
       facts := by
@@ -903,6 +912,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
           omega
         · exact H'.facts f hf }
   · exact {
+      range := fun rg hr => ⟨bounded_mono le (wf.range rg hr).1, fun v hv => SVal.bounded_mono le ((wf.range rg hr).2 v hv)⟩
       base := Nat.le_trans wf.base le
       reg := fun r hr => bounded_mono le (wf.reg r hr)
       zf := Flag.bounded_mono le wf.zf
@@ -980,6 +990,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     have br : bounded (s.nvars + 2) (Lin.var (s.nvars + 1)) := bounded_var (by omega)
     refine ⟨ρ', ⟨c.agree, c.mono, ?_, ?_⟩, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr, bq, br⟩
     · exact {
+        range := c.holds.range
         entry := c.holds.entry, reg := c.holds.reg, small := c.holds.small, zf := c.holds.zf, cf := c.holds.cf,
         frame := c.holds.frame, spec := c.holds.spec, mem := c.holds.mem, bytes := c.holds.bytes, wrote := c.holds.wrote, words := c.holds.words, known := c.holds.known,
         facts := by
@@ -999,6 +1010,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
             · rw [holds_iff, ev_var, hq]; exact Int.ediv_nonneg x0 (by omega)
             · exact c.holds.facts f hf }
     · exact {
+        range := c.wf.range
         base := c.wf.base, reg := c.wf.reg, zf := c.wf.zf, cf := c.wf.cf, frame := c.wf.frame, spec := c.wf.spec,
         bytes := c.wf.bytes, wrote := c.wf.wrote, words := c.wf.words.mono rfl rfl rfl (Nat.le_refl _), known := c.wf.known,
         facts := by
@@ -1543,20 +1555,21 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 theorem Holds.setZf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with zf := f } { st with zf := b } :=
-  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
+  ⟨H.entry, H.reg, H.small, hf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem Holds.setCf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with cf := f } { st with cf := b } :=
-  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
+  ⟨H.entry, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.setZf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with zf := f } :=
-  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
+  ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 theorem WF.setCf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with cf := f } :=
-  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
+  ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (r x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) : Holds ctx s0 ρ (s.put r xr) (setReg st r x) where
+  range := H.range
   entry := H.entry
   reg r' hr' := by
     simp only [Sym.put, setReg]
@@ -1580,6 +1593,7 @@ theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
   known := H.known
 
 theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars xr) : WF (s.put r xr) where
+  range := wf.range
   base := wf.base
   reg r' hr' := by
     simp only [Sym.put]
@@ -1610,8 +1624,9 @@ theorem Flag.below_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev
 theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) (c : Int) (h1 : -(ctx.contract.stack : Int) ≤ c) (h2 : c + 8 ≤ 0)
     (a : Nat) (ha : (a : Int) = (s0.reg RSP : Int) + c) (x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) :
-    Holds ctx s0 ρ { s with spill := [], frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
+    Holds ctx s0 ρ { s with spill := [], range := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) }
       { st with mem := store st.mem a x 8 } where
+  range := fun _ h => nomatch h
   entry := H.entry
   reg := H.reg
   small := H.small
@@ -1670,7 +1685,8 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   known := H.known
 
 theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
-    WF { s with spill := [], frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
+    WF { s with spill := [], range := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
+  range := fun _ h => nomatch h
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1688,14 +1704,39 @@ theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvar
   known := wf.known
 
 /-- One byte written into a run given to write. -/
+theorem belowRange_sound {s : Sym} {w : Nat} {o : Row} {items : Items} {r : Unit × Items} {ρ : Nat → Int}
+    (h : belowRange s w o items = .ok r) (hf : ∀ f ∈ s.facts, f.holds ρ) :
+    ∀ rg, s.range = some rg → rg.w = w → ev ρ o + 1 ≤ ev ρ rg.lo := by
+  intro rg hr hw
+  simp only [belowRange, hr, hw, beq_self_eq_true, if_true] at h
+  have := entail_sound h ρ hf
+  simp only [ev_sub, ev_const] at this
+  omega
+
 theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) {w : Nat} {name : String} {r n : Nat} (hw : ctx.contract.outs[w]? = some (name, r, n))
     (o xr : Row) (h1 : 0 ≤ ev ρ o) (h2 : ev ρ o < n) (x : Nat) (hx : x < 256) (hxr : (x : Int) = ev ρ xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest)
     (hnw : (s.wroteW.any fun e => e.1 == w) = false)
-    (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat) :
+    (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat)
+    (below : ∀ rg, s.range = some rg → rg.w = w → ev ρ o + 1 ≤ ev ρ rg.lo) :
     Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] }
       { st with mem := store st.mem a x 1 } where
+  range rg hr := by
+    obtain ⟨name', r', n', params, y, b, hi, g1, g2, g3, g4, g5⟩ := H.range rg hr
+    refine ⟨name', r', n', params, y, b, hi, g1, g2, g3, g4, fun j lo hj => ?_⟩
+    show Value ctx.defs _ b (.int (store st.mem a x 1 (s0.reg r' + j)))
+    have hne : s0.reg r' + j < a ∨ a + 1 ≤ s0.reg r' + j := by
+      by_cases e : rg.w = w
+      · have := below rg hr e
+        rw [e, hw] at g1
+        injection g1 with g1; injection g1 with _ g1; injection g1 with g1 gn
+        subst g1 gn
+        omega
+      · have := E.outOut hw g1 (Ne.symm e)
+        omega
+    rw [store_other _ _ _ _ _ hne]
+    exact g5 j lo hj
   entry := H.entry
   reg := H.reg
   small := H.small
@@ -1771,6 +1812,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) :
     WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] } where
+  range := wf.range
   base := wf.base
   reg := wf.reg
   zf := wf.zf
@@ -1822,7 +1864,8 @@ theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat
     (same : ∀ y, y < a ∨ a + n ≤ y → mem' y = st.mem y)
     (saved : ∀ o ids, (o, ids) ∈ spill → 0 ≤ (s0.reg RSP : Int) + ev ρ o ∧ ∀ k, k < ids.length →
       load mem' (((s0.reg RSP : Int) + ev ρ o).toNat + 4 * k) 4 = den (inpOf ctx s0) ρ s.terms (ids.getD k 0)) :
-    Holds ctx s0 ρ { s with spill := spill } { st with mem := mem' } where
+    Holds ctx s0 ρ { s with spill := spill, range := none } { st with mem := mem' } where
+  range := fun _ h => nomatch h
   entry := H.entry
   reg := H.reg
   small := H.small
@@ -1890,7 +1933,7 @@ theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
   · exact H.frameSpanWrite E lo hi (savedWordSpan_sound H ea (entails_sound H.facts hd))
       (fun y hy => store_other _ _ _ _ _ hy) (fun _ _ h => nomatch h)
   · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
-      wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
+      wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, fun _ h => nomatch h⟩
 
 theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -2061,6 +2104,8 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                           | none => simp only [hkw] at h; exact (refuse_ok h).elim
                           | some rest =>
                             simp only [hkw] at h
+                            obtain ⟨_, r8, gb, h⟩ := V.bind_ok h
+                            have below := belowRange_sound gb c3.holds.facts
                             have := V.pure_ok h
                             injection this with h1 _
                             subst h1
@@ -2096,7 +2141,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                             refine ⟨ρ3, { st with mem := store st.mem ((xa + xb) % M64) x 1 },
                               ⟨Agree.trans c1.mono c1.agree (Agree.trans c2.mono c2.agree c3.agree),
                                Nat.le_trans c1.mono (Nat.le_trans c2.mono c3.mono),
-                               c3.holds.writeOut E hw o xr g1 (by omega) x hx8 sx3.2.1 hkw hnw _ hadr,
+                               c3.holds.writeOut E hw o xr g1 (by omega) x hx8 sx3.2.1 hkw hnw _ hadr below,
                                c3.wf.writeOut hbo sx3.2.2 hkw⟩, ?_, rfl⟩
                             simp [execStmt, hu, vx, hsize, values_two va vb, sumList, hw1]
                         next => exact (refuse_ok h).elim

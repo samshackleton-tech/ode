@@ -586,10 +586,10 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem Holds.q {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : SMarks) :
     Holds ctx s0 ρ { s with q := x } st :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
+  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.q {s : Sym} (wf : WF s) (x : SMarks) : WF { s with q := x } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known⟩
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 theorem Carried.q {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s s' : Sym} {st : State} (c : Carried ctx s0 ρ s ρ' s' st) (x : SMarks) :
     Carried ctx s0 ρ s ρ' { s' with q := x } st := ⟨c.agree, c.mono, c.holds.q x, c.wf.q x⟩
@@ -639,6 +639,10 @@ theorem arrive_q {ctx : Ctx} {pl : Place} {first s : Sym} {d : Row} {items : Ite
     split at h
     next => exact (refuse_ok h).elim
     next hq => simpa using hq
+
+/-- The registers a place's general state takes as not marked are among those not marked on first coming. -/
+theorem placeQuiet_all (pl : Place) (regq : List Nat) : (placeQuiet pl regq).all regq.contains = true :=
+  List.all_eq_true.mpr fun r m => List.contains_iff_mem.mpr (List.mem_filter.mp m).1
 
 /-- What is so of the marks where more registers are known not to be marked is so where fewer are. -/
 theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) {regs : List Nat}

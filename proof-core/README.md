@@ -12,10 +12,11 @@ is the first version of such a core. It contains:
 
 It is not finished. Today it handles a subset of what the Python verifier in `kcheck/` handles. That is
 enough for five of the twelve small shipped functions and for a function that calls one of them. It is
-also enough for four of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+also enough for five of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one 64-byte block (one written with AVX-512 instructions and one with SSE4.1 instructions);
 `b3l_node_out`, the function that reads a node record and calls the kernel selected by its `plat`
-argument; and the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop.
+argument; the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop; and
+`b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros.
 For the rest of the hash and the other programs, `kcheck/` is still the verifier to use.
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
@@ -73,9 +74,10 @@ The functions it verifies today:
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
 | `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.37 s |
+| `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 
 `ode_equal`, `ode_low` and `ode_eighth` are small examples written for this folder. Five are shipped
-functions from `kcheck/programs/`. The last four are four of the fourteen functions in the shipped
+functions from `kcheck/programs/`. The last five are five of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
@@ -217,6 +219,19 @@ is known. Each path that comes back around the loop must re-establish the invari
 measure. Soundness for loops is proved by induction on the measure. A function may have several
 invariants, and loops may be nested.
 
+An invariant can also say what the loop has written so far to an output buffer. The line names the buffer,
+a position `lo` in it, and an application of a definition whose text is a list built element by element
+(`[e for k in 0..hi]`). It says: every position `j` of the buffer from `lo` up to `hi` holds element `j`
+of that list. On reaching the invariant the verifier checks the positions that are new since the last
+time (at most 64 of them): each must be a byte it knows was stored, equal to the element's expression
+evaluated at that position. A later single-byte store to the buffer must go below `lo`. At the return, an
+`ensures` clause that names the same application of the definition is accepted if `lo` is 0. The verifier
+never builds the whole list.
+
+An invariant can also list registers that may be marked (may depend on a secret) when a path comes back
+to it, although they were not marked the first time. Without such a line every register that was not
+marked on first arrival must still be so on every later arrival.
+
 An invariant can also say what vector registers hold. Such a line names some 512-bit registers and a
 definition of the specification, with the things the definition is applied to written in terms of a lane
 number. It says: in each of the sixteen lanes, the words of those registers are the list of words that the
@@ -309,10 +324,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 976 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 977 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,048 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,164 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -451,6 +466,15 @@ in a general register: both are refused. `test_p16.py` marks the table of block 
 refused, because the blocks are read at those addresses. The contract of `b3l_node_out` still says
 `trace depends on nd`, for the reason given above.
 
+**A loop that fills a buffer: `b3l_pad`** (`test_pad.py`). The function copies the `n` bytes of a chunk's
+last block into a 64-byte block, from the last position down, and writes zeros where the input has ended.
+Its contract is the one in `../kcheck/proofs/inner.spec`, unchanged: `ensures block = padded(src)`, where
+`padded` is `[if k < len(bytes) then bytes[k] else 0 for k in 0..64]`. The contract has no
+`trace depends on` line, so the input bytes are secret; the function branches on `n` and on its counter
+only. The loop invariant (`examples/hash/pad.places`) is four lines: the counter `i` is at most 64, the
+block holds `padded(src)` from position `i` on, and `i` decreases. The prover adds that `rax` may be
+marked on a later arrival (it holds the byte just copied). The proof is 451 bytes.
+
 ### Known limitations
 
 These are cases where the verifier rejects a correct function:
@@ -460,9 +484,12 @@ These are cases where the verifier rejects a correct function:
   can be used where the caller's contract mentions the same definition with provably equal arguments.
 - No rule yet for: AND with a constant that is not a mask, OR, shift by a register, a 4-byte load.
 - Nothing may be written below the stack pointer.
-- Output buffers of bytes: only single-byte stores; the function cannot read back what it wrote; what was written
-  before a loop invariant is forgotten at the invariant; a called function cannot write to the caller's
-  output buffer.
+- Output buffers of bytes: only single-byte stores; the function cannot read back what it wrote; single
+  bytes written before a loop invariant are forgotten at the invariant, unless the invariant says what the
+  buffer holds from some position on (one such line per invariant, growing downward, compared with a
+  definition that is a list built element by element from 0); a called function cannot write to the
+  caller's output buffer. A store to the stack frame, a vector store, or a call makes the verifier forget
+  what an invariant said about an output buffer.
 - `ensures` has one form for a buffer of bytes and one for a buffer of words, neither with a condition.
 - Buffers of words: 16-byte loads and stores only, at constant offsets that are multiples of 4. A buffer
   that is read and written cannot be read after the first store to it. Bytes and words cannot both be
@@ -661,6 +688,9 @@ specification. (The code and file names call this file the "statement".)
     decreases (bin - (name n) (name i))                the termination measure
     lane i zmm0 zmm1 = (call f …) in each lane `i` (0 to 15) the words of these vector registers are the
                                   list of words that the definition `f` gives of these things
+    wrote block (index (call f …) (name i))            from position `i` on, the output buffer `block` holds
+                                  the list that the definition `f` gives, position by position
+    marked rax                    registers that may depend on a secret on a later arrival
     t open 1                      unfold this occurrence of a definition
     t held 0 / t carry 0          reuse a value already computed for an equal call of a definition
     t live / t dead               a branch is feasible / infeasible (followed by an arithmetic proof)
@@ -776,6 +806,7 @@ version needs.
 | the AVX-512 kernel | 38 | in the specification: a rotation by 15 bits instead of 16, one constant, six rounds, two entries of the message permutation exchanged; in the code: the same kinds of change, a store past the end of the buffer, a store into the read-only block, reading back what was stored |
 | the SSE4.1 kernel | 38 | the same changes to the specification; in the contract: no bound on the length; in the code: a left shift by 19 bits instead of 20, an OR with another register, one byte of a shuffle constant, a blend that takes half a word, the flags not shifted |
 | the 16-way kernel, for every `n` | 30 | in the contract: the first and the last block's flags exchanged, one block fewer, another lane's blocks; in the code: the first block's flags kept for every block, the next block read two blocks on; in the loop invariant: the chaining value after one block more, two registers exchanged, nothing said of the vector registers |
+| `b3l_pad` | 19 | in the contract: less stack than the function uses; in the specification: padding with ones, one byte more or fewer of the input, a list of 63; in the invariant: one position more or fewer; in the code: a byte read past the end of the input, a jump on a byte of the input |
 | the 16-way kernel, one or two blocks | 14 | the last block's flags and its length exchanged; the next counter; a shift that takes the first block's flags from the wrong bits |
 
 Also rejected: a caller listed before its callee, a function that calls itself, a missing callee, and two
@@ -800,8 +831,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 977 lines (Table.lean 152, Machine.lean 461, Contract.lean 364). The
-verifier: 2,207 lines (Core.lean 2,048, Arithmetic.lean 159 including its proofs). The file parser: 159
-lines. The proofs of the theorems: 13,486 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
+verifier: 2,323 lines (Core.lean 2,164, Arithmetic.lean 159 including its proofs). The file parser: 164
+lines. The proofs of the theorems: 14,004 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
 
 ## The files
 
