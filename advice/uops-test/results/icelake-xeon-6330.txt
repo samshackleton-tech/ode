@@ -1,0 +1,21 @@
+run p16-cycles-ice-20261120T014744-d2d4f68e (under the bench lock, one thread)
+ode 53d17e328611f9552cd118740607f23a2f137995
+model name	: Intel(R) Xeon(R) Gold 6330 CPU @ 2.00GHz
+7.0.0-43-generic
+cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+b3hashr.o d955470b793ff811c841d80fc74451263b6fb977c4baffc313527984713be03d
+n 16  reps 200000  cycles a block 503.10  instructions a block 989.06  ns a block 252.127  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 501.63  instructions a block 984.52  ns a block 251.343  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 539.66  instructions a block 1080.00  ns a block 270.423  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 503.30  instructions a block 989.06  ns a block 252.961  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 501.58  instructions a block 984.52  ns a block 251.328  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 534.55  instructions a block 1080.00  ns a block 267.802  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 503.01  instructions a block 989.06  ns a block 252.022  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 501.74  instructions a block 984.52  ns a block 251.463  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 534.95  instructions a block 1080.00  ns a block 268.086  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 503.49  instructions a block 989.06  ns a block 252.272  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 501.55  instructions a block 984.52  ns a block 251.333  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 534.52  instructions a block 1080.00  ns a block 267.853  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 503.01  instructions a block 989.06  ns a block 252.025  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 501.77  instructions a block 984.52  ns a block 251.395  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 534.51  instructions a block 1080.00  ns a block 267.826  counters perf  out 6e161caa

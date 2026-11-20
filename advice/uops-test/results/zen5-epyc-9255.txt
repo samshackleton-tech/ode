@@ -1,0 +1,21 @@
+run p16-cycles-epyc9255-20261120T014743-1620e1b5 (under the bench lock, one thread)
+ode 53d17e328611f9552cd118740607f23a2f137995
+model name	: AMD EPYC 9255 24-Core Processor
+7.0.0-43-generic
+cc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+b3hashr.o d955470b793ff811c841d80fc74451263b6fb977c4baffc313527984713be03d
+n 16  reps 200000  cycles a block 390.82  instructions a block 989.06  ns a block 90.309  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 389.69  instructions a block 984.52  ns a block 90.032  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 410.49  instructions a block 1080.00  ns a block 94.812  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 390.67  instructions a block 989.06  ns a block 90.240  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 389.76  instructions a block 984.52  ns a block 90.029  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 410.56  instructions a block 1080.00  ns a block 94.823  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 390.85  instructions a block 989.06  ns a block 90.277  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 389.90  instructions a block 984.52  ns a block 90.043  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 410.53  instructions a block 1080.00  ns a block 94.833  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 390.85  instructions a block 989.06  ns a block 90.273  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 389.88  instructions a block 984.52  ns a block 90.056  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 410.57  instructions a block 1080.00  ns a block 94.837  counters perf  out 6e161caa
+n 16  reps 200000  cycles a block 390.85  instructions a block 989.06  ns a block 90.273  counters perf  out 95fc645a
+n 64  reps 50000  cycles a block 389.59  instructions a block 984.52  ns a block 89.973  counters perf  out 3234252b
+n 1  reps 3200000  cycles a block 410.57  instructions a block 1080.00  ns a block 94.831  counters perf  out 6e161caa

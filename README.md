@@ -121,6 +121,7 @@ on a real processor and compared with a reference implementation. It takes hours
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a `def`, a `for`), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |
+| `advice/` | numbers about speed, for the coder; no verifier reads this folder and no verdict relies on it. First in it: a test of predicting the 16-way kernel's cycles from uops.info's table |
 
 Inside `kcheck/`, by what a file is relied on for:
 

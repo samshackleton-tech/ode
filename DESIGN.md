@@ -270,6 +270,14 @@ Consequences:
   another instruction set is another piece of chosen code.
 - **The speed of the chosen code is still measured.** Writing the instructions down fixes what runs. How
   fast it runs on a given machine is a measurement (section 11).
+- **Numbers that help the coder choose are advice, kept apart from what a verdict relies on.** How long an
+  instruction form takes on a given processor, and which ports it uses, can stand beside the instruction
+  table, keyed by its row names, in `advice/`. No verifier reads them. A first test of such numbers
+  (`advice/uops-test/`) predicted the 16-way kernel's cycles 17% to 35% too low and ranked three processors
+  correctly. Whether they rank two variants of one kernel correctly is not tested yet. One kind of number
+  would be different: a statement that an instruction's time does not depend on its operands is something
+  a constant-time claim would rely on, so it would belong in the table that the verifier and Bob read. It
+  is not built.
 
 Memory and calls follow the same rule. This was decided in November 2026 and is partly built:
 
