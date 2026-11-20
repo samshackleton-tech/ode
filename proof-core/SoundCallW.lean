@@ -884,7 +884,6 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallW', hsp] at h; exact (refuse_ok h).elim
@@ -1066,7 +1065,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
-        intro s2 post hdata2 _
+        intro s2 post hdata2
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _, pensW⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]
@@ -1322,13 +1321,12 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E (show symCallW' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
     T.holds T.wf q hq i hret hl hal hd
-  refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata hb => ?_⟩
-  obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata hb
+  refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
+  obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', T.then C⟩
 
 /-! ## A call of a function that writes a run of bytes -/
@@ -1576,8 +1574,8 @@ theorem call_def {defs : List Def} {env : List (String × Val)} {g : String} {ar
 /-- **A call, by contract, of a function that writes a run of bytes for its caller.** If the verifier has
 gone through such a call, then of the machine at the call: the address to come back to can be written; the
 state the called function starts in is one its contract's caller has seen to; what the called function may
-touch, this function may touch; and of every state the contract lets it return in, in which memory was
-changed only by storing bytes, what the verifier holds after the call is so, at the next instruction. -/
+touch, this function may touch; and of every state the contract lets it return in, what the verifier
+holds after the call is so, at the next instruction. -/
 theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallB' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -1587,7 +1585,6 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallB', hsp] at h; exact (refuse_ok h).elim
@@ -1739,7 +1736,8 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
-        intro s2 post hdata2 hbytes2
+        intro s2 post hdata2
+        have hbytes2 : ∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256 := fun a => Or.inr (s2.mem a).isLt
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, pens, _⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip, s1rsp]
@@ -1860,13 +1858,12 @@ theorem symCallB_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallB'_sound E (show symCallB' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
     T.holds T.wf q hq i hret hl hal hd
-  refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata hb => ?_⟩
-  obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata hb
+  refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
+  obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', T.then C⟩
 
 /-- Rows the proof has shown join the facts: what the verifier holds is still so, of the same state of
@@ -1901,7 +1898,6 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall' at h
   split at h
@@ -1928,14 +1924,13 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
   have C := learn_sound e1 H wf
   obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i hret
-  refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 b2 => ?_⟩
-  obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2 b2
+  refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 => ?_⟩
+  obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2
   exact ⟨hrip, ρ', ⟨Agree.mono C.mono C'.agree, Nat.le_trans C.mono C'.mono, C'.holds, C'.wf⟩⟩
 
 end Ode

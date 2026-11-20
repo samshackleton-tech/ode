@@ -671,7 +671,7 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
           rw [this, e])
         (fun s2 lf2 => by
           have lf := lf2.1
-          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 lf.1 lf2.2 (fun a => Or.inr (s2.mem a).isLt)
+          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 lf.1 lf2.2
           exact K _ i.next ρ' (backFrom st s2) (List.mem_cons_self ..) hrip2 ((c'.q _).fields rfl rfl rfl rfl rfl rfl) (hafter s2 lf.2))
 
 /-- What the verifier relies on along a path, of each place the path has come to, `n` being the unknowns
