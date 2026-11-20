@@ -4,6 +4,7 @@ import SoundMarks
 import SoundSpecW
 import SoundWide
 import SoundList
+import Plain
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
 -/
@@ -908,5 +909,21 @@ theorem verify_all_sound (world : List Program) (defs : List Def) (fns : List Fn
     (h : verdictAll defs fns = none) :
     ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world f.contract defs p :=
   verdictFrom_sound world defs fns [] (fun name c hl => by simp [List.lookup] at hl) L h
+
+/-- **Constant time, of what the verifier says yes of.** If the verifier says yes of the functions of a
+statement, whatever the proofs are, then of each of them this holds. Take two states at the function's
+entry. Each is one of which the caller has seen to what the contract asks, marks included: so nothing is
+marked but what the contract lets be hidden. The two are alike in everything not marked. Then two runs of
+the plain machine (Plain.lean: no marks, nothing forbidden), one from each state, each to the function's
+return, let the same things be observed: the same instructions at the same addresses, touching the same
+memory. -/
+theorem verify_all_trace (world : List Program) (defs : List Def) (fns : List Fn) (L : Linked world fns)
+    (h : verdictAll defs fns = none) :
+    ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧
+      ∀ a b : State, f.contract.pre p a → f.contract.quietAt a → f.contract.pre p b → f.contract.quietAt b → Alike a b →
+        ∀ a' b' : State, EndsP world p a.plain a' → EndsP world p b.plain b' → a'.trace = b'.trace := by
+  intro f m
+  obtain ⟨p, hp, M⟩ := verify_all_sound world defs fns L h f m
+  exact ⟨p, hp, fun a b pa qa pb qb A a' b' Ea Eb => runs_trace A (M a pa qa) (M b pb qb) Ea Eb⟩
 
 end Ode

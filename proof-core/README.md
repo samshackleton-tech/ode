@@ -153,39 +153,62 @@ The caller's obligations (`Contract.pre`):
   is marked, except in the buffers that the contract lists as `hidden`. A read-only buffer is `hidden`
   when the contract's `trace depends on` line does not name it.
 
-### The second theorem: what an observer can see
+### Constant time: what an observer can see
 
-    theorem ends_trace : Alike a b → Ends world p a a' → Ends world p b b' → a'.trace = b'.trace
+    theorem verify_all_trace (world : List Program) (defs : List Def) (fns : List Fn) :
+        Linked world fns → verdictAll defs fns = none →
+        ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧
+          ∀ a b, f.contract.pre p a → f.contract.quietAt a → f.contract.pre p b → f.contract.quietAt b →
+            Alike a b →
+            ∀ a' b', EndsP world p a.plain a' → EndsP world p b.plain b' → a'.trace = b'.trace
 
-This theorem is in Trace.lean. It is about the machine model alone: no verifier and no contract appear in
-it.
+In words: suppose the verifier accepts a list of functions. Take one of them, and two machine states `a`
+and `b` at its entry. Run the function from each to its return. Then the two runs have the same trace.
+The conditions are these.
 
+- Both states satisfy the caller's obligations listed above, including the ones about marks. The marks
+  say which registers and bytes are secret, and the obligations limit them. The argument registers, the
+  return address, the file's data and every input buffer that the contract does not list as `hidden` must
+  not be marked. Anything else may be: the hidden buffers, the callee-saved registers, the flags, and
+  memory that is not an input.
+- `Alike a b`: the two states have the same marks, are at the same instruction, and agree on every
+  register, flag and memory byte that is not marked. They may differ in everything that is marked.
 - The *trace* of a run is the list of what the model takes to be observable: the address of each
   instruction executed, and each memory address read or written, with its size.
-- `Alike a b` says that two machine states have the same marks, are at the same instruction, have the
-  same trace so far, and agree on every register, flag and memory byte that is not marked. They may differ
-  in everything that is marked.
-- `Ends world p a a'` says that the function `p`, started in state `a`, ran to its return in state `a'`
-  on the machine that stops where something marked would become observable.
+- The runs are runs of the *plain machine* (`EndsP`, in Plain.lean). The plain machine has no marks and
+  forbids nothing: `a.plain` is the state `a` with its marks erased, and every memory access succeeds. So
+  the marks appear in this theorem only as a way to say which inputs are secret. The machine that runs
+  the function does not have them.
 
-So two runs of a function from states that differ only in secrets produce the same trace. Together with
-the soundness theorem this gives the constant-time promise of a contract: the verifier accepts a function
-only if it never stops the machine, so every run of an accepted function is a run that `ends_trace` speaks
-about. A called function runs under the same rule. Across a call, the callee-saved registers get back the
-marks they had before the call. That is justified because the called function must return them holding
-the values they held, and `Runs` and `Ends` both require this.
+So the theorem says: what an observer of this kind sees does not depend on the secrets.
+
+It is put together from three results, each checked by Lean.
+
+- `ends_trace` (Trace.lean) is about the machine with marks alone, with no verifier and no contract in
+  it. That machine moves the marks as it moves values, and it *stops* where something marked would become
+  observable. The theorem: two runs of that machine from states that are `Alike`, each reaching the
+  function's return, have the same trace.
+- The soundness theorem above says that an accepted function never stops that machine.
+- `runs_endsP` (Plain.lean) connects the two machines. Where the machine with marks runs a function to
+  its return without stopping, every run of the plain machine from the same state is that same run with
+  the marks left out. Two lemmas carry it: the marks change no value (`execQ_exec`, `exec_plain`), and
+  an instruction that succeeds while only some memory may be touched does the same when all memory may
+  be touched (`exec_all`).
+
+Two more consequences are stated on their own. `runs_plain` and `runs_free` say that a run of the machine
+with marks, to states of which a property `Q` holds, is a run of the plain machine to those states without
+their marks: first with the same memory limits, then with none. So what the soundness theorem says a
+function computes, it computes on a machine without marks and without limits.
+
+A called function runs under the same rule. Across a call, the callee-saved registers get back the marks
+they had before the call. That is justified because the called function must return them holding the
+values they held.
 
 What this does **not** cover:
 
 - **Only this level of observation.** How long an instruction takes for given operands is outside the
   model. So are speculative execution, caches shared with other programs, power and frequency. Each needs
   assumptions of its own.
-- **The marks change no value: proved.** A processor has no marks, so the theorem about the machine with
-  marks must carry over to a machine without them. Plain.lean defines that machine (`execP`, `RunsP`: the
-  same rules with every word about marks left out; it keeps the trace) and proves `runs_plain`: a run of
-  the machine with marks, from a state `s` to states of which `Q` holds, is a run of the plain machine
-  from `s` without its marks to those states without theirs. So what a verified function computes, and
-  what it lets be observed, is what the plain machine computes and lets be observed.
 - **Things the verifier refuses although they are true.** A number passed to a called function in a
   register must not be marked, so `b3l_node_out` is verified with `trace depends on nd`: it loads the
   node's counter, length and flags into registers and passes them to a kernel. A value read back from the
@@ -276,7 +299,7 @@ caller's frame, and that each buffer passed is one of the caller's own buffers, 
 call it keeps only what the callee's contract guarantees: the callee-saved registers, memory outside the
 callee's frame, and the returned value in `rax`. All other registers and the flags become unknown.
 
-There are two theorems. `verify_sound` is about one function, assuming the functions it calls satisfy
+Two theorems state the soundness of calls. `verify_sound` is about one function, assuming the functions it calls satisfy
 their contracts. `verify_all_sound`, above, removes that assumption by going through the functions in
 order.
 
@@ -1053,7 +1076,7 @@ the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,021 lines (Table.lean 152, Machine.lean 495, Contract.lean 374). The
 verifier: 2,485 lines (Core.lean 2,326, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 15,127 lines, of which Trace.lean (the second theorem) is 858 and Plain.lean (the machine without marks) is 249.
+lines. The proofs of the theorems: 15,519 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 
@@ -1061,7 +1084,7 @@ lines. The proofs of the theorems: 15,127 lines, of which Trace.lean (the second
 |---|---|
 | the formal model | `Table.lean`, `Machine.lean`, `Contract.lean` |
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
-| the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`), `Trace.lean` (the second theorem, `ends_trace`), `Plain.lean` (the machine without marks, `runs_plain`) |
+| the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/` and `examples/table/` (source, specification and object file); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |

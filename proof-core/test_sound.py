@@ -16,7 +16,10 @@ THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.Arithmetic.refutes_sound": "[propext, Quot.sound]",
             "Ode.ends_trace": "[propext, Classical.choice, Quot.sound]",
             "Ode.execQ_exec": "[propext, Classical.choice, Quot.sound]",
-            "Ode.runs_plain": "[propext, Classical.choice, Quot.sound]"}
+            "Ode.runs_plain": "[propext, Classical.choice, Quot.sound]",
+            "Ode.runs_free": "[propext, Classical.choice, Quot.sound]",
+            "Ode.runs_trace": "[propext, Classical.choice, Quot.sound]",
+            "Ode.verify_all_trace": "[propext, Classical.choice, Quot.sound]"}
 STATEMENTS = [
     # of the functions of a statement together: what `odeverify` says yes of
     ("Ode.verify_all_sound : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "
@@ -35,6 +38,24 @@ STATEMENTS = [
     # the marks change no value: a run of the machine with marks is a run of the machine without any
     ("Ode.runs_plain : ∀ {world : List Ode.Program} {perm : Ode.Perm} {p : Ode.Program} {Q : Ode.State → Prop} {s : Ode.State}, "
      "Ode.Runs world perm p Q s → Ode.RunsP world perm p (fun t => ∃ s', Q s' ∧ t = s'.plain) s.plain"),
+    # and nothing need be forbidden: it is a run of the plain machine that may touch all memory
+    ("Ode.runs_free : ∀ {world : List Ode.Program} {perm : Ode.Perm} {p : Ode.Program} {Q : Ode.State → Prop} {s : Ode.State}, "
+     "Ode.Runs world perm p Q s → Ode.RunsP world Ode.Perm.all p (fun t => ∃ s', Q s' ∧ t = s'.plain) s.plain"),
+    # constant time of what the verifier says yes of, on the plain machine: two runs, from two states at entry
+    # alike in everything not marked, let the same things be observed
+    ("Ode.verify_all_trace : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "
+     "Ode.Linked world fns → Ode.verdictAll defs fns = none → "
+     "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ "
+     "∀ (a b : Ode.State), f.contract.pre p a → f.contract.quietAt a → f.contract.pre p b → f.contract.quietAt b → Ode.Alike a b → "
+     "∀ (a' b' : Ode.State), Ode.EndsP world p a.plain a' → Ode.EndsP world p b.plain b' → a'.trace = b'.trace"),
+    # a run of the plain machine to a function's return: by `execP` with nothing forbidden
+    ("Ode.EndsP.ret : ∀ {world : List Ode.Program} (p : Ode.Program) (s : Ode.State) (i : Ode.Instr) (u : Nat → Nat) (s' : Ode.State), "
+     "p.fetch s.rip = some i → Ode.execP Ode.Perm.all p i u s = some (Ode.Outcome.returned s') → Ode.EndsP world p s s'"),
+    ("Ode.EndsP.step : ∀ {world : List Ode.Program} (p : Ode.Program) (s : Ode.State) (i : Ode.Instr) (u : Nat → Nat) (s1 s' : Ode.State), "
+     "p.fetch s.rip = some i → Ode.execP Ode.Perm.all p i u s = some (Ode.Outcome.next s1) → Ode.EndsP world p s1 s' → Ode.EndsP world p s s'"),
+    ("Ode.EndsP.call : ∀ {world : List Ode.Program} (p : Ode.Program) (s : Ode.State) (i : Ode.Instr) (name : String) (q : Ode.Program) (s1 s' : Ode.State), "
+     "p.fetch s.rip = some i → Ode.callTarget i = some name → Ode.findProgram world name = some q → "
+     "Ode.EndsP world q (Ode.afterCallP p q i s) s1 → Ode.EndsP world p s1 s' → Ode.EndsP world p s s'"),
 ]
 
 
@@ -49,7 +70,8 @@ class Sound(unittest.TestCase):
             path = os.path.join(d, "Ask.lean")
             with open(path, "w") as f:
                 f.write("import SoundTop\nimport Trace\nimport Plain\n" + "".join(f"#print axioms {name}\n" for name in THEOREMS) +
-                        "#check @Ode.verify_all_sound\n#check @Ode.verify_sound\n#print Ode.Linked\n#check @Ode.ends_trace\n#check @Ode.runs_plain\n")
+                        "#check @Ode.verify_all_sound\n#check @Ode.verify_sound\n#print Ode.Linked\n#check @Ode.ends_trace\n#check @Ode.runs_plain\n"
+                        "#check @Ode.runs_free\n#check @Ode.verify_all_trace\n#print Ode.EndsP\n")
             r = subprocess.run([LAKE, "env", "lean", path], cwd=HERE, capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         said = " ".join(r.stdout.split())

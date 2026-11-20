@@ -450,7 +450,9 @@ That page also says what is left out. Reading the object file and the text of th
 outside the theorem. So do the link step and the check of which processor features a function needs. The
 promise in the kernels' contracts that the trace does not depend on the data (constant time) is in the
 Lean model and is proved for the four kernels and for `b3l_pad`, at the level of which instructions run and
-which addresses are touched. This is the third route of the list above, begun. Lean is the language of this
+which addresses are touched. A second theorem (`verify_all_trace`) states it without the model's
+bookkeeping: on a machine with no secrecy marks, two runs of an accepted function from inputs that differ
+only in what its contract hides produce the same trace. This is the third route of the list above, begun. Lean is the language of this
 implementation. No reader is required to use it: a proof is a text file that a verifier written in any
 language can read.
 
