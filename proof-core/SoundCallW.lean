@@ -40,78 +40,41 @@ theorem writtenIds_spec {wroteW : List (Nat × Nat × Nat)} {w : Nat} : ∀ (cou
       rw [show e2 + (q + 1) = e2 + 1 + q by omega]
       simpa using this
 
-/-- The terms `inputIds` finds are those of the run's words, in order. -/
-theorem inputIds_spec {look : Node → Option Nat} {j : Nat} : ∀ (count k : Nat) {ids : List Nat},
-    inputIds look j count k = some ids → ids.length = count ∧ ∀ q, q < count → look (.input j (k + q)) = some (ids.getD q 0)
-  | 0, _, ids, h => by
-    simp only [inputIds, Option.some.injEq] at h; subst h
-    exact ⟨rfl, fun q hq => absurd hq (Nat.not_lt_zero _)⟩
-  | count + 1, k, ids, h => by
-    simp only [inputIds] at h
-    cases hl : look (.input j k) <;> cases hr : inputIds look j count (k + 1) <;>
-      simp only [hl, hr, reduceCtorEq, Option.some.injEq] at h
-    rename_i i rest
-    subst h
-    obtain ⟨len, hm⟩ := inputIds_spec count (k + 1) hr
-    refine ⟨by simp [len], ?_⟩
-    intro q hq
-    cases q with
-    | zero => simpa using hl
-    | succ q =>
-      have := hm q (by omega)
-      rw [show k + (q + 1) = k + 1 + q by omega]
-      simpa using this
-
-/-- The run a called function is given to read and write: one of this function's runs given to read and
-write, whole, at the address the register holds, with no single byte of it written and every word known:
-written; or, nothing having been written to the run, as it was at entry. -/
-theorem callRun_spec {ctx : Ctx} {look : Node → Option Nat} {s : Sym} {r n w : Nat} {ids : List Nat}
-    (h : callRun ctx look s r n = some (w, ids)) :
-    ∃ x b, ctx.contract.outs[w]? = some (x, b, n) ∧ (x, b, n) ∈ ctx.contract.inouts ∧ n % 4 = 0 ∧
-      (∀ ρ : Nat → Int, ev ρ (s.reg r) = ρ b) ∧ (∀ e ∈ s.wrote, e.1 ≠ w) ∧
-      (writtenIds s.wroteW w (n / 4) 0 = some ids ∨
-       (w ∈ s.intact ∧ ∃ j x' n', ctx.contract.wordRuns[j]? = some (x', b, n') ∧ inputIds look j (n / 4) 0 = some ids)) := by
+/-- The run a called function is given to read and write: whole words of one of this function's runs given
+to read and write, at the address the register holds, with no single byte of the run written and every
+word of the part known written. -/
+theorem callRun_spec {ctx : Ctx} {s : Sym} {r n w o : Nat} {ids : List Nat}
+    (h : callRun ctx s r n = some (w, o, ids)) :
+    ∃ x b n0, ctx.contract.outs[w]? = some (x, b, n0) ∧ (x, b, n0) ∈ ctx.contract.inouts ∧ n % 4 = 0 ∧ 4 * o + n ≤ n0 ∧
+      (∀ ρ : Nat → Int, ev ρ (s.reg r) = ρ b + ((4 * o : Nat) : Int)) ∧ (∀ e ∈ s.wrote, e.1 ≠ w) ∧
+      writtenIds s.wroteW w (n / 4) o = some ids := by
   unfold callRun at h
   cases hf : findOut (s.reg r) ctx.contract.outs 0 with
   | none => simp [hf] at h
   | some wh =>
-    obtain ⟨w', o, name, base, n', rfl, _, hl, ho⟩ := findOut_spec hf
+    obtain ⟨w', off, name, base, n', rfl, _, hl, ho⟩ := findOut_spec hf
     simp only [Nat.sub_zero] at hl
-    simp only [hf, hl] at h
-    split at h
-    next hc =>
-      obtain ⟨c0, cn, c4, ci, cw⟩ := hc
-      have hreg : ∀ ρ : Nat → Int, ev ρ (s.reg r) = ρ base := fun ρ => by
-        have := ev_isConst (ρ := ρ) c0
-        rw [ho, ev_sub, ev_var] at this
-        omega
-      have hnow : ∀ e ∈ s.wrote, e.1 ≠ w' := fun e me => by
-        have := List.all_eq_true.mp cw e me
-        simpa using this
+    cases hc : Lin.isConst off with
+    | none => simp [hf, hc] at h
+    | some c =>
+      simp only [hf, hl, hc] at h
       split at h
-      next hint =>
-        cases hra : runAt base ctx.contract.wordRuns 0 with
-        | none => simp [hra] at h
-        | some j =>
-          simp only [hra, Option.bind_some] at h
-          cases hii : inputIds look j (n / 4) 0 with
-          | none => simp [hii] at h
-          | some ids' =>
-            simp only [hii, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
-            obtain ⟨rfl, rfl⟩ := h
-            subst cn
-            obtain ⟨_, x', n'', hj⟩ := runAt_spec hra
-            exact ⟨name, base, hl, by simpa using ci, c4, hreg, hnow,
-              Or.inr ⟨by simpa using hint, j, x', n'', by simpa using hj, hii⟩⟩
-      next =>
-        cases hwi : writtenIds s.wroteW w' (n / 4) 0 with
+      next hcond =>
+        obtain ⟨c0, c4, cn, n4, ci, cw⟩ := hcond
+        cases hwi : writtenIds s.wroteW w' (n / 4) (c.toNat / 4) with
         | none => simp [hwi] at h
         | some ids' =>
           simp only [hwi, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
-          obtain ⟨rfl, rfl⟩ := h
-          subst cn
-          exact ⟨name, base, hl, by simpa using ci, c4, hreg, hnow, Or.inl hwi⟩
-    next => simp at h
+          obtain ⟨rfl, rfl, rfl⟩ := h
+          have hreg : ∀ ρ : Nat → Int, ev ρ (s.reg r) = ρ base + ((4 * (c.toNat / 4) : Nat) : Int) := fun ρ => by
+            have := ev_isConst (ρ := ρ) hc
+            rw [ho, ev_sub, ev_var] at this
+            omega
+          have hnow : ∀ e ∈ s.wrote, e.1 ≠ w' := fun e me => by
+            have := List.all_eq_true.mp cw e me
+            simpa using this
+          exact ⟨name, base, n', hl, by simpa using ci, n4, by omega, hreg, hnow, hwi⟩
+      next => simp at h
 
 /-- The part of a run a called function is given to read, as a run of a fixed count: it lies in one of
 this function's runs of a fixed count, or in one of its runs of bytes with a length, at the address the
@@ -399,23 +362,7 @@ theorem partNodes_inputs {ctx : Ctx} {s : Sym} : ∀ (args : List (String × Kin
   | (x, .number) :: args, r :: regs, nd, m => by simp only [partNodes] at m; exact partNodes_inputs args regs nd m
   | (x, .bytes len) :: args, r :: regs, nd, m => by simp only [partNodes] at m; exact partNodes_inputs args regs nd m
   | (x, .out n) :: args, r :: regs, nd, m => by simp only [partNodes] at m; exact partNodes_inputs args regs nd m
-  | (x, .inout n) :: args, r :: regs, nd, m => by
-    simp only [partNodes, List.mem_append] at m
-    rcases m with m | m
-    · split at m
-      next w _ _ =>
-        split at m
-        next =>
-          split at m
-          · split at m
-            next j _ =>
-              obtain ⟨k, _, rfl⟩ := List.mem_map.mp m
-              exact ⟨j, k, rfl⟩
-            next => simp at m
-          · simp at m
-        next => simp at m
-      next => simp at m
-    · exact partNodes_inputs args regs nd m
+  | (x, .inout n) :: args, r :: regs, nd, m => by simp only [partNodes] at m; exact partNodes_inputs args regs nd m
 
 /-- With words of runs put into it, the table is still one the verifier may hold, and has grown at most. -/
 theorem inputs_table {s : Sym} (wf : WF s) (nodes : List Node) (hn : ∀ nd ∈ nodes, ∃ j k, nd = Node.input j k) :
@@ -434,19 +381,20 @@ def madeW (s : Sym) (m : Nat) : List Nat × List Node :=
   ((termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab).1,
    (termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab).2.list)
 
-theorem afterCallW_facts (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).facts = ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
+theorem afterCallW_facts (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).facts = ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
       ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts) := rfl
-theorem afterCallW_wroteW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).wroteW = ((List.range m).map fun k => (w, k, (madeW s m).1.getD k 0)) ++ s.wroteW.filter fun e => e.1 != w := rfl
-theorem afterCallW_intact (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).intact = s.intact.filter (· != w) := rfl
-theorem afterCallW_known (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).known = .held g keys (madeW s m).1 :: s.known := rfl
-theorem afterCallW_terms (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).terms = (madeW s m).2 := rfl
-theorem afterCallW_nvars (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) :
-    (s.afterCallW sp w m g keys).nvars = s.nvars + 16 + m := rfl
+theorem afterCallW_wroteW (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).wroteW = ((List.range m).map fun k => (w, o + k, (madeW s m).1.getD k 0)) ++
+      s.wroteW.filter fun e => e.1 != w || decide (e.2.1 < o) || decide (o + m ≤ e.2.1) := rfl
+theorem afterCallW_intact (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).intact = s.intact.filter (· != w) := rfl
+theorem afterCallW_known (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).known = .held g keys (madeW s m).1 :: s.known := rfl
+theorem afterCallW_terms (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).terms = (madeW s m).2 := rfl
+theorem afterCallW_nvars (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) :
+    (s.afterCallW sp w o m g keys).nvars = s.nvars + 16 + m := rfl
 
 /-- The table with the terms of the new words: it has grown at most, is one the verifier may hold with the
 new unknowns in use, has one term a word, each in the table. -/
@@ -471,8 +419,8 @@ theorem madeW_table {s : Sym} (wf : WF s) (m : Nat) (inp : Nat → Nat → Nat) 
     simp only [List.getElem_map, List.getElem_range] at this
     exact this
 
-theorem afterCallW_wf {s : Sym} (wf : WF s) (sp : Int) (w m : Nat) (g : String) {keys : List Key}
-    (hkeys : ∀ k ∈ keys, k.wf s.nvars s.terms.length) : WF (s.afterCallW sp w m g keys) := by
+theorem afterCallW_wf {s : Sym} (wf : WF s) (sp : Int) (w o m : Nat) (g : String) {keys : List Key}
+    (hkeys : ∀ k ∈ keys, k.wf s.nvars s.terms.length) : WF (s.afterCallW sp w o m g keys) := by
   have le : s.nvars ≤ s.nvars + 16 + m := by omega
   obtain ⟨ext, ok, len, lt, _⟩ := madeW_table wf m (fun _ _ => 0) (fun _ => 0)
   refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
@@ -553,23 +501,24 @@ theorem afterRhoW_word (n : Nat) (ρ : Nat → Int) (s2 : State) (nums : List Na
 
 /-- Of the machine's state when the called function has returned, what the verifier holds after the call is
 so: given that the registers a callee keeps and the stack pointer are as before the call; memory is as
-before but in the called function's frame, at the address it returned to and in the run `w`; the run holds
-the bytes of the words `nums`; and the definition `g`, used with `keys`, gives those words. -/
+before but in the called function's frame, at the address it returned to and in the `m` words of the run
+`w` from word `o` on; those hold the bytes of the words `nums`; and the definition `g`, used with `keys`,
+gives those words. -/
 theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st s2 : State}
     {sp : Int} (cs : Nat) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stack : Int) ≤ sp - 8 - cs) (hsp0 : sp ≤ 0)
     (hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
-    {w m : Nat} {x : String} {b n : Nat} (hw : ctx.contract.outs[w]? = some (x, b, n)) (hn : n = 4 * m)
+    {w o m : Nat} {x : String} {b n : Nat} (hw : ctx.contract.outs[w]? = some (x, b, n)) (hn : 4 * (o + m) ≤ n)
     (hnow : ∀ e ∈ s.wrote, e.1 ≠ w)
-    (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b ∨ s0.reg b + n ≤ a → s2.mem a = st.mem a)
+    (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b + 4 * o ∨ s0.reg b + 4 * (o + m) ≤ a → s2.mem a = st.mem a)
     (hdata : s2.data = st.data)
     {nums : List Nat} (hlen : nums.length = m) (hlt : ∀ v ∈ nums, v < W32)
-    (hrun : ∀ k, k < m → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * k + bb) = nums.getD k 0 / 256 ^ bb % 256)
+    (hrun : ∀ k, k < m → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * (o + k) + bb) = nums.getD k 0 / 256 ^ bb % 256)
     {g : String} {keys : List Key} (hkeys : ∀ k ∈ keys, k.wf s.nvars s.terms.length)
     (hheld : ∃ d, findDef ctx.defs g = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.list (nums.map Val.word))) :
-    Holds ctx s0 (afterRhoW s.nvars ρ s2 nums) (s.afterCallW sp w m g keys) s2 := by
+    Holds ctx s0 (afterRhoW s.nvars ρ s2 nums) (s.afterCallW sp w o m g keys) s2 := by
   have hstack := E.stack
   have hwm := List.mem_of_getElem? hw
   have hout := E.out hwm
@@ -638,7 +587,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       have := List.any_eq_false.mp ho (x, b, n) hwm
       simp only [Bool.and_eq_true, decide_eq_true_eq] at this
       omega
-    rw [hmem a hfr hnot]
+    rw [hmem a hfr (by omega)]
     exact H.mem a ha ho
   · -- what this function wrote for its caller, byte by byte, is of other runs: they lie apart from the run written
     intro w' o x' mw
@@ -674,13 +623,24 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       subst hb' hn'
       refine ⟨by omega, fun bb hbb => ?_⟩
       rw [hrun k hk bb hbb, afterCallW_terms, hden k hk]
-    · obtain ⟨mo, ne⟩ := List.mem_filter.mp mo
-      have ne' : w' ≠ w := by simpa using ne
+    · -- a word of another run, or of this run outside the part written
+      obtain ⟨mo, ne⟩ := List.mem_filter.mp mo
       obtain ⟨h1, h2⟩ := H.words.wrote w' j i mo x' r' n' ho'
       have hor := E.out (List.mem_of_getElem? ho')
-      have ap := E.outOut ho' hw ne'
       refine ⟨h1, fun bb hbb => ?_⟩
-      rw [hmem _ (by omega) (by omega), h2 bb hbb, afterCallW_terms, hold i (wf.words.wrote w' j i mo)]
+      have keep : s2.mem (s0.reg r' + 4 * j + bb) = st.mem (s0.reg r' + 4 * j + bb) := by
+        by_cases hww : w' = w
+        · subst w'
+          rw [hw] at ho'
+          injection ho' with ho'
+          injection ho' with _ ho'
+          injection ho' with hb' hn'
+          subst hb' hn'
+          have ne' : j < o ∨ o + m ≤ j := by simpa using ne
+          exact hmem _ (by omega) (by omega)
+        · have ap := E.outOut ho' hw hww
+          exact hmem _ (by omega) (by omega)
+      rw [keep, h2 bb hbb, afterCallW_terms, hold i (wf.words.wrote w' j i mo)]
   · intro k mk
     rw [afterCallW_known] at mk
     rcases List.mem_cons.mp mk with rfl | mk
@@ -709,7 +669,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
 theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : callW ctx s c = .ok plan) :
     ∃ (run : String) (r n : Nat) (e : EnsureW) (ids : List Nat) (env : List (String × WVal)) (args : SExpr) (vs : List WVal) (d : Def),
       c.mbounds = [] ∧ c.outs = [(run, r, n)] ∧ c.inouts = [(run, r, n)] ∧ c.ensuresW = [e] ∧ e.run = run ∧
-      callRun ctx plan.tab.find s r n = some (plan.w, ids) ∧ calleeW ctx s ids c.args argRegs = some env ∧
+      callRun ctx s r n = some (plan.w, plan.first, ids) ∧ calleeW ctx s ids c.args argRegs = some env ∧
       e.value = .call "bytes_of" (.cons (.call plan.g args) .nil) ∧ own.contains plan.g = false ∧ plan.g ≠ "len" ∧
       plan.tab = (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 ∧
       wevalList (weval ctx plan.tab.find { s with tab := plan.tab } WFUEL env) args = some vs ∧
@@ -732,10 +692,10 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
           next hsame =>
             have hs : ((run = run' ∧ r = r') ∧ n = n') ∧ e.run = run := by simpa using hsame
             obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, erun⟩ := hs
-            cases hcr : callRun ctx (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.find s r n with
+            cases hcr : callRun ctx s r n with
             | none => simp only [hcr] at h; cases h
             | some wi =>
-              obtain ⟨w, ids⟩ := wi
+              obtain ⟨w, o, ids⟩ := wi
               simp only [hcr] at h
               cases hce : calleeW ctx s ids c.args argRegs with
               | none => simp only [hce] at h; cases h
@@ -895,9 +855,9 @@ gone through such a call, then of the machine at the call: the address to come b
 state the called function starts in is one its contract's caller has seen to; what the called function may
 touch, this function may touch; and of every state the contract lets it return in, what the verifier holds
 after the call is so, at the next instruction. -/
-theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
+theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCallW ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symCallW' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
     8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
@@ -906,9 +866,9 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
-  | none => simp only [symCallW, hsp] at h; exact (refuse_ok h).elim
+  | none => simp only [symCallW', hsp] at h; exact (refuse_ok h).elim
   | some sp =>
-    simp only [symCallW, hsp] at h
+    simp only [symCallW', hsp] at h
     split at h
     next => exact (refuse_ok h).elim
     next hguard =>
@@ -923,7 +883,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         subst hs'
         obtain ⟨run, r, n, e, ids, env, args, vs, d, hmb, houts, hinouts, hens, erun, hcr, hce, hv, hown, hglen, hT, hwl, hfd, hfk,
           hkeys, hdl, hwords⟩ := callW_spec hplan
-        obtain ⟨xw, b, how, hio, n4, hreg_r, hnow, hwi⟩ := callRun_spec hcr
+        obtain ⟨xw, b, n0, how, hio, n4, hfit, hreg_r, hnow, hwi⟩ := callRun_spec hcr
         -- the machine at the call
         have esp := ev_isConst (ρ := ρ) hsp
         simp only [ev_sub, ev_var] at esp
@@ -939,18 +899,18 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         have s1mem : ∀ x, x < st.reg RSP - 8 ∨ st.reg RSP ≤ x → (afterCall p q i st).mem x = st.mem x := fun x hx => by
           show store st.mem (st.reg RSP - 8) (p.base + i.next) 8 x = st.mem x
           exact store_other _ _ _ _ _ (by omega)
-        -- the run handed over to be read and written: one of this function's, whole
+        -- the run handed over to be read and written: whole words of one of this function's
         have hwm := List.mem_of_getElem? how
         have hout := E.out hwm
         have rmem : (run, r, n) ∈ c.outs := by rw [houts]; exact List.mem_cons_self ..
         have rarg : r ∈ argRegs := outsIn_mem c.args argRegs run r n rmem
         obtain ⟨r16, rne⟩ := argRegs_not_rsp rarg
         have b16 := outs_lt hwm
-        have hrb : st.reg r = s0.reg b := by
+        have hrb : st.reg r = s0.reg b + 4 * plan.first := by
           have := H.reg r r16
           rw [hreg_r ρ, H.entry b b16] at this
           omega
-        have s1r : (afterCall p q i st).reg r = s0.reg b := by rw [s1reg r rne, hrb]
+        have s1r : (afterCall p q i st).reg r = s0.reg b + 4 * plan.first := by rw [s1reg r rne, hrb]
         have hregions : c.regions = [] := calleeW_regions c c.args argRegs hce
         -- the table with the words of the parts handed over
         obtain ⟨extT, okT⟩ := inputs_table wf (partNodes ctx s c.args argRegs) (partNodes_inputs c.args argRegs)
@@ -977,38 +937,23 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               have := f4 x'' r'' n'' hm
               simp only [Bool.and_eq_true, decide_eq_true_eq]
               omega)
-        -- the bytes of the run handed over are the bytes of the words known: written, or as at entry
+        -- the bytes of the part handed over are the bytes of the words known written
         have hidsb : ids.length = n / 4 ∧ ∀ j, j < n / 4 → ∀ bb, bb < 4 →
-            (afterCall p q i st).mem (s0.reg b + 4 * j + bb) = den (inpOf ctx s0) ρ plan.terms (ids.getD j 0) / 256 ^ bb % 256 := by
-          rcases hwi with hwi | ⟨hint, jr, xr, nr, hjr, hii⟩
-          · obtain ⟨idlen, hwritten⟩ := writtenIds_spec (n / 4) 0 hwi
-            refine ⟨idlen, fun j hj bb hbb => ?_⟩
-            have m := hwritten j hj
-            rw [Nat.zero_add] at m
-            obtain ⟨g1, g2⟩ := HT.words.wrote plan.w j (ids.getD j 0) m xw b n how
-            rw [s1mem _ (by omega)]
-            exact g2 bb hbb
-          · obtain ⟨idlen, hlook⟩ := inputIds_spec (n / 4) 0 hii
-            refine ⟨idlen, fun j hj bb hbb => ?_⟩
-            have hlk := hlook j hj
-            rw [Nat.zero_add] at hlk
-            have hat : plan.terms[ids.getD j 0]? = some (Node.input jr j) := Looks.found hlk
-            have hden : den (inpOf ctx s0) ρ plan.terms (ids.getD j 0) = load s0.mem (s0.reg b + 4 * j) 4 := by
-              rw [den_node wfT.words.table hat]
-              simp only [Node.value, inpOf, hjr]
-            rw [hden, load4_byteAt s0.mem (s0.reg b + 4 * j) bb hbb (fun k hk => by
-              have := E.inoutByte hio (k := 4 * j + k) (by omega)
-              rwa [← Nat.add_assoc] at this)]
-            rw [s1mem _ (by omega)]
-            have := HT.words.intact plan.w hint xw b n how (4 * j + bb) (by omega)
-            rwa [← Nat.add_assoc] at this
+            (afterCall p q i st).mem (s0.reg b + 4 * (plan.first + j) + bb) = den (inpOf ctx s0) ρ plan.terms (ids.getD j 0) / 256 ^ bb % 256 := by
+          obtain ⟨idlen, hwritten⟩ := writtenIds_spec (n / 4) plan.first hwi
+          refine ⟨idlen, fun j hj bb hbb => ?_⟩
+          have m := hwritten j hj
+          obtain ⟨g1, g2⟩ := HT.words.wrote plan.w (plan.first + j) (ids.getD j 0) m xw b n0 how
+          rw [s1mem _ (by omega)]
+          exact g2 bb hbb
         obtain ⟨idlen, hbytes⟩ := hidsb
         have hiobytes : (List.range n).map (fun k => Val.int ((afterCall p q i st).mem ((afterCall p q i st).reg r + k))) =
             wordBytes (ids.map (den (inpOf ctx s0) ρ plan.terms)) := by
           have := wordBytes_range (afterCall p q i st).mem (ids.map (den (inpOf ctx s0) ρ plan.terms)) ((afterCall p q i st).reg r)
             (fun j hj bb hbb => by
               have hj' : j < ids.length := by simpa using hj
-              rw [s1r, hbytes j (by omega) bb hbb, getD_of_lt _ _ hj, getD_of_lt _ _ hj', List.getElem_map])
+              rw [s1r, show s0.reg b + 4 * plan.first + 4 * j + bb = s0.reg b + 4 * (plan.first + j) + bb by omega,
+                hbytes j (by omega) bb hbb, getD_of_lt _ _ hj, getD_of_lt _ _ hj', List.getElem_map])
           rw [List.length_map, idlen, show 4 * (n / 4) = n by omega] at this
           exact this
         have henv : EnvDen ctx s0 ρ plan.terms env (c.envW (afterCall p q i st)) := by
@@ -1036,7 +981,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m
             obtain ⟨_, e1, e2⟩ := m
             subst r' n'
-            refine ⟨by rw [s1r]; exact hout.1, by rw [s1r, s1rsp]; have := hout.2; omega, ?_⟩
+            refine ⟨by rw [s1r]; have := hout.1; omega, by rw [s1r, s1rsp]; have := hout.2; omega, ?_⟩
             intro r'' l m'; rw [hregions] at m'; cases m'
           · rw [houts]; exact List.pairwise_singleton _ _
           · intro x' r' n' m
@@ -1052,7 +997,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
               obtain ⟨_, e1, e2⟩ := m''
               subst r'' n''
-              have := f4 xw b n hwm
+              have := f4 xw b n0 hwm
               rw [s1reg r' rne', g3, s1r]
               omega
           · intro x' r' n' m k hk
@@ -1061,7 +1006,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             obtain ⟨_, e1, e2⟩ := m
             subst r' n'
             have := hbytes (k / 4) (by omega) (k % 4) (by omega)
-            rw [s1r, show s0.reg b + k = s0.reg b + 4 * (k / 4) + k % 4 by omega, this]
+            rw [s1r, show s0.reg b + 4 * plan.first + k = s0.reg b + 4 * (plan.first + k / 4) + k % 4 by omega, this]
             exact Nat.mod_lt _ (by decide)
           · intro x' bd m r' hr'
             obtain ⟨items', res, he⟩ := each_mem hbounds (x', bd) m
@@ -1095,7 +1040,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             · right; right
               rw [hinouts] at ha
               simp only [List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
-              exact List.any_eq_true.mpr ⟨(xw, b, n), hio, by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ha⟩
+              exact List.any_eq_true.mpr ⟨(xw, b, n0), hio, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
           intro a ha
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
@@ -1104,7 +1049,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           · right
             simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
             unfold Contract.inOut
-            exact List.any_eq_true.mpr ⟨(xw, b, n), hwm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ha⟩
+            exact List.any_eq_true.mpr ⟨(xw, b, n0), hwm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
           apply allowed_of
           intro x hx1 hx2
@@ -1129,7 +1074,8 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             rw [psaved r' hmemr, s1reg r' h4]
         -- memory when the called function has returned: as before but in its frame, at the address it
         -- returned to and in the run it wrote
-        have hmem2 : ∀ a, a + 8 + c.stack < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b ∨ s0.reg b + n ≤ a → s2.mem a = st.mem a := by
+        have hmem2 : ∀ a, a + 8 + c.stack < st.reg RSP ∨ st.reg RSP ≤ a →
+            a < s0.reg b + 4 * plan.first ∨ s0.reg b + 4 * (plan.first + n / 4) ≤ a → s2.mem a = st.mem a := by
           intro a ha hb
           rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega)
             (by simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1r]; omega)]
@@ -1163,18 +1109,109 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             Value ctx.defs (d'.params.zip (plan.keys.map (Key.val ctx s0 ρ plan.terms))) d'.body (.list (nums.map Val.word)) :=
           ⟨d, hfd, hdl, f2, by rw [← ekeys]; exact hev2⟩
         have hnums : nums.length = n / 4 := by omega
-        have hrun : ∀ k, k < n / 4 → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * k + bb) = nums.getD k 0 / 256 ^ bb % 256 := by
+        have hrun : ∀ k, k < n / 4 → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * (plan.first + k) + bb) = nums.getD k 0 / 256 ^ bb % 256 := by
           intro k hk bb hbb
           have lt' : 4 * k + bb < l.length := by omega
           have := hlm (4 * k + bb) lt'
           rw [s1r, ← Nat.add_assoc] at this
-          rw [this, ← getD_of_lt l 0 lt']
+          rw [show s0.reg b + 4 * (plan.first + k) + bb = s0.reg b + 4 * plan.first + 4 * k + bb by omega, this, ← getD_of_lt l 0 lt']
           exact hlget k (by omega) bb hbb
-        have Hafter := afterCallW_holds E c.stack HT wfT hrsp hg.2 hg.1 hkeep psmall how (show n = 4 * (n / 4) by omega) hnow hmem2 hdata2
+        have Hafter := afterCallW_holds E c.stack HT wfT hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
           hnums hlt hrun hkeys hheld
-        have wafter := afterCallW_wf wfT sp plan.w (n / 4) plan.g hkeys
+        have wafter := afterCallW_wf wfT sp plan.w plan.first (n / 4) plan.g hkeys
         rw [hwords]
         exact ⟨hrip, _, afterRhoW_agree s.nvars ρ s2 nums, by rw [afterCallW_nvars]; show s.nvars ≤ s.nvars + 16 + n / 4; omega, Hafter, wafter⟩
+
+/-- A run given to read and write that nothing was written to yet, taken as written with the words it held
+at entry: what the verifier then holds is so of the same machine state. -/
+theorem touch_carried {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (w : Nat) : Carried ctx s0 ρ s ρ (s.touch ctx w) st := by
+  unfold Sym.touch
+  split
+  next x b n how =>
+    split
+    next hc =>
+      obtain ⟨hint, hio, n4⟩ := hc
+      split
+      next j hj =>
+        obtain ⟨_, x', n', hj'⟩ := runAt_spec hj
+        have hj'' : ctx.contract.wordRuns[j]? = some (x', b, n') := by simpa using hj'
+        have hint' : w ∈ s.intact := by simpa using hint
+        have hio' : (x, b, n) ∈ ctx.contract.inouts := by simpa using hio
+        have hsame : ∀ k, k < n → st.mem (s0.reg b + k) = s0.mem (s0.reg b + k) := H.words.intact w hint' x b n how
+        have L := loadWords_terms H wf hj'' (c := 0) (width := n / 4)
+          (fun k hk => by rw [Nat.add_zero]; exact hsame k (by omega)) rfl
+        dsimp only at L
+        rw [show ((List.range (n / 4)).map fun i => Node.input j (0 / 4 + i)) = (List.range (n / 4)).map fun k => Node.input j k from
+          List.map_congr_left fun i _ => by simp] at L
+        obtain ⟨CT, len, lt, dn⟩ := L
+        have HT := CT.holds
+        have wfT := CT.wf
+        refine ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩
+        · refine ⟨HT.entry, HT.data, HT.reg, HT.small, HT.zf, HT.cf, HT.frame, HT.facts, HT.bytes, HT.spec, HT.mem, HT.wrote,
+            ⟨HT.words.vec, (fun w' mw' => HT.words.intact w' (List.mem_filter.mp mw').1), ?_, HT.words.spill⟩, HT.known, HT.range⟩
+          intro w' k i mw' x'' r'' n'' ho'
+          rcases List.mem_append.mp mw' with mn | mo
+          · obtain ⟨k', hk', e⟩ := List.mem_map.mp mn
+            have hk' := List.mem_range.mp hk'
+            injection e with e1 e
+            injection e with e2 e3
+            subst e1 e2 e3
+            rw [how] at ho'
+            injection ho' with ho'
+            injection ho' with _ ho'
+            injection ho' with hb' hn'
+            subst hb' hn'
+            refine ⟨by omega, fun bb hbb => ?_⟩
+            have hd := dn k' hk'
+            rw [Nat.add_zero] at hd
+            show st.mem (s0.reg b + 4 * k' + bb) = den (inpOf ctx s0) ρ _ _ / 256 ^ bb % 256
+            rw [← hd, load4_byteAt st.mem (s0.reg b + 4 * k') bb hbb (fun q hq => by
+              rw [Nat.add_assoc, hsame (4 * k' + q) (by omega)]
+              exact E.inoutByte hio' (by omega))]
+          · exact HT.words.wrote w' k i mo x'' r'' n'' ho'
+        · refine ⟨wfT.base, wfT.reg, wfT.zf, wfT.cf, wfT.frame, wfT.facts, wfT.bytes, wfT.spec, wfT.wrote,
+            ⟨wfT.words.table, wfT.words.atoms, wfT.words.vec, wfT.words.rotrs, ?_, wfT.words.spill⟩, wfT.known, wfT.range⟩
+          intro w' k i mw'
+          rcases List.mem_append.mp mw' with mn | mo
+          · obtain ⟨k', hk', e⟩ := List.mem_map.mp mn
+            have hk' := List.mem_range.mp hk'
+            injection e with _ e
+            injection e with _ e
+            rw [← e]
+            exact lt _ (getD_mem _ _ (by omega))
+          · exact wfT.words.wrote w' k i mo
+      next => exact Carried.here H wf
+    next => exact Carried.here H wf
+  next => exact Carried.here H wf
+
+theorem callTouch_carried {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+    (H : Holds ctx s0 ρ s st) (wf : WF s) (c : Contract) : Carried ctx s0 ρ s ρ (callTouch ctx s c) st := by
+  unfold callTouch
+  split
+  · split
+    · exact touch_carried E H wf _
+    · exact Carried.here H wf
+  · exact Carried.here H wf
+
+/-- **A call, by contract, of a function that writes a run of words for its caller**, the run of this
+function it is given a part of being first taken as written with the words it held at entry. -/
+theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symCallW ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    c.pre q (afterCall p q i st) ∧
+    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
+    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
+  have T := callTouch_carried E H wf c
+  obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E (show symCallW' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
+    T.holds T.wf q hq i hret hl hal hd
+  refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
+  obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
+  exact ⟨hrip, ρ', T.then C⟩
 
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's

@@ -264,6 +264,25 @@ def layout_kind(arg, kind, lay):
     return lay["size"], (lambda x: ("record", fields)), lines
 
 
+def record_words(kind, lay, e, name):
+    """The words of a record laid out as `layout KIND …`, of the record e as a value (an expression): its
+    fields' words, one field after another. The fields must lie one after another and fill the record. A
+    field of chaining-value kind is its eight words; one of so many bytes, a multiple of four, is the words
+    of those bytes."""
+    at, parts = 0, []
+    for field, f in sorted(lay["fields"].items(), key=lambda item: item[1]["at"]):
+        m = re.fullmatch(r"(\d+) bytes", f["kind"])
+        if f["count"] is not None or f["at"] != at:
+            raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind}, whose fields do not lie one after another, each one thing: not read yet")
+        if f["kind"] == "cv": parts.append(("field", e, field)); at += 32
+        elif m and int(m.group(1)) % 4 == 0: parts.append(("call", "words", [("field", e, field)])); at += int(m.group(1))
+        else: raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind} with a field of a kind the verifier in Lean does not read there yet: {field}: {f['kind']}")
+    if at != lay["size"] or not parts: raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind}, whose fields do not fill it: not read yet")
+    joined = parts[-1]
+    for x in reversed(parts[:-1]): joined = ("bin", "++", x, joined)
+    return joined
+
+
 def named_bytes(arg, names):
     """An argument of the kind `bytes a b c d` is a number in a register; a, b, c, d name the four low bytes of
     it, the lowest first, and of the four bytes above them nothing is said. What each name stands for, said
@@ -299,6 +318,8 @@ def by_kind(e, kinds, name):
     if e[0] == "list": return ("list", [by_kind(a, kinds, name) for a in e[1]])
     if e[0] == "index": return ("index", by_kind(e[1], kinds, name), by_kind(e[2], kinds, name))
     if e[0] == "slice": return ("slice", by_kind(e[1], kinds, name), by_kind(e[2], kinds, name), by_kind(e[3], kinds, name))
+    if e[0] == "field": return ("field", by_kind(e[1], kinds, name), e[2])
+    if e[0] == "record": return ("record", [(field, by_kind(x, kinds, name)) for field, x in e[1]])
     # (a form that gives a name, a `let` or a list made thing by thing, could give an argument's name again)
     raise SystemExit(f"statement: the contract of {name}: beside arguments whose names stand for words, counters or records "
                      f"an expression of this form is not read yet: {e!r}")
@@ -363,13 +384,15 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         elif arg in packed and arg not in written: out.append(f"arg {arg} number")
         # a run of words: read and written where an `ensures` speaks of it, only read where none does
         elif kind in KINDS and KINDS[kind][0] is not None: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {KINDS[kind][0]}")
-        # a record in memory: only read
-        elif arg in laid and arg not in written: out.append(f"arg {arg} fixed {laid[arg][0]}")
+        # a record in memory: read and written where an `ensures` speaks of it, only read where none does
+        elif arg in laid: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {laid[arg][0]}")
         elif (kind in KINDS or kind == "any") and arg not in written: out.append(f"arg {arg} number")
         else: raise SystemExit(f"statement: {name}: an argument of a kind the verifier in Lean does not read yet: {arg}: {kind}")
     for arg, kind in c["args"]:
         if kind in BOUNDS: out.append(f"below {arg} {BOUNDS[kind]}")
-        if arg in laid: out += laid[arg][2]
+        # (what a layout asks of the numbers in a record is asked at entry, of a record that is only read)
+        if arg in laid and arg not in written: out += laid[arg][2]
+        elif arg in laid and laid[arg][2]: raise SystemExit(f"statement: the contract of {name} writes a record with a number in it ({arg}): not read yet")
     in_register = lambda arg: arg in sizes and sizes[arg] is None or dict(c["args"])[arg] == "number"
     for what, more in c["needs"]:
         if not re.fullmatch(r"[a-z0-9]+", what): raise SystemExit(f"statement: the contract of {name} has a `needs` line the verifier in Lean does not read yet")
@@ -421,6 +444,12 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
             continue
         if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
             raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")
+        if leaf["name"] in laid:
+            # a whole record: its bytes are those of its fields' words, one field after another
+            if leaf["part"] is not None: raise SystemExit(f"statement: the contract of {name} has an `ensures` of a part of a record, which the verifier in Lean does not read yet")
+            kind = dict(c["args"])[leaf["name"]]
+            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [record_words(kind, layouts[kind], by_kind(leaf["expr"], kinds, name), name)]), seqs))
+            continue
         if leaf["name"] in kinds:
             # a whole run of words: its bytes are those of the words said, the lowest byte of each first
             if leaf["part"] is not None: raise SystemExit(f"statement: the contract of {name} has an `ensures` of a part of a run of words, which the verifier in Lean does not read yet")

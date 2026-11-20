@@ -2619,31 +2619,49 @@ def writtenIds (wroteW : List (Nat × Nat × Nat)) (w : Nat) : Nat → Nat → O
     | some e, some rest => some (e.2.2 :: rest)
     | _, _ => none
 
-/-- The terms of the words of the run of words `j`, from word `k` on, `count` of them: each must be in the table. -/
-def inputIds (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (List Nat)
-  | 0, _ => some []
-  | count + 1, k =>
-    match look (.input j k), inputIds look j count (k + 1) with
-    | some i, some rest => some (i :: rest)
-    | _, _ => none
+/-- A run given to read and write that nothing was written to yet, taken as written with the words it held
+at entry: the term of each of its words (the word as it was at entry) is put into the table and is known
+as the word written there. (A part of the run can then be written, and the other words stay known.) Any
+other run, and a run that is not whole words: the state as it was. -/
+def Sym.touch (ctx : Ctx) (s : Sym) (w : Nat) : Sym :=
+  match ctx.contract.outs[w]? with
+  | some (x, b, n) =>
+    if s.intact.contains w = true ∧ ctx.contract.inouts.contains (x, b, n) = true ∧ n % 4 = 0 then
+      match runAt b ctx.contract.wordRuns 0 with
+      | some j =>
+        let made := termsOf intern ((List.range (n / 4)).map fun k => Node.input j k) s.tab
+        { s with tab := made.2, intact := s.intact.filter (· != w),
+                 wroteW := ((List.range (n / 4)).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW }
+      | none => s
+    else s
+  | none => s
 
-/-- The run this function may read and write that a called function is given to read and write: the
-register `r` holds its address as it was at entry, it is `n` bytes, no single byte of it was written, and
-every word of it is known: written, or (nothing having been written to the run) as it was at entry. Its
-number among the runs given to write, and the words' terms. -/
-def callRun (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (r n : Nat) : Option (Nat × List Nat) :=
+/-- Before a call of a function that reads and writes a run: where the register it is given in holds an
+address in a run of this function's that nothing was written to yet, that run is taken as written with
+the words it held at entry (`Sym.touch`). -/
+def callTouch (ctx : Ctx) (s : Sym) (c : Contract) : Sym :=
+  match c.inouts with
+  | [(_, r, _)] =>
+    match findOut (s.reg r) ctx.contract.outs 0 with
+    | some (.out w _) => s.touch ctx w
+    | _ => s
+  | _ => s
+
+/-- The run a called function is given to read and write: a part of a run this function may read and
+write. The register `r` holds an address so far from where that run begins: a number of bytes that is a
+multiple of four; `n` bytes from there lie in the run; no single byte of the run was written; and every
+word of the part is known written. The run's number among the runs given to write, the part's first word,
+and the words' terms. -/
+def callRun (ctx : Ctx) (s : Sym) (r n : Nat) : Option (Nat × Nat × List Nat) :=
   match findOut (s.reg r) ctx.contract.outs 0 with
   | some (.out w off) =>
-    match ctx.contract.outs[w]? with
-    | some (x, b, n0) =>
-      if Lin.isConst off = some 0 ∧ n0 = n ∧ n % 4 = 0 ∧ ctx.contract.inouts.contains (x, b, n0) = true ∧
+    match Lin.isConst off, ctx.contract.outs[w]? with
+    | some c, some (x, b, n0) =>
+      if 0 ≤ c ∧ c % 4 = 0 ∧ c + n ≤ n0 ∧ n % 4 = 0 ∧ ctx.contract.inouts.contains (x, b, n0) = true ∧
           s.wrote.all (fun e => e.1 != w) = true then
-        if s.intact.contains w then
-          -- nothing was written to it yet: its words are those it held at entry, which must be in the table
-          (runAt b ctx.contract.wordRuns 0).bind fun j => (inputIds look j (n / 4) 0).map fun ids => (w, ids)
-        else (writtenIds s.wroteW w (n / 4) 0).map fun ids => (w, ids)
+        (writtenIds s.wroteW w (n / 4) (c.toNat / 4)).map fun ids => (w, c.toNat / 4, ids)
       else none
-    | none => none
+    | _, _ => none
   | _ => none
 
 /-- The part of a run this function was given to read that a called function is given to read, as a run of
@@ -2681,35 +2699,21 @@ def calleeW (ctx : Ctx) (s : Sym) (ids : List Nat) : List (String × Kind) → L
   | (_, .out _) :: _, _ :: _ => none
   | _, _ => some []
 
-/-- The words of the parts of runs handed to a called function, and of a run handed over to read and write
-that is still as at entry, as terms to be in the table (so that the specification's `words` of such a part
-finds them). -/
+/-- The words of the parts of runs handed to a called function to read, as terms to be in the table (so
+that the specification's `words` of such a part finds them). -/
 def partNodes (ctx : Ctx) (s : Sym) : List (String × Kind) → List Nat → List Node
   | (_, .fixed n) :: args, r :: regs =>
     (match fixedPart ctx s r n with
      | some (j, _, c) => if c % 4 = 0 then (List.range (n / 4)).map fun k => Node.input j (c / 4 + k) else []
      | none => []) ++ partNodes ctx s args regs
-  | (_, .inout n) :: args, r :: regs =>
-    -- a run handed over to read and write that nothing was written to yet: its words as they were at entry
-    (match findOut (s.reg r) ctx.contract.outs 0 with
-     | some (.out w _) =>
-       (match ctx.contract.outs[w]? with
-        | some (_, b, _) =>
-          if s.intact.contains w then
-            (match runAt b ctx.contract.wordRuns 0 with
-             | some j => (List.range (n / 4)).map fun k => Node.input j k
-             | none => [])
-          else []
-        | none => [])
-     | _ => []) ++ partNodes ctx s args regs
   | _ :: args, _ :: regs => partNodes ctx s args regs
   | _, _ => []
 
-/-- The state after a call of a function that has written the run `w`, of `m` words: as after any call
-(`Sym.afterCall`); and each word of the run is a new unknown from 0 to 2^32 - 1, the run's words are those,
-and the definition `g`, used with `keys`, is known to be the list of them. What was known of the other runs
-given to write stays. -/
-def Sym.afterCallW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Key) : Sym :=
+/-- The state after a call of a function that has written `m` words of the run `w`, from word `o` on: as
+after any call (`Sym.afterCall`); and each word written is a new unknown from 0 to 2^32 - 1, those words
+of the run are these, and the definition `g`, used with `keys`, is known to be the list of them. What was
+known of the run's other words and of the other runs given to write stays. -/
+def Sym.afterCallW (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) : Sym :=
   let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
   { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
@@ -2719,15 +2723,17 @@ def Sym.afterCallW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Ke
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
     tab := made.2,
     intact := s.intact.filter (· != w),
-    wroteW := ((List.range m).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW.filter fun e => e.1 != w,
+    wroteW := ((List.range m).map fun k => (w, o + k, made.1.getD k 0)) ++
+              s.wroteW.filter fun e => e.1 != w || decide (e.2.1 < o) || decide (o + m ≤ e.2.1),
     known := .held g keys made.1 :: s.known }
 
-/-- What a call of a function that writes a run of words is taken by: the run of this function that it
-writes (its number among the runs given to write, and how many words it has), the definition its contract
-names, the keys of the things the definition is used with there, and the table with the words of the parts
-handed over put in. -/
+/-- What a call of a function that writes a run of words is taken by: the part of a run of this function
+that it writes (the run's number among the runs given to write, the part's first word, and how many words
+the part has), the definition its contract names, the keys of the things the definition is used with
+there, and the table with the words of the parts handed over put in. -/
 structure CallW where
   w : Nat
+  first : Nat
   words : Nat
   g : String
   keys : List Key
@@ -2746,9 +2752,9 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
         .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
       else
         let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
-        match callRun ctx T.find s r n with
-        | none => .error "a called function is given to write what is not a run this function may read and write, whole, with every word of it known"
-        | some (w, ids) =>
+        match callRun ctx s r n with
+        | none => .error "a called function is given to write what is not whole words of a run this function may read and write, each of them known"
+        | some (w, o, ids) =>
           match calleeW ctx s ids c.args argRegs with
           | none => .error "a called function is given a run that is no part of a run this function was given to read"
           | some env =>
@@ -2761,7 +2767,7 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
                   match flatKeys T.find vs with
                   | some keys =>
                     if !(keys.all (Key.ok s.nvars T.list.length)) then .error "what a called function's contract says of its arguments is not followed"
-                    else if d.params.length == keys.length then .ok ⟨w, n / 4, g, keys, T⟩
+                    else if d.params.length == keys.length then .ok ⟨w, o, n / 4, g, keys, T⟩
                     else .error "a called function's contract uses a definition with another number of things"
                   | none => .error "what a called function's contract says of its arguments is not followed"
                 | _, _ => .error "what a called function's contract says of its arguments is not followed"
@@ -2769,7 +2775,7 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
             | _ => .error "a called function's `ensures` that is not the bytes of the words a definition gives: not here yet"
     | _, _, _ => .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
 
-def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
@@ -2784,7 +2790,11 @@ def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           match c.regOf xb.1 with
           | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
           | none => pure ()) c.bounds
-        pure (Sym.afterCallW { s with tab := plan.tab } sp plan.w plan.words plan.g plan.keys)
+        pure (Sym.afterCallW { s with tab := plan.tab } sp plan.w plan.first plan.words plan.g plan.keys)
+
+/-- A call of a function that writes a run of words: the run of this function that it is given a part of
+is first taken as written with the words it held at entry, where nothing was written to it yet. -/
+def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallW' ctx (callTouch ctx s c) c
 
 /-- A call: by the rule for a function that writes nothing for its caller, or by the rule for one that
 writes a run of words. -/

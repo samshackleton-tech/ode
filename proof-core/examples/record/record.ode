@@ -1,0 +1,31 @@
+// A chaining value kept in a record, after two more blocks. The first function shown by the verifier in
+// Lean that hands a called function, to read and write, a part of a run it may itself read and write. The
+// record is 64 bytes: a tag of eight words that this function leaves alone, then the chaining value. The
+// one-block kernel is given the address of the record's second half twice: first when nothing has been
+// written to the record, then when its second half holds what the first call left there.
+// absorb(r, m, m2): arguments in rdi, rsi, rdx, as C passes them. Saved and restored: rbx, r12. Kept over
+//   the first call: r in rbx, m2 in r12. The kernel is given r + 32, a block, the block length 64, the
+//   counter 0 and no flags.
+fn absorb as "ode_absorb" {
+  push rbx
+  push r12
+  sub rsp, 8
+  mov rbx, rdi
+  mov r12, rdx
+  add rdi, 32
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  mov rdi, rbx
+  add rdi, 32
+  mov rsi, r12
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 8
+  pop r12
+  pop rbx
+  ret
+}
