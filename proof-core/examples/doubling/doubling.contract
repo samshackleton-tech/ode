@@ -1,0 +1,13 @@
+// The contract of ode_left_last (doubling.ode). `left_chunks` is ../../../kcheck/blake3.spec's own definition:
+// `the greatest power of two k with 1024 * k < len(bytes)`. The contract says where the block lies by that
+// definition, for a message of any length from 1025 bytes to 2^63. (Longer messages: see test_doubling.py,
+// the limit.) The loop has no invariant: the verifier walks it, one path for each count the left part
+// can have, and on each path the proof answers which powers of two are too great for the message.
+contract ode_left_last(h: cv, input: len bytes, len: number) {
+    requires no_overlap(h, input)
+    requires len >= 1025
+    requires len <= 9223372036854775808
+    ensures h = compress(h, words(input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]), counter(0), 64, 0)
+    stack 64
+    needs sse41
+}

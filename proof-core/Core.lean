@@ -2412,6 +2412,29 @@ proof (`isBelow`: the proof says which way it is, with the arithmetic), what is 
 the `ensures` is gone through again: `weval` finds the comparisons there. `wask` is advice: whatever it
 gives, only what the proof shows is added. -/
 
+/-- Among numbers gone through in order, of each of which something is worked out: where it is not
+followed of one of them (and, with `first`, was not followed and true of one before): that number; or,
+with `middle`, the middle one of the run of numbers from there on of which it is not followed. (Advice.
+Where the thing is a comparison that turns once along the numbers, as `1024 * k < len` does along the
+powers of two, an answer about the middle one says it of half the run at once: six questions for
+sixty-four powers. Where it does not turn once, a question about the middle one may be one the proof
+cannot answer, though a search from the first would have ended before it: the function is then not
+shown.) -/
+def askAt (first middle : Bool) (followed : Int → Option WVal) (l : List Int) : Option Int :=
+  let rest := l.dropWhile fun n =>
+    match followed n with
+    | some (.bool true) => !first
+    | some _ => true
+    | none => false
+  match rest with
+  | [] => none
+  | n :: more =>
+    if (followed n).isSome then none
+    else if !middle then some n
+    else
+      let run := n :: more.takeWhile fun m => (followed m).isNone
+      run[run.length / 2]?
+
 mutual
   /-- Where `weval` does not follow the expression because two numbers are compared (or one taken from
   the other, or a part of a run of bytes is to end within it) and the facts do not say at once how they
@@ -2461,7 +2484,9 @@ mutual
         | .each e1 x a b =>
           match weval ctx look s fuel env a, weval ctx look s fuel env b with
           | some (.int lo), some (.int hi) =>
-            waskAmong ctx look s fuel env x e1 ((List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int))
+            match askAt false false (fun n => weval ctx look s fuel ((x, .int n) :: env) e1) ((List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)) with
+            | some n => wask ctx look s fuel ((x, .int n) :: env) e1
+            | none => none
           | none, _ => wask ctx look s fuel env a
           | _, _ => wask ctx look s fuel env b
         | .withx a puts => (wask ctx look s fuel env a).orElse fun _ => waskList ctx look s fuel env puts
@@ -2481,27 +2506,22 @@ mutual
           match weval ctx look s fuel env a, weval ctx look s fuel env b with
           | some (.int lo), some (.int hi) =>
             let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
-            waskAmong ctx look s fuel env x cond (if greatest then among.reverse else among)
+            match askAt true false (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among) with
+            | some n => wask ctx look s fuel ((x, .int n) :: env) cond
+            | none => none
           | none, _ => wask ctx look s fuel env a
           | _, _ => wask ctx look s fuel env b
         | .thePower greatest x cond =>
           let among := (List.range 64).map fun (k : Nat) => (2 : Int) ^ k
-          waskAmong ctx look s fuel env x cond (if greatest then among.reverse else among)
+          match askAt true true (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among) with
+          | some n => wask ctx look s fuel ((x, .int n) :: env) cond
+          | none => none
         | _ => none
   /-- The first of the things of a list that `weval` does not follow: what is asked there. -/
   def waskList (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option (Row × Row)
     | fuel, env, .cons a rest =>
       if (weval ctx look s fuel env a).isSome then waskList ctx look s fuel env rest else wask ctx look s fuel env a
     | _, _, _ => none
-  /-- The first of the numbers, the name `x` being it, of which `weval` does not follow the expression:
-  what is asked there. (A condition that is followed and true ends the search, as it ends `wfirstWith`.) -/
-  def waskAmong (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → String → SExpr → List Int → Option (Row × Row)
-    | _, _, _, _, [] => none
-    | fuel, env, x, e, n :: rest =>
-      match weval ctx look s fuel ((x, .int n) :: env) e with
-      | none => wask ctx look s fuel ((x, .int n) :: env) e
-      | some (.bool true) => none
-      | some _ => waskAmong ctx look s fuel env x e rest
 end
 
 /-- The comparisons `ask` finds are asked of the proof, one after another, at most `fuel` of them: whether
