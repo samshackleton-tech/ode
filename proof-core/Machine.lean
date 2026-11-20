@@ -48,6 +48,16 @@ def readInt (text : String) : Option Int :=
   | '-' :: cs => (nat cs).map fun n => -(n : Int)
   | cs => (nat cs).map fun n => (n : Int)
 
+/-- What may depend on a secret: a mark (`true`) on each general register, on the two flags, and on each
+byte of memory. (A vector register has no mark of its own: it is always taken as marked.) The marks do
+nothing to what an instruction computes. They are moved as values are moved, so that a value that is not
+marked has been computed from values not marked alone. -/
+structure Marks where
+  reg : Nat → Bool := fun _ => false
+  zf : Bool := false
+  cf : Bool := false
+  mem : Nat → Bool := fun _ => false
+
 structure State where
   reg : Nat → Nat          -- the sixteen general registers, by number (rax 0, rcx 1, rdx 2, rbx 3, rsp 4, …)
   zf : Bool
@@ -55,6 +65,8 @@ structure State where
   mem : Nat → Nat          -- the byte at an address
   rip : Nat
   vec : Nat → Nat → Nat    -- the vector registers: a register's lanes of 32 bits, lane 0 the lowest
+  marks : Marks := {}      -- what may depend on a secret
+  trace : List (Nat × Nat) := []    -- what has been observed so far, the oldest first: (an instruction's address, 0); (an address touched, how many bytes)
 
 /-- The bytes a function may read, and may write. -/
 structure Perm where
@@ -311,6 +323,131 @@ def execVec512 (perm : Perm) (bind : Bind) (s : State) (place rhs : Expr) : Opti
     if allowed perm.write a 64 then some { s with mem := storeWords s.mem a lanes } else none
   | _ => none
 
+/-! ## Marks and the trace
+
+What follows changes no value. It says, of a statement run in the state `s`: which marks are set after
+it, and what was observed. -/
+
+/-- How many bytes a memory operand is, by its name in an EFFECT. -/
+def memWidth (f : String) : Option Nat :=
+  if f == "mem8" then some 1 else if f == "mem32" then some 4 else if f == "mem64" then some 8
+  else if f == "mem128" then some 16 else if f == "mem512" || f == "mem512a" then some 64 else none
+
+/-- Is any of the `n` bytes at `a` marked? -/
+def anyMarked (m : Nat → Bool) (a : Nat) : Nat → Bool
+  | 0 => false
+  | n + 1 => m a || anyMarked m (a + 1) n
+
+/-- The marks with the `n` bytes at `a` marked, or not marked. -/
+def markBytes (m : Nat → Bool) (a n : Nat) (b : Bool) : Nat → Bool :=
+  fun x => if a ≤ x ∧ x < a + n then b else m x
+
+mutual
+  /-- May what an expression stands for depend on a secret? A number of the instruction: no. A general
+  register: its mark. A vector register, a lane of one, `unknown`: yes. Memory: yes if a byte read is
+  marked, or anything its address is made of. Anything else: if anything it is made of may. -/
+  def exprMark (perm : Perm) (bind : Bind) (s : State) : Expr → Bool
+    | .number _ => false
+    | .lane _ _ => true
+    | .name n =>
+      if isNumberLetter n then false
+      else match regOf bind n with
+        | some r => s.marks.reg r
+        | none => isVectorLetter n || n == "X512" || n == "Y512" || n == "Z512" || n == "unknown"
+    | .call f args =>
+      exprMarks perm bind s args ||
+        match memWidth f, values perm bind s args with
+        | some w, some vs => anyMarked s.marks.mem (sumList vs % M64) w
+        | some _, none => true
+        | none, _ => false
+  def exprMarks (perm : Perm) (bind : Bind) (s : State) : List Expr → Bool
+    | [] => false
+    | e :: es => exprMark perm bind s e || exprMarks perm bind s es
+end
+
+mutual
+  /-- No address in the expression is made of anything marked. -/
+  def addrsQuiet (perm : Perm) (bind : Bind) (s : State) : Expr → Bool
+    | .call f args => addrsQuietAll perm bind s args && ((memWidth f).isNone || !exprMarks perm bind s args)
+    | _ => true
+  def addrsQuietAll (perm : Perm) (bind : Bind) (s : State) : List Expr → Bool
+    | [] => true
+    | e :: es => addrsQuiet perm bind s e && addrsQuietAll perm bind s es
+end
+
+mutual
+  /-- The memory an expression touches: each address with how many bytes. -/
+  def touched (perm : Perm) (bind : Bind) (s : State) : Expr → List (Nat × Nat)
+    | .call f args =>
+      touchedAll perm bind s args ++
+        match memWidth f, values perm bind s args with
+        | some w, some vs => [(sumList vs % M64, w)]
+        | _, _ => []
+    | _ => []
+  def touchedAll (perm : Perm) (bind : Bind) (s : State) : List Expr → List (Nat × Nat)
+    | [] => []
+    | e :: es => touched perm bind s e ++ touchedAll perm bind s es
+end
+
+/-- A statement uses nothing marked in a way that shows: no address it touches is made of anything marked,
+and a jump on a flag is on a flag not marked. (A return: the stack pointer is not marked.) -/
+def quietStmt (perm : Perm) (bind : Bind) (s : State) : Stmt → Bool
+  | .set place v => addrsQuiet perm bind s place && addrsQuiet perm bind s v
+  | .vset place v => addrsQuiet perm bind s place && addrsQuiet perm bind s v
+  | .vset512 place v => addrsQuiet perm bind s place && addrsQuiet perm bind s v
+  | .jump target cond =>
+    !exprMark perm bind s target &&
+      match cond with
+      | none => true
+      | some (flag, _) => !(if flag == "zf" then s.marks.zf else s.marks.cf)
+  | .ret => !s.marks.reg RSP
+  | .call _ => !s.marks.reg RSP
+  | .nothing => true
+
+/-- The marks after a statement, `s` being the state before it: what is set is marked if what it is set
+from may depend on a secret. A vector register has no mark; what a vector is stored to is marked. -/
+def marksAfter (perm : Perm) (bind : Bind) (s : State) : Stmt → Marks
+  | .set place v =>
+    let m := exprMark perm bind s v
+    match place with
+    | .name n =>
+      if n == "zf" then { s.marks with zf := m }
+      else if n == "cf" then { s.marks with cf := m }
+      else match regOf bind n with
+        | some r => { s.marks with reg := fun k => if k = r then m else s.marks.reg k }
+        | none => s.marks
+    | .call f args =>
+      match memWidth f, values perm bind s args with
+      | some w, some vs => { s.marks with mem := markBytes s.marks.mem (sumList vs % M64) w m }
+      | _, _ => s.marks
+    | _ => s.marks
+  | .vset place _ =>
+    match place with
+    | .call f args =>
+      match memWidth f, values perm bind s args with
+      | some w, some vs => { s.marks with mem := markBytes s.marks.mem (sumList vs % M64) w true }
+      | _, _ => s.marks
+    | _ => s.marks
+  | .vset512 place _ =>
+    match place with
+    | .call f args =>
+      match memWidth f, values perm bind s args with
+      | some w, some vs => { s.marks with mem := markBytes s.marks.mem (sumList vs % M64) w true }
+      | _, _ => s.marks
+    | _ => s.marks
+  | _ => s.marks
+
+/-- What a statement lets be observed: the memory it touches. -/
+def observed (perm : Perm) (bind : Bind) (s : State) : Stmt → List (Nat × Nat)
+  | .set place v => touched perm bind s place ++ touched perm bind s v
+  | .vset place v => touched perm bind s place ++ touched perm bind s v
+  | .vset512 place v => touched perm bind s place ++ touched perm bind s v
+  | _ => []
+
+/-- The state `s'` a statement gave from `s`, with the marks and the trace brought up to date. -/
+def noted (perm : Perm) (bind : Bind) (s : State) (st : Stmt) (s' : State) : State :=
+  { s' with marks := marksAfter perm bind s st, trace := s.trace ++ observed perm bind s st }
+
 /-- One statement of an effect. `u` is what an `unknown` turns out to be this time. -/
 def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → Option State
   | .nothing => some s
@@ -364,10 +501,10 @@ def execAll (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat →
   | _, s, [] => some (.next s)
   | _, s, .ret :: _ =>
     let sp := s.reg RSP
-    if allowed perm.read sp 8 then some (.returned (setReg { s with rip := load s.mem sp 8 } RSP (sp + 8))) else none
+    if allowed perm.read sp 8 then some (.returned (setReg { s with rip := load s.mem sp 8, trace := s.trace ++ [(sp, 8)] } RSP (sp + 8))) else none
   | k, s, st :: rest =>
     match execStmt perm bind base (u k) s st with
-    | some s' => execAll perm bind base u (k + 1) s' rest
+    | some s' => execAll perm bind base u (k + 1) (noted perm bind s st s') rest
     | none => none
 
 /-- A decoded instruction: its row's effect, what the row's placeholders are, and where the next one is
@@ -388,7 +525,7 @@ def Program.fetch (p : Program) (rip : Nat) : Option Instr :=
   if rip < p.base then none else p.code.lookup (rip - p.base)
 
 def exec (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) : Option Outcome :=
-  execAll perm i.bind p.base u 0 { s with rip := p.base + i.next } i.effect
+  execAll perm i.bind p.base u 0 { s with rip := p.base + i.next, trace := s.trace ++ [(s.rip, 0)] } i.effect
 
 /-- The function an instruction calls, by its name. -/
 def callTarget (i : Instr) : Option String :=
@@ -403,7 +540,9 @@ def findProgram (world : List Program) (name : String) : Option Program := world
 pointer, the stack pointer points at it, and the next instruction is the called function's first. -/
 def afterCall (p q : Program) (i : Instr) (s : State) : State :=
   { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec }
+    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec,
+    marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },      -- (the address to come back to is no secret)
+    trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
 
 /-- From `s`, whatever the unknowns turn out to be: the function `p` runs on instructions it has, touches
 only what `perm` lets it, and returns after finitely many of them in a state of which `Q` holds.

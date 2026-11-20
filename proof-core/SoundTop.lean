@@ -10,9 +10,36 @@ import SoundList
 namespace Ode
 open Arithmetic
 
+/-- What the verifier holds of a state speaks of its registers, flags, memory and vector registers: it is
+so of any state with the same ones (whatever its place in the code, its marks and its trace). -/
+theorem Holds.fields {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st st' : State} (H : Holds ctx s0 ρ s st)
+    (hr : st'.reg = st.reg) (hz : st'.zf = st.zf) (hc : st'.cf = st.cf) (hm : st'.mem = st.mem) (hv : st'.vec = st.vec) :
+    Holds ctx s0 ρ s st' := by
+  refine ⟨H.entry, ?_, ?_, ?_, ?_, ?_, H.facts, H.bytes, H.spec, ?_, ?_, ?_, H.known⟩
+  · rw [hr]; exact H.reg
+  · rw [hr]; exact H.small
+  · rw [hz]; exact H.zf
+  · rw [hc]; exact H.cf
+  · rw [hm]; exact H.frame
+  · rw [hm]; exact H.mem
+  · rw [hm]; exact H.wrote
+  · have W := H.words
+    unfold VecOk at W ⊢
+    rw [hv, hm]; exact W
+
 theorem Holds.rip {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : Nat) :
-    Holds ctx s0 ρ s { st with rip := x } :=
-  ⟨H.entry, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known⟩
+    Holds ctx s0 ρ s { st with rip := x } := H.fields rfl rfl rfl rfl rfl
+
+theorem Carried.fields {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s s' : Sym} {st st' : State} (c : Carried ctx s0 ρ s ρ' s' st)
+    (hr : st'.reg = st.reg) (hz : st'.zf = st.zf) (hc : st'.cf = st.cf) (hm : st'.mem = st.mem) (hv : st'.vec = st.vec) :
+    Carried ctx s0 ρ s ρ' s' st' := ⟨c.agree, c.mono, c.holds.fields hr hz hc hm hv, c.wf⟩
+
+/-- What a contract promises of the state at the return speaks of its registers, its memory and where it
+goes on: it is so of any state with the same ones. -/
+theorem post_fields {c : Contract} {defs : List Def} {s0 st st' : State} (h : c.post defs s0 st)
+    (hr : st'.reg = st.reg) (hm : st'.mem = st.mem) (hrip : st'.rip = st.rip) : c.post defs s0 st' := by
+  simp only [Contract.post, Ensure.holds, EnsureW.holds, Contract.envAfter, hr, hm, hrip] at h ⊢
+  exact h
 
 /-- The statements of an effect, one after another. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
@@ -30,8 +57,10 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     simp only [fold] at h
     obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨ρ1, st1, c1, x1, rip1⟩ := symStmt_sound E bind e1 H wf base (u k)
-    obtain ⟨ρ2, st2, c2, x2, rip2⟩ := stmts_sound E bind base u more (k + 1) h c1.holds c1.wf
-    refine ⟨ρ2, st2, c1.then c2, ?_, rip2.trans rip1⟩
+    -- the machine goes on from that state with its marks and its trace brought up to date
+    have c1' : Carried ctx s0 ρ s ρ1 s1 (noted (ctx.contract.perm s0) bind st stmt st1) := c1.fields rfl rfl rfl rfl rfl
+    obtain ⟨ρ2, st2, c2, x2, rip2⟩ := stmts_sound E bind base u more (k + 1) h c1'.holds c1'.wf
+    refine ⟨ρ2, st2, c1'.then c2, ?_, rip2.trans rip1⟩
     cases stmt with
     | ret => simp only [symStmt] at e1; exact (refuse_ok e1).elim
     | nothing => simp only [execAll, x1]; exact x2
@@ -322,6 +351,11 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 /-! ## An instruction -/
 
+/-- The state an instruction's statements start in: the place in the code is the next instruction's, and
+the instruction's own address has been observed. -/
+abbrev started (p : Program) (i : Instr) (st : State) : State :=
+  { st with rip := p.base + i.next, trace := st.trace ++ [(st.rip, 0)] }
+
 theorem shape_ret : ∀ {l : List Stmt}, shape l = .ret → l = [.ret]
   | [], h => by simp [shape] at h
   | [s], h => by cases s <;> simp [shape] at h ⊢
@@ -348,7 +382,7 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     simp only [symInstr, hs] at h
     obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
     obtain ⟨al, post⟩ := symReturn_sound E e1 (H.rip (p.base + i.next)) wf
-    refine ⟨_, by simp only [exec, heff, execAll]; rw [if_pos al], post⟩
+    refine ⟨_, by simp only [exec, heff, execAll]; rw [if_pos al], post_fields post rfl rfl rfl⟩
   | jump target cond =>
     have heff := shape_jump hs
     simp only [symInstr, hs] at h
@@ -356,14 +390,15 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     | none => simp only [ht] at h; exact (refuse_ok h).elim
     | some t =>
       simp only [ht] at h
-      have hv := jumpTarget_value ht (ctx.contract.perm s0) { st with rip := p.base + i.next }
+      have hv := jumpTarget_value ht (ctx.contract.perm s0) (started p i st)
       cases cond with
       | none =>
         simp only at h
         have := V.pure_ok h
         injection this with h1 _
         subst h1
-        refine ⟨.next { st with rip := p.base + t }, by simp [exec, heff, execAll, execStmt, hv], s, t, ρ, List.mem_cons_self .., rfl, Carried.here (H.rip _) wf⟩
+        refine ⟨.next (noted (ctx.contract.perm s0) i.bind (started p i st) (.jump target none) { started p i st with rip := p.base + t }),
+          by simp [exec, heff, execAll, execStmt, hv], s, t, ρ, List.mem_cons_self .., rfl, Carried.here (H.fields rfl rfl rfl rfl rfl) wf⟩
       | some fw =>
         obtain ⟨flag, want⟩ := fw
         simp only at h
@@ -378,9 +413,11 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             obtain ⟨s', m, c'⟩ := ways_sound H wf st.zf w h bd ex
             by_cases taken : (st.zf == want) = true
             · rw [if_pos taken] at m
-              exact ⟨.next { st with rip := p.base + t }, by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl, c'.agree, c'.mono, c'.holds.rip _, c'.wf⟩
+              exact ⟨.next (noted (ctx.contract.perm s0) i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
+                by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl, c'.fields rfl rfl rfl rfl rfl⟩
             · rw [if_neg taken] at m
-              exact ⟨.next { st with rip := p.base + i.next }, by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl, c'.agree, c'.mono, c'.holds.rip _, c'.wf⟩
+              exact ⟨.next (noted (ctx.contract.perm s0) i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
+                by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl, c'.fields rfl rfl rfl rfl rfl⟩
         | false =>
           simp only [hz, Bool.false_eq_true, if_false] at h
           cases hw : flagWays s.cf with
@@ -391,9 +428,11 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             obtain ⟨s', m, c'⟩ := ways_sound H wf st.cf w h bd ex
             by_cases taken : (st.cf == want) = true
             · rw [if_pos taken] at m
-              exact ⟨.next { st with rip := p.base + t }, by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl, c'.agree, c'.mono, c'.holds.rip _, c'.wf⟩
+              exact ⟨.next (noted (ctx.contract.perm s0) i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
+                by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl, c'.fields rfl rfl rfl rfl rfl⟩
             · rw [if_neg taken] at m
-              exact ⟨.next { st with rip := p.base + i.next }, by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl, c'.agree, c'.mono, c'.holds.rip _, c'.wf⟩
+              exact ⟨.next (noted (ctx.contract.perm s0) i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
+                by simp only [exec, heff, execAll, execStmt, hz, if_true, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl, c'.fields rfl rfl rfl rfl rfl⟩
   | plain =>
     simp only [symInstr, hs] at h
     obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
@@ -401,7 +440,8 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     have := V.pure_ok h
     injection this with h1 _
     subst h1
-    obtain ⟨ρ1, st1, c1, x1, rip1⟩ := stmts_sound E i.bind p.base u i.effect 0 e1 (H.rip (p.base + i.next)) wf
+    obtain ⟨ρ1, st1, c1, x1, rip1⟩ := stmts_sound E i.bind p.base u i.effect 0 e1
+      (H.fields (st' := { st with rip := p.base + i.next, trace := st.trace ++ [(st.rip, 0)] }) rfl rfl rfl rfl rfl) wf
     have c2 := settle_sound e2 c1.holds c1.wf
     exact ⟨.next st1, x1, s2, i.next, ρ1, List.mem_cons_self .., rip1, c1.then c2⟩
 
