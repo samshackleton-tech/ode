@@ -358,12 +358,14 @@ inductive Known where
   | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
   deriving DecidableEq, Repr, Inhabited
 
-/-- What is known NOT to be marked (not to depend on a secret): general registers, and the two flags.
+/-- What is known NOT to be marked (not to depend on a secret): general registers, the two flags, and
+cells of the frame (eight bytes each, by how far they are from where the stack pointer was at entry).
 Of anything not named here nothing is known: it may be marked. -/
 structure SMarks where
   regq : List Nat := []
   zq : Bool := false
   cq : Bool := false
+  fq : List Int := []
   deriving Inhabited
 
 /-- What a loop has written so far, as a place says it: each place `j` of the run `w` (a run given to
@@ -2176,12 +2178,13 @@ def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) 
   | some x, some y =>
     let addr := Lin.add (signed x) (signed y)
     match locate ctx addr with
+    | some (.frame c) => size == 8 && s.q.fq.contains c       -- (a cell of the frame known not to be marked)
     | some (.region r o) =>
       size == 1 && (lookupByte r o s1.bytes).isSome &&
         match ctx.contract.regions[r]? with
         | some (base, _) => !ctx.contract.hiddenAt base
         | none => false
-    | some _ => false
+    | some (.out _ _) => false
     | none =>
       match findOut addr ctx.contract.fixeds 0 with
       | some (.out j off) =>
@@ -2214,6 +2217,24 @@ mutual
       | _, _ => none
 end
 
+/-- The cells of the frame known not to be marked, after a store to memory at `args` of something that
+may be marked (`m`) or may not. A store at a place of the frame that is a number: the cells apart from the
+bytes stored to stay, and where eight bytes are stored and what is stored is not marked, they are a cell
+known not to be marked. Any other store: nothing is known of any cell after it. -/
+def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) : List Int :=
+  match memSize f, args with
+  | some size, [a, b] =>
+    match plainRow bind s a, plainRow bind s b with
+    | some x, some y =>
+      match locate ctx (Lin.add (signed x) (signed y)) with
+      | some (.frame c) =>
+        if decide (-(ctx.contract.stack : Int) ≤ c) && decide (c + size ≤ 0) then
+          (if size == 8 && !m then [c] else []) ++ s.q.fq.filter fun o => decide (o + 8 ≤ c) || decide (c + size ≤ o)
+        else []
+      | _ => []
+    | _, _ => []
+  | _, _ => []
+
 /-- What is known not to be marked after a statement, `s` being the state before it and `s1` the state
 after. No answer: the statement could use something marked in an address. -/
 def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
@@ -2229,18 +2250,18 @@ def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
         else match regOf bind n with
           | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq.filter (· != r) }     -- (once in the list)
           | none => none
-      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | .call f args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfter ctx bind s f args m } else none
       | _ => none
   | .vset place v =>
     if quietExprS bind s.q.regq v then
       match place with
-      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | .call _ args => if cleanAll bind s.q.regq args then some { s.q with fq := [] } else none
       | _ => some s.q
     else none
   | .vset512 place v =>
     if quietExprS bind s.q.regq v then
       match place with
-      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | .call _ args => if cleanAll bind s.q.regq args then some { s.q with fq := [] } else none
       | _ => some s.q
     else none
   | _ => none
@@ -2560,10 +2581,13 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
 does not keep are known not to be marked; each run of bytes it is given to read is one its contract
 says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
 this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
-says is hidden. -/
+says is hidden. And where a cell of the frame is known not to be marked, each run the called function
+may write is within a run this function was given to write (so it is no part of the frame). -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   quietRegs.all s.q.regq.contains &&
   c.fixeds.all (fun x => c.hidden.contains x.1) &&
+  (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
+    ctx.contract.outs.any fun (_, b, n0) => s.reg r == Lin.var b && decide (b < 16) && decide (n ≤ n0)) &&
   c.regions.all fun (r, l) =>
     c.hiddenAt r ||
       match findRun s r l ctx.contract.regions 0 with
@@ -2574,9 +2598,13 @@ def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
       | none => false
 
 /-- What is known not to be marked after a call: the general registers a callee does not keep (the called
-function's contract says so), and each register a callee keeps that was not marked before. -/
+function's contract says so), each register a callee keeps that was not marked before, and each cell of
+the frame not marked before that is not below the stack pointer. -/
 def afterCallQ (s : Sym) : SMarks :=
-  { regq := quietRegs ++ s.q.regq.filter calleeSaved.contains }
+  { regq := quietRegs ++ s.q.regq.filter calleeSaved.contains,
+    fq := match s.sp with
+      | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
+      | none => [] }
 
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=

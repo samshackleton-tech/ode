@@ -43,11 +43,22 @@ OTHER_WAYS = [
     ("the count is kept in another register a callee keeps",
      ("  push rbx\n  mov rbx, rdx\n", "  cmp rax, rbx\n", "  pop rbx\n  ret\n"), ("  push r12\n  mov r12, rdx\n", "  cmp rax, r12\n", "  pop r12\n  ret\n")),
 ]
-# A caller that does what the contract says, and is NOT shown: the count is kept in the frame, at the stack
-# pointer, and read back after the call. What is read back from the frame is taken as marked (as something
-# that may depend on a secret), so the jump on it is refused. A limit of the verifier, kept here so that it
-# is seen when it goes.
-FRAME_WAY = (("  push rbx\n  mov rbx, rdx\n", "  cmp rax, rbx\n", "  pop rbx\n  ret\n"), ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n"))
+# The count kept in the frame, at the stack pointer, and read back after the call: shown, because the verifier
+# follows which cells of the frame hold nothing that may depend on a secret. (It was a limit once: what was
+# read back from the frame was taken as marked.)
+FRAME_OLD = ("  push rbx\n  mov rbx, rdx\n", "  cmp rax, rbx\n", "  pop rbx\n  ret\n")
+FRAME_WAY = (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n"))
+# Callers whose jump DOES depend on something that may be secret, through the frame: each refused.
+# rbp is a register the caller of this function may hold a secret in.
+FRAME_SECRETS = [
+    ("what is kept in the frame is a register that may hold a secret",
+     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rbp\n", "  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on a secret"),
+    ("the cell is written again after the call with a register that may hold a secret",
+     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov [rsp], rbp\n  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on a secret"),
+    ("one byte of the cell is written again with a register that may hold a secret",
+     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov rsi, rax\n  mov rax, rbp\n  mov byte ptr [rsp + 4], al\n  mov rax, rsi\n  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")),
+     "a write that is not eight bytes of the frame in use"),       # (refused before the marks are asked)
+]
 # (what is changed, the specification as it is, the specification changed, the function then not shown, what the verifier lacks or refuses)
 SPECS = [
     ("the caller's contract allows less stack", "    stack 56\n", "    stack 48\n", "ode_equal", "a call needs more stack than this function's contract allows"),
@@ -168,12 +179,21 @@ class Call(unittest.TestCase):
                 self.assertEqual(list(numbers), ["ode_common", "ode_equal"], what)
                 self.assertEqual(lean_verify.verify(self.spec, [(self.common, "ode_common"), (self.path("other.o"), "ode_equal")], self.path("other.proof")), (True, "shown"))
 
-    def test_a_count_read_back_from_the_frame_is_taken_as_marked(self):
+    def test_a_count_kept_in_the_frame_and_read_back_after_the_call(self):
         with open(self.path("frame.ode"), "w") as f: f.write(changed(self.source, *FRAME_WAY))
         odec.build(self.path("frame.ode"), "equal", self.path("frame.o"))
-        where, last = self.found(self.spec, self.path("frame.o"))
-        self.assertEqual(where, "ode_equal")
-        self.assertIn("a jump on a flag that may depend on a secret", last)
+        numbers = self.found(self.spec, self.path("frame.o"), "frame")
+        self.assertEqual(list(numbers), ["ode_common", "ode_equal"])
+        self.assertEqual(lean_verify.verify(self.spec, [(self.common, "ode_common"), (self.path("frame.o"), "ode_equal")], self.path("frame.proof")), (True, "shown"))
+
+    def test_a_secret_kept_in_the_frame_is_still_a_secret(self):
+        for k, (what, way, why) in enumerate(FRAME_SECRETS):
+            with self.subTest(what=what):
+                with open(self.path(f"secret{k}.ode"), "w") as f: f.write(changed(self.source, *way))
+                odec.build(self.path(f"secret{k}.ode"), "equal", self.path(f"secret{k}.o"))
+                where, last = self.found(self.spec, self.path(f"secret{k}.o"), f"secret{k}")
+                self.assertEqual(where, "ode_equal", what)
+                self.assertIn(why, last, what)
 
     def test_the_callers_contract_written_another_way(self):
         for what, old, new in SPEC_WAYS:

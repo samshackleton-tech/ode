@@ -173,11 +173,16 @@ What this does **not** cover:
   the machine with marks, from a state `s` to states of which `Q` holds, is a run of the plain machine
   from `s` without its marks to those states without theirs. So what a verified function computes, and
   what it lets be observed, is what the plain machine computes and lets be observed.
-- **Two things the verifier refuses although they are true.** A value read back from the stack frame
-  counts as marked, so a function that spills a loop counter to its frame and later branches on it is
-  refused (`test_call.py` has such a caller). A number passed to a called function in a register must
-  not be marked, so `b3l_node_out` is verified with `trace depends on nd`: it loads the node's counter,
-  length and flags into registers and passes them to a kernel.
+- **Things the verifier refuses although they are true.** A number passed to a called function in a
+  register must not be marked, so `b3l_node_out` is verified with `trace depends on nd`: it loads the
+  node's counter, length and flags into registers and passes them to a kernel. A value read back from the
+  stack frame counts as marked unless the verifier knows its cell holds nothing marked. It knows that of
+  eight bytes of the frame after a store there of a value that is not marked, until those bytes are
+  stored to again, any other store to memory that is not such a store to the frame is made, the path
+  comes to a loop invariant, or a function is called while the cell is below the stack pointer. So a
+  function that keeps a public count in its frame across a call and then branches on it is verified
+  (`test_call.py` has such a caller, and three that keep something secret there and are refused); a
+  function that keeps it there across a store to an output buffer or around a loop is still refused.
 - **A rule for the coder.** A general register that is not callee-saved must not hold anything marked at
   a call or at a return. A function that loads a secret into such a register has to clear it first.
 
@@ -327,7 +332,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 977 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,167 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,187 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -833,8 +838,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 977 lines (Table.lean 152, Machine.lean 461, Contract.lean 364). The
-verifier: 2,326 lines (Core.lean 2,167, Arithmetic.lean 159 including its proofs). The file parser: 164
-lines. The proofs of the theorems: 14,028 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
+verifier: 2,346 lines (Core.lean 2,187, Arithmetic.lean 159 including its proofs). The file parser: 164
+lines. The proofs of the theorems: 14,185 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
 
 ## The files
 

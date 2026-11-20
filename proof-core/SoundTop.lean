@@ -798,7 +798,7 @@ theorem verify_sound (world : List Program) (ctx : Ctx) (p : Program) (proof : L
     unfold verify at hv
     obtain ⟨_, r1, e1, _⟩ := V.bind_ok hv
     obtain ⟨H, wf⟩ := entry_holds E
-    exact explore_sound E W PATH e1 H wf (by rw [E.rip]; rfl) ⟨fun r hr => quiet.1 r hr, (fun x => by cases x), (fun x => by cases x), fun _ _ _ => rfl⟩ (fun e m => nomatch m)
+    exact explore_sound E W PATH e1 H wf (by rw [E.rip]; rfl) ⟨fun r hr => quiet.1 r hr, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil⟩ (fun e m => nomatch m)
 
 /-! ## The functions of a statement, together -/
 
