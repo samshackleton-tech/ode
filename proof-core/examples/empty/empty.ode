@@ -1,0 +1,24 @@
+// The root node of the empty message. BLAKE3 hashes a message of no bytes by one compression: of a block
+// of sixty-four zero bytes, with the block length 0 and the flags CHUNK_START, CHUNK_END and ROOT (11),
+// from the key (or the constants of the plain hash) that `out` holds. The function makes the block in its
+// own stack frame and gives the one-block kernel its address.
+// empty(out): the argument in rdi, as C passes it. Buffer: the block at [rsp + 0], 64 bytes.
+fn empty as "ode_empty" {
+  sub rsp, 64
+  mov rax, 0
+  mov qword ptr [rsp + 0], rax
+  mov qword ptr [rsp + 8], rax
+  mov qword ptr [rsp + 16], rax
+  mov qword ptr [rsp + 24], rax
+  mov qword ptr [rsp + 32], rax
+  mov qword ptr [rsp + 40], rax
+  mov qword ptr [rsp + 48], rax
+  mov qword ptr [rsp + 56], rax
+  lea rsi, [rsp + 0]
+  mov rdx, 0
+  mov rcx, 0
+  mov r8, 11
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 64
+  ret
+}

@@ -1,0 +1,9 @@
+// The contract of ode_empty (empty.ode): `out` comes to hold the root node of the empty message, from the
+// key it held. The block of zeros is no argument: the function keeps it in its stack frame.
+def zero_block() { [word(0) for i in 0..16] }
+
+contract ode_empty(out: cv) {
+    ensures out = compress(out, zero_block(), counter(0), 0, 11)
+    stack 72
+    needs sse41
+}

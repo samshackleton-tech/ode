@@ -1,4 +1,5 @@
 import SoundSpecW
+import SoundFrame
 /-!
 # Why the verifier's yes is right, 7b: a call of a function that writes a run of words for its caller
 
@@ -242,7 +243,8 @@ theorem calleeW_regions {ctx : Ctx} {s : Sym} {ids : List Nat} (c : Contract) : 
 /-- Each run of a fixed count it is given is a part of one of this function's. -/
 theorem calleeW_fixeds {ctx : Ctx} {s : Sym} {ids : List Nat} : ∀ (args : List (String × Kind)) (regs : List Nat)
     {env : List (String × WVal)}, calleeW ctx s ids args regs = some env →
-    ∀ x r n, (x, r, n) ∈ fixedsIn args regs → ∃ j b cst, fixedPart ctx s r n = some (j, b, cst)
+    ∀ x r n, (x, r, n) ∈ fixedsIn args regs →
+      (∃ j b cst, fixedPart ctx s r n = some (j, b, cst)) ∨ ∃ cf fids, frameRun s r n = some (cf, fids)
   | [], _, _, _, x, r, n, m => by simp [fixedsIn] at m
   | _ :: _, [], _, _, x, r, n, m => by simp [fixedsIn] at m
   | (y, .number) :: args, r' :: regs, env, h, x, r, n, m => by
@@ -252,20 +254,21 @@ theorem calleeW_fixeds {ctx : Ctx} {s : Sym} {ids : List Nat} : ∀ (args : List
     | some env' => simp only [fixedsIn] at m; exact calleeW_fixeds args regs hrec x r n m
   | (y, .fixed n') :: args, r' :: regs, env, h, x, r, n, m => by
     simp only [calleeW] at h
-    cases hf : fixedPart ctx s r' n' with
-    | none => simp [hf] at h
-    | some pp =>
-      obtain ⟨j, b, cst⟩ := pp
-      cases hrec : calleeW ctx s ids args regs with
-      | none => simp [hf, hrec] at h
-      | some env' =>
-        simp only [fixedsIn, List.mem_cons] at m
-        rcases m with e | m
-        · injection e with _ e
-          injection e with e1 e2
-          subst e1 e2
-          exact ⟨j, b, cst, hf⟩
-        · exact calleeW_fixeds args regs hrec x r n m
+    cases hrec : calleeW ctx s ids args regs with
+    | none => cases hf : fixedPart ctx s r' n' <;> simp [hf, hrec] at h
+    | some env' =>
+      simp only [fixedsIn, List.mem_cons] at m
+      rcases m with e | m
+      · injection e with _ e
+        injection e with e1 e2
+        subst e1 e2
+        cases hf : fixedPart ctx s r n with
+        | some pp => obtain ⟨j, b, cst⟩ := pp; exact Or.inl ⟨j, b, cst, rfl⟩
+        | none =>
+          cases hfr : frameRun s r n with
+          | none => simp [hf, hrec, hfr] at h
+          | some pr => obtain ⟨cf, fids⟩ := pr; exact Or.inr ⟨cf, fids, rfl⟩
+      · exact calleeW_fixeds args regs hrec x r n m
   | (y, .inout n') :: args, r' :: regs, env, h, x, r, n, m => by
     simp only [calleeW] at h
     cases hrec : calleeW ctx s ids args regs with
@@ -281,7 +284,9 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
     (c : Contract) {s1 : State} {ids : List Nat}
     (hreg : ∀ r ∈ argRegs, s1.reg r = st.reg r)
     (hfix : ∀ r n j b cst, r ∈ argRegs → fixedPart ctx s r n = some (j, b, cst) →
-      ∀ k, k < n → s1.mem (st.reg r + k) = s0.mem (s0.reg b + cst + k) ∧ (s0.mem (s0.reg b + cst + k)).val < 256) :
+      ∀ k, k < n → s1.mem (st.reg r + k) = s0.mem (s0.reg b + cst + k) ∧ (s0.mem (s0.reg b + cst + k)).val < 256)
+    (hfr : ∀ r n cf fids, r ∈ argRegs → frameRun s r n = some (cf, fids) →
+      (List.range n).map (fun k => Val.int (s1.mem (s1.reg r + k))) = wordBytes (fids.map (den (inpOf ctx s0) ρ T))) :
     ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r ∈ argRegs) →
       (∀ x r n, (x, r, n) ∈ inoutsIn args regs →
         (List.range n).map (fun k => Val.int (s1.mem (s1.reg r + k))) = wordBytes (ids.map (den (inpOf ctx s0) ρ T))) →
@@ -296,7 +301,7 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
     | none => simp [hrec] at h
     | some env' =>
       simp only [hrec, Option.map_some, Option.some.injEq] at h; subst h
-      have ih := calleeW_sound H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
+      have ih := calleeW_sound H c hreg hfix hfr args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
         (fun x' r' n' m => hio x' r' n' (inoutsIn_tail (x, .number) r m)) hrec
       simp only [envWIn]
       refine ⟨rfl, ?_, ih⟩
@@ -307,14 +312,31 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
   | (x, .fixed n) :: args, r :: regs, env, hr, hio, h => by
     simp only [calleeW] at h
     cases hf : fixedPart ctx s r n with
-    | none => simp [hf] at h
+    | none =>
+      cases hrec : calleeW ctx s ids args regs with
+      | none => simp [hf, hrec] at h
+      | some env' =>
+        cases hfrun : frameRun s r n with
+        | none => simp [hf, hrec, hfrun] at h
+        | some pr =>
+          obtain ⟨cf, fids⟩ := pr
+          simp only [hf, hrec, hfrun, Option.map_some, Option.some.injEq] at h; subst h
+          have ih := calleeW_sound H c hreg hfix hfr args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
+            (fun x' r' n' m => hio x' r' n' (inoutsIn_tail (x, .fixed n) r m)) hrec
+          simp only [envWIn]
+          refine ⟨rfl, ?_, ih⟩
+          have e := hfr r n cf fids (hr r (List.mem_cons_self ..)) hfrun
+          simp only [Val.bytes, List.map_map]
+          show WDen ctx s0 ρ T (.wbytes fids) (.list ((List.range n).map fun k => Val.int (s1.mem (s1.reg r + k))))
+          rw [e]
+          exact WDen.wbytes fids
     | some pp =>
       obtain ⟨j, b, cst⟩ := pp
       cases hrec : calleeW ctx s ids args regs with
       | none => simp [hf, hrec] at h
       | some env' =>
         simp only [hf, hrec, Option.some.injEq] at h; subst h
-        have ih := calleeW_sound H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
+        have ih := calleeW_sound H c hreg hfix hfr args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
           (fun x' r' n' m => hio x' r' n' (inoutsIn_tail (x, .fixed n) r m)) hrec
         simp only [envWIn]
         refine ⟨rfl, ?_, ih⟩
@@ -334,7 +356,7 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
     | none => simp [hrec] at h
     | some env' =>
       simp only [hrec, Option.map_some, Option.some.injEq] at h; subst h
-      have ih := calleeW_sound H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
+      have ih := calleeW_sound H c hreg hfix hfr args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m))
         (fun x' r' n' m => hio x' r' n' (inoutsIn_tail (x, .inout n) r m)) hrec
       simp only [envWIn]
       refine ⟨rfl, ?_, ih⟩
@@ -939,10 +961,10 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have HT := CT.holds
         have wfT := CT.wf
         -- each part handed over to be read lies in one of this function's runs given to read
-        have hpart : ∀ x' r' n', (x', r', n') ∈ c.fixeds → ∃ j b' cst, fixedPart ctx s r' n' = some (j, b', cst) ∧ r' ∈ argRegs := by
+        have hpart : ∀ x' r' n', (x', r', n') ∈ c.fixeds → r' ∈ argRegs ∧
+            ((∃ j b' cst, fixedPart ctx s r' n' = some (j, b', cst)) ∨ ∃ cf fids, frameRun s r' n' = some (cf, fids)) := by
           intro x' r' n' m
-          obtain ⟨j, b', cst, hf⟩ := calleeW_fixeds c.args argRegs hce x' r' n' m
-          exact ⟨j, b', cst, hf, fixedsIn_mem c.args argRegs x' r' n' m⟩
+          exact ⟨fixedsIn_mem c.args argRegs x' r' n' m, calleeW_fixeds c.args argRegs hce x' r' n' m⟩
         have hfixmem : ∀ r' n' j b' cst, r' ∈ argRegs → fixedPart ctx s r' n' = some (j, b', cst) →
             ∀ k, k < n' → (afterCall p q i st).mem (st.reg r' + k) = s0.mem (s0.reg b' + cst + k) ∧ (s0.mem (s0.reg b' + cst + k)).val < 256 := by
           intro r' n' j b' cst ra hf k hk
@@ -976,9 +998,33 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
                 hbytes j (by omega) bb hbb, getD_of_lt _ _ hj, getD_of_lt _ _ hj', List.getElem_map])
           rw [List.length_map, idlen, show 4 * (n / 4) = n by omega] at this
           exact this
+        -- a part of the frame handed over to be read: where it lies, and that its bytes are the bytes of its words
+        have hframe : ∀ r' n' cf fids, r' ∈ argRegs → frameRun s r' n' = some (cf, fids) →
+            (afterCall p q i st).reg r' = ((s0.reg RSP : Int) + cf).toNat ∧ sp ≤ cf ∧ cf + n' ≤ 0 ∧
+            (List.range n').map (fun k => Val.int ((afterCall p q i st).mem ((afterCall p q i st).reg r' + k))) =
+              wordBytes (fids.map (den (inpOf ctx s0) ρ plan.terms)) := by
+          intro r' n' cf fids ra hfr
+          obtain ⟨⟨sp', hsp', hle⟩, hn0, hn8, hreg', hlen, hwords⟩ := frameRun_sound E H wf (argRegs_lt ra) hfr
+          have esp' : sp' = sp := Option.some.inj (hsp'.symm.trans hsp)
+          subst esp'
+          have hA : (afterCall p q i st).reg r' = ((s0.reg RSP : Int) + cf).toNat := by
+            rw [s1reg r' (argRegs_not_rsp ra).2]; omega
+          refine ⟨hA, hle, hn0, ?_⟩
+          have := wordBytes_range (afterCall p q i st).mem (fids.map (den (inpOf ctx s0) ρ plan.terms)) ((afterCall p q i st).reg r')
+            (fun j hj bb hbb => by
+              have hj' : j < fids.length := by simpa using hj
+              obtain ⟨hlt, hlow, hld⟩ := hwords j (by omega)
+              have hb : (st.mem (((s0.reg RSP : Int) + cf).toNat + 4 * j + bb)).val =
+                  den (inpOf ctx s0) ρ plan.terms (fids.getD j 0) / 256 ^ bb % 256 := by
+                rw [den_ext wf.words.table extT hlt, ← hld]
+                exact (load4_byteAt st.mem _ bb hbb (fun _ _ => Fin.isLt _)).symm
+              rw [hA, s1mem _ (by omega), hb, getD_of_lt _ _ hj, getD_of_lt _ _ hj', List.getElem_map])
+          rw [List.length_map, hlen, show 4 * (n' / 4) = n' by omega] at this
+          exact this
         have henv : EnvDen ctx s0 ρ plan.terms env (c.envW (afterCall p q i st)) := by
           rw [envW_plain hl]
-          exact calleeW_sound H c (fun r' m => s1reg r' (argRegs_not_rsp m).2) hfixmem c.args argRegs (fun _ m => m)
+          exact calleeW_sound H c (fun r' m => s1reg r' (argRegs_not_rsp m).2) hfixmem
+            (fun r' n' cf fids ra hfr => (hframe r' n' cf fids ra hfr).2.2.2) c.args argRegs (fun _ m => m)
             (fun x' r' n' m => by
               have m' : (x', r', n') ∈ c.inouts := m
               rw [hinouts] at m'
@@ -1005,18 +1051,31 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             intro r'' l m'; rw [hregions] at m'; cases m'
           · rw [houts]; exact List.pairwise_singleton _ _
           · intro x' r' n' m
-            obtain ⟨j, b', cst, hf, ra⟩ := hpart x' r' n' m
-            obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E H (argRegs_lt ra) hf
-            have rne' := (argRegs_not_rsp ra).2
-            refine ⟨by rw [s1reg r' rne', g3]; omega, by rw [s1reg r' rne', g3, s1rsp]; omega, ?_⟩
-            intro x'' r'' n'' m''
-            rw [houts] at m''
-            simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
-            obtain ⟨_, e1, e2⟩ := m''
-            subst r'' n''
-            have := f4 xw b n0 hwm
-            rw [s1reg r' rne', g3, s1r]
-            omega
+            obtain ⟨ra, hf | hf⟩ := hpart x' r' n' m
+            · obtain ⟨j, b', cst, hf⟩ := hf
+              obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E H (argRegs_lt ra) hf
+              have rne' := (argRegs_not_rsp ra).2
+              refine ⟨by rw [s1reg r' rne', g3]; omega, by rw [s1reg r' rne', g3, s1rsp]; omega, ?_⟩
+              intro x'' r'' n'' m''
+              rw [houts] at m''
+              simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
+              obtain ⟨_, e1, e2⟩ := m''
+              subst r'' n''
+              have := f4 xw b n0 hwm
+              rw [s1reg r' rne', g3, s1r]
+              omega
+            · -- a part of the frame: at or above the stack pointer, so apart from the called function's frame
+              -- and from the address to return to; apart from the run it writes, which is no part of the frame
+              obtain ⟨cf, fids, hfr⟩ := hf
+              obtain ⟨hA, hle, hn0, -⟩ := hframe r' n' cf fids ra hfr
+              refine ⟨by rw [hA]; omega, by rw [hA, s1rsp]; omega, ?_⟩
+              intro x'' r'' n'' m''
+              rw [houts] at m''
+              simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
+              obtain ⟨_, e1, e2⟩ := m''
+              subst r'' n''
+              rw [hA, s1r]
+              omega
           · intro x' bd m r' hr'
             obtain ⟨items', res, he⟩ := each_mem hbounds (x', bd) m
             simp only [hr'] at he
@@ -1038,14 +1097,21 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           · simp only [Contract.inFixed, Bool.or_eq_true] at ha ⊢
             rcases ha with ha | ha
             · obtain ⟨⟨x', r', n'⟩, m, hin⟩ := List.any_eq_true.mp ha
-              obtain ⟨j, b', cst, hf, ra⟩ := hpart x' r' n' m
-              obtain ⟨g3, -, -, -, -, -, fw⟩ := fixedPart_sound E H (argRegs_lt ra) hf
-              simp only [Bool.and_eq_true, decide_eq_true_eq, s1reg r' (argRegs_not_rsp ra).2, g3] at hin
-              rcases fw with ⟨x0, n0, hm0, hle⟩ | ⟨l0, hm0, hle⟩
-              · right; left
-                exact List.any_eq_true.mpr ⟨(x0, b', n0), hm0, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-              · left; right
-                exact List.any_eq_true.mpr ⟨(b', l0), hm0, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+              obtain ⟨ra, hf | hf⟩ := hpart x' r' n' m
+              · obtain ⟨j, b', cst, hf⟩ := hf
+                obtain ⟨g3, -, -, -, -, -, fw⟩ := fixedPart_sound E H (argRegs_lt ra) hf
+                simp only [Bool.and_eq_true, decide_eq_true_eq, s1reg r' (argRegs_not_rsp ra).2, g3] at hin
+                rcases fw with ⟨x0, n0, hm0, hle⟩ | ⟨l0, hm0, hle⟩
+                · right; left
+                  exact List.any_eq_true.mpr ⟨(x0, b', n0), hm0, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+                · left; right
+                  exact List.any_eq_true.mpr ⟨(b', l0), hm0, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+              · -- a part of the frame is within this function's frame
+                obtain ⟨cf, fids, hfr⟩ := hf
+                obtain ⟨hA, hle, hn0, -⟩ := hframe r' n' cf fids ra hfr
+                simp only [Bool.and_eq_true, decide_eq_true_eq, hA] at hin
+                left; left; left
+                omega
             · right; right
               rw [hinouts] at ha
               simp only [List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
@@ -1323,11 +1389,13 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
-  obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E (show symCallW' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
-    T.holds T.wf q hq i hret hl hal hd
+  have F := callFrameTouch_carried (ctx := ctx) (s0 := s0) (ρ := ρ) (st := st) c (c.fixeds ++ c.inouts) T.holds T.wf
+  obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E
+    (show symCallW' ctx (callFrameTouch (callTouch ctx s c) c) c items = .ok (s', rest) from h)
+    F.holds F.wf q hq i hret hl hal hd
   refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
-  exact ⟨hrip, ρ', T.then C⟩
+  exact ⟨hrip, ρ', T.then (F.then C)⟩
 
 /-! ## A call of a function that writes a run of bytes -/
 

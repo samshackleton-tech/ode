@@ -2895,6 +2895,67 @@ def writtenIds (wroteW : List (Nat × Nat × Nat)) (w : Nat) : Nat → Nat → O
     | some e, some rest => some (e.2.2 :: rest)
     | _, _ => none
 
+/-! ### A part of the frame handed to a called function to read
+
+The frame's 8-byte cells say what the frame holds. A word of the frame is a half of a cell: the cell's
+number modulo 2^32, or its quotient by 2^32. A called function that reads a run of a fixed count may be
+given a part of the frame, in whole cells, each of them known. -/
+
+/-- So many bytes from where the stack pointer was at entry: where a register points, if into the frame. -/
+def frameAt (s : Sym) (r : Nat) : Option Int := Lin.isConst (Lin.sub (s.reg r) (Lin.var RSP))
+
+/-- The quotient by 2^32 of a cell's number: the row of the quotients, where the row of the remainders is
+seen at once to be a word; else as `highOf` finds it. -/
+def highHalf (s : Sym) (x : Row) : Option Row :=
+  if knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then some (Lin.high x)
+  else highOf s x
+
+/-- The four bytes of the frame at `o` (so many bytes from where the stack pointer was at entry) as a word:
+the low half of the cell that begins there, or the high half of the cell that begins four bytes before.
+(The row whose atom the word is.) -/
+def frameWord (s : Sym) (o : Int) : Option Row :=
+  match s.frame.find? (fun cell => cell.1 == o) with
+  | some (_, x) => some x
+  | none =>
+    match s.frame.find? (fun cell => cell.1 + 4 == o) with
+    | some (_, x) => highHalf s x
+    | none => none
+
+/-- `count` words of the frame from `c` on, each of them known from a cell. -/
+def frameRows (s : Sym) (c : Int) : Nat → Nat → Option (List Row)
+  | 0, _ => some []
+  | count + 1, k =>
+    match frameWord s (c + 4 * (k : Int)), frameRows s c count (k + 1) with
+    | some x, some rest => some (x :: rest)
+    | _, _ => none
+
+/-- Before a call: the words of each run the called function is given that lies in the frame are put into
+the table of terms. -/
+def callFrameTouch (s : Sym) (c : Contract) : Sym :=
+  (c.fixeds ++ c.inouts).foldl (fun s (x : String × Nat × Nat) =>
+    match (frameAt s x.2.1).bind fun k => frameRows s k (x.2.2 / 4) 0 with
+    | some rows => { s with tab := (termsOf wAtom rows s.tab).2 }
+    | none => s) s
+
+/-- The terms of words that are the atoms of these rows, each of them in the table. -/
+def frameIds (s : Sym) : List Row → Option (List Nat)
+  | [] => some []
+  | x :: rest =>
+    match s.tab.find (.atom (Lin.word x)), frameIds s rest with
+    | some i, some ids => some (i :: ids)
+    | _, _ => none
+
+/-- The part of the frame a called function is given: the register `r` holds an address at or above the
+stack pointer, `n` bytes from there (whole cells) lie below the address to return to, and every word of
+the part is known from a cell and is in the table. Where it lies, and the words' terms. -/
+def frameRun (s : Sym) (r n : Nat) : Option (Int × List Nat) :=
+  match frameAt s r, s.sp with
+  | some c, some sp =>
+    if sp ≤ c ∧ c + n ≤ 0 ∧ n % 8 = 0 then
+      ((frameRows s c (n / 4) 0).bind (frameIds s)).map fun ids => (c, ids)
+    else none
+  | _, _ => none
+
 /-- Before a call of a function that writes a run: where the register it is given in holds an
 address in a run of this function's that nothing was written to yet, that run is taken as written with
 the words it held at entry (`Sym.touch`). -/
@@ -2952,6 +3013,7 @@ def calleeW (ctx : Ctx) (s : Sym) (ids : List Nat) : List (String × Kind) → L
   | (x, .fixed n) :: args, r :: regs =>
     match fixedPart ctx s r n, calleeW ctx s ids args regs with
     | some (_, b, c), some env => some ((x, WVal.part b c n) :: env)
+    | none, some env => (frameRun s r n).map fun (_, fids) => (x, WVal.wbytes fids) :: env     -- (or a part of the frame)
     | _, _ => none
   | (x, .inout _) :: args, _ :: regs => (calleeW ctx s ids args regs).map fun env => (x, WVal.wbytes ids) :: env
   | (_, .bytes _) :: _, _ :: _ => none
@@ -3054,7 +3116,7 @@ def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 
 /-- A call of a function that writes a run of words: the run of this function that it is given a part of
 is first taken as written with the words it held at entry, where nothing was written to it yet. -/
-def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallW' ctx (callTouch ctx s c) c
+def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallW' ctx (callFrameTouch (callTouch ctx s c) c) c
 
 /-! ## A call of a function that writes a run of bytes for its caller
 
