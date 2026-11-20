@@ -529,6 +529,19 @@ theorem load_congr (mem mem' : Nat → Nat) (a n : Nat) (h : ∀ x, a ≤ x → 
     simp only [load]
     rw [h a (by omega) (by omega), ih (a + 1) (fun x h1 h2 => h x (by omega) (by omega))]
 
+/-- A load of memory whose bytes are those of a list, from a place of the list on, is the load of the list. -/
+theorem load_list (mem : Nat → Nat) (l : List Nat) : ∀ (n a c : Nat), (∀ k, k < n → mem (a + k) = l.getD (c + k) 0) →
+    load mem a n = load (fun x => l.getD x 0) c n
+  | 0, _, _, _ => rfl
+  | n + 1, a, c, h => by
+    have h0 := h 0 (by omega)
+    simp only [Nat.add_zero] at h0
+    simp only [load]
+    rw [h0, load_list mem l n (a + 1) (c + 1) (fun k hk => by
+      have := h (k + 1) (by omega)
+      rw [show a + 1 + k = a + (k + 1) by omega, show c + 1 + k = c + (k + 1) by omega]
+      exact this)]
+
 theorem load_store_other (mem : Nat → Nat) (a v n b k : Nat) (h : b + k ≤ a ∨ a + n ≤ b) : load (store mem a v n) b k = load mem b k :=
   load_congr _ _ _ _ fun x h1 h2 => store_other mem a v n x (by omega)
 

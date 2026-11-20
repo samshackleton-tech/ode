@@ -33,6 +33,17 @@ def verify(spec_text, functions, proof_path):
     return r.returncode == 0 and r.stdout == "shown\n", r.stdout.strip()
 
 
+def with_data(spec_text, functions):
+    """{symbol: how many bytes of its file's read-only data the statement gives the function}: the functions
+    that take the address of a constant of their file."""
+    out, fn = {}, None
+    for line in statement.statement(spec_text, functions):
+        w = line.split()
+        if w[:1] == ["fn"]: fn = w[1]
+        elif w[:1] == ["data"]: out[fn] = len(w[1]) // 2
+    return out
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 4: raise SystemExit(__doc__)
     spec, proof = sys.argv[1:3]
@@ -43,7 +54,12 @@ if __name__ == "__main__":
         print(m.group(0) if m else f"(no contract of {symbol} in {spec})")
     shown, said = verify(spec_text, functions, proof)
     if shown:
-        for obj, symbol in functions: print(f"\nshown: {symbol} in {os.path.basename(obj)} meets its contract, with the definitions of {os.path.basename(spec)} it uses.")
+        data = with_data(spec_text, functions)
+        for obj, symbol in functions:
+            print(f"\nshown: {symbol} in {os.path.basename(obj)} meets its contract, with the definitions of {os.path.basename(spec)} it uses.")
+            if symbol in data:
+                print(f"It reads constants of {os.path.basename(obj)} ({data[symbol]} bytes of read-only data). That those bytes lie in memory where its\n"
+                      "instructions look for them is the linker's part: this verification assumes it and does not show it.")
     else:
         lines = said.splitlines()
         where = lines[-1][3:] if lines and lines[-1].startswith("in ") else "(no function)"

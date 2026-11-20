@@ -64,7 +64,8 @@ of the fourteen functions of BLAKE3: the two versions of the kernel that compres
 16-way kernel, with its loop over the blocks of sixteen chunks, for every number of blocks; and
 `b3l_pad`, whose loop writes a padded block byte by byte.
 It can follow arithmetic and shuffles on 512-bit registers, loads and stores of those registers
-in buffers and on the stack, and loads through a table of addresses.
+in buffers and on the stack, loads through a table of addresses, and loads of constants from the object
+file's read-only data.
 [proof-core/README.md](proof-core/README.md) says exactly what its theorem assumes.
 
 Section 13 of DESIGN.md compares the current state with the design, point by point.

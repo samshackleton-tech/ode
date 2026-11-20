@@ -485,8 +485,11 @@ def statement(spec_text, functions):
         if there: raise SystemExit(f"statement: the specification has {what} ({', '.join(map(str, list(there)[:3]))}), which the verifier in Lean does not read yet")
     for obj, symbol in ordered(functions):
         out.append(f"fn {symbol}")
-        rows, _ = kdecode.read(obj, symbol, 0, 0)
+        rows, rodata = kdecode.read(obj, symbol, 0, 0)
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
+        # A function that takes the address of the file's read-only data (`lea reg, [rip + data]`) may read that
+        # data: the statement gives its bytes, which the caller sees to lie where the function expects them.
+        if any(text.split()[0] == ".lea_data" for _, _, text in rows): out.append("data " + bytes(rodata).hex().upper())
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
         out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts)
         # The machine of the account in Lean has every instruction of the table. A processor has those of the

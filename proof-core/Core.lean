@@ -536,6 +536,18 @@ inductive Where where
   | frame (off : Int)
   | region (r : Nat) (off : Row)
   | out (w : Nat) (off : Row)
+  | data (off : Int)              -- so many bytes into the file's read-only data
+
+/-- The unknown that is where the file's read-only data lies. (Unknowns 0 to 15 are the registers at entry.) -/
+def dataVar : Nat := 16
+
+/-- How many bytes into the file's data an address is, where the contract has data and the address is the
+data's plus a number. -/
+def dataOff (ctx : Ctx) (addr : Row) : Option Int :=
+  if ctx.contract.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var dataVar))
+
+/-- The number that `size` bytes of the file's data make, from byte `c` on, the lowest byte first. -/
+def dataWord (data : List Nat) (c size : Nat) : Nat := load (fun x => data.getD x 0) c size
 
 def findRegion (addr : Row) : List (Nat × Nat) → Nat → Option Where
   | [], _ => none
@@ -547,14 +559,18 @@ def findOut (addr : Row) : List (String × Nat × Nat) → Nat → Option Where
   | (_, base, _) :: more, k =>
     if Lin.coeffOf addr base == 1 then some (.out k (Lin.sub addr (Lin.var base))) else findOut addr more (k + 1)
 
-/-- Where an address is: in the frame, in a run of bytes given to read, or in one given to write. -/
+/-- Where an address is: in the frame, in the file's read-only data, in a run of bytes given to read, or in
+one given to write. -/
 def locate (ctx : Ctx) (addr : Row) : Option Where :=
   match Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c => some (.frame c)
   | none =>
-    match findRegion addr ctx.contract.regions 0 with
-    | some w => some w
-    | none => findOut addr ctx.contract.outs 0
+    match dataOff ctx addr with
+    | some c => some (.data c)
+    | none =>
+      match findRegion addr ctx.contract.regions 0 with
+      | some w => some w
+      | none => findOut addr ctx.contract.outs 0
 
 /-- What is known written, when one byte is written at place `o` of the run `w`: what was known of another
 run stays; of this run, what was at this very place goes, what was at a place that differs from it by a
@@ -637,6 +653,11 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
       pure (.lin v, s)
     else refuse "a read of a run of bytes that is not one byte: not here yet"
   | some (.out _ _) => refuse "a read of a run given only to write"
+  | some (.data c) =>
+    -- the file's read-only data: the bytes are the file's, so what is read is a plain number
+    if (size = 1 ∨ size = 4 ∨ size = 8) ∧ 0 ≤ c ∧ c + size ≤ ctx.contract.data.length then
+      pure (.lin (Lin.const (dataWord ctx.contract.data c.toNat size)), s)
+    else refuse "a read of the file's read-only data that is not one, four or eight bytes within it"
   | none => symLoadFixed ctx s addr size
 
 /-- The remainder of a number by a divisor above zero: worked out where every multiple in the number is a
@@ -733,6 +754,15 @@ def symPrim1 (f : String) (s : Sym) (x : Row) : V (EV × Sym) :=
   else if f == "low8" then pure (.lin (symLow s x 256).1, (symLow s x 256).2)
   else refuse s!"no rule for {f}"
 
+/-- `data(I)`, the address of a place in the file's read-only data: the unknown that is the data's address,
+plus `I`, where `I` is a number within the data the contract has. -/
+def symData (ctx : Ctx) (s : Sym) (x : Row) : V (EV × Sym) :=
+  match Lin.isConst x with
+  | some c =>
+    if 0 ≤ c ∧ c < ctx.contract.data.length then pure (.lin (Lin.add (Lin.var dataVar) (Lin.const c)), s)
+    else refuse "the address of a place that is not in the file's read-only data (or the contract has no data)"
+  | none => refuse "the address of a place in the file's data that is no number"
+
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .number n => if n < 2 ^ 64 then pure (.lin (Lin.const n), s) else refuse "a number of the table that is no 64-bit number"
   | _, .lane _ _ => refuse "a vector register: not here yet"
@@ -747,7 +777,7 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .call f [a] => do
     let (x, s) ← symValue ctx bind s a
     match x with
-    | .lin x => symPrim1 f s x
+    | .lin x => if f == "data" then symData ctx s x else symPrim1 f s x
     | _ => refuse "a flag's value where a number is expected"
   | s, .call f [a, b] => do
     let (x, s) ← symValue ctx bind s a
@@ -2185,6 +2215,7 @@ def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) 
         | some (base, _) => !ctx.contract.hiddenAt base
         | none => false
     | some (.out _ _) => false
+    | some (.data c) => decide (0 ≤ c) && decide (c + size ≤ ctx.contract.data.length)     -- (the file's data is not marked)
     | none =>
       match findOut addr ctx.contract.fixeds 0 with
       | some (.out j off) =>
@@ -2638,8 +2669,14 @@ def entryFacts (ctx : Ctx) : List Row :=
   (ctx.contract.atLeast.filterMap fun (name, k) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.var r) (Lin.const k)) ++
   ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
 
+/-- Where the contract has data: the data's address is a number from 0 up, and the data ends below 2^64.
+(After the other facts: they keep their numbers.) -/
+def dataFacts (ctx : Ctx) : List Row :=
+  if ctx.contract.data.isEmpty then []
+  else [Lin.var dataVar, Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.contract.data.length : Int))) (Lin.var dataVar)]
+
 def entrySym (ctx : Ctx) : Sym :=
-  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
+  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
     wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := quietRegs } }
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept

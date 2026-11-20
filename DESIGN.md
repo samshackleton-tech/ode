@@ -285,11 +285,30 @@ Memory and calls follow the same rule. This was decided in November 2026 and is 
   size in bytes does not measure it.
 - **Nothing is allocated at run time.** The memory that a call needs is set aside beforehand, stated
   exactly in the contract (the `stack` line), and proved.
-- **The coder lays out memory, and the compiler does what is written or stops.** A detailed proposal
-  awaits a decision. In it, buffers lie in the order written, each with the alignment written. `line` and
-  `page` are the target's names for the sizes of its cache line and its page. The coder may state what a
-  layout is for (two things on one cache line, or two things on separate lines), and the compiler checks
-  the statement.
+- **Every run of memory that a function may touch is a declared piece.** This was decided on November 20,
+  2026, and its first step is built. A piece is a run of bytes of a known length that the function may
+  read, or may read and write. No address exists without its piece: an address is always "this piece, at
+  this offset inside it". A piece that may be written overlaps no other piece, by construction. A piece's
+  declaration says what it holds (bytes nothing is known of, known bytes or words, a number, or addresses
+  of other pieces) and whether its contents may show in the trace. At a call, the caller lends pieces, or
+  parts of them, to the called function until it returns. The coder declares the pieces of the stack
+  frame in Ode source. This is the discipline of capabilities, as in CHERI or Fil-C, held in the proof:
+  nothing is checked at run time and no instruction is added. It is affordable because the coder plans
+  the memory use beforehand, commits to it, and proves it. Built so far, in `proof-core/`: the object
+  file's read-only data as a piece. The stack frame and the buffers of contracts still go by the earlier
+  rules.
+- **The coder lays out memory, and the compiler does what is written or stops.** The pieces of a frame
+  lie in the order written, each with the alignment written. An alignment is a number: "a multiple of
+  64", or "does not cross a multiple of 4096". The verifier proves such a statement about the addresses.
+  It does not know what a cache line or a page is, because their sizes belong to the processor and the
+  operating system: x86-64 processors have 64-byte lines and pages of 4 KiB or 2 MiB, the Apple M6 used
+  here reports 128-byte lines and 16 KiB pages, and Linux on Arm runs with pages of 4, 16 or 64 KiB. Those
+  sizes are advice, to be kept with the performance numbers in `advice/`, and a tool can say for each
+  processor what a proved layout means there: which pieces share a line, and which cross a page. A
+  function can align its own frame. Of a piece that it is given, it can only require an alignment. A
+  layout statement never widens what may be read: reading past the end of a piece is refused even where
+  the bytes lie on the same page. This is planned. What exists today is the proof that a frame is aligned
+  to 64 bytes where a kernel stores vectors in it with aligned stores.
 - **Calls between Ode functions need no fixed convention.** Where the arguments are, what a called
   function may change, and whether it has a stack frame of its own are stated in its contract and proved.
   The C convention stays at the boundary where C or Rust calls in.
@@ -401,8 +420,8 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 977 lines.
-The verifier's own 2,346 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 990 lines.
+The verifier's own 2,369 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -412,7 +431,8 @@ for their caller); contracts with input buffers, output buffers, records laid ou
 `stack`; and vector instructions that compute on 32-bit words. The verifier can follow operations on
 512-bit registers and loads and stores at fixed offsets in buffers. It can follow a stack pointer
 rounded down to a 64-byte boundary and the stores and loads in that frame. It can follow loads through
-a table of addresses, and a loop invariant can say what vector registers hold. The
+a table of addresses, and a loop invariant can say what vector registers hold. It can follow loads of
+constants from the object file's read-only data. The
 specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that specification
 reproduces the 105 official test vectors.
 
@@ -481,10 +501,10 @@ language can read.
   carries it into the proof.
 - **State kept across calls** is the next kind of composition to build. An example is the `update` and
   `finalize` of an incremental hasher: the contract speaks of a state that the caller keeps between calls.
-- **Capabilities at the boundary** (proposed, not built). A contract's piece of memory is a capability
-  held in the proof, and there is no address without its piece. Where a caller that has no proof passes
-  memory in, an entry point with checks makes the capability real, in the manner of Fil-C. Inside proved
-  code the checks are removed, because they have been proved unnecessary.
+- **Capabilities at the boundary** (proposed, not built). Inside proved code a piece of memory is a
+  capability held in the proof, and there is no address without its piece (section 5). Where a caller
+  that has no proof passes memory in, an entry point with checks makes the capability real, in the manner
+  of Fil-C. Inside proved code the checks are removed, because they have been proved unnecessary.
 - **One obligation, discharged where enough is known.** A requirement is stated once. Wherever possible
   it is proved before the program runs. At a boundary with a caller that has no proof, it is a check that
   stops the program. For a processor feature, it is a test at startup. The record says which of these

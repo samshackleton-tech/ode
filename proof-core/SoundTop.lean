@@ -668,7 +668,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
 
 /-- At entry, each fact the verifier starts from is so of what the registers hold. -/
 theorem entryFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
-    ∀ f ∈ (entrySym ctx).facts, f.holds (fun k => (s0.reg k : Int)) := by
+    ∀ f ∈ entryFacts ctx, f.holds (fun k => (s0.reg k : Int)) := by
   have hstack := E.stack
   have habove := E.above
   unfold M64 at habove
@@ -730,7 +730,7 @@ theorem entryFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     next => cases hf
 
 /-- Each fact the verifier starts from speaks of the registers at entry alone. -/
-theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ (entrySym ctx).facts, bounded 16 f := by
+theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f := by
   intro f m
   simp only [entrySym, entryFacts, List.mem_append] at m
   rcases m with ((((((m | m) | m) | m) | m) | m) | m) | m
@@ -783,6 +783,28 @@ theorem entryRho_reg (s0 : State) {r : Nat} (h : r < 16) : entryRho s0 r = s0.re
   show (if r = 16 then (s0.data : Int) else (s0.reg r : Int)) = s0.reg r
   rw [if_neg (by omega)]
 
+theorem entryRho_data (s0 : State) : entryRho s0 dataVar = s0.data := by
+  unfold entryRho dataVar
+  simp only [if_true]
+
+/-- At entry, what the verifier starts from about the data's address is so: it is a number from 0 up, and
+the data ends below 2^64. -/
+theorem dataFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
+    ∀ f ∈ dataFacts ctx, f.holds (entryRho s0) ∧ bounded 17 f := by
+  intro f m
+  unfold dataFacts at m
+  split at m
+  · cases m
+  next he =>
+    have hd : ctx.contract.data ≠ [] := fun e => he (by rw [e]; rfl)
+    have fit := E.data_fits hd
+    unfold M64 at fit
+    have bv : bounded 17 (Lin.var dataVar) := bounded_var (show dataVar < 17 by decide)
+    simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+    rcases m with rfl | rfl
+    · exact ⟨by rw [holds_iff, ev_var, entryRho_data]; omega, bv⟩
+    · exact ⟨by rw [holds_iff, ev_sub, ev_const, ev_var, entryRho_data]; omega, bounded_sub (bounded_const _ _) bv⟩
+
 /-- At entry, what the verifier starts from is so (the unknowns being what the registers hold, and where
 the file's data lies). -/
 theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
@@ -791,14 +813,20 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   refine ⟨⟨fun r hr => entryRho_reg s0 hr, ⟨by show (if 16 = 16 then (s0.data : Int) else _) = _; rw [if_pos rfl], rfl⟩,
            (fun r hr => by show (s0.reg r : Int) = ev (entryRho s0) (Lin.var r); rw [ev_var, entryRho_reg s0 hr]),
            E.small, trivial, trivial, ?_,
-           (fun f m => by rw [holds_iff, ← ev_agree (entryFacts_bounded ctx f m) agree]; exact entryFacts_hold E f m),
+           (fun f m => by
+              rcases List.mem_append.mp m with m | m
+              · rw [holds_iff, ← ev_agree (entryFacts_bounded ctx f m) agree]; exact entryFacts_hold E f m
+              · exact (dataFacts_hold E f m).1),
            ?_, ?_, (fun _ _ _ => rfl),
            (fun _ _ _ m => nomatch m),
            ⟨(fun x ids h => by simp [entrySym] at h), (fun _ _ _ _ _ _ _ _ => rfl),
             (fun w j i m => by simp [entrySym] at m), fun _ _ h => nomatch h⟩,
            (fun k m => by simp [entrySym] at m), fun _ h => nomatch h⟩,
           ⟨Nat.le_refl _, fun r hr => bounded_var (Nat.lt_succ_of_lt hr), trivial, trivial, ?_,
-           (fun f m => bounded_mono (n := 16) (m := 17) (by decide) (entryFacts_bounded ctx f m)), ?_, ?_, (fun _ _ _ m => nomatch m),
+           (fun f m => by
+              rcases List.mem_append.mp m with m | m
+              · exact bounded_mono (n := 16) (m := 17) (by decide) (entryFacts_bounded ctx f m)
+              · exact (dataFacts_hold E f m).2), ?_, ?_, (fun _ _ _ m => nomatch m),
            ⟨fun i n h => by simp [entrySym, Sym.terms, Tab.list] at h, fun j r h => by simp [entrySym, Sym.terms, Tab.list] at h,
             fun x ids h => by simp [entrySym] at h,
             (fun j a n h => by simp [entrySym, Sym.terms, Tab.list] at h), (fun w j i h => by simp [entrySym] at h), fun _ _ h => nomatch h⟩,

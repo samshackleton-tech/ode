@@ -522,56 +522,92 @@ theorem locate_frame {ctx : Ctx} {addr : Row} {c : Int} (h : locate ctx addr = s
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; injection h with h; rw [h]
   | none =>
-    simp only [locate, hk] at h
-    cases hf : findRegion addr ctx.contract.regions 0 with
-    | some w =>
-      simp only [hf] at h
-      obtain ⟨r, o, b, l, hw, _⟩ := findRegion_spec hf
-      injection h with h; rw [hw] at h; cases h
+    cases hd : dataOff ctx addr with
+    | some c' => simp only [locate, hk, hd] at h; injection h with h; cases h
     | none =>
-      simp only [hf] at h
-      obtain ⟨r, o, nm, b, n, hw, _⟩ := findOut_spec h
-      cases hw
+      simp only [locate, hk, hd] at h
+      cases hf : findRegion addr ctx.contract.regions 0 with
+      | some w =>
+        simp only [hf] at h
+        obtain ⟨r, o, b, l, hw, _⟩ := findRegion_spec hf
+        injection h with h; rw [hw] at h; cases h
+      | none =>
+        simp only [hf] at h
+        obtain ⟨r, o, nm, b, n, hw, _⟩ := findOut_spec h
+        cases hw
 
 theorem locate_region {ctx : Ctx} {addr : Row} {r : Nat} {o : Row} (h : locate ctx addr = some (.region r o)) :
     ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧ o = Lin.sub addr (Lin.var base) := by
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; cases h
   | none =>
-    simp only [locate, hk] at h
-    cases hf : findRegion addr ctx.contract.regions 0 with
-    | some w =>
-      simp only [hf] at h
-      injection h with h
-      subst h
-      obtain ⟨r', o', b, l, hw, _, hr, ho⟩ := findRegion_spec hf
-      injection hw with h1 h2
-      subst h1 h2
-      exact ⟨b, l, by simpa using hr, ho⟩
+    cases hd : dataOff ctx addr with
+    | some c' => simp only [locate, hk, hd] at h; injection h with h; cases h
     | none =>
-      simp only [hf] at h
-      obtain ⟨r', o', nm, b, n, hw, _⟩ := findOut_spec h
-      cases hw
+      simp only [locate, hk, hd] at h
+      cases hf : findRegion addr ctx.contract.regions 0 with
+      | some w =>
+        simp only [hf] at h
+        injection h with h
+        subst h
+        obtain ⟨r', o', b, l, hw, _, hr, ho⟩ := findRegion_spec hf
+        injection hw with h1 h2
+        subst h1 h2
+        exact ⟨b, l, by simpa using hr, ho⟩
+      | none =>
+        simp only [hf] at h
+        obtain ⟨r', o', nm, b, n, hw, _⟩ := findOut_spec h
+        cases hw
 
 theorem locate_out {ctx : Ctx} {addr : Row} {w : Nat} {o : Row} (h : locate ctx addr = some (.out w o)) :
     ∃ name base n, ctx.contract.outs[w]? = some (name, base, n) ∧ o = Lin.sub addr (Lin.var base) := by
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; cases h
   | none =>
-    simp only [locate, hk] at h
-    cases hf : findRegion addr ctx.contract.regions 0 with
-    | some w' =>
-      simp only [hf] at h
-      injection h with h
-      subst h
-      obtain ⟨r', o', b, l, hw, _⟩ := findRegion_spec hf
-      cases hw
+    cases hd : dataOff ctx addr with
+    | some c' => simp only [locate, hk, hd] at h; injection h with h; cases h
     | none =>
-      simp only [hf] at h
-      obtain ⟨r', o', nm, b, n, hw, _, hr, ho⟩ := findOut_spec h
-      injection hw with h1 h2
-      subst h1 h2
-      exact ⟨nm, b, n, by simpa using hr, ho⟩
+      simp only [locate, hk, hd] at h
+      cases hf : findRegion addr ctx.contract.regions 0 with
+      | some w' =>
+        simp only [hf] at h
+        injection h with h
+        subst h
+        obtain ⟨r', o', b, l, hw, _⟩ := findRegion_spec hf
+        cases hw
+      | none =>
+        simp only [hf] at h
+        obtain ⟨r', o', nm, b, n, hw, _, hr, ho⟩ := findOut_spec h
+        injection hw with h1 h2
+        subst h1 h2
+        exact ⟨nm, b, n, by simpa using hr, ho⟩
+
+/-- An address the verifier places in the file's data: the contract has data, and the address is the
+unknown that is the data's address, plus that number. -/
+theorem locate_data {ctx : Ctx} {addr : Row} {c : Int} (h : locate ctx addr = some (.data c)) :
+    ctx.contract.data ≠ [] ∧ Lin.isConst (Lin.sub addr (Lin.var dataVar)) = some c := by
+  cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
+  | some c' => simp only [locate, hk] at h; injection h with h; cases h
+  | none =>
+    cases hd : dataOff ctx addr with
+    | some c' =>
+      simp only [locate, hk, hd] at h
+      injection h with h; injection h with h; subst h
+      unfold dataOff at hd
+      split at hd
+      · cases hd
+      next he => exact ⟨fun e => he (by rw [e]; rfl), hd⟩
+    | none =>
+      simp only [locate, hk, hd] at h
+      cases hf : findRegion addr ctx.contract.regions 0 with
+      | some w =>
+        simp only [hf] at h
+        obtain ⟨r, o, b, l, hw, _⟩ := findRegion_spec hf
+        injection h with h; rw [hw] at h; cases h
+      | none =>
+        simp only [hf] at h
+        obtain ⟨r, o, nm, b, n, hw, _⟩ := findOut_spec h
+        cases hw
 
 theorem inFrame_spec {ctx : Ctx} {s : Sym} {c : Int} (h : inFrame ctx s c = true) :
     ∃ sp, s.sp = some sp ∧ sp ≤ c ∧ c + 8 ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ c := by
@@ -640,6 +676,27 @@ theorem atLeast {x : String} {k r : Nat} (h : (x, k) ∈ ctx.contract.atLeast) (
 /-- The file's read-only data, where the contract has it: in memory, each byte the file's, apart from the
 frame, the address to return to and the runs given to write. -/
 theorem dataAt : ctx.contract.dataAt s0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+theorem data_fits (hd : ctx.contract.data ≠ []) : s0.data + ctx.contract.data.length < M64 := (E.dataAt hd).1
+/-- An address in the file's data is not in the frame. -/
+theorem data_notFrame (hd : ctx.contract.data ≠ []) {a : Nat} (h1 : s0.data ≤ a) (h2 : a < s0.data + ctx.contract.data.length) :
+    ctx.contract.inFrame s0 a = false := by
+  have := (E.dataAt hd).2.1
+  simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+  omega
+/-- An address in the file's data is in no run given to write. -/
+theorem data_notOut (hd : ctx.contract.data ≠ []) {a : Nat} (h1 : s0.data ≤ a) (h2 : a < s0.data + ctx.contract.data.length) :
+    ctx.contract.inOut s0 a = false := by
+  unfold Contract.inOut
+  rw [List.any_eq_false]
+  intro ⟨x, r', n⟩ hm
+  have := (E.dataAt hd).2.2.2 x r' n hm
+  simp only [Bool.and_eq_true, decide_eq_true_eq]
+  omega
+/-- At entry each byte of the file's data is in memory where the data lies. -/
+theorem data_byte (hd : ctx.contract.data ≠ []) {k : Nat} (hk : k < ctx.contract.data.length) :
+    s0.mem (s0.data + k) = ctx.contract.data.getD k 0 := by
+  rw [(E.dataAt hd).2.2.1 k hk]
+  simp [List.getD, List.getElem?_eq_getElem hk]
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
@@ -791,6 +848,22 @@ theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               next => cases e
       next => exact (refuse_ok h).elim
 
+/-- An address the verifier places in the file's data, some bytes from it lying within the data: the
+machine's address is the data's address plus that number. -/
+theorem dataAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+    (H : Holds ctx s0 ρ s st) {addr : Row} {c : Int} {size : Nat}
+    (hl : locate ctx addr = some (.data c)) (h0 : 0 ≤ c) (h1 : c + size ≤ ctx.contract.data.length)
+    {a : Nat} (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
+    ctx.contract.data ≠ [] ∧ a = s0.data + c.toNat := by
+  obtain ⟨hd, hc⟩ := locate_data hl
+  have e := ev_isConst (ρ := ρ) hc
+  rw [ev_sub, ev_var] at e
+  have pin : ρ dataVar = s0.data := H.data.1
+  have fit := E.data_fits hd
+  unfold M64 at hlt fit
+  refine ⟨hd, ?_⟩
+  omega
+
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars addr)
@@ -807,6 +880,35 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   | some w =>
     cases w with
     | out _ _ => simp only [symLoad, hl] at h; exact (refuse_ok h).elim
+    | data c =>
+      -- the file's read-only data: memory there is as at entry, and at entry it holds the file's bytes
+      simp only [symLoad, hl] at h
+      split at h
+      next hok =>
+        obtain ⟨hsize, h0, h1⟩ := hok
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with hv hs
+        subst hv hs
+        obtain ⟨hd, hadr⟩ := dataAddr E H hl h0 h1 (by unfold M64; exact hlt) ha
+        have hload : load st.mem a size = dataWord ctx.contract.data c.toNat size := by
+          rw [hadr]
+          unfold dataWord
+          exact load_list _ _ size _ _ fun k hk => by
+            rw [H.mem _ (E.data_notFrame hd (by omega) (by omega)) (E.data_notOut hd (by omega) (by omega))]
+            rw [Nat.add_assoc]
+            exact E.data_byte hd (by omega)
+        refine ⟨ρ, Carried.here H wf, allowed_of _ _ _ (fun x x1 x2 => ?_), ?_, ?_, bounded_const _ _⟩
+        · simp only [Contract.perm, Contract.inData, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
+          right; omega
+        · rw [hload]
+          have lt := load_lt (fun x => ctx.contract.data.getD x 0) c.toNat size
+          have le : 256 ^ size ≤ 256 ^ 8 := Nat.pow_le_pow_right (by decide) (by omega)
+          unfold dataWord M64
+          have e8 : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+          omega
+        · rw [hload, ev_const]
+      next => exact (refuse_ok h).elim
     | frame c =>
       simp only [symLoad, hl] at h
       split at h
@@ -1554,13 +1656,41 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     | below _ _ => exact (refuse_ok h).elim
     | lin x =>
       simp only at h
-      obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
-      have hnd : (f == "data") = false := by
-        cases hd : (f == "data") with
-        | false => rfl
-        | true => have fe : f = "data" := by simpa using hd
-                  rw [fe] at hz; simp [prim] at hz
-      exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
+      split at h
+      next hdta =>
+        -- `data(I)`: the address of a place in the file's data
+        have fe : f = "data" := by simpa using hdta
+        obtain ⟨hx1, hx2, hx3⟩ := sa
+        cases hc : Lin.isConst x with
+        | none => simp only [symData, hc] at h; exact (refuse_ok h).elim
+        | some c =>
+          simp only [symData, hc] at h
+          by_cases hin : 0 ≤ c ∧ c < (ctx.contract.data.length : Int)
+          · rw [if_pos hin] at h
+            have := V.pure_ok h
+            injection this with hp _
+            injection hp with hv hs
+            subst hv hs
+            have hd : ctx.contract.data ≠ [] := by
+              intro e
+              rw [e] at hin
+              simp only [List.length_nil] at hin
+              omega
+            have ec := ev_isConst (ρ := ρ1) hc
+            have fit := E.data_fits hd
+            have pin := c1.holds.data
+            have pin1 : ρ1 dataVar = s0.data := pin.1
+            refine ⟨ρ1, (st.data + sumList [xa]) % M64, c1, by simp [value, values, va, memSize, fe], Nat.mod_lt _ (by decide), ?_,
+              bounded_add (bounded_var (Nat.lt_of_lt_of_le (show dataVar < 17 by decide) c1.wf.base)) (bounded_const _ _)⟩
+            rw [ev_add, ev_var, ev_const, pin1, pin.2]
+            simp only [sumList]
+            unfold M64 at *
+            omega
+          · rw [if_neg hin] at h; exact (refuse_ok h).elim
+      next hnd0 =>
+        obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
+        have hnd : (f == "data") = false := by simpa using hnd0
+        exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
   | .call f (_ :: _ :: _ :: _), s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
@@ -2103,6 +2233,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                     | some w =>
                       cases w with
                       | region _ _ => simp only [hl] at h; exact (refuse_ok h).elim
+                      | data _ => simp only [hl] at h; exact (refuse_ok h).elim      -- (the file's data is not written)
                       | out w o =>
                         simp only [hl] at h
                         obtain ⟨name, base, n, hw, ho⟩ := locate_out hl

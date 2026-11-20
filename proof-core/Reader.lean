@@ -61,7 +61,16 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "stack", "def"]
+def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "stack", "def"]
+
+/-- Bytes written as two hexadecimal digits each. -/
+def readBytes : List Char → Option (List Nat)
+  | [] => some []
+  | [_] => none
+  | a :: b :: more =>
+    match hexDigit a, hexDigit b, readBytes more with
+    | some x, some y, some rest => some ((16 * x + y) :: rest)
+    | _, _, _ => none
 
 def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : Except String Job := do
   -- a line of the statement is of the function last named there; a line of the proof, of the one its `for` names
@@ -121,6 +130,9 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     | some n => onLast fun g => { g with contract := { g.contract with atLeast := g.contract.atLeast ++ [(name, n)] } }
     | none => throw s!"cannot read {line}"
   | ["hidden", name] => onLast fun g => { g with contract := { g.contract with hidden := g.contract.hidden ++ [name] } }
+  | ["data", hex] => match readBytes hex.toList with
+    | some bytes => onLast fun g => { g with contract := { g.contract with data := bytes } }     -- the file's read-only data
+    | none => throw "cannot read the bytes of the file's data"
   | ["needsif", what, name, n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with needsIf := g.contract.needsIf ++ [(what, name, n)] } }
     | none => throw s!"cannot read {line}"

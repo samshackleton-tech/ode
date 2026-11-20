@@ -199,6 +199,19 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             rw [show ((s0.reg RSP : Int) + c).toNat + (x - ((s0.reg RSP : Int) + c).toNat) = x by omega] at this
             exact this
         | out w o => simp [hl] at h
+        | data c =>
+          -- the file's data: its marks are as at entry, and at entry none of its bytes is marked
+          simp only [hl, Bool.and_eq_true, decide_eq_true_eq] at h
+          obtain ⟨h0, h1⟩ := h
+          have hmod : (((va + (vb + 0)) % M64 : Nat) : Int) % 2 ^ 64 = ev ρ (Lin.add (signed x) (signed y)) % 2 ^ 64 := by
+            rw [hA]; unfold M64 at la lb ⊢; omega
+          obtain ⟨hd, hadr⟩ := dataAddr E H hl h0 h1 (Nat.mod_lt _ (by decide)) hmod
+          rw [hadr]
+          exact anyMarked_none _ _ fun a a1 a2 => by
+            rw [M.stable a (E.data_notFrame hd (by omega) (by omega)) (E.data_notOut hd (by omega) (by omega))]
+            have := E.quiet.2.2.2.2 (a - s0.data) (by omega)
+            rw [show s0.data + (a - s0.data) = a by omega] at this
+            exact this
         | region r o =>
           obtain ⟨base, len, hreg, ho⟩ := locate_region hl
           simp only [hl, hreg, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
@@ -510,6 +523,7 @@ theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             cases w with
             | region _ _ => exact CellsOk.nil
             | out _ _ => exact CellsOk.nil
+            | data _ => exact CellsOk.nil
             | frame c =>
               simp only
               split

@@ -1,0 +1,42 @@
+// A table of numbers in the file's read-only data, read through its address (`lea reg, [rip + #table]`).
+// The first functions shown by the verifier in Lean that take the address of their file's data: the
+// verifier reads the bytes of the data from the statement, and the contract's caller sees to it that they
+// lie in memory where the function expects them.
+data primes = 2, 3, 5, 7, 11, 13, 17, 19
+
+// The third prime: four bytes, eight bytes into the table.
+fn third as "ode_third" {
+  lea rax, [rip + #primes]
+  mov eax, DWORD PTR [rax + 8]
+  ret
+}
+
+// The fifth and the sixth prime as one number: eight bytes, sixteen bytes into the table.
+fn pair as "ode_pair" {
+  lea rcx, [rip + #primes]
+  mov rax, [rcx + 16]
+  ret
+}
+
+// The lowest byte of the second prime, the address walked on by four first (as a loop over a table does).
+fn second as "ode_second" {
+  lea rcx, [rip + #primes]
+  add rcx, 4
+  movzx eax, byte ptr [rcx + 0]
+  ret
+}
+
+// Whether the first prime is two: a jump decided by a number of the table. (The table's bytes are not
+// hidden from who watches the function run, so a jump may be decided by them.)
+fn first as "ode_first_is_two" {
+  lea rcx, [rip + #primes]
+  mov eax, DWORD PTR [rcx + 0]
+  cmp rax, 2
+  jne @differ
+  mov rax, 1
+  jmp @done
+@differ:
+  xor eax, eax
+@done:
+  ret
+}
