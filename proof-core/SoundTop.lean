@@ -651,14 +651,14 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
       split at h
       next => exact (refuse_ok h).elim
       next hcq =>
-      have hcq : callQuiet ctx s c = true := by simpa using hcq
+      have hcq : callQuiet ctx (quietAtCall s c) c = true := by simpa using hcq
       have := V.pure_ok h
       injection this with hn _
       subst hn
       obtain ⟨q, hq, fitq, meets⟩ := W name c hl2
       have hcode : (pc, i) ∈ p.code := by rw [E.code]; exact lookup_mem hl
       obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i (E.fits hcode)
-      obtain ⟨hrsp, hquiet, hafter⟩ := callQuiet_sound E M H hcq q i hw hwrite
+      obtain ⟨hrsp, hquiet, hafter⟩ := callQuiet_sound E (quietAtCall_marks M c) (quietAtCall_holds H c) hcq q i hw hwrite
       -- (the called function returns with the file's data where it was, `runs_data`)
       exact Runs.call _ p _ st i name q (c.perm (afterCall p q i st))
         (fun s2 => c.left ctx.defs (afterCall p q i st) s2 ∧ s2.data = st.data)

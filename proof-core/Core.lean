@@ -3049,6 +3049,24 @@ def Sym.afterCallW (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List 
               s.wroteW.filter fun e => e.1 != w || decide (e.2.1 < o) || decide (o + m ≤ e.2.1),
     known := (if bytes then Known.heldB g keys made.1 else Known.held g keys made.1) :: s.known }
 
+/-- The state after a call of a function that has written `m` words (an even count) of the frame, from `c`
+bytes from where the stack pointer was at entry: as `Sym.afterCallW`, but what is written is cells of the
+frame. Each new word is a new unknown; two words make a cell's number, the first its low half. The cells
+the part overlaps are forgotten; the others at or above the stack pointer stay. -/
+def Sym.afterCallF (s : Sym) (sp c : Int) (m : Nat) (g : String) (keys : List Key) : Sym :=
+  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
+  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+    zf := .unknown, cf := .unknown,
+    frame := ((List.range (m / 2)).map fun (j : Nat) =>
+                (c + 8 * (j : Int), Lin.add (Lin.var (s.nvars + 16 + 2 * j)) (Lin.scale W32i (Lin.var (s.nvars + 16 + 2 * j + 1))))) ++
+             s.frame.filter fun cell => decide (sp ≤ cell.1) && (decide (cell.1 + 8 ≤ c) || decide (c + 4 * (m : Int) ≤ cell.1)),
+    facts := ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
+             ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
+    tab := made.2,
+    intact := s.intact, wroteW := s.wroteW,
+    known := Known.held g keys made.1 :: s.known }
+
 /-- What a call of a function that writes a run of words is taken by: the part of a run of this function
 that it writes (the run's number among the runs given to write, the part's first word, and how many words
 the part has), the definition its contract names, the keys of the things the definition is used with
@@ -3065,7 +3083,7 @@ structure CallW where
 abbrev CallW.terms (p : CallW) : List Node := p.tab.list
 
 /-- That, where the call can be taken so; else why not. (No proof is read here.) -/
-def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
+def callWby (find : Nat → Nat → Option (Nat × Nat × List Nat)) (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
   if !c.mbounds.isEmpty then .error "a called function whose contract bounds a number in memory: not here yet"
   else
     match c.outs, c.inouts, c.ensuresW with
@@ -3074,7 +3092,7 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
         .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
       else
         let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
-        match callRun ctx s r n with
+        match find r n with
         | none => .error "a called function is given to write what is not whole words of a run this function may read and write, each of them known"
         | some (w, o, ids) =>
           match calleeW ctx s ids c.args argRegs with
@@ -3097,6 +3115,9 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
             | _ => .error "a called function's `ensures` that is not the bytes of the words a definition gives: not here yet"
     | _, _, _ => .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
 
+/-- The run it writes is looked for among the runs of words this function may read and write (`callRun`). -/
+def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW := callWby (callRun ctx s) ctx s c
+
 def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
@@ -3117,6 +3138,43 @@ def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 /-- A call of a function that writes a run of words: the run of this function that it is given a part of
 is first taken as written with the words it held at entry, where nothing was written to it yet. -/
 def symCallW (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallW' ctx (callFrameTouch (callTouch ctx s c) c) c
+
+/-! ## A call of a function that writes a part of this function's frame -/
+
+/-- A call of a function that writes a run of words it also reads, where that run is a part of this
+function's frame: in whole cells, each of them known, at or above the stack pointer and below the address
+to return to (`frameRun`). A part of the frame that the called function is given to read must lie apart
+from it. After the call the part's words are new unknowns, two to a cell (`Sym.afterCallF`). -/
+def symCallF' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+  match s.sp with
+  | none => refuse "at a call the stack pointer is not known"
+  | some sp =>
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+      refuse "a call needs more stack than this function's contract allows"
+    else
+      match c.outs with
+      | [(_, r, n)] =>
+        match frameRun s r n with
+        | none => refuse "a called function is given to write what is not whole cells of this function's frame, each of them known"
+        | some (cw, _) =>
+          if !(c.fixeds.all fun x =>
+                match frameAt s x.2.1 with
+                | some cf => decide (cf + (x.2.2 : Int) ≤ cw) || decide (cw + (n : Int) ≤ cf)
+                | none => true) then
+            refuse "a called function is given a part of the frame to read that the part it writes overlaps"
+          else
+            match callWby (fun r n => (frameRun s r n).map fun x => (0, 0, x.2)) ctx s c with
+            | .error what => refuse what
+            | .ok plan => do
+              each (fun (xb : String × Nat) =>
+                match c.regOf xb.1 with
+                | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
+                | none => pure ()) c.bounds
+              pure (Sym.afterCallF { s with tab := plan.tab } sp cw plan.words plan.g plan.keys)
+      | _ => refuse "a called function that writes for its caller, but not one run of words it also reads: not here yet"
+
+/-- Such a call: the words of the parts of the frame it is given are first put into the table. -/
+def symCallF (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallF' ctx (callFrameTouch s c) c
 
 /-! ## A call of a function that writes a run of bytes for its caller
 
@@ -3248,6 +3306,7 @@ def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
     refuse "a called function that is given a table of addresses, asks that a number be no less than another, or takes the address of the file's data: not here yet"
   else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else if c.inouts.isEmpty && c.ensuresW.isEmpty then symCallB ctx s c
+  else if c.outs.any (fun x => (frameAt s x.2.1).isSome) then symCallF ctx s c
   else symCallW ctx s c
 
 /-- A call: first the bounds of the parts of runs handed over are asked of the proof where the facts do
@@ -3304,6 +3363,12 @@ def afterCallQ (s : Sym) : SMarks :=
       | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
       | none => [] }
 
+/-- The state whose marks a call is judged by: where the called function is given a part of the frame to
+write, which cells of the frame are known not to be marked is forgotten first (it may write marked bytes
+there, and nothing follows which cells it writes). -/
+def quietAtCall (s : Sym) (c : Contract) : Sym :=
+  if c.outs.any (fun x => (frameAt s x.2.1).isSome) then { s with q := { s.q with fq := [] } } else s
+
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
@@ -3313,9 +3378,9 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     | some c => do
       needsOf ctx s c
       let s' ← symCall ctx s c
-      if !callQuiet ctx s c then
+      if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract asks not to depend on a secret may depend on one"
-      else pure [({ s' with q := afterCallQ s }, .at i.next)]
+      else pure [({ s' with q := afterCallQ (quietAtCall s c) }, .at i.next)]
   | none => symInstr ctx s i
 
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=

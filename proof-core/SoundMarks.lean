@@ -1000,4 +1000,19 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · rfl
         · rw [← ha]; exact c3 k hk
 
+/-- Forgetting which cells of the frame are known not to be marked keeps what is held of the marks. -/
+theorem quietAtCall_marks {ctx : Ctx} {s0 : State} {s : Sym} {st : State} (M : MarksOk ctx s0 s.q st) (c : Contract) :
+    MarksOk ctx s0 (quietAtCall s c).q st := by
+  unfold quietAtCall
+  split
+  · exact ⟨M.reg, M.zf, M.cf, M.stable, by unfold CellsOk; intro x hx; cases hx⟩
+  · exact M
+
+theorem quietAtCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (c : Contract) :
+    Holds ctx s0 ρ (quietAtCall s c) st := by
+  unfold quietAtCall
+  split
+  · exact H.q _
+  · exact H
+
 end Ode

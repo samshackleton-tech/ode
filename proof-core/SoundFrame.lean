@@ -258,4 +258,31 @@ theorem frameRun_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             omega
       next => cases h
 
+/-- Where a part of the frame lies is where its register points. -/
+theorem frameRun_at {s : Sym} {r n : Nat} {c : Int} {ids : List Nat} (h : frameRun s r n = some (c, ids)) : frameAt s r = some c := by
+  unfold frameRun at h
+  cases hf : frameAt s r with
+  | none => simp [hf] at h
+  | some c' =>
+    cases hsp : s.sp with
+    | none => simp [hf, hsp] at h
+    | some sp =>
+      simp only [hf, hsp] at h
+      split at h
+      · cases hx : (frameRows s c' (n / 4) 0).bind (frameIds s) with
+        | none => simp [hx] at h
+        | some ids' => simp only [hx, Option.map_some, Option.some.injEq, Prod.mk.injEq] at h; rw [h.1]
+      · cases h
+
+/-- Four bytes that are the bytes of a word are that word. -/
+theorem load4_of_bytes (mem : Nat → Byte) (a v : Nat) (hv : v < 4294967296)
+    (h : ∀ bb, bb < 4 → (mem (a + bb)).val = v / 256 ^ bb % 256) : load mem a 4 = v := by
+  have h0 := h 0 (by omega)
+  have h1 := h 1 (by omega)
+  have h2 := h 2 (by omega)
+  have h3 := h 3 (by omega)
+  simp only [Nat.add_zero, Nat.pow_zero, Nat.div_one, Nat.pow_one, Nat.reducePow] at h0 h1 h2 h3
+  simp only [load, Nat.add_assoc, Nat.reduceAdd]
+  omega
+
 end Ode
