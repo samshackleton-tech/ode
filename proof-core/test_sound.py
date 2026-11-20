@@ -15,7 +15,8 @@ THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.verify_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.Arithmetic.refutes_sound": "[propext, Quot.sound]",
             "Ode.ends_trace": "[propext, Classical.choice, Quot.sound]",
-            "Ode.execQ_exec": "[propext, Classical.choice, Quot.sound]"}
+            "Ode.execQ_exec": "[propext, Classical.choice, Quot.sound]",
+            "Ode.runs_plain": "[propext, Classical.choice, Quot.sound]"}
 STATEMENTS = [
     # of the functions of a statement together: what `odeverify` says yes of
     ("Ode.verify_all_sound : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "
@@ -31,6 +32,9 @@ STATEMENTS = [
     # of the machine alone: two runs from states alike in everything not marked let the same things be observed
     ("Ode.ends_trace : ∀ {world : List Ode.Program} {p : Ode.Program} {a a' b b' : Ode.State}, "
      "Ode.Alike a b → Ode.Ends world p a a' → Ode.Ends world p b b' → a'.trace = b'.trace"),
+    # the marks change no value: a run of the machine with marks is a run of the machine without any
+    ("Ode.runs_plain : ∀ {world : List Ode.Program} {perm : Ode.Perm} {p : Ode.Program} {Q : Ode.State → Prop} {s : Ode.State}, "
+     "Ode.Runs world perm p Q s → Ode.RunsP world perm p (fun t => ∃ s', Q s' ∧ t = s'.plain) s.plain"),
 ]
 
 
@@ -40,11 +44,12 @@ class Sound(unittest.TestCase):
         env = dict(os.environ, PATH=os.path.dirname(LAKE) + os.pathsep + os.environ["PATH"])
         built.built("Sound")
         built.built("Trace")
+        built.built("Plain")
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "Ask.lean")
             with open(path, "w") as f:
-                f.write("import SoundTop\nimport Trace\n" + "".join(f"#print axioms {name}\n" for name in THEOREMS) +
-                        "#check @Ode.verify_all_sound\n#check @Ode.verify_sound\n#print Ode.Linked\n#check @Ode.ends_trace\n")
+                f.write("import SoundTop\nimport Trace\nimport Plain\n" + "".join(f"#print axioms {name}\n" for name in THEOREMS) +
+                        "#check @Ode.verify_all_sound\n#check @Ode.verify_sound\n#print Ode.Linked\n#check @Ode.ends_trace\n#check @Ode.runs_plain\n")
             r = subprocess.run([LAKE, "env", "lean", path], cwd=HERE, capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         said = " ".join(r.stdout.split())

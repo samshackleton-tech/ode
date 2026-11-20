@@ -165,11 +165,12 @@ What this does **not** cover:
 - **Only this level of observation.** How long an instruction takes for given operands is outside the
   model. So are speculative execution, caches shared with other programs, power and frequency. Each needs
   assumptions of its own.
-- **One step is partly proved, partly by inspection.** The claim is that the machine with marks computes
-  the same registers and memory as a processor without them, wherever it does not stop. Proved
-  (`execQ_exec` in Trace.lean): where the machine that stops takes a step, the machine without the stop
-  takes the same step to the same state. By inspection: the effect of a statement on values (`execStmt`)
-  never reads a mark or the trace. A theorem that erases the marks altogether is not written yet.
+- **The marks change no value: proved.** A processor has no marks, so the theorem about the machine with
+  marks must carry over to a machine without them. Plain.lean defines that machine (`execP`, `RunsP`: the
+  same rules with every word about marks left out; it keeps the trace) and proves `runs_plain`: a run of
+  the machine with marks, from a state `s` to states of which `Q` holds, is a run of the plain machine
+  from `s` without its marks to those states without theirs. So what a verified function computes, and
+  what it lets be observed, is what the plain machine computes and lets be observed.
 - **Two things the verifier refuses although they are true.** A value read back from the stack frame
   counts as marked, so a function that spills a loop counter to its frame and later branches on it is
   refused (`test_call.py` has such a caller). A number passed to a called function in a register must
@@ -796,7 +797,7 @@ the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 976 lines (Table.lean 152, Machine.lean 461, Contract.lean 363). The
 verifier: 2,191 lines (Core.lean 2,032, Arithmetic.lean 159 including its proofs). The file parser: 159
-lines. The proofs of the theorems: 13,152 lines, of which Trace.lean (the second theorem) is 704.
+lines. The proofs of the theorems: 13,449 lines, of which Trace.lean (the second theorem) is 755 and Plain.lean (the machine without marks) is 246.
 
 ## The files
 
