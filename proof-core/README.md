@@ -165,9 +165,11 @@ What this does **not** cover:
 - **Only this level of observation.** How long an instruction takes for given operands is outside the
   model. So are speculative execution, caches shared with other programs, power and frequency. Each needs
   assumptions of its own.
-- **One step is argued, not proved.** The marks change no value, so the machine with marks computes the
-  same registers and memory as the machine without them wherever it does not stop. That is visible in the
-  definition (`execAllQ` is `execAll` with the stop added). It is not yet a theorem.
+- **One step is partly proved, partly by inspection.** The claim is that the machine with marks computes
+  the same registers and memory as a processor without them, wherever it does not stop. Proved
+  (`execQ_exec` in Trace.lean): where the machine that stops takes a step, the machine without the stop
+  takes the same step to the same state. By inspection: the effect of a statement on values (`execStmt`)
+  never reads a mark or the trace. A theorem that erases the marks altogether is not written yet.
 - **Two things the verifier refuses although they are true.** A value read back from the stack frame
   counts as marked, so a function that spills a loop counter to its frame and later branches on it is
   refused (`test_call.py` has such a caller). A number passed to a called function in a register must

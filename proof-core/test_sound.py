@@ -14,7 +14,8 @@ LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.pat
 THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.verify_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.Arithmetic.refutes_sound": "[propext, Quot.sound]",
-            "Ode.ends_trace": "[propext, Classical.choice, Quot.sound]"}
+            "Ode.ends_trace": "[propext, Classical.choice, Quot.sound]",
+            "Ode.execQ_exec": "[propext, Classical.choice, Quot.sound]"}
 STATEMENTS = [
     # of the functions of a statement together: what `odeverify` says yes of
     ("Ode.verify_all_sound : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "

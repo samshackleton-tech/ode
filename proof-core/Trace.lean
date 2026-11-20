@@ -782,4 +782,63 @@ theorem ends_trace {world : List Program} {p : Program} {a a' b b' : State} (A :
     (E1 : Ends world p a a') (E2 : Ends world p b b') : a'.trace = b'.trace :=
   (ends_alike E1 A E2).trace
 
+/-! ## The machine that stops, and the machine that does not
+
+`execQ` is `exec` with the stop added: where it takes a step, `exec` takes the same step, to the same
+state. (So a run of a function that never stops the one is a run of the other.) -/
+
+theorem execAllQ_execAll {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat} :
+    ∀ (stmts : List Stmt) (k : Nat) {s : State} {o : Outcome},
+    execAllQ perm bind base u k s stmts = some o → execAll perm bind base u k s stmts = some o
+  | [], _, _, _, h => h
+  | st :: rest, k, s, o, h => by
+    have go : ∀ {s' : State}, execStmt perm bind base (u k) s st = some s' →
+        execAllQ perm bind base u (k + 1) (noted bind s st s') rest = some o →
+        execAll perm bind base u (k + 1) (noted bind s st s') rest = some o :=
+      fun _ r => execAllQ_execAll rest (k + 1) r
+    cases st with
+    | ret =>
+      simp only [execAllQ] at h
+      split at h
+      next hq =>
+        simp only [Bool.and_eq_true] at hq
+        simp only [execAll, hq.2, if_true]
+        exact h
+      next => cases h
+    | nothing =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+    | call _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+    | jump _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+    | set _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+    | vset _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+    | vset512 _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
+
+/-- Where the machine that stops takes a step, the machine that does not stop takes the same step. -/
+theorem execQ_exec {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s : State} {o : Outcome}
+    (h : execQ perm p i u s = some o) : exec perm p i u s = some o :=
+  execAllQ_execAll i.effect 0 h
+
 end Ode
