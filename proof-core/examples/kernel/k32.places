@@ -1,0 +1,23 @@
+// The loop over the blocks of blake3_servil_avx512_k32 (../../../kcheck/b3hashr.o), for the prover of the
+// verifier in Lean. The code is that of blake3_servil_avx512_p32, entered twelve bytes earlier, and the
+// place is the place of p32.places: at the loop's bottom, a block having just been compressed in every lane.
+//
+// What differs is the counter. Lane i of the first half has the counter t + i, lane i of the second half
+// t + i + 16, and the four cells of the frame hold the low and the high words of those counters, word i
+// that of lane i.
+place +0xf50 {
+    name left = r13
+    name off = r14
+    fact left >= 1
+    fact left <= n
+    fact off == 64 * (n - left)
+    fact end <= 255
+    fact length <= 255
+    lane i: zmm0 .. zmm7 = chunk(key, t + i, flags, start, end, length, n, inputs[i]) after n - left + 1
+    lane i: zmm8 .. zmm15 = chunk(key, t + i + 16, flags, start, end, length, n, inputs[i + 16]) after n - left + 1
+    cell [rsp + 2048]: word i = lo(t + i)
+    cell [rsp + 2112]: word i = hi(t + i)
+    cell [rsp + 2176]: word i = lo(t + i + 16)
+    cell [rsp + 2240]: word i = hi(t + i + 16)
+    decreases left
+}

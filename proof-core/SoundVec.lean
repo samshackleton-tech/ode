@@ -74,6 +74,74 @@ theorem wXor_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t :
     Step inp ρ nv t.list (wXor a b t).2.list (wXor a b t).1 (den inp ρ t.list a ^^^ den inp ρ t.list b) :=
   step_of_made ok (wXor_made (t' := (wXor a b t).2) (i := (wXor a b t).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
 
+theorem wUlt_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wUlt a b t).2.list (wUlt a b t).1 (if den inp ρ t.list a < den inp ρ t.list b then 1 else 0) := by
+  unfold wUlt
+  split
+  next e =>
+    subst e
+    have z := wAtom_step (inp := inp) (ρ := ρ) (t := t) ok (bounded_const nv 0)
+    simpa [ev_const] using z
+  next ne =>
+    exact step_of_made ok
+      (made (inp := inp) (ρ := ρ) (n := .ult a b) (t := t) (t' := (intern (.ult a b) t).2) (i := (intern (.ult a b) t).1) rfl ok.wf (by
+        intro j mj
+        simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
+        rcases mj with mj | mj <;> (rw [mj]; assumption)))
+      (fun r e => by cases e) (fun a k e => by cases e)
+
+theorem wSel_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {m a b : Nat} (ok : TableOk nv t.list)
+    (hm : m < t.list.length) (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wSel m a b t).2.list (wSel m a b t).1
+      (if den inp ρ t.list m = 0 then den inp ρ t.list b else den inp ρ t.list a) := by
+  unfold wSel
+  split
+  next e =>
+    have el : t.list[m]? = some (.atom (Lin.word (Lin.const 0))) := by simpa [Tab.list] using e
+    have dm : den inp ρ t.list m = 0 := by
+      rw [den_node ok.wf el]
+      simp [Node.value, ev_word, ev_const]
+    rw [if_pos dm]
+    exact ⟨Ext.refl _, ok, hb, rfl⟩
+  next ne =>
+    exact step_of_made ok
+      (made (inp := inp) (ρ := ρ) (n := .sel m a b) (t := t) (t' := (intern (.sel m a b) t).2) (i := (intern (.sel m a b) t).1) rfl ok.wf (by
+        intro j mj
+        simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
+        rcases mj with mj | mj | mj <;> (rw [mj]; assumption)))
+      (fun r e => by cases e) (fun a k e => by cases e)
+
+theorem wAddConst_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a k : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hinp : ∀ j k, inp j k < W32) :
+    Step inp ρ nv t.list (wAddConst a k t).2.list (wAddConst a k t).1 ((den inp ρ t.list a + k) % W32) := by
+  unfold wAddConst
+  split
+  next k0 =>
+    subst k0
+    rw [Nat.add_zero, Nat.mod_eq_of_lt (den_lt ok.wf hinp ok.rotrs a)]
+    exact ⟨Ext.refl _, ok, ha, rfl⟩
+  next kn =>
+    split
+    next r e =>
+      have el : t.list[a]? = some (.atom r) := by simpa [Tab.list] using e
+      have z := wAtom_step (inp := inp) (ρ := ρ) (t := t) (r := Lin.add r (Lin.const k)) ok
+        (bounded_add (ok.atoms a r el) (bounded_const nv k))
+      have da : den inp ρ t.list a = (ev ρ r % W32i).toNat := by rw [den_node ok.wf el]; rfl
+      have e2 : (ev ρ (Lin.add r (Lin.const k)) % W32i).toNat = ((ev ρ r % W32i).toNat + k) % W32 := by
+        rw [ev_add, ev_const]
+        unfold W32i W32
+        omega
+      rw [da, ← e2]; exact z
+    next =>
+      have s1 := wAtom_step (inp := inp) (ρ := ρ) (t := t) (r := Lin.const k) ok (bounded_const nv k)
+      have s2 := wAdd_step (inp := inp) (ρ := ρ) (t := (wAtom (Lin.const k) t).2) (a := a) (b := (wAtom (Lin.const k) t).1) s1.ok
+        (Nat.lt_of_lt_of_le ha s1.ext.le) s1.lt
+      refine ⟨s1.ext.trans s2.ext, s2.ok, s2.lt, ?_⟩
+      rw [s2.den, den_ext ok.wf s1.ext ha, s1.den, ev_const]
+      unfold W32i W32
+      omega
+
 theorem wRotr_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a n : Nat} (ok : TableOk nv t.list)
     (ha : a < t.list.length) (hn : n ≤ 32) :
     Step inp ρ nv t.list (wRotr a n t).2.list (wRotr a n t).1 (rotr (den inp ρ t.list a) n) :=

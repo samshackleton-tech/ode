@@ -420,8 +420,8 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 1,000 lines.
-The verifier's own 2,441 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 1,021 lines.
+The verifier's own 2,485 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -437,12 +437,13 @@ specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that 
 reproduces the 105 official test vectors.
 
 As of November 20, 2026 it verifies five of the twelve small shipped functions, a function that calls one
-of them, and six of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
+of them, and seven of the fourteen functions of the BLAKE3 hash: the two versions of the kernel that
 compresses one block (proofs of 131 and 137 bytes, verified in 5 ms each); `b3l_node_out`, which
 reads a 120-byte node record and calls one of them (a 38-byte proof, verified together with both kernels
 in 7 ms); the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
-in 0.17 s); the 32-way kernel, through the entry that gives every chunk the same counter (699
-instructions, a 4.2 kB proof, verified in 1.2 s); and `b3l_pad`, which pads a chunk's last block (39
+in 0.17 s); the 32-way kernel through each of its two entries, the one that gives every chunk the same
+counter and the one the hash calls, which gives chunk `i` the counter `t + i` (699 and 702 instructions,
+proofs of 4.2 and 4.3 kB, verified in 1.2 s and 1.4 s); and `b3l_pad`, which pads a chunk's last block (39
 instructions, a 451-byte proof). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
 
 That page also says what is left out. Reading the object file and the text of the specification happens

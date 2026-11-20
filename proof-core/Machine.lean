@@ -6,9 +6,10 @@ What a row's EFFECT does to registers, two flags and memory, on whole numbers. T
 contract's meaning is stated over (`Contract.lean`), and it is meant to say what `../core/conc.py` says,
 which processors are compared with (`../core/cross.py`).
 
-The model covers general registers, two flags, calls by name, and vector operations on four or sixteen
-32-bit lanes. It does not yet model mask registers. The read-only data of the function's file lies at an
-address the state holds (`State.data`): the linker and the loader decide it, and no instruction changes it.
+The model covers general registers, two flags, calls by name, vector operations on four or sixteen 32-bit
+lanes, and the mask registers where a row compares into one or sets a vector register under one. The
+read-only data of the function's file lies at an address the state holds (`State.data`): the linker and the
+loader decide it, and no instruction changes it.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -65,7 +66,9 @@ structure State where
   cf : Bool
   mem : Nat → Nat          -- the byte at an address
   rip : Nat
-  vec : Nat → Nat → Nat    -- the vector registers: a register's lanes of 32 bits, lane 0 the lowest
+  vec : Nat → Nat → Nat    -- the vector registers zmm0 to zmm31: a register's lanes of 32 bits, lane 0 the lowest;
+                           -- after them, as registers 33 to 39, the mask registers k1 to k7 (`maskOf`): a
+                           -- mask's sixteen bits, each a lane (0: the bit is not set; a compare writes 0 or 1)
   data : Nat               -- where the read-only data of the function's file lies (no instruction changes it)
   marks : Marks := {}      -- what may depend on a secret
   trace : List (Nat × Nat) := []    -- what has been observed so far, the oldest first: (an instruction's address, 0); (an address touched, how many bytes)
@@ -125,6 +128,7 @@ def prim32 (f : String) (a b : Nat) : Option Nat :=
   else if f == "ror32" then some (rotr a (b % 32))
   else if f == "shl32" then some ((a <<< b) % W32)
   else if f == "shr32" then some (a >>> b)
+  else if f == "ult32" then some (if a < b then 1 else 0)        -- (is the one word below the other?)
   else none
 
 /-- Byte `j` (of sixteen, the lowest first) of four lanes. -/
@@ -149,8 +153,16 @@ def blendHalves (a b : List Nat) (i : Nat) : List Nat :=
 def isRegisterLetter (n : String) : Bool := n == "D" || n == "S" || n == "B" || n == "P"
 def isVectorLetter (n : String) : Bool := n == "X" || n == "Y" || n == "Z"
 
-/-- The vector register a letter of an EFFECT stands for, in an instance: its number. -/
-def vecOf (bind : Bind) (n : String) : Option Nat := if isVectorLetter n then (bind.lookup n).bind String.toNat? else none
+/-- The vector register a letter of an EFFECT stands for, in an instance: its number, of the thirty-two. -/
+def vecOf (bind : Bind) (n : String) : Option Nat :=
+  if isVectorLetter n then ((bind.lookup n).bind String.toNat?).bind fun r => if r < 32 then some r else none else none
+
+/-- The mask register the letter `M` of an EFFECT stands for, in an instance (k1 to k7): where its sixteen
+bits are kept among the vector registers, after the thirty-two of them. (Not k0: where an instruction is
+written under a mask, the processor takes k0 to say "no mask". No instruction that names k0 has a meaning
+here.) -/
+def maskOf (bind : Bind) (n : String) : Option Nat :=
+  if n == "M" then ((bind.lookup n).bind String.toNat?).bind fun m => if 0 < m ∧ m < 8 then some (32 + m) else none else none
 def isNumberLetter (n : String) : Bool := n == "I" || n == "J" || n == "K" || n == "L" || n == "N"
 
 /-- The register a name of an EFFECT stands for, in an instance. -/
@@ -256,9 +268,10 @@ def isUnknown : Expr → Bool
 
 def setReg (s : State) (r v : Nat) : State := { s with reg := fun k => if k = r then v % M64 else s.reg k }
 
+/-- The register a name of sixteen lanes stands for: a vector register whole, or a mask register. -/
 def vecOf512 (bind : Bind) (n : String) : Option Nat :=
   if n == "X512" then vecOf bind "X" else if n == "Y512" then vecOf bind "Y"
-  else if n == "Z512" then vecOf bind "Z" else none
+  else if n == "Z512" then vecOf bind "Z" else maskOf bind n
 
 def vecArg512 (bind : Bind) (s : State) : Expr → Option (List Nat)
   | .name n => (vecOf512 bind n).map fun r => (List.range 16).map (s.vec r)
@@ -281,6 +294,16 @@ def quarters (x y : List Nat) (i : Nat) : List Nat :=
   (List.range 16).map fun j =>
     let q := j / 4
     (if q < 2 then x else y).getD (4 * (i / 4 ^ q % 4) + j % 4) 0
+
+/-- The sixteen words of a number of 512 bits, the lowest first (`words16(K)`: a constant of the file that
+the decoder has put into the instruction; it writes such a number with its width after it, `0x…#512`). -/
+def words16 (bind : Bind) : List Expr → Option (List Nat)
+  | [.name k] =>
+    if isNumberLetter k then
+      ((bind.lookup k).bind fun text => readInt ((text.splitOn "#").headD text)).bind fun n =>
+        if 0 ≤ n then some ((List.range 16).map fun i => n.toNat / W32 ^ i % W32) else none
+    else none
+  | _ => none
 
 /-- Sixty-four bytes of memory as sixteen words: a wide memory operand, where it may be read. -/
 def memLanes512 (perm : Perm) (bind : Bind) (s : State) (f : String) (args : List Expr) : Option (List Nat) := do
@@ -305,6 +328,9 @@ def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List N
             if g == "mem512" || g == "mem512a" then do
               let y ← memLanes512 perm bind s g margs
               (x.zip y).mapM fun (p, q) => prim32 op p q
+            else if g == "words16" then do
+              let y ← words16 bind margs
+              (x.zip y).mapM fun (p, q) => prim32 op p q
             else do
               let n ← value perm bind s b
               x.mapM fun p => prim32 op p n
@@ -320,6 +346,14 @@ def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List N
         let y ← vecArg512 bind s b
         let sel ← value perm bind s i
         some (quarters x y sel)
+      | "choose16", [m, .call "each32" [.name op, a, b], c] => do
+        -- under a mask: in each lane the operation's result where the mask's bit is set, else what `c` holds
+        let k ← vecArg512 bind s m
+        let x ← vecArg512 bind s a
+        let y ← vecArg512 bind s b
+        let old ← vecArg512 bind s c
+        let new ← (x.zip y).mapM fun (p, q) => prim32 op p q
+        some ((k.zip (new.zip old)).map fun (bit, p, q) => if bit = 0 then q else p)
       | _, _ => none
   | _ => none
 

@@ -19,6 +19,8 @@ def Node.value (inp : Nat → Nat → Nat) (ρ : Nat → Int) (g : Nat → Nat) 
   | .rotr a n => Ode.rotr (g a) n
   | .shl a n => (g a <<< n) % W32
   | .shr a n => g a >>> n
+  | .ult a b => if g a < g b then 1 else 0
+  | .sel m a b => if g m = 0 then g b else g a
 
 def denF (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T : List Node) : Nat → Nat → Nat
   | 0, _ => 0
@@ -55,6 +57,12 @@ theorem Node.value_congr {inp : Nat → Nat → Nat} {ρ ρ' : Nat → Int} {g g
   | shr a k =>
     simp only [Node.value]
     rw [hg a (by simp [Node.parts])]
+  | ult a b =>
+    simp only [Node.value]
+    rw [hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
+  | sel m a b =>
+    simp only [Node.value]
+    rw [hg m (by simp [Node.parts]), hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
 
 /-- Two tables alike below `m`, with unknowns under which the rows of their terms are the same numbers: a
 term below `m` is the same in both, whatever more is counted. -/
@@ -267,6 +275,8 @@ theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t : Tab} (h
     | rotr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | shl x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | shr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | ult x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | sel c x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
 
 /-- What each term the verifier makes is, the table having grown by it at most. -/
 structure Made (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T T' : List Node) (i : Nat) (v : Nat) : Prop where
@@ -428,6 +438,14 @@ theorem den_lt {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} (h
       | rotr a n => exact rotr_lt (ih a (hw i _ h a (by simp [Node.parts]))) (hrot i a n h)
       | shl a n => exact Nat.mod_lt _ (by decide)
       | shr a n => exact Nat.lt_of_le_of_lt (Nat.shiftRight_le _ _) (ih a (hw i _ h a (by simp [Node.parts])))
+      | ult a b =>
+        simp only [Node.value]
+        split <;> decide
+      | sel m a b =>
+        simp only [Node.value]
+        split
+        · exact ih b (hw i _ h b (by simp [Node.parts]))
+        · exact ih a (hw i _ h a (by simp [Node.parts]))
 
 /-! ## The index of a table -/
 

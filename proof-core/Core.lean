@@ -255,6 +255,8 @@ inductive Node where
   | rotr (a n : Nat)            -- the term turned right by `n` bits
   | shl (a n : Nat)             -- the term shifted left by `n` bits, what passes 32 bits dropped
   | shr (a n : Nat)             -- the term shifted right by `n` bits
+  | ult (a b : Nat)             -- 1 where the term `a` is below the term `b`, else 0 (a bit of a mask register)
+  | sel (m a b : Nat)           -- the term `a` where the term `m` is not zero, else the term `b`
   deriving DecidableEq, Repr, Inhabited, Hashable
 
 /-- The terms a term is made of, by their numbers. -/
@@ -266,6 +268,8 @@ def Node.parts : Node → List Nat
   | .rotr a _ => [a]
   | .shl a _ => [a]
   | .shr a _ => [a]
+  | .ult a b => [a, b]
+  | .sel m a b => [m, a, b]
 
 def findNode (n : Node) : List Node → Nat → Option Nat
   | [], _ => none
@@ -327,6 +331,21 @@ def wRotr (a n : Nat) (t : Tab) : Nat × Tab := intern (.rotr a n) t
 def wShl (a n : Nat) (t : Tab) : Nat × Tab := intern (.shl a n) t
 
 def wShr (a n : Nat) (t : Tab) : Nat × Tab := intern (.shr a n) t
+
+/-- Is the one term below the other: 1 or 0. A term is not below itself. -/
+def wUlt (a b : Nat) (t : Tab) : Nat × Tab := if a = b then wAtom (Lin.const 0) t else intern (.ult a b) t
+
+/-- The term `a` where the term `m` is not zero, else the term `b`. Where `m` is the number 0 it is `b`. -/
+def wSel (m a b : Nat) (t : Tab) : Nat × Tab :=
+  if t.arr[m]? = some (.atom (Lin.word (Lin.const 0))) then (b, t) else intern (.sel m a b) t
+
+/-- A term and a number of the table summed, wrapping. With the number 0 it is the term; where the term is
+the word of a row, it is the word of that row and the number. -/
+def wAddConst (a k : Nat) (t : Tab) : Nat × Tab :=
+  if k = 0 then (a, t)
+  else match t.arr[a]? with
+    | some (.atom r) => wAtom (Lin.add r (Lin.const k)) t
+    | _ => wAdd a (wAtom (Lin.const k) t).1 (wAtom (Lin.const k) t).2
 
 /-- The or of two terms that is a turn: one is a term shifted left by `32 - n` bits, the other the same term
 shifted right by `n`. (The term turned, and by how much.) -/
@@ -1203,6 +1222,7 @@ def symMem512 (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr
 def symEachOp (s : Sym) (op : String) (x y : List Nat) : V (List Nat × Sym) :=
   if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y)
   else if op == "xor32" then symLaneTerms s (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y)
+  else if op == "ult32" then symLaneTerms s (fun (p : Nat × Nat) => wUlt p.1 p.2) (x.zip y)
   else refuse "no proof rule for this 512-bit operation"
 
 def symEach512 (ctx : Ctx) (bind : Bind) (s : Sym) (op : String) (a b : Expr) : V (List Nat × Sym) :=
@@ -1212,7 +1232,15 @@ def symEach512 (ctx : Ctx) (bind : Bind) (s : Sym) (op : String) (a b : Expr) : 
     | _, _ => refuse "a rotate needs a known 512-bit register and an immediate"
   else
     match b with
-    | .call f args => do
+    | .call f args =>
+      if f == "words16" then
+        -- the second operand is sixteen numbers of the table (a constant of the file): added lane by lane
+        match symVec512 bind s a, words16 bind args with
+        | some x, some ks =>
+          if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAddConst p.1 p.2) (x.zip ks)
+          else refuse "no proof rule for this 512-bit operation with a constant"
+        | _, _ => refuse "a 512-bit register whose lanes are not all known"
+      else do
       -- the second operand is sixty-four bytes of memory (`vpaddd zmm, zmm, [mem]`): it is read first
       let (y, s) ← symMem512 ctx bind s f args
       match symVec512 bind s a with
@@ -1243,6 +1271,18 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       | [.name op, a, b] => symEach512 ctx bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
     else if f == "mem512" || f == "mem512a" then symMem512 ctx bind s f args
+    else if f == "choose16" then
+      -- under a mask: in each lane the operation's result where the mask's bit is set, else what `c` holds
+      match args with
+      | [m, .call g [.name op, a, b], c] =>
+        if g == "each32" then
+          match symVec512 bind s m, symVec512 bind s a, symVec512 bind s b, symVec512 bind s c with
+          | some k, some x, some y, some old => do
+            let (new, s) ← symEachOp s op x y
+            symLaneTerms s (fun (p : Nat × Nat × Nat) => wSel p.1 p.2.1 p.2.2) (k.zip (new.zip old))
+          | _, _, _, _ => refuse "a 512-bit register or a mask register whose lanes are not all known"
+        else refuse "no proof rule for this operation under a mask"
+      | _ => refuse "no proof rule for this operation under a mask"
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
@@ -1966,8 +2006,24 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
   | .num x, .num y =>
     if op == "|" then (knownOr x y s.known).map fun v => .num (Lin.var v)    -- (the unknown the state knows as both numbers' bits)
     else wnum s op x y
+  | .counter r, .int n =>
+    -- a number of the text added to a counter (it wraps at 2^64, as the account has it)
+    if op == "+" ∧ 0 ≤ n then some (.counter (if n = 0 then r else Lin.add r (Lin.const n))) else none
   | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none
   | _, _ => none
+
+/-- The high word of a counter that is a number and a number of the text more (`t + 5`), as code works it
+out from the two words of the first number: the low words summed wrap exactly where the sum comes out below
+the low word it was made from, and there the high word is one more. So it is the high word of the first
+number, or that and one, by whether the one low word is below the other. Every term must be in the table. -/
+def hiPlus (look : Node → Option Nat) (s : Sym) (r : Row) : Option Nat :=
+  if 0 < r.constant ∧ r.constant < W32i ∧ knownNonneg s ⟨r.coeff, 0⟩ = true then
+    match look (.atom (Lin.word r)), look (.atom (Lin.word ⟨r.coeff, 0⟩)),
+          (highOf s ⟨r.coeff, 0⟩).bind (fun q => look (.atom (Lin.word q))), look (.atom (Lin.word (Lin.const 1))) with
+    | some a, some l, some h, some one =>
+      (look (.ult a l)).bind fun m => (look (.add (insertSorted h (insertSorted one [])))).bind fun h1 => look (.sel m h1 h)
+    | _, _, _, _ => none
+  else none
 
 /-- The words of a run, from word `k` on, `count` of them: each must be in the table. -/
 def inputWords (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (List WVal)
@@ -1992,7 +2048,10 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
   | [.counter r] =>
     if f == "counter" then some (.counter r)
     else if f == "lo" then (look (.atom (Lin.word r))).map fun i => .word [i]
-    else if f == "hi" then (highOf s r).bind fun q => (look (.atom (Lin.word q))).map fun i => .word [i]
+    else if f == "hi" then
+      match (highOf s r).bind fun q => (look (.atom (Lin.word q))).map fun i => WVal.word [i] with
+      | some v => some v
+      | none => (hiPlus look s r).map fun i => .word [i]
     else none
   | [.run r n] =>
     if f == "words" ∧ n % 4 = 0 then

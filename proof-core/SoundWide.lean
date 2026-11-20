@@ -152,7 +152,9 @@ theorem symNumber_notWide {bind : Bind} {e : Expr} {n : Int} (h : symNumber bind
     · simp [symNumber, isNumberLetter, hY] at h
     by_cases hZ : name = "Z512"
     · simp [symNumber, isNumberLetter, hZ] at h
-    simp [vecArg512, vecOf512, hX, hY, hZ]
+    by_cases hM : name = "M"
+    · simp [symNumber, isNumberLetter, hM] at h
+    simp [vecArg512, vecOf512, maskOf, hX, hY, hZ, hM]
   | number _ | lane _ _ | call _ _ => rfl
 
 @[local simp] theorem mapM_some {α β : Type} (xs : List α) (f : α → β) :
@@ -199,7 +201,53 @@ theorem symEachOp_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : S
       subst op
       exact ⟨fun p q => p ^^^ q, fun _ _ => rfl,
         eachTerms_sound (fn := fun p q => p ^^^ q) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wXor_step ok hp hq)⟩
-    next => exact (refuse_ok h).elim
+    next =>
+      split at h
+      next hU =>
+        simp only [beq_iff_eq] at hU
+        subst op
+        exact ⟨fun p q => if p < q then 1 else 0, fun _ _ => rfl,
+          eachTerms_sound (fn := fun p q => if p < q then 1 else 0) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wUlt_step ok hp hq)⟩
+      next => exact (refuse_ok h).elim
+
+/-- Terms made lane by lane change no register's lanes. -/
+theorem symLaneTerms_vec {α : Type} {s s' : Sym} {l : List Nat} {mk : α → Tab → Nat × Tab} {xs : List α} {items rest : Items}
+    (h : symLaneTerms s mk xs items = .ok ((l, s'), rest)) : s'.vec = s.vec := by
+  unfold symLaneTerms at h
+  obtain ⟨rfl, rfl⟩ := pure_pair h
+  rfl
+
+theorem symEachOp_vec {s s' : Sym} {l x y : List Nat} {op : String} {items rest : Items}
+    (h : symEachOp s op x y items = .ok ((l, s'), rest)) : s'.vec = s.vec := by
+  unfold symEachOp at h
+  split at h
+  · exact symLaneTerms_vec h
+  · split at h
+    · exact symLaneTerms_vec h
+    · split at h
+      · exact symLaneTerms_vec h
+      · exact (refuse_ok h).elim
+
+theorem symVec512_vec {bind : Bind} {s s' : Sym} (hv : s'.vec = s.vec) (e : Expr) : symVec512 bind s' e = symVec512 bind s e := by
+  cases e <;> simp [symVec512, hv]
+
+/-- The sixteen words of a number of 512 bits are sixteen. -/
+theorem words16_length {bind : Bind} {args : List Expr} {ks : List Nat} (h : words16 bind args = some ks) : ks.length = 16 := by
+  unfold words16 at h
+  split at h
+  next k =>
+    split at h
+    next =>
+      cases hb : (bind.lookup k).bind fun text => readInt ((text.splitOn "#").headD text) with
+      | none => rw [hb] at h; simp at h
+      | some n =>
+        rw [hb] at h
+        simp only [Option.bind_some] at h
+        by_cases n0 : 0 ≤ n
+        · simp [n0] at h; rw [← h]; simp
+        · simp [n0] at h
+    next => cases h
+  next => cases h
 
 theorem getD_map_index {xs : List Nat} {k : Nat} (h : k < xs.length) (d : Nat → Nat) :
     (xs.map d).getD k 0 = d (xs.getD k 0) := by
@@ -679,6 +727,32 @@ theorem symEach512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat →
   next =>
     split at h
     next f args =>
+      split at h
+      next hw =>
+        -- the second operand is sixteen numbers of the table: each is added to its lane
+        simp only [beq_iff_eq] at hw
+        subst f
+        cases hx : symVec512 bind s a <;> cases hk : words16 bind args <;> simp only [hx, hk] at h
+        all_goals try exact (refuse_ok h).elim
+        rename_i x ks
+        split at h
+        next hop =>
+          simp only [beq_iff_eq] at hop
+          subst op
+          obtain ⟨lx, ltx, evx⟩ := symVec512_sound H wf hx
+          have lk : ks.length = 16 := words16_length hk
+          let val (p : Nat × Nat) := (den (inpOf ctx s0) ρ s.terms p.1 + p.2) % W32
+          obtain ⟨c, vv⟩ := symLaneTerms_sound (val := val) h H wf (by simp [lx, lk]) (by
+            intro p mp T e ok
+            have bi := ltx p.1 (List.of_mem_zip mp).1
+            have z := wAddConst_step (inp := inpOf ctx s0) (ρ := ρ) (k := p.2) ok (Nat.lt_of_lt_of_le bi e.le) (inpOf_lt ctx s0)
+            simpa only [val, den_ext wf.words.table e bi] using z)
+          refine ⟨ρ, _, c, ?_, vv⟩
+          have nb : vecArg512 bind st (.call "words16" args) = none := rfl
+          have prim : ∀ p q, prim32 "add32" p q = some ((p + q) % W32) := fun _ _ => rfl
+          simp [lanesOf512, evx, nb, hk, prim, List.zip_map_left, List.map_map, Function.comp_def, val]
+        next => exact (refuse_ok h).elim
+      next =>
       -- the second operand is read from memory, and then the register is looked up
       obtain ⟨⟨y, s1⟩, r1, h1, h⟩ := V.bind_ok h
       obtain ⟨ρ1, lanesY, c1, evy, ly, lty, rfl⟩ := symMem512_sound E H wf h1
@@ -761,8 +835,53 @@ theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
           split at h
           next => exact symMem512_sound E H wf h
           next =>
-            obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
-            exact ⟨ρ, lanes, c, eval, val⟩
+            split at h
+            next hc =>
+              -- an operation under a mask: its result where the mask's lane is not 0, else what was there
+              have hf' : f = "choose16" := by simpa using hc
+              subst f
+              split at h
+              next m g op a b c _ =>
+                split at h
+                next hg =>
+                  simp only [beq_iff_eq] at hg
+                  subst g
+                  cases hk : symVec512 bind s m <;> cases hx : symVec512 bind s a <;> cases hy : symVec512 bind s b <;>
+                    cases ho : symVec512 bind s c <;> simp only [hk, hx, hy, ho] at h
+                  all_goals try exact (refuse_ok h).elim
+                  rename_i k x y old
+                  obtain ⟨⟨new, s1⟩, r1, h1, h2⟩ := V.bind_ok h
+                  simp only at h2
+                  obtain ⟨lx, ltx, evx⟩ := symVec512_sound H wf hx
+                  obtain ⟨ly, lty, evy⟩ := symVec512_sound H wf hy
+                  obtain ⟨fn, prim, c1, ln, ltn, vn⟩ := symEachOp_sound H wf lx ly ltx lty h1
+                  have hv := symEachOp_vec h1
+                  rw [← symVec512_vec hv] at hk ho
+                  obtain ⟨lk, ltk, evk⟩ := symVec512_sound c1.holds c1.wf hk
+                  obtain ⟨lo, lto, evo⟩ := symVec512_sound c1.holds c1.wf ho
+                  let d1 := den (inpOf ctx s0) ρ s1.terms
+                  let val (p : Nat × Nat × Nat) := if d1 p.1 = 0 then d1 p.2.2 else d1 p.2.1
+                  obtain ⟨c2, vv⟩ := symLaneTerms_sound (val := val) h2 c1.holds c1.wf (by simp [lk, ln, lo]) (by
+                    intro p mp T e ok
+                    have mr := (List.of_mem_zip mp).2
+                    have b1 := ltk _ (List.of_mem_zip mp).1
+                    have b2 := ltn _ (List.of_mem_zip mr).1
+                    have b3 := lto _ (List.of_mem_zip mr).2
+                    have z := wSel_step (inp := inpOf ctx s0) (ρ := ρ) (m := p.1) (a := p.2.1) (b := p.2.2) ok
+                      (Nat.lt_of_lt_of_le b1 e.le) (Nat.lt_of_lt_of_le b2 e.le) (Nat.lt_of_lt_of_le b3 e.le)
+                    simpa only [val, d1, den_ext c1.wf.words.table e b1, den_ext c1.wf.words.table e b2,
+                      den_ext c1.wf.words.table e b3] using z)
+                  refine ⟨ρ, _, c1.then c2, ?_, vv⟩
+                  have en : (x.zip y).mapM (fun (pq : Nat × Nat) =>
+                      prim32 op (den (inpOf ctx s0) ρ s.terms pq.1) (den (inpOf ctx s0) ρ s.terms pq.2)) = some (new.map d1) := by
+                    rw [← vn]; simp [prim]
+                  simp [lanesOf512, evk, evx, evy, evo, en, List.zip_map, List.map_map, Function.comp_def, val]
+                  intro _ _ _ _; rfl
+                next => exact (refuse_ok h).elim
+              next => exact (refuse_ok h).elim
+            next =>
+              obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
+              exact ⟨ρ, lanes, c, eval, val⟩
 
 theorem load_spilled_word (mem : Nat → Nat) (a : Nat) (lanes : List Nat) {k : Nat} (hk : k < lanes.length)
     (hv : lanes.getD k 0 < W32) : load (storeWords mem a lanes) (a + 4 * k) 4 = lanes.getD k 0 := by

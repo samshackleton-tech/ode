@@ -9,9 +9,10 @@ instruction run from one state:
 
 BYTES are the bytes of memory from START, in hexadecimal; everything may be read and written. LANES are the
 vector registers' lanes, eight hexadecimal digits each, sixteen a register, register 0 first (none: all
-zero). The answer is a line: `next` or `returned`, then the instruction pointer, the two flags, the sixteen
-registers, the bytes of memory from START, and all sixteen lanes of each of 32 vector registers; or `none`
-where the row has no meaning here; or `norow`.
+zero); after the thirty-two vector registers come the eight mask registers, a bit a lane. The answer is a
+line: `next` or `returned`, then the instruction pointer, the two flags, the sixteen registers, the bytes of
+memory from START, and all sixteen lanes of each of the 32 vector registers and the 8 mask registers; or
+`none` where the row has no meaning here; or `norow`.
 -/
 open Ode
 
@@ -54,7 +55,7 @@ def runCase (table : Array TRow) (line : String) : String :=
               | .returned s' => ("returned", s')
             let regsOut := " ".intercalate ((List.range 16).map fun k => toString (s'.reg k))
             let memOut := String.join ((List.range bytes.size).map fun k => toHex2 (s'.mem (start + k)))
-            let vecOut := String.join ((List.range 32).map fun x => String.join ((List.range 16).map fun k => toHex8 (s'.vec x k)))
+            let vecOut := String.join ((List.range 40).map fun x => String.join ((List.range 16).map fun k => toHex8 (s'.vec x k)))
             s!"{kind} {s'.rip} {if s'.zf then 1 else 0} {if s'.cf then 1 else 0} {regsOut} {memOut} {vecOut}"
         | none => "norow"
       | none => "unreadable"

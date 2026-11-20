@@ -115,7 +115,7 @@ def isVectorPlace : Expr → Bool
   | _ => false
 
 def isWidePlace : Expr → Bool
-  | .name n => n == "X512" || n == "Y512" || n == "Z512"
+  | .name n => n == "X512" || n == "Y512" || n == "Z512" || n == "M"
   | .call f _ => f == "mem512" || f == "mem512a"
   | _ => false
 

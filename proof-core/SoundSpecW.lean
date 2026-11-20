@@ -776,7 +776,79 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
         exact ⟨.list (a' ++ b'), by simp [binop], WDen.append hx hy⟩
       next => simp at h
     | _ => simp [wbin] at h
+  | counter r =>
+    cases y with
+    | int n =>
+      cases hy
+      cases hx with
+      | counter _ r0 =>
+        simp only [wbin] at h
+        split at h
+        next hc =>
+          obtain ⟨hop, n0⟩ := hc
+          have oe : op = "+" := by simpa using hop
+          subst oe
+          injection h with h; subst h
+          refine ⟨.counter (((ev ρ r).toNat % 2 ^ 64 + n.toNat) % 2 ^ 64), by simp [binop, n0], ?_⟩
+          by_cases nz : n = 0
+          · subst nz
+            have e : ((ev ρ r).toNat % 2 ^ 64 + (0 : Int).toNat) % 2 ^ 64 = (ev ρ r).toNat % 2 ^ 64 := by omega
+            rw [if_pos rfl, e]; exact WDen.counter r r0
+          · have r1 : 0 ≤ ev ρ (Lin.add r (Lin.const n)) := by rw [ev_add, ev_const]; omega
+            have e : ((ev ρ r).toNat % 2 ^ 64 + n.toNat) % 2 ^ 64 = (ev ρ (Lin.add r (Lin.const n))).toNat % 2 ^ 64 := by
+              rw [ev_add, ev_const]; omega
+            rw [if_neg nz, e]; exact WDen.counter _ r1
+        next => cases h
+    | _ => simp [wbin] at h
   | _ => cases y <;> simp [wbin] at h
+
+/-- The high word of a counter that is a number and a number of the text more: what `hiPlus` finds is it. -/
+theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {r : Row} {i : Nat}
+    (h : hiPlus (fun n => findNode n s.terms 0) s r = some i) :
+    den (inpOf ctx s0) ρ s.terms i = (ev ρ r).toNat % 2 ^ 64 / W32 := by
+  unfold hiPlus at h
+  split at h
+  next hc =>
+    obtain ⟨c0, c1, hn⟩ := hc
+    split at h
+    next a l hh one ha hl hhh hone =>
+      cases hm : findNode (.ult a l) s.terms 0 with
+      | none => simp [hm] at h
+      | some m =>
+        cases hs : findNode (.add (insertSorted hh (insertSorted one []))) s.terms 0 with
+        | none => simp [hm, hs] at h
+        | some h1 =>
+          simp only [hm, hs, Option.bind_some] at h
+          cases hq : highOf s ⟨r.coeff, 0⟩ with
+          | none => simp [hq] at hhh
+          | some q =>
+            simp only [hq, Option.bind_some] at hhh
+            have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h
+            have dm := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hm
+            have d1 := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hs
+            have da := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
+            have dl := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hl
+            have dh := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hhh
+            have d0 := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hone
+            have eq := highOf_sound (ρ := ρ) H hq
+            have b0 := knownNonneg_sound (ρ := ρ) H hn
+            have er : ev ρ r = ev ρ ⟨r.coeff, 0⟩ + r.constant := by simp [ev]
+            simp only [Node.value] at di dm d1 da dl dh d0
+            have fs : insertSorted hh (insertSorted one []) = [hh, one].foldr insertSorted [] := rfl
+            rw [fs, sumList_sorted] at d1
+            simp only [List.map, sumList, Nat.add_zero] at d1
+            rw [ev_word] at da dl dh d0
+            rw [ev_const] at d0
+            rw [di, dm, d1, da, dl, dh, d0, eq, er]
+            generalize ev ρ ⟨r.coeff, 0⟩ = R at b0 ⊢
+            generalize r.constant = c at c0 c1 ⊢
+            unfold W32i at c1 ⊢
+            unfold W32
+            by_cases lt : ((R + c) % 4294967296).toNat < (R % 4294967296).toNat
+            · rw [if_pos lt, if_neg (by decide)]; omega
+            · rw [if_neg lt, if_pos rfl]; omega
+    next => cases h
+  next => cases h
 
 end
 
@@ -984,19 +1056,31 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
               next hf3 =>
                 have fe : f = "hi" := by simpa using hf3
                 subst fe
-                cases hq : highOf s r with
-                | none => simp [hq] at h
-                | some q =>
-                  simp only [hq, Option.bind_some] at h
-                  cases hfn : findNode (.atom (Lin.word q)) s.terms 0 with
-                  | none => simp [hfn] at h
+                split at h
+                next v hold =>
+                  injection h with h; subst h
+                  have h := hold
+                  cases hq : highOf s r with
+                  | none => simp [hq] at h
+                  | some q =>
+                    simp only [hq, Option.bind_some] at h
+                    cases hfn : findNode (.atom (Lin.word q)) s.terms 0 with
+                    | none => simp [hfn] at h
+                    | some i =>
+                      simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
+                      have di : 𝔻 i = (ev ρ (Lin.word q) % W32i).toNat := found_den wf hfn
+                      have eq := highOf_sound H hq
+                      refine ⟨.word ((ev ρ r).toNat % 2 ^ 64 / W32), by simp [builtin], ?_⟩
+                      have e : (ev ρ r).toNat % 2 ^ 64 / W32 = 𝔻 i := by rw [di, ev_word, eq]; unfold W32 W32i; omega
+                      rw [e]; exact WDen.one wf i
+                next =>
+                  -- the counter is a number and a number of the text more
+                  cases hp : hiPlus (fun n => findNode n s.terms 0) s r with
+                  | none => simp [hp] at h
                   | some i =>
-                    simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
-                    have di : 𝔻 i = (ev ρ (Lin.word q) % W32i).toNat := found_den wf hfn
-                    have eq := highOf_sound H hq
+                    simp only [hp, Option.map_some, Option.some.injEq] at h; subst h
                     refine ⟨.word ((ev ρ r).toNat % 2 ^ 64 / W32), by simp [builtin], ?_⟩
-                    have e : (ev ρ r).toNat % 2 ^ 64 / W32 = 𝔻 i := by rw [di, ev_word, eq]; unfold W32 W32i; omega
-                    rw [e]; exact WDen.one wf i
+                    rw [← hiPlus_sound H wf hp]; exact WDen.one wf i
               next => simp at h
       | run r n =>
         cases hx with

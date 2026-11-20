@@ -7,8 +7,7 @@ The function is `blake3_servil_avx512_p32` as it lies in ../kcheck/b3hashr.o: 69
 not changed here. Its contract is examples/kernel/p32.contract, which is the contract of
 ../kcheck/proofs/inner.spec: thirty-two lanes, each a chunk of `n` blocks read through a table of addresses,
 the same counter in every lane. (The hash calls the same code through its other entry,
-`blake3_servil_avx512_k32`, which gives lane i the counter t + i: that entry runs six instructions on mask
-registers, which the account of the machine does not have yet.)
+`blake3_servil_avx512_k32`, which gives lane i the counter t + i: test_k32.py.)
 
 The class `P32` narrows the contract by one line, `requires n < 2` (one block a lane) or `requires n < 3`
 (one or two), and gives no place: the verifier follows each count of blocks as a path of its own.
@@ -150,7 +149,9 @@ class Statement(unittest.TestCase):
 
 
 class Files:
-    """Statements and proofs in a folder of the test's own (`cls.dir`), the prover and the verifier on them."""
+    """Statements and proofs in a folder of the test's own (`cls.dir`), the prover and the verifier on them.
+    `name`: the function they are of."""
+    name = NAME
 
     @classmethod
     def tearDownClass(cls):
@@ -167,7 +168,7 @@ class Files:
     def prove_file(cls, st, pf, seconds=None, place=()):
         """(a proof was found and written to `pf`, the verifier's last word where none was). With `seconds`,
         the search gives up after that time. `place`: the lines of the function's places."""
-        prover = prove.Prover(str(st), [f"for {NAME}"] + list(place), str(pf), until=None if seconds is None else time.time() + seconds)
+        prover = prove.Prover(str(st), [f"for {cls.name}"] + list(place), str(pf), until=None if seconds is None else time.time() + seconds)
         prover.last = ""
         try:
             try:
