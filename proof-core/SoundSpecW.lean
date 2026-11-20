@@ -238,8 +238,8 @@ variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 /-- A division the facts held already say: the unknowns are the quotient and the remainder. -/
 theorem divided_spec (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m) {q : Nat} (hd : divided s x m = some q) :
     ρ q = ev ρ x / m ∧ ρ (q + 1) = ev ρ x % m := by
-  have hq := List.find?_some hd
-  simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
+  have hq := (List.mem_filter.mp (leastNat_mem hd)).2
+  simp only [Bool.and_eq_true, among_iff] at hq
   obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
   have f1 := H.facts _ m1
   have f2 := H.facts _ m2
@@ -255,7 +255,7 @@ theorem knownNonneg_sound (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg 
   split at h
   next k hk => rw [ev_isConst hk]; simpa using h
   next =>
-    have := H.facts r (List.contains_iff_mem.mp h)
+    have := H.facts r (among_iff.mp h)
     rw [holds_iff] at this; exact this
 
 theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : lowOf s x m = some r) : ev ρ r = ev ρ x % m := by
@@ -353,7 +353,7 @@ theorem WDen.wordsOf (wf : WF s) : ∀ (ids : List Nat),
 
 theorem sameRow_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) {a b : Row}
     (h : sameRow facts a b = true) : ev ρ a = ev ρ b := by
-  simp only [sameRow, Bool.or_eq_true, beq_iff_eq, Bool.and_eq_true] at h
+  simp only [sameRow, Bool.or_eq_true, Lin.same_iff, Bool.and_eq_true] at h
   rcases h with h | ⟨h1, h2⟩
   · rw [h]
   · have g1 := plainTimes_sound h1 ρ hf

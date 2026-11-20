@@ -421,7 +421,7 @@ expertise of his team.
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
 processor that the instruction table describes. The formal model that the theorem is about is 1,000 lines.
-The verifier's own 2,386 lines are covered by the theorem, so a Bob who takes the third route does not
+The verifier's own 2,408 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -441,7 +441,7 @@ of them, and five of the fourteen functions of the BLAKE3 hash: the two versions
 compresses one block (proofs of 131 and 137 bytes, verified in 5 ms each); `b3l_node_out`, which
 reads a 120-byte node record and calls one of them (a 38-byte proof, verified together with both kernels
 in 7 ms); the 16-way kernel, for every number of blocks (460 instructions, a 2.4 kB proof, verified
-in 0.38 s); and `b3l_pad`, which pads a chunk's last block (39 instructions, a 451-byte proof). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
+in 0.17 s); and `b3l_pad`, which pads a chunk's last block (39 instructions, a 451-byte proof). [proof-core/README.md](proof-core/README.md) has the list, the sizes and the times.
 
 That page also says what is left out. Reading the object file and the text of the specification happens
 outside the theorem. So do the link step and the check of which processor features a function needs. The

@@ -1047,9 +1047,9 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
   cases hd : divided s x m with
   | some q =>
     simp only [Sym.quotRem, hd]
-    have hq := List.find?_some hd
-    simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
-    obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
+    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
+    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
     have f1 := H.facts _ m1
     have f2 := H.facts _ m2
     have f3 := H.facts _ m3
@@ -1058,7 +1058,7 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
     have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
     exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
-           bounded_var (List.mem_range.mp (List.mem_of_find?_eq_some hd)), wf.facts _ m3⟩
+           bounded_var hlt, wf.facts _ m3⟩
   | none =>
     simp only [Sym.quotRem, hd]
     obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
@@ -1075,9 +1075,9 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
   cases hd : divided s x m with
   | some q =>
     simp only [symDivide, hd]
-    have hq := List.find?_some hd
-    simp only [Bool.and_eq_true, List.contains_iff_mem] at hq
-    obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
+    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
+    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
+    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
     have f1 := H.facts _ m1
     have f2 := H.facts _ m2
     have f3 := H.facts _ m3
@@ -1086,7 +1086,7 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
     simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
     have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
     exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
-           bounded_var (List.mem_range.mp (List.mem_of_find?_eq_some hd)), wf.facts _ m3⟩
+           bounded_var hlt, wf.facts _ m3⟩
   | none =>
     simp only [symDivide, hd]
     obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos

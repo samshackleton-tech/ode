@@ -699,7 +699,10 @@ theorem symEach512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat →
         have nb : vecArg512 bind st (.call "mem512a" args) = none := rfl
         simp [lanesOf512, evx, nb, my, prim, List.zip_map, Function.comp_def]
     next =>
-      obtain ⟨x, y, hx, hy, he⟩ := symPair512_ok h
+      cases hx : symVec512 bind s a <;> cases hy : symVec512 bind s b <;> simp only [hx, hy] at h
+      all_goals try exact (refuse_ok h).elim
+      rename_i x y
+      have he := h
       obtain ⟨lx, ltx, evx⟩ := symVec512_sound H wf hx
       obtain ⟨ly, lty, evy⟩ := symVec512_sound H wf hy
       obtain ⟨fn, prim, c, val⟩ := symEachOp_sound H wf lx ly ltx lty he

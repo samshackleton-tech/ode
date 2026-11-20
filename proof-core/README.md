@@ -75,7 +75,7 @@ The functions it verifies today:
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
-| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.38 s |
+| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.17 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 
 `ode_equal`, `ode_low`, `ode_eighth` and the four functions of `examples/table/` (`ode_third` is one of
@@ -351,7 +351,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,000 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,227 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,249 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -652,7 +652,7 @@ its value after `K` steps. `prove.py` writes that line for the verifier as a use
 loop leaves alone.
 
 With that invariant the verifier accepts the contract as it stands, for every `n` from 1 up. The proof is
-2,350 bytes and the verifier takes 0.38 s. It walks six paths: the first block with `n` equal to 1 and
+2,350 bytes and the verifier takes 0.17 s. It walks six paths: the first block with `n` equal to 1 and
 with `n` greater; from the invariant to the return, twice; and once round the loop to a block that is
 the last and to one that is not. Without the invariant the path goes round the loop without end, and a
 test records that the prover gives up.
@@ -673,8 +673,8 @@ loop changes.
 
 The same test file also narrows the contract by one line, `requires n < 2` or `requires n < 3`, and gives
 no invariant. The verifier then follows each count of blocks as a path of its own. For one block a lane
-the proof is 921 bytes and the verifier takes 0.06 s. For one or two blocks the proof is 1,440 bytes and
-the verifier takes 0.19 s. Those tests refuse ten changed contracts and four changed instructions.
+the proof is 921 bytes and the verifier takes 35 ms. For one or two blocks the proof is 1,440 bytes and
+the verifier takes 95 ms. Those tests refuse ten changed contracts and four changed instructions.
 
 Two more rules were needed. A broadcast of a register's low 32 bits makes the word of the register's
 number directly, so that the specification's `lo(t)` is the same term. And in the specification, numbers
@@ -690,8 +690,8 @@ statement there; it does not accept a false one.
 **The 32-way kernel, for one block and for two.** `test_p32.py` verifies the shipped bytes of
 `blake3_servil_avx512_p32` (699 instructions in `../kcheck/b3hashr.o`) against the contract of
 `../kcheck/proofs/inner.spec` (here `examples/kernel/p32.contract`) narrowed by one line, `requires n < 2`
-or `requires n < 3`. For one block a lane the proof is 1,270 bytes and the verifier takes 0.40 s. For one
-or two blocks the proof is 2,127 bytes and the verifier takes 1.25 s.
+or `requires n < 3`. For one block a lane the proof is 1,270 bytes and the verifier takes 0.15 s. For one
+or two blocks the proof is 2,127 bytes and the verifier takes 0.44 s.
 
 This kernel differs from the 16-way kernel in two ways that needed new rules. First, it looks up the order
 of the message words for each round in a table in the object file (the rule for constants, above). Second,
@@ -821,7 +821,7 @@ time is the prover's own search for arithmetic proofs. A verdict does not rely o
 returns a proof only after `odeverify` has accepted it, and `test_session.py` checks that the two give
 identical answers at every prefix of three stored proofs.
 
-## Measurements (November 19, 2026)
+## Measurements (November 19 and 20, 2026)
 
 **Speed of the verifier.** 3.5 ms for `ode_common`, 4 ms for `ode_adler32`, 14 ms for `ode_adler32_blocks`,
 22 ms for `ode_adler32_blocks4`, 5 ms for `ode_varint`, 5 ms for each of the two BLAKE3 kernels. Each
@@ -859,9 +859,29 @@ which was 5.4 times the Python verifier's 0.20 s and over the limit described be
 while the statement was worked on, so the table of words was copied. The marks are now worked out from
 the registers and the list of clean registers alone.) The two one-block kernels went from 12 and 13 ms to 5 ms each, and the two runs above to
 0.06 s and 0.19 s. The Lean evaluation of the specification still gives the 105 official test vectors.
+
+On November 20 three more things were mended. A sampling profiler found them on the 32-way kernel:
+
+- **The table of terms was still copied** at every 512-bit operation that combines two registers. The
+  state was held in two places while the new terms were added, so the first new term copied the whole
+  table. The table is now taken out of the state for that moment, and the registers are looked up before
+  the state is handed on.
+- **Finding a quotient the state already knows** compared rows by the equality that Lean derives for the
+  type, which is slow, and went through every unknown of the state. Rows are now compared number by
+  number, and only the unknowns noted for that division are looked at.
+- **Seeing at once that two numbers are equal** built two new rows for every fact. It now compares the
+  lists of multiples where they stand.
+
+The 16-way kernel for every `n` went from 0.38 s to 0.17 s, which is less than the Python verifier's
+0.20 s. One block a lane went from 0.06 s to 35 ms, and one or two blocks from 0.19 s to 95 ms. The 32-way
+kernel went from 0.40 s to 0.15 s for one block a lane, and from 1.25 s to 0.44 s for one or two. The
+stored proofs did not change by a byte, and the proofs that the tests find for the 32-way kernel are the
+same bytes as before.
+
 What takes the time now, for the 16-way kernel, is still evaluating the specification: at the loop
 invariant the verifier works out one block's compression for each of the sixteen lanes, on each of four
-arrivals there.
+arrivals there. For the 32-way kernel, about a sixth of the time goes to checking the bounds of the stack
+frame again after every instruction.
 
 **Two limits that are enforced by a test** (`test_limits.py`): every stored proof must be under 100 kB,
 and a whole run of this verifier must take at most five times as long as the Python verifier takes for the
@@ -921,8 +941,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,000 lines (Table.lean 152, Machine.lean 474, Contract.lean 374). The
-verifier: 2,386 lines (Core.lean 2,227, Arithmetic.lean 159 including its proofs). The file parser: 174
-lines. The proofs of the theorems: 14,612 lines, of which Trace.lean (the second theorem) is 858 and Plain.lean (the machine without marks) is 249.
+verifier: 2,408 lines (Core.lean 2,249, Arithmetic.lean 159 including its proofs). The file parser: 174
+lines. The proofs of the theorems: 14,663 lines, of which Trace.lean (the second theorem) is 858 and Plain.lean (the machine without marks) is 249.
 
 ## The files
 

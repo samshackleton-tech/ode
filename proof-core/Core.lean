@@ -52,7 +52,30 @@ def sameCoeff : List Int → List Int → Bool
   | x :: xs, [] => Arithmetic.allZero (x :: xs)
   | x :: xs, y :: ys => x == y && sameCoeff xs ys
 
+/-- The same list of numbers, one by one. -/
+def sameList : List Int → List Int → Bool
+  | [], [] => true
+  | x :: xs, y :: ys => x == y && sameList xs ys
+  | _, _ => false
+
+/-- The same row: what `==` says of two rows, asked number by number (which is faster). -/
+def same (a b : Row) : Bool := a.constant == b.constant && sameList a.coeff b.coeff
+
+/-- Is the second list `c` times the first, number by number, but for zeros at their ends? -/
+def timesCoeff (c : Int) : List Int → List Int → Bool
+  | [], ys => Arithmetic.allZero ys
+  | x :: xs, [] => c * x == 0 && timesCoeff c xs []
+  | x :: xs, y :: ys => y == c * x && timesCoeff c xs ys
+
+/-- `g` less `c` times `f`, where that is a number alone. (What `isConst (sub g (scale c f))` gives, asked
+without making the rows.) -/
+def lessTimes (g : Row) (c : Int) (f : Row) : Option Int :=
+  if timesCoeff c f.coeff g.coeff then some (g.constant - c * f.constant) else none
+
 end Lin
+
+/-- Is the row one of the facts? -/
+def among (facts : List Row) (g : Row) : Bool := facts.any fun f => Lin.same f g
 
 /-! ## The proof, and asking it -/
 
@@ -467,17 +490,24 @@ def Sym.divide (s : Sym) (x : Row) (m : Int) : Sym :=
 /-- The unknowns made as quotients of `x` by `m` (`Sym.divide` notes each division it makes). (Only to look
 at few unknowns in `divided`: nothing rests on it.) -/
 def quotients (s : Sym) (x : Row) (m : Int) : List Nat :=
-  s.divs.filterMap fun d => if d.1 == x && d.2.1 == m then some d.2.2 else none
+  s.divs.filterMap fun d => if d.2.1 == m && Lin.same d.1 x then some d.2.2 else none
+
+/-- The least of some numbers. -/
+def leastNat : List Nat → Option Nat
+  | [] => none
+  | a :: l =>
+    match leastNat l with
+    | some b => some (if a ≤ b then a else b)
+    | none => some a
 
 /-- The quotient's unknown, where the facts held already say what `x` divided by `m` is: the four facts of
-`Sym.divide`, of one unknown and the next. -/
+`Sym.divide`, of one unknown and the next. (The least such unknown among those noted for this division.) -/
 def divided (s : Sym) (x : Row) (m : Int) : Option Nat :=
-  let named := quotients s x m
-  (List.range s.nvars).find? fun q =>
-    named.contains q &&
+  leastNat ((quotients s x m).filter fun q =>
+    decide (q < s.nvars) &&
     (let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)))
-     s.facts.contains d && s.facts.contains (Lin.scale (-1) d) && s.facts.contains (Lin.var (q + 1)) &&
-       s.facts.contains (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1))))
+     among s.facts d && among s.facts (Lin.scale (-1) d) && among s.facts (Lin.var (q + 1)) &&
+       among s.facts (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1)))))
 
 /-- The least of some numbers. -/
 def least : List Int → Option Int
@@ -1038,8 +1068,12 @@ def symPair512 (bind : Bind) (s : Sym) (a b : Expr) (f : List Nat → List Nat �
   | some x, some y => f x y
   | _, _ => refuse "a 512-bit register whose lanes are not all known"
 
+/-- (The table is taken out of the state while terms are added to it, so that it is added to where it
+lies: a table that the state still holds would be copied at the first new term.) -/
 def symLaneTerms {α : Type} (s : Sym) (mk : α → Tab → Nat × Tab) (xs : List α) : V (List Nat × Sym) :=
-  let made := termsOf mk xs s.tab
+  let tab := s.tab
+  let s := { s with tab := {} }
+  let made := termsOf mk xs tab
   pure (made.1, { s with tab := made.2 })
 
 def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
@@ -1163,7 +1197,12 @@ def symEach512 (ctx : Ctx) (bind : Bind) (s : Sym) (op : String) (a b : Expr) : 
       match symVec512 bind s a with
       | some x => symEachOp s op x y
       | none => refuse "a 512-bit register whose lanes are not all known"
-    | _ => symPair512 bind s a b fun x y => symEachOp s op x y
+    | _ =>
+      -- (the registers are looked up before the state is handed on: a state held here as well would have
+      -- its table copied)
+      match symVec512 bind s a, symVec512 bind s b with
+      | some x, some y => symEachOp s op x y
+      | _, _ => refuse "a 512-bit register whose lanes are not all known"
 
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
@@ -1842,7 +1881,7 @@ def idOf (look : Node → Option Nat) : List Nat → Option Nat
 def knownNonneg (s : Sym) (r : Row) : Bool :=
   match Lin.isConst r with
   | some k => decide (0 ≤ k)
-  | none => s.facts.contains r
+  | none => among s.facts r
 
 /-- The remainder by a number above zero, where it is known without a new unknown (as `symLow` has it). -/
 def lowOf (s : Sym) (x : Row) (m : Int) : Option Row :=
@@ -1863,13 +1902,13 @@ def plainTimes (facts : List Row) (g : Row) : Bool :=
     match f.coeff.getLast?, g.coeff.getLast? with
     | some a, some b =>
       a != 0 && b % a == 0 && decide (0 ≤ b / a) &&
-        (match Lin.isConst (Lin.sub g (Lin.scale (b / a) f)) with
+        (match Lin.lessTimes g (b / a) f with
          | some k => decide (0 ≤ k)
          | none => false)
     | _, _ => false
 
 /-- Two rows are one number: the same row, or each seen at once to be no less than the other. -/
-def sameRow (facts : List Row) (a b : Row) : Bool := a == b || (plainTimes facts (Lin.sub a b) && plainTimes facts (Lin.sub b a))
+def sameRow (facts : List Row) (a b : Row) : Bool := Lin.same a b || (plainTimes facts (Lin.sub a b) && plainTimes facts (Lin.sub b a))
 
 /-- Two numbers held as rows: their sum; their difference, where it is seen at once to be no less than zero;
 whether they are equal, where the facts say at once that they are, or that one is the greater. -/

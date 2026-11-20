@@ -76,6 +76,64 @@ theorem need_ok {what : String} {facts goals : List Row} {items : Items} {r : α
 
 /-! ## What follows from facts -/
 
+theorem Lin.sameList_iff : ∀ {xs ys : List Int}, Lin.sameList xs ys = true ↔ xs = ys
+  | [], [] => by simp [Lin.sameList]
+  | [], _ :: _ => by simp [Lin.sameList]
+  | _ :: _, [] => by simp [Lin.sameList]
+  | x :: xs, y :: ys => by
+    simp only [Lin.sameList, Bool.and_eq_true, beq_iff_eq, List.cons.injEq]
+    rw [Lin.sameList_iff]
+
+theorem Lin.same_iff {a b : Row} : Lin.same a b = true ↔ a = b := by
+  cases a; cases b
+  simp only [Lin.same, Bool.and_eq_true, beq_iff_eq, Lin.sameList_iff, Row.mk.injEq]
+  exact And.comm
+
+/-- The second list is `c` times the first: so is what they add up to. -/
+theorem dot_timesCoeff (c : Int) : ∀ (xs ys : List Int) (ρ : Nat → Int), Lin.timesCoeff c xs ys = true → dot ys ρ = c * dot xs ρ
+  | [], ys, ρ, h => by
+    simp only [Lin.timesCoeff] at h
+    simp [dot, dot_allZero ys ρ h]
+  | x :: xs, [], ρ, h => by
+    simp only [Lin.timesCoeff, Bool.and_eq_true, beq_iff_eq] at h
+    have e := dot_timesCoeff c xs [] (fun n => ρ (n + 1)) h.2
+    simp only [dot] at e ⊢
+    rw [Int.mul_add, ← Int.mul_assoc, h.1, ← e]
+    simp
+  | x :: xs, y :: ys, ρ, h => by
+    simp only [Lin.timesCoeff, Bool.and_eq_true, beq_iff_eq] at h
+    simp only [dot, h.1, dot_timesCoeff c xs ys _ h.2]
+    rw [Int.mul_add, Int.mul_assoc]
+
+theorem lessTimes_sound {g f : Row} {c k : Int} (h : Lin.lessTimes g c f = some k) (ρ : Nat → Int) :
+    ev ρ g - c * ev ρ f = k := by
+  unfold Lin.lessTimes at h
+  split at h
+  next ht =>
+    injection h with h
+    have e := dot_timesCoeff c f.coeff g.coeff ρ ht
+    simp only [ev, e, Int.mul_add]
+    omega
+  next => contradiction
+
+/-- The least of some numbers is one of them. -/
+theorem leastNat_mem : ∀ {l : List Nat} {c : Nat}, leastNat l = some c → c ∈ l
+  | [], _, h => by simp [leastNat] at h
+  | a :: l, c, h => by
+    simp only [leastNat] at h
+    cases hl : leastNat l with
+    | none => simp only [hl, Option.some.injEq] at h; subst h; exact List.mem_cons_self ..
+    | some b =>
+      simp only [hl, Option.some.injEq] at h
+      split at h
+      next => subst h; exact List.mem_cons_self ..
+      next => subst h; exact List.mem_cons_of_mem _ (leastNat_mem hl)
+
+/-- `among` is membership. -/
+theorem among_iff {facts : List Row} {g : Row} : among facts g = true ↔ g ∈ facts := by
+  simp only [among, List.any_eq_true, Lin.same_iff]
+  exact ⟨fun ⟨f, m, e⟩ => e ▸ m, fun m => ⟨g, m, rfl⟩⟩
+
 /-- Two lists of multiples that are the same but for zeros at their ends are the same sum. -/
 theorem dot_sameCoeff : ∀ (xs ys : List Int) (ρ : Nat → Int), Lin.sameCoeff xs ys = true → dot xs ρ = dot ys ρ
   | [], ys, ρ, h => by
@@ -114,10 +172,9 @@ theorem plainTimes_sound {facts : List Row} {g : Row} (h : plainTimes facts g = 
       obtain ⟨⟨_, k0⟩, hc⟩ := hfk
       split at hc
       next k hk =>
-        have e := ev_isConst (ρ := ρ) hk
+        have e := lessTimes_sound hk ρ
         have f0 := hf f fin
         rw [holds_iff] at f0
-        simp only [ev_sub, ev_scale] at e
         have c0 : 0 ≤ k := by simpa using hc
         have := Int.mul_nonneg k0 f0
         omega
