@@ -358,6 +358,14 @@ inductive Known where
   | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
   deriving DecidableEq, Repr, Inhabited
 
+/-- What is known NOT to be marked (not to depend on a secret): general registers, and the two flags.
+Of anything not named here nothing is known: it may be marked. -/
+structure SMarks where
+  regq : List Nat := []
+  zq : Bool := false
+  cq : Bool := false
+  deriving Inhabited
+
 structure Sym where
   reg : Nat → Row                 -- the sixteen registers
   zf : Flag
@@ -375,6 +383,7 @@ structure Sym where
   spill : Option (Row × List Nat) := none  -- entry-relative offset and lane terms of the last aligned vector spill
   known : List Known := []        -- what is known of numbers that are no rows
   divs : List (Row × Int × Nat) := []   -- the divisions made (the number, the divisor, the quotient's unknown): advice for `divided`, and nothing rests on it
+  q : SMarks := {}                -- what is known not to be marked
   deriving Inhabited
 
 /-- The terms of the table of words, in order. -/
@@ -2023,6 +2032,128 @@ def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
         pure ()
       | _ => refuse "a function returns a number"
 
+/-! ## Marks: what may depend on a secret
+
+The machine marks what may depend on a secret, and stops where something marked is used in an address,
+decides a jump, or is the address a return goes to. The verifier follows which registers and flags are
+known not to be marked (`Sym.q`), a statement at a time, and refuses where the machine could stop. -/
+
+mutual
+  /-- The expression is made of nothing that may be marked: numbers, registers known not to be marked,
+  and what is worked out of such; no memory, no vector register. -/
+  def cleanExpr (bind : Bind) (q : List Nat) : Expr → Bool
+    | .number _ => true
+    | .lane _ _ => false
+    | .name n =>
+      isNumberLetter n ||
+        match regOf bind n with
+        | some r => q.contains r
+        | none => false
+    | .call f args => (memWidth f).isNone && cleanAll bind q args
+  def cleanAll (bind : Bind) (q : List Nat) : List Expr → Bool
+    | [] => true
+    | e :: es => cleanExpr bind q e && cleanAll bind q es
+end
+
+mutual
+  /-- Every address in the expression is made of nothing that may be marked. -/
+  def quietExprS (bind : Bind) (q : List Nat) : Expr → Bool
+    | .call f args => quietAllS bind q args && ((memWidth f).isNone || cleanAll bind q args)
+    | _ => true
+  def quietAllS (bind : Bind) (q : List Nat) : List Expr → Bool
+    | [] => true
+    | e :: es => quietExprS bind q e && quietAllS bind q es
+end
+
+/-- A register's row, or a number's: what a part of an address is. -/
+def plainRow (bind : Bind) (s : Sym) : Expr → Option Row
+  | .number n => if n < 2 ^ 64 then some (Lin.const n) else none
+  | .name n =>
+    if isNumberLetter n then ((bind.lookup n).bind readInt).map fun i => Lin.const (i % (M64 : Int))
+    else (regOf bind n).map s.reg
+  | _ => none
+
+/-- A load of `size` bytes at `a + b` reads memory that is given to read only and is not hidden: a byte
+of a run of bytes, at a place the statement has shown to be within the run (`s1` is the state after the
+statement: the byte is known there); or bytes at a place that is a number, within a run of a fixed count
+that the contract does not say is hidden. Such bytes are not marked at entry, and nothing can write them. -/
+def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) : Bool :=
+  match plainRow bind s a, plainRow bind s b with
+  | some x, some y =>
+    let addr := Lin.add (signed x) (signed y)
+    match locate ctx addr with
+    | some (.region r o) => size == 1 && (lookupByte r o s1.bytes).isSome
+    | some _ => false
+    | none =>
+      match findOut addr ctx.contract.fixeds 0 with
+      | some (.out j off) =>
+        match Lin.isConst off, ctx.contract.fixeds[j]? with
+        | some c, some (name, _, count) => decide (0 ≤ c) && decide (c + size ≤ count) && !ctx.contract.hidden.contains name
+        | _, _ => false
+      | _ => false
+  | _, _ => false
+
+mutual
+  /-- May what the expression stands for be marked? No answer: an address in it is made of something
+  that may be marked. -/
+  def markOf (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Expr → Option Bool
+    | .number _ => some false
+    | .lane _ _ => some true
+    | .name n => some !(cleanExpr bind s.q.regq (.name n))
+    | .call f args =>
+      if (memWidth f).isSome then
+        if cleanAll bind s.q.regq args then
+          match memSize f, args with
+          | some size, [a, b] => some !(publicLoad ctx bind s s1 size a b)
+          | _, _ => some true
+        else none
+      else marksOf ctx bind s s1 args
+  def marksOf (ctx : Ctx) (bind : Bind) (s s1 : Sym) : List Expr → Option Bool
+    | [] => some false
+    | e :: es =>
+      match markOf ctx bind s s1 e, marksOf ctx bind s s1 es with
+      | some x, some y => some (x || y)
+      | _, _ => none
+end
+
+/-- What is known not to be marked after a statement, `s` being the state before it and `s1` the state
+after. No answer: the statement could use something marked in an address. -/
+def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
+  | .nothing => some s.q
+  | .set place v =>
+    match markOf ctx bind s s1 v with
+    | none => none
+    | some m =>
+      match place with
+      | .name n =>
+        if n == "zf" then some { s.q with zq := !m }
+        else if n == "cf" then some { s.q with cq := !m }
+        else match regOf bind n with
+          | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq }
+          | none => none
+      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | _ => none
+  | .vset place v =>
+    if quietExprS bind s.q.regq v then
+      match place with
+      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | _ => some s.q
+    else none
+  | .vset512 place v =>
+    if quietExprS bind s.q.regq v then
+      match place with
+      | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
+      | _ => some s.q
+    else none
+  | _ => none
+
+/-- A statement, with what is known not to be marked brought up to date. -/
+def symStmtQ (ctx : Ctx) (bind : Bind) (s : Sym) (st : Stmt) : V Sym := do
+  let s1 ← symStmt ctx bind s st
+  match stmtMarks ctx bind s s1 st with
+  | some q => pure { s1 with q := q }
+  | none => refuse "an address is made of something that may depend on a secret: what can be observed of the run would depend on it"
+
 inductive Next where
   | at (pc : Nat)
   | returned
@@ -2059,7 +2190,12 @@ def shape : List Stmt → Shape
 
 def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match shape i.effect with
-  | .ret => do symReturn ctx s; pure [(s, .returned)]
+  | .ret =>
+    do
+      symReturn ctx s
+      if !quietRegs.all s.q.regq.contains then
+        refuse "at the return a general register that a callee does not keep may depend on a secret"
+      else pure [(s, .returned)]
   | .jump target cond =>
     match jumpTarget i.bind target with
     | none => refuse "a jump to a place that cannot be read"
@@ -2067,13 +2203,16 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       match cond with
       | none => pure [(s, .at t)]
       | some (flag, want) =>
+        if !(if flag == "zf" then s.q.zq else s.q.cq) then
+          refuse "a jump on a flag that may depend on a secret: which instructions run would depend on it"
+        else
         match flagWays (if flag == "zf" then s.zf else s.cf) with
         | none => refuse "a jump on a flag of which nothing is known"
         | some w => ways s want t i.next w
   | .plain => do
-    let s ← fold (symStmt ctx i.bind) s i.effect
-    let s ← settle ctx s
-    pure [(s, .at i.next)]
+    let s1 ← fold (symStmtQ ctx i.bind) s i.effect
+    let s2 ← settle ctx s1
+    pure [({ s2 with q := s1.q }, .at i.next)]
 
 /-! ## A call, by the called function's contract -/
 
@@ -2312,6 +2451,20 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
         | none => false) then pure ()
   else refuse "a called function needs of the processor what this function's contract does not say it needs"
 
+/-- What a called function's contract asks about marks is so at the call: the general registers a callee
+does not keep are known not to be marked; each run of bytes it is given to read is one
+this function was given to read, whole; and a run of a fixed count it reads is one its contract says is
+hidden (so nothing is asked of its bytes). -/
+def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
+  quietRegs.all s.q.regq.contains &&
+  c.fixeds.all (fun x => c.hidden.contains x.1) &&
+  c.regions.all fun (r, l) => (findRun s r l ctx.contract.regions 0).isSome
+
+/-- What is known not to be marked after a call: the general registers a callee does not keep (the called
+function's contract says so), and each register a callee keeps that was not marked before. -/
+def afterCallQ (s : Sym) : SMarks :=
+  { regq := quietRegs ++ s.q.regq.filter calleeSaved.contains }
+
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
@@ -2321,7 +2474,9 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     | some c => do
       needsOf ctx s c
       let s' ← symCall ctx s c
-      pure [(s', .at i.next)]
+      if !callQuiet ctx s c then
+        refuse "at a call, something the called function's contract asks not to depend on a secret may depend on one"
+      else pure [({ s' with q := afterCallQ s }, .at i.next)]
   | none => symInstr ctx s i
 
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=
@@ -2343,7 +2498,7 @@ def entryFacts (ctx : Ctx) : List Row :=
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx, bytes := [], spec := [], nvars := 16,
-    wrote := [], intact := List.range ctx.contract.outs.length }
+    wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := quietRegs } }
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept
 registers and the frame as in `s`, every other register any number below 2^64. What `s` knows of the
@@ -2450,6 +2605,8 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   match p.keep.find? fun r => s.reg r != first.reg r with
   | some r => refuse s!"at the place {p.pc} register {r} does not hold what it held on first coming there"
   | none =>
+  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} a register may depend on a secret that did not on first coming there"
+  else
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do
     let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
@@ -2483,7 +2640,8 @@ def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V 
       | some e => arrive ctx e.place e.first e.d next.1
       | none => do
         let (g, d, first) ← generalize ctx p next.1
-        go (⟨p, d, first⟩ :: seen) g pc'
+        -- (what is known not to be marked at the place: the registers that are not on this first coming)
+        go (⟨p, d, { first with q := next.1.q }⟩ :: seen) { g with q := { regq := next.1.q.regq } } pc'
 
 /-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
 def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit

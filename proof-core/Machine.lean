@@ -586,26 +586,39 @@ def afterCall (p q : Program) (i : Instr) (s : State) : State :=
     marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },      -- (the address to come back to is no secret)
     trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
 
+/-- The registers a called function gives back as it found them: rbx, rbp, r12 to r15. -/
+def calleeSaved : List Nat := [3, 5, 12, 13, 14, 15]
+
+/-- The state a caller goes on in when a called function has returned in `s'`, `s` being the state at the
+call: the registers a callee keeps are marked as they were at the call. (They hold what they held then:
+`Runs` and `Ends` ask that of a call. So if they did not depend on a secret before the call, they do not
+after it, whatever the called function did with them in between.) -/
+def backFrom (s s' : State) : State :=
+  { s' with marks := { s'.marks with reg := fun r => if calleeSaved.contains r then s.marks.reg r else s'.marks.reg r } }
+
 /-- From `s`, whatever the unknowns turn out to be: the function `p` runs on instructions it has, touches
-only what `perm` lets it, and returns after finitely many of them in a state of which `Q` holds.
+only what `perm` lets it, uses nothing marked in a way that shows (in an address, at a jump, as the address a
+return goes to), and returns after finitely many of them in a state of which `Q` holds.
 
 At a call the address to come back to is written below the stack pointer, and the called function runs in
 its turn, in the same way: on its own instructions, touching only what it is let (never more than its
-caller is), until it returns; and from every state it can return in, the caller's run goes on. -/
+caller is), until it returns; in every state it can return in, the registers a callee keeps hold what they
+held at the call, and from that state the caller's run goes on. -/
 inductive Runs (world : List Program) : Perm → Program → (State → Prop) → State → Prop where
   | step (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr) :
       p.fetch s.rip = some i →
-      (∀ u, exec perm p i u s ≠ none) →
-      (∀ u s', exec perm p i u s = some (.next s') → Runs world perm p Q s') →
-      (∀ u s', exec perm p i u s = some (.returned s') → Q s') →
+      (∀ u, execQ perm p i u s ≠ none) →
+      (∀ u s', execQ perm p i u s = some (.next s') → Runs world perm p Q s') →
+      (∀ u s', execQ perm p i u s = some (.returned s') → Q s') →
       Runs world perm p Q s
   | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
       (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      8 ≤ s.reg RSP → allowed perm.write (s.reg RSP - 8) 8 = true →
+      8 ≤ s.reg RSP → allowed perm.write (s.reg RSP - 8) 8 = true → s.marks.reg RSP = false →
       (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
       Runs world inner q R (afterCall p q i s) →
-      (∀ s', R s' → Runs world perm p Q s') →
+      (∀ s', R s' → ∀ r ∈ calleeSaved, s'.reg r = s.reg r) →
+      (∀ s', R s' → Runs world perm p Q (backFrom s s')) →
       Runs world perm p Q s
 
 end Ode

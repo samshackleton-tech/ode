@@ -393,13 +393,17 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
             raise SystemExit(f"statement: the contract of {name} does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap nothing else it is given")
     elif c["no_overlap"]: raise SystemExit(f"statement: the contract of {name} has `requires no_overlap`, which the verifier in Lean reads only with something written")
     # A contract promises that which instructions run and which addresses are touched do not depend on the bytes
-    # in memory, but for the runs a `trace depends on` line names. The account in Lean says nothing of that: a
-    # run only read must be named there. (A run written is never read in that account, so nothing depends on
-    # what it held; and it is not to be named, since nothing may then depend on it.)
-    # (A run of words that is written is also read: it too must be named.)
-    quiet = [arg for arg, kind in c["args"] if not in_register(arg) and arg not in c["trace"] and (arg not in written or arg in kinds)]
+    # in memory, but for the runs a `trace depends on` line names. In the account in Lean the bytes of a run
+    # given to read are not marked (nothing secret), but for a run of a fixed count that a `hidden` line names:
+    # so a run of a fixed count that is only read and that `trace depends on` does not name is `hidden`.
+    # (The addresses a table holds are numbers given, as a register's number is: a table is never hidden. Of
+    # a run that is written nothing is asked: what is read of it is taken as marked.)
+    fixed = [line.split()[1] for line in out if line.startswith("arg ") and line.split()[2] == "fixed"]
+    quiet = [arg for arg, kind in c["args"] if not in_register(arg) and arg not in c["trace"] and arg not in written and arg not in tables]
+    out += [f"hidden {arg}" for arg in quiet if arg in fixed]
+    quiet = [arg for arg in quiet if arg not in fixed]
     if quiet: raise SystemExit(f"statement: the contract of {name} promises that the trace does not depend on the bytes of {', '.join(quiet)}: "
-                               "the verifier in Lean does not show that yet")
+                               "the verifier in Lean shows that of a run of a fixed count only")
     if [arg for arg in written if arg in c["trace"] and arg not in kinds]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
     if r is not None and kinds: raise SystemExit(f"statement: the contract of {name} returns a number beside arguments of the kinds {', '.join(said)}: not read yet")
     if result is not None: out.append(f"result {result}")

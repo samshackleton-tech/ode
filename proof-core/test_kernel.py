@@ -33,9 +33,11 @@ With the specification, the contract or the function changed in one place the ve
 `shown`, and the prover finds no proof; each case names what the verifier then says. With a line of the
 proof left out or changed it does not say `shown`.
 
-Not shown here, though the kernels' real contracts (../kcheck/proofs/inner.spec) promise it: that which
-instructions run and which addresses are touched depend on no byte of `h` or `m`. The account in Lean says
-nothing of that yet (the two files of examples/kernel/ say so with `trace depends on h, m`)."""
+The contracts have no `trace` line, as the kernels' real contracts have none (../kcheck/proofs/inner.spec):
+which instructions run and which addresses are touched depend on no byte of `h` or `m`. The account in Lean
+marks the bytes of `m` (the line `hidden m` of the statement) and whatever is worked out of them or read
+of `h`, and the verifier refuses where something marked could decide a jump, be part of an address or be
+left in a general register at the return: `test_the_trace` changes the kernel so that it does each."""
 import os, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -45,10 +47,10 @@ KCHECK = os.path.join(HERE, "..", "kcheck")
 LAKE = lean_verify.LAKE
 SYMBOL = "blake3_servil_compress_in_place_avx512"
 SSE41 = "blake3_servil_compress_in_place_sse41"
-CONTRACT = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "needs avx512",
+CONTRACT = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "needs avx512", "hidden m",
             "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (name m)) (call counter (name t)) "
             "(bin % (name length) (num 256)) (bin % (name flags) (num 256))))", "stack 0"]
-CONTRACT_SSE41 = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "below length 4294967296", "needs sse41",
+CONTRACT_SSE41 = ["arg h inout 32", "arg m fixed 64", "arg length number", "arg t number", "arg flags number", "below length 4294967296", "needs sse41", "hidden m",
                   "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (name m)) (call counter (name t)) "
                   "(name length) (bin % (name flags) (num 4294967296))))", "stack 0"]
 # what the verifier says where it does not say `shown`
@@ -182,8 +184,6 @@ class StatementTests:
 
     def test_a_contract_that_promises_more_or_other_than_is_read_is_refused(self):
         for what, old, new, why in [
-                ("the trace depends on no byte of m", "trace depends on h, m", "trace depends on h", "the trace does not depend on the bytes of m"),
-                ("the trace depends on no byte of h", "trace depends on h, m", "trace depends on m", "the trace does not depend on the bytes of h"),
                 ("no line of what overlaps", "    requires no_overlap(h, m)\n", "", "does not say `requires no_overlap(h, m)`"),
                 ("a part of the words", "ensures h = compress", "ensures h[0 .. 16] = compress", "of a part of a run of words"),
                 ("a number returned too", "    stack 0\n", "    returns length\n    stack 0\n", "returns a number beside arguments of the kinds"),
@@ -266,6 +266,26 @@ class KernelTests:
                 last = self.found(self.spec, self.path("changed.o"))
                 self.assertIsInstance(last, str, what)
                 self.assertIn(why, last.split("\n")[0], what)
+
+    def test_the_trace(self):
+        """The kernel changed so that what can be observed of a run depends on a word of the block: refused.
+        The same function against a contract that says the trace may depend on the block: shown."""
+        start = f'fn {self.K.fn} as "{self.K.symbol}" {{\n  .p2align 6\n'
+        self.assertEqual(self.source.count(start), 1)
+        public = self.changed("    stack 0\n", "    stack 0\n    trace depends on m\n")
+        for what, added, why in (
+                ("a jump on a word of the block", "  mov r9, qword ptr [rsi + 0]\n  test r9, r9\n  jne @seen\n@seen:\n  xor r9d, r9d\n",
+                 "a jump on a flag that may depend on a secret"),
+                ("a word of the block left in a register", "  mov r9, qword ptr [rsi + 0]\n",
+                 "at the return a general register that a callee does not keep may depend on a secret")):
+            with self.subTest(what=what):
+                with open(self.path("trace.ode"), "w") as f: f.write(self.source.replace(start, start + added))
+                odec.build(self.path("trace.ode"), self.K.fn, self.path("trace.o"))
+                last = self.found(self.spec, self.path("trace.o"), "trace")
+                self.assertIsInstance(last, str, what)
+                self.assertIn(why, last.split("\n")[0], what)
+                # (the function is not refused for being changed: it does what the contract says of the words)
+                self.assertNotIsInstance(self.found(public, self.path("trace.o"), "public"), str, what)
 
     def test_the_proof_changed(self):
         with open(self.kept) as f: proof = f.read().splitlines()

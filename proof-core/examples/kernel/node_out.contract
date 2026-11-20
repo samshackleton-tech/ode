@@ -1,7 +1,9 @@
 // A node's chaining value (the function `b3l_node_out` is in ../../../kcheck/b3hashr.o): it calls one of the two
 // one-block kernels (kernel.contract, kernel_sse41.contract). The layout and the contract are those of
 // ../../../kcheck/proofs/inner.spec, but for the `trace` line: there the trace depends on no byte of `out`
-// or `nd`, and the account in Lean says nothing of the trace yet, so that promise is not made here.
+// or `nd`. Here it may depend on `nd`: the function reads the counter, the length and the flags of the node
+// into registers and gives them to a kernel, and a contract cannot yet say that a number given in a
+// register is one the trace does not depend on.
 layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
 
 contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
@@ -10,5 +12,5 @@ contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
     stack 128
     needs sse41
     needs avx512 if plat == 5
-    trace depends on out, nd
+    trace depends on nd
 }

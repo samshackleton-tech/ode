@@ -10,6 +10,7 @@ function's entry of which the caller has seen to what the contract asks. -/
 structure Setting (ctx : Ctx) (p : Program) (s0 : State) : Prop where
   code : p.code = ctx.code
   pre : ctx.contract.pre p s0
+  quiet : ctx.contract.quietAt s0
 
 namespace Setting
 variable {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)

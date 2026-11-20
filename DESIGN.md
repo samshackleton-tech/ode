@@ -393,8 +393,8 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 830 lines.
-The verifier's own 2,071 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 976 lines.
+The verifier's own 2,191 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -417,8 +417,9 @@ in 0.37 s). [proof-core/README.md](proof-core/README.md) has the list, the sizes
 
 That page also says what is left out. Reading the object file and the text of the specification happens
 outside the theorem. So do the link step and the check of which processor features a function needs. The
-promise in the kernels' contracts that the trace does not depend on the data (constant time) is not in the
-Lean model. This is the third route of the list above, begun. Lean is the language of this
+promise in the kernels' contracts that the trace does not depend on the data (constant time) is in the
+Lean model and is proved for the three kernels, at the level of which instructions run and which
+addresses are touched. This is the third route of the list above, begun. Lean is the language of this
 implementation. No reader is required to use it: a proof is a text file that a verifier written in any
 language can read.
 

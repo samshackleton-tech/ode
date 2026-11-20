@@ -112,6 +112,14 @@ any machine state that satisfies the caller's obligations (listed next). Then:
   output buffers is unchanged; `rax` holds the value that the contract's `returns` line specifies; and
   every `ensures` line holds. An `ensures` line has the form `BUFFER[lo .. hi] = LIST` and says that those
   bytes of an output buffer equal a list defined by the specification.
+- **Secrets (constant time).** The machine model keeps a mark on each general register, each flag and each
+  byte of memory. The mark means "this may depend on a secret". The model moves marks as it moves values:
+  a result is marked if any of its inputs is. A vector register always counts as marked. The marks change
+  no value. The model *stops* where something marked would become observable: where it is part of an
+  address, where it decides a conditional jump, and where it is the address a `ret` returns to. `Meets`
+  says that the function never stops in this way. At the return, no general register is marked except
+  the callee-saved ones, and memory outside the stack frame and the output buffers has the marks it had.
+  The next section says what follows from this.
 
 The caller's obligations (`Contract.pre`):
 
@@ -124,7 +132,49 @@ The caller's obligations (`Contract.pre`):
 - a contract can also name a fixed-size read-only buffer, and a fixed-size buffer that is both read and
   written. They have the same obligations, and the read-and-written one counts as an output buffer;
 - where the contract bounds a number argument (`length: word`), the number is below the bound;
-- the function's code is in memory.
+- the function's code is in memory;
+- about marks (`Contract.quietAt`): no general register is marked except the callee-saved ones (rbx, rbp,
+  r12 to r15), which may hold anything; the return address is not marked; and no byte of an input buffer
+  is marked, except in the fixed-size buffers that the contract lists as `hidden`. A buffer is `hidden`
+  when the contract's `trace depends on` line does not name it.
+
+### The second theorem: what an observer can see
+
+    theorem ends_trace : Alike a b → Ends world p a a' → Ends world p b b' → a'.trace = b'.trace
+
+This theorem is in Trace.lean. It is about the machine model alone: no verifier and no contract appear in
+it.
+
+- The *trace* of a run is the list of what the model takes to be observable: the address of each
+  instruction executed, and each memory address read or written, with its size.
+- `Alike a b` says that two machine states have the same marks, are at the same instruction, have the
+  same trace so far, and agree on every register, flag and memory byte that is not marked. They may differ
+  in everything that is marked.
+- `Ends world p a a'` says that the function `p`, started in state `a`, ran to its return in state `a'`
+  on the machine that stops where something marked would become observable.
+
+So two runs of a function from states that differ only in secrets produce the same trace. Together with
+the soundness theorem this gives the constant-time promise of a contract: the verifier accepts a function
+only if it never stops the machine, so every run of an accepted function is a run that `ends_trace` speaks
+about. A called function runs under the same rule. Across a call, the callee-saved registers get back the
+marks they had before the call. That is justified because the called function must return them holding
+the values they held, and `Runs` and `Ends` both require this.
+
+What this does **not** cover:
+
+- **Only this level of observation.** How long an instruction takes for given operands is outside the
+  model. So are speculative execution, caches shared with other programs, power and frequency. Each needs
+  assumptions of its own.
+- **One step is argued, not proved.** The marks change no value, so the machine with marks computes the
+  same registers and memory as the machine without them wherever it does not stop. That is visible in the
+  definition (`execAllQ` is `execAll` with the stop added). It is not yet a theorem.
+- **Two things the verifier refuses although they are true.** A value read back from the stack frame
+  counts as marked, so a function that spills a loop counter to its frame and later branches on it is
+  refused (`test_call.py` has such a caller). A number passed to a called function in a register must
+  not be marked, so `b3l_node_out` is verified with `trace depends on nd`: it loads the node's counter,
+  length and flags into registers and passes them to a kernel.
+- **A rule for the coder.** A general register that is not callee-saved must not hold anything marked at
+  a call or at a return. A function that loads a secret into such a register has to clear it first.
 
 ### The one assumption: `Linked`
 
@@ -256,10 +306,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory), and Contract.lean (the meaning of contracts and specifications). 830 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 976 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (1,844 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,032 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -373,8 +423,7 @@ it refuses `requires` (other than `requires no_overlap`), other forms of `ensure
 A `needs` line (the processor feature a function requires, such as `needs avx512`) is carried through. It
 has no meaning in the machine model, which has every instruction of the table. The verifier does check
 that a caller's contract repeats every `needs` of the functions it calls. `statement.py` checks that a
-function's own instructions are of kinds its `needs` lines name. It refuses a contract that promises that the execution trace is independent of a buffer's contents
-(the constant-time property), because the model here does not define a trace. It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
+function's own instructions are of kinds its `needs` lines name. A fixed-size read-only buffer that the `trace depends on` line does not name becomes a `hidden` line: its bytes may be secret. For a buffer whose length is an argument, `statement.py` still refuses a contract that does not name it in `trace depends on`. It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
 A contract with an output buffer and another buffer must state `requires no_overlap` over all of them,
 because the model demands that of the caller.
 
@@ -390,10 +439,14 @@ that" forms. For four kinds of 128-bit vector instruction the verifier has rules
 that the SSE4.1 kernel makes of them: byte shuffles, shifts, OR, and blends of 16-bit halves. The machine
 model defines them in general.
 
-**What is left out of the kernels' contracts.** The kernels' real contracts
-(`../kcheck/proofs/inner.spec`) also promise that the execution trace does not depend on the data
-(constant time). The model here does not define a trace, so that promise is not proved here. The
-contracts used here (the two files in `examples/kernel/`) say so. `kcheck/` does check it.
+**The constant-time promise of the kernels' contracts is proved.** The kernels' real contracts
+(`../kcheck/proofs/inner.spec`) have no `trace depends on` line: the execution trace must not depend on
+the message block, the key or the chaining value. The contracts used here (the three kernel files in
+`examples/kernel/`) now say the same, and the verifier accepts all three kernels. `test_kernel.py` changes
+each one-block kernel so that it branches on a word of the message block, and so that it leaves such a word
+in a general register: both are refused. `test_p16.py` marks the table of block addresses as secret too:
+refused, because the blocks are read at those addresses. The contract of `b3l_node_out` still says
+`trace depends on nd`, for the reason given above.
 
 ### Known limitations
 
@@ -476,8 +529,9 @@ entries, and when the load starts before the lane's blocks.
 
 **The 16-way kernel is verified for every number of blocks.** `test_p16.py` verifies the shipped bytes
 of `blake3_servil_avx512_p16` (460 instructions in `../kcheck/b3hashr.o`). Its contract is
-`examples/kernel/p16.contract`: the contract of `../kcheck/proofs/inner.spec` with a `trace` line added,
-as for the other kernels.
+`examples/kernel/p16.contract`: the contract of `../kcheck/proofs/inner.spec`. It has no `trace` line,
+so the trace depends on no byte of the blocks or of the key. The addresses in the table `inputs` are
+treated as numbers passed to the function, like `n`: the trace does depend on them.
 `statement.py` now reads the three kinds of argument that this contract uses. `16 inputs` is the table of
 addresses described above. `16 cvs` is a buffer of sixteen chaining values, with one `ensures` that speaks
 of each of them. `bytes flags start end length` is one register whose four low bytes have names;
@@ -738,8 +792,9 @@ loads and stores fault on a misaligned address. The single-instruction compariso
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 830 lines. The verifier: 2,071 lines (Core.lean 1,912, Arithmetic.lean
-159 including its proofs). The file parser: 179 lines. The proofs of the theorems: 11,697 lines.
+**Code size.** The formal model: 976 lines (Table.lean 152, Machine.lean 461, Contract.lean 363). The
+verifier: 2,191 lines (Core.lean 2,032, Arithmetic.lean 159 including its proofs). The file parser: 159
+lines. The proofs of the theorems: 13,152 lines, of which Trace.lean (the second theorem) is 704.
 
 ## The files
 

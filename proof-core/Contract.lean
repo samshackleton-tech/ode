@@ -289,12 +289,12 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
+  hidden : List String := []              -- the runs of a fixed count given to read whose bytes may be marked (secret): what
+                                          -- can be observed of a run of the function must not depend on them
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
 def argRegs : List Nat := [7, 6, 2, 1, 8, 9]
-
-def calleeSaved : List Nat := [3, 5, 12, 13, 14, 15]
 
 def regOfIn (name : String) : List (String × Kind) → List Nat → Option Nat
   | (n, _) :: args, r :: regs => if n == name then some r else regOfIn name args regs
@@ -491,8 +491,33 @@ def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   (∀ e ∈ c.ensures, e.holds c defs s s') ∧
   ∀ e ∈ c.ensuresW, e.holds c defs s s'
 
-/-- The function's code meets the contract, among the functions of `world` (those it may call). -/
+/-- The general registers that are not marked at a call and at a return: all but those a callee keeps
+(rax, rcx, rdx, rsp, rsi, rdi, r8 to r11). A register a callee keeps may be marked: it is given back as it
+was found. -/
+def quietRegs : List Nat := [0, 1, 2, 4, 6, 7, 8, 9, 10, 11]
+
+/-- What the caller sees to about marks (what may depend on a secret): no general register is marked but
+those a callee keeps; the address to return to is not marked; no byte of a run given to read is marked,
+but for the runs of a fixed count the contract says are hidden. -/
+def Contract.quietAt (c : Contract) (s : State) : Prop :=
+  (∀ r ∈ quietRegs, s.marks.reg r = false) ∧
+  (∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false) ∧
+  (∀ r l, (r, l) ∈ c.regions → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
+  ∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false
+
+/-- What the function leaves of the marks, `s` being the state at entry: no general register is marked
+but those a callee keeps, and outside its own frame and the runs given to write every byte of memory is marked as it was. -/
+def Contract.quietAfter (c : Contract) (s s' : State) : Prop :=
+  (∀ r ∈ quietRegs, s'.marks.reg r = false) ∧
+  ∀ a, c.inFrame s a = false → c.inOut s a = false → s'.marks.mem a = s.marks.mem a
+
+/-- What the function leaves: what `post` says, and what `quietAfter` says of the marks. -/
+def Contract.left (c : Contract) (defs : List Def) (s s' : State) : Prop := c.post defs s s' ∧ c.quietAfter s s'
+
+/-- The function's code meets the contract, among the functions of `world` (those it may call): from every
+state at entry of which the caller has seen to what the contract asks, it runs to its return, touching
+only what it is let, using nothing marked in a way that shows, and leaves what the contract says. -/
 def Meets (world : List Program) (c : Contract) (defs : List Def) (p : Program) : Prop :=
-  ∀ s, c.pre p s → Runs world (c.perm s) p (c.post defs s) s
+  ∀ s, c.pre p s → c.quietAt s → Runs world (c.perm s) p (c.left defs s) s
 
 end Ode

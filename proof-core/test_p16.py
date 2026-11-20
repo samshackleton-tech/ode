@@ -64,6 +64,7 @@ LINES = [
     "needs avx512",
     "atleast n 1",
     "below n 2",
+    "hidden key",
     "stack 4096",
 ]
 
@@ -132,7 +133,6 @@ class Statement(unittest.TestCase):
             ("the values from 1 on", once("inputs[i]) for i in 0..16", "inputs[i]) for i in 1..16"), "not of all of them"),
             ("a bound that is no number", once(AT_LEAST, "    requires n >= t\n"), "has a `requires` the verifier in Lean does not read yet"),
             ("a bound of a run", once(AT_LEAST, "    requires key >= 1\n"), "has a `requires` the verifier in Lean does not read yet"),
-            ("the trace depends on no byte of the blocks", once("trace depends on inputs, key", "trace depends on key"), "the trace does not depend on the bytes of inputs"),
             ("no line of what overlaps", once("    requires no_overlap(inputs, key, out)\n", ""), "does not say `requires no_overlap(inputs, key, out)`"),
         ]
         for what, change, why in cases:
@@ -296,6 +296,15 @@ class Loop(Files, unittest.TestCase):
         cls.place = [l for l in proof if l.split()[0] in ("place", "name", "fact", "keep", "decreases", "lane")]
         cls.items = [l for l in proof if l.split()[0] in ("t", "p", "s", "q")]
         assert proof == [f"for {NAME}"] + cls.place + cls.items, "the proof's lines are not: for, the place, what was found"
+
+    def test_the_trace(self):
+        """The key's bytes are marked (`hidden key`): shown, since the kernel only loads them into vector
+        registers. With the table of addresses marked too it is refused: the addresses the blocks are read at
+        would depend on something marked."""
+        self.assertIn("hidden key", self.lines)
+        self.assertNotIn("hidden inputs", self.lines)
+        k = self.lines.index("hidden key")
+        self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address is made of something that may depend on a secret")
 
     def refused(self, tag, lines, expected, place=None):
         """With these lines for the statement and these for the place: what was found for the good ones does

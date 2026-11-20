@@ -649,6 +649,9 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     simp only [arrive, hfind] at h
     split at h
     next => exact (refuse_ok h).elim
+    next =>
+    split at h
+    next => exact (refuse_ok h).elim
     next hframe =>
       have hkeep : ∀ r, pl.keep.contains r = true → s.reg r = first.reg r := by
         intro r hr

@@ -698,11 +698,29 @@ theorem afterCall_alike {p q : Program} {i : Instr} {a b : State} (A : Alike a b
       rw [store_outside 8 _ _ _ x (by omega), store_outside 8 _ _ _ x (by omega)]
       exact A.mem x hx
 
+/-- The states two callers go on in after a call, of two states alike at the call and two alike at the
+return, the registers a callee keeps holding in each what they held at the call. -/
+theorem backFrom_alike {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
+    (ka : ∀ r ∈ calleeSaved, a1.reg r = a.reg r) (kb : ∀ r ∈ calleeSaved, b1.reg r = b.reg r) :
+    Alike (backFrom a a1) (backFrom b b1) := by
+  refine ⟨?_, A1.rip, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem⟩
+  · show ({ a1.marks with reg := fun r => if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r } : Marks) =
+      { b1.marks with reg := fun r => if calleeSaved.contains r then b.marks.reg r else b1.marks.reg r }
+    rw [A.marks, A1.marks]
+  · have hr : (if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r) = false := hr
+    show a1.reg r = b1.reg r
+    by_cases hc : calleeSaved.contains r = true
+    · rw [if_pos hc] at hr
+      have hm : r ∈ calleeSaved := by simpa using hc
+      rw [ka r hm, kb r hm]; exact A.reg r hr
+    · rw [if_neg hc] at hr; exact A1.reg r hr
+
 /-! ## A run -/
 
 /-- The function `p`, started in the state `s`, has returned in the state `s'`: by instructions of the
 machine that stops where something marked shows, whatever the unknowns turned out to be at each and
-whatever each was let touch; a called function running to its return in its turn. -/
+whatever each was let touch; a called function running to its return in its turn, and giving back the
+registers a callee keeps as it found them. -/
 inductive Ends (world : List Program) : Program → State → State → Prop where
   | ret (p : Program) (s : State) (i : Instr) (perm : Perm) (u : Nat → Nat) (s' : State) :
       p.fetch s.rip = some i → execQ perm p i u s = some (.returned s') → Ends world p s s'
@@ -711,7 +729,8 @@ inductive Ends (world : List Program) : Program → State → State → Prop whe
   | call (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s1 s' : State) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
       s.marks.reg RSP = false →
-      Ends world q (afterCall p q i s) s1 → Ends world p s1 s' → Ends world p s s'
+      Ends world q (afterCall p q i s) s1 → (∀ r ∈ calleeSaved, s1.reg r = s.reg r) →
+      Ends world p (backFrom s s1) s' → Ends world p s s'
 
 /-- TWO RUNS. Of two runs of a function from states alike in everything not marked, the states at the
 return are alike in everything not marked. -/
@@ -727,7 +746,7 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
     | step _ _ i2 perm2 u2 s1 _ hf2 hx2 _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       exact (execQ_alike A hx hx2).elim
-    | call _ _ i2 name q s1 _ hf2 hc _ _ _ _ =>
+    | call _ _ i2 name q s1 _ hf2 hc _ _ _ _ _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [execQ_call hc] at hx; cases hx
   | step p s i perm u s1 s' hf hx _ ih =>
@@ -739,10 +758,10 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
     | step _ _ i2 perm2 u2 t1 _ hf2 hx2 E2 =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       exact ih (execQ_alike A hx hx2) E2
-    | call _ _ i2 name q t1 _ hf2 hc _ _ _ _ =>
+    | call _ _ i2 name q t1 _ hf2 hc _ _ _ _ _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [execQ_call hc] at hx; cases hx
-  | call p s i name q s1 s' hf hc hw hsp _ _ ih1 ih2 =>
+  | call p s i name q s1 s' hf hc hw hsp _ hk _ ih1 ih2 =>
     intro b b' A E2
     cases E2 with
     | ret _ _ i2 perm2 u2 _ hf2 hx2 =>
@@ -751,11 +770,11 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
     | step _ _ i2 perm2 u2 t1 _ hf2 hx2 _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [execQ_call hc] at hx2; cases hx2
-    | call _ _ i2 name2 q2 t1 _ hf2 hc2 hw2 _ Ein Eout =>
+    | call _ _ i2 name2 q2 t1 _ hf2 hc2 hw2 _ Ein hk2 Eout =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [hc] at hc2; injection hc2 with e; subst e
       rw [hw] at hw2; injection hw2 with e; subst e
-      exact ih2 (ih1 (afterCall_alike A hsp) Ein) Eout
+      exact ih2 (backFrom_alike A (ih1 (afterCall_alike A hsp) Ein) hk hk2) Eout
 
 /-- THE TRACE. Two runs of a function from states alike in everything not marked let the same things be
 observed: the same instructions at the same addresses, touching the same memory. -/

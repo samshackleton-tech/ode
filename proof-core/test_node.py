@@ -53,7 +53,7 @@ MORE_STACK = "refused: a call needs more stack than this function's contract all
 NOT_BACK = "refused: at the return the stack pointer is not where it was at entry"
 NOT_WITHIN = "refused: a read of a run of a fixed count that is not eight bytes within it: not here yet"
 NO_RUN = "refused: a read that is neither of the frame nor of a run given"
-IF, TRACE = "if plat == 5", "\n    trace depends on out, nd"       # (the hash's own contract in blake3.spec has the same condition)
+IF, TRACE = "if plat == 5", "\n    trace depends on nd"       # (the hash's own contract in blake3.spec has the same condition)
 
 
 def spec_text(change=lambda t: t):
@@ -102,7 +102,6 @@ class Statement(unittest.TestCase):
                 ("a need on a condition of what is no register", once(IF + TRACE, "if nd == 5" + TRACE), "condition"),
                 ("a need on a condition of a sum", once(IF + TRACE, "if plat + 1 == 6" + TRACE), "condition"),
                 ("an expression that speaks of an argument of the kind `any`", once("node_value(nd, root)", "node_value(nd, plat)"), "`any`"),
-                ("the trace may not depend on the record's bytes", once("trace depends on out, nd", "trace depends on out"), "trace"),
                 ("no `requires no_overlap`", once("    requires no_overlap(out, nd)\n", ""), "no_overlap")):
             with self.subTest(what=what):
                 with self.assertRaises((SystemExit, Exception)) as e: self.lines(change)
@@ -320,8 +319,17 @@ class Verify(unittest.TestCase):
             with self.subTest(what=what):
                 self.assertEqual(last_word(self.node_from(old, new)), "shown")
 
+    def test_the_trace(self):
+        """The contract says the trace may depend on the record `nd`. Without that line the function is NOT
+        shown, though what the line then promises is true of it: it reads the counter, the length and the flags
+        of the record into registers and gives them to a kernel, whose contract asks that the registers it is
+        given be not marked (a contract cannot yet say that a number given is one the trace does not depend on).
+        A limit of the verifier, kept here so that it is seen when it goes."""
+        self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one",
+                      last_word(FUNCTIONS, once(TRACE, "")))
+
     def test_a_wrong_contract_is_refused(self):
-        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on out, nd"
+        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on nd"
         for what, old, new, word in (
                 ("the length's bound left out", "length: number at 104 below 65", "length: number at 104", ARGS),
                 ("the length up to 256", "below 65", "below 257", ARGS),
@@ -347,7 +355,7 @@ class Verify(unittest.TestCase):
                 self.assertIn(word, said)
 
     def test_a_changed_contract_that_is_true_is_shown(self):
-        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on out, nd"
+        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on nd"
         for what, old, new in (
                 ("the length up to 255", "below 65", "below 256"),
                 ("the length a byte", "length: number at 104 below 65", "length: byte at 104"),
