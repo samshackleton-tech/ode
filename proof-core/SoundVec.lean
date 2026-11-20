@@ -399,7 +399,7 @@ theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}
 
 /-- The terms for a load stand for the words in memory when those bytes still have their entry values. -/
 theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
-    {j : Nat} {x : String} {r n c width : Nat} (hj : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x, r, n))
+    {j : Nat} {x : String} {r n c width : Nat} (hj : ctx.contract.wordRuns[j]? = some (x, r, n))
     (hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c + k) = s0.mem (s0.reg r + c + k)) (hc : c % 4 = 0) :
     let made := termsOf intern ((List.range width).map fun i => Node.input j (c / 4 + i)) s.tab
     Carried ctx s0 ρ s ρ { s with tab := made.2 } st ∧ made.1.length = width ∧
@@ -474,7 +474,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             have := f4 x' r' n' hm'
             simp only [Bool.and_eq_true, decide_eq_true_eq]
             omega
-        obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf hjj hmem (by omega)
+        obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf (wordRuns_of hjj) hmem (by omega)
         refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
         · intro y hy1 hy2
           simp only [Contract.perm, Bool.or_eq_true]
@@ -527,7 +527,7 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
                 intro k hk
                 have := H.words.intact w hin' x r n hw' (c.toNat + k) (by omega)
                 rw [← Nat.add_assoc] at this; exact this
-              obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf hj' hmem (by omega)
+              obtain ⟨cr, len, lt, dn⟩ := loadWords_terms (ρ := ρ) H wf (wordRuns_of hj') hmem (by omega)
               refine ⟨allowed_of _ _ _ ?_, cr, len, lt, ?_⟩
               · intro y hy1 hy2
                 simp only [Contract.perm, Bool.or_eq_true]

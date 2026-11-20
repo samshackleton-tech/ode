@@ -42,7 +42,7 @@ LAYOUT = "layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: numbe
 # Why the verifier refuses a function or a contract that is wrong.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 ARGS = "refused: what a called function's contract says of its arguments is not followed"
-NO_PART = "refused: a called function is given a run that is no part of a run of a fixed count this function was given"
+NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
 NEEDS = "refused: a called function needs of the processor what this function's contract does not say it needs"
 NOT_WHOLE = "refused: a called function is given to write what is not a run this function may read and write, whole, with every word of it known"
 VEC = "refused: a store of a vector register whose words are not known, or at an address that is not a register and a number"

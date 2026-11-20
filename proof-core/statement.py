@@ -298,6 +298,7 @@ def by_kind(e, kinds, name):
     if e[0] == "call": return ("call", e[1], [by_kind(a, kinds, name) for a in e[2]])
     if e[0] == "list": return ("list", [by_kind(a, kinds, name) for a in e[1]])
     if e[0] == "index": return ("index", by_kind(e[1], kinds, name), by_kind(e[2], kinds, name))
+    if e[0] == "slice": return ("slice", by_kind(e[1], kinds, name), by_kind(e[2], kinds, name), by_kind(e[3], kinds, name))
     # (a form that gives a name, a `let` or a list made thing by thing, could give an argument's name again)
     raise SystemExit(f"statement: the contract of {name}: beside arguments whose names stand for words, counters or records "
                      f"an expression of this form is not read yet: {e!r}")

@@ -881,8 +881,13 @@ def termsOf {α : Type} (mk : α → Tab → Nat × Tab) : List α → Tab → L
   | a :: as, t => ((mk a t).1 :: (termsOf mk as (mk a t).2).1, (termsOf mk as (mk a t).2).2)
   | [], t => ([], t)
 
-/-- Which run of words (the runs of a fixed count given to read, then those given to read and write) is at
-the address a register held at entry. -/
+/-- The runs whose words are terms (`Node.input`), by their numbers: the runs of a fixed count given to
+read, then those given to read and write, then the runs of bytes with a length (each with the register its
+address is in; no name, no count). -/
+def Contract.wordRuns (c : Contract) : List (String × Nat × Nat) :=
+  c.fixeds ++ c.inouts ++ c.regions.map fun rl => ("", rl.1, 0)
+
+/-- Which run of words is at the address a register held at entry. -/
 def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
   | [], _ => none
   | (_, r', _) :: more, j => if r' = r then some j else runAt r more (j + 1)
@@ -1939,6 +1944,7 @@ inductive WVal where
   | list (l : List WVal)
   | run (r n : Nat)               -- the `n` bytes at the address register `r` held at entry, as they were at entry
   | part (r off n : Nat)          -- `n` of those bytes, from place `off` on
+  | region (r l : Nat)            -- the bytes at the address register `r` held at entry, as many as register `l` held then, as they were at entry
   | wbytes (ids : List Nat)       -- the bytes of the words of these terms, four a word, the lowest first
   | record (fields : List (String × WVal))    -- a record: its names, each with its thing
   | lanes (j count l : Nat)       -- the table of addresses that the fixed run `j` is: its `count` lanes
@@ -2073,13 +2079,13 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
     else none
   | [.run r n] =>
     if f == "words" ∧ n % 4 = 0 then
-      (runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0).bind fun j => (inputWords look j (n / 4) 0).map .list
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) 0).map .list
     else none
   | [.part r off n] =>
     -- a part of a run that begins and ends at whole words: those words; eight bytes of a run only read: the
     -- unknown the state knows as that number
     if f == "words" ∧ off % 4 = 0 ∧ n % 4 = 0 then
-      (runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
     else if f == "number.le" ∧ n = 8 then
       (runAt r ctx.contract.fixeds 0).bind fun j => (knownLoad j off s.known).map fun v => .num (Lin.var v)
     else none
@@ -2234,6 +2240,9 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
         if 0 ≤ i ∧ i ≤ j ∧ j ≤ n then some (.part r i.toNat (j - i).toNat) else none
       | some (.part r off n), some (.int i), some (.int j) =>
         if 0 ≤ i ∧ i ≤ j ∧ j ≤ n then some (.part r (off + i.toNat) (j - i).toNat) else none
+      -- a part of a run of bytes with a length: it must be seen at once to end within the run
+      | some (.region r l), some (.int i), some (.int j) =>
+        if 0 ≤ i ∧ i ≤ j ∧ plain s.facts (Lin.sub (Lin.var l) (Lin.const j)) = true then some (.part r i.toNat (j - i).toNat) else none
       | _, _, _ => none
     | .record names items =>
       match wevalList (weval ctx look s fuel env) items with
@@ -2249,9 +2258,9 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
 number is the row of its register at entry; a run of a fixed count is itself. -/
 def wenvIn (c : Contract) : List (String × Kind) → List Nat → List (String × WVal)
   | (n, .number) :: args, r :: regs => (n, .num (Lin.var r)) :: wenvIn c args regs
-  | (n, .bytes len) :: args, _ :: regs =>
+  | (n, .bytes len) :: args, r :: regs =>
     match c.regOf len with
-    | some _ => (n, .other) :: wenvIn c args regs
+    | some l => (n, .region r l) :: wenvIn c args regs
     | none => wenvIn c args regs
   | (_, .out _) :: args, _ :: regs => wenvIn c args regs
   | (n, .fixed count) :: args, r :: regs => (n, .run r count) :: wenvIn c args regs
@@ -2610,31 +2619,54 @@ def writtenIds (wroteW : List (Nat × Nat × Nat)) (w : Nat) : Nat → Nat → O
     | some e, some rest => some (e.2.2 :: rest)
     | _, _ => none
 
+/-- The terms of the words of the run of words `j`, from word `k` on, `count` of them: each must be in the table. -/
+def inputIds (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (List Nat)
+  | 0, _ => some []
+  | count + 1, k =>
+    match look (.input j k), inputIds look j count (k + 1) with
+    | some i, some rest => some (i :: rest)
+    | _, _ => none
+
 /-- The run this function may read and write that a called function is given to read and write: the
 register `r` holds its address as it was at entry, it is `n` bytes, no single byte of it was written, and
-every word of it is known written. Its number among the runs given to write, and the words' terms. -/
-def callRun (ctx : Ctx) (s : Sym) (r n : Nat) : Option (Nat × List Nat) :=
+every word of it is known: written, or (nothing having been written to the run) as it was at entry. Its
+number among the runs given to write, and the words' terms. -/
+def callRun (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (r n : Nat) : Option (Nat × List Nat) :=
   match findOut (s.reg r) ctx.contract.outs 0 with
   | some (.out w off) =>
     match ctx.contract.outs[w]? with
     | some (x, b, n0) =>
       if Lin.isConst off = some 0 ∧ n0 = n ∧ n % 4 = 0 ∧ ctx.contract.inouts.contains (x, b, n0) = true ∧
           s.wrote.all (fun e => e.1 != w) = true then
-        (writtenIds s.wroteW w (n / 4) 0).map fun ids => (w, ids)
+        if s.intact.contains w then
+          -- nothing was written to it yet: its words are those it held at entry, which must be in the table
+          (runAt b ctx.contract.wordRuns 0).bind fun j => (inputIds look j (n / 4) 0).map fun ids => (w, ids)
+        else (writtenIds s.wroteW w (n / 4) 0).map fun ids => (w, ids)
       else none
     | none => none
   | _ => none
 
-/-- The part of a run of a fixed count this function was given to read that a called function is given to
-read: the register `r` holds an address so far from where the run begins, and `n` bytes from there lie in
-the run. (The run by its number, the register its address was in at entry, and the place.) -/
+/-- The part of a run this function was given to read that a called function is given to read, as a run of
+a fixed count: the register `r` holds an address so far from where the run begins, and `n` bytes from there
+lie in the run. (The run by its number among the runs of words, the register its address was in at entry,
+and the place.) -/
 def fixedPart (ctx : Ctx) (s : Sym) (r n : Nat) : Option (Nat × Nat × Nat) :=
   match findOut (s.reg r) ctx.contract.fixeds 0 with
   | some (.out j off) =>
     match Lin.isConst off, ctx.contract.fixeds[j]? with
     | some c, some (_, b, n0) => if 0 ≤ c ∧ c + n ≤ n0 then some (j, b, c.toNat) else none
     | _, _ => none
-  | _ => none
+  | _ =>
+    -- or a part of a run of bytes with a length, at a place that is a number, seen at once to end within the run
+    match findRegion (s.reg r) ctx.contract.regions 0 with
+    | some (.region k off) =>
+      match Lin.isConst off, ctx.contract.regions[k]? with
+      | some c, some (b, l) =>
+        if 0 ≤ c ∧ plain s.facts (Lin.sub (Lin.var l) (Lin.const (c + n))) = true then
+          some (ctx.contract.fixeds.length + ctx.contract.inouts.length + k, b, c.toNat)
+        else none
+      | _, _ => none
+    | _ => none
 
 /-- A called function's names on words, where its arguments are numbers, parts of runs of a fixed count
 this function was given, and the run it reads and writes (the bytes of the words of `ids`). -/
@@ -2649,13 +2681,27 @@ def calleeW (ctx : Ctx) (s : Sym) (ids : List Nat) : List (String × Kind) → L
   | (_, .out _) :: _, _ :: _ => none
   | _, _ => some []
 
-/-- The words of the parts of runs handed to a called function, as terms to be in the table (so that the
-specification's `words` of such a part finds them). -/
+/-- The words of the parts of runs handed to a called function, and of a run handed over to read and write
+that is still as at entry, as terms to be in the table (so that the specification's `words` of such a part
+finds them). -/
 def partNodes (ctx : Ctx) (s : Sym) : List (String × Kind) → List Nat → List Node
   | (_, .fixed n) :: args, r :: regs =>
     (match fixedPart ctx s r n with
      | some (j, _, c) => if c % 4 = 0 then (List.range (n / 4)).map fun k => Node.input j (c / 4 + k) else []
      | none => []) ++ partNodes ctx s args regs
+  | (_, .inout n) :: args, r :: regs =>
+    -- a run handed over to read and write that nothing was written to yet: its words as they were at entry
+    (match findOut (s.reg r) ctx.contract.outs 0 with
+     | some (.out w _) =>
+       (match ctx.contract.outs[w]? with
+        | some (_, b, _) =>
+          if s.intact.contains w then
+            (match runAt b ctx.contract.wordRuns 0 with
+             | some j => (List.range (n / 4)).map fun k => Node.input j k
+             | none => [])
+          else []
+        | none => [])
+     | _ => []) ++ partNodes ctx s args regs
   | _ :: args, _ :: regs => partNodes ctx s args regs
   | _, _ => []
 
@@ -2699,17 +2745,17 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
       if !(run == run' && r == r' && n == n' && e.run == run) then
         .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
       else
-        match callRun ctx s r n with
+        let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
+        match callRun ctx T.find s r n with
         | none => .error "a called function is given to write what is not a run this function may read and write, whole, with every word of it known"
         | some (w, ids) =>
           match calleeW ctx s ids c.args argRegs with
-          | none => .error "a called function is given a run that is no part of a run of a fixed count this function was given"
+          | none => .error "a called function is given a run that is no part of a run this function was given to read"
           | some env =>
             -- its promise: the run is the bytes of the words a definition gives of its arguments
             match e.value with
             | .call f (.cons (.call g args) .nil) =>
               if f == "bytes_of" && !own.contains g && g != "len" then
-                let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
                 match wevalList (weval ctx T.find { s with tab := T } WFUEL env) args, findDef ctx.defs g with
                 | some vs, some d =>
                   match flatKeys T.find vs with

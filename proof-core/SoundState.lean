@@ -187,11 +187,18 @@ theorem tableAt_fixed {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h
 /-! ## What the verifier's state says -/
 
 /-- Word `k` of the run of words of number `j` (the runs of a fixed count given to read, then those given to
-read and to write), as memory held it at entry. -/
+read and to write, then the runs of bytes with a length), as memory held it at entry. -/
 def inpOf (ctx : Ctx) (s0 : State) (j k : Nat) : Nat :=
-  match (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? with
+  match ctx.contract.wordRuns[j]? with
   | some (_, r, _) => load s0.mem (s0.reg r + 4 * k) 4
   | none => 0
+
+/-- A run of a fixed count, or one given to read and write, has among the runs of words the number it has
+among those two. -/
+theorem wordRuns_of {c : Contract} {j : Nat} {x : String × Nat × Nat} (h : (c.fixeds ++ c.inouts)[j]? = some x) :
+    c.wordRuns[j]? = some x := by
+  unfold Contract.wordRuns
+  rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp h).1]; exact h
 
 /-- Known words agree with the machine's vector registers and memory. -/
 structure WordFacts (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (terms : List Node)

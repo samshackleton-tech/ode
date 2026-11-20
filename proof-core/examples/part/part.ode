@@ -1,0 +1,16 @@
+// The chaining value after one more block: the second 64 bytes of a message. The first function shown by
+// the verifier in Lean that hands a called function a part of a run of bytes it was given. The one-block
+// kernel is given, as its block, the address of the message's bytes 64 to 127; and, as the chaining value
+// it reads and writes, this function's own h, which nothing has been written to yet.
+// second_block(h, input, len): arguments in rdi, rsi, rdx, as C passes them. The kernel is given h,
+//   input + 64, the block length 64, the counter 0 and no flags.
+fn second_block as "ode_second_block" {
+  sub rsp, 8
+  add rsi, 64
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 8
+  ret
+}

@@ -33,6 +33,8 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
       WDen ctx s0 ρ T (.run r n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + k))))
   | part (r off n : Nat) (hb : ∀ k, k < n → s0.mem (s0.reg r + off + k) < 256) :
       WDen ctx s0 ρ T (.part r off n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + off + k))))
+  | region (r l : Nat) (hl : ρ l = s0.reg l) (hb : ∀ k, k < s0.reg l → s0.mem (s0.reg r + k) < 256) :
+      WDen ctx s0 ρ T (.region r l) (.list ((List.range (s0.reg l)).map fun k => Val.int (s0.mem (s0.reg r + k))))
   | wbytes (ids : List Nat) : WDen ctx s0 ρ T (.wbytes ids) (.list (wordBytes (ids.map (den (inpOf ctx s0) ρ T))))
   | rnil : WDen ctx s0 ρ T (.record []) (.record [])
   | rcons {x : String} {v : WVal} {a : Val} {fs : List (String × WVal)} {fs' : List (String × Val)} :
@@ -1093,7 +1095,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
             obtain ⟨hf, n4⟩ := hc
             have fe : f = "words" := by simpa using hf
             subst fe
-            cases hra : runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0 with
+            cases hra : runAt r ctx.contract.wordRuns 0 with
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
@@ -1102,7 +1104,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
-                have hj' : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x', r, n') := by simpa using hj
+                have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
                 obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) 0 (fun i => s0.mem (s0.reg r + i)) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
@@ -1130,7 +1132,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
             obtain ⟨hf, o4, n4⟩ := hc
             have fe : f = "words" := by simpa using hf
             subst fe
-            cases hra : runAt r (ctx.contract.fixeds ++ ctx.contract.inouts) 0 with
+            cases hra : runAt r ctx.contract.wordRuns 0 with
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
@@ -1139,7 +1141,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
-                have hj' : (ctx.contract.fixeds ++ ctx.contract.inouts)[j]? = some (x', r, n') := by simpa using hj
+                have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
                 obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) (off / 4) (fun i => s0.mem (s0.reg r + off + i)) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
@@ -1549,6 +1551,31 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
               next => simp at h
           | _ => simp at h
         | _ => cases hv <;> simp at h
+      | region r l =>
+        cases lv with
+        | int i =>
+          cases hv with
+          | int j =>
+            cases dlo; cases dhi
+            cases da with
+            | region _ _ hl hb =>
+              simp only at h
+              split at h
+              next hc =>
+                simp only [Option.some.injEq] at h; subst h
+                obtain ⟨i0, ij, jn⟩ := hc
+                have hj := plain_sound jn ρ H.facts
+                rw [ev_sub, ev_var, ev_const, hl] at hj
+                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + i.toNat + k) < 256 := fun k hk => by
+                  have := hb (i.toNat + k) (by omega)
+                  rwa [← Nat.add_assoc] at this
+                refine ⟨_, ?_, WDen.part r i.toNat (j - i).toNat hb'⟩
+                simp only [evalSpec, ea, elo, ehi]
+                rw [if_pos ⟨i0, ij, by simp only [List.length_map, List.length_range]; omega⟩,
+                  slice_run s0.mem (s0.reg r) (s0.reg l) i.toNat (j - i).toNat (by omega)]
+              next => simp at h
+          | _ => simp at h
+        | _ => cases hv <;> simp at h
       | _ => cases lv <;> cases hv <;> simp at h
     | record names items =>
       simp only [weval] at h
@@ -1594,6 +1621,20 @@ theorem inoutsIn_tail {y : String × Nat × Nat} (a : String × Kind) (r : Nat) 
   obtain ⟨n, k⟩ := a
   cases k <;> simp [inoutsIn, m]
 
+theorem regionsIn_tail (c : Contract) {y : Nat × Nat} (a : String × Kind) (r : Nat) {args : List (String × Kind)} {regs : List Nat}
+    (m : y ∈ regionsIn c args regs) : y ∈ regionsIn c (a :: args) (r :: regs) := by
+  obtain ⟨n, k⟩ := a
+  cases k with
+  | bytes len =>
+    simp only [regionsIn]
+    cases c.regOf len with
+    | none => exact m
+    | some l => exact List.mem_cons_of_mem _ m
+  | number => simpa [regionsIn] using m
+  | out _ => simpa [regionsIn] using m
+  | fixed _ => simpa [regionsIn] using m
+  | inout _ => simpa [regionsIn] using m
+
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 variable {look : Node → Option Nat} [Looks look s.terms]
@@ -1605,12 +1646,14 @@ theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
     ∀ (args : List (String × Kind)) (regs : List Nat), (∀ r ∈ regs, r < 16) →
       (∀ x r n, (x, r, n) ∈ fixedsIn args regs → ∀ k, k < n → s0.mem (s0.reg r + k) < 256) →
       (∀ x r n, (x, r, n) ∈ inoutsIn args regs → ∀ k, k < n → s0.mem (s0.reg r + k) < 256) →
+      (∀ r l, (r, l) ∈ regionsIn c args regs → ∀ k, k < s0.reg l → s0.mem (s0.reg r + k) < 256) →
       EnvDen ctx s0 ρ T (wenvIn c args regs) (envWIn c s0 args regs)
-  | [], _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
-  | _ :: _, [], _, _, _ => by simp [wenvIn, envWIn, EnvDen]
-  | (n, kind) :: args, r :: regs, hreg, hf, hi => by
+  | [], _, _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
+  | _ :: _, [], _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
+  | (n, kind) :: args, r :: regs, hreg, hf, hi, hrg => by
     have ih := wenvIn_sound H (T := T) c args regs (fun r' m => hreg r' (List.mem_cons_of_mem _ m))
       (fun x r' n' m => hf x r' n' (fixedsIn_tail (n, kind) r m)) (fun x r' n' m => hi x r' n' (inoutsIn_tail (n, kind) r m))
+      (fun r' l' m => hrg r' l' (regionsIn_tail c (n, kind) r m))
     cases kind with
     | number =>
       simp only [wenvIn, envWIn]
@@ -1620,9 +1663,13 @@ theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
       exact this
     | bytes len =>
       simp only [wenvIn, envWIn]
-      cases c.regOf len with
+      cases hlen : c.regOf len with
       | none => exact ih
-      | some l => exact ⟨rfl, WDen.other _, ih⟩
+      | some l =>
+        refine ⟨rfl, ?_, ih⟩
+        simp only [Val.bytes, List.map_map]
+        exact WDen.region r l (H.entry l (argRegs_lt (regOfIn_mem len c.args argRegs l hlen)))
+          (hrg r l (by simp [regionsIn, hlen]))
     | out k =>
       simp only [wenvIn, envWIn]
       exact ih
@@ -1661,7 +1708,7 @@ theorem lanesW_den {T : List Node} : ∀ (js : List Nat),
 theorem wenvIn_all {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
     EnvDen ctx s0 ρ T (wenvIn ctx.contract ctx.contract.args argRegs) (envWIn ctx.contract s0 ctx.contract.args argRegs) :=
   wenvIn_sound H ctx.contract ctx.contract.args argRegs (fun _ m => argRegs_lt m)
-    (fun _ _ _ m k hk => (E.fixed m).2.2.1 k hk) (fun _ _ _ m _ hk => E.inoutByte m hk)
+    (fun _ _ _ m k hk => (E.fixed m).2.2.1 k hk) (fun _ _ _ m _ hk => E.inoutByte m hk) (fun _ _ m k hk => E.byte m k hk)
 
 /-- The contract's names on words stand for its names in the account, a table's name first. -/
 theorem wenv_sound {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
