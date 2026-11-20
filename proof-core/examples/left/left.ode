@@ -1,0 +1,15 @@
+// The last block of the left part of a message of three or four chunks. BLAKE3 splits a message of more
+// than one chunk in two: the left part is the greatest power-of-two count of chunks that leaves bytes
+// for the right. For a message of 2049 to 4096 bytes that is two chunks, so the left part's last block is
+// the 64 bytes that end at byte 2048. The function gives the one-block kernel their address.
+// left_block(h, input, len): arguments in rdi, rsi, rdx, as C passes them.
+fn left_block as "ode_left_block" {
+  sub rsp, 8
+  add rsi, 1984
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 8
+  ret
+}

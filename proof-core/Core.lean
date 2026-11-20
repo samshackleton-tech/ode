@@ -2348,6 +2348,12 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
         let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
         wfirstWith (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among)
       | _, _ => none
+    | .thePower greatest x cond =>
+      -- `the greatest power of two x with cond` (or the least): the first of the sixty-four powers, in
+      -- that order, of which the condition is followed and true, it being followed and false of every
+      -- one before
+      let among := (List.range 64).map fun (k : Nat) => (2 : Int) ^ k
+      wfirstWith (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among)
     | _ => none
 
 /-- The names of the contract for an `ensures` of a whole run (as `envWIn` of the account has them): a

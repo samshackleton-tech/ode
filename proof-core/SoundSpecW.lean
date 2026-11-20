@@ -1802,6 +1802,13 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
           exact er
         | _ => simp at h
       | _ => cases bv <;> simp at h
+    | thePower greatest x cond =>
+      simp only [weval] at h
+      obtain ⟨r, er, dr⟩ := wfirstWith_sound (ev' := fun n => evalSpec ctx.defs (fuel + B) ((x, .int n) :: env') cond)
+        (fun i v hv => ih ((x, .int i) :: env) ((x, .int i) :: env') cond v hv ⟨rfl, WDen.int i, hE⟩) _ v h
+      refine ⟨r, ?_, dr⟩
+      simp only [evalSpec]
+      exact er
     | _ => simp [weval] at h
 
 end
