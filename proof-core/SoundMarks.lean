@@ -438,6 +438,36 @@ theorem marksAfter_same {bind : Bind} {st : State} {stmt : Stmt} {place v : Expr
     | lane _ _ => exact ⟨rfl, rfl, rfl⟩
     | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl⟩
 
+/-! The marks of a statement are worked out from the registers of the state before and from what is known
+not to be marked there, and from nothing else of it. -/
+
+theorem plainRow_light (bind : Bind) (s : Sym) (e : Expr) : plainRow bind s.light e = plainRow bind s e := by
+  cases e <;> rfl
+
+theorem publicLoad_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) :
+    publicLoad ctx bind s.light s1 size a b = publicLoad ctx bind s s1 size a b := by
+  unfold publicLoad
+  rw [plainRow_light, plainRow_light]
+
+mutual
+  theorem markOf_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) : ∀ (e : Expr), markOf ctx bind s.light s1 e = markOf ctx bind s s1 e
+    | .number _ => rfl
+    | .lane _ _ => rfl
+    | .name _ => rfl
+    | .call f args => by
+      simp only [markOf, marksOf_light ctx bind s s1 args, publicLoad_light]
+      rfl
+  theorem marksOf_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) : ∀ (es : List Expr), marksOf ctx bind s.light s1 es = marksOf ctx bind s s1 es
+    | [] => rfl
+    | e :: es => by simp only [marksOf, markOf_light ctx bind s s1 e, marksOf_light ctx bind s s1 es]
+end
+
+theorem stmtMarks_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (st : Stmt) :
+    stmtMarks ctx bind s.light s1 st = stmtMarks ctx bind s s1 st := by
+  cases st with
+  | set place v => simp only [stmtMarks, markOf_light]; rfl
+  | _ => rfl
+
 /-- A STATEMENT. Where the verifier has followed the marks over a statement (`stmtMarks`), the statement
 uses nothing marked in a way that shows, and what the verifier then has as not marked is not marked in
 the state the machine goes on in. -/
@@ -573,7 +603,7 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
                     simp only [Bool.false_eq_true, if_false, List.mem_cons] at hk
                     rcases hk with hk | hk
                     · exact absurd hk hkr
-                    · exact M.reg k hk
+                    · exact M.reg k (List.mem_filter.mp hk).1
                   | true =>
                     simp only [if_true] at hk
                     exact M.reg k (List.mem_filter.mp hk).1

@@ -2227,7 +2227,7 @@ def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
         if n == "zf" then some { s.q with zq := !m }
         else if n == "cf" then some { s.q with cq := !m }
         else match regOf bind n with
-          | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq }
+          | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq.filter (· != r) }     -- (once in the list)
           | none => none
       | .call _ args => if cleanAll bind s.q.regq args then some s.q else none
       | _ => none
@@ -2245,10 +2245,17 @@ def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
     else none
   | _ => none
 
+/-- What the marks of a statement are worked out from, of the state before it: its registers and what is
+known not to be marked. (So that the state before need not be kept while the statement is gone through:
+its table of words is then changed where it is, not copied.) -/
+def Sym.light (s : Sym) : Sym :=
+  { reg := s.reg, zf := .unknown, cf := .unknown, frame := [], facts := [], bytes := [], spec := [], nvars := 0, wrote := [], q := s.q }
+
 /-- A statement, with what is known not to be marked brought up to date. -/
 def symStmtQ (ctx : Ctx) (bind : Bind) (s : Sym) (st : Stmt) : V Sym := do
+  let before := s.light
   let s1 ← symStmt ctx bind s st
-  match stmtMarks ctx bind s s1 st with
+  match stmtMarks ctx bind before s1 st with
   | some q => pure { s1 with q := q }
   | none => refuse "an address is made of something that may depend on a secret: what can be observed of the run would depend on it"
 

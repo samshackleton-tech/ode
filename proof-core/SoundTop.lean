@@ -59,6 +59,7 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
     obtain ⟨sq, r1, eq, h⟩ := V.bind_ok h
     simp only [symStmtQ] at eq
     obtain ⟨s1, r0, e1, eq⟩ := V.bind_ok eq
+    rw [stmtMarks_light] at eq
     cases hm : stmtMarks ctx bind s s1 stmt with
     | none => simp only [hm] at eq; exact (refuse_ok eq).elim
     | some q' =>
