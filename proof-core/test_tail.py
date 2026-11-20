@@ -123,7 +123,7 @@ class Meaning(unittest.TestCase):
     def test_the_ensures_says_the_record_of_the_contract(self):
         """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the
         chaining value as it was, then the message from byte 16 on with zeros after it to 64 bytes."""
-        import meaning, random
+        import ensures_meaning as meaning, random
         line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "r")
         rng = random.Random(63)
         cases, want = [], []

@@ -164,7 +164,7 @@ class Meaning(unittest.TestCase):
         """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the tag
         as it was, then the chaining value compressed with the two blocks, as ../kcheck/ode.py works out
         `compress`."""
-        import meaning, ode, random
+        import ensures_meaning as meaning, ode, random
         with open(os.path.join(KCHECK, "blake3.spec")) as f: spec = ode.Spec(f.read())
         line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "r")
         once_ = ("call", "compress", [("call", "words", [("name", "h")]), ("call", "words", [("name", "m")]), ("call", "counter", [("num", 0)]), ("num", 64), ("num", 0)])

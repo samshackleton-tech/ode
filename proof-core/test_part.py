@@ -100,7 +100,7 @@ class Meaning(unittest.TestCase):
     def test_the_ensures_says_the_second_blocks_compression(self):
         """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the
         compression of the message's bytes 64 to 128, as ../kcheck/ode.py works out `compress`."""
-        import meaning, ode, random
+        import ensures_meaning as meaning, ode, random
         with open(os.path.join(KCHECK, "blake3.spec")) as f: spec = ode.Spec(f.read())
         line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "h")
         use = ("call", "bytes_of", [("call", "compress", [("call", "words", [("name", "h")]), ("call", "words", [("name", "b")]), ("call", "counter", [("num", 0)]), ("num", 64), ("num", 0)])])
