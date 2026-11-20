@@ -82,7 +82,8 @@ The functions it verifies today:
 | `ode_keyed` | copies a 32-byte key out of a 40-byte record, reads the flags that lie beside the key, and compresses one block from them, by calling the SSE4.1 kernel | 11 instructions | 1 line, 14 bytes | 6 ms with the kernel |
 | `ode_left_block` | compresses the last block of the left part of a message of 2049 to 4096 bytes, by calling the SSE4.1 kernel; the contract says where the block lies by the specification's `left_chunks` | 8 instructions | 5 lines, 55 bytes | 6 ms with the kernel |
 | `ode_split_block` | the same for a message of 1025 to 4096 bytes: it finds the size of the left part from a quotient, `(len - 1) / 1024`, which it compares with 2 | 14 instructions | 30 lines, 305 bytes | 8 ms with the kernel |
-| `ode_left_last` | the same for a message of 1025 bytes to 2^63: it finds the size of the left part with the loop of the hash's `b3l_take`, in which `k` takes the value of its double while the double is below the number of chunks | 21 instructions, 1 loop of at most 52 iterations | 2,406 lines, 24.5 kB | 0.10 s with the kernel |
+| `ode_left_last` | the same for a message of 1025 bytes or more: it finds the size of the left part with the loop of the hash's `b3l_take`, in which `k` takes the value of its double while the double is below the number of chunks | 21 instructions, 1 loop of at most 53 iterations | 2,461 lines, 25.0 kB | 0.10 s with the kernel |
+| `ode_far`, `ode_near`, `ode_less` | add 2^63 to a number below 2^63; subtract 2^63 from a number of 2^63 or more; subtract 8 by adding 2^64 - 8 | 4, 5 and 3 instructions | 1 line each | 3 ms each |
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
@@ -93,7 +94,7 @@ The functions it verifies today:
 | `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the bytes are secret | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
-them), `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block` and `ode_left_last` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
+them), `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last` and the three functions of `examples/far/` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
@@ -1117,36 +1118,52 @@ because the specification turns on a comparison that can go either way, the prov
 `need entail` or `need below` (what it could not show), where the verifier used to refuse by itself.
 
 **The loop by which the hash finds the split: `examples/doubling/`** (`test_doubling.py`).
-`ode_left_last(h, input, len)` takes a message of 1025 bytes to 2^63. It finds the size of the left part
+`ode_left_last(h, input, len)` takes a message of 1025 bytes or more. It finds the size of the left part
 with the loop that `b3l_take` and `b3l_subtree` use: `c = ((len - 1) >> 10) + 1` is the number of chunks,
 `k` starts at 1 and takes the value of its double while the double is below `c`. It then compresses the
 last 64 bytes of the first `k` chunks. The contract says where that block lies by `left_chunks`, as in
 the two examples above.
 
-The loop has no invariant. The verifier walks it, which gives 53 paths, one for each size the left part
-can have (1, 2, 4, ..., 2^52 chunks). On each path it must decide, for the sixty-four powers of two,
+The loop has no invariant. The verifier walks it, which gives 54 paths, one for each size the left part
+can have (1, 2, 4, ..., 2^53 chunks). On each path it must decide, for the sixty-four powers of two,
 which are too great for the message. It asks the proof, as described above. Which power to ask about
-matters for the size of the proof. Asking from the greatest power down takes about 27 questions a path
-(1,430 in all, and a proof of 95 kB), because an answer about one power says nothing at once about the
-next. For the "power of two" form `wask` therefore asks about the middle one of the powers that are
-still open (`askAt` in Core.lean): one answer then settles all the greater powers, or all the lesser.
-That takes four or five questions a path (234 in all). The stored proof is 24.5 kB; the prover finds it
-in 2 seconds and the verifier checks it in 0.1 seconds. This is a change of the proposal only, so no
-proof of soundness changed for it. It has a price: if a condition does not turn from false to true
-once along the powers, the middle question may be one that no proof can answer, although a search from
-the first power would have ended before reaching it. The function is then rejected. The conditions in
-`../kcheck/blake3.spec` turn once.
+matters for the size of the proof. Asking from the greatest power down took about 27 questions a path
+(a proof of 95 kB, measured with messages up to 2^63 bytes), because an answer about one power says
+nothing at once about the next. For the "power of two" form `wask` therefore asks about the middle one
+of the powers that are still open (`askAt` in Core.lean): one answer then settles all the greater
+powers, or all the lesser. That takes four or five questions a path (240 in all). The stored proof is
+25.0 kB; the prover finds it in 2 seconds and the verifier checks it in 0.1 seconds. This is a change
+of the proposal only, so no proof of soundness changed for it. It has a price: if a condition does
+not turn from false to true once along the powers, the middle question may be one that no proof can
+answer, although a search from the first power would have ended before reaching it. The function is
+then rejected. The conditions in `../kcheck/blake3.spec` turn once.
 
 The tests change the contract in four ways, the definition in three and the code in nine, each making
 the statement false, and each is refused. The stored proof with a line left out (every fiftieth line
 is tried) or with an answer reversed (every tenth) is refused. Two changed contracts that are still
 true are accepted.
 
-One limit, kept as a test: without the bound 2^63 on the length the function is still correct, and the
-verifier refuses it. A message of more than 2^63 bytes has a left part of 2^53 chunks, and the function
-then adds 2^63 to the message's address. The verifier's rule for an addition treats a constant of 2^63
-or more as negative (so that `add rsp, -8` works), and here that reading is the wrong one. The hash's
-own functions will meet this, since BLAKE3 allows messages up to 2^64 - 1 bytes.
+**Which constants are read as negative: `examples/far/`** (`test_far.py`). A register holds a number
+from 0 to 2^64 - 1, and the processor adds modulo 2^64, so adding 2^64 - 8 subtracts 8. The verifier
+follows an addition or subtraction as one of whole numbers and shows that the result lies from 0 to
+2^64 - 1. For that it reads each constant one way: as it stands, or as the negative number that is the
+same modulo 2^64 (`signed` in Core.lean). Either reading is sound, because the result that is shown to
+be in range is the machine's result.
+
+The verifier used to read a constant of 2^63 or more as negative. That stopped `ode_left_last` for
+messages of more than 2^63 bytes: their left part has 2^53 chunks, and the function then adds 2^63 to
+the message's address. The verifier now reads a constant as negative only if it is nearer 2^64 than
+2^63 (3 * 2^62 or more), and reads 2^63 as it stands. No proof of soundness changed, and the stored
+proofs of all other functions are the same bytes. The three functions of the example add 2^63 to a
+number below 2^63, subtract 2^63 from a number of 2^63 or more, and subtract 8 by adding 2^64 - 8. Each
+is changed in two places of its code and two of its contract, twelve false statements in all, and each
+is refused.
+
+One limit, kept as a test: a true statement that is refused. The instructions of `ode_far` also
+subtract 2^63 from a number of 2^63 or more, since the sum passes 2^64 and comes round. The verifier
+reads 2^63 as it stands and does not accept that contract. Before this change it accepted that one
+and refused the other. A rule that follows both would let the proof say which reading to take; it is
+not built.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -1427,8 +1444,8 @@ lines. The proofs of the theorems: 16,962 lines, of which Trace.lean (two runs o
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/` and `examples/doubling/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/`, `examples/doubling/` and `examples/far/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py` and `test_doubling.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_far.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py` and `test_doubling.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

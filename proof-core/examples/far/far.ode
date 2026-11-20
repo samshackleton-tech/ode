@@ -1,0 +1,28 @@
+// The number 2^63 added and taken away. A register holds numbers from 0 to 2^64 - 1, and the processor
+// adds modulo 2^64: adding 2^64 - 8 is taking 8 away. The verifier takes a number nearer 2^64 than 2^63
+// as the negative number it then stands for; a number below that it takes as it stands. 2^63 is taken
+// as it stands: the hash adds it to a message's address where the left part has 2^53 chunks.
+
+// far(x): x + 2^63, for x below 2^63. The argument in rdi.
+fn far as "ode_far" {
+  mov rax, 1
+  shl rax, 63
+  add rax, rdi
+  ret
+}
+
+// near(x): x - 2^63, for x of 2^63 or more. The argument in rdi.
+fn near as "ode_near" {
+  mov rcx, 1
+  shl rcx, 63
+  mov rax, rdi
+  sub rax, rcx
+  ret
+}
+
+// less(x): x - 8, for x of 8 or more, by adding 2^64 - 8. The argument in rdi.
+fn less as "ode_less" {
+  mov rax, rdi
+  add rax, -8
+  ret
+}

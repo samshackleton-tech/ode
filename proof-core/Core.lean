@@ -652,10 +652,14 @@ def keepWrote (w : Nat) (o : Row) : List (Nat × Row × Row) → Option (List (N
         | some k => if k = 0 then some rest else some ((w', o', x') :: rest)
         | none => none
 
-/-- A number of 2^63 or more, as the number below zero that is the same modulo 2^64. -/
+/-- A number nearer 2^64 than 2^63 (one of 3 * 2^62 or more), as the number below zero that is the same
+modulo 2^64: so `add rsp, -8` is followed as a subtraction. A number below that is taken as it stands:
+2^63 itself is one, which the hash adds to a message's address where the left part has 2^53 chunks.
+(Whichever way a number is taken, the sum or difference is then shown to lie from 0 to 2^64 - 1, and is
+the machine's, which works modulo 2^64.) -/
 def signed (r : Row) : Row :=
   match Lin.isConst r with
-  | some k => if 2 ^ 63 ≤ k then Lin.const (k - 2 ^ 64) else r
+  | some k => if 3 * 2 ^ 62 ≤ k then Lin.const (k - 2 ^ 64) else r
   | none => r
 
 /-- Eight bytes of the frame at `c` may be touched: at or above the stack pointer, below the return

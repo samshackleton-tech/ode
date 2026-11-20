@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The way the hash's `b3l_take` and `b3l_subtree` find where a message splits, shown for a message of
-any length from 1025 bytes to 2^63: `ode_left_last` (examples/doubling) works out the count of chunks
+any length from 1025 bytes on: `ode_left_last` (examples/doubling) works out the count of chunks
 c = ((len - 1) >> 10) + 1, lets k take the value of its double while the double is below c, and
 compresses the 64 bytes that end the first k chunks. Its contract says where those bytes lie by
 ../kcheck/blake3.spec's own `left_chunks`:
@@ -10,8 +10,8 @@ compresses the 64 bytes that end the first k chunks. Its contract says where tho
 
     python3 test_doubling.py        (needs Lean's `lake`; the tests are skipped where it is not installed)
 
-The loop has no invariant. The verifier walks it: one path for each of the fifty-three counts the left
-part can have (1, 2, 4, ... 2^52 chunks). On each path the specification's definition is to be worked out:
+The loop has no invariant. The verifier walks it: one path for each of the fifty-four counts the left
+part can have (1, 2, 4, ... 2^53 chunks). On each path the specification's definition is to be worked out:
 of the sixty-four powers of two, which are too great for the message? No one known fact says it; the
 verifier asks the proof (see test_split.py), and it asks about the middle one of the powers not yet
 decided, since an answer about one power says it of all the greater ones, or of all the lesser. The kept
@@ -20,9 +20,9 @@ proof has four or five answers a path.
 The function, its contract and the kept proof are shown; with the contract, the definition or the function
 changed in one place, so that what is stated is false, nothing is shown, and each case names what the
 verifier then refuses or what the prover cannot give it. Two changed contracts that are still true are
-shown. One true statement is refused, and is kept here as a limit: without the bound 2^63 on the length
-the function is still right, but the path of the greatest count adds 2^63 to an address, and the rule
-of an addition takes a number from 2^63 on as a negative one."""
+shown. (On the path of the greatest count the function adds 2^63 to the message's address. The verifier
+took a number from 2^63 on as a negative one, and the function was shown only with the length bounded
+by 2^63; now it takes 2^63 as it stands: test_far.py.)"""
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -33,7 +33,7 @@ DOUBLING = os.path.join(HERE, "examples", "doubling")
 NAME, SSE41 = "ode_left_last", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(DOUBLING, "odedoubling.o"), NAME)]
 BLOCK = "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]"
-CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 1025", "below len 9223372036854775809", "hidden input",
+CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs sse41", "atleast len 1025", "hidden input",
             "ensuresw h (call bytes_of (call compress (call words (name h)) (call words (slice (name input) "
             "(bin - (bin * (num 1024) (call left_chunks (name input))) (num 64)) (bin * (num 1024) (call left_chunks (name input))))) "
             "(call counter (num 0)) (num 64) (num 0)))",
@@ -69,7 +69,7 @@ SOURCES = [
 ]
 # Changed contracts that are still true: (what is changed, the text as it is, the text changed).
 STILL_TRUE = [
-    ("the message has at most 4096 bytes", "len <= 9223372036854775808", "len <= 4096"),
+    ("the message has at most 4096 bytes", "    requires len >= 1025\n", "    requires len >= 1025\n    requires len <= 4096\n"),
     ("the message has at least 5000 bytes", "len >= 1025", "len >= 5000"),
 ]
 
@@ -170,11 +170,11 @@ class Verify(unittest.TestCase):
         prove.prove(spec_text(), [(obj, symbol, "") for obj, symbol in FUNCTIONS], statement_path, proof_path)
         with open(proof_path) as f: found = f.read()
         self.assertEqual(found[found.index("for " + NAME):], "\n".join(self.lines) + "\n")
-        # fifty-three ways out of the loop: on all but the first the proof says that 1024 * k is below the
-        # length (`t lt`); the powers too great are said in 182 answers (`t ge`), not in the 1,378 that
-        # asking from the greatest power down would take
-        self.assertEqual(self.lines.count("t lt"), 52)
-        self.assertEqual(self.lines.count("t ge"), 182)
+        # fifty-four ways out of the loop: on all but the first the proof says that 1024 * k is below the
+        # length (`t lt`); the powers too great are said in 187 answers (`t ge`), three or four a way out,
+        # where asking from the greatest power down took about twenty-six
+        self.assertEqual(self.lines.count("t lt"), 53)
+        self.assertEqual(self.lines.count("t ge"), 187)
         # controls: the kernel is not taken as shown without its proof, nor left out of what is to be shown
         shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NAME,)))
         self.assertFalse(shown)
@@ -194,7 +194,7 @@ class Verify(unittest.TestCase):
         turned round (`t ge` for `t lt`, or the other way) is refused. Every tenth answer is tried."""
         turned = {"t ge": "t lt", "t lt": "t ge"}
         places = [k for k, l in enumerate(self.lines) if l in turned]
-        self.assertEqual(len(places), 234)
+        self.assertEqual(len(places), 240)
         for k in places[::10]:
             with self.subTest(turned=k):
                 self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, self.changed(self.lines[:k] + [turned[self.lines[k]]] + self.lines[k + 1:]))[0])
@@ -220,14 +220,6 @@ class Verify(unittest.TestCase):
         for what, old, new in STILL_TRUE:
             with self.subTest(what=what):
                 self.assertEqual(last_word(FUNCTIONS, once(old, new)), "shown", what)
-
-    def test_a_limit_a_true_statement_that_is_refused(self):
-        """Without the bound 2^63 on the length the function is still right: a message of more than 2^63
-        bytes has a left part of 2^53 chunks, and the function adds 2^63 to the message's address, which
-        stays below 2^64 since the message lies in memory. The verifier's rule of an addition takes a
-        number from 2^63 on as a negative one (so that `add rsp, -8` is followed), and asks that the
-        address less 2^63 be no less than zero: that is not so. A LIMIT, kept here so that it is seen."""
-        self.assertEqual(last_word(FUNCTIONS, once("    requires len <= 9223372036854775808\n", "")), ENTAIL)
 
 
 if __name__ == "__main__":
