@@ -739,6 +739,7 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
       next => exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | or _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | held _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | div _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | block _ _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
 
 /-- Eight bytes read of a run of a fixed count given to read: the number the state knows there. The run is
@@ -975,6 +976,24 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         · rw [g3, ← hadr]; simp only [load, hmem0]; omega
       next => exact (refuse_ok h).elim
 
+/-- What `divided` finds is a division the state knows. -/
+theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x m = some q) : Known.div x m q ∈ s.known := by
+  obtain ⟨k, hk, e⟩ := List.mem_filterMap.mp (leastNat_mem hd)
+  cases k with
+  | div x' m' q' =>
+    simp only at e
+    split at e
+    next hc =>
+      simp only [Bool.and_eq_true, beq_iff_eq, Lin.same_iff] at hc
+      obtain ⟨rfl, rfl⟩ := hc
+      injection e with e; subst e
+      exact hk
+    next => cases e
+  | load _ _ _ => cases e
+  | or _ _ _ => cases e
+  | held _ _ _ => cases e
+  | block _ _ _ _ => cases e
+
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
 theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
@@ -1004,7 +1023,14 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
   · exact {
       range := H'.range
       entry := H'.entry, data := H'.data, reg := H'.reg, small := H'.small, zf := H'.zf, cf := H'.cf, frame := H'.frame,
-      spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words, known := H'.known,
+      spec := H'.spec, mem := H'.mem, bytes := H'.bytes, wrote := H'.wrote, words := H'.words,
+      known := by
+        intro k hk
+        simp only [Sym.divide, List.mem_cons] at hk
+        rcases hk with rfl | hk
+        · intro _
+          exact ⟨by rw [nq, ex], by rw [nr, ex]⟩
+        · exact H'.known k hk
       facts := by
         intro f hf
         simp only [Sym.divide, List.mem_cons] at hf
@@ -1026,7 +1052,12 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
       spec := fun f m => SFact.bounded_mono le (wf.spec f m)
       wrote := fun w o x m => ⟨bounded_mono le (wf.wrote w o x m).1, bounded_mono le (wf.wrote w o x m).2⟩
       words := wf.words.mono rfl rfl rfl le
-      known := fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m)
+      known := by
+        intro k hk
+        simp only [Sym.divide, List.mem_cons] at hk
+        rcases hk with rfl | hk
+        · exact ⟨bounded_mono le hx, show s.nvars + 1 < s.nvars + 2 by omega⟩
+        · exact Known.wf_mono le (Nat.le_refl _) (wf.known k hk)
       bytes := fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩
       facts := by
         intro f hf
@@ -1048,18 +1079,10 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
   cases hd : divided s x m with
   | some q =>
     simp only [symDivide, hd]
-    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
-    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
-    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
-    have f1 := H.facts _ m1
-    have f2 := H.facts _ m2
-    have f3 := H.facts _ m3
-    have f4 := H.facts _ m4
-    rw [holds_iff] at f1 f2 f3 f4
-    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
-    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
-    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
-           bounded_var hlt, wf.facts _ m3⟩
+    have u := H.known _ (divided_known hd) pos
+    have b := wf.known _ (divided_known hd)
+    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1, by rw [ev_var]; exact u.2,
+           bounded_var (Nat.lt_of_succ_lt b.2), bounded_var b.2⟩
   | none =>
     simp only [symDivide, hd]
     obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
@@ -1129,18 +1152,10 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
   cases hd : divided s x m with
   | some q =>
     simp only [Sym.quotRem, hn, hd, Bool.false_eq_true, ↓reduceIte]
-    have hq := (List.mem_filter.mp (leastNat_mem hd)).2
-    simp only [Bool.and_eq_true, among_iff, decide_eq_true_eq] at hq
-    obtain ⟨hlt, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
-    have f1 := H.facts _ m1
-    have f2 := H.facts _ m2
-    have f3 := H.facts _ m3
-    have f4 := H.facts _ m4
-    rw [holds_iff] at f1 f2 f3 f4
-    simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
-    have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
-    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1.symm, by rw [ev_var]; exact u.2.symm,
-           bounded_var hlt, wf.facts _ m3⟩
+    have u := H.known _ (divided_known hd) pos
+    have b := wf.known _ (divided_known hd)
+    exact ⟨ρ, Carried.here H wf, by rw [ev_var]; exact u.1, by rw [ev_var]; exact u.2,
+           bounded_var (Nat.lt_of_succ_lt b.2), bounded_var b.2⟩
   | none =>
     simp only [Sym.quotRem, hn, hd, Bool.false_eq_true, ↓reduceIte]
     obtain ⟨ρ', c, hq, hr⟩ := divide_sound (ctx := ctx) (s0 := s0) H wf hx pos
@@ -1198,6 +1213,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
       next => exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | load _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | held _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | div _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | block _ _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/

@@ -397,7 +397,7 @@ theorem findLane_spec {c : Contract} {addr : Row} : ∀ {l : List Known} {v j p 
         next =>
           obtain ⟨m, t⟩ := findLane_spec h
           exact ⟨List.mem_cons_of_mem _ m, t⟩
-    | or _ _ _ | held _ _ _ | block _ _ _ _ =>
+    | or _ _ _ | held _ _ _ | div _ _ _ | block _ _ _ _ =>
       simp only [findLane] at h
       obtain ⟨m, t⟩ := findLane_spec h
       exact ⟨List.mem_cons_of_mem _ m, t⟩

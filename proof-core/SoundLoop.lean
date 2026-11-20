@@ -110,18 +110,15 @@ theorem lanesShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (H : 
     ∀ i, i < 16 → LaneSays ctx pl s0 st L i := by
   intro i hi
   unfold lanesShown at h
-  have hl : (fun n => (termIndex s.terms)[n]?) = fun n => findNode n s.terms 0 :=
-    funext fun n => termIndex_spec s.terms n
-  simp only [hl] at h
   have hi' := List.all_eq_true.mp h i (List.mem_range.mpr hi)
   unfold laneShown at hi'
-  cases hw : weval ctx (fun n => findNode n s.terms 0) s WFUEL ((L.x, .int i) :: placeW ctx pl s) (.call L.f L.args) with
+  cases hw : weval ctx s.tab.find s WFUEL ((L.x, .int i) :: placeW ctx pl s) (.call L.f L.args) with
   | none => simp [hw] at hi'
   | some v =>
     cases v with
     | list l =>
       simp only [hw] at hi'
-      cases hids : wordIds (fun n => findNode n s.terms 0) l with
+      cases hids : wordIds s.tab.find l with
       | none => simp [hids] at hi'
       | some ids =>
         cases hheld : laneTerms s i L.regs with
@@ -377,15 +374,15 @@ theorem withLanes_carried (H : Holds ctx s0 ρ g st) (wf : WF g) (L : PlaceLanes
 /-- The keys of a lane's things stand for the values of those things at the place. -/
 theorem laneKey_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ g st) (wf : WF g)
     (hn : ∀ nr ∈ pl.names, nr.2 < 16) {L : PlaceLanes} {i : Nat} {keys : List Key}
-    (h : laneKey ctx (fun n => findNode n g.terms 0) (placeW ctx pl g) g L i = some keys) :
+    (h : laneKey ctx g.tab.find (placeW ctx pl g) g L i = some keys) :
     (∀ k ∈ keys, k.wf g.nvars g.terms.length) ∧
     ∃ F, evalList (evalSpec ctx.defs F ((L.x, Val.int (i : Int)) :: placeValsW ctx pl s0 st)) L.args =
       some (keys.map (Key.val ctx s0 ρ g.terms)) := by
   unfold laneKey at h
-  cases hw : wevalList (weval ctx (fun n => findNode n g.terms 0) g WFUEL ((L.x, .int i) :: placeW ctx pl g)) L.args with
+  cases hw : wevalList (weval ctx g.tab.find g WFUEL ((L.x, .int i) :: placeW ctx pl g)) L.args with
   | none => simp [hw] at h
   | some vs =>
-    cases hk : flatKeys (fun n => findNode n g.terms 0) vs with
+    cases hk : flatKeys g.tab.find vs with
     | none => simp [hw, hk] at h
     | some keys' =>
       simp only [hw, hk] at h
@@ -421,10 +418,7 @@ theorem supposeLanes_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn
       cases c : own.contains L.f with
       | true => exact absurd (by rw [c, Bool.or_true]) hf
       | false => rfl
-    have hl : (fun n => (termIndex g.terms)[n]?) = fun n => findNode n g.terms 0 :=
-      funext fun n => termIndex_spec g.terms n
-    simp only [hl] at h
-    cases hks : laneKeysOf (laneKey ctx (fun n => findNode n g.terms 0) (placeW ctx pl g) g L) (List.range 16) with
+    cases hks : laneKeysOf (laneKey ctx g.tab.find (placeW ctx pl g) g L) (List.range 16) with
     | none => simp only [hks] at h; exact (refuse_ok h).elim
     | some keys =>
       simp only [hks] at h
@@ -529,10 +523,7 @@ theorem cellShown_sound {p : Program} {s : Sym} (E : Setting ctx p s0) (pl : Pla
     (hn : ∀ nr ∈ pl.names, nr.2 < 16) {C : PlaceCell} (h : cellShown ctx pl s C = true) : CellSays ctx pl s0 st C := by
   intro i hi
   unfold cellShown at h
-  have hl : (fun n => (termIndex s.terms)[n]?) = fun n => findNode n s.terms 0 :=
-    funext fun n => termIndex_spec s.terms n
-  simp only [hl] at h
-  cases hids : cellIds ctx (fun n => findNode n s.terms 0) (placeW ctx pl s) s C with
+  cases hids : cellIds ctx s.tab.find (placeW ctx pl s) s C with
   | none => simp [hids] at h
   | some ids =>
     cases hf : s.spill.find? (fun (o, _) => o == cellRow s C) with
@@ -562,10 +553,7 @@ theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn 
     (h : supposeCell ctx pl g C items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
     (says : CellSays ctx pl s0 st C) : Carried ctx s0 ρ g ρ g' st := by
   unfold supposeCell at h
-  have hl : (fun n => (termIndex g.terms)[n]?) = fun n => findNode n g.terms 0 :=
-    funext fun n => termIndex_spec g.terms n
-  simp only [hl] at h
-  cases hids : cellIds ctx (fun n => findNode n g.terms 0) (placeW ctx pl g) g C with
+  cases hids : cellIds ctx g.tab.find (placeW ctx pl g) g C with
   | none => simp only [hids] at h; exact (refuse_ok h).elim
   | some ids =>
     simp only [hids] at h

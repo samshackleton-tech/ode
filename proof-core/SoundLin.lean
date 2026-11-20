@@ -165,21 +165,24 @@ theorem plainTimes_sound {facts : List Row} {g : Row} (h : plainTimes facts g = 
   unfold plainTimes at h
   rcases Bool.or_eq_true_iff.mp h with h | h
   · exact plain_sound h ρ hf
-  · obtain ⟨f, fin, hfk⟩ := List.any_eq_true.mp h
-    split at hfk
-    next a b _ _ =>
-      simp only [Bool.and_eq_true, decide_eq_true_eq] at hfk
-      obtain ⟨⟨_, k0⟩, hc⟩ := hfk
-      split at hc
-      next k hk =>
-        have e := lessTimes_sound hk ρ
-        have f0 := hf f fin
-        rw [holds_iff] at f0
-        have c0 : 0 ≤ k := by simpa using hc
-        have := Int.mul_nonneg k0 f0
-        omega
-      next => contradiction
+  · split at h
     next => contradiction
+    next b _ =>
+      obtain ⟨f, fin, hfk⟩ := List.any_eq_true.mp h
+      split at hfk
+      next a _ =>
+        simp only [Bool.and_eq_true, decide_eq_true_eq] at hfk
+        obtain ⟨⟨_, k0⟩, hc⟩ := hfk
+        split at hc
+        next k hk =>
+          have e := lessTimes_sound hk ρ
+          have f0 := hf f fin
+          rw [holds_iff] at f0
+          have c0 : 0 ≤ k := by simpa using hc
+          have := Int.mul_nonneg k0 f0
+          omega
+        next => contradiction
+      next => contradiction
 
 /-- The least of some numbers is one of them. -/
 theorem least_mem : ∀ {l : List Int} {c : Int}, least l = some c → c ∈ l

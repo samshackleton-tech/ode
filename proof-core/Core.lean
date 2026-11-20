@@ -271,18 +271,6 @@ def Node.parts : Node → List Nat
   | .ult a b => [a, b]
   | .sel m a b => [m, a, b]
 
-def findNode (n : Node) : List Node → Nat → Option Nat
-  | [], _ => none
-  | m :: more, i => if m = n then some i else findNode n more (i + 1)
-
-/-- Where each term of a table is, for looking one up at once: the first place of each, as `findNode` finds
-it (`termIndex_spec` in SoundWord.lean). -/
-def termIndexFrom : List Node → Nat → Std.HashMap Node Nat → Std.HashMap Node Nat
-  | [], _, m => m
-  | n :: more, i, m => termIndexFrom more (i + 1) (m.insertIfNew n i)
-
-def termIndex (T : List Node) : Std.HashMap Node Nat := termIndexFrom T 0 ∅
-
 /-- The table of words. `arr`: the terms, each named by its number there. `idx`: where a term may be found,
 so that one is looked up at once. The second is advice, and nothing that is shown rests on it: `intern` takes
 a number from it only where that term stands at that number, and puts the term at the end otherwise. -/
@@ -293,6 +281,14 @@ structure Tab where
 
 /-- The table's terms in order: what the reasoning speaks of. (The verifier's own steps read `arr`.) -/
 def Tab.list (t : Tab) : List Node := t.arr.toList
+
+/-- Where a term is in the table, looked up at once: the number the table's index gives, taken only where
+that term stands at that number. (So what is found is right whatever the index holds; a term the index
+does not have is not found.) -/
+def Tab.find (t : Tab) (n : Node) : Option Nat :=
+  match t.idx[n]? with
+  | some i => if t.arr[i]? = some n then some i else none
+  | none => none
 
 /-- The number of a term in the table; a term that is not found there is put at the end. (Marked so that a
 proof opens it only by asking to: what is reasoned of it is `intern_list` in SoundWord.lean.) -/
@@ -397,6 +393,7 @@ inductive Known where
   | load (v j c : Nat)            -- the unknown `v` is the eight bytes at place `c` of the run `j` (of a fixed count, given to read) as they were at entry: one number, the lowest byte first
   | or (v : Nat) (x y : Row)      -- the unknown `v` is `x | y`: the bits of both
   | held (f : String) (keys : List Key) (ids : List Nat)    -- the definition `f`, used with these things, is the list of the words of these terms
+  | div (x : Row) (m : Int) (q : Nat)   -- the unknown `q` is `x` divided by `m` (a number above zero) rounded down, and the unknown after it is the remainder
   | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
   deriving DecidableEq, Repr, Inhabited
 
@@ -437,9 +434,9 @@ structure Sym where
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
   spill : List (Row × List Nat) := []  -- the aligned vector spills still known: each one's entry-relative offset and lane terms
   known : List Known := []        -- what is known of numbers that are no rows
-  divs : List (Row × Int × Nat) := []   -- the divisions made (the number, the divisor, the quotient's unknown): advice for `divided`, and nothing rests on it
   q : SMarks := {}                -- what is known not to be marked
   range : Option RangeF := none   -- what a place says a loop has written so far, where one says so
+  stackAt : Option (Row × List (Int × Row) × List (Row × List Nat)) := none   -- the stack pointer, the frame's cells and the spills as they were when `settle` last showed the stack's facts: advice, and nothing rests on it
   deriving Inhabited
 
 /-- The terms of the table of words, in order. -/
@@ -514,12 +511,14 @@ def Sym.divide (s : Sym) (x : Row) (m : Int) : Sym :=
   let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var s.nvars)) (Lin.var (s.nvars + 1)))
   { s with nvars := s.nvars + 2,
            facts := d :: Lin.scale (-1) d :: Lin.var (s.nvars + 1) :: Lin.sub (Lin.const (m - 1)) (Lin.var (s.nvars + 1)) :: s.facts,
-           divs := (x, m, s.nvars) :: s.divs }
+           known := .div x m s.nvars :: s.known }
 
-/-- The unknowns made as quotients of `x` by `m` (`Sym.divide` notes each division it makes). (Only to look
-at few unknowns in `divided`: nothing rests on it.) -/
+/-- The unknowns the state knows as quotients of `x` by `m` (`Sym.divide` notes each division it makes). -/
 def quotients (s : Sym) (x : Row) (m : Int) : List Nat :=
-  s.divs.filterMap fun d => if d.2.1 == m && Lin.same d.1 x then some d.2.2 else none
+  s.known.filterMap fun k =>
+    match k with
+    | .div x' m' q => if m' == m && Lin.same x' x then some q else none
+    | _ => none
 
 /-- The least of some numbers. -/
 def leastNat : List Nat → Option Nat
@@ -529,14 +528,8 @@ def leastNat : List Nat → Option Nat
     | some b => some (if a ≤ b then a else b)
     | none => some a
 
-/-- The quotient's unknown, where the facts held already say what `x` divided by `m` is: the four facts of
-`Sym.divide`, of one unknown and the next. (The least such unknown among those noted for this division.) -/
-def divided (s : Sym) (x : Row) (m : Int) : Option Nat :=
-  leastNat ((quotients s x m).filter fun q =>
-    decide (q < s.nvars) &&
-    (let d := Lin.sub x (Lin.add (Lin.scale m (Lin.var q)) (Lin.var (q + 1)))
-     among s.facts d && among s.facts (Lin.scale (-1) d) && among s.facts (Lin.var (q + 1)) &&
-       among s.facts (Lin.sub (Lin.const (m - 1)) (Lin.var (q + 1)))))
+/-- The quotient's unknown, where the state knows what `x` divided by `m` is: the least such unknown. -/
+def divided (s : Sym) (x : Row) (m : Int) : Option Nat := leastNat (quotients s x m)
 
 /-- The least of some numbers. -/
 def least : List Int → Option Int
@@ -1429,18 +1422,39 @@ def stackGoals (ctx : Ctx) (s : Sym) : List Row :=
     ((s.frame.map fun (o, _) => Lin.sub (Lin.const o) off) ++
      (s.spill.map fun (o, _) => Lin.sub o off))
 
+/-- Two lists of cells of the frame are the same. -/
+def sameCells : List (Int × Row) → List (Int × Row) → Bool
+  | [], [] => true
+  | (o, v) :: a, (o', v') :: b => o == o' && Lin.same v v' && sameCells a b
+  | _, _ => false
+
+/-- Two lists of spills are the same. -/
+def sameSpills : List (Row × List Nat) → List (Row × List Nat) → Bool
+  | [], [] => true
+  | (o, l) :: a, (o', l') :: b => Lin.same o o' && l == l' && sameSpills a b
+  | _, _ => false
+
+/-- The stack pointer, the cells of the frame and the spills are as they were when `settle` last showed
+the stack's facts. (Then there is nothing to show again. Nothing rests on this: `settle` only adds facts
+it has shown.) -/
+def stackSame (s : Sym) : Bool :=
+  match s.stackAt with
+  | some (sp, frame, spill) => Lin.same sp (s.reg RSP) && sameCells frame s.frame && sameSpills spill s.spill
+  | none => false
+
 def settle (ctx : Ctx) (s : Sym) : V Sym :=
   match s.sp with
   | some sp =>
     if sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp then
       pure { s with spill := [], frame := s.frame.filter fun (o, _) => decide (sp ≤ o) }
     else refuse "the stack pointer leaves the frame the contract allows"
-  | none => do
+  | none =>
+    if stackSame s then pure s else do
     -- Every saved word must remain at or above the stack pointer. Remember these facts so
     -- instructions that leave the stack pointer in place do not need another copy of the proofs.
     let missing := (stackGoals ctx s).filter fun g => !plain s.facts g
     each (entail s.facts) missing
-    pure { s with facts := missing ++ s.facts }
+    pure { s with facts := missing ++ s.facts, stackAt := some (s.reg RSP, s.frame, s.spill) }
 
 def constBelowZero (r : Row) : Bool :=
   match Lin.isConst r with
@@ -1953,14 +1967,18 @@ def highOf (s : Sym) (r : Row) : Option Row :=
 /-- Seen at once, a fact being taken more than once: a number not below zero; or so many times a fact (no
 fewer than none) and such a number. -/
 def plainTimes (facts : List Row) (g : Row) : Bool :=
-  plain facts g || facts.any fun f =>
-    match f.coeff.getLast?, g.coeff.getLast? with
-    | some a, some b =>
-      a != 0 && b % a == 0 && decide (0 ≤ b / a) &&
-        (match Lin.lessTimes g (b / a) f with
-         | some k => decide (0 ≤ k)
-         | none => false)
-    | _, _ => false
+  plain facts g ||
+    -- (the number's own last multiple is looked for once, and no fact is gone through where it has none)
+    match g.coeff.getLast? with
+    | none => false
+    | some b => facts.any fun f =>
+      match f.coeff.getLast? with
+      | some a =>
+        a != 0 && b % a == 0 && decide (0 ≤ b / a) &&
+          (match Lin.lessTimes g (b / a) f with
+           | some k => decide (0 ≤ k)
+           | none => false)
+      | none => false
 
 /-- Two rows are one number: the same row, or each seen at once to be no less than the other. -/
 def sameRow (facts : List Row) (a b : Row) : Bool := Lin.same a b || (plainTimes facts (Lin.sub a b) && plainTimes facts (Lin.sub b a))
@@ -2266,10 +2284,9 @@ def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
     if f == "bytes_of" then
       match findOutNamed e.run ctx.contract.outs 0 with
       | some (w, n) =>
-        let index := termIndex s.terms
-        match weval ctx (fun n => index[n]?) s WFUEL (wenv ctx.contract) x with
+        match weval ctx s.tab.find s WFUEL (wenv ctx.contract) x with
         | some (.list l) =>
-          if l.length * 4 = n ∧ wordsWritten (fun n => index[n]?) s.wroteW w 0 l = true then pure ()
+          if l.length * 4 = n ∧ wordsWritten s.tab.find s.wroteW w 0 l = true then pure ()
           else refuse "a word of the run is not known to hold what the specification says"
         | _ => refuse "the specification's words are not followed on the terms the function made"
       | none => refuse "an `ensures` of what is no run given to write"
@@ -2548,7 +2565,7 @@ def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
     facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
     tab := s.tab,         -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
-    known := s.known, divs := s.divs }
+    known := s.known }
 
 /-- A call, taken by the called function's contract `c` and nothing else. What the contract asks is shown
 first: its frame and the address to come back to fit in this function's frame, and each run of bytes it is
@@ -2657,7 +2674,7 @@ def Sym.afterCallW (s : Sym) (sp : Int) (w m : Nat) (g : String) (keys : List Ke
     tab := made.2,
     intact := s.intact.filter (· != w),
     wroteW := ((List.range m).map fun k => (w, k, made.1.getD k 0)) ++ s.wroteW.filter fun e => e.1 != w,
-    known := .held g keys made.1 :: s.known, divs := s.divs }
+    known := .held g keys made.1 :: s.known }
 
 /-- What a call of a function that writes a run of words is taken by: the run of this function that it
 writes (its number among the runs given to write, and how many words it has), the definition its contract
@@ -2693,10 +2710,9 @@ def callW (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
             | .call f (.cons (.call g args) .nil) =>
               if f == "bytes_of" && !own.contains g && g != "len" then
                 let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
-                let index := termIndex T.list
-                match wevalList (weval ctx (fun n => index[n]?) { s with tab := T } WFUEL env) args, findDef ctx.defs g with
+                match wevalList (weval ctx T.find { s with tab := T } WFUEL env) args, findDef ctx.defs g with
                 | some vs, some d =>
-                  match flatKeys (fun n => index[n]?) vs with
+                  match flatKeys T.find vs with
                   | some keys =>
                     if !(keys.all (Key.ok s.nvars T.list.length)) then .error "what a called function's contract says of its arguments is not followed"
                     else if d.params.length == keys.length then .ok ⟨w, n / 4, g, keys, T⟩
@@ -2827,7 +2843,7 @@ def Sym.general (p : Place) (s : Sym) : Sym :=
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
     tab := s.tab,         -- (nor that a run is as it was at entry; what the vector registers hold is said by the place's lanes)
-    known := s.known, divs := s.divs,
+    known := s.known,
     facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-! ### What a place says of vector registers -/
@@ -2875,23 +2891,20 @@ def cellRow (s : Sym) (C : PlaceCell) : Row := Lin.add (frameOffset (s.reg RSP))
 /-- What the place says of a cell of the frame is so of this state: the state holds a vector stored there,
 and its terms are the words the place says. (No proof is read here.) -/
 def cellShown (ctx : Ctx) (p : Place) (s : Sym) (C : PlaceCell) : Bool :=
-  let index := termIndex s.terms
-  match cellIds ctx (fun n => index[n]?) (placeW ctx p s) s C, s.spill.find? fun (o, _) => o == cellRow s C with
+  match cellIds ctx s.tab.find (placeW ctx p s) s C, s.spill.find? fun (o, _) => o == cellRow s C with
   | some ids, some (_, held) => ids == held
   | _, _ => false
 
 /-- What the place says of a cell of the frame, taken as known of the general state: the cell holds the
 words the place says, as terms worked out in that state. -/
 def supposeCell (ctx : Ctx) (p : Place) (g : Sym) (C : PlaceCell) : V Sym :=
-  let index := termIndex g.terms
-  match cellIds ctx (fun n => index[n]?) (placeW ctx p g) g C with
+  match cellIds ctx g.tab.find (placeW ctx p g) g C with
   | some ids => pure { g with spill := (cellRow g C, ids) :: g.spill }
   | none => refuse "what a place says of a cell of the frame is not followed in its general state"
 
 /-- What the place says of vector registers is so of this state, lane by lane. -/
 def lanesShown (ctx : Ctx) (p : Place) (s : Sym) (L : PlaceLanes) : Bool :=
-  let index := termIndex s.terms
-  (List.range 16).all fun i => laneShown ctx (fun n => index[n]?) (placeW ctx p s) s L i
+  (List.range 16).all fun i => laneShown ctx s.tab.find (placeW ctx p s) s L i
 
 /-- The things the place's definition is used with in lane `i`, as keys: in the state `g`. -/
 def laneKey (ctx : Ctx) (look : Node → Option Nat) (env : List (String × WVal)) (g : Sym) (L : PlaceLanes) (i : Nat) : Option (List Key) :=
@@ -2925,8 +2938,7 @@ def Sym.withLanes (g : Sym) (L : PlaceLanes) (keys : List (List Key)) : Sym :=
 def supposeLanes (ctx : Ctx) (p : Place) (g : Sym) (L : PlaceLanes) : V Sym :=
   if L.f == "len" || own.contains L.f then refuse "a place's lanes are said by a definition of the specification"
   else
-    let index := termIndex g.terms
-    match laneKeysOf (laneKey ctx (fun n => index[n]?) (placeW ctx p g) g L) (List.range 16) with
+    match laneKeysOf (laneKey ctx g.tab.find (placeW ctx p g) g L) (List.range 16) with
     | some keys => pure (g.withLanes L keys)
     | none => refuse "what a place says of vector registers is not followed in its general state"
 

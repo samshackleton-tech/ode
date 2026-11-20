@@ -181,6 +181,10 @@ theorem heldIds_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l :
       simp only [heldIds] at h
       obtain ⟨k', m, same⟩ := heldIds_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
+    | div x m q =>
+      simp only [heldIds] at h
+      obtain ⟨k', m, same⟩ := heldIds_mem h
+      exact ⟨k', List.mem_cons_of_mem _ m, same⟩
     | block j c off vs =>
       simp only [heldIds] at h
       obtain ⟨k', m, same⟩ := heldIds_mem h
@@ -222,6 +226,12 @@ theorem held_bound_list (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List No
       rcases List.mem_cons.mp m with e | m
       · cases e
       · exact hB _ _ _ m
+    | div x m q =>
+      refine ⟨B, ?_⟩
+      intro f' keys' ids' m
+      rcases List.mem_cons.mp m with e | m
+      · cases e
+      · exact hB _ _ _ m
     | block j c off vs =>
       refine ⟨B, ?_⟩
       intro f' keys' ids' m
@@ -234,21 +244,12 @@ theorem held_bound_list (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List No
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 /-- A division the facts held already say: the unknowns are the quotient and the remainder. -/
 theorem divided_spec (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m) {q : Nat} (hd : divided s x m = some q) :
     ρ q = ev ρ x / m ∧ ρ (q + 1) = ev ρ x % m := by
-  have hq := (List.mem_filter.mp (leastNat_mem hd)).2
-  simp only [Bool.and_eq_true, among_iff] at hq
-  obtain ⟨_, ⟨⟨m1, m2⟩, m3⟩, m4⟩ := hq
-  have f1 := H.facts _ m1
-  have f2 := H.facts _ m2
-  have f3 := H.facts _ m3
-  have f4 := H.facts _ m4
-  rw [holds_iff] at f1 f2 f3 f4
-  simp only [ev_sub, ev_add, ev_scale, ev_var, ev_const] at f1 f2 f3 f4
-  have u := (Int.ediv_emod_unique (a := ev ρ x) (r := ρ (q + 1)) (q := ρ q) pos).mpr ⟨by omega, f3, by omega⟩
-  exact ⟨u.1.symm, u.2.symm⟩
+  exact H.known _ (divided_known hd) pos
 
 
 theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : lowOf s x m = some r) : ev ρ r = ev ρ x % m := by
@@ -306,13 +307,12 @@ theorem Holds.den_lt (wf : WF s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i < W
   Ode.den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
 
 /-- The term a word is, where it is one: the sum of the word's terms, wrapping. -/
-theorem idOf_den (wf : WF s) {xs : List Nat} {a : Nat} (h : idOf (fun n => findNode n s.terms 0) xs = some a) :
+theorem idOf_den (wf : WF s) {xs : List Nat} {a : Nat} (h : idOf look xs = some a) :
     den (inpOf ctx s0) ρ s.terms a = sumList (xs.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
-  have key : ∀ ys, findNode (.add ys) s.terms 0 = some a →
+  have key : ∀ ys, look (.add ys) = some a →
       den (inpOf ctx s0) ρ s.terms a = sumList (ys.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
     intro ys hf
-    have hn := (findNode_spec _ _ _ _ hf).2
-    rw [den_node wf.words.table (by simpa using hn)]
+    rw [den_node wf.words.table (Looks.found hf)]
     rfl
   match xs, h with
   | [], h => exact key [] h
@@ -324,10 +324,9 @@ theorem idOf_den (wf : WF s) {xs : List Nat} {a : Nat} (h : idOf (fun n => findN
   | b :: c :: more, h => exact key _ h
 
 /-- A term found in the table: it is what its node says. -/
-theorem found_den (wf : WF s) {n : Node} {i : Nat} (h : findNode n s.terms 0 = some i) :
+theorem found_den (wf : WF s) {n : Node} {i : Nat} (h : look n = some i) :
     den (inpOf ctx s0) ρ s.terms i = n.value (inpOf ctx s0) ρ (den (inpOf ctx s0) ρ s.terms) := by
-  have hn := (findNode_spec _ _ _ _ h).2
-  exact den_node wf.words.table (by simpa using hn)
+  exact den_node wf.words.table (Looks.found h)
 
 /-- One term as a word. -/
 theorem WDen.one (wf : WF s) (i : Nat) :
@@ -442,22 +441,22 @@ theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : Lis
       next =>
         obtain ⟨o, m, hs⟩ := knownBlock_mem h
         exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | div _ _ _ =>
       simp only [knownBlock] at h
       obtain ⟨o, m, hs⟩ := knownBlock_mem h
       exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
 
 /-- Unknowns whose terms are in the table, as words: each is its unknown's remainder by 2^32. -/
 theorem atomWords_sound (wf : WF s) : ∀ {vs : List Nat} {ws : List WVal},
-    atomWords (fun n => findNode n s.terms 0) vs = some ws →
+    atomWords look vs = some ws →
     WDen ctx s0 ρ s.terms (.list ws) (.list (vs.map fun v => Val.word ((ρ v % W32i).toNat)))
   | [], _, h => by simp only [atomWords, Option.some.injEq] at h; subst h; exact WDen.nil
   | v :: more, ws, h => by
     simp only [atomWords] at h
-    cases hf : findNode (.atom (Lin.word (Lin.var v))) s.terms 0 with
+    cases hf : look (.atom (Lin.word (Lin.var v))) with
     | none => simp [hf] at h
     | some i =>
-      cases hr : atomWords (fun n => findNode n s.terms 0) more with
+      cases hr : atomWords look more with
       | none => simp [hf, hr] at h
       | some rest =>
         simp only [hf, hr, Option.some.injEq] at h; subst h
@@ -471,7 +470,7 @@ theorem atomWords_sound (wf : WF s) : ∀ {vs : List Nat} {ws : List WVal},
 /-- The block `weval` finds at byte `off` of a lane is the block the account has at that place of the lane:
 the function read it there, within the lane's blocks. -/
 theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {j c : Nat} {off : Row} {v : WVal}
-    (h : blockAt (fun n => findNode n s.terms 0) s j c off = some v) {k : Int} (hk : ev ρ off = 64 * k)
+    (h : blockAt look s j c off = some v) {k : Int} (hk : ev ρ off = 64 * k)
     {x : String} {r count l : Nat} (ht : ctx.contract.tableAt j = some (x, r, count, l)) :
     0 ≤ k ∧ ∃ a, ((List.range (s0.reg l)).map fun b => blockWords s0.mem (lanePtr s0 r (c / 8) + 64 * b))[k.toNat]? = some a ∧
       WDen ctx s0 ρ s.terms v a := by
@@ -512,7 +511,7 @@ theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {j c : Nat} {off : 
 
 /-- The terms of a list of words, where each is one: the words are those terms'. -/
 theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : List Nat},
-    WDen ctx s0 ρ s.terms (.list l) (.list l') → wordIds (fun n => findNode n s.terms 0) l = some ids →
+    WDen ctx s0 ρ s.terms (.list l) (.list l') → wordIds look l = some ids →
     l' = ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)
   | [], _, _, hd, h => by
     cases hd
@@ -524,7 +523,7 @@ theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : Lis
       | word xs =>
         cases hv
         simp only [wordIds] at h
-        cases hi : idOf (fun n => findNode n s.terms 0) xs <;> cases hr : wordIds (fun n => findNode n s.terms 0) rest <;>
+        cases hi : idOf look xs <;> cases hr : wordIds look rest <;>
           simp only [hi, hr, reduceCtorEq, Option.some.injEq] at h
         rename_i i is
         subst h
@@ -534,7 +533,7 @@ theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : Lis
 
 /-- A thing a definition is used with, as a key: the key's value is the thing's. -/
 theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
-    (hd : WDen ctx s0 ρ s.terms v a) (h : flatKey (fun n => findNode n s.terms 0) v = some k) : a = k.val ctx s0 ρ s.terms := by
+    (hd : WDen ctx s0 ρ s.terms v a) (h : flatKey look v = some k) : a = k.val ctx s0 ρ s.terms := by
   cases v with
   | int n =>
     cases hd
@@ -551,7 +550,7 @@ theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
   | list l =>
     obtain ⟨l', rfl⟩ := WDen.list_inv hd
     simp only [flatKey] at h
-    cases hw : wordIds (fun n => findNode n s.terms 0) l with
+    cases hw : wordIds look l with
     | none => simp [hw] at h
     | some ids =>
       simp only [hw, Option.map_some, Option.some.injEq] at h; subst h
@@ -565,7 +564,7 @@ theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
   | _ => simp [flatKey] at h
 
 theorem flatKeys_den (wf : WF s) : ∀ {vs : List WVal} {as : List Val} {keys : List Key},
-    WDen ctx s0 ρ s.terms (.list vs) (.list as) → flatKeys (fun n => findNode n s.terms 0) vs = some keys →
+    WDen ctx s0 ρ s.terms (.list vs) (.list as) → flatKeys look vs = some keys →
     as = keys.map (Key.val ctx s0 ρ s.terms)
   | [], _, _, hd, h => by
     cases hd
@@ -574,7 +573,7 @@ theorem flatKeys_den (wf : WF s) : ∀ {vs : List WVal} {as : List Val} {keys : 
     cases hd with
     | cons hv hrest =>
       simp only [flatKeys] at h
-      cases hk : flatKey (fun n => findNode n s.terms 0) v <;> cases hr : flatKeys (fun n => findNode n s.terms 0) rest <;>
+      cases hk : flatKey look v <;> cases hr : flatKeys look rest <;>
         simp only [hk, hr, reduceCtorEq, Option.some.injEq] at h
       rename_i k ks
       subst h
@@ -590,11 +589,12 @@ end
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
 theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v : WVal} {xa ya : Val}
-    (h : wbin (fun n => findNode n s.terms 0) s op x y = some v) (hx : WDen ctx s0 ρ s.terms x xa) (hy : WDen ctx s0 ρ s.terms y ya) :
+    (h : wbin look s op x y = some v) (hx : WDen ctx s0 ρ s.terms x xa) (hy : WDen ctx s0 ρ s.terms y ya) :
     ∃ a, binop op xa ya = some a ∧ WDen ctx s0 ρ s.terms v a := by
   cases x with
   | int a =>
@@ -648,9 +648,9 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
         next hop2 =>
           have oe : op = "^" := by simpa using hop2
           subst oe
-          cases ha : idOf (fun n => findNode n s.terms 0) xs <;> cases hb : idOf (fun n => findNode n s.terms 0) ys <;> simp only [ha, hb, reduceCtorEq] at h
+          cases ha : idOf look xs <;> cases hb : idOf look ys <;> simp only [ha, hb, reduceCtorEq] at h
           rename_i a b
-          cases hf : findNode (.xor (min a b) (max a b)) s.terms 0 with
+          cases hf : look (.xor (min a b) (max a b)) with
           | none => simp [hf] at h
           | some i =>
             simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
@@ -674,11 +674,11 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
         obtain ⟨hop, n0, n32⟩ := hc
         have oe : op = ">>>" := by simpa using hop
         subst oe
-        cases ha : idOf (fun n => findNode n s.terms 0) xs with
+        cases ha : idOf look xs with
         | none => simp [ha] at h
         | some a =>
           simp only [ha] at h
-          cases hf : findNode (.rotr a n.toNat) s.terms 0 with
+          cases hf : look (.rotr a n.toNat) with
           | none => simp [hf] at h
           | some i =>
             simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
@@ -804,7 +804,7 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
 
 /-- The high word of a counter that is a number and a number of the text more: what `hiPlus` finds is it. -/
 theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {r : Row} {i : Nat}
-    (h : hiPlus (fun n => findNode n s.terms 0) s r = some i) :
+    (h : hiPlus look s r = some i) :
     den (inpOf ctx s0) ρ s.terms i = (ev ρ r).toNat % 2 ^ 64 / W32 := by
   unfold hiPlus at h
   split at h
@@ -812,10 +812,10 @@ theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {r : Row} {i : Nat}
     obtain ⟨c0, c1, hn⟩ := hc
     split at h
     next a l hh one ha hl hhh hone =>
-      cases hm : findNode (.ult a l) s.terms 0 with
+      cases hm : look (.ult a l) with
       | none => simp [hm] at h
       | some m =>
-        cases hs : findNode (.add (insertSorted hh (insertSorted one []))) s.terms 0 with
+        cases hs : look (.add (insertSorted hh (insertSorted one []))) with
         | none => simp [hm, hs] at h
         | some h1 =>
           simp only [hm, hs, Option.bind_some] at h
@@ -903,11 +903,12 @@ theorem toWords_wordBytes : ∀ (ws : List Nat), (∀ w ∈ ws, w < W32) → toW
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 /-- The words of the table that are a run's words: they are what the account's `words` makes of the run's
 bytes, four bytes a word, the lowest first. -/
 theorem toWords_fn (wf : WF s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat) (wvs : List WVal),
-    inputWords (fun n => findNode n s.terms 0) j count k = some wvs → (∀ i, i < 4 * count → g i < 256) →
+    inputWords look j count k = some wvs → (∀ i, i < 4 * count → g i < 256) →
     (∀ q a, a = 4 * q → q < count →
       inpOf ctx s0 j (k + q) = g a + 256 * g (a + 1) + 65536 * g (a + 2) + 16777216 * g (a + 3)) →
     ∃ ws, toWords ((List.range (4 * count)).map fun i => Val.int (g i)) = some ws ∧ WDen ctx s0 ρ s.terms (.list wvs) (.list ws)
@@ -916,7 +917,7 @@ theorem toWords_fn (wf : WF s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat)
     exact ⟨[], by simp [toWords], WDen.nil⟩
   | count + 1, k, g, wvs, h, hb, hwd => by
     simp only [inputWords] at h
-    cases hf : findNode (.input j k) s.terms 0 <;> cases hr : inputWords (fun n => findNode n s.terms 0) j count (k + 1) <;>
+    cases hf : look (.input j k) <;> cases hr : inputWords look j count (k + 1) <;>
       simp only [hf, hr, reduceCtorEq, Option.some.injEq] at h
     rename_i i rest
     subst h
@@ -948,11 +949,12 @@ theorem load4 (mem : Nat → Nat) (a : Nat) :
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
 theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : List WVal} {as : List Val} {v : WVal}
-    (h : wown ctx (fun n => findNode n s.terms 0) s f vs = some v) (hv : WDen ctx s0 ρ s.terms (.list vs) (.list as)) :
+    (h : wown ctx look s f vs = some v) (hv : WDen ctx s0 ρ s.terms (.list vs) (.list as)) :
     ∃ a, builtin f as = some a ∧ WDen ctx s0 ρ s.terms v a := by
   rcases vs with _ | ⟨x, _ | ⟨y, more⟩⟩
   · simp [wown] at h
@@ -969,7 +971,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
           subst fe
           split at h
           next n0 =>
-            cases hfn : findNode (.atom (Lin.word (Lin.const n))) s.terms 0 with
+            cases hfn : look (.atom (Lin.word (Lin.const n))) with
             | none => simp [hfn] at h
             | some i =>
               simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
@@ -1002,7 +1004,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
           next hf =>
             have fe : f = "word" := by simpa using hf
             subst fe
-            cases hfn : findNode (.atom (Lin.word r)) s.terms 0 with
+            cases hfn : look (.atom (Lin.word r)) with
             | none => simp [hfn] at h
             | some i =>
               simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
@@ -1043,7 +1045,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
             next hf2 =>
               have fe : f = "lo" := by simpa using hf2
               subst fe
-              cases hfn : findNode (.atom (Lin.word r)) s.terms 0 with
+              cases hfn : look (.atom (Lin.word r)) with
               | none => simp [hfn] at h
               | some i =>
                 simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
@@ -1064,7 +1066,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
                   | none => simp [hq] at h
                   | some q =>
                     simp only [hq, Option.bind_some] at h
-                    cases hfn : findNode (.atom (Lin.word q)) s.terms 0 with
+                    cases hfn : look (.atom (Lin.word q)) with
                     | none => simp [hfn] at h
                     | some i =>
                       simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
@@ -1075,7 +1077,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
                       rw [e]; exact WDen.one wf i
                 next =>
                   -- the counter is a number and a number of the text more
-                  cases hp : hiPlus (fun n => findNode n s.terms 0) s r with
+                  cases hp : hiPlus look s r with
                   | none => simp [hp] at h
                   | some i =>
                     simp only [hp, Option.map_some, Option.some.injEq] at h; subst h
@@ -1095,7 +1097,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
-              cases hin : inputWords (fun n => findNode n s.terms 0) j (n / 4) 0 with
+              cases hin : inputWords look j (n / 4) 0 with
               | none => simp [hin] at h
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
@@ -1132,7 +1134,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
-              cases hin : inputWords (fun n => findNode n s.terms 0) j (n / 4) (off / 4) with
+              cases hin : inputWords look j (n / 4) (off / 4) with
               | none => simp [hin] at h
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
@@ -1269,13 +1271,14 @@ end
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 /-- What `weval` gives of an expression stands for what `evalSpec` gives of it with the same fuel and `B`
 more, the names on words standing for the names of the account: `B` being steps enough for every use of a
 definition whose words the state holds (such a use costs `weval` nothing, and `evalSpec` works it out). -/
 theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldWithin ctx s0 ρ s.terms s.known B) :
     ∀ (fuel : Nat) (env : List (String × WVal)) (env' : List (String × Val)) (e : SExpr) (v : WVal),
-      weval ctx (fun n => findNode n s.terms 0) s fuel env e = some v → EnvDen ctx s0 ρ s.terms env env' →
+      weval ctx look s fuel env e = some v → EnvDen ctx s0 ρ s.terms env env' →
       ∃ a, evalSpec ctx.defs (fuel + B) env' e = some a ∧ WDen ctx s0 ρ s.terms v a
   | 0, _, _, _, _, h, _ => by simp [weval] at h
   | fuel + 1, env, env', e, v, h, hE => by
@@ -1298,7 +1301,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       simp only [evalSpec]; exact ha
     | bin op a b =>
       simp only [weval] at h
-      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hb : weval ctx (fun n => findNode n s.terms 0) s fuel env b <;>
+      cases ha : weval ctx look s fuel env a <;> cases hb : weval ctx look s fuel env b <;>
         simp only [ha, hb, reduceCtorEq] at h
       rename_i x y
       obtain ⟨xa, ea, da⟩ := ih env env' a x ha hE
@@ -1308,7 +1311,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       simp only [evalSpec, ea, eb]; exact er
     | ifx c a b =>
       simp only [weval] at h
-      cases hc : weval ctx (fun n => findNode n s.terms 0) s fuel env c with
+      cases hc : weval ctx look s fuel env c with
       | none => simp [hc] at h
       | some cv =>
         obtain ⟨ca, ec, dc⟩ := ih env env' c cv hc hE
@@ -1329,7 +1332,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
         | _ => simp [hc] at h
     | index a i =>
       simp only [weval] at h
-      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hi : weval ctx (fun n => findNode n s.terms 0) s fuel env i <;>
+      cases ha : weval ctx look s fuel env a <;> cases hi : weval ctx look s fuel env i <;>
         simp only [ha, hi, reduceCtorEq] at h
       rename_i av iv
       obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
@@ -1388,7 +1391,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       | _ => cases iv <;> simp at h
     | call f args =>
       simp only [weval] at h
-      cases hl : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) args with
+      cases hl : wevalList (weval ctx look s fuel env) args with
       | none => simp [hl] at h
       | some vs =>
         simp only [hl] at h
@@ -1402,7 +1405,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
             refine ⟨r, ?_, dr⟩
             simp only [evalSpec, el]; rw [if_neg hlen, if_pos hown]; exact er
           next hown =>
-            cases hh : ((flatKeys (fun n => findNode n s.terms 0) vs).bind fun keys => heldIds s.facts f keys s.known) with
+            cases hh : ((flatKeys look vs).bind fun keys => heldIds s.facts f keys s.known) with
             | some ids =>
               -- a use the state holds the words of (of the same things, by the facts): the definition gives
               -- them within `B` steps
@@ -1431,7 +1434,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
                 next => simp at h
     | list items =>
       simp only [weval] at h
-      cases hl : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) items with
+      cases hl : wevalList (weval ctx look s fuel env) items with
       | none => simp [hl] at h
       | some vs =>
         simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
@@ -1440,7 +1443,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
         simp only [evalSpec, el, Option.map_some]
     | letx x e rest =>
       simp only [weval] at h
-      cases he : weval ctx (fun n => findNode n s.terms 0) s fuel env e with
+      cases he : weval ctx look s fuel env e with
       | none => simp [he] at h
       | some xv =>
         simp only [he] at h
@@ -1450,7 +1453,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
         simp only [evalSpec, ex]; exact er
     | each e x a b =>
       simp only [weval] at h
-      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hb : weval ctx (fun n => findNode n s.terms 0) s fuel env b <;>
+      cases ha : weval ctx look s fuel env a <;> cases hb : weval ctx look s fuel env b <;>
         simp only [ha, hb, reduceCtorEq] at h
       rename_i av bv
       obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
@@ -1461,7 +1464,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
         | int hi =>
           cases da; cases db
           simp only at h
-          cases hl : wevalEach (fun i => weval ctx (fun n => findNode n s.terms 0) s fuel ((x, .int i) :: env) e) (hi - lo).toNat lo with
+          cases hl : wevalEach (fun i => weval ctx look s fuel ((x, .int i) :: env) e) (hi - lo).toNat lo with
           | none => simp [hl] at h
           | some vs =>
             simp only [hl, Option.map_some, Option.some.injEq] at h; subst h
@@ -1473,7 +1476,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       | _ => cases bv <;> simp at h
     | withx a puts =>
       simp only [weval] at h
-      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hp : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) puts <;>
+      cases ha : weval ctx look s fuel env a <;> cases hp : wevalList (weval ctx look s fuel env) puts <;>
         simp only [ha, hp, reduceCtorEq] at h
       rename_i av ps
       obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
@@ -1492,8 +1495,8 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       | _ => simp at h
     | slice a lo hi =>
       simp only [weval] at h
-      cases ha : weval ctx (fun n => findNode n s.terms 0) s fuel env a <;> cases hlo : weval ctx (fun n => findNode n s.terms 0) s fuel env lo <;>
-        cases hhi : weval ctx (fun n => findNode n s.terms 0) s fuel env hi <;> simp only [ha, hlo, hhi, reduceCtorEq] at h
+      cases ha : weval ctx look s fuel env a <;> cases hlo : weval ctx look s fuel env lo <;>
+        cases hhi : weval ctx look s fuel env hi <;> simp only [ha, hlo, hhi, reduceCtorEq] at h
       rename_i av lv hv
       obtain ⟨aa, ea, da⟩ := ih env env' a av ha hE
       obtain ⟨la, elo, dlo⟩ := ih env env' lo lv hlo hE
@@ -1549,7 +1552,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
       | _ => cases lv <;> cases hv <;> simp at h
     | record names items =>
       simp only [weval] at h
-      cases hl : wevalList (weval ctx (fun n => findNode n s.terms 0) s fuel env) items with
+      cases hl : wevalList (weval ctx look s fuel env) items with
       | none => simp [hl] at h
       | some vs =>
         simp only [hl] at h
@@ -1563,7 +1566,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
         next => simp at h
     | field e x =>
       simp only [weval] at h
-      cases he : weval ctx (fun n => findNode n s.terms 0) s fuel env e with
+      cases he : weval ctx look s fuel env e with
       | none => simp [he] at h
       | some rv =>
         obtain ⟨ra, ee, de⟩ := ih env env' e rv he hE
@@ -1593,6 +1596,7 @@ theorem inoutsIn_tail {y : String × Nat × Nat} (a : String × Kind) (r : Nat) 
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
@@ -1668,7 +1672,7 @@ theorem wenv_sound {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s s
 those words, four a word, the lowest first. -/
 theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : String} {r n : Nat}
     (hw : ctx.contract.outs[w]? = some (x, r, n)) :
-    ∀ (l : List WVal) (ws : List Val) (j : Nat), wordsWritten (fun n => findNode n s.terms 0) s.wroteW w j l = true →
+    ∀ (l : List WVal) (ws : List Val) (j : Nat), wordsWritten look s.wroteW w j l = true →
       WDen ctx s0 ρ s.terms (.list l) (.list ws) →
       ∃ bs : List Nat, ofWords ws = some (bs.map fun (b : Nat) => Val.int b) ∧ bs.length = 4 * l.length ∧
         ∀ k, k < bs.length → bs[k]? = some (st.mem (s0.reg r + 4 * j + k))
@@ -1683,7 +1687,7 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
         cases hv
         simp only [wordsWritten, Bool.and_eq_true] at hww
         obtain ⟨h1, h2⟩ := hww
-        cases hi : idOf (fun n => findNode n s.terms 0) xs with
+        cases hi : idOf look xs with
         | none => simp [hi] at h1
         | some i =>
           simp only [hi] at h1
@@ -1731,12 +1735,9 @@ theorem symEnsureW_sound {p : Program} (E : Setting ctx p s0) {e : EnsureW} {ite
           | some wn =>
             obtain ⟨w, n⟩ := wn
             simp only [hfo] at h
-            have hl : (fun n => (termIndex s.terms)[n]?) = fun n => findNode n s.terms 0 :=
-              funext fun n => termIndex_spec s.terms n
-            rw [hl] at h
             obtain ⟨rr, _, hw⟩ := findOutNamed_spec hfo
             have hw' : ctx.contract.outs[w]? = some (e.run, rr, n) := by simpa using hw
-            cases hwv : weval ctx (fun n => findNode n s.terms 0) s WFUEL (wenv ctx.contract) x with
+            cases hwv : weval ctx s.tab.find s WFUEL (wenv ctx.contract) x with
             | none => simp only [hwv] at h; exact (refuse_ok h).elim
             | some v =>
               cases v with

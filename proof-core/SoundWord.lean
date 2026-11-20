@@ -135,17 +135,21 @@ theorem den_node {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} 
 
 /-! ## Putting a term into the table -/
 
-theorem findNode_spec (n : Node) : ∀ (T : List Node) (k i : Nat), findNode n T k = some i → k ≤ i ∧ T[i - k]? = some n
-  | [], _, _, h => by simp [findNode] at h
-  | m :: more, k, i, h => by
-    unfold findNode at h
+/-- A way of looking a term up that is right where it finds one: the term stands at the number given. -/
+class Looks (look : Node → Option Nat) (T : List Node) : Prop where
+  found : ∀ {n : Node} {i : Nat}, look n = some i → T[i]? = some n
+
+/-- The table's own index, as `Tab.find` reads it, is such a way. -/
+instance Tab.find_looks (t : Tab) : Looks t.find t.list where
+  found := by
+    intro n i h
+    unfold Tab.find at h
     split at h
-    next e => injection h with h; subst h; subst e; simp
-    next =>
-      obtain ⟨le, at_⟩ := findNode_spec n more (k + 1) i h
-      refine ⟨by omega, ?_⟩
-      have : i - k = (i - (k + 1)) + 1 := by omega
-      rw [this, List.getElem?_cons_succ]; exact at_
+    next j hj =>
+      split at h
+      next e => injection h with h; subst h; simpa [Tab.list] using e
+      next => cases h
+    next => cases h
 
 /-- A term put into the table: it stands at the number given; what was there is there still; and where its
 parts are terms of the table before, the table is still made of terms that stand after their parts. -/
@@ -446,40 +450,6 @@ theorem den_lt {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} (h
         split
         · exact ih b (hw i _ h b (by simp [Node.parts]))
         · exact ih a (hw i _ h a (by simp [Node.parts]))
-
-/-! ## The index of a table -/
-
-theorem termIndexFrom_spec : ∀ (T : List Node) (i : Nat) (m : Std.HashMap Node Nat) (n : Node),
-    (termIndexFrom T i m)[n]? = match m[n]? with | some j => some j | none => findNode n T i
-  | [], i, m, n => by
-    simp only [termIndexFrom, findNode]
-    cases m[n]? <;> rfl
-  | x :: more, i, m, n => by
-    simp only [termIndexFrom]
-    rw [termIndexFrom_spec more (i + 1) (m.insertIfNew x i) n, Std.HashMap.getElem?_insertIfNew]
-    cases hm : m[n]? with
-    | some j =>
-      have hin : n ∈ m := Std.HashMap.mem_iff_isSome_getElem?.mpr (by rw [hm]; rfl)
-      by_cases hx : x = n
-      · subst hx
-        rw [if_neg (fun c => c.2 hin)]
-      · rw [if_neg (fun c => hx (by simpa using c.1))]
-    | none =>
-      have hout : ¬ n ∈ m := fun c => by
-        have := Std.HashMap.mem_iff_isSome_getElem?.mp c
-        rw [hm] at this; exact absurd this (by decide)
-      by_cases hx : x = n
-      · subst hx
-        rw [if_pos ⟨by simp, hout⟩]
-        simp [findNode]
-      · rw [if_neg (fun c => hx (by simpa using c.1))]
-        simp [findNode, hx]
-
-/-- Looking a term up in the index of a table finds what going through the table finds. -/
-theorem termIndex_spec (T : List Node) (n : Node) : (termIndex T)[n]? = findNode n T 0 := by
-  unfold termIndex
-  rw [termIndexFrom_spec]
-  simp
 
 /-! ## Shifts, and the or of two shifts that is a turn -/
 

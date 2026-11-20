@@ -607,8 +607,8 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
       callRun ctx s r n = some (plan.w, ids) ∧ calleeW ctx s ids c.args argRegs = some env ∧
       e.value = .call "bytes_of" (.cons (.call plan.g args) .nil) ∧ own.contains plan.g = false ∧ plan.g ≠ "len" ∧
       plan.tab = (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 ∧
-      wevalList (weval ctx (fun n => findNode n plan.terms 0) { s with tab := plan.tab } WFUEL env) args = some vs ∧
-      findDef ctx.defs plan.g = some d ∧ flatKeys (fun n => findNode n plan.terms 0) vs = some plan.keys ∧
+      wevalList (weval ctx plan.tab.find { s with tab := plan.tab } WFUEL env) args = some vs ∧
+      findDef ctx.defs plan.g = some d ∧ flatKeys plan.tab.find vs = some plan.keys ∧
       (∀ k ∈ plan.keys, k.wf s.nvars plan.terms.length) ∧ d.params.length = plan.keys.length ∧ plan.words = n / 4 := by
   unfold callW at h
   split at h
@@ -649,10 +649,6 @@ theorem callW_spec {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW} (h : call
                         next hfg =>
                           have hfg' : (f = "bytes_of" ∧ own.contains g = false) ∧ g ≠ "len" := by simpa using hfg
                           obtain ⟨⟨rfl, hown⟩, hlen⟩ := hfg'
-                          have hl : (fun n => (termIndex (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list)[n]?) =
-                              fun n => findNode n (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list 0 :=
-                            funext fun n => termIndex_spec _ n
-                          simp only [hl] at h
                           split at h
                           next vs d hwl hfd =>
                             split at h

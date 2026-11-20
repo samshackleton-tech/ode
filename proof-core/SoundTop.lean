@@ -100,6 +100,12 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
   cases hsp : s.sp with
   | none =>
     simp only [settle, hsp] at h
+    by_cases hsame : stackSame s = true
+    · rw [if_pos hsame] at h
+      have hs := V.pure_ok h
+      injection hs with heq _; subst s'
+      exact Carried.here H wf
+    rw [if_neg hsame] at h
     obtain ⟨q, _, hc, he⟩ := V.bind_ok h
     cases q
     have hs := V.pure_ok he

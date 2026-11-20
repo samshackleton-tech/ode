@@ -77,9 +77,9 @@ The functions it verifies today:
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
-| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.17 s |
-| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 1.2 s |
-| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 1.4 s |
+| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.12 s |
+| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.60 s |
+| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.59 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 
 `ode_equal`, `ode_low`, `ode_eighth` and the four functions of `examples/table/` (`ode_third` is one of
@@ -378,7 +378,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,021 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,326 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,332 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -683,7 +683,7 @@ its value after `K` steps. `prove.py` writes that line for the verifier as a use
 loop leaves alone.
 
 With that invariant the verifier accepts the contract as it stands, for every `n` from 1 up. The proof is
-2,350 bytes and the verifier takes 0.17 s. It walks six paths: the first block with `n` equal to 1 and
+2,350 bytes and the verifier takes 0.12 s. It walks six paths: the first block with `n` equal to 1 and
 with `n` greater; from the invariant to the return, twice; and once round the loop to a block that is
 the last and to one that is not. Without the invariant the path goes round the loop without end, and a
 test records that the prover gives up.
@@ -783,10 +783,11 @@ met in the specification was not recognized when the code computed it later. Two
 (`ode_adler32_blocks` and `ode_adler32_blocks4`) were found again because of this change.
 
 With the invariant the verifier accepts the contract for every `n` from 1 up. The proof is 4,178 bytes.
-The verifier takes 1.2 s, and the Python verifier takes 0.40 s for the same function. That is within the
-limit of five times, and it is the slowest ratio of any function here. The cause is known. The verifier
-stores an inequality as a list with one entry for every unknown, this function has more than 1,300
-unknowns by its end, and the unknowns of a later iteration come last.
+The verifier takes 0.60 s, and the Python verifier takes 0.40 s for the same function. (It took 1.2 s
+when this was first verified; the section on speed below says what was mended.) This function and its
+other entry have the slowest ratio of any function here. The cause is known. The verifier stores an
+inequality as a list with one entry for every unknown, this function has more than 1,300 unknowns by its
+end, and the unknowns of a later iteration come last.
 
 The tests change the contract in twelve ways, the code in seven and the invariant in fourteen, and the
 verifier refuses each. Among the invariants: a slot said to hold the counter's low words where it holds the
@@ -831,7 +832,7 @@ of the first half has the counter `t + i`, lane `i` of the second half has `t + 
 slots hold `lo(t + i)`, `hi(t + i)`, `lo(t + i + 16)` and `hi(t + i + 16)` in word `i`.
 
 With it the verifier accepts the contract for every `n` from 1 up. The proof is 4,331 bytes. The verifier
-takes 1.4 s, and the Python verifier takes 0.40 s.
+takes 0.59 s, and the Python verifier takes 0.40 s.
 
 The tests change the contract in ten ways, the code in fourteen and the invariant in five, and the
 verifier refuses each. Among them: every lane given the counter `t`, which is what the other entry
@@ -1009,12 +1010,41 @@ kernel went from 0.40 s to 0.15 s for one block a lane, and from 1.25 s to 0.44 
 stored proofs did not change by a byte, and the proofs that the tests find for the 32-way kernel are the
 same bytes as before.
 
-What takes the time now, for the 16-way kernel, is still evaluating the specification: at the loop
-invariant the verifier works out one block's compression for each of the sixteen lanes, on each of four
-arrivals there. For the 32-way kernel, about a sixth of the time goes to checking the bounds of the stack
-frame again after every instruction. For every number of blocks that kernel takes 1.2 s, three times the
-Python verifier's time: an inequality is a list with one entry for every unknown, and the function has
-more than 1,300 of them.
+For every number of blocks the 32-way kernel then took 1.2 s, and 1.4 s by the entry the hash calls: three
+and three and a half times the Python verifier's 0.40 s. Later on November 20 four more things were
+mended, again found with the sampling profiler:
+
+- **An index of the table of terms was built again at every use.** Where the verifier evaluates the
+  specification, it looks terms up by what they are. It built a hash index of the whole table for that at
+  every line of a loop invariant that says what a vector register or a slot of the frame holds, at every
+  `ensures` about words and at every call that writes words. The table carries such an index already, and
+  the verifier now reads that one, in the way it does when it adds a term: a number from the index is
+  taken only where that term stands at that number in the array. The soundness proofs of the
+  specification's evaluation ask one thing of a lookup, that a number it gives holds that term, and no
+  longer speak of a scan of the table.
+- **Seeing at once that so many times a fact gives a goal** looked for the goal's last multiple once for
+  every fact. It now looks for it once.
+- **Finding a quotient the state already knows** asked, of each unknown noted for that division, whether
+  the four facts that make it a quotient were among the facts. That built four rows and went through
+  every fact four times. A division the state has made is now a thing it knows, in the way it knows a use
+  of a definition or a block that was read: the soundness proof carries that the unknown is the quotient
+  and the next unknown the remainder. Finding it again goes through no fact. (This section
+  says above that the note of a division is advice. That was so until this change; now the proof speaks
+  of it.)
+- **The bounds of the stack frame were shown again after every instruction** in a function that aligns
+  its stack pointer, though few instructions move the stack pointer or store into the frame. The state now
+  notes the stack pointer, the frame's saved words and the spilled vectors as they were when the bounds
+  were last shown. While they are the same, nothing is shown again. This note is advice: the step only
+  adds facts it has shown, so a wrong note could leave a fact out and could add none that is false.
+
+The 32-way kernel went from 1.2 s to 0.60 s, and by the entry the hash calls from 1.4 s to 0.59 s: one and
+a half times the Python verifier's 0.40 s. The 16-way kernel went from 0.17 s to 0.12 s. The stored proofs
+did not change by a byte through any of the four.
+
+What takes the time now is evaluating the specification at the loop invariant (for each lane the
+verifier works out one block's compression, on each arrival there), and the size of the rows: an
+inequality is a list with one entry for every unknown, the 32-way kernel has more than 1,300 unknowns by
+its end, and a term of the table that is such a row is hashed and compared entry by entry.
 
 **Two limits that are enforced by a test** (`test_limits.py`): every stored proof must be under 100 kB,
 and a whole run of this verifier must take at most five times as long as the Python verifier takes for the
@@ -1075,8 +1105,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,021 lines (Table.lean 152, Machine.lean 495, Contract.lean 374). The
-verifier: 2,485 lines (Core.lean 2,326, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 15,519 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
+verifier: 2,491 lines (Core.lean 2,332, Arithmetic.lean 159 including its proofs). The file parser: 178
+lines. The proofs of the theorems: 15,508 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 

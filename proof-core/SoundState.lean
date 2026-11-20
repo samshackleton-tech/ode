@@ -94,6 +94,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .load v _ _ => v < n
   | .or v x y => v < n ∧ bounded n x ∧ bounded n y
   | .held _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
+  | .div x _ q => bounded n x ∧ q + 1 < n
   | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
@@ -222,6 +223,7 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
   | .or v x y => 0 ≤ ev ρ x ∧ 0 ≤ ev ρ y ∧ ρ v = (((ev ρ x).toNat ||| (ev ρ y).toNat : Nat) : Int)
   | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
+  | .div x m q => 0 < m → ρ q = ev ρ x / m ∧ ρ (q + 1) = ev ρ x % m
   | .block j c off vs => ∃ x r count l, ctx.contract.tableAt j = some (x, r, count, l) ∧ c % 8 = 0 ∧ c / 8 < count ∧
       0 ≤ ev ρ off ∧ ev ρ off + 64 ≤ 64 * (s0.reg l : Int) ∧ vs.length = 16 ∧
       ∀ w, w < 16 → ρ (vs.getD w 0) = (Ode.load s0.mem (lanePtr s0 r (c / 8) + (ev ρ off).toNat + 4 * w) 4 : Nat)
@@ -405,6 +407,12 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     have ei : (ids.map fun i => Val.word (den (inpOf ctx s0) ρ' T' i)) = ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i) :=
       List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
     rw [ek, ei]; exact h3
+  | div x m q =>
+    intro pos
+    have hq := h pos
+    simp only [Known.wf] at wk
+    rw [← ev_agree wk.1 a, ← a q (by omega), ← a (q + 1) wk.2]
+    exact hq
   | block j c off vs =>
     obtain ⟨x, r, count, l, h1, h2, h3, h4, h5, h6, h7⟩ := h
     have eo := ev_agree wk.1 a
@@ -426,6 +434,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
     | counter r => exact bounded_mono hn this
     | words js => exact fun i hi => Nat.lt_of_lt_of_le (this i hi) ht
     | lane j c l => trivial
+  | div x m q => exact ⟨bounded_mono hn wk.1, Nat.lt_of_lt_of_le wk.2 hn⟩
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
