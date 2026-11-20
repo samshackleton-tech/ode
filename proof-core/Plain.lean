@@ -47,14 +47,18 @@ theorem lanesOf_plain (perm : Perm) (bind : Bind) (s : State) (e : Expr) : lanes
     simp only [lanesOf, values_plain, value_plain, vecArg_plain, laneArg_plain]
     rfl
 
+theorem memLanes512_plain (perm : Perm) (bind : Bind) (s : State) (f : String) (args : List Expr) :
+    memLanes512 perm bind s.plain f args = memLanes512 perm bind s f args := by
+  simp only [memLanes512, addr512_plain]
+  rfl
+
 theorem lanesOf512_plain (perm : Perm) (bind : Bind) (s : State) (e : Expr) : lanesOf512 perm bind s.plain e = lanesOf512 perm bind s e := by
   cases e with
   | number _ => rfl
   | lane _ _ => rfl
   | name n => exact vecArg512_plain bind s (.name n)
   | call f args =>
-    simp only [lanesOf512, addr512_plain, value_plain, vecArg512_plain]
-    rfl
+    simp only [lanesOf512, memLanes512_plain, value_plain, vecArg512_plain]
 
 theorem execVec512_plain (perm : Perm) (bind : Bind) (s : State) (place v : Expr) :
     execVec512 perm bind s.plain place v = (execVec512 perm bind s place v).map State.plain := by

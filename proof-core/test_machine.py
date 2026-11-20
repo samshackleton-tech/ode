@@ -36,7 +36,7 @@ NEEDED = ["mov64_rr", "mov64_ri", "mov64_rm", "mov64_mr", "add64_rr", "add64_ri"
 VECTOR = ["loadu128", "storeu128", "const128", "mov128", "movq128", "paddd128", "pxor128", "prord128", "pslld128", "psrld128",
           "por128", "pshufb128", "pshufd128", "shufps128", "unpckldq", "unpckhdq", "unpcklqdq", "pblendd128", "pblendw128"]
 WIDE = ["broadcast_r", "broadcast_i", "broadcast_m", "mov512", "load512a", "load512", "load512i", "store512a", "store512",
-        "paddd512", "pxord512_same", "pxord512", "prord512", "unpckldq512", "unpckhdq512", "unpcklqdq512", "unpckhqdq512", "shufi32x4"]
+        "paddd512", "paddd512m", "pxord512_same", "pxord512", "prord512", "unpckldq512", "unpckhdq512", "unpcklqdq512", "unpckhqdq512", "shufi32x4"]
 
 
 def fill(row, bind):
@@ -119,8 +119,12 @@ class Machine(unittest.TestCase):
         for name in NEEDED + VECTOR + WIDE: self.assertIn(name, same)
         self.assertGreaterEqual(len(same), 78)
         left = [r.name for r in self.rows if r.name not in same and r.name != "ret"]
+        # not compared here: the address of the file's data and a call are said in Machine.lean itself (conc.py
+        # runs neither); the other three (a constant of the file added, and the two rows with mask registers)
+        # have no meaning in Machine.lean yet
+        self.assertEqual(left, ["lea_data", "call", "paddd512c", "pcmpud512", "paddd512k"])
         print(f"\nmachine: {len(same)} rows, {sum(same.values())} instances: Machine.lean leaves what conc.py leaves; "
-              f"{len(left)} rows have no meaning in Machine.lean yet: {' '.join(left)}", file=sys.stderr)
+              f"not compared: {' '.join(left)}", file=sys.stderr)
 
     def test_a_return_takes_the_address_at_the_stack_pointer(self):
         rng = random.Random(2)

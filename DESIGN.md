@@ -420,8 +420,8 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 990 lines.
-The verifier's own 2,369 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 1,000 lines.
+The verifier's own 2,386 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,

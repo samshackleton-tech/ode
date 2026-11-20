@@ -282,12 +282,15 @@ def quarters (x y : List Nat) (i : Nat) : List Nat :=
     let q := j / 4
     (if q < 2 then x else y).getD (4 * (i / 4 ^ q % 4) + j % 4) 0
 
+/-- Sixty-four bytes of memory as sixteen words: a wide memory operand, where it may be read. -/
+def memLanes512 (perm : Perm) (bind : Bind) (s : State) (f : String) (args : List Expr) : Option (List Nat) := do
+  let a ← addr512 perm bind s f args
+  if allowed perm.read a 64 then some ((List.range 16).map fun k => load s.mem (a + 4 * k) 4) else none
+
 def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List Nat)
   | .name n => vecArg512 bind s (.name n)
   | .call f args =>
-    if f == "mem512" || f == "mem512a" then do
-      let a ← addr512 perm bind s f args
-      if allowed perm.read a 64 then some ((List.range 16).map fun k => load s.mem (a + 4 * k) 4) else none
+    if f == "mem512" || f == "mem512a" then memLanes512 perm bind s f args
     else match f, args with
       | "spread16", [.call "lane32" [a]] => (value perm bind s a).map fun v => List.replicate 16 (v % W32)
       | "zeros16", [] => some (List.replicate 16 0)
@@ -295,9 +298,19 @@ def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List N
         let x ← vecArg512 bind s a
         match vecArg512 bind s b with
         | some y => (x.zip y).mapM fun (p, q) => prim32 op p q
-        | none => do
-          let n ← value perm bind s b
-          x.mapM fun p => prim32 op p n
+        | none =>
+          -- the second operand is no register: sixty-four bytes of memory (`vpaddd zmm, zmm, [mem]`), or one number
+          match b with
+          | .call g margs =>
+            if g == "mem512" || g == "mem512a" then do
+              let y ← memLanes512 perm bind s g margs
+              (x.zip y).mapM fun (p, q) => prim32 op p q
+            else do
+              let n ← value perm bind s b
+              x.mapM fun p => prim32 op p n
+          | _ => do
+            let n ← value perm bind s b
+            x.mapM fun p => prim32 op p n
       | "in_quarters", [a, b, .number p0, .number p1, .number p2, .number p3] => do
         let x ← vecArg512 bind s a
         let y ← vecArg512 bind s b

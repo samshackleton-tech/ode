@@ -1042,16 +1042,6 @@ def symLaneTerms {α : Type} (s : Sym) (mk : α → Tab → Nat × Tab) (xs : Li
   let made := termsOf mk xs s.tab
   pure (made.1, { s with tab := made.2 })
 
-def symEach512 (bind : Bind) (s : Sym) (op : String) (a b : Expr) : V (List Nat × Sym) :=
-  if op == "ror32" then
-    match symVec512 bind s a, symNumber bind b with
-    | some x, some n => symLaneTerms s (fun p => wRotr p (n.toNat % 32)) x
-    | _, _ => refuse "a rotate needs a known 512-bit register and an immediate"
-  else symPair512 bind s a b fun x y =>
-    if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y)
-    else if op == "xor32" then symLaneTerms s (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y)
-    else refuse "no proof rule for this 512-bit operation"
-
 def symShuffle512 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
   match args with
   | [a, b, .number p0, .number p1, .number p2, .number p3] =>
@@ -1135,6 +1125,46 @@ def symLoadBlock (s : Sym) (v j p l : Nat) (addr : Row) : V (List Nat × Sym) :=
     let vs := (List.range 16).map (s.nvars + ·)
     symLaneTerms { s with nvars := s.nvars + 16, known := .block j p off vs :: s.known } wAtom (vs.map Lin.var)
 
+/-- An unaligned read of the sixty-four bytes of a cell of the frame that a vector was stored to: that
+vector's words. (`symSpillLoad` is the aligned read.) -/
+def symCellLoad (ctx : Ctx) (s : Sym) (a : Row) (l : List Nat) : V (List Nat × Sym) := do
+  each (entail s.facts) (frameSpanGoals ctx s a 64)
+  pure (l, s)
+
+/-- Sixty-four bytes of memory as sixteen words: a block read through an address a table holds, a cell of
+the frame that a vector was stored to, or sixteen words of a run. -/
+def symMem512 (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
+  if f == "mem512" then
+    match (symWordAddr bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
+    | some (a, v, j, p, l) => symLoadBlock s v j p l a
+    | none =>
+      match (symWordAddr bind s args).bind fun a => (s.spill.find? fun (o, _) => frameOffset a == o).map fun c => (a, c) with
+      | some (a, _, l) => symCellLoad ctx s a l
+      | none => symMemWords ctx bind s args 16
+  else if f == "mem512a" then symSpillLoad ctx bind s args
+  else refuse "no proof rule for this 512-bit value"
+
+/-- One operation on each pair of words of two lists of sixteen. -/
+def symEachOp (s : Sym) (op : String) (x y : List Nat) : V (List Nat × Sym) :=
+  if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y)
+  else if op == "xor32" then symLaneTerms s (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y)
+  else refuse "no proof rule for this 512-bit operation"
+
+def symEach512 (ctx : Ctx) (bind : Bind) (s : Sym) (op : String) (a b : Expr) : V (List Nat × Sym) :=
+  if op == "ror32" then
+    match symVec512 bind s a, symNumber bind b with
+    | some x, some n => symLaneTerms s (fun p => wRotr p (n.toNat % 32)) x
+    | _, _ => refuse "a rotate needs a known 512-bit register and an immediate"
+  else
+    match b with
+    | .call f args => do
+      -- the second operand is sixty-four bytes of memory (`vpaddd zmm, zmm, [mem]`): it is read first
+      let (y, s) ← symMem512 ctx bind s f args
+      match symVec512 bind s a with
+      | some x => symEachOp s op x y
+      | none => refuse "a 512-bit register whose lanes are not all known"
+    | _ => symPair512 bind s a b fun x y => symEachOp s op x y
+
 def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
     match symVec512 bind s (.name n) with
@@ -1150,13 +1180,9 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
       | _ => refuse "expected a 32-bit broadcast source"
     else if f == "each32" then
       match args with
-      | [.name op, a, b] => symEach512 bind s op a b
+      | [.name op, a, b] => symEach512 ctx bind s op a b
       | _ => refuse "expected a 32-bit operation and two operands"
-    else if f == "mem512" then
-      match (symWordAddr bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
-      | some (a, v, j, p, l) => symLoadBlock s v j p l a
-      | none => symMemWords ctx bind s args 16
-    else if f == "mem512a" then symSpillLoad ctx bind s args
+    else if f == "mem512" || f == "mem512a" then symMem512 ctx bind s f args
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
