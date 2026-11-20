@@ -141,6 +141,41 @@ class Statement(unittest.TestCase):
                       "(call hi (call counter (field (name record) tag)))) (index (list (num 0)) (num 1))) "
                       "(bin ++ (call words (field (name record) more)) (field (name record) h)))", ensures)
         self.assertFalse([l for l in lines if l.startswith("mbelow ")])
+        # the bound is the least of 2^64 (the number is eight bytes), 256 for a `byte`, and what `below` says
+        layout = lambda field: once("tag: r.tag", "tag: 5, more: r.more")(once("tag: cv at 0, h: cv at 32", field + ", more: 24 bytes at 8, h: cv at 32")(spec_text()))
+        for field, bound in (("tag: number at 0", 2 ** 64), ("tag: number at 0 below 18446744073709551616", 2 ** 64), ("tag: byte at 0", 256),
+                             ("tag: number at 0 below 1", 1)):
+            with self.subTest(field=field):
+                (ensures,) = [l for l in statement.statement(layout(field), FUNCTIONS) if l.startswith("ensuresw r ")]
+                self.assertIn(f"(ifx (bin < (field (name record) tag) (num {bound})) (list ", ensures)
+        # a bound that eight bytes cannot keep, or one of what is no single number, is no layout (../kcheck/ode.py
+        # says so): a greater bound taken would let a number through that eight bytes cannot hold
+        for field, why in (("tag: number at 0 below 36893488147419103232", "the bound is above 2^64"), ("tag: number at 0 below 0", "no number is"),
+                           ("tag: byte at 0 below 16", "has `below`, and is not a single number"),
+                           ("tag: 8 bytes at 0 below 5", "has `below`, and is not a single number")):
+            with self.subTest(field=field):
+                with self.assertRaises(Exception) as e: statement.statement(layout(field), FUNCTIONS)
+                self.assertIn(why, str(e.exception))
+
+
+@unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
+class Meaning(unittest.TestCase):
+    def test_the_ensures_says_the_record_of_the_contract(self):
+        """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the tag
+        as it was, then the chaining value compressed with the two blocks, as ../kcheck/ode.py works out
+        `compress`."""
+        import meaning, ode, random
+        with open(os.path.join(KCHECK, "blake3.spec")) as f: spec = ode.Spec(f.read())
+        line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "r")
+        once_ = ("call", "compress", [("call", "words", [("name", "h")]), ("call", "words", [("name", "m")]), ("call", "counter", [("num", 0)]), ("num", 64), ("num", 0)])
+        use = ("call", "bytes_of", [("call", "compress", [once_, ("call", "words", [("name", "m2")]), ("call", "counter", [("num", 0)]), ("num", 64), ("num", 0)])])
+        rng = random.Random(62)
+        cases, want = [], []
+        for _ in range(6):
+            r, m, m2 = (bytes(rng.randrange(256) for _ in range(n)) for n in (64, 64, 64))
+            cases.append((line, {"r": r, "m": m, "m2": m2}))
+            want.append("bytes " + (r[:32] + bytes(spec.eval(ode.Numbers(), use, {"h": list(r[32:]), "m": list(m), "m2": list(m2)}))).hex())
+        self.assertEqual(meaning.account(spec_text(), FUNCTIONS, cases), want)
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")

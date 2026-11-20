@@ -96,6 +96,27 @@ class Statement(unittest.TestCase):
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
+class Meaning(unittest.TestCase):
+    def test_the_ensures_says_the_second_blocks_compression(self):
+        """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the
+        compression of the message's bytes 64 to 128, as ../kcheck/ode.py works out `compress`."""
+        import meaning, ode, random
+        with open(os.path.join(KCHECK, "blake3.spec")) as f: spec = ode.Spec(f.read())
+        line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "h")
+        use = ("call", "bytes_of", [("call", "compress", [("call", "words", [("name", "h")]), ("call", "words", [("name", "b")]), ("call", "counter", [("num", 0)]), ("num", 64), ("num", 0)])])
+        rng = random.Random(61)
+        cases, want, first = [], [], []
+        for n in (128, 129, 200, 1000):
+            h, message = bytes(rng.randrange(256) for _ in range(32)), bytes(rng.randrange(256) for _ in range(n))
+            cases.append((line, {"h": h, "input": message, "len": n}))
+            want.append("bytes " + bytes(spec.eval(ode.Numbers(), use, {"h": list(h), "b": list(message[64:128])})).hex())
+            first.append("bytes " + bytes(spec.eval(ode.Numbers(), use, {"h": list(h), "b": list(message[:64])})).hex())
+        got = meaning.account(spec_text(), FUNCTIONS, cases)
+        self.assertEqual(got, want)
+        self.assertTrue(all(g != f for g, f in zip(got, first)))          # (a control: the first block's is another)
+
+
+@unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
 class Verify(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

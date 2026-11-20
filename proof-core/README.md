@@ -940,15 +940,19 @@ What is new:
   word of the part was known before the call" this gives that each byte of the part is below 256
   afterwards.
 
-The stored proof is 49 bytes. The tests change the contract in eight ways and the code in twelve, each
-making the statement false, and each is refused. Among them: the contract allows 81 bytes, so that
-`b3l_pad` would be given 65 bytes, more than its own contract allows; the code gives `b3l_pad` one byte
-more to read, a byte past the message; the code gives it `r + 28` to write, so that it would overwrite
-the last word of the chaining value.
+The stored proof is 49 bytes. The tests change the contract in seven ways and the code in twelve, each
+making the statement false, and each is refused. Among them: the contract says the block holds bytes 16
+to 80, which a shorter message does not have; the code gives `b3l_pad` one byte more to read, a byte past
+the message; the code gives it `r + 28` to write, so that it would overwrite the last word of the
+chaining value.
 
-**One true statement is refused, and a test records it as a limit.** With `requires len >= 16` the
+**Two true statements are refused, and a test records them as limits.** With `requires len >= 16` the
 statement is still true: `b3l_pad` is then given zero bytes to read. The verifier refuses it, because
-`src + 16` could then equal 2^64, and its rule for an addition requires the sum to stay below 2^64.
+`src + 16` could then equal 2^64, and its rule for an addition requires the sum to stay below 2^64. With
+`requires len <= 81` the statement is also still true: `b3l_pad` is then given 65 bytes, and as it is
+written it copies the first 64 of them, which is what `padded` gives. The verifier refuses it, because
+`b3l_pad`'s contract allows at most 64 bytes, and a call is verified against the callee's contract alone,
+whatever the callee's instructions would do. The second limit is by design.
 
 Not yet: an offset that is not a known number (a loop invariant about a walk through a message would
 need that).
@@ -1290,6 +1294,6 @@ lines. The proofs of the theorems: 16,842 lines, of which Trace.lean (two runs o
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/` and `examples/tail/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_part.py`, `test_record.py` and `test_tail.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

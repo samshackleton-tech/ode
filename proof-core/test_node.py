@@ -89,6 +89,7 @@ class Statement(unittest.TestCase):
         for old, new, lines in ((" below 65", "", ["mbelow nd 112 256"]),
                                 (" below 65", " below 1", ["mbelow nd 104 1", "mbelow nd 112 256"]),
                                 ("flags: byte at 112", "flags: number at 112", ["mbelow nd 104 65"]),
+                                (" below 65", " below 18446744073709551616", ["mbelow nd 112 256"]),
                                 ("counter: number at 96", "counter: number at 96 below 4", ["mbelow nd 96 4", "mbelow nd 104 65", "mbelow nd 112 256"])):
             with self.subTest(new=new):
                 self.assertEqual([l for l in self.lines(once(old, new)) if l.startswith("mbelow")], lines)
@@ -97,6 +98,7 @@ class Statement(unittest.TestCase):
         for what, change, word in (
                 ("a field that is several things", once("h: cv at 0", "h[1]: cv at 0"), "several things"),
                 ("a field of a kind that is not read", once("block: 64 bytes at 32", "block: block at 32"), "does not read yet"),
+                ("`below` of a field that is no number", once("block: 64 bytes at 32", "block: 64 bytes at 32 below 7"), "has `below`, and is not a single number"),
                 ("a need on a condition that is no argument's being a number", once(IF + TRACE, "if plat != 5" + TRACE), "condition"),
                 ("a need on a condition of what is no register", once(IF + TRACE, "if nd == 5" + TRACE), "condition"),
                 ("a need on a condition of a sum", once(IF + TRACE, "if plat + 1 == 6" + TRACE), "condition"),

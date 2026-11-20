@@ -20,7 +20,7 @@ numbers; that each is a byte is known from the machine.
 
 The function, its contract and the kept proof are shown; with the contract or the function changed in one
 place, so that what is stated is false, nothing is shown, and each case names what the verifier then
-refuses or what it lacks. One true statement is refused, and is kept here as a limit."""
+refuses or what it lacks. Two true statements are refused, and are kept here as limits."""
 import os, re, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -50,7 +50,6 @@ CONTRACTS = [
     ("the block is said to hold the whole message", "padded(src[16 .. len])", "padded(src)", FOLLOW),
     ("the block is said to hold bytes 16 to 80, which a shorter message does not have", "src[16 .. len]", "src[16 .. 80]", FOLLOW),
     ("the block is said to hold all but the last byte", "src[16 .. len]", "src[16 .. len - 1]", FOLLOW),
-    ("81 bytes may be given: b3l_pad would be given 65, more than its contract allows", "len <= 80", "len <= 81", ENTAIL),
     ("the block is said to be as it was", "block: padded(src[16 .. len])", "block: r.block", WORD),
     ("one byte less of stack is said", "stack 64", "stack 63", STACK),
     ("the fields are said to lie in the other order", "h: cv at 0, block: 64 bytes at 32", "block: 64 bytes at 0, h: cv at 64", WORD),
@@ -120,6 +119,26 @@ class Statement(unittest.TestCase):
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
+class Meaning(unittest.TestCase):
+    def test_the_ensures_says_the_record_of_the_contract(self):
+        """The statement's `ensures` line, worked out by the account in Lean on bytes drawn at random: the
+        chaining value as it was, then the message from byte 16 on with zeros after it to 64 bytes."""
+        import meaning, random
+        line = meaning.ensures(spec_text(), FUNCTIONS, NAME, "r")
+        rng = random.Random(63)
+        cases, want = [], []
+        for n in (17, 18, 40, 79, 80):
+            r, src = bytes(rng.randrange(256) for _ in range(96)), bytes(rng.randrange(1, 256) for _ in range(n))
+            cases.append((line, {"r": r, "src": src, "len": n}))
+            want.append("bytes " + (r[:32] + src[16:].ljust(64, b"\0")).hex())
+        self.assertEqual(meaning.account(spec_text(), FUNCTIONS, cases), want)
+        # (of 81 bytes there are 65 from byte 16 on, and `padded` is the first 64 of them: the `ensures` has a
+        # value there too. What a contract that allowed 81 would ask of b3l_pad is another matter: see the limits.)
+        r, src = bytes(96), bytes(range(1, 82))
+        self.assertEqual(meaning.account(spec_text(), FUNCTIONS, [(line, {"r": r, "src": src, "len": 81})]), ["bytes " + (r[:32] + src[16:80]).hex()])
+
+
+@unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")
 class Verify(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -185,12 +204,18 @@ class Verify(unittest.TestCase):
                 self.assertFalse(lean_verify.verify(spec_text(), functions, self.kept())[0], what)
                 self.assertEqual(last_word(functions), why, what)
 
-    def test_a_limit_a_true_statement_refused(self):
+    def test_limits_two_true_statements_refused(self):
         # With 16 bytes the statement is still true: b3l_pad is then given no byte to read. The verifier
         # refuses it: `src + 16` could be 2^64, one past the last address, and its rule for an addition asks
         # that the sum stay below 2^64. (Kept as a test: when the rule takes it, this test says so.)
         self.assertFalse(lean_verify.verify(spec_text(once("len >= 17", "len >= 16")), FUNCTIONS, self.kept())[0])
         self.assertEqual(last_word(FUNCTIONS, once("len >= 17", "len >= 16")), ENTAIL)
+        # With 81 bytes the statement is still true: b3l_pad is then given 65 bytes, and as it is written it
+        # copies the first 64 of them, which is what `padded` of 65 bytes is. The verifier refuses it:
+        # b3l_pad's contract asks for at most 64, and a call is taken by the called function's contract alone,
+        # whatever its instructions would do. (A limit that stays: it is what verifying by contracts means.)
+        self.assertFalse(lean_verify.verify(spec_text(once("len <= 80", "len <= 81")), FUNCTIONS, self.kept())[0])
+        self.assertEqual(last_word(FUNCTIONS, once("len <= 80", "len <= 81")), ENTAIL)
 
 
 if __name__ == "__main__":

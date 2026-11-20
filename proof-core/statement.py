@@ -253,15 +253,23 @@ def layout_kind(arg, kind, lay):
     for field, f in lay["fields"].items():
         m = re.fullmatch(r"(\d+) bytes", f["kind"])
         if f["count"] is not None: raise SystemExit(f"statement: the layout {kind} has a field that is several things ({field}): the verifier in Lean does not read that yet")
+        if f["below"] is not None and f["kind"] not in ("number", "byte"):
+            raise SystemExit(f"statement: the layout {kind} says `below` of a field that is no number ({field})")
         if f["kind"] == "cv": x = ("call", "words", [part(f["at"], 32)])
         elif m: x = part(f["at"], int(m.group(1)))
         elif f["kind"] in ("number", "byte"):
             x = ("call", "number.le", [part(f["at"], 8)])
-            below = 256 if f["kind"] == "byte" else f["below"]
-            if below is not None: lines.append(f"mbelow {arg} {f['at']} {below}")
+            below = number_bound(f)
+            if below < 2 ** 64: lines.append(f"mbelow {arg} {f['at']} {below}")
         else: raise SystemExit(f"statement: the layout {kind} has a field of a kind the verifier in Lean does not read yet: {field}: {f['kind']}")
         fields.append((field, x))
     return lay["size"], (lambda x: ("record", fields)), lines
+
+
+def number_bound(f):
+    """What a field that is a number must be below: 2^64 (it is eight bytes); 256 where it is a `byte`; and
+    what the layout says with `below`. The least of them."""
+    return min([2 ** 64] + ([256] if f["kind"] == "byte" else []) + ([f["below"]] if f["below"] is not None else []))
 
 
 def record_words(kind, lay, e, name):
@@ -269,17 +277,19 @@ def record_words(kind, lay, e, name):
     fields' words, one field after another. The fields must lie one after another and fill the record. A
     field of chaining-value kind is its eight words; one of so many bytes, a multiple of four, is the words
     of those bytes; a `number` or a `byte` is the two words of its eight bytes, the low word first, where
-    the number is below what the layout asks (`below`; 256 for a `byte`; else 2^64). Where it is not below
-    that, the expression has no value: no record of the layout holds such a number, so the `ensures` is false."""
+    the number is below what the layout asks (`number_bound`). Where it is not below that, the expression
+    has no value: no record of the layout holds such a number, so the `ensures` is false."""
     at, parts = 0, []
     for field, f in sorted(lay["fields"].items(), key=lambda item: item[1]["at"]):
         m = re.fullmatch(r"(\d+) bytes", f["kind"])
         if f["count"] is not None or f["at"] != at:
             raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind}, whose fields do not lie one after another, each one thing: not read yet")
+        if f["below"] is not None and f["kind"] not in ("number", "byte"):
+            raise SystemExit(f"statement: the layout {kind} says `below` of a field that is no number ({field})")
         if f["kind"] == "cv": parts.append(("field", e, field)); at += 32
         elif m and int(m.group(1)) % 4 == 0: parts.append(("call", "words", [("field", e, field)])); at += int(m.group(1))
         elif f["kind"] in ("number", "byte"):
-            bound = 256 if f["kind"] == "byte" else (f["below"] if f["below"] is not None else 2 ** 64)
+            bound = number_bound(f)
             x = ("field", e, field)
             words = ("list", [("call", "lo", [("call", "counter", [x])]), ("call", "hi", [("call", "counter", [x])])])
             none = ("index", ("list", [("num", 0)]), ("num", 1))          # (the place 1 of a list of one thing: no value)
