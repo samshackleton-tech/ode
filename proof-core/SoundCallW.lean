@@ -1885,10 +1885,56 @@ theorem symCallB_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata hb
   exact ⟨hrip, ρ', T.then C⟩
 
+/-- Rows the proof has shown join the facts: what the verifier holds is still so, of the same state of
+the machine and the same unknowns. -/
+theorem learn_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {goals : List Row} {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : learn s goals items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
+  simp only [learn] at h
+  obtain ⟨q, _, hc, he⟩ := V.bind_ok h
+  cases q
+  have hs := V.pure_ok he
+  injection hs with heq _; subst s'
+  exact ⟨Agree.refl _ _, Nat.le_refl _,
+    ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
+     fun g m => (List.mem_append.mp m).elim (entails_sound H.facts hc g) (H.facts g),
+     H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩,
+    ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
+     fun g m => (List.mem_append.mp m).elim
+       (fun mg => by
+         have hb := (List.mem_filter.mp mg).2
+         simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+         exact hb.1)
+       (wf.facts g),
+     wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩⟩
+
+/-- A call, by one of the three rules (`symCall'`): see `symCall_sound`. -/
+theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symCall' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    c.pre q (afterCall p q i st) ∧
+    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
+    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
+  unfold symCall' at h
+  split at h
+  · exact (refuse_ok h).elim
+  next hno =>
+    have both : (c.lanes = [] ∧ c.atLeast = []) ∧ c.data = [] := by simpa using hno
+    split at h
+    · exact symCallPlain_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
+    · split at h
+      · exact symCallB_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
+      · exact symCallW_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
+
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
 caller has seen to; what the called function may touch, this function may touch; and of every state the
-contract lets it return in, what the verifier holds after the call is so, at the next instruction. -/
+contract lets it return in, what the verifier holds after the call is so, at the next instruction. (The
+rows the proof was asked for before the rule, `learn`, are shown, and only add to the facts.) -/
 theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -1901,14 +1947,11 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
       (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h
-  split at h
-  · exact (refuse_ok h).elim
-  next hno =>
-    have both : (c.lanes = [] ∧ c.atLeast = []) ∧ c.data = [] := by simpa using hno
-    split at h
-    · exact symCallPlain_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-    · split at h
-      · exact symCallB_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-      · exact symCallW_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
+  obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
+  have C := learn_sound e1 H wf
+  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i hret
+  refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 b2 => ?_⟩
+  obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2 b2
+  exact ⟨hrip, ρ', ⟨Agree.mono C.mono C'.agree, Nat.le_trans C.mono C'.mono, C'.holds, C'.wf⟩⟩
 
 end Ode

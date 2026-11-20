@@ -42,14 +42,16 @@ WORD = "refused: a word of the run is not known to hold what the specification s
 NOT_WORDS = "refused: a called function is given to write what is not whole words of a run this function may read and write, each of them known"
 NO_PART = "refused: a called function is given a run of bytes that is no part of a run of bytes this function was given"
 NO_RUN = "refused: a write to a run given only to read, or to no run given"
-ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, or a number to be below its bound, and it is not so
+ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
+                                  # called function to lie within the run it is a part of, and it is not so
+BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
 STACK = "refused: a call needs more stack than this function's contract allows"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
     ("the block is said to hold the message from byte 15 on", "src[16 .. len]", "src[15 .. len]", FOLLOW),
     ("the block is said to hold the whole message", "padded(src[16 .. len])", "padded(src)", FOLLOW),
-    ("the block is said to hold bytes 16 to 80, which a shorter message does not have", "src[16 .. len]", "src[16 .. 80]", FOLLOW),
-    ("the block is said to hold all but the last byte", "src[16 .. len]", "src[16 .. len - 1]", FOLLOW),
+    ("the block is said to hold bytes 16 to 80, which a shorter message does not have", "src[16 .. len]", "src[16 .. 80]", BELOW),
+    ("the block is said to hold all but the last byte", "src[16 .. len]", "src[16 .. len - 1]", BELOW),
     ("the block is said to be as it was", "block: padded(src[16 .. len])", "block: r.block", WORD),
     ("one byte less of stack is said", "stack 64", "stack 63", STACK),
     ("the fields are said to lie in the other order", "h: cv at 0, block: 64 bytes at 32", "block: 64 bytes at 0, h: cv at 64", WORD),
@@ -61,9 +63,9 @@ SOURCES = [
     ("b3l_pad is given r to write", "  add rdi, 32\n", "  add rdi, 0\n", WORD),
     ("b3l_pad is given r + 34 to write: no whole words", "  add rdi, 32\n", "  add rdi, 34\n", NOT_WORDS),
     ("b3l_pad is given the message from byte 15 on, as long as before", "  add rsi, 16\n", "  add rsi, 15\n", FOLLOW),
-    ("b3l_pad is given one byte more to read: a byte past the message", "  sub rdx, 16\n", "  sub rdx, 15\n", NO_PART),
+    ("b3l_pad is given one byte more to read: a byte past the message", "  sub rdx, 16\n", "  sub rdx, 15\n", ENTAIL),
     ("b3l_pad is given one byte less to read", "  sub rdx, 16\n", "  sub rdx, 17\n", FOLLOW),
-    ("b3l_pad is given the whole length to read: 16 bytes past the message", "  sub rdx, 16\n", "", NO_PART),
+    ("b3l_pad is given the whole length to read: 16 bytes past the message", "  sub rdx, 16\n", "", ENTAIL),
     ("b3l_pad is given the message itself to write", "  add rdi, 32\n", "  mov rdi, rsi\n", NOT_WORDS),
     ("b3l_pad is given the record's own bytes to read", "  add rsi, 16\n", "  mov rsi, rdi\n", NO_PART),
     ("a byte is written where rdi points after the call", "  add rsp, 8\n", "  mov byte ptr [rdi + 0], 1\n  add rsp, 8\n", NO_RUN),

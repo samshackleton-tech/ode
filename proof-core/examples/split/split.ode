@@ -1,0 +1,23 @@
+// The last block of the left part of a message of two to four chunks. BLAKE3 splits a message of more
+// than one chunk in two: the left part is the greatest power-of-two count of chunks that leaves bytes
+// for the right. The function finds that count as the hash's own functions do, from the count of whole
+// chunks before the last byte, (len - 1) / 1024: with one such chunk the left part is one chunk, with two
+// or three it is two. It gives the one-block kernel the address of the left part's last 64 bytes.
+// split_block(h, input, len): arguments in rdi, rsi, rdx, as C passes them.
+fn split_block as "ode_split_block" {
+  sub rsp, 8
+  mov rax, rdx
+  sub rax, 1
+  shr rax, 10
+  add rsi, 960
+  cmp rax, 2
+  jb @one
+  add rsi, 1024
+@one:
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 8
+  ret
+}

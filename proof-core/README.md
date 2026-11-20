@@ -389,7 +389,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,021 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,510 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,647 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -428,12 +428,12 @@ Outside the theorem. Every reader relies on each of these today, for what its en
 - **Parsing the specification.** `statement.py` uses `../kcheck/ode.py` to parse the specification text,
   and writes the contracts and definitions in the line format that the Lean program reads. A sequence
   given by a first element and a step is written out as the recursive definition it stands for.
-  What is tested here: for each of the eight functions of the hash that are verified, and for five of
+  What is tested here: for each of the eight functions of the hash that are verified, and for six of
   the examples, the formal model in Lean evaluates the `ensures` line that `statement.py` wrote, on
   random inputs, and the result is compared with `../kcheck/ode.py`'s evaluation of the contract's
   expression, with each argument read by its kind by hand (`test_meaning.py`, `test_node.py`,
-  `test_chunk.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`). That
-  is a test on some inputs. It
+  `test_chunk.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`,
+  `test_split.py`). That is a test on some inputs. It
   is no proof that `statement.py` is right.
 - **Reader.lean and the compiled program.** Reader.lean parses the input and proof files. The theorem is
   about the Lean function `verdictAll`. For the compiled executable computing that function, a verdict
@@ -529,8 +529,9 @@ operations, counters, list comprehensions, slices, list update, records, "the le
 `../kcheck/blake3.spec` uses. This matters for facts about numbers: loop invariants, `returns`, and
 `ensures` of bytes. There the verifier rejects a function whose verification would need to unfold one of
 these forms. The message is "not here yet". For an `ensures` of a buffer of words, the verifier evaluates
-these forms on terms, as described above. Its limits there: each comparison inside a "such that" form
-must be decided by one known inequality, and the ends of a slice must be numbers the verifier holds.
+these forms on terms, as described above. Its limits there: the ends of a slice must be numbers the
+verifier holds, and a comparison must be one that the known inequalities decide: at once where one of
+them says it, and otherwise by arithmetic that the proof gives when the verifier asks it.
 For four kinds of 128-bit vector instruction the verifier has rules only for the uses
 that the SSE4.1 kernel makes of them: byte shuffles, shifts, OR, and blends of 16-bit halves. The machine
 model defines them in general.
@@ -585,8 +586,8 @@ These are cases where the verifier rejects a correct function:
   buffer that it reads and writes can be a part of a buffer that the caller may read and write, in whole
   32-bit words; so can a buffer that it only writes. For a buffer of words the offset must be a known
   number. For a read-only buffer whose length is an argument the offset may be a linear expression that
-  one known inequality bounds. A callee that writes more than one buffer, or that also returns a
-  number, is not called yet.
+  the known inequalities bound (the proof is asked for the arithmetic where no one of them does). A
+  callee that writes more than one buffer, or that also returns a number, is not called yet.
 - The return value of a called function is known only as "the value of this call of this definition". It
   can be used where the caller's contract mentions the same definition with provably equal arguments.
 - No rule yet for: AND with a constant that is not a mask, OR, shift by a register, a 4-byte load.
@@ -940,7 +941,8 @@ What is new:
 - **A read-only buffer whose length is an argument, passed as a part.** The callee's buffer starts at an
   offset in the caller's buffer and has its own length. Offset and length are linear expressions. The
   verifier accepts the call where one known inequality shows that the offset is not negative, and one that
-  the part ends inside the caller's buffer.
+  the part ends inside the caller's buffer. (Since `examples/split/`, below: where no one inequality shows
+  it, the proof is asked for the arithmetic.)
 - **In the specification:** `src[16 .. len]` (a slice whose end is an argument) and `len(...)` of such a
   buffer or slice.
 - **One new fact about the formal model: memory changes only by stores of bytes** (`runs_bytes` in
@@ -1055,8 +1057,8 @@ message of more than one chunk in two, and `../kcheck/blake3.spec` says where:
 The verifier's evaluation of the specification on words now follows this form (`weval` in Core.lean,
 with its case in `weval_sound`). As the formal model defines it, the sixty-four powers of two are gone
 through from the greatest down, and the value is the first for which the condition is true, the
-condition being false for every power before it. The verifier decides each of those comparisons only
-where one known inequality says it. The example is small enough for that: `ode_left_block(h, input,
+condition being false for every power before it. In this example one known inequality decides each of
+those comparisons: `ode_left_block(h, input,
 len)` requires `2049 <= len <= 4096`, so the left part is two chunks, and the function compresses the 64
 bytes that end at byte 2048. Its contract says where the block lies by the definition:
 
@@ -1067,9 +1069,50 @@ the code in six, each making the statement false, and each is refused. Among the
 2048 bytes, or 4097; the definition says "the least power of two", or `1024 * k <= len(bytes)`. Two
 changed contracts that are still true are accepted.
 
-Not yet: a comparison that follows from several known inequalities together. The hash's `b3l_take` and
-`b3l_subtree` find the count by doubling in a loop, and there the comparison follows from three facts
-about a quotient. A `returns` or a loop invariant that uses this form is still rejected ("not here yet").
+A `returns` or a loop invariant that uses this form is still rejected ("not here yet").
+
+**A comparison that follows from several known inequalities: `examples/split/`** (`test_split.py`).
+`ode_split_block(h, input, len)` takes a message of 1025 to 4096 bytes, two to four chunks. It finds the
+size of the left part the way the hash's own functions do, from a quotient: it divides `len - 1` by 1024
+and compares the quotient with 2. Below 2 the left part is one chunk, otherwise two. It then compresses
+the last 64 bytes of the left part. The contract is the one of `examples/left/`, with `requires len >=
+1025` in place of 2049.
+
+To evaluate `left_chunks` the verifier must decide whether 2048 is below the length. No single known
+inequality says so. It follows from three: the two that the division leaves (`len - 1 = 1024 * q + r`
+with `0 <= r <= 1023`) and the one from the comparison of `q` with 2. Before this step the verifier
+rejected the function for that reason. Two rules changed.
+
+- **An `ensures` of a buffer of words** (`symEnsureAsked` in Core.lean). The verifier first evaluates the
+  specification as before. If that fails, it looks for the comparison that stopped the evaluation
+  (`wask`), and asks the proof which way the comparison is. The proof answers "below" or "not below"
+  and gives the arithmetic that shows it (the existing rule `isBelow`). The inequality that was shown is
+  added to the known ones, and the verifier evaluates again. It repeats this, at most 200 times, until
+  the evaluation succeeds or nothing new is learned.
+- **A call** (`learn` and `callNeeds` in Core.lean). Before the call's rule runs, the verifier works out
+  the inequalities that say the callee's read-only buffers lie inside the caller's. Those that no single
+  known inequality shows, it asks the proof to show by arithmetic, and adds them.
+
+Which comparison to ask about is a choice that the verdict does not rely on. `wask` and `callNeeds`
+only propose; the verifier adds an inequality only after the proof has shown it, and the soundness
+theorem covers both rules whatever is proposed (`settleAsked_sound` and `symEnsureAsked_sound` in
+SoundTop.lean, `learn_sound` in SoundCallW.lean). A function whose `ensures` is evaluated at once costs
+what it cost before: the stored proofs of the eight functions of the hash are unchanged, byte for byte.
+
+The stored proof is 305 bytes. It answers three questions: which way 2048 and the length compare on
+each of the two paths through the function, and, at the call on the second path, that bytes 1984 to
+2048 lie inside the message. The tests change the contract in six ways, the definition in three and
+the code in ten, each making the statement false, and each is refused; so is the stored proof with
+either of its two answers reversed. Four changed contracts that are still true are accepted, two of
+them with a path that no message takes.
+
+The cost: Core.lean grew by 137 lines, most of them `wask`, which mirrors the evaluation's cases to find
+the comparison to ask about. An alternative that keeps the verifier smaller is to let the prover name
+the inequalities in the proof file; it needs more work on the prover and is not built.
+
+One effect on messages: where a statement is false because a part does not lie inside its buffer, or
+because the specification turns on a comparison that can go either way, the prover's last word is now
+`need entail` or `need below` (what it could not show), where the verifier used to refuse by itself.
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -1339,8 +1382,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,021 lines (Table.lean 152, Machine.lean 495, Contract.lean 374). The
-verifier: 2,669 lines (Core.lean 2,510, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 16,849 lines, of which Trace.lean (two runs of the machine with marks; memory changes only by stores of bytes) is 1,032 and Plain.lean (the machine without marks, and two runs of it) is 632.
+verifier: 2,806 lines (Core.lean 2,647, Arithmetic.lean 159 including its proofs). The file parser: 178
+lines. The proofs of the theorems: 16,962 lines, of which Trace.lean (two runs of the machine with marks; memory changes only by stores of bytes) is 1,032 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 
@@ -1350,8 +1393,8 @@ lines. The proofs of the theorems: 16,849 lines, of which Trace.lean (two runs o
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/` and `examples/left/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/` and `examples/split/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py` and `test_left.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py` and `test_split.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

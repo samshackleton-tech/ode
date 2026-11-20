@@ -2404,13 +2404,157 @@ def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
     else refuse "an `ensures` of a whole run that is not the bytes of words: not here yet"
   | _ => refuse "an `ensures` of a whole run that is not the bytes of words: not here yet"
 
+/-! ### A comparison the facts do not say at once is asked of the proof
+
+`weval` follows a comparison of two numbers only where one fact says it. Where an `ensures` of a run of
+words is refused as the state is, the comparisons that stop it are found (`wask`), each is asked of the
+proof (`isBelow`: the proof says which way it is, with the arithmetic), what is shown joins the facts, and
+the `ensures` is gone through again: `weval` finds the comparisons there. `wask` is advice: whatever it
+gives, only what the proof shows is added. -/
+
+mutual
+  /-- Where `weval` does not follow the expression because two numbers are compared (or one taken from
+  the other, or a part of a run of bytes is to end within it) and the facts do not say at once how they
+  compare: those two numbers, the first such in `weval`'s order. (Advice.) -/
+  def wask (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option (Row × Row)
+    | 0, _, _ => none
+    | fuel + 1, env, e =>
+      if (weval ctx look s (fuel + 1) env e).isSome then none
+      else
+        match e with
+        | .bin op a b =>
+          match weval ctx look s fuel env a, weval ctx look s fuel env b with
+          | some x, some y =>
+            let pair := fun (p q : Row) =>
+              -- (only where `wnum` turns on how the two compare)
+              if !(op == "-" || op == "==" || op == "<" || op == ">=") then none
+              -- `==`, where the first is known to be no less than the second: is the second below the first?
+              else if op == "==" && plain s.facts (Lin.sub p q) then some (q, p) else some (p, q)
+            (match x, y with
+             | .num p, .num q => pair p q
+             | .num p, .int m => pair p (Lin.const m)
+             | .int m, .num q => pair (Lin.const m) q
+             | _, _ => none)
+          | none, _ => wask ctx look s fuel env a
+          | some _, none => wask ctx look s fuel env b
+        | .ifx c a b =>
+          match weval ctx look s fuel env c with
+          | some (.bool true) => wask ctx look s fuel env a
+          | some (.bool false) => wask ctx look s fuel env b
+          | some _ => none
+          | none => wask ctx look s fuel env c
+        | .index a i => (wask ctx look s fuel env a).orElse fun _ => wask ctx look s fuel env i
+        | .call f args =>
+          match wevalList (weval ctx look s fuel env) args with
+          | none => waskList ctx look s fuel env args
+          | some vs =>
+            if f == "len" || own.contains f then none
+            else
+              match findDef ctx.defs f with
+              | some d => if d.params.length == vs.length then wask ctx look s fuel (d.params.zip vs) d.body else none
+              | none => none
+        | .list items => waskList ctx look s fuel env items
+        | .letx x e1 rest =>
+          match weval ctx look s fuel env e1 with
+          | some v => wask ctx look s fuel ((x, v) :: env) rest
+          | none => wask ctx look s fuel env e1
+        | .each e1 x a b =>
+          match weval ctx look s fuel env a, weval ctx look s fuel env b with
+          | some (.int lo), some (.int hi) =>
+            waskAmong ctx look s fuel env x e1 ((List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int))
+          | none, _ => wask ctx look s fuel env a
+          | _, _ => wask ctx look s fuel env b
+        | .withx a puts => (wask ctx look s fuel env a).orElse fun _ => waskList ctx look s fuel env puts
+        | .slice a lo hi =>
+          match weval ctx look s fuel env a, weval ctx look s fuel env lo, weval ctx look s fuel env hi with
+          | some (.region _ l), some (.int i), some (.int j) =>
+            if 0 ≤ i ∧ i ≤ j then some (Lin.var l, Lin.const j) else none        -- is the run shorter than the part's end?
+          | some (.region _ l), some (.int i), some (.num j) =>
+            if 0 ≤ i then (if plain s.facts (Lin.sub j (Lin.const i)) then some (Lin.var l, j) else some (j, Lin.const i)) else none
+          | none, _, _ => wask ctx look s fuel env a
+          | some _, none, _ => wask ctx look s fuel env lo
+          | some _, some _, none => wask ctx look s fuel env hi
+          | _, _, _ => none
+        | .record _ items => waskList ctx look s fuel env items
+        | .field e1 _ => wask ctx look s fuel env e1
+        | .theNumber greatest x a b cond =>
+          match weval ctx look s fuel env a, weval ctx look s fuel env b with
+          | some (.int lo), some (.int hi) =>
+            let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
+            waskAmong ctx look s fuel env x cond (if greatest then among.reverse else among)
+          | none, _ => wask ctx look s fuel env a
+          | _, _ => wask ctx look s fuel env b
+        | .thePower greatest x cond =>
+          let among := (List.range 64).map fun (k : Nat) => (2 : Int) ^ k
+          waskAmong ctx look s fuel env x cond (if greatest then among.reverse else among)
+        | _ => none
+  /-- The first of the things of a list that `weval` does not follow: what is asked there. -/
+  def waskList (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option (Row × Row)
+    | fuel, env, .cons a rest =>
+      if (weval ctx look s fuel env a).isSome then waskList ctx look s fuel env rest else wask ctx look s fuel env a
+    | _, _, _ => none
+  /-- The first of the numbers, the name `x` being it, of which `weval` does not follow the expression:
+  what is asked there. (A condition that is followed and true ends the search, as it ends `wfirstWith`.) -/
+  def waskAmong (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → String → SExpr → List Int → Option (Row × Row)
+    | _, _, _, _, [] => none
+    | fuel, env, x, e, n :: rest =>
+      match weval ctx look s fuel ((x, .int n) :: env) e with
+      | none => wask ctx look s fuel ((x, .int n) :: env) e
+      | some (.bool true) => none
+      | some _ => waskAmong ctx look s fuel env x e rest
+end
+
+/-- The comparisons `ask` finds are asked of the proof, one after another, at most `fuel` of them: whether
+the first number is below the second (`isBelow`); what the proof shows joins the facts. It stops where
+nothing is asked, where a number speaks of an unknown not in use, or where what is shown was already
+seen at once (so that nothing is asked twice). -/
+def settleAsked (ask : Sym → Option (Row × Row)) : Nat → Sym → V Sym
+  | 0, s => pure s
+  | fuel + 1, s =>
+    match ask s with
+    | none => pure s
+    | some (a, b) =>
+      if !(decide (a.coeff.length ≤ s.nvars) && decide (b.coeff.length ≤ s.nvars)) then pure s
+      else do
+        let lt ← isBelow s.facts a b
+        let row := if lt then Lin.sub (Lin.sub b a) (Lin.const 1) else Lin.sub a b
+        if plain s.facts row then pure s
+        else settleAsked ask fuel { s with facts := row :: s.facts }
+
+/-- How many comparisons are asked for one `ensures`, at most. -/
+def ASKS : Nat := 200
+
+/-- What `weval` would be stopped by, working out the `ensures` of a run of words. (Advice.) -/
+def ensureAsk (ctx : Ctx) (e : EnsureW) (s : Sym) : Option (Row × Row) :=
+  match e.value with
+  | .call _ (.cons x .nil) => wask ctx s.tab.find s WFUEL (wenv ctx.contract) x
+  | _ => none
+
+/-- An `ensures` of a run of words: as the state is (`symEnsureW`, which takes nothing from the proof);
+where that is refused, the comparisons that stop the specification's words are asked of the proof, what
+it shows joins the facts, and the `ensures` is gone through again. -/
+def symEnsureAsked (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit := fun items =>
+  match symEnsureW ctx s e items with
+  | .ok r => .ok r
+  | .error _ =>
+    (do
+      let s ← settleAsked (ensureAsk ctx e) ASKS s
+      symEnsureW ctx s e) items
+
+/-- Rows shown to follow from the facts, where the facts do not say them at once: they join the facts.
+(A row that speaks of an unknown not in use is passed over.) -/
+def learn (s : Sym) (goals : List Row) : V Sym := do
+  let missing := goals.filter fun g => decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
+  each (entail s.facts) missing
+  pure { s with facts := missing ++ s.facts }
+
 /-- At the return: the stack pointer is where it was, the registers a callee keeps hold what they held at
 entry, the runs given to write hold what each `ensures` says, and rax holds what the contract says. -/
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
   else do
-    each (symEnsureW ctx s) ctx.contract.ensuresW
+    each (symEnsureAsked ctx s) ctx.contract.ensuresW
     let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
     match ctx.contract.returns with
     | none => pure ()
@@ -2984,14 +3128,47 @@ def symCallB' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 first taken as written with the words it held at entry, where nothing was written to it yet. -/
 def symCallB (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallB' ctx (callTouch ctx s c) c
 
+/-- The rows a call's rules look for among the facts: that each part of a run of bytes with a length
+that the called function is given ends within the run, and does not begin before it. (Advice: `learn`
+adds only what is shown.) -/
+def callNeeds (ctx : Ctx) (s : Sym) (c : Contract) : List (String × Kind) → List Nat → List Row
+  | (_, .fixed n) :: args, r :: regs =>
+    (match findOut (s.reg r) ctx.contract.fixeds 0 with
+     | some _ => []
+     | none =>
+       match findRegion (s.reg r) ctx.contract.regions 0 with
+       | some (.region k off) =>
+         match Lin.isConst off, ctx.contract.regions[k]? with
+         | some c0, some (_, l) => [Lin.sub (Lin.var l) (Lin.const (c0 + n))]
+         | _, _ => []
+       | _ => []) ++ callNeeds ctx s c args regs
+  | (_, .bytes len) :: args, r :: regs =>
+    (match c.regOf len with
+     | some l =>
+       match findRegion (s.reg r) ctx.contract.regions 0 with
+       | some (.region k off) =>
+         match ctx.contract.regions[k]? with
+         | some (_, lb) => [off, Lin.sub (Lin.var lb) (Lin.add off (s.reg l))]
+         | none => []
+       | _ => []
+     | none => []) ++ callNeeds ctx s c args regs
+  | _ :: args, _ :: regs => callNeeds ctx s c args regs
+  | _, _ => []
+
 /-- A call: by the rule for a function that writes nothing for its caller, by the rule for one that
 writes a run of words it also reads, or by the rule for one that writes a run of bytes. -/
-def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   if !(c.lanes.isEmpty && c.atLeast.isEmpty && c.data.isEmpty) then
     refuse "a called function that is given a table of addresses, asks that a number be no less than another, or takes the address of the file's data: not here yet"
   else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else if c.inouts.isEmpty && c.ensuresW.isEmpty then symCallB ctx s c
   else symCallW ctx s c
+
+/-- A call: first the bounds of the parts of runs handed over are asked of the proof where the facts do
+not say them at once; then `symCall'`. -/
+def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := do
+  let s ← learn s (callNeeds ctx s c c.args argRegs)
+  symCall' ctx s c
 
 /-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The
 machine of the account has every row of the table, so no theorem asks this. A reader of this function's

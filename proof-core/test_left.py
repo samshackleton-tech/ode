@@ -11,9 +11,9 @@ lies by ../kcheck/blake3.spec's own `left_chunks`:
 What the verifier in Lean takes here that it refused before: `the greatest power of two x with cond` (or
 the least), on the terms the function made. As the account has it, the sixty-four powers of two are gone
 through from the greatest down; the value is the first of which the condition is true, the condition
-being false of every one before. Each of those comparisons must be seen at once from one known fact: here
-`len <= 4096` says it of the powers from 4 up, and `len >= 2049` of the power 2. (The hash's `b3l_take` and
-`b3l_subtree` will need more: there the comparison follows from three facts about a quotient.)
+being false of every one before. Each of those comparisons is seen at once here from one known fact:
+`len <= 4096` says it of the powers from 4 up, and `len >= 2049` of the power 2. (Where no one fact says
+it, the proof is asked which way the comparison is: test_split.py.)
 
 The function, its contract and the kept proof are shown; with the contract, the definition or the function
 changed in one place, so that what is stated is false, nothing is shown, and each case names what the
@@ -35,18 +35,20 @@ CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs ss
 # Why the verifier refuses, or what the prover cannot give it.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 ARGS = "refused: what a called function's contract says of its arguments is not followed"
-ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, or a number to be below its bound, and it is not so
+ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
+                                  # called function to lie within the run it is a part of, and it is not so
+BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
 DEFINITION = "def left_chunks(bytes) { the greatest power of two k with 1024 * k < len(bytes) }"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
-    ("the message may have 2048 bytes: its left part is then one chunk", "len >= 2049", "len >= 2048", FOLLOW),
-    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", FOLLOW),
+    ("the message may have 2048 bytes: its left part is then one chunk", "len >= 2049", "len >= 2048", BELOW),
+    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", BELOW),
     ("nothing is asked of the message's length from below", "    requires len >= 2049\n", "", ENTAIL),
-    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", FOLLOW),
+    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", BELOW),
     ("the block before the last is said", "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]",
      "input[1024 * left_chunks(input) - 128 .. 1024 * left_chunks(input) - 64]", FOLLOW),
     ("the right part's first block is said", "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]",
-     "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", FOLLOW),
+     "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", BELOW),
     ("the counter 1 is said", "counter(0), 64, 0)\n    stack 64", "counter(1), 64, 0)\n    stack 64", FOLLOW),
     ("the definition: the least power of two", DEFINITION, "def left_chunks(bytes) { the least power of two k with 1024 * k < len(bytes) }", FOLLOW),
     ("the definition: a left part may be the whole message", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 1024 * k <= len(bytes) }", FOLLOW),

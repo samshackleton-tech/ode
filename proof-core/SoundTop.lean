@@ -268,6 +268,90 @@ theorem calleeSaved_spec {r : Nat} (h : r ∈ calleeSaved) : r < 16 ∧ r ≠ RS
   unfold RSP
   omega
 
+/-- The comparisons asked of the proof (`settleAsked`): what it has shown joins the facts, and what the
+verifier holds is still so, of the same state of the machine and the same unknowns; the registers are as
+they were. (Whatever `ask` gives: only what `isBelow` shows is added.) -/
+theorem settleAsked_sound {ctx : Ctx} {s0 : State} {ask : Sym → Option (Row × Row)} {ρ : Nat → Int} {st : State} :
+    ∀ (fuel : Nat) {s s' : Sym} {items rest : Items}, settleAsked ask fuel s items = .ok (s', rest) →
+      Holds ctx s0 ρ s st → WF s → Carried ctx s0 ρ s ρ s' st ∧ s'.reg = s.reg
+  | 0, s, s', items, rest, h, H, wf => by
+    simp only [settleAsked] at h
+    have hs := V.pure_ok h
+    injection hs with heq _; subst s'
+    exact ⟨Carried.here H wf, rfl⟩
+  | fuel + 1, s, s', items, rest, h, H, wf => by
+    simp only [settleAsked] at h
+    cases ha : ask s with
+    | none =>
+      simp only [ha] at h
+      have hs := V.pure_ok h
+      injection hs with heq _; subst s'
+      exact ⟨Carried.here H wf, rfl⟩
+    | some ab =>
+      obtain ⟨a, b⟩ := ab
+      simp only [ha] at h
+      split at h
+      · have hs := V.pure_ok h
+        injection hs with heq _; subst s'
+        exact ⟨Carried.here H wf, rfl⟩
+      next hb =>
+        have hb : a.coeff.length ≤ s.nvars ∧ b.coeff.length ≤ s.nvars := by simpa using hb
+        obtain ⟨lt, r1, e1, h⟩ := V.bind_ok h
+        have hlt := isBelow_sound e1 ρ H.facts
+        have hrow : (if lt = true then Lin.sub (Lin.sub b a) (Lin.const 1) else Lin.sub a b).holds ρ := by
+          cases lt with
+          | true =>
+            have : ev ρ a < ev ρ b := by simpa using hlt.symm
+            show 0 ≤ ev ρ (Lin.sub (Lin.sub b a) (Lin.const 1))
+            simp only [ev_sub, ev_const]; omega
+          | false =>
+            have : ¬ ev ρ a < ev ρ b := by simpa using hlt.symm
+            show 0 ≤ ev ρ (Lin.sub a b)
+            simp only [ev_sub]; omega
+        have hbd : bounded s.nvars (if lt = true then Lin.sub (Lin.sub b a) (Lin.const 1) else Lin.sub a b) := by
+          cases lt with
+          | true => exact bounded_sub (bounded_sub hb.2 hb.1) (bounded_const _ _)
+          | false => exact bounded_sub hb.1 hb.2
+        -- whatever the row is: it holds and speaks of unknowns in use
+        have key : ∀ row : Row, row.holds ρ → bounded s.nvars row →
+            (if plain s.facts row = true then pure s else settleAsked ask fuel { s with facts := row :: s.facts }) r1 = .ok (s', rest) →
+            Carried ctx s0 ρ s ρ s' st ∧ s'.reg = s.reg := by
+          intro row hrow hbd h
+          split at h
+          · have hs := V.pure_ok h
+            injection hs with heq _; subst s'
+            exact ⟨Carried.here H wf, rfl⟩
+          · obtain ⟨C, hr⟩ := settleAsked_sound fuel h
+              (⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
+                fun g m => by
+                  rcases List.mem_cons.mp m with rfl | m
+                  · exact hrow
+                  · exact H.facts g m,
+                H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩ :
+                Holds ctx s0 ρ { s with facts := row :: s.facts } st)
+              ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
+                fun g m => by
+                  rcases List.mem_cons.mp m with rfl | m
+                  · exact hbd
+                  · exact wf.facts g m,
+                wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
+            exact ⟨⟨C.agree, C.mono, C.holds, C.wf⟩, hr⟩
+        exact key _ hrow hbd h
+
+/-- An `ensures` of a whole run of words that the verifier has passed, at once or after the comparisons
+asked of the proof (`symEnsureAsked`), holds. -/
+theorem symEnsureAsked_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {e : EnsureW}
+    {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st st' : State}
+    (h : symEnsureAsked ctx s e items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hmem : st'.mem = st.mem) :
+    e.holds ctx.contract ctx.defs s0 st' := by
+  unfold symEnsureAsked at h
+  split at h
+  next r' h1 => exact symEnsureW_sound E h1 H wf hmem
+  next =>
+    obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨C, _⟩ := settleAsked_sound ASKS e1 H wf
+    exact symEnsureW_sound E h C.holds C.wf hmem
+
 /-- At a return the verifier has passed: the machine's return is allowed, and leaves what the contract
 promises. -/
 theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
@@ -288,7 +372,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           e.holds ctx.contract ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
         intro e me
         obtain ⟨items', r', hr⟩ := each_mem enW e me
-        exact symEnsureW_sound E hr H wf rfl
+        exact symEnsureAsked_sound E hr H wf rfl
       -- every `ensures` first: of the state the return leaves, whose memory and rax are this state's
       obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
       have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
