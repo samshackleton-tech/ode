@@ -81,6 +81,8 @@ The functions it verifies today:
 | `ode_tail` | pads the bytes of a message from byte 16 on into the 64-byte block of a record, by calling the hash's `b3l_pad` | 7 instructions | 5 lines, 49 bytes | 4 ms with `b3l_pad` |
 | `ode_keyed` | copies a 32-byte key out of a 40-byte record, reads the flags that lie beside the key, and compresses one block from them, by calling the SSE4.1 kernel | 11 instructions | 1 line, 14 bytes | 6 ms with the kernel |
 | `ode_left_block` | compresses the last block of the left part of a message of 2049 to 4096 bytes, by calling the SSE4.1 kernel; the contract says where the block lies by the specification's `left_chunks` | 8 instructions | 5 lines, 55 bytes | 6 ms with the kernel |
+| `ode_split_block` | the same for a message of 1025 to 4096 bytes: it finds the size of the left part from a quotient, `(len - 1) / 1024`, which it compares with 2 | 14 instructions | 30 lines, 305 bytes | 8 ms with the kernel |
+| `ode_left_last` | the same for a message of 1025 bytes to 2^63: it finds the size of the left part with the loop of the hash's `b3l_take`, in which `k` takes the value of its double while the double is below the number of chunks | 21 instructions, 1 loop of at most 52 iterations | 2,406 lines, 24.5 kB | 0.10 s with the kernel |
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
@@ -91,7 +93,7 @@ The functions it verifies today:
 | `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the bytes are secret | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
-them), `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed` and `ode_left_block` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
+them), `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block` and `ode_left_last` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
