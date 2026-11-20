@@ -521,7 +521,7 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
                     exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, h6, h7, h8, h9, semv, ht, hd]⟩
                   next => exact (refuse_ok h).elim
 
-theorem runBytes_get (s0 : State) (base len k : Nat) (h : k < s0.reg len) : (runBytes s0 base len)[k]? = some (s0.mem (s0.reg base + k)) := by
+theorem runBytes_get (s0 : State) (base len k : Nat) (h : k < s0.reg len) : (runBytes s0 base len)[k]? = some (s0.mem (s0.reg base + k)).val := by
   simp [runBytes, h]
 
 theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s' : Sym} {res : SRes} {items rest : Items}

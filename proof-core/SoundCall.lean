@@ -179,8 +179,8 @@ theorem semEnv_calleeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {
             have := hreg l1 hl1
             rw [e2, ev_var, hentry l0 lt.2] at this
             omega
-          have hbytes : (List.range (s0.reg l0)).map (fun k => s1.mem (s0.reg b0 + k)) = (List.range (s0.reg l0)).map (fun k => s0.mem (s0.reg b0 + k)) :=
-            List.map_congr_left fun k hk => hmem b0 l0 hm k (List.mem_range.mp hk)
+          have hbytes : (List.range (s0.reg l0)).map (fun k => (s1.mem (s0.reg b0 + k)).val) = (List.range (s0.reg l0)).map (fun k => (s0.mem (s0.reg b0 + k)).val) :=
+            List.map_congr_left fun k hk => congrArg Fin.val (hmem b0 l0 hm k (List.mem_range.mp hk))
           simp only [semEnv, List.map_cons, envIn, hl, semv, hreg0', runBytes] at ih ⊢
           rw [ih, rx, rl, hbytes]
 
@@ -311,7 +311,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallPlain, hsp] at h; exact (refuse_ok h).elim
@@ -378,7 +378,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             omega
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
-            (fun x r n m => by rw [hfx] at m; cases m), (fun x r n m => by rw [hio] at m; cases m),
+            (fun x r n m => by rw [hfx] at m; cases m),
             (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf),
             (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
           · intro r
@@ -391,12 +391,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             obtain ⟨b0, l0, hm, er, el⟩ := hregion r l m
             obtain ⟨fit, apart⟩ := E.region hm
             rw [er, el, s1rsp]
-            refine ⟨fit, by omega, ?_⟩
-            intro k hk
-            have hx : (afterCall p q i st).mem (s0.reg b0 + k) = st.mem (s0.reg b0 + k) := s1mem _ (by omega)
-            rw [hx, H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)
-              (E.region_notOut hm (Nat.le_add_right _ _) (by omega))]
-            exact E.byte hm k (by omega)
+            exact ⟨fit, by omega⟩
         have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
           intro a ha
           simp only [Contract.perm, hnf, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢

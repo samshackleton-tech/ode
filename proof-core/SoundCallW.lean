@@ -85,7 +85,7 @@ theorem fixedPart_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     st.reg r = s0.reg b + c ∧ (∃ x n0, ctx.contract.wordRuns[j]? = some (x, b, n0)) ∧
     s0.reg b + c + n ≤ M64 ∧
     (s0.reg b + c + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg b + c) ∧
-    (∀ k, k < n → s0.mem (s0.reg b + c + k) < 256) ∧
+    (∀ k, k < n → (s0.mem (s0.reg b + c + k)).val < 256) ∧
     (∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg b + c + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg b + c) ∧
     ((∃ x0 n0, (x0, b, n0) ∈ ctx.contract.fixeds ∧ c + n ≤ n0) ∨ (∃ l, (b, l) ∈ ctx.contract.regions ∧ c + n ≤ s0.reg l)) := by
   unfold fixedPart at h
@@ -188,7 +188,7 @@ theorem ofWords_spec : ∀ {ws bs : List Val}, ofWords ws = some bs →
     | _ => simp [ofWords] at h
 
 /-- Bytes of memory that are the bytes of words, word by word: the list of them is `wordBytes` of the words. -/
-theorem wordBytes_range (mem : Nat → Nat) : ∀ (ds : List Nat) (base : Nat),
+theorem wordBytes_range (mem : Nat → Byte) : ∀ (ds : List Nat) (base : Nat),
     (∀ q, q < ds.length → ∀ b, b < 4 → mem (base + 4 * q + b) = ds.getD q 0 / 256 ^ b % 256) →
     (List.range (4 * ds.length)).map (fun k => Val.int (mem (base + k))) = wordBytes ds
   | [], base, _ => rfl
@@ -281,7 +281,7 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
     (c : Contract) {s1 : State} {ids : List Nat}
     (hreg : ∀ r ∈ argRegs, s1.reg r = st.reg r)
     (hfix : ∀ r n j b cst, r ∈ argRegs → fixedPart ctx s r n = some (j, b, cst) →
-      ∀ k, k < n → s1.mem (st.reg r + k) = s0.mem (s0.reg b + cst + k) ∧ s0.mem (s0.reg b + cst + k) < 256) :
+      ∀ k, k < n → s1.mem (st.reg r + k) = s0.mem (s0.reg b + cst + k) ∧ (s0.mem (s0.reg b + cst + k)).val < 256) :
     ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r ∈ argRegs) →
       (∀ x r n, (x, r, n) ∈ inoutsIn args regs →
         (List.range n).map (fun k => Val.int (s1.mem (s1.reg r + k))) = wordBytes (ids.map (den (inpOf ctx s0) ρ T))) →
@@ -319,7 +319,7 @@ theorem calleeW_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
         simp only [envWIn]
         refine ⟨rfl, ?_, ih⟩
         have ra := hr r (List.mem_cons_self ..)
-        have hb : ∀ k, k < n → s0.mem (s0.reg b + cst + k) < 256 := fun k hk => (hfix r n j b cst ra hf k hk).2
+        have hb : ∀ k, k < n → (s0.mem (s0.reg b + cst + k)).val < 256 := fun k hk => (hfix r n j b cst ra hf k hk).2
         have e : (List.range n).map (fun k => Val.int (s1.mem (s1.reg r + k))) =
             (List.range n).map fun k => Val.int (s0.mem (s0.reg b + cst + k)) :=
           List.map_congr_left fun k mk => by
@@ -852,7 +852,7 @@ theorem bytes_of_call {defs : List Def} {env : List (String × Val)} {g : String
       | _ => simp [builtin] at hf
 
 /-- A byte of four that are all bytes: the byte at its place of the number the four are. -/
-theorem load4_byteAt (mem : Nat → Nat) (a bb : Nat) (hbb : bb < 4) (h : ∀ k, k < 4 → mem (a + k) < 256) :
+theorem load4_byteAt (mem : Nat → Byte) (a bb : Nat) (hbb : bb < 4) (h : ∀ k, k < 4 → (mem (a + k)).val < 256) :
     load mem a 4 / 256 ^ bb % 256 = mem (a + bb) := by
   have h0 := h 0 (by omega)
   have h1 := h 1 (by omega)
@@ -884,7 +884,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallW', hsp] at h; exact (refuse_ok h).elim
@@ -945,7 +945,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           obtain ⟨j, b', cst, hf⟩ := calleeW_fixeds c.args argRegs hce x' r' n' m
           exact ⟨j, b', cst, hf, fixedsIn_mem c.args argRegs x' r' n' m⟩
         have hfixmem : ∀ r' n' j b' cst, r' ∈ argRegs → fixedPart ctx s r' n' = some (j, b', cst) →
-            ∀ k, k < n' → (afterCall p q i st).mem (st.reg r' + k) = s0.mem (s0.reg b' + cst + k) ∧ s0.mem (s0.reg b' + cst + k) < 256 := by
+            ∀ k, k < n' → (afterCall p q i st).mem (st.reg r' + k) = s0.mem (s0.reg b' + cst + k) ∧ (s0.mem (s0.reg b' + cst + k)).val < 256 := by
           intro r' n' j b' cst ra hf k hk
           obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E H (argRegs_lt ra) hf
           refine ⟨?_, f3 k hk⟩
@@ -988,7 +988,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
               subst r' n'
               exact hiobytes) hce
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
             (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
           · intro r'
             by_cases hr : r' = RSP
@@ -1009,26 +1009,15 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             obtain ⟨j, b', cst, hf, ra⟩ := hpart x' r' n' m
             obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E H (argRegs_lt ra) hf
             have rne' := (argRegs_not_rsp ra).2
-            refine ⟨by rw [s1reg r' rne', g3]; omega, by rw [s1reg r' rne', g3, s1rsp]; omega, ?_, ?_⟩
-            · intro k hk
-              rw [s1reg r' rne', (hfixmem r' n' j b' cst ra hf k hk).1]
-              exact (hfixmem r' n' j b' cst ra hf k hk).2
-            · intro x'' r'' n'' m''
-              rw [houts] at m''
-              simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
-              obtain ⟨_, e1, e2⟩ := m''
-              subst r'' n''
-              have := f4 xw b n0 hwm
-              rw [s1reg r' rne', g3, s1r]
-              omega
-          · intro x' r' n' m k hk
-            rw [hinouts] at m
-            simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m
-            obtain ⟨_, e1, e2⟩ := m
-            subst r' n'
-            have := hbytes (k / 4) (by omega) (k % 4) (by omega)
-            rw [s1r, show s0.reg b + 4 * plan.first + k = s0.reg b + 4 * (plan.first + k / 4) + k % 4 by omega, this]
-            exact Nat.mod_lt _ (by decide)
+            refine ⟨by rw [s1reg r' rne', g3]; omega, by rw [s1reg r' rne', g3, s1rsp]; omega, ?_⟩
+            intro x'' r'' n'' m''
+            rw [houts] at m''
+            simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m''
+            obtain ⟨_, e1, e2⟩ := m''
+            subst r'' n''
+            have := f4 xw b n0 hwm
+            rw [s1reg r' rne', g3, s1r]
+            omega
           · intro x' bd m r' hr'
             obtain ⟨items', res, he⟩ := each_mem hbounds (x', bd) m
             simp only [hr'] at he
@@ -1218,11 +1207,12 @@ theorem callTouch_carried {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
 /-! ## Eight bytes of a number stored as two words of a run -/
 
 /-- Eight bytes of a number stored: the number's low half stored as a word, and its high half as the next. -/
-theorem store8_words (mem : Nat → Nat) (a x : Nat) : storeWords mem a [x % 4294967296, x / 4294967296] = store mem a x 8 := by
+theorem store8_words (mem : Nat → Byte) (a x : Nat) : storeWords mem a [x % 4294967296, x / 4294967296] = store mem a x 8 := by
   funext y
   by_cases hy : y < a ∨ a + 8 ≤ y
   · rw [storeWords_other _ _ _ _ (by simpa using hy), store_other _ _ _ _ _ hy]
   · obtain ⟨j, rfl, hj⟩ : ∃ j, y = a + j ∧ j < 8 := ⟨y - a, by omega, by omega⟩
+    apply Fin.eq_of_val_eq
     rw [store_at 8 mem a x j hj]
     have e : a + j = a + 4 * (j / 4) + j % 4 := by omega
     rw [e, storeWords_at _ _ _ (j / 4) (j % 4) (by simp only [List.length_cons, List.length_nil]; omega) (by omega)]
@@ -1332,7 +1322,7 @@ theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E (show symCallW' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
@@ -1597,7 +1587,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
   | none => simp only [symCallB', hsp] at h; exact (refuse_ok h).elim
@@ -1673,7 +1663,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           exact ⟨b', off, nn, lb, hp, ra, la, g1, g3, g4, g5⟩
         -- the bytes of the part handed over to be written are bytes: its words are known written
         obtain ⟨idlen, hwritten⟩ := writtenIds_spec (n / 4) plan.first hwi
-        have hcell : ∀ j, j < n → st.mem (s0.reg b + 4 * plan.first + j) < 256 := by
+        have hcell : ∀ j, j < n → (st.mem (s0.reg b + 4 * plan.first + j)).val < 256 := by
           intro j hj
           have m := hwritten (j / 4) (by omega)
           obtain ⟨g1, g2⟩ := H.words.wrote plan.w (plan.first + j / 4) (ids.getD (j / 4) 0) m xw b n0 how
@@ -1683,7 +1673,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have henv : EnvDen ctx s0 ρ s.terms env (c.env (afterCall p q i st)) :=
           calleeB_sound H c (fun r' m => s1reg r' (argRegs_not_rsp m).2) hspan c.args argRegs (fun _ m => m) hce
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
             (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
           · intro r'
             by_cases hr : r' = RSP
@@ -1696,12 +1686,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             have hregn := E.region g1
             have er := s1reg r' (argRegs_not_rsp ra).2
             have el := s1reg l' (argRegs_not_rsp la).2
-            refine ⟨by rw [er, el]; omega, by rw [er, el, s1rsp]; omega, fun k hk => ?_⟩
-            obtain ⟨_, _, _, hm⟩ := hspan r' l' b' off nn ra la hp
-            rw [hm k hk]
-            rw [el] at hk
-            have := E.byte g1 ((ev ρ off).toNat + k) (by omega)
-            rwa [← Nat.add_assoc] at this
+            exact ⟨by rw [er, el]; omega, by rw [er, el, s1rsp]; omega⟩
           · intro x' r' n' m
             rw [houts] at m
             simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq] at m
@@ -1715,7 +1700,6 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             omega
           · rw [houts]; exact List.pairwise_singleton _ _
           · intro x' r' n' m; rw [hfx] at m; cases m
-          · intro x' r' n' m; rw [hinouts] at m; cases m
           · intro x' bd m r' hr'
             obtain ⟨items', res, he⟩ := each_mem hbounds (x', bd) m
             simp only [hr'] at he
@@ -1798,7 +1782,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         injection hd2 with hd2
         subst hd2
         -- each byte of the part is a byte: it is as it was (the bytes of a word known), or a byte stored
-        have hcell2 : ∀ j, j < n → s2.mem (s0.reg b + 4 * plan.first + j) < 256 := by
+        have hcell2 : ∀ j, j < n → (s2.mem (s0.reg b + 4 * plan.first + j)).val < 256 := by
           intro j hj
           rcases hbytes2 (s0.reg b + 4 * plan.first + j) with hsame | hlt
           · rw [hsame, s1mem _ (by omega)]; exact hcell j hj
@@ -1876,7 +1860,7 @@ theorem symCallB_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallB'_sound E (show symCallB' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
@@ -1917,7 +1901,7 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall' at h
   split at h
@@ -1944,7 +1928,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
     (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ s2.mem a < 256) →
+      (∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256) →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h

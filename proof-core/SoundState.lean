@@ -205,7 +205,7 @@ theorem wordRuns_of {c : Contract} {j : Nat} {x : String × Nat × Nat} (h : (c.
 /-- Known words agree with the machine's vector registers and memory. -/
 structure WordFacts (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (terms : List Node)
     (vectors : List (Nat × List Nat)) (untouched : List Nat) (written : List (Nat × Nat × Nat))
-    (saved : List (Row × List Nat)) (reg : Nat → Nat → Nat) (mem : Nat → Nat) : Prop where
+    (saved : List (Row × List Nat)) (reg : Nat → Nat → Nat) (mem : Nat → Byte) : Prop where
   vec : ∀ x ids, vectors.lookup x = some ids → ∀ k, k < ids.length → reg x k = den (inpOf ctx s0) ρ terms (ids.getD k 0)
   intact : ∀ w ∈ untouched, ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) → ∀ k, k < n → mem (s0.reg r + k) = s0.mem (s0.reg r + k)
   wrote : ∀ w j i, (w, j, i) ∈ written → ∀ x r n, ctx.contract.outs[w]? = some (x, r, n) →
@@ -275,7 +275,7 @@ def Flag.holds (ρ : Nat → Int) (set : Bool) : Flag → Prop
 /-- What a place has said a loop has written is so of memory: the run is one given to write; the definition
 is a list made thing by thing, of no more things than the run has places; and each place from `lo` on holds
 the list's thing there. -/
-def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : Nat → Nat) : Prop :=
+def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : Nat → Byte) : Prop :=
   ∃ name r n params x b hi, ctx.contract.outs[rg.w]? = some (name, r, n) ∧
     eachOf ctx rg.f rg.args.length = some (params, x, b, hi) ∧ hi ≤ n ∧ 0 ≤ ev ρ rg.lo ∧
     ∀ j : Nat, ev ρ rg.lo ≤ j → j < hi →
@@ -466,7 +466,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
-theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Nat} {n : Nat}
+theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Byte} {n : Nat}
     (bl : bounded n rg.lo) (ba : ∀ v ∈ rg.args, v.bounded n) (a : Agree n ρ ρ') (h : RangeHolds ctx s0 ρ rg mem) :
     RangeHolds ctx s0 ρ' rg mem := by
   obtain ⟨name, r, m, params, x, b, hi, h1, h2, h3, h4, h5⟩ := h
@@ -533,13 +533,13 @@ theorem SFact.bounded_mono {n m : Nat} {f : SFact} (h : n ≤ m) (hb : f.bounded
 
 /-! ## Memory -/
 
-theorem load_lt (mem : Nat → Nat) (a n : Nat) : load mem a n < 256 ^ n := by
+theorem load_lt (mem : Nat → Byte) (a n : Nat) : load mem a n < 256 ^ n := by
   induction n generalizing a with
   | zero => simp [load]
   | succ n ih =>
     simp only [load]
     have := ih (a + 1)
-    have h256 : mem a % 256 < 256 := Nat.mod_lt _ (by decide)
+    have h256 : (mem a).val < 256 := (mem a).isLt
     rw [Nat.pow_succ]
     omega
 
@@ -549,7 +549,7 @@ theorem inpOf_lt (ctx : Ctx) (s0 : State) (j k : Nat) : inpOf ctx s0 j k < W32 :
   · exact load_lt _ _ 4
   · decide
 
-theorem store_other (mem : Nat → Nat) (a v n x : Nat) (h : x < a ∨ a + n ≤ x) : store mem a v n x = mem x := by
+theorem store_other (mem : Nat → Byte) (a v n x : Nat) (h : x < a ∨ a + n ≤ x) : store mem a v n x = mem x := by
   induction n generalizing mem a v with
   | zero => rfl
   | succ n ih =>
@@ -559,7 +559,7 @@ theorem store_other (mem : Nat → Nat) (a v n x : Nat) (h : x < a ∨ a + n ≤
     · omega
     · rfl
 
-theorem load_congr (mem mem' : Nat → Nat) (a n : Nat) (h : ∀ x, a ≤ x → x < a + n → mem x = mem' x) : load mem a n = load mem' a n := by
+theorem load_congr (mem mem' : Nat → Byte) (a n : Nat) (h : ∀ x, a ≤ x → x < a + n → mem x = mem' x) : load mem a n = load mem' a n := by
   induction n generalizing a with
   | zero => rfl
   | succ n ih =>
@@ -567,22 +567,24 @@ theorem load_congr (mem mem' : Nat → Nat) (a n : Nat) (h : ∀ x, a ≤ x → 
     rw [h a (by omega) (by omega), ih (a + 1) (fun x h1 h2 => h x (by omega) (by omega))]
 
 /-- A load of memory whose bytes are those of a list, from a place of the list on, is the load of the list. -/
-theorem load_list (mem : Nat → Nat) (l : List Nat) : ∀ (n a c : Nat), (∀ k, k < n → mem (a + k) = l.getD (c + k) 0) →
-    load mem a n = load (fun x => l.getD x 0) c n
+theorem load_list (mem : Nat → Byte) (l : List Nat) : ∀ (n a c : Nat), (∀ k, k < n → mem (a + k) = l.getD (c + k) 0) →
+    load mem a n = load (fun x => ⟨l.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c n
   | 0, _, _, _ => rfl
   | n + 1, a, c, h => by
     have h0 := h 0 (by omega)
     simp only [Nat.add_zero] at h0
+    have hlt : l.getD c 0 < 256 := by rw [← h0]; exact (mem a).isLt
     simp only [load]
     rw [h0, load_list mem l n (a + 1) (c + 1) (fun k hk => by
       have := h (k + 1) (by omega)
       rw [show a + 1 + k = a + (k + 1) by omega, show c + 1 + k = c + (k + 1) by omega]
       exact this)]
+    rw [Nat.mod_eq_of_lt hlt]
 
-theorem load_store_other (mem : Nat → Nat) (a v n b k : Nat) (h : b + k ≤ a ∨ a + n ≤ b) : load (store mem a v n) b k = load mem b k :=
+theorem load_store_other (mem : Nat → Byte) (a v n b k : Nat) (h : b + k ≤ a ∨ a + n ≤ b) : load (store mem a v n) b k = load mem b k :=
   load_congr _ _ _ _ fun x h1 h2 => store_other mem a v n x (by omega)
 
-theorem load_store_same (mem : Nat → Nat) (a v n : Nat) (h : v < 256 ^ n) : load (store mem a v n) a n = v := by
+theorem load_store_same (mem : Nat → Byte) (a v n : Nat) (h : v < 256 ^ n) : load (store mem a v n) a n = v := by
   induction n generalizing mem a v with
   | zero => simp at h; simp [load, h]
   | succ n ih =>

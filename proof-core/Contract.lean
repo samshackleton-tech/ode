@@ -366,10 +366,10 @@ def Contract.inLane (c : Contract) (s : State) (a : Nat) : Bool :=
   c.tables.any fun (_, r, count, l) => (List.range count).any fun i => lanePtr s r i ≤ a && a < lanePtr s r i + 64 * s.reg l
 
 /-- A block as the specification has it: sixteen words, each four bytes, the lowest first. -/
-def blockWords (mem : Nat → Nat) (a : Nat) : Val := .list ((List.range 16).map fun w => Val.word (load mem (a + 4 * w) 4))
+def blockWords (mem : Nat → Byte) (a : Nat) : Val := .list ((List.range 16).map fun w => Val.word (load mem (a + 4 * w) 4))
 
 /-- The blocks at an address, one after another: a list of `n` blocks. -/
-def laneBlocks (mem : Nat → Nat) (p n : Nat) : Val := .list ((List.range n).map fun b => blockWords mem (p + 64 * b))
+def laneBlocks (mem : Nat → Byte) (p n : Nat) : Val := .list ((List.range n).map fun b => blockWords mem (p + 64 * b))
 
 /-- A table's name as a value, in a state at entry: the list of its lanes, each the list of its blocks. -/
 def Contract.lanesEnv (c : Contract) (s : State) : List (String × Val) :=
@@ -386,7 +386,7 @@ def envIn (c : Contract) (s : State) : List (String × Kind) → List Nat → Li
   | (n, .number) :: args, r :: regs => (n, .int (s.reg r)) :: envIn c s args regs
   | (n, .bytes len) :: args, r :: regs =>
     match c.regOf len with
-    | some l => (n, .bytes ((List.range (s.reg l)).map fun k => s.mem (s.reg r + k))) :: envIn c s args regs
+    | some l => (n, .bytes ((List.range (s.reg l)).map fun k => (s.mem (s.reg r + k)).val)) :: envIn c s args regs
     | none => envIn c s args regs
   | (_, .out _) :: args, _ :: regs => envIn c s args regs        -- (a run only written has no value at entry)
   | (_, .fixed _) :: args, _ :: regs => envIn c s args regs      -- (a run of a fixed count has its value in `envW`)
@@ -397,11 +397,11 @@ def envWIn (c : Contract) (s : State) : List (String × Kind) → List Nat → L
   | (n, .number) :: args, r :: regs => (n, .int (s.reg r)) :: envWIn c s args regs
   | (n, .bytes len) :: args, r :: regs =>
     match c.regOf len with
-    | some l => (n, .bytes ((List.range (s.reg l)).map fun k => s.mem (s.reg r + k))) :: envWIn c s args regs
+    | some l => (n, .bytes ((List.range (s.reg l)).map fun k => (s.mem (s.reg r + k)).val)) :: envWIn c s args regs
     | none => envWIn c s args regs
   | (_, .out _) :: args, _ :: regs => envWIn c s args regs
-  | (n, .fixed count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => s.mem (s.reg r + k))) :: envWIn c s args regs
-  | (n, .inout count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => s.mem (s.reg r + k))) :: envWIn c s args regs
+  | (n, .fixed count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => (s.mem (s.reg r + k)).val)) :: envWIn c s args regs
+  | (n, .inout count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => (s.mem (s.reg r + k)).val)) :: envWIn c s args regs
   | _, _ => []
 
 /-- The names of the contract as values, in a state at entry: a number is its register; a run of bytes is
@@ -426,7 +426,7 @@ def Contract.dataAt (c : Contract) (s : State) : Prop :=
   c.data ≠ [] →
     s.data + c.data.length < M64 ∧
     (s.data + c.data.length ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.data) ∧
-    (∀ k (h : k < c.data.length), s.mem (s.data + k) = c.data[k]) ∧
+    (∀ k (h : k < c.data.length), (s.mem (s.data + k)).val = c.data[k]) ∧
     ∀ x r n, (x, r, n) ∈ c.outs → s.data + c.data.length ≤ s.reg r ∨ s.reg r + n ≤ s.data
 
 /-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
@@ -441,35 +441,30 @@ def Program.fits (p : Program) : Prop := ∀ oi ∈ p.code, p.base + oi.2.next <
 
 /-- What the caller sees to: the function is entered at its start; the registers hold numbers below 2^64;
 `stack` bytes below the stack pointer and the eight at it are in memory; each run of bytes given to read
-lies in memory, apart from that frame and from the address to return to, and holds bytes; each run given to
+lies in memory, apart from that frame and from the address to return to; each run given to
 write lies in memory, apart from that frame, from the address to return to, from every run given to read
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
-from the frame, the address to return to and every run given to write, and holds bytes; a run given to read
-and to write holds bytes. A number the contract bounds is below its bound, in a register or in memory. The
+from the frame, the address to return to and every run given to write. A number the contract bounds is below its bound, in a register or in memory. The
 blocks each address of a table points to lie in memory, apart from the frame, the address to return to and
-every run given to write, and hold bytes. A number the contract asks to be no less than another is so.
+every run given to write. A number the contract asks to be no less than another is so.
 The file's read-only data is where the function expects it (`dataAt`). -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
   (∀ r l, (r, l) ∈ c.regions →
-    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
-    ∀ k, k < s.reg l → s.mem (s.reg r + k) < 256) ∧
+    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r)) ∧
   (∀ x r n, (x, r, n) ∈ c.outs →
     s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
     ∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
   (c.outs.Pairwise fun (_, r, n) (_, r', n') => s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x r n, (x, r, n) ∈ c.fixeds →
     s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
-    (∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
-  (∀ x r n, (x, r, n) ∈ c.inouts → ∀ k, k < n → s.mem (s.reg r + k) < 256) ∧
   (∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b) ∧
   (∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b) ∧
   (∀ j x r count l, c.tableAt j = some (x, r, count, l) → ∀ i, i < count →
     lanePtr s r i + 64 * s.reg l ≤ M64 ∧
     (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ lanePtr s r i) ∧
-    (∀ k, k < 64 * s.reg l → s.mem (lanePtr s r i + k) < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → lanePtr s r i + 64 * s.reg l ≤ s.reg r' ∨ s.reg r' + n' ≤ lanePtr s r i) ∧
   (∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r) ∧
   c.dataAt s
@@ -488,13 +483,13 @@ def Ensure.holds (e : Ensure) (c : Contract) (defs : List Def) (s s' : State) : 
     Value defs (c.envAfter s s') e.lo (.int a) ∧ Value defs (c.envAfter s s') e.hi (.int b) ∧
     Value defs (c.envAfter s s') e.value (.bytes l) ∧
     0 ≤ a ∧ a + l.length = b ∧ b ≤ n ∧
-    ∀ k (h : k < l.length), s'.mem (s.reg r + a.toNat + k) = l[k]
+    ∀ k (h : k < l.length), (s'.mem (s.reg r + a.toNat + k)).val = l[k]
 
 /-- `ensures RUN = value` holds, `s` being the state at entry and `s'` the state at the return: the run is one
 given to write, the value is a list of as many bytes as the run has, and each byte of the run is the list's. -/
 def EnsureW.holds (e : EnsureW) (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   ∃ r n l, (e.run, r, n) ∈ c.outs ∧ Value defs (c.envW s) e.value (.bytes l) ∧ l.length = n ∧
-    ∀ k (h : k < l.length), s'.mem (s.reg r + k) = l[k]
+    ∀ k (h : k < l.length), (s'.mem (s.reg r + k)).val = l[k]
 
 /-- What the function leaves, `s` being the state at entry: it has returned to its caller with the stack
 pointer above the return address, the registers a callee keeps as they were, memory outside its own frame

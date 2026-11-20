@@ -45,7 +45,7 @@ def runCase (table : Array TRow) (line : String) : String :=
         match findRow table ins with
         | some (row, bind) =>
           let s : State := { reg := fun k => regs.getD k 0, zf := zf == "1", cf := cf == "1", rip := 0, vec := fun x k => vecs.getD (16 * x + k) 0, data := 0,
-                             mem := fun a => if start ≤ a ∧ a < start + bytes.size then bytes[a - start]! else 0 }
+                             mem := fun a => ⟨(if start ≤ a ∧ a < start + bytes.size then bytes[a - start]! else 0) % 256, Nat.mod_lt _ (by decide)⟩ }
           let perm : Perm := ⟨fun _ => true, fun _ => true⟩
           match exec perm ⟨"", base.toNat!, []⟩ ⟨row.effect, bind, next.toNat!⟩ (fun _ => u.toNat!) s with
           | none => "none"

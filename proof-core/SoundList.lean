@@ -522,11 +522,11 @@ theorem symEnsureRange_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
       have same : vs.map (semv ctx s0 ρ1) = vs.map (semv ctx s0 ρ5) :=
         List.map_congr_left fun v hv => semv_agree (bd1 v hv) ag15
       have body : Value ctx.defs (d.params.zip (vs.map (semv ctx s0 ρ1))) d.body
-          (.bytes ((List.range hi).map fun j => st.mem (s0.reg r + j))) := by
+          (.bytes ((List.range hi).map fun j => (st.mem (s0.reg r + j)).val)) := by
         rw [hbody, hparams, same]
-        exact Value.each_bytes (fun j => st.mem (s0.reg r + j)) hi (fun j hj => q5 j (by omega) hj)
+        exact Value.each_bytes (fun j => (st.mem (s0.reg r + j)).val) hi (fun j hj => q5 j (by omega) hj)
       have val : Value ctx.defs (ctx.contract.envAfter s0 st') e.value
-          (.bytes ((List.range hi).map fun j => st.mem (s0.reg r + j))) := by
+          (.bytes ((List.range hi).map fun j => (st.mem (s0.reg r + j)).val)) := by
         rw [hvalue]
         exact (Value.call hlen hown hd (by simp [hplen]) sem1 _).mpr body
       refine ⟨ρ5, all, ?_⟩

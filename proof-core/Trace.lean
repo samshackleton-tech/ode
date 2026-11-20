@@ -43,19 +43,19 @@ theorem anyMarked_false {m : Nat → Bool} : ∀ {n a : Nat}, anyMarked m a n = 
     · subst hx; exact h.1
     · exact anyMarked_false h.2 x (by omega) (by omega)
 
-theorem load_same (m1 m2 : Nat → Nat) : ∀ (n a : Nat), (∀ x, a ≤ x → x < a + n → m1 x = m2 x) → load m1 a n = load m2 a n
+theorem load_same (m1 m2 : Nat → Byte) : ∀ (n a : Nat), (∀ x, a ≤ x → x < a + n → m1 x = m2 x) → load m1 a n = load m2 a n
   | 0, _, _ => rfl
   | n + 1, a, h => by
     simp only [load]
     rw [h a (Nat.le_refl _) (by omega), load_same m1 m2 n (a + 1) fun x h1 h2 => h x (by omega) (by omega)]
 
-theorem store_outside : ∀ (n : Nat) (m : Nat → Nat) (a v x : Nat), x < a ∨ a + n ≤ x → store m a v n x = m x
+theorem store_outside : ∀ (n : Nat) (m : Nat → Byte) (a v x : Nat), x < a ∨ a + n ≤ x → store m a v n x = m x
   | 0, _, _, _, _, _ => rfl
   | n + 1, m, a, v, x, h => by
     simp only [store]
     rw [store_outside n _ (a + 1) (v / 256) x (by omega), if_neg (by omega)]
 
-theorem store_inside : ∀ (n : Nat) (m1 m2 : Nat → Nat) (a v x : Nat), a ≤ x → x < a + n → store m1 a v n x = store m2 a v n x
+theorem store_inside : ∀ (n : Nat) (m1 m2 : Nat → Byte) (a v x : Nat), a ≤ x → x < a + n → store m1 a v n x = store m2 a v n x
   | 0, _, _, _, _, _, h1, h2 => by omega
   | n + 1, m1, m2, a, v, x, h1, h2 => by
     simp only [store]
@@ -63,7 +63,7 @@ theorem store_inside : ∀ (n : Nat) (m1 m2 : Nat → Nat) (a v x : Nat), a ≤ 
     · rw [store_outside n _ (a + 1) _ x (by omega), store_outside n _ (a + 1) _ x (by omega), if_pos hx, if_pos hx]
     · exact store_inside n _ _ (a + 1) _ x (by omega) (by omega)
 
-theorem storeWords_outside : ∀ (ws : List Nat) (m : Nat → Nat) (a x : Nat), x < a ∨ a + 4 * ws.length ≤ x → storeWords m a ws x = m x
+theorem storeWords_outside : ∀ (ws : List Nat) (m : Nat → Byte) (a x : Nat), x < a ∨ a + 4 * ws.length ≤ x → storeWords m a ws x = m x
   | [], _, _, _, _ => rfl
   | w :: ws, m, a, x, h => by
     simp only [storeWords]
@@ -957,204 +957,5 @@ theorem runs_data {world : List Program} {perm : Perm} {p : Program} {Q : State 
     have hd : (backFrom s s').data = s.data := hs'.2
     rw [hd] at this
     exact this
-
-/-! ## Memory is changed only by storing bytes
-
-Every store of the machine writes bytes: numbers below 256. So whatever a function does, an address of
-memory holds afterwards what it held before, or a byte. (A contract's `ensures` says what a run holds as a
-list of numbers; a caller that takes the run as words needs each to be a byte.) -/
-
-/-- Each address holds in `m'` what it holds in `m`, or a byte. -/
-def BytesSince (m m' : Nat → Nat) : Prop := ∀ a, m' a = m a ∨ m' a < 256
-
-theorem BytesSince.refl (m : Nat → Nat) : BytesSince m m := fun _ => Or.inl rfl
-
-theorem BytesSince.trans {m1 m2 m3 : Nat → Nat} (a : BytesSince m1 m2) (b : BytesSince m2 m3) : BytesSince m1 m3 := fun x => by
-  rcases b x with h | h
-  · rw [h]; exact a x
-  · exact Or.inr h
-
-theorem store_bytes : ∀ (n : Nat) (mem : Nat → Nat) (a v : Nat), BytesSince mem (store mem a v n)
-  | 0, mem, _, _ => BytesSince.refl mem
-  | n + 1, mem, a, v => by
-    show BytesSince mem (store (fun x => if x = a then v % 256 else mem x) (a + 1) (v / 256) n)
-    refine BytesSince.trans (fun x => ?_) (store_bytes n _ (a + 1) (v / 256))
-    by_cases hx : x = a
-    · right; simp only [hx, if_true]; exact Nat.mod_lt _ (by decide)
-    · left; simp only [hx, if_false]
-
-theorem storeWords_bytes : ∀ (ws : List Nat) (mem : Nat → Nat) (a : Nat), BytesSince mem (storeWords mem a ws)
-  | [], mem, _ => BytesSince.refl mem
-  | w :: ws, mem, a => (store_bytes 4 mem a w).trans (storeWords_bytes ws _ (a + 4))
-
-/-- A statement changes memory only by storing bytes. -/
-theorem execStmt_bytes {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} :
-    ∀ (st : Stmt), execStmt perm bind base u s st = some s' → BytesSince s.mem s'.mem
-  | .nothing, h => by simp only [execStmt] at h; injection h with h; subst h; exact BytesSince.refl _
-  | .ret, h => by simp only [execStmt] at h; cases h
-  | .call _, h => by simp only [execStmt] at h; cases h
-  | .vset512 place v, h => by
-    simp only [execStmt, execVec512] at h
-    cases hl : lanesOf512 perm bind s v with
-    | none => simp [hl] at h
-    | some lanes =>
-      simp only [hl, Option.bind_eq_bind, Option.bind_some] at h
-      split at h
-      · cases h
-      next hlen =>
-        cases place with
-        | name n =>
-          simp only at h
-          cases hr : vecOf512 bind n with
-          | none => simp [hr] at h
-          | some r => simp only [hr, Option.map] at h; injection h with h; subst h; exact BytesSince.refl _
-        | call f args =>
-          simp only [addr512] at h
-          cases hvs : values perm bind s args with
-          | none => simp [hvs] at h
-          | some vs =>
-            simp only [hvs, Option.bind_eq_bind, Option.bind_some] at h
-            split at h
-            · simp only [Option.bind_some] at h
-              split at h
-              · injection h with h; subst h
-                exact storeWords_bytes lanes _ _
-              · cases h
-            · simp at h
-        | number _ => simp at h
-        | lane _ _ => simp at h
-  | .vset place v, h => by
-    cases place with
-    | name n =>
-      simp only [execStmt] at h
-      split at h
-      · split at h
-        · injection h with h; subst h; exact BytesSince.refl _
-        · cases h
-      · split at h
-        · injection h with h; subst h; exact BytesSince.refl _
-        · cases h
-    | call f args =>
-      simp only [execStmt] at h
-      split at h
-      next vs l hvs _ =>
-        split at h
-        · injection h with h; subst h
-          exact BytesSince.trans (BytesSince.trans (BytesSince.trans (store_bytes 4 _ _ _) (store_bytes 4 _ _ _)) (store_bytes 4 _ _ _)) (store_bytes 4 _ _ _)
-        · cases h
-      next => cases h
-    | number _ => simp only [execStmt] at h; cases h
-    | lane _ _ => simp only [execStmt] at h; cases h
-  | .jump target cond, h => by
-    rw [execStmt_jump] at h
-    split at h
-    · cases hv : value perm bind s target with
-      | none => rw [hv] at h; cases h
-      | some t => rw [hv] at h; injection h with h; subst h; exact BytesSince.refl _
-    · injection h with h; subst h; exact BytesSince.refl _
-  | .set place v, h => by
-    simp only [execStmt] at h
-    split at h
-    next x n _ =>
-      split at h
-      · injection h with h; subst h; exact BytesSince.refl _
-      · split at h
-        · injection h with h; subst h; exact BytesSince.refl _
-        · cases hr : regOf bind n with
-          | none => simp [hr] at h
-          | some r => simp only [hr, Option.map] at h; injection h with h; subst h; exact BytesSince.refl _
-    next x f args _ =>
-      split at h
-      · split at h
-        · injection h with h; subst h; exact store_bytes _ _ _ _
-        · cases h
-      · cases h
-    next => cases h
-
-/-- Memory in the state an instruction gives. -/
-def Outcome.mem : Outcome → Nat → Nat
-  | .next s => s.mem
-  | .returned s => s.mem
-
-theorem execAllQ_bytes {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat} :
-    ∀ (stmts : List Stmt) (k : Nat) {s : State} {o : Outcome},
-    execAllQ perm bind base u k s stmts = some o → BytesSince s.mem o.mem
-  | [], _, _, _, h => by injection h with h; subst h; exact BytesSince.refl _
-  | st :: rest, k, s, o, h => by
-    have go : ∀ {s' : State}, execStmt perm bind base (u k) s st = some s' →
-        execAllQ perm bind base u (k + 1) (noted bind s st s') rest = some o → BytesSince s.mem o.mem :=
-      fun {s'} e r => by
-        have h1 : BytesSince (noted bind s st s').mem o.mem := execAllQ_bytes rest (k + 1) r
-        have h2 : BytesSince s.mem s'.mem := execStmt_bytes st e
-        exact h2.trans h1
-    cases st with
-    | ret =>
-      simp only [execAllQ] at h
-      split at h
-      next => injection h with h; subst h; exact BytesSince.refl _
-      next => cases h
-    | nothing =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-    | call _ =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-    | jump _ _ =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-    | set _ _ =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-    | vset _ _ =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-    | vset512 _ _ =>
-      simp only [execAllQ] at h
-      split at h
-      next => split at h <;> first | cases h | (next s' e => exact go e h)
-      next => cases h
-
-theorem execQ_bytes {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s : State} {o : Outcome}
-    (h : execQ perm p i u s = some o) : BytesSince s.mem o.mem :=
-  execAllQ_bytes i.effect 0 (s := { s with rip := p.base + i.next, trace := s.trace ++ [(s.rip, 0)] }) h
-
-/-- A function that runs to states of which `Q` holds runs to states of which anything that follows from `Q` holds. -/
-theorem runs_weaken {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
-    (h : Runs world perm p Q s) : ∀ (Q' : State → Prop), (∀ s', Q s' → Q' s') → Runs world perm p Q' s := by
-  induction h with
-  | step perm p Q s i hf hn _ hr ih =>
-    intro Q' hq
-    exact Runs.step perm p _ s i hf hn (fun u s' e => ih u s' e Q' hq) (fun u s' e => hq _ (hr u s' e))
-  | call perm p Q s i name q inner R hf hc hw h8 ha hm hir hiw hrun hk _ _ ihp =>
-    intro Q' hq
-    exact Runs.call perm p _ s i name q inner R hf hc hw h8 ha hm hir hiw hrun hk (fun s' hs' => ihp s' hs' Q' hq)
-
-/-- **Memory is changed only by storing bytes.** A function that runs from `s` to states of which `Q`
-holds runs to states of which `Q` holds and in which each address of memory holds what it held in `s`, or
-a byte. -/
-theorem runs_bytes {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
-    (h : Runs world perm p Q s) : Runs world perm p (fun s' => Q s' ∧ BytesSince s.mem s'.mem) s := by
-  induction h with
-  | step perm p Q s i hf hn _ hr ih =>
-    refine Runs.step perm p _ s i hf hn (fun u s' e => ?_) (fun u s' e => ⟨hr u s' e, execQ_bytes e⟩)
-    have hb : BytesSince s.mem s'.mem := execQ_bytes e
-    exact runs_weaken (ih u s' e) _ (fun s'' hq => ⟨hq.1, hb.trans hq.2⟩)
-  | call perm p Q s i name q inner R hf hc hw h8 ha hm hir hiw _ hk _ ihq ihp =>
-    refine Runs.call perm p _ s i name q inner (fun s' => R s' ∧ BytesSince (afterCall p q i s).mem s'.mem) hf hc hw h8 ha hm hir hiw ihq
-      (fun s' hs' => hk s' hs'.1) (fun s' hs' => ?_)
-    -- at the call the address to return to is stored: bytes; then what the called function did
-    have h1 : BytesSince s.mem (afterCall p q i s).mem := store_bytes 8 _ _ _
-    have h2 : BytesSince s.mem (backFrom s s').mem := h1.trans hs'.2
-    exact runs_weaken (ihp s' hs'.1) _ (fun s'' hq => ⟨hq.1, h2.trans hq.2⟩)
 
 end Ode

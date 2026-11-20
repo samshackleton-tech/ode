@@ -145,8 +145,8 @@ The caller's obligations (`Contract.pre`):
 
 - every register holds a 64-bit value;
 - `stack` bytes below the stack pointer are available;
-- every input buffer is mapped memory, holds bytes, and does not overlap the stack frame or the return
-  address;
+- every input buffer is mapped memory and does not overlap the stack frame or the return address (that
+  it holds bytes is no obligation: in the formal model a memory cell is a byte by its type);
 - every output buffer is mapped memory and does not overlap the stack frame, the return address, any input
   buffer, or any other output buffer;
 - a contract can also name a fixed-size read-only buffer, and a fixed-size buffer that is both read and
@@ -389,7 +389,7 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,021 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,018 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
 **For the verifier's rules, the reader chooses.** The rules are Core.lean (2,660 lines of code) and the
@@ -948,12 +948,11 @@ What is new:
   it, the proof is asked for the arithmetic.)
 - **In the specification:** `src[16 .. len]` (a slice whose end is an argument) and `len(...)` of such a
   buffer or slice.
-- **One new fact about the formal model: memory changes only by stores of bytes** (`runs_bytes` in
-  Trace.lean). A contract says what a buffer holds as a list of numbers. The caller treats the buffer as
-  32-bit words, so it needs each number to be below 256. The theorem says that after any run of a
-  function each memory address holds what it held before or a number below 256. Together with "every
-  word of the part was known before the call" this gives that each byte of the part is below 256
-  afterwards.
+- **A fact about the formal model that this rule needs: a memory cell holds a byte.** A contract says
+  what a buffer holds as a list of numbers. The caller treats the buffer as 32-bit words, so it needs
+  each number to be below 256. When this rule was built, that came from a theorem about runs of the
+  machine (`runs_bytes`). Since then a memory cell has become a byte by its type (see "A memory cell is a
+  byte by its type" below), and that theorem is gone.
 
 The stored proof is 49 bytes. The tests change the contract in seven ways and the code in twelve, each
 making the statement false, and each is refused. Among them: the contract says the block holds bytes 16
@@ -1164,6 +1163,17 @@ subtract 2^63 from a number of 2^63 or more, since the sum passes 2^64 and comes
 reads 2^63 as it stands and does not accept that contract. Before this change it accepted that one
 and refused the other. A rule that follows both would let the proof say which reading to take; it is
 not built.
+
+**A memory cell is a byte by its type.** In the formal model, memory used to be a function from
+addresses to natural numbers. Each precondition then had to say, for each kind of buffer, that the
+buffer's cells hold numbers below 256: four clauses. Nothing said it of the stack frame, so a function
+could not hand a buffer in its own frame to a function it calls. Memory is now a function from addresses
+to bytes (`State.mem : Nat → Byte` in Machine.lean, where `Byte` is the type of the numbers below 256).
+`load` reads bytes and `store` writes them. The four clauses are gone from `Contract.pre`. Gone too is
+the theorem that a run of the machine stores only bytes, with 198 lines of proof, because there is
+nothing left to prove. One line of the verifier changed: where it loads a constant from the file's
+read-only data, it takes the data's numbers as bytes, which gives the same value. Every stored proof is
+the same bytes. The formal model is 1,018 lines (was 1,021) and the proofs are 16,772 (were 16,962).
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -1432,9 +1442,9 @@ single-instruction comparison does not cover `lea_data` and `call`, which Machin
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 1,021 lines (Table.lean 152, Machine.lean 495, Contract.lean 374). The
+**Code size.** The formal model: 1,018 lines (Table.lean 152, Machine.lean 496, Contract.lean 370). The
 verifier: 2,819 lines (Core.lean 2,660, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 16,962 lines, of which Trace.lean (two runs of the machine with marks; memory changes only by stores of bytes) is 1,032 and Plain.lean (the machine without marks, and two runs of it) is 632.
+lines. The proofs of the theorems: 16,772 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 

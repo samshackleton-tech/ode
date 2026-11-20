@@ -24,11 +24,11 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
   | nil : WDen ctx s0 ρ T (.list []) (.list [])
   | cons {v : WVal} {a : Val} {vs : List WVal} {as : List Val} :
       WDen ctx s0 ρ T v a → WDen ctx s0 ρ T (.list vs) (.list as) → WDen ctx s0 ρ T (.list (v :: vs)) (.list (a :: as))
-  | run (r n : Nat) (hb : ∀ k, k < n → s0.mem (s0.reg r + k) < 256) :
+  | run (r n : Nat) (hb : ∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) :
       WDen ctx s0 ρ T (.run r n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + k))))
-  | part (r off n : Nat) (hb : ∀ k, k < n → s0.mem (s0.reg r + off + k) < 256) :
+  | part (r off n : Nat) (hb : ∀ k, k < n → (s0.mem (s0.reg r + off + k)).val < 256) :
       WDen ctx s0 ρ T (.part r off n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + off + k))))
-  | region (r l : Nat) (hl : ρ l = s0.reg l) (hb : ∀ k, k < s0.reg l → s0.mem (s0.reg r + k) < 256) :
+  | region (r l : Nat) (hl : ρ l = s0.reg l) (hb : ∀ k, k < s0.reg l → (s0.mem (s0.reg r + k)).val < 256) :
       WDen ctx s0 ρ T (.region r l) (.list ((List.range (s0.reg l)).map fun k => Val.int (s0.mem (s0.reg r + k))))
   | span (r : Nat) (off len : Row) (ho : 0 ≤ ev ρ off) (hn : 0 ≤ ev ρ len) :
       WDen ctx s0 ρ T (.span r off len) (.list ((List.range (ev ρ len).toNat).map fun k => Val.int (s0.mem (s0.reg r + (ev ρ off).toNat + k))))
@@ -955,7 +955,7 @@ theorem map_range_add4 {α : Type} (f : Nat → α) (n : Nat) :
   rw [show n + 4 = n + 1 + 1 + 1 + 1 from rfl, map_range_succ, map_range_succ, map_range_succ, map_range_succ]
 
 /-- A part of a run of bytes, cut out of the list of them. -/
-theorem slice_run (mem : Nat → Nat) (base n a b : Nat) (h : a + b ≤ n) :
+theorem slice_run (mem : Nat → Byte) (base n a b : Nat) (h : a + b ≤ n) :
     (((List.range n).map fun k => Val.int (mem (base + k))).drop a).take b = (List.range b).map fun k => Val.int (mem (base + a + k)) := by
   apply List.ext_getElem
   · simp; omega
@@ -963,7 +963,7 @@ theorem slice_run (mem : Nat → Nat) (base n a b : Nat) (h : a + b ≤ n) :
     simp [Nat.add_assoc]
 
 /-- The number that bytes of memory are, the lowest first: what the machine's `load` reads there. -/
-theorem numberLE_load (mem : Nat → Nat) : ∀ (n a : Nat), (∀ k, k < n → mem (a + k) < 256) →
+theorem numberLE_load (mem : Nat → Byte) : ∀ (n a : Nat), (∀ k, k < n → (mem (a + k)).val < 256) →
     numberLE ((List.range n).map fun k => Val.int (mem (a + k))) = some (load mem a n)
   | 0, a, _ => by simp [numberLE, load]
   | n + 1, a, hb => by
@@ -1036,8 +1036,9 @@ end
 
 /-! ## The language's own names -/
 
-theorem load4 (mem : Nat → Nat) (a : Nat) :
-    load mem a 4 = mem a % 256 + 256 * (mem (a + 1) % 256 + 256 * (mem (a + 1 + 1) % 256 + 256 * (mem (a + 1 + 1 + 1) % 256 + 256 * 0))) := rfl
+theorem load4 (mem : Nat → Byte) (a : Nat) :
+    load mem a 4 = mem a % 256 + 256 * (mem (a + 1) % 256 + 256 * (mem (a + 1 + 1) % 256 + 256 * (mem (a + 1 + 1 + 1) % 256 + 256 * 0))) := by
+  simp only [load]; omega
 
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
@@ -1195,7 +1196,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
                 have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
-                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) 0 (fun i => s0.mem (s0.reg r + i)) wvs hin
+                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) 0 (fun i => (s0.mem (s0.reg r + i)).val) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
                     subst ha
@@ -1232,7 +1233,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : Lis
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
                 have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
-                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) (off / 4) (fun i => s0.mem (s0.reg r + off + i)) wvs hin
+                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) (off / 4) (fun i => (s0.mem (s0.reg r + off + i)).val) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
                     subst ha
@@ -1673,7 +1674,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
               next hc =>
                 simp only [Option.some.injEq] at h; subst h
                 obtain ⟨i0, ij, jn⟩ := hc
-                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + i.toNat + k) < 256 := fun k hk => by
+                have hb' : ∀ k, k < (j - i).toNat → (s0.mem (s0.reg r + i.toNat + k)).val < 256 := fun k hk => by
                   have := hb (i.toNat + k) (by omega)
                   rwa [← Nat.add_assoc] at this
                 refine ⟨_, ?_, WDen.part r i.toNat (j - i).toNat hb'⟩
@@ -1696,7 +1697,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
                 simp only [Option.some.injEq] at h; subst h
                 obtain ⟨i0, ij, jn⟩ := hc
                 have eo : ∀ k, s0.reg r + (off + i.toNat) + k = s0.reg r + off + i.toNat + k := fun k => by omega
-                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + (off + i.toNat) + k) < 256 := fun k hk => by
+                have hb' : ∀ k, k < (j - i).toNat → (s0.mem (s0.reg r + (off + i.toNat) + k)).val < 256 := fun k hk => by
                   have := hb (i.toNat + k) (by omega)
                   rw [eo]; rwa [← Nat.add_assoc] at this
                 have key := WDen.part (ctx := ctx) (ρ := ρ) (T := s.terms) (s0 := s0) r (off + i.toNat) (j - i).toNat hb'
@@ -1722,7 +1723,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
                 obtain ⟨i0, ij, jn⟩ := hc
                 have hj := plain_sound jn ρ H.facts
                 rw [ev_sub, ev_var, ev_const, hl] at hj
-                have hb' : ∀ k, k < (j - i).toNat → s0.mem (s0.reg r + i.toNat + k) < 256 := fun k hk => by
+                have hb' : ∀ k, k < (j - i).toNat → (s0.mem (s0.reg r + i.toNat + k)).val < 256 := fun k hk => by
                   have := hb (i.toNat + k) (by omega)
                   rwa [← Nat.add_assoc] at this
                 refine ⟨_, ?_, WDen.part r i.toNat (j - i).toNat hb'⟩
@@ -1848,9 +1849,9 @@ local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 /-- The names on words stand for the contract's names as the account has them at entry. -/
 theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
     ∀ (args : List (String × Kind)) (regs : List Nat), (∀ r ∈ regs, r < 16) →
-      (∀ x r n, (x, r, n) ∈ fixedsIn args regs → ∀ k, k < n → s0.mem (s0.reg r + k) < 256) →
-      (∀ x r n, (x, r, n) ∈ inoutsIn args regs → ∀ k, k < n → s0.mem (s0.reg r + k) < 256) →
-      (∀ r l, (r, l) ∈ regionsIn c args regs → ∀ k, k < s0.reg l → s0.mem (s0.reg r + k) < 256) →
+      (∀ x r n, (x, r, n) ∈ fixedsIn args regs → ∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) →
+      (∀ x r n, (x, r, n) ∈ inoutsIn args regs → ∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) →
+      (∀ r l, (r, l) ∈ regionsIn c args regs → ∀ k, k < s0.reg l → (s0.mem (s0.reg r + k)).val < 256) →
       EnvDen ctx s0 ρ T (wenvIn c args regs) (envWIn c s0 args regs)
   | [], _, _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
   | _ :: _, [], _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
@@ -1926,7 +1927,7 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
     ∀ (l : List WVal) (ws : List Val) (j : Nat), wordsWritten look s.wroteW w j l = true →
       WDen ctx s0 ρ s.terms (.list l) (.list ws) →
       ∃ bs : List Nat, ofWords ws = some (bs.map fun (b : Nat) => Val.int b) ∧ bs.length = 4 * l.length ∧
-        ∀ k, k < bs.length → bs[k]? = some (st.mem (s0.reg r + 4 * j + k))
+        ∀ k, k < bs.length → bs[k]? = some (st.mem (s0.reg r + 4 * j + k)).val
   | [], ws, j, _, hd => by
     cases hd
     exact ⟨[], by simp [ofWords], rfl, fun k hk => absurd hk (Nat.not_lt_zero _)⟩
@@ -1959,7 +1960,7 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
             | k + 4, hk =>
               have := hm k (by simp at hk; omega)
               simp only [List.cons_append, List.nil_append, List.getElem?_cons_succ]
-              rw [this]; congr 2; omega
+              rw [this]; congr 3; omega
       | _ => simp [wordsWritten] at hww
 
 /-- An `ensures` of a whole run of words that the verifier has passed holds: the run's bytes at the return

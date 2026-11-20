@@ -14,9 +14,9 @@ Lean takes here that it refused before:
 - a run of bytes with a length that the called function reads may be a part of such a run of this
   function's: the place and the length are numbers the verifier holds, seen at once to lie within the run;
 - the specification's `src[16 .. len]` and `len(...)` of a run of bytes with a length are followed.
-The theorem behind the first needs one fact about the machine that no rule needed before: memory is
-changed only by storing bytes (`runs_bytes` in Trace.lean). A contract says what a run holds as a list of
-numbers; that each is a byte is known from the machine.
+The theorem behind the first needs one fact about the machine: a contract says what a run holds as a
+list of numbers, and each must be a byte. In the account a cell of memory is a byte by its type. (When
+this was built it was a theorem about the machine's runs, `runs_bytes`.)
 
 The function, its contract and the kept proof are shown; with the contract or the function changed in one
 place, so that what is stated is false, nothing is shown, and each case names what the verifier then

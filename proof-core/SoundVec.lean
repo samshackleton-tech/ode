@@ -1310,7 +1310,7 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 /-! ## Store a run of words -/
 
-theorem store_at : ∀ (n : Nat) (mem : Nat → Nat) (a v b : Nat), b < n → store mem a v n (a + b) = v / 256 ^ b % 256
+theorem store_at : ∀ (n : Nat) (mem : Nat → Byte) (a v b : Nat), b < n → store mem a v n (a + b) = v / 256 ^ b % 256
   | 0, _, _, _, _, h => absurd h (Nat.not_lt_zero _)
   | n + 1, mem, a, v, b, h => by
     simp only [store]
@@ -1322,7 +1322,7 @@ theorem store_at : ∀ (n : Nat) (mem : Nat → Nat) (a v b : Nat), b < n → st
       have e : a + (b + 1) = (a + 1) + b := by omega
       rw [e, store_at n _ (a + 1) (v / 256) b (by omega), Nat.div_div_eq_div_mul, Nat.pow_succ, Nat.mul_comm]
 
-theorem storeWords_other (mem : Nat → Nat) (a : Nat) (ls : List Nat) (y : Nat) (h : y < a ∨ a + 4 * ls.length ≤ y) :
+theorem storeWords_other (mem : Nat → Byte) (a : Nat) (ls : List Nat) (y : Nat) (h : y < a ∨ a + 4 * ls.length ≤ y) :
     storeWords mem a ls y = mem y := by
   induction ls generalizing a mem with
   | nil => rfl
@@ -1330,7 +1330,7 @@ theorem storeWords_other (mem : Nat → Nat) (a : Nat) (ls : List Nat) (y : Nat)
     simp only [List.length_cons] at h
     rw [storeWords, ih _ _ (by omega), store_other _ _ _ _ _ (by omega)]
 
-theorem storeWords_at (mem : Nat → Nat) (a : Nat) (ls : List Nat) (i b : Nat) (hi : i < ls.length) (hb : b < 4) :
+theorem storeWords_at (mem : Nat → Byte) (a : Nat) (ls : List Nat) (i b : Nat) (hi : i < ls.length) (hb : b < 4) :
     storeWords mem a ls (a + 4 * i + b) = ls.getD i 0 / 256 ^ b % 256 := by
   induction ls generalizing mem a i with
   | nil => simp at hi
@@ -1427,14 +1427,14 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
         injection g1 with g1; injection g1 with _ g1; injection g1 with g1 gn
         subst g1 gn
         refine ⟨by omega, fun b hb => ?_⟩
-        show storeWords st.mem a lanes (s0.reg r + 4 * (c / 4 + q) + b) = _
+        show (storeWords st.mem a lanes (s0.reg r + 4 * (c / 4 + q) + b)).val = _
         have e : s0.reg r + 4 * (c / 4 + q) + b = a + 4 * q + b := by omega
         rw [e, storeWords_at _ _ _ _ _ (by omega) hb, hd q hq]
         rfl
       · obtain ⟨m', keep⟩ := List.mem_filter.mp m
         obtain ⟨g2, g3⟩ := H.words.wrote w' j i m' x' r' n' g1
         refine ⟨g2, fun b hb => ?_⟩
-        show storeWords st.mem a lanes (s0.reg r' + 4 * j + b) = _
+        show (storeWords st.mem a lanes (s0.reg r' + 4 * j + b)).val = _
         have hne : s0.reg r' + 4 * j + b < a ∨ a + 4 * lanes.length ≤ s0.reg r' + 4 * j + b := by
           by_cases e : w' = w
           · subst e

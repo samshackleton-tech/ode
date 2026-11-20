@@ -612,7 +612,7 @@ def dataOff (ctx : Ctx) (addr : Row) : Option Int :=
   if ctx.contract.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var dataVar))
 
 /-- The number that `size` bytes of the file's data make, from byte `c` on, the lowest byte first. -/
-def dataWord (data : List Nat) (c size : Nat) : Nat := load (fun x => data.getD x 0) c size
+def dataWord (data : List Nat) (c size : Nat) : Nat := load (fun x => ⟨data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c size
 
 def findRegion (addr : Row) : List (Nat × Nat) → Nat → Option Where
   | [], _ => none

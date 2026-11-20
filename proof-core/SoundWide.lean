@@ -883,7 +883,7 @@ theorem symLanes512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ct
               obtain ⟨lanes, c, eval, val⟩ := symShuffle512_sound H wf h
               exact ⟨ρ, lanes, c, eval, val⟩
 
-theorem load_spilled_word (mem : Nat → Nat) (a : Nat) (lanes : List Nat) {k : Nat} (hk : k < lanes.length)
+theorem load_spilled_word (mem : Nat → Byte) (a : Nat) (lanes : List Nat) {k : Nat} (hk : k < lanes.length)
     (hv : lanes.getD k 0 < W32) : load (storeWords mem a lanes) (a + 4 * k) 4 = lanes.getD k 0 := by
   let base := a + 4 * k
   calc
@@ -892,7 +892,7 @@ theorem load_spilled_word (mem : Nat → Nat) (a : Nat) (lanes : List Nat) {k : 
       intro y hy1 hy2
       have e : y = base + (y - base) := by omega
       rw [e]
-      exact (storeWords_at mem a lanes k (y - base) hk (by omega)).trans (store_at 4 mem base _ _ (by omega)).symm
+      exact Fin.eq_of_val_eq ((storeWords_at mem a lanes k (y - base) hk (by omega)).trans (store_at 4 mem base _ _ (by omega)).symm)
     _ = _ := load_store_same _ _ _ _ hv
 
 theorem symSpillStore_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}

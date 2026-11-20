@@ -60,11 +60,14 @@ structure Marks where
   cf : Bool := false
   mem : Nat → Bool := fun _ => false
 
+/-- A byte: a number below 256. A cell of memory holds one. -/
+abbrev Byte := Fin 256
+
 structure State where
   reg : Nat → Nat          -- the sixteen general registers, by number (rax 0, rcx 1, rdx 2, rbx 3, rsp 4, …)
   zf : Bool
   cf : Bool
-  mem : Nat → Nat          -- the byte at an address
+  mem : Nat → Byte         -- memory: the byte at each address
   rip : Nat
   vec : Nat → Nat → Nat    -- the vector registers zmm0 to zmm31: a register's lanes of 32 bits, lane 0 the lowest;
                            -- after them, as registers 33 to 39, the mask registers k1 to k7 (`maskOf`): a
@@ -83,13 +86,14 @@ def allowed (p : Nat → Bool) (a : Nat) : Nat → Bool
   | n + 1 => p a && allowed p (a + 1) n
 
 /-- `n` bytes at `a` as one number, the lowest byte first. -/
-def load (mem : Nat → Nat) (a : Nat) : Nat → Nat
+def load (mem : Nat → Byte) (a : Nat) : Nat → Nat
   | 0 => 0
-  | n + 1 => mem a % 256 + 256 * load mem (a + 1) n
+  | n + 1 => (mem a).val + 256 * load mem (a + 1) n
 
-def store (mem : Nat → Nat) (a v : Nat) : Nat → Nat → Nat
+/-- Memory with the `n` low bytes of `v` written at `a`, the lowest first. -/
+def store (mem : Nat → Byte) (a v : Nat) : Nat → Nat → Byte
   | 0 => mem
-  | n + 1 => store (fun x => if x = a then v % 256 else mem x) (a + 1) (v / 256) n
+  | n + 1 => store (fun x => if x = a then ⟨v % 256, Nat.mod_lt v (by decide)⟩ else mem x) (a + 1) (v / 256) n
 
 def memSize (f : String) : Option Nat :=
   if f == "mem8" then some 1 else if f == "mem32" then some 4 else if f == "mem64" then some 8 else none
@@ -357,7 +361,7 @@ def lanesOf512 (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List N
       | _, _ => none
   | _ => none
 
-def storeWords (mem : Nat → Nat) (a : Nat) : List Nat → (Nat → Nat)
+def storeWords (mem : Nat → Byte) (a : Nat) : List Nat → (Nat → Byte)
   | [] => mem
   | w :: ws => storeWords (store mem a w 4) (a + 4) ws
 

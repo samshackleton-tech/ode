@@ -22,9 +22,9 @@ theorem above : s0.reg RSP + 8 < M64 := E.pre.2.2.2.1
 theorem fits {o : Nat} {i : Instr} (h : (o, i) ∈ p.code) : p.base + i.next < M64 := E.pre.2.2.2.2.1 (o, i) h
 theorem region {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) :
     s0.reg r + s0.reg l ≤ M64 ∧ (s0.reg r + s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
-  ⟨(E.pre.2.2.2.2.2.1 r l h).1, (E.pre.2.2.2.2.2.1 r l h).2.1⟩
-theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k < s0.reg l) : s0.mem (s0.reg r + k) < 256 :=
-  (E.pre.2.2.2.2.2.1 r l h).2.2 k hk
+  E.pre.2.2.2.2.2.1 r l h
+theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k < s0.reg l) : (s0.mem (s0.reg r + k)).val < 256 :=
+  (s0.mem _).isLt
 /-- A run given to write: in memory, and apart from the frame and the address to return to. -/
 theorem out {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) :
     s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
@@ -644,38 +644,40 @@ include E
 holding bytes, and apart from every run given to write. -/
 theorem fixed {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.fixeds) :
     s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) ∧
-    (∀ k, k < n → s0.mem (s0.reg r + k) < 256) ∧
+    (∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.1 x r n h
+  have h' := E.pre.2.2.2.2.2.2.2.2.1 x r n h
+  ⟨h'.1, h'.2.1, fun _ _ => (s0.mem _).isLt, h'.2.2⟩
 theorem inoutByte {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.inouts) {k : Nat} (hk : k < n) :
-    s0.mem (s0.reg r + k) < 256 := E.pre.2.2.2.2.2.2.2.2.2.1 x r n h k hk
+    (s0.mem (s0.reg r + k)).val < 256 := (s0.mem _).isLt
 
 /-- A number the contract bounds is below its bound at entry. -/
 theorem bound {x : String} {b r : Nat}
     (h : (x, b) ∈ ctx.contract.bounds) (hr : ctx.contract.regOf x = some r) : s0.reg r < b :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.1 x b h r hr
+  E.pre.2.2.2.2.2.2.2.2.2.1 x b h r hr
 
 /-- A number in memory the contract bounds (the eight bytes at a place of a run given to read) is below its
 bound at entry. -/
 theorem mbound {x : String} {off b r n : Nat}
     (h : (x, off, b) ∈ ctx.contract.mbounds) (hf : (x, r, n) ∈ ctx.contract.fixeds) : load s0.mem (s0.reg r + off) 8 < b :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.1 x off b h r n hf
+  E.pre.2.2.2.2.2.2.2.2.2.2.1 x off b h r n hf
 
 /-- The blocks an address of a table points to: in memory, apart from the frame and the address to return
 to, holding bytes, and apart from every run given to write. -/
 theorem lane {j : Nat} {x : String} {r count l : Nat} (h : ctx.contract.tableAt j = some (x, r, count, l)) {i : Nat} (hi : i < count) :
     lanePtr s0 r i + 64 * s0.reg l ≤ M64 ∧
     (lanePtr s0 r i + 64 * s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ lanePtr s0 r i) ∧
-    (∀ k, k < 64 * s0.reg l → s0.mem (lanePtr s0 r i + k) < 256) ∧
+    (∀ k, k < 64 * s0.reg l → (s0.mem (lanePtr s0 r i + k)).val < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → lanePtr s0 r i + 64 * s0.reg l ≤ s0.reg r' ∨ s0.reg r' + n' ≤ lanePtr s0 r i :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.1 j x r count l h i hi
+  have h' := E.pre.2.2.2.2.2.2.2.2.2.2.2.1 j x r count l h i hi
+  ⟨h'.1, h'.2.1, fun _ _ => (s0.mem _).isLt, h'.2.2⟩
 
 /-- A number the contract asks to be no less than another is so at entry. -/
 theorem atLeast {x : String} {k r : Nat} (h : (x, k) ∈ ctx.contract.atLeast) (hr : ctx.contract.regOf x = some r) : k ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.1 x k h r hr
+  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.1 x k h r hr
 /-- The file's read-only data, where the contract has it: in memory, each byte the file's, apart from the
 frame, the address to return to and the runs given to write. -/
-theorem dataAt : ctx.contract.dataAt s0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+theorem dataAt : ctx.contract.dataAt s0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2
 theorem data_fits (hd : ctx.contract.data ≠ []) : s0.data + ctx.contract.data.length < M64 := (E.dataAt hd).1
 /-- An address in the file's data is not in the frame. -/
 theorem data_notFrame (hd : ctx.contract.data ≠ []) {a : Nat} (h1 : s0.data ≤ a) (h2 : a < s0.data + ctx.contract.data.length) :
@@ -904,7 +906,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         · simp only [Contract.perm, Contract.inData, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
           right; omega
         · rw [hload]
-          have lt := load_lt (fun x => ctx.contract.data.getD x 0) c.toNat size
+          have lt := load_lt (fun x => ⟨ctx.contract.data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c.toNat size
           have le : 256 ^ size ≤ 256 ^ 8 := Nat.pow_le_pow_right (by decide) (by omega)
           unfold dataWord M64
           have e8 : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
@@ -1890,7 +1892,7 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       obtain ⟨g2, g3⟩ := H.words.wrote w j i m x' r n g1
       have ho := (E.out (List.mem_of_getElem? g1)).2
       refine ⟨g2, fun b hb => ?_⟩
-      show store st.mem a x 8 (s0.reg r + 4 * j + b) = _
+      show (store st.mem a x 8 (s0.reg r + 4 * j + b)).val = _
       rw [store_other _ _ _ _ _ (by omega)]
       exact g3 b hb
   known := H.known
@@ -2016,7 +2018,7 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         exact (List.any_eq_false.mp hnw) _ m (by simp)
       have := E.outOut hw g1 (Ne.symm ne')
       refine ⟨g2, fun b hb => ?_⟩
-      show store st.mem a x 1 (s0.reg r' + 4 * j + b) = _
+      show (store st.mem a x 1 (s0.reg r' + 4 * j + b)).val = _
       rw [store_other _ _ _ _ _ (by omega)]
       exact g3 b hb
   known := H.known
@@ -2070,7 +2072,7 @@ theorem frameSpan_perm {ctx : Ctx} {s0 : State} {a n : Nat}
 
 /-- A store wholly inside the frame and below the saved scalar words does not affect other regions. -/
 theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym}
-    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {mem' : Nat → Nat} {a n : Nat} {spill : List (Row × List Nat)}
+    (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {mem' : Nat → Byte} {a n : Nat} {spill : List (Row × List Nat)}
     (lo : s0.reg RSP - ctx.contract.stack ≤ a) (hi : a + n ≤ s0.reg RSP)
     (apart : ∀ o v, (o, v) ∈ s.frame → a + n ≤ ((s0.reg RSP : Int) + o).toNat)
     (same : ∀ y, y < a ∨ a + n ≤ y → mem' y = st.mem y)
@@ -2116,7 +2118,7 @@ theorem Holds.frameSpanWrite {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat
       obtain ⟨within, hh⟩ := H.words.wrote w j i m x r count hr
       have disjoint := (E.out (List.mem_of_getElem? hr)).2
       refine ⟨within, fun b hb => ?_⟩
-      show mem' (s0.reg r + 4 * j + b) = _
+      show (mem' (s0.reg r + 4 * j + b)).val = _
       rw [same _ (by omega)]
       exact hh b hb
   known := H.known
