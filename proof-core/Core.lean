@@ -3202,16 +3202,20 @@ does not keep are known not to be marked; each run of bytes it is given to read 
 says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
 this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
 says is hidden. And where a cell of the frame is known not to be marked, each run the called function
-may write is within a run this function was given to write (so it is no part of the frame). -/
+may write is within a run this function was given to write (so it is no part of the frame), or is a part
+of the frame that every such cell lies apart from. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   quietRegs.all s.q.regq.contains &&
   c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
   c.fixeds.all (fun x => c.hidden.contains x.1) &&
   (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
-    ctx.contract.outs.any fun (_, b, n0) =>
+    ((ctx.contract.outs.any fun (_, b, n0) =>
       match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
       | some k => decide (0 ≤ k) && decide (b < 16) && decide (k + n ≤ n0)
-      | none => false) &&
+      | none => false) ||
+     (match frameAt s r with
+      | some o => s.q.fq.all fun cell => decide (cell + 8 ≤ o) || decide (o + (n : Int) ≤ cell)
+      | none => false))) &&
   c.regions.all fun (r, l) =>
     c.hiddenAt r ||
       match findRun s r l ctx.contract.regions 0 with
@@ -3231,10 +3235,14 @@ def afterCallQ (s : Sym) : SMarks :=
       | none => [] }
 
 /-- The state whose marks a call is judged by: where the called function is given a part of the frame to
-write, which cells of the frame are known not to be marked is forgotten first (it may write marked bytes
-there, and nothing follows which cells it writes). -/
+write, the cells of the frame that do not lie apart from that part are no longer known not to be marked
+(the called function may write marked bytes there). A cell that lies apart from every such part stays. -/
 def quietAtCall (s : Sym) (c : Contract) : Sym :=
-  if c.outs.any (fun x => (frameAt s x.2.1).isSome) then { s with q := { s.q with fq := [] } } else s
+  let apart (cell : Int) : Bool := c.outs.all fun x =>
+    match frameAt s x.2.1 with
+    | some o => decide (cell + 8 ≤ o) || decide (o + (x.2.2 : Int) ≤ cell)
+    | none => true
+  { s with q := { s.q with fq := s.q.fq.filter apart } }
 
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=

@@ -13,8 +13,7 @@ run of words may be given a part of this function's stack frame, in whole 8-byte
 known, at or above the stack pointer and below the address to return to (`symCallF'` in Core.lean; Lean
 checks `symCallF'_sound`). After the call each word of the part is a new unknown, and two words make a
 cell's number. A part of the frame that the called function reads must lie apart from the part it
-writes. A LIMIT: at such a call the verifier forgets which cells of the frame are known not to depend on
-a secret, so a later jump on a number kept in the frame is refused.
+writes. (A number kept in the frame across such a call, and a jump on it afterwards: test_turns.py.)
 
 The function, its contract and the kept proof are shown; with the contract or the function changed in one
 place, so that what is stated is false, nothing is shown, and each case names what the verifier then
@@ -69,8 +68,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

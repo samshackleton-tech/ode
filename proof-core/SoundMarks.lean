@@ -956,10 +956,13 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           rw [ev_sub, ev_var, H.entry RSP (by decide)] at h2
           omega
         have houts : (c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
-            ctx.contract.outs.any fun (_, b, n0) =>
+            ((ctx.contract.outs.any fun (_, b, n0) =>
               match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
               | some k => decide (0 ≤ k) && decide (b < 16) && decide (k + n ≤ n0)
-              | none => false) = true := by
+              | none => false) ||
+             (match frameAt s r with
+              | some o => s.q.fq.all fun cell => decide (cell + 8 ≤ o) || decide (o + (n : Int) ≤ cell)
+              | none => false))) = true := by
           cases he : s.q.fq.isEmpty with
           | true => rw [List.isEmpty_iff.mp he] at hin; cases hin
           | false => rw [he, Bool.false_or] at houts; exact houts
@@ -975,23 +978,42 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           rw [List.any_eq_false]
           intro ⟨x, r, n⟩ hm
           have := List.all_eq_true.mp houts (x, r, n) hm
-          simp only [Bool.and_eq_true, decide_eq_true_eq, List.any_eq_true] at this
-          obtain ⟨⟨rne, r16⟩, ⟨x0, b, n0⟩, hm0, hpart⟩ := this
-          cases hk : Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
-          | none => simp [hk] at hpart
-          | some k =>
-            simp only [hk, Bool.and_eq_true, decide_eq_true_eq] at hpart
-            obtain ⟨⟨k0, b16⟩, hn⟩ := hpart
-            have vr : (st.reg r : Int) = s0.reg b + k := by
-              have h1 := H.reg r r16
-              have h2 := ev_isConst (ρ := ρ) hk
-              rw [ev_sub, ev_var, H.entry b b16] at h2
+          simp only [Bool.and_eq_true, decide_eq_true_eq, Bool.or_eq_true] at this
+          obtain ⟨⟨rne, r16⟩, hgiven | hframe⟩ := this
+          · -- within a run this function was given to write, which is no part of the frame
+            obtain ⟨⟨x0, b, n0⟩, hm0, hpart⟩ := List.any_eq_true.mp hgiven
+            cases hk : Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
+            | none => simp [hk] at hpart
+            | some k =>
+              simp only [hk, Bool.and_eq_true, decide_eq_true_eq] at hpart
+              obtain ⟨⟨k0, b16⟩, hn⟩ := hpart
+              have vr : (st.reg r : Int) = s0.reg b + k := by
+                have h1 := H.reg r r16
+                have h2 := ev_isConst (ρ := ρ) hk
+                rw [ev_sub, ev_var, H.entry b b16] at h2
+                omega
+              obtain ⟨_, o2⟩ := E.out hm0
+              show ¬ ((decide ((if r = RSP then st.reg RSP - 8 else st.reg r) ≤ a) && decide (a < (if r = RSP then st.reg RSP - 8 else st.reg r) + n)) = true)
+              rw [if_neg rne]
+              simp only [Bool.and_eq_true, decide_eq_true_eq]
               omega
-            obtain ⟨_, o2⟩ := E.out hm0
-            show ¬ ((decide ((if r = RSP then st.reg RSP - 8 else st.reg r) ≤ a) && decide (a < (if r = RSP then st.reg RSP - 8 else st.reg r) + n)) = true)
-            rw [if_neg rne]
-            simp only [Bool.and_eq_true, decide_eq_true_eq]
-            omega
+          · -- a part of the frame: the cell lies apart from it
+            cases hfr : frameAt s r with
+            | none => simp [hfr] at hframe
+            | some o =>
+              rw [hfr] at hframe
+              have hapart := List.all_eq_true.mp hframe cc hin
+              simp only [Bool.or_eq_true, decide_eq_true_eq] at hapart
+              have vr : (st.reg r : Int) = s0.reg RSP + o := by
+                have h1 := H.reg r r16
+                unfold frameAt at hfr
+                have h2 := ev_isConst (ρ := ρ) hfr
+                rw [ev_sub, ev_var, H.entry RSP (by decide)] at h2
+                omega
+              show ¬ ((decide ((if r = RSP then st.reg RSP - 8 else st.reg r) ≤ a) && decide (a < (if r = RSP then st.reg RSP - 8 else st.reg r) + n)) = true)
+              rw [if_neg rne]
+              simp only [Bool.and_eq_true, decide_eq_true_eq]
+              omega
         show s2.marks.mem a = false
         rw [qs a hf ho]
         show markBytes st.marks.mem (st.reg RSP - 8) 8 false a = false
@@ -1000,19 +1022,15 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · rfl
         · rw [← ha]; exact c3 k hk
 
-/-- Forgetting which cells of the frame are known not to be marked keeps what is held of the marks. -/
+/-- Forgetting of some cells of the frame that they are known not to be marked keeps what is held of the marks. -/
 theorem quietAtCall_marks {ctx : Ctx} {s0 : State} {s : Sym} {st : State} (M : MarksOk ctx s0 s.q st) (c : Contract) :
     MarksOk ctx s0 (quietAtCall s c).q st := by
   unfold quietAtCall
-  split
-  · exact ⟨M.reg, M.zf, M.cf, M.stable, by unfold CellsOk; intro x hx; cases hx⟩
-  · exact M
+  exact ⟨M.reg, M.zf, M.cf, M.stable, fun x hx => M.frame x (List.mem_filter.mp hx).1⟩
 
 theorem quietAtCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (c : Contract) :
     Holds ctx s0 ρ (quietAtCall s c) st := by
   unfold quietAtCall
-  split
-  · exact H.q _
-  · exact H
+  exact H.q _
 
 end Ode

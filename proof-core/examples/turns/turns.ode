@@ -1,0 +1,61 @@
+// A parent of two blocks, as examples/parent, with the two values made in a loop whose counter is kept in
+// the stack frame. On each turn the one-block kernel is given a half of the frame's block to read and
+// write, and the counter is read again after that call: its cell lies apart from the half that was written.
+// turns(out, a, b): arguments in rdi, rsi, rdx, as C passes them. Saved and restored: rbx, rbp, r12.
+//   Kept: out in rbx, a in rbp, b in r12, i at [rsp + 64]. Buffer: blk at [rsp + 0], 64 bytes. Frame: 80 bytes.
+fn turns as "ode_turns" {
+  push rbx
+  push rbp
+  push r12
+  sub rsp, 80
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov rax, 0
+  mov qword ptr [rsp + 0], rax
+  mov qword ptr [rsp + 8], rax
+  mov qword ptr [rsp + 16], rax
+  mov qword ptr [rsp + 24], rax
+  mov qword ptr [rsp + 32], rax
+  mov qword ptr [rsp + 40], rax
+  mov qword ptr [rsp + 48], rax
+  mov qword ptr [rsp + 56], rax
+  // i = 0
+  mov qword ptr [rsp + 64], rax
+  // while i < 2
+@turn:
+  mov rax, qword ptr [rsp + 64]
+  cmp rax, 2
+  jae @done
+  // the block to compress: a on the first turn, b on the second
+  mov rsi, rbp
+  cmp rax, 1
+  jb @first
+  mov rsi, r12
+@first:
+  // the half of blk for this turn: blk + (i << 5)
+  shl rax, 5
+  lea rdi, [rsp + 0]
+  add rdi, rax
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  // i = i + 1
+  mov rax, qword ptr [rsp + 64]
+  add rax, 1
+  mov qword ptr [rsp + 64], rax
+  jmp @turn
+@done:
+  mov rdi, rbx
+  lea rsi, [rsp + 0]
+  mov rdx, 64
+  mov rcx, 0
+  mov r8, 0
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 80
+  pop r12
+  pop rbp
+  pop rbx
+  ret
+}

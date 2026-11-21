@@ -1,0 +1,10 @@
+// The contract of ode_turns (turns.ode): the one of ode_parent (examples/parent). The block of the two values
+// and the loop's counter are no arguments: the function keeps them in its stack frame.
+def zero_cv() { [word(0) for i in 0..8] }
+
+contract ode_turns(out: cv, a: block, b: block) {
+    requires no_overlap(out, a, b)
+    ensures out = compress(out, compress(zero_cv(), a, counter(0), 64, 0) ++ compress(zero_cv(), b, counter(0), 64, 0), counter(0), 64, 0)
+    stack 112
+    needs sse41
+}

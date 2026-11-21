@@ -424,7 +424,7 @@ expertise of his team.
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
 processor that the instruction table describes. The formal model that the theorem is about is 1,018 lines.
-The verifier's own 2,782 lines are covered by the theorem, so a Bob who takes the third route does not
+The verifier's own 2,789 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
