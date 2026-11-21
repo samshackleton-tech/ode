@@ -74,7 +74,8 @@ STACK = "refused: a call needs more stack than this function's contract allows"
 NOT_TWO = "refused: eight bytes that are not two words of the run, or of a run that single bytes were written to"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
-BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
+KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
+                                  # would name there (that a part lies within its run; how two numbers compare) none is shown
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
     ("a chunk of 1025 bytes may be given: it has no count of blocks", "len <= 1024", "len <= 1025", FOLLOW),
@@ -85,7 +86,7 @@ CONTRACTS = [
      "chunk_node(words(nd.block[0 .. 32]), t, flags, input)", FOLLOW),
     ("the number and the length at each other's places", "counter: number at 96, length: number at 104 below 65",
      "counter: number at 104, length: number at 96 below 65", WORD),
-    ("the length is said to be below 64: a last block of 64 bytes has none", "length: number at 104 below 65", "length: number at 104 below 64", BELOW),
+    ("the length is said to be below 64: a last block of 64 bytes has none", "length: number at 104 below 65", "length: number at 104 below 64", KNOW),
     ("the flags may be any number: a kernel takes a byte", "t: number, flags: byte, plat: any", "t: number, flags: number, plat: any", ARGS),
     ("one byte less of stack than is used", "stack 256", "stack 143", STACK),
     ("AVX-512 is not said to be needed", NEEDS, "    stack 256\n    needs sse41\n", NEEDS_MORE),
@@ -106,10 +107,10 @@ SOURCES = [
     ("the loop goes on while 63 < rem: the address after a last whole block may pass 2^64", "  mov rax, 64\n  mov rcx, rbp\n", "  mov rax, 63\n  mov rcx, rbp\n", ENTAIL),
     ("the loop goes on while 65 < rem: b3l_pad may be given 65 bytes", "  mov rax, 64\n  mov rcx, rbp\n", "  mov rax, 65\n  mov rcx, rbp\n", ENTAIL),
     ("the next block is taken 60 bytes on", "  mov rax, rbx\n  add rax, 64\n", "  mov rax, rbx\n  add rax, 60\n", FOLLOW),
-    ("60 bytes are counted for a block: a kernel is given bytes past the input", "  mov rax, rbp\n  sub rax, 64\n", "  mov rax, rbp\n  sub rax, 60\n", ENTAIL),
+    ("60 bytes are counted for a block: a kernel is given bytes past the input", "  mov rax, rbp\n  sub rax, 64\n", "  mov rax, rbp\n  sub rax, 60\n", KNOW),
     ("b3l_pad writes at byte 36 of the record", "  mov rax, r13\n  add rax, 32\n", "  mov rax, r13\n  add rax, 36\n", WORD),
     ("b3l_pad writes at byte 28 of the record", "  mov rax, r13\n  add rax, 32\n", "  mov rax, r13\n  add rax, 28\n", WORD),
-    ("b3l_pad is given the whole length to read", "  mov rdx, rbp\n  call b3l_pad\n", "  mov rdx, qword ptr [rsp + 8]\n  call b3l_pad\n", ENTAIL),
+    ("b3l_pad is given the whole length to read", "  mov rdx, rbp\n  call b3l_pad\n", "  mov rdx, qword ptr [rsp + 8]\n  call b3l_pad\n", KNOW),
     ("b3l_pad is given the input from its start", "  mov rsi, rbx\n  mov rdx, rbp\n  call b3l_pad\n", "  mov rsi, qword ptr [rsp + 0]\n  mov rdx, rbp\n  call b3l_pad\n", FOLLOW),
     ("b3l_pad is not called", "  call b3l_pad\n", "", FOLLOW),
     ("the chunk's number is stored at byte 100", "  add rcx, 96\n", "  add rcx, 100\n", WORD),
@@ -158,8 +159,8 @@ def places(symbol): return read(os.path.join(HERE, "examples", "hash", "pad.plac
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, places(symbol)) for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

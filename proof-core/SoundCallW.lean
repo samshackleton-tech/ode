@@ -2457,27 +2457,47 @@ theorem symCallB_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', T.then C⟩
 
-/-- Rows the proof has shown join the facts: what the verifier holds is still so, of the same state of
-the machine and the same unknowns. -/
-theorem learn_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {goals : List Row} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : learn s goals items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
-  simp only [learn] at h
-  obtain ⟨q, _, hc, he⟩ := V.bind_ok h
-  cases q
-  have hs := V.pure_ok he
-  injection hs with heq _; subst s'
-  exact ⟨Agree.refl _ _, Nat.le_refl _,
-    ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
-     fun g m => (List.mem_append.mp m).elim (entails_sound H.facts hc g) (H.facts g),
-     H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩,
-    ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
-     fun g m => (List.mem_append.mp m).elim
-       (fun mg => by
-         have hb := (List.mem_filter.mp mg).2
-         simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
-         exact hb.1)
-       (wf.facts g),
-     wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩⟩
+/-- Rows the proof file gives and the verifier has shown join the facts (`symKnow`): what the verifier
+holds is still so, of the same state of the machine and the same unknowns. (Whatever the advice is: it
+only words what is printed where a proof has run out.) -/
+theorem symKnow_sound {ctx : Ctx} {s0 : State} {advice : Sym → List Row} {ρ : Nat → Int} {st : State} :
+    ∀ (fuel : Nat) {s s' : Sym} {items rest : Items}, symKnow advice fuel s items = .ok (s', rest) →
+      Holds ctx s0 ρ s st → WF s → Carried ctx s0 ρ s ρ s' st
+  | 0, s, s', items, rest, h, H, wf => by
+    simp only [symKnow] at h
+    have hs := V.pure_ok h
+    injection hs with heq _; subst s'
+    exact Carried.here H wf
+  | fuel + 1, s, s', items, rest, h, H, wf => by
+    simp only [symKnow] at h
+    obtain ⟨g, r1, _, h⟩ := V.bind_ok h
+    cases g with
+    | none =>
+      have hs := V.pure_ok h
+      injection hs with heq _; subst s'
+      exact Carried.here H wf
+    | some g =>
+      simp only at h
+      split at h
+      next hb =>
+        obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
+        have hrow : g.holds ρ := entail_sound e2 ρ H.facts
+        have C := symKnow_sound fuel h
+          (⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
+            fun g' m => by
+              rcases List.mem_cons.mp m with rfl | m
+              · exact hrow
+              · exact H.facts g' m,
+            H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩ :
+            Holds ctx s0 ρ { s with facts := g :: s.facts } st)
+          ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
+            fun g' m => by
+              rcases List.mem_cons.mp m with rfl | m
+              · exact hb
+              · exact wf.facts g' m,
+            wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
+        exact ⟨C.agree, C.mono, C.holds, C.wf⟩
+      next => exact (refuse_ok h).elim
 
 /-- A call of a function that writes a part of this function's frame (`symCallF`). -/
 theorem symCallF_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
@@ -2525,7 +2545,7 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 address to come back to can be written; the state the called function starts in is one its contract's
 caller has seen to; what the called function may touch, this function may touch; and of every state the
 contract lets it return in, what the verifier holds after the call is so, at the next instruction. (The
-rows the proof was asked for before the rule, `learn`, are shown, and only add to the facts.) -/
+rows the proof file gives before the rule, `symKnow`, are shown, and only add to the facts.) -/
 theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -2538,7 +2558,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
-  have C := learn_sound e1 H wf
+  have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
   obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i hret
   refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 => ?_⟩
   obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2

@@ -1,4 +1,5 @@
 import Reader
+import Advice
 /-!
 The verifier as the PROVER's helper:  `odeprove TABLE STATEMENT HEAD NAME`
 
@@ -10,7 +11,7 @@ HEAD holds the proof's lines before those to be found: the parts of the function
 `for NAME`, its places, and as many lines of its part as the prover likes to begin from. The further lines
 of NAME's part come on standard input, as the prover finds them.
 
-The verifier (Core.lean) takes the proof's lines by number. Here, when it asks for a line that has not
+The verifier (Core.lean) takes the proof's lines by number. Here, when it comes to a line that has not
 come yet, the process makes a copy of itself (`fork`). The copy goes on as if the proof ended there and
 prints what the verifier then says, as `odeverify` would for that much of the proof. The original waits,
 having done all the work up to that line, for one of:
@@ -120,7 +121,8 @@ def main (args : List String) : IO UInt32 := do
         let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done }
         let why :=
           if f.name == name then
-            match verify ctx { line := lineAsItComes } with
+            -- (with the advice: where the lines have run out before an `ensures` of words or a call, the rows to try are printed)
+            match verify { ctx with advice := adviceFor ctx } { line := lineAsItComes } with
             | .ok _ => none
             | .error why => some why
           else verdict ctx f.proof

@@ -13,7 +13,7 @@ the least), on the terms the function made. As the account has it, the sixty-fou
 through from the greatest down; the value is the first of which the condition is true, the condition
 being false of every one before. Each of those comparisons is seen at once here from one known fact:
 `len <= 4096` says it of the powers from 4 up, and `len >= 2049` of the power 2. (Where no one fact says
-it, the proof is asked which way the comparison is: test_split.py.)
+it, the proof file names the inequality in a row, and the verifier shows it first: test_split.py.)
 
 The function, its contract and the kept proof are shown; with the contract, the definition or the function
 changed in one place, so that what is stated is false, nothing is shown, and each case names what the
@@ -37,18 +37,19 @@ FOLLOW = "refused: the specification's words are not followed on the terms the f
 ARGS = "refused: what a called function's contract says of its arguments is not followed"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
-BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
+KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
+                                  # would name there (that a part lies within its run; how two numbers compare) none is shown
 DEFINITION = "def left_chunks(bytes) { the greatest power of two k with 1024 * k < len(bytes) }"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
-    ("the message may have 2048 bytes: its left part is then one chunk", "len >= 2049", "len >= 2048", BELOW),
-    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", BELOW),
+    ("the message may have 2048 bytes: its left part is then one chunk", "len >= 2049", "len >= 2048", KNOW),
+    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", KNOW),
     ("nothing is asked of the message's length from below", "    requires len >= 2049\n", "", ENTAIL),
-    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", BELOW),
+    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", KNOW),
     ("the block before the last is said", "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]",
      "input[1024 * left_chunks(input) - 128 .. 1024 * left_chunks(input) - 64]", FOLLOW),
     ("the right part's first block is said", "input[1024 * left_chunks(input) - 64 .. 1024 * left_chunks(input)]",
-     "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", BELOW),
+     "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", KNOW),
     ("the counter 1 is said", "counter(0), 64, 0)\n    stack 64", "counter(1), 64, 0)\n    stack 64", FOLLOW),
     ("the definition: the least power of two", DEFINITION, "def left_chunks(bytes) { the least power of two k with 1024 * k < len(bytes) }", FOLLOW),
     ("the definition: a left part may be the whole message", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 1024 * k <= len(bytes) }", FOLLOW),
@@ -85,8 +86,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

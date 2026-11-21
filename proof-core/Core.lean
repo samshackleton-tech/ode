@@ -82,10 +82,11 @@ def among (facts : List Row) (g : Row) : Bool := facts.any fun f => Lin.same f g
 inductive Item where
   | tag (name : String) (n : Nat)
   | proof (starts : List Nat) (steps : List Step)   -- of arithmetic: the rows it starts from, by their numbers among those the verifier holds
+  | know (g : Row)                                  -- a row for the verifier to show from the facts, and then to keep among them
   deriving Inhabited
 
 /-- The proof's lines as the verifier takes them: by their numbers, and the number of the next one. (By
-number, so that a prover's program can hand a line over when the verifier first asks for it.) -/
+number, so that a prover's program can hand a line over when the verifier first comes to it.) -/
 structure Items where
   line : Nat → Option Item
   next : Nat := 0
@@ -152,7 +153,7 @@ def entailAs (what : String) (facts : List Row) (g : Row) : V Unit :=
     | some (.proof starts steps) =>
       if Arithmetic.refutes (negation g :: facts) (pick (negation g :: facts) starts) steps then pure ()
       else refuse "a proof of arithmetic does not show what is to be shown"
-    | some (.tag ..) => refuse "a proof of arithmetic is expected"
+    | some _ => refuse "a proof of arithmetic is expected"
     | none => need what facts [g]
 
 /-- `g ≥ 0` follows from the facts. -/
@@ -182,7 +183,7 @@ def compare (facts : List Row) (a b : Row) : V Cmp :=
       else if name == "lt" then do entail facts (Lin.sub (Lin.sub b a) (Lin.const 1)); pure .lt
       else if name == "gt" then do entail facts (Lin.sub (Lin.sub a b) (Lin.const 1)); pure .gt
       else refuse "lt, eq or gt is expected"
-    | some (.proof ..) => refuse "lt, eq or gt is expected"
+    | some _ => refuse "lt, eq or gt is expected"
     | none => need "compare" facts [Lin.sub a b]
 
 /-- Whether `a` is below `b`, by the facts: the proof says which, `lt` (below) or `ge` (not below). -/
@@ -195,7 +196,7 @@ def isBelow (facts : List Row) (a b : Row) : V Bool :=
       if name == "lt" then do entail facts (Lin.sub (Lin.sub b a) (Lin.const 1)); pure true
       else if name == "ge" then do entail facts (Lin.sub a b); pure false
       else refuse "lt or ge is expected"
-    | some (.proof ..) => refuse "lt or ge is expected"
+    | some _ => refuse "lt or ge is expected"
     | none => need "below" facts [Lin.sub a b]
 
 /-- At a shift to the left: is the number shown to stay below `m`, so that no doubling is lost? Seen at once;
@@ -208,7 +209,7 @@ def staysBelow (facts : List Row) (x : Row) (m : Int) : V Bool :=
       if name == "exact" then do entail facts (Lin.sub (Lin.const (m - 1)) x); pure true
       else if name == "wrap" then pure false
       else refuse "exact or wrap is expected"
-    | some (.proof ..) => refuse "exact or wrap is expected"
+    | some _ => refuse "exact or wrap is expected"
     | none => need "shift" facts [Lin.sub (Lin.const (m - 1)) x]
 
 /-! ## What is held at a point of a path -/
@@ -476,12 +477,21 @@ structure Place where
                                   -- (run, lo, f, args): from the place `lo` on, the run given to write holds the list `f(args)`, place by place
   deriving Inhabited
 
+/-- What a prover's helper may say where a proof that is still being written has run out: the rows it
+would try to show next, before an `ensures` of a run of words and before a call. The verifier's program
+gives none. Nothing is concluded from these rows: they are only printed (`popKnow`). -/
+structure Advice where
+  ensures : Sym → EnsureW → List Row := fun _ _ => []
+  call : Sym → Contract → List Row := fun _ _ => []
+  deriving Inhabited
+
 structure Ctx where
   code : List (Nat × Instr)
   contract : Contract
   defs : List Def
   places : List Place := []                     -- the maker's: where the paths of loops are cut
   callees : List (String × Contract) := []      -- the functions this one calls, each with its contract
+  advice : Advice := {}                         -- a prover's helper's; the verifier's program leaves it empty
   deriving Inhabited
 
 def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → List (String × SVal)
@@ -1528,7 +1538,7 @@ def assume (s : Sym) (rows : List Row) : V (Option Sym) :=
           else refuse "a proof of arithmetic does not show that no input goes this way"
         | _ => refuse "a proof of arithmetic is expected"
       else refuse "live or dead is expected"
-    | some (.proof ..) => refuse "live or dead is expected"
+    | some _ => refuse "live or dead is expected"
     | none => need "branch" (rows ++ s.facts) []
 
 /-! ## The specification, on symbols -/
@@ -1635,7 +1645,7 @@ def heldFor (deeper : Sym → SCall → V Sym) (s : Sym) (c : SCall) : V (Row ×
         | some v => pure (v, s')
         | none => refuse "a use of a definition opened where a number is needed, and its value is still no number"
       else refuse "a number is expected (or a use of a definition whose value is held)"
-    | some (.proof ..) => refuse "a number is expected (or a use of a definition whose value is held)"
+    | some _ => refuse "a number is expected (or a use of a definition whose value is held)"
     | none => fun _ => .error s!"need held\nc {(heldValues s.spec).length}\n"
 
 /-- A result where a number is needed: a number, or a use of a definition whose value is held or found. -/
@@ -1783,7 +1793,7 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
           carry s goal n
           pure s
         else refuse "open or carry is expected"
-      | some (.proof ..) => refuse "open or carry is expected"
+      | some _ => refuse "open or carry is expected"
       | none => fun _ => .error s!"need spec\nc {(callsOf s.spec goal).length}\no {15 - fuel}\nh {(heldValues s.spec).length}\n"
 
 /-- What a line `fact …` of a place says: rows, and facts of the specification. -/
@@ -2408,169 +2418,53 @@ def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
     else refuse "an `ensures` of a whole run that is not the bytes of words: not here yet"
   | _ => refuse "an `ensures` of a whole run that is not the bytes of words: not here yet"
 
-/-! ### A comparison the facts do not say at once is asked of the proof
+/-! ### Rows the proof file gives
 
-`weval` follows a comparison of two numbers only where one fact says it. Where an `ensures` of a run of
-words is refused as the state is, the comparisons that stop it are found (`wask`), each is asked of the
-proof (`isBelow`: the proof says which way it is, with the arithmetic), what is shown joins the facts, and
-the `ensures` is gone through again: `weval` finds the comparisons there. `wask` is advice: whatever it
-gives, only what the proof shows is added. -/
+`weval` follows a comparison of two numbers only where one fact says it, and a call's rules look among
+the facts for the bounds of the parts of runs handed over. Where the facts do not say such a thing at
+once but it follows from them, the proof file says so: before an `ensures` of a run of words, and before
+a call, its next items may be rows (`know`). Each is shown to follow from the facts (`entail`: seen at
+once, or by the proof of arithmetic that comes next in the file) and then joins them. Which rows to give
+is the prover's business. The verifier only shows them.
 
-/-- Among numbers gone through in order, of each of which something is worked out: where it is not
-followed of one of them (and, with `first`, was not followed and true of one before): that number; or,
-with `middle`, the middle one of the run of numbers from there on of which it is not followed. (Advice.
-Where the thing is a comparison that turns once along the numbers, as `1024 * k < len` does along the
-powers of two, an answer about the middle one says it of half the run at once: six questions for
-sixty-four powers. Where it does not turn once, a question about the middle one may be one the proof
-cannot answer, though a search from the first would have ended before it: the function is then not
-shown.) -/
-def askAt (first middle : Bool) (followed : Int → Option WVal) (l : List Int) : Option Int :=
-  let rest := l.dropWhile fun n =>
-    match followed n with
-    | some (.bool true) => !first
-    | some _ => true
-    | none => false
-  match rest with
-  | [] => none
-  | n :: more =>
-    if (followed n).isSome then none
-    else if !middle then some n
-    else
-      let run := n :: more.takeWhile fun m => (followed m).isNone
-      run[run.length / 2]?
+Rows are taken at the first such point the verifier comes to. Where rows are meant for a later point, the
+file says `next` first: that ends the taking of rows at a point. -/
 
-mutual
-  /-- Where `weval` does not follow the expression because two numbers are compared (or one taken from
-  the other, or a part of a run of bytes is to end within it) and the facts do not say at once how they
-  compare: those two numbers, the first such in `weval`'s order. (Advice.) -/
-  def wask (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option (Row × Row)
-    | 0, _, _ => none
-    | fuel + 1, env, e =>
-      if (weval ctx look s (fuel + 1) env e).isSome then none
-      else
-        match e with
-        | .bin op a b =>
-          match weval ctx look s fuel env a, weval ctx look s fuel env b with
-          | some x, some y =>
-            let pair := fun (p q : Row) =>
-              -- (only where `wnum` turns on how the two compare)
-              if !(op == "-" || op == "==" || op == "<" || op == ">=") then none
-              -- `==`, where the first is known to be no less than the second: is the second below the first?
-              else if op == "==" && plain s.facts (Lin.sub p q) then some (q, p) else some (p, q)
-            (match x, y with
-             | .num p, .num q => pair p q
-             | .num p, .int m => pair p (Lin.const m)
-             | .int m, .num q => pair (Lin.const m) q
-             | _, _ => none)
-          | none, _ => wask ctx look s fuel env a
-          | some _, none => wask ctx look s fuel env b
-        | .ifx c a b =>
-          match weval ctx look s fuel env c with
-          | some (.bool true) => wask ctx look s fuel env a
-          | some (.bool false) => wask ctx look s fuel env b
-          | some _ => none
-          | none => wask ctx look s fuel env c
-        | .index a i => (wask ctx look s fuel env a).orElse fun _ => wask ctx look s fuel env i
-        | .call f args =>
-          match wevalList (weval ctx look s fuel env) args with
-          | none => waskList ctx look s fuel env args
-          | some vs =>
-            if f == "len" || own.contains f then none
-            else
-              match findDef ctx.defs f with
-              | some d => if d.params.length == vs.length then wask ctx look s fuel (d.params.zip vs) d.body else none
-              | none => none
-        | .list items => waskList ctx look s fuel env items
-        | .letx x e1 rest =>
-          match weval ctx look s fuel env e1 with
-          | some v => wask ctx look s fuel ((x, v) :: env) rest
-          | none => wask ctx look s fuel env e1
-        | .each e1 x a b =>
-          match weval ctx look s fuel env a, weval ctx look s fuel env b with
-          | some (.int lo), some (.int hi) =>
-            match askAt false false (fun n => weval ctx look s fuel ((x, .int n) :: env) e1) ((List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)) with
-            | some n => wask ctx look s fuel ((x, .int n) :: env) e1
-            | none => none
-          | none, _ => wask ctx look s fuel env a
-          | _, _ => wask ctx look s fuel env b
-        | .withx a puts => (wask ctx look s fuel env a).orElse fun _ => waskList ctx look s fuel env puts
-        | .slice a lo hi =>
-          match weval ctx look s fuel env a, weval ctx look s fuel env lo, weval ctx look s fuel env hi with
-          | some (.region _ l), some (.int i), some (.int j) =>
-            if 0 ≤ i ∧ i ≤ j then some (Lin.var l, Lin.const j) else none        -- is the run shorter than the part's end?
-          | some (.region _ l), some (.int i), some (.num j) =>
-            if 0 ≤ i then (if plain s.facts (Lin.sub j (Lin.const i)) then some (Lin.var l, j) else some (j, Lin.const i)) else none
-          | none, _, _ => wask ctx look s fuel env a
-          | some _, none, _ => wask ctx look s fuel env lo
-          | some _, some _, none => wask ctx look s fuel env hi
-          | _, _, _ => none
-        | .record _ items => waskList ctx look s fuel env items
-        | .field e1 _ => wask ctx look s fuel env e1
-        | .theNumber greatest x a b cond =>
-          match weval ctx look s fuel env a, weval ctx look s fuel env b with
-          | some (.int lo), some (.int hi) =>
-            let among := (List.range (hi - lo).toNat).map fun (k : Nat) => lo + (k : Int)
-            match askAt true false (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among) with
-            | some n => wask ctx look s fuel ((x, .int n) :: env) cond
-            | none => none
-          | none, _ => wask ctx look s fuel env a
-          | _, _ => wask ctx look s fuel env b
-        | .thePower greatest x cond =>
-          let among := (List.range 64).map fun (k : Nat) => (2 : Int) ^ k
-          match askAt true true (fun n => weval ctx look s fuel ((x, .int n) :: env) cond) (if greatest then among.reverse else among) with
-          | some n => wask ctx look s fuel ((x, .int n) :: env) cond
-          | none => none
-        | _ => none
-  /-- The first of the things of a list that `weval` does not follow: what is asked there. -/
-  def waskList (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (String × WVal) → SExpr → Option (Row × Row)
-    | fuel, env, .cons a rest =>
-      if (weval ctx look s fuel env a).isSome then waskList ctx look s fuel env rest else wask ctx look s fuel env a
-    | _, _, _ => none
-end
+/-- The next item of the proof file, where it is a row to know; it is then taken. `next` is taken too, and
+ends the rows of this point. Any other item is left where it is. (Where the file has run out, nothing is
+given. A prover's helper may say there what rows it would try next, `advice`, and that is printed like
+anything else a proof lacks. The verifier's program gives no advice.) -/
+def popKnow (advice : Sym → List Row) (s : Sym) : V (Option Row) := fun items =>
+  match items.line items.next with
+  | some (.know g) => .ok (some g, { items with next := items.next + 1 })
+  | some (.tag name _) => .ok (none, if name == "next" then { items with next := items.next + 1 } else items)
+  | some _ => .ok (none, items)
+  | none =>
+    match advice s with
+    | [] => .ok (none, items)
+    | rows => need "know" s.facts rows items
 
-/-- The comparisons `ask` finds are asked of the proof, one after another, at most `fuel` of them: whether
-the first number is below the second (`isBelow`); what the proof shows joins the facts. It stops where
-nothing is asked, where a number speaks of an unknown not in use, or where what is shown was already
-seen at once (so that nothing is asked twice). -/
-def settleAsked (ask : Sym → Option (Row × Row)) : Nat → Sym → V Sym
+/-- The rows the proof file gives here, at most `fuel` of them: each is shown to follow from the facts and
+the rows before it, and joins the facts. A row that speaks of an unknown not in use is refused. -/
+def symKnow (advice : Sym → List Row) : Nat → Sym → V Sym
   | 0, s => pure s
-  | fuel + 1, s =>
-    match ask s with
+  | fuel + 1, s => do
+    match ← popKnow advice s with
     | none => pure s
-    | some (a, b) =>
-      if !(decide (a.coeff.length ≤ s.nvars) && decide (b.coeff.length ≤ s.nvars)) then pure s
-      else do
-        let lt ← isBelow s.facts a b
-        let row := if lt then Lin.sub (Lin.sub b a) (Lin.const 1) else Lin.sub a b
-        if plain s.facts row then pure s
-        else settleAsked ask fuel { s with facts := row :: s.facts }
+    | some g =>
+      if g.coeff.length ≤ s.nvars then do
+        entail s.facts g
+        symKnow advice fuel { s with facts := g :: s.facts }
+      else refuse "a row the proof gives speaks of an unknown that is not in use"
 
-/-- How many comparisons are asked for one `ensures`, at most. -/
-def ASKS : Nat := 200
+/-- How many rows the proof file may give at one point, at most. -/
+def KNOWN : Nat := 200
 
-/-- What `weval` would be stopped by, working out the `ensures` of a run of words. (Advice.) -/
-def ensureAsk (ctx : Ctx) (e : EnsureW) (s : Sym) : Option (Row × Row) :=
-  match e.value with
-  | .call _ (.cons x .nil) => wask ctx s.tab.find s WFUEL (wenv ctx.contract) x
-  | _ => none
-
-/-- An `ensures` of a run of words: as the state is (`symEnsureW`, which takes nothing from the proof);
-where that is refused, the comparisons that stop the specification's words are asked of the proof, what
-it shows joins the facts, and the `ensures` is gone through again. -/
-def symEnsureAsked (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit := fun items =>
-  match symEnsureW ctx s e items with
-  | .ok r => .ok r
-  | .error _ =>
-    (do
-      let s ← settleAsked (ensureAsk ctx e) ASKS s
-      symEnsureW ctx s e) items
-
-/-- Rows shown to follow from the facts, where the facts do not say them at once: they join the facts.
-(A row that speaks of an unknown not in use is passed over.) -/
-def learn (s : Sym) (goals : List Row) : V Sym := do
-  let missing := goals.filter fun g => decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
-  each (entail s.facts) missing
-  pure { s with facts := missing ++ s.facts }
+/-- An `ensures` of a run of words: first the rows the proof file gives here join the facts; then
+`symEnsureW`. -/
+def symEnsureKnown (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit := do
+  let s ← symKnow (ctx.advice.ensures · e) KNOWN s
+  symEnsureW ctx s e
 
 /-- At the return: the stack pointer is where it was, the registers a callee keeps hold what they held at
 entry, the runs given to write hold what each `ensures` says, and rax holds what the contract says. -/
@@ -2578,7 +2472,7 @@ def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
   else do
-    each (symEnsureAsked ctx s) ctx.contract.ensuresW
+    each (symEnsureKnown ctx s) ctx.contract.ensuresW
     let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
     match ctx.contract.returns with
     | none => pure ()
@@ -3272,33 +3166,6 @@ def symCallB' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 first taken as written with the words it held at entry, where nothing was written to it yet. -/
 def symCallB (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallB' ctx (callTouch ctx s c) c
 
-/-- The rows a call's rules look for among the facts: that each part of a run of bytes with a length
-that the called function is given ends within the run, and does not begin before it. (Advice: `learn`
-adds only what is shown.) -/
-def callNeeds (ctx : Ctx) (s : Sym) (c : Contract) : List (String × Kind) → List Nat → List Row
-  | (_, .fixed n) :: args, r :: regs =>
-    (match findOut (s.reg r) ctx.contract.fixeds 0 with
-     | some _ => []
-     | none =>
-       match findRegion (s.reg r) ctx.contract.regions 0 with
-       | some (.region k off) =>
-         match Lin.isConst off, ctx.contract.regions[k]? with
-         | some c0, some (_, l) => [Lin.sub (Lin.var l) (Lin.const (c0 + n))]
-         | _, _ => []
-       | _ => []) ++ callNeeds ctx s c args regs
-  | (_, .bytes len) :: args, r :: regs =>
-    (match c.regOf len with
-     | some l =>
-       match findRegion (s.reg r) ctx.contract.regions 0 with
-       | some (.region k off) =>
-         match ctx.contract.regions[k]? with
-         | some (_, lb) => [off, Lin.sub (Lin.var lb) (Lin.add off (s.reg l))]
-         | none => []
-       | _ => []
-     | none => []) ++ callNeeds ctx s c args regs
-  | _ :: args, _ :: regs => callNeeds ctx s c args regs
-  | _, _ => []
-
 /-- A call: by the rule for a function that writes nothing for its caller, by the rule for one that
 writes a run of words it also reads, or by the rule for one that writes a run of bytes. -/
 def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
@@ -3309,10 +3176,10 @@ def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   else if c.outs.any (fun x => (frameAt s x.2.1).isSome) then symCallF ctx s c
   else symCallW ctx s c
 
-/-- A call: first the bounds of the parts of runs handed over are asked of the proof where the facts do
-not say them at once; then `symCall'`. -/
+/-- A call: first the rows the proof file gives here join the facts (the bounds of the parts of runs
+handed over, where the facts do not say them at once); then `symCall'`. -/
 def symCall (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := do
-  let s ← learn s (callNeeds ctx s c c.args argRegs)
+  let s ← symKnow (ctx.advice.call · c) KNOWN s
   symCall' ctx s c
 
 /-- What a called function needs of the processor (`needs avx512`), this function's contract says too. (The

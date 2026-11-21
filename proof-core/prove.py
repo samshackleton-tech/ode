@@ -5,13 +5,17 @@
 
 What is to be shown is written by statement.py (OUT.statement). The proof (OUT.proof) has a part for each
 function, a function after those it calls. A part starts with the places of PLACES (a file) and is then
-found by asking: the verifier is run, says what it needs next (`need …`), an answer is added to the proof,
-and it is run again, until it has no more to ask of that function. The answers are found here:
+found a line at a time: the verifier's rules are run on the lines so far; where those lines run out, the run
+says which kind of line the proof lacks next (`need …`); such a line is found here and added; and so on,
+until that function's part lacks nothing. How each kind of line is found:
 
     need entail / branch    a proof of arithmetic, by elimination (../kcheck/kprove.py's derive)
     need compare            which of lt, eq, gt has such a proof
     need shift              exact, where the number shifted to the left is shown to lose no bit, else wrap
     need below              which of lt, ge has such a proof
+    need know               a row to give the verifier before an `ensures` of a run of words or before a call:
+                            the first of the rows proposed that has such a proof (only `odeprove` proposes
+                            rows: the advice is no part of the verifier)
     need spec               which value held to carry over, or which use of a definition to open: each is tried
     need held               which value held is of a use with the same things: each is tried
     a kept register refused the register is left out of the place's `keep`
@@ -343,6 +347,24 @@ class Prover:
                 if refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
                 else: self.last = said; self.note(proof, said + ' (undecided)'); return None
+            elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
+                rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
+                for g, row in zip(goals, rows):
+                    if not g.c or any(f.c == g.c and f.k <= g.k for f in facts): continue        # (a fact says it at once)
+                    if refutation(facts + [negation(g)]) is None: continue
+                    # The verifier takes rows at the first point it comes to after the lines so far, which may be
+                    # an earlier one than the point that lacks the row (a call before the return, where the call
+                    # lacks nothing). `t next` ends the rows of a point: as many as put the row where it is
+                    # lacked, which is where the verifier then needs the row's proof from these same facts.
+                    for passed in range(9):
+                        trial = proof + ["t next"] * passed + ["k " + row]
+                        answer = self.ask(trial).split("\n")
+                        if answer[0] == "need entail" and "g " + row in answer and [l for l in answer if l.startswith("f ")] == given:
+                            found = trial
+                            break
+                    break
+                if found is None: self.last = said; self.note(proof, said + ' (none of the rows has a proof)'); return None
+                proof = found
             elif what == "shift":                              # a shift to the left: is the number shown to lose no bit, or is only its low part kept
                 proof = proof + (["t exact"] if refutation(facts + [negation(goals[0])]) else ["t wrap"])
             elif what == "compare":

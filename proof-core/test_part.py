@@ -34,14 +34,15 @@ FOLLOW = "refused: the specification's words are not followed on the terms the f
 NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
-BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
+KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
+                                  # would name there (that a part lies within its run; how two numbers compare) none is shown
 NOT_KNOWN = "refused: a called function is given to write what is not whole words of a run this function may read and write, each of them known"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
     ("the first block is said", "input[64 .. 128]", "input[0 .. 64]", FOLLOW),
     ("bytes 60 to 124 are said", "input[64 .. 128]", "input[60 .. 124]", FOLLOW),
-    ("the third block is said", "input[64 .. 128]", "input[128 .. 192]", BELOW),
-    ("the message may be one byte too short", "len >= 128", "len >= 127", ENTAIL),
+    ("the third block is said", "input[64 .. 128]", "input[128 .. 192]", KNOW),
+    ("the message may be one byte too short", "len >= 128", "len >= 127", KNOW),
     ("nothing is asked of the message's length", "    requires len >= 128\n", "", ENTAIL),
     ("the counter 1 is said", "input[64 .. 128]), counter(0)", "input[64 .. 128]), counter(1)", FOLLOW),
     ("the block length 63 is said", ", 64, 0)", ", 63, 0)", FOLLOW),
@@ -50,7 +51,7 @@ CONTRACTS = [
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
     ("the kernel is given the bytes from 32 on", "  add rsi, 64\n", "  add rsi, 32\n", FOLLOW),
-    ("the kernel is given the bytes from 65 on: the last is past the 128 asked for", "  add rsi, 64\n", "  add rsi, 65\n", ENTAIL),
+    ("the kernel is given the bytes from 65 on: the last is past the 128 asked for", "  add rsi, 64\n", "  add rsi, 65\n", KNOW),
     ("the kernel is given the bytes from 128 on", "  add rsi, 64\n", "  add rsi, 128\n", ENTAIL),
     ("the kernel is given the bytes 64 before the message", "  add rsi, 64\n", "  sub rsi, 64\n", ENTAIL),
     ("the kernel is given the length as the block's address", "  add rsi, 64\n", "  mov rsi, rdx\n", NO_PART),
@@ -77,8 +78,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

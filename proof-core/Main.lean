@@ -37,7 +37,14 @@ statement's kinds in it is refused.
     keep REGISTER…
     fact EXPRESSION
     decreases EXPRESSION
-    t NAME [N]                what the verifier asks for, in the order it asks
+    t NAME [N]                a word that a rule of the verifier reads where it has come to (`live`, `lt`,
+                              `open 2`, …): the lines stand in the order in which the verifier comes to them
+    k CONSTANT COEFFICIENT…   a row of whole numbers: it says that CONSTANT, plus each COEFFICIENT times the
+                              unknown of its position, is not below zero. Rows may stand before an `ensures`
+                              of a run of words and before a call. The verifier shows each row from the
+                              facts it holds (by the proof of arithmetic that follows it, where one is
+                              needed), and then holds the row as a fact too. `t next` ends the rows of
+                              such a point, so that a row after it is read at a later point.
     p … / s … / q             a proof of arithmetic: the rows it starts from, by their numbers among the
                               rows the verifier holds (0: the first); its steps (as ArithMain.lean reads
                               them); the end

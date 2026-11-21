@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A comparison that no one known fact says is asked of the proof: `ode_split_block` (examples/split)
+"""An inequality that no one known fact says, named by the proof file: `ode_split_block` (examples/split)
 compresses the last block of the left part of a message of 1025 to 4096 bytes. It finds how many chunks
 the left part has as the hash's own functions do, from a quotient: with (len - 1) / 1024 below 2 the left
 part is one chunk, else two. Its contract says where the block lies by ../kcheck/blake3.spec's own
@@ -12,22 +12,26 @@ part is one chunk, else two. Its contract says where the block lies by ../kcheck
 
 What the verifier in Lean takes here that it refused before. Whether 2048 is below the message's length
 decides the definition, and no one known fact says it: it follows from three (what the division left,
-and how the quotient compared with 2). Where the specification's words are not followed as the state
-is, the verifier now finds the comparison that stopped them and asks the proof which way it is; the proof
-answers with the arithmetic that shows it; what is shown joins the known facts; and the specification is
-gone through again. In the same way, before a call's rule, the proof is asked to show that a part of a
-run given to the called function lies within the run. What is asked is advice: only what the proof shows
-is added, and the theorem covers it (`settleAsked_sound`, `learn_sound`).
+and how the quotient compared with 2). The proof file names such an inequality in a line of its own, a row
+(`k`: a constant, then a whole number for each unknown; the row says that their sum is not below zero).
+Before an `ensures` of a run of words, and before the rule of a call, the verifier reads the next items of
+the proof file. Each row among them must speak only of unknowns in use, and must follow from the known
+facts by the arithmetic the file gives next. A row that is shown joins the known facts. Then the
+specification's words are followed, or the call's rule is applied, as the state is. So the proof file
+says that the length is at most 2048 on one way through the function, and on the other that it is at
+least 2048 (before the call: the second chunk's last block lies within the message) and at least 2049
+(before the `ensures`). Which rows to name is the prover's choice, and the verifier has no part in it:
+it adds only what it has shown, and the theorem covers that (`symKnow_sound`, `symEnsureKnown_sound`).
 
 The function, its contract and the kept proof are shown; with the contract, the definition or the function
 changed in one place, so that what is stated is false, nothing is shown, and each case names what the
 verifier then refuses or what the prover cannot give it. Four changed contracts that are still true are
 shown, two of them with a path of the function that no message takes."""
-import os, shutil, sys, tempfile, unittest
+import os, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, HERE); sys.path.insert(0, KCHECK); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
-import built, lean_verify, odec, prove, statement
+import built, lean_verify, odec, prove, session, statement
 
 SPLIT = os.path.join(HERE, "examples", "split")
 NAME, SSE41 = "ode_split_block", "blake3_servil_compress_in_place_sse41"
@@ -43,15 +47,25 @@ FOLLOW = "refused: the specification's words are not followed on the terms the f
 ARGS = "refused: what a called function's contract says of its arguments is not followed"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
-BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
+KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
+                                  # would name there (that a part lies within its run; how two numbers compare) none is shown
 DEFINITION = "def left_chunks(bytes) { the greatest power of two k with 1024 * k < len(bytes) }"
+# The rows of the kept proof, in the file's order: a constant, then a whole number for each unknown (0, 1 and 2
+# are rax, rcx and rdx at entry; rdx holds the length). `k 2048 0 0 -1` says 2048 - len >= 0.
+ROWS = ["k 2048 0 0 -1", "k -2048 0 0 1", "k -2049 0 0 1"]
+
+
+def turned(row):
+    """The row that says the opposite: where `row` says c + a.x >= 0, it says -c - 1 - a.x >= 0."""
+    numbers = [int(n) for n in row.split()[1:]]
+    return "k " + " ".join(str(n) for n in [-numbers[0] - 1] + [-n for n in numbers[1:]])
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
-    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", BELOW),
-    ("the message may have 1024 bytes: it is one chunk, and no power of two is its left part", "len >= 1025", "len >= 1024", BELOW),
-    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", BELOW),
+    ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", KNOW),
+    ("the message may have 1024 bytes: it is one chunk, and no power of two is its left part", "len >= 1025", "len >= 1024", KNOW),
+    ("nothing is asked of the message's length from above", "    requires len <= 4096\n", "", KNOW),
     ("the block before the last is said", BLOCK, "input[1024 * left_chunks(input) - 128 .. 1024 * left_chunks(input) - 64]", FOLLOW),
-    ("the right part's first block is said", BLOCK, "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", BELOW),
+    ("the right part's first block is said", BLOCK, "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", KNOW),
     ("the counter 1 is said", "counter(0), 64, 0)\n    stack 64", "counter(1), 64, 0)\n    stack 64", FOLLOW),
     ("the definition: the least power of two", DEFINITION, "def left_chunks(bytes) { the least power of two k with 1024 * k < len(bytes) }", FOLLOW),
     ("the definition: a left part may be the whole message", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 1024 * k <= len(bytes) }", FOLLOW),
@@ -59,9 +73,9 @@ CONTRACTS = [
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
-    ("the length is divided by 2048", "  shr rax, 10\n", "  shr rax, 11\n", BELOW),
-    ("the length itself is divided, not the length less one: 2048 bytes are taken for three chunks", "  sub rax, 1\n", "", BELOW),
-    ("two chunks before the last byte are taken for one", "  cmp rax, 2\n", "  cmp rax, 3\n", BELOW),
+    ("the length is divided by 2048", "  shr rax, 10\n", "  shr rax, 11\n", KNOW),
+    ("the length itself is divided, not the length less one: 2048 bytes are taken for three chunks", "  sub rax, 1\n", "", KNOW),
+    ("two chunks before the last byte are taken for one", "  cmp rax, 2\n", "  cmp rax, 3\n", KNOW),
     ("one chunk before the last byte is taken for two: the kernel is given bytes a message of two chunks does not have", "  cmp rax, 2\n", "  cmp rax, 1\n", ENTAIL),
     ("the two ways are exchanged", "  jb @one\n", "  jae @one\n", ENTAIL),
     ("the kernel is given the third chunk's last block, which a shorter message does not have", "  add rsi, 1024\n", "  add rsi, 2048\n", ENTAIL),
@@ -94,8 +108,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:
@@ -166,10 +180,13 @@ class Verify(unittest.TestCase):
         with open(proof_path) as f: found = f.read()
         with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: kept = f.read()
         self.assertEqual(found[found.index("for " + NAME):], kept)
-        # the proof answers three questions: which way 2048 and the length compare on each of the two ways
-        # through the function (`t ge`, `t lt`), and, by arithmetic alone, that the second chunk's last
-        # block lies within the message where the quotient is 2 or more
-        self.assertEqual(sorted(l for l in kept.split("\n") if l in ("t ge", "t lt")), ["t ge", "t lt"])
+        # the proof file names three inequalities of the length (the unknown 2: rdx at entry). On the way of
+        # one chunk: it is at most 2048, before the `ensures`. On the way of two chunks: it is at least 2048,
+        # before the call (the second chunk's last block lies within the message), and at least 2049, before
+        # the `ensures`. `t next` ends the rows of a point: it stands before a row meant for a later point.
+        self.assertEqual([l for l in kept.split("\n") if l.startswith("k ")], ROWS)
+        self.assertEqual([l for l in kept.split("\n") if l.startswith(("k ", "t next"))], ["t next", ROWS[0], ROWS[1], "t next", ROWS[2]])
+        self.assertEqual([l for l in kept.split("\n") if l in ("t ge", "t lt")], [])
         # controls: the kernel is not taken as shown without its proof, nor left out of what is to be shown
         shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NAME,)))
         self.assertFalse(shown)
@@ -188,20 +205,97 @@ class Verify(unittest.TestCase):
                     out.write("\n".join(lines[:k] + lines[k + 1:]) + "\n")
                 self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, path)[0])
 
-    def test_an_answer_the_other_way_is_refused(self):
-        """The proof says which way a comparison is, and must show it: the kept proof with one of its two
-        answers turned round (`t ge` for `t lt`, or the other way) is refused."""
+    def with_line(self, k, line):
+        """The verifier's answer to the kept proof with its line `k` replaced by `line`."""
         with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: lines = f.read().split("\n")[:-1]
-        turned = {"t ge": "t lt", "t lt": "t ge"}
-        places = [k for k, l in enumerate(lines) if l in turned]
-        self.assertEqual(len(places), 2)
+        path = os.path.join(self.dir, "replaced.proof")
+        with open(path, "w") as out:
+            with open(os.path.join(HERE, "proofs", SSE41 + ".proof")) as f: out.write(f.read())
+            out.write("\n".join(lines[:k] + [line] + lines[k + 1:]) + "\n")
+        return lean_verify.verify(spec_text(), FUNCTIONS, path)
+
+    def test_a_row_turned_round_is_refused(self):
+        """The proof file names an inequality, and the verifier must show it from the known facts: the kept
+        proof with one of its three rows turned round (a row that says the opposite) is refused. On its way
+        through the function each turned row is false: `len >= 2049` where the quotient is below 2, and
+        `len <= 2047` and `len <= 2048` where it is not."""
+        with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: lines = f.read().split("\n")[:-1]
+        places = [k for k, l in enumerate(lines) if l.startswith("k ")]
+        self.assertEqual([lines[k] for k in places], ROWS)
+        self.assertEqual([turned(lines[k]) for k in places], ["k -2049 0 0 1", "k 2047 0 0 -1", "k 2048 0 0 -1"])
         for k in places:
             with self.subTest(turned=lines[k]):
-                path = os.path.join(self.dir, "turned.proof")
-                with open(path, "w") as out:
-                    with open(os.path.join(HERE, "proofs", SSE41 + ".proof")) as f: out.write(f.read())
-                    out.write("\n".join(lines[:k] + [turned[lines[k]]] + lines[k + 1:]) + "\n")
-                self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, path)[0])
+                shown, said = self.with_line(k, turned(lines[k]))
+                self.assertFalse(shown)
+                # (the arithmetic that the file gives next is of the row as it was, and shows nothing of this one)
+                self.assertEqual(said.split("\n")[0], "refused: a proof of arithmetic does not show what is to be shown")
+
+    def test_a_row_of_an_unknown_that_is_not_in_use_is_refused(self):
+        """A row may speak only of unknowns in use where it is read. (A row about an unknown made later would
+        say something of a number before the verifier has said what the number is.) The kept proof's first
+        row with one more number, for an unknown far beyond those in use: whether that number is 0 or 1, the
+        row is refused, and for this reason."""
+        with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: lines = f.read().split("\n")[:-1]
+        k = next(k for k, l in enumerate(lines) if l.startswith("k "))
+        for last in ("0", "1"):
+            with self.subTest(last=last):
+                shown, said = self.with_line(k, lines[k] + " 0" * 300 + " " + last)
+                self.assertFalse(shown)
+                self.assertEqual(said.split("\n")[0], "refused: a row the proof gives speaks of an unknown that is not in use")
+        self.assertEqual(self.with_line(k, lines[k]), (True, "shown"))         # (the control: the row as it is)
+
+    def test_a_row_that_is_no_row_is_not_read(self):
+        """A `k` line holds whole numbers and nothing else: the reader refuses the file otherwise."""
+        with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: lines = f.read().split("\n")[:-1]
+        k = next(k for k, l in enumerate(lines) if l.startswith("k "))
+        for line in ("k", "k 2048 0 0 x", "k 2048 0 0 -1.5"):
+            with self.subTest(line=line):
+                try: shown = self.with_line(k, line)[0]
+                except SystemExit: shown = False
+                self.assertFalse(shown)
+
+    def test_only_the_provers_helper_says_which_rows_to_try(self):
+        """The verifier's program knows nothing of which rows would help. The kept proof is cut after each of
+        its lines in turn. Where the cut comes right before a row (or before the `t next` that stands
+        before one), `odeverify` goes on without the row and refuses; `odeprove`, the helper that the
+        prover runs (session.py), says `need know` there and prints the rows it would try, the kept
+        proof's row among them. At every other cut the two say the same, word for word, and `odeverify`
+        never says `need know`."""
+        with open(os.path.join(HERE, "proofs", SSE41 + ".proof")) as f: kernel = f.read().split("\n")[:-1]
+        with open(os.path.join(HERE, "proofs", NAME + ".proof")) as f: lines = f.read().split("\n")[:-1]
+        st, cut = os.path.join(self.dir, "cut.statement"), os.path.join(self.dir, "cut.proof")
+        with open(st, "w") as f: f.write("\n".join(statement.statement(spec_text(), FUNCTIONS)) + "\n")
+        head, body = kernel + lines[:1], lines[1:]                             # (`for ode_split_block`: the function has no places)
+        def verifier(n):
+            with open(cut, "w") as f: f.write("".join(l + "\n" for l in head + body[:n]))
+            return subprocess.run([lean_verify.EXE, lean_verify.TABLE, st, cut], capture_output=True, text=True).stdout
+        cuts = [n for n in range(len(body) + 1) if session.whole(body[:n])]
+        before_a_row = [n for n in cuts if n < len(body) and (body[n].startswith("k ") or (body[n] == "t next" and body[n + 1].startswith("k ")))]
+        self.assertEqual(len(before_a_row), 5)                                 # three rows, two of them after a `t next`
+        helper = session.Session(st, head, NAME)
+        try:
+            for n in cuts:
+                with self.subTest(cut_after=body[n - 1] if n else "the first line"):
+                    helped, own = helper.ask(body[:n]), verifier(n)                # what the helper says, and the verifier's own program
+                    self.assertNotIn("need know", own)
+                    if n in before_a_row:
+                        self.assertEqual(helped.split("\n")[0], "need know")
+                        self.assertTrue(own.startswith("refused: "), own)
+                        row = next(l for l in body[n:] if l.startswith("k "))
+                        self.assertIn("g " + row[2:], helped.split("\n"))
+                    else: self.assertEqual(helped, own)
+        finally: helper.close()
+        # and the search for rows is no part of the verifier's program: Main.lean reaches Advice.lean through no import
+        def imports(name, seen):
+            if name in seen or not os.path.exists(os.path.join(HERE, name + ".lean")): return seen
+            seen.add(name)
+            with open(os.path.join(HERE, name + ".lean")) as f:
+                for line in f:
+                    if line.startswith("import "): imports(line.split()[1], seen)
+            return seen
+        self.assertNotIn("Advice", imports("Main", set()))
+        self.assertIn("Core", imports("Main", set()))
+        self.assertIn("Advice", imports("ProveMain", set()))                   # (the control: the helper's program has it)
 
     def test_a_contract_changed_in_one_place(self):
         for what, old, new, why in CONTRACTS:

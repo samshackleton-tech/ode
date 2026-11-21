@@ -81,8 +81,8 @@ The functions it verifies today:
 | `ode_tail` | pads the bytes of a message from byte 16 on into the 64-byte block of a record, by calling the hash's `b3l_pad` | 7 instructions | 5 lines, 49 bytes | 4 ms with `b3l_pad` |
 | `ode_keyed` | copies a 32-byte key out of a 40-byte record, reads the flags that lie beside the key, and compresses one block from them, by calling the SSE4.1 kernel | 11 instructions | 1 line, 14 bytes | 6 ms with the kernel |
 | `ode_left_block` | compresses the last block of the left part of a message of 2049 to 4096 bytes, by calling the SSE4.1 kernel; the contract says where the block lies by the specification's `left_chunks` | 8 instructions | 5 lines, 55 bytes | 6 ms with the kernel |
-| `ode_split_block` | the same for a message of 1025 to 4096 bytes: it finds the size of the left part from a quotient, `(len - 1) / 1024`, which it compares with 2 | 14 instructions | 30 lines, 305 bytes | 8 ms with the kernel |
-| `ode_left_last` | the same for a message of 1025 bytes or more: it finds the size of the left part with the loop of the hash's `b3l_take`, in which `k` takes the value of its double while the double is below the number of chunks | 21 instructions, 1 loop of at most 53 iterations | 2,461 lines, 25.0 kB | 0.10 s with the kernel |
+| `ode_split_block` | the same for a message of 1025 to 4096 bytes: it finds the size of the left part from a quotient, `(len - 1) / 1024`, which it compares with 2 | 14 instructions | 33 lines, 351 bytes | 6 ms with the kernel |
+| `ode_left_last` | the same for a message of 1025 bytes or more: it finds the size of the left part with the loop of the hash's `b3l_take`, in which `k` takes the value of its double while the double is below the number of chunks | 21 instructions, 1 loop of at most 53 iterations | 2,568 lines, 30.6 kB | 0.02 s with the kernel |
 | `ode_far`, `ode_near`, `ode_less` | add 2^63 to a number below 2^63; subtract 2^63 from a number of 2^63 or more; subtract 8 by adding 2^64 - 8 | 4, 5 and 3 instructions | 1 line each | 3 ms each |
 | `ode_empty` | the root node of the empty message: makes a block of 64 zero bytes in its own stack frame and gives the SSE4.1 kernel its address | 17 instructions | 1 line, 14 bytes | 6 ms with the kernel |
 | `ode_parent` | a parent node of two blocks: its 64-byte block is in its stack frame; the SSE4.1 kernel writes each half of it, then reads the whole | 39 instructions | 1 line, 15 bytes | 6 ms with the kernel |
@@ -394,7 +394,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,018 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,741 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,623 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -536,7 +536,7 @@ operations, counters, list comprehensions, slices, list update, records, "the le
 these forms. The message is "not here yet". For an `ensures` of a buffer of words, the verifier evaluates
 these forms on terms, as described above. Its limits there: the ends of a slice must be numbers the
 verifier holds, and a comparison must be one that the known inequalities decide: at once where one of
-them says it, and otherwise by arithmetic that the proof gives when the verifier asks it.
+them says it, and otherwise by arithmetic that the proof file gives at that point.
 For four kinds of 128-bit vector instruction the verifier has rules only for the uses
 that the SSE4.1 kernel makes of them: byte shuffles, shifts, OR, and blends of 16-bit halves. The machine
 model defines them in general.
@@ -593,7 +593,7 @@ These are cases where the verifier rejects a correct function:
   buffer that it reads and writes can be a part of a buffer that the caller may read and write, in whole
   32-bit words; so can a buffer that it only writes. For a buffer of words the offset must be a known
   number. For a read-only buffer whose length is an argument the offset may be a linear expression that
-  the known inequalities bound (the proof is asked for the arithmetic where no one of them does). A
+  the known inequalities bound (the proof file gives the arithmetic where no one of them does). A
   callee that writes more than one buffer, or that also returns a number, is not called yet.
 - The return value of a called function is known only as "the value of this call of this definition". It
   can be used where the caller's contract mentions the same definition with provably equal arguments.
@@ -949,7 +949,7 @@ What is new:
   offset in the caller's buffer and has its own length. Offset and length are linear expressions. The
   verifier accepts the call where one known inequality shows that the offset is not negative, and one that
   the part ends inside the caller's buffer. (Since `examples/split/`, below: where no one inequality shows
-  it, the proof is asked for the arithmetic.)
+  it, the proof file names the inequality in a row and gives the arithmetic.)
 - **In the specification:** `src[16 .. len]` (a slice whose end is an argument) and `len(...)` of such a
   buffer or slice.
 - **A fact about the formal model that this rule needs: a memory cell holds a byte.** A contract says
@@ -1086,39 +1086,52 @@ the last 64 bytes of the left part. The contract is the one of `examples/left/`,
 
 To evaluate `left_chunks` the verifier must decide whether 2048 is below the length. No single known
 inequality says so. It follows from three: the two that the division leaves (`len - 1 = 1024 * q + r`
-with `0 <= r <= 1023`) and the one from the comparison of `q` with 2. Before this step the verifier
-rejected the function for that reason. Two rules changed.
+with `0 <= r <= 1023`) and the one from the comparison of `q` with 2.
 
-- **An `ensures` of a buffer of words** (`symEnsureAsked` in Core.lean). The verifier first evaluates the
-  specification as before. If that fails, it looks for the comparison that stopped the evaluation
-  (`wask`), and asks the proof which way the comparison is. The proof answers "below" or "not below"
-  and gives the arithmetic that shows it (the existing rule `isBelow`). The inequality that was shown is
-  added to the known ones, and the verifier evaluates again. It repeats this, at most 200 times, until
-  the evaluation succeeds or nothing new is learned.
-- **A call** (`learn` and `callNeeds` in Core.lean). Before the call's rule runs, the verifier works out
-  the inequalities that say the callee's read-only buffers lie inside the caller's. Those that no single
-  known inequality shows, it asks the proof to show by arithmetic, and adds them.
+**The proof file names such an inequality, and the verifier only checks it.** A line `k` of the proof
+file is a row of whole numbers: a constant, then a coefficient for each unknown. It states that the
+constant, plus each coefficient times its unknown, is not below zero. For example `k -2049 0 0 1` states
+`len >= 2049`, the length being the third unknown. Rows may stand at two kinds of points:
 
-Which comparison to ask about is a choice that the verdict does not rely on. `wask` and `callNeeds`
-only propose; the verifier adds an inequality only after the proof has shown it, and the soundness
-theorem covers both rules whatever is proposed (`settleAsked_sound` and `symEnsureAsked_sound` in
-SoundTop.lean, `learn_sound` in SoundCallW.lean). A function whose `ensures` is evaluated at once costs
-what it cost before: the stored proofs of the eight functions of the hash are unchanged, byte for byte.
+- **before an `ensures` of a buffer of words** (`symEnsureKnown` in Core.lean), where the inequality
+  decides a comparison in the specification;
+- **before a call** (`symCall`), where the inequalities say that the callee's read-only buffers lie
+  inside the caller's.
 
-The stored proof is 305 bytes. It answers three questions: which way 2048 and the length compare on
-each of the two paths through the function, and, at the call on the second path, that bytes 1984 to
-2048 lie inside the message. The tests change the contract in six ways, the definition in three and
-the code in ten, each making the statement false, and each is refused; so is the stored proof with
-either of its two answers reversed. Four changed contracts that are still true are accepted, two of
-them with a path that no message takes.
+At such a point the verifier reads the next items of the proof file (`symKnow`). For each row it checks
+that the row speaks only of unknowns in use, and shows the row from the known inequalities, by the
+arithmetic that follows the row in the file (the existing rule `entail`). A row that is shown is added
+to the known inequalities. When the next item is not a row, the verifier evaluates the specification,
+or applies the call's rule, once, with what is then known. Rows are optional, so a row is read at the
+first such point the verifier comes to. The item `t next` ends the rows of a point: a row after it is
+read at a later point.
 
-The cost: Core.lean grew by 150 lines, most of them `wask`, which mirrors the evaluation's cases to find
-the comparison to ask about. An alternative that keeps the verifier smaller is to let the prover name
-the inequalities in the proof file; it needs more work on the prover and is not built.
+The verifier does not search for the inequality. An earlier version did: when the evaluation failed, it
+looked for the comparison that had stopped it, read from the proof file which way that comparison went,
+and evaluated again, up to 200 times. That search was 118 of the verifier's lines of code. It is now
+outside the verifier, in Advice.lean (134 lines), which is part of `odeprove` alone, the helper program
+that the prover runs. Where a proof under construction runs out at a point where rows may stand,
+`odeprove` prints the rows that the search proposes (`need know`), and the prover tries them in turn.
+`odeverify` does not contain Advice.lean. Given a proof that lacks a row, it rejects the function;
+`test_split.py` cuts the stored proof after each of its lines and compares the two programs.
+
+The soundness theorem covers the rule (`symKnow_sound` in SoundCallW.lean, `symEnsureKnown_sound` in
+SoundTop.lean). The proposals reach the shared code through one field of the verifier's context
+(`Ctx.advice`), which nothing reads but the `need know` message; the theorem holds for every context,
+so for every value of that field. The stored proofs of the eight functions of the hash are unchanged,
+byte for byte.
+
+The stored proof is 351 bytes. It names three inequalities. On the path of one chunk: the length is at
+most 2048. On the path of two chunks: the length is at least 2048, before the call (bytes 1984 to 2048
+lie inside the message), and at least 2049, before the `ensures`. The tests change the contract in six
+ways, the definition in three and the code in ten, each making the statement false, and each is
+refused. So is the stored proof with any of its three rows replaced by the row that states the
+opposite, and with a row that speaks of an unknown not in use. Four changed contracts that are still
+true are accepted, two of them with a path that no message takes.
 
 One effect on messages: where a statement is false because a part does not lie inside its buffer, or
-because the specification turns on a comparison that can go either way, the prover's last word is now
-`need entail` or `need below` (what it could not show), where the verifier used to refuse by itself.
+because the specification turns on a comparison that can go either way, the prover's last word is
+`need know` (it could show none of the rows proposed there), and `odeverify` rejects the function.
 
 **The loop by which the hash finds the split: `examples/doubling/`** (`test_doubling.py`).
 `ode_left_last(h, input, len)` takes a message of 1025 bytes or more. It finds the size of the left part
@@ -1129,22 +1142,25 @@ the two examples above.
 
 The loop has no invariant. The verifier walks it, which gives 54 paths, one for each size the left part
 can have (1, 2, 4, ..., 2^53 chunks). On each path it must decide, for the sixty-four powers of two,
-which are too great for the message. It asks the proof, as described above. Which power to ask about
-matters for the size of the proof. Asking from the greatest power down took about 27 questions a path
-(a proof of 95 kB, measured with messages up to 2^63 bytes), because an answer about one power says
-nothing at once about the next. For the "power of two" form `wask` therefore asks about the middle one
-of the powers that are still open (`askAt` in Core.lean): one answer then settles all the greater
-powers, or all the lesser. That takes four or five questions a path (240 in all). The stored proof is
-25.0 kB; the prover finds it in 2 seconds and the verifier checks it in 0.1 seconds. This is a change
-of the proposal only, so no proof of soundness changed for it. It has a price: if a condition does
-not turn from false to true once along the powers, the middle question may be one that no proof can
-answer, although a search from the first power would have ended before reaching it. The function is
-then rejected. The conditions in `../kcheck/blake3.spec` turn once.
+which are too great for the message. The proof file names the inequalities that decide it, in rows, as
+described above. Which powers the rows are about matters for the size of the proof. Going from the
+greatest power down took about 27 inequalities a path (a proof of 95 kB, measured with messages up to
+2^63 bytes), because an inequality about one power says nothing at once about the next. For the "power
+of two" form the prover's search therefore proposes the middle one of the powers that are still open
+(`askAt` in Advice.lean): one row then settles all the greater powers, or all the lesser. The stored
+proof has 293 rows, two to seven a path: on each of the 53 paths with two chunks or more, one row before
+the call and one that says `1024 * k` is below the length, and 187 rows in all that say a power is too
+great. It is 30.6 kB; the prover finds it in 1 to 2 seconds and the verifier checks it in 0.02 seconds
+(0.10 seconds when the search was the verifier's: each comparison it settled meant evaluating the
+specification again). The search has a limit: if a condition does not turn from false to true once along the
+powers, the middle row may be one that cannot be shown, although a search from the first power would
+have ended before reaching it. The prover then finds no proof. The conditions in
+`../kcheck/blake3.spec` turn once.
 
 The tests change the contract in four ways, the definition in three and the code in nine, each making
 the statement false, and each is refused. The stored proof with a line left out (every fiftieth line
-is tried) or with an answer reversed (every tenth) is refused. Two changed contracts that are still
-true are accepted.
+is tried), with a row replaced by the row that states the opposite (every tenth row), or with a row
+that speaks of an unknown not in use is refused. Two changed contracts that are still true are accepted.
 
 **Which constants are read as negative: `examples/far/`** (`test_far.py`). A register holds a number
 from 0 to 2^64 - 1, and the processor adds modulo 2^64, so adding 2^64 - 8 subtracts 8. The verifier
@@ -1299,26 +1315,28 @@ specification. (The code and file names call this file the "statement".)
 `prove.py` finds proofs. A verdict does not rely on it: whatever it produces is checked by the verifier, so
 a wrong or hostile prover can only produce something the verifier rejects, or nothing.
 
-It works as a dialogue. It gives the verifier the proof so far; the verifier replies with the next thing
-it needs (for example, "prove that these inequalities imply that one"); the prover finds it and appends
-it. The prover finds arithmetic proofs by eliminating variables. When two rows can serve the same role,
+It works by trial. It runs the verifier on the proof so far. Where that proof runs out, the run ends by
+saying which kind of item the proof lacks next (for example, a proof that certain inequalities imply
+another one). The prover finds such an item, appends it, and runs the verifier again. None of this
+takes place when a finished proof is verified: `odeverify` then reads the input file and the proof
+file, and nothing else. The prover finds arithmetic proofs by eliminating variables. When two rows can serve the same role,
 it considers them in the order it received or derived them. That order does not depend on Python's hash
 seed. The tests compare the stored proofs with what the prover finds. You can run them with either
 CPython or PyPy: `ODE_TESTS=proof-core PYTHON=pypy3 sh tests.sh` from the repository root.
 
-The verifier executable `odeverify` re-checks the whole proof from the first line every time it is asked.
+The verifier executable `odeverify` re-checks the whole proof from the first line every time it is run.
 For `ode_adler32_blocks4`, whose proof has 2,023 lines, that meant re-reading 1.2 million proof lines in
 total and took 47 of the prover's 62 seconds. So the prover now talks to a helper, `odeprove`
 (ProveMain.lean, driven by `session.py`). The helper runs the same verifier code but keeps its position:
-when the verifier asks for a proof line that has not been supplied yet, the process forks. The child
+when the verifier's code comes to a proof line that has not been supplied yet, the process forks. The child
 continues as if the proof ended there and reports what the verifier says. The parent waits for the next
 line. Backtracking to an earlier point is just terminating the later processes.
 
 Time to find each proof, on a 64-thread Zen 4 machine, as measured on November 18. Since then the rules
 for shifts to the left, for low parts and for quotients have changed, and the proofs are found with fewer
-questions: 47, 202, 737, 2,075 and 76. The times have not been measured again:
+runs: 47, 202, 737, 2,075 and 76. The times have not been measured again:
 
-| function | questions asked | with `odeprove` | with `odeverify` each time |
+| function | runs of the verifier | with `odeprove` | with `odeverify` each time |
 |---|---|---|---|
 | `ode_common` | 47 | 0.16 s | 0.28 s |
 | `ode_adler32` | 204 | 0.58 s | 1.26 s |
@@ -1329,7 +1347,8 @@ questions: 47, 202, 737, 2,075 and 76. The times have not been measured again:
 Both ways find byte-for-byte the same proofs (`ODE_PROVE_FROM_START=1` selects the old way). The remaining
 time is the prover's own search for arithmetic proofs. A verdict does not rely on `odeprove` either: `prove.py`
 returns a proof only after `odeverify` has accepted it, and `test_session.py` checks that the two give
-identical answers at every prefix of three stored proofs.
+identical answers at every prefix of three stored proofs. (The two differ in one thing, by design: only
+`odeprove` proposes rows, as described under `examples/split/` above.)
 
 ## Measurements (November 19 and 20, 2026)
 
@@ -1350,13 +1369,13 @@ square of the path's length. They are mended, and the same two runs then took 0.
   found. The hash map is advice: the verifier takes a number from it only where it finds that term at
   that number in the array, and otherwise puts the term at the end. So no proof says anything about the
   hash map, and a wrong entry could cost a term a second number and nothing else.
-- **Seeing at once that a fact gives a goal.** After every instruction the verifier asks of the stack
-  pointer's bounds whether a fact gives each at once. It built the difference of the goal and every fact
+- **Seeing at once that a fact gives a goal.** After every instruction the verifier looks, for each of the
+  stack pointer's bounds, whether a fact gives it at once. It built the difference of the goal and every fact
   to see whether a number alone was left. It now compares the two lists of multiples where they stand.
 - **Finding a quotient the state already knows.** The specification's `hi(t)` and the flag bytes are
   quotients. To find the unknown that is one, the verifier built a difference with every fact. Each
   division made is now noted, and only the unknowns noted for that number and divisor are looked at.
-  The note is advice as well: the four facts that make an unknown a quotient are asked for as before.
+  The note is advice as well: the four facts that make an unknown a quotient are required as before.
 
 The stored proofs did not change by a byte through any of the three.
 
@@ -1484,8 +1503,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,018 lines (Table.lean 152, Machine.lean 496, Contract.lean 370). The
-verifier: 2,900 lines (Core.lean 2,741, Arithmetic.lean 159 including its proofs). The file parser: 178
-lines. The proofs of the theorems: 17,620 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
+verifier: 2,782 lines (Core.lean 2,623, Arithmetic.lean 159 including its proofs). The file parser: 181
+lines. The proofs of the theorems: 17,573 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 
@@ -1496,7 +1515,7 @@ lines. The proofs of the theorems: 17,620 lines, of which Trace.lean (two runs o
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/`, `examples/doubling/`, `examples/far/`, `examples/empty/` and `examples/parent/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
-| the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`) |
+| the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`), `Advice.lean` (which rows to propose; part of `odeprove` alone) |
 | tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_far.py`, `test_empty.py`, `test_parent.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_empty.py` and `test_parent.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

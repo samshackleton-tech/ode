@@ -8,6 +8,8 @@ keeps its place in the proof, where `odeverify` goes through the proof from its 
 of three functions, the proof is cut after each of its lines in turn (for the longest, each seventh), and
 at every cut the two must say the same, word for word: going forward a line at a time, going back from the
 far end, and with the session made to begin again every few batches (as it does when many processes wait).
+(One thing only the helper says: `need know`, with the rows it would try, where the proof file has run out
+at a point where rows may stand. None of these three proofs has a row; test_split.py has that case.)
 
 Two controls. A session that does not go back when the proof gets shorter must be told apart. And a
 helper that says `shown` of everything does not get a proof past prove.py: what the prover hands out has

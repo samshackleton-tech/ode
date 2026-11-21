@@ -13,9 +13,9 @@ compresses the 64 bytes that end the first k chunks. Its contract says where tho
 The loop has no invariant. The verifier walks it: one path for each of the fifty-four counts the left
 part can have (1, 2, 4, ... 2^53 chunks). On each path the specification's definition is to be worked out:
 of the sixty-four powers of two, which are too great for the message? No one known fact says it; the
-verifier asks the proof (see test_split.py), and it asks about the middle one of the powers not yet
-decided, since an answer about one power says it of all the greater ones, or of all the lesser. The kept
-proof has four or five answers a path.
+proof file names the inequalities that say it, in rows (see test_split.py). The prover names the middle
+one of the powers not yet decided, since a row about one power says it of all the greater ones, or of all
+the lesser. The kept proof has two to seven rows a path.
 
 The function, its contract and the kept proof are shown; with the contract, the definition or the function
 changed in one place, so that what is stated is false, nothing is shown, and each case names what the
@@ -42,14 +42,21 @@ CONTRACT = ["arg h inout 32", "arg input bytes len", "arg len number", "needs ss
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
-BELOW = "need below"              # the specification turns on how two numbers compare, the proof is asked which way, and neither follows
+KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
+                                  # would name there (that a part lies within its run; how two numbers compare) none is shown
 DEFINITION = "def left_chunks(bytes) { the greatest power of two k with 1024 * k < len(bytes) }"
+
+
+def turned(row):
+    """The row that says the opposite: where `row` says c + a.x >= 0, it says -c - 1 - a.x >= 0."""
+    numbers = [int(n) for n in row.split()[1:]]
+    return "k " + " ".join(str(n) for n in [-numbers[0] - 1] + [-n for n in numbers[1:]])
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
     # (refused before the specification is reached: the address of byte 1024 may then be 2^64)
     ("the message may have 1024 bytes: it is one chunk, and no power of two is its left part", "len >= 1025", "len >= 1024", ENTAIL),
     ("the block before the last is said", BLOCK, "input[1024 * left_chunks(input) - 128 .. 1024 * left_chunks(input) - 64]", FOLLOW),
-    ("the right part's first block is said", BLOCK, "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", BELOW),
+    ("the right part's first block is said", BLOCK, "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", KNOW),
     ("the counter 1 is said", "counter(0), 64, 0)\n    stack 64", "counter(1), 64, 0)\n    stack 64", FOLLOW),
     ("the definition: the least power of two", DEFINITION, "def left_chunks(bytes) { the least power of two k with 1024 * k < len(bytes) }", FOLLOW),
     ("the definition: a left part may be the whole message", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 1024 * k <= len(bytes) }", FOLLOW),
@@ -57,11 +64,11 @@ CONTRACTS = [
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
-    ("the count of chunks is one too few", "  add rcx, 1\n", "", BELOW),
-    ("two are taken from the length, not one: 2049 bytes are taken for two chunks", "  sub rcx, 1\n", "  sub rcx, 2\n", BELOW),
+    ("the count of chunks is one too few", "  add rcx, 1\n", "", KNOW),
+    ("two are taken from the length, not one: 2049 bytes are taken for two chunks", "  sub rcx, 1\n", "  sub rcx, 2\n", KNOW),
     ("the length is divided by 2048", "  shr rcx, 10\n", "  shr rcx, 11\n", FOLLOW),
     ("k starts at 2: the kernel is given bytes a message of two chunks does not have", "  mov r9, 1\n", "  mov r9, 2\n", ENTAIL),
-    ("the double is doubled again: counts are passed over", "  shl rax, 1\n", "  shl rax, 2\n", BELOW),
+    ("the double is doubled again: counts are passed over", "  shl rax, 1\n", "  shl rax, 2\n", KNOW),
     ("the count is taken for a count of half chunks", "  shl r9, 10\n", "  shl r9, 9\n", FOLLOW),
     ("the kernel is given the block before", "  sub rsi, 64\n", "  sub rsi, 128\n", FOLLOW),
     ("the kernel is given the block length 32", "  mov rdx, 64\n", "  mov rdx, 32\n", FOLLOW),
@@ -89,8 +96,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:
@@ -170,11 +177,22 @@ class Verify(unittest.TestCase):
         prove.prove(spec_text(), [(obj, symbol, "") for obj, symbol in FUNCTIONS], statement_path, proof_path)
         with open(proof_path) as f: found = f.read()
         self.assertEqual(found[found.index("for " + NAME):], "\n".join(self.lines) + "\n")
-        # fifty-four ways out of the loop: on all but the first the proof says that 1024 * k is below the
-        # length (`t lt`); the powers too great are said in 187 answers (`t ge`), three or four a way out,
-        # where asking from the greatest power down took about twenty-six
-        self.assertEqual(self.lines.count("t lt"), 53)
-        self.assertEqual(self.lines.count("t ge"), 187)
+        # fifty-four ways out of the loop, and 293 rows, each about the length alone (the unknown 2: rdx at
+        # entry). On each of the 53 ways with two chunks or more: one row before the call (the length is at
+        # least 1024 * k: the block lies within the message) and one before the `ensures` (1024 * k is below
+        # the length). The powers too great are said in 187 rows (`len <= 2^n`), up to five a way out,
+        # where going from the greatest power down took about twenty-six. No row says anything else.
+        rows = [[int(n) for n in l.split()[1:]] for l in self.lines if l.startswith("k ")]
+        self.assertEqual({tuple(r[1:3]) for r in rows}, {(0, 0)})
+        power = lambda n: n > 0 and n & (n - 1) == 0
+        at_least = sorted(-r[0] for r in rows if r[3] == 1)                    # `len >= N`
+        at_most = [r[0] for r in rows if r[3] == -1]                           # `len <= N`
+        self.assertEqual(len(rows), len(at_least) + len(at_most))
+        self.assertEqual([n for n in at_least if power(n)], [1024 << k for k in range(1, 54)])
+        self.assertEqual([n for n in at_least if not power(n)], [(1024 << k) + 1 for k in range(1, 54)])
+        self.assertEqual((len(at_most), all(power(n) for n in at_most)), (187, True))
+        self.assertEqual((len(rows), self.lines.count("t next")), (293, 54))
+        self.assertEqual([l for l in self.lines if l in ("t ge", "t lt")], [])
         # controls: the kernel is not taken as shown without its proof, nor left out of what is to be shown
         shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NAME,)))
         self.assertFalse(shown)
@@ -189,15 +207,28 @@ class Verify(unittest.TestCase):
             with self.subTest(left_out=k):
                 self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, self.changed(self.lines[:k] + self.lines[k + 1:]))[0])
 
-    def test_an_answer_the_other_way_is_refused(self):
-        """The proof says which way a comparison is, and must show it: the kept proof with one answer
-        turned round (`t ge` for `t lt`, or the other way) is refused. Every tenth answer is tried."""
-        turned = {"t ge": "t lt", "t lt": "t ge"}
-        places = [k for k, l in enumerate(self.lines) if l in turned]
-        self.assertEqual(len(places), 240)
+    def test_a_row_turned_round_is_refused(self):
+        """The proof file names an inequality, and the verifier must show it from the known facts: the kept
+        proof with one row turned round (a row that says the opposite, which is false on that way through
+        the function) is refused. Every tenth row is tried."""
+        places = [k for k, l in enumerate(self.lines) if l.startswith("k ")]
+        self.assertEqual(len(places), 293)
+        self.assertEqual(turned("k -2049 0 0 1"), "k 2048 0 0 -1")
         for k in places[::10]:
-            with self.subTest(turned=k):
-                self.assertFalse(lean_verify.verify(spec_text(), FUNCTIONS, self.changed(self.lines[:k] + [turned[self.lines[k]]] + self.lines[k + 1:]))[0])
+            with self.subTest(turned=self.lines[k]):
+                shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.changed(self.lines[:k] + [turned(self.lines[k])] + self.lines[k + 1:]))
+                self.assertFalse(shown)
+                self.assertEqual(said.split("\n")[0], "refused: a proof of arithmetic does not show what is to be shown")
+
+    def test_a_row_of_an_unknown_that_is_not_in_use_is_refused(self):
+        """A row may speak only of unknowns in use where it is read: the first row, the hundredth and the last,
+        each with one more number, for an unknown far beyond those in use."""
+        places = [k for k, l in enumerate(self.lines) if l.startswith("k ")]
+        for k in (places[0], places[99], places[-1]):
+            with self.subTest(row=self.lines[k]):
+                shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.changed(self.lines[:k] + [self.lines[k] + " 0" * 300 + " 1"] + self.lines[k + 1:]))
+                self.assertFalse(shown)
+                self.assertEqual(said.split("\n")[0], "refused: a row the proof gives speaks of an unknown that is not in use")
 
     def test_a_contract_changed_in_one_place(self):
         for what, old, new, why in CONTRACTS:
