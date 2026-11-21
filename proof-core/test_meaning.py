@@ -90,7 +90,9 @@ class Meaning(unittest.TestCase):
         rng = random.Random(82 + count)
         functions = [(OBJ, symbol)]
         text = module.spec_text()
-        line = meaning.ensures(text, functions, symbol, "out")
+        # one line of the statement a lane: the 32 bytes of the lane's value
+        parts = meaning.ensures_parts(text, functions, symbol, "out")
+        self.assertEqual([(first, size) for first, size, _ in parts], [(32 * i, 32) for i in range(count)])
         cases, want = [], []
         for n in (1, 2, 3):
             key = bytes(rng.randrange(256) for _ in range(32))
@@ -102,11 +104,13 @@ class Meaning(unittest.TestCase):
                 if k is not None: lanes[k] = bytes([lanes[k][0] ^ 1]) + lanes[k][1:]
                 env = {"key": key, "t": t, "packed": packed, "n": n}
                 env.update({f"lane{i}": lanes[i] for i in range(count)})
-                cases.append((lanes_let(count, n, line), env))
+                cases += [(lanes_let(count, n, line), env) for _, _, line in parts]
                 want.append("bytes " + b"".join(self.chunk(key, t, plus(i), flags, start, end, length, [lanes[i][64 * b:64 * b + 64] for b in range(n)])
                                                 for i in range(count)).hex())
-        got = meaning.account(text, functions, cases)
-        self.assertEqual([len(g) for g in got], [len("bytes ") + 64 * count] * len(got))
+        each = meaning.account(text, functions, cases)
+        self.assertEqual([len(g) for g in each], [len("bytes ") + 64] * len(each))
+        self.assertTrue(all(g.startswith("bytes ") for g in each))
+        got = ["bytes " + "".join(g[len("bytes "):] for g in each[k * count:(k + 1) * count]) for k in range(len(want))]      # (the lanes' values, one after another)
         self.assertEqual(got, want)
         self.assertEqual(len(set(got)), len(got))
 

@@ -393,7 +393,7 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,018 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,031 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
 **For the verifier's rules, the reader chooses.** The rules are Core.lean (2,673 lines of code) and the
@@ -694,7 +694,8 @@ so the trace depends on no byte of the blocks or of the key. The addresses in th
 treated as numbers passed to the function, like `n`: the trace does depend on them.
 `statement.py` now reads the three kinds of argument that this contract uses. `16 inputs` is the table of
 addresses described above. `16 cvs` is a buffer of sixteen chaining values, with one `ensures` that speaks
-of each of them. `bytes flags start end length` is one register whose four low bytes have names;
+of each of them. `statement.py` writes one line for each value: the 32 bytes of that value in the buffer
+are the bytes of the words that the contract gives it. `bytes flags start end length` is one register whose four low bytes have names;
 `statement.py` writes each name as that byte of the register's low 32 bits. A contract can also say
 `requires n >= 1` or `requires n < 2` of a number.
 
@@ -1554,9 +1555,9 @@ single-instruction comparison does not cover `lea_data` and `call`, which Machin
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 1,018 lines (Table.lean 152, Machine.lean 496, Contract.lean 370). The
-verifier: 2,832 lines (Core.lean 2,673, Arithmetic.lean 159 including its proofs). The file parser: 181
-lines. The proofs of the theorems: 17,770 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
+**Code size.** The formal model: 1,031 lines (Table.lean 152, Machine.lean 496, Contract.lean 383). The
+verifier: 2,832 lines (Core.lean 2,673, Arithmetic.lean 159 including its proofs). The file parser: 191
+lines. The proofs of the theorems: 17,771 lines, of which Trace.lean (two runs of the machine with marks) is 858 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 

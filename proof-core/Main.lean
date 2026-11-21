@@ -22,6 +22,7 @@ TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by t
     result NAME               or: the number returned is called NAME in the `ensures` lines
     ensures NAME LO HI LIST   at the return the bytes LO to HI of the run NAME are the things of LIST
     ensuresw NAME EXPRESSION  at the return the whole run NAME is the bytes the expression gives
+    ensuresw NAME FIRST COUNT EXPRESSION      or: COUNT bytes of the run NAME, from byte FIRST on, are those bytes
     stack N
     def NAME PARAMETER… = EXPRESSION      a definition of the specification (for every function)
 

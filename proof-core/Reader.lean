@@ -115,9 +115,20 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["arg", name, "inout", n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .inout n)] } }
     | none => throw s!"cannot read {line}"
-  | "ensuresw" :: name :: _ => do
-    let e ← readSExpr (rest line 2)
-    onLast fun g => { g with contract := { g.contract with ensuresW := g.contract.ensuresW ++ [⟨name, e⟩] } }
+  | "ensuresw" :: name :: more => do
+    -- (two numbers before the expression: the part of the run spoken of, its first byte and how many bytes)
+    match more with
+    | a :: m :: _ =>
+      match a.toNat?, m.toNat? with
+      | some a, some m => do
+        let e ← readSExpr (rest line 4)
+        onLast fun g => { g with contract := { g.contract with ensuresW := g.contract.ensuresW ++ [⟨name, e, some (a, m)⟩] } }
+      | _, _ => do
+        let e ← readSExpr (rest line 2)
+        onLast fun g => { g with contract := { g.contract with ensuresW := g.contract.ensuresW ++ [⟨name, e, none⟩] } }
+    | _ => do
+      let e ← readSExpr (rest line 2)
+      onLast fun g => { g with contract := { g.contract with ensuresW := g.contract.ensuresW ++ [⟨name, e, none⟩] } }
   | ["needs", what] => onLast fun g => { g with contract := { g.contract with needs := g.contract.needs ++ [what] } }
   | ["below", name, n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with bounds := g.contract.bounds ++ [(name, n)] } }

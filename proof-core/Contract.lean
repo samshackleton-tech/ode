@@ -266,11 +266,26 @@ structure Ensure where
   deriving Repr, Inhabited
 
 /-- `ensures RUN = value`: when the function has returned, the whole run holds that list of bytes. The value
-is said of the state at entry, and may speak of the bytes that runs given to read (and this run) held then. -/
+is said of the state at entry, and may speak of the bytes that runs given to read (and this run) held then.
+With `part`: so many bytes of the run, from a byte of it on, hold that list (`ensures RUN[i] = value` of one
+of the chaining values a run is). -/
 structure EnsureW where
   run : String
   value : SExpr
+  part : Option (Nat × Nat) := none       -- (the first byte, how many bytes): the part of the run spoken of; none: the whole run
   deriving Repr, Inhabited
+
+/-- The byte of the run where what an `ensures` speaks of begins. -/
+def EnsureW.first (e : EnsureW) : Nat :=
+  match e.part with
+  | some (a, _) => a
+  | none => 0
+
+/-- How many bytes an `ensures` speaks of, in a run of `n` bytes. -/
+def EnsureW.size (e : EnsureW) (n : Nat) : Nat :=
+  match e.part with
+  | some (_, m) => m
+  | none => n
 
 structure Contract where
   args : List (String × Kind)
@@ -486,10 +501,18 @@ def Ensure.holds (e : Ensure) (c : Contract) (defs : List Def) (s s' : State) : 
     ∀ k (h : k < l.length), (s'.mem (s.reg r + a.toNat + k)).val = l[k]
 
 /-- `ensures RUN = value` holds, `s` being the state at entry and `s'` the state at the return: the run is one
-given to write, the value is a list of as many bytes as the run has, and each byte of the run is the list's. -/
+given to write, the value is a list of as many bytes as the run has (as the part spoken of has, which lies
+within the run), and each byte of the run (of that part) is the list's. -/
 def EnsureW.holds (e : EnsureW) (c : Contract) (defs : List Def) (s s' : State) : Prop :=
-  ∃ r n l, (e.run, r, n) ∈ c.outs ∧ Value defs (c.envW s) e.value (.bytes l) ∧ l.length = n ∧
-    ∀ k (h : k < l.length), (s'.mem (s.reg r + k)).val = l[k]
+  ∃ r n l, (e.run, r, n) ∈ c.outs ∧ Value defs (c.envW s) e.value (.bytes l) ∧ l.length = e.size n ∧ e.first + e.size n ≤ n ∧
+    ∀ k (h : k < l.length), (s'.mem (s.reg r + e.first + k)).val = l[k]
+
+/-- Of a whole run that is: the value is a list of as many bytes as the run has, and each byte of the run is
+the list's. -/
+theorem EnsureW.holds_whole {e : EnsureW} (hp : e.part = none) {c : Contract} {defs : List Def} {s s' : State} :
+    e.holds c defs s s' ↔ ∃ r n l, (e.run, r, n) ∈ c.outs ∧ Value defs (c.envW s) e.value (.bytes l) ∧ l.length = n ∧
+      ∀ k (h : k < l.length), (s'.mem (s.reg r + k)).val = l[k] := by
+  simp only [EnsureW.holds, EnsureW.first, EnsureW.size, hp, Nat.zero_add, Nat.add_zero, Nat.le_refl, true_and]
 
 /-- What the function leaves, `s` being the state at entry: it has returned to its caller with the stack
 pointer above the return address, the registers a callee keeps as they were, memory outside its own frame

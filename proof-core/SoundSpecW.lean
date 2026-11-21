@@ -2090,18 +2090,19 @@ theorem symEnsureW_sound {p : Program} (E : Setting ctx p s0) {e : EnsureW} {ite
                 simp only [hwv] at h
                 split at h
                 next hc =>
-                  obtain ⟨hlen, hww⟩ := hc
+                  obtain ⟨hal, hlen, hin, hww⟩ := hc
                   obtain ⟨B, hB⟩ := held_bound H
                   obtain ⟨a, ea, da⟩ := weval_sound H wf hB WFUEL _ _ x _ hwv (wenv_sound E H)
                   obtain ⟨ws, rfl⟩ := WDen.list_inv da
-                  obtain ⟨bs, eo, blen, hm⟩ := written_words H wf hw' l ws 0 hww da
-                  refine ⟨rr, n, bs, List.mem_of_getElem? hw', ⟨WFUEL + B + 1, ?_⟩, by omega, ?_⟩
+                  obtain ⟨bs, eo, blen, hm⟩ := written_words H wf hw' l ws (e.first / 4) hww da
+                  refine ⟨rr, n, bs, List.mem_of_getElem? hw', ⟨WFUEL + B + 1, ?_⟩, by omega, hin, ?_⟩
                   · rw [hv]
                     simp only [evalSpec, evalList, ea]
                     simp [own, builtin, eo, Val.bytes]
                   · intro k hk
                     have hk' := hm k hk
-                    simp only [Nat.mul_zero, Nat.add_zero] at hk'
+                    have e4 : 4 * (e.first / 4) = e.first := by omega
+                    rw [e4] at hk'
                     obtain ⟨_, e⟩ := List.getElem?_eq_some_iff.mp hk'
                     rw [hmem]; exact e.symm
                 next => exact (refuse_ok h).elim

@@ -2473,7 +2473,8 @@ def wordsWritten (look : Node → Option Nat) (wroteW : List (Nat × Nat × Nat)
   | _, _ => false
 
 /-- `ensures RUN = bytes_of(WORDS)`: the specification's words, worked out on the terms, are as many as the
-run has, and each is the term known written at its place of the run. -/
+run has, and each is the term known written at its place of the run. (Of a part of the run: as many as the
+part has, which begins at a whole word and lies within the run; each is the term written at its place there.) -/
 def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
   match e.value with
   | .call f (.cons x .nil) =>
@@ -2482,7 +2483,7 @@ def symEnsureW (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit :=
       | some (w, n) =>
         match weval ctx s.tab.find s WFUEL (wenv ctx.contract) x with
         | some (.list l) =>
-          if l.length * 4 = n ∧ wordsWritten s.tab.find s.wroteW w 0 l = true then pure ()
+          if e.first % 4 = 0 ∧ l.length * 4 = e.size n ∧ e.first + e.size n ≤ n ∧ wordsWritten s.tab.find s.wroteW w (e.first / 4) l = true then pure ()
           else refuse "a word of the run is not known to hold what the specification says"
         | _ => refuse "the specification's words are not followed on the terms the function made"
       | none => refuse "an `ensures` of what is no run given to write"
@@ -3053,7 +3054,7 @@ def callWby (find : Nat → Nat → Option (Nat × Nat × List Nat)) (ctx : Ctx)
   else
     match c.outs, c.inouts, c.ensuresW with
     | [(run, r, n)], [(run', r', n')], [e] =>
-      if !(run == run' && r == r' && n == n' && e.run == run) then
+      if !(run == run' && r == r' && n == n' && e.run == run && e.part.isNone) then
         .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
       else
         let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2

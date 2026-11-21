@@ -108,7 +108,7 @@ class Statement(unittest.TestCase):
         lines = lines_of(below(2))
         self.assertEqual([l for l in lines if l.split()[0] not in ("i", "def", "ensuresw")], LINES)
         self.assertEqual(sum(l.startswith("i ") for l in lines), 460)
-        (ensures,) = [l for l in lines if l.startswith("ensuresw ")]
+        ensures = [l for l in lines if l.startswith("ensuresw ")]
         low = "(bin % (name packed) (num 4294967296))"
         lane = lambda i: (
             "(call chunk (call words (name key)) (call counter (name t)) "
@@ -118,10 +118,8 @@ class Statement(unittest.TestCase):
             f"(bin / {low} (num 16777216)) "
             f"(name n) (index (name inputs) (num {i})))"
         )
-        expr = lane(15)
-        for i in reversed(range(15)):
-            expr = f"(bin ++ {lane(i)} {expr})"
-        self.assertEqual(ensures, f"ensuresw out (call bytes_of {expr})")
+        # one line a lane: the 32 bytes of the lane's value, from byte 32 * i of the run on
+        self.assertEqual(ensures, [f"ensuresw out {32 * i} 32 (call bytes_of {lane(i)})" for i in range(16)])
 
     def test_what_is_not_read_is_refused(self):
         cases = [
@@ -259,6 +257,34 @@ class P16(Files, unittest.TestCase):
                 self.refused(tag, lines_of(change), why)
         with self.subTest(what="stack_366"):
             self.refused("stack_366", self.changed("stack 4096", "stack 366"), "need entail")
+
+    def test_a_changed_line_of_a_lane_is_refused(self):
+        """The statement has one line a lane: `ensuresw out FIRST COUNT …` says what 32 bytes of the run are.
+        With one such line changed by hand, so that it is false or speaks of no part of the run that is
+        whole words, nothing is shown."""
+        at = lambda i: next(l for l in self.lines if l.startswith(f"ensuresw out {32 * i} 32 "))
+        expr = lambda i: at(i)[len(f"ensuresw out {32 * i} 32 "):]
+        self.assertEqual(sum(l.startswith("ensuresw out ") for l in self.lines), 16)
+        cases = [
+            # two lanes' values, each said of the other's bytes
+            ("lanes_exchanged", [f"ensuresw out 0 32 {expr(1)}" if l == at(0) else f"ensuresw out 32 32 {expr(0)}" if l == at(1) else l for l in self.lines]),
+            # a lane's value said of the 32 bytes that begin four bytes further on
+            ("four_bytes_on", self.changed(at(3), f"ensuresw out 100 32 {expr(3)}")),
+            # ... of 32 bytes that do not begin at a whole word
+            ("two_bytes_on", self.changed(at(3), f"ensuresw out 98 32 {expr(3)}")),
+            # the last lane's value said of 32 bytes that begin where the run ends
+            ("past_the_run", self.changed(at(15), f"ensuresw out 512 32 {expr(15)}")),
+            # a lane's value said to be 28 bytes, and 36
+            ("28_bytes", self.changed(at(3), f"ensuresw out 96 28 {expr(3)}")),
+            ("36_bytes", self.changed(at(3), f"ensuresw out 96 36 {expr(3)}")),
+        ]
+        for tag, lines in cases:
+            with self.subTest(what=tag):
+                self.refused(tag, lines, OTHER_WORD)
+        # still true: a lane's line left out (less is said), and a lane's line twice
+        for tag, lines in [("one_lane_less", [l for l in self.lines if l != at(7)]), ("one_lane_twice", self.lines + [at(7)])]:
+            with self.subTest(what=tag):
+                self.assertEqual(self.verify_files(self.write(tag, lines), self.proof), "shown\n")
 
     def test_a_changed_instruction_is_refused(self):
         cases = [

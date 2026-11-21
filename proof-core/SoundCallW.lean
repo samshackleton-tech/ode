@@ -919,7 +919,7 @@ theorem afterCallF_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
 theorem callWby_spec {find : Nat → Nat → Option (Nat × Nat × List Nat)} {ctx : Ctx} {s : Sym} {c : Contract} {plan : CallW}
     (h : callWby find ctx s c = .ok plan) :
     ∃ (run : String) (r n : Nat) (e : EnsureW) (ids : List Nat) (env : List (String × WVal)) (args : SExpr) (vs : List WVal) (d : Def),
-      c.mbounds = [] ∧ c.outs = [(run, r, n)] ∧ c.inouts = [(run, r, n)] ∧ c.ensuresW = [e] ∧ e.run = run ∧
+      c.mbounds = [] ∧ c.outs = [(run, r, n)] ∧ c.inouts = [(run, r, n)] ∧ c.ensuresW = [e] ∧ e.run = run ∧ e.part = none ∧
       find r n = some (plan.w, plan.first, ids) ∧ calleeW ctx s ids c.args argRegs = some env ∧
       e.value = .call "bytes_of" (.cons (.call plan.g args) .nil) ∧ own.contains plan.g = false ∧ plan.g ≠ "len" ∧
       plan.tab = (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 ∧
@@ -941,8 +941,8 @@ theorem callWby_spec {find : Nat → Nat → Option (Nat × Nat × List Nat)} {c
           split at h
           next => cases h
           next hsame =>
-            have hs : ((run = run' ∧ r = r') ∧ n = n') ∧ e.run = run := by simpa using hsame
-            obtain ⟨⟨⟨rfl, rfl⟩, rfl⟩, erun⟩ := hs
+            have hs : (((run = run' ∧ r = r') ∧ n = n') ∧ e.run = run) ∧ e.part = none := by simpa using hsame
+            obtain ⟨⟨⟨⟨rfl, rfl⟩, rfl⟩, erun⟩, epart⟩ := hs
             cases hcr : find r n with
             | none => simp only [hcr] at h; cases h
             | some wi =>
@@ -978,7 +978,7 @@ theorem callWby_spec {find : Nat → Nat → Option (Nat × Nat × List Nat)} {c
                                   subst h
                                   have hok' : (keys.all (Key.ok s.nvars (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2.list.length)) = true := by
                                     simpa using hok
-                                  exact ⟨run, r, n, e, ids, env, args, vs, d, hmb', rfl, rfl, rfl, erun, hcr, hce, hv, hown, hlen, rfl, hwl, hfd, hfk,
+                                  exact ⟨run, r, n, e, ids, env, args, vs, d, hmb', rfl, rfl, rfl, erun, epart, hcr, hce, hv, hown, hlen, rfl, hwl, hfd, hfk,
                                     (fun k mk => Key.ok_wf (List.all_eq_true.mp hok' k mk)), by simpa using hdl, rfl⟩
                                 next => cases h
                             next => cases h
@@ -1132,7 +1132,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have hfin := V.pure_ok h
         injection hfin with hs' _
         subst hs'
-        obtain ⟨run, r, n, e, ids, env, args, vs, d, hmb, houts, hinouts, hens, erun, hcr, hce, hv, hown, hglen, hT, hwl, hfd, hfk,
+        obtain ⟨run, r, n, e, ids, env, args, vs, d, hmb, houts, hinouts, hens, erun, epart, hcr, hce, hv, hown, hglen, hT, hwl, hfd, hfk,
           hkeys, hdl, hwords⟩ := callWby_spec (find := callRun ctx s) hplan
         obtain ⟨xw, b, n0, how, hio, n4, hfit, hreg_r, hnow, hwi⟩ := callRun_spec hcr
         -- the machine at the call
@@ -1365,7 +1365,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             (by simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1r]; omega)]
           exact s1mem a (by omega)
         -- what the contract of the called function says of the run
-        obtain ⟨r_, n_, l, hrm, hval, hll, hlm⟩ := pensW e (by rw [hens]; exact List.mem_cons_self ..)
+        obtain ⟨r_, n_, l, hrm, hval, hll, hlm⟩ := (EnsureW.holds_whole epart).mp (pensW e (by rw [hens]; exact List.mem_cons_self ..))
         rw [erun, houts] at hrm
         simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq, true_and] at hrm
         obtain ⟨e1, e2⟩ := hrm
@@ -1456,7 +1456,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       have hfin := V.pure_ok h
       injection hfin with hs' _
       subst hs'
-      obtain ⟨run, r_, n_, e, ids, env, args, vs, d, hmb, houts, hinouts, hens, erun, hcr, hce, hv, hown, hglen, hT, hwl, hfd, hfk,
+      obtain ⟨run, r_, n_, e, ids, env, args, vs, d, hmb, houts, hinouts, hens, erun, epart, hcr, hce, hv, hown, hglen, hT, hwl, hfd, hfk,
         hkeys, hdl, hwords⟩ := callWby_spec hplan
       have e0 : r = r_ ∧ n = n_ := by
         rw [houts0] at houts
@@ -1677,7 +1677,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           (by simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1r]; omega)]
         exact s1mem a (by omega)
       -- what the contract of the called function says of the run
-      obtain ⟨r_, n_, l, hrm, hval, hll, hlm⟩ := pensW e (by rw [hens]; exact List.mem_cons_self ..)
+      obtain ⟨r_, n_, l, hrm, hval, hll, hlm⟩ := (EnsureW.holds_whole epart).mp (pensW e (by rw [hens]; exact List.mem_cons_self ..))
       rw [erun, houts] at hrm
       simp only [List.mem_cons, List.mem_nil_iff, or_false, Prod.mk.injEq, true_and] at hrm
       obtain ⟨e1, e2⟩ := hrm

@@ -108,12 +108,15 @@ class Statement(unittest.TestCase):
         self.assertEqual(sum(l.startswith("i ") for l in lines), 702)
         for line in (ENTRY, LOW_0, LOW_16, BELOW_0, BELOW_16, HIGH_0, HIGH_16):
             self.assertEqual(lines.count(line), 1, line)
-        (ensures,) = [l for l in lines if l.startswith("ensuresw ")]
-        self.assertEqual(ensures.count("(call chunk "), 32)
-        # lane i has the counter t + i
-        for i in (0, 1, 31):
-            self.assertIn(f"(bin + (call counter (name t)) (num {i})) ", ensures)
-            self.assertEqual(ensures.count(f"(bin + (call counter (name t)) (num {i})) "), 1)
+        # one line a lane: the 32 bytes of the lane's value, from byte 32 * i of the run on
+        ensures = [l for l in lines if l.startswith("ensuresw ")]
+        self.assertEqual(len(ensures), 32)
+        for i, line in enumerate(ensures):
+            self.assertTrue(line.startswith(f"ensuresw out {32 * i} 32 (call bytes_of (call chunk "), line[:80])
+            self.assertEqual(line.count("(call chunk "), 1)
+            # lane i has the counter t + i, and the blocks its address in the table points to
+            self.assertIn(f"(bin + (call counter (name t)) (num {i})) ", line)
+            self.assertIn(f"(index (name inputs) (num {i}))", line)
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")

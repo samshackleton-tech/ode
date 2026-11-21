@@ -459,15 +459,15 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     elif r is not None: out.append("returns " + sexp(r, seqs, scope))
     for leaf in c["leaves"]:
         if leaf["name"] in values and leaf["index"] is not None and leaf["cond"] is None and leaf["part"] is None:
-            # `ensures NAME[i] = E for i in 0..N`, NAME being N chaining values: its bytes are those of the
-            # words of E with 0 for i, then of E with 1 for i, and so on to N - 1
+            # `ensures NAME[i] = E for i in 0..N`, NAME being N chaining values: for each k from 0 to N - 1, the
+            # 32 bytes of the value of number k (from byte 32 * k of the run on) are those of the words of E
+            # with k for i. One line a value: `ensuresw NAME FIRST COUNT …`, a part of the run.
             count, var = values[leaf["name"]], leaf["index"]
             if leaf["each"] != (("num", 0), ("num", count)) or var in names or var in kinds:
                 raise SystemExit(f"statement: the contract of {name} has an `ensures` of each of some values that is not of all of them, or counts by a name given before")
-            each = [by_kind(with_number(leaf["expr"], var, k, name), kinds, name) for k in range(count)]
-            joined = each[-1]
-            for e in reversed(each[:-1]): joined = ("bin", "++", e, joined)
-            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [joined]), seqs, scope))
+            for k in range(count):
+                e = by_kind(with_number(leaf["expr"], var, k, name), kinds, name)
+                out.append(f"ensuresw {leaf['name']} {32 * k} 32 " + sexp(("call", "bytes_of", [e]), seqs, scope))
             continue
         if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
             raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")

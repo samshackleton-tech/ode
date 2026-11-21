@@ -143,9 +143,13 @@ class Statement(unittest.TestCase):
         self.assertEqual(schedule[:16], [64 * k for k in range(16)])
         self.assertEqual(schedule[16:32], [64 * k for k in (2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8)])
         self.assertTrue(all(sorted(schedule[16 * r:16 * r + 16]) == [64 * k for k in range(16)] for r in range(7)))
-        (ensures,) = [l for l in lines if l.startswith("ensuresw ")]
-        self.assertEqual(ensures.count("(call chunk "), 32)
-        self.assertIn("(index (name inputs) (num 31))", ensures)
+        # one line a lane: the 32 bytes of the lane's value, from byte 32 * i of the run on
+        ensures = [l for l in lines if l.startswith("ensuresw ")]
+        self.assertEqual(len(ensures), 32)
+        for i, line in enumerate(ensures):
+            self.assertTrue(line.startswith(f"ensuresw out {32 * i} 32 (call bytes_of (call chunk "), line[:80])
+            self.assertEqual(line.count("(call chunk "), 1)
+            self.assertIn(f"(index (name inputs) (num {i}))", line)
 
 
 class Files:
