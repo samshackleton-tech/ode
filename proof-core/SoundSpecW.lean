@@ -40,6 +40,7 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
       WDen ctx s0 ρ T (.lanes j count l) (.list ((List.range count).map fun i => laneBlocks s0.mem (lanePtr s0 r i) (s0.reg l)))
   | lane (j c l : Nat) (x : String) (r count : Nat) (h : ctx.contract.tableAt j = some (x, r, count, l)) (hc : c % 8 = 0) (hi : c / 8 < count) :
       WDen ctx s0 ρ T (.lane j c l) (laneBlocks s0.mem (lanePtr s0 r (c / 8)) (s0.reg l))
+  | use (h : Nat) : WDen ctx s0 ρ T (.use h) (Val.decode (ρ h).toNat)
   | other (a : Val) : WDen ctx s0 ρ T .other a
 
 section
@@ -172,7 +173,7 @@ theorem heldIds_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l :
       next =>
         obtain ⟨k', m, same⟩ := heldIds_mem h
         exact ⟨k', List.mem_cons_of_mem _ m, same⟩
-    | load _ _ _ | or _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ =>
+    | load _ _ _ | or _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ =>
       simp only [heldIds] at h
       obtain ⟨k', m, same⟩ := heldIds_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
@@ -194,68 +195,78 @@ theorem heldBytes_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l
       next =>
         obtain ⟨k', m, same⟩ := heldBytes_mem h
         exact ⟨k', List.mem_cons_of_mem _ m, same⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ | div _ _ _ | block _ _ _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ =>
       simp only [heldBytes] at h
       obtain ⟨k', m, same⟩ := heldBytes_mem h
       exact ⟨k', List.mem_cons_of_mem _ m, same⟩
 
-/-- Every use of a definition that the state holds the words of, or the bytes of: the definition gives
-those within `B` steps. -/
+/-- Of a use of a definition that the state holds the words of, or the bytes of, or has given a number: the
+definition gives that within `B` steps. (Of what else is known, nothing is said.) -/
+def Known.within (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) (B : Nat) : Known → Prop
+  | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body =
+        some (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
+  | .heldB f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body =
+        some (.list (wordBytes (ids.map fun i => den (inpOf ctx s0) ρ T i)))
+  | .use f keys h => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body = some (Val.decode (ρ h).toNat)
+  | _ => True
+
+theorem Known.within_mono {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {B B' : Nat} (hb : B ≤ B') {k : Known}
+    (h : k.within ctx s0 ρ T B) : k.within ctx s0 ρ T B' := by
+  cases k with
+  | held f keys ids => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
+  | heldB f keys ids => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
+  | use f keys u => obtain ⟨d, hd, hlen, hev⟩ := h; exact ⟨d, hd, hlen, evalSpec_mono _ B hev _ hb⟩
+  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ => trivial
+
+theorem Known.within_of_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {k : Known}
+    (h : k.holds ctx s0 ρ T) : ∃ B, k.within ctx s0 ρ T B := by
+  cases k with
+  | held f keys ids => obtain ⟨d, hd, hlen, fuel, hev⟩ := h; exact ⟨fuel, d, hd, hlen, hev⟩
+  | heldB f keys ids => obtain ⟨d, hd, hlen, fuel, hev⟩ := h; exact ⟨fuel, d, hd, hlen, hev⟩
+  | use f keys u => obtain ⟨d, hd, hlen, fuel, hev⟩ := h; exact ⟨fuel, d, hd, hlen, hev⟩
+  | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ => exact ⟨0, trivial⟩
+
+/-- Every use of a definition that the state holds the words of, or the bytes of, or has given a number: the
+definition gives that within `B` steps. -/
 abbrev HeldWithin (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) (known : List Known) (B : Nat) : Prop :=
-  (∀ f keys ids, Known.held f keys ids ∈ known → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
-    evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body =
-      some (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))) ∧
-  ∀ f keys ids, Known.heldB f keys ids ∈ known → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
-    evalSpec ctx.defs B (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body =
-      some (.list (wordBytes (ids.map fun i => den (inpOf ctx s0) ρ T i)))
+  ∀ k ∈ known, k.within ctx s0 ρ T B
 
 /-- There is such a number of steps: the largest any of them needs. -/
 theorem held_bound_list (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : ∀ (l : List Known),
     (∀ k ∈ l, k.holds ctx s0 ρ T) → ∃ B, HeldWithin ctx s0 ρ T l B
-  | [], _ => ⟨0, ⟨fun _ _ _ m => (nomatch m), fun _ _ _ m => (nomatch m)⟩⟩
+  | [], _ => ⟨0, fun _ m => (nomatch m)⟩
   | k :: more, h => by
-    obtain ⟨B, hB1, hB2⟩ := held_bound_list ctx s0 ρ T more (fun k' m => h k' (List.mem_cons_of_mem _ m))
+    obtain ⟨B, hB⟩ := held_bound_list ctx s0 ρ T more (fun k' m => h k' (List.mem_cons_of_mem _ m))
+    obtain ⟨Bk, hk⟩ := Known.within_of_holds (h k (List.mem_cons_self ..))
+    refine ⟨max B Bk, fun k' m => ?_⟩
+    rcases List.mem_cons.mp m with e | m
+    · subst e; exact Known.within_mono (Nat.le_max_right _ _) hk
+    · exact Known.within_mono (Nat.le_max_left _ _) (hB k' m)
+
+/-- The number found for a use of a definition is that of a use with keys that are the same things. -/
+theorem usedAs_mem {facts : List Row} {f : String} {keys : List Key} : ∀ {l : List Known} {u : Nat},
+    usedAs facts f keys l = some u → ∃ keys', Known.use f keys' u ∈ l ∧ sameKeys facts keys' keys = true
+  | [], _, h => by simp [usedAs] at h
+  | k :: more, u, h => by
     cases k with
-    | held f keys ids =>
-      obtain ⟨d, hd, hlen, fuel, hev⟩ := h _ (List.mem_cons_self ..)
-      refine ⟨max B fuel, ?_, ?_⟩
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · injection e with e1 e2 e3
-          subst e1 e2 e3
-          exact ⟨d, hd, hlen, evalSpec_mono _ fuel hev _ (Nat.le_max_right _ _)⟩
-        · obtain ⟨d', hd', hlen', hev'⟩ := hB1 f' keys' ids' m
-          exact ⟨d', hd', hlen', evalSpec_mono _ B hev' _ (Nat.le_max_left _ _)⟩
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · cases e
-        · obtain ⟨d', hd', hlen', hev'⟩ := hB2 f' keys' ids' m
-          exact ⟨d', hd', hlen', evalSpec_mono _ B hev' _ (Nat.le_max_left _ _)⟩
-    | heldB f keys ids =>
-      obtain ⟨d, hd, hlen, fuel, hev⟩ := h _ (List.mem_cons_self ..)
-      refine ⟨max B fuel, ?_, ?_⟩
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · cases e
-        · obtain ⟨d', hd', hlen', hev'⟩ := hB1 f' keys' ids' m
-          exact ⟨d', hd', hlen', evalSpec_mono _ B hev' _ (Nat.le_max_left _ _)⟩
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · injection e with e1 e2 e3
-          subst e1 e2 e3
-          exact ⟨d, hd, hlen, evalSpec_mono _ fuel hev _ (Nat.le_max_right _ _)⟩
-        · obtain ⟨d', hd', hlen', hev'⟩ := hB2 f' keys' ids' m
-          exact ⟨d', hd', hlen', evalSpec_mono _ B hev' _ (Nat.le_max_left _ _)⟩
-    | load _ _ _ | or _ _ _ | div _ _ _ | block _ _ _ _ =>
-      refine ⟨B, ?_, ?_⟩
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · cases e
-        · exact hB1 _ _ _ m
-      · intro f' keys' ids' m
-        rcases List.mem_cons.mp m with e | m
-        · cases e
-        · exact hB2 _ _ _ m
+    | use f' keys' u' =>
+      simp only [usedAs] at h
+      split at h
+      next e =>
+        injection h with h
+        obtain ⟨e1, e2⟩ := e
+        subst h e1
+        exact ⟨keys', List.mem_cons_self .., e2⟩
+      next =>
+        obtain ⟨k', m, same⟩ := usedAs_mem h
+        exact ⟨k', List.mem_cons_of_mem _ m, same⟩
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ =>
+      simp only [usedAs] at h
+      obtain ⟨k', m, same⟩ := usedAs_mem h
+      exact ⟨k', List.mem_cons_of_mem _ m, same⟩
 
 /-! ## What is looked up -/
 
@@ -596,7 +607,7 @@ theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : Lis
       next =>
         obtain ⟨o, m, hs⟩ := knownBlock_mem h
         exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
-    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ =>
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | use _ _ _ =>
       simp only [knownBlock] at h
       obtain ⟨o, m, hs⟩ := knownBlock_mem h
       exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
@@ -717,6 +728,10 @@ theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
       simp only [flatKey, Option.some.injEq] at h; subst h
       simp only [Key.val, ht]
   | span r off len =>
+    cases hd
+    simp only [flatKey, Option.some.injEq] at h; subst h
+    rfl
+  | use u =>
     cases hd
     simp only [flatKey, Option.some.injEq] at h; subst h
     rfl
@@ -1649,7 +1664,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
               simp only [hh, Option.some.injEq] at h; subst h
               obtain ⟨keys, hk, hi⟩ := Option.bind_eq_some_iff.mp hh
               obtain ⟨keys', hm, same⟩ := heldIds_mem hi
-              obtain ⟨d, hd, hlen', hev⟩ := hB.1 f keys' ids hm
+              obtain ⟨d, hd, hlen', hev⟩ := hB _ hm
               have eas : as = keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf dl hk
               have ekeys : keys'.map (Key.val ctx s0 ρ s.terms) = keys.map (Key.val ctx s0 ρ s.terms) := sameKeys_sound H.facts same
               have hp' : (d.params.length == as.length) = true := by rw [eas, ← ekeys, List.length_map]; simpa using hlen'
@@ -1664,7 +1679,7 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
                 simp only [hh2, Option.some.injEq] at h; subst h
                 obtain ⟨keys, hk, hi⟩ := Option.bind_eq_some_iff.mp hh2
                 obtain ⟨keys', hm, same⟩ := heldBytes_mem hi
-                obtain ⟨d, hd, hlen', hev⟩ := hB.2 f keys' ids hm
+                obtain ⟨d, hd, hlen', hev⟩ := hB _ hm
                 have eas : as = keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf dl hk
                 have ekeys : keys'.map (Key.val ctx s0 ρ s.terms) = keys.map (Key.val ctx s0 ρ s.terms) := sameKeys_sound H.facts same
                 have hp' : (d.params.length == as.length) = true := by rw [eas, ← ekeys, List.length_map]; simpa using hlen'
@@ -1673,6 +1688,22 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
                 exact evalSpec_mono ctx.defs B hev (fuel + B) (Nat.le_add_left _ _)
               | none =>
               simp only [hh2] at h
+              cases hh3 : ((flatKeys look vs).bind fun keys => usedAs s.facts f keys s.known) with
+              | some u =>
+                -- a use the state has given a number: the definition gives, within `B` steps, what the unknown
+                -- of that number stands for
+                simp only [hh3, Option.some.injEq] at h; subst h
+                obtain ⟨keys, hk, hi⟩ := Option.bind_eq_some_iff.mp hh3
+                obtain ⟨keys', hm, same⟩ := usedAs_mem hi
+                obtain ⟨d, hd, hlen', hev⟩ := hB _ hm
+                have eas : as = keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf dl hk
+                have ekeys : keys'.map (Key.val ctx s0 ρ s.terms) = keys.map (Key.val ctx s0 ρ s.terms) := sameKeys_sound H.facts same
+                have hp' : (d.params.length == as.length) = true := by rw [eas, ← ekeys, List.length_map]; simpa using hlen'
+                refine ⟨Val.decode (ρ u).toNat, ?_, WDen.use u⟩
+                simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp', eas, ← ekeys]
+                exact evalSpec_mono ctx.defs B hev (fuel + B) (Nat.le_add_left _ _)
+              | none =>
+              simp only [hh3] at h
               cases hd : findDef ctx.defs f with
               | none => simp [hd] at h
               | some d =>

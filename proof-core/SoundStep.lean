@@ -744,6 +744,7 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
     | heldB _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | div _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | block _ _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | use _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
 
 /-- Eight bytes read of a run of a fixed count given to read: the number the state knows there. The run is
 as it was at entry (the function may not write it), so the number is what `load` reads there at entry. -/
@@ -997,6 +998,7 @@ theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x 
   | held _ _ _ => cases e
   | heldB _ _ _ => cases e
   | block _ _ _ _ => cases e
+  | use _ _ _ => cases e
 
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
 theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
@@ -1220,6 +1222,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
     | heldB _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | div _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | block _ _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | use _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
 theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}

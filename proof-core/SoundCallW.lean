@@ -162,6 +162,7 @@ theorem Key.ok_wf {n t : Nat} {k : Key} (h : k.ok n t = true) : k.wf n t := by
   | span r off len =>
     have : off.coeff.length ≤ n ∧ len.coeff.length ≤ n := by simpa [Key.ok] using h
     exact this
+  | use u => show u < n; simpa [Key.ok] using h
 
 /-- The words whose bytes the account's `bytes_of` gives: each is below 2^32, and the bytes are theirs. -/
 theorem ofWords_spec : ∀ {ws bs : List Val}, ofWords ws = some bs →

@@ -381,13 +381,15 @@ as one number, two numbers' bits put together, the words a definition gives of w
 is held as an unknown (or as terms of the table) of which it is known what it is. -/
 
 /-- A thing a definition is used with, as the verifier holds it: a number, the counter of a number, a list
-of words by their terms, or the blocks an address of a table points to. -/
+of words by their terms, the blocks an address of a table points to, or what another use of a definition
+gives, that use being known by a number of its own. -/
 inductive Key where
   | num (r : Row)
   | counter (r : Row)
   | words (ids : List Nat)
   | lane (j c l : Nat)            -- the blocks that the address at place `c` of the table `j` points to (as many as register `l` held at entry)
   | span (r : Nat) (off len : Row)    -- `len` bytes from place `off` on of the run of bytes at the address register `r` held at entry, as they were at entry
+  | use (h : Nat)                 -- what the use of a definition that has the number `h` gives (`Known.use`)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What is known beyond the facts. -/
@@ -398,6 +400,7 @@ inductive Known where
   | heldB (f : String) (keys : List Key) (ids : List Nat)   -- the definition `f`, used with these things, is the list of the bytes of the words of these terms, four a word, the lowest first
   | div (x : Row) (m : Int) (q : Nat)   -- the unknown `q` is `x` divided by `m` (a number above zero) rounded down, and the unknown after it is the remainder
   | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
+  | use (f : String) (keys : List Key) (h : Nat)    -- the definition `f`, used with these things, gives something; `h` is that use's own number (an unknown's number, which no row speaks of)
   deriving DecidableEq, Repr, Inhabited
 
 /-- What is known NOT to be marked (not to depend on a secret): general registers, the two flags, and
@@ -2039,6 +2042,7 @@ inductive WVal where
   | record (fields : List (String × WVal))    -- a record: its names, each with its thing
   | lanes (j count l : Nat)       -- the table of addresses that the fixed run `j` is: its `count` lanes
   | lane (j c l : Nat)            -- the blocks that the address at place `c` of that table points to (as many as register `l` held at entry)
+  | use (h : Nat)                 -- what the use of a definition that has the number `h` gives
   | other                         -- a thing that is not followed here
   deriving Inhabited
 
@@ -2279,6 +2283,7 @@ def flatKey (look : Node → Option Nat) : WVal → Option Key
   | .counter r => some (.counter r)
   | .list l => (wordIds look l).map .words
   | .lane j c l => some (.lane j c l)
+  | .use h => some (.use h)
   | .span r off len => some (.span r off len)
   | .region r l => some (.span r (Lin.const 0) (Lin.var l))      -- (a whole run of bytes is the part of it from 0 on, as long as it is)
   | _ => none
@@ -2297,6 +2302,7 @@ def Key.ok (n t : Nat) : Key → Bool
   | .words ids => ids.all (· < t)
   | .lane _ _ _ => true
   | .span _ off len => decide (off.coeff.length ≤ n) && decide (len.coeff.length ≤ n)
+  | .use h => decide (h < n)
 
 /-- Two keys are one thing: the same key; or two numbers, or the counters of two numbers, that the facts
 say at once are one number. -/
@@ -2316,6 +2322,12 @@ def heldIds (facts : List Row) (f : String) (keys : List Key) : List Known → O
   | [] => none
   | .held f' keys' ids :: more => if f' = f ∧ sameKeys facts keys' keys = true then some ids else heldIds facts f keys more
   | _ :: more => heldIds facts f keys more
+
+/-- The number of the use of the definition `f` with these things, where the state has given that use one. -/
+def usedAs (facts : List Row) (f : String) (keys : List Key) : List Known → Option Nat
+  | [] => none
+  | .use f' keys' h :: more => if f' = f ∧ sameKeys facts keys' keys = true then some h else usedAs facts f keys more
+  | _ :: more => usedAs facts f keys more
 
 /-- The words whose bytes the state knows the definition `f` to give of these things. -/
 def heldBytes (facts : List Row) (f : String) (keys : List Key) : List Known → Option (List Nat)
@@ -2384,9 +2396,13 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
             match (flatKeys look vs).bind fun keys => heldBytes s.facts f keys s.known with
             | some ids => some (.wbytes ids)
             | none =>
-              match findDef ctx.defs f with
-              | some d => if d.params.length == vs.length then weval ctx look s fuel (d.params.zip vs) d.body else none
-              | none => none
+              -- a use that has a number of its own is followed by that number
+              match (flatKeys look vs).bind fun keys => usedAs s.facts f keys s.known with
+              | some h => some (.use h)
+              | none =>
+                match findDef ctx.defs f with
+                | some d => if d.params.length == vs.length then weval ctx look s fuel (d.params.zip vs) d.body else none
+                | none => none
     | .list items => (wevalList (weval ctx look s fuel env) items).map .list
     | .letx x e rest =>
       match weval ctx look s fuel env e with

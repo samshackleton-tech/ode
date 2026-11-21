@@ -1,4 +1,5 @@
 import SoundWord
+import SoundCode
 /-!
 # Why the verifier's yes is right, 2: what a state on symbols says of a state of the machine
 
@@ -88,6 +89,7 @@ def Key.wf (n t : Nat) : Key → Prop
   | .words ids => ∀ i ∈ ids, i < t
   | .lane _ _ _ => True
   | .span _ off len => bounded n off ∧ bounded n len
+  | .use h => h < n
 
 /-- What is known of a number that is no row speaks only of unknowns in use (`n` of them) and of terms of
 the table (`t` of them). -/
@@ -98,6 +100,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .heldB _ keys ids => (∀ k ∈ keys, k.wf n t) ∧ ∀ i ∈ ids, i < t
   | .div x _ q => bounded n x ∧ q + 1 < n
   | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
+  | .use _ keys h => (∀ k ∈ keys, k.wf n t) ∧ h < n
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
@@ -222,7 +225,7 @@ def wordBytes : List Nat → List Val
   | w :: rest => .int (w % 256 : Nat) :: .int (w / 256 % 256 : Nat) :: .int (w / 65536 % 256 : Nat) :: .int (w / 16777216 % 256 : Nat) :: wordBytes rest
 
 /-- What a thing a definition is used with stands for: a value of the account. -/
-def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key → Val
+noncomputable def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key → Val
   | .num r => .int (ev ρ r)
   | .counter r => .counter ((ev ρ r).toNat % 2 ^ 64)
   | .words ids => .list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i))
@@ -231,6 +234,7 @@ def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Key �
     | some (_, r, _, _) => laneBlocks s0.mem (lanePtr s0 r (c / 8)) (s0.reg l)
     | none => .list []
   | .span r off len => .list ((List.range (ev ρ len).toNat).map fun k => Val.int (s0.mem (s0.reg r + (ev ρ off).toNat + k)))
+  | .use h => Val.decode (ρ h).toNat      -- (the unknown of the use's number stands for what the use gives: SoundCode.lean)
 
 /-- What is known of a number that is no row is so. -/
 def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Known → Prop
@@ -244,6 +248,8 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
   | .block j c off vs => ∃ x r count l, ctx.contract.tableAt j = some (x, r, count, l) ∧ c % 8 = 0 ∧ c / 8 < count ∧
       0 ≤ ev ρ off ∧ ev ρ off + 64 ≤ 64 * (s0.reg l : Int) ∧ vs.length = 16 ∧
       ∀ w, w < 16 → ρ (vs.getD w 0) = (Ode.load s0.mem (lanePtr s0 r (c / 8) + (ev ρ off).toNat + 4 * w) 4 : Nat)
+  | .use f keys h => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+      Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (Val.decode (ρ h).toNat)
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -401,6 +407,7 @@ theorem Key.val_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : Lis
     exact List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk i hi)]
   | lane j c l => rfl
   | span r off len => simp only [Key.val]; rw [← ev_agree wk.1 a, ← ev_agree wk.2 a]
+  | use h => simp only [Key.val]; rw [← a h wk]
 
 /-- What is known of numbers that are no rows stays so under other unknowns that agree on those in use,
 and in a table with more terms after it. -/
@@ -447,6 +454,12 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
       rw [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem (by omega)]
       exact List.getElem_mem _
     rw [← eo, ← a _ (wk.2 _ hm)]; exact h7 w hw
+  | use f keys u =>
+    obtain ⟨d, h1, h2, h3⟩ := h
+    refine ⟨d, h1, h2, ?_⟩
+    have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
+      List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
+    rw [ek, ← a u wk.2]; exact h3
 
 theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -455,6 +468,7 @@ theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') 
   | words js => exact fun i hi => Nat.lt_of_lt_of_le (wk i hi) ht
   | lane j c l => trivial
   | span r off len => exact ⟨bounded_mono hn wk.1, bounded_mono hn wk.2⟩
+  | use h => exact Nat.lt_of_lt_of_le wk hn
 
 theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -464,6 +478,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | heldB f keys ids => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
   | div x m q => exact ⟨bounded_mono hn wk.1, Nat.lt_of_lt_of_le wk.2 hn⟩
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
+  | use f keys h => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), Nat.lt_of_lt_of_le wk.2 hn⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Byte} {n : Nat}
