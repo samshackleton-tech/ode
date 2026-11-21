@@ -1311,6 +1311,95 @@ theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : 
     · refine ⟨by rw [ex]; exact Int.natCast_nonneg _, by rw [ey]; exact Int.natCast_nonneg _, ?_⟩
       rw [new, ex, ey]; simp
 
+/-- The bits of a number below 2^j and of any number, put together: the second number's bits from bit j on,
+and what the first number's bits and the second's lower bits make. -/
+theorem or_small {x k j : Nat} (hx : x < 2 ^ j) : x ||| k = 2 ^ j * (k / 2 ^ j) + (x ||| k % 2 ^ j) := by
+  have h := (Nat.div_add_mod (x ||| k) (2 ^ j)).symm
+  rw [Nat.or_div_two_pow, Nat.or_mod_two_pow, Nat.div_eq_of_lt hx, Nat.mod_eq_of_lt hx, Nat.zero_or] at h
+  exact h
+
+/-- What `smallBits` finds: the number lies from 0 to below 2^j, and j is at most 32. -/
+theorem smallBits_sound {facts : List Row} {x : Row} {j : Nat} (h : smallBits facts x = some j) (ρ : Nat → Int)
+    (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ x ∧ ev ρ x < (2 : Int) ^ j ∧ j ≤ 32 := by
+  unfold smallBits at h
+  have hp := List.find?_some h
+  have hm := List.mem_of_find?_eq_some h
+  simp only [Bool.and_eq_true] at hp
+  have g1 := plain_sound hp.1 ρ hf
+  have g2 := plain_sound hp.2 ρ hf
+  simp only [ev_sub, ev_const] at g2
+  refine ⟨g1, by omega, ?_⟩
+  simp only [List.mem_cons, List.mem_nil_iff, or_false] at hm
+  rcases hm with rfl | rfl | rfl <;> decide
+
+/-- The remainder by 2^j of a number that is no less than zero, as a number of the machine. -/
+theorem emod_two_pow_toNat {k : Int} (k0 : 0 ≤ k) (j : Nat) : k % (2 : Int) ^ j = ((k.toNat % 2 ^ j : Nat) : Int) := by
+  rw [Int.natCast_emod, Int.toNat_of_nonneg k0]; simp
+
+/-- What `orParts` finds: the second number is that number of the table, which is 2^j or more; the first lies
+from 0 to below 2^j; and j is at most 32. -/
+theorem orParts_sound {facts : List Row} {x y : Row} {k : Int} {j : Nat} (h : orParts facts x y = some (k, j)) (ρ : Nat → Int)
+    (hf : ∀ f ∈ facts, f.holds ρ) : ev ρ y = k ∧ 0 ≤ ev ρ x ∧ ev ρ x < (2 : Int) ^ j ∧ j ≤ 32 := by
+  unfold orParts at h
+  cases hc : Lin.isConst y with
+  | none => simp [hc] at h
+  | some k' =>
+    cases hj : smallBits facts x with
+    | none => simp [hc, hj] at h
+    | some j' =>
+      simp only [hc, hj] at h
+      split at h
+      next =>
+        injection h with h
+        injection h with h1 h2
+        subst h1 h2
+        exact ⟨ev_isConst hc, smallBits_sound hj ρ hf⟩
+      next => cases h
+
+/-- The bits of a small number and of a number of the table that is 2^j or more, put together: what
+`symOrSmall` gives is that number. -/
+theorem symOrSmall_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {k : Int} {j : Nat} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symOrSmall s x k j items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hk : (xb : Int) = k) (hb : xb < M64)
+    (small : xa < 2 ^ j) (j32 : j ≤ 32) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
+  have lt : xa ||| xb < M64 := by unfold M64 at *; exact Nat.or_lt_two_pow hx.1 hb
+  have split := or_small (k := xb) small
+  have k0 : 0 ≤ k := by rw [← hk]; exact Int.natCast_nonneg _
+  have kn : k.toNat = xb := by rw [← hk]; exact Int.toNat_natCast xb
+  have kmod : k % (2 : Int) ^ j = ((xb % 2 ^ j : Nat) : Int) := by rw [emod_two_pow_toNat k0, kn]
+  have whole := Nat.div_add_mod xb (2 ^ j)
+  unfold symOrSmall at h
+  split at h
+  next h0 =>
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    have m0 : xb % 2 ^ j = 0 := by rw [kmod] at h0; exact Int.natCast_eq_zero.mp h0
+    have e : xa ||| xb = xa + xb := by rw [split, m0, Nat.or_zero]; omega
+    refine ⟨ρ, Carried.here H wf, lt, lt, ?_, bounded_add hx.2.2 (bounded_const _ _)⟩
+    rw [ev_add, ev_const, ← hx.2.1, ← hk, e]; omega
+  next h0 =>
+    obtain ⟨⟨u, s1⟩, r1, hor, h⟩ := V.bind_ok h
+    have plt : 2 ^ j ≤ 2 ^ 32 := Nat.pow_le_pow_right (by decide) j32
+    have k0lt : xb % 2 ^ j < M64 := by
+      have := Nat.mod_lt xb (Nat.two_pow_pos j)
+      unfold M64; omega
+    have hy0 : EV.sem ρ s.nvars (xb % 2 ^ j) (.lin (Lin.const (k % 2 ^ j))) := ⟨k0lt, by rw [ev_const, kmod], bounded_const _ _⟩
+    obtain ⟨ρ', c, _, sem⟩ := symOrKnown_sound hor H wf xa (xb % 2 ^ j) hx hy0
+    cases u with
+    | lin ur =>
+      simp only at h
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      refine ⟨ρ', c, lt, lt, ?_, bounded_add sem.2.2 (bounded_const _ _)⟩
+      rw [ev_add, ev_const, ← sem.2.1, split, kmod, ← hk]; omega
+    | equal _ _ => exact (refuse_ok h).elim
+    | below _ _ => exact (refuse_ok h).elim
+
 /-- Two numbers' bits put together, one of the two being the number zero or neither. -/
 theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
@@ -1340,7 +1429,27 @@ theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {
       subst xa0
       rw [Nat.zero_or]
       exact ⟨ρ, Carried.here H wf, hy.1, hy⟩
-    next => exact symOrKnown_sound h H wf xa xb hx hy
+    next =>
+      cases hp : orParts s.facts x y with
+      | some kj =>
+        obtain ⟨k, j⟩ := kj
+        simp only [hp] at h
+        obtain ⟨ek, x0, xlt, j32⟩ := orParts_sound hp ρ H.facts
+        have small : xa < 2 ^ j := Int.ofNat_lt.mp (by rw [hx.2.1]; simpa using xlt)
+        exact symOrSmall_sound h H wf xa xb hx (by rw [hy.2.1, ek]) hy.1 small j32
+      | none =>
+        simp only [hp] at h
+        cases hq : orParts s.facts y x with
+        | some kj =>
+          obtain ⟨k, j⟩ := kj
+          simp only [hq] at h
+          obtain ⟨ek, y0, ylt, j32⟩ := orParts_sound hq ρ H.facts
+          have small : xb < 2 ^ j := Int.ofNat_lt.mp (by rw [hy.2.1]; simpa using ylt)
+          rw [Nat.or_comm]
+          exact symOrSmall_sound h H wf xb xa hy (by rw [hx.2.1, ek]) hx.1 small j32
+        | none =>
+          simp only [hq] at h
+          exact symOrKnown_sound h H wf xa xb hx hy
 
 /-- The 64-bit mask ending in six zero bits rounds an address down to a multiple of 64. -/
 theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64) := by

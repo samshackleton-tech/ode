@@ -269,6 +269,31 @@ theorem divided_spec (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m
   exact H.known _ (divided_known hd) pos
 
 
+/-- A row is the row with its number's remainder in that number's place, and a multiple of the divisor. -/
+theorem ev_rest (ρ : Nat → Int) (x : Row) (m : Int) : ev ρ x = ev ρ (Lin.rest x m) + m * (x.constant / m) := by
+  simp only [ev, Lin.rest]
+  have := Int.emod_add_mul_ediv x.constant m
+  omega
+
+theorem within_sound {facts : List Row} {y : Row} {m : Int} (h : within facts y m = true) (ρ : Nat → Int)
+    (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ y ∧ ev ρ y < m := by
+  unfold within at h
+  simp only [Bool.and_eq_true] at h
+  have g1 := plain_sound h.1 ρ hf
+  have g2 := plain_sound h.2 ρ hf
+  simp only [ev_sub, ev_const] at g2
+  exact ⟨g1, by omega⟩
+
+/-- A multiple of the divisor and a number from 0 to below the divisor: that number is the remainder, and the
+multiple's quotient is the quotient. -/
+theorem rest_sound (H : Holds ctx s0 ρ s st) {x : Row} {m : Int} (pos : 0 < m) (h : within s.facts (Lin.rest x m) m = true) :
+    ev ρ (Lin.rest x m) = ev ρ x % m ∧ x.constant / m = ev ρ x / m := by
+  obtain ⟨g0, g1⟩ := within_sound h ρ H.facts
+  rw [ev_rest ρ x m]
+  constructor
+  · rw [Int.add_mul_emod_self_left]; exact (Int.emod_eq_of_lt g0 g1).symm
+  · rw [Int.add_mul_ediv_left _ _ (by omega : m ≠ 0), Int.ediv_eq_zero_of_lt g0 g1]; simp
+
 theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : lowOf s x m = some r) : ev ρ r = ev ρ x % m := by
   unfold lowOf at h
   split at h
@@ -286,11 +311,73 @@ theorem lowOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < 
       exact (Int.emod_eq_of_lt g0 (by omega)).symm
     next =>
       cases hd : divided s x m with
-      | none => simp [hd] at h
       | some q =>
-        simp only [hd, Option.map_some] at h
+        simp only [hd] at h
         injection h with h; subst h
         rw [ev_var]; exact (divided_spec H pos hd).2
+      | none =>
+        simp only [hd] at h
+        split at h
+        next hw =>
+          injection h with h; subst h
+          exact (rest_sound H pos hw).1
+        next => cases h
+
+/-- The quotient `quotOf` gives is the quotient. -/
+theorem quotOf_sound (H : Holds ctx s0 ρ s st) {x r : Row} {m : Int} (pos : 0 < m) (h : quotOf s x m = some r) : ev ρ r = ev ρ x / m := by
+  unfold quotOf at h
+  cases hd : divided s x m with
+  | some q =>
+    simp only [hd] at h
+    injection h with h; subst h
+    rw [ev_var]; exact (divided_spec H pos hd).1
+  | none =>
+    simp only [hd] at h
+    split at h
+    next hw =>
+      injection h with h; subst h
+      rw [ev_const]; exact (rest_sound H pos hw).2
+    next => cases h
+
+/-- What `orSmall` gives is the two numbers' bits put together. -/
+theorem orSmall_sound (H : Holds ctx s0 ρ s st) {x r : Row} {k : Int} (h : orSmall s x k = some r) :
+    0 ≤ ev ρ x ∧ 0 ≤ k ∧ ev ρ r = (((ev ρ x).toNat ||| k.toNat : Nat) : Int) := by
+  unfold orSmall at h
+  cases hj : smallBits s.facts x with
+  | none => simp [hj] at h
+  | some j =>
+    simp only [hj] at h
+    obtain ⟨x0, xlt, _⟩ := smallBits_sound hj ρ H.facts
+    split at h
+    next kge =>
+      have ppos : (0 : Int) < 2 ^ j := Int.pow_pos (by decide)
+      have k0 : 0 ≤ k := by omega
+      have ex := Int.toNat_of_nonneg x0
+      have ek := Int.toNat_of_nonneg k0
+      have small : (ev ρ x).toNat < 2 ^ j := Int.ofNat_lt.mp (by rw [ex]; simpa using xlt)
+      have split' := or_small (k := k.toNat) small
+      have kmod := emod_two_pow_toNat k0 j
+      have whole := Nat.div_add_mod k.toNat (2 ^ j)
+      refine ⟨x0, k0, ?_⟩
+      split at h
+      next h0 =>
+        injection h with h; subst h
+        have m0 : k.toNat % 2 ^ j = 0 := by rw [kmod] at h0; exact Int.natCast_eq_zero.mp h0
+        have e : (ev ρ x).toNat ||| k.toNat = (ev ρ x).toNat + k.toNat := by rw [split', m0, Nat.or_zero]; omega
+        rw [ev_add, ev_const, e]; omega
+      next h0 =>
+        cases hk : knownOr x (Lin.const (k % 2 ^ j)) s.known with
+        | none => simp [hk] at h
+        | some v =>
+          simp only [hk, Option.some.injEq] at h; subst h
+          have hv : ρ v = (((ev ρ x).toNat ||| (k.toNat % 2 ^ j) : Nat) : Int) := by
+            rcases knownOr_mem hk with mm | mm
+            · obtain ⟨_, _, g3⟩ := H.known _ mm
+              rw [g3, ev_const, kmod, Int.toNat_natCast]
+            · obtain ⟨_, _, g3⟩ := H.known _ mm
+              rw [g3, ev_const, kmod, Int.toNat_natCast, Nat.or_comm]
+          rw [ev_add, ev_const, ev_var, hv, split', kmod]; omega
+    next => cases h
 
 theorem highOf_sound (H : Holds ctx s0 ρ s st) {x q : Row} (h : highOf s x = some q) : ev ρ q = ev ρ x / W32i := by
   unfold highOf at h
@@ -793,14 +880,12 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
           subst oe
           split at h
           next mpos =>
-            cases hd : divided s r m with
-            | none => simp [hd] at h
-            | some q =>
-              simp only [hd, Option.map_some, Option.some.injEq] at h; subst h
+            cases hq : quotOf s r m with
+            | none => simp [hq] at h
+            | some r' =>
+              simp only [hq, Option.map_some, Option.some.injEq] at h; subst h
               refine ⟨.int (ev ρ r / m), by simp [binop, mpos], ?_⟩
-              have := WDen.num (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) (Lin.var q)
-              rw [ev_var, (divided_spec H mpos hd).1] at this
-              exact this
+              rw [← quotOf_sound H mpos hq]; exact WDen.num r'
           next => cases h
         next =>
           split at h
@@ -816,9 +901,17 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
               exact ⟨.int (ev ρ r), by simp [binop, r0, Int.max_eq_left r0], WDen.num r⟩
             next =>
               cases hk : knownOr r (Lin.const m) s.known with
-              | none => simp [hk] at h
+              | none =>
+                simp only [hk] at h
+                cases ho : orSmall s r m with
+                | none => simp [ho] at h
+                | some r' =>
+                  simp only [ho, Option.map_some, Option.some.injEq] at h; subst h
+                  obtain ⟨r0, m0, e⟩ := orSmall_sound H ho
+                  refine ⟨.int (((ev ρ r).toNat ||| m.toNat : Nat) : Int), by simp [binop, r0, m0], ?_⟩
+                  rw [← e]; exact WDen.num r'
               | some v =>
-                simp only [hk, Option.map_some, Option.some.injEq] at h; subst h
+                simp only [hk, Option.some.injEq] at h; subst h
                 have hv : 0 ≤ ev ρ r ∧ 0 ≤ ev ρ (Lin.const m) ∧ ρ v = (((ev ρ r).toNat ||| (ev ρ (Lin.const m)).toNat : Nat) : Int) := by
                   rcases knownOr_mem hk with mm | mm
                   · exact H.known _ mm

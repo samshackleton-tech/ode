@@ -775,12 +775,44 @@ def symOrKnown (s : Sym) (x y : Row) : V (EV × Sym) :=
       { s with nvars := s.nvars + 1, known := .or s.nvars x y :: s.known,
                facts := ranged s.nvars ++ [Lin.sub (Lin.var s.nvars) x, Lin.sub (Lin.var s.nvars) y] ++ orBound s.facts x y s.nvars ++ s.facts })
 
+/-- The least of 8, 16 and 32 for which the facts say at once that the number lies from 0 to below 2 to that
+power. -/
+def smallBits (facts : List Row) (x : Row) : Option Nat :=
+  [8, 16, 32].find? fun (j : Nat) => plain facts x && plain facts (Lin.sub (Lin.const (2 ^ j - 1)) x)
+
+/-- The bits of a number below 2^j and of a number `k` of the table that is 2^j or more, put together: `k`'s
+bits from bit j on are added to what the first number's bits and `k`'s lower bits make. Where `k` has no
+lower bit that is the first number itself, and the whole is a row; else it is the unknown that stands for
+that pair, and a number of the table more. (So a number that packs a small one into its low bits, as
+`flags | 0x40020100` does, is known by its parts.) -/
+def symOrSmall (s : Sym) (x : Row) (k : Int) (j : Nat) : V (EV × Sym) :=
+  if k % 2 ^ j = 0 then pure (.lin (Lin.add x (Lin.const k)), s)
+  else do
+    let (u, s) ← symOrKnown s x (Lin.const (k % 2 ^ j))
+    match u with
+    | .lin ur => pure (.lin (Lin.add ur (Lin.const (k - k % 2 ^ j))), s)
+    | _ => refuse "two numbers' bits put together are no number"
+
+/-- Where the first number is seen at once to lie below 2^j (j: 8, 16 or 32) and the second is a number `k` of
+the table that is 2^j or more: `k` and j. -/
+def orParts (facts : List Row) (x y : Row) : Option (Int × Nat) :=
+  match Lin.isConst y, smallBits facts x with
+  | some k, some j => if (2 : Int) ^ j ≤ k then some (k, j) else none
+  | _, _ => none
+
 /-- Two numbers' bits put together: where one of the two is the number zero, the other (zero adds no bit);
-else the unknown that stands for the pair. -/
+where one is seen at once to lie below 2^j (j: 8, 16 or 32) and the other is a number of the table that is
+2^j or more, by `symOrSmall`; else the unknown that stands for the pair. -/
 def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
   if Lin.isConst y = some 0 then pure (.lin x, s)
   else if Lin.isConst x = some 0 then pure (.lin y, s)
-  else symOrKnown s x y
+  else
+    match orParts s.facts x y with
+    | some (k, j) => symOrSmall s x k j
+    | none =>
+      match orParts s.facts y x with
+      | some (k, j) => symOrSmall s y k j
+      | none => symOrKnown s x y
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
@@ -2016,11 +2048,47 @@ def idOf (look : Node → Option Nat) : List Nat → Option Nat
   | [a] => some a
   | xs => look (.add xs)
 
+/-- A row with the remainder by `m` of its number of the table in that number's place: the row is this and
+a multiple of `m`. -/
+def Lin.rest (x : Row) (m : Int) : Row := ⟨x.coeff, x.constant % m⟩
+
+/-- A row seen at once to lie from 0 to `m - 1`. -/
+def within (facts : List Row) (y : Row) (m : Int) : Bool := plain facts y && plain facts (Lin.sub (Lin.const (m - 1)) y)
+
 /-- The remainder by a number above zero, where it is known without a new unknown (as `symLow` has it). -/
 def lowOf (s : Sym) (x : Row) (m : Int) : Option Row :=
   if x.coeff.all (fun c => c % m == 0) then some (Lin.const (x.constant % m))
   else if knownNonneg s x && plain s.facts (Lin.sub (Lin.const (m - 1)) x) then some x     -- (a number seen at once to be below the divisor is its own remainder)
-  else (divided s x m).map fun q => Lin.var (q + 1)
+  else
+    match divided s x m with
+    | some q => some (Lin.var (q + 1))
+    | none =>
+      -- a multiple of the divisor and a number seen at once to lie from 0 to below the divisor: that number
+      if within s.facts (Lin.rest x m) m then some (Lin.rest x m) else none
+
+/-- The quotient by a number above zero, where it is known without a new unknown: the unknown the state
+knows as that quotient; or, of a multiple of the divisor and a number seen at once to lie from 0 to below
+the divisor, the multiple's quotient. -/
+def quotOf (s : Sym) (x : Row) (m : Int) : Option Row :=
+  match divided s x m with
+  | some q => some (Lin.var q)
+  | none => if within s.facts (Lin.rest x m) m then some (Lin.const (x.constant / m)) else none
+
+/-- The bits of a number seen at once to lie below 2^j (j: 8, 16 or 32) and of a number `k` of the table that
+is 2^j or more, put together, where that is known without a new unknown (as `symOrSmall` makes it): `k`'s
+bits from bit j on, added to the first number (where `k` has no lower bit) or to the unknown the state
+knows as the first number's bits and `k`'s lower bits put together. -/
+def orSmall (s : Sym) (x : Row) (k : Int) : Option Row :=
+  match smallBits s.facts x with
+  | some j =>
+    if (2 : Int) ^ j ≤ k then
+      if k % 2 ^ j = 0 then some (Lin.add x (Lin.const k))
+      else
+        match knownOr x (Lin.const (k % 2 ^ j)) s.known with
+        | some v => some (Lin.add (Lin.var v) (Lin.const (k - k % 2 ^ j)))
+        | none => none
+    else none
+  | none => none
 
 /-- The quotient by 2^32, where it is known without a new unknown (as the halves of a register are found). -/
 def highOf (s : Sym) (r : Row) : Option Row :=
@@ -2088,10 +2156,13 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
     else none
   | .num r, .int m =>
     if op == "%" then (if 0 < m then (lowOf s r m).map .num else none)
-    else if op == "/" then (if 0 < m then (divided s r m).map fun q => .num (Lin.var q) else none)   -- (the quotient the state knows of)
+    else if op == "/" then (if 0 < m then (quotOf s r m).map .num else none)   -- (the quotient the state knows of)
     else if op == "|" then
       (if m = 0 ∧ knownNonneg s r = true then some (.num r)          -- (no bit is added)
-       else (knownOr r (Lin.const m) s.known).map fun v => .num (Lin.var v))
+       else
+         match knownOr r (Lin.const m) s.known with
+         | some v => some (.num (Lin.var v))
+         | none => (orSmall s r m).map .num)
     else wnum s op r (Lin.const m)
   | .int m, .num r =>
     if op == "|" then (if m = 0 ∧ knownNonneg s r = true then some (.num r) else none)

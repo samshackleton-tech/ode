@@ -65,7 +65,7 @@ def once(old, new):
 
 
 def last_word(obj=OBJ, spec=lambda t: t, place=lambda t: t):
-    """What the verifier says at last, the prover answering what it asks for: `shown`, or its last word."""
+    """What the verifier says at last with the proof that the prover writes: `shown`, or its last word."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(spec), [(obj, PAD, places(place))], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

@@ -296,7 +296,7 @@ class KernelTests:
             self.assertEqual(r.returncode == 0, r.stdout == "shown\n", r.stdout[:200])
             return r.stdout
         self.assertEqual(said(proof), "shown\n")
-        self.assertTrue(said(proof[:1]).startswith(self.K.first), "with no line of proof the verifier asks for the first")
+        self.assertTrue(said(proof[:1]).startswith(self.K.first), "with no line of proof the verifier's last word names the first line it lacks")
         kinds = {}
         for k in range(1, len(proof)):                                     # (the first line names the function)
             l = proof[k]

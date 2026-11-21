@@ -452,8 +452,11 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     out += [f"hidden {arg}" for arg, kind in c["args"] if not in_register(arg) and arg not in c["trace"] and arg not in written and arg not in tables]
     if [arg for arg in written if arg in c["trace"] and arg not in kinds]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
     if r is not None and kinds: raise SystemExit(f"statement: the contract of {name} returns a number beside arguments of the kinds {', '.join(said)}: not read yet")
+    # A name in an expression of the contract that is no argument's and is a constant of the specification is
+    # that constant (as in a definition).
+    scope = Scope(consts, frozenset(names) | frozenset(kinds))
     if result is not None: out.append(f"result {result}")
-    elif r is not None: out.append("returns " + sexp(r, seqs))
+    elif r is not None: out.append("returns " + sexp(r, seqs, scope))
     for leaf in c["leaves"]:
         if leaf["name"] in values and leaf["index"] is not None and leaf["cond"] is None and leaf["part"] is None:
             # `ensures NAME[i] = E for i in 0..N`, NAME being N chaining values: its bytes are those of the
@@ -464,7 +467,7 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
             each = [by_kind(with_number(leaf["expr"], var, k, name), kinds, name) for k in range(count)]
             joined = each[-1]
             for e in reversed(each[:-1]): joined = ("bin", "++", e, joined)
-            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [joined]), seqs))
+            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [joined]), seqs, scope))
             continue
         if leaf["index"] is not None or leaf["each"] is not None or leaf["cond"] is not None:
             raise SystemExit(f"statement: the contract of {name} has an `ensures` of a form the verifier in Lean does not read yet")
@@ -474,18 +477,18 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
             # (the record said is had once, by a `let`: each field's words are then of that one value)
             kind = dict(c["args"])[leaf["name"]]
             whole = fresh("record", {arg for arg, _ in c["args"]})
-            out.append(f"ensuresw {leaf['name']} (call bytes_of (let {whole} " + sexp(by_kind(leaf["expr"], kinds, name), seqs) + " " +
-                       sexp(record_words(kind, layouts[kind], ("name", whole), name), seqs) + "))")
+            out.append(f"ensuresw {leaf['name']} (call bytes_of (let {whole} " + sexp(by_kind(leaf["expr"], kinds, name), seqs, scope) + " " +
+                       sexp(record_words(kind, layouts[kind], ("name", whole), name), seqs, scope.with_name(whole)) + "))")
             continue
         if leaf["name"] in kinds:
             # a whole run of words: its bytes are those of the words said, the lowest byte of each first
             if leaf["part"] is not None: raise SystemExit(f"statement: the contract of {name} has an `ensures` of a part of a run of words, which the verifier in Lean does not read yet")
-            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [by_kind(leaf["expr"], kinds, name)]), seqs))
+            out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [by_kind(leaf["expr"], kinds, name)]), seqs, scope))
             continue
         if kinds: raise SystemExit(f"statement: the contract of {name} has an `ensures` of bytes beside arguments of the kinds {', '.join(said)}: not read yet")
         count = next(int(re.fullmatch(r"(\d+) bytes", kind).group(1)) for arg, kind in c["args"] if arg == leaf["name"])
         lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
-        out.append(f"ensures {leaf['name']} {sexp(lo, seqs)} {sexp(hi, seqs)} {sexp(leaf['expr'], seqs)}")
+        out.append(f"ensures {leaf['name']} {sexp(lo, seqs, scope)} {sexp(hi, seqs, scope)} {sexp(leaf['expr'], seqs, scope)}")
     out.append(f"stack {c['stack']}")
     return out
 

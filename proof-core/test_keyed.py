@@ -65,7 +65,7 @@ SOURCES = [
     ("the flags are read from byte 24 on: the key's last eight bytes", "  mov r8, qword ptr [rdx + 32]\n", "  mov r8, qword ptr [rdx + 24]\n", ARGS),
     ("the flags are read from byte 33 on: one byte past the record", "  mov r8, qword ptr [rdx + 32]\n", "  mov r8, qword ptr [rdx + 33]\n", READ8),
     ("the flags are not read: the kernel is given what r8 held", "  mov r8, qword ptr [rdx + 32]\n", "", ARGS),
-    ("the kernel is given the flags and one more", "  mov rdx, 64\n", "  add r8, 1\n  mov rdx, 64\n", ARGS),
+    ("the kernel is given the flags and one more", "  mov rdx, 64\n", "  add r8, 1\n  mov rdx, 64\n", FOLLOW),
     ("the kernel is given the block length 32", "  mov rdx, 64\n", "  mov rdx, 32\n", FOLLOW),
     ("the kernel is given the counter 1", "  mov rcx, 0\n", "  mov rcx, 1\n", FOLLOW),
     ("the kernel is given the block from its byte 4 on: four bytes past it", "  mov rdx, 64\n", "  add rsi, 4\n  mov rdx, 64\n", NO_PART),
@@ -98,8 +98,8 @@ def once(old, new):
 
 
 def last_word(functions, change=lambda t: t):
-    """What the verifier says at last of the functions [(object, symbol)], the prover answering what it asks
-    for: `shown`, or the word the prover has no answer to."""
+    """What the verifier says at last of the functions [(object, symbol)] with the proof that the prover
+    writes for them: `shown`, or its last word where the prover has nothing more to write."""
     with tempfile.TemporaryDirectory() as d:
         try: prove.prove(spec_text(change), [(obj, symbol, "") for obj, symbol in functions], os.path.join(d, "statement"), os.path.join(d, "proof"))
         except SystemExit as e:

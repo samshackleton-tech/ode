@@ -56,9 +56,10 @@ def showVal : Option Val → String
   | none => "none"
 
 def runCase (defs : List Def) (line : String) : String :=
+  -- (the first ` | ` ends the names: the expression may have the same three characters, where bits are put together)
   match line.splitOn " | " with
-  | [bindings, text] =>
-    match ((bindings.splitOn " ").filter (· ≠ "")).mapM readBinding, readSExpr text with
+  | bindings :: first :: more =>
+    match ((bindings.splitOn " ").filter (· ≠ "")).mapM readBinding, readSExpr (" | ".intercalate (first :: more)) with
     | some env, .ok e => showVal (evalSpec defs 4000 env e)
     | _, _ => "unreadable"
   | _ => "unreadable"
