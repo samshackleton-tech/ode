@@ -140,7 +140,8 @@ def negation (g : Row) : Row := Lin.sub (Lin.const (-1)) g
 def plain (facts : List Row) (g : Row) : Bool :=
   match Lin.isConst g with
   | some k => decide (0 ≤ k)
-  | none => facts.any fun f => Lin.sameCoeff g.coeff f.coeff && decide (f.constant ≤ g.constant)
+  -- (the two constants are compared first: that is one step, and comparing the multiples is one for every unknown)
+  | none => facts.any fun f => decide (f.constant ≤ g.constant) && Lin.sameCoeff g.coeff f.coeff
 
 /-- The rows a proof of arithmetic starts from: those of the rows given that it names by their numbers. -/
 def pick (given : List Row) (numbers : List Nat) : List Row := numbers.filterMap fun k => given[k]?
@@ -2365,6 +2366,17 @@ def heldBytes (facts : List Row) (f : String) (keys : List Key) : List Known →
   | .heldB f' keys' ids :: more => if f' = f ∧ sameKeys facts keys' keys = true then some ids else heldBytes facts f keys more
   | _ :: more => heldBytes facts f keys more
 
+/-- Whether the state knows anything of a use of the definition `f`: its words, its bytes, or a number
+given to it. (Asked before the three looks above, which first work out what the use is given: the
+kernels' states know nothing of any definition, and their specification uses definitions in every round
+of every lane's compression. Where this says no, each of the three looks would find nothing.) -/
+def knowsOf (f : String) : List Known → Bool
+  | [] => false
+  | .held f' _ _ :: more => f' == f || knowsOf f more
+  | .heldB f' _ _ :: more => f' == f || knowsOf f more
+  | .use f' _ _ :: more => f' == f || knowsOf f more
+  | _ :: more => knowsOf f more
+
 /-- The unknowns the state knows as the words of the block at byte `off` of the lane at place `c` of the table `j`. -/
 def knownBlock (facts : List Row) (j c : Nat) (off : Row) : List Known → Option (List Nat)
   | [] => none
@@ -2419,6 +2431,11 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
           | [.span _ _ len] => some (.num len)
           | _ => none
         else if own.contains f then wown ctx look s f vs
+        else if !knowsOf f s.known then
+          -- the state knows nothing of this definition: its text is followed
+          match findDef ctx.defs f with
+          | some d => if d.params.length == vs.length then weval ctx look s fuel (d.params.zip vs) d.body else none
+          | none => none
         else
           match (flatKeys look vs).bind fun keys => heldIds s.facts f keys s.known with
           | some ids => some (.list (ids.map fun i => WVal.word [i]))

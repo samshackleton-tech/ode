@@ -1657,6 +1657,21 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldW
             refine ⟨r, ?_, dr⟩
             simp only [evalSpec, el]; rw [if_neg hlen, if_pos hown]; exact er
           next hown =>
+            split at h
+            next =>
+              -- the state knows nothing of the definition: its text is followed
+              cases hd : findDef ctx.defs f with
+              | none => simp [hd] at h
+              | some d =>
+                simp only [hd] at h
+                split at h
+                next hp =>
+                  obtain ⟨r, er, dr⟩ := ih (d.params.zip vs) (d.params.zip as) d.body v h (EnvDen.zip dl)
+                  have hp' : (d.params.length == as.length) = true := by rw [← WDen.length dl]; exact hp
+                  refine ⟨r, ?_, dr⟩
+                  simp only [evalSpec, el]; rw [if_neg hlen, if_neg hown]; simp only [hd]; rw [if_pos hp']; exact er
+                next => simp at h
+            next =>
             cases hh : ((flatKeys look vs).bind fun keys => heldIds s.facts f keys s.known) with
             | some ids =>
               -- a use the state holds the words of (of the same things, by the facts): the definition gives

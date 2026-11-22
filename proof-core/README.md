@@ -89,15 +89,15 @@ The functions it verifies today:
 | `ode_parent` | a parent node of two blocks: its 64-byte block is in its stack frame; the SSE4.1 kernel writes each half of it, then reads the whole | 39 instructions | 1 line, 15 bytes | 6 ms with the kernel |
 | `ode_turns` | the same parent node, made in a loop of two iterations whose counter is kept in the stack frame and read again after each call of the kernel | 46 instructions, 1 loop of 2 iterations | 1 line, 14 bytes | 6 ms with the kernel |
 | `ode_high` | compresses one block from a key with the record's flags and PARENT, handing the SSE4.1 kernel those flags packed into a larger number (`flags \| (2^34 \| 4)`) | 15 instructions | 1 line, 13 bytes | 6 ms with the kernel |
-| `ode_quad` | the parent of two parent nodes, by two calls of the 16-way kernel: the table of sixteen addresses and the 512 bytes each call writes are in its stack frame, and the second call's lanes read what the first call wrote | 85 instructions | 1 line, 13 bytes | 0.16 s with the kernel |
+| `ode_quad` | the parent of two parent nodes, by two calls of the 16-way kernel: the table of sixteen addresses and the 512 bytes each call writes are in its stack frame, and the second call's lanes read what the first call wrote | 85 instructions | 1 line, 13 bytes | 0.13 s with the kernel |
 | `ode_rounds` | a loop of three iterations counted in the lowest byte of `rax`, while the other bytes of `rax` hold a byte of a hidden buffer | 7 instructions, 1 loop of 3 iterations | 1 line, 15 bytes | 3 ms |
-| `ode_quad32` | the parent of two parent nodes as `ode_quad` makes it, by two calls of the 32-way kernel, which reads a table of constants in its object file | 133 instructions | 1 line, 15 bytes | 0.72 s with the kernel |
+| `ode_quad32` | the parent of two parent nodes as `ode_quad` makes it, by two calls of the 32-way kernel, which reads a table of constants in its object file | 133 instructions | 1 line, 15 bytes | 0.61 s with the kernel |
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
-| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 205 lines, 2.4 kB | 0.15 s |
-| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.68 s |
-| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.66 s |
+| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 205 lines, 2.4 kB | 0.11 s |
+| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.58 s |
+| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.56 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 | `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the bytes are secret | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 
@@ -437,7 +437,7 @@ than one way to become confident in the verifier's rules.
 | The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,058 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,937 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,947 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -809,8 +809,8 @@ instructions in `../kcheck/b3hashr.o`) against the contract of `../kcheck/proofs
 `examples/kernel/p32.contract`). It does so twice: first with the contract narrowed by one line and no
 loop invariant, then with the contract as it stands.
 
-Narrowed by `requires n < 2`, for one block a lane, the proof is 1,270 bytes and the verifier takes 0.15 s.
-Narrowed by `requires n < 3`, for one or two blocks, the proof is 2,127 bytes and the verifier takes 0.44 s.
+Narrowed by `requires n < 2`, for one block a lane, the proof is 1,270 bytes and the verifier takes 95 ms.
+Narrowed by `requires n < 3`, for one or two blocks, the proof is 2,127 bytes and the verifier takes 0.29 s.
 
 This kernel differs from the 16-way kernel in two ways that needed new rules. First, it looks up the order
 of the message words for each round in a table in the object file (the rule for constants, above). Second,
@@ -869,9 +869,9 @@ met in the specification was not recognized when the code computed it later. Two
 (`ode_adler32_blocks` and `ode_adler32_blocks4`) were found again because of this change.
 
 With the invariant the verifier accepts the contract for every `n` from 1 up. The proof is 4,178 bytes.
-The verifier takes 0.68 s, and the Python verifier takes 0.40 s for the same function. (It took 1.2 s
-when this was first verified, and 0.60 s after the speed round of November 20; the section on speed below
-says what was mended, and that it has become slower again since.) This function and its
+The verifier takes 0.58 s, and the Python verifier takes 0.40 s for the same function. (It took 1.2 s
+when this was first verified, 0.60 s after the speed round of November 20, and 0.68 s two days later,
+after more rules had been added; the section on speed below says what was mended each time.) This function and its
 other entry have the slowest ratio of any function here. The cause is known. The verifier stores an
 inequality as a list with one entry for every unknown, this function has more than 1,300 unknowns by its
 end, and the unknowns of a later iteration come last.
@@ -919,7 +919,7 @@ of the first half has the counter `t + i`, lane `i` of the second half has `t + 
 slots hold `lo(t + i)`, `hi(t + i)`, `lo(t + i + 16)` and `hi(t + i + 16)` in word `i`.
 
 With it the verifier accepts the contract for every `n` from 1 up. The proof is 4,331 bytes. The verifier
-takes 0.66 s, and the Python verifier takes 0.40 s.
+takes 0.56 s, and the Python verifier takes 0.40 s.
 
 The tests change the contract in ten ways, the code in fourteen and the invariant in five, and the
 verifier refuses each. Among them: every lane given the counter `t`, which is what the other entry
@@ -1499,7 +1499,7 @@ that calls it could be verified. `ode_quad32` is `ode_quad` (above) with the 32-
 16-way one: a table of thirty-two addresses and two buffers of 1,024 bytes, all in its stack frame. Its
 calls go by the rule for a table of addresses, which needed no change but the refusal taken out. The
 verifier accepts it; the stored proof is the function's name alone, and verifying it with the kernel takes
-0.72 s. The tests change the contract in three ways and the code in six, each making the statement false,
+0.61 s. The tests change the contract in three ways and the code in six, each making the statement false,
 and each is refused; two changed statements that are still true are accepted. Without the kernel's `data`
 line in the input file, or without its file's data, nothing is accepted.
 
@@ -1713,17 +1713,37 @@ The 32-way kernel went from 1.2 s to 0.60 s, and by the entry the hash calls fro
 a half times the Python verifier's 0.40 s. The 16-way kernel went from 0.17 s to 0.12 s. The stored proofs
 did not change by a byte through any of the four.
 
-**Slower again since.** Measured on November 22, with the verifier of November 20 and the verifier of that
-day side by side on one machine: the 16-way kernel takes 0.15 s (0.125 s with the verifier of November
-20), and the 32-way kernel 0.68 s and 0.66 s by its two entries (0.61 s and 0.60 s). So the rules added in
-between cost a fifth on the 16-way kernel and a tenth on the 32-way one. Counting the instructions the
-verifier runs, at the commits in between, shows two steps of the same size, and nothing else: the rule for
-a called function that writes a run of bytes, and the rule that gives a use of a definition a number of
-its own. Each of the two made the verifier look, at every use of a definition in the specification,
-whether the state knows that use, and each look works out anew what the use is given. A kernel's state
-knows no such use. A trial that leaves the looks out where the state knows nothing of the definition
-takes a sixth off the instructions for the 32-way kernel and a third off for the 16-way one; it is not
-in this verifier yet. The account of constants of November 22 costs less than one percent.
+**Slower again by November 22, and mended.** Measured on November 22, with the verifier of November 20
+and the verifier of that day side by side on one machine: the 16-way kernel took 0.15 s (0.125 s with the
+verifier of November 20), and the 32-way kernel 0.68 s and 0.66 s by its two entries (0.61 s and 0.60 s).
+So the rules added in between had cost a fifth on the 16-way kernel and a tenth on the 32-way one. The
+account of constants of November 22 was not the cause: it cost less than one percent.
+
+The cause was found by counting the instructions that the verifier itself runs (`perf stat`, user space),
+at fifteen of the commits in between. The count comes out the same to a few parts in a million from run
+to run, whatever else the machine is doing. Two commits each added a step of the same size, and the count
+does not move anywhere else: the rule for a called function that writes a run of bytes, and the rule
+that gives a use of a definition a number of its own. Each of the two made the verifier look, at every
+use of a definition in the specification, whether the state knows that use, and each look worked out
+anew what the use is given. A kernel's state knows no such use, and a kernel's specification uses
+definitions in every round of every lane's compression.
+
+- **The three looks are made only where the state knows anything of that definition** (`knowsOf`, a pass
+  over what the state knows, by name). Where it knows nothing, the definition's text is followed at once,
+  which is what the three looks came to.
+- **Seeing at once that a fact gives a goal** compares the two constants before the two lists of
+  multiples. The first is one step; the second is one for every unknown.
+
+| a whole run of the verifier | instructions, November 20 | before the mend | after | time after (before) |
+|---|---|---|---|---|
+| the 16-way kernel | 2,415 million | 3,085 million | 2,083 million | 0.11 s (0.15 s) |
+| the 32-way kernel | 10,677 million | 12,157 million | 9,760 million | 0.58 s (0.68 s) |
+| the 32-way kernel by the entry the hash calls | 10,504 million | 11,978 million | 9,600 million | 0.56 s (0.66 s) |
+| `ode_quad` with the 16-way kernel | | 3,384 million | 2,320 million | 0.13 s (0.16 s) |
+
+The instructions were counted on an x86-64 machine and the times taken on the Apple M6. `ode_quad32` with
+the 32-way kernel takes 0.61 s (0.72 s before). The stored proofs did not change by a byte, and
+`b3l_chunk_node` with the three functions it calls takes 0.16 s as before.
 
 What takes the time now is evaluating the specification at the loop invariant (for each lane the
 verifier works out one block's compression, on each arrival there), and the size of the rows: an
@@ -1790,8 +1810,8 @@ official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
 **Code size.** The formal model: 1,058 lines (Table.lean 152, Machine.lean 511, Contract.lean 395). The
-verifier: 3,096 lines (Core.lean 2,937, Arithmetic.lean 159 including its proofs). The file parser: 202
-lines. The proofs of the theorems: 20,301 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
+verifier: 3,106 lines (Core.lean 2,947, Arithmetic.lean 159 including its proofs). The file parser: 202
+lines. The proofs of the theorems: 20,315 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 

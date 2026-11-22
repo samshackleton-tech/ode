@@ -156,7 +156,7 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
     simp only [Bool.and_eq_true, decide_eq_true_eq] at hfk
     have f0 := hf f fin
     rw [holds_iff] at f0
-    have e := dot_sameCoeff g.coeff f.coeff ρ hfk.1
+    have e := dot_sameCoeff g.coeff f.coeff ρ hfk.2
     simp only [ev] at f0 ⊢
     omega
 
