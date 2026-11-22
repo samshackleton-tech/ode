@@ -121,6 +121,7 @@ on a real processor and compared with a reference implementation. It takes hours
 
 | | |
 |---|---|
+| `paper/` | the Ode language design report ([`ODE.md`](paper/ODE.md), [`ODE.pdf`](paper/ODE.pdf)), its companion review ([`REVIEW.md`](paper/REVIEW.md)) with reliance sets and implementation status, and the layout renderer ([`render-paper.py`](paper/render-paper.py)) |
 | `DESIGN.md` | what Ode is for and how it is built; the state today; open decisions |
 | `NAMES.md` | names and identities: requirements, the proposal, what the tools do |
 | `LESSONS.md` | what the work has taught, October and November 2026 |
