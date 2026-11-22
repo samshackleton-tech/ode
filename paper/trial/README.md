@@ -9,7 +9,7 @@ What stands behind [`../STYLES.md`](../STYLES.md) and [`../TRACE-PROPOSAL.md`](.
 | `test_styles.py` | Compiles each source and compares the bytes; tries nine sources that the front end must refuse. With `--verify OUT` it also runs the prover and the verifier on each x86-64 function (`odeverify` must be built). With `--arm OUT` it assembles `src/arm.ode2` and runs it on an AArch64 Mac. |
 | `results/` | What `--verify` wrote on an x86-64 Linux work machine and `--arm` on an Apple M6, on November 22, 2026. |
 | `make_styles.py` | Writes the page of styles from `src/` and `results/`. |
-| `trace/` | Three small programs that ask today's reader and verifier the questions of the trace proposal, and what they printed. |
+| `trace/` | What stands behind the trace proposal. `compare.ode` holds its two compare functions and a third form that today's verifier can follow; `compare_run.py` runs them against C and counts the instructions of a call; `compare_verify.py` and `compare_diag.py` put them to today's prover and verifier; `compare_today.txt` holds what those printed. `far_trace.py`, `equal_trace.py` and `line_today.py` ask today's verifier and reader three smaller questions; `today.txt` holds what they printed. |
 
 To make everything again, in this folder:
 

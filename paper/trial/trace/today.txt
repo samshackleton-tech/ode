@@ -12,6 +12,6 @@ as kept: exit 0: shown
 the caller names n alone: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
 the caller names a, b: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
 the caller has no line: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
-== clause_today.py
+== line_today.py
 `trace depends on a, b, n`: read, 70 lines of statement
 `trace depends on n, common(a, b)`: not read: line 22: name expected, not '('

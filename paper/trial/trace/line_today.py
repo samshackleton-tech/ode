@@ -1,5 +1,5 @@
 # Today's reader and an expression in `trace depends on`: the contract of `ode_equal` with a value named.
-# Run in `proof-core`: `python3 ../paper/trial/trace/clause_today.py`.
+# Run in `proof-core`: `python3 ../paper/trial/trace/line_today.py`.
 import sys
 sys.path[:0] = [".", "../kcheck", "../lang"]
 import statement

@@ -1,0 +1,79 @@
+// Two functions that say whether two arrays of n bytes hold the same bytes: 1 if they do, 0 if not.
+// Both take a in rdi, b in rsi and n in rdx, count in rcx, and return the answer in rax.
+
+// `equal` leaves its loop at the first pair of bytes that differ.
+fn equal as "ode_equal_early" {
+  xor ecx, ecx                    // i := 0
+  @loop:
+  cmp rcx, rdx
+  jae @same                       // i reached n: a jump on the count alone
+  mov r8, rdi
+  add r8, rcx
+  movzx eax, byte ptr [r8 + 0]    // a[i]
+  mov r9, rsi
+  add r9, rcx
+  movzx r9d, byte ptr [r9 + 0]    // b[i]
+  cmp rax, r9
+  jne @differ                     // a jump on two bytes
+  add rcx, 1
+  jmp @loop
+  @same:
+  mov rax, 1
+  jmp @done
+  @differ:
+  xor eax, eax
+  @done:
+  ret
+}
+
+// `equal_ct` reads every byte and has no jump that depends on a byte.
+fn equal_ct as "ode_equal_ct" {
+  xor ecx, ecx                    // i := 0
+  xor r10d, r10d                  // r10: the differences seen so far, all or-ed together
+  @loop:
+  cmp rcx, rdx
+  jae @end                        // i reached n: a jump on the count alone
+  mov r8, rdi
+  add r8, rcx
+  movzx eax, byte ptr [r8 + 0]    // a[i]
+  mov r9, rsi
+  add r9, rcx
+  movzx r9d, byte ptr [r9 + 0]    // b[i]
+  sub rax, r9
+  and rax, 255                    // zero where the two bytes are the same
+  or r10, rax
+  add rcx, 1
+  jmp @loop
+  @end:
+  sub r10, 1                      // r10 was 0 (no difference seen): now every bit is set; else it is 0 to 254
+  shr r10, 63                     // the top bit: 1 where no difference was seen, 0 where one was
+  mov rax, r10
+  ret
+}
+
+// `differ_ct` is `equal_ct` in a form that today's verifier can follow. It returns 0 where the arrays hold the
+// same bytes and another number where they differ. Today's verifier asks of every subtraction that it does not
+// go below zero: so 256 is added before two bytes are subtracted, and the step that turns the differences into
+// 1 or 0 (which subtracts 1 from what may be 0) is left out.
+fn differ_ct as "ode_differ_ct" {
+  xor ecx, ecx                    // i := 0
+  xor r10d, r10d                  // r10: the differences seen so far, all or-ed together
+  @loop:
+  cmp rcx, rdx
+  jae @end                        // i reached n: a jump on the count alone
+  mov r8, rdi
+  add r8, rcx
+  movzx eax, byte ptr [r8 + 0]    // a[i]
+  mov r9, rsi
+  add r9, rcx
+  movzx r9d, byte ptr [r9 + 0]    // b[i]
+  add rax, 256
+  sub rax, r9
+  and rax, 255                    // zero where the two bytes are the same
+  or r10, rax
+  add rcx, 1
+  jmp @loop
+  @end:
+  mov rax, r10
+  ret
+}
