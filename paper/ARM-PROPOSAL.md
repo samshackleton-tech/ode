@@ -1,72 +1,92 @@
-# Proposal: Verifying the First AArch64 Functions in Ode
+# Proposal: a model of AArch64 for Ode
 
-Written proposal before building the AArch64 formal model (22 November 2026). Takes up Sam's November 11 choice of Google DeepMind's `arm64-semantics` in light of Ode's table-driven verifier built since November 17 (`core/x86.tab` + `proof-core/`). Nothing proposed here is built yet; awaits Sam's decision.
+A written proposal, 22 November 2026, before anything is built. It asks Zooko for one decision. It marks what was measured, what was read, what is judgment, and what is not known.
 
-## Summary and recommendation
+## The decision
 
-We recommend **Option C (Hybrid)**:
+Ode's theorems are about a model of the processor. For x86-64 that model is Ode's own: a table of instruction forms (`core/x86.tab`) with the meaning of its rows in Lean (`proof-core/Machine.lean`). Which model stands under the theorems for AArch64?
 
-1. Define Ode's AArch64 instructions in a small table (`core/arm64.tab`, roughly 250 to 350 lines for the first milestone) paired with a small AArch64 machine model (`proof-core/MachineArm64.lean`, roughly 600 to 700 lines) that plugs into the **same** table interpreter (`Table.lean`), specification semantics (`Contract.lean`), proof format, and Lean verifier (`Core.lean`) used for x86-64.
-2. Validate every row of `core/arm64.tab` in **two independent ways**:
-   - **Hardware cross-check (`cross.py`):** assemble random instances of each row and run them on real AArch64 silicon (Apple Silicon and AmpereOne), comparing every architectural effect against the table.
-   - **Optional Lean equivalence against Google's `arm64-semantics`:** prove (in a separate optional module, never required by `odeverify`) that each row of `core/arm64.tab` decodes the same 32-bit word and produces the same register/memory transition as Google DeepMind's `Arm64/Trusted/ISA/{Decode,Eval}.lean`.
+On 11 November Zooko chose Google DeepMind's `arm64-semantics` for AArch64. Ode's table and the verifier that steps by it came after that, from 17 November on. So the question is open again, and there are three answers:
 
-This keeps Bob's minimal reliance set small, preserves Ode's architectural constant-time theorem (`verify_all_trace`), keeps `odeverify` free of external Lean dependencies, and still gives an auditor who already relies on Google's `arm64-semantics` an independent formal route to confidence in our AArch64 instruction rules.
+- **A.** Google's model, as chosen on 11 November.
+- **B.** A table of Ode's own for AArch64, of the same kind as the one for x86-64.
+- **C.** B, and beside it a proof in Lean that the rows of that table agree with Google's model. The proof is kept apart from the verifier: nothing that verifies depends on it.
 
-## What we measured in Google's `arm64-semantics`
+I recommend C, taken in two steps so that its costs are measured before they are promised. C does not build Ode's verifier on Google's model, which is what the choice of 11 November said. If that choice is to stand, the answer is A.
 
-Inspecting `google-deepmind/code-verification` (`arm64-semantics`, local checkout `b0f729ac`, Apache-2.0; Lean `v4.34.0` locally, `v4.35.0` upstream; Ode uses Lean `v4.34.1` with zero external Lean packages):
+## What was measured and read
 
-| Component | Files | Lines | Notes |
-|---|---:|---:|---|
-| Google `Arm64/Trusted/ISA/` (upstream folder name) | 7 | 7,166 | `Eval.lean` 3,072, `Decode.lean` 1,299, `Float.lean` 793, `State.lean` 689, `Syntax.lean` 631, `Memory.lean` 397, `Semantics.lean` 285 |
-| Google full `Arm64/Trusted/` (upstream folder name) | 61 | 16,767 | Adds Linux ELF loader, POSIX syscalls, Rust/C ABI, separation logic |
-| Google `Arm64/` total | 134 | 50,610 | Includes lemmas and helpers |
-| Google `ProofLib/` total | 315 | 184,747 | Symbolic execution and Hoare/separation logic |
-| Ode x86-64 machine + table + contract (`Machine.lean`, `Table.lean`, `Contract.lean`, `core/x86.tab`) | 4 | 1,801 | Plus `Core.lean` 4,028, `Reader.lean` 228, `Arithmetic.lean` 215 (total 6,272 lines with comments) |
+Google's `arm64-semantics` (repository `google-deepmind/code-verification`, the checkout of 11 November, `b0f729ac`; Apache-2.0; Lean 4.34.0 there, 4.35.0 on its main branch today; Ode builds with Lean 4.34.1 and no package beyond Lean's own):
 
-Four technical findings from reading Google's `Arm64/Trusted/ISA/` directly:
+| Part | Files | Lines |
+|---|---:|---:|
+| `Arm64/Trusted/ISA/` (the folder's name is Google's): decoder, evaluator, state | 7 | 7,166 |
+| all of `Arm64/Trusted/`: adds `Object`, `Process` (the loading of a static Linux program), `Spec`, `Surface` and `Syscalls` | 61 | 16,767 |
+| all of `Arm64/` | 134 | 50,610 |
+| `ProofLib/`: the logic their proofs are written in | 315 | 184,747 |
 
-1. **Good NEON and scalar coverage, no SME2:** `Syntax.lean` covers AArch64 scalar instructions (`mul`, `smulh`, `adds`, `cbz`, `cbnz`, `condSelect` / `cset`, `ldr`/`str` with post-indexing) and 128-bit NEON (`simdThreeSame`, `simdTwoRegMisc`, `simdImmShift`, `simdTbl`, `simdExt`, `simdPermute`, `simdLdSt1Multi`, `cryptoXar`). It does not cover SME2.
-2. **No architectural PC/address trace:** `TraceEvent` in `State.lean` records Linux syscall I/O (`writeByte`, `fileChanged`, `userDefined`), not instruction addresses or memory addresses touched. Proving Ode's constant-time property (`verify_all_trace`) directly over their `Step` relation would require modifying their core `State` and `Eval` files anyway.
-3. **Linux ELF process orientation:** their top-level semantics targets whole Linux ELF binaries (`ElfRunsTo`) with POSIX syscalls and fixed `BitVec 64` memory, whereas Ode verifies relocatable functions against declarative contracts on both Linux ELF and macOS Mach-O.
-4. **Incompatible with Ode's table-driven verifier and future self-verification:** `Core.lean` executes instruction effects generically through `Table.lean` (191 lines) and checks small separate proof files in milliseconds (`ode_sum` in 3.6 ms, `p16` in 109 ms). Driving a proof-file verifier directly off 3,072 lines of `BitVec` evaluators in `Eval.lean` would either duplicate the verifier or drag 184,747 lines of `ProofLib` into the build, and would block writing the verifier in Ode itself or checking it in Metamath Zero.
+Ode for x86-64 today:
 
-## Three options compared
+| Part | Files | Lines |
+|---|---:|---:|
+| the machine: `core/x86.tab`, `Machine.lean`, `Table.lean`, `Contract.lean` | 4 | 1,801 |
+| the verifier: `Core.lean`, `Reader.lean`, `Arithmetic.lean` | 3 | 4,471 |
+| the proofs that the verifier is sound (`Sound*.lean`) | 18 | 20,388 |
 
-### Option A: Build Ode's AArch64 verifier directly on Google's `arm64-semantics`
+Three things read in Google's files:
 
-- **Pros:** reuses an existing, externally audited AArch64 decoder and evaluator for 128-bit NEON and scalar code.
-- **Cons:** adds at least 7,166 lines of external Lean code (including 793 lines of IEEE floating-point semantics Ode never uses) to every Bob's reliance set; lacks architectural PC/address traces for `verify_all_trace` (requiring a maintained fork); cannot share `Table.lean` or `Core.lean` cleanly with x86-64; couples Ode's Lean toolchain to an external repository; cannot be transliterated into an Ode-written verifier or a small Metamath Zero kernel.
+1. The instructions the trial used have constructors in `Syntax.lean` and cases in `Eval.lean`: `eor`, `rev32`, `ushr`, `shl`, `sli` and `ld1`/`st1` on vector registers; `smulh`, `adds`, `cbz`, conditional select and a load that moves its base register on general registers. I found them by name or by their encoding. I did not read the evaluators through or run them. SVE is not modeled (`Decode.lean` says so), and nothing in the folder names SME.
+2. Its trace (`TraceEvent` in `State.lean`) records bytes written by system calls and changes of files. It does not record which instructions ran or which addresses they touched. Ode's theorem about what an observer sees (`verify_all_trace`) is about those addresses.
+3. Its top-level statements are about a whole Linux process (`ElfRunsTo` in `Process/`). Ode's are about one function under a contract.
 
-### Option B: Standalone table `core/arm64.tab` + `MachineArm64.lean` (same architecture as x86-64)
+One thing read in Ode's files: the model and the proofs are written for x86-64. `Machine.lean` has sixteen general registers, two flags, and a call that stores the return address below the stack pointer. The proofs name the stack pointer 296 times and the registers that carry arguments 146 times.
 
-- **Pros:** tiny reading list (~250–350 lines for `core/arm64.tab` plus ~600–700 lines for `MachineArm64.lean`); one verifier (`Core.lean` + `Table.lean`) for both x86-64 and AArch64; full `verify_all_trace` constant-time theorem from day one; hardware `cross.py` directly validates every row on Apple Silicon and AmpereOne; zero external Lean packages; directly portable to an Ode-written verifier and Metamath Zero.
-- **Cons:** does not use Google's `arm64-semantics`, so an auditor who already relies on Google's model still has to audit `core/arm64.tab` (or rely on hardware `cross.py`).
+## The three answers
 
-### Option C (Recommended): `core/arm64.tab` + optional equivalence proof against Google's `arm64-semantics`
+### A. Google's model
 
-- **Pros:** keeps every benefit of Option B (tiny reliance set, one shared `Core.lean` verifier, `verify_all_trace`, zero external packages in `odeverify`, self-verifying Ode verifier and MM0 compatibility), **and** adds an independent optional Lean module (`arm64-bridge/`, outside `odeverify`'s build) that proves each row of `core/arm64.tab` matches Google's `Arm64/Trusted/ISA/{Decode,Eval}.lean`.
-- **Reliance sets under Option C:**
-  - **Bob (minimal reader):** reads `core/arm64.tab` + `MachineArm64.lean` + `Core.lean` (plus hardware `cross.py` receipts). Does not depend on Google's repository at all.
-  - **Bob (Google-semantics user):** checks the optional bridge theorem showing `core/arm64.tab` agrees with Google's `Arm64/Trusted/ISA` on every instruction used, without auditing our 32-bit bit-pattern encodings by hand.
-- **Cost:** writing the optional bridge proofs adds effort after the table works, bounded to the ~30–50 rows Ode actually uses rather than all of AArch64.
+- What it gives: an account of AArch64 that others wrote, maintain and use. A reader who already relies on it for other work adds nothing to what he relies on. An error anybody finds in it is found for everybody.
+- What a reader of the machine reads: the 7,166 lines of `Arm64/Trusted/ISA/`, in place of a table of a few hundred lines.
+- What has to be built: the verifier's steps for AArch64, each proved against Google's evaluator; a definition of the trace of addresses, either inside Google's files or laid over them; a build that takes their repository and follows their Lean version.
+- Not known: how much of Ode's 20,388 lines of proof carries over when the machine's state is Google's (bit vectors) and not Ode's (whole numbers). I expect little. That is a judgment; nothing was tried.
 
-## What changes in `proof-core/` to support two processors (`2 >> 1`)
+### B. A table of Ode's own
 
-Our two-target trial (`ode_quad32`, `ode_all_zero`, `mix16`, `mix12`, and checked 64-bit arithmetic) identified the exact processor differences that must stop being hard-coded to x86-64:
+- What it gives: one way of saying a machine and one verifier for both processors; the trace of addresses from the start, since the table's meaning already records it; rows compared with processors, as `core/cross.py` does for x86-64.
+- What a reader of the machine reads: `core/arm64.tab` and a machine file for AArch64. By the size of the x86-64 files (306 and 709 lines) I guess a few hundred lines each for a first set of rows. That is a guess.
+- What has to be built: the table; the machine file; `cross.py` for AArch64 (today it runs on x86-64 Linux only); and the change that lets `Core.lean` and its proofs serve two machines.
+- Not known: the size of that last change. It is the largest cost of B and of C, and nothing has measured it.
+- What it gives up: the account of AArch64 is ours alone to write and to defend. A reader who relies on Google's model has to read our table as well, or rely on the comparison with processors.
 
-1. **Registers and call-return mechanics:** x86-64 has 16 GPRs (`rsp` = stack, `call` pushes return address to memory, `ret` pops it); AArch64 has 31 GPRs (`x0`–`x30`, zero register `xzr`, `sp` separate and 16-byte aligned at loads/stores, `bl` writes the return address to `x30`, `ret` jumps to `x30`). `Core.lean` currently hard-codes x86 `argRegs := [7, 6, 2, 1, 8, 9]` and `calleeSaved := [3, 5, 12, 13, 14, 15]`. Making register sets, argument/result registers, and preserved registers part of the target/contract removes C ABI assumptions from the verifier core and serves Ode-to-Ode calls on both processors.
-2. **Flags and branchless predicates:** x86-64 `x86.tab` tracks `zf` and `cf`; AArch64 needs `N, Z, C, V` (for `subs`/`b.ne`, `adds`/`b.vs`, `cmp`/`cset`). `V` (signed overflow) is also needed on x86-64 (`imul`/`add` + `jo`) for checked arithmetic in the Ode-written verifier.
-3. **Addressing modes:** AArch64 post-indexed loads (`ldr w2, [x0], #4`) update both a destination register and the base pointer in one instruction. `Table.lean` already supports multi-statement row effects (`D = mem32(B, 0); B = add64(B, 4)`), so no new effect-language mechanism is needed.
-4. **Vector widths:** x86-64 uses 128-bit `xmm` (4 lanes) and 512-bit `zmm` (16 lanes); AArch64 NEON uses 32 × 128-bit `v0`–`v31` (4 lanes of 32-bit words). The existing 4-lane primitives (`each32(xor32, ...)`, `each32(ror32, ...)`, `mem128`) already match NEON's lane equations.
-5. **Fixed 32-bit instruction encoding:** AArch64 instructions are uniformly 4 bytes (no variable-length REX/VEX/EVEX prefixes), which makes `core/arm64.tab` and its encoder/decoder substantially simpler than x86-64's.
+### C. B, and a proof of agreement with Google's model
 
-## Proposed first Arm64 verification milestones (before `b3l_wide32`)
+- What it adds to B: a reader who relies on Google's model gets a theorem that each row of our table does what Google's evaluator does to the same instruction word. He need not read our table's encodings. A reader who does not rely on Google's model is where he is under B: the proof is outside what verifies.
+- Not known: whether such a proof can be had at a cost worth paying. The two models hold state in different forms, and not one row has been tried. If it cannot, C falls back to B.
 
-Once Sam approves the option:
+## Why C, in two steps
 
-1. **Milestone A1 (`arm_sum` + `arm_mix16`):** ~20 rows in `core/arm64.tab` (`mov`, `add`, `sub`, `ldr`/`str`, `bl`/`ret`, `ld1`/`st1`, `eor`, `rev32`), `MachineArm64.lean`, hardware `cross.py` on Apple Silicon, and Lean `odeverify` approving `arm_sum` (calling `arm_third` via `bl`/`x30`) and `arm_mix16` (`eor` + `rev32` on 4 lanes) while refusing false mutants.
-2. **Milestone A2 (`arm_all_zero`):** add `cbz`/`cbnz`, `subs`, `b.ne`, `orr`, `cmp`, `cset`, and verify `arm_all_zero` (both early-exit and branchless OR-accumulator) on AArch64 beside x86-64.
-3. **Milestone A3 (optional bridge):** prove equivalence of the ~30 used rows of `core/arm64.tab` against Google's `Arm64/Trusted/ISA/{Decode,Eval}.lean` in a separate optional Lake package.
-4. **Then** return to `b3l_wide32` and the remaining x86-64 hash functions, carrying the cleaner target-parametric call/register model into both processors.
+These are judgments.
+
+1. Under A the theorem about traces has no ground to stand on until Google's model is changed or wrapped. Under B and C it comes with the table.
+2. Ode aims at one mechanism where one serves. A second model of another kind beside the table would be a second way of saying a machine, with its own reader, proofs and upkeep.
+3. A reader who reads the machine reads far less under B and C.
+4. C keeps Google's model as a second route to confidence for those who rely on it, which B alone gives up.
+
+Against C: we take on writing an account of AArch64, which the choice of 11 November meant to spare us, and the proof of agreement may prove too costly.
+
+The two steps:
+
+1. **Measure.** About twenty rows (`mov`, `add`, `sub`, `ldr`/`str`, `bl`/`ret`, `ld1`/`st1`, `eor`, `rev32`), a machine file for them, and `cross.py` on an Apple M6 and an AmpereOne. Verify one function that calls another through `bl` and the hash step of the trial (`eor` and `rev32` on four lanes), and refuse changed versions of both. Count the lines of `Core.lean` and of the proofs that had to change. Prove one row's agreement with Google's evaluator, to learn what such a proof costs.
+2. **Decide again with those numbers:** go on to C, stay at B, or turn to A.
+
+After step 1 the work returns to the rest of the x86-64 hash, with the model of calls and registers that serves both processors.
+
+## What the verifier's code fixes to x86-64 today
+
+Read in the code; the list may not be complete.
+
+1. **Registers and calls.** Sixteen general registers with the stack pointer among them (`Machine.lean`); the registers that carry arguments (`argRegs`, in `Contract.lean`) and those a called function gives back (`calleeSaved`, in `Machine.lean`) are C's convention. `call` stores the return address in memory. AArch64 has thirty-one general registers and a stack pointer apart from them; `bl` puts the return address in a register. A contract that names its own registers for arguments and results, as `ODE.md` section 5 proposes, would take the convention out of the verifier for both processors.
+2. **Flags.** The table has a zero flag and a carry flag. The trial's AArch64 code uses conditions on overflow as well (`b.vs`), and tested arithmetic on x86-64 needs the overflow flag too (`jo`).
+3. **A load that moves its base.** `ldr w2, [x0], #4` changes two registers. A row's effect is already a list of statements (`push` has two), so the table's language needs nothing new for it.
+4. **Vectors.** The table has rows on four lanes and on sixteen lanes of 32 bits. NEON has four lanes; the table's lane-wise operations (`each32` with `xor32` or `ror32`) say what `eor` and a rotate do there.
+5. **Encoding.** Every AArch64 instruction is four bytes, so the part of the table that says how a row is written in bytes should be simpler than for x86-64. That is an expectation.

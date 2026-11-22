@@ -1,40 +1,49 @@
 # Reading the Ode design report
 
-This sheet accompanies `ODE.md` (revision 3, 22 November 2026). It is not part of the language definition. The implementation baseline is Ode `c407eb6` (same verifier code as `1dab0e3`: `Core.lean` SHA-256 `cf09a130adea315c`, `core/x86.tab` SHA-256 `825f760819bfe872`); the design is ahead of it. No verifier rule has changed since `1dab0e3`. The AArch64 formal-model proposal sits beside this sheet in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md).
+This sheet accompanies `ODE.md` (revision 4, 22 November 2026). It is not part of the language definition. It keeps three observations from one revision to the next: how much there is to read, what verifying costs, and who relies on what. It also says what a first trial of the proposed notation showed and what it did not show.
+
+The verifier is that of commit `1dab0e3`: nothing proposed in `ODE.md` has been added to it. Its two main inputs, by BLAKE3:
+
+- `proof-core/Core.lean`: `cc0f1279bc6a3787317b8e6252f468605cad93489a5b400218569c3d58624eea`
+- `core/x86.tab`: `66743ef5b540a00ac933537d3d56d0b56ab954ce5ae8d594bc2f9165e2b780d2`
+
+A proposal for a model of AArch64 is in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md).
 
 ## Three observations, not one score
 
-| Observation | Revision 1 | Revision 2 | Revision 3 (current) | What to compare next time |
-|---|---|---|---|---|
-| How much language is there to read? | 5 rendered pages (2,160 words). | 5 rendered pages (2,393 words). | 5 rendered pages (2,416 words). Use `pypy3 render-paper.py ODE.md ODE.pdf` and `pdfinfo ODE.pdf`. | Use the same renderer, page size and type. Name any rule moved to another document. Do not count moving detail a reader still needs as a reduction. |
-| What does verifying cost? | No baseline yet. | Fixed 14-job basket (`basket v1`): **35,173.96 M retired user instructions**, **2.43 s** x86-64 / **2.04 s** Apple M6. | Same 14-job Lean baseline; plus first V1 Ode verifier written in Ode runs `ode_sum` in **0.14 M instructions / 0.52 ms** (stage 1, narrow subset; not yet full verifier or self-verified). | Keep the 14-job basket stable across revisions; report input identities, host role, elapsed time, and retired instructions separately. Retired instructions resist host load changes, but do not replace user wait time. |
-| Who relies on what, for what? | The routes below. | Same routes. | Same routes; `ARM-PROPOSAL.md` compares reliance sets for AArch64 options before any model is built. | List added and removed dependencies, new alternatives, and dependencies that used to be independent but now coincide. |
+| Observation | At this revision | How to compare next time |
+|---|---|---|
+| How much language is there to read? | 5 pages, 2,430 words. (Revisions 1 to 3: 5 pages each; 2,160, 2,393 and 2,416 words.) Made by `pypy3 render-paper.py ODE.md ODE.pdf`, counted by `pdfinfo ODE.pdf`. | The same renderer, page size and type. Name any rule moved to another document: detail a reader still needs is not a reduction. |
+| What does verifying cost? | The 14 kept proofs of the table below: 35,174 million retired instructions on x86-64. The verifier has not changed since the count. | The same 14 jobs. Give the inputs' hashes, the machine's role, the retired instructions and the elapsed time separately. |
+| Who relies on what, for what? | The routes below. None was added or removed since revision 1. | List dependencies added and removed, new alternatives, and dependencies that were independent and now coincide. |
 
-The report is a design draft, not a standalone grammar or machine specification. The precise instruction meanings, byte encodings and full contract definitions still have to be read for an audit. The page count is **not** the size of Bob's total reading list.
+The report is a design draft, not a grammar or a machine specification. For an audit the instruction meanings, the encodings and the full contracts still have to be read. The page count is not the size of Bob's reading list.
 
-## Fixed verification-basket baseline (`basket v1`)
+## The verification basket
 
-All 14 jobs ran the current `odeverify` against the repository's stored proofs at `c407eb6` (`Core.lean` `cf09a130adea315c`, `core/x86.tab` `825f760819bfe872`). Every job returned `shown`, with identical statement and proof SHA-256 digests on both hosts. Retired instructions are the minimum of 5 `perf stat -e instructions:u` runs on the x86-64 Linux work machine (Threadripper PRO 7975WX); wall times are medians of 11 runs.
+Each of 14 jobs gives `odeverify` a statement made from the repository's objects and contracts, and the proof kept in `proof-core/proofs/`. Every job ended `shown`. The statements and proofs had the same digests on both machines.
 
-| Job | Statement (B) | Proof (B) | Retired instr. (M, x86-64) | Median (ms, x86-64) | Median (ms, Apple M6) |
+Retired instructions are user-space instructions counted by `perf stat`, the least of 5 runs, on an x86-64 Linux work machine (Threadripper PRO 7975WX). They are the measure to compare. The times are medians of 11 runs on that machine and on an Apple M6. Both machines are shared and no lock was held, so the times show the order of magnitude and no more.
+
+| Job | Statement (bytes) | Proof (bytes) | Retired instructions (millions) | Time, x86-64 (ms) | Time, Apple M6 (ms) |
 |---|---:|---:|---:|---:|---:|
-| `ode_sum` (+ `ode_third`) | 465 | 26 | 19.22 | 3.69 | 3.62 |
-| `ode_equal` (+ `ode_common`) | 2,262 | 723 | 29.23 | 4.31 | 3.78 |
+| `ode_sum` (with `ode_third`) | 465 | 26 | 19.22 | 3.69 | 3.62 |
+| `ode_equal` (with `ode_common`) | 2,262 | 723 | 29.23 | 4.31 | 3.78 |
 | `ode_adler32` | 2,493 | 2,967 | 42.80 | 5.07 | 4.31 |
 | `ode_adler32_blocks4` | 6,722 | 22,656 | 404.05 | 27.42 | 23.69 |
 | `ode_varint` | 1,463 | 453 | 39.30 | 5.52 | 4.43 |
 | `compress_avx512` | 9,046 | 131 | 58.82 | 6.28 | 5.12 |
 | `compress_sse41` | 9,512 | 137 | 67.18 | 7.01 | 5.52 |
-| `b3l_node_out` (+ 2 kernels) | 13,031 | 306 | 101.60 | 9.27 | 7.00 |
+| `b3l_node_out` (with 2 kernels) | 13,031 | 306 | 101.60 | 9.27 | 7.00 |
 | `b3l_pad` | 8,129 | 451 | 36.31 | 4.98 | 3.91 |
-| `b3l_chunk_node` (+ 3 callees) | 17,376 | 6,107 | 2,443.70 | 162.22 | 162.70 |
+| `b3l_chunk_node` (with 3 called functions) | 17,376 | 6,107 | 2,443.70 | 162.22 | 162.70 |
 | `p16` | 27,006 | 2,361 | 2,082.77 | 136.31 | 109.11 |
 | `p32` | 78,240 | 4,178 | 9,759.74 | 665.32 | 561.13 |
 | `k32` | 78,858 | 4,331 | 9,600.23 | 651.60 | 548.04 |
-| `quad32+p32` | 84,641 | 4,193 | 10,489.03 | 739.67 | 602.18 |
-| **Total (14 jobs)** | **339,244** | **49,020** | **35,173.96** | **2,428.65** | **2,044.54** |
+| `quad32` with `p32` | 84,641 | 4,193 | 10,489.03 | 739.67 | 602.18 |
+| **All 14** | **339,244** | **49,020** | **35,173.96** | **2,428.65** | **2,044.54** |
 
-## Reliance sets at this revision
+## Reliance sets
 
 **Conclusion A:** acceptance by the mathematical verifier implies that the modeled function meets the modeled contract. The current theorem is `Ode.verify_all_sound`; it assumes `Linked`, which relates the programs in its world to the instructions given to the verifier. The separate `Ode.verify_all_trace` theorem states what two executions have in common. A proof of either theorem about a different machine or a different contract would not answer the same question.
 
@@ -43,59 +52,99 @@ All 14 jobs ran the current `odeverify` against the repository's stored proofs a
 | Bob, via Lean | Bob must recognize the theorem he means and the definitions it names. He relies on a way of validating its proof, including the axioms used. If he already relies on Lean4Lean for that purpose, count it in the full set, not as an entirely new cost. | The Lean theorem exists. Successful independent replay of this theorem by Lean4Lean is not a result we have. |
 | Barry, via Metamath Zero | Barry would need a statement about the same verifier, a proof accepted by the kernel he knows, and grounds for identifying its statement with A. | A possible route. No such proof is supplied. |
 | Brenda, by reading | Brenda can examine the machine, contract semantics and verifier rules, including the arithmetic rule, and decide whether each acceptance step is sound. This route depends on her own reasoning, not on a Lean proof. | The definitions and rules are available. Whether this is less work for Brenda than learning a proof kernel is her decision. |
-| A second verifier written in Ode | For agreement to add independent evidence, identify the components shared by both implementations, particularly readers and machine semantics. Self-verification alone does not break the circle. | Proposed, not available. |
+| A second verifier written in Ode | For agreement to add independent evidence, identify the components shared by both implementations, particularly readers and machine semantics. Self-verification alone does not break the circle. | Proposed, not available. Test 4 below is a first exercise toward it and is evidence for nothing yet. |
 
-**Conclusion B:** a particular binary, as loaded on a real processor, meets the contract the reader selected. None of the routes to A by itself yields B. Today the additional dependencies include reading the binary, decoding its instructions, binding call targets and constants, parsing the contract, reading the verifier input, running an executable that implements the mathematical verifier, loading the intended program, and how accurately the machine model describes the processor for the property in question. For example, an error in a decoder shared by two otherwise independent verifiers could give them the same wrong instruction list. The maker's compiler and proof search need not be correct for B **if the actual binary is what gets checked**.
+**Conclusion B:** a particular binary, as loaded on a real processor, meets the contract the reader selected. None of the routes to A by itself yields B. Today the additional dependencies include reading the binary, decoding its instructions, binding call targets and constants, parsing the contract, reading the verifier input, running an executable that implements the mathematical verifier, loading the intended program, and how accurately the machine model describes the processor for the property in question. For example, an error in a decoder shared by two otherwise independent verifiers could give them the same wrong instruction list. The maker's compiler and proof search need not be correct for B if the actual binary is what gets verified.
 
 A reader may separately judge whether the selected contract meets a practical need. Matching a vague intent is not a theorem about bytes. Keep dependencies for A, for B, and for that judgment on separate lines.
 
-## What we have, and results of the first two design tests
+## What exists today
 
-- The existing x86 verifier covers 8 of the 14 functions in the Ode hash and 1,470 of its 3,062 instructions. That is not a proof of the production library or of the complete Ode hash. In the small `ode_sum` example, the contract says `returns 14`, with a 16-byte stack budget. Its existing proof file is 12 bytes (`for ode_sum` and a newline); that short file does not include the verifier's rules, object code, contracts or the other functions' proofs.
-- The existing `ode_quad32` example uses a 32-address table and calls a kernel with a contract. Its existing stack budget is 6,432 bytes. The new frame notation, per-use choice of inlining, early feedback, finer return rule, second processor and verifier in Ode are proposals, not features of `c407eb6`.
+The x86-64 verifier covers 8 of the 14 functions of the Ode hash and 1,470 of its 3,062 instructions. That is not a proof of the production library or of the whole Ode hash. In the small `ode_sum` example the contract says `returns 14` with a stack budget of 16 bytes, and the proof file is 12 bytes (`for ode_sum` and a newline); the rules, the object code, the contracts and the other functions' proofs are not in those 12 bytes. `ode_quad32` fills a table of 32 addresses and calls a kernel through its contract; its stack budget is 6,432 bytes.
 
-### Test 1: Hash operation (`d := (d ^ a) ror 16`, inline vs. macro vs. call, x86-64 and AArch64)
+The frame notation, the choice of inlining at each use, the finer return rule, a second processor and a verifier written in Ode are proposals. None is in the repository's tools.
 
-- **x86-64 AVX-512 (verified by the current `odeverify`, executed on x86-64 AVX-512 hardware):** across `N = 1, 4, 16, 56` alternating copies (56 matches 7 BLAKE3 rounds), raw instructions and the `def` text macro emit byte-identical code (`35, 74, 230, 750` bytes; 13 bytes per added copy: 6-byte `vpxord` + 7-byte `vprord`, matching `clang`). The current `odeverify` approves all four with constant proof size (`16` to `17` bytes) and linear work: `19.54, 20.87, 26.31, 44.81` M retired instructions (`3.69` to `5.25` ms median, `+0.46` M instructions per 16-lane copy). Checking `ode_mix16_step` standalone takes `19` proof bytes and `19.54` M instructions (`3.59` ms). Both false controls at `N = 4` (changing one rotate from `16` to `15`, and omitting one `vpxord`) are refused by `odeverify`.
-- **AArch64 NEON (assembled, disassembled, and executed on Apple M6 hardware; execution testing, not formal Arm verification):** `eor v0.16b, v0.16b, v1.16b` + `rev32 v0.8h, v0.8h` (`8` bytes per copy; total `24, 48, 144, 464` bytes for `N = 1, 4, 16, 56`) matches both the mathematical specification and the x86-64 AVX-512 outputs on the first four lanes across all 16 test vectors. Omitting the final `rev32` is caught (`9ae1faa3 != faa39ae1`).
-- **Call vs. inline:** calling a memory-passing C-ABI `ode_mix16_step` never breaks even in code size (`121, 187, 451` bytes at `N = 1, 4, 16` vs. `35, 74, 230` inline, plus stack frame traffic) and hits a missing unaligned 64-byte frame store rule in `proof-core`. An Ode register call breaks even in code bytes at `N = 2` on x86-64 (`14 + 5N` vs. `13N`) and `N = 4` on AArch64 (`12 + 4N` vs. `8N`) only when register assignments match across call sites without register moves.
-- **Concrete macro hazard exposed by the second processor:** on AArch64 NEON, `(d ^ a) ror 12` needs a third scratch register (`eor`, `ushr`, `shl`, `orr` = 16 B in place, or `eor`, `ushr`, `sli` = 12 B into a renamed output). Passing `tmp == d` in a text macro assembles without error on Apple M6 and silently corrupts all four lanes (`99e00000 00000000 fff00000 00000000` instead of `897cc99e 00300000 ffffffff 00180000`). A contract-bearing inline function with a distinct-register check catches this at the source line with zero byte or runtime penalty. Keep `for` for constant unrolling, and keep `def` until real kernels run on the new front end.
+## The trial
 
-### Test 2: Verifier component (`allZero` and exact arithmetic from `proof-core/Arithmetic.lean`)
+The trial took two programs (a step of the hash, a piece of the verifier) and two processors (x86-64, AArch64), as far as today's tools and a prototype front end reach. Its programs and result files are kept outside this repository for now; they are to be added under `paper/trial/` so that every figure below can be made again.
 
-- **First verifier component verified by the current `odeverify`:** `ode_all_zero` (early-exit x86-64 byte scan, `40` bytes, `0` stack) is proved and approved by the current Lean `odeverify` against `returns all_zero(xs)` with `trace depends on xs, n` (`770` B statement, `463` B proof, `21.57` M retired instructions, `3.78` ms median). Both false controls are refused: a deliberately shortened scan skipping the last element (which passes empty, all-zero, first-nonzero, and middle-nonzero tests while failing nonzero-final tests) is refused by `odeverify`, and dropping `xs` from `trace depends on` is directly refused (`refused: a jump on a flag that may depend on a secret`).
-- **Four concrete gaps in the current verifier/decoder exposed by the second program:**
-  1. Variable-length word loads: a 32-bit word OR-accumulator scan (`41` B on x86-64; `36` B and fully branchless on data via `ldr w2, [x0], #4` and `cset x0, eq` on AArch64, both passing empty, all-zero, LSB/MSB/signed `-1`, and nonzero-final tests with shortened-scan negative controls caught) is refused by `proof-core/Core.lean`'s `symLoad` (`a read of a run of bytes that is not one byte: not here yet`).
-  2. Bitwise OR linear upper bound: `symOrKnown` in `Core.lean` records `v >= x` and `v >= y` without `v <= x + y`, so linear arithmetic cannot prove `(x == 0 and y == 0) -> (x | y == 0)` for symbolic operands.
-  3. Branchless loop case split: proving a branchless OR-accumulator against a boolean prefix specification requires a proof-file case split (`acc == 0` vs. `acc > 0`) where the machine code itself does not branch.
-  4. Multi-`ret` decoding: `kdecode.py` stops decoding at the first `ret`, truncating a function that places a second `ret` after an early return. Soundness held because `odeverify` refused the jump to the missing label, but early-exit code must share one final `ret` until the decoder follows all reachable code in the symbol.
-- **Exact arithmetic vs. wraparound overflow (`Arithmetic.lean`'s `derive`):** two concrete 64-bit signed inputs from TRUE rows (`0*x + 2^62 >= 0` added to itself wraps to `-2^63 < 0`; `2^62*x + 0 >= 0` and `2^62*x - 1 >= 0` scaled by 2 wrap the coefficient sum to `0` with constant `-2 < 0`) forge a contradiction in 64-bit arithmetic without overflow checks. Checked implementations on x86-64 (`imul`+`jo`, `add`+`jo`: `29` bytes) and AArch64 (`mul`+`smulh`+`cmp asr #63`+`b.ne`, `adds`+`b.vs`: `60` bytes) decline both wraparound forgeries while approving exact refutations including floor division on negative constants.
+Four words are used exactly:
 
-### Test 3: Single-tool prototype front end (`ode2.py`, 320 lines, x86-64 and AArch64)
+- **Shown:** `odeverify` printed `shown` for a statement and a proof file.
+- **Refused with a proof:** `odeverify` printed `refused` for a statement and that proof file. A sound verifier refuses a false statement whatever the proof; one refusal does not demonstrate that.
+- **No proof found:** the prover gave up. The prover is relied on for nothing, so this is not a verdict.
+- **Run:** the code was executed on a processor and its results compared with a model written for the test, on the inputs named. A run is a test, not a proof.
 
-Built and tested one small prototype front end implementing `target x86_64 | aarch64`, named registers, checked `frame` declarations with typed slot bounds, `inline fn` with typed register parameters, `distinct(...)` and `changes` checking, constant `for` unrolling, explicit `:=` store notation, and loop `place { ... }` blocks with automatic byte-offset computation:
+Ode has no model of AArch64. Everything said of AArch64 below is a run.
 
-- **`ode_quad32` (hash caller):** dropped from 157 lines (with 68 raw `[rsp + N]` byte offsets and two manual `2312` constants) to 66 lines with zero raw stack offsets and bounds-checked `table[i]` / `r2.qword[w]` accesses. Emitted an ELF object **byte-for-byte identical** to `proof-core/examples/quad/odequad32.o`, approved by the current Lean `odeverify` using the exact stored 15-byte `ode_quad32.proof`.
-- **`blake3_servil_avx512_p16` (16-way BLAKE3 kernel):** replaced the `def g4(...)` text macro with a typed `inline fn g4(...: zmm) changes a0..d3` (zero text macros) and moved the loop invariant directly onto the loop (`place { ... }`). Emitted **byte-for-byte identical** `.text` (`2,768` B) and `.rodata` (`16` B), auto-computed the exact `+0x9a7` loop offset, was approved by `odeverify` with the stored proof, and reproved from scratch to the exact same `2,361`-byte proof. Across the entire repository only three `def` text macros exist (`p16.ode` and two in `one.ode`), and typed `inline fn` plus `for` replaces all three cleanly.
-- **`ode_all_zero` (verifier component):** loop invariant written directly on `@loop:` auto-computed `+0x2` and verified (`463` B proof, `odeverify -> shown`). Inserting `nop` before `@loop:` auto-shifted the offset to `+0x3` with zero edits to the invariant and still verified (`463` B proof, `shown`).
-- **AArch64 (`target aarch64`):** the same front end compiled `arm_mix16_4`, `arm_mix12` (with `distinct(d, tmp)`), and `arm_all_zero_words` (with named registers `xs/n/w/acc`), assembled with `clang` and passed native execution checks on Apple M6 hardware (execution testing, not Arm verification).
-- **Nine negative source-line diagnostics verified:** frame upper/negative/view out-of-bounds (`table[32]`, `table[-1]`, `r2.qword[128]`), unknown frame field (`&missing_slot`), AArch64 `mix12(v0, v1, v0)` (`distinct(d, tmp)` violated), register writes not listed in `changes` inside `inline fn` on x86-64 (`zmm2`, and `zmm30` inside `p16`'s `g4`) and AArch64 (`v5`), and register-kind mismatch (`rax` where `zmm` is required). Each reported the exact source file, line number, and violated rule before assembling.
+### Test 1: one step of the hash, written three ways
 
-### Test 4: First V1 verifier written in Ode (`v1_verify.ode2`, Stage 1 milestone)
+The step is `d := (d ^ a) ror 16` in every 32-bit lane. A function applies it N times, the two registers changing roles each time, for N = 1, 4, 16 and 56 (seven rounds of BLAKE3 have 56 G functions).
 
-Built a first narrow verifier in pure Ode (`v1_verify.ode2`, 8 functions, `1,118` x86-64 instructions, `4,726` bytes `.text`), compiled through `ode2.py` and `core/asm.py` with **100% of its instructions decoded by Ode's `kdecode`**. It takes `(stmt, stmt_len, proof, proof_len, work, work_len)` over raw byte buffers with zero heap allocation (requires an 8,192-byte caller-supplied workspace; smaller workspaces cannot return approval) and reads the exact statement and proof files used by Lean `odeverify`:
+On x86-64 with AVX-512 (16 lanes), with today's `odec.py` and verifier:
 
-- **Positive cases (`4/4` approved):** `ode_third` + `ode_sum` (with the stored 12-byte `ode_sum.proof`), `ode_third` + `ode_twice`, and both `STILL_TRUE` variants from `proof-core/test_sum.py`.
-- **Negative controls (`22/22` refused, 0 false approvals):** all 8 mutated-source cases and all 5 mutated-contract cases from `proof-core/test_sum.py`, plus 9 guards (`data` after instruction, missing piece index, `lea_data` past piece end, wrong/missing/trailing proof headers, insufficient workspace `0` B and `4,096` B, unknown instruction).
-- **Speed on `ode_sum` (x86-64 Linux work machine, whole process including startup and file I/O):** `136,827` retired user instructions (`0.14` M, 140× fewer than Lean `odeverify`'s `19.22` M) and `0.52` ms median wall time (vs. `3.69` ms for Lean `odeverify`).
-- **Two actual compiled V1 helper objects formally verified by Lean `odeverify`:** `v1_hex_nibble.o` (`22` insns, `67` B, `300` B proof, `shown`; false spec `ch - 54` refused) and `v1_mem_eq.o` (`17` insns, `50` B, `532` B proof, `shown`; false spec returning `1` on mismatch refused).
-- **What this does and does not establish:** Stage 1 demonstrates an Ode-written verifier running over real statement and proof bytes on a tiny straight-line subset (`ode_sum`/`ode_twice`/`ode_third`), and Stage 2 has started on two helper objects. It is **not** a full verifier for loops or vectors, and it does **not** yet have a whole-verifier soundness proof.
+- The source that writes the two instructions out and the source that uses a `def` text macro give the same object file, byte for byte, at each N. The code is 35, 74, 230 and 750 bytes: 13 bytes a copy (`vpxord` 6, `vprord` 7). clang gives the same code bytes for the assembly that `odec.py` prints.
+- Each function is shown. Its proof file is its name alone (16 or 17 bytes): the function has no loop and no call, so the verifier needs no hint. The verifier's work grows with the code: 19.54, 20.87, 26.31 and 44.81 million retired instructions, about 0.46 million a copy.
+- Each object, run on 16 inputs, agrees with a Python model of the formula in all 16 lanes.
+- Two false controls at N = 4, both in the third step, which makes the output: a rotate by 15 in place of 16, and the step without its `vpxord`. Each differs from the model when run. Each is refused with the proof of the correct function ("the specification's words are not followed on the terms the function made"), and no proof of either is found.
+- One true statement is refused: the fourth step without its `vpxord`. That step writes a register nothing reads afterwards, so the function still meets the contract, and it agrees with the model when run. It is refused with the same words. The specification written for the test names the fourth step's value in a `let` that nothing uses, and the verifier follows every `let`. Without that line the same function is shown.
 
-### Next steps (awaiting Sam's word on proposals where noted)
+On AArch64 with NEON (4 lanes), assembled by clang and run on an Apple M6:
 
-1. **AArch64 formal model ([`ARM-PROPOSAL.md`](ARM-PROPOSAL.md)):** awaits Sam's choice among Option A (direct `arm64-semantics`), Option B (standalone `core/arm64.tab`), and Option C (recommended: `core/arm64.tab` + optional Lean equivalence bridge to Google's `arm64-semantics`).
-2. **Finer returned-number rule (`ODE.md` section 3):** awaits Sam's confirmation of the two-sentence rule before changing the formal model.
-3. **Continue V1 -> V2 Ode verifier + small verifier enablers:** formally verify `v1_match_lit.o`, `v1_parse_dec.o`, `v1_parse_hex.o`, and `v1_parse_reg.o` under Lean `odeverify`, add `Arithmetic.lean` refutation verification (`all_zero` + checked 64-bit `derive`) to the Ode verifier, and tighten `symOrKnown` (`v <= x + y`) / variable-length word loads / multi-`ret` decoding.
-4. **Promote the `ode2.py` front-end constructs into `lang/odec.py`** once the Arm target shape is approved, deleting `def` text macros in the same round.
+- `eor` and `rev32`, 8 bytes a copy: 24, 48, 144 and 464 bytes for the four N. The results agree with the Python model on 16 inputs, and with the first four lanes of the x86-64 run on the one input compared.
+- At N = 3 without the last `rev32`, the run gives `9ae1faa3` where the model gives `faa39ae1`.
+- A rotate by 12 has no single NEON instruction. Two sequences were run and agree with the model: `eor`, `ushr`, `shl`, `orr` (16 bytes) with a scratch register, and `eor`, `ushr`, `sli` (12 bytes) into another register. With the scratch register the same as the destination, the first sequence still assembles, and all four lanes come out wrong (`99e00000 00000000 fff00000 00000000` for `897cc99e 00300000 ffffffff 00180000`). Text substitution has no rule that could refuse this; the prototype of Test 3 refuses it at the line of the use.
 
-After each change, revisit this sheet and the report together. A proof file can shrink while the verifier gets harder to understand; inlining can make a loop faster while more instruction lines compete in a caller. None of the three observations substitutes for the others.
+A call in place of the inline copies, on x86-64:
+
+- A helper that takes `d`, `a` and the result through memory, called N times, takes 121, 187 and 451 bytes (caller and helper) at N = 1, 4 and 16, against 35, 74 and 230 inline.
+- These callers are not shown. No proof is found, and the verifier's last message is "sixty-four bytes written to what is no run given to write". Reading `Core.lean`: the store `vmovdqu32` has a rule only for memory that the contract gives to write, and the frame takes the aligned store `vmovdqa32`. The callers were not written again with an aligned frame, so it is not known whether they would then be shown.
+- A call that passes its operands in registers was not built or measured.
+
+### Test 2: a piece of the verifier
+
+The verifier's arithmetic rule ends a contradiction by finding every coefficient zero. `ode_all_zero(xs, n)` returns 1 if the `n` bytes at `xs` are all zero, and 0 if not. Its contract says `returns all_zero(xs)`, `trace depends on xs, n` and `stack 0`.
+
+- A scan that leaves at the first byte that is not zero (x86-64, 40 bytes) is shown. The statement is 770 bytes and the proof 463 bytes; verifying takes 21.57 million retired instructions. The loop's invariant is `all_zero_from(xs, i) == all_zero(xs)` with `i <= n`.
+- The same code against a contract whose trace may depend on `n` alone is refused with the proof above: "a jump on a flag that may depend on a secret: which instructions run would depend on it". No proof of it is found.
+- A scan that stops one byte early returns 1, when run, for bytes of which only the last is not zero. No proof of it is found.
+
+Three things are true and not shown today:
+
+1. A scan that ORs every byte into one register and tests it once at the end (46 bytes; it passes the same runs). No proof was found with the invariant tried: the register is zero exactly where the bytes so far are all zero. Reading `symOrKnown` in `Core.lean`: of `x | y` the verifier knows that it is no less than `x`, no less than `y`, and below 2^8, 2^16 or 2^32 where both are. Where facts say that both are zero, nothing lets it conclude that `x | y` is zero. That reading was not put to a test by adding a rule.
+2. A scan of 32-bit words (41 bytes on x86-64; 36 bytes on AArch64 with `ldr w2, [x0], #4` and `cset`; both pass their runs, with a last word that alone is not zero among them). The verifier has no rule for a load of four bytes from a run of bytes of variable length ("a read of a run of bytes that is not one byte: not here yet"). The contract given was a stand-in, written only to reach that message.
+3. A function with a second `ret` after an early return. By its design the reader of a function (`kcheck/kdecode.py`) stops at the first `ret`. Such a scan has 14 instructions and its statement has 12. With the proof of the scan that has one `ret` it is refused ("no instruction at 36"), and no proof is found. So the scan that is shown ends in one `ret` that both paths reach.
+
+Exact arithmetic. The rule adds multiples of inequalities over the integers. A model of the rule in C with wrapping 64-bit arithmetic accepts two derivations that are false. Adding `0*x + 2^62 >= 0` to itself gives a constant that wraps below zero. Doubling and adding `2^62*x >= 0` and `2^62*x - 1 >= 0` gives a coefficient that wraps to zero and the constant -2. With every product and sum tested for overflow, both are declined, and two correct derivations (one needs a negative constant divided and rounded down) are still accepted. The tested code is 29 bytes on x86-64 (`imul` and `add`, each followed by `jo`) and 60 bytes on AArch64 (`mul` with `smulh`, `adds` with `b.vs`); both were run. `imul` and `jo` are not rows of `core/x86.tab`, so Ode cannot verify the x86-64 code today.
+
+### Test 3: a prototype front end
+
+`ode2.py` (420 lines of Python) reads a source in the notation of `ODE.md` sections 4 and 5. For x86-64 it hands plain instructions to the existing assembler (`core/asm.py`); for AArch64 it prints assembly for clang. It has a `target` line; names for registers; a `frame` of named fields, with every slot tested against the field's count; `inline fn` with register parameters of a stated class, `distinct(a, b)` and a `changes` list; `for` over a constant range, with arithmetic on the loop's variable; `:=` for moves, loads and stores (x86-64 only); and a `place` written at the loop it describes, whose offset in the code the tool works out. It chooses no register and adds no instruction.
+
+- `ode_quad32`. The kept source has 156 lines, 135 of them code. Its code writes `[rsp + N]` 73 times and the frame's size twice, and it writes its 64 stores into the table one by one: today's `for` substitutes text, and the assembler takes no arithmetic in an operand. In the prototype's notation the function has 67 lines, 56 of them code, and writes no stack offset and no frame size. Its object file is `proof-core/examples/quad/odequad32.o` byte for byte, and it is shown with the kept proof.
+- The repository's Ode sources have three `def` text macros: `g4` of the 16-way kernel and the two `g` of the one-block kernels. Written as inline functions, all three give the code that `odec.py` gives for the macros: the 16-way kernel's 2,768 bytes of code and 16 bytes of constants, and the whole object files of the two one-block kernels (373 and 437 bytes of code).
+- The 16-way kernel's invariant, written at its loop: the tool works out the offset `+0x9a7`, which is the kept one. The object is shown with the kept proof, and the prover, given the place the tool printed, finds the same 2,361 bytes of proof again.
+- `ode_all_zero` with its invariant at the loop: offset `+0x2`, shown, proof 463 bytes. With a `nop` put before the loop the tool gives `+0x3`, the invariant's text is the same, and the function is shown again.
+- AArch64: three small functions (four copies of the step of Test 1; the rotate by 12 with `distinct`; the scan of words) become assembly that clang assembles and that passes its runs on an Apple M6.
+- Nine faults are refused before anything is assembled, each with the number of the line the fault is on: a frame slot past its count, a slot below zero, a view of a field past its end, a field that is not declared, a scratch register that is the destination (AArch64), a general register where a vector register is asked, and a write to a register that `changes` does not list (x86-64, AArch64, and inside `g4`).
+
+What the prototype does not do. An `inline fn` has no contract of its own: each copy is verified as part of the function that uses it. The `changes` rule reads the first operand of each instruction as text, not the instruction table, so it does not see a second register or a flag that an instruction writes. A frame's slots are offsets from `rsp`; nothing tests that `rsp` is where the frame takes it to be.
+
+### Test 4: a first exercise toward a verifier written in Ode
+
+`v1_verify.ode2` (1,384 lines in the prototype's notation; 8 functions, 1,118 instructions, 4,726 bytes of code) reads the statement and proof files that `odeverify` reads. It does not implement the verifier's rules. It knows eight instruction forms (`push`, `pop`, the address of a constant, a load of four bytes of a constant, a move and an add between registers, `call`, `ret`), follows a function that has no branch, works with constants, and compares the number returned and the stack used with the contract. It has no proof of soundness, and no argument for one is written. Its working memory comes from the caller (8,192 bytes); given less, it refuses at entry.
+
+- It approves the four true cases tried (`ode_sum`, `ode_twice`, and the two changed and still true cases of `proof-core/test_sum.py`). It refuses the 22 false or malformed cases tried: the 8 changed sources and 5 changed contracts of `test_sum.py`, and 9 malformed statements, proofs and sizes of working memory.
+- Every instruction of it is a row of `core/x86.tab`: the table's reader reads every byte of the eight functions.
+- For scale: on `ode_sum` its whole process retires 0.14 million instructions, where `odeverify` retires 19.22 million. The two do different work, so this compares no speeds.
+- Two of its helpers are shown by `odeverify` against contracts written for them: `v1_hex_nibble` (22 instructions, proof 300 bytes) and `v1_mem_eq` (17 instructions, proof 532 bytes). For each, a false contract is refused with the proof of the true one, and no proof of it is found.
+
+## What comes next
+
+1. Zooko's choice of a model for AArch64 ([`ARM-PROPOSAL.md`](ARM-PROPOSAL.md)), before the first function is verified there.
+2. Zooko's word on the rule for a returned number (`ODE.md` section 3), before the formal model changes.
+3. The trial's programs into `paper/trial/`, with the same functions in each notation as files to read.
+4. The five things the trial found that the verifier does not do, each to be weighed before it is built: conclude that `x | y` is zero where both are; load more than one byte from a run of bytes; store a vector to the frame with `vmovdqu32`; read a function past its first `ret`; pass over a `let` that nothing uses.
+5. The front end's forms into `lang/odec.py`, once the shape of a second target is decided; the three `def` macros go in the same change.
+
+After each change, return to this sheet and the report together. A proof file can shrink while the verifier gets harder to understand; inlining can make a loop faster while more instruction lines compete in a caller. None of the three observations stands in for the others.
