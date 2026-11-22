@@ -1,0 +1,21 @@
+{
+ "as written": {
+  "exit": 0,
+  "printed": "the three functions agree with the C"
+ },
+ "changed": {
+  "orr acc, acc, w -> and acc, acc, w": {
+   "exit": 32,
+   "printed": ""
+  },
+  "rev32 d.8h, d.8h -> rev32 d.16b, d.16b": {
+   "exit": 10,
+   "printed": ""
+  },
+  "ushr tmp.4s, d.4s, #12 -> ushr tmp.4s, d.4s, #11": {
+   "exit": 20,
+   "printed": ""
+  }
+ },
+ "machine": "arm64"
+}

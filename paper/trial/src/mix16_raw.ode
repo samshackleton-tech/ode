@@ -1,0 +1,14 @@
+// Three mixing steps, every instruction written out.
+fn mix16_3 as "ode_mix16_3" {
+  vmovdqu32 zmm0, [rsi + 0]
+  vmovdqu32 zmm1, [rdx + 0]
+  vpxord zmm0, zmm0, zmm1
+  vprord zmm0, zmm0, 16
+  vpxord zmm1, zmm1, zmm0
+  vprord zmm1, zmm1, 16
+  vpxord zmm0, zmm0, zmm1
+  vprord zmm0, zmm0, 16
+  vmovdqu32 [rdi + 0], zmm0
+  vzeroupper
+  ret
+}

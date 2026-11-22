@@ -1,0 +1,38 @@
+{
+ "all_zero": {
+  "code bytes": 40,
+  "instructions": 14,
+  "proof bytes": 463,
+  "statement bytes": 770,
+  "verifier": "shown"
+ },
+ "all_zero with an instruction added before the loop, that proof with the place at the count typed before": {
+  "place": "place +0x2",
+  "verifier": "refused: live or dead is expected\nin ode_all_zero"
+ },
+ "all_zero with an instruction added before the loop, the place the tool finds": {
+  "code bytes": 41,
+  "instructions": 15,
+  "place": "place +0x3",
+  "proof bytes": 463,
+  "statement bytes": 781,
+  "verifier": "shown"
+ },
+ "all_zero with an instruction added before the loop, the prover with the place file typed before": {
+  "place": "place +0x2",
+  "prover": "no answer within 60 seconds"
+ },
+ "mix16_3": {
+  "code bytes": 61,
+  "instructions": 11,
+  "proof bytes": 16,
+  "statement bytes": 810,
+  "verifier": "shown"
+ },
+ "quad32": {
+  "code bytes": 695,
+  "proof bytes of ode_quad32": 15,
+  "verifier": "shown",
+  "with": "the kept proofs of the kernel and of ode_quad32"
+ }
+}

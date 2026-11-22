@@ -1,0 +1,19 @@
+// Three mixing steps with an inline function: it says what kind each register is, that the two differ,
+// and which one it changes. A use that breaks one of these is refused at its line.
+target x86_64
+
+inline fn mix16(d: zmm, a: zmm) distinct(d, a) changes d {
+  vpxord d, d, a
+  vprord d, d, 16
+}
+
+fn mix16_3 as "ode_mix16_3" {
+  vmovdqu32 zmm0, [rsi + 0]
+  vmovdqu32 zmm1, [rdx + 0]
+  mix16(zmm0, zmm1)
+  mix16(zmm1, zmm0)
+  mix16(zmm0, zmm1)
+  vmovdqu32 [rdi + 0], zmm0
+  vzeroupper
+  ret
+}

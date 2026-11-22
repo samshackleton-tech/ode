@@ -1,0 +1,51 @@
+// AArch64: the mixing step with a rotation by 16 and by 12, and a scan of words. Run, not verified.
+target aarch64
+
+inline fn mix16(d: vreg, a: vreg) distinct(d, a) changes d {
+  eor d.16b, d.16b, a.16b
+  rev32 d.8h, d.8h
+}
+
+inline fn mix12(d: vreg, a: vreg, tmp: vreg) distinct(d, a) distinct(d, tmp) distinct(a, tmp) changes d, tmp {
+  eor d.16b, d.16b, a.16b
+  ushr tmp.4s, d.4s, #12
+  shl d.4s, d.4s, #20
+  orr d.16b, d.16b, tmp.16b
+}
+
+fn arm_mix16_3 as "arm_mix16_3" {
+  ld1 {v0.4s}, [x1]
+  ld1 {v1.4s}, [x2]
+  mix16(v0, v1)
+  mix16(v1, v0)
+  mix16(v0, v1)
+  st1 {v0.4s}, [x0]
+  ret
+}
+
+fn arm_mix12 as "arm_mix12" {
+  ld1 {v0.4s}, [x1]
+  ld1 {v1.4s}, [x2]
+  mix12(v0, v1, v2)
+  st1 {v0.4s}, [x0]
+  ret
+}
+
+fn arm_all_zero_words as "arm_all_zero_words" {
+  reg xs  = x0
+  reg n   = x1
+  reg w   = w2
+  reg acc = w3
+
+  mov acc, #0
+  cbz n, @done
+  @loop:
+  ldr w, [xs], #4
+  orr acc, acc, w
+  subs n, n, #1
+  b.ne @loop
+  @done:
+  cmp acc, #0
+  cset x0, eq
+  ret
+}

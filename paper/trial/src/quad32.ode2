@@ -1,0 +1,69 @@
+// The parent of two parents by the 32-way kernel, in the prototype's notation. Today's notation:
+// proof-core/examples/quad/quad32.ode. Both give the same object file.
+target x86_64
+
+fn quad32 as "ode_quad32" {
+  reg out = rbx
+  reg kf  = r12
+  reg tmp = rax
+
+  frame {
+    table: 32 * u64
+    r1:    32 * cv
+    r2:    32 * cv
+    pad:   8
+  }
+
+  push out
+  push kf
+  sub rsp, frame.size
+  out := rdi
+  kf  := rcx
+
+  // Round 1: lane 0 reads a (rsi), lane 1 reads b (rdx), lanes 2..31 read a
+  tmp := rsi
+  table[0] := tmp
+  tmp := rdx
+  table[1] := tmp
+  for i in 2..32 {
+    tmp := rsi
+    table[i] := tmp
+  }
+
+  tmp := qword [kf + 32]
+  or tmp, 1073741828
+  r8 := tmp
+  rdi := &table
+  rsi := 1
+  rdx := kf
+  rcx := 0
+  r9  := &r1
+  call blake3_servil_avx512_p32
+
+  // Round 2: every lane reads first 64 bytes of r1
+  tmp := &r1
+  for i in 0..32 {
+    table[i] := tmp
+  }
+
+  tmp := qword [kf + 32]
+  or tmp, 1073741828
+  r8 := tmp
+  rdi := &table
+  rsi := 1
+  rdx := kf
+  rcx := 0
+  r9  := &r2
+  call blake3_servil_avx512_p32
+
+  // Copy r2[0] (32 bytes = 4 qwords) into caller's out
+  for w in 0..4 {
+    tmp := r2.qword[w]
+    qword [out + w * 8] := tmp
+  }
+  tmp := 0
+  add rsp, frame.size
+  pop kf
+  pop out
+  ret
+}

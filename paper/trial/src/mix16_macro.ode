@@ -1,0 +1,15 @@
+// Three mixing steps with today's text macro: the macro's lines are pasted with the names replaced.
+fn mix16_3 as "ode_mix16_3" {
+  def mix16(dst, src) {
+    vpxord $dst, $dst, $src
+    vprord $dst, $dst, 16
+  }
+  vmovdqu32 zmm0, [rsi + 0]
+  vmovdqu32 zmm1, [rdx + 0]
+  mix16(zmm0, zmm1)
+  mix16(zmm1, zmm0)
+  mix16(zmm0, zmm1)
+  vmovdqu32 [rdi + 0], zmm0
+  vzeroupper
+  ret
+}

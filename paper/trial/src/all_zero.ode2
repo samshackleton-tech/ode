@@ -1,0 +1,36 @@
+// Whether every byte of a run is zero: a scan that leaves at the first byte that is not. The loop's
+// invariant is written at the loop; the tool works out where that is in the code.
+target x86_64
+
+fn all_zero_early as "ode_all_zero" {
+  reg xs = rdi
+  reg n  = rsi
+  reg i  = rcx
+  reg p  = rdx
+  reg b  = rax
+
+  xor ecx, ecx
+  @loop:
+  place {
+    name i = rcx
+    fact i <= n
+    fact all_zero_from(xs, i) == all_zero(xs)
+    decreases n - i
+  }
+  cmp i, n
+  jae @yes
+  p := xs
+  add p, i
+  movzx eax, byte ptr [p + 0]
+  cmp b, 0
+  jne @no
+  add i, 1
+  jmp @loop
+  @yes:
+  b := 1
+  jmp @done
+  @no:
+  xor eax, eax
+  @done:
+  ret
+}

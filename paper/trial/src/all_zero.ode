@@ -1,0 +1,22 @@
+// Whether every byte of a run is zero: a scan that leaves at the first byte that is not. Today's notation.
+// The loop's invariant is in all_zero.places, at the loop's place in the code, given as a count of bytes.
+fn all_zero_early as "ode_all_zero" {
+  xor ecx, ecx
+  @loop:
+  cmp rcx, rsi
+  jae @yes
+  mov rdx, rdi
+  add rdx, rcx
+  movzx eax, byte ptr [rdx + 0]
+  cmp rax, 0
+  jne @no
+  add rcx, 1
+  jmp @loop
+  @yes:
+  mov rax, 1
+  jmp @done
+  @no:
+  xor eax, eax
+  @done:
+  ret
+}
