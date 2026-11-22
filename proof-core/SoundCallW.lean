@@ -1110,11 +1110,11 @@ after the call is so, at the next instruction. -/
 theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallW' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
@@ -1244,7 +1244,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
               exact hiobytes) hce
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), fun x k m => by rw [hal] at m; cases m⟩
           · intro r'
             by_cases hr : r' = RSP
             · rw [hr, s1rsp]; omega
@@ -1296,9 +1296,11 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [s1reg r' (argRegs_not_rsp ra).2]
             omega
           · intro x' off bd m; rw [hmb] at m; cases m
-        have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
+        have hread : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          rw [perm_read_split, Bool.or_eq_true] at ha
+          refine ha.elim (fun ha => ?_) (fun ha => read_pieces H p q i ha)
+          simp only [Contract.perm, inLane_false hl, inPieces_nil, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           left; left
           rcases ha with ((ha | ha) | ha) | ha
           · left; left; left; omega
@@ -1326,7 +1328,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
               rw [hinouts] at ha
               simp only [List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
               exact List.any_eq_true.mpr ⟨(xw, b, n0), hio, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-        have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
+        have hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true := by
           intro a ha
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           rcases ha with ha | ha
@@ -1335,7 +1337,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
             unfold Contract.inOut
             exact List.any_eq_true.mpr ⟨(xw, b, n0), hwm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-        have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
+        have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
           apply allowed_of
           intro x hx1 hx2
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -1414,11 +1416,11 @@ its words are new cells of the frame. -/
 theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallF' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
@@ -1556,7 +1558,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             exact hiobytes) hce
       have hpre : c.pre q (afterCall p q i st) := by
         refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
-          (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
+          (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), fun x k m => by rw [hal] at m; cases m⟩
         · intro r'
           by_cases hr : r' = RSP
           · rw [hr, s1rsp]; omega
@@ -1609,9 +1611,11 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           rw [s1reg r' (argRegs_not_rsp ra).2]
           omega
         · intro x' off bd m; rw [hmb] at m; cases m
-      have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
+      have hread : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true := by
         intro a ha
-        simp only [Contract.perm, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+        rw [perm_read_split, Bool.or_eq_true] at ha
+        refine ha.elim (fun ha => ?_) (fun ha => read_pieces H p q i ha)
+        simp only [Contract.perm, inLane_false hl, inPieces_nil, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
         left; left
         rcases ha with ((ha | ha) | ha) | ha
         · left; left; left; omega
@@ -1639,7 +1643,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             simp only [List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
             left; left; left
             omega
-      have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
+      have hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true := by
         intro a ha
         simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
         rcases ha with ha | ha
@@ -1647,7 +1651,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · left
           simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
           omega
-      have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
+      have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
         apply allowed_of
         intro x hx1 hx2
         simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -1828,7 +1832,7 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (hw : ctx.contract.outs[w]? = some (name, base, n))
     (ha : ∀ c : Int, ev ρ o = c → 0 ≤ c → c + 8 ≤ n → a = s0.reg base + c.toNat)
     (sx : EV.sem ρ s.nvars x (.lin xr)) :
-    allowed (ctx.contract.perm s0).write a 8 = true ∧
+    allowed (ctx.contract.perm ctx.pieces s0).write a 8 = true ∧
       ∃ ρ', Carried ctx s0 ρ s ρ' s' { st with mem := store st.mem a x 8 } := by
   unfold symStore8 at h
   cases hc : Lin.isConst o with
@@ -1971,18 +1975,18 @@ function it is given a part of being first taken as written with the words it he
 theorem symCallW_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallW ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   have F := callFrameTouch_carried (ctx := ctx) (s0 := s0) (ρ := ρ) (st := st) c (c.fixeds ++ c.inouts) T.holds T.wf
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallW'_sound E
     (show symCallW' ctx (callFrameTouch (callTouch ctx s c) c) c items = .ok (s', rest) from h)
-    F.holds F.wf q hq i hret hl hal hd
+    F.holds F.wf q hq i hret hl hal
   refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', T.then (F.then C)⟩
@@ -2237,11 +2241,11 @@ holds after the call is so, at the next instruction. -/
 theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallB' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   cases hsp : s.sp with
@@ -2329,7 +2333,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           calleeB_sound H c (fun r' m => s1reg r' (argRegs_not_rsp m).2) hspan c.args argRegs (fun _ m => m) hce
         have hpre : c.pre q (afterCall p q i st) := by
           refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_,
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m), fun h => absurd hd h⟩
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), fun x k m => by rw [hal] at m; cases m⟩
           · intro r'
             by_cases hr : r' = RSP
             · rw [hr, s1rsp]; omega
@@ -2365,9 +2369,11 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [s1reg r' (argRegs_not_rsp ra).2]
             omega
           · intro x' off bd m; rw [hmb] at m; cases m
-        have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
+        have hread : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true := by
           intro a ha
-          simp only [Contract.perm, inLane_false hl, inData_false hd, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
+          rw [perm_read_split, Bool.or_eq_true] at ha
+          refine ha.elim (fun ha => ?_) (fun ha => read_pieces H p q i ha)
+          simp only [Contract.perm, inLane_false hl, inPieces_nil, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           left; left
           rcases ha with ((ha | ha) | ha) | ha
           · left; left; left; omega
@@ -2379,7 +2385,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             exact List.any_eq_true.mpr ⟨(b', lb), g1, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
           · simp only [Contract.inFixed, hfx, hinouts, List.any_nil, Bool.or_self] at ha
             cases ha
-        have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
+        have hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true := by
           intro a ha
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           rcases ha with ha | ha
@@ -2388,7 +2394,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
             unfold Contract.inOut
             exact List.any_eq_true.mpr ⟨(xw, b, n0), hwm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-        have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
+        have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
           apply allowed_of
           intro x hx1 hx2
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -2510,16 +2516,16 @@ function it is given a part of being first taken as written with the words it he
 theorem symCallB_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallB ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have T := callTouch_carried E H wf c
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallB'_sound E (show symCallB' ctx (callTouch ctx s c) c items = .ok (s', rest) from h)
-    T.holds T.wf q hq i hret hl hal hd
+    T.holds T.wf q hq i hret hl hal
   refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', T.then C⟩
@@ -2570,16 +2576,16 @@ theorem symKnow_sound {ctx : Ctx} {s0 : State} {advice : Sym → List Row} {ρ :
 theorem symCallF_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallF ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) (hd : c.data = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   have F := callFrameTouch_carried (ctx := ctx) (s0 := s0) (ρ := ρ) (st := st) c (c.fixeds ++ c.inouts) H wf
   obtain ⟨g1, g2, g3, g4, g5, g6⟩ := symCallF'_sound E
-    (show symCallF' ctx (callFrameTouch s c) c items = .ok (s', rest) from h) F.holds F.wf q hq i hret hl hal hd
+    (show symCallF' ctx (callFrameTouch s c) c items = .ok (s', rest) from h) F.holds F.wf q hq i hret hl hal
   refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', F.then C⟩

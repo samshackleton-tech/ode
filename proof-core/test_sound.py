@@ -21,14 +21,15 @@ THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.runs_trace": "[propext, Classical.choice, Quot.sound]",
             "Ode.verify_all_trace": "[propext, Classical.choice, Quot.sound]"}
 STATEMENTS = [
-    # of the functions of a statement together: what `odeverify` says yes of
-    ("Ode.verify_all_sound : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "
-     "Ode.Linked world fns → Ode.verdictAll defs fns = none → "
-     "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ Ode.Meets world f.contract defs p"),
+    # of the functions of a statement together: what `odeverify` says yes of (`pieces`: the read-only data of
+    # the object files, as the statement gives it; `Meets` is of every state in which the program is loaded)
+    ("Ode.verify_all_sound : ∀ (world : List Ode.Program) (pieces : List Ode.Piece) (defs : List Ode.Def) (fns : List Ode.Fn), "
+     "Ode.Linked world fns → Ode.verdictAll pieces defs fns = none → "
+     "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ Ode.Meets world pieces f.contract defs p"),
     # of one function, given that those it calls meet their contracts
     ("Ode.verify_sound : ∀ (world : List Ode.Program) (ctx : Ode.Ctx) (p : Ode.Program) (proof : List Ode.Item), "
      "p.code = ctx.code → Ode.CalleesMeet world ctx → Ode.verdict ctx proof = none → "
-     "Ode.Meets world ctx.contract ctx.defs p"),
+     "Ode.Meets world ctx.pieces ctx.contract ctx.defs p"),
     # what is asked of the functions there are: under each name, the instructions the statement gives, lying in memory
     ("def Ode.Linked : List Ode.Program → List Ode.Fn → Prop := fun world fns => "
      "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ p.code = f.code ∧ p.fits"),
@@ -43,10 +44,11 @@ STATEMENTS = [
      "Ode.Runs world perm p Q s → Ode.RunsP world Ode.Perm.all p (fun t => ∃ s', Q s' ∧ t = s'.plain) s.plain"),
     # constant time of what the verifier says yes of, on the plain machine: two runs, from two states at entry
     # alike in everything not marked, let the same things be observed
-    ("Ode.verify_all_trace : ∀ (world : List Ode.Program) (defs : List Ode.Def) (fns : List Ode.Fn), "
-     "Ode.Linked world fns → Ode.verdictAll defs fns = none → "
+    ("Ode.verify_all_trace : ∀ (world : List Ode.Program) (pieces : List Ode.Piece) (defs : List Ode.Def) (fns : List Ode.Fn), "
+     "Ode.Linked world fns → Ode.verdictAll pieces defs fns = none → "
      "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ "
-     "∀ (a b : Ode.State), f.contract.pre p a → f.contract.quietAt a → f.contract.pre p b → f.contract.quietAt b → Ode.Alike a b → "
+     "∀ (a b : Ode.State), Ode.Loaded pieces a → f.contract.clear world pieces a → f.contract.pre p a → f.contract.quietAt a → "
+     "Ode.Loaded pieces b → f.contract.clear world pieces b → f.contract.pre p b → f.contract.quietAt b → Ode.Alike a b → "
      "∀ (a' b' : Ode.State), Ode.EndsP world p a.plain a' → Ode.EndsP world p b.plain b' → a'.trace = b'.trace"),
     # a run of the plain machine to a function's return: by `execP` with nothing forbidden
     ("Ode.EndsP.ret : ∀ {world : List Ode.Program} (p : Ode.Program) (s : Ode.State) (i : Ode.Instr) (u : Nat → Nat) (s' : Ode.State), "

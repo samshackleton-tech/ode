@@ -5,7 +5,11 @@ The verifier as a program:  `odeverify TABLE STATEMENT PROOF`
 TABLE is `../core/x86.tab`. STATEMENT says what is to be shown, and is made by the one who asks
 (statement.py makes it from files' bytes and a specification's text). A line a thing:
 
+    piece ALIGN BYTES         the read-only data of an object file: the boundary it lies on, and its bytes
+                              (two hexadecimal digits each). The files are numbered in this order, from 0.
     fn NAME                   a function, then its instructions and its contract:
+    data K                    the function is of the object file whose read-only data has the number K (where
+                              it takes an address there; before its instructions)
     i START END ROW…          an instruction, as the reader of code writes it
     arg NAME number           the contract's arguments, in order
     arg NAME bytes LEN        (the address of LEN bytes to read, LEN another argument)
@@ -73,7 +77,7 @@ def main (args : List String) : IO UInt32 := do
       | .error e => IO.println e; return 2
       | .ok job =>
         if job.fns.isEmpty then IO.println "refused: the statement has no function"; return 2
-        match verdictAll job.defs job.fns with
+        match verdictAll job.pieces job.defs job.fns with
         | none => IO.println "shown"; return 0
         | some why => IO.println why; return 1
   | _ => IO.println "odeverify TABLE STATEMENT PROOF"; return 2

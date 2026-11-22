@@ -33,15 +33,10 @@ def verify(spec_text, functions, proof_path):
     return r.returncode == 0 and r.stdout == "shown\n", r.stdout.strip()
 
 
-def with_data(spec_text, functions):
-    """{symbol: how many bytes of its file's read-only data the statement gives the function}: the functions
-    that take the address of a constant of their file."""
-    out, fn = {}, None
-    for line in statement.statement(spec_text, functions):
-        w = line.split()
-        if w[:1] == ["fn"]: fn = w[1]
-        elif w[:1] == ["data"]: out[fn] = len(w[1]) // 2
-    return out
+def with_data(functions):
+    """[(an object file's name, how many bytes of read-only data the statement gives for it)]: the files in
+    which a function to be shown takes the address of a constant."""
+    return [(os.path.basename(obj), len(rodata)) for obj, _, rodata in statement.pieces(functions)]
 
 
 if __name__ == "__main__":
@@ -54,12 +49,14 @@ if __name__ == "__main__":
         print(m.group(0) if m else f"(no contract of {symbol} in {spec})")
     shown, said = verify(spec_text, functions, proof)
     if shown:
-        data = with_data(spec_text, functions)
         for obj, symbol in functions:
             print(f"\nshown: {symbol} in {os.path.basename(obj)} meets its contract, with the definitions of {os.path.basename(spec)} it uses.")
-            if symbol in data:
-                print(f"It reads constants of {os.path.basename(obj)} ({data[symbol]} bytes of read-only data). That those bytes lie in memory where its\n"
-                      "instructions look for them is the linker's part: this verification assumes it and does not show it.")
+        data = with_data(functions)
+        if data:
+            files = ", ".join(f"{name} ({n} bytes of read-only data)" for name, n in data)
+            print(f"\nFunctions here read constants of their files: {files}. What is shown holds wherever the program is\n"
+                  "loaded: that each file's bytes lie in memory where its instructions look for them is the linker's and the\n"
+                  "loader's part. This verification relies on them for it and does not show it.")
     else:
         lines = said.splitlines()
         where = lines[-1][3:] if lines and lines[-1].startswith("in ") else "(no function)"

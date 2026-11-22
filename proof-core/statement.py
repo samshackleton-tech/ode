@@ -539,9 +539,28 @@ def one_line(line):
     return line
 
 
+def takes_data(rows):
+    """Does the function take an address in its file's read-only data (`lea reg, [rip + data]`)?"""
+    return any(text.split()[0] == ".lea_data" for _, _, text in rows)
+
+
+def pieces(functions):
+    """The read-only data of the object files in which a function to be shown takes an address:
+    [(object, the boundary the data lies on, its bytes)], each file once, in the order of the functions (a
+    function after those it calls). A file's number in the statement is its place in this list."""
+    out, seen = [], set()
+    for obj, symbol in ordered(functions):
+        rows, rodata = kdecode.read(obj, symbol, 0, 0)
+        if takes_data(rows) and os.path.realpath(obj) not in seen:
+            seen.add(os.path.realpath(obj))
+            out.append((obj, kdecode.boundary(obj, symbol), bytes(rodata)))
+    return out
+
+
 def statement(spec_text, functions):
-    """The lines that say what is to be shown of the functions [(object, symbol)]: each one's instructions and
-    its contract, a function after those it calls; then the definitions."""
+    """The lines that say what is to be shown of the functions [(object, symbol)]: the read-only data of
+    the object files, where a function takes an address there; each function's instructions and its
+    contract, a function after those it calls; then the definitions."""
     out = []
     spec = ode.Spec(spec_text)
     seqs = sequences(spec)
@@ -549,13 +568,18 @@ def statement(spec_text, functions):
     # (A layout says nothing by itself: it is read where an argument of a function to be shown is of its kind.)
     for what, there in (("a lemma", spec.lemmas), ("a kind", spec.kinds)):
         if there: raise SystemExit(f"statement: the specification has {what} ({', '.join(map(str, list(there)[:3]))}), which the verifier in Lean does not read yet")
+    # A function may read the read-only data of the program's object files. The statement gives each file's
+    # bytes once, before the functions, with the boundary they lie on; what is shown holds wherever the
+    # program is loaded (those bytes in memory, each file's at the address its instructions take).
+    files = pieces(functions)
+    number = {os.path.realpath(obj): k for k, (obj, _, _) in enumerate(files)}
+    for _, align, rodata in files: out.append(f"piece {align} {rodata.hex().upper()}")
     for obj, symbol in ordered(functions):
         out.append(f"fn {symbol}")
         rows, rodata = kdecode.read(obj, symbol, 0, 0)
+        # A function that takes an address in its file's data says which file's it is (before its instructions).
+        if takes_data(rows): out.append(f"data {number[os.path.realpath(obj)]}")
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
-        # A function that takes the address of the file's read-only data (`lea reg, [rip + data]`) may read that
-        # data: the statement gives its bytes, which the caller sees to lie where the function expects them.
-        if any(text.split()[0] == ".lea_data" for _, _, text in rows): out.append("data " + bytes(rodata).hex().upper())
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
         out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts)
         # The machine of the account in Lean has every instruction of the table. A processor has those of the

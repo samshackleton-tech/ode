@@ -68,7 +68,8 @@ writes a padded block byte by byte; and `b3l_chunk_node`, which calls a one-bloc
 of a chunk but the last, calls `b3l_pad` for the last, and stores three numbers into the chunk's record.
 It can follow arithmetic and shuffles on 512-bit registers, compares into mask registers and additions
 under a mask, loads and stores of 512-bit registers in buffers and on the stack, loads through a table of
-addresses, and loads of constants from the object file's read-only data.
+addresses, loads of constants from the object file's read-only data, and calls of functions that read such
+constants, whichever object file they are in.
 
 A second theorem is about constant time. For a function the verifier accepts, take two runs from inputs
 that differ only in what the contract hides, such as a key or a message block. The two runs execute the

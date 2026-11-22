@@ -1501,7 +1501,7 @@ theorem LaneAt.where_ {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     ((P + 64 * nb ≤ M64 ∧ (P + 64 * nb ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ P)) ∨
      (∃ o : Int, (P : Int) = s0.reg RSP + o ∧ sp ≤ o ∧ o + 64 * (nb : Int) ≤ 0 ∧
         (o + 64 * (nb : Int) ≤ cw ∨ cw + (nout : Int) ≤ o))) ∧
-    (-(ctx.contract.stack : Int) ≤ sp → ∀ a, P ≤ a → a < P + 64 * nb → (ctx.contract.perm s0).read a = true) := by
+    (-(ctx.contract.stack : Int) ≤ sp → ∀ a, P ≤ a → a < P + 64 * nb → (ctx.contract.perm ctx.pieces s0).read a = true) := by
   have hstack := E.stack
   rcases h with ⟨x0, b, n0, c, hm, hP, hle⟩ | ⟨o, sp', hsp', hP, h1, h2, h3⟩
   · obtain ⟨f1, f2, f3, f4⟩ := E.fixed hm
@@ -1522,7 +1522,7 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
     ∃ (sp : Int) (run : String) (r n : Nat) (tx : String) (tr count l : Nat) (nb cw ct : Int) (lanes : List WVal) (T : Tab)
       (env : List (String × WVal)) (rows : List Row) (s1 : Sym),
       s.sp = some sp ∧ (sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack) ∧
-      (c.data = [] ∧ c.mbounds = [] ∧ c.inouts = [] ∧ c.regions = []) ∧
+      (c.mbounds = [] ∧ c.inouts = [] ∧ c.regions = []) ∧
       (∀ x k, (x, k) ∈ c.atLeast → ∀ r', c.regOf x = some r' → plain s.facts (Lin.sub (s.reg r') (Lin.const (k : Int))) = true) ∧
       c.outs = [(run, r, n)] ∧ c.tables = [(tx, tr, count, l)] ∧
       Lin.isConst (s.reg l) = some nb ∧ frameAt s r = some cw ∧ frameAt s tr = some ct ∧
@@ -1546,10 +1546,10 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
       split at h
       next => exact (refuse_ok h).elim
       next hshape =>
-        have hs : c.data = [] ∧ c.mbounds = [] ∧ c.inouts = [] ∧ c.ensures = [] ∧ c.regions = [] ∧
+        have hs : c.mbounds = [] ∧ c.inouts = [] ∧ c.ensures = [] ∧ c.regions = [] ∧
             c.returns = none ∧ c.result = none := by
           simpa [List.isEmpty_iff, Option.isNone_iff_eq_none, and_assoc] using hshape
-        obtain ⟨hdata0, hmb, hinouts, -, hregions, -, -⟩ := hs
+        obtain ⟨hmb, hinouts, -, hregions, -, -⟩ := hs
         split at h
         next => exact (refuse_ok h).elim
         next hat =>
@@ -1611,7 +1611,7 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
           obtain ⟨⟨u, items1⟩, r1, hbounds, h⟩ := V.bind_ok h
           have hfin := V.pure_ok h
           injection hfin with hs' _
-          exact ⟨sp, run, r, n, tx, tr, count, l, nb, cw, ct, lanes, T, env, rows, s1, rfl, hg, ⟨hdata0, hmb, hinouts, hregions⟩,
+          exact ⟨sp, run, r, n, tx, tr, count, l, nb, cw, ct, lanes, T, env, rows, s1, rfl, hg, ⟨hmb, hinouts, hregions⟩,
             (fun x k m r' hr' => by
               have hall := List.all_eq_true.mp hat' (x, k) m
               simp only [hr'] at hall
@@ -1629,7 +1629,7 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     (H : Holds ctx s0 ρ s st) (q : Program) (hq : q.fits) (i : Instr)
     {sp cw ct nb : Int} {run tx : String} {r n tr count l : Nat} {T : Tab}
     (hsp : s.sp = some sp) (hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)
-    (hdata0 : c.data = []) (hmb : c.mbounds = []) (hregions' : c.regions = [])
+    (hmb : c.mbounds = []) (hregions' : c.regions = [])
     (hatL : ∀ x k, (x, k) ∈ c.atLeast → ∀ r', c.regOf x = some r' →
       plain s.facts (Lin.sub (s.reg r') (Lin.const (k : Int))) = true)
     (houts : c.outs = [(run, r, n)]) (htab : c.tables = [(tx, tr, count, l)])
@@ -1655,7 +1655,7 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
   have habove := E.above
   have hsmallsp := H.small RSP
   have h8 : 8 ≤ st.reg RSP := by omega
-  refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, fun hne => absurd hdata0 hne⟩
+  refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · intro r'
     by_cases hr : r' = RSP
     · rw [hr, s1rsp]; omega
@@ -1740,13 +1740,13 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCallL ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
-  obtain ⟨sp, run, r, n, tx, tr, count, l, nb, cw, ct, lanes, T, env, rows, s1, hsp, hg, ⟨hdata0, hmb, hinouts, hregions⟩, hatL,
+  obtain ⟨sp, run, r, n, tx, tr, count, l, nb, cw, ct, lanes, T, env, rows, s1, hsp, hg, ⟨hmb, hinouts, hregions⟩, hatL,
     houts, htab, hnb, hcw, hct, ⟨hnb0, hcw1, hcw2, hn8, hct1, hct2, hapart⟩, hlanes, hcal, hnl, hrl', hbounds, hs'⟩ := symCallL_spec h
   subst hs'
   -- the machine at the call
@@ -1855,11 +1855,13 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have hokenv : EnvOk s.nvars T.list.length ((tx, WVal.list lanes) :: env) :=
     EnvOk.cons (by simp only [WVal.ok]; exact okLanes) (calleeL_ok wfT c.args argRegs (fun r' m => argRegs_lt m) hcal)
   have hpre : c.pre q (afterCall p q i st) :=
-    symCallL_pre E H q hq i hsp hg hdata0 hmb hregions' hatL houts htab hcw1 hcw2 hct1 hct2 hapart hbounds hrsp s1rsp s1reg
+    symCallL_pre E H q hq i hsp hg hmb hregions' hatL houts htab hcw1 hcw2 hct1 hct2 hapart hbounds hrsp s1rsp s1reg
       s1r s1t s1l HT hfixs hptr atLanes
-  have hread : ∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true := by
+  have hread : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true := by
     intro a ha
-    simp only [Contract.perm, inData_false hdata0, Bool.or_false, Bool.or_eq_true] at ha
+    rw [perm_read_split, Bool.or_eq_true] at ha
+    refine ha.elim (fun ha => ?_) (fun ha => read_pieces H p q i ha)
+    simp only [Contract.perm, inPieces_nil, Bool.or_false, Bool.or_eq_true] at ha
     rcases ha with (((ha | ha) | ha) | ha) | ha
     · simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha
       simp only [Contract.perm, Bool.or_eq_true]
@@ -1899,7 +1901,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       have hj' := List.mem_range.mp hj'
       simp only [Bool.and_eq_true, decide_eq_true_eq, hptr j' hj', s1l] at hin
       exact (LaneAt.where_ E hsp (atLanes j' hj')).2 (by omega) a hin.1 hin.2
-  have hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true := by
+  have hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true := by
     intro a ha
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
     rcases ha with ha | ha
@@ -1907,7 +1909,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     · left
       simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
       omega
-  have hwr : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true := by
+  have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
     apply allowed_of
     intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -1967,10 +1969,10 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCall' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall' at h
@@ -1981,14 +1983,14 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     split at h
     · exact (refuse_ok h).elim
     next hno =>
-      have both : c.atLeast = [] ∧ c.data = [] := by simpa using hno
+      have hal : c.atLeast = [] := by simpa using hno
       split at h
-      · exact symCallPlain_sound E h H wf q hq i hret hl both.1 both.2
+      · exact symCallPlain_sound E h H wf q hq i hret hl hal
       · split at h
-        · exact symCallB_sound E h H wf q hq i hret hl both.1 both.2
+        · exact symCallB_sound E h H wf q hq i hret hl hal
         · split at h
-          · exact symCallF_sound E h H wf q hq i hret hl both.1 both.2
-          · exact symCallW_sound E h H wf q hq i hret hl both.1 both.2
+          · exact symCallF_sound E h H wf q hq i hret hl hal
+          · exact symCallW_sound E h H wf q hq i hret hl hal
 
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
@@ -1999,10 +2001,10 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
+    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
     c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
+    (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
     ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall at h

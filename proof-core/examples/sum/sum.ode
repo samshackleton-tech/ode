@@ -1,0 +1,25 @@
+// Two object files, each with a table of numbers in its read-only data. The functions here call `ode_third`
+// of ../table/odethird.o, which reads a number of that file's table. They are the first functions shown by
+// the verifier in Lean that call a function which reads constants: the call is taken by the called
+// function's contract alone, and what is shown holds wherever the two files are loaded.
+data squares = 1, 4, 9, 16
+
+// Twice the third prime. (This function takes no address in its own file's data; the function it calls
+// reads its file's.)
+fn twice as "ode_twice" {
+  call ode_third
+  add rax, rax
+  ret
+}
+
+// The third prime and the third square, added: 5, which `ode_third` reads from its file's table, and 9,
+// read from this file's table. The table's address is taken before the call and kept across it in rbx.
+fn sum as "ode_sum" {
+  push rbx
+  lea rbx, [rip + #squares]
+  call ode_third
+  mov ecx, DWORD PTR [rbx + 8]
+  add rax, rcx
+  pop rbx
+  ret
+}

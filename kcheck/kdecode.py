@@ -259,6 +259,11 @@ def address(obj, symbol):
     return place(Elf(obj), symbol)[1]
 
 
+def boundary(obj, symbol):
+    """The boundary the file's read-only data (as `read` gives it) starts on, wherever a linker and a loader put it."""
+    return place(Elf(obj), symbol)[2].align
+
+
 def read(obj, symbol, base, rodata_at):
     text, start, relocs, rodata = place(Elf(obj), symbol)
     at = start

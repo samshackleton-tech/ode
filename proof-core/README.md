@@ -76,6 +76,7 @@ The functions it verifies today:
 | `ode_adler32_blocks4` | the same, four bytes per iteration; this is the fast one (87% of the speed of the usual C) | 164 instructions, 3 loops | 1,815 lines, 23 kB | 22 ms |
 | `ode_varint` | encodes a number as a varint into a 10-byte buffer supplied by the caller; returns the length | 35 instructions, 1 loop of at most 10 iterations | 79 lines, 453 bytes | 5 ms |
 | `ode_third` | returns the third number of a table of constants that lies in its object file's read-only data | 3 instructions | 1 line, 14 bytes | 3 ms |
+| `ode_sum` | adds a number of a table in its own object file to what `ode_third`, a function of another object file, returns | 7 instructions | 1 line, 12 bytes | 3 ms for both |
 | `ode_second_block` | compresses the second 64 bytes of a message into a chaining value, by calling the SSE4.1 kernel with the address of those bytes | 8 instructions | 5 lines, 57 bytes | 6 ms with the kernel |
 | `ode_absorb` | compresses two blocks into a chaining value kept in the second half of a 64-byte record, by calling the SSE4.1 kernel twice with the address of that half | 21 instructions | 1 line, 15 bytes | 6 ms with the kernel |
 | `ode_tail` | pads the bytes of a message from byte 16 on into the 64-byte block of a record, by calling the hash's `b3l_pad` | 7 instructions | 5 lines, 49 bytes | 4 ms with `b3l_pad` |
@@ -90,17 +91,18 @@ The functions it verifies today:
 | `ode_high` | compresses one block from a key with the record's flags and PARENT, handing the SSE4.1 kernel those flags packed into a larger number (`flags \| (2^34 \| 4)`) | 15 instructions | 1 line, 13 bytes | 6 ms with the kernel |
 | `ode_quad` | the parent of two parent nodes, by two calls of the 16-way kernel: the table of sixteen addresses and the 512 bytes each call writes are in its stack frame, and the second call's lanes read what the first call wrote | 85 instructions | 1 line, 13 bytes | 0.16 s with the kernel |
 | `ode_rounds` | a loop of three iterations counted in the lowest byte of `rax`, while the other bytes of `rax` hold a byte of a hidden buffer | 7 instructions, 1 loop of 3 iterations | 1 line, 15 bytes | 3 ms |
+| `ode_quad32` | the parent of two parent nodes as `ode_quad` makes it, by two calls of the 32-way kernel, which reads a table of constants in its object file | 133 instructions | 1 line, 15 bytes | 0.72 s with the kernel |
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
 | `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 205 lines, 2.4 kB | 0.15 s |
-| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.60 s |
-| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.59 s |
+| `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.68 s |
+| `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.66 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
 | `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the bytes are secret | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
-them), `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last`, the three functions of `examples/far/`, `ode_empty`, `ode_parent`, `ode_turns`, `ode_high`, `ode_quad` and `ode_rounds` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
+them), the two functions of `examples/sum/`, `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last`, the three functions of `examples/far/`, `ode_empty`, `ode_parent`, `ode_turns`, `ode_high`, `ode_quad`, `ode_rounds` and `ode_quad32` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. The last eight are eight of the fourteen functions in the shipped
 BLAKE3 object file `kcheck/b3hashr.o`. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
@@ -109,14 +111,17 @@ kernel's contract says, for every `n` from 1 up, that the sixteen chaining value
 
 ## The soundness theorem
 
-    theorem verify_all_sound (world : List Program) (defs : List Def) (fns : List Fn) :
-        Linked world fns → verdictAll defs fns = none →
-        ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world f.contract defs p
+    theorem verify_all_sound (world : List Program) (pieces : List Piece) (defs : List Def) (fns : List Fn) :
+        Linked world fns → verdictAll pieces defs fns = none →
+        ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world pieces f.contract defs p
 
-In words: suppose the verifier accepts a list of functions (`verdictAll defs fns = none`; `none` means "no
-objection"). Then every function in the list satisfies its contract (`Meets`).
+In words: suppose the verifier accepts a list of functions (`verdictAll pieces defs fns = none`; `none`
+means "no objection"). Then every function in the list satisfies its contract (`Meets`), wherever the
+program is loaded.
 
 - `fns` is the input: for each function its name, its instructions, its contract, and the author's proof.
+- `pieces` is input too: the constants of the object files. For each object file in which a function takes
+  the address of a constant, it holds the bytes of the file's read-only data and their alignment.
 - `defs` are the definitions from the specification file, which contracts refer to.
 - The proofs inside `fns` are not constrained in any way. The theorem holds whatever they contain.
 - `Linked world fns` is the one assumption. It is explained below.
@@ -124,13 +129,14 @@ objection"). Then every function in the list satisfies its contract (`Meets`).
 ### What "satisfies its contract" means
 
 `Meets` is defined in Contract.lean, in terms of the machine model in Machine.lean. Start the function in
-any machine state that satisfies the caller's obligations (listed next). Then:
+any machine state in which the program is loaded and which satisfies the caller's obligations (both are
+listed below). Then:
 
 - **Control flow.** The machine executes only instructions of this function and of the functions it calls.
 - **Memory safety.** The function reads only the buffers declared for reading, its own stack frame, and
   its return address. It writes only its own stack frame and the buffers declared for writing. A buffer
   declared as output-only cannot be read. The `stack` line gives the size of the stack frame in bytes.
-  A function whose contract carries its object file's read-only data may read that data as well.
+  Every function may also read the constants of the program: the read-only data of its object files.
   Functions it calls obey the same limits.
 - **Termination.** After finitely many instructions it returns to the return address its caller pushed.
 - **Result.** At that point: the stack pointer is just above the return address; the callee-saved
@@ -151,7 +157,15 @@ any machine state that satisfies the caller's obligations (listed next). Then:
   the marks it had. Of the other registers that are not callee-saved nothing is said: they may be marked,
   and a caller may rely on nothing about them. The next section says what follows from this.
 
-The caller's obligations (`Contract.pre`):
+**The program is loaded** (`Loaded` in Contract.lean). An object file can hold constants beside its code,
+in its read-only data. For each such file the machine state holds the address at which that data lies
+(`State.data`). The program is loaded when, for each file, the file's bytes are in memory at that address,
+the address is a multiple of the file's alignment, the data ends below 2^64, and none of its bytes is
+marked. The addresses themselves are arbitrary, so the theorem holds wherever a linker and a loader put
+each file. No contract mentions constants. On a real machine the linker and the loader make this true, not
+the calling code. That they do is not proved here; it is listed below with the link step.
+
+The caller's obligations (`Contract.pre`, `Contract.clear`):
 
 - every register holds a 64-bit value;
 - `stack` bytes below the stack pointer are available;
@@ -163,12 +177,11 @@ The caller's obligations (`Contract.pre`):
   written. They have the same obligations, and the read-and-written one counts as an output buffer;
 - where the contract bounds a number argument (`length: word`), the number is below the bound;
 - the function's code is in memory;
-- where the function uses constants from its object file's read-only data: the contract carries the bytes
-  of that data (`Contract.data`), and the machine state has the address at which the data lies
-  (`State.data`). The obligation (`Contract.dataAt`) is that those bytes are in mapped memory at that
-  address, apart from the stack frame, the return address and every output buffer, and that none of them
-  is marked. On a real machine the linker and the loader fulfil this, not the calling code. That they do
-  is not proved here; it is listed below with the link step;
+- nothing that the function may write is part of the program itself (`Contract.clear`): the stack frame,
+  the return address and every output buffer lie apart from the read-only data of every object file and
+  from the code of every function. (An input buffer may lie in read-only data: both are only read.) In the
+  formal model a store cannot change code, because code is not kept in memory there. On a real processor
+  it can, so the obligation says what the model would otherwise take to be so without saying it;
 - about marks (`Contract.quietAt`): the stack pointer is not marked; the register of an argument is not
   marked, unless the argument is a number that the contract lists as `hidden`; the return address is not
   marked; and no byte of an input buffer is marked, except in the buffers that the contract lists as
@@ -261,7 +274,9 @@ What this does **not** cover:
 function name in the input refers, at run time, to a function with exactly the instructions given in the
 input, present in memory. In the model, a call instruction goes to the function with the called name. That
 the real linker arranges this is not proved here. (It is not proved in `kcheck/` either;
-[VERIFY.md](../kcheck/VERIFY.md) says so.)
+[VERIFY.md](../kcheck/VERIFY.md) says so.) The same holds of "the program is loaded", above: that each
+object file's constants are in memory where that file's instructions take them to be is the linker's and
+the loader's part.
 
 ### Axioms
 
@@ -341,13 +356,21 @@ order.
 
 **Constants in the object file.** A function can take the address of a constant in its object file's
 read-only data, as `lea rdi, [rip + table]` does. The instruction table gives that instruction the value
-`data(I)`: the address at which the file's data lies, plus the constant's offset `I` in the data. The
-verifier keeps one unknown for the address of the data and accepts `data(I)` when `I` is inside the
-data. A load of 1, 4 or 8 bytes whose address is the data's address plus a known number, and whose bytes
-all lie inside the data, gives a known number: the one that the file's bytes make there. The verifier
-reads those bytes from the input file. Such a load is not marked, because the constants of a file are no
-secret. A store to the data is rejected. For such a function `lean_verify.py` prints, beside its verdict,
-that the place of the data in memory is the linker's part and is assumed.
+`data(I)`: the address at which the file's data lies, plus the constant's offset `I` in the data. Each
+instruction carries the number of the object file it is in, and `data(I)` is an address in that file's
+data. The verifier keeps one unknown for the address of the data of the function's own file and accepts
+`data(I)` when `I` is inside that data. A load of 1, 4 or 8 bytes whose address is the data's address plus
+a known number, and whose bytes all lie inside the data, gives a known number: the one that the file's
+bytes make there. The verifier reads those bytes from the input file. Such a load is not marked, because
+the constants of a file are no secret. A store to the data is rejected.
+
+A function that reads constants can be called like any other, from its own object file or from another.
+Its contract says nothing about constants, and the caller has nothing to show about them at the call:
+the program is loaded at the call because it was loaded when the caller was entered, and the caller can
+have written none of it. What the called function may write lies inside what the caller may write, so it
+lies apart from the program's constants and code as well. Where functions in the input read constants,
+`lean_verify.py` prints, after its verdict, that the place of each file's data in memory is the linker's
+and the loader's part, and that the verification relies on them for it.
 
 **Output buffers.** A contract may give the function a buffer to write, for example `out: 10 bytes`, with
 an `ensures` line about its contents. The verifier tracks single-byte stores into such a buffer. For each
@@ -411,10 +434,10 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,053 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,058 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
-**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,925 lines of code) and the
+**For the verifier's rules, the reader chooses.** The rules are Core.lean (2,937 lines of code) and the
 arithmetic rule in Arithmetic.lean. All the clever parts are here or in the prover. The rules are relied on
 for accepting only what the formal model implies.
 
@@ -449,7 +472,8 @@ Outside the theorem. Every reader relies on each of these today, for what its en
   forms from the table. Turning the object file's bytes into that list is done by `statement.py` using
   `../kcheck/kdecode.py`. That code is Python. It also parses the ELF file and resolves the names of called
   functions. Where a function takes the address of a constant, it also takes the bytes of the read-only
-  data from the object file and works out which offset in that data the instruction refers to.
+  data from the object file, with their alignment, works out which offset in that data the instruction
+  refers to, and says which object file the function is in.
 - **Parsing the specification.** `statement.py` uses `../kcheck/ode.py` to parse the specification text,
   and writes the contracts and definitions in the line format that the Lean program reads. A sequence
   given by a first element and a step is written out as the recursive definition it stands for.
@@ -471,11 +495,12 @@ Outside the theorem. Every reader relies on each of these today, for what its en
 - **That the instruction table matches real processors.** This rests on the comparison done by
   `cross.py`. That comparison cannot execute a `call` or a `ret` in isolation, so what those two
   instructions do is stated directly in Machine.lean.
-- **Linking** (the `Linked` assumption above). For a function that uses its object file's read-only
-  data, also that the data's bytes are in memory where the function's instructions look for them. The
-  model has one address for the data of all functions, which fits functions linked from one object file.
-  For `../kcheck/b3hashr.o`, which holds code and constants in one section of 17,856 bytes, the data that
-  `statement.py` gives is that whole section.
+- **Linking and loading** (the `Linked` assumption above, and "the program is loaded"). Each called name
+  leads to the function of that name. Each object file's read-only data is in memory where that file's
+  instructions take it to be, on the file's alignment. The model has one address for the data of each
+  object file; which file an instruction is in comes from `statement.py`. For `../kcheck/b3hashr.o`, which
+  holds code and constants in one section of 17,856 bytes, the data that `statement.py` gives is that
+  whole section.
 
 A proof file cannot change what is being proved. The input (what is to be proved) and the proof are two
 separate files, and a line of an input kind inside a proof file is rejected. The only string in the input
@@ -523,9 +548,9 @@ fixed size; `returns`; `stack`; and `ensures BUFFER[lo .. hi] = LIST`. Also buff
 fixed size, either read-only (`m: block`) or read and written (`h: cv`), with `ensures h = EXPRESSION`
 saying which words the buffer holds at the return. A number argument can carry a bound or a width:
 `length: word` means that the caller keeps the number below 2^32, and `flags: low word` means that only
-the low 32 bits of the register are the argument. A contract can also carry the read-only data of the
-function's object file. `statement.py` adds it for every function that takes the address of a place in
-that data; no line of the specification asks for it.
+the low 32 bits of the register are the argument. A contract says nothing about constants. The input
+file gives the read-only data of an object file once, for every file in which a function takes the address
+of a place in that data; `statement.py` writes it, and no line of the specification is needed for it.
 
 **Specifications.** Definitions that are a single expression built from numbers, names, arithmetic,
 comparisons, remainder and quotient by a constant, `if`, a byte of a buffer, `len`, list literals, list
@@ -589,9 +614,11 @@ bytes; one byte, after moving the address on by four; and four bytes that then d
 verifier accepts all four, and each proof is the one line that names the function. The tests change the
 code in ten ways and the contracts in four, and the verifier refuses each. Among them: another number of
 the table is read, a read ends past the end of the table, the table is stored to, the table holds another
-number. The tests also change the input file itself. Without its `data` line, taking the address is
-refused. With one byte of the data changed, the value returned is no longer the contract's. With the data
-cut short, the read is outside it.
+number. The tests also change the input file itself. Without the function's `data` line, taking the
+address is refused. With one byte of the file's data changed, the value returned is no longer the
+contract's. With the data cut short, the read is outside it.
+
+A call of a function that reads constants is `examples/sum/`, below.
 
 This is the first step of a new way to describe memory, in which each run of memory that a function may
 touch is a declared *piece* and no address exists without its piece ([DESIGN.md](../DESIGN.md), section
@@ -606,9 +633,9 @@ These are cases where the verifier rejects a correct function:
   data's address plus a known number. A table indexed by a register whose value is not a known number
   (`[table + 4*i]`) is rejected. Vector loads from the data have no rule of this kind yet. The forms that
   the kernels use (a constant repeated in every lane, a 16-byte constant, a 64-byte constant added) are
-  still decoded with the constant's value written into the instruction, as before. A function whose
-  contract carries data cannot be called by another function yet. The address just past the end of the
-  data cannot be taken.
+  still decoded with the constant's value written into the instruction, as before. A function can take
+  addresses only in the read-only data of its own object file (it may read any file's, through a function
+  it calls). The address just past the end of the data cannot be taken.
 
 - A buffer that a called function only reads can be a part of one of the caller's read-only buffers, or
   a part of the caller's stack frame (whole 8-byte cells, each of them known; so far only where the
@@ -842,8 +869,9 @@ met in the specification was not recognized when the code computed it later. Two
 (`ode_adler32_blocks` and `ode_adler32_blocks4`) were found again because of this change.
 
 With the invariant the verifier accepts the contract for every `n` from 1 up. The proof is 4,178 bytes.
-The verifier takes 0.60 s, and the Python verifier takes 0.40 s for the same function. (It took 1.2 s
-when this was first verified; the section on speed below says what was mended.) This function and its
+The verifier takes 0.68 s, and the Python verifier takes 0.40 s for the same function. (It took 1.2 s
+when this was first verified, and 0.60 s after the speed round of November 20; the section on speed below
+says what was mended, and that it has become slower again since.) This function and its
 other entry have the slowest ratio of any function here. The cause is known. The verifier stores an
 inequality as a list with one entry for every unknown, this function has more than 1,300 unknowns by its
 end, and the unknowns of a later iteration come last.
@@ -891,7 +919,7 @@ of the first half has the counter `t + i`, lane `i` of the second half has `t + 
 slots hold `lo(t + i)`, `hi(t + i)`, `lo(t + i + 16)` and `hi(t + i + 16)` in word `i`.
 
 With it the verifier accepts the contract for every `n` from 1 up. The proof is 4,331 bytes. The verifier
-takes 0.59 s, and the Python verifier takes 0.40 s.
+takes 0.66 s, and the Python verifier takes 0.40 s.
 
 The tests change the contract in ten ways, the code in fourteen and the invariant in five, and the
 verifier refuses each. Among them: every lane given the counter `t`, which is what the other entry
@@ -1355,9 +1383,9 @@ that takes `out` from the second value still meets the contract. The verifier re
 definition gives for the first lane that has it. For a later lane with the same call it records nothing
 about the words written.
 
-The rule does not yet cover a callee with more than one table or more than one buffer to write, a number
-of blocks that is not a constant, or a callee that reads the object file's read-only data. The 32-way
-kernel reads such data, so it cannot be called yet.
+The rule does not yet cover a callee with more than one table or more than one buffer to write, or a
+number of blocks that is not a constant. (It did not cover a callee that reads its object file's constants,
+as the 32-way kernel does. That limit is gone: `examples/sum/` and `examples/quad/quad32.ode`, below.)
 
 **A count in the lowest byte of a register that holds a secret: `examples/lowbyte/`** (`test_lowbyte.py`).
 `ode_rounds(m, n)` loads a byte of the hidden buffer `m` into `rax` and shifts it into the second byte.
@@ -1435,6 +1463,46 @@ One thing is asked that the contract language does not say: the number a functio
 of secrets. `ode_far` adds 2^63 to a number and branches on nothing, yet its contract must name the
 number (`test_far.py` keeps the contract without that line, a true statement refused, as a limit).
 
+**A call of a function that reads constants: `examples/sum/`** (`test_sum.py`). Two object files, each
+with a table of its own. `ode_third` (above) returns the third prime from the table in its file.
+`ode_sum`, in the other file, takes the address of its own file's table of squares, keeps it in `rbx`
+across a call of `ode_third`, and returns the third prime plus the third square. `ode_twice` takes no
+address in its own file's data and returns twice what `ode_third` returns. The verifier accepts both;
+`ode_sum`'s stored proof is the function's name alone, and `ode_twice`'s is 13 lines.
+
+This is what the formal model's account of constants is for. Until now a contract carried the constants
+of the function's own object file, and their being in memory was an obligation on each caller. A caller's
+contract said nothing about the constants of another function's file, so the verifier refused every call
+of a function that read constants. Now the constants are said once, for the loaded program (`Loaded`,
+above), no contract carries any, and the three refusals are gone from the verifier. At a call, whichever
+of the five rules for calls applies, the soundness proof uses two lemmas: the program is loaded as it was
+at the caller's entry (`loaded_call`), and what the called function may write lies apart from the
+program's constants and code because the caller may write it (`clear_call`). Every stored proof is the
+same bytes as before.
+
+The tests change the code in eight ways and the contracts in five, each making the statement false, and
+each is refused: another number of the caller's table is read, a read ends past it, the table is stored to,
+the callee's contract or the caller's says another prime. They change the input file in twelve ways: a
+byte of either file's data; `ode_sum` said to be in the file with the primes (it then returns 10, not 14);
+its `data` line missing, naming a file that is not there, or standing after its instructions; either
+file's data missing; the two files' data exchanged; bytes that are not bytes, and an alignment that is not
+a number. Two changed statements that
+are still true are accepted: the two files' tables holding the same bytes (two copies, each where its own
+file is loaded), and the table's address taken after the call. One more false statement comes from
+`examples/parent/`: there the caller hands the SSE4.1 kernel a part of its stack frame to write. Changed to
+hand it a table of constants instead, the caller is refused, because a called function may be given to
+write only what its caller may write.
+
+**A call of the 32-way kernel: `examples/quad/quad32.ode`** (`test_quad32.py`). The hash's 32-way kernel
+finds the order of the message words in a table of constants in its object file, so until now no function
+that calls it could be verified. `ode_quad32` is `ode_quad` (above) with the 32-way kernel in place of the
+16-way one: a table of thirty-two addresses and two buffers of 1,024 bytes, all in its stack frame. Its
+calls go by the rule for a table of addresses, which needed no change but the refusal taken out. The
+verifier accepts it; the stored proof is the function's name alone, and verifying it with the kernel takes
+0.72 s. The tests change the contract in three ways and the code in six, each making the statement false,
+and each is refused; two changed statements that are still true are accepted. Without the kernel's `data`
+line in the input file, or without its file's data, nothing is accepted.
+
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
 AVX-512 kernel or the SSE4.1 kernel.
@@ -1476,14 +1544,18 @@ contracts are rejected with the expected reasons, and valid variations are accep
 **What is to be proved** is a text file written by `statement.py` from the object file's bytes and the
 specification. (The code and file names call this file the "statement".)
 
+    piece 64 0200000003000000…    the read-only data of an object file: its alignment, and its bytes in
+                                  hexadecimal (only for a file in which a function takes the address of a
+                                  constant; the files are numbered in this order, from 0)
     fn ode_common                 a function; its instructions and contract follow
+    data 0                        the function is in the object file whose read-only data has that number
+                                  (only where it takes the address of a constant; before its instructions)
     i 0 1 .push .rbx              an instruction: start offset, end offset, instruction form and operands
     arg a bytes n                 an input buffer of n bytes (`arg out out 10`: an output buffer of 10 bytes)
     returns (call common (name a) (name b))
     below length 4294967296       the caller keeps this number argument below the bound
     mbelow nd 104 65              the caller keeps the 8-byte number at offset 104 of the buffer `nd` below the bound
     needsif avx512 plat 5         the function needs AVX-512 if the argument `plat` is 5
-    data 0200000003000000…        the bytes of the object file's read-only data, in hexadecimal
     stack 40
     fn ode_equal                  the next function; it may call the ones before it
     …
@@ -1641,6 +1713,18 @@ The 32-way kernel went from 1.2 s to 0.60 s, and by the entry the hash calls fro
 a half times the Python verifier's 0.40 s. The 16-way kernel went from 0.17 s to 0.12 s. The stored proofs
 did not change by a byte through any of the four.
 
+**Slower again since.** Measured on November 22, with the verifier of November 20 and the verifier of that
+day side by side on one machine: the 16-way kernel takes 0.15 s (0.125 s with the verifier of November
+20), and the 32-way kernel 0.68 s and 0.66 s by its two entries (0.61 s and 0.60 s). So the rules added in
+between cost a fifth on the 16-way kernel and a tenth on the 32-way one. Counting the instructions the
+verifier runs, at the commits in between, shows two steps of the same size, and nothing else: the rule for
+a called function that writes a run of bytes, and the rule that gives a use of a definition a number of
+its own. Each of the two made the verifier look, at every use of a definition in the specification,
+whether the state knows that use, and each look works out anew what the use is given. A kernel's state
+knows no such use. A trial that leaves the looks out where the state knows nothing of the definition
+takes a sixth off the instructions for the 32-way kernel and a third off for the 16-way one; it is not
+in this verifier yet. The account of constants of November 22 costs less than one percent.
+
 What takes the time now is evaluating the specification at the loop invariant (for each lane the
 verifier works out one block's compression, on each arrival there), and the size of the rows: an
 inequality is a list with one entry for every unknown, the 32-way kernel has more than 1,300 unknowns by
@@ -1699,15 +1783,15 @@ registers, flags, memory and the next instruction address. The comparison checks
 vector register wherever the table specifies their values, and all 16 bits of each mask register.
 Separate tests check that aligned 512-bit loads and stores fault on a misaligned address. The
 single-instruction comparison does not cover `lea_data` and `call`, which Machine.lean states directly
-(`lea_data` gives the address of the file's data plus an offset).
+(`lea_data` gives the address of the data of the instruction's object file plus an offset).
 
 **The BLAKE3 specification.** Evaluating `../kcheck/blake3.spec` (29 definitions) in Lean gives the 105
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 1,053 lines (Table.lean 152, Machine.lean 510, Contract.lean 391). The
-verifier: 3,084 lines (Core.lean 2,925, Arithmetic.lean 159 including its proofs). The file parser: 191
-lines. The proofs of the theorems: 20,190 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
+**Code size.** The formal model: 1,058 lines (Table.lean 152, Machine.lean 511, Contract.lean 395). The
+verifier: 3,096 lines (Core.lean 2,937, Arithmetic.lean 159 including its proofs). The file parser: 202
+lines. The proofs of the theorems: 20,301 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 
@@ -1719,6 +1803,6 @@ lines. The proofs of the theorems: 20,190 lines, of which Trace.lean (two runs o
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
 | for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/`, `examples/doubling/`, `examples/far/`, `examples/empty/`, `examples/parent/`, `examples/turns/`, `examples/high/`, `examples/quad/` and `examples/lowbyte/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`), `Advice.lean` (which rows to propose; part of `odeprove` alone) |
-| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_far.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py`, `test_quad.py`, `test_lowbyte.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py` and `test_quad.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
+| tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_far.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py`, `test_quad.py`, `test_lowbyte.py`, `test_sum.py`, `test_quad32.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py` and `test_quad.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 
 The tests are skipped where Lean's build tool `lake` is not installed.

@@ -116,8 +116,15 @@ specification a number is of any size and never wraps: part 1. It is only an arg
 that a register bounds.)
 
 **`requires`**: what the caller makes true. `requires no_overlap(a, b, ...)`: no two of the things at those addresses have a
-byte in common. One thing is required of every caller and not written: the stack is the machine's own,
-and nothing an argument addresses lies in it. Of a call that does not keep these, nothing is said.
+byte in common. Two things are required of every caller and not written. The stack is the machine's own,
+and nothing an argument addresses lies in it. And the program is loaded: the constants that lie in each
+of its object files beside the code are in memory where that file's code takes them to be, and nothing
+the function may write (what an `ensures` or a `writes` names, its stack, the address it returns to) lies
+over those constants or over the program's code. (What a function only reads may lie among the constants.)
+Whoever puts the program into memory (a linker and a loader) sees to the first half of that; a caller that
+writes only its own stack and what it was itself given to write keeps the second half for the functions it
+calls. Of a call that does not keep
+these, nothing is said.
 
 **If the caller does that, the function returns**, and then:
 
@@ -137,7 +144,8 @@ way. Both are the language's own (part 1) and a specification may not define the
 **And it has done nothing else.**
 
 - It has read no memory but what its arguments address, its own stack, and constants that lie in the
-  binary beside its code.
+  program's object files beside the code. (No contract names constants: any function may read them, and
+  none may write them.)
 - It has written no memory but what an `ensures` or a `writes` names (`writes X`: X may hold anything
   afterwards), and at most `stack` bytes below the caller's stack pointer.
 - The registers the calling convention says a callee keeps are as they were.

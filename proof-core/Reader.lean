@@ -41,6 +41,7 @@ def readSExpr (text : String) : Except String SExpr :=
 
 structure Job where
   fns : List Fn := []               -- the statement's functions, in its order
+  pieces : List Piece := []         -- the read-only data of the object files, in the statement's order (numbered from 0)
   defs : List Def := []
   cur : Option String := none       -- in the proof: the function the lines are for
   starts : List Nat := []
@@ -61,7 +62,14 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "stack", "def"]
+def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "piece", "stack", "def"]
+
+/-- An instruction of a function that takes addresses in its file's read-only data says which file's
+(`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
+def pieceBind (piece : Option Nat) (bind : Bind) : Bind :=
+  match piece with
+  | some k => bind ++ [("piece", toString k)]
+  | none => bind
 
 /-- Bytes written as two hexadecimal digits each. -/
 def readBytes : List Char → Option (List Nat)
@@ -103,7 +111,7 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     let some ins := parseSexp (rest line 3) | throw s!"cannot read {line}"
     let some (row, bind) := findRow table ins | throw s!"refused: an instruction that is no row of the table: {rest line 3}"
     let (some a, some b) := (a.toNat?, b.toNat?) | throw s!"cannot read {line}"
-    onLast fun g => { g with code := g.code ++ [(a, ⟨row.effect, bind, b⟩)] }
+    onLast fun g => { g with code := g.code ++ [(a, ⟨row.effect, pieceBind g.piece bind, b⟩)] }
   | ["arg", name, "number"] => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .number)] } }
   | ["arg", name, "bytes", len] => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .bytes len)] } }
   | ["arg", name, "out", n] => match n.toNat? with
@@ -141,9 +149,15 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     | some n => onLast fun g => { g with contract := { g.contract with atLeast := g.contract.atLeast ++ [(name, n)] } }
     | none => throw s!"cannot read {line}"
   | ["hidden", name] => onLast fun g => { g with contract := { g.contract with hidden := g.contract.hidden ++ [name] } }
-  | ["data", hex] => match readBytes hex.toList with
-    | some bytes => onLast fun g => { g with contract := { g.contract with data := bytes } }     -- the file's read-only data
-    | none => throw "cannot read the bytes of the file's data"
+  | ["piece", align, hex] => match align.toNat?, readBytes hex.toList with      -- the read-only data of an object file
+    | some align, some bytes => pure { t with pieces := t.pieces ++ [{ bytes := bytes, align := align }] }
+    | _, _ => throw "cannot read the bytes of a file's read-only data"
+  | ["data", k] => match k.toNat?, t.fns.reverse with       -- the function is of the file whose read-only data has that number
+    | some k, last :: before =>
+      if !last.code.isEmpty then throw s!"refused: `data` after an instruction of the function: {line}"
+      else if t.pieces.length ≤ k then throw s!"refused: no read-only data of that number stands before: {line}"
+      else pure { t with fns := before.reverse ++ [{ last with piece := some k }] }
+    | _, _ => throw s!"cannot read {line}"
   | ["needsif", what, name, n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with needsIf := g.contract.needsIf ++ [(what, name, n)] } }
     | none => throw s!"cannot read {line}"

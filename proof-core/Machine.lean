@@ -8,8 +8,8 @@ which processors are compared with (`../core/cross.py`).
 
 The model covers general registers, two flags, calls by name, vector operations on four or sixteen 32-bit
 lanes, and the mask registers where a row compares into one or sets a vector register under one. The
-read-only data of the function's file lies at an address the state holds (`State.data`): the linker and the
-loader decide it, and no instruction changes it.
+read-only data of each object file of the program lies at an address the state holds (`State.data`, by the
+file's number): the linker and the loader decide it, and no instruction changes it.
 
 Memory a function may not touch is said by `Perm`; touching it is a fault, as is an instruction with no row.
 -/
@@ -77,7 +77,8 @@ structure State where
   vec : Nat → Nat → Nat    -- the vector registers zmm0 to zmm31: a register's lanes of 32 bits, lane 0 the lowest;
                            -- after them, as registers 33 to 39, the mask registers k1 to k7 (`maskOf`): a
                            -- mask's sixteen bits, each a lane (0: the bit is not set; a compare writes 0 or 1)
-  data : Nat               -- where the read-only data of the function's file lies (no instruction changes it)
+  data : Nat → Nat         -- where the read-only data of each object file of the program lies, by the file's
+                           -- number (no instruction changes it)
   marks : Marks := {}      -- what may depend on a secret
   trace : List (Nat × Nat) := []    -- what has been observed so far, the oldest first: (an instruction's address, 0); (an address touched, how many bytes)
 
@@ -182,6 +183,10 @@ def sumList : List Nat → Nat
   | [] => 0
   | v :: vs => v + sumList vs
 
+/-- The object file in whose read-only data an instruction takes an address, by the file's number: the
+reader of a statement writes it into each instruction of a function of that file (as `piece`). -/
+def pieceOf (bind : Bind) : Option Nat := (bind.lookup "piece").bind String.toNat?
+
 mutual
   def value (perm : Perm) (bind : Bind) (s : State) : Expr → Option Nat
     | .number n => some n
@@ -198,7 +203,7 @@ mutual
           let a := sumList vs % M64
           if allowed perm.read a size then some (load s.mem a size) else none
         | none =>
-          if f == "data" then some ((s.data + sumList vs) % M64)       -- the address of a place in the file's data
+          if f == "data" then (pieceOf bind).map fun k => (s.data k + sumList vs) % M64     -- the address of a place in the file's data
           else prim f vs
   def values (perm : Perm) (bind : Bind) (s : State) : List Expr → Option (List Nat)
     | [] => some []

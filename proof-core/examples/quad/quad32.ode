@@ -1,0 +1,156 @@
+// The parent of two parents, as quad.ode makes it, by the hash's 32-way kernel: a table of thirty-two
+// addresses, and thirty-two values of 32 bytes each, in this function's stack frame. The 32-way kernel finds
+// the order of the message words in a table of constants in its object file: this is the first function
+// shown by the verifier in Lean that calls it.
+// First round: lane 0 reads the block `a`, lane 1 the block `b` (the thirty lanes left read `a` again, and
+// what they leave is not used). Second round: every lane reads the first 64 bytes of what the first round
+// left, which are the values of `a` and of `b` side by side. `out` becomes the first value of the second round.
+// quad32(out, a, b, kf): arguments in rdi, rsi, rdx, rcx, as C passes them. Saved and restored: rbx, r12.
+// Kept: out in rbx, kf in r12. In the frame: the table at [rsp + 0], the first round's values at
+// [rsp + 256], the second round's at [rsp + 1280]. Frame: 2312 bytes.
+fn quad32 as "ode_quad32" {
+  push rbx
+  push r12
+  sub rsp, 2312
+  mov rbx, rdi
+  mov r12, rcx
+  // the table: lane 0 reads a, lane 1 reads b, the other lanes read a
+  mov rax, rsi
+  mov qword ptr [rsp + 0], rax
+  mov rax, rdx
+  mov qword ptr [rsp + 8], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 16], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 24], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 32], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 40], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 48], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 56], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 64], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 72], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 80], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 88], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 96], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 104], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 112], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 120], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 128], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 136], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 144], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 152], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 160], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 168], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 176], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 184], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 192], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 200], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 208], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 216], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 224], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 232], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 240], rax
+  mov rax, rsi
+  mov qword ptr [rsp + 248], rax
+  // packed = flags | 0x40000004: the flags and PARENT in the low byte; no flag of a chunk's first or last block;
+  // 64 bytes a block
+  mov rax, qword ptr [r12 + 32]
+  or rax, 1073741828
+  mov r8, rax
+  // p32(table, 1, key, 0, packed, values)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  lea r9, [rsp + 256]
+  call blake3_servil_avx512_p32
+  // the table: every lane reads the two values the first round left first
+  lea rax, [rsp + 256]
+  mov qword ptr [rsp + 0], rax
+  mov qword ptr [rsp + 8], rax
+  mov qword ptr [rsp + 16], rax
+  mov qword ptr [rsp + 24], rax
+  mov qword ptr [rsp + 32], rax
+  mov qword ptr [rsp + 40], rax
+  mov qword ptr [rsp + 48], rax
+  mov qword ptr [rsp + 56], rax
+  mov qword ptr [rsp + 64], rax
+  mov qword ptr [rsp + 72], rax
+  mov qword ptr [rsp + 80], rax
+  mov qword ptr [rsp + 88], rax
+  mov qword ptr [rsp + 96], rax
+  mov qword ptr [rsp + 104], rax
+  mov qword ptr [rsp + 112], rax
+  mov qword ptr [rsp + 120], rax
+  mov qword ptr [rsp + 128], rax
+  mov qword ptr [rsp + 136], rax
+  mov qword ptr [rsp + 144], rax
+  mov qword ptr [rsp + 152], rax
+  mov qword ptr [rsp + 160], rax
+  mov qword ptr [rsp + 168], rax
+  mov qword ptr [rsp + 176], rax
+  mov qword ptr [rsp + 184], rax
+  mov qword ptr [rsp + 192], rax
+  mov qword ptr [rsp + 200], rax
+  mov qword ptr [rsp + 208], rax
+  mov qword ptr [rsp + 216], rax
+  mov qword ptr [rsp + 224], rax
+  mov qword ptr [rsp + 232], rax
+  mov qword ptr [rsp + 240], rax
+  mov qword ptr [rsp + 248], rax
+  // packed = flags | 0x40000004: the flags and PARENT in the low byte; no flag of a chunk's first or last block;
+  // 64 bytes a block
+  mov rax, qword ptr [r12 + 32]
+  or rax, 1073741828
+  mov r8, rax
+  // p32(table, 1, key, 0, packed, values)
+  lea rdi, [rsp + 0]
+  mov rsi, 1
+  mov rdx, r12
+  mov rcx, 0
+  lea r9, [rsp + 1280]
+  call blake3_servil_avx512_p32
+  // out = the first value of the second round
+  mov rax, qword ptr [rsp + 1280]
+  mov qword ptr [rbx + 0], rax
+  mov rax, qword ptr [rsp + 1288]
+  mov qword ptr [rbx + 8], rax
+  mov rax, qword ptr [rsp + 1296]
+  mov qword ptr [rbx + 16], rax
+  mov rax, qword ptr [rsp + 1304]
+  mov qword ptr [rbx + 24], rax
+  // rax held bytes of the value: it is set to zero, so that the function leaves nothing of the blocks in a
+  // register. (No rule of the verifier needs this.)
+  mov rax, 0
+  add rsp, 2312
+  pop r12
+  pop rbx
+  ret
+}

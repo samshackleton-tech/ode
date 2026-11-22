@@ -3,16 +3,19 @@
 a table of numbers in their file's data (`lea reg, [rip + #primes]`, the row `lea_data`) and read numbers
 of it, four bytes, eight bytes and one byte, and one decides a jump by what it read.
 
-The account of the machine has the address at which the file's data lies (`State.data`); a contract has
-the data's bytes (`Contract.data`: statement.py gives them, from the object file, for a function that takes
-the data's address), and what its caller sees to is that those bytes lie there, apart from the function's
-frame and from every run given to write. The verifier takes an address that is the data's plus a number as
-a place in the data, and a read there as the number the file's bytes make.
+The account of the machine has, for each object file, the address at which that file's data lies
+(`State.data`). The statement gives the file's bytes once (a `piece` line: statement.py writes it from the
+object file, for a file in which a function takes the data's address), and the function says which file's
+data it takes the address in (a `data` line). What is shown holds wherever the program is loaded: those
+bytes in memory at the file's address, apart from the function's frame, from the address to return to and
+from every run given to write. The verifier takes an address that is the data's plus a number as a place
+in the data, and a read there as the number the file's bytes make. (A call of a function that reads its
+file's data: test_sum.py.)
 
 With the function, its table or its contract changed in one place it does not say `shown`, nor does the
 prover find a proof; each case names what the verifier then refuses or lacks. A statement without its
-`data` line, or with one byte of it changed, is not shown either. Beside its verdict lean_verify.py says
-that the place of the data in memory is the linker's part.
+`data` line or its `piece` line, or with one byte of the data changed, is not shown either. Beside its
+verdict lean_verify.py says that the place of the data in memory is the linker's and the loader's part.
 
     python3 test_table.py        (skipped where Lean's `lake` is not installed)"""
 import os, shutil, subprocess, sys, tempfile, unittest
@@ -96,8 +99,10 @@ class Table(unittest.TestCase):
                 with open(kept) as f, open(self.path(fn + ".proof")) as g: self.assertEqual(f.read(), g.read())
                 with open(self.path(fn + ".statement")) as f: lines = f.read().splitlines()
                 self.assertEqual(sum(l.startswith("i ") and ".lea_data " in l for l in lines), 1)      # the row this is about
-                data = [l for l in lines if l.startswith("data ")]
-                self.assertEqual(data, ["data " + "".join(f"{p:02X}000000" for p in (2, 3, 5, 7, 11, 13, 17, 19))])     # the table, as the file has it
+                data = [l for l in lines if l.startswith(("piece ", "data "))]
+                # the table, as the file has it, on the boundary the file gives its data; and the function is of that file
+                self.assertEqual(data, ["piece 64 " + "".join(f"{p:02X}000000" for p in (2, 3, 5, 7, 11, 13, 17, 19)), "data 0"])
+                self.assertEqual(lines.index("data 0"), lines.index("fn " + symbol) + 1)       # before the function's instructions
 
     def test_a_function_changed_in_one_place(self):
         for fn, what, old, new, why in SOURCES:
@@ -122,15 +127,16 @@ class Table(unittest.TestCase):
                 self.assertIsInstance(last, str, what)
                 self.assertIn(RETURNS, last, what)
 
-    def test_the_verdict_names_what_the_linker_owes(self):
+    def test_the_verdict_names_what_the_linker_and_the_loader_owe(self):
         """`shown` of a function that reads its file's data holds where the data lies in memory as the function
         expects: lean_verify.py says so beside the verdict, and says nothing of it for a function without data."""
         symbol, obj, kept = self.fns["third"]
         r = subprocess.run([sys.executable, os.path.join(HERE, "lean_verify.py"), os.path.join(TABLE, "table.spec"), kept, obj + ":" + symbol], capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("shown: ode_third in odethird.o meets its contract", r.stdout)
-        self.assertIn("It reads constants of odethird.o (32 bytes of read-only data)", r.stdout)
-        self.assertIn("the linker's part", r.stdout)
+        self.assertIn("Functions here read constants of their files: odethird.o (32 bytes of read-only data).", r.stdout)
+        self.assertIn("the linker's and the\nloader's part", r.stdout)
+        self.assertIn("relies on them for it and does not show it", r.stdout)
         low = os.path.join(HERE, "examples", "low")
         r = subprocess.run([sys.executable, os.path.join(HERE, "lean_verify.py"), os.path.join(low, "low.spec"), os.path.join(HERE, "proofs", "ode_low.proof"),
                             os.path.join(low, "odelow.o") + ":ode_low"], capture_output=True, text=True)
@@ -138,22 +144,26 @@ class Table(unittest.TestCase):
         self.assertNotIn("linker", r.stdout)
 
     def test_the_statements_data(self):
-        """The verifier in Lean goes by the bytes the statement gives. Without them the address of the data
-        is refused; with one byte of them changed the function returns another number than its contract
-        says; and bytes that are no bytes are not read."""
+        """The verifier in Lean goes by the bytes the statement gives. Without the function's `data` line the
+        address of the data is refused, and without the file's bytes that line names nothing; with one byte
+        of them changed the function returns another number than its contract says; and bytes that are no
+        bytes are not read."""
         symbol, obj, kept = self.fns["third"]
         self.found(self.spec, obj, symbol, "whole")
         with open(self.path("whole.statement")) as f: lines = f.read().splitlines()
         self.assertEqual(self.run_lines(lines, kept), "shown\n")
-        k = next(i for i, l in enumerate(lines) if l.startswith("data "))
-        self.assertIn("the address of a place that is not in the file's read-only data", self.run_lines(lines[:k] + lines[k + 1:], kept))
-        other = lines[k][:5 + 16] + "06" + lines[k][5 + 18:]            # the third number's lowest byte: 5 becomes 6
+        k = next(i for i, l in enumerate(lines) if l.startswith("piece "))
+        d = lines.index("data 0")
+        self.assertIn("the address of a place that is not in the file's read-only data", self.run_lines(lines[:d] + lines[d + 1:], kept))
+        self.assertIn("refused: no read-only data of that number stands before", self.run_lines(lines[:k] + lines[k + 1:], kept))
+        head = len("piece 64 ")
+        other = lines[k][:head + 16] + "06" + lines[k][head + 18:]      # the third number's lowest byte: 5 becomes 6
         self.assertNotEqual(other, lines[k]); self.assertEqual(len(other), len(lines[k]))
         self.assertIn(RETURNS, self.run_lines(lines[:k] + [other] + lines[k + 1:], kept))
-        short = lines[k][:5 + 16]                                       # the table cut off before the number read
+        short = lines[k][:head + 16]                                    # the table cut off before the number read
         self.assertIn(OUTSIDE, self.run_lines(lines[:k] + [short] + lines[k + 1:], kept))
         for bad in (lines[k] + "0", lines[k][:-1] + "G"):
-            self.assertIn("cannot read the bytes of the file's data", self.run_lines(lines[:k] + [bad] + lines[k + 1:], kept))
+            self.assertIn("cannot read the bytes of a file's read-only data", self.run_lines(lines[:k] + [bad] + lines[k + 1:], kept))
 
 
 if __name__ == "__main__":

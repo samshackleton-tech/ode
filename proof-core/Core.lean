@@ -500,7 +500,19 @@ structure Ctx where
   places : List Place := []                     -- the maker's: where the paths of loops are cut
   callees : List (String × Contract) := []      -- the functions this one calls, each with its contract
   advice : Advice := {}                         -- a prover's helper's; the verifier's program leaves it empty
+  pieces : List Piece := []                     -- the read-only data of the program's object files, by number
+  piece : Option Nat := none                    -- the file this function is of, where it takes an address in
+                                                -- that file's read-only data
   deriving Inhabited
+
+/-- The bytes of the read-only data of the function's own file, where the function takes an address there. -/
+def Ctx.data (ctx : Ctx) : List Nat :=
+  match ctx.piece with
+  | some k =>
+    match ctx.pieces[k]? with
+    | some pc => pc.bytes
+    | none => []
+  | none => []
 
 def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → List (String × SVal)
   | (n, .number) :: args, r :: regs, k => (n, .lin (Lin.var r)) :: symEnvIn c args regs k
@@ -624,10 +636,10 @@ inductive Where where
 /-- The unknown that is where the file's read-only data lies. (Unknowns 0 to 15 are the registers at entry.) -/
 def dataVar : Nat := 16
 
-/-- How many bytes into the file's data an address is, where the contract has data and the address is the
-data's plus a number. -/
+/-- How many bytes into the file's data an address is, where the function's file has data and the address is
+the data's plus a number. -/
 def dataOff (ctx : Ctx) (addr : Row) : Option Int :=
-  if ctx.contract.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var dataVar))
+  if ctx.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var dataVar))
 
 /-- The number that `size` bytes of the file's data make, from byte `c` on, the lowest byte first. -/
 def dataWord (data : List Nat) (c size : Nat) : Nat := load (fun x => ⟨data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c size
@@ -742,8 +754,8 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
   | some (.out _ _) => refuse "a read of a run given only to write"
   | some (.data c) =>
     -- the file's read-only data: the bytes are the file's, so what is read is a plain number
-    if (size = 1 ∨ size = 4 ∨ size = 8) ∧ 0 ≤ c ∧ c + size ≤ ctx.contract.data.length then
-      pure (.lin (Lin.const (dataWord ctx.contract.data c.toNat size)), s)
+    if (size = 1 ∨ size = 4 ∨ size = 8) ∧ 0 ≤ c ∧ c + size ≤ ctx.data.length then
+      pure (.lin (Lin.const (dataWord ctx.data c.toNat size)), s)
     else refuse "a read of the file's read-only data that is not one, four or eight bytes within it"
   | none => symLoadFixed ctx s addr size
 
@@ -880,14 +892,17 @@ def symPrim1 (f : String) (s : Sym) (x : Row) : V (EV × Sym) :=
   else if f == "low8" then pure (.lin (symLow s x 256).1, (symLow s x 256).2)
   else refuse s!"no rule for {f}"
 
-/-- `data(I)`, the address of a place in the file's read-only data: the unknown that is the data's address,
-plus `I`, where `I` is a number within the data the contract has. -/
-def symData (ctx : Ctx) (s : Sym) (x : Row) : V (EV × Sym) :=
-  match Lin.isConst x with
-  | some c =>
-    if 0 ≤ c ∧ c < ctx.contract.data.length then pure (.lin (Lin.add (Lin.var dataVar) (Lin.const c)), s)
-    else refuse "the address of a place that is not in the file's read-only data (or the contract has no data)"
-  | none => refuse "the address of a place in the file's data that is no number"
+/-- `data(I)`, the address of a place in the read-only data of the function's own file: the unknown that is
+that data's address, plus `I`, where `I` is a number within the data. (The instruction says which file's
+data it takes the address in, `pieceOf`: it must be this function's.) -/
+def symData (ctx : Ctx) (bind : Bind) (s : Sym) (x : Row) : V (EV × Sym) :=
+  if pieceOf bind = ctx.piece then
+    match Lin.isConst x with
+    | some c =>
+      if 0 ≤ c ∧ c < ctx.data.length then pure (.lin (Lin.add (Lin.var dataVar) (Lin.const c)), s)
+      else refuse "the address of a place that is not in the file's read-only data (or the file has none)"
+    | none => refuse "the address of a place in the file's data that is no number"
+  else refuse "the address of a place in the read-only data of another file than the function's own"
 
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .number n => if n < 2 ^ 64 then pure (.lin (Lin.const n), s) else refuse "a number of the table that is no 64-bit number"
@@ -903,7 +918,7 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .call f [a] => do
     let (x, s) ← symValue ctx bind s a
     match x with
-    | .lin x => if f == "data" then symData ctx s x else symPrim1 f s x
+    | .lin x => if f == "data" then symData ctx bind s x else symPrim1 f s x
     | _ => refuse "a flag's value where a number is expected"
   | s, .call f [a, b] => do
     let (x, s) ← symValue ctx bind s a
@@ -2647,7 +2662,7 @@ def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) 
         | some (base, _) => !ctx.contract.hiddenAt base
         | none => false
     | some (.out _ _) => false
-    | some (.data c) => decide (0 ≤ c) && decide (c + size ≤ ctx.contract.data.length)     -- (the file's data is not marked)
+    | some (.data c) => decide (0 ≤ c) && decide (c + size ≤ ctx.data.length)     -- (the file's data is not marked)
     | none =>
       match findOut addr ctx.contract.fixeds 0 with
       | some (.out j off) =>
@@ -3539,7 +3554,7 @@ def symCallL (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   | some sp =>
     if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
-    else if !(c.data.isEmpty && c.mbounds.isEmpty && c.inouts.isEmpty && c.ensures.isEmpty && c.regions.isEmpty &&
+    else if !(c.mbounds.isEmpty && c.inouts.isEmpty && c.ensures.isEmpty && c.regions.isEmpty &&
               c.returns.isNone && c.result.isNone) then
       refuse "a called function that is given a table of addresses and does more than write one run: not here yet"
     else if !(c.atLeast.all fun (xk : String × Nat) =>
@@ -3581,8 +3596,8 @@ writes nothing for its caller, by the rule for one that writes a run of words it
 for one that writes a run of bytes. -/
 def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   if !c.lanes.isEmpty then symCallL ctx s c
-  else if !(c.atLeast.isEmpty && c.data.isEmpty) then
-    refuse "a called function that asks that a number be no less than another, or takes the address of the file's data: not here yet"
+  else if !c.atLeast.isEmpty then
+    refuse "a called function that asks that a number be no less than another: not here yet"
   else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else if c.inouts.isEmpty && c.ensuresW.isEmpty then symCallB ctx s c
   else if c.outs.any (fun x => (frameAt s x.2.1).isSome) then symCallF ctx s c
@@ -3618,7 +3633,6 @@ may write is within a run this function was given to write (so it is no part of 
 of the frame that every such cell lies apart from. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   c.cleanAtEntry.all s.q.regq.contains &&
-  c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
   c.fixeds.all (fun x => c.hidden.contains x.1 ||
     -- (or a part of the frame, in whole cells, each of them known not to be marked: a table of addresses made here)
     match frameAt s x.2.1 with
@@ -3692,11 +3706,11 @@ def entryFacts (ctx : Ctx) : List Row :=
   (ctx.contract.atLeast.filterMap fun (name, k) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.var r) (Lin.const k)) ++
   ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
 
-/-- Where the contract has data: the data's address is a number from 0 up, and the data ends below 2^64.
-(After the other facts: they keep their numbers.) -/
+/-- Where the function's file has data: the data's address is a number from 0 up, and the data ends below
+2^64. (After the other facts: they keep their numbers.) -/
 def dataFacts (ctx : Ctx) : List Row :=
-  if ctx.contract.data.isEmpty then []
-  else [Lin.var dataVar, Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.contract.data.length : Int))) (Lin.var dataVar)]
+  if ctx.data.isEmpty then []
+  else [Lin.var dataVar, Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.data.length : Int))) (Lin.var dataVar)]
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
@@ -3968,27 +3982,30 @@ def verdict (ctx : Ctx) (proof : List Item) : Option String :=
   | .ok _ => none
   | .error why => some why
 
-/-- A function of a statement: its name, its instructions and its contract; and, the maker's, its places
-and its proof. -/
+/-- A function of a statement: its name, its instructions and its contract; the object file it is of, by
+number, where it takes an address in that file's read-only data; and, the maker's, its places and its proof. -/
 structure Fn where
   name : String
   code : List (Nat × Instr) := []
   contract : Contract := { args := [], returns := none, stack := 0 }
+  piece : Option Nat := none
   places : List Place := []
   proof : List Item := []
 
 /-- The functions one after another, `done` being those already shown, each with its contract. A call is
 taken by the contract of a function already shown, and by nothing else: so no function calls itself, or
 one that calls it, or one that is not in the statement. -/
-def verdictFrom (defs : List Def) : List (String × Contract) → List Fn → Option String
+def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contract) → List Fn → Option String
   | _, [] => none
   | done, f :: more =>
     if done.any (fun d => d.1 == f.name) then some s!"refused: two functions are named {f.name}"
-    else match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := done } f.proof with
+    else match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := done,
+                         pieces := pieces, piece := f.piece } f.proof with
       | some why => some s!"{why}\nin {f.name}"
-      | none => verdictFrom defs ((f.name, f.contract) :: done) more
+      | none => verdictFrom pieces defs ((f.name, f.contract) :: done) more
 
-/-- Do the functions of a statement meet their contracts, by these proofs? `none`: yes, every one. -/
-def verdictAll (defs : List Def) (fns : List Fn) : Option String := verdictFrom defs [] fns
+/-- Do the functions of a statement meet their contracts, by these proofs? `none`: yes, every one. (`pieces`:
+the read-only data of the object files the functions are of.) -/
+def verdictAll (pieces : List Piece) (defs : List Def) (fns : List Fn) : Option String := verdictFrom pieces defs [] fns
 
 end Ode

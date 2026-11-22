@@ -307,8 +307,6 @@ structure Contract where
   hidden : List String := []              -- the runs given to read whose bytes may be marked (secret), and the
                                           -- numbers given that may be: what can be observed of a run of the
                                           -- function must not depend on them
-  data : List Nat := []                   -- the bytes of the file's read-only data, where the function takes that
-                                          -- data's address: it may read them (they lie at `State.data`)
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -431,25 +429,32 @@ def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEn
 
 def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
 
-/-- The address is in the file's read-only data, `s` being the state at entry. -/
-def Contract.inData (c : Contract) (s : State) (a : Nat) : Bool := s.data ≤ a && a < s.data + c.data.length
+/-- The read-only data of an object file of the program: its bytes, and the boundary it lies on (where it
+lies is a multiple of that). -/
+structure Piece where
+  bytes : List Nat
+  align : Nat := 1
+  deriving Repr, Inhabited
 
-/-- What the caller sees to about the file's read-only data, where the function takes its address: the data
-lies in memory at `s.data`, whole, and ends below 2^64; each byte there is the file's; it lies apart from
-the function's frame and from the address to return to, and apart from every run given to write. (A run
-given to read may lie over it: both are only read.) -/
-def Contract.dataAt (c : Contract) (s : State) : Prop :=
-  c.data ≠ [] →
-    s.data + c.data.length < M64 ∧
-    (s.data + c.data.length ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.data) ∧
-    (∀ k (h : k < c.data.length), (s.mem (s.data + k)).val = c.data[k]) ∧
-    ∀ x r n, (x, r, n) ∈ c.outs → s.data + c.data.length ≤ s.reg r ∨ s.reg r + n ≤ s.data
+/-- The address is in the read-only data of an object file of the program (`pieces`: each file's, by the
+file's number). -/
+def inPieces (pieces : List Piece) (s : State) (a : Nat) : Bool :=
+  pieces.zipIdx.any fun (pc, k) => s.data k ≤ a && a < s.data k + pc.bytes.length
+
+/-- **The program is loaded.** The read-only data of each of its object files lies in memory, whole, at the
+address the state holds for that file, which is a multiple of the file's boundary; it ends below 2^64; each
+byte there is the file's, and none is marked (the program's own bytes are no secret). The addresses
+themselves are any: a linker and a loader decide them. -/
+def Loaded (pieces : List Piece) (s : State) : Prop :=
+  ∀ k pc, pieces[k]? = some pc →
+    s.data k + pc.bytes.length < M64 ∧ s.data k % pc.align = 0 ∧
+    ∀ j (h : j < pc.bytes.length), (s.mem (s.data k + j)).val = pc.bytes[j] ∧ s.marks.mem (s.data k + j) = false
 
 /-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
 read, its own frame and the return address above it, the blocks a table of addresses points to, and the
-file's read-only data; it may write its own frame and the runs given to write. -/
-def Contract.perm (c : Contract) (s : State) : Perm where
-  read a := ((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || c.inData s a
+read-only data of every object file of the program; it may write its own frame and the runs given to write. -/
+def Contract.perm (c : Contract) (pieces : List Piece) (s : State) : Perm where
+  read a := ((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || inPieces pieces s a
   write a := c.inFrame s a || c.inOut s a
 
 /-- The function's code lies in memory below 2^64. -/
@@ -462,8 +467,7 @@ write lies in memory, apart from that frame, from the address to return to, from
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
 from the frame, the address to return to and every run given to write. A number the contract bounds is below its bound, in a register or in memory. The
 blocks each address of a table points to lie in memory, apart from the frame, the address to return to and
-every run given to write. A number the contract asks to be no less than another is so.
-The file's read-only data is where the function expects it (`dataAt`). -/
+every run given to write. A number the contract asks to be no less than another is so. -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
   c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
@@ -482,8 +486,18 @@ def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
     lanePtr s r i + 64 * s.reg l ≤ M64 ∧
     (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ lanePtr s r i) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → lanePtr s r i + 64 * s.reg l ≤ s.reg r' ∨ s.reg r' + n' ≤ lanePtr s r i) ∧
-  (∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r) ∧
-  c.dataAt s
+  ∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r
+
+/-- A byte of the program as it is loaded, which no function writes: a byte of the read-only data of one of
+its object files, or a byte of an instruction of one of its functions. -/
+def Fixed (world : List Program) (pieces : List Piece) (s : State) (a : Nat) : Prop :=
+  inPieces pieces s a = true ∨ ∃ q ∈ world, ∃ oi ∈ q.code, q.base + oi.1 ≤ a ∧ a < q.base + oi.2.next
+
+/-- What the caller sees to about the program as it is loaded: no byte the function may write (its frame,
+the runs given to write) and no byte of the address to return to is a byte of the program's read-only data
+or of its code. (A run given only to read may lie over read-only data: both are only read.) -/
+def Contract.clear (c : Contract) (world : List Program) (pieces : List Piece) (s : State) : Prop :=
+  ∀ a, Fixed world pieces s a → c.inFrame s a = false ∧ c.inOut s a = false ∧ ¬(s.reg RSP ≤ a ∧ a < s.reg RSP + 8)
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/
@@ -551,14 +565,12 @@ def Contract.hiddenAt (c : Contract) (r : Nat) : Bool := c.hidden.any fun x => c
 /-- What the caller sees to about marks (what may depend on a secret): the stack pointer is not marked,
 nor is the register of an argument, but for a number the contract says is hidden (of any other general
 register nothing is asked: it may be marked); the address to return to is not marked; no byte of a run
-given to read is marked, but for the runs the contract says are hidden; no byte of the file's read-only
-data is marked. -/
+given to read is marked, but for the runs the contract says are hidden. -/
 def Contract.quietAt (c : Contract) (s : State) : Prop :=
   (∀ r ∈ c.cleanAtEntry, s.marks.reg r = false) ∧
   (∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false) ∧
   (∀ r l, (r, l) ∈ c.regions → c.hiddenAt r = false → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
-  (∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false) ∧
-  ∀ k, k < c.data.length → s.marks.mem (s.data + k) = false
+  ∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false
 
 /-- What the function leaves of the marks, `s` being the state at entry: the stack pointer is not marked;
 the number returned, where the contract says one is, is not marked (of any other general register nothing
@@ -572,10 +584,12 @@ def Contract.quietAfter (c : Contract) (s s' : State) : Prop :=
 /-- What the function leaves: what `post` says, and what `quietAfter` says of the marks. -/
 def Contract.left (c : Contract) (defs : List Def) (s s' : State) : Prop := c.post defs s s' ∧ c.quietAfter s s'
 
-/-- The function's code meets the contract, among the functions of `world` (those it may call): from every
-state at entry of which the caller has seen to what the contract asks, it runs to its return, touching
-only what it is let, using nothing marked in a way that shows, and leaves what the contract says. -/
-def Meets (world : List Program) (c : Contract) (defs : List Def) (p : Program) : Prop :=
-  ∀ s, c.pre p s → c.quietAt s → Runs world (c.perm s) p (c.left defs s) s
+/-- The function's code meets the contract, among the functions of `world` (those it may call), `pieces`
+being the read-only data of the program's object files: from every state at entry in which the program is
+loaded (`Loaded`), in which nothing the function may write is of the program's own bytes (`clear`), and of
+which the caller has seen to what the contract asks, it runs to its return, touching only what it is let,
+using nothing marked in a way that shows, and leaves what the contract says. -/
+def Meets (world : List Program) (pieces : List Piece) (c : Contract) (defs : List Def) (p : Program) : Prop :=
+  ∀ s, Loaded pieces s → c.clear world pieces s → c.pre p s → c.quietAt s → Runs world (c.perm pieces s) p (c.left defs s) s
 
 end Ode

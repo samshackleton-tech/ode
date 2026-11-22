@@ -1,0 +1,12 @@
+// The contract of ode_quad32 (quad32.ode): the contract of ode_quad (quad.contract) with the stack that the
+// 32-way kernel and the larger frame need. `out` becomes the value of the parent node over two parent nodes:
+// one over the block `a`, one over the block `b`. The key and the flags are those of the record `kf`.
+// There is no `trace` line: the trace depends on nothing that is given.
+layout keyed 40 { key: cv at 0, flags: byte at 32 }
+
+contract ode_quad32(out: cv, a: block, b: block, kf: keyed) {
+    requires no_overlap(out, a, b, kf)
+    ensures out = parent(kf.key, kf.flags, compress(kf.key, a, counter(0), 64, kf.flags | PARENT), compress(kf.key, b, counter(0), 64, kf.flags | PARENT))
+    stack 6432
+    needs avx512
+}

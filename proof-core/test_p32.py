@@ -131,15 +131,17 @@ class Statement(unittest.TestCase):
 
     def test_the_contract_in_the_accounts_terms(self):
         lines = lines_of(below(2))
-        self.assertEqual([l for l in lines if l.split()[0] not in ("i", "def", "ensuresw", "data")], LINES)
+        self.assertEqual([l for l in lines if l.split()[0] not in ("i", "def", "ensuresw", "data", "piece")], LINES)
         self.assertEqual(sum(l.startswith("i ") for l in lines), 699)
         self.assertEqual(sum(l.startswith("i ") and " .zpadddm " in l for l in lines), 32)
         self.assertEqual(sum(l.startswith("i ") and " .lea_data " in l for l in lines), 1)
         # the file's data: in this file one section holds the code and the constants, and the data is all of it
-        (data,) = [l for l in lines if l.startswith("data ")]
+        self.assertEqual([l for l in lines if l.startswith("data ")], ["data 0"])
+        (data,) = [l for l in lines if l.startswith("piece ")]
         with open(OBJ, "rb") as f:
             whole = f.read()
-        image = bytes.fromhex(data[5:])
+        self.assertEqual(data.split()[1], "64")                # the boundary the file's one section lies on
+        image = bytes.fromhex(data.split()[2])
         self.assertEqual(len(image), 17856)
         self.assertIn(image, whole)
         # the order of the message words for the seven rounds: places in the frame, 64 bytes a word
@@ -310,15 +312,18 @@ class P32(Files, unittest.TestCase):
                 self.refused(tag, self.changed(old, new), why)
 
     def test_changed_data_is_refused(self):
-        """The statement's `data` line is the file's. With the first number of the table changed (the first
-        message word of the first round taken from the next cell) the function computes another hash; and
-        without the line the table's address is refused."""
-        k = next(i for i, l in enumerate(self.lines) if l.startswith("data "))
-        at = 5 + 2 * SCHEDULE
+        """The statement's `piece` line is the file's data. With the first number of the table changed (the
+        first message word of the first round taken from the next cell) the function computes another hash;
+        without the function's `data` line the table's address is refused, and without the file's data that
+        line names nothing."""
+        k = next(i for i, l in enumerate(self.lines) if l.startswith("piece "))
+        at = len("piece 64 ") + 2 * SCHEDULE
         self.assertEqual(self.lines[k][at:at + 8], "00000000")
         other = self.lines[k][:at] + "40" + self.lines[k][at + 2:]
         self.refused("data_changed", self.lines[:k] + [other] + self.lines[k + 1:], FOLLOW)
-        self.refused("no_data", self.lines[:k] + self.lines[k + 1:], NOT_IN_DATA)
+        d = self.lines.index("data 0")
+        self.refused("no_data", self.lines[:d] + self.lines[d + 1:], NOT_IN_DATA)
+        self.refused("no_piece", self.lines[:k] + self.lines[k + 1:], "refused: no read-only data of that number stands before")
 
 
 @unittest.skipUnless(lean_verify.LAKE, "Lean's lake is not installed")

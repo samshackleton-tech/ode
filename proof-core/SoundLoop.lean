@@ -825,7 +825,7 @@ the place says of them. -/
 structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : Nat → Int) (st : State) : Prop where
   outer : Agree first.nvars ρs ρ
   entry : ∀ r, r < 16 → ρ r = s0.reg r
-  data : ρ 16 = s0.data ∧ st.data = s0.data
+  data : ρ 16 = ctx.own s0 ∧ st.data = s0.data
   kept : ∀ r, r < 16 → pl.keep.contains r = true → (st.reg r : Int) = ev ρ (first.reg r)
   small : ∀ r, st.reg r < M64
   frame : ∀ o v, (o, v) ∈ first.frame →
@@ -881,8 +881,8 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
     show (if first.nvars ≤ r ∧ r < first.nvars + 16 then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
     rw [if_neg (by omega)]
     exact A.entry r hr
-  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) 16 = s0.data := by
-    show (if first.nvars ≤ 16 ∧ 16 < first.nvars + 16 then (st.reg (16 - first.nvars) : Int) else ρ 16) = s0.data
+  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) 16 = ctx.own s0 := by
+    show (if first.nvars ≤ 16 ∧ 16 < first.nvars + 16 then (st.reg (16 - first.nvars) : Int) else ρ 16) = ctx.own s0
     rw [if_neg (by omega)]
     exact A.data.1
   have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)

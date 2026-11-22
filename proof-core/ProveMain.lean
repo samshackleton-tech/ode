@@ -118,7 +118,8 @@ def main (args : List String) : IO UInt32 := do
       if said.isSome then break
       if done.any (fun d => d.1 == f.name) then said := some s!"refused: two functions are named {f.name}"
       else
-        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done }
+        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done,
+                           pieces := job.pieces, piece := f.piece }
         let why :=
           if f.name == name then
             -- (with the advice: where the lines have run out before an `ensures` of words or a call, the rows to try are printed)

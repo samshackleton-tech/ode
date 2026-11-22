@@ -106,7 +106,8 @@ class Statement(unittest.TestCase):
 
     def test_the_contract_in_the_accounts_terms(self):
         lines = lines_of(below(2))
-        self.assertEqual([l for l in lines if l.split()[0] not in ("i", "def", "ensuresw", "data")], LINES)
+        self.assertEqual([l for l in lines if l.split()[0] not in ("i", "def", "ensuresw", "data", "piece")], LINES)
+        self.assertEqual([l.split()[:2] for l in lines if l.split()[0] in ("data", "piece")], [["piece", "64"], ["data", "0"]])
         self.assertEqual(sum(l.startswith("i ") for l in lines), 702)
         for line in (ENTRY, LOW_0, LOW_16, BELOW_0, BELOW_16, HIGH_0, HIGH_16):
             self.assertEqual(lines.count(line), 1, line)

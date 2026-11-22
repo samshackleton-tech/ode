@@ -6,11 +6,14 @@ namespace Ode
 open Arithmetic
 
 /-- The setting of every lemma here: the verifier's `ctx` is of the program `p`, and `s0` is a state at the
-function's entry of which the caller has seen to what the contract asks. -/
+function's entry of which the caller has seen to what the contract asks; the program is loaded there, and
+no byte of its files' read-only data is one the function may write. -/
 structure Setting (ctx : Ctx) (p : Program) (s0 : State) : Prop where
   code : p.code = ctx.code
   pre : ctx.contract.pre p s0
   quiet : ctx.contract.quietAt s0
+  loaded : Loaded ctx.pieces s0
+  apart : ∀ a, inPieces ctx.pieces s0 a = true → ctx.contract.inFrame s0 a = false ∧ ctx.contract.inOut s0 a = false
 
 namespace Setting
 variable {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
@@ -582,10 +585,10 @@ theorem locate_out {ctx : Ctx} {addr : Row} {w : Nat} {o : Row} (h : locate ctx 
         subst h1 h2
         exact ⟨nm, b, n, by simpa using hr, ho⟩
 
-/-- An address the verifier places in the file's data: the contract has data, and the address is the
+/-- An address the verifier places in the file's data: the function's file has data, and the address is the
 unknown that is the data's address, plus that number. -/
 theorem locate_data {ctx : Ctx} {addr : Row} {c : Int} (h : locate ctx addr = some (.data c)) :
-    ctx.contract.data ≠ [] ∧ Lin.isConst (Lin.sub addr (Lin.var dataVar)) = some c := by
+    ctx.data ≠ [] ∧ Lin.isConst (Lin.sub addr (Lin.var dataVar)) = some c := by
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; cases h
   | none =>
@@ -624,7 +627,7 @@ theorem pow8 : (256 : Nat) ^ 8 = M64 := by decide
 function may read and write them. -/
 theorem frame_address {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {c : Int}
     (h1 : -(ctx.contract.stack : Int) ≤ c) (h2 : c + 8 ≤ 0) (a : Nat) (ha : (a : Int) = (s0.reg RSP : Int) + c) :
-    allowed (ctx.contract.perm s0).read a 8 = true ∧ allowed (ctx.contract.perm s0).write a 8 = true ∧
+    allowed (ctx.contract.perm ctx.pieces s0).read a 8 = true ∧ allowed (ctx.contract.perm ctx.pieces s0).write a 8 = true ∧
     ((s0.reg RSP : Int) + c).toNat = a := by
   have hs := E.stack
   refine ⟨allowed_of _ _ _ ?_, allowed_of _ _ _ ?_, by omega⟩
@@ -674,31 +677,39 @@ theorem lane {j : Nat} {x : String} {r count l : Nat} (h : ctx.contract.tableAt 
 
 /-- A number the contract asks to be no less than another is so at entry. -/
 theorem atLeast {x : String} {k r : Nat} (h : (x, k) ∈ ctx.contract.atLeast) (hr : ctx.contract.regOf x = some r) : k ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.1 x k h r hr
-/-- The file's read-only data, where the contract has it: in memory, each byte the file's, apart from the
-frame, the address to return to and the runs given to write. -/
-theorem dataAt : ctx.contract.dataAt s0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2
-theorem data_fits (hd : ctx.contract.data ≠ []) : s0.data + ctx.contract.data.length < M64 := (E.dataAt hd).1
+  E.pre.2.2.2.2.2.2.2.2.2.2.2.2 x k h r hr
+/-- The read-only data of the function's own file, where it has any, ends below 2^64. -/
+theorem data_fits (hd : ctx.data ≠ []) : ctx.own s0 + ctx.data.length < M64 := by
+  obtain ⟨k, pc, hk, hq, e⟩ := Ctx.data_piece hd
+  rw [Ctx.own_eq hk, e]
+  exact (E.loaded k pc hq).1
+/-- An address in the data of the function's own file is in the read-only data of the program. -/
+theorem data_in (hd : ctx.data ≠ []) {a : Nat} (h1 : ctx.own s0 ≤ a) (h2 : a < ctx.own s0 + ctx.data.length) :
+    inPieces ctx.pieces s0 a = true := by
+  obtain ⟨k, pc, hk, hq, e⟩ := Ctx.data_piece hd
+  rw [Ctx.own_eq hk] at h1 h2
+  rw [e] at h2
+  exact inPieces_iff.mpr ⟨k, pc, hq, h1, h2⟩
 /-- An address in the file's data is not in the frame. -/
-theorem data_notFrame (hd : ctx.contract.data ≠ []) {a : Nat} (h1 : s0.data ≤ a) (h2 : a < s0.data + ctx.contract.data.length) :
-    ctx.contract.inFrame s0 a = false := by
-  have := (E.dataAt hd).2.1
-  simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
-  omega
+theorem data_notFrame (hd : ctx.data ≠ []) {a : Nat} (h1 : ctx.own s0 ≤ a) (h2 : a < ctx.own s0 + ctx.data.length) :
+    ctx.contract.inFrame s0 a = false := (E.apart a (E.data_in hd h1 h2)).1
 /-- An address in the file's data is in no run given to write. -/
-theorem data_notOut (hd : ctx.contract.data ≠ []) {a : Nat} (h1 : s0.data ≤ a) (h2 : a < s0.data + ctx.contract.data.length) :
-    ctx.contract.inOut s0 a = false := by
-  unfold Contract.inOut
-  rw [List.any_eq_false]
-  intro ⟨x, r', n⟩ hm
-  have := (E.dataAt hd).2.2.2 x r' n hm
-  simp only [Bool.and_eq_true, decide_eq_true_eq]
-  omega
+theorem data_notOut (hd : ctx.data ≠ []) {a : Nat} (h1 : ctx.own s0 ≤ a) (h2 : a < ctx.own s0 + ctx.data.length) :
+    ctx.contract.inOut s0 a = false := (E.apart a (E.data_in hd h1 h2)).2
 /-- At entry each byte of the file's data is in memory where the data lies. -/
-theorem data_byte (hd : ctx.contract.data ≠ []) {k : Nat} (hk : k < ctx.contract.data.length) :
-    s0.mem (s0.data + k) = ctx.contract.data.getD k 0 := by
-  rw [(E.dataAt hd).2.2.1 k hk]
-  simp [List.getD, List.getElem?_eq_getElem hk]
+theorem data_byte (hd : ctx.data ≠ []) {k : Nat} (hk : k < ctx.data.length) :
+    s0.mem (ctx.own s0 + k) = ctx.data.getD k 0 := by
+  obtain ⟨j, pc, hj, hq, e⟩ := Ctx.data_piece hd
+  have hk' : k < pc.bytes.length := by rw [← e]; exact hk
+  rw [Ctx.own_eq hj, ((E.loaded j pc hq).2.2 k hk').1, e]
+  simp [List.getD, List.getElem?_eq_getElem hk']
+/-- At entry no byte of the file's data is marked. -/
+theorem data_quiet (hd : ctx.data ≠ []) {k : Nat} (hk : k < ctx.data.length) :
+    s0.marks.mem (ctx.own s0 + k) = false := by
+  obtain ⟨j, pc, hj, hq, e⟩ := Ctx.data_piece hd
+  have hk' : k < pc.bytes.length := by rw [← e]; exact hk
+  rw [Ctx.own_eq hj]
+  exact ((E.loaded j pc hq).2.2 k hk').2
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),
@@ -752,7 +763,7 @@ theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoadFixed ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
-    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
   unfold symLoadFixed at h
   cases hf : findOut addr ctx.contract.fixeds 0 with
   | none => simp only [hf] at h; exact (refuse_ok h).elim
@@ -791,7 +802,7 @@ theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         have hload : load st.mem a 8 = load s0.mem (s0.reg base + c.toNat) 8 := by
           rw [hadr]
           exact load_congr _ _ _ _ fun x h1 h2 => same x (by omega) (by omega)
-        have hread : allowed (ctx.contract.perm s0).read a 8 = true := by
+        have hread : allowed (ctx.contract.perm ctx.pieces s0).read a 8 = true := by
           apply allowed_of
           intro x h1 h2
           simp only [Contract.perm, Contract.inFixed, Bool.or_eq_true]
@@ -857,13 +868,13 @@ theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
 machine's address is the data's address plus that number. -/
 theorem dataAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) {addr : Row} {c : Int} {size : Nat}
-    (hl : locate ctx addr = some (.data c)) (h0 : 0 ≤ c) (h1 : c + size ≤ ctx.contract.data.length)
+    (hl : locate ctx addr = some (.data c)) (h0 : 0 ≤ c) (h1 : c + size ≤ ctx.data.length)
     {a : Nat} (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
-    ctx.contract.data ≠ [] ∧ a = s0.data + c.toNat := by
+    ctx.data ≠ [] ∧ a = ctx.own s0 + c.toNat := by
   obtain ⟨hd, hc⟩ := locate_data hl
   have e := ev_isConst (ρ := ρ) hc
   rw [ev_sub, ev_var] at e
-  have pin : ρ dataVar = s0.data := H.data.1
+  have pin : ρ dataVar = ctx.own s0 := H.data.1
   have fit := E.data_fits hd
   unfold M64 at hlt fit
   refine ⟨hd, ?_⟩
@@ -873,7 +884,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars addr)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
-    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
   have hstack := E.stack
   have habove := E.above
   have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by decide)
@@ -896,7 +907,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         injection hp with hv hs
         subst hv hs
         obtain ⟨hd, hadr⟩ := dataAddr E H hl h0 h1 (by unfold M64; exact hlt) ha
-        have hload : load st.mem a size = dataWord ctx.contract.data c.toNat size := by
+        have hload : load st.mem a size = dataWord ctx.data c.toNat size := by
           rw [hadr]
           unfold dataWord
           exact load_list _ _ size _ _ fun k hk => by
@@ -904,10 +915,11 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
             rw [Nat.add_assoc]
             exact E.data_byte hd (by omega)
         refine ⟨ρ, Carried.here H wf, allowed_of _ _ _ (fun x x1 x2 => ?_), ?_, ?_, bounded_const _ _⟩
-        · simp only [Contract.perm, Contract.inData, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
-          right; omega
+        · simp only [Contract.perm, Bool.or_eq_true]
+          right
+          exact E.data_in hd (by omega) (by omega)
         · rw [hload]
-          have lt := load_lt (fun x => ⟨ctx.contract.data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c.toNat size
+          have lt := load_lt (fun x => ⟨ctx.data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c.toNat size
           have le : 256 ^ size ≤ 256 ^ 8 := Nat.pow_le_pow_right (by decide) (by omega)
           unfold dataWord M64
           have e8 : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
@@ -1736,7 +1748,7 @@ theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : R
 theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
     ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State},
     symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF s →
-    ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm s0) bind st e = some x ∧ EV.sem ρ' s'.nvars x v
+    ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm ctx.pieces s0) bind st e = some x ∧ EV.sem ρ' s'.nvars x v
   | .number n, s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     split at h
@@ -1840,32 +1852,40 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         -- `data(I)`: the address of a place in the file's data
         have fe : f = "data" := by simpa using hdta
         obtain ⟨hx1, hx2, hx3⟩ := sa
-        cases hc : Lin.isConst x with
-        | none => simp only [symData, hc] at h; exact (refuse_ok h).elim
-        | some c =>
-          simp only [symData, hc] at h
-          by_cases hin : 0 ≤ c ∧ c < (ctx.contract.data.length : Int)
-          · rw [if_pos hin] at h
-            have := V.pure_ok h
-            injection this with hp _
-            injection hp with hv hs
-            subst hv hs
-            have hd : ctx.contract.data ≠ [] := by
-              intro e
-              rw [e] at hin
-              simp only [List.length_nil] at hin
+        unfold symData at h
+        split at h
+        next hpiece =>
+          -- (the instruction takes the address in the data of the function's own file)
+          cases hc : Lin.isConst x with
+          | none => simp only [hc] at h; exact (refuse_ok h).elim
+          | some c =>
+            simp only [hc] at h
+            by_cases hin : 0 ≤ c ∧ c < (ctx.data.length : Int)
+            · rw [if_pos hin] at h
+              have := V.pure_ok h
+              injection this with hp _
+              injection hp with hv hs
+              subst hv hs
+              have hd : ctx.data ≠ [] := by
+                intro e
+                rw [e] at hin
+                simp only [List.length_nil] at hin
+                omega
+              obtain ⟨k, _, hk, _, _⟩ := Ctx.data_piece hd
+              have hpb : pieceOf bind = some k := hpiece.trans hk
+              have ec := ev_isConst (ρ := ρ1) hc
+              have fit := E.data_fits hd
+              have pin := c1.holds.data
+              have pin1 : ρ1 dataVar = ctx.own s0 := pin.1
+              rw [Ctx.own_eq hk] at fit pin1
+              refine ⟨ρ1, (st.data k + sumList [xa]) % M64, c1, by simp [value, values, va, memSize, fe, hpb], Nat.mod_lt _ (by decide), ?_,
+                bounded_add (bounded_var (Nat.lt_of_lt_of_le (show dataVar < 17 by decide) c1.wf.base)) (bounded_const _ _)⟩
+              rw [ev_add, ev_var, ev_const, pin1, pin.2]
+              simp only [sumList]
+              unfold M64 at *
               omega
-            have ec := ev_isConst (ρ := ρ1) hc
-            have fit := E.data_fits hd
-            have pin := c1.holds.data
-            have pin1 : ρ1 dataVar = s0.data := pin.1
-            refine ⟨ρ1, (st.data + sumList [xa]) % M64, c1, by simp [value, values, va, memSize, fe], Nat.mod_lt _ (by decide), ?_,
-              bounded_add (bounded_var (Nat.lt_of_lt_of_le (show dataVar < 17 by decide) c1.wf.base)) (bounded_const _ _)⟩
-            rw [ev_add, ev_var, ev_const, pin1, pin.2]
-            simp only [sumList]
-            unfold M64 at *
-            omega
-          · rw [if_neg hin] at h; exact (refuse_ok h).elim
+            · rw [if_neg hin] at h; exact (refuse_ok h).elim
+        next => exact (refuse_ok h).elim
       next hnd0 =>
         obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
         have hnd : (f == "data") = false := by simpa using hnd0
@@ -2175,7 +2195,7 @@ theorem frameSpan_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → 
 
 theorem frameSpan_perm {ctx : Ctx} {s0 : State} {a n : Nat}
     (lo : s0.reg RSP - ctx.contract.stack ≤ a) (hi : a + n ≤ s0.reg RSP) :
-    allowed (ctx.contract.perm s0).read a n = true ∧ allowed (ctx.contract.perm s0).write a n = true := by
+    allowed (ctx.contract.perm ctx.pieces s0).read a n = true ∧ allowed (ctx.contract.perm ctx.pieces s0).write a n = true := by
   have inside (x : Nat) (hx : a ≤ x) (hy : x < a + n) : ctx.contract.inFrame s0 x = true := by
     simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
     omega
@@ -2247,7 +2267,7 @@ theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
     {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (h : symTouchFrame ctx s addr items = .ok (s', rest)) (a x : Nat)
     (matchAddr : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
-    allowed (ctx.contract.perm s0).write a 1 = true ∧ Carried ctx s0 ρ s ρ s' { st with mem := store st.mem a x 1 } := by
+    allowed (ctx.contract.perm ctx.pieces s0).write a 1 = true ∧ Carried ctx s0 ρ s ρ s' { st with mem := store st.mem a x 1 } := by
   unfold symTouchFrame at h
   obtain ⟨_, _, hc, h1⟩ := V.bind_ok h
   obtain ⟨_, _, hd, he⟩ := V.bind_ok h1
@@ -2272,9 +2292,9 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       ctx.contract.outs[w]? = some (name, base, n) →
       (∀ c : Int, ev ρ o = c → 0 ≤ c → c + 8 ≤ n → a = s0.reg base + c.toNat) →
       EV.sem ρ s.nvars x (.lin xr) →
-      allowed (ctx.contract.perm s0).write a 8 = true ∧
+      allowed (ctx.contract.perm ctx.pieces s0).write a 8 = true ∧
         ∃ ρ', Carried ctx s0 ρ s ρ' s' { st with mem := store st.mem a x 8 }) :
-    ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
+    ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm ctx.pieces s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with
   | nothing =>
     simp only [symStmt] at h
@@ -2464,7 +2484,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                             unfold M64 at hx1 hy1 hfit
                             have hadr : (xa + xb) % M64 = s0.reg base + (ev ρ3 o).toNat := by unfold M64; omega
                             have hx8 : x < 256 := by have := sx3.2.1; omega
-                            have hw1 : allowed (ctx.contract.perm s0).write ((xa + xb) % M64) 1 = true := by
+                            have hw1 : allowed (ctx.contract.perm ctx.pieces s0).write ((xa + xb) % M64) 1 = true := by
                               apply allowed_of
                               intro y hy1' hy2'
                               simp only [Contract.perm, Bool.or_eq_true]

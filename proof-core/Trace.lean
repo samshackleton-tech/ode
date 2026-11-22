@@ -15,7 +15,7 @@ import Machine
 namespace Ode
 
 /-- Two states are alike in everything not marked: they have the same marks, are at the same place in
-the code, have their file's data at the same address, have let the same things be observed, and every
+the code, have each file's read-only data at the same address, have let the same things be observed, and every
 register, flag and byte of memory that is not marked is the same in both; and so is the lowest byte of a
 register whose lowest byte is not marked. (Of the vector registers nothing is asked: they are always taken as marked.) -/
 structure Alike (a b : State) : Prop where
@@ -464,7 +464,7 @@ theorem execStmt_jump (perm : Perm) (bind : Bind) (base u : Nat) (s : State) (ta
   | none => rfl
   | some fw => rfl
 
-/-- No statement changes where the file's data lies. -/
+/-- No statement changes where the files' data lies. -/
 theorem execStmt_data {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} :
     ∀ (st : Stmt), execStmt perm bind base u s st = some s' → s'.data = s.data
   | .nothing, h => by simp only [execStmt] at h; injection h with h; subst h; rfl
@@ -1095,13 +1095,13 @@ theorem execQ_exec {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s 
     (h : execQ perm p i u s = some o) : exec perm p i u s = some o :=
   execAllQ_execAll i.effect 0 h
 
-/-! ## Where the file's data lies never changes
+/-! ## Where the files' data lies never changes
 
 No statement changes `State.data`, so no instruction does, no call does, and a function returns with it
-where it was. (A contract need not promise it: it is so of every run.) -/
+as it was. (A contract need not promise it: it is so of every run.) -/
 
-/-- Where the file's data lies in the state an instruction gives. -/
-def Outcome.data : Outcome → Nat
+/-- Where the files' data lies in the state an instruction gives. -/
+def Outcome.data : Outcome → Nat → Nat
   | .next s => s.data
   | .returned s => s.data
 
@@ -1158,7 +1158,7 @@ theorem execQ_data {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s 
   execAllQ_data i.effect 0 (s := { s with rip := p.base + i.next, trace := s.trace ++ [(s.rip, 0)] }) h
 
 /-- **The data stays where it is.** A function that runs from `s` to states of which `Q` holds runs to
-states of which `Q` holds and that have the file's data where `s` has it. -/
+states of which `Q` holds and that have the files' data where `s` has it. -/
 theorem runs_data {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
     (h : Runs world perm p Q s) : Runs world perm p (fun s' => Q s' ∧ s'.data = s.data) s := by
   induction h with

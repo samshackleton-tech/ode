@@ -145,11 +145,36 @@ theorem tables_nil {c : Contract} (h : c.lanes = []) : c.tables = [] := by
 theorem inLane_false {c : Contract} (h : c.lanes = []) (s : State) (a : Nat) : c.inLane s a = false := by
   simp [Contract.inLane, tables_nil h]
 
-theorem inData_false {c : Contract} (h : c.data = []) (s : State) (a : Nat) : c.inData s a = false := by
-  unfold Contract.inData
+/-- An address is in the read-only data of a file: the file's number, and where in its data the address is. -/
+theorem inPieces_iff {pieces : List Piece} {s : State} {a : Nat} :
+    inPieces pieces s a = true ↔ ∃ k pc, pieces[k]? = some pc ∧ s.data k ≤ a ∧ a < s.data k + pc.bytes.length := by
+  unfold inPieces
+  rw [List.any_eq_true]
+  constructor
+  · intro h
+    obtain ⟨⟨pc, k⟩, m, h⟩ := h
+    simp only [Bool.and_eq_true, decide_eq_true_eq] at h
+    exact ⟨k, pc, List.mem_zipIdx_iff_getElem?.mp m, h.1, h.2⟩
+  · intro h
+    obtain ⟨k, pc, e, h1, h2⟩ := h
+    exact ⟨(pc, k), List.mem_zipIdx_iff_getElem?.mpr e, by simp only [Bool.and_eq_true, decide_eq_true_eq]; exact ⟨h1, h2⟩⟩
+
+/-- Where the files' data lies is all that `inPieces` reads of a state. -/
+theorem inPieces_data {pieces : List Piece} {s s' : State} (h : s'.data = s.data) (a : Nat) : inPieces pieces s' a = inPieces pieces s a := by
+  unfold inPieces
   rw [h]
-  simp only [List.length_nil, Nat.add_zero, Bool.and_eq_false_iff, decide_eq_false_iff_not]
-  omega
+
+theorem inPieces_nil (s : State) (a : Nat) : inPieces [] s a = false := rfl
+
+/-- What a function may read: what its contract lets it read whatever the program's read-only data is, and
+that data. -/
+theorem perm_read_split {c : Contract} {pieces : List Piece} {s : State} {a : Nat} :
+    (c.perm pieces s).read a = ((c.perm [] s).read a || inPieces pieces s a) := by
+  simp only [Contract.perm, inPieces_nil, Bool.or_false]
+
+theorem perm_read_pieces {c : Contract} {pieces : List Piece} {s : State} {a : Nat} (h : inPieces pieces s a = true) :
+    (c.perm pieces s).read a = true := by
+  simp only [Contract.perm, h, Bool.or_true]
 
 theorem lanesEnv_nil {c : Contract} (h : c.lanes = []) (s : State) : c.lanesEnv s = [] := by
   simp [Contract.lanesEnv, tables_nil h]
@@ -287,11 +312,29 @@ def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : 
     ∀ j : Nat, ev ρ rg.lo ≤ j → j < hi →
       Value ctx.defs ((x, .int j) :: params.zip (rg.args.map (semv ctx s0 ρ))) b (.int (mem (s0.reg r + j)))
 
+/-- Where the read-only data of the function's own file lies, `s0` being the state at entry. -/
+def Ctx.own (ctx : Ctx) (s0 : State) : Nat := s0.data (ctx.piece.getD 0)
+
+/-- Where the function's own file has read-only data: the file's number, and its data among the program's. -/
+theorem Ctx.data_piece {ctx : Ctx} (hd : ctx.data ≠ []) :
+    ∃ k pc, ctx.piece = some k ∧ ctx.pieces[k]? = some pc ∧ ctx.data = pc.bytes := by
+  cases hp : ctx.piece with
+  | none => exact absurd (by simp only [Ctx.data, hp]) hd
+  | some k =>
+    cases hq : ctx.pieces[k]? with
+    | none => exact absurd (by simp only [Ctx.data, hp, hq]) hd
+    | some pc => exact ⟨k, pc, rfl, hq, by simp only [Ctx.data, hp, hq]⟩
+
+theorem Ctx.own_eq {ctx : Ctx} {k : Nat} (h : ctx.piece = some k) (s0 : State) : ctx.own s0 = s0.data k := by
+  unfold Ctx.own
+  rw [h]
+  rfl
+
 /-- What the verifier holds (`s`) is so of the machine's state `st`, the unknowns being `ρ`, and `s0` the
 state at the function's entry. -/
 structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop where
   entry : ∀ r, r < 16 → ρ r = s0.reg r
-  data : ρ 16 = s0.data ∧ st.data = s0.data      -- unknown 16 is where the file's data lies; it lies where it did
+  data : ρ 16 = ctx.own s0 ∧ st.data = s0.data      -- unknown 16 is where the data of the function's own file lies; every file's lies where it did
   reg : ∀ r, r < 16 → (st.reg r : Int) = ev ρ (s.reg r)
   small : ∀ r, st.reg r < M64
   zf : s.zf.holds ρ st.zf
@@ -308,6 +351,14 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   words : VecOk ctx s0 ρ s st
   known : ∀ k ∈ s.known, k.holds ctx s0 ρ s.terms
   range : ∀ rg, s.range = some rg → RangeHolds ctx s0 ρ rg st.mem
+
+/-- What a called function may read of the program's read-only data, its caller may read: the data lies at
+the call where it lay at the caller's entry. -/
+theorem read_pieces {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    (p q : Program) (i : Instr) {a : Nat} (h : inPieces ctx.pieces (afterCall p q i st) a = true) :
+    (ctx.contract.perm ctx.pieces s0).read a = true := by
+  rw [inPieces_data (show (afterCall p q i st).data = s0.data from H.data.2) a] at h
+  exact perm_read_pieces h
 
 /-- The unknowns in use keep their values. -/
 def Agree (n : Nat) (ρ ρ' : Nat → Int) : Prop := ∀ k, k < n → ρ k = ρ' k

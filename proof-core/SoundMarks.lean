@@ -220,8 +220,8 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           rw [hadr]
           exact anyMarked_none _ _ fun a a1 a2 => by
             rw [M.stable a (E.data_notFrame hd (by omega) (by omega)) (E.data_notOut hd (by omega) (by omega))]
-            have := E.quiet.2.2.2.2 (a - s0.data) (by omega)
-            rw [show s0.data + (a - s0.data) = a by omega] at this
+            have := E.data_quiet hd (k := a - ctx.own s0) (by omega)
+            rw [show ctx.own s0 + (a - ctx.own s0) = a by omega] at this
             exact this
         | region r o =>
           obtain ⟨base, len, hreg, ho⟩ := locate_region hl
@@ -283,7 +283,7 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have hx : x = s0.reg base + (x - s0.reg base) := by omega
             rw [M.stable x (notFrame (by omega)) (fixed_notOut E hmem (by omega) (by omega))]
             rw [hx]
-            exact E.quiet.2.2.2.1 name base n hmem hnot _ hk
+            exact E.quiet.2.2.2 name base n hmem hnot _ hk
 
 /-! ## What an expression's value may be marked with -/
 
@@ -439,7 +439,7 @@ theorem store_allowed {perm : Perm} {bind : Bind} {base u : Nat} {st st1 : State
 /-- A statement that ran, touching only what the contract lets the function touch: outside the frame and
 the runs given to write every byte of memory is marked as it was. -/
 theorem marksAfter_stable {ctx : Ctx} {s0 : State} {bind : Bind} {base u : Nat} {st st1 : State} {stmt : Stmt}
-    (h : execStmt (ctx.contract.perm s0) bind base u st stmt = some st1) (a : Nat)
+    (h : execStmt (ctx.contract.perm ctx.pieces s0) bind base u st stmt = some st1) (a : Nat)
     (hf : ctx.contract.inFrame s0 a = false) (ho : ctx.contract.inOut s0 a = false) :
     (marksAfter bind st stmt).mem a = st.marks.mem a := by
   unfold marksAfter
@@ -687,7 +687,7 @@ the state the machine goes on in. -/
 theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int}
     {s s1 : Sym} {st st1 : State} (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF s)
     (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} {base u : Nat} {stmt : Stmt}
-    (hx : execStmt (ctx.contract.perm s0) bind base u st stmt = some st1) {q' : SMarks}
+    (hx : execStmt (ctx.contract.perm ctx.pieces s0) bind base u st stmt = some st1) {q' : SMarks}
     (hm : stmtMarks ctx bind s s1 stmt = some q') :
     quietStmt bind st stmt = true ∧ MarksOk ctx s0 q' (noted bind st stmt st1) := by
   have stable : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false →
@@ -945,21 +945,19 @@ function's contract asks about marks is so in the state it starts in; and in the
 in, what the verifier has as not marked after the call is not marked. -/
 theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) {c : Contract} (hq : callQuiet ctx s c = true)
-    (q : Program) (i : Instr) (hw : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true)
-    (hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) :
+    (q : Program) (i : Instr) (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true)
+    (hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) :
     st.marks.reg RSP = false ∧ c.quietAt (afterCall p q i st) ∧
     ∀ s2, c.quietAfter (afterCall p q i st) s2 → MarksOk ctx s0 (afterCallQ c s) (backFrom st s2) := by
   simp only [callQuiet, Bool.and_eq_true] at hq
-  obtain ⟨⟨⟨⟨hregs, hdata⟩, hfix⟩, houts⟩, hrun⟩ := hq
-  have hdata : c.data = [] := by simpa using hdata
+  obtain ⟨⟨⟨hregs, hfix⟩, houts⟩, hrun⟩ := hq
   have regs : ∀ r ∈ c.cleanAtEntry, st.marks.reg r = false := fun r hr =>
     M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hregs r hr))
   have notw : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false →
       ¬ (st.reg RSP - 8 ≤ a ∧ a < st.reg RSP - 8 + 8) := fun a hf ho hin => by
     have := allowed_at hw a hin.1 hin.2
     simp [Contract.perm, hf, ho] at this
-  refine ⟨regs RSP (List.mem_cons_self ..), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_,
-    fun k hk => by rw [hdata] at hk; cases hk⟩, ?_⟩
+  refine ⟨regs RSP (List.mem_cons_self ..), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_⟩, ?_⟩
   · show markBytes st.marks.mem (st.reg RSP - 8) 8 false ((if RSP = RSP then st.reg RSP - 8 else st.reg RSP) + k) = false
     rw [if_pos rfl]
     unfold markBytes
@@ -1050,8 +1048,8 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           · subst h1; rw [if_neg (by rw [rsp_not_kept]; decide)]; exact qsp
       · rw [if_pos (List.mem_filter.mp h2).2]; exact M.reg r (List.mem_filter.mp h2).1
     · show s2.marks.mem a = s0.marks.mem a
-      have hn : (c.perm (afterCall p q i st)).write a = false := by
-        cases hx : (c.perm (afterCall p q i st)).write a with
+      have hn : (c.perm ctx.pieces (afterCall p q i st)).write a = false := by
+        cases hx : (c.perm ctx.pieces (afterCall p q i st)).write a with
         | false => rfl
         | true =>
           have := hwrite a hx

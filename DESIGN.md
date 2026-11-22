@@ -300,6 +300,15 @@ Memory and calls follow the same rule. This was decided in November 2026 and is 
   words of a buffer that the caller may read and write. With these, `b3l_chunk_node` of the hash is
   verified: it lends parts of its input and of its record to three functions. The stack frame and the
   buffers of contracts still go by the earlier rules.
+- **The constants of a program are said once, for the loaded program** (November 22, 2026; built). An
+  object file can hold constants beside its code. The formal model does not put them into any contract.
+  It says what it is for a program to be loaded: each object file's constants are in memory at some
+  address, on the file's alignment, and nothing that a function may write lies over them or over the
+  program's code. Every function may read every constant, and none may write one. The theorem holds
+  wherever a linker and a loader put each file. So a function that reads constants is called like any
+  other function, from its own object file or from another, and a caller's contract never grows with what
+  the functions beneath it read. (Two narrower ways were weighed and not taken: calls only within one
+  object file, and each contract carrying the constants of everything beneath it.)
 - **The coder lays out memory, and the compiler does what is written or stops.** The pieces of a frame
   lie in the order written, each with the alignment written. An alignment is a number: "a multiple of
   64", or "does not cross a multiple of 4096". The verifier proves such a statement about the addresses.
@@ -423,8 +432,8 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 1,053 lines.
-The verifier's own 3,084 lines are covered by the theorem, so a Bob who takes the third route does not
+processor that the instruction table describes. The formal model that the theorem is about is 1,058 lines.
+The verifier's own 3,096 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
 It handles a first part of what the full verifier handles: instructions on the general-purpose registers,
@@ -435,7 +444,8 @@ for their caller); contracts with input buffers, output buffers, records laid ou
 512-bit registers and loads and stores at fixed offsets in buffers. It can follow a stack pointer
 rounded down to a 64-byte boundary and the stores and loads in that frame. It can follow loads through
 a table of addresses, and a loop invariant can say what vector registers hold. It can follow loads of
-constants from the object file's read-only data. The
+constants from the object file's read-only data, and calls of functions that read such constants, in the
+same object file or in another. The
 specification model covers all of `kcheck/blake3.spec`. Evaluated in Lean, that specification
 reproduces the 105 official test vectors.
 
