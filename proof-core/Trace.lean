@@ -16,7 +16,8 @@ namespace Ode
 
 /-- Two states are alike in everything not marked: they have the same marks, are at the same place in
 the code, have their file's data at the same address, have let the same things be observed, and every
-register, flag and byte of memory that is not marked is the same in both. (Of the vector registers nothing is asked: they are always taken as marked.) -/
+register, flag and byte of memory that is not marked is the same in both; and so is the lowest byte of a
+register whose lowest byte is not marked. (Of the vector registers nothing is asked: they are always taken as marked.) -/
 structure Alike (a b : State) : Prop where
   marks : a.marks = b.marks
   rip : a.rip = b.rip
@@ -26,6 +27,7 @@ structure Alike (a b : State) : Prop where
   zf : a.marks.zf = false → a.zf = b.zf
   cf : a.marks.cf = false → a.cf = b.cf
   mem : ∀ x, a.marks.mem x = false → a.mem x = b.mem x
+  low : ∀ r, a.marks.low r = false → a.reg r % 256 = b.reg r % 256
 
 /-! ## Memory -/
 
@@ -124,6 +126,21 @@ mutual
           exact h
 end
 
+/-- What `lowOnly` finds: `low8` of a general register. -/
+theorem lowOnly_some {bind : Bind} {f : String} {args : List Expr} {r : Nat} (h : lowOnly bind f args = some r) :
+    f = "low8" ∧ ∃ n, args = [.name n] ∧ isNumberLetter n = false ∧ regOf bind n = some r := by
+  unfold lowOnly at h
+  split at h
+  next hf =>
+    refine ⟨by simpa using hf, ?_⟩
+    split at h
+    next n =>
+      split at h
+      · cases h
+      next hn => exact ⟨n, rfl, by simpa using hn, h⟩
+    next => cases h
+  next => cases h
+
 mutual
   /-- Of an expression whose addresses are made of nothing marked, in two states alike: it is marked in
   both or in neither; it reads the same memory; and where it is not marked it is worth the same. -/
@@ -145,6 +162,21 @@ mutual
         | none => simp only [hr] at hm; cases hm
         | some r => simp only [hr] at hm; simp only [Option.map, A.reg r hm]
     | .call f args, h => by
+      cases hl : lowOnly bind f args with
+      | some r =>
+        -- the lowest byte of a general register: the same in both where the register or that byte is not marked
+        obtain ⟨hf, n, ha, hn, hr⟩ := lowOnly_some hl
+        subst hf ha
+        refine ⟨by simp only [exprMark, hl, A.marks], rfl, rfl, ?_⟩
+        intro hm
+        simp only [exprMark, hl, Bool.and_eq_false_iff] at hm
+        have e : a.reg r % 256 = b.reg r % 256 := by
+          cases hm with
+          | inl h1 => rw [A.reg r h1]
+          | inr h2 => exact A.low r h2
+        simp only [value, values, hn, hr, Option.map, memSize, prim]
+        simp [e]
+      | none =>
       simp only [addrsQuiet, Bool.and_eq_true] at h
       obtain ⟨hq, hw⟩ := h
       obtain ⟨em, tm, qb, vm⟩ := exprs_alike A args hq
@@ -154,18 +186,18 @@ mutual
           cases hs : memSize f with
           | none => rfl
           | some n => rw [memSize_width hs] at hmw; cases hmw
-        refine ⟨by simp only [exprMark, hmw, em], by simp only [touched, hmw, tm], by simp only [addrsQuiet, hmw, qb]; rfl, ?_⟩
+        refine ⟨by simp only [exprMark, hl, hmw, em], by simp only [touched, hmw, tm], by simp only [addrsQuiet, hmw, qb]; rfl, ?_⟩
         intro hm
-        simp only [exprMark, hmw, Bool.or_false] at hm
+        simp only [exprMark, hl, hmw, Bool.or_false] at hm
         simp only [value, vm hm, ms, A.data]
       | some w =>
         simp only [hmw, Option.isNone_some, Bool.false_or, Bool.not_eq_true'] at hw
         have ve := vm hw
         have ae : addrOf bind a args = addrOf bind b args := by simp only [addrOf, ve]
-        refine ⟨by simp only [exprMark, hmw, em, ae, A.marks], by simp only [touched, hmw, tm, ae],
+        refine ⟨by simp only [exprMark, hl, hmw, em, ae, A.marks], by simp only [touched, hmw, tm, ae],
           by simp only [addrsQuiet, hmw, qb, ← em, hw]; rfl, ?_⟩
         intro hm
-        simp only [exprMark, hmw, hw, Bool.false_or] at hm
+        simp only [exprMark, hl, hmw, hw, Bool.false_or] at hm
         simp only [value, ← ve]
         cases hvs : values Perm.all bind a args with
         | none => rfl
@@ -194,6 +226,37 @@ mutual
 end
 
 /-! ## One statement -/
+
+/-- The mark of a lowest byte, in two states alike. -/
+theorem lowMark_alike {bind : Bind} {a b : State} (A : Alike a b) : ∀ (v : Expr), addrsQuiet bind a v = true →
+    lowMark bind a v = lowMark bind b v
+  | .call f [x, w], hq => by
+    simp only [lowMark]
+    split
+    · have hw : addrsQuiet bind a w = true := by
+        simp only [addrsQuiet, addrsQuietAll, Bool.and_eq_true] at hq; exact hq.1.2.1
+      exact (expr_alike A w hw).1
+    · exact (expr_alike A _ hq).1
+  | .number _, hq => (expr_alike A _ hq).1
+  | .lane _ _, hq => (expr_alike A _ hq).1
+  | .name _, hq => (expr_alike A _ hq).1
+  | .call _ [], hq => (expr_alike A _ hq).1
+  | .call _ [_], hq => (expr_alike A _ hq).1
+  | .call _ (_ :: _ :: _ :: _), hq => (expr_alike A _ hq).1
+
+/-- What `setlow8(x, w)` is worth: `x` with `w` as its lowest byte. -/
+theorem value_setlow8 {perm : Perm} {bind : Bind} {s : State} {x w : Expr} {v : Nat}
+    (h : value perm bind s (.call "setlow8" [x, w]) = some v) :
+    ∃ xv wv, value perm bind s w = some wv ∧ v = xv % M64 / 256 * 256 + wv % 256 := by
+  simp only [value, values] at h
+  cases hx : value perm bind s x with
+  | none => simp [hx] at h
+  | some xv =>
+    cases hw : value perm bind s w with
+    | none => simp [hx, hw] at h
+    | some wv =>
+      simp [hx, hw, memSize, prim] at h
+      exact ⟨xv, wv, rfl, h.symm⟩
 
 theorem unknown_marked {bind : Bind} {s : State} {v : Expr} (h : isUnknown v = true) : exprMark bind s v = true := by
   cases v with
@@ -236,7 +299,7 @@ theorem notes_alike {bind : Bind} {a b : State} (A : Alike a b) {st : Stmt} (hq 
     | name n =>
       simp only [quietStmt, stmtParts, Bool.and_true] at hq
       obtain ⟨e1, t1, _⟩ := parts _ v rfl ⟨hq, trivial⟩
-      exact ⟨by simp only [marksAfter, stmtParts, e1, A.marks], by simp only [observed, stmtParts, t1]⟩
+      exact ⟨by simp only [marksAfter, stmtParts, e1, A.marks, lowMark_alike A v hq], by simp only [observed, stmtParts, t1]⟩
     | number _ =>
       simp only [quietStmt, stmtParts, Bool.and_true] at hq
       obtain ⟨e1, t1, _⟩ := parts _ v rfl ⟨hq, trivial⟩
@@ -448,6 +511,151 @@ theorem jumps_alike {a b : State} (A : Alike a b) {cond : Option (String × Bool
     · simp only [hz, if_true, Bool.not_eq_true'] at h ⊢; rw [A.zf h]
     · simp only [hz, if_false, Bool.false_eq_true, Bool.not_eq_true'] at h ⊢; rw [A.cf h]
 
+/-- The lowest byte of what a register is set to is the same in both, where `lowMark` has it as not marked. -/
+theorem low_same {bind : Bind} {a b : State} (A : Alike a b) {v : Expr} (hqv : addrsQuiet bind a v = true)
+    {p1 p2 : Perm} {u1 u2 x1 x2 : Nat}
+    (e1 : (if isUnknown v = true then some u1 else value p1 bind a v) = some x1)
+    (e2 : (if isUnknown v = true then some u2 else value p2 bind b v) = some x2)
+    (hm : lowMark bind a v = false) : x1 % M64 % 256 = x2 % M64 % 256 := by
+  have whole : exprMark bind a v = false → x1 = x2 := by
+    intro hm
+    by_cases hu : isUnknown v = true
+    · rw [unknown_marked hu] at hm; cases hm
+    · rw [if_neg hu] at e1 e2
+      have := (expr_alike A v hqv).2.2.2 hm
+      rw [value_all v e1, value_all v e2] at this
+      injection this
+  unfold lowMark at hm
+  split at hm
+  next f x w =>
+    split at hm
+    next hf =>
+      -- `setlow8(x, w)`: the lowest byte is `w`'s, and `w` is worth the same in both
+      have hf : f = "setlow8" := by simpa using hf
+      subst hf
+      simp only [isUnknown, Bool.false_eq_true, if_false] at e1 e2
+      have hqw : addrsQuiet bind a w = true := by
+        simp only [addrsQuiet, addrsQuietAll, Bool.and_eq_true] at hqv; exact hqv.1.2.1
+      have ew := (expr_alike A w hqw).2.2.2 hm
+      obtain ⟨xa, wa, hwa, rfl⟩ := value_setlow8 e1
+      obtain ⟨xb, wb, hwb, rfl⟩ := value_setlow8 e2
+      rw [value_all w hwa, value_all w hwb] at ew
+      injection ew with ew
+      subst ew
+      unfold M64
+      omega
+    next => rw [whole hm]
+  next => rw [whole hm]
+
+/-- ONE STATEMENT, the lowest bytes: after it a register whose lowest byte is not marked has the same lowest
+byte in both. -/
+theorem stmt_low {bind : Bind} {base : Nat} {a b a' b' : State} (A : Alike a b) {st : Stmt}
+    (hq : quietStmt bind a st = true) {p1 p2 : Perm} {u1 u2 : Nat}
+    (h1 : execStmt p1 bind base u1 a st = some a') (h2 : execStmt p2 bind base u2 b st = some b') :
+    ∀ r, (marksAfter bind a st).low r = false → a'.reg r % 256 = b'.reg r % 256 := by
+  cases st with
+  | nothing =>
+    simp only [execStmt] at h1 h2
+    injection h1 with h1; injection h2 with h2; subst h1; subst h2
+    exact A.low
+  | ret => simp only [execStmt] at h1; cases h1
+  | call _ => simp only [execStmt] at h1; cases h1
+  | vset place v =>
+    intro r hr
+    rw [(vset_kept h1).1, (vset_kept h2).1]
+    refine A.low r ?_
+    rw [← hr]
+    cases place with
+    | call f args => cases h : addrOf bind a args <;> simp only [marksAfter, stmtParts, placeWidth, h]
+    | _ => simp only [marksAfter, stmtParts]
+  | vset512 place v =>
+    intro r hr
+    rw [(vset512_kept h1).1, (vset512_kept h2).1]
+    refine A.low r ?_
+    rw [← hr]
+    cases place with
+    | call f args => cases h : addrOf bind a args <;> simp only [marksAfter, stmtParts, placeWidth, h]
+    | _ => simp only [marksAfter, stmtParts]
+  | jump target cond =>
+    intro r hr
+    have e1 : a'.reg = a.reg := by
+      rw [execStmt_jump] at h1
+      split at h1
+      · cases hv : value p1 bind a target with
+        | none => rw [hv] at h1; cases h1
+        | some t => rw [hv] at h1; injection h1 with h1; subst h1; rfl
+      · injection h1 with h1; subst h1; rfl
+    have e2 : b'.reg = b.reg := by
+      rw [execStmt_jump] at h2
+      split at h2
+      · cases hv : value p2 bind b target with
+        | none => rw [hv] at h2; cases h2
+        | some t => rw [hv] at h2; injection h2 with h2; subst h2; rfl
+      · injection h2 with h2; subst h2; rfl
+    rw [e1, e2]
+    exact A.low r (by simpa only [marksAfter, stmtParts] using hr)
+  | set place v =>
+    have hqv : addrsQuiet bind a v = true := by
+      simp only [quietStmt, stmtParts, Bool.and_eq_true] at hq; exact hq.1
+    intro r hr
+    simp only [execStmt] at h1 h2
+    cases e1 : (if isUnknown v = true then some u1 else value p1 bind a v) with
+    | none => simp [e1] at h1
+    | some x1 =>
+      cases e2 : (if isUnknown v = true then some u2 else value p2 bind b v) with
+      | none => simp [e2] at h2
+      | some x2 =>
+        simp only [e1, e2] at h1 h2
+        cases place with
+        | number _ => simp at h1
+        | lane _ _ => simp at h1
+        | name n =>
+          simp only at h1 h2
+          by_cases hz : (n == "zf") = true
+          · simp only [hz, if_true] at h1 h2
+            injection h1 with h1; injection h2 with h2; subst h1; subst h2
+            simp only [marksAfter, stmtParts, hz, if_true] at hr
+            exact A.low r hr
+          · simp only [hz, if_false, Bool.false_eq_true] at h1 h2
+            by_cases hc : (n == "cf") = true
+            · simp only [hc, if_true] at h1 h2
+              injection h1 with h1; injection h2 with h2; subst h1; subst h2
+              simp only [marksAfter, stmtParts, hz, hc, if_true, if_false, Bool.false_eq_true] at hr
+              exact A.low r hr
+            · simp only [hc, if_false, Bool.false_eq_true] at h1 h2
+              cases hreg : regOf bind n with
+              | none => simp [hreg] at h1
+              | some r0 =>
+                simp only [hreg, Option.map] at h1 h2
+                injection h1 with h1; injection h2 with h2; subst h1; subst h2
+                simp only [marksAfter, stmtParts, hz, hc, hreg, if_false, Bool.false_eq_true] at hr
+                show (if r = r0 then x1 % M64 else a.reg r) % 256 = (if r = r0 then x2 % M64 else b.reg r) % 256
+                by_cases hk : r = r0
+                · rw [if_pos hk] at hr
+                  rw [if_pos hk, if_pos hk]
+                  exact low_same A hqv e1 e2 hr
+                · rw [if_neg hk] at hr; rw [if_neg hk, if_neg hk]; exact A.low r hr
+        | call f args =>
+          -- a store: no register changes, and no register's mark
+          simp only at h1 h2
+          have r1 : a'.reg = a.reg := by
+            split at h1
+            · split at h1
+              · injection h1 with h1; subst h1; rfl
+              · cases h1
+            · cases h1
+          have r2 : b'.reg = b.reg := by
+            split at h2
+            · split at h2
+              · injection h2 with h2; subst h2; rfl
+              · cases h2
+            · cases h2
+          rw [r1, r2]
+          refine A.low r ?_
+          rw [← hr]
+          simp only [marksAfter, stmtParts]
+          split <;> rfl
+
 /-- ONE STATEMENT. In two states alike in everything not marked, a statement that uses nothing marked
 in a way that shows leaves two states alike again, whatever the unknowns turned out to be in each and
 whatever each was let touch. -/
@@ -460,7 +668,8 @@ theorem stmt_alike {bind : Bind} {base : Nat} {a b a' b' : State} (A : Alike a b
   suffices h : a'.rip = b'.rip ∧ (∀ r, (marksAfter bind a st).reg r = false → a'.reg r = b'.reg r) ∧
       ((marksAfter bind a st).zf = false → a'.zf = b'.zf) ∧ ((marksAfter bind a st).cf = false → a'.cf = b'.cf) ∧
       ∀ x, (marksAfter bind a st).mem x = false → a'.mem x = b'.mem x from
-    ⟨mk, h.1, hd, by simp only [noted, A.trace, ob], h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2⟩
+    ⟨mk, h.1, hd, by simp only [noted, A.trace, ob], h.2.1, h.2.2.1, h.2.2.2.1, h.2.2.2.2,
+      fun r hr => stmt_low (a' := a') (b' := b') A hq h1 h2 r hr⟩
   cases st with
   | nothing =>
     simp only [execStmt] at h1 h2
@@ -632,7 +841,7 @@ theorem all_alike {bind : Bind} {base : Nat} {p1 p2 : Perm} {u1 u2 : Nat → Nat
           simp only [Bool.and_eq_true, quietRet, Bool.not_eq_true'] at hq
           have sp := A.reg RSP hq.1.1
           show Alike _ _
-          refine ⟨A.marks, ?_, A.data, ?_, fun k hk => ?_, A.zf, A.cf, A.mem⟩
+          refine ⟨A.marks, ?_, A.data, ?_, fun k hk => ?_, A.zf, A.cf, A.mem, fun k hk => ?_⟩
           · show load a.mem (a.reg RSP) 8 = load b.mem (b.reg RSP) 8
             rw [← sp]
             exact load_same _ _ 8 _ fun x x1 x2 => A.mem x (anyMarked_false hq.1.2 x x1 x2)
@@ -642,6 +851,10 @@ theorem all_alike {bind : Bind} {base : Nat} {p1 p2 : Perm} {u1 u2 : Nat → Nat
             by_cases hkr : k = RSP
             · rw [if_pos hkr, if_pos hkr, sp]
             · rw [if_neg hkr, if_neg hkr]; exact A.reg k hk
+          · show (if k = RSP then (a.reg RSP + 8) % M64 else a.reg k) % 256 = (if k = RSP then (b.reg RSP + 8) % M64 else b.reg k) % 256
+            by_cases hkr : k = RSP
+            · rw [if_pos hkr, if_pos hkr, sp]
+            · rw [if_neg hkr, if_neg hkr]; exact A.low k hk
         next => cases h2
       next => cases h1
     | nothing =>
@@ -699,7 +912,7 @@ theorem execQ_alike {p : Program} {i : Instr} {p1 p2 : Perm} {u1 u2 : Nat → Na
   all_alike i.effect 0 0
     (a := { a with rip := p.base + i.next, trace := a.trace ++ [(a.rip, 0)] })
     (b := { b with rip := p.base + i.next, trace := b.trace ++ [(b.rip, 0)] })
-    ⟨A.marks, rfl, A.data, by show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]; rw [A.trace, A.rip], A.reg, A.zf, A.cf, A.mem⟩
+    ⟨A.marks, rfl, A.data, by show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]; rw [A.trace, A.rip], A.reg, A.zf, A.cf, A.mem, A.low⟩
     h1 h2
 
 /-- A call is not run as an instruction of the function it is in. -/
@@ -714,7 +927,12 @@ theorem execQ_call {p : Program} {i : Instr} {name : String} (h : callTarget i =
 theorem afterCall_alike {p q : Program} {i : Instr} {a b : State} (A : Alike a b) (h : a.marks.reg RSP = false) :
     Alike (afterCall p q i a) (afterCall p q i b) := by
   have sp := A.reg RSP h
-  refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_⟩
+  refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_, fun k hk => ?_⟩
+  rotate_right
+  · show (if k = RSP then a.reg RSP - 8 else a.reg k) % 256 = (if k = RSP then b.reg RSP - 8 else b.reg k) % 256
+    by_cases hkr : k = RSP
+    · rw [if_pos hkr, if_pos hkr, sp]
+    · rw [if_neg hkr, if_neg hkr]; exact A.low k hk
   · show ({ a.marks with mem := markBytes a.marks.mem (a.reg RSP - 8) 8 false } : Marks) =
       { b.marks with mem := markBytes b.marks.mem (b.reg RSP - 8) 8 false }
     rw [A.marks, sp]
@@ -739,7 +957,7 @@ return, the registers a callee keeps holding in each what they held at the call.
 theorem backFrom_alike {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
     (ka : ∀ r ∈ calleeSaved, a1.reg r = a.reg r) (kb : ∀ r ∈ calleeSaved, b1.reg r = b.reg r) :
     Alike (backFrom a a1) (backFrom b b1) := by
-  refine ⟨?_, A1.rip, A1.data, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem⟩
+  refine ⟨?_, A1.rip, A1.data, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem, A1.low⟩
   · show ({ a1.marks with reg := fun r => if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r } : Marks) =
       { b1.marks with reg := fun r => if calleeSaved.contains r then b.marks.reg r else b1.marks.reg r }
     rw [A.marks, A1.marks]

@@ -1,0 +1,14 @@
+// A count kept in the lowest byte of a register whose other bytes hold something hidden. The hash's two
+// one-block kernels count their seven rounds this way (`mov al, 7` ... `dec al`), in a register whose
+// other bytes then hold the flags, or what a caller left there.
+// rounds(m, n): arguments in rdi, rsi, as C passes them: a run of n bytes that is hidden, n at least 1.
+fn rounds as "ode_rounds" {
+  movzx eax, byte ptr [rdi + 0]
+  shl rax, 8
+  mov al, 3
+@again:
+  dec al
+  jne @again
+  mov rax, 0
+  ret
+}

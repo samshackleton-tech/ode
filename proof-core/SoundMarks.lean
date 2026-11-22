@@ -20,23 +20,26 @@ theorem CellsOk.nil {ctx : Ctx} {s0 : State} {m : Nat → Bool} : CellsOk ctx s0
 
 /-- What the verifier knows of the marks is so of the machine's state: each register it has as not marked
 is not marked; a flag it has as not marked is not marked; each cell of the frame it has as not marked is
-not marked; and every byte of memory outside the frame and the runs given to write is marked as it was at
-entry. -/
+not marked; every byte of memory outside the frame and the runs given to write is marked as it was at
+entry; and of each register whose lowest byte it has as not marked, the register is not marked or its
+lowest byte is not. -/
 structure MarksOk (ctx : Ctx) (s0 : State) (q : SMarks) (st : State) : Prop where
   reg : ∀ r ∈ q.regq, st.marks.reg r = false
   zf : q.zq = true → st.marks.zf = false
   cf : q.cq = true → st.marks.cf = false
   stable : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false → st.marks.mem a = s0.marks.mem a
   frame : CellsOk ctx s0 q.fq st.marks.mem
+  low : ∀ r ∈ q.lowq, (st.marks.reg r && st.marks.low r) = false
 
 theorem MarksOk.fields {ctx : Ctx} {s0 : State} {q : SMarks} {st st' : State} (M : MarksOk ctx s0 q st)
     (h : st'.marks = st.marks) : MarksOk ctx s0 q st' := by
-  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> rw [h]
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> rw [h]
   · exact M.reg
   · exact M.zf
   · exact M.cf
   · exact M.stable
   · exact M.frame
+  · exact M.low
 
 theorem anyMarked_none {m : Nat → Bool} : ∀ (n a : Nat), (∀ x, a ≤ x → x < a + n → m x = false) → anyMarked m a n = false
   | 0, _, _ => rfl
@@ -68,7 +71,15 @@ mutual
     | .call f args, h => by
       simp only [cleanExpr, Bool.and_eq_true, Option.isNone_iff_eq_none] at h
       obtain ⟨e1, e2⟩ := cleanAll_sound hq args h.2
-      exact ⟨by simp only [exprMark, e1, h.1, Bool.false_or], by simp only [addrsQuiet, e2, h.1, Option.isNone_none, Bool.true_or, Bool.and_true]⟩
+      refine ⟨?_, by simp only [addrsQuiet, e2, h.1, Option.isNone_none, Bool.true_or, Bool.and_true]⟩
+      cases hl : lowOnly bind f args with
+      | none => simp only [exprMark, hl, e1, h.1, Bool.false_or]
+      | some r =>
+        -- the lowest byte of a register that is not marked
+        obtain ⟨_, n, ha, hn, hr⟩ := lowOnly_some hl
+        subst ha
+        simp only [exprMarks, exprMark, hn, hr, Bool.or_false, Bool.false_eq_true, if_false] at e1
+        simp only [exprMark, hl, e1, Bool.false_and]
   theorem cleanAll_sound {bind : Bind} {q : List Nat} {st : State} (hq : ∀ r ∈ q, st.marks.reg r = false) :
       ∀ (es : List Expr), cleanAll bind q es = true → exprMarks bind st es = false ∧ addrsQuietAll bind st es = true
     | [], _ => ⟨rfl, rfl⟩
@@ -294,6 +305,21 @@ mutual
       exact (clean_sound M.reg (.name n) (by simpa using x)).1
     | .call f args, m, h => by
       simp only [markOf] at h
+      cases hl : lowOnly bind f args with
+      | some r =>
+        -- the lowest byte of a general register: not marked where the register is not, or that byte is not
+        simp only [hl] at h
+        injection h with h; subst h
+        obtain ⟨hf, n, ha, hn, hr⟩ := lowOnly_some hl
+        subst hf ha
+        refine ⟨by simp [addrsQuiet, addrsQuietAll, memWidth], fun hm => ?_⟩
+        simp only [exprMark, hl]
+        have hm : ¬ r ∈ s.q.regq → r ∈ s.q.lowq := by simpa using hm
+        by_cases h1 : r ∈ s.q.regq
+        · rw [M.reg r h1, Bool.false_and]
+        · exact M.low r (hm h1)
+      | none =>
+      simp only [hl] at h
       split at h
       next hw =>
         split at h
@@ -306,14 +332,14 @@ mutual
             subst h
             have hp : publicLoad ctx bind s s1 size a b = true := by simpa using hm
             obtain ⟨ad, ha, hmk⟩ := publicLoad_sound E M H wf C hp
-            simp only [exprMark, c1, memSize_width hs, ha, hmk, Bool.or_false]
+            simp only [exprMark, hl, c1, memSize_width hs, ha, hmk, Bool.or_false]
           next => injection h with h; subst h; cases hm
         next => cases h
       next hw =>
         have hw : memWidth f = none := by simpa using hw
         obtain ⟨c2, c1⟩ := marksOf_sound E M H wf C args h
         exact ⟨by simp only [addrsQuiet, c2, hw, Option.isNone_none, Bool.true_or, Bool.and_true],
-          fun hm => by simp only [exprMark, c1 hm, hw, Bool.or_false]⟩
+          fun hm => by simp only [exprMark, hl, c1 hm, hw, Bool.or_false]⟩
   theorem marksOf_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int}
       {s s1 : Sym} {st st1 : State} (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF s)
       (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} :
@@ -458,7 +484,7 @@ def NoRegSet : Stmt → Expr → Prop
 theorem marksAfter_same {bind : Bind} {st : State} {stmt : Stmt} {place v : Expr} (hp : stmtParts stmt = some (place, v))
     (hk : NoRegSet stmt place) :
     (marksAfter bind st stmt).reg = st.marks.reg ∧ (marksAfter bind st stmt).zf = st.marks.zf ∧
-    (marksAfter bind st stmt).cf = st.marks.cf := by
+    (marksAfter bind st stmt).cf = st.marks.cf ∧ (marksAfter bind st stmt).low = st.marks.low := by
   cases stmt with
   | nothing => cases hp
   | ret => cases hp
@@ -471,29 +497,29 @@ theorem marksAfter_same {bind : Bind} {st : State} {stmt : Stmt} {place v : Expr
     subst h1 h2
     cases pl with
     | name _ => exact hk.elim
-    | number _ => exact ⟨rfl, rfl, rfl⟩
-    | lane _ _ => exact ⟨rfl, rfl, rfl⟩
-    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl⟩
+    | number _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | lane _ _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
   | vset pl v' =>
     simp only [stmtParts] at hp
     injection hp with hp
     injection hp with h1 h2
     subst h1 h2
     cases pl with
-    | name _ => exact ⟨rfl, rfl, rfl⟩
-    | number _ => exact ⟨rfl, rfl, rfl⟩
-    | lane _ _ => exact ⟨rfl, rfl, rfl⟩
-    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl⟩
+    | name _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | number _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | lane _ _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
   | vset512 pl v' =>
     simp only [stmtParts] at hp
     injection hp with hp
     injection hp with h1 h2
     subst h1 h2
     cases pl with
-    | name _ => exact ⟨rfl, rfl, rfl⟩
-    | number _ => exact ⟨rfl, rfl, rfl⟩
-    | lane _ _ => exact ⟨rfl, rfl, rfl⟩
-    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl⟩
+    | name _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | number _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | lane _ _ => exact ⟨rfl, rfl, rfl, rfl⟩
+    | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- A store to memory: the cells of the frame the verifier has as not marked after it are not marked. -/
 theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
@@ -626,11 +652,34 @@ mutual
     | e :: es => by simp only [marksOf, markOf_light ctx bind s s1 e, marksOf_light ctx bind s s1 es]
 end
 
+theorem lowClean_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (v : Expr) :
+    lowClean ctx bind s.light s1 v = lowClean ctx bind s s1 v := by
+  unfold lowClean
+  split
+  · rw [markOf_light]
+  · rfl
+
 theorem stmtMarks_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (st : Stmt) :
     stmtMarks ctx bind s.light s1 st = stmtMarks ctx bind s s1 st := by
   cases st with
-  | set place v => simp only [stmtMarks, markOf_light]; rfl
+  | set place v => simp only [stmtMarks, markOf_light, lowClean_light]; rfl
   | _ => rfl
+
+/-- Where the verifier has the lowest byte of what an expression stands for as not marked, it is not. -/
+theorem lowClean_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int}
+    {s s1 : Sym} {st st1 : State} (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} {v : Expr} (h : lowClean ctx bind s s1 v = true) :
+    lowMark bind st v = false := by
+  unfold lowClean at h
+  split at h
+  next f x w =>
+    simp only [Bool.and_eq_true, beq_iff_eq] at h
+    obtain ⟨hf, hw⟩ := h
+    subst hf
+    have e : lowMark bind st (.call "setlow8" [x, w]) = exprMark bind st w := by simp [lowMark]
+    rw [e]
+    exact (markOf_sound E M H wf C w hw).2 rfl
+  next => cases h
 
 /-- A STATEMENT. Where the verifier has followed the marks over a statement (`stmtMarks`), the statement
 uses nothing marked in a way that shows, and what the verifier then has as not marked is not marked in
@@ -647,19 +696,21 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
   have keep : ∀ {place v : Expr} {fq : List Int}, stmtParts stmt = some (place, v) → NoRegSet stmt place →
       CellsOk ctx s0 fq (marksAfter bind st stmt).mem →
       MarksOk ctx s0 { s.q with fq := fq } (noted bind st stmt st1) := fun hp hk hcells => by
-    obtain ⟨e1, e2, e3⟩ := marksAfter_same (bind := bind) (st := st) hp hk
-    refine ⟨fun r hr => ?_, fun hz => ?_, fun hc => ?_, stable, hcells⟩
+    obtain ⟨e1, e2, e3, e4⟩ := marksAfter_same (bind := bind) (st := st) hp hk
+    refine ⟨fun r hr => ?_, fun hz => ?_, fun hc => ?_, stable, hcells, fun r hr => ?_⟩
     · show (marksAfter bind st stmt).reg r = false
       rw [e1]; exact M.reg r hr
     · show (marksAfter bind st stmt).zf = false
       rw [e2]; exact M.zf hz
     · show (marksAfter bind st stmt).cf = false
       rw [e3]; exact M.cf hc
+    · show ((marksAfter bind st stmt).reg r && (marksAfter bind st stmt).low r) = false
+      rw [e1, e4]; exact M.low r hr
   cases stmt with
   | nothing =>
     simp only [stmtMarks] at hm
     injection hm with hm; subst hm
-    exact ⟨rfl, M.reg, M.zf, M.cf, stable, M.frame⟩
+    exact ⟨rfl, M.reg, M.zf, M.cf, stable, M.frame, M.low⟩
   | ret => simp [stmtMarks] at hm
   | call _ => simp [stmtMarks] at hm
   | jump _ _ => simp [stmtMarks] at hm
@@ -731,7 +782,10 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         by_cases hz : (n == "zf") = true
         · simp only [hz, if_true] at hm
           injection hm with hm; subst hm
-          refine ⟨fun r hr => ?_, fun hq => ?_, fun hq => ?_, stable, cells⟩
+          refine ⟨fun r hr => ?_, fun hq => ?_, fun hq => ?_, stable, cells, fun r hr => ?_⟩
+          rotate_right
+          · show ((marksAfter bind st (.set (.name n) v)).reg r && (marksAfter bind st (.set (.name n) v)).low r) = false
+            simp only [marksAfter, stmtParts, hz, if_true]; exact M.low r hr
           · show (marksAfter bind st (.set (.name n) v)).reg r = false
             simp only [marksAfter, stmtParts, hz, if_true]; exact M.reg r hr
           · show (marksAfter bind st (.set (.name n) v)).zf = false
@@ -743,7 +797,10 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           by_cases hcf : (n == "cf") = true
           · simp only [hcf, if_true] at hm
             injection hm with hm; subst hm
-            refine ⟨fun r hr => ?_, fun hq => ?_, fun hq => ?_, stable, cells⟩
+            refine ⟨fun r hr => ?_, fun hq => ?_, fun hq => ?_, stable, cells, fun r hr => ?_⟩
+            rotate_right
+            · show ((marksAfter bind st (.set (.name n) v)).reg r && (marksAfter bind st (.set (.name n) v)).low r) = false
+              simp only [marksAfter, stmtParts, hz, hcf, if_true, if_false, Bool.false_eq_true]; exact M.low r hr
             · show (marksAfter bind st (.set (.name n) v)).reg r = false
               simp only [marksAfter, stmtParts, hz, hcf, if_true, if_false, Bool.false_eq_true]; exact M.reg r hr
             · show (marksAfter bind st (.set (.name n) v)).zf = false
@@ -757,7 +814,33 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             | some r =>
               simp only [hr] at hm
               injection hm with hm; subst hm
-              refine ⟨fun k hk => ?_, fun hq => ?_, fun hq => ?_, stable, cells⟩
+              refine ⟨fun k hk => ?_, fun hq => ?_, fun hq => ?_, stable, cells, fun k hk => ?_⟩
+              rotate_right
+              · -- the lowest bytes: the register set has one known not to be marked only by `lowClean`
+                show ((marksAfter bind st (.set (.name n) v)).reg k && (marksAfter bind st (.set (.name n) v)).low k) = false
+                simp only [marksAfter, stmtParts, hz, hcf, hr, if_false, Bool.false_eq_true]
+                show ((if k = r then exprMark bind st v else st.marks.reg k) && (if k = r then lowMark bind st v else st.marks.low k)) = false
+                simp only at hk
+                by_cases hkr : k = r
+                · rw [if_pos hkr, if_pos hkr]
+                  cases hlc : lowClean ctx bind s s1 v with
+                  | false =>
+                    simp only [hlc, Bool.false_eq_true, if_false] at hk
+                    have := (List.mem_filter.mp hk).2
+                    simp [hkr] at this
+                  | true => rw [lowClean_sound E M H wf C hlc, Bool.and_false]
+                · rw [if_neg hkr, if_neg hkr]
+                  have hk' : k ∈ s.q.lowq := by
+                    cases hlc : lowClean ctx bind s s1 v with
+                    | false =>
+                      simp only [hlc, Bool.false_eq_true, if_false] at hk
+                      exact (List.mem_filter.mp hk).1
+                    | true =>
+                      simp only [hlc, if_true, List.mem_cons] at hk
+                      rcases hk with hk | hk
+                      · exact absurd hk hkr
+                      · exact (List.mem_filter.mp hk).1
+                  exact M.low k hk'
               · show (marksAfter bind st (.set (.name n) v)).reg k = false
                 simp only [marksAfter, stmtParts, hz, hcf, hr, if_false, Bool.false_eq_true]
                 show (if k = r then exprMark bind st v else st.marks.reg k) = false
@@ -850,7 +933,7 @@ theorem placeQuiet_all (pl : Place) (regq : List Nat) : (placeQuiet pl regq).all
 /-- What is so of the marks where more registers are known not to be marked is so where fewer are. -/
 theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) {regs : List Nat}
     (h : regs.all q.regq.contains = true) : MarksOk ctx s0 { regq := regs } st :=
-  ⟨fun r hr => M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp h r hr)), (fun x => by cases x), (fun x => by cases x), M.stable, CellsOk.nil⟩
+  ⟨fun r hr => M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp h r hr)), (fun x => by cases x), (fun x => by cases x), M.stable, CellsOk.nil, fun _ m => nomatch m⟩
 
 /-! ## A call -/
 
@@ -950,7 +1033,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · have e : st.reg r + k = ((s0.reg RSP : Int) + (o + 8 * ((k / 8 : Nat) : Int))).toNat + k % 8 := by omega
           rw [e]; exact c3 (k % 8) (by omega)
   · intro s2 ⟨qr, qs⟩
-    refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_⟩
+    refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_, fun _ m => nomatch m⟩
     · show (if calleeSaved.contains r then st.marks.reg r else s2.marks.reg r) = false
       rcases List.mem_append.mp hr with h1 | h2
       · rw [if_neg (by rw [quiet_not_kept r h1]; decide)]; exact qr r h1
@@ -1056,7 +1139,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 theorem quietAtCall_marks {ctx : Ctx} {s0 : State} {s : Sym} {st : State} (M : MarksOk ctx s0 s.q st) (c : Contract) :
     MarksOk ctx s0 (quietAtCall s c).q st := by
   unfold quietAtCall
-  exact ⟨M.reg, M.zf, M.cf, M.stable, fun x hx => M.frame x (List.mem_filter.mp hx).1⟩
+  exact ⟨M.reg, M.zf, M.cf, M.stable, fun x hx => M.frame x (List.mem_filter.mp hx).1, M.low⟩
 
 theorem quietAtCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (c : Contract) :
     Holds ctx s0 ρ (quietAtCall s c) st := by

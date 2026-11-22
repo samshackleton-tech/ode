@@ -53,12 +53,17 @@ def readInt (text : String) : Option Int :=
 /-- What may depend on a secret: a mark (`true`) on each general register, on the two flags, and on each
 byte of memory. (A vector register has no mark of its own: it is always taken as marked.) The marks do
 nothing to what an instruction computes. They are moved as values are moved, so that a value that is not
-marked has been computed from values not marked alone. -/
+marked has been computed from values not marked alone.
+
+A general register has a second mark, for its lowest byte (`low`). It is looked at only where the register
+is marked: such a register may still have a lowest byte that is not (`mov al, 7` into a register that holds
+a secret), and what is worked out of that byte alone is then not marked. -/
 structure Marks where
   reg : Nat → Bool := fun _ => false
   zf : Bool := false
   cf : Bool := false
   mem : Nat → Bool := fun _ => false
+  low : Nat → Bool := fun _ => false
 
 /-- A byte: a number below 256. A cell of memory holds one. -/
 abbrev Byte := Fin 256
@@ -405,9 +410,18 @@ def Perm.all : Perm := ⟨fun _ => true, fun _ => true⟩
 def addrOf (bind : Bind) (s : State) (args : List Expr) : Option Nat :=
   (values Perm.all bind s args).map fun vs => sumList vs % M64
 
+/-- The register whose lowest byte alone an expression is: `low8` of a general register. -/
+def lowOnly (bind : Bind) (f : String) (args : List Expr) : Option Nat :=
+  if f == "low8" then
+    match args with
+    | [.name n] => if isNumberLetter n then none else regOf bind n
+    | _ => none
+  else none
+
 mutual
   /-- May what an expression stands for depend on a secret? A number of the instruction: no. A general
-  register: its mark. A vector register, a lane of one, `unknown`: yes. Memory: yes if a byte read is
+  register: its mark. The lowest byte of a general register: only if the register is marked and that byte
+  is. A vector register, a lane of one, `unknown`: yes. Memory: yes if a byte read is
   marked, or anything its address is made of. Anything else: if anything it is made of may. -/
   def exprMark (bind : Bind) (s : State) : Expr → Bool
     | .number _ => false
@@ -418,11 +432,14 @@ mutual
         | some r => s.marks.reg r
         | none => true
     | .call f args =>
-      exprMarks bind s args ||
-        match memWidth f, addrOf bind s args with
-        | some w, some a => anyMarked s.marks.mem a w
-        | some _, none => true
-        | none, _ => false
+      match lowOnly bind f args with
+      | some r => s.marks.reg r && s.marks.low r
+      | none =>
+        exprMarks bind s args ||
+          match memWidth f, addrOf bind s args with
+          | some w, some a => anyMarked s.marks.mem a w
+          | some _, none => true
+          | none, _ => false
   def exprMarks (bind : Bind) (s : State) : List Expr → Bool
     | [] => false
     | e :: es => exprMark bind s e || exprMarks bind s es
@@ -485,8 +502,15 @@ def quietStmt (bind : Bind) (s : State) (st : Stmt) : Bool :=
         | _ => true
     | none => true
 
+/-- May the lowest byte of what an expression stands for depend on a secret? Of `setlow8(x, w)`, whose
+lowest byte is `w`'s: as `w` may. Of anything else: as the whole may. -/
+def lowMark (bind : Bind) (s : State) : Expr → Bool
+  | .call f [x, w] => if f == "setlow8" then exprMark bind s w else exprMark bind s (.call f [x, w])
+  | e => exprMark bind s e
+
 /-- The marks after a statement, `s` being the state before it: what is set is marked if what it is set
-from may depend on a secret. A vector register has no mark; the memory a vector is stored to is marked. -/
+from may depend on a secret. A general register's lowest byte is marked by `lowMark`. A vector register has
+no mark; the memory a vector is stored to is marked. -/
 def marksAfter (bind : Bind) (s : State) (st : Stmt) : Marks :=
   match stmtParts st with
   | none => s.marks
@@ -503,7 +527,8 @@ def marksAfter (bind : Bind) (s : State) (st : Stmt) : Marks :=
         if n == "zf" then { s.marks with zf := exprMark bind s v }
         else if n == "cf" then { s.marks with cf := exprMark bind s v }
         else match regOf bind n with
-          | some r => { s.marks with reg := fun k => if k = r then exprMark bind s v else s.marks.reg k }
+          | some r => { s.marks with reg := fun k => if k = r then exprMark bind s v else s.marks.reg k,
+                                     low := fun k => if k = r then lowMark bind s v else s.marks.low k }
           | none => s.marks
       | _ => s.marks
     | _ => s.marks

@@ -1,0 +1,7 @@
+// The contract of ode_rounds (lowbyte.ode). What it says is mostly in what it does not have: there is no
+// `trace depends on m`. So which instructions run, and which addresses are touched, depend on no byte of `m`.
+contract ode_rounds(m: n bytes, n: number) {
+    requires n >= 1
+    returns 0
+    stack 0
+}

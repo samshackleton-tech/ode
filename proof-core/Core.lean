@@ -408,12 +408,14 @@ inductive Known where
 
 /-- What is known NOT to be marked (not to depend on a secret): general registers, the two flags, and
 cells of the frame (eight bytes each, by how far they are from where the stack pointer was at entry).
-Of anything not named here nothing is known: it may be marked. -/
+Of anything not named here nothing is known: it may be marked. `lowq`: the general registers whose lowest
+byte is known not to be marked, whatever the rest of the register is. -/
 structure SMarks where
   regq : List Nat := []
   zq : Bool := false
   cq : Bool := false
   fq : List Int := []
+  lowq : List Nat := []
   deriving Inhabited
 
 /-- What a loop has written so far, as a place says it: each place `j` of the run `w` (a run given to
@@ -2663,13 +2665,16 @@ mutual
     | .lane _ _ => some true
     | .name n => some !(cleanExpr bind s.q.regq (.name n))
     | .call f args =>
-      if (memWidth f).isSome then
-        if cleanAll bind s.q.regq args then
-          match memSize f, args with
-          | some size, [a, b] => some !(publicLoad ctx bind s s1 size a b)
-          | _, _ => some true
-        else none
-      else marksOf ctx bind s s1 args
+      match lowOnly bind f args with
+      | some r => some !(s.q.regq.contains r || s.q.lowq.contains r)      -- (the lowest byte of a general register)
+      | none =>
+        if (memWidth f).isSome then
+          if cleanAll bind s.q.regq args then
+            match memSize f, args with
+            | some size, [a, b] => some !(publicLoad ctx bind s s1 size a b)
+            | _, _ => some true
+          else none
+        else marksOf ctx bind s s1 args
   def marksOf (ctx : Ctx) (bind : Bind) (s s1 : Sym) : List Expr → Option Bool
     | [] => some false
     | e :: es =>
@@ -2702,6 +2707,12 @@ def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Exp
     | _, _ => []
   | _, _ => []
 
+/-- Is the lowest byte of what the expression stands for known not to be marked? Only of `setlow8(x, w)`,
+whose lowest byte is `w`'s, with `w` known not to be marked. -/
+def lowClean (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Expr → Bool
+  | .call f [_, w] => f == "setlow8" && markOf ctx bind s s1 w == some false
+  | _ => false
+
 /-- What is known not to be marked after a statement, `s` being the state before it and `s1` the state
 after. No answer: the statement could use something marked in an address. -/
 def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
@@ -2715,7 +2726,8 @@ def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
         if n == "zf" then some { s.q with zq := !m }
         else if n == "cf" then some { s.q with cq := !m }
         else match regOf bind n with
-          | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq.filter (· != r) }     -- (once in the list)
+          | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq.filter (· != r),     -- (once in the list)
+                                      lowq := if lowClean ctx bind s s1 v then r :: s.q.lowq.filter (· != r) else s.q.lowq.filter (· != r) }
           | none => none
       | .call f args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfter ctx bind s f args m } else none
       | _ => none
