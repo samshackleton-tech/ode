@@ -60,7 +60,7 @@ const NO = 18446744073709551615
 // no more than `cap` bytes, it returns the count of the bytes decoded, and they are at `out`. Where it does
 // not (no block, or more bytes than the room), it returns NO. Whatever the input, it reads nothing but the n bytes at `input`,
 // writes nothing but the cap bytes at `out`, and returns. Which instructions it runs and which addresses it
-// touches depend on the input's bytes.
+// touches depend on the input's bytes, and on the two numbers.
 //
 // (The `requires` on n: the block is less than 2^56 bytes, so that no count read from it passes 64 bits.
 // Such a block decodes to fewer than 2^64 - 1 bytes, so NO is never a count.)
@@ -69,7 +69,7 @@ contract ode_lz4_decode(out: cap bytes, cap: number, input: n bytes, n: number) 
     requires n < 72057594037927936
     returns if failed(lz4(input)) || len(lz4(input)) > cap then NO else len(lz4(input))
     ensures out[0 .. len(lz4(input))] = lz4(input) if !failed(lz4(input)) && len(lz4(input)) <= cap
-    trace depends on input
+    trace depends on input, cap, n
     stack 104
 }
 
@@ -87,6 +87,7 @@ contract ode_lz4_store(out: cap bytes, cap: number, input: n bytes, n: number) {
     ensures lz4(out[0 .. r]) == input if r != NO
     ensures r != NO if cap >= n + n / 255 + 16
     writes out
+    trace depends on cap, n
     stack 88
 }
 
@@ -103,6 +104,6 @@ contract ode_lz4_pack(out: cap bytes, cap: number, input: n bytes, n: number, d:
     ensures lz4(out[0 .. r]) == input if r != NO
     ensures r != NO if cap >= n + n / 255 + 16
     writes out
-    trace depends on input
+    trace depends on input, cap, n, d
     stack 120
 }

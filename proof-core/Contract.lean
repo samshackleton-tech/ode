@@ -304,8 +304,9 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
-  hidden : List String := []              -- the runs given to read whose bytes may be marked (secret): what
-                                          -- can be observed of a run of the function must not depend on them
+  hidden : List String := []              -- the runs given to read whose bytes may be marked (secret), and the
+                                          -- numbers given that may be: what can be observed of a run of the
+                                          -- function must not depend on them
   data : List Nat := []                   -- the bytes of the file's read-only data, where the function takes that
                                           -- data's address: it may read them (they lie at `State.data`)
   deriving Repr, Inhabited
@@ -527,28 +528,45 @@ def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   (∀ e ∈ c.ensures, e.holds c defs s s') ∧
   ∀ e ∈ c.ensuresW, e.holds c defs s s'
 
-/-- The general registers that are not marked at a call and at a return: all but those a callee keeps
-(rax, rcx, rdx, rsp, rsi, rdi, r8 to r11). A register a callee keeps may be marked: it is given back as it
-was found. -/
-def quietRegs : List Nat := [0, 1, 2, 4, 6, 7, 8, 9, 10, 11]
+/-- The registers of the arguments that hold nothing hidden: each argument's register, but for a number the
+contract says is hidden. (An address is never hidden: the function reads or writes there, so it shows.) -/
+def cleanIn (c : Contract) : List (String × Kind) → List Nat → List Nat
+  | (x, k) :: args, r :: regs =>
+    (match k with
+     | .number => if c.hidden.contains x then [] else [r]
+     | _ => [r]) ++ cleanIn c args regs
+  | _, _ => []
+
+/-- The general registers that are not marked at the function's entry: the stack pointer, and what
+`cleanIn` gives. Any other register may be marked: a number the contract says is hidden, and whatever a
+caller left in a register that holds no argument. -/
+def Contract.cleanAtEntry (c : Contract) : List Nat := RSP :: cleanIn c c.args argRegs
+
+/-- Does the contract say that a number is returned (in rax)? -/
+def Contract.givesNumber (c : Contract) : Bool := c.returns.isSome || c.result.isSome
 
 /-- Is the run whose address is in the register `r` one the contract says is hidden? -/
 def Contract.hiddenAt (c : Contract) (r : Nat) : Bool := c.hidden.any fun x => c.regOf x == some r
 
-/-- What the caller sees to about marks (what may depend on a secret): no general register is marked but
-those a callee keeps; the address to return to is not marked; no byte of a run given to read is marked,
-but for the runs the contract says are hidden; no byte of the file's read-only data is marked. -/
+/-- What the caller sees to about marks (what may depend on a secret): the stack pointer is not marked,
+nor is the register of an argument, but for a number the contract says is hidden (of any other general
+register nothing is asked: it may be marked); the address to return to is not marked; no byte of a run
+given to read is marked, but for the runs the contract says are hidden; no byte of the file's read-only
+data is marked. -/
 def Contract.quietAt (c : Contract) (s : State) : Prop :=
-  (∀ r ∈ quietRegs, s.marks.reg r = false) ∧
+  (∀ r ∈ c.cleanAtEntry, s.marks.reg r = false) ∧
   (∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false) ∧
   (∀ r l, (r, l) ∈ c.regions → c.hiddenAt r = false → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
   (∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false) ∧
   ∀ k, k < c.data.length → s.marks.mem (s.data + k) = false
 
-/-- What the function leaves of the marks, `s` being the state at entry: no general register is marked
-but those a callee keeps, and outside its own frame and the runs given to write every byte of memory is marked as it was. -/
+/-- What the function leaves of the marks, `s` being the state at entry: the stack pointer is not marked;
+the number returned, where the contract says one is, is not marked (of any other general register nothing
+is said: a caller may rely on nothing about it); and outside the function's own frame and the runs given to
+write every byte of memory is marked as it was. -/
 def Contract.quietAfter (c : Contract) (s s' : State) : Prop :=
-  (∀ r ∈ quietRegs, s'.marks.reg r = false) ∧
+  s'.marks.reg RSP = false ∧
+  (c.givesNumber = true → s'.marks.reg 0 = false) ∧
   ∀ a, c.inFrame s a = false → c.inOut s a = false → s'.marks.mem a = s.marks.mem a
 
 /-- What the function leaves: what `post` says, and what `quietAfter` says of the marks. -/

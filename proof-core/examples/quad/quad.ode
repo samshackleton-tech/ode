@@ -98,7 +98,9 @@ fn quad as "ode_quad" {
   mov qword ptr [rbx + 16], rax
   mov rax, qword ptr [rsp + 664]
   mov qword ptr [rbx + 24], rax
-  // rax held bytes of the value: it is set to zero, so that it shows nothing of the blocks
+  // rax held bytes of the value: it is set to zero, so that the function leaves nothing of the blocks in a
+  // register. (No rule of the verifier needs this: a caller may rely on nothing that a called function leaves
+  // in a register, but for the number returned where the contract returns one.)
   mov rax, 0
   add rsp, 1160
   pop r12

@@ -34,7 +34,7 @@ class Refute(unittest.TestCase):
         cases = [
             ("programs/adler32/odeadler32.o", "programs/adler32/adler32.spec", "ode_adler32", "(s[i] + bytes[i]) % 65521", "(s[i] + bytes[i]) % 65520"),
             ("programs/varint/odevarint.o", "programs/varint/varint.spec", "ode_varint", "128 + v % 128", "128 + v % 127"),
-            ("programs/lz4/odelz4.o", "programs/lz4/lz4.spec", "ode_lz4_store", "ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    stack 88", "ensures r != NO if cap >= n\n    writes out\n    stack 88"),
+            ("programs/lz4/odelz4.o", "programs/lz4/lz4.spec", "ode_lz4_store", "ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    trace depends on cap, n", "ensures r != NO if cap >= n\n    writes out\n    trace depends on cap, n"),
             ("programs/lz4/odelz4.o", "programs/lz4/lz4.spec", "ode_lz4_decode", "|| len(lz4(input)) > cap then", "|| len(lz4(input)) >= cap then"),
             ("programs/lz4/odelz4.o", "programs/lz4/lz4.spec", "ode_lz4_decode", "let offset = bytes[at] + 256 * bytes[at + 1]", "let offset = bytes[at + 1] + 256 * bytes[at]"),
             ("programs/utf8/odeutf8.o", "programs/utf8/utf8.spec", "ode_utf8", "if b < 128 then 1", "if b < 127 then 1"),

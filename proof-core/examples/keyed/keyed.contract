@@ -1,17 +1,15 @@
 // The contract of ode_keyed (keyed.ode). `out` becomes the compression of the block `m` from the key, with
 // the record's flags, as ../../../kcheck/blake3.spec defines `compress`. The layout is the one
 // ../../../kcheck/proofs/inner.spec has for the hash.
-// `trace depends on kf`: the flags are read from the record and handed to the kernel in a register, and
-// the verifier in Lean accepts a call only where no register the called function is given may depend on
-// something hidden. Without this line the statement would still be true (the kernel's instructions and
-// the addresses it touches do not depend on its flags), and the verifier refuses it; test_keyed.py keeps
-// that as a limit.
+// There is no `trace` line: which instructions run and which addresses are touched depend on nothing that
+// is given, so not on a byte of the block or of the record (the key and the flags). The flags are read
+// from the record and handed to the kernel in a register; the kernel's contract hides its flags, so the
+// call is accepted with something hidden there.
 layout keyed 40 { key: cv at 0, flags: byte at 32 }
 
 contract ode_keyed(out: cv, m: block, kf: keyed) {
     requires no_overlap(out, m, kf)
     ensures out = compress(kf.key, m, counter(0), 64, kf.flags)
-    trace depends on kf
     stack 64
     needs sse41
 }

@@ -438,14 +438,17 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     split at h
     next => exact (refuse_ok h).elim
     next hq =>
-      have hq : quietRegs.all s.q.regq.contains = true := by simpa using hq
+      have hq : RSP ∈ s.q.regq ∧ (ctx.contract.givesNumber = true → 0 ∈ s.q.regq) := by
+        simpa using hq
       obtain ⟨al, post⟩ := symReturn_sound E e1 (H.rip (p.base + i.next)) wf
-      have qr := return_quiet E Ms Hs (symReturn_sp e1) hq
+      have qr := return_quiet E Ms Hs (symReturn_sp e1) (List.contains_iff_mem.mpr hq.1)
       refine ⟨.returned (setReg { started p i st with rip := load st.mem (st.reg RSP) 8, trace := (started p i st).trace ++ [(st.reg RSP, 8)] } RSP (st.reg RSP + 8)),
-        by simp only [execQ, heff, execAllQ]; rw [if_pos (by rw [qr]; exact al)], post_fields post rfl rfl rfl, ?_, ?_⟩
-      · intro r hr
-        show st.marks.reg r = false
-        exact M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hq r hr))
+        by simp only [execQ, heff, execAllQ]; rw [if_pos (by rw [qr]; exact al)], post_fields post rfl rfl rfl, ?_, ?_, ?_⟩
+      · show st.marks.reg RSP = false
+        exact M.reg RSP hq.1
+      · intro hg
+        show st.marks.reg 0 = false
+        exact M.reg 0 (hq.2 hg)
       · exact M.stable
   | jump target cond =>
     have heff := shape_jump hs
@@ -942,7 +945,8 @@ theorem verify_all_sound (world : List Program) (defs : List Def) (fns : List Fn
 /-- **Constant time, of what the verifier says yes of.** If the verifier says yes of the functions of a
 statement, whatever the proofs are, then of each of them this holds. Take two states at the function's
 entry. Each is one of which the caller has seen to what the contract asks, marks included: so nothing is
-marked but what the contract lets be hidden. The two are alike in everything not marked. Then two runs of
+marked but what the contract lets be marked (the bytes of the runs it hides, the registers of the numbers
+it hides, and the general registers that hold no argument). The two are alike in everything not marked. Then two runs of
 the plain machine (Plain.lean: no marks, nothing forbidden), one from each state, each to the function's
 return, let the same things be observed: the same instructions at the same addresses, touching the same
 memory. -/

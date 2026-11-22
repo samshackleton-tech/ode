@@ -5,9 +5,11 @@
 
 The function is `blake3_servil_avx512_p16` as it lies in ../kcheck/b3hashr.o: 460 instructions. Its bytes
 are not changed here. Its contract is examples/kernel/p16.contract, which is the contract of
-../kcheck/proofs/inner.spec but for the `trace` line: sixteen lanes, each a chunk of `n` blocks read through
-a table of addresses, the same counter in every lane, and four bytes of one register that give the flags,
-the flags of the first and of the last block, and the last block's length.
+../kcheck/proofs/inner.spec: sixteen lanes, each a chunk of `n` blocks read through a table of addresses,
+the same counter in every lane, and four bytes of one register that give the flags, the flags of the first
+and of the last block, and the last block's length. `trace depends on n`: which instructions run and which
+addresses are touched depend on the count of blocks, and not on the key's bytes, the blocks' bytes, the
+counter or those four bytes.
 
 The kernel loops over the blocks. The class `Loop` verifies the contract as it is, for every `n` from 1 up.
 The loop is cut at a place (examples/kernel/p16.places) at its bottom, which says how many blocks are
@@ -50,6 +52,8 @@ FOLLOW = "refused: the specification's words are not followed on the terms the f
 OTHER_WORD = "refused: a word of the run is not known to hold what the specification says"
 AT_PLACE = "refused: at the place 2471 the vector registers are not shown to hold what the place says"
 AT_LEAST = "    requires n >= 1\n"
+TRACE = "    trace depends on n\n"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 CALL = "chunk(key, t, flags, start, end, length, n, inputs[i])"
 # The contract's lines as statement.py writes them, but for the `ensuresw` line.
 LINES = [
@@ -65,6 +69,8 @@ LINES = [
     "atleast n 1",
     "below n 2",
     "hidden key",
+    "hidden t",
+    "hidden packed",
     "stack 4096",
 ]
 
@@ -167,6 +173,8 @@ class Files:
                 return False, "gave up"
             except prove.Unkept as e:
                 return False, f"a kept register does not hold what it held: {e.args}"
+            except prove.Marked as e:
+                return False, f"refused: at the place {e.args[0]} register {e.args[1]} may depend on a secret, which it did not on first coming there"
             if items is None:
                 return False, prover.last
             with pf.open("w") as f:
@@ -319,18 +327,29 @@ class Loop(Files, unittest.TestCase):
         with cls.proof.open() as f:
             proof = f.read().split("\n")[:-1]
         # the place as the verifier reads it (with the registers the prover found it keeps), then what was found
-        cls.place = [l for l in proof if l.split()[0] in ("place", "name", "fact", "keep", "decreases", "lane")]
+        cls.place = [l for l in proof if l.split()[0] in ("place", "name", "fact", "keep", "marked", "decreases", "lane")]
         cls.items = [l for l in proof if l.split()[0] in ("t", "p", "s", "q")]
         assert proof == [f"for {NAME}"] + cls.place + cls.items, "the proof's lines are not: for, the place, what was found"
 
     def test_the_trace(self):
-        """The key's bytes are marked (`hidden key`): shown, since the kernel only loads them into vector
-        registers. With the table of addresses marked too it is refused: the addresses the blocks are read at
-        would depend on something marked."""
-        self.assertIn("hidden key", self.lines)
-        self.assertNotIn("hidden inputs", self.lines)
+        """The key's bytes, the counter and the register of the four bytes are marked (`hidden key`, `hidden t`,
+        `hidden packed`): shown, since the kernel only loads them into vector registers. The count of blocks is
+        not marked (`trace depends on n`). With the table of addresses marked too it is refused: the addresses
+        the blocks are read at would depend on something marked. With the count of blocks marked (the contract
+        without its `trace` line) it is refused: the loop is left when the count is done."""
+        hidden = [l for l in self.lines if l.startswith("hidden ")]
+        self.assertEqual(hidden, ["hidden key", "hidden t", "hidden packed"])
         k = self.lines.index("hidden key")
         self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address is made of something that may depend on a secret")
+        no_line = lines_of(once(TRACE, ""))
+        self.assertEqual(no_line, self.lines[:k + 1] + ["hidden n"] + self.lines[k + 1:])
+        self.refused("hidden-count", no_line, JUMP)
+        # a contract that hides less says less: with the counter and the four bytes named too, the same place shows it
+        named = lines_of(once(TRACE, "    trace depends on n, t, packed\n"))
+        self.assertEqual(named, [l for l in self.lines if l not in ("hidden t", "hidden packed")])
+        got, last = self.prove_file(self.write("named", named), self.dir / "named.proof", seconds=120, place=self.place)
+        self.assertTrue(got, last)
+        self.assertEqual(self.verify_files(self.dir / "named.statement", self.dir / "named.proof"), "shown\n")
 
     def refused(self, tag, lines, expected, place=None):
         """With these lines for the statement and these for the place: what was found for the good ones does
@@ -365,13 +384,15 @@ class Loop(Files, unittest.TestCase):
         self.assertEqual([l for l in self.lines if l.split()[0] in ("atleast", "below")], ["atleast n 1"])
         self.assertLess(self.proof.stat().st_size, 4096)
         # the place as the prover writes it for the verifier
-        self.assertEqual(self.place[:7], [
+        # (`marked rdx`: at the loop's bottom rdx holds the length of the block just done, which for the last
+        # block is one of the four bytes the contract hides; the prover finds the line)
+        self.assertEqual(self.place[:8], [
             "place 2471", "name left r13", "name off r14",
             "fact (bin >= (name left) (num 1))", "fact (bin <= (name left) (name n))",
             "fact (bin == (name off) (bin * (num 64) (bin - (name n) (name left))))",
-            "keep rcx rbx rsp rbp rsi rdi r8 r9 r11 r12 r15"])
+            "keep rcx rbx rsp rbp rsi rdi r8 r9 r11 r12 r15", "marked rdx"])
         low = "(bin % (name packed) (num 4294967296))"
-        self.assertEqual(self.place[7:], [
+        self.assertEqual(self.place[8:], [
             "decreases (name left)",
             "lane i zmm0 zmm1 zmm2 zmm3 zmm4 zmm5 zmm6 zmm7 = (call chunk.h (call words (name key)) (call counter (name t)) "
             "(bin % (name packed) (num 256)) "
@@ -447,6 +468,8 @@ class Loop(Files, unittest.TestCase):
             # a register kept that the loop changes; a register not kept that the loop needs
             ("keeps_r10", self.with_place("keep rcx", "keep r10 rcx"), "a kept register does not hold what it held"),
             ("does_not_keep_r8", self.with_place(" r8 r9", " r9"), AT_PLACE),
+            # rdx is not said to be a register that may depend on a secret on a later coming there
+            ("rdx_not_marked", self.without("marked rdx"), "refused: at the place 2471 register 2 may depend on a secret, which it did not on first coming there"),
         ]
         for tag, place, why in cases:
             with self.subTest(what=tag):

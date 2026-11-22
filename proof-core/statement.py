@@ -443,13 +443,19 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         if sorted(c["no_overlap"] or []) != sorted(addresses):
             raise SystemExit(f"statement: the contract of {name} does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap nothing else it is given")
     elif c["no_overlap"]: raise SystemExit(f"statement: the contract of {name} has `requires no_overlap`, which the verifier in Lean reads only with something written")
-    # A contract promises that which instructions run and which addresses are touched do not depend on the bytes
-    # in memory, but for the runs a `trace depends on` line names. In the account in Lean the bytes of a run
-    # given to read are not marked (nothing secret), but for a run that a `hidden` line names: so a run that
-    # is only read and that `trace depends on` does not name is `hidden`.
-    # (The addresses a table holds are numbers given, as a register's number is: a table is never hidden. Of
-    # a run that is written nothing is asked: what is read of it is taken as marked.)
+    # A contract promises that which instructions run and which addresses are touched depend on nothing it is
+    # given, but for what a `trace depends on` line names: not on the bytes of a run, and not on a number in a
+    # register. In the account in Lean the bytes of a run given to read are not marked (nothing secret), but
+    # for a run that a `hidden` line names; and the register of a number given is not marked, but for a number
+    # that a `hidden` line names. So a run that is only read, and a number, that `trace depends on` does not
+    # name is `hidden`.
+    # (An address is never hidden: the function reads or writes there, so it shows. The addresses a table holds
+    # are numbers given and read as addresses: a table is never hidden. Of a run that is written nothing is
+    # asked: what is read of it is taken as marked.)
+    for arg in c["trace"]:
+        if arg not in names: raise SystemExit(f"statement: the contract of {name}: `trace depends on {arg}`, and {arg} is no argument")
     out += [f"hidden {arg}" for arg, kind in c["args"] if not in_register(arg) and arg not in c["trace"] and arg not in written and arg not in tables]
+    out += [f"hidden {arg}" for arg, kind in c["args"] if in_register(arg) and arg not in c["trace"]]
     if [arg for arg in written if arg in c["trace"] and arg not in kinds]: raise SystemExit(f"statement: the contract of {name}: the trace depends on a run it writes: the verifier in Lean does not read that yet")
     if r is not None and kinds: raise SystemExit(f"statement: the contract of {name} returns a number beside arguments of the kinds {', '.join(said)}: not read yet")
     # A name in an expression of the contract that is no argument's and is a constant of the specification is

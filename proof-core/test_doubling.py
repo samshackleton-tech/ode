@@ -51,16 +51,19 @@ def turned(row):
     """The row that says the opposite: where `row` says c + a.x >= 0, it says -c - 1 - a.x >= 0."""
     numbers = [int(n) for n in row.split()[1:]]
     return "k " + " ".join(str(n) for n in [-numbers[0] - 1] + [-n for n in numbers[1:]])
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
     # (refused before the specification is reached: the address of byte 1024 may then be 2^64)
     ("the message may have 1024 bytes: it is one chunk, and no power of two is its left part", "len >= 1025", "len >= 1024", ENTAIL),
     ("the block before the last is said", BLOCK, "input[1024 * left_chunks(input) - 128 .. 1024 * left_chunks(input) - 64]", FOLLOW),
     ("the right part's first block is said", BLOCK, "input[1024 * left_chunks(input) .. 1024 * left_chunks(input) + 64]", KNOW),
-    ("the counter 1 is said", "counter(0), 64, 0)\n    stack 64", "counter(1), 64, 0)\n    stack 64", FOLLOW),
+    ("the counter 1 is said", "counter(0), 64, 0)\n    trace depends on len", "counter(1), 64, 0)\n    trace depends on len", FOLLOW),
     ("the definition: the least power of two", DEFINITION, "def left_chunks(bytes) { the least power of two k with 1024 * k < len(bytes) }", FOLLOW),
     ("the definition: a left part may be the whole message", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 1024 * k <= len(bytes) }", FOLLOW),
     ("the definition: chunks of 2048 bytes", DEFINITION, "def left_chunks(bytes) { the greatest power of two k with 2048 * k < len(bytes) }", FOLLOW),
+    # the trace: where the block is read is the length's to say
+    ("the length is hidden", "    trace depends on len\n", "", JUMP),
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [

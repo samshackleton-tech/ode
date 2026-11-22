@@ -237,6 +237,22 @@ class Binary(unittest.TestCase):
                     self.assertRegex(r.stdout + r.stderr, "the proof's part declares|is the language's own|defined twice")
                     self.assertNotIn("meets its public contract", r.stdout)
 
+    def test_a_public_contract_names_every_number_it_is_given(self):
+        """kfn.py takes every number given as one the trace may depend on. A reader's specification whose public
+        contract leaves a number out of `trace depends on` says more than this verifier shows: the
+        verification is NOT shown, and says which number. (The refusal comes before any function is read.)"""
+        import subprocess
+        with open(os.path.join(HERE, "blake3.spec")) as f: spec = f.read()
+        line = "    trace depends on len, flags, plat\n"
+        self.assertEqual(spec.count(line), 1)
+        for less, left in (("    trace depends on len, plat\n", "flags"), ("", "len, flags, plat")):
+            other = os.path.join(self.dir, "hidden.spec")
+            with open(other, "w") as f: f.write(spec.replace(line, less))
+            r = subprocess.run([sys.executable, os.path.join(HERE, "check_binary.py"), os.path.join(HERE, "b3hashr.o"), "--maintain", "--spec", other], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn(f"b3l_hashr: NOT shown: b3l_hashr: the contract says the trace does not depend on {left}:", r.stdout)
+            self.assertIn("b3l_hashr: NOT shown (1 failed)", r.stdout)
+
     def test_what_a_loader_would_not_map_so_is_not_read(self):
         size = kdecode.Elf(self.blob).sections[1]["size"]
         for what, so in (("leave to write", shared(self.blob, flags=7)),

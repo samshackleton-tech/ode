@@ -13,6 +13,7 @@ layout of the record it writes are the ones in ../kcheck/proofs/inner.spec, as t
         requires no_overlap(nd, input)
         requires len <= 1024
         ensures nd = chunk_node(nd.h, t, flags, input)
+        trace depends on len, plat
         stack 256
         needs sse41
         needs avx512 if plat == 5
@@ -22,8 +23,10 @@ A chunk is at most 1024 bytes: up to sixteen blocks of 64. The function gives ea
 one-block kernel (the AVX-512 one where `plat` is 5, else the SSE4.1 one), which compresses it into the
 first 32 bytes of the record `nd`; it has `b3l_pad` write the last block, padded with zeros, into the
 record at byte 32; and it stores the chunk's number, the last block's length and the flags as three
-numbers of eight bytes. The contract has no `trace depends on` line: which instructions run and which
-addresses are touched depend on the length and on `plat`, and on no byte of the input or of the record.
+numbers of eight bytes. The contract says `trace depends on len, plat`: which instructions run and which
+addresses are touched depend on the length and on `plat`, and on nothing else that is given: on no byte of
+the input or of the record, and not on the chunk's number or the flags. (The function keeps the flags in its
+frame and gives them and the chunk's number to a kernel, whose contract hides both.)
 
 The function has a loop and no place is said of it: the length is at most 1024, so the loop is gone
 round at most fifteen times, and the verifier goes through every count of turns, each with what is then
@@ -62,7 +65,7 @@ def number_words(field, bound):
 ENSURES = (f"(call bytes_of (let record {RECORD} (bin ++ (field (name record) h) (bin ++ (call words (field (name record) block)) "
            f"(bin ++ {number_words('counter', 2 ** 64)} (bin ++ {number_words('length', 65)} {number_words('flags', 256)}))))))")
 CONTRACT = ["arg nd inout 120", "arg input bytes len", "arg len number", "arg t number", "arg flags number", "arg plat number",
-            "below flags 256", "needs sse41", "needsif avx512 plat 5", "below len 1025", "hidden input",
+            "below flags 256", "needs sse41", "needsif avx512 plat 5", "below len 1025", "hidden input", "hidden t", "hidden flags",
             "ensuresw nd " + ENSURES, "stack 256"]
 NEEDS = "    stack 256\n    needs sse41\n    needs avx512 if plat == 5\n"
 # Why the verifier refuses, or what the prover cannot give it.
@@ -72,6 +75,7 @@ ARGS = "refused: what a called function's contract says of its arguments is not 
 NEEDS_MORE = "refused: a called function needs of the processor what this function's contract does not say it needs"
 STACK = "refused: a call needs more stack than this function's contract allows"
 NOT_TWO = "refused: eight bytes that are not two words of the run, or of a run that single bytes were written to"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
 KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
@@ -92,15 +96,24 @@ CONTRACTS = [
     ("AVX-512 is not said to be needed", NEEDS, "    stack 256\n    needs sse41\n", NEEDS_MORE),
     ("AVX-512 is said to be needed for another number", NEEDS, NEEDS.replace("plat == 5", "plat == 6"), NEEDS_MORE),
     ("SSE4.1 is not said to be needed", NEEDS, NEEDS.replace("    needs sse41\n", ""), NEEDS_MORE),
+    # the trace: the loop is gone round as often as the length says, and which kernel is called is `plat`'s to say
+    ("the length is hidden", "trace depends on len, plat", "trace depends on plat", JUMP),
+    ("`plat` is hidden", "trace depends on len, plat", "trace depends on len", JUMP),
+    ("no `trace` line: every number is hidden", "    trace depends on len, plat\n", "", JUMP),
 ]
 TRUE_CONTRACTS = [
     ("chunks of at most 512 bytes", "len <= 1024", "len <= 512"),
     ("as little stack as is used", "stack 256", "stack 144"),
     ("AVX-512 whatever `plat` is", NEEDS, NEEDS.replace(" if plat == 5", "")),
     ("the length below 256", "length: number at 104 below 65", "length: number at 104 below 256"),
+    # the trace: a contract that hides less says less
+    ("every number is named", "trace depends on len, plat", "trace depends on len, t, flags, plat"),
+    ("the input is named too", "trace depends on len, plat", "trace depends on len, plat, input"),
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 KERNEL = "  mov rcx, r14\n  mov r8, qword ptr [rsp + 24]\n  call blake3_servil_compress_in_place_"
+T_JUMP = ("a jump on the chunk's number", "  mov r14, rcx\n", "  mov r14, rcx\n  cmp rcx, 0\n  je @t0\n  mov rax, rax\n@t0:\n")
+F_JUMP = ("a jump on the flags", "  mov qword ptr [rsp + 16], r8\n", "  mov qword ptr [rsp + 16], r8\n  cmp r8, 0\n  je @f0\n  mov rax, rax\n@f0:\n")
 SOURCES = [
     ("the first block is not marked as the chunk's first", "  mov rax, 1\n  mov r12, rax\n", "  mov rax, 0\n  mov r12, rax\n", FOLLOW),
     ("every block is marked as the chunk's first", "  mov rax, 0\n  mov r12, rax\n", "  mov rax, 0\n", FOLLOW),
@@ -123,6 +136,9 @@ SOURCES = [
     ("the AVX-512 kernel is told a block is 63 bytes", "  mov rdx, 64\n" + KERNEL + "avx512\n", "  mov rdx, 63\n" + KERNEL + "avx512\n", FOLLOW),
     ("the SSE4.1 kernel is given 0 for the chunk's number", KERNEL + "sse41\n", KERNEL.replace("mov rcx, r14", "mov rcx, 0") + "sse41\n", FOLLOW),
     ("the AVX-512 kernel where `plat` is not 5", "  cmp rax, rcx\n  jne @l2\n", "  cmp rax, rcx\n  je @l2\n", NEEDS_MORE),
+    # the trace: one instruction more is run where a number that the contract hides is not 0
+    T_JUMP + (JUMP,),
+    F_JUMP + (JUMP,),
 ]
 TRUE_SOURCES = [
     ("the SSE4.1 kernel whatever `plat` is", "  cmp rax, rcx\n  jne @l2\n", "  cmp rax, rcx\n  jmp @l2\n"),
@@ -334,6 +350,13 @@ class Verify(unittest.TestCase):
         for what, old, new in TRUE_SOURCES:
             with self.subTest(what=what):
                 self.assertEqual(last_word(self.chunk_from(old, new)), "shown")
+
+    def test_a_jump_on_a_number_is_shown_where_the_contract_names_the_number(self):
+        """The two functions that test_a_wrong_function_is_refused has refused for a jump on a number the
+        contract hides: each computes what the contract says, and is shown where the contract names that number."""
+        for (what, old, new), line in ((T_JUMP, "trace depends on len, t, plat"), (F_JUMP, "trace depends on len, flags, plat")):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(self.chunk_from(old, new), once("trace depends on len, plat", line)), "shown")
 
 
 if __name__ == "__main__":

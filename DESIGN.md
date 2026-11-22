@@ -423,7 +423,7 @@ expertise of his team.
 **A first core exists: `proof-core/`.** It is a verifier written in Lean 4. It decides by a proof that it
 is given. With it comes a theorem that Lean checks (`verify_all_sound`): if this verifier accepts the
 functions in its input, whatever the proofs contain, then every one of them meets its contract on the
-processor that the instruction table describes. The formal model that the theorem is about is 1,045 lines.
+processor that the instruction table describes. The formal model that the theorem is about is 1,053 lines.
 The verifier's own 3,084 lines are covered by the theorem, so a Bob who takes the third route does not
 have to read them.
 
@@ -458,7 +458,10 @@ promise in the kernels' contracts that the trace does not depend on the data (co
 Lean model and is proved for the four kernels, for `b3l_pad` and for `b3l_chunk_node`, at the level of which instructions run and
 which addresses are touched. A second theorem (`verify_all_trace`) states it without the model's
 bookkeeping: on a machine with no secrecy marks, two runs of an accepted function from inputs that differ
-only in what its contract hides produce the same trace. This is the third route of the list above, begun. Lean is the language of this
+only in what its contract hides produce the same trace. A contract hides everything the function is passed
+except what its `trace depends on` line names: the bytes of a buffer, and since November 22, 2026 a number
+in a register too. So the theorem about a kernel says that the trace does not depend on the counter or the
+flags either. This is the third route of the list above, begun. Lean is the language of this
 implementation. No reader is required to use it: a proof is a text file that a verifier written in any
 language can read.
 

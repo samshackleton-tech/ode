@@ -5,7 +5,7 @@ and calls one of the two one-block kernels.
     python3 test_node.py        (needs Lean's `lake`; the tests are skipped where it is not installed)
 
 The function is in ../kcheck/b3hashr.o; its contract and the record's layout are in
-examples/kernel/node_out.contract, as ../kcheck/proofs/inner.spec has them but for the `trace` line.
+examples/kernel/node_out.contract, as ../kcheck/proofs/inner.spec has them.
 
 Here:
 - the contract as statement.py writes it: a record in memory is written out field by field from its layout,
@@ -33,6 +33,7 @@ NODE, AVX512, SSE41 = "b3l_node_out", "blake3_servil_compress_in_place_avx512", 
 FUNCTIONS = [(OBJ, NODE), (OBJ, AVX512), (OBJ, SSE41)]
 CONTRACT = ["arg out inout 32", "arg nd fixed 120", "arg root number", "arg plat number",
             "mbelow nd 104 65", "mbelow nd 112 256", "below root 256", "needs sse41", "needsif avx512 plat 5",
+            "hidden nd", "hidden root",
             "ensuresw out (call bytes_of (call node_value (record (h (call words (slice (name nd) (num 0) (num 32)))) "
             "(block (slice (name nd) (num 32) (num 96))) (counter (call number.le (slice (name nd) (num 96) (num 104)))) "
             "(length (call number.le (slice (name nd) (num 104) (num 112)))) (flags (call number.le (slice (name nd) (num 112) (num 120))))) "
@@ -53,7 +54,9 @@ MORE_STACK = "refused: a call needs more stack than this function's contract all
 NOT_BACK = "refused: at the return the stack pointer is not where it was at entry"
 NOT_WITHIN = "refused: a read of a run of a fixed count that is not eight bytes within it: not here yet"
 NO_RUN = "refused: a read that is neither of the frame nor of a run given"
-IF, TRACE = "if plat == 5", "\n    trace depends on nd"       # (the hash's own contract in blake3.spec has the same condition)
+NEEDS_IF, IF = "    stack 128\n    needs sse41\n    needs avx512 ", "if plat == 5"       # (the hash's own contract in blake3.spec has the same condition)
+TRACE = "    trace depends on plat\n    stack 128\n"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 
 
 def spec_text(change=lambda t: t):
@@ -99,9 +102,9 @@ class Statement(unittest.TestCase):
                 ("a field that is several things", once("h: cv at 0", "h[1]: cv at 0"), "several things"),
                 ("a field of a kind that is not read", once("block: 64 bytes at 32", "block: block at 32"), "does not read yet"),
                 ("`below` of a field that is no number", once("block: 64 bytes at 32", "block: 64 bytes at 32 below 7"), "has `below`, and is not a single number"),
-                ("a need on a condition that is no argument's being a number", once(IF + TRACE, "if plat != 5" + TRACE), "condition"),
-                ("a need on a condition of what is no register", once(IF + TRACE, "if nd == 5" + TRACE), "condition"),
-                ("a need on a condition of a sum", once(IF + TRACE, "if plat + 1 == 6" + TRACE), "condition"),
+                ("a need on a condition that is no argument's being a number", once(NEEDS_IF + IF, NEEDS_IF + "if plat != 5"), "condition"),
+                ("a need on a condition of what is no register", once(NEEDS_IF + IF, NEEDS_IF + "if nd == 5"), "condition"),
+                ("a need on a condition of a sum", once(NEEDS_IF + IF, NEEDS_IF + "if plat + 1 == 6"), "condition"),
                 ("an expression that speaks of an argument of the kind `any`", once("node_value(nd, root)", "node_value(nd, plat)"), "`any`"),
                 ("no `requires no_overlap`", once("    requires no_overlap(out, nd)\n", ""), "no_overlap")):
             with self.subTest(what=what):
@@ -154,7 +157,7 @@ class Meaning(unittest.TestCase):
         self.assertEqual(self.lean(cases), want)
 
     def test_a_record_in_memory_means_what_its_layout_says(self):
-        record = CONTRACT[9][len("ensuresw out (call bytes_of (call node_value "):-len(" (name root)))")]
+        record = CONTRACT[11][len("ensuresw out (call bytes_of (call node_value "):-len(" (name root)))")]
         self.assertTrue(record.startswith("(record (h ") and record.endswith(")))))"), record)
         rng = random.Random(42)
         cases, want = [], []
@@ -178,13 +181,13 @@ class Meaning(unittest.TestCase):
         for n in (0, 1, 3, 31, 63, 64):
             message = bytes(rng.randrange(256) for _ in range(n))
             nd = iv + message.ljust(64, b"\0") + (0).to_bytes(8, "little") + n.to_bytes(8, "little") + (3).to_bytes(8, "little")   # CHUNK_START | CHUNK_END
-            cases.append((CONTRACT[9][len("ensuresw out "):], {"nd": nd, "root": 8}))                                                 # ROOT
+            cases.append((CONTRACT[11][len("ensuresw out "):], {"nd": nd, "root": 8}))                                                 # ROOT
             want.append("bytes " + bytes(spec.eval(ode.Numbers(), ("call", "blake3", [("name", "m")]), {"m": list(message)})).hex())
         self.assertEqual(self.lean(cases), want)
         # a control: with the length and the flags laid out the other way round, the empty message's value is another
         swapped = [l for l in statement.statement(spec_text(once("length: number at 104 below 65, flags: byte at 112", "length: number at 112 below 65, flags: byte at 104")), FUNCTIONS)
                    if l.startswith("ensuresw out ")][0]
-        self.assertNotEqual(swapped, CONTRACT[9])
+        self.assertNotEqual(swapped, CONTRACT[11])
         got = self.lean([(swapped[len("ensuresw out "):], env) for _, env in cases])
         self.assertTrue(got[0].startswith("bytes ") and got[0] != want[0], got[0])
 
@@ -293,7 +296,9 @@ class Verify(unittest.TestCase):
                 ("the block is the run given to write", "add rsi, 32", "mov rsi, rdi", NO_PART),
                 ("the kernels exchanged", "jne @sse41", "je @sse41", NEEDS),
                 ("the wide kernel for another number", "cmp rax, 5", "cmp rax, 6", NEEDS),
-                ("plat taken from root", "mov rax, rcx", "mov rax, rdx", NEEDS),
+                # (rdx holds the node's length by then, which the contract hides: the jump on it is refused before
+                # the kernels' needs are looked at)
+                ("plat taken from the node's length", "mov rax, rcx", "mov rax, rdx", JUMP),
                 ("the second half not stored", "  movups xmmword ptr [rdi + 16], xmm0\n", "", NOT_WHOLE),
                 ("the first half stored twice", "movups xmmword ptr [rdi + 16], xmm0", "movups xmmword ptr [rdi + 0], xmm0", NOT_WHOLE),
                 ("the value taken from the block", "movups xmm0, xmmword ptr [rsi + 16]", "movups xmm0, xmmword ptr [rsi + 32]", FOLLOW),
@@ -321,16 +326,32 @@ class Verify(unittest.TestCase):
                 self.assertEqual(last_word(self.node_from(old, new)), "shown")
 
     def test_the_trace(self):
-        """The contract says the trace may depend on the record `nd`. Without that line the function is NOT
-        shown, though what the line then promises is true of it: it reads the counter, the length and the flags
-        of the record into registers and gives them to a kernel, whose contract asks that the registers it is
-        given be not marked (a contract cannot yet say that a number given is one the trace does not depend on).
-        A limit of the verifier, kept here so that it is seen when it goes."""
-        self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one",
-                      last_word(FUNCTIONS, once(TRACE, "")))
+        """The contract says the trace depends on `plat` and on nothing else that is given: not on a byte of the
+        record `nd`, and not on `root`. The function reads the counter, the length and the flags of the record
+        into registers and gives them to a kernel, whose contract hides those three numbers. (Until numbers
+        could be hidden the contract had to say `trace depends on nd`: the kernels then asked that every
+        register they were given be free of secrets.)"""
+        # false statements: the trace does depend on what the changed contract, or the changed function, hides
+        self.assertEqual(last_word(FUNCTIONS, once(TRACE, "    stack 128\n")), JUMP)                 # `plat` hidden: the function jumps on it
+        self.assertEqual(last_word(FUNCTIONS, once(TRACE, "    trace depends on root\n    stack 128\n")), JUMP)
+        root = ("  or r8, rdx\n  mov rdx, qword ptr [rsi + 104]\n  mov rax, rcx\n", "  or r8, rdx\n  mov rax, rdx\n  mov rdx, qword ptr [rsi + 104]\n")
+        for what, old, new in (
+                ("a jump on the record's flags", "  cmp rax, 5\n", "  mov rax, qword ptr [rsi + 80]\n  cmp rax, 5\n"),
+                ("a jump on the record's length", "  cmp rax, 5\n", "  cmp rdx, 5\n"),
+                ("a jump on `root`",) + root):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(self.node_from(old, new)), JUMP)
+        # (the same function with `root` named: the jump is let through, and what is refused is that the wide
+        # kernel is called for another number than the contract says)
+        self.assertEqual(last_word(self.node_from(*root), once(TRACE, "    trace depends on root, plat\n    stack 128\n")), NEEDS)
+        # true statements that say less: shown
+        for what, line in (("the record named too", "    trace depends on plat, nd\n"), ("`root` named too", "    trace depends on root, plat\n"),
+                           ("all three named", "    trace depends on nd, root, plat\n")):
+            with self.subTest(what=what):
+                self.assertEqual(last_word(FUNCTIONS, once(TRACE, line + "    stack 128\n")), "shown")
 
     def test_a_wrong_contract_is_refused(self):
-        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on nd"
+        needs = "    stack 128\n    needs sse41\n    needs avx512 if plat == 5\n"
         for what, old, new, word in (
                 ("the length's bound left out", "length: number at 104 below 65", "length: number at 104", ARGS),
                 ("the length up to 256", "below 65", "below 257", ARGS),
@@ -342,7 +363,7 @@ class Verify(unittest.TestCase):
                 ("the wide kernel for another number", needs, needs.replace("plat == 5", "plat == 6"), NEEDS),
                 ("the wide kernel not said", needs, needs.replace("    needs avx512 if plat == 5\n", ""), NEEDS),
                 ("sse41 not said", needs, needs.replace("    needs sse41\n", ""), NEEDS),
-                ("too little stack", "stack 128", "stack 15", MORE_STACK)):
+                ("too little stack", "trace depends on plat\n    stack 128", "trace depends on plat\n    stack 15", MORE_STACK)):
             with self.subTest(what=what):
                 self.assertEqual(last_word(FUNCTIONS, once(old, new)), word)
         # refused before the verifier: what the statement cannot say
@@ -356,12 +377,12 @@ class Verify(unittest.TestCase):
                 self.assertIn(word, said)
 
     def test_a_changed_contract_that_is_true_is_shown(self):
-        needs = "    needs sse41\n    needs avx512 if plat == 5\n    trace depends on nd"
+        needs = "    stack 128\n    needs sse41\n    needs avx512 if plat == 5\n"
         for what, old, new in (
                 ("the length up to 255", "below 65", "below 256"),
                 ("the length a byte", "length: number at 104 below 65", "length: byte at 104"),
                 ("a counter with a bound", "counter: number at 96", "counter: number at 96 below 4294967296"),
-                ("as little stack as it uses", "stack 128", "stack 16"),
+                ("as little stack as it uses", "trace depends on plat\n    stack 128", "trace depends on plat\n    stack 16"),
                 ("a record of one byte more", "layout node120 120", "layout node120 121"),
                 ("avx512 whatever `plat` is", needs, needs.replace(" if plat == 5", ""))):
             with self.subTest(what=what):

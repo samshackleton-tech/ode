@@ -118,8 +118,22 @@ class Contract:
         addresses = [name for _, kind, name in self.args if kind != "number"]
         if self.writes and len(addresses) > 1 and sorted(c["no_overlap"] or []) != sorted(addresses):
             raise Fail(f"{symbol}: the contract does not say `requires no_overlap({', '.join(addresses)})`: what it writes is taken to overlap none of the other things it is given")
-        for name in self.writes | self.trace:
+        for name in self.writes:
             if self.kind.get(name) in (None, "number"): raise Fail(f"{symbol}: {name} is not something at an address among its arguments")
+        # `trace depends on` names bytes at an address, or a number given in a register. This verifier takes every
+        # number given as one the trace may depend on, named or not: of a contract that leaves a number out it
+        # shows less than the contract says (LANGUAGE.md, part 2), and `left_out` says which numbers those are.
+        for name in self.trace:
+            if name not in self.kind: raise Fail(f"{symbol}: `trace depends on {name}`, and {name} is not among its arguments")
+        self.left_out = [name for _, kind, name in self.args if kind == "number" and name not in self.trace]
+
+
+def public(spec, symbol):
+    """A public contract (one of which a reader is told `shown`) names every number it is given in
+    `trace depends on`. This verifier takes each number given as one the trace may depend on (LANGUAGE.md,
+    part 2): of a contract that leaves one out it would show less than the contract says. Raises Fail there."""
+    left = Contract(spec, symbol).left_out
+    if left: raise Fail(f"{symbol}: the contract says the trace does not depend on {', '.join(left)}: this verifier takes every number given as one the trace may depend on, and cannot show that")
 
 
 class Undecided(Err):

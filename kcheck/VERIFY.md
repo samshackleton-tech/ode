@@ -26,7 +26,7 @@ It prints three things:
            requires n < 72057594037927936
            returns if failed(lz4(input)) || len(lz4(input)) > cap then NO else len(lz4(input))
            ensures out[0 .. len(lz4(input))] = lz4(input) if !failed(lz4(input)) && len(lz4(input)) <= cap
-           trace depends on input
+           trace depends on input, cap, n
            stack 104
        }
 
@@ -52,7 +52,7 @@ that others have already scrutinized. What matters is a justified connection bet
 the exact text the tool verifies:
 
 - **The contract** (printed), and **the definitions it names**: `python3 verify.py FILE` prints the
-  contract; the whole specification is `programs/NAME/NAME.spec` (`blake3.spec` for the hash), 12 to 185
+  contract; the whole specification is `programs/NAME/NAME.spec` (`blake3.spec` for the hash), 12 to 186
   lines; `python3 verify.py FILE --show-spec` prints the one the file carries. `lz4(input)` means what `lz4.spec` says it means, which is the LZ4 block format written as equations.
 - **What a contract means**: `LANGUAGE.md`, part 2. The short of it: a contract is a closed world. The
   function reads and writes nothing it does not name, returns, and what a line does not allow is not done.
@@ -129,6 +129,11 @@ first verifier's part). It is the beginning of a second verifier, not one.
   which addresses are touched. Other timing effects of a processor, such as an instruction whose duration
   depends on its operands, are outside it. To protect a secret, connect your requirement to the exact
   property that was shown.
+- **That the trace does not depend on a number.** A contract says that the trace depends on nothing the
+  function is given but what its `trace depends on` line names. This verifier shows that of the bytes in
+  memory. It does not tell a number that the line names from one that it leaves out: it takes every number
+  as one the trace may depend on. So it refuses a public contract that leaves a number out, and the public
+  contracts here name each number they are given. (The verifier in `../proof-core` tells the two apart.)
 - **What else is linked into your program.** A shipped file here is an object to be linked, and it is read
   only in one shape: its code and its proof and nothing else a linker would take, and no name but those of
   functions each shown to meet a contract (a copy with a second function hidden under a verified one's name

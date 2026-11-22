@@ -8,5 +8,6 @@ def varint(v) { if v < 128 then [v] else [128 + v % 128] ++ varint(v / 128) }
 contract ode_varint(out: 10 bytes, v: number) {
     returns r
     ensures out[0 .. r] = varint(v)
+    trace depends on v
     stack 24
 }

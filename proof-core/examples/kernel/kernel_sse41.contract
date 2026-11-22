@@ -1,6 +1,7 @@
 // The one-block kernel of the hash for processors with SSE4.1 and no more (the function is in
 // ../../../kcheck/b3hashr.o). As for the other kernel (kernel.contract), and as in
-// ../../../kcheck/proofs/inner.spec, there is no `trace` line: the trace depends on no byte of h or m.
+// ../../../kcheck/proofs/inner.spec, there is no `trace` line: the trace depends on no byte of h or m,
+// and not on the length, the counter or the flags.
 // `length: word`: the caller keeps the length below 2^32. `flags: low word`: the low 32 bits of the
 // flags' register are read, the rest being anything.
 contract blake3_servil_compress_in_place_sse41(h: cv, m: block, length: word, t: counter, flags: low word) {

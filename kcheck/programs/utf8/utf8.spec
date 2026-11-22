@@ -56,6 +56,6 @@ const NO = 18446744073709551615
 // are not well-formed UTF-8. Nothing is written.
 contract ode_utf8(input: n bytes, n: number) {
     returns if failed(utf8(input)) then NO else utf8(input)
-    trace depends on input
+    trace depends on input, n
     stack 88
 }

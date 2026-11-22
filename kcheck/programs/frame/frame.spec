@@ -85,6 +85,6 @@ contract ode_unframe(out: cap bytes, cap: number, input: n bytes, n: number) {
     requires cap < NO
     returns if failed(unframe(input)) || len(unframe(input)) > cap then NO else len(unframe(input))
     ensures out[0 .. len(unframe(input))] = unframe(input) if !failed(unframe(input)) && len(unframe(input)) <= cap
-    trace depends on input
+    trace depends on input, cap, n
     stack 184
 }

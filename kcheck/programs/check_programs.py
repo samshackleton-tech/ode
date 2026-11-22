@@ -73,6 +73,7 @@ def main():
             t0 = time.time()
             try:
                 rows = kbyte.load(os.path.join(folder, function + ".o"), "ode_" + function)
+                kbyte.public(ode.Spec(spec_text), "ode_" + function)          # a public contract names every number it is given
                 tally = kbyte.check(rows, ode.with_proof(spec_text, lemmas(program)) if lemmas(program) else ode.Spec(spec_text), "ode_" + function, proof)
                 total += len(rows)
                 again, why = kends.ends_for(ode.with_proof(spec_text, lemmas(program)) if lemmas(program) else ode.Spec(spec_text), "ode_" + function)

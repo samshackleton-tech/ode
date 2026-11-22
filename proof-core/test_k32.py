@@ -78,6 +78,8 @@ LINES = [
     "atleast n 1",
     "below n 2",
     "hidden key",
+    "hidden t",
+    "hidden packed",
     "stack 4096",
 ]
 

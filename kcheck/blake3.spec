@@ -161,8 +161,8 @@ def iv_words() { [word(IV[i]) for i in 0..8] }
 //   It has written none but what an `ensures` names, and at most `stack` bytes below the caller's stack
 //   pointer. The registers a callee keeps are as they were. It has run no instructions but those every
 //   x86-64 processor has and those a `needs` line names (`needs F if C`: only where C holds). Which
-//   instructions it ran and which addresses it touched depend on the numbers it was given, and not on the
-//   bytes in memory.
+//   instructions it ran and which addresses it touched depend on the addresses it was given and on what a
+//   `trace depends on` line names, and on nothing else: here on three numbers, and on no byte in memory.
 //
 //   A function that does more, or promises less, says so in its contract. Nothing is left to be understood.
 //
@@ -179,6 +179,7 @@ def iv_words() { [word(IV[i]) for i in 0..8] }
 contract b3l_hashr(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte, plat: any) {
     requires no_overlap(out, input, key)
     ensures out = bytes_of(hash_words(words(key), flags, input))
+    trace depends on len, flags, plat
     stack 18688 + 384 * bits(len / 1024)
     needs sse41
     needs avx512 if plat == 5

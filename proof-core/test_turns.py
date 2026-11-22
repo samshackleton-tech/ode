@@ -40,7 +40,7 @@ NOTHING = "refused: a read of the frame where nothing was written"
 SECRET = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 STACK = "refused: a call needs more stack than this function's contract allows"
 ENTAIL = "need entail"            # a number is to be shown below its bound (here: that adding one to it does not pass 2^64), and it is not so
-JUMP = "@done:\n  mov rax, qword ptr [rsp + {}]\n  cmp rax, 1\n  jb @skip\n@skip:\n"       # a jump on a cell of the frame, after the loop
+JUMP = "@done:\n  mov rax, qword ptr [rsp + {}]\n  cmp rax, 1\n  jb @skip\n  mov rax, rax\n@skip:\n"       # a jump on a cell of the frame, after the loop: one instruction more is run where the cell holds 1 or more
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
     ("a and b are exchanged", ENSURES, "compress(zero_cv(), b, counter(0), 64, 0) ++ compress(zero_cv(), a, counter(0), 64, 0)", FOLLOW),

@@ -1,13 +1,12 @@
 // The contract of ode_high (high.ode). `out` becomes the compression of the block `m` from the key, with
 // the record's flags and PARENT, as ../../../kcheck/blake3.spec defines `compress`. The function hands the
 // kernel a number that has the bit 2^34 as well; the kernel's contract reads the low 32 bits.
-// `trace depends on kf`: as in ../keyed/keyed.contract.
+// There is no `trace` line: as in ../keyed/keyed.contract, the trace depends on nothing that is given.
 layout keyed 40 { key: cv at 0, flags: byte at 32 }
 
 contract ode_high(out: cv, m: block, kf: keyed) {
     requires no_overlap(out, m, kf)
     ensures out = compress(kf.key, m, counter(0), 64, kf.flags | PARENT)
-    trace depends on kf
     stack 64
     needs sse41
 }

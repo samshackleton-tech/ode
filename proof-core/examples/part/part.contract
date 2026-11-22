@@ -1,6 +1,7 @@
 // The contract of ode_second_block (part.ode): h becomes the compression of h with the second block of the
 // message, as ../../../kcheck/blake3.spec defines `compress`. The message must have that block: its length
-// is no less than 128. There is no `trace` line: the function reads no byte of the message or of h itself.
+// is no less than 128. There is no `trace` line: the function reads no byte of the message or of h itself,
+// and which instructions it runs does not depend on the length.
 contract ode_second_block(h: cv, input: len bytes, len: number) {
     requires no_overlap(h, input)
     requires len >= 128

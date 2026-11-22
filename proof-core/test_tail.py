@@ -47,6 +47,8 @@ ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, 
 KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
                                   # would name there (that a part lies within its run; how two numbers compare) none is shown
 STACK = "refused: a call needs more stack than this function's contract allows"
+AT_CALL = "refused: at a call, something the called function's contract asks not to depend on a secret may depend on one"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
     ("the block is said to hold the message from byte 15 on", "src[16 .. len]", "src[15 .. len]", FOLLOW),
@@ -56,6 +58,8 @@ CONTRACTS = [
     ("the block is said to be as it was", "block: padded(src[16 .. len])", "block: r.block", WORD),
     ("one byte less of stack is said", "stack 64", "stack 63", STACK),
     ("the fields are said to lie in the other order", "h: cv at 0, block: 64 bytes at 32", "block: 64 bytes at 0, h: cv at 64", WORD),
+    # the trace: the length less 16 is given on to b3l_pad, whose loop counts by it
+    ("the length is hidden", "    trace depends on len\n", "", AT_CALL),
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
@@ -71,6 +75,11 @@ SOURCES = [
     ("b3l_pad is given the record's own bytes to read", "  add rsi, 16\n", "  mov rsi, rdi\n", NO_PART),
     ("a byte is written where rdi points after the call", "  add rsp, 8\n", "  mov byte ptr [rdi + 0], 1\n  add rsp, 8\n", NO_RUN),
     ("there is no call", "  call b3l_pad\n", "", FOLLOW),
+    # the trace: after a call the caller may rely on nothing that the called function leaves in a register,
+    # but for a number its contract returns; b3l_pad's returns none (one instruction more is run where rax is not 0)
+    ("a jump on what b3l_pad leaves in rax", "  add rsp, 8\n", "  cmp rax, 0\n  je @none\n  mov rcx, rcx\n@none:\n  add rsp, 8\n", JUMP),
+    # ... nor may a function rely on what its own caller left in a register that holds no argument
+    ("a jump on what the caller left in r10", "  sub rsp, 8\n", "  sub rsp, 8\n  cmp r10, 0\n  je @left\n  mov rcx, rcx\n@left:\n", JUMP),
 ]
 
 

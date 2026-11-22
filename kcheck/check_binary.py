@@ -167,6 +167,11 @@ def main():
         by_proof = "--search" not in sys.argv and (symbol in ARITH or bool(ARITH))
         try:
             klin.Facts.PROOFS = (varith.unpack(ARITH[symbol]) if symbol in ARITH else {}) if by_proof else None
+            if symbol == top:
+                # the public contract: what "shown" is said of. This verifier takes every number given as one the
+                # trace may depend on (LANGUAGE.md, part 2), so the contract must name each of them.
+                left = kfn.contract(symbol).left_out
+                if left: raise kterms.Fail(f"{symbol}: the contract says the trace does not depend on {', '.join(left)}: this verifier takes every number given as one the trace may depend on, and cannot show that")
             rows, what, start = check(path, symbol)
         except (kterms.Fail, kdecode.Stop) as err:
             done[symbol] = None; failed += 1

@@ -20,6 +20,11 @@
 // each of its values); all else is as it was. `returns`: the result. `stack`: the bytes of stack the function
 // may use below its return address (`bits(n)`: the length of n in bits). `calls F if C`: the function calls F
 // only where C holds (the platform word 5 means the machine has AVX-512, which its caller answers for).
+// `trace depends on`: the numbers given that which instructions run and which addresses are touched may depend
+// on. They depend on nothing else that is given: on no byte in memory, and on no other number (with no such
+// line: on nothing that is given). Where a function is not yet verified by the verifier in ../../proof-core
+// (b3l_wide32 and those after it), the line names every number the function is given: that much is what the
+// verifier of this folder shows, which takes every number as one the trace may depend on.
 
 // What sort of thing some definitions of blake3.spec give: where the verifier cannot work such a value out
 // (the bytes of a chunk whose length it does not know), it still knows its sort, and names it by what it is of.
@@ -37,6 +42,7 @@ contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: coun
     requires n >= 1
     requires no_overlap(inputs, key, out)
     ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32
+    trace depends on n
     stack 4096
     needs avx512
 }
@@ -45,6 +51,7 @@ contract blake3_servil_avx512_p32(inputs: 32 inputs, n: number, key: cv, t: coun
     requires n >= 1
     requires no_overlap(inputs, key, out)
     ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..32
+    trace depends on n
     stack 4096
     needs avx512
 }
@@ -53,6 +60,7 @@ contract blake3_servil_avx512_p16(inputs: 16 inputs, n: number, key: cv, t: coun
     requires n >= 1
     requires no_overlap(inputs, key, out)
     ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..16
+    trace depends on n
     stack 4096
     needs avx512
 }
@@ -84,6 +92,7 @@ contract b3l_pad(block: 64 bytes, src: n bytes, n: number) {
     requires no_overlap(block, src)
     requires n <= 64
     ensures block = padded(src)
+    trace depends on n
     stack 48
 }
 
@@ -91,6 +100,7 @@ contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, f
     requires no_overlap(nd, input)
     requires len <= 1024
     ensures nd = chunk_node(nd.h, t, flags, input)
+    trace depends on len, plat
     stack 256
     needs sse41
     needs avx512 if plat == 5
@@ -99,6 +109,7 @@ contract b3l_chunk_node(nd: node120, input: len bytes, len: number, t: number, f
 contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
     requires no_overlap(out, nd)
     ensures out = node_value(nd, root)
+    trace depends on plat
     stack 128
     needs sse41
     needs avx512 if plat == 5
@@ -108,6 +119,7 @@ contract b3l_wide32(out: cv, input: 32768 bytes, kf: keyed, t: number) {
     requires no_overlap(out, input, kf)
     requires 1024 * t + 32768 <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
+    trace depends on t
     stack 8192
     needs avx512
 }
@@ -116,6 +128,7 @@ contract b3l_wide128(out: cv, input: 131072 bytes, kf: keyed, t: number) {
     requires no_overlap(out, input, kf)
     requires 1024 * t + 131072 <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
+    trace depends on t
     stack 16384
     needs avx512
 }
@@ -127,6 +140,7 @@ contract b3l_take(out: cv, input: len bytes, len: number, kf: keyed, t: number, 
     requires 1024 * t + len <= 18446744073709551615
     requires cvs[i] == node_value(chunk_node(kf.key, t + i, kf.flags, input[1024 * i .. 1024 * i + 1024]), 0) for i in 0..len / 1024
     ensures out = subtree(kf.key, kf.flags, t, input)
+    trace depends on len, t
     decreases len
     stack 640 + 384 * bits((len - 1) / 1024)
     needs sse41
@@ -139,6 +153,7 @@ contract b3l_part32(out: cv, input: len bytes, len: number, kf: keyed, t: number
     requires len <= 32768
     requires 1024 * t + len <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
+    trace depends on len, t
     stack 8192
     needs sse41
     needs avx512
@@ -149,6 +164,7 @@ contract b3l_subtree(out: cv, input: len bytes, len: number, kf: keyed, t: numbe
     requires len >= 1
     requires 1024 * t + len <= 18446744073709551615
     ensures out = subtree(kf.key, kf.flags, t, input)
+    trace depends on len, t, plat
     decreases len
     stack 16896 + 384 * bits((len - 1) / 1024)
     needs sse41
@@ -177,6 +193,7 @@ contract b3l_merge(st: stack, key: cv, flags: byte, plat: any, target: number) {
     requires target >= 1
     ensures st = merge(key, flags, target, st)
     returns len(st)
+    trace depends on flags, plat, target
     stack 256
     calls blake3_servil_compress_in_place_avx512 if plat == 5
 }
@@ -186,5 +203,6 @@ contract b3l_add(st: stack, key: cv, flags: byte, plat: any, new: cv, target: nu
     requires target >= 1
     ensures st = merge(key, flags, target, st ++ [new])
     returns len(st)
+    trace depends on flags, plat, target
     stack 512
 }

@@ -9,9 +9,9 @@ three in the lowest byte of `rax` while the other bytes of `rax` hold a byte of 
     dec al
     jne @again                         a jump decided by the lowest byte alone
 
-Its contract has no `trace depends on m`: which instructions run may depend on no byte of `m`. They do
-not: the jump is decided by the count. The hash's two one-block kernels count their seven rounds in
-this way.
+Its contract has no `trace` line: which instructions run may depend on no byte of `m`, and not on the
+number `n`. They do not: the jump is decided by the count of three. The hash's two one-block kernels count
+their seven rounds in this way.
 
 The formal model (Machine.lean) marks what may depend on something hidden. A general register has two
 marks there: one for the register, and one for its lowest byte, looked at only where the register is
@@ -24,7 +24,11 @@ verifier refused this function at the jump: a true statement refused.
 The function and its contract are shown, with the function's name alone as the proof. With the function
 changed in one place so that the jump does depend on the hidden byte, nothing is shown, and each case
 names what the verifier refuses. Changes that keep the statement true are shown. One true statement is
-refused and kept as a limit."""
+refused and kept as a limit.
+
+A number given is hidden as a run's bytes are, unless `trace depends on` names it: with the function
+changed so that it reads the run's last byte, at an address made of `n`, nothing is shown; with `n` named,
+the same function is shown."""
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
@@ -35,18 +39,26 @@ NAME = "ode_rounds"
 LAKE = lean_verify.LAKE
 # Why the verifier refuses.
 JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+ADDRESS = "refused: an address is made of something that may depend on a secret: what can be observed of the run would depend on it"
 LOOP = "\n  jne @again\n"
-# Changed so that which instructions run depends on the hidden byte: (what, the source as it is, changed, what the verifier says)
+# Changed so that which instructions run depends on the hidden byte, or which address is read on the hidden
+# count: (what, the source as it is, changed, what the verifier says)
 SOURCES = [
     ("the count is the hidden byte itself", "  shl rax, 8\n  mov al, 3\n", "", JUMP),
     ("the hidden byte is shifted back into the lowest byte", "  mov al, 3\n", "  mov al, 3\n  shr rax, 8\n", JUMP),
-    ("a jump on the whole register after the loop", LOOP, LOOP + "  cmp rax, 256\n  jb @skip\n@skip:\n", JUMP),
+    # (one instruction more is run where the hidden byte is not 0)
+    ("a jump on the whole register after the loop", LOOP, LOOP + "  cmp rax, 256\n  jb @skip\n  mov rcx, rcx\n@skip:\n", JUMP),
+    # (the address read depends on the count of the run's bytes, a number the contract hides)
+    ("the last byte of the run is read, at an address made of its count", "  movzx eax, byte ptr [rdi + 0]\n",
+     "  mov rcx, rsi\n  sub rcx, 1\n  add rcx, rdi\n  movzx eax, byte ptr [rcx + 0]\n", ADDRESS),
+    # (r10 holds no argument: it holds what a caller left there, of which the contract says nothing)
+    ("a jump on a register that holds no argument", "  mov al, 3\n", "  mov al, 3\n  cmp r10, 0\n  je @left\n  mov rcx, rcx\n@left:\n", JUMP),
 ]
 # Changed and still true: (what, the source as it is, changed)
 STILL_TRUE = [
     ("the count is five", "  mov al, 3\n", "  mov al, 5\n"),
     ("the lowest byte is copied to another register, and a jump is decided there", "  mov al, 3\n",
-     "  mov al, 3\n  movzx ecx, al\n  cmp rcx, 4\n  jb @skip\n@skip:\n"),
+     "  mov al, 3\n  movzx ecx, al\n  cmp rcx, 4\n  jb @skip\n  mov rcx, rcx\n@skip:\n"),
 ]
 # A changed function that is still true and is refused: the register is doubled, so its lowest byte is 6
 # whatever the other bytes are. The verifier has the whole register as set from something hidden.
@@ -103,7 +115,8 @@ class LowByte(unittest.TestCase):
         with open(self.path("shown.statement")) as f: rows = f.read()
         self.assertIn(".mov 8 (.reg .rax) (.imm 0x3)", rows)            # the rows this is about
         self.assertIn(".decb .rax", rows)
-        self.assertIn("hidden m", rows)                                 # the run is hidden: no `trace depends on m`
+        self.assertIn("hidden m", rows)                                 # the run is hidden, and the count: no `trace` line
+        self.assertIn("hidden n", rows)
 
     def test_a_function_changed_so_that_the_hidden_byte_shows(self):
         for what, old, new, why in SOURCES:
@@ -119,6 +132,14 @@ class LowByte(unittest.TestCase):
         what, old, new, _ = SOURCES[2]
         obj = self.changed(old, new)
         spec = self.spec.replace("    returns 0\n", "    returns 0\n    trace depends on m\n")
+        self.assertNotEqual(spec, self.spec)
+        self.assertEqual(list(self.found(spec, obj)), [NAME], what)
+
+    def test_the_same_read_is_shown_where_the_contract_lets_the_trace_depend_on_the_count(self):
+        # The fourth changed function, with a contract that says `trace depends on n`: now a true statement.
+        what, old, new, _ = SOURCES[3]
+        obj = self.changed(old, new)
+        spec = self.spec.replace("    returns 0\n", "    returns 0\n    trace depends on n\n")
         self.assertNotEqual(spec, self.spec)
         self.assertEqual(list(self.found(spec, obj)), [NAME], what)
 

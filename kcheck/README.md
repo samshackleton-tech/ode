@@ -75,7 +75,7 @@ this way, not all programs. The languages are our own.
   with the specification's definition. Terms are compared by identity, numbers by adding linear facts up.
   No solver.
 
-**The binary is one file, `b3hashr.o`** (80,920 bytes): the thirteen bodies of code the hash is made of,
+**The binary is one file, `b3hashr.o`** (81,680 bytes): the thirteen bodies of code the hash is made of,
 their constants, their names, the specification, the proof, and nothing for a linker to fill in.
 `python3 check_binary.py b3hashr.o` reads it, follows every call from `b3l_hashr`, and says in 19 s on an
 Apple M6 that `b3l_hashr` in that file meets its public contract:
@@ -83,6 +83,7 @@ Apple M6 that `b3l_hashr` in that file meets its public contract:
     contract b3l_hashr(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte, plat: any) {
         requires no_overlap(out, input, key)
         ensures out = bytes_of(hash_words(words(key), flags, input))
+        trace depends on len, flags, plat
         stack 18688 + 384 * bits(len / 1024)
         needs sse41
         needs avx512 if plat == 5
@@ -109,7 +110,7 @@ the base-64 encoder's; the shipped files, by the proofs they carry: 3 s in all, 
 | first difference of two runs of bytes | `returns common(a, b)` | 45 | 1 place, 8 lines | 5 ms |
 | UTF-8: is it well-formed, and how many code points | `returns if failed(utf8(input)) then NO else utf8(input)` | 300 | 1 place, 11 lines | 0.16 s |
 | Base 64 encoder | `requires cap >= 4 * ((n + 2) / 3)`; `returns 4 * ((n + 2) / 3)`; `ensures out[0 .. 4 * ((n + 2) / 3)] = base64(input)` | 197 | 1 place, 12 lines | 12 s |
-| the Internet checksum (RFC 1071) | `ensures r == checksum(input) if n < 562949953421312`, else NO; no `requires`; no `trace` line: its timing does not depend on the bytes | 88 | 1 place, 9 lines | 0.25 s |
+| the Internet checksum (RFC 1071) | `ensures r == checksum(input) if n < 562949953421312`, else NO; no `requires`; `trace depends on n`: its trace does not depend on the bytes | 88 | 1 place, 9 lines | 0.25 s |
 
 What is shown of BLAKE3, from the bytes (`python3 check_all.py`, of the objects an assembler makes of the
 sources: 18 functions, 3,831 instructions, 19 s):
@@ -163,10 +164,14 @@ and the public contract (above), which is all of the contracts a reader need rea
 any contract means; here: `out`, `input` and `key` do not overlap; then the 32 bytes at `out` are the
 hash's eight words as bytes, each word's lowest byte first, of the key's bytes read the same way, the flags
 and the input; it uses that much stack and no more; it runs SSE4.1 instructions, and AVX-512 instructions
-only where `plat` is 5; and, since the contract has no `trace` line, which instructions it runs and which
-addresses it touches depend on the numbers it is given (`len`, `flags`, `plat`), not on the bytes of the key
-or the input. (`kfn.py` has no way to branch on anything else: a compare of two things that are not both
-numbers is refused, and an address is a region and a number. No test changes the code to branch on a byte.)
+only where `plat` is 5; and, by its `trace` line, which instructions it runs and which addresses it
+touches depend on the three numbers it is given (`len`, `flags`, `plat`) and on nothing else: not on the
+bytes of the key or the input. (`kfn.py` has no way to branch on anything else: a compare of two things that
+are not both numbers is refused, and an address is a region and a number. No test changes the code to
+branch on a byte. A number, in this verifier, is always something the trace may depend on: it does not
+tell a number that `trace depends on` names from one that it does not, so `check_binary.py` refuses a
+public contract that leaves a number out. `LANGUAGE.md`, part 2, says what the line means; the verifier
+in `../proof-core` tells the two apart.)
 
 - `ode.py` (694 lines) reads the text and evaluates it over an algebra of words. On numbers: the official
   vectors, at every length, for the hash, the keyed hash and key derivation.
@@ -529,9 +534,9 @@ that is no way to compute anything.
   inside the group should join them (not tried); a verifier that joined paths that end alike would do it
   for every program.
 - *The Internet checksum*: nothing in the languages (written with the verifier frozen, accepted on its
-  first run). Its contract has no `trace` line: no branch and no address depends on the bytes, though every
-  byte goes into the result, and the verifier shows it (it refuses Adler-32 without the line; the storing
-  encoder and the varint have none either). And the verifier
+  first run). Its `trace` line names the count alone: no branch and no address depends on the bytes, though
+  every byte goes into the result, and the verifier shows it (it refuses Adler-32 where the line does not
+  name the input; the lines of the storing encoder and of the varint name numbers alone too). And the verifier
   did arithmetic its author had wrong: I wrote `requires n < 2^32` with four folds of the carries; a
   changed specification with three folds was accepted (three do suffice below 2^32), and so was `n < 2^49`
   with four (the sum then still fits 64 bits, and four folds bring any such sum within 16). The contract
@@ -574,14 +579,14 @@ searched for; with `--search`, the times of the table further down):
 
 | file | bytes | functions | verified in |
 |---|---|---|---|
-| `adler32/odeadler32.o` | 10,432 | 3 | 0.04 s |
-| `lz4/odelz4.o` | 28,864 (3,088 of code) | 3 | 0.3 s |
-| `varint/odevarint.o` | 3,120 | 1 | 0.01 s |
-| `utf8/odeutf8.o` | 6,744 | 1 | 0.03 s |
-| `base64/odebase64.o` | 6,368 | 1 | 1.7 s |
-| `inet/odeinet.o` | 5,304 | 1 | 0.01 s |
-| `common/odecommon.o` | 2,752 | 1 | under 0.01 s |
-| `frame/odeframe.o` (a function and the two it calls) | 21,920 (1,936 of code) | 3 | 0.25 s |
+| `adler32/odeadler32.o` | 10,280 | 3 | 0.04 s |
+| `lz4/odelz4.o` | 28,608 (3,088 of code) | 3 | 0.3 s |
+| `varint/odevarint.o` | 2,976 | 1 | 0.01 s |
+| `utf8/odeutf8.o` | 6,752 | 1 | 0.03 s |
+| `base64/odebase64.o` | 6,344 | 1 | 1.7 s |
+| `inet/odeinet.o` | 5,328 | 1 | 0.01 s |
+| `common/odecommon.o` | 2,760 | 1 | under 0.01 s |
+| `frame/odeframe.o` (a function and the two it calls) | 21,832 (1,936 of code) | 3 | 0.25 s |
 | `programs/lz4-rust/main.rs` linked with `odelz4.o` (rustc 1.99.1) | 4,582,912 | 3 | (remade November 16; not timed: the machine was busy) |
 | the same after `strip` | 378,520 | 3, found by their bytes | |
 | each of the eight as a shared object (GNU ld 2.46) | 15,152 to 38,320 | all | each meets its contracts |
@@ -1033,7 +1038,7 @@ Python's `int`).
 
     contract ode_decimal(input: n bytes, n: number) {
         returns if failed(decimal(input)) then NO else decimal(input)
-        trace depends on input
+        trace depends on input, n
         stack 56
     }
 
@@ -1335,12 +1340,12 @@ specification. (The hash above does not use them: it has no stack.)
 
 | file | lines | what it is |
 |---|---|---|
-| `blake3.spec` | 185 | the specification (147 lines), and the public contract: that of the function a user calls |
-| `LANGUAGE.md` | 157 | what a specification's text means and what a contract means: one page in two parts, the same for every program |
+| `blake3.spec` | 186 | the specification (147 lines), and the public contract: that of the function a user calls |
+| `LANGUAGE.md` | 185 | what a specification's text means and what a contract means: one page in two parts, the same for every program |
 | `../DESIGN.md` | | the design (it was a page of this folder, 175 lines, when this table was made) |
-| `proofs/inner.spec`, `proofs/*.json` | 185 | the inner contracts (of the functions inside), the layouts of two records; the wide kernels' and `merge`'s places |
+| `proofs/inner.spec`, `proofs/*.json` | 208 | the inner contracts (of the functions inside), the layouts of two records; the wide kernels' and `merge`'s places |
 | `hash.ode`, `glue/*.S` | 332 | the hash written to be proved; the assembly the Ode compiler prints of it (and of the stack's three functions) |
-| `b3hashr.o` | | the binary: 80,920 bytes, the specification and the proof in it |
+| `b3hashr.o` | | the binary: 81,680 bytes, the specification and the proof in it |
 | `VERIFY.md`, `verify.py` | 100 + 95 | the reader's page; one command: the contract, the verification, and which files of this folder ran to reach it (their lines and digests) |
 | `check_binary.py` | 140 | what a reader runs on the binary, or on what a linker made of it |
 | `programs/` | | six other programs (Sigil a specification only): each its specification and public contract, its Ode source, the compiler's assembly, its proof, a harness for the processor; `check_programs.py`, `test_specs.py`, `bench.c`; `blake3-rust/` |
@@ -1470,7 +1475,7 @@ an 8-bit `or` read as 32 bits.
 
 ## What it rests on (what a reader relies on or checks)
 
-- The specification and the public contract (`blake3.spec`, 185 lines; for another program, its own
+- The specification and the public contract (`blake3.spec`, 186 lines; for another program, its own
   `.spec`), with what they mean (`LANGUAGE.md`), and the programs that read them and the
   bytes: for the hash `ode.py`, `kspec.py`, `klin.py`, `kdecode.py`, `kterms.py`, `kfn.py` (and the
   drivers; since November 17, when the kernels' own verifiers went: `verify.py` lists them, 3,072 lines of code); for the programs of `programs/`, `kbyte.py` in place of the last four: 910 more;

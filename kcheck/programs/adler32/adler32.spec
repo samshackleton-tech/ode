@@ -14,7 +14,7 @@ def adler32(bytes) { 65536 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)] }
 // The public contract (what a contract means: LANGUAGE.md, part 2).
 contract ode_adler32(input: len bytes, len: number) {
     returns adler32(input)
-    trace depends on input
+    trace depends on input, len
     stack 40
 }
 
@@ -22,13 +22,13 @@ contract ode_adler32(input: len bytes, len: number) {
 // way to make it fast. The specification above is not changed for it.
 contract ode_adler32_blocks(input: len bytes, len: number) {
     returns adler32(input)
-    trace depends on input
+    trace depends on input, len
     stack 56
 }
 
 // The same again, of the function that takes four bytes a turn within a block (blocks4.ode).
 contract ode_adler32_blocks4(input: len bytes, len: number) {
     returns adler32(input)
-    trace depends on input
+    trace depends on input, len
     stack 56
 }

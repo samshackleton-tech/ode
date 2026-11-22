@@ -1,12 +1,14 @@
 // The 32-way AVX-512 kernel of the hash, entered where lane i gets the counter t + i (the function is in
 // ../../../kcheck/b3hashr.o): thirty-two chunks at once, each of n blocks. This is the entry the hash
-// calls. As in ../../../kcheck/proofs/inner.spec there is no `trace` line: which instructions run and
-// which addresses are touched depend on no byte of the blocks or of the key. (The addresses the table
-// `inputs` holds are numbers given, as n is: the trace depends on them.)
+// calls. As in ../../../kcheck/proofs/inner.spec the trace depends on n and on nothing else that is given:
+// which instructions run and which addresses are touched depend on no byte of the blocks or of the key,
+// and not on the counter or on the four bytes of `packed`. (The addresses the table `inputs` holds are
+// read as addresses, so they show: a table is never hidden.)
 contract blake3_servil_avx512_k32(inputs: 32 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 32 cvs) {
     requires n >= 1
     requires no_overlap(inputs, key, out)
     ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32
+    trace depends on n
     stack 4096
     needs avx512
 }

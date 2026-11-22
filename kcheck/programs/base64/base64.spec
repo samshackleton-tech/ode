@@ -31,6 +31,6 @@ contract ode_base64(out: cap bytes, cap: number, input: n bytes, n: number) {
     requires cap >= 4 * ((n + 2) / 3)
     returns 4 * ((n + 2) / 3)
     ensures out[0 .. 4 * ((n + 2) / 3)] = base64(input)
-    trace depends on input
+    trace depends on input, cap, n
     stack 120
 }

@@ -16,11 +16,12 @@ Lean is new here. The test keeps what those functions will rely on:
 
 The function, its contract and the kept proof are shown; with the contract or the function changed in one
 place, so that what is stated is false, nothing is shown, and each case names what the verifier then
-refuses or what it lacks. Three changed functions that still meet the contract are shown. One true
-statement is refused, and is kept here as a limit: without `trace depends on kf` the flags are hidden,
-and the verifier accepts a call only where no register the called function is given may depend on
-something hidden. (The kernel's instructions and the addresses it touches do not depend on its flags;
-the kernel's contract does not say so today, because a number in a register is not hidden today.)"""
+refuses or what it lacks. Three changed functions that still meet the contract are shown.
+
+The contract has no `trace` line: the record is hidden, the key and the flags. The flags are read from it
+into a register and given to the kernel, whose contract hides its flags. (Until a number given in a
+register could be hidden, this contract had to say `trace depends on kf`, and the statement without that
+line, true as it was, was refused: it was kept here as a limit.)"""
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 KCHECK = os.path.join(HERE, "..", "kcheck")
@@ -30,7 +31,7 @@ import built, lean_verify, odec, prove, statement
 KEYED = os.path.join(HERE, "examples", "keyed")
 NAME, SSE41 = "ode_keyed", "blake3_servil_compress_in_place_sse41"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), SSE41), (os.path.join(KEYED, "odekeyed.o"), NAME)]
-CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "hidden m",
+CONTRACT = ["arg out inout 32", "arg m fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs sse41", "hidden m", "hidden kf",
             "ensuresw out (call bytes_of (call compress (call words (slice (name kf) (num 0) (num 32))) (call words (name m)) "
             "(call counter (num 0)) (num 64) (call number.le (slice (name kf) (num 32) (num 40)))))",
             "stack 64"]
@@ -39,7 +40,7 @@ FOLLOW = "refused: the specification's words are not followed on the terms the f
 NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
 NOT_KNOWN = "refused: a called function is given to write what is not whole words of a run this function may read and write, each of them known"
 STACK = "refused: a call needs more stack than this function's contract allows"
-SECRET = "refused: at a call, something the called function's contract asks not to depend on a secret may depend on one"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 ARGS = "refused: what a called function's contract says of its arguments is not followed"
 NOT_WORDS = "refused: sixteen bytes that are not four words of the run"
 READ8 = "refused: a read of a run of a fixed count that is not eight bytes within it: not here yet"
@@ -206,15 +207,19 @@ class Verify(unittest.TestCase):
             with self.subTest(what=what):
                 self.assertEqual(last_word(self.changed(old, new)), "shown", what)
 
-    def test_limits_a_true_statement_is_refused(self):
-        """Without `trace depends on kf` the record is hidden, and so are the flags read from it. The
-        statement is still true: which instructions the kernel runs and which addresses it touches do not
-        depend on its flags. The verifier refuses the call, because a register the called function is
-        given may then depend on something hidden."""
-        change = once("    trace depends on kf\n", "")
-        self.assertIn("hidden kf", statement.statement(spec_text(change), FUNCTIONS))
-        self.assertFalse(lean_verify.verify(spec_text(change), FUNCTIONS, self.kept())[0])
-        self.assertEqual(last_word(FUNCTIONS, change), SECRET)
+    def test_the_trace(self):
+        """The record is hidden (`hidden kf`), and so are the flags read from it: the function is shown, since
+        it only hands the flags to the kernel, whose contract hides them. Changed so that one instruction more
+        is run where the flags are 0, it is refused; the same changed function is shown against a contract
+        that says the trace may depend on the record. And the function as it is meets that weaker contract."""
+        self.assertIn("hidden kf", statement.statement(spec_text(), FUNCTIONS))
+        named = once("    stack 64\n    needs sse41\n}\n", "    trace depends on kf\n    stack 64\n    needs sse41\n}\n")
+        self.assertNotIn("hidden kf", statement.statement(spec_text(named), FUNCTIONS))
+        jump = self.changed("  mov r8, qword ptr [rdx + 32]\n", "  mov r8, qword ptr [rdx + 32]\n  cmp r8, 0\n  je @none\n  mov rax, rax\n@none:\n")
+        self.assertFalse(lean_verify.verify(spec_text(), jump, self.kept())[0])
+        self.assertEqual(last_word(jump), JUMP)
+        self.assertEqual(last_word(jump, named), "shown")
+        self.assertEqual(last_word(FUNCTIONS, named), "shown")
 
 
 if __name__ == "__main__":

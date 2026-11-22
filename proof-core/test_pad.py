@@ -10,11 +10,12 @@ The function is `b3l_pad` as it lies in ../kcheck/b3hashr.o: 39 instructions. It
         requires no_overlap(block, src)
         requires n <= 64
         ensures block = padded(src)
+        trace depends on n
         stack 48
     }
 
-It has no `trace depends on` line: which instructions run and which addresses are touched depend on `n` and
-on no byte of `src`. So the statement says `hidden src`, and the verifier shows that too.
+`trace depends on n`: which instructions run and which addresses are touched depend on `n` and on no byte
+of `src`. So the statement says `hidden src`, and the verifier shows that too.
 
 What it exercises that no function before it did:
 
@@ -184,8 +185,10 @@ class Pad(unittest.TestCase):
         self.assertEqual(lean_verify.verify(spec_text(), [(again, PAD)], self.kept), (True, "shown"))
 
     def test_the_trace(self):
-        # the contract may say the trace depends on the run: it promises less, and is shown too
-        self.assertEqual(last_word(spec=once("    stack 48\n", "    stack 48\n    trace depends on src\n")), "shown")
+        # the contract may say the trace depends on the run too: it promises less, and is shown too
+        self.assertEqual(last_word(spec=once("    trace depends on n\n", "    trace depends on n, src\n")), "shown")
+        # without the line the count is hidden, and the loop goes round by it: a false statement, refused
+        self.assertEqual(last_word(spec=once("    trace depends on n\n", "")), "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it")
 
 
 if __name__ == "__main__":

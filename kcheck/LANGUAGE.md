@@ -143,12 +143,24 @@ way. Both are the language's own (part 1) and a specification may not define the
 - The registers the calling convention says a callee keeps are as they were.
 - It has run no instructions but those every x86-64 processor has, and those a `needs` line names
   (`needs F if C`: only where C holds). That the processor has them is the caller's to know.
-- Which instructions it ran, and which addresses it touched, depend on the numbers it was given and not on the
-  bytes in memory: unless a line `trace depends on X` says they may depend on the bytes at X.
+- Which instructions it ran, and which addresses it touched, depend on the addresses it was given and on
+  what a line `trace depends on X, ...` names, and on nothing else: not on another number it was given, not
+  on a byte in memory, and not on what its caller left in a register that holds no argument. X is a
+  number among the arguments, or something at an address among them: the bytes there. With no such line
+  they depend on the addresses given alone.
+
+So everything a function is given is hidden from its trace unless the contract names it. (An address
+given is never hidden: the function reads or writes there, so the address shows. A table of addresses is
+read as addresses: what it holds shows too.) A count that a loop goes round by, or a number that chooses
+between two ways through the function, must be named; a number that is only stored, or handed on to a
+function that hides it, need not be.
 
 The trace property speaks of which instructions run and which addresses are touched. How long an instruction
 takes on its operands, and every other effect of the processor, lie outside it: a promise about those needs
-an account and assumptions of its own. A verification reports the property that was shown, by this name.
+an account and assumptions of its own. Nor does it speak of what a function leaves behind in registers and
+in its dead stack: between functions written in Ode, a function may rely only on what a contract says
+about a register (its own contract at its entry, the called function's after a call). A verification
+reports the property that was shown, by this name.
 
 A function that does more, or promises less, says so in its contract. Silence always means the stronger
 thing.
@@ -161,3 +173,13 @@ failing input through it: `returns if failed(lz4(input)) then NO else ...`.
 shows all of the above from the binary's bytes, for everything the `requires` lines allow, or it refuses.
 The contracts of the functions inside (proofs/inner.spec) are steps of that showing, in the same form, with
 two lines of their own (`decreases`, `calls`); a reader need not read them.
+
+One thing this folder's verifier does not tell apart: a number that `trace depends on` names from one
+that it does not. It takes every number given as one the trace may depend on, and shows that the trace
+depends on no byte in memory but those named. So that its "shown" is of what the contract says,
+check_binary.py and check_file.py refuse a public contract that leaves a number it is given out of
+`trace depends on`. Of an inner contract that leaves one out, this verifier shows the rest. The verifier
+in `../proof-core` tells the two apart: there a number that is not named is marked as a secret is, and a
+jump or an address that depends on it is refused. It also requires one thing more than this page does: the
+number a function returns must be made of nothing hidden (so `ode_far`, which adds 2^63 to a number and
+branches on nothing, has to name that number there). Whether a contract should say that is not decided.

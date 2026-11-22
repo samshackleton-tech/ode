@@ -2,7 +2,7 @@
 // message's bytes from 16 on, with zeros after them to 64 bytes, as ../../../kcheck/blake3.spec defines
 // `padded`. The message has 17 to 80 bytes. (With 16 bytes the statement would still be true, and the
 // verifier in Lean refuses it: the address `src + 16` could then be 2^64, one past the last address, and
-// its rule for an addition asks that the sum stay below 2^64.) There is no `trace` line: which
+// its rule for an addition asks that the sum stay below 2^64.) `trace depends on len`: which
 // instructions run depends on the length, and on no byte of the message.
 layout tailrec 96 { h: cv at 0, block: 64 bytes at 32 }
 
@@ -11,5 +11,6 @@ contract ode_tail(r: tailrec, src: len bytes, len: number) {
     requires len >= 17
     requires len <= 80
     ensures r = {h: r.h, block: padded(src[16 .. len])}
+    trace depends on len
     stack 64
 }

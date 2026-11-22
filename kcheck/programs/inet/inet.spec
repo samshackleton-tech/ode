@@ -28,7 +28,7 @@ const NO = 18446744073709551615
 
 // =========================================================================================================
 // The public contract (what a contract means: LANGUAGE.md, part 2). There is no `requires`: of 2^49 bytes or more,
-// whose plain sum might not fit 64 bits, it says NO and reads none. There is no `trace` line: which
+// whose plain sum might not fit 64 bits, it says NO and reads none. `trace depends on n`: which
 // instructions run and which addresses are touched depend on n, and not on the bytes.
 //
 // (The second and third lines are one line, said for a sum that is 0 and for one that is not: the verifier
@@ -38,5 +38,6 @@ contract ode_inet(input: n bytes, n: number) {
     ensures r == NO if n >= 562949953421312
     ensures r == checksum(input) if n < 562949953421312 && total(input) == 0
     ensures r == checksum(input) if n < 562949953421312 && total(input) != 0
+    trace depends on n
     stack 40
 }

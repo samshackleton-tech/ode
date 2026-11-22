@@ -100,6 +100,7 @@ def main():
             by_proof = "--search" not in sys.argv and any(n.endswith(".arith.z") for n in proof["files"])
             try:
                 klin.Facts.PROOFS = (varith.unpack(arith) if arith is not None else {}) if by_proof else None
+                if symbol in public: kbyte.public(spec, symbol)          # what "shown" is said of names every number it is given
                 calls[symbol] = kbyte.check(rows, spec, symbol, places)["calls"]
             except (ValueError, KeyError, IndexError, TypeError) as err:
                 if not by_proof: raise

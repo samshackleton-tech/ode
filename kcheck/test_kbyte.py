@@ -23,8 +23,11 @@ class Program:
         if os.path.exists(os.path.join(HERE, "programs", folder, name + ".inner")): self.spec += "\n" + text(folder, name + ".inner")   # the contracts of what it calls
         if os.path.exists(os.path.join(HERE, "programs", folder, folder + ".lemmas")): self.spec += "\n" + text(folder, folder + ".lemmas")   # lemmas about the definitions
         shutil.rmtree(self.dir)
-    def verdict(self, spec=None, proof=None, rows=None):
-        try: kbyte.check(rows or self.rows, ode.Spec(spec or self.spec), self.symbol, self.proof if proof is None else proof); return "accepted"
+    def verdict(self, spec=None, proof=None, rows=None, public=False):
+        """`public`: as the tools say of a public contract (it must name every number it is given: kbyte.public)."""
+        try:
+            if public: kbyte.public(ode.Spec(spec or self.spec), self.symbol)
+            kbyte.check(rows or self.rows, ode.Spec(spec or self.spec), self.symbol, self.proof if proof is None else proof); return "accepted"
         except (kterms.Fail, ode.Err) as e: return f"refused: {e}"
     def changed(self, test, what, changes):
         whole = self.spec if what == "spec" else self.proof
@@ -42,17 +45,18 @@ class Adler32(unittest.TestCase):
         self.assertEqual(self.p.verdict(), "accepted")
 
     def test_a_branch_on_the_bytes_must_be_said(self):
-        line = "    trace depends on input\n    stack 40"
+        line = "    trace depends on input, len\n    stack 40"
         self.assertEqual(self.p.spec.count(line), 1)
-        v = self.p.verdict(spec=self.p.spec.replace(line, "    stack 40"))
-        self.assertTrue(v.startswith("refused: a branch that depends on bytes in memory"), v)
+        for less in ("    trace depends on len\n    stack 40", "    stack 40"):
+            v = self.p.verdict(spec=self.p.spec.replace(line, less))
+            self.assertTrue(v.startswith("refused: a branch that depends on bytes in memory"), v)
 
     def test_a_changed_specification_or_contract_is_refused(self):
         self.p.changed(self, "spec", [("s[0] = 1 ", "s[0] = 0 "), ("s[0] = 0 ", "s[0] = 1 "), ("(s[i] + bytes[i]) % 65521", "(s[i] + bytes[i]) % 65520"),
                                       ("(s[i] + bytes[i]) % 65521", "(s[i] + bytes[i] + 1) % 65521"), ("s1(bytes)[i + 1]) % 65521", "s1(bytes)[i]) % 65521"),
                                       ("65536 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)]", "65536 * s1(bytes)[len(bytes)] + s2(bytes)[len(bytes)]"), ("65536 * s2", "65535 * s2"),
                                       ("s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)]", "s2(bytes)[len(bytes)] + s1(bytes)[len(bytes) - 1]"), ("stack 40", "stack 39"),
-                                      ("returns adler32(input)\n    trace depends on input\n    stack 40", "returns adler32(input) + 1\n    trace depends on input\n    stack 40")])
+                                      ("returns adler32(input)\n    trace depends on input, len\n    stack 40", "returns adler32(input) + 1\n    trace depends on input, len\n    stack 40")])
 
     def test_a_changed_proof_is_refused(self):
         self.p.changed(self, "proof", [("    fact i <= len\n", ""), ("fact i <= len", "fact i <= len + 1"), ("r12 = s1(input)[i]", "r12 = s2(input)[i]"), ("r13 = s2(input)[i]", "r13 = s2(input)[i + 1]"),
@@ -88,12 +92,12 @@ class Adler32Blocks(unittest.TestCase):
 
     def test_a_changed_specification_or_contract_is_refused(self):
         head = "contract ode_adler32_blocks(input: len bytes, len: number) {\n"
-        whole = head + "    returns adler32(input)\n    trace depends on input\n    stack 56\n}"
+        whole = head + "    returns adler32(input)\n    trace depends on input, len\n    stack 56\n}"
         self.p.changed(self, "spec", [
             ("s[0] = 1 ", "s[0] = 0 "), ("s[0] = 0 ", "s[0] = 1 "), ("(s[i] + bytes[i]) % 65521", "(s[i] + bytes[i]) % 65520"), ("(s[i] + bytes[i]) % 65521", "(s[i] + bytes[i]) % 65536"),
             ("(s[i] + s1(bytes)[i + 1]) % 65521", "(s[i] + s1(bytes)[i]) % 65521"), ("(s[i] + s1(bytes)[i + 1]) % 65521", "(s[i] + s1(bytes)[i + 1]) % 65522"),
             ("65536 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)]", "65536 * s1(bytes)[len(bytes)] + s2(bytes)[len(bytes)]"), ("65536 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)]", "65535 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)]"),
-            (whole, whole.replace("returns adler32(input)", "returns adler32(input) + 1")), (whole, whole.replace("    trace depends on input\n", "")), (whole, whole.replace("stack 56", "stack 48"))])
+            (whole, whole.replace("returns adler32(input)", "returns adler32(input) + 1")), (whole, whole.replace("trace depends on input, len", "trace depends on len")), (whole, whole.replace("stack 56", "stack 48"))])
 
     def test_a_changed_proof_is_refused(self):
         lines, needless = self.p.proof.split("\n"), []
@@ -184,7 +188,7 @@ class Lz4Decode(unittest.TestCase):
             ("&& len(lz4(input)) <= cap", "&& len(lz4(input)) <= cap + 1"), ("|| len(lz4(input)) > cap then", "|| len(lz4(input)) >= cap then"), ("|| len(lz4(input)) > cap then", "|| len(lz4(input)) > cap + 1 then"),
             ("returns if failed(lz4(input)) || len(lz4(input)) > cap then NO", "returns if failed(lz4(input)) then NO"), ("returns if failed(lz4(input)) || len(lz4(input)) > cap then NO", "returns if len(lz4(input)) > cap then NO"),
             ("if !failed(lz4(input)) && len(lz4(input)) <= cap", "if !failed(lz4(input))"), ("if !failed(lz4(input)) && len(lz4(input)) <= cap", "if len(lz4(input)) <= cap"),
-            ("    requires n < 72057594037927936\n", ""), ("    trace depends on input\n    stack 104", "    stack 104"), ("stack 104", "stack 96"), ("    requires no_overlap(out, input)\n    requires n <", "    requires n <"),
+            ("    requires n < 72057594037927936\n", ""), ("    trace depends on input, cap, n\n    stack 104", "    trace depends on cap, n\n    stack 104"), ("stack 104", "stack 96"), ("    requires no_overlap(out, input)\n    requires n <", "    requires n <"),
             ("ode_lz4_decode(out: cap bytes, cap: number, input: n bytes", "ode_lz4_decode(out: cap bytes, cap: number, input: cap bytes"), ("ode_lz4_decode(out: cap bytes, cap: number, input: n bytes", "ode_lz4_decode(out: n bytes, cap: number, input: n bytes")])
 
     def test_a_proof_without_one_of_its_lines_is_refused(self):
@@ -235,7 +239,7 @@ class Frame(unittest.TestCase):
 
     def test_no_line_of_the_public_contract_can_go(self):
         for line in ("    requires no_overlap(out, input)\n    requires n < 72057594037927936\n    requires cap < NO\n", "    requires n < 72057594037927936\n    requires cap < NO\n",
-                     "    requires cap < NO\n", "    trace depends on input\n    stack 184\n"):
+                     "    requires cap < NO\n", "    trace depends on input, cap, n\n    stack 184\n"):
             self.assertEqual(self.p.spec.count(line), 1, line)
             first = line.split("\n")[0] + "\n"
             v = self.p.verdict(spec=self.p.spec.replace(line, line[len(first):]))
@@ -285,7 +289,7 @@ class Frame(unittest.TestCase):
     def test_a_callee_is_used_by_its_contract_and_nothing_else(self):
         """What the caller is shown to do rests on each line of the contracts of what it calls: with one weaker, or
         one that asks more, or one that says another thing, the caller is refused."""
-        dec = "returns if failed(lz4(input)) || len(lz4(input)) > cap then NO else len(lz4(input))\n    ensures out[0 .. len(lz4(input))] = lz4(input) if !failed(lz4(input)) && len(lz4(input)) <= cap\n    trace depends on input\n    stack 104"
+        dec = "returns if failed(lz4(input)) || len(lz4(input)) > cap then NO else len(lz4(input))\n    ensures out[0 .. len(lz4(input))] = lz4(input) if !failed(lz4(input)) && len(lz4(input)) <= cap\n    trace depends on input, cap, n\n    stack 104"
         self.assertEqual(self.p.spec.count(dec), 1)
         sums = "contract ode_adler32_blocks4(input: len bytes, len: number) {\n    returns adler32(input)\n"
         self.assertEqual(self.p.spec.count(sums), 1)
@@ -293,7 +297,7 @@ class Frame(unittest.TestCase):
                          (dec, dec.replace("then NO else", "then 0 else")), (dec, dec.replace("else len(lz4(input))\n", "else len(lz4(input)) + 1\n")),
                          (dec, dec.replace("> cap then", ">= cap then")), (dec, dec.replace("|| len(lz4(input)) > cap then", "then")), (dec, dec.replace("ensures out[0 .. len(lz4(input))] = lz4(input) if !failed", "ensures out[0 .. len(lz4(input))] = lz4(input) if failed")),
                          (dec, dec.replace("stack 104", "stack 105")),                                                                                               # the decoder may use more stack
-                         (dec, "returns r\n    trace depends on input\n    writes out\n    stack 104"),                                                             # nothing said of the result
+                         (dec, "returns r\n    trace depends on input, cap, n\n    writes out\n    stack 104"),                                                             # nothing said of the result
                          ("    requires n < 72057594037927936\n    returns if failed(lz4", "    requires n < 72057594037927931\n    returns if failed(lz4"),      # the decoder asks more than the caller shows (n - 4 < 2^56 - 4 it does show)
                          ("    requires n < 72057594037927936\n    returns if failed(lz4", "    requires n < 72057594037927936\n    requires cap >= 1\n    returns if failed(lz4"),
                          (sums, sums.replace("adler32(input)", "adler32(input) + 1")), (sums, sums.replace("returns adler32(input)", "returns r")),
@@ -473,7 +477,7 @@ class Lz4Store(unittest.TestCase):
         self.assertEqual(self.p.verdict(), "accepted")
 
     def test_a_changed_specification_or_contract_is_refused(self):
-        after = "\n    writes out\n    stack 88"
+        after = "\n    writes out\n    trace depends on cap, n\n    stack 88"
         room = "\n    ensures r != NO if cap >= n + n / 255 + 16" + after
         self.p.changed(self, "spec", [
             ("{value: sum + bytes[at], next: at + 1}", "{value: sum + bytes[at] + 1, next: at + 1}"), ("{value: sum + bytes[at], next: at + 1}", "{value: sum + bytes[at], next: at + 2}"),
@@ -491,7 +495,7 @@ class Lz4Store(unittest.TestCase):
             # when it does not give NO: no less room than it needs will do (15 bytes need 17), and not the other answer
             (room, "\n    ensures r != NO if cap >= n + n / 255 + 1" + after), (room, "\n    ensures r != NO if cap >= n + 16" + after), (room, "\n    ensures r != NO if cap >= n + n / 256 + 2" + after),
             (room, "\n    ensures r != NO" + after), (room, "\n    ensures r == NO if cap >= n + n / 255 + 16" + after),
-            ("    writes out\n    stack 88", "    stack 88"), ("stack 88", "stack 80")])
+            ("    writes out\n    trace depends on cap, n\n", "    trace depends on cap, n\n"), ("stack 88", "stack 80")])
 
     def test_a_proof_without_one_of_its_lines_is_refused(self):
         lines, needless = self.p.proof.split("\n"), []
@@ -518,8 +522,8 @@ class Lz4Pack(unittest.TestCase):
         self.assertEqual(self.p.verdict(), "accepted")
 
     def test_a_changed_specification_or_contract_is_refused(self):
-        tail = "\n    ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    trace"
-        room, after = "\n    ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    trace", "\n    writes out\n    trace"
+        tail = "\n    ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    trace depends on input"
+        room, after = "\n    ensures r != NO if cap >= n + n / 255 + 16\n    writes out\n    trace depends on input", "\n    writes out\n    trace depends on input"
         self.p.changed(self, "spec", [
             ("{value: sum + bytes[at], next: at + 1}", "{value: sum + bytes[at] + 1, next: at + 1}"), ("counted(bytes, at + 1, sum + 255)", "counted(bytes, at + 1, sum + 254)"), ("if bytes[at] < 255 then", "if bytes[at] < 254 then"),
             ("if first < 15 then {value: first, next: at} else counted(bytes, at, 15)", "if first < 14 then {value: first, next: at} else counted(bytes, at, 15)"),
@@ -538,7 +542,7 @@ class Lz4Pack(unittest.TestCase):
             ("ensures lz4(out[0 .. r]) == input if r != NO" + tail, "ensures lz4(out[0 .. r]) == input" + tail),
             ("ensures lz4(out[0 .. r]) == input if r != NO" + tail, "ensures lz4(out[0 .. r + 1], n) == input if r != NO" + tail),
             ("    requires d >= 1\n", ""), ("    requires d <= 65535\n", ""), ("requires d <= 65535", "requires d <= 65536"),
-            ("    trace depends on input\n    stack 120", "    stack 120"), ("stack 120", "stack 112"), ("    requires cap < NO\n    requires d", "    requires d"),
+            ("    trace depends on input, cap, n, d\n    stack 120", "    trace depends on cap, n, d\n    stack 120"), ("stack 120", "stack 112"), ("    requires cap < NO\n    requires d", "    requires d"),
             # when it does not give NO: no less room will do (15 bytes that do not repeat need 17), and not the other answer
             (room, "\n    ensures r != NO if cap >= n + n / 255 + 1" + after), (room, "\n    ensures r != NO if cap >= n + 16" + after), (room, "\n    ensures r != NO if cap >= n + n / 256 + 16" + after),
             (room, "\n    ensures r != NO" + after), (room, "\n    ensures r == NO if cap >= n + n / 255 + 16" + after)])
@@ -595,7 +599,7 @@ class Utf8(unittest.TestCase):
             (rest, rest.replace("count + 1)", "count + 2)")), (rest, rest.replace("then count else", "then count + 1 else")),
             ("def utf8(bytes) { points(bytes, 0, 0) }", "def utf8(bytes) { points(bytes, 0, 1) }"),
             (result, "returns utf8(input)"), (result, result + " + 1"), (result, result.replace("then NO", "then 0")),
-            ("    trace depends on input\n", ""), ("stack 88", "stack 80")])
+            ("trace depends on input, n", "trace depends on n"), ("stack 88", "stack 80")])
 
     def test_a_proof_without_one_of_its_lines_is_refused(self):
         lines, needless = self.p.proof.split("\n"), []
@@ -658,7 +662,7 @@ class Base64(unittest.TestCase):
             ("    requires no_overlap(out, input)\n", ""), ("    requires cap >= 4 * ((n + 2) / 3)\n", ""), ("requires cap >= 4 * ((n + 2) / 3)", "requires cap >= 4 * ((n + 2) / 3) - 1"), ("requires cap >= 4 * ((n + 2) / 3)", "requires cap >= 4 * (n / 3)"),
             ("returns 4 * ((n + 2) / 3)", "returns 4 * (n / 3)"), ("returns 4 * ((n + 2) / 3)", "returns 4 * ((n + 2) / 3) + 1"),
             ("ensures out[0 .. 4 * ((n + 2) / 3)] = base64(input)", "ensures out[0 .. 4 * ((n + 2) / 3)] = base64(input) ++ [61]"),
-            ("    trace depends on input\n", ""), ("stack 120", "stack 112")])
+            ("trace depends on input, cap, n", "trace depends on cap, n"), ("stack 120", "stack 112")])
 
     def test_a_proof_without_one_of_its_lines_is_refused(self):
         lines, needless = self.p.proof.split("\n"), []
@@ -669,7 +673,7 @@ class Base64(unittest.TestCase):
 
 
 class Inet(unittest.TestCase):
-    """The Internet checksum. Its contract has no `trace` line: no branch and no address depends on the bytes,
+    """The Internet checksum. Its `trace` line names the count alone: no branch and no address depends on the bytes,
     though every byte goes into the result. And it has no `requires`: where the sum might not fit it says NO.
     The specification says what a one's complement sum is (the plain sum less as many 65535s as leave it from 1
     to 65535); the code folds the carries in four times; the verifier's arithmetic shows they are the same.
@@ -680,7 +684,7 @@ class Inet(unittest.TestCase):
     def test_it_meets_its_contract(self):
         self.assertEqual(self.p.verdict(), "accepted")
         contract = self.p.spec.split("contract ode_inet")[1]
-        self.assertNotIn("trace", contract); self.assertNotIn("requires", contract)
+        self.assertIn("    trace depends on n\n", contract); self.assertNotIn("requires", contract)
 
     def test_a_changed_specification_or_contract_is_refused(self):
         pair = "s[k + 1] = s[k] + 256 * bytes[2 * k] + bytes[2 * k + 1]"
@@ -727,7 +731,21 @@ class Contracts(unittest.TestCase):
             end = next(k for k in range(start, len(lines)) if lines[k].startswith("}"))
             for k in range(start + 1, end):
                 if lines[k].strip().startswith(("requires", "writes", "trace", "needs")):
-                    self.assertTrue(p.verdict(spec="\n".join(lines[:k] + lines[k + 1:])).startswith("refused"), f"ode_{function}: {lines[k].strip()}")
+                    self.assertTrue(p.verdict(spec="\n".join(lines[:k] + lines[k + 1:]), public=True).startswith("refused"), f"ode_{function}: {lines[k].strip()}")
+
+    def test_a_public_contract_names_every_number_it_is_given(self):
+        """kbyte.py takes every number given as one the trace may depend on. So of a public contract that leaves a
+        number out of `trace depends on` the tools do not say `shown` (kbyte.public): kbyte.check alone would
+        show less than such a contract says. Of the same contract as an inner one, kbyte.check says what it has
+        shown: the rest."""
+        p = Program("varint", "varint", "ode_varint")
+        hidden = p.spec.replace("    trace depends on v\n", "")
+        self.assertNotEqual(hidden, p.spec)
+        self.assertEqual(p.verdict(public=True), "accepted")
+        self.assertIn("the contract says the trace does not depend on v", p.verdict(spec=hidden, public=True))
+        self.assertEqual(p.verdict(spec=hidden), "accepted")
+        # a name that is no argument is refused, public or not
+        self.assertIn("is not among its arguments", p.verdict(spec=p.spec.replace("trace depends on v", "trace depends on w")))
 
 
 class Arithmetic(unittest.TestCase):
@@ -807,7 +825,7 @@ class Common(unittest.TestCase):
 
     def test_a_changed_specification_contract_or_proof_is_refused(self):
         self.p.changed(self, "spec", [("if at == len(a) then at else", "if at == len(a) then 0 else"), ("if a[at] != b[at] then at", "if a[at] != b[at] then at + 1"), ("else alike(a, b, at + 1)", "else alike(a, b, at + 2)"),
-                                      ("def common(a, b) { alike(a, b, 0) }", "def common(a, b) { alike(a, b, 1) }"), ("    trace depends on a, b\n", ""), ("trace depends on a, b", "trace depends on a"),
+                                      ("def common(a, b) { alike(a, b, 0) }", "def common(a, b) { alike(a, b, 1) }"), ("trace depends on a, b, n", "trace depends on n"), ("trace depends on a, b, n", "trace depends on a, n"),
                                       ("returns common(a, b)", "returns common(a, b) + 1"), ("stack 40", "stack 32"), ("a: n bytes, b: n bytes, n: number", "a: n bytes, b: n bytes, m: number, n: number")])
         self.p.changed(self, "proof", [("    fact go == 1\n", ""), ("    fact i <= n\n", ""), ("    fact alike(a, b, i) == common(a, b)\n", ""), ("fact alike(a, b, i) == common(a, b)", "fact alike(a, b, i + 1) == common(a, b)"),
                                        ("    decreases n - i\n", ""), ("name i = r13", "name i = r12")])

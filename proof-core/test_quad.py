@@ -37,7 +37,7 @@ NAME, P16 = "ode_quad", "blake3_servil_avx512_p16"
 FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), P16), (os.path.join(QUAD, "odequad.o"), NAME)]
 COMPRESS = ("(call compress (call words (slice (name kf) (num 0) (num 32))) (call words (name {})) (call counter (num 0)) (num 64) "
             "(bin | (call number.le (slice (name kf) (num 32) (num 40))) (call PARENT)))")
-CONTRACT = ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs avx512", "hidden a", "hidden b",
+CONTRACT = ["arg out inout 32", "arg a fixed 64", "arg b fixed 64", "arg kf fixed 40", "mbelow kf 32 256", "needs avx512", "hidden a", "hidden b", "hidden kf",
             "ensuresw out (call bytes_of (call parent (call words (slice (name kf) (num 0) (num 32))) (call number.le (slice (name kf) (num 32) (num 40))) "
             + COMPRESS.format("a") + " " + COMPRESS.format("b") + "))",
             "stack 5280"]
@@ -47,7 +47,6 @@ WORD = "refused: a word of the run is not known to hold what the specification s
 STACK = "refused: a call needs more stack than this function's contract allows"
 LANE = "refused: a lane of a called function's table is not blocks this function may read, every word of them known"
 FRAME = "refused: a called function's table of addresses, or the run it writes, is no part of this function's frame, or the two overlap"
-LEFT = "refused: at the return a general register that a callee does not keep may depend on a secret"
 JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 P = "compress(kf.key, {}, counter(0), 64, kf.flags | PARENT)"
 ENS = f"parent(kf.key, kf.flags, {P.format('a')}, {P.format('b')})"
@@ -113,15 +112,17 @@ SOURCES = [
     ("the first round writes over the table", once("  lea r9, [rsp + 128]\n", "  lea r9, [rsp + 64]\n"), FRAME),
     ("the second round writes over what its lanes read", once("  lea r9, [rsp + 640]\n", "  lea r9, [rsp + 128]\n"), LANE),
     ("out is the first value of the first round", out_from(128), WORD),
-    ("rax is not set to zero at the end", once("  mov rax, 0\n  add rsp, 1160\n", "  add rsp, 1160\n"), LEFT),
+    # (one instruction more is run where the cell holds 1 or more)
     ("a jump on a cell the kernel wrote", once("  mov rax, 0\n  add rsp, 1160\n",
-                                                "  mov rax, qword ptr [rsp + 640]\n  cmp rax, 1\n  jb @skip\n@skip:\n  mov rax, 0\n  add rsp, 1160\n"), JUMP),
+                                                "  mov rax, qword ptr [rsp + 640]\n  cmp rax, 1\n  jb @skip\n  mov rax, 0\n@skip:\n  mov rax, 0\n  add rsp, 1160\n"), JUMP),
 ]
 # Changed functions that still meet the contract: (what is changed, the source changed).
 STILL_TRUE = [
     ("lane 2 reads b: what it leaves is not used", once("  mov rax, rsi\n  mov qword ptr [rsp + 16], rax\n", "  mov rax, rdx\n  mov qword ptr [rsp + 16], rax\n")),
     ("the count of blocks comes by way of another register", first("  mov rsi, 1\n", "  mov rax, 1\n  mov rsi, rax\n")),
     ("the second round's values lie eight bytes further up", then(once("  lea r9, [rsp + 640]\n", "  lea r9, [rsp + 648]\n"), out_from(648))),
+    # (a caller may rely on nothing that a called function leaves in a register: until that was the rule, this was refused)
+    ("rax is not set to zero at the end: it holds bytes of the value", once("  mov rax, 0\n  add rsp, 1160\n", "  add rsp, 1160\n")),
 ]
 # A changed function that still meets the contract and is refused: a limit.
 SECOND_VALUE = out_from(672)

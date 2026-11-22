@@ -7,13 +7,16 @@ def low(a, b) { a % 256 + b % 4294967296 }
 def eighth(a) { a / 8 }
 
 // =========================================================================================================
-// The public contracts (what a contract means: LANGUAGE.md, part 2).
+// The public contracts (what a contract means: LANGUAGE.md, part 2). `trace depends on` names the numbers
+// for the number returned, as in ../far/far.spec.
 contract ode_low(a: number, b: number) {
     returns low(a, b)
+    trace depends on a, b
     stack 0
 }
 
 contract ode_eighth(a: number) {
     returns eighth(a)
+    trace depends on a
     stack 0
 }

@@ -1,5 +1,6 @@
 // The contract of ode_rounds (lowbyte.ode). What it says is mostly in what it does not have: there is no
-// `trace depends on m`. So which instructions run, and which addresses are touched, depend on no byte of `m`.
+// `trace` line. So which instructions run, and which addresses are touched, depend on nothing that is given:
+// on no byte of `m`, and not on the count `n`.
 contract ode_rounds(m: n bytes, n: number) {
     requires n >= 1
     returns 0

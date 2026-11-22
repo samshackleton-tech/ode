@@ -1,13 +1,12 @@
 // The contract of ode_quad (quad.ode). `out` becomes the value of the parent node over two parent nodes: one
 // over the block `a`, one over the block `b`, as ../../../kcheck/blake3.spec defines `parent` and `compress`.
 // The key and the flags are those of the record `kf`.
-// `trace depends on kf`: as in ../keyed/keyed.contract.
+// There is no `trace` line: as in ../keyed/keyed.contract, the trace depends on nothing that is given.
 layout keyed 40 { key: cv at 0, flags: byte at 32 }
 
 contract ode_quad(out: cv, a: block, b: block, kf: keyed) {
     requires no_overlap(out, a, b, kf)
     ensures out = parent(kf.key, kf.flags, compress(kf.key, a, counter(0), 64, kf.flags | PARENT), compress(kf.key, b, counter(0), 64, kf.flags | PARENT))
-    trace depends on kf
     stack 5280
     needs avx512
 }

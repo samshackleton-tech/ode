@@ -29,6 +29,6 @@ const NO = 18446744073709551615
 // Nothing is written.
 contract ode_decimal(input: n bytes, n: number) {
     returns if failed(decimal(input)) then NO else decimal(input)
-    trace depends on input
+    trace depends on input, n
     stack 56
 }

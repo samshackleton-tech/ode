@@ -430,14 +430,17 @@ contract wide_add(out: block, a: block, b: block) {
         self.assertFalse(shown)
 
     def test_a_run_of_bytes_can_be_hidden_and_the_function_is_then_refused(self):
-        """`ode_common` compares the bytes of its two runs and stops at the first that differ: which instructions
-        run depends on the bytes of both. Its contract says so (`trace depends on a, b`). With that line left
-        out, or naming one run only, the contract promises something false: the statement then says the run is
-        hidden, and no proof is found and the kept proof is refused."""
+        """`ode_common` compares the bytes of its two runs and stops at the first that differ, or when it has
+        compared as many bytes as the count says: which instructions run depends on the bytes of both and on
+        the count. Its contract says so (`trace depends on a, b, n`). With that line left out, or naming less,
+        the contract promises something false: the statement then says the run, or the number, is hidden, and
+        no proof is found and the kept proof is refused."""
         obj = os.path.join(COMMON, "odecommon.o")
         kept = os.path.join(HERE, "proofs", "ode_common.proof")
-        for what, old, new, hidden in (("the trace may not depend on the bytes", "    trace depends on a, b\n", "", ["hidden a", "hidden b"]),
-                                       ("the trace may depend on one run only", "trace depends on a, b", "trace depends on a", ["hidden b"])):
+        for what, old, new, hidden in (("the trace may not depend on the bytes", "trace depends on a, b, n", "trace depends on n", ["hidden a", "hidden b"]),
+                                       ("the trace may depend on one run only", "trace depends on a, b, n", "trace depends on a, n", ["hidden b"]),
+                                       ("the trace may not depend on the count", "trace depends on a, b, n", "trace depends on a, b", ["hidden n"]),
+                                       ("no `trace` line", "    trace depends on a, b, n\n", "", ["hidden a", "hidden b", "hidden n"])):
             with self.subTest(what=what):
                 self.assertEqual(self.spec.count(old), 1)
                 spec = self.spec.replace(old, new)
@@ -451,7 +454,7 @@ contract wide_add(out: block, a: block, b: block) {
 
     def test_a_contract_line_the_account_lacks_is_refused(self):
         obj = os.path.join(COMMON, "odecommon.o")
-        self.assertIn("    trace depends on a, b\n", self.spec)
+        self.assertIn("    trace depends on a, b, n\n", self.spec)
         statement.statement(self.spec, [(obj, "ode_common")])                          # as it is: written
         # what the function needs of the processor is carried, a line of the statement (the caller of such a function must say it too: test_call.py)
         self.assertIn("needs sse41", statement.statement(self.spec.replace("    stack 40\n", "    stack 40\n    needs sse41\n"), [(obj, "ode_common")]))

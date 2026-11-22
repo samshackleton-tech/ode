@@ -1,6 +1,7 @@
 // The one-block AVX-512 kernel of the hash (the function is in ../../../kcheck/b3hashr.o). As in
 // ../../../kcheck/proofs/inner.spec, there is no `trace` line: which instructions run and which addresses
-// are touched depend on no byte of h or m.
+// are touched depend on nothing that is given: on no byte of h or m, and not on the length, the counter or
+// the flags.
 contract blake3_servil_compress_in_place_avx512(h: cv, m: block, length: low byte, t: counter, flags: low byte) {
     requires no_overlap(h, m)
     ensures h = compress(h, m, t, length, flags)

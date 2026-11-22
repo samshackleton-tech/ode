@@ -70,6 +70,8 @@ NO_CELL = "refused: sixty-four bytes that are of no run of words given to read"
 NOT_IN_DATA = "refused: the address of a place that is not in the file's read-only data"
 PAST_DATA = "refused: a read of the file's read-only data that is not one, four or eight bytes within it"
 AT_LEAST = "    requires n >= 1\n"
+TRACE = "    trace depends on n\n"
+JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
 CALL = "chunk(key, t, flags, start, end, length, n, inputs[i])"
 SCHEDULE = 0x4380                         # where the order of the message words lies in the file's data
 # The contract's lines as statement.py writes them, but for the `data` and the `ensuresw` line.
@@ -86,6 +88,8 @@ LINES = [
     "atleast n 1",
     "below n 2",
     "hidden key",
+    "hidden t",
+    "hidden packed",
     "stack 4096",
 ]
 
@@ -394,13 +398,19 @@ class Loop(Files, unittest.TestCase):
         self.assertEqual(self.verify_files(st, self.proof), "shown\n")
 
     def test_the_trace(self):
-        """The key's bytes are marked (`hidden key`): shown, since the kernel only loads them into vector
-        registers. With the table of addresses marked too it is refused: the addresses the blocks are read at
-        would depend on something marked."""
-        self.assertIn("hidden key", self.lines)
-        self.assertNotIn("hidden inputs", self.lines)
+        """The key's bytes, the counter and the register of the four bytes are marked (`hidden key`, `hidden t`,
+        `hidden packed`): shown, since the kernel only loads them into vector registers and into cells of its
+        frame. The count of blocks is not marked (`trace depends on n`). With the table of addresses marked too
+        it is refused: the addresses the blocks are read at would depend on something marked. With the count
+        of blocks marked (the contract without its `trace` line) it is refused: the loop is left when the
+        count is done."""
+        hidden = [l for l in self.lines if l.startswith("hidden ")]
+        self.assertEqual(hidden, ["hidden key", "hidden t", "hidden packed"])
         k = self.lines.index("hidden key")
         self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address is made of something that may depend on a secret")
+        no_line = lines_of(once(TRACE, ""))
+        self.assertEqual(no_line, self.lines[:k + 1] + ["hidden n"] + self.lines[k + 1:])
+        self.refused("hidden-count", no_line, JUMP)
 
     def test_a_changed_contract_is_refused(self):
         cases = [

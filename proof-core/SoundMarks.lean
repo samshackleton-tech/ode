@@ -897,16 +897,15 @@ theorem jumpTarget_quiet {bind : Bind} {target : Expr} {t : Nat} (h : jumpTarget
 /-- At a return the verifier has let through, the address returned to is not marked. -/
 theorem return_quiet {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (hsp : s.sp = some 0)
-    (hq : quietRegs.all s.q.regq.contains = true) : quietRet st = true := by
-  have hreg : ∀ r ∈ quietRegs, st.marks.reg r = false := fun r hr =>
-    M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hq r hr))
+    (hq : s.q.regq.contains RSP = true) : quietRet st = true := by
+  have hreg : st.marks.reg RSP = false := M.reg RSP (List.contains_iff_mem.mp hq)
   have e : st.reg RSP = s0.reg RSP := by
     have h1 := H.reg RSP (by decide)
     have h2 := ev_isConst (ρ := ρ) hsp
     rw [ev_sub, ev_var, H.entry RSP (by decide)] at h2
     omega
   have hs := E.stack
-  simp only [quietRet, hreg RSP (by decide), Bool.not_false, Bool.true_and, Bool.not_eq_true']
+  simp only [quietRet, hreg, Bool.not_false, Bool.true_and, Bool.not_eq_true']
   rw [e]
   refine anyMarked_none _ _ fun x x1 x2 => ?_
   rw [M.stable x (notFrame (Or.inr x1)) (E.frame_notOut (by omega) x2)]
@@ -937,7 +936,9 @@ theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : Ma
 
 /-! ## A call -/
 
-theorem quiet_not_kept : ∀ r ∈ quietRegs, calleeSaved.contains r = false := by decide
+theorem rsp_not_kept : calleeSaved.contains RSP = false := by decide
+
+theorem rax_not_kept : calleeSaved.contains 0 = false := by decide
 
 /-- A call the verifier has let through, of the marks: the stack pointer is not marked; what the called
 function's contract asks about marks is so in the state it starts in; and in the state the caller goes on
@@ -947,17 +948,17 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (q : Program) (i : Instr) (hw : allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true)
     (hwrite : ∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) :
     st.marks.reg RSP = false ∧ c.quietAt (afterCall p q i st) ∧
-    ∀ s2, c.quietAfter (afterCall p q i st) s2 → MarksOk ctx s0 (afterCallQ s) (backFrom st s2) := by
+    ∀ s2, c.quietAfter (afterCall p q i st) s2 → MarksOk ctx s0 (afterCallQ c s) (backFrom st s2) := by
   simp only [callQuiet, Bool.and_eq_true] at hq
   obtain ⟨⟨⟨⟨hregs, hdata⟩, hfix⟩, houts⟩, hrun⟩ := hq
   have hdata : c.data = [] := by simpa using hdata
-  have regs : ∀ r ∈ quietRegs, st.marks.reg r = false := fun r hr =>
+  have regs : ∀ r ∈ c.cleanAtEntry, st.marks.reg r = false := fun r hr =>
     M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hregs r hr))
   have notw : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false →
       ¬ (st.reg RSP - 8 ≤ a ∧ a < st.reg RSP - 8 + 8) := fun a hf ho hin => by
     have := allowed_at hw a hin.1 hin.2
     simp [Contract.perm, hf, ho] at this
-  refine ⟨regs RSP (by decide), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_,
+  refine ⟨regs RSP (List.mem_cons_self ..), ⟨fun r hr => regs r hr, fun k hk => ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_,
     fun k hk => by rw [hdata] at hk; cases hk⟩, ?_⟩
   · show markBytes st.marks.mem (st.reg RSP - 8) 8 false ((if RSP = RSP then st.reg RSP - 8 else st.reg RSP) + k) = false
     rw [if_pos rfl]
@@ -1032,11 +1033,21 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · rfl
         · have e : st.reg r + k = ((s0.reg RSP : Int) + (o + 8 * ((k / 8 : Nat) : Int))).toNat + k % 8 := by omega
           rw [e]; exact c3 (k % 8) (by omega)
-  · intro s2 ⟨qr, qs⟩
+  · intro s2 ⟨qsp, qret, qs⟩
     refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_, fun _ m => nomatch m⟩
     · show (if calleeSaved.contains r then st.marks.reg r else s2.marks.reg r) = false
       rcases List.mem_append.mp hr with h1 | h2
-      · rw [if_neg (by rw [quiet_not_kept r h1]; decide)]; exact qr r h1
+      · -- the stack pointer, and the number returned where the called function's contract says one is
+        cases hg : c.givesNumber with
+        | false =>
+          simp only [hg, Bool.false_eq_true, if_false, List.mem_singleton] at h1
+          subst h1
+          rw [if_neg (by rw [rsp_not_kept]; decide)]; exact qsp
+        | true =>
+          simp only [hg, if_true, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at h1
+          rcases h1 with h1 | h1
+          · subst h1; rw [if_neg (by rw [rax_not_kept]; decide)]; exact qret hg
+          · subst h1; rw [if_neg (by rw [rsp_not_kept]; decide)]; exact qsp
       · rw [if_pos (List.mem_filter.mp h2).2]; exact M.reg r (List.mem_filter.mp h2).1
     · show s2.marks.mem a = s0.marks.mem a
       have hn : (c.perm (afterCall p q i st)).write a = false := by

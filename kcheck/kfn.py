@@ -94,6 +94,9 @@ class Lanes:
         return self.memo[i]
 
 
+REGISTERS = ("number", "byte", "any", "counter", "low byte", "word", "low word")     # the kinds of a number given in a register (and `bytes a b c d`)
+
+
 def packed_kind(kind):
     """`bytes a b c d`: the names of a word's four low bytes; None for other kinds."""
     p = kind.split()
@@ -167,8 +170,13 @@ class Contract:
             n = bytes_kind(kind)
             if isinstance(n, str) and self.kind.get(n) != "number": raise Fail(f"{symbol}: {name} is {kind}, and {n} is not a number among the arguments")
             if lanes_kind(kind, "inputs") is not None and self.kind.get("n") != "number": raise Fail(f"{symbol}: {name} is {kind}, and no number n says how many blocks each input has")
-        if any(leaf.get("part") is not None or leaf.get("cond") is not None for leaf in c["leaves"]) or c.get("trace") or c.get("conditions"):
-            raise Fail(f"{symbol}: a contract with `ensures X[a .. b]`, `ensures ... if C` or `trace depends on`: not this verifier's yet")
+        # `trace depends on` may name the numbers given in registers, and nothing at an address. This verifier takes
+        # every number given as one the trace may depend on, named or not: of a contract that leaves a number
+        # out it shows less than the contract says (LANGUAGE.md, part 2), and `left_out` says which those are.
+        numbers = [name for _, kind, name in self.args if kind in REGISTERS or packed_kind(kind) is not None]
+        if any(leaf.get("part") is not None or leaf.get("cond") is not None for leaf in c["leaves"]) or c.get("conditions") or any(name not in numbers for name in c.get("trace", [])):
+            raise Fail(f"{symbol}: a contract with `ensures X[a .. b]`, `ensures ... if C`, or `trace depends on` something that is no number among its arguments: not this verifier's yet")
+        self.left_out = [name for name in numbers if name not in c.get("trace", [])]
         for leaf in c["leaves"]:
             if leaf["index"] is not None and (lanes_kind(self.kind.get(leaf["name"], ""), "cvs") is None or leaf["each"] != (("num", 0), ("num", lanes_kind(self.kind[leaf["name"]], "cvs")))):
                 raise Fail(f"{symbol}: it leaves each of some values that are not all the chaining values at an address")

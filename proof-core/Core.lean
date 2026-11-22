@@ -2798,8 +2798,8 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   | .ret =>
     do
       symReturn ctx s
-      if !quietRegs.all s.q.regq.contains then
-        refuse "at the return a general register that a callee does not keep may depend on a secret"
+      if !(s.q.regq.contains RSP && (!ctx.contract.givesNumber || s.q.regq.contains 0)) then
+        refuse "at the return the stack pointer, or the number returned, may depend on a secret"
       else pure [(s, .returned)]
   | .jump target cond =>
     match jumpTarget i.bind target with
@@ -3609,15 +3609,15 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
         | none => false) then pure ()
   else refuse "a called function needs of the processor what this function's contract does not say it needs"
 
-/-- What a called function's contract asks about marks is so at the call: the general registers a callee
-does not keep are known not to be marked; each run of bytes it is given to read is one its contract
+/-- What a called function's contract asks about marks is so at the call: the stack pointer and the
+registers of its arguments, but for the numbers its contract says are hidden, are known not to be marked; each run of bytes it is given to read is one its contract
 says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
 this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
 says is hidden, or a part of the frame whose cells are known not to be marked. And where a cell of the frame is known not to be marked, each run the called function
 may write is within a run this function was given to write (so it is no part of the frame), or is a part
 of the frame that every such cell lies apart from. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
-  quietRegs.all s.q.regq.contains &&
+  c.cleanAtEntry.all s.q.regq.contains &&
   c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
   c.fixeds.all (fun x => c.hidden.contains x.1 ||
     -- (or a part of the frame, in whole cells, each of them known not to be marked: a table of addresses made here)
@@ -3641,11 +3641,12 @@ def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
         | none => false
       | none => false
 
-/-- What is known not to be marked after a call: the general registers a callee does not keep (the called
-function's contract says so), each register a callee keeps that was not marked before, and each cell of
-the frame not marked before that is not below the stack pointer. -/
-def afterCallQ (s : Sym) : SMarks :=
-  { regq := quietRegs ++ s.q.regq.filter calleeSaved.contains,
+/-- What is known not to be marked after a call: the stack pointer; the number returned, where the called
+function's contract says one is (of the other registers a callee does not keep, nothing: the contract says
+nothing of them); each register a callee keeps that was not marked before; and each cell of the frame not
+marked before that is not below the stack pointer. -/
+def afterCallQ (c : Contract) (s : Sym) : SMarks :=
+  { regq := (if c.givesNumber then [0, RSP] else [RSP]) ++ s.q.regq.filter calleeSaved.contains,
     fq := match s.sp with
       | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
       | none => [] }
@@ -3671,7 +3672,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       let s' ← symCall ctx s c
       if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract asks not to depend on a secret may depend on one"
-      else pure [({ s' with q := afterCallQ (quietAtCall s c) }, .at i.next)]
+      else pure [({ s' with q := afterCallQ c (quietAtCall s c) }, .at i.next)]
   | none => symInstr ctx s i
 
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=
@@ -3699,7 +3700,7 @@ def dataFacts (ctx : Ctx) : List Row :=
 
 def entrySym (ctx : Ctx) : Sym :=
   { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
-    wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := quietRegs } }
+    wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := ctx.contract.cleanAtEntry } }
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept
 registers and the frame as in `s`, every other register any number below 2^64. What `s` knows of the

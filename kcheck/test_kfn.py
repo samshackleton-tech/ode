@@ -18,7 +18,7 @@ FLIP = {".jae": ".jb", ".jb": ".jae", ".je": ".jne", ".jne": ".je"}
 # (function, the text of blake3.spec, what it becomes): the function that met the text does not meet the change
 TEXT = [
     ("pad", "then bytes[k] else 0 for k in 0..64", "then bytes[k] else 1 for k in 0..64"),
-    ("pad", "ensures block = padded(src)\n    stack 48", "ensures block = padded(src)\n    stack 32"),
+    ("pad", "trace depends on n\n    stack 48", "trace depends on n\n    stack 32"),
     ("chunk_node", "ensures nd = chunk_node(nd.h, t, flags, input)", "ensures nd = chunk_node(nd.h, t + 1, flags, input)"),
     ("chunk_node", "requires len <= 1024\n", "requires len <= 1025\n"),
     ("chunk_node", "length: len(rest), flags:", "length: 64, flags:"),
@@ -28,14 +28,14 @@ TEXT = [
     ("node_out", "ensures out = node_value(nd, root)", "ensures out = node_value(nd, 0)"),
     ("node_out", "counter(node.counter), node.length, node.flags | root)", "counter(node.counter), 64, node.flags | root)"),
     ("node_out", "counter: number at 96, length: number at 104", "counter: number at 104, length: number at 96"),
-    ("subtree", "ensures out = subtree(kf.key, kf.flags, t, input)\n    decreases len\n    stack 16896", "ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    decreases len\n    stack 16896"),
+    ("subtree", "ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on len, t, plat\n    decreases len\n    stack 16896", "ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    trace depends on len, t, plat\n    decreases len\n    stack 16896"),
     ("subtree", "t: number, plat: any) {\n    requires no_overlap(out, input, kf)\n    requires len >= 1\n    requires 1024 * t + len <= 18446744073709551615", "t: number, plat: any) {\n    requires no_overlap(out, input, kf)\n    requires len >= 1\n    requires t <= 18446744073709551615"),         # the chunks' numbers may then pass 64 bits
     ("subtree", "stack 16896 + 384 * bits((len - 1) / 1024)", "stack 16896 + 320 * bits((len - 1) / 1024)"),
     ("subtree", "stack 16896 + 384 * bits((len - 1) / 1024)\n    needs sse41\n    needs avx512 if plat == 5", "stack 16896 + 384 * bits((len - 1) / 1024)\n    needs sse41\n    needs avx512 if plat == 4"),
     ("subtree", "stack 16896 + 384 * bits((len - 1) / 1024)\n    needs sse41\n", "stack 16896 + 384 * bits((len - 1) / 1024)\n"),
-    ("wide32", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 8192", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    stack 8192"),
+    ("wide32", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 8192", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    trace depends on t\n    stack 8192"),
     ("wide32", "stack 8192\n    needs avx512\n", "stack 8192\n"),
-    ("wide32", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 8192", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 4096"),
+    ("wide32", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 8192", "requires 1024 * t + 32768 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 4096"),
     ("wide32", "contract b3l_wide32(out: cv, input: 32768 bytes,", "contract b3l_wide32(out: cv, input: 32767 bytes,"),
     ("wide32", "requires 1024 * t + 32768 <= 18446744073709551615", "requires t <= 18446744073709551615"),
     ("wide32", "ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..32", "ensures out[i] = chunk(key, t, flags, start, end, length, n, inputs[i]) for i in 0..32"),
@@ -57,8 +57,8 @@ TEXT = [
     ("hashr", "stack 18688 + 384 * bits(len / 1024)\n    needs sse41\n    needs avx512 if plat == 5", "stack 18688 + 384 * bits(len / 1024)\n    needs sse41"),
     ("hashr", "stack 18688 + 384 * bits(len / 1024)\n    needs sse41\n", "stack 18688 + 384 * bits(len / 1024)\n"),
     ("hashr", "stack 18688 + 384 * bits(len / 1024)", "stack 9216 + 384 * bits(len / 1024)"),
-    ("wide128", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 16384", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    stack 16384"),
-    ("wide128", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 16384", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    stack 8192"),
+    ("wide128", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 16384", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t + 1, input)\n    trace depends on t\n    stack 16384"),
+    ("wide128", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 16384", "requires 1024 * t + 131072 <= 18446744073709551615\n    ensures out = subtree(kf.key, kf.flags, t, input)\n    trace depends on t\n    stack 8192"),
     ("wide128", "contract b3l_wide128(out: cv, input: 131072 bytes,", "contract b3l_wide128(out: cv, input: 131071 bytes,"),
     ("wide128", "compress(key, children(key, flags, t, bytes), counter(0), 64, flags | PARENT)", "compress(key, children(key, flags, t, bytes), counter(0), 64, flags)"),
     ("subtree", "    requires no_overlap(out, input, kf)\n    requires len >= 1\n    requires 1024 * t", "    requires len >= 1\n    requires 1024 * t"),       # the caller is asked for what the check assumes

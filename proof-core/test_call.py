@@ -21,8 +21,11 @@ NOT_WHOLE = "a called function is given a run of bytes that is not one this func
 UNDECIDED = "need compare"            # which of two numbers is the greater is asked, and the prover has no proof either way
 # (what is changed, the caller's source as it is, the source changed, what the verifier then lacks or refuses):
 # each is built again from the changed source
+JUMP = "a jump on a flag that may depend on a secret"
 SOURCES = [
-    ("the count is kept in a register a call may change", "  mov rbx, rdx\n  call ode_common\n  cmp rax, rbx\n", "  mov r10, rdx\n  call ode_common\n  cmp rax, r10\n", UNDECIDED),
+    # (after a call the caller may rely on nothing that the called function leaves in a register it need not
+    # keep: such a register may hold anything, something secret too, so a jump on it is refused. Three such here.)
+    ("the count is kept in a register a call may change", "  mov rbx, rdx\n  call ode_common\n  cmp rax, rbx\n", "  mov r10, rdx\n  call ode_common\n  cmp rax, r10\n", JUMP),
     # (this one stops before the call: the verifier lets nothing be written below the stack pointer, so no call can write over what is held)
     ("the count is put below the stack pointer, where the call writes the address to come back to", "  mov rbx, rdx\n  call ode_common\n",
      "  mov [rsp - 8], rdx\n  call ode_common\n  mov rbx, [rsp - 8]\n", "a write that is not eight bytes of the frame in use"),
@@ -35,8 +38,8 @@ SOURCES = [
      "the stack pointer leaves the frame the contract allows"),
     ("rbx is not given back", "  pop rbx\n  ret\n", "  pop rcx\n  ret\n", "a register a callee keeps does not hold what it held at entry"),
     ("1 is returned where the runs differ", "@differ:\n  xor eax, eax\n", "@differ:\n  mov rax, 1\n", UNDECIDED),
-    ("the result is compared with another number", "  cmp rax, rbx\n", "  cmp rax, rdi\n", UNDECIDED),
-    ("what a call leaves in rcx is used", "  cmp rax, rbx\n", "  cmp rax, rcx\n", UNDECIDED),
+    ("the result is compared with what the call leaves in rdi", "  cmp rax, rbx\n", "  cmp rax, rdi\n", JUMP),
+    ("what a call leaves in rcx is used", "  cmp rax, rbx\n", "  cmp rax, rcx\n", JUMP),
 ]
 # other ways of writing the caller, each shown: (what, the lines as they are, the lines changed)
 OTHER_WAYS = [
@@ -126,15 +129,18 @@ class Call(unittest.TestCase):
         with open(self.path("made.o"), "rb") as f, open(self.equal, "rb") as g: self.assertEqual(f.read(), g.read())
 
     def test_a_caller_cannot_hide_a_run_from_a_called_function_that_does_not(self):
-        """`ode_equal` hands its two runs to `ode_common`, whose trace depends on their bytes. With the caller's
-        `trace depends on a, b` left out its contract promises something false: the call is refused. (With the
-        called function's line left out as well, the called function itself is refused: test_verify.py.)"""
+        """`ode_equal` hands its two runs and their count to `ode_common`, whose trace depends on the runs' bytes
+        and on the count. With the runs left out of the caller's `trace depends on a, b, n`, or the count, or
+        the whole line, its contract promises something false: the call is refused. (With the called function's
+        line left out as well, the called function itself is refused: test_verify.py.)"""
         spec = self.spec
-        old = "    returns equal(a, b)\n    trace depends on a, b\n"
+        old = "    returns equal(a, b)\n    trace depends on a, b, n\n"
         self.assertEqual(spec.count(old), 1)
-        name, said = self.found(spec.replace(old, "    returns equal(a, b)\n"), self.equal, "hidden")
-        self.assertEqual(name, "ode_equal")
-        self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one", said)
+        for what, line in (("the runs are hidden", "    trace depends on n\n"), ("the count is hidden", "    trace depends on a, b\n"), ("no line", "")):
+            with self.subTest(what=what):
+                name, said = self.found(spec.replace(old, "    returns equal(a, b)\n" + line), self.equal, "hidden")
+                self.assertEqual(name, "ode_equal")
+                self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one", said)
 
     def test_shown(self):
         t = time.time()

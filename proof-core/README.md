@@ -93,7 +93,7 @@ The functions it verifies today:
 | `blake3_servil_compress_in_place_avx512` | BLAKE3's compression function on one 64-byte block: the hash's one-block kernel, written with AVX-512 instructions on 128-bit registers | 76 instructions, 1 loop of 7 iterations | 9 lines, 131 bytes | 5 ms |
 | `blake3_servil_compress_in_place_sse41` | the same compression function for processors that have SSE4.1 and no more. It rotates a word by two shifts and an OR, or by a byte shuffle | 94 instructions, 1 loop of 7 iterations | 10 lines, 137 bytes | 5 ms |
 | `b3l_node_out` | reads a 120-byte node record from memory, packs its flags, and calls the AVX-512 or SSE4.1 kernel | 18 instructions | 4 lines, 38 bytes | 7 ms with both kernels |
-| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 204 lines, 2.4 kB | 0.15 s |
+| `blake3_servil_avx512_p16` | the hash's 16-way kernel: sixteen chunks at once, each of `n` blocks read through a table of sixteen addresses, with AVX-512 instructions on 512-bit registers | 460 instructions, a loop over the blocks around a loop of 7 rounds | 205 lines, 2.4 kB | 0.15 s |
 | `blake3_servil_avx512_p32` | the hash's 32-way kernel, entered where every chunk gets the same counter: thirty-two chunks at once, each of `n` blocks read through a table of thirty-two addresses | 699 instructions, a loop over the blocks around a loop of 7 rounds | 332 lines, 4.2 kB | 0.60 s |
 | `blake3_servil_avx512_k32` | the same kernel entered where chunk `i` gets the counter `t + i`: the entry the hash calls. Six more instructions make the thirty-two counters, with compares into mask registers | 702 instructions, of which 699 are the function above | 332 lines, 4.3 kB | 0.59 s |
 | `b3l_pad` | copies the `n` bytes of a chunk's last block into a 64-byte block and fills the rest with zeros; the bytes are secret | 39 instructions, 1 loop of 64 iterations | 38 lines, 451 bytes | 4 ms |
@@ -146,9 +146,10 @@ any machine state that satisfies the caller's obligations (listed next). Then:
   so a count kept there may decide a jump. The marks change
   no value. The model *stops* where something marked would become observable: where it is part of an
   address, where it decides a conditional jump, and where it is the address a `ret` returns to. `Meets`
-  says that the function never stops in this way. At the return, no general register is marked except
-  the callee-saved ones, and memory outside the stack frame and the output buffers has the marks it had.
-  The next section says what follows from this.
+  says that the function never stops in this way. At the return the stack pointer is not marked, nor is
+  `rax` where the contract returns a number, and memory outside the stack frame and the output buffers has
+  the marks it had. Of the other registers that are not callee-saved nothing is said: they may be marked,
+  and a caller may rely on nothing about them. The next section says what follows from this.
 
 The caller's obligations (`Contract.pre`):
 
@@ -168,10 +169,13 @@ The caller's obligations (`Contract.pre`):
   address, apart from the stack frame, the return address and every output buffer, and that none of them
   is marked. On a real machine the linker and the loader fulfil this, not the calling code. That they do
   is not proved here; it is listed below with the link step;
-- about marks (`Contract.quietAt`): no general register is marked except the callee-saved ones (rbx, rbp,
-  r12 to r15), which may hold anything; the return address is not marked; and no byte of an input buffer
-  is marked, except in the buffers that the contract lists as `hidden`. A read-only buffer is `hidden`
-  when the contract's `trace depends on` line does not name it.
+- about marks (`Contract.quietAt`): the stack pointer is not marked; the register of an argument is not
+  marked, unless the argument is a number that the contract lists as `hidden`; the return address is not
+  marked; and no byte of an input buffer is marked, except in the buffers that the contract lists as
+  `hidden`. Every other general register may be marked: it holds whatever the caller left there. A
+  read-only buffer or a number argument is `hidden` when the contract's `trace depends on` line does not
+  name it. A register that holds a buffer's address is never hidden: the function reads or writes there,
+  so the address shows.
 
 ### Constant time: what an observer can see
 
@@ -187,10 +191,11 @@ and `b` at its entry. Run the function from each to its return. Then the two run
 The conditions are these.
 
 - Both states satisfy the caller's obligations listed above, including the ones about marks. The marks
-  say which registers and bytes are secret, and the obligations limit them. The argument registers, the
-  return address, the file's data and every input buffer that the contract does not list as `hidden` must
-  not be marked. Anything else may be: the hidden buffers, the callee-saved registers, the flags, and
-  memory that is not an input.
+  say which registers and bytes are secret, and the obligations limit them. The stack pointer, the
+  register of every argument that the contract does not list as `hidden`, the return address, the file's
+  data and every input buffer that the contract does not list as `hidden` must not be marked. Anything
+  else may be: the hidden buffers, the registers of the hidden numbers, every general register that holds
+  no argument, the flags, and memory that is not an input.
 - `Alike a b`: the two states have the same marks, are at the same instruction, and agree on every
   register, flag and memory byte that is not marked, and on the lowest byte of every register whose lowest
   byte is not marked. They may differ in everything that is marked.
@@ -223,25 +228,32 @@ function computes, it computes on a machine without marks and without limits.
 
 A called function runs under the same rule. Across a call, the callee-saved registers get back the marks
 they had before the call. That is justified because the called function must return them holding the
-values they held.
+values they held. Every other general register counts as marked after the call, except the stack pointer,
+and `rax` where the called function's contract returns a number: the contract says nothing about the rest.
 
 What this does **not** cover:
 
 - **Only this level of observation.** How long an instruction takes for given operands is outside the
   model. So are speculative execution, caches shared with other programs, power and frequency. Each needs
   assumptions of its own.
-- **Things the verifier refuses although they are true.** A number passed to a called function in a
-  register must not be marked, so `b3l_node_out` is verified with `trace depends on nd`: it loads the
-  node's counter, length and flags into registers and passes them to a kernel. A value read back from the
-  stack frame counts as marked unless the verifier knows its cell holds nothing marked. It knows that of
+- **Things the verifier refuses although they are true.** The number a function returns must not be
+  marked. So a function that only computes a number from a number, such as `ode_far`, has to name that
+  number in `trace depends on`, although its trace depends on nothing (`test_far.py` keeps this as a
+  limit). Whether a contract should promise that of the number it returns is not decided. A value read
+  back from the stack frame counts as marked unless the verifier knows its cell holds nothing marked. It
+  knows that of
   eight bytes of the frame after a store there of a value that is not marked, until those bytes are
   stored to again, any other store to memory that is not such a store to the frame is made, the path
   comes to a loop invariant, or a function is called while the cell is below the stack pointer. So a
   function that keeps a public count in its frame across a call and then branches on it is verified
   (`test_call.py` has such a caller, and three that keep something secret there and are refused); a
   function that keeps it there across a store to an output buffer or around a loop is still refused.
-- **A rule for the coder.** A general register that is not callee-saved must not hold anything marked at
-  a call or at a return. A function that loads a secret into such a register has to clear it first.
+- **What a function leaves behind.** A function may rely only on what a contract says about a register:
+  its own contract at its entry, and the called function's contract after a call. So a called function
+  may leave a secret in a register that is not callee-saved, and in the part of the stack it used, and its
+  caller cannot let that show. When verified code returns to code that is not verified, nothing here
+  says what is left in those registers and in that part of the stack. A contract clause for such an
+  entry point is not designed.
 
 ### The one assumption: `Linked`
 
@@ -399,7 +411,7 @@ than one way to become confident in the verifier's rules.
 
 | A reader relies on | for | How it can be checked |
 |---|---|---|
-| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,045 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
+| The formal model: Table.lean (reads `../core/x86.tab`), Machine.lean (the effects on registers, flags and memory, and the marks), and Contract.lean (the meaning of contracts and specifications). 1,053 lines of code. | what the soundness theorem says about the processor and the contract | Read it. The tests below compare parts of it with separate implementations. |
 | The steps outside the theorem | what each entry of the second list below says | They are tested, not proved. |
 
 **For the verifier's rules, the reader chooses.** The rules are Core.lean (2,925 lines of code) and the
@@ -531,7 +543,7 @@ it refuses `requires` (other than `requires no_overlap`), other forms of `ensure
 A `needs` line (the processor feature a function requires, such as `needs avx512`) is carried through. It
 has no meaning in the machine model, which has every instruction of the table. The verifier does check
 that a caller's contract repeats every `needs` of the functions it calls. `statement.py` checks that a
-function's own instructions are of kinds its `needs` lines name. A read-only buffer that the `trace depends on` line does not name becomes a `hidden` line: its bytes may be secret. This holds for a fixed-size buffer and for one whose length is an argument. (A function that calls another may hand it a hidden buffer only if the called function's contract hides it too.) It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
+function's own instructions are of kinds its `needs` lines name. A read-only buffer that the `trace depends on` line does not name becomes a `hidden` line: its bytes may be secret. This holds for a fixed-size buffer and for one whose length is an argument. A number argument that the line does not name becomes a `hidden` line too: its register may hold a secret. (A function that calls another may hand it a hidden buffer only if the called function's contract hides it too.) It refuses specifications that use a kind, a lemma, or a definition that can fail. A layout is read where an argument is a record of that layout.
 A contract with an output buffer and another buffer must state `requires no_overlap` over all of them,
 because the model demands that of the caller.
 
@@ -549,21 +561,24 @@ For four kinds of 128-bit vector instruction the verifier has rules only for the
 that the SSE4.1 kernel makes of them: byte shuffles, shifts, OR, and blends of 16-bit halves. The machine
 model defines them in general.
 
-**The constant-time promise of the kernels' contracts is proved.** The kernels' real contracts
-(`../kcheck/proofs/inner.spec`) have no `trace depends on` line: the execution trace must not depend on
-the message block, the key or the chaining value. The contracts used here (the five kernel contracts in
+**The constant-time promise of the kernels' contracts is proved.** The one-block kernels' real contracts
+(`../kcheck/proofs/inner.spec`) have no `trace depends on` line: the execution trace must depend on
+nothing that is passed, so not on the message block, the key or the chaining value, and not on the block
+length, the counter or the flags. The wide kernels' contracts say `trace depends on n`: the trace depends
+on the number of blocks and on nothing else. The contracts used here (the five kernel contracts in
 `examples/kernel/`: the 32-way kernel has one for each of its entries) say the same, and the verifier
-accepts each. `test_kernel.py` changes
-each one-block kernel so that it branches on a word of the message block, and so that it leaves such a word
-in a general register: both are refused. `test_p16.py` and `test_p32.py` mark the table of block addresses
-as secret too: refused, because the blocks are read at those addresses. The contract of `b3l_node_out` still says
-`trace depends on nd`, for the reason given above.
+accepts each. `test_kernel.py` changes each one-block kernel so that it branches on a word of the message
+block, on the length, on the counter or on the flags: each is refused, and each is accepted once the
+contract names what the branch is on. `test_p16.py` and `test_p32.py` mark the table of block addresses
+as secret too: refused, because the blocks are read at those addresses. They also leave out the `trace`
+line, so that the number of blocks is hidden: refused at the loop's jump. The contract of `b3l_node_out`
+says `trace depends on plat`: which kernel is called depends on `plat`, and the node record is hidden.
 
 **A loop that fills a buffer: `b3l_pad`** (`test_pad.py`). The function copies the `n` bytes of a chunk's
 last block into a 64-byte block, from the last position down, and writes zeros where the input has ended.
 Its contract is the one in `../kcheck/proofs/inner.spec`, unchanged: `ensures block = padded(src)`, where
-`padded` is `[if k < len(bytes) then bytes[k] else 0 for k in 0..64]`. The contract has no
-`trace depends on` line, so the input bytes are secret; the function branches on `n` and on its counter
+`padded` is `[if k < len(bytes) then bytes[k] else 0 for k in 0..64]`. The contract says
+`trace depends on n`, so the input bytes are secret; the function branches on `n` and on its counter
 only. The loop invariant (`examples/hash/pad.places`) is four lines: the counter `i` is at most 64, the
 block holds `padded(src)` from position `i` on, and `i` decreases. The prover adds that `rax` may be
 marked on a later arrival (it holds the byte just copied). The proof is 451 bytes.
@@ -695,9 +710,10 @@ entries, and when the load starts before the lane's blocks.
 
 **The 16-way kernel is verified for every number of blocks.** `test_p16.py` verifies the shipped bytes
 of `blake3_servil_avx512_p16` (460 instructions in `../kcheck/b3hashr.o`). Its contract is
-`examples/kernel/p16.contract`: the contract of `../kcheck/proofs/inner.spec`. It has no `trace` line,
-so the trace depends on no byte of the blocks or of the key. The addresses in the table `inputs` are
-treated as numbers passed to the function, like `n`: the trace does depend on them.
+`examples/kernel/p16.contract`: the contract of `../kcheck/proofs/inner.spec`. It says
+`trace depends on n`, so the trace depends on the number of blocks, and on no byte of the blocks or of the
+key, nor on the counter or the four packed bytes. The addresses in the table `inputs` are read as
+addresses, so the trace does depend on them: a table is never hidden.
 `statement.py` now reads the three kinds of argument that this contract uses. `16 inputs` is the table of
 addresses described above. `16 cvs` is a buffer of sixteen chaining values, with one `ensures` that speaks
 of each of them. `statement.py` writes one line for each value: the 32 bytes of that value in the buffer
@@ -736,7 +752,7 @@ from the eight bytes of the return address, so they end at least 64 bytes below 
 starts from that fact, which shows that `add r14, 64` does not wrap. And the blocks of a lane can be one
 of the things a recorded application of a definition is applied to.
 
-The tests change the contract in ten ways, the code in six and the invariant in fourteen, and the
+The tests change the contract in ten ways, the code in six and the invariant in fifteen, and the
 verifier refuses each. Among the contracts: the first block's flags exchanged with the last block's, which
 is false as soon as there are two blocks; one block fewer than the code compresses; another lane's blocks;
 no lower bound on `n`. Among the instructions: the flags of the first block kept for every block; the
@@ -967,7 +983,7 @@ What is new:
   machine (`runs_bytes`). Since then a memory cell has become a byte by its type (see "A memory cell is a
   byte by its type" below), and that theorem is gone.
 
-The stored proof is 49 bytes. The tests change the contract in seven ways and the code in twelve, each
+The stored proof is 49 bytes. The tests change the contract in eight ways and the code in fourteen, each
 making the statement false, and each is refused. Among them: the contract says the block holds bytes 16
 to 80, which a shorter message does not have; the code gives `b3l_pad` one byte more to read, a byte past
 the message; the code gives it `r + 28` to write, so that it would overwrite the last word of the
@@ -1001,8 +1017,9 @@ contract and the layout of `../kcheck/proofs/inner.spec` as they are written the
 A chunk is at most sixteen blocks of 64 bytes. The function gives each block but the last to a one-block
 kernel, which compresses it into the first 32 bytes of the record `nd`. It has `b3l_pad` write the last
 block into the record at byte 32. Then it stores three numbers of eight bytes each: the chunk's number,
-the last block's length and the flags. The contract has no `trace depends on` line, so the verifier also
-shows that the instructions run and the addresses touched depend on no byte of the input or the record.
+the last block's length and the flags. The contract says `trace depends on len, plat`, so the verifier also
+shows that the instructions run and the addresses touched depend on the length and on `plat`, and on
+nothing else: on no byte of the input or the record, and not on the chunk's number or the flags.
 
 **The loop has no invariant.** The length is at most 1024, so the loop runs at most fifteen times, and the
 verifier goes through every number of iterations, each with the inequalities then known about the
@@ -1033,12 +1050,14 @@ What the verifier takes here that it refused before, each with its soundness pro
 model in Lean evaluates the `ensures` line on random inputs of 0 to 1024 bytes and gives the 120 bytes
 that `../kcheck/ode.py` gives for `chunk_node`; and the node of a one-chunk message, taken as the root,
 gives the BLAKE3 hash of the message. Second, the verifier accepts the stored proof and the prover finds
-it again; a proof with a line removed is rejected. Third, 33 false statements are refused, each with the
-expected reason: 12 changes to the contract and 21 to the code. Among them: the contract allows 1025
+it again; a proof with a line removed is rejected. Third, 38 false statements are refused, each with the
+expected reason: 15 changes to the contract and 23 to the code. Among them: the contract allows 1025
 bytes; the contract says the length field is below 64, which a last block of 64 bytes is not; the code
 marks no block, or every block, as the chunk's first; the code counts 60 bytes for a block, so that a
 kernel would read past the input; the code stores the flags four bytes past the record; the code calls
-the AVX-512 kernel where `plat` is not 5. Six changed versions that are still correct are accepted.
+the AVX-512 kernel where `plat` is not 5; the contract hides the length, or `plat`; the code runs one
+instruction more where the chunk's number, or the flags, are not 0 (accepted once the contract names that
+number). Eight changed versions that are still correct are accepted.
 
 **A key and its flags, read from a record: `examples/keyed/`** (`test_keyed.py`). No rule of the verifier
 is new here. The example is the first steps of a parent node as the hash's `b3l_take` and `b3l_subtree`
@@ -1048,21 +1067,20 @@ kernel, which reads and writes `out`. The record is the hash's own:
 
     layout keyed 40 { key: cv at 0, flags: byte at 32 }
     ensures out = compress(kf.key, m, counter(0), 64, kf.flags)
-    trace depends on kf
 
 The stored proof is one line. The tests change the contract in seven ways and the code in fourteen, each
 making the statement false, and each is refused. Among them: the layout has the flags first; one half of
 the key is not copied, or is stored four bytes late, past `out`; the flags are read from the key's last
 eight bytes, or one byte past the record. Three changed versions that are still correct are accepted.
 
-**One true statement is refused, and a test records it as a limit.** Without `trace depends on kf` the
-record is hidden, and so are the flags read from it. The function would still be constant time in them:
-the kernel's instructions and the addresses it touches do not depend on its flags. The verifier refuses
-the call, because it accepts a call only where no register that the callee is given may depend on
-something hidden. So today a function that hands the key's flags to a kernel must name the whole record
-in `trace depends on`, and its theorem then says nothing about the trace and the key. Five of the six
-functions of the hash that are still to be verified read the flags from such a record and hand them on
-in a register (`b3l_wide32`, `b3l_wide128`, `b3l_take`, `b3l_part32`, `b3l_subtree`).
+**The record is hidden: the key and the flags.** The contract has no `trace` line. The flags are read
+from the record into a register and handed to the kernel, whose contract hides its flags. So the theorem
+about the trace covers the key and the flags. (Until a number in a register could be hidden, the contract
+had to say `trace depends on kf`, and the test kept the statement without that line as a limit.) A changed
+version that runs one instruction more where the flags are 0 is refused, and is accepted against a
+contract that names the record. Five of the six functions of the hash that are still to be verified read
+the flags from such a record and hand them on in a register (`b3l_wide32`, `b3l_wide128`, `b3l_take`,
+`b3l_part32`, `b3l_subtree`).
 
 **The specification's "the greatest power of two": `examples/left/`** (`test_left.py`). BLAKE3 splits a
 message of more than one chunk in two, and `../kcheck/blake3.spec` says where:
@@ -1132,7 +1150,7 @@ byte for byte.
 
 The stored proof is 351 bytes. It names three inequalities. On the path of one chunk: the length is at
 most 2048. On the path of two chunks: the length is at least 2048, before the call (bytes 1984 to 2048
-lie inside the message), and at least 2049, before the `ensures`. The tests change the contract in six
+lie inside the message), and at least 2049, before the `ensures`. The tests change the contract in seven
 ways, the definition in three and the code in ten, each making the statement false, and each is
 refused. So is the stored proof with any of its three rows replaced by the row that states the
 opposite, and with a row that speaks of an unknown not in use. Four changed contracts that are still
@@ -1166,7 +1184,7 @@ powers, the middle row may be one that cannot be shown, although a search from t
 have ended before reaching it. The prover then finds no proof. The conditions in
 `../kcheck/blake3.spec` turn once.
 
-The tests change the contract in four ways, the definition in three and the code in nine, each making
+The tests change the contract in five ways, the definition in three and the code in nine, each making
 the statement false, and each is refused. The stored proof with a line left out (every fiftieth line
 is tried), with a row replaced by the row that states the opposite (every tenth row), or with a row
 that speaks of an unknown not in use is refused. Two changed contracts that are still true are accepted.
@@ -1192,6 +1210,11 @@ subtract 2^63 from a number of 2^63 or more, since the sum passes 2^64 and comes
 reads 2^63 as it stands and does not accept that contract. Before this change it accepted that one
 and refused the other. A rule that follows both would let the proof say which reading to take; it is
 not built.
+
+A second limit, kept as a test since numbers can be hidden: each of the three contracts says
+`trace depends on x`, though the function runs the same instructions whatever `x` is. Without that line
+the statement is still true, and the verifier refuses it at the return, because the number returned is
+made of `x`.
 
 **A memory cell is a byte by its type.** In the formal model, memory used to be a function from
 addresses to natural numbers. Each precondition then had to say, for each kind of buffer, that the
@@ -1325,8 +1348,8 @@ the addresses in the table, so the verifier checks at the call that no cell of t
 secret (`callQuiet`).
 
 The stored proof is the function's name alone. The tests change the contract in six ways and the code in
-thirteen, each making the statement false, and each is refused. Three changed functions that still meet
-the contract are accepted. One true statement is refused and kept as a limit. Every lane of the second
+twelve, each making the statement false, and each is refused. Four changed functions that still meet
+the contract are accepted; one of them returns with bytes of the value in `rax`. One true statement is refused and kept as a limit. Every lane of the second
 call reads the same block, so the second value it writes is the same bytes as the first, and a function
 that takes `out` from the second value still meets the contract. The verifier records what a call of a
 definition gives for the first lane that has it. For a later lane with the same call it records nothing
@@ -1339,7 +1362,7 @@ kernel reads such data, so it cannot be called yet.
 **A count in the lowest byte of a register that holds a secret: `examples/lowbyte/`** (`test_lowbyte.py`).
 `ode_rounds(m, n)` loads a byte of the hidden buffer `m` into `rax` and shifts it into the second byte.
 Then it counts three iterations of a loop in `al`, the lowest byte of `rax` (`mov al, 3` ... `dec al`,
-`jne`). Its contract has no `trace depends on m`, so the jump must not depend on `m`. It does not: the
+`jne`). Its contract has no `trace` line, so the jump must not depend on `m`. It does not: the
 count decides it. The hash's two one-block kernels count their seven rounds in the same way.
 
 With one mark for a whole register, the verifier refused this function at the jump, because `rax` is
@@ -1360,15 +1383,57 @@ SoundMarks.lean). It forgets that list at a loop invariant and at a call.
 The stored proof is the function's name alone. The tests change the function in three ways that make the
 jump depend on the hidden byte: the count is taken from the hidden byte; the hidden byte is shifted back
 into `al`; a jump is made on the whole register. Each is refused, and the third is accepted once the
-contract says `trace depends on m`. Two changed contracts that are false are refused. Two changed
+contract says `trace depends on m`. Two more changes belong to the rules of the next paragraph: the
+function reads the buffer's last byte, at an address made of `n` (refused; accepted once the contract says
+`trace depends on n`), and the function jumps on `r10`, a register that holds no argument (refused). Two
+changed contracts that are false are refused. Two changed
 functions that are still true are accepted; one of them copies `al` to another register and jumps on
 that. One true statement is refused and kept as a limit: after `add rax, rax` the lowest byte is 6
 whatever the other bytes are, but the verifier takes the whole register as written from something marked.
 
-This is the first of three rules about what a function's trace may depend on. The other two come next: a
-number argument is hidden unless `trace depends on` names it, and a function relies only on what a
-contract says about a register. They need this one. With them the other bytes of `rax` in the two
-one-block kernels count as possibly secret, and the kernels' round counters are in `al`.
+This is the first of three rules about what a function's trace may depend on. The other two need it:
+with them the other bytes of `rax` in the two one-block kernels count as possibly secret, and the kernels'
+round counters are in `al`.
+
+**A number is hidden unless the contract names it, and a function relies only on what a contract says
+about a register.** These are the other two rules. They change two definitions of what a contract means
+(`Contract.quietAt` and `Contract.quietAfter` in Contract.lean) and four places in the verifier.
+
+- *At a function's entry* the registers known to be free of secrets are the stack pointer and the
+  register of each argument, except a number that `trace depends on` does not name
+  (`Contract.cleanAtEntry`). Before, they were all the registers that are not callee-saved. So a
+  function can no longer let the trace depend on a number its contract hides, or on what its caller left
+  in a register that holds no argument.
+- *At a call* the caller must show the same of the called function's registers, by the called function's
+  contract (`callQuiet`). A register that the called function is not given may hold a secret.
+- *After a call* the caller knows only this to be free of secrets: the stack pointer, `rax` where the
+  called function's contract returns a number, and each callee-saved register that was free of secrets
+  before (`afterCallQ`).
+- *At a return* the stack pointer must be free of secrets, and so must `rax` where the contract returns a
+  number. Before, every register that is not callee-saved had to be.
+
+What this gives for the hash: the theorem about each one-block kernel now says that the trace does not
+depend on the block length, the counter or the flags; about each wide kernel, that it depends on the
+number of blocks and not on the counter or the four packed bytes; about `b3l_node_out`, that it depends
+on `plat` and not on the node record (the contract no longer names the record); about `b3l_chunk_node`,
+that it depends on the length and on `plat` and not on the chunk's number or the flags. The stored proofs
+are the same bytes, except the 16-way kernel's, which has one line more: at its loop invariant `rdx` may
+now hold a secret (the last block's length is one of the four packed bytes). `ode_keyed`, `ode_high` and
+`ode_quad` no longer name the record of the key and the flags, so their theorems cover the key.
+
+The tests have false statements for each rule. A jump on a hidden number: the number of blocks of the
+16-way and 32-way kernels, the length and `plat` of `b3l_chunk_node`, `plat` of `b3l_node_out`, the three
+numbers of each one-block kernel, the length of `ode_split_block` and `ode_left_last`. A hidden number
+passed to a called function that does not hide it (`ode_tail`, `ode_equal`). An address made of a hidden
+number (`ode_rounds`). A jump on a register that holds no argument (`ode_rounds`, `ode_tail`), and on a
+register after a call that the called function's contract says nothing about (`ode_equal`, `ode_tail`).
+In the other direction, a kernel that leaves a word of the message block in a register is now accepted
+(`test_kernel.py`), and so is `ode_quad` without the instruction that sets `rax` to zero before it
+returns.
+
+One thing is asked that the contract language does not say: the number a function returns must be free
+of secrets. `ode_far` adds 2^63 to a number and branches on nothing, yet its contract must name the
+number (`test_far.py` keeps the contract without that line, a true statement refused, as a limit).
 
 **`b3l_node_out`, the function that calls both kernels, is verified.** It reads a 120-byte node record
 from memory, combines its flags with `or`, checks the processor platform argument, and calls either the
@@ -1640,9 +1705,9 @@ single-instruction comparison does not cover `lea_data` and `call`, which Machin
 official test vectors (35 input lengths up to 102,400 bytes, in three modes) in 43 s. With one constant in
 the specification changed (a rotation by 11 bits instead of 12), it does not.
 
-**Code size.** The formal model: 1,045 lines (Table.lean 152, Machine.lean 510, Contract.lean 383). The
+**Code size.** The formal model: 1,053 lines (Table.lean 152, Machine.lean 510, Contract.lean 391). The
 verifier: 3,084 lines (Core.lean 2,925, Arithmetic.lean 159 including its proofs). The file parser: 191
-lines. The proofs of the theorems: 20,177 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
+lines. The proofs of the theorems: 20,190 lines, of which Trace.lean (two runs of the machine with marks) is 1,061 and Plain.lean (the machine without marks, and two runs of it) is 632.
 
 ## The files
 

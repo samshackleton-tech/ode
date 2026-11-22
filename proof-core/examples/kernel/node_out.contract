@@ -1,16 +1,16 @@
 // A node's chaining value (the function `b3l_node_out` is in ../../../kcheck/b3hashr.o): it calls one of the two
 // one-block kernels (kernel.contract, kernel_sse41.contract). The layout and the contract are those of
-// ../../../kcheck/proofs/inner.spec, but for the `trace` line: there the trace depends on no byte of `out`
-// or `nd`. Here it may depend on `nd`: the function reads the counter, the length and the flags of the node
-// into registers and gives them to a kernel, and a contract cannot yet say that a number given in a
-// register is one the trace does not depend on.
+// ../../../kcheck/proofs/inner.spec. The trace depends on `plat` (which kernel is called) and on nothing
+// else that is given: not on a byte of the node, and not on `root`. The function reads the counter, the
+// length and the flags of the node into registers and gives them to a kernel, whose contract says that its
+// trace depends on none of them.
 layout node120 120 { h: cv at 0, block: 64 bytes at 32, counter: number at 96, length: number at 104 below 65, flags: byte at 112 }
 
 contract b3l_node_out(out: cv, nd: node120, root: byte, plat: any) {
     requires no_overlap(out, nd)
     ensures out = node_value(nd, root)
+    trace depends on plat
     stack 128
     needs sse41
     needs avx512 if plat == 5
-    trace depends on nd
 }

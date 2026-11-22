@@ -67,6 +67,21 @@ class Files(unittest.TestCase):
         code, out = with_inner(inner[:inner.index(b"contract ode_adler32_blocks4")])
         self.assertEqual(code, 1, out); self.assertIn("ode_unframe: NOT shown", out)
 
+    def test_a_public_contract_names_every_number_it_is_given(self):
+        """kbyte.py takes every number given as one the trace may depend on. A reader's specification whose public
+        contract leaves a number out of `trace depends on` says more than this verifier shows: the
+        verification is NOT shown, and says which number."""
+        obj, spec = self.paths("varint")
+        with open(spec) as f: text = f.read()
+        self.assertEqual(text.count("    trace depends on v\n"), 1)
+        with tempfile.TemporaryDirectory() as d:
+            other = os.path.join(d, "hidden.spec")
+            with open(other, "w") as f: f.write(text.replace("    trace depends on v\n", ""))
+            code, out = run(obj, other)
+            self.assertEqual(code, 1, out)
+            self.assertIn("ode_varint: NOT shown: ode_varint: the contract says the trace does not depend on v:", out)
+            self.assertNotIn("meets its public contract", out)
+
     def test_a_proof_cannot_leave_a_function_out_quietly(self):
         """Which functions are verified is the proof's to say. One that leaves out a function the file has and the
         specification has a contract for: the verification is NOT shown, and says which."""

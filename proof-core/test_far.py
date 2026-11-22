@@ -19,6 +19,12 @@ a number of 2^63 or more (the sum passes 2^64 and comes round), and of that cont
 shown, since 2^63 is taken as it stands. (A way to follow both: the proof says which way a number is to
 be taken. Not built.)
 
+The three contracts say `trace depends on x`, though each function runs the same instructions whatever x
+is. With the line left out the statement is still true, and it is refused: a second limit, kept here. The
+verifier in Lean shows a contract that returns a number only where that number is made of nothing hidden
+(in the formal model a caller may let its own trace depend on a number returned). Whether a contract
+should say that of the number it returns is not decided.
+
     python3 test_far.py        (skipped where Lean's `lake` is not installed)"""
 import os, shutil, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,6 +37,7 @@ LAKE = lean_verify.LAKE
 
 RANGE = "need entail"                 # the sum or difference is to be shown from 0 to 2^64 - 1, and the prover has no proof of it
 RETURNS = "need entail"               # what is returned is to be shown the contract's number, and it is not
+HIDDEN = "refused: at the return the stack pointer, or the number returned, may depend on a secret"
 # function -> (what is changed, the source as it is, the source changed, what the verifier then lacks)
 SOURCES = {
     "far": [("2^62 is added", "  mov rax, 1\n  shl rax, 63\n", "  mov rax, 1\n  shl rax, 62\n", RETURNS),
@@ -49,6 +56,10 @@ SPECS = {
     "less": [("the number may be 7", "x >= 8", "x >= 7", RANGE),
              ("the contract takes 9 away", "returns x - 8", "returns x - 9", RETURNS)],
 }
+# function -> its contract without the `trace` line: a true statement that is refused (the second limit)
+NO_TRACE = {"far": ("    returns x + 9223372036854775808\n    trace depends on x\n", "    returns x + 9223372036854775808\n"),
+            "near": ("    returns x - 9223372036854775808\n    trace depends on x\n", "    returns x - 9223372036854775808\n"),
+            "less": ("    returns x - 8\n    trace depends on x\n", "    returns x - 8\n")}
 # The limit: `ode_far`'s contract changed in two places to one its instructions also meet.
 LIMIT = [("    requires x <= 9223372036854775807\n    returns x + 9223372036854775808\n",
           "    requires x >= 9223372036854775808\n    returns x - 9223372036854775808\n")]
@@ -128,6 +139,20 @@ class Far(unittest.TestCase):
         last = self.found(spec, self.obj("far"), "far")
         self.assertIsInstance(last, str)
         self.assertIn(RANGE, last)
+
+    def test_a_limit_a_number_returned_that_is_made_of_a_hidden_number(self):
+        """Each function runs the same instructions whatever x is, and touches no memory but its return
+        address: its trace depends on nothing. Without `trace depends on x` the statement is still true, and
+        the verifier refuses it at the return: the number returned is made of x, which is then hidden. A
+        LIMIT, kept here so that it is seen (the question of the number returned is not decided)."""
+        for fn, (old, new) in NO_TRACE.items():
+            with self.subTest(fn=fn):
+                self.assertEqual(self.spec.count(old), 1)
+                spec = self.spec.replace(old, new)
+                self.assertFalse(lean_verify.verify(spec, [(self.obj(fn), "ode_" + fn)], self.kept(fn))[0])
+                last = self.found(spec, self.obj(fn), fn)
+                self.assertIsInstance(last, str)
+                self.assertIn(HIDDEN, last)
 
 
 if __name__ == "__main__":
