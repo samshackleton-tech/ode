@@ -99,12 +99,14 @@ Its one conditional jump compares the counter with `n`. No jump is taken or not 
 
 ```
 contract equal_ct(a: n bytes, b: n bytes, n: number) {
-    returns same(a, b)
-    trace depends on n
+    returns same(a, b)       // what the returned number is
+    trace depends on n       // what may influence which instructions run and which addresses they touch
 }
 ```
 
-**Why this line does not list `same(a, b)`.** The number that `equal_ct` returns depends on whether the arrays are the same. Its trace does not: the same instructions run either way, and only the value left in `rax` differs. The line is about the trace, not about the returned number. Counted by a processor, for two arrays of 32 bytes:
+The two lines answer two different questions. `returns` says what the returned number is. A function that calls `equal_ct` learns from that line, and from nowhere else, what the answer depends on (section 4). `trace depends on` is about `equal_ct`'s own instructions and addresses.
+
+**Why the second line does not list `same(a, b)`.** The number that `equal_ct` returns depends on whether the arrays are the same. Its trace does not: the same instructions run either way, and only the value left in `rax` differs. The line is about the trace, not about the returned number. Counted by a processor, for two arrays of 32 bytes:
 
 | Instructions executed by one call | The arrays are the same | They differ in the first byte | They differ in the last byte |
 |---|---|---|---|
@@ -185,7 +187,7 @@ Put together, this is the `trace depends on` line that each caller's contract ne
 
 **3. One rule is removed.** Today the number a function returns must also be computed only from what its line lists. Under the proposal a function may return any number it has computed. Returning a number does not change the trace. If the caller then jumps on that number, that is a jump in the caller's code, and point 2 judges it by the line in the caller's contract.
 
-**How the verifier knows what a returned number is.** `equal_ct`'s contract says `returns same(a, b)`, and `check` passed `want` and `tag` as `a` and `b`. So after the call the verifier knows that `rax` holds `same(want, tag)`. The line in `check`'s contract lists `same(want, tag)`, so the jump on `rax` is allowed. If `check`'s contract had no such line, the jump would be refused.
+**How a caller learns what a returned number depends on.** From the called function's `returns` line. `equal_ct`'s contract says `returns same(a, b)`, and `check` passed `want` and `tag` as `a` and `b`. So after the call the verifier knows that `rax` holds `same(want, tag)`. That is more than knowing what the number depends on: it is knowing what the number is. The line in `check`'s contract lists `same(want, tag)`, so the jump on `rax` is allowed. If `check`'s contract had no such line, the jump would be refused. A caller cannot jump on the answer by oversight: until the verifier knows that a returned number is computed only from what the caller's line lists, it refuses every jump and every address that uses it.
 
 ## 5. What the verifier would accept and refuse
 
@@ -252,7 +254,7 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 ## 10. What this does not do
 
 - It does not make `equal`'s contract more exact. `equal`'s trace really depends only on `n` and on where the first difference is, and the rule would allow a line that says so. Proving it needs a fact about the definition (before the first difference, the bytes are the same) that takes an induction. Whether today's verifier can show that is not known.
-- A caller can jump on a returned number only if the called function's contract says exactly what the number is, with `returns E`. If the contract only relates the result to other things with `ensures`, the verifier does not know what the number was computed from.
+- A caller can jump on a returned number only if the called function's contract says exactly what the number is, with `returns E`. If the contract only relates the result to other things with `ensures`, the verifier does not know what the number was computed from, and refuses a jump on it. Today's rule does give callers that knowledge: under it every returned number is computed only from what the called function's line lists. For example, `ode_varint`'s contract says `returns r` and `ensures out[0 .. r] = varint(v)`. A caller that went round a loop `r` times is acceptable today, and under the proposal would be refused until `ode_varint`'s contract said what `r` is (the length of `varint(v)`). No function in the repository does this today.
 - Two expressions that are written differently count as different until the proof shows that they are equal. `same(tag, want)` is not `same(want, tag)` without such a step.
 - In the first version the new step of section 7 applies to registers only, not to bytes in memory.
 - What the line should say for a function that Rust or C calls is a separate question and is still open.
@@ -262,6 +264,7 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 - **Give each returned number a yes or a no: may the caller jump on it?** Too coarse. `check` must be able to jump on `equal_ct`'s answer, and `pick` without the line must not be able to use it in an address. One yes or no cannot give both verdicts.
 - **Record, for each returned number, which inputs it was computed from.** Still wrong for `check`. The answer is computed from `want` and `tag`, so `check` would have to list both tags, which is the over-broad line that section 3 set out to avoid.
 - **A word in the code that releases a number for use in jumps** (`reveal rax`). What allows the jump would then be written in the code, which a person reading the contract does not read. In the proposal it is written in the contract's line, and the code only uses it.
+- **A line that says what the returned number is computed from, without saying what the number is** (say `result depends on same(a, b)`). It would let a caller jump on a result whose exact value the contract leaves open, as in the `ode_varint` example of section 10. But the verifier would then have to keep two yes-or-no facts for each register inside the called function, not one: computed only from what the trace line lists, and computed only from what the result line lists. And for `equal_ct` it would gain nothing: to prove that the answer is computed only from `same(a, b)`, the verifier has to prove what the answer is, which is what `returns` already says. Left out unless a real program needs it.
 - **No yes-or-no facts at all; the verifier reasons about two runs at once.** That would replace the existing proofs about the trace entirely. The proposal gets the same verdicts on these examples with what exists.
 
 ## 12. What is asked
@@ -269,6 +272,7 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 1. **The three points of section 4.**
 2. **Where the new step of section 7 may be used:** (a) at any instruction, or (b) only right after a call. Form (b) is a smaller change to the formal model. But with (b), `check` with `equal_ct`'s instructions inline is refused, although the same instructions behind a call are accepted. The recommendation is (a).
 3. **Whether to restate the theorem about two runs.** Today its assumption is phrased through the marks, so a person reading the theorem has to read their definition too. It could instead say directly: "the two runs are given the same addresses and the same values for the listed things". It is the same theorem, shorter to read. The recommendation is to do it in the same change.
+4. **Whether a contract should also be able to say what its returned number is computed from without saying what the number is** (section 11, the fourth entry). The recommendation is not now: `returns E` already tells a caller everything where the contract says what the number is, and the weaker statement costs a second set of yes-or-no facts in the verifier and in the formal model.
 
 ## 13. The tests, to be written before the rule is built
 
