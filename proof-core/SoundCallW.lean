@@ -1838,66 +1838,132 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     split at h
     next hcond =>
       obtain ⟨c0, c4, cn, hnw⟩ := hcond
-      have hs := V.pure_ok h
-      injection hs with h1 _
-      subst h1
-      have hA : a = s0.reg base + c.toNat := ha c (ev_isConst hc) c0 cn
-      have hm := List.mem_of_getElem? hw
-      -- the run taken as written with the words it held; the number's high half; the terms of the two words
-      have CT := touch_carried E H wf w
-      have sxT := EV.sem_agree sx CT.agree CT.mono
-      have x0 : 0 ≤ ev ρ xr := by rw [← sxT.2.1]; exact Int.natCast_nonneg _
-      obtain ⟨ρ', CD, eq, _, bq, _⟩ := symDivide_sound CT.holds CT.wf sxT.2.2 (show (0 : Int) < W32i by decide) x0
-      have sxD := EV.sem_agree sxT CD.agree CD.mono
-      have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') CD.wf.words.ok sxD.2.2
-      have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') S1.ok bq
-      have C5 := Carried.terms CD.holds CD.wf (S1.ext.trans S2.ext) S2.ok
-      have hnw' : ((symDivide (s.touch ctx w) xr W32i).2.2.wrote.any fun e => e.1 == w) = false := by
-        rw [symDivide_wrote, touch_wrote, List.any_eq_false]
-        intro e me
-        have := List.all_eq_true.mp hnw e me
-        simpa using this
-      have hx1 := sx.1
-      have ex1 := sxT.2.1
-      have ex2 := sxD.2.1
-      have d1 := S1.den
-      have d2 := S2.den
-      have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ') S1.ok.wf S2.ext S1.lt
-      have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
-        (l := [(wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).1,
-               (wAtom (symDivide (s.touch ctx w) xr W32i).1 (wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).2).1])
-        (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
-        (by simp only [List.length_cons, List.length_nil]; omega) hnw'
-        (fun k hk => by
-          have hk : k = 0 ∨ k = 1 := by simp only [List.length_cons, List.length_nil] at hk; omega
-          rcases hk with rfl | rfl
-          · have e : x % 4294967296 = (ev ρ' xr % W32i).toNat := by unfold W32i; omega
-            exact e.trans (d1'.trans d1).symm
-          · have e : x / 4294967296 = (ev ρ' (symDivide (s.touch ctx w) xr W32i).1 % W32i).toNat := by
-              rw [eq]; unfold M64 at hx1; unfold W32i; omega
-            exact e.trans d2.symm) a hA
-      rw [store8_words] at Hs
-      refine ⟨allowed_of _ _ _ ?_, ρ', CT.then (CD.then (C5.then ⟨Agree.refl _ _, Nat.le_refl _, Hs, ?_⟩))⟩
-      · intro y hy1 hy2
-        simp only [Contract.perm, Bool.or_eq_true]
-        right
-        unfold Contract.inOut
-        exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
-      · have wf5 := C5.wf
-        exact ⟨wf5.base, wf5.reg, wf5.zf, wf5.cf, wf5.frame, wf5.facts, wf5.bytes, wf5.spec, wf5.wrote,
-          ⟨wf5.words.table, wf5.words.atoms, wf5.words.vec, wf5.words.rotrs,
-           fun w' j i m => by
-             rcases List.mem_append.mp m with m | m
-             · obtain ⟨q, mq, eq'⟩ := List.mem_map.mp m
-               have hq : q = 0 ∨ q = 1 := by have := List.mem_range.mp mq; simp only [List.length_cons, List.length_nil] at this; omega
-               injection eq' with _ e2
-               injection e2 with _ e3
-               rw [← e3]
-               rcases hq with rfl | rfl
-               · exact Nat.lt_of_lt_of_le S1.lt S2.ext.le
-               · exact S2.lt
-             · exact wf5.words.wrote w' j i (List.mem_filter.mp m).1,
-           fun _ _ hs => nomatch hs⟩, wf5.known, fun _ h => nomatch h⟩
+      split at h
+      next hk =>
+        -- the row of the remainders by 2^32 is a word: the high half is the row of the quotients, nothing is divided
+        have hk' : knownNonneg s (Lin.word xr) = true ∧ plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word xr)) = true := by
+          have hk2 := hk
+          simp only [Bool.and_eq_true] at hk2
+          exact ⟨hk2.1.2, hk2.2⟩
+        have hs := V.pure_ok h
+        injection hs with h1 _
+        subst h1
+        have hA : a = s0.reg base + c.toNat := ha c (ev_isConst hc) c0 cn
+        have hm := List.mem_of_getElem? hw
+        have CT := touch_carried E H wf w
+        have sxT := EV.sem_agree sx CT.agree CT.mono
+        have w0 := knownNonneg_sound H hk'.1
+        have w1 := plain_sound hk'.2 ρ H.facts
+        simp only [ev_sub, ev_const] at w1
+        have eh := ev_high ρ xr
+        have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) CT.wf.words.ok sxT.2.2
+        have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) S1.ok (bounded_high sxT.2.2)
+        have C5 := Carried.terms CT.holds CT.wf (S1.ext.trans S2.ext) S2.ok
+        have hnw' : ((s.touch ctx w).wrote.any fun e => e.1 == w) = false := by
+          rw [touch_wrote, List.any_eq_false]
+          intro e me
+          have := List.all_eq_true.mp hnw e me
+          simpa using this
+        have hx1 := sx.1
+        have ex1 := sxT.2.1
+        have d1 := S1.den
+        have d2 := S2.den
+        have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ) S1.ok.wf S2.ext S1.lt
+        have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
+          (l := [(wAtom xr (s.touch ctx w).tab).1, (wAtom (Lin.high xr) (wAtom xr (s.touch ctx w).tab).2).1])
+          (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
+          (by simp only [List.length_cons, List.length_nil]; omega) hnw'
+          (fun k hk => by
+            have hk : k = 0 ∨ k = 1 := by simp only [List.length_cons, List.length_nil] at hk; omega
+            rcases hk with rfl | rfl
+            · have e : x % 4294967296 = (ev ρ xr % W32i).toNat := by unfold W32i; omega
+              exact e.trans (d1'.trans d1).symm
+            · have e : x / 4294967296 = (ev ρ (Lin.high xr) % W32i).toNat := by
+                unfold M64 at hx1; unfold W32i at w1 eh ⊢; omega
+              exact e.trans d2.symm) a hA
+        rw [store8_words] at Hs
+        refine ⟨allowed_of _ _ _ ?_, ρ, CT.then (C5.then ⟨Agree.refl _ _, Nat.le_refl _, Hs, ?_⟩)⟩
+        · intro y hy1 hy2
+          simp only [Contract.perm, Bool.or_eq_true]
+          right
+          unfold Contract.inOut
+          exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+        · have wf5 := C5.wf
+          exact ⟨wf5.base, wf5.reg, wf5.zf, wf5.cf, wf5.frame, wf5.facts, wf5.bytes, wf5.spec, wf5.wrote,
+            ⟨wf5.words.table, wf5.words.atoms, wf5.words.vec, wf5.words.rotrs,
+             fun w' j i m => by
+               rcases List.mem_append.mp m with m | m
+               · obtain ⟨q, mq, eq'⟩ := List.mem_map.mp m
+                 have hq : q = 0 ∨ q = 1 := by have := List.mem_range.mp mq; simp only [List.length_cons, List.length_nil] at this; omega
+                 injection eq' with _ e2
+                 injection e2 with _ e3
+                 rw [← e3]
+                 rcases hq with rfl | rfl
+                 · exact Nat.lt_of_lt_of_le S1.lt S2.ext.le
+                 · exact S2.lt
+               · exact wf5.words.wrote w' j i (List.mem_filter.mp m).1,
+             fun _ _ hs => nomatch hs⟩, wf5.known, fun _ h => nomatch h⟩
+      next =>
+        have hs := V.pure_ok h
+        injection hs with h1 _
+        subst h1
+        have hA : a = s0.reg base + c.toNat := ha c (ev_isConst hc) c0 cn
+        have hm := List.mem_of_getElem? hw
+        -- the run taken as written with the words it held; the number's high half; the terms of the two words
+        have CT := touch_carried E H wf w
+        have sxT := EV.sem_agree sx CT.agree CT.mono
+        have x0 : 0 ≤ ev ρ xr := by rw [← sxT.2.1]; exact Int.natCast_nonneg _
+        obtain ⟨ρ', CD, eq, _, bq, _⟩ := symDivide_sound CT.holds CT.wf sxT.2.2 (show (0 : Int) < W32i by decide) x0
+        have sxD := EV.sem_agree sxT CD.agree CD.mono
+        have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') CD.wf.words.ok sxD.2.2
+        have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ') S1.ok bq
+        have C5 := Carried.terms CD.holds CD.wf (S1.ext.trans S2.ext) S2.ok
+        have hnw' : ((symDivide (s.touch ctx w) xr W32i).2.2.wrote.any fun e => e.1 == w) = false := by
+          rw [symDivide_wrote, touch_wrote, List.any_eq_false]
+          intro e me
+          have := List.all_eq_true.mp hnw e me
+          simpa using this
+        have hx1 := sx.1
+        have ex1 := sxT.2.1
+        have ex2 := sxD.2.1
+        have d1 := S1.den
+        have d2 := S2.den
+        have d1' := den_ext (inp := inpOf ctx s0) (ρ := ρ') S1.ok.wf S2.ext S1.lt
+        have Hs := C5.holds.storeRunWords E hw (c := c.toNat)
+          (l := [(wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).1,
+                 (wAtom (symDivide (s.touch ctx w) xr W32i).1 (wAtom xr (symDivide (s.touch ctx w) xr W32i).2.2.tab).2).1])
+          (lanes := [x % 4294967296, x / 4294967296]) rfl (by omega)
+          (by simp only [List.length_cons, List.length_nil]; omega) hnw'
+          (fun k hk => by
+            have hk : k = 0 ∨ k = 1 := by simp only [List.length_cons, List.length_nil] at hk; omega
+            rcases hk with rfl | rfl
+            · have e : x % 4294967296 = (ev ρ' xr % W32i).toNat := by unfold W32i; omega
+              exact e.trans (d1'.trans d1).symm
+            · have e : x / 4294967296 = (ev ρ' (symDivide (s.touch ctx w) xr W32i).1 % W32i).toNat := by
+                rw [eq]; unfold M64 at hx1; unfold W32i; omega
+              exact e.trans d2.symm) a hA
+        rw [store8_words] at Hs
+        refine ⟨allowed_of _ _ _ ?_, ρ', CT.then (CD.then (C5.then ⟨Agree.refl _ _, Nat.le_refl _, Hs, ?_⟩))⟩
+        · intro y hy1 hy2
+          simp only [Contract.perm, Bool.or_eq_true]
+          right
+          unfold Contract.inOut
+          exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+        · have wf5 := C5.wf
+          exact ⟨wf5.base, wf5.reg, wf5.zf, wf5.cf, wf5.frame, wf5.facts, wf5.bytes, wf5.spec, wf5.wrote,
+            ⟨wf5.words.table, wf5.words.atoms, wf5.words.vec, wf5.words.rotrs,
+             fun w' j i m => by
+               rcases List.mem_append.mp m with m | m
+               · obtain ⟨q, mq, eq'⟩ := List.mem_map.mp m
+                 have hq : q = 0 ∨ q = 1 := by have := List.mem_range.mp mq; simp only [List.length_cons, List.length_nil] at this; omega
+                 injection eq' with _ e2
+                 injection e2 with _ e3
+                 rw [← e3]
+                 rcases hq with rfl | rfl
+                 · exact Nat.lt_of_lt_of_le S1.lt S2.ext.le
+                 · exact S2.lt
+               · exact wf5.words.wrote w' j i (List.mem_filter.mp m).1,
+             fun _ _ hs => nomatch hs⟩, wf5.known, fun _ h => nomatch h⟩
     next => exact (refuse_ok h).elim
 
 /-- **A call, by contract, of a function that writes a run of words for its caller**, the run of this
@@ -2517,52 +2583,5 @@ theorem symCallF_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   refine ⟨g1, g2, g3, g4, g5, fun s2 post hdata => ?_⟩
   obtain ⟨hrip, ρ', C⟩ := g6 s2 post hdata
   exact ⟨hrip, ρ', F.then C⟩
-
-/-- A call, by one of the three rules (`symCall'`): see `symCall_sound`. -/
-theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
-    {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCall' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
-    c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
-    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
-  unfold symCall' at h
-  split at h
-  · exact (refuse_ok h).elim
-  next hno =>
-    have both : (c.lanes = [] ∧ c.atLeast = []) ∧ c.data = [] := by simpa using hno
-    split at h
-    · exact symCallPlain_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-    · split at h
-      · exact symCallB_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-      · split at h
-        · exact symCallF_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-        · exact symCallW_sound E h H wf q hq i hret both.1.1 both.1.2 both.2
-
-/-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
-address to come back to can be written; the state the called function starts in is one its contract's
-caller has seen to; what the called function may touch, this function may touch; and of every state the
-contract lets it return in, what the verifier holds after the call is so, at the next instruction. (The
-rows the proof file gives before the rule, `symKnow`, are shown, and only add to the facts.) -/
-theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
-    {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm s0).write (st.reg RSP - 8) 8 = true ∧
-    c.pre q (afterCall p q i st) ∧
-    (∀ a, (c.perm (afterCall p q i st)).read a = true → (ctx.contract.perm s0).read a = true) ∧
-    (∀ a, (c.perm (afterCall p q i st)).write a = true → (ctx.contract.perm s0).write a = true) ∧
-    ∀ s2, c.post ctx.defs (afterCall p q i st) s2 → s2.data = st.data →
-      s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
-  unfold symCall at h
-  obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
-  have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
-  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i hret
-  refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 => ?_⟩
-  obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2
-  exact ⟨hrip, ρ', ⟨Agree.mono C.mono C'.agree, Nat.le_trans C.mono C'.mono, C'.holds, C'.wf⟩⟩
 
 end Ode

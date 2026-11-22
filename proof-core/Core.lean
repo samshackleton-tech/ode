@@ -310,6 +310,9 @@ def Lin.word (r : Row) : Row := ⟨Lin.strip (r.coeff.map (· % W32i)), r.consta
 /-- The row of the quotients by 2^32: `r` is `Lin.word r` and 2^32 times this. -/
 def Lin.high (r : Row) : Row := ⟨Lin.strip (r.coeff.map (· / W32i)), r.constant / W32i⟩
 
+/-- The row has, as it is written, a part that is a multiple of 2^32: a low word and something above it. -/
+def Lin.hasHigh (r : Row) : Bool := r.coeff.any fun c => c != 0 && c % W32i == 0
+
 def wAtom (r : Row) (t : Tab) : Nat × Tab := intern (.atom (Lin.word r)) t
 
 /-- What a term is a sum of: itself, or the terms it sums. -/
@@ -1399,10 +1402,20 @@ def symStore8 (ctx : Ctx) (s : Sym) (w n : Nat) (o x : Row) : V Sym :=
   match Lin.isConst o with
   | some c =>
     if 0 ≤ c ∧ c % 4 = 0 ∧ c + 8 ≤ n ∧ s.wrote.all (fun e => e.1 != w) = true then
-      let d := symDivide (s.touch ctx w) x W32i
-      let lo := wAtom x d.2.2.tab
-      let hi := wAtom d.1 lo.2
-      pure (rememberStore { d.2.2 with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
+      if Lin.hasHigh x && knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then
+        -- (the number is written as a low part and a multiple of 2^32, and the row of the remainders by
+        -- 2^32 is seen at once to be a word: the high half is the row of the quotients, and nothing is
+        -- divided. So a cell that two known words make gives those two words back. Any other number is
+        -- divided, so that the specification's division of it finds the same quotient.)
+        let t := s.touch ctx w
+        let lo := wAtom x t.tab
+        let hi := wAtom (Lin.high x) lo.2
+        pure (rememberStore { t with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
+      else
+        let d := symDivide (s.touch ctx w) x W32i
+        let lo := wAtom x d.2.2.tab
+        let hi := wAtom d.1 lo.2
+        pure (rememberStore { d.2.2 with tab := hi.2 } w (c.toNat / 4) [lo.1, hi.1])
     else refuse "eight bytes that are not two words of the run, or of a run that single bytes were written to"
   | none => refuse "eight bytes at a place of a run that is no number"
 
@@ -3254,11 +3267,310 @@ def symCallB' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
 first taken as written with the words it held at entry, where nothing was written to it yet. -/
 def symCallB (ctx : Ctx) (s : Sym) (c : Contract) : V Sym := symCallB' ctx (callTouch ctx s c) c
 
-/-- A call: by the rule for a function that writes nothing for its caller, by the rule for one that
-writes a run of words it also reads, or by the rule for one that writes a run of bytes. -/
+/-! ## A call of a function that is given a table of addresses
+
+The called function (a wide kernel) reads a table of addresses, each the address of so many blocks, and
+writes one run: for each lane of the table some bytes of it, which its contract says are the bytes of the
+words of what a definition gives of the lane's blocks. Here the table and the run written are parts of
+this function's frame, and a lane's blocks are a part of a run this function was given to read, or a part
+of its frame.
+
+What a lane leaves is followed as far as it can be (`nameval`): the contract's expression is worked out on
+this function's terms; a use of a definition that cannot be worked out is given a number of its own
+(`Known.use`). The contract says the whole has a value, so that use has one. After the call each word
+written is a new unknown; where a lane's expression came to a use that has a number, that use is known to
+give the lane's words (`Known.held`). -/
+
+mutual
+/-- A thing worked out speaks only of unknowns in use (`n` of them) and of terms of the table (`t` of them):
+a number, a word, a counter, a use's number, bytes of a run as they were at entry, or a list of such. (Of the
+other kinds this says no: `nameval` does not let them through.) -/
+def WVal.ok (n t : Nat) : WVal → Bool
+  | .int _ => true
+  | .bool _ => true
+  | .num r => decide (r.coeff.length ≤ n)
+  | .counter r => decide (r.coeff.length ≤ n)
+  | .word xs => xs.all (· < t)
+  | .list l => WVal.okAll n t l
+  | .use h => decide (h < n)
+  | .run _ _ => true
+  | .part _ _ _ => true
+  | .other => true
+  | _ => false
+def WVal.okAll (n t : Nat) : List WVal → Bool
+  | [] => true
+  | v :: rest => WVal.ok n t v && WVal.okAll n t rest
+end
+
+/-- A number held as a row that is a number of the table, as that number. -/
+def wnorm : WVal → WVal
+  | .num r =>
+    match Lin.isConst r with
+    | some k => .int k
+    | none => .num r
+  | v => v
+
+/-- Two numbers' bits put together, each seen at once to lie from 0 to below 2^64: the unknown the state
+knows as that, or a new one (`symOrKnown`). -/
+def nameOr (s : Sym) (x y : Row) : Option (WVal × Sym) :=
+  if knownNonneg s x && plain s.facts (Lin.sub (Lin.const top) x) && knownNonneg s y && plain s.facts (Lin.sub (Lin.const top) y) then
+    match symOrKnown s x y (Items.ofList []) with
+    | .ok ((.lin r, s'), _) => some (.num r, s')
+    | _ => none
+  else none
+
+/-- `a op b` of two things worked out: as `wbin` has it; and the bits of a row and of a number of the text
+put together, with a new unknown where the state has none for the pair. -/
+def namebin (s : Sym) (op : String) (x y : WVal) : Option (WVal × Sym) :=
+  match wbin s.tab.find s op x y with
+  | some v => if v.ok s.nvars s.terms.length then some (v, s) else none
+  | none =>
+    match x, y with
+    | .num a, .int b => if op == "|" ∧ 0 ≤ b then nameOr s a (Lin.const b) else none
+    | _, _ => none
+
+def namevalList (ev : Sym → SExpr → Option (WVal × Sym)) : Sym → SExpr → Option (List WVal × Sym)
+  | s, .nil => some ([], s)
+  | s, .cons a rest =>
+    match ev s a with
+    | some (v, s) =>
+      match namevalList ev s rest with
+      | some (vs, s) => some (v :: vs, s)
+      | none => none
+    | none => none
+  | _, _ => none
+
+/-- An expression of a called function's `ensures`, worked out on this function's terms. What `weval` works
+out as it is, is taken so. Else `a op b`, `if`, `let` and a use of a definition are gone into: a use of a
+definition the state holds the words of, or has given a number, is that; else the definition is opened; and
+where that cannot be worked out either, the use is given a number of its own. (The state comes back with
+what was added: the uses' numbers, and unknowns for two numbers' bits put together. Only a thing that speaks
+of unknowns in use and of terms of the table is let through: `WVal.ok`.) -/
+def nameval (ctx : Ctx) : Nat → Sym → List (String × WVal) → SExpr → Option (WVal × Sym)
+  | 0, _, _, _ => none
+  | fuel + 1, s, env, e =>
+    match weval ctx s.tab.find s WFUEL env e with
+    | some v => if (wnorm v).ok s.nvars s.terms.length then some (wnorm v, s) else none
+    | none =>
+      match e with
+      | .bin op a b =>
+        match nameval ctx fuel s env a with
+        | some (x, s) =>
+          match nameval ctx fuel s env b with
+          | some (y, s) => namebin s op x y
+          | none => none
+        | none => none
+      | .ifx c a b =>
+        match weval ctx s.tab.find s WFUEL env c with
+        | some (.bool true) => nameval ctx fuel s env a
+        | some (.bool false) => nameval ctx fuel s env b
+        | _ => none
+      | .letx x a rest =>
+        match nameval ctx fuel s env a with
+        | some (v, s) => nameval ctx fuel s ((x, v) :: env) rest
+        | none => none
+      | .call f args =>
+        if f == "len" || own.contains f then none
+        else
+          match namevalList (fun s e => nameval ctx fuel s env e) s args, findDef ctx.defs f with
+          | some (vs, s), some d =>
+            if d.params.length != vs.length then none
+            else
+              match flatKeys s.tab.find vs with
+              | none => nameval ctx fuel s (d.params.zip vs) d.body
+              | some keys =>
+                match heldIds s.facts f keys s.known with
+                | some ids => if ids.all (· < s.terms.length) then some (.list (ids.map fun i => WVal.word [i]), s) else none
+                | none =>
+                  match usedAs s.facts f keys s.known with
+                  | some h => if h < s.nvars then some (.use h, s) else none
+                  | none =>
+                    match nameval ctx fuel s (d.params.zip vs) d.body with
+                    | some r => some r
+                    | none =>
+                      if keys.all (Key.ok s.nvars s.terms.length) then
+                        some (.use s.nvars, { s with nvars := s.nvars + 1, known := .use f keys s.nvars :: s.known })
+                      else none
+          | _, _ => none
+      | _ => none
+
+/-- The use that has the number `h`: its definition and what it is used with. -/
+def useOf (h : Nat) : List Known → Option (String × List Key)
+  | [] => none
+  | .use f keys h' :: more => if h' = h then some (f, keys) else useOf h more
+  | _ :: more => useOf h more
+
+/-- A list of words in blocks of sixteen, `k` blocks. -/
+def blocksOf : Nat → List WVal → List WVal
+  | 0, _ => []
+  | k + 1, l => .list (l.take 16) :: blocksOf k (l.drop 16)
+
+/-- The words of the `nb` blocks at the address `a`, as terms put into the table: the blocks are a part of
+a run of a fixed count this function was given to read, at a whole word; or a part of this function's frame
+(at or above the stack pointer, below the address to return to) that lies apart from the part the called
+function writes (`nout` bytes from `cw`), every word of it known from a cell. -/
+def laneWords (ctx : Ctx) (s : Sym) (a : Row) (nb : Nat) (cw : Int) (nout : Nat) : Option (List Nat × Tab) :=
+  match findOut a ctx.contract.fixeds 0 with
+  | some (.out j off) =>
+    match Lin.isConst off, ctx.contract.fixeds[j]? with
+    | some c, some (_, _, n0) =>
+      if 0 ≤ c ∧ c % 4 = 0 ∧ c + 64 * (nb : Int) ≤ (n0 : Int) then
+        some (termsOf intern ((List.range (16 * nb)).map fun k => Node.input j (c.toNat / 4 + k)) s.tab)
+      else none
+    | _, _ => none
+  | _ =>
+    match Lin.isConst (Lin.sub a (Lin.var RSP)), s.sp with
+    | some o, some sp =>
+      if sp ≤ o ∧ o + 64 * (nb : Int) ≤ 0 ∧ (o + 64 * (nb : Int) ≤ cw ∨ cw + (nout : Int) ≤ o) then
+        (frameRows s o (16 * nb) 0).map fun rows => termsOf wAtom rows s.tab
+      else none
+    | _, _ => none
+
+/-- The lanes of a table of addresses that lies in the frame from `ct` on, from lane `i` on, `count` of them:
+each address is a cell of the frame, and each lane is the list of its `nb` blocks (`laneWords`). -/
+def tableLanes (ctx : Ctx) (s : Sym) (ct : Int) (nb : Nat) (cw : Int) (nout : Nat) : Nat → Nat → Tab → Option (List WVal × Tab)
+  | 0, _, T => some ([], T)
+  | count + 1, i, T =>
+    match s.frame.find? (fun cell => cell.1 == ct + 8 * (i : Int)) with
+    | some (_, a) =>
+      match laneWords ctx { s with tab := T } a nb cw nout with
+      | some (ids, T) =>
+        match tableLanes ctx s ct nb cw nout count (i + 1) T with
+        | some (rest, T) => some (.list (blocksOf nb (ids.map fun i => WVal.word [i])) :: rest, T)
+        | none => none
+      | none => none
+    | none => none
+
+/-- The called function's names on words: a number is its register; a run of a fixed count is a part of a
+run this function was given to read; the table's own bytes are not followed (its name stands for its lanes,
+which come first), and the run of that name is the table: in the register `tr`, `nt` bytes; a run it only
+writes has no name there. -/
+def calleeL (ctx : Ctx) (s : Sym) (tx : String) (tr nt : Nat) : List (String × Kind) → List Nat → Option (List (String × WVal))
+  | (x, .number) :: args, r :: regs => (calleeL ctx s tx tr nt args regs).map fun env => (x, WVal.num (s.reg r)) :: env
+  | (x, .fixed n) :: args, r :: regs =>
+    if x == tx then
+      if r = tr ∧ n = nt then (calleeL ctx s tx tr nt args regs).map fun env => (x, WVal.other) :: env else none
+    else
+      match fixedPart ctx s r n, calleeL ctx s tx tr nt args regs with
+      | some (_, b, c), some env => some ((x, WVal.part b c n) :: env)
+      | _, _ => none
+  | (_, .out _) :: args, _ :: regs => calleeL ctx s tx tr nt args regs
+  | (_, .inout _) :: _, _ :: _ => none
+  | (_, .bytes _) :: _, _ :: _ => none
+  | _, _ => some []
+
+/-- The use, if any, that a lane's expression comes to: where the expression is the bytes of the words of
+something `nameval` brings to a use that has a number. (The state with what `nameval` added; the use's
+definition and what it is used with.) -/
+def laneUse (ctx : Ctx) (s : Sym) (env : List (String × WVal)) : SExpr → Sym × Option (String × List Key)
+  | .call f (.cons x .nil) =>
+    if f == "bytes_of" then
+      match nameval ctx WFUEL s env x with
+      | some (.use h, s1) => (s1, useOf h s1.known)
+      | _ => (s, none)
+    else (s, none)
+  | _ => (s, none)
+
+/-- `m` words written by a called function, as new unknowns, each from 0 to 2^32 - 1, with their terms in
+the table; where they are what a use gives, that is known. (The rows of the words, and the state.) -/
+def Sym.newWords (s : Sym) (m : Nat) (use : Option (String × List Key)) : List Row × Sym :=
+  let rows := (List.range m).map fun k => Lin.var (s.nvars + k)
+  let made := termsOf wAtom rows s.tab
+  (rows, { s with nvars := s.nvars + m, tab := made.2,
+                  facts := ((List.range m).map fun k => ranged32 (s.nvars + k)).flatten ++ s.facts,
+                  known := match use with
+                    | some (f, keys) => Known.held f keys made.1 :: s.known
+                    | none => s.known })
+
+/-- What the lanes leave. The contract has one `ensures` for each lane, in the run's order: so many bytes of
+the run, whole words, from where the lane before ended. Each lane's words are new unknowns, each from 0 to
+2^32 - 1. Where the lane's expression is the bytes of the words of something `nameval` brings to a use that
+has a number, that use is known to give the lane's words. (The rows of the words in the run's order, and the
+state with what was added. `a`: where the next lane's bytes begin.) -/
+def nameLanes (ctx : Ctx) (run : String) (env : List (String × WVal)) : Sym → Nat → List EnsureW → Option (List Row × Sym)
+  | s, _, [] => some ([], s)
+  | s, a, e :: rest =>
+    match e.part with
+    | some (a', m) =>
+      if e.run == run ∧ a' = a ∧ m % 4 = 0 then
+        let named := laneUse ctx s env e.value
+        let made := named.1.newWords (m / 4) named.2
+        (nameLanes ctx run env made.2 (a + m) rest).map fun p => (made.1 ++ p.1, p.2)
+      else none
+    | none => none
+
+/-- The cells that pairs of words make, from `c` on: the first word of a pair is its cell's low half. -/
+def cellsOf (c : Int) : Nat → List Row → List (Int × Row)
+  | j, lo :: hi :: rest => (c + 8 * (j : Int), Lin.add lo (Lin.scale W32i hi)) :: cellsOf c (j + 1) rest
+  | _, _ => []
+
+/-- The state after a call of a function that has written `n` bytes of the frame from `cw` on, the words
+written being these rows: as after any call, and the cells of that part are made of the rows, two to a
+cell. The cells the part overlaps are forgotten; the others at or above the stack pointer stay. -/
+def Sym.afterCallL (s : Sym) (sp cw : Int) (n : Nat) (rows : List Row) : Sym :=
+  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+    zf := .unknown, cf := .unknown,
+    frame := cellsOf cw 0 rows ++
+             s.frame.filter fun cell => decide (sp ≤ cell.1) && (decide (cell.1 + 8 ≤ cw) || decide (cw + (n : Int) ≤ cell.1)),
+    facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
+    tab := s.tab, intact := s.intact, wroteW := s.wroteW, known := s.known }
+
+/-- A call of a function that is given a table of addresses and writes one run, where both are parts of
+this function's frame, apart from each other, at or above the stack pointer and below the address to return
+to; the table's cells are known; the count of blocks is a number of the table; each lane's blocks are a
+part of a run this function was given to read or of the frame (`tableLanes`). What the contract asks of its
+numbers is shown first. After the call the run's words are new unknowns (`nameLanes`, `Sym.afterCallL`). -/
+def symCallL (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
+  match s.sp with
+  | none => refuse "at a call the stack pointer is not known"
+  | some sp =>
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+      refuse "a call needs more stack than this function's contract allows"
+    else if !(c.data.isEmpty && c.mbounds.isEmpty && c.inouts.isEmpty && c.ensures.isEmpty && c.regions.isEmpty &&
+              c.returns.isNone && c.result.isNone) then
+      refuse "a called function that is given a table of addresses and does more than write one run: not here yet"
+    else if !(c.atLeast.all fun (xk : String × Nat) =>
+        match c.regOf xk.1 with
+        | some rb => plain s.facts (Lin.sub (s.reg rb) (Lin.const xk.2))
+        | none => true) then
+      refuse "a number that a called function's contract asks to be no less than another is not seen at once to be so"
+    else
+      match c.outs, c.tables with
+      | [(run, r, n)], [(tx, tr, count, l)] =>
+        match Lin.isConst (s.reg l), frameAt s r, frameAt s tr with
+        | some nb, some cw, some ct =>
+          if !(decide (0 ≤ nb) && decide (sp ≤ cw) && decide (cw + (n : Int) ≤ 0) && decide (n % 8 = 0) && decide (sp ≤ ct) &&
+               decide (ct + 8 * (count : Int) ≤ 0) && (decide (ct + 8 * (count : Int) ≤ cw) || decide (cw + (n : Int) ≤ ct))) then
+            refuse "a called function's table of addresses, or the run it writes, is no part of this function's frame, or the two overlap"
+          else
+            match tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 with
+            | none => refuse "a lane of a called function's table is not blocks this function may read, every word of them known"
+            | some (lanes, T) =>
+              match calleeL ctx { s with tab := T } tx tr (8 * count) c.args argRegs with
+              | none => refuse "a called function is given a run that is no part of a run this function was given to read"
+              | some env =>
+                match nameLanes ctx run ((tx, WVal.list lanes) :: env) { s with tab := T } 0 c.ensuresW with
+                | none => refuse "a called function's contract does not say of each lane, one after another, what whole words of the run it leaves"
+                | some (rows, s1) =>
+                  if rows.length * 4 != n then
+                    refuse "a called function's contract does not say of each lane, one after another, what whole words of the run it leaves"
+                  else do
+                    each (fun (xb : String × Nat) =>
+                      match c.regOf xb.1 with
+                      | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
+                      | none => pure ()) c.bounds
+                    pure (Sym.afterCallL s1 sp cw n rows)
+        | _, _, _ => refuse "a called function's count of blocks is no number of the table, or its table or the run it writes is not in this function's frame"
+      | _, _ => refuse "a called function that is given a table of addresses, but not one table and one run to write: not here yet"
+
+/-- A call: by the rule for a function that is given a table of addresses; by the rule for a function that
+writes nothing for its caller, by the rule for one that writes a run of words it also reads, or by the rule
+for one that writes a run of bytes. -/
 def symCall' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
-  if !(c.lanes.isEmpty && c.atLeast.isEmpty && c.data.isEmpty) then
-    refuse "a called function that is given a table of addresses, asks that a number be no less than another, or takes the address of the file's data: not here yet"
+  if !c.lanes.isEmpty then symCallL ctx s c
+  else if !(c.atLeast.isEmpty && c.data.isEmpty) then
+    refuse "a called function that asks that a number be no less than another, or takes the address of the file's data: not here yet"
   else if c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty)) then symCallPlain ctx s c
   else if c.inouts.isEmpty && c.ensuresW.isEmpty then symCallB ctx s c
   else if c.outs.any (fun x => (frameAt s x.2.1).isSome) then symCallF ctx s c
@@ -3289,13 +3601,17 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
 does not keep are known not to be marked; each run of bytes it is given to read is one its contract
 says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
 this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
-says is hidden. And where a cell of the frame is known not to be marked, each run the called function
+says is hidden, or a part of the frame whose cells are known not to be marked. And where a cell of the frame is known not to be marked, each run the called function
 may write is within a run this function was given to write (so it is no part of the frame), or is a part
 of the frame that every such cell lies apart from. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   quietRegs.all s.q.regq.contains &&
   c.data.isEmpty &&         -- (a called function that takes the address of the file's data: not here yet)
-  c.fixeds.all (fun x => c.hidden.contains x.1) &&
+  c.fixeds.all (fun x => c.hidden.contains x.1 ||
+    -- (or a part of the frame, in whole cells, each of them known not to be marked: a table of addresses made here)
+    match frameAt s x.2.1 with
+    | some o => decide (x.2.2 % 8 = 0) && (List.range (x.2.2 / 8)).all fun (i : Nat) => s.q.fq.contains (o + 8 * (i : Int))
+    | none => false) &&
   (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
     ((ctx.contract.outs.any fun (_, b, n0) =>
       match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with

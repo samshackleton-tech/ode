@@ -917,8 +917,38 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       · obtain ⟨_, r2⟩ := E.region hmem
         rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
         exact E.quiet.2.2.1 b0 l0 hmem hnh0 k hk
-  · have := List.all_eq_true.mp hfix (x, r, n) hm
-    exact absurd (List.contains_iff_mem.mp this) hnot
+  · have hx := List.all_eq_true.mp hfix (x, r, n) hm
+    rcases Bool.or_eq_true_iff.mp hx with hh | hframe
+    · exact absurd (List.contains_iff_mem.mp hh) hnot
+    · -- a part of the frame, in whole cells, each of them known not to be marked
+      intro k hk
+      have r16 : r < 16 := fixeds_lt hm
+      have rne : r ≠ RSP := by
+        have hr := fixedsIn_mem c.args argRegs x r n hm
+        intro e
+        rw [e] at hr
+        simp [argRegs, RSP] at hr
+      cases hfr : frameAt s r with
+      | none => simp [hfr] at hframe
+      | some o =>
+        simp only [hfr, Bool.and_eq_true, decide_eq_true_eq] at hframe
+        obtain ⟨n8, hcells⟩ := hframe
+        have vr : (st.reg r : Int) = s0.reg RSP + o := by
+          have h1 := H.reg r r16
+          unfold frameAt at hfr
+          have h2 := ev_isConst (ρ := ρ) hfr
+          rw [ev_sub, ev_var, H.entry RSP (by decide)] at h2
+          omega
+        have hin : k / 8 < n / 8 := by omega
+        have hc := List.all_eq_true.mp hcells (k / 8) (List.mem_range.mpr hin)
+        obtain ⟨c1, c2, c3⟩ := M.frame _ (List.contains_iff_mem.mp hc)
+        show markBytes st.marks.mem (st.reg RSP - 8) 8 false ((if r = RSP then st.reg RSP - 8 else st.reg r) + k) = false
+        rw [if_neg rne]
+        unfold markBytes
+        split
+        · rfl
+        · have e : st.reg r + k = ((s0.reg RSP : Int) + (o + 8 * ((k / 8 : Nat) : Int))).toNat + k % 8 := by omega
+          rw [e]; exact c3 (k % 8) (by omega)
   · intro s2 ⟨qr, qs⟩
     refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_⟩
     · show (if calleeSaved.contains r then st.marks.reg r else s2.marks.reg r) = false
