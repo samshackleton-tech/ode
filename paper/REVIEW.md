@@ -141,8 +141,8 @@ What the prototype does not do. An `inline fn` has no contract of its own: each 
 
 ## What comes next
 
-1. Zooko's choice of a model for AArch64 ([`ARM-PROPOSAL.md`](ARM-PROPOSAL.md)), before the first function is verified there.
-2. Zooko's word on the rule for a returned number (`ODE.md` section 3), before the formal model changes.
+1. The model of AArch64. Answer C of [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md) is chosen: a table of Ode's own, and a proof kept apart that it agrees with Google's model. Its first step measures what the change costs.
+2. A decision on the rule for a returned number, before the formal model changes. The rule proposed in `ODE.md` section 3 hides more than it needs to: it keeps a caller from branching on a result that is made of nothing hidden. A finer rule, which goes by what the contract's `returns` expression is made of, is under discussion.
 3. The trial's programs into `paper/trial/`, with the same functions in each notation as files to read.
 4. The five things the trial found that the verifier does not do, each to be weighed before it is built: conclude that `x | y` is zero where both are; load more than one byte from a run of bytes; store a vector to the frame with `vmovdqu32`; read a function past its first `ret`; pass over a `let` that nothing uses.
 5. The front end's forms into `lang/odec.py`, once the shape of a second target is decided; the three `def` macros go in the same change.

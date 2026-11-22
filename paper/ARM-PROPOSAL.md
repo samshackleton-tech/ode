@@ -1,12 +1,14 @@
 # Proposal: a model of AArch64 for Ode
 
-A written proposal, 22 November 2026, before anything is built. It asks Zooko for one decision. It marks what was measured, what was read, what is judgment, and what is not known.
+A written proposal, 22 November 2026, before anything is built. It asks for one decision, and it marks what was measured, what was read, what is judgment, and what is not known.
+
+**Decided the same day: answer C,** taken in the two steps below. If C proves useful, the table, its comparison with processors and the proof of agreement are to be published as work of independent interest: something people can learn from and use who do not use Ode. So they are built as a package of their own, which names nothing of Ode's verifier or contracts.
 
 ## The decision
 
 Ode's theorems are about a model of the processor. For x86-64 that model is Ode's own: a table of instruction forms (`core/x86.tab`) with the meaning of its rows in Lean (`proof-core/Machine.lean`). Which model stands under the theorems for AArch64?
 
-On 11 November Zooko chose Google DeepMind's `arm64-semantics` for AArch64. Ode's table and the verifier that steps by it came after that, from 17 November on. So the question is open again, and there are three answers:
+On 11 November the choice for AArch64 was Google DeepMind's `arm64-semantics`. Ode's table and the verifier that steps by it came after that, from 17 November on. So the question is open again, and there are three answers:
 
 - **A.** Google's model, as chosen on 11 November.
 - **B.** A table of Ode's own for AArch64, of the same kind as the one for x86-64.
