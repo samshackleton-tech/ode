@@ -1,6 +1,6 @@
 # What a function's trace may depend on
 
-*This is a proposal. Nothing in it is built. It replaces the "Proposed return rule" that revision 4 of `ODE.md` had in section 3; that rule is withdrawn. It changes the formal model, so it waits for a decision. The last section says which statements here are measured, which are read from the code, and which are judgment.*
+*This is a proposal. Nothing in it is built. It replaces the "Proposed return rule" that revision 4 of `ODE.md` had in section 3; that rule is withdrawn. It changes the formal model, so it waits for a decision. Question 4 of section 12 was added last, and its recommendation changes point 3 of section 4. The last section says which statements here are measured, which are read from the code, and which are judgment.*
 
 ## 1. Two terms
 
@@ -254,7 +254,7 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 ## 10. What this does not do
 
 - It does not make `equal`'s contract more exact. `equal`'s trace really depends only on `n` and on where the first difference is, and the rule would allow a line that says so. Proving it needs a fact about the definition (before the first difference, the bytes are the same) that takes an induction. Whether today's verifier can show that is not known.
-- A caller can jump on a returned number only if the called function's contract says exactly what the number is, with `returns E`. If the contract only relates the result to other things with `ensures`, the verifier does not know what the number was computed from, and refuses a jump on it. Today's rule does give callers that knowledge: under it every returned number is computed only from what the called function's line lists. For example, `ode_varint`'s contract says `returns r` and `ensures out[0 .. r] = varint(v)`. A caller that went round a loop `r` times is acceptable today, and under the proposal would be refused until `ode_varint`'s contract said what `r` is (the length of `varint(v)`). No function in the repository does this today.
+- A caller can jump on a returned number only if the called function's contract says exactly what the number is, with `returns E`. If the contract only relates the result to other things with `ensures`, the verifier does not know what the number was computed from, and refuses a jump on it. Today's rule does give callers that knowledge: under it every returned number is computed only from what the called function's line lists. For example, `ode_varint`'s contract says `returns r` and `ensures out[0 .. r] = varint(v)`. A caller that went round a loop `r` times is acceptable today, and under the proposal would be refused until `ode_varint`'s contract said what `r` is (the length of `varint(v)`). No function in the repository does this today. Question 4 of section 12 is about exactly this.
 - Two expressions that are written differently count as different until the proof shows that they are equal. `same(tag, want)` is not `same(want, tag)` without such a step.
 - In the first version the new step of section 7 applies to registers only, not to bytes in memory.
 - What the line should say for a function that Rust or C calls is a separate question and is still open.
@@ -264,7 +264,7 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 - **Give each returned number a yes or a no: may the caller jump on it?** Too coarse. `check` must be able to jump on `equal_ct`'s answer, and `pick` without the line must not be able to use it in an address. One yes or no cannot give both verdicts.
 - **Record, for each returned number, which inputs it was computed from.** Still wrong for `check`. The answer is computed from `want` and `tag`, so `check` would have to list both tags, which is the over-broad line that section 3 set out to avoid.
 - **A word in the code that releases a number for use in jumps** (`reveal rax`). What allows the jump would then be written in the code, which a person reading the contract does not read. In the proposal it is written in the contract's line, and the code only uses it.
-- **A line that says what the returned number is computed from, without saying what the number is** (say `result depends on same(a, b)`). It would let a caller jump on a result whose exact value the contract leaves open, as in the `ode_varint` example of section 10. But the verifier would then have to keep two yes-or-no facts for each register inside the called function, not one: computed only from what the trace line lists, and computed only from what the result line lists. And for `equal_ct` it would gain nothing: to prove that the answer is computed only from `same(a, b)`, the verifier has to prove what the answer is, which is what `returns` already says. Left out unless a real program needs it.
+- **A line that says what the returned number is computed from, without saying what the number is.** An earlier form of this page set it aside. It is now question 4 of section 12, with the recommendation to take it.
 - **No yes-or-no facts at all; the verifier reasons about two runs at once.** That would replace the existing proofs about the trace entirely. The proposal gets the same verdicts on these examples with what exists.
 
 ## 12. What is asked
@@ -272,7 +272,54 @@ The fourteen verification jobs that serve as a fixed basket should keep their ve
 1. **The three points of section 4.**
 2. **Where the new step of section 7 may be used:** (a) at any instruction, or (b) only right after a call. Form (b) is a smaller change to the formal model. But with (b), `check` with `equal_ct`'s instructions inline is refused, although the same instructions behind a call are accepted. The recommendation is (a).
 3. **Whether to restate the theorem about two runs.** Today its assumption is phrased through the marks, so a person reading the theorem has to read their definition too. It could instead say directly: "the two runs are given the same addresses and the same values for the listed things". It is the same theorem, shorter to read. The recommendation is to do it in the same change.
-4. **Whether a contract should also be able to say what its returned number is computed from without saying what the number is** (section 11, the fourth entry). The recommendation is not now: `returns E` already tells a caller everything where the contract says what the number is, and the weaker statement costs a second set of yes-or-no facts in the verifier and in the formal model.
+4. **Whether the rule about the returned number should stay as the default, with a line of its own that widens it.** This question was added after the other three. Its recommendation changes point 3 of section 4, which removes the rule.
+
+   The new line would stand beside `trace depends on`. Take `differ_ct` (in the same file as `equal_ct`). It is `equal_ct` without the last step, the one that turns the differences into 1 or 0: it returns 0 where the arrays hold the same bytes, and another number where they differ. Here is a contract for it that does not say which number:
+
+   ```
+   contract differ_ct(a: n bytes, b: n bytes, n: number) {
+       returns r
+       trace depends on n
+       result depends on a, b
+   }
+   ```
+
+   `result depends on a, b` promises that the returned number is computed only from `a`, from `b`, and from what the `trace depends on` line lists. Said as in section 6: two runs that are given the same addresses, the same `n`, and the same bytes in `a` and in `b` return the same number. The line does not say what the number is.
+
+   The rule about the returned number would then have three cases:
+
+   - The contract says what the number is, with `returns E`. Nothing more is asked. A caller knows the value, as in section 4.
+   - The contract does not say what the number is, and has no `result depends on` line. Today's rule holds: the number must be computed only from what the `trace depends on` line lists. A contract that exists today and does not say what its number is, such as `ode_varint`'s, keeps its meaning.
+   - The contract does not say what the number is, and has the line. The number must be computed only from what the two lines list.
+
+   In the second and third cases a caller may let the returned number decide a jump, or use it in an address, if everything the two lines list, with the call's arguments put in, is computed only from constants and from what the caller's own line lists. If it is not, the caller may still store the number or compute with it. In the second case that is already asked at every call (section 7), so there the caller may always jump on the number, as today.
+
+   **What it costs a caller.** The less a called function's contract says about its number, the more a caller that jumps on the number has to list. The table shows the `trace depends on` line that the contracts of `check` and `keep` (section 3) need, by which function they call.
+
+   | The caller | If it calls `equal_ct`, whose contract says `returns same(a, b)` | If it calls `differ_ct`, whose contract says `result depends on a, b` |
+   |---|---|---|
+   | `check`, which jumps on the answer | `trace depends on same(want, tag)` | `trace depends on want, tag` |
+   | `keep`, which stores the answer | no line needed | no line needed |
+
+   After `differ_ct`, the verifier knows only that the answer is computed from the two tags. So `check`'s line has to list both tags, and that line would also allow a jump on any single byte of either (section 3). After `equal_ct`, the line can list exactly `same(want, tag)`.
+
+   **What the line buys.**
+
+   - A contract need not say more about its number than its callers use, and the maker may change the number later without changing the contract.
+   - A cheaper proof. "Computed only from these things" is what the yes-or-no facts of section 7 show. "Equal to this expression" needs a proof about the definition.
+   - In the contract of a function that Rust or C calls, the line tells a reader what the returned number can reveal. `result depends on a, b` says that it can reveal more than whether the arrays are the same.
+
+   **What keeping today's rule as the default buys.** Take code whose trace may depend on all of its input, such as a parser or the verifier written in Ode. Every number that such code computes from its input is computed only from listed things. So today's rule costs it nothing, and lets every caller jump on every returned number. With the rule removed, as point 3 has it, each such jump would need a called function whose contract says exactly what the number is. Section 10 names this loss. It does not arise in the functions of the repository today. It would arise in such code wherever a caller jumps on a result whose contract does not say what it is.
+
+   **What the line costs.**
+
+   - One more kind of line to read, and two lists to keep apart.
+   - A function whose contract has the line is verified twice: once against its `trace depends on` line without the rule about the returned number, and once against the two lines together with today's rule. For `differ_ct` both were tried on today's verifier (the two results for `differ_ct` in the last section). The second is `shown`. The first goes through every jump and every address and is refused only at the return, by the rule that it would no longer apply.
+   - More to prove in the formal model: a contract with two lists, and at a call the choice between them. As an estimate, a few hundred lines beyond the thousand of section 9.
+
+   An earlier form of this page set the line aside because it would need a second set of yes-or-no facts inside the verifier. That was wrong. It needs the same facts worked out a second time, against a longer list.
+
+   The recommendation is to take the line and to keep today's rule as the default. Point 3 of section 4 would then read: *today the number a function returns must be computed only from what its `trace depends on` line lists. Under the proposal a contract that says what the number is promises nothing more about it; a contract that does not may add a `result depends on` line, and the number must then be computed only from what the two lines list.* Sections 5 to 9 and the tests of section 13 would change with it.
 
 ## 13. The tests, to be written before the rule is built
 
@@ -300,6 +347,6 @@ Each is tried with a call and with the same instructions inline, and on both pro
 
 **Read in the code.** What a contract promises about marks at entry and at the return (`Contract.lean`: `quietAt`, `quietAfter`). The marks, and the theorem about two runs with its conclusion about the plain machine (`Machine.lean`, `Trace.lean`, `SoundTop.lean`: `verify_all_trace`). What the verifier takes as not marked after a call and what it asks at one (`Core.lean`: `afterCallQ`, `callQuiet`, `quietAtCall`). That an expression has at most one value (`SoundSpec.lean`: `Value.unique`). The contracts of the basket's fourteen jobs, for what they return.
 
-**Judgment.** The size. That the new step is sound: section 9 gives the argument, which is not yet a proof. That the basket keeps its verdicts.
+**Judgment.** The size. That the new step is sound: section 9 gives the argument, which is not yet a proof. That the basket keeps its verdicts. In question 4 of section 12: that verifying a function twice is enough to show a `result depends on` line, and the size of that change. The two halves were tried for one function, `differ_ct`; the formal model's part is not written.
 
 **Not known.** Whether `equal`'s more exact line can be proved today. Whether a listed expression must be shown to have a value under `requires`, or whether "the two runs are given the same value for it" may include "it has no value in either".
