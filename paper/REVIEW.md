@@ -1,14 +1,14 @@
 # Reading the Ode design report
 
-This sheet accompanies `ODE.md` (revision 2, 22 November 2026). It is not part of the language definition. The implementation baseline is Ode `c407eb6` (same verifier code as `1dab0e3`: `Core.lean` SHA-256 `cf09a130adea315c`, `core/x86.tab` SHA-256 `825f760819bfe872`); the design is ahead of it. No verifier rule has changed since `1dab0e3`.
+This sheet accompanies `ODE.md` (revision 3, 22 November 2026). It is not part of the language definition. The implementation baseline is Ode `c407eb6` (same verifier code as `1dab0e3`: `Core.lean` SHA-256 `cf09a130adea315c`, `core/x86.tab` SHA-256 `825f760819bfe872`); the design is ahead of it. No verifier rule has changed since `1dab0e3`. The AArch64 formal-model proposal sits beside this sheet in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md).
 
 ## Three observations, not one score
 
-| Observation | Revision 1 | Revision 2 (current) | What to compare next time |
-|---|---|---|---|
-| How much language is there to read? | 5 rendered pages (2,160 words). | 5 rendered pages (2,393 words). Use `pypy3 render-paper.py ODE.md ODE.pdf` and `pdfinfo ODE.pdf`. | Use the same renderer, page size and type. Name any rule moved to another document. Do not count moving detail a reader still needs as a reduction. |
-| What does verifying cost? | No self-verification timing yet; no fixed-basket baseline recorded. | Fixed 14-job basket (`basket v1`, below): **35,173.96 M retired user instructions** and **2.43 s** median wall time on the x86-64 Linux work machine; **2.04 s** median wall time on the Apple M6 macOS build machine (quiet). Still no verifier written in Ode. | Keep the 14-job basket stable across revisions; report input identities, host role, elapsed time, and retired instructions separately. Retired instructions resist host load changes, but do not replace user wait time. |
-| Who relies on what, for what? | The routes below. | Same routes; no new dependency added or removed. | List added and removed dependencies, new alternatives, and dependencies that used to be independent but now coincide. |
+| Observation | Revision 1 | Revision 2 | Revision 3 (current) | What to compare next time |
+|---|---|---|---|---|
+| How much language is there to read? | 5 rendered pages (2,160 words). | 5 rendered pages (2,393 words). | 5 rendered pages (2,416 words). Use `pypy3 render-paper.py ODE.md ODE.pdf` and `pdfinfo ODE.pdf`. | Use the same renderer, page size and type. Name any rule moved to another document. Do not count moving detail a reader still needs as a reduction. |
+| What does verifying cost? | No baseline yet. | Fixed 14-job basket (`basket v1`): **35,173.96 M retired user instructions**, **2.43 s** x86-64 / **2.04 s** Apple M6. | Same baseline (no verifier change); prototype front end compiles `quad32`, `p16`, and `all_zero` to byte-identical proofs. Still no verifier written in Ode. | Keep the 14-job basket stable across revisions; report input identities, host role, elapsed time, and retired instructions separately. Retired instructions resist host load changes, but do not replace user wait time. |
+| Who relies on what, for what? | The routes below. | Same routes. | Same routes; `ARM-PROPOSAL.md` compares reliance sets for AArch64 options before any model is built. | List added and removed dependencies, new alternatives, and dependencies that used to be independent but now coincide. |
 
 The report is a design draft, not a standalone grammar or machine specification. The precise instruction meanings, byte encodings and full contract definitions still have to be read for an audit. The page count is **not** the size of Bob's total reading list.
 
@@ -71,9 +71,21 @@ A reader may separately judge whether the selected contract meets a practical ne
   4. Multi-`ret` decoding: `kdecode.py` stops decoding at the first `ret`, truncating a function that places a second `ret` after an early return. Soundness held because `odeverify` refused the jump to the missing label, but early-exit code must share one final `ret` until the decoder follows all reachable code in the symbol.
 - **Exact arithmetic vs. wraparound overflow (`Arithmetic.lean`'s `derive`):** two concrete 64-bit signed inputs from TRUE rows (`0*x + 2^62 >= 0` added to itself wraps to `-2^63 < 0`; `2^62*x + 0 >= 0` and `2^62*x - 1 >= 0` scaled by 2 wrap the coefficient sum to `0` with constant `-2 < 0`) forge a contradiction in 64-bit arithmetic without overflow checks. Checked implementations on x86-64 (`imul`+`jo`, `add`+`jo`: `29` bytes) and AArch64 (`mul`+`smulh`+`cmp asr #63`+`b.ne`, `adds`+`b.vs`: `60` bytes) decline both wraparound forgeries while approving exact refutations including floor division on negative constants.
 
-### Next tests
+### Test 3: Single-tool prototype front end (`ode2.py`, 320 lines, x86-64 and AArch64)
 
-1. Build the first single-tool higher-level Ode trial on `ode_quad32` (named registers, checked frame slots, checked call) and `ode_all_zero`, plus `p16`'s loop invariant written on the loop, emitting bytes and running the current `odeverify`.
-2. Write the Arm formal-model proposal comparing Google's `arm64-semantics` with a small table-driven Arm model before verifying the first Arm function.
+Built and tested one small prototype front end implementing `target x86_64 | aarch64`, named registers, checked `frame` declarations with typed slot bounds, `inline fn` with typed register parameters, `distinct(...)` and `changes` checking, constant `for` unrolling, explicit `:=` store notation, and loop `place { ... }` blocks with automatic byte-offset computation:
+
+- **`ode_quad32` (hash caller):** dropped from 157 lines (with 68 raw `[rsp + N]` byte offsets and two manual `2312` constants) to 66 lines with zero raw stack offsets and bounds-checked `table[i]` / `r2.qword[w]` accesses. Emitted an ELF object **byte-for-byte identical** to `proof-core/examples/quad/odequad32.o`, approved by the current Lean `odeverify` using the exact stored 15-byte `ode_quad32.proof`.
+- **`blake3_servil_avx512_p16` (16-way BLAKE3 kernel):** replaced the `def g4(...)` text macro with a typed `inline fn g4(...: zmm) changes a0..d3` (zero text macros) and moved the loop invariant directly onto the loop (`place { ... }`). Emitted **byte-for-byte identical** `.text` (`2,768` B) and `.rodata` (`16` B), auto-computed the exact `+0x9a7` loop offset, was approved by `odeverify` with the stored proof, and reproved from scratch to the exact same `2,361`-byte proof. Across the entire repository only three `def` text macros exist (`p16.ode` and two in `one.ode`), and typed `inline fn` plus `for` replaces all three cleanly.
+- **`ode_all_zero` (verifier component):** loop invariant written directly on `@loop:` auto-computed `+0x2` and verified (`463` B proof, `odeverify -> shown`). Inserting `nop` before `@loop:` auto-shifted the offset to `+0x3` with zero edits to the invariant and still verified (`463` B proof, `shown`).
+- **AArch64 (`target aarch64`):** the same front end compiled `arm_mix16_4`, `arm_mix12` (with `distinct(d, tmp)`), and `arm_all_zero_words` (with named registers `xs/n/w/acc`), assembled with `clang` and passed native execution checks on Apple M6 hardware (execution testing, not Arm verification).
+- **Nine negative source-line diagnostics verified:** frame upper/negative/view out-of-bounds (`table[32]`, `table[-1]`, `r2.qword[128]`), unknown frame field (`&missing_slot`), AArch64 `mix12(v0, v1, v0)` (`distinct(d, tmp)` violated), register writes not listed in `changes` inside `inline fn` on x86-64 (`zmm2`, and `zmm30` inside `p16`'s `g4`) and AArch64 (`v5`), and register-kind mismatch (`rax` where `zmm` is required). Each reported the exact source file, line number, and violated rule before assembling.
+
+### Next steps (awaiting Sam's word on proposals where noted)
+
+1. **AArch64 formal model ([`ARM-PROPOSAL.md`](ARM-PROPOSAL.md)):** awaits Sam's choice among Option A (direct `arm64-semantics`), Option B (standalone `core/arm64.tab`), and Option C (recommended: `core/arm64.tab` + optional Lean equivalence bridge to Google's `arm64-semantics`).
+2. **Finer returned-number rule (`ODE.md` section 3):** awaits Sam's confirmation of the two-sentence rule before changing the formal model.
+3. **Small verifier-in-Ode enablers (`proof-core/`):** tighten `symOrKnown` with the proved linear bound `v <= x + y` (`x | y <= x + y`), design variable-length word loads (`symLoad` size 4/8) and multi-`ret` decoding, and start the first V1 Ode-written verifier slice targeting `ode_sum` and its false controls.
+4. **Promote the `ode2.py` front-end constructs into `lang/odec.py`** once the Arm target shape is approved, deleting `def` text macros in the same round.
 
 After each change, revisit this sheet and the report together. A proof file can shrink while the verifier gets harder to understand; inlining can make a loop faster while more instruction lines compete in a caller. None of the three observations substitutes for the others.
