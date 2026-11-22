@@ -1,0 +1,17 @@
+What today's reader and verifier say of the three small questions of TRACE-PROPOSAL, run on November 22, 2026
+on an x86-64 Linux work machine, in `proof-core`, with the repository's verifier:
+proof-core/Core.lean cc0f1279bc6a3787317b8e6252f468605cad93489a5b400218569c3d58624eea
+core/x86.tab         66743ef5b540a00ac933537d3d56d0b56ab954ce5ae8d594bc2f9165e2b780d2   (BLAKE3)
+The messages are the verifier's as it stands today. The proposal changes their wording.
+
+== far_trace.py
+as kept: exit 0: shown
+without `trace depends on x`: exit 1: refused: at the return the stack pointer, or the number returned, may depend on a secret | in ode_far
+== equal_trace.py
+as kept: exit 0: shown
+the caller names n alone: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
+the caller names a, b: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
+the caller has no line: exit 1: refused: at a call, something the called function's contract asks not to depend on a secret may depend on one | in ode_equal
+== clause_today.py
+`trace depends on a, b, n`: read, 70 lines of statement
+`trace depends on n, common(a, b)`: not read: line 22: name expected, not '('

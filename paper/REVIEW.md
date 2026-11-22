@@ -1,6 +1,6 @@
 # Reading the Ode design report
 
-This sheet accompanies `ODE.md` (revision 4, 22 November 2026). It is not part of the language definition. It keeps three observations from one revision to the next: how much there is to read, what verifying costs, and who relies on what. It also says what a first trial of the proposed notation showed and what it did not show.
+This sheet accompanies `ODE.md` (revision 5, 22 November 2026). It is not part of the language definition. It keeps three observations from one revision to the next: how much there is to read, what verifying costs, and who relies on what. It also says what a first trial of the proposed notation showed and what it did not show.
 
 The verifier is that of commit `1dab0e3`: nothing proposed in `ODE.md` has been added to it. Its two main inputs, by BLAKE3:
 
@@ -13,7 +13,7 @@ A proposal for a model of AArch64 is in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md).
 
 | Observation | At this revision | How to compare next time |
 |---|---|---|
-| How much language is there to read? | 5 pages, 2,430 words. (Revisions 1 to 3: 5 pages each; 2,160, 2,393 and 2,416 words.) Made by `pypy3 render-paper.py ODE.md ODE.pdf`, counted by `pdfinfo ODE.pdf`. | The same renderer, page size and type. Name any rule moved to another document: detail a reader still needs is not a reduction. |
+| How much language is there to read? | 5 pages, 2,455 words. (Revisions 1 to 4: 5 pages each; 2,160, 2,393, 2,416 and 2,430 words.) Made by `pypy3 render-paper.py ODE.md ODE.pdf`, counted by `pdfinfo ODE.pdf`. Revision 5 gives the proposed trace clause one paragraph; its examples, its meaning and what it would change are in `TRACE-PROPOSAL.md` (2,689 words), a proposal that is no part of the language yet. | The same renderer, page size and type. Name any rule moved to another document: detail a reader still needs is not a reduction. |
 | What does verifying cost? | The 14 kept proofs of the table below: 35,174 million retired instructions on x86-64. The verifier has not changed since the count. | The same 14 jobs. Give the inputs' hashes, the machine's role, the retired instructions and the elapsed time separately. |
 | Who relies on what, for what? | The routes below. None was added or removed since revision 1. | List dependencies added and removed, new alternatives, and dependencies that were independent and now coincide. |
 
@@ -62,11 +62,11 @@ A reader may separately judge whether the selected contract meets a practical ne
 
 The x86-64 verifier covers 8 of the 14 functions of the Ode hash and 1,470 of its 3,062 instructions. That is not a proof of the production library or of the whole Ode hash. In the small `ode_sum` example the contract says `returns 14` with a stack budget of 16 bytes, and the proof file is 12 bytes (`for ode_sum` and a newline); the rules, the object code, the contracts and the other functions' proofs are not in those 12 bytes. `ode_quad32` fills a table of 32 addresses and calls a kernel through its contract; its stack budget is 6,432 bytes.
 
-The frame notation, the choice of inlining at each use, the finer return rule, a second processor and a verifier written in Ode are proposals. None is in the repository's tools.
+The frame notation, the choice of inlining at each use, a trace clause that names values, a second processor and a verifier written in Ode are proposals. None is in the repository's tools.
 
 ## The trial
 
-The trial took two programs (a step of the hash, a piece of the verifier) and two processors (x86-64, AArch64), as far as today's tools and a prototype front end reach. Its programs and result files are kept outside this repository for now; they are to be added under `paper/trial/` so that every figure below can be made again.
+The trial took two programs (a step of the hash, a piece of the verifier) and two processors (x86-64, AArch64), as far as today's tools and a prototype front end reach. Its programs and result files are kept outside this repository for now; they are to be added under `paper/trial/` so that every figure below can be made again. (`paper/trial/trace/` is there already and holds only the three small programs behind `TRACE-PROPOSAL.md`.)
 
 Four words are used exactly:
 
@@ -106,7 +106,7 @@ A call in place of the inline copies, on x86-64:
 The verifier's arithmetic rule ends a contradiction by finding every coefficient zero. `ode_all_zero(xs, n)` returns 1 if the `n` bytes at `xs` are all zero, and 0 if not. Its contract says `returns all_zero(xs)`, `trace depends on xs, n` and `stack 0`.
 
 - A scan that leaves at the first byte that is not zero (x86-64, 40 bytes) is shown. The statement is 770 bytes and the proof 463 bytes; verifying takes 21.57 million retired instructions. The loop's invariant is `all_zero_from(xs, i) == all_zero(xs)` with `i <= n`.
-- The same code against a contract whose trace may depend on `n` alone is refused with the proof above: "a jump on a flag that may depend on a secret: which instructions run would depend on it". No proof of it is found.
+- The same code against a contract whose trace may depend on `n` alone is refused with the proof above, at a jump on a flag made of a byte that the clause does not name (the message is at `proof-core/Core.lean` line 2844). No proof of it is found.
 - A scan that stops one byte early returns 1, when run, for bytes of which only the last is not zero. No proof of it is found.
 
 Three things are true and not shown today:
@@ -142,7 +142,7 @@ What the prototype does not do. An `inline fn` has no contract of its own: each 
 ## What comes next
 
 1. The model of AArch64. Answer C of [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md) is chosen: a table of Ode's own, and a proof kept apart that it agrees with Google's model. Its first step measures what the change costs.
-2. A decision on the rule for a returned number, before the formal model changes. The rule proposed in `ODE.md` section 3 hides more than it needs to: it keeps a caller from branching on a result that is made of nothing hidden. A finer rule, which goes by what the contract's `returns` expression is made of, is under discussion.
+2. A decision on [`TRACE-PROPOSAL.md`](TRACE-PROPOSAL.md), before the formal model changes. It lets `trace depends on` name a value such as `same(want, tag)`, asks of a jump or an address that it be made of what the function's own clause names, and gives a returned number no rule of its own. The return rule that revision 4 of `ODE.md` proposed is withdrawn: two functions that compare bytes and three callers showed that no mark on the returned number gives the right verdicts.
 3. The trial's programs into `paper/trial/`, with the same functions in each notation as files to read.
 4. The five things the trial found that the verifier does not do, each to be weighed before it is built: conclude that `x | y` is zero where both are; load more than one byte from a run of bytes; store a vector to the frame with `vmovdqu32`; read a function past its first `ret`; pass over a `let` that nothing uses.
 5. The front end's forms into `lang/odec.py`, once the shape of a second target is decided; the three `def` macros go in the same change.

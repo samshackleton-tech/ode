@@ -1,6 +1,6 @@
 # Ode: a language for code that comes with a proof
 
-Design report, revision 4 for discussion, 22 November 2026. This describes the intended language, not a release. The companion review gives implementation status, experimental measurements, and reliance sets. Example source that uses the new notation is a proposal.
+Design report, revision 5 for discussion, 22 November 2026. This describes the intended language, not a release. The companion review gives implementation status, experimental measurements, and reliance sets. Example source that uses the new notation is a proposal.
 
 ## 1. What the reader gets
 
@@ -37,9 +37,9 @@ A piece of memory is a range of bytes together with permission to read it or to 
 
 The contract need not repeat machine details that the tool can derive and check. But hiding them from the usual display must not hide an obligation from the caller. For the existing x86 implementation of `quad32`, the caller needs AVX-512 and a stack budget of 6,432 bytes including calls. A caller with only 4,096 bytes cannot use that implementation on this contract. A summary that displays only the digest equation must not answer that it can.
 
-`trace depends on` names inputs, besides the permitted addresses, that may influence which instructions run or which addresses they touch. An omitted input may still affect the result. In particular, `quad32` needs no permission to branch on the key merely because the result uses it. This describes an architectural trace, not elapsed time, speculative execution, or every observation a real processor permits.
+`trace depends on` names what may influence which instructions run or which addresses they touch, besides the permitted addresses. An input it leaves out may still affect the result. In particular, `quad32` needs no permission to branch on the key merely because the result uses it. This describes an architectural trace, not elapsed time, speculative execution, or every observation a real processor permits.
 
-Proposed return rule: if a contract hides an input from the trace, a caller must treat its returned number as possibly depending on that input; it may use the number as data but not directly as a branch condition or an address. If the contract hides no input, the verifier still checks that the result does not depend on other hidden entry state before allowing the caller to use it in the trace. This conservative rule does not promise that every permitted trace dependency actually occurs.
+Proposed: the clause may name an expression as well as an input. A tag check compares two tags without branching on their bytes and must then act on the answer. Its contract says `trace depends on same(want, tag)` and names neither tag. A function may branch on a number, or use it in an address, only where the number is made of what its own clause names. A returned number has no rule of its own: the caller knows of it what the callee's `returns` says. The clause permits a dependency; it does not promise that one occurs. The page `TRACE-PROPOSAL.md` has the examples, the meaning and what would change.
 
 ## 4. Choosing instructions
 
