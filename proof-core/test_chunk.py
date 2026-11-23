@@ -75,7 +75,7 @@ ARGS = "refused: what a called function's contract says of its arguments is not 
 NEEDS_MORE = "refused: a called function needs of the processor what this function's contract does not say it needs"
 STACK = "refused: a call needs more stack than this function's contract allows"
 NOT_TWO = "refused: eight bytes that are not two words of the run, or of a run that single bytes were written to"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, a number to be below its bound, or a part given to a
                                   # called function to lie within the run it is a part of, and it is not so
 KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover

@@ -447,9 +447,9 @@ contract wide_add(out: block, a: block, b: block) {
                 self.assertEqual([l for l in statement.statement(spec, [(obj, "ode_common")]) if l.startswith("hidden")], hidden)
                 shown, said = lean_verify.verify(spec, [(obj, "ode_common")], kept)
                 self.assertFalse(shown)
-                self.assertIn("may depend on a secret", said)
+                self.assertIn("may depend on values kept out of the trace", said)
                 st, pf = (os.path.join(self.dir, f"hidden.{kind}") for kind in ("statement", "proof"))
-                with self.assertRaisesRegex(SystemExit, "may depend on a secret"):
+                with self.assertRaisesRegex(SystemExit, "may depend on values kept out of the trace"):
                     prove.prove(spec, [(obj, "ode_common", "")], st, pf)
 
     def test_a_contract_line_the_account_lacks_is_refused(self):

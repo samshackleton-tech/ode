@@ -47,7 +47,7 @@ WORD = "refused: a word of the run is not known to hold what the specification s
 STACK = "refused: a call needs more stack than this function's contract allows"
 LANE = "refused: a lane of a called function's table is not blocks this function may read, every word of them known"
 FRAME = "refused: a called function's table of addresses, or the run it writes, is no part of this function's frame, or the two overlap"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 P = "compress(kf.key, {}, counter(0), 64, kf.flags | PARENT)"
 ENS = f"parent(kf.key, kf.flags, {P.format('a')}, {P.format('b')})"
 

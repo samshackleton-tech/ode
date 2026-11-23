@@ -2815,7 +2815,7 @@ def symStmtQ (ctx : Ctx) (bind : Bind) (s : Sym) (st : Stmt) : V Sym := do
   let s1 ← symStmt ctx bind s st
   match stmtMarks ctx bind before s1 st with
   | some q => pure { s1 with q := q }
-  | none => refuse "an address is made of something that may depend on a secret: what can be observed of the run would depend on it"
+  | none => refuse "an address may depend on values kept out of the trace: what can be observed of the run would depend on them"
 
 inductive Next where
   | at (pc : Nat)
@@ -2861,7 +2861,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     else do
       symReturn ctx s
       if !(s.q.regq.contains RSP && (!ctx.contract.givesNumber || s.q.regq.contains 0)) then
-        refuse "at the return the stack pointer, or the number returned, may depend on a secret"
+        refuse "at the return the stack pointer, or the number returned, may depend on values kept out of the trace"
       else pure [(s, .returned)]
   | .retLink r =>
     -- a return to the address a register holds: the register is the one the contract's machine returns by, it
@@ -2881,7 +2881,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       | none => pure [(s, .at t)]
       | some (flag, want) =>
         if !(if flag == "zf" then s.q.zq else s.q.cq) then
-          refuse "a jump on a flag that may depend on a secret: which instructions run would depend on it"
+          refuse "a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
         else
         match flagWays (if flag == "zf" then s.zf else s.cf) with
         | none => refuse "a jump on a flag of which nothing is known"
@@ -3760,7 +3760,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       needsOf ctx s c
       let s' ← symCall ctx s c
       if !callQuiet ctx (quietAtCall s c) c then
-        refuse "at a call, something the called function's contract asks not to depend on a secret may depend on one"
+        refuse "at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
       else pure [({ s' with q := afterCallQ c (quietAtCall s c) }, .at i.next)]
   | none => symInstr ctx s i
 
@@ -3992,7 +3992,7 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   match p.keep.find? fun r => s.reg r != first.reg r with
   | some r => refuse s!"at the place {p.pc} register {r} does not hold what it held on first coming there"
   | none =>
-  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on a secret, which it did not on first coming there"
+  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
   else
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else do

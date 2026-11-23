@@ -59,7 +59,7 @@ def turned(row):
     """The row that says the opposite: where `row` says c + a.x >= 0, it says -c - 1 - a.x >= 0."""
     numbers = [int(n) for n in row.split()[1:]]
     return "k " + " ".join(str(n) for n in [-numbers[0] - 1] + [-n for n in numbers[1:]])
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
     ("the message may have 4097 bytes: its left part is then four chunks", "len <= 4096", "len <= 4097", KNOW),

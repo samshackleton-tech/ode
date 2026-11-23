@@ -39,7 +39,7 @@ OBJ = os.path.join(KCHECK, "b3hashr.o")
 PAD = "b3l_pad"
 LINES = ["fn b3l_pad", "arg block out 64", "arg src bytes n", "arg n number", "below n 65", "hidden src",
          "ensures block (num 0) (num 64) (call padded (name src))", "stack 48"]
-SECRET = "may depend on a secret"
+SECRET = "may depend on values kept out of the trace"
 
 
 def contract():
@@ -188,7 +188,7 @@ class Pad(unittest.TestCase):
         # the contract may say the trace depends on the run too: it promises less, and is shown too
         self.assertEqual(last_word(spec=once("    trace depends on n\n", "    trace depends on n, src\n")), "shown")
         # without the line the count is hidden, and the loop goes round by it: a false statement, refused
-        self.assertEqual(last_word(spec=once("    trace depends on n\n", "")), "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it")
+        self.assertEqual(last_word(spec=once("    trace depends on n\n", "")), "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them")
 
 
 if __name__ == "__main__":

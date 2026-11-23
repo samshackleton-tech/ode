@@ -72,7 +72,7 @@ NOT_IN_DATA = "refused: the address of a place that is not in the file's read-on
 PAST_DATA = "refused: a read of the file's read-only data that is not one, four or eight bytes within it"
 AT_LEAST = "    requires n >= 1\n"
 TRACE = "    trace depends on n\n"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 CALL = "chunk(key, t, flags, start, end, length, n, inputs[i])"
 SCHEDULE = 0x4380                         # where the order of the message words lies in the file's data
 # The contract's lines as statement.py writes them, but for the `data` and the `ensuresw` line.
@@ -412,7 +412,7 @@ class Loop(Files, unittest.TestCase):
         hidden = [l for l in self.lines if l.startswith("hidden ")]
         self.assertEqual(hidden, ["hidden key", "hidden t", "hidden packed"])
         k = self.lines.index("hidden key")
-        self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address is made of something that may depend on a secret")
+        self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address may depend on values kept out of the trace")
         no_line = lines_of(once(TRACE, ""))
         self.assertEqual(no_line, self.lines[:k + 1] + ["hidden n"] + self.lines[k + 1:])
         self.refused("hidden-count", no_line, JUMP)

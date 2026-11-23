@@ -37,7 +37,7 @@ LAKE = lean_verify.LAKE
 
 RANGE = "need entail"                 # the sum or difference is to be shown from 0 to 2^64 - 1, and the prover has no proof of it
 RETURNS = "need entail"               # what is returned is to be shown the contract's number, and it is not
-HIDDEN = "refused: at the return the stack pointer, or the number returned, may depend on a secret"
+HIDDEN = "refused: at the return the stack pointer, or the number returned, may depend on values kept out of the trace"
 # function -> (what is changed, the source as it is, the source changed, what the verifier then lacks)
 SOURCES = {
     "far": [("2^62 is added", "  mov rax, 1\n  shl rax, 63\n", "  mov rax, 1\n  shl rax, 62\n", RETURNS),

@@ -56,7 +56,7 @@ NOT_WITHIN = "refused: a read of a run of a fixed count that is not eight bytes 
 NO_RUN = "refused: a read that is neither of the frame nor of a run given"
 NEEDS_IF, IF = "    stack 128\n    needs sse41\n    needs avx512 ", "if plat == 5"       # (the hash's own contract in blake3.spec has the same condition)
 TRACE = "    trace depends on plat\n    stack 128\n"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 
 
 def spec_text(change=lambda t: t):

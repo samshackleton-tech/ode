@@ -47,8 +47,8 @@ ENTAIL = "need entail"            # an address is to be shown not to pass 2^64, 
 KNOW = "need know"                # the proof file has run out before an `ensures` or a call, and of the rows that the prover
                                   # would name there (that a part lies within its run; how two numbers compare) none is shown
 STACK = "refused: a call needs more stack than this function's contract allows"
-AT_CALL = "refused: at a call, something the called function's contract asks not to depend on a secret may depend on one"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+AT_CALL = "refused: at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
     ("the block is said to hold the message from byte 15 on", "src[16 .. len]", "src[15 .. len]", FOLLOW),

@@ -59,6 +59,8 @@ def main():
         ("test_inline (a use of an inline function is its instructions)", [sys.executable, "../lang/test_inline.py"]),
         ("test_places (a place written at its loop: the count is worked out)", [sys.executable, "../lang/test_places.py"]),
         ("test_forms (names for registers, `:=`, a frame: the instructions written out)", [sys.executable, "../lang/test_forms.py"]),
+        ("test_arm64 (AArch64 instruction table, encodings and ELF decoding)", [sys.executable, "../arm64/test_arm64.py"]),
+        ("test_arm (three AArch64 functions verified by Core.lean)", [sys.executable, "../proof-core/test_arm.py"]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

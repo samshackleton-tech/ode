@@ -289,7 +289,7 @@ class KernelTests:
                 odec.build(self.path("trace.ode"), self.K.fn, self.path("trace.o"))
                 last = self.found(self.spec, self.path("trace.o"), "trace")
                 self.assertIsInstance(last, str, what)
-                self.assertIn("a jump on a flag that may depend on a secret", last.split("\n")[0], what)
+                self.assertIn("a jump on a flag that may depend on values kept out of the trace", last.split("\n")[0], what)
                 # (the function is not refused for being changed: it does what the contract says of the words)
                 named = self.changed("    stack 0\n", f"    stack 0\n    trace depends on {name}\n")
                 self.assertNotIsInstance(self.found(named, self.path("trace.o"), "named"), str, what)

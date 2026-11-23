@@ -38,8 +38,8 @@ LOWBYTE = os.path.join(HERE, "examples", "lowbyte")
 NAME = "ode_rounds"
 LAKE = lean_verify.LAKE
 # Why the verifier refuses.
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
-ADDRESS = "refused: an address is made of something that may depend on a secret: what can be observed of the run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
+ADDRESS = "refused: an address may depend on values kept out of the trace: what can be observed of the run would depend on them"
 LOOP = "\n  jne @again\n"
 # Changed so that which instructions run depends on the hidden byte, or which address is read on the hidden
 # count: (what, the source as it is, changed, what the verifier says)

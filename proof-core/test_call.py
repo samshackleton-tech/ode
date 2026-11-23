@@ -21,7 +21,7 @@ NOT_WHOLE = "a called function is given a run of bytes that is not one this func
 UNDECIDED = "need compare"            # which of two numbers is the greater is asked, and the prover has no proof either way
 # (what is changed, the caller's source as it is, the source changed, what the verifier then lacks or refuses):
 # each is built again from the changed source
-JUMP = "a jump on a flag that may depend on a secret"
+JUMP = "a jump on a flag that may depend on values kept out of the trace"
 SOURCES = [
     # (after a call the caller may rely on nothing that the called function leaves in a register it need not
     # keep: such a register may hold anything, something secret too, so a jump on it is refused. Three such here.)
@@ -55,9 +55,9 @@ FRAME_WAY = (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov rcx, [rsp]\n
 # rbp is a register the caller of this function may hold a secret in.
 FRAME_SECRETS = [
     ("what is kept in the frame is a register that may hold a secret",
-     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rbp\n", "  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on a secret"),
+     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rbp\n", "  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on values kept out of the trace"),
     ("the cell is written again after the call with a register that may hold a secret",
-     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov [rsp], rbp\n  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on a secret"),
+     (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov [rsp], rbp\n  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")), "a jump on a flag that may depend on values kept out of the trace"),
     ("one byte of the cell is written again with a register that may hold a secret",
      (FRAME_OLD, ("  sub rsp, 8\n  mov [rsp], rdx\n", "  mov rsi, rax\n  mov rax, rbp\n  mov byte ptr [rsp + 4], al\n  mov rax, rsi\n  mov rcx, [rsp]\n  cmp rax, rcx\n", "  add rsp, 8\n  ret\n")),
      "a write that is not eight bytes of the frame in use"),       # (refused before the marks are asked)
@@ -140,7 +140,7 @@ class Call(unittest.TestCase):
             with self.subTest(what=what):
                 name, said = self.found(spec.replace(old, "    returns equal(a, b)\n" + line), self.equal, "hidden")
                 self.assertEqual(name, "ode_equal")
-                self.assertIn("at a call, something the called function's contract asks not to depend on a secret may depend on one", said)
+                self.assertIn("at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace", said)
 
     def test_shown(self):
         t = time.time()

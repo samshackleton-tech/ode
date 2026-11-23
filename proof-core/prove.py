@@ -329,7 +329,7 @@ class Prover:
             if self.finished(said): return proof
             m = re.search(r"at the place (\d+) register (\d+) does not hold", said)
             if m: raise Unkept(int(m.group(1)), int(m.group(2)))
-            m = re.search(r"at the place (\d+) register (\d+) may depend on a secret", said)
+            m = re.search(r"at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
             if m: raise Marked(int(m.group(1)), int(m.group(2)))
             if not said.startswith("need "): self.last = said; self.note(proof, said); return None
             lines = said.split("\n")

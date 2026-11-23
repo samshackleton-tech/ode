@@ -54,7 +54,7 @@ OTHER_WORD = "refused: a word of the run is not known to hold what the specifica
 AT_PLACE = "refused: at the place 2471 the vector registers are not shown to hold what the place says"
 AT_LEAST = "    requires n >= 1\n"
 TRACE = "    trace depends on n\n"
-JUMP = "refused: a jump on a flag that may depend on a secret: which instructions run would depend on it"
+JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 CALL = "chunk(key, t, flags, start, end, length, n, inputs[i])"
 # The contract's lines as statement.py writes them, but for the `ensuresw` line.
 LINES = [
@@ -175,7 +175,7 @@ class Files:
             except prove.Unkept as e:
                 return False, f"a kept register does not hold what it held: {e.args}"
             except prove.Marked as e:
-                return False, f"refused: at the place {e.args[0]} register {e.args[1]} may depend on a secret, which it did not on first coming there"
+                return False, f"refused: at the place {e.args[0]} register {e.args[1]} may depend on values kept out of the trace, which it did not on first coming there"
             if items is None:
                 return False, prover.last
             with pf.open("w") as f:
@@ -340,7 +340,7 @@ class Loop(Files, unittest.TestCase):
         hidden = [l for l in self.lines if l.startswith("hidden ")]
         self.assertEqual(hidden, ["hidden key", "hidden t", "hidden packed"])
         k = self.lines.index("hidden key")
-        self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address is made of something that may depend on a secret")
+        self.refused("hidden-table", self.lines[:k] + ["hidden inputs"] + self.lines[k:], "refused: an address may depend on values kept out of the trace")
         no_line = lines_of(once(TRACE, ""))
         self.assertEqual(no_line, self.lines[:k + 1] + ["hidden n"] + self.lines[k + 1:])
         self.refused("hidden-count", no_line, JUMP)
@@ -469,7 +469,7 @@ class Loop(Files, unittest.TestCase):
             ("keeps_r10", self.with_place("keep rcx", "keep r10 rcx"), "a kept register does not hold what it held"),
             ("does_not_keep_r8", self.with_place(" r8 r9", " r9"), AT_PLACE),
             # rdx is not said to be a register that may depend on a secret on a later coming there
-            ("rdx_not_marked", self.without("marked rdx"), "refused: at the place 2471 register 2 may depend on a secret, which it did not on first coming there"),
+            ("rdx_not_marked", self.without("marked rdx"), "refused: at the place 2471 register 2 may depend on values kept out of the trace, which it did not on first coming there"),
         ]
         for tag, place, why in cases:
             with self.subTest(what=tag):

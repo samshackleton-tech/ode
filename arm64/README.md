@@ -1,9 +1,9 @@
-# A first table of AArch64 instruction forms
+# A table of AArch64 instruction forms
 
-A measurement, on the branch `experiment/arm-step1`. It is the first step of option C of
-[`../paper/ARM-PROPOSAL.md`](../paper/ARM-PROPOSAL.md): write a small table of AArch64 instructions in the
-way Ode writes its table for x86-64, compare it with processors, and learn what it costs. Nothing here is
-relied on by anybody yet, and nothing in this folder names Ode's verifier or its contracts.
+Step 1 of option C of [`../paper/ARM-PROPOSAL.md`](../paper/ARM-PROPOSAL.md): a small table of AArch64
+instructions in the same format as Ode's x86-64 table, compared against real AArch64 processors and
+paired with a separate Lean 4 proof of agreement with Google DeepMind's `arm64-semantics`. Nothing in
+this folder depends on Ode's verifier or its contracts.
 
 ## What is here
 
