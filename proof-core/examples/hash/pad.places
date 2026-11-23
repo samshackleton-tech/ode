@@ -1,8 +1,0 @@
-// The loop of b3l_pad (../../../kcheck/b3hashr.o), at its head: `i` counts down from 64, and the places of
-// the block from `i` on are written, each with what the specification's `padded` has there.
-place +0x1d {
-    name i = r13
-    fact i <= 64
-    wrote block[i ..] = padded(src)
-    decreases i
-}

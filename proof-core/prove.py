@@ -4,7 +4,8 @@
     python3 prove.py SPEC OUT.statement OUT.proof OBJECT:SYMBOL[:PLACES] [OBJECT:SYMBOL[:PLACES] …]
 
 What is to be shown is written by statement.py (OUT.statement). The proof (OUT.proof) has a part for each
-function, a function after those it calls. A part starts with the places of PLACES (a file) and is then
+function, a function after those it calls. A part starts with the places of PLACES (a file: for a source
+that has its places written at its loops, `python3 ../lang/odec.py SOURCE NAME --places` prints it) and is then
 found a line at a time: the verifier's rules are run on the lines so far; where those lines run out, the run
 says which kind of line the proof lacks next (`need …`); such a line is found here and added; and so on,
 until that function's part lacks nothing. How each kind of line is found:

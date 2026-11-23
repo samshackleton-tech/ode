@@ -19,7 +19,7 @@ of `src`. So the statement says `hidden src`, and the verifier shows that too.
 
 What it exercises that no function before it did:
 
-  - a loop that writes a run, one byte each time round. The loop's place (examples/hash/pad.places) says
+  - a loop that writes a run, one byte each time round. The loop's place (written at the loop in ../kcheck/hash.ode) says
     what is written so far: `wrote block[i ..] = padded(src)`, the places of the block from `i` on, each
     with the specification's thing there. The verifier shows that of the first coming to the place (nothing
     is written yet: `i` is 64), and of each later coming from the one before (one byte more, at `i - 1`).
@@ -55,7 +55,7 @@ def spec_text(change=lambda t: t):
 
 
 def places(change=lambda t: t):
-    with open(os.path.join(HERE, "examples", "hash", "pad.places")) as f: return change(f.read())
+    return change(odec.places(os.path.join(KCHECK, "hash.ode"), "pad"))         # the place written at the loop in the source
 
 
 def once(old, new):

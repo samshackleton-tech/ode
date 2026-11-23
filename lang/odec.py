@@ -3,6 +3,7 @@
 
     python3 odec.py SOURCE.ode NAME            prints the assembly of the function NAME
     python3 odec.py SOURCE.ode NAME OUT.o      makes the object from the instruction table, without clang
+    python3 odec.py SOURCE.ode NAME --places [ENTRY]   prints the function's places, as the prover of proof-core reads them
     python3 odec.py SOURCE.ode --all FOLDER    makes FOLDER/NAME.o for every function of the source
     python3 odec.py --from FOLDER NAME OUT.o   makes the object of the function NAME of whichever source in FOLDER has it
 
@@ -19,11 +20,18 @@ Ode has one layer: a function is the instructions its coder chose, one a line, a
       @LABEL:                           a place a jump names: `jmp @LABEL`
       NAME(r, s)                        a use of the inline function NAME: its instructions, here
       for I in 0..8 { LINES }           LINES eight times, with `$I` replaced by 0 to 7
-      place B { LINES }                 what holds here after B turns of a loop: the loop's proof is written from it
+      place { LINES }                   what holds whenever the code comes to the instruction after it (a loop's
+                                        invariant, in the lines the prover of proof-core reads); no part of the object
+      place "SYMBOL" { LINES }          the same, for the proof of the function as entered at `entry "SYMBOL"`
+      place B { LINES }                 for kcheck's verifier of kernels (kfn.py): what holds here after B turns of a loop
       entry "SYMBOL"                    the function is entered here too, under that name
       .p2align N                        (first line) the boundary the function starts on; 16 bytes without it
     }
     // a comment
+
+A place is written where it holds. The prover is given it with the count of bytes from the function's first
+byte (or from the entry's) to that instruction: `--places` prints that, and the count is worked out here,
+so it moves with the code.
 
 An inline function says, of each register it takes, which class it is of (gpr, gpr32, xmm, zmm). It may say
 which of them must differ: `distinct(P, Q, ...)`, as often as needed; no two of those named in one may be
@@ -99,7 +107,7 @@ def inline_of(src, n, name, params, clauses, body):
     elif rest: stop(src, n, f"inline fn {name}: after the parameters comes `distinct(P, Q)`, then `changes P, ...`, not `{rest}`")
     for k, line in body:
         s = line.split("//")[0].strip()
-        if re.match(r"(place\s+\w+\s*\{|entry\s)", s): stop(src, k, f"inline fn {name}: a place or an entry inside an inline function")
+        if re.match(r"(place|entry)\b", s): stop(src, k, f"inline fn {name}: a place or an entry inside an inline function")
         for word in re.findall(r"(?<![@#$\w])[A-Za-z_]\w*", s):
             if word in WHOLE: stop(src, k, f"inline fn {name}: the line names the register `{word}`; an inline function takes each register it uses as a parameter")
     return Inline(name, n, ps, distinct, changes, body)
@@ -239,11 +247,14 @@ def expand(src, fn, numbered, inlines, notes=None):
                 body, i = block(lines, i)
                 for k in range(int(m.group(2)), int(m.group(3))): run(body, {**env, m.group(1): str(k)}, labels, inside)
                 continue
-            m = re.fullmatch(r"place\s+(\w+)\s*\{", s)
+            m = re.fullmatch(r'place\s*(?:"(\w+)"\s*)?\{', s) or re.fullmatch(r"place\s+(\w+)\s*\{", s)
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
                 body, i = block(lines, i)
-                if notes is not None: notes.append(("place", len(out), m.group(1), [l.split("//")[0].strip() for _, l in body if l.split("//")[0].strip()]))
+                said = [l.split("//")[0].strip() for _, l in body if l.split("//")[0].strip()]
+                if notes is None: continue
+                if '"' in s or m.group(1) is None: notes.append(("at", len(out), m.group(1), said, n))      # a place for the prover of proof-core
+                else: notes.append(("place", len(out), m.group(1), said))                                # a kernel's, with its count's name
                 continue
             m = re.fullmatch(r'entry\s+"(\w+)"', s)
             if m:
@@ -298,6 +309,7 @@ def assembly(src, name, symbol=None):
     symbol = symbol or own
     notes = []
     ins = expand(src, name, lines, inlines, notes)
+    notes = [note for note in notes if note[0] != "at"]         # (the places for proof-core's prover are no part of the object)
     for note in sorted(notes, key=lambda n: -n[1]):             # from the last, so the numbers before it stay
         ins[note[1]:note[1]] = [f".Lode_place_{name}:"] if note[0] == "place" else [f".global {note[2]}", f"{note[2]}:"]
     # A leading alignment directive belongs before the entry symbols, not
@@ -331,10 +343,36 @@ def build(src, name, obj, symbol=None):
     notes = []
     expanded = expand(src, name, lines, inlines, notes)
     try:
-        blob = build_elf(name, symbol or own, expanded, notes, data)
+        blob = build_elf(name, symbol or own, expanded, [note for note in notes if note[0] != "at"], data)
     except (ValueError, KeyError, IndexError) as e:
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
     with open(obj, "wb") as f: f.write(blob)
+
+
+def places(src, name, entry=None):
+    """What a function's source says holds at its places, as the prover of proof-core reads it (prove.prove):
+    for each `place { LINES }` of the function, `place +0xN { LINES }`, N being the count of bytes from the
+    function's first byte to the instruction the place stands before. With `entry` (the symbol of an
+    `entry "SYMBOL"` of the function): the places written `place "SYMBOL" { LINES }`, counted from that
+    entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
+    core = os.path.join(HERE, "..", "core")
+    if core not in sys.path: sys.path.insert(0, core)
+    from asm import build_elf
+    data, own, lines, inlines = found(src, name)
+    notes = []
+    expanded = expand(src, name, lines, inlines, notes)
+    entries = {own} | {note[2] for note in notes if note[0] == "entry"}
+    if (entry or own) not in entries: sys.exit(f"{src}: fn {name} has no entry `{entry}`")
+    for note in notes:
+        if note[0] == "at" and note[2] is not None and note[2] not in entries: stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
+    mine = [note for note in notes if note[0] == "at" and (note[2] or own) == (entry or own)]
+    if not mine: return ""
+    where = {}
+    try:
+        build_elf(name, own, expanded, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where)
+    except (ValueError, KeyError, IndexError) as e:
+        raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
+    return "".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine))
 
 
 def source_of(folder, name):
@@ -404,6 +442,7 @@ def main():
         for n in names: build(a[0], n, os.path.join(a[2], n + ".o"))
         print(f"{len(names)} functions of {os.path.basename(a[0])}: objects in {a[2]}"); return
     if len(a) == 4 and a[0] == "--from": build(source_of(a[1], a[2]), a[2], a[3]); return
+    if len(a) in (3, 4) and a[2] == "--places": sys.stdout.write(places(a[0], a[1], *a[3:])); return
     if len(a) == 2: sys.stdout.write(assembly(a[0], a[1])); return
     if len(a) == 3: build(a[0], a[1], a[2]); return
     sys.exit(__doc__)

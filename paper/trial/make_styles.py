@@ -73,8 +73,9 @@ def main(out):
     with tempfile.TemporaryDirectory(prefix="ode-styles-") as d:
         raw, inline = t.today("mix16_raw.ode", "mix16_3", d), t.today("mix16.ode", "mix16_3", d)
         scan = t.today("all_zero.ode", "all_zero_early", d)
-    scan_new, places = t.prototype(text("all_zero.ode2"))
-    assert raw == inline and scan == scan_new and places == text("all_zero.places")
+        places = t.places_today(text("all_zero.ode"), "all_zero_early", d)
+    scan_new, places_new = t.prototype(text("all_zero.ode2"))
+    assert raw == inline and scan == scan_new and places == places_new
     mix, zero, quad = v["mix16_3"], v["all_zero"], v["quad32"]
     moved = v["all_zero with an instruction added before the loop, the place the tool finds"]
     stale = v["all_zero with an instruction added before the loop, that proof with the place at the count typed before"]
@@ -97,9 +98,10 @@ def main(out):
     say("*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in "
         "`paper/trial/results/`. Its counts and verdicts are read from them. \"Today\" is what the repository's "
         "compiler (`lang/odec.py`) takes. \"Prototype\" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, "
-        "not one of the repository's, and not a decision about the language. The inline function of section 1 was the "
-        "prototype's when this page was first made. It is the compiler's now, and the text macro that it was compared with "
-        "is gone from the compiler (commit `082ba81` has this page as it was then). The contracts are in today's specification "
+        "not one of the repository's, and not a decision about the language. The inline function of section 1 and the "
+        "invariant written at its loop of section 2 were the prototype's when this page was first made. They are the compiler's "
+        "now. The text macro and the file of typed counts of bytes that they were compared with are gone "
+        "(commit `082ba81` has this page as it was then). The contracts are in today's specification "
         "language in both, so an output equation is written with `=` where the report proposes `==`.*\n")
 
     say("## 1. Three mixing steps\n")
@@ -127,18 +129,20 @@ def main(out):
     say("## 2. A scan with a loop\n")
     say("The function says whether every byte of an array is zero, and leaves at the first byte that is not. Its contract:\n")
     say(block(body(text("all_zero.spec"))))
-    say("**Today** (`all_zero.ode`, with the loop's invariant in a second file, `all_zero.places`). "
-        "The invariant is tied to the code by a count of bytes from the function's start, which a person types:\n")
+    say("**Today** (`all_zero.ode`). The loop's invariant stands at the loop, as `place { ... }`:\n")
     say(block(body(text("all_zero.ode"))))
-    say(block(text("all_zero.places")))
-    say("**Prototype** (`all_zero.ode2`). Registers have names, a store is written `:=`, and the invariant stands at the loop:\n")
+    say("The prover needs the invariant with a count of bytes from the function's first byte to that instruction. "
+        "The compiler works the count out (`odec.py all_zero.ode all_zero_early --places` prints this):\n")
+    say(block(places))
+    say("**Prototype** (`all_zero.ode2`). The same, and also names for registers and a store written `:=`:\n")
     say(block(body(text("all_zero.ode2"))))
-    say(f"Both give one object file: {zero['instructions']} instructions, {zero['code bytes']} bytes of code. The place the tool works out is the one "
-        f"typed in `all_zero.places`. The verifier says `{zero['verifier']}`; the statement is {zero['statement bytes']} bytes and the proof {zero['proof bytes']}.\n")
-    say(f"Then one instruction (`nop`) is added before the loop. The prototype's place moves with it, to `{moved['place']}`, and the function is "
-        f"`{moved['verifier']}` again. The same proof with the place at the count typed before (`{stale['place']}`) is "
-        f"`{stale['verifier'].splitlines()[0]}`. The prover, given the place file as typed before, had found no proof and had not stopped "
-        f"after {seconds} seconds: it does not say that the loop has no place.\n")
+    say(f"Both give one object file, {zero['instructions']} instructions and {zero['code bytes']} bytes of code, and the same place. "
+        f"The verifier says `{zero['verifier']}`; the statement is {zero['statement bytes']} bytes and the proof {zero['proof bytes']}.\n")
+    say(f"Then one instruction (`nop`) is added before the loop. The place moves with it, to `{moved['place']}`, and the function is "
+        f"`{moved['verifier']}` again. Before, a person typed the count into a second file, and a count that is not moved goes wrong. "
+        f"The same proof with the place at the count as it was before (`{stale['place']}`) is `{stale['verifier'].splitlines()[0]}`. "
+        f"The prover, given the place at that count, had found no proof and had not stopped after {seconds} seconds: "
+        "it does not say that the loop has no place.\n")
 
     say("## 3. A frame\n")
     say("`quad32` makes the parent of two parents with the 32-way kernel. Its frame holds a table of 32 addresses and two "
@@ -167,7 +171,7 @@ def main(out):
     say("## What was measured\n")
     say("| Function | Notation | Lines of code | Bytes of code | The verifier | Proof bytes |\n|---|---|---|---|---|---|")
     for fn, name, src, r in (("mix16_3", "today, written out", text("mix16_raw.ode"), mix), ("mix16_3", "today, inline function", text("mix16.ode"), mix),
-                             ("all_zero", "today, with a place file", text("all_zero.ode") + text("all_zero.places"), zero),
+                             ("all_zero", "today", text("all_zero.ode"), zero),
                              ("all_zero", "prototype", text("all_zero.ode2"), zero)):
         say(f"| `{fn}` | {name} | {len(code_lines(src))} | {r['code bytes']} | {r['verifier']} | {r['proof bytes']} |")
     say(f"| `quad32` | today | {len(code_lines(quad_today))} | {quad['code bytes']} | {quad['verifier']} | {quad['proof bytes of ode_quad32']} |")

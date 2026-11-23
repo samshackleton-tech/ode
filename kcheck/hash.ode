@@ -32,6 +32,15 @@ fn pad as "b3l_pad" {
   mov r13, rax
   // while 0 < i
 @l0:
+  // The loop's place, for the prover of the verifier in Lean (proof-core), at its head: `i` counts down from
+  // 64, and the places of the block from `i` on are written, each with what the specification's `padded` has
+  // there.
+  place {
+    name i = r13
+    fact i <= 64
+    wrote block[i ..] = padded(src)
+    decreases i
+  }
   mov rax, 0
   mov rcx, r13
   cmp rax, rcx

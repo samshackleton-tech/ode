@@ -1,8 +1,9 @@
 """The trial's sources (src/): one function in each notation gives the same bytes; the prototype front end's
 refusals; and, where asked, what the prover and the verifier say, and what an AArch64 processor computes.
-(The inline function of src/mix16.ode is built by the repository's compiler, which has had inline functions
-since they were moved into it from the prototype; its own test is lang/test_inline.py. The text macro that
-the trial compared with is gone from the compiler and from here.)
+(Two of the prototype's forms are the repository's compiler's now, and are built by it here: the inline
+function of src/mix16.ode and the place written at its loop in src/all_zero.ode. Their own tests are
+lang/test_inline.py and lang/test_places.py. The text macro and the file of typed counts of bytes that the
+trial compared them with are gone from the compiler and from here.)
 
     python3 test_styles.py                   compiles, compares bytes, tries the refusals (any machine)
     python3 test_styles.py --verify OUT      also proves and verifies each x86-64 function, and writes what was
@@ -31,6 +32,21 @@ def today(name, fn, folder):
     """The object file today's compiler makes of a function of a source in src/."""
     obj = os.path.join(folder, name + ".o")
     odec.build(os.path.join(SRC, name), fn, obj)
+    with open(obj, "rb") as f: return f.read()
+
+
+def places_today(source, fn, folder):
+    """The places today's compiler finds in a source's text, as the prover reads them."""
+    path = os.path.join(folder, "places.ode")
+    with open(path, "w") as f: f.write(source)
+    return odec.places(path, fn)
+
+
+def today_of(source, fn, folder):
+    """The object file today's compiler makes of a function of a source's text."""
+    path, obj = os.path.join(folder, "changed.ode"), os.path.join(folder, "changed.o")
+    with open(path, "w") as f: f.write(source)
+    odec.build(path, fn, obj)
     with open(obj, "rb") as f: return f.read()
 
 
@@ -76,13 +92,16 @@ class Styles(unittest.TestCase):
         old = today("all_zero.ode", "all_zero_early", self.d)
         new, places = prototype(text("all_zero.ode2"))
         self.assertEqual(old, new)
-        self.assertEqual(places, text("all_zero.places"))     # the count of bytes a person typed is the one the tool finds
+        self.assertEqual(places, places_today(text("all_zero.ode"), "all_zero_early", self.d))     # the compiler and the prototype find one place
+        self.assertTrue(places.startswith("place +0x2 {\n"), places)
 
     def test_an_instruction_before_the_loop_moves_the_place_with_it(self):
         source = text("all_zero.ode2")
         self.assertEqual(source.count("  xor ecx, ecx\n"), 1)
         _, places = prototype(source.replace("  xor ecx, ecx\n", "  xor ecx, ecx\n  nop\n"))
         self.assertTrue(places.startswith("place +0x3 {\n"), places)
+        self.assertEqual(text("all_zero.ode").count("  xor ecx, ecx\n"), 1)
+        self.assertEqual(places_today(text("all_zero.ode").replace("  xor ecx, ecx\n", "  xor ecx, ecx\n  nop\n"), "all_zero_early", self.d), places)
 
     def test_quad32_is_the_kept_object_file(self):
         target, data, fns = ode2.compile_source(text("quad32.ode2"), "quad32.ode2")
@@ -159,14 +178,15 @@ def verify(out):
         print(name, "->", found[name], flush=True)
 
     with tempfile.TemporaryDirectory(prefix="ode-styles-") as d:
-        # the scan: today's notation with its place file; the prototype's, whose place the tool finds
+        # the scan: the place written at the loop, in today's notation and in the prototype's; one object, one place
         old = today("all_zero.ode", "all_zero_early", d)
-        new, places = prototype(text("all_zero.ode2"))
-        assert old == new and places == text("all_zero.places")
-        note("all_zero", proved("all_zero", text("all_zero.spec"), old, "ode_all_zero", text("all_zero.places")))
-        # an instruction added before the loop: the prototype's place moves with it; a count of bytes typed before does not
-        moved_source = text("all_zero.ode2").replace("  xor ecx, ecx\n", "  xor ecx, ecx\n  nop\n")
-        moved, moved_places = prototype(moved_source)
+        places = places_today(text("all_zero.ode"), "all_zero_early", d)
+        assert (old, places) == prototype(text("all_zero.ode2"))
+        note("all_zero", proved("all_zero", text("all_zero.spec"), old, "ode_all_zero", places))
+        # an instruction added before the loop: the place moves with it; a count of bytes that is not moved goes wrong
+        moved_source = text("all_zero.ode").replace("  xor ecx, ecx\n", "  xor ecx, ecx\n  nop\n")
+        moved, moved_places = today_of(moved_source, "all_zero_early", d), places_today(moved_source, "all_zero_early", d)
+        assert (moved, moved_places) == prototype(text("all_zero.ode2").replace("  xor ecx, ecx\n", "  xor ecx, ecx\n  nop\n"))
         with_place = proved("moved", text("all_zero.spec"), moved, "ode_all_zero", moved_places)
         note("all_zero with an instruction added before the loop, the place the tool finds", dict(with_place, place=moved_places.split(" {")[0]))
         # the proof just found, with the count of bytes as it was typed for the function before the change
@@ -177,7 +197,7 @@ def verify(out):
         note("all_zero with an instruction added before the loop, that proof with the place at the count typed before",
              {"verifier": shown(os.path.join(d, "moved.statement"), stale), "place": "place +0x2"})
         note("all_zero with an instruction added before the loop, the prover with the place file typed before",
-             dict(proved("stale", text("all_zero.spec"), moved, "ode_all_zero", text("all_zero.places"), limit=60), place="place +0x2"))
+             dict(proved("stale", text("all_zero.spec"), moved, "ode_all_zero", places, limit=60), place="place +0x2"))
         # the mixing steps: written out and with an inline function, one object file
         raw, inline = today("mix16_raw.ode", "mix16_3", d), today("mix16.ode", "mix16_3", d)
         assert raw == inline == prototype(text("mix16.ode"))[0]

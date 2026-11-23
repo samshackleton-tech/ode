@@ -1,8 +1,14 @@
-// Whether every byte of a run is zero: a scan that leaves at the first byte that is not. Today's notation.
-// The loop's invariant is in all_zero.places, at the loop's place in the code, given as a count of bytes.
+// Whether every byte of an array is zero: a scan that leaves at the first byte that is not. Today's notation.
+// The loop's invariant is written at the loop; the compiler works out where that is in the code.
 fn all_zero_early as "ode_all_zero" {
   xor ecx, ecx
   @loop:
+  place {
+    name i = rcx
+    fact i <= n
+    fact all_zero_from(xs, i) == all_zero(xs)
+    decreases n - i
+  }
   cmp rcx, rsi
   jae @yes
   mov rdx, rdi

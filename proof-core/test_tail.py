@@ -97,7 +97,7 @@ def spec_text(change=lambda t: t):
 
 
 def pad_places():
-    with open(os.path.join(HERE, "examples", "hash", "pad.places")) as f: return f.read()
+    return odec.places(os.path.join(KCHECK, "hash.ode"), "pad")
 
 
 def once(old, new):

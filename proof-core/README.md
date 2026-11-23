@@ -604,7 +604,7 @@ last block into a 64-byte block, from the last position down, and writes zeros w
 Its contract is the one in `../kcheck/proofs/inner.spec`, unchanged: `ensures block = padded(src)`, where
 `padded` is `[if k < len(bytes) then bytes[k] else 0 for k in 0..64]`. The contract says
 `trace depends on n`, so the input bytes are secret; the function branches on `n` and on its counter
-only. The loop invariant (`examples/hash/pad.places`) is four lines: the counter `i` is at most 64, the
+only. The loop invariant (written at the loop in `../kcheck/hash.ode`, in `fn pad`) is four lines: the counter `i` is at most 64, the
 block holds `padded(src)` from position `i` on, and `i` decreases. The prover adds that `rax` may be
 marked on a later arrival (it holds the byte just copied). The proof is 451 bytes.
 
@@ -748,8 +748,10 @@ are the bytes of the words that the contract gives it. `bytes flags start end le
 `statement.py` writes each name as that byte of the register's low 32 bits. A contract can also say
 `requires n >= 1` or `requires n < 2` of a number.
 
-The kernel loops over the blocks of a chunk. Its loop invariant is in `examples/kernel/p16.places`, and
-it is attached to the last instruction of the loop body before the block count is decremented:
+The kernel loops over the blocks of a chunk. Its loop invariant is written in the source (`../wide/p16.ode`, as `place { ... }`) before
+the last instruction of the loop body, where the block count has not been decremented yet. The compiler
+works out how many bytes into the function that is, and the prover is given the invariant with that count
+(`python3 ../lang/odec.py ../wide/p16.ode p16 --places` prints this):
 
     place +0x9a7 {
         name left = r13
@@ -825,8 +827,9 @@ refuses each. Among them: the two halves of the lanes exchanged; lane `i` given 
 is what the kernel's other entry computes; another message word added; sixty-four bytes read across two
 slots; the table's address moved by four bytes; one number of the table changed.
 
-The contract as it stands, for every `n`, needs a loop invariant, as the 16-way kernel's does. It is in
-`examples/kernel/p32.places`:
+The contract as it stands, for every `n`, needs a loop invariant, as the 16-way kernel's does. It is written at the
+loop in `../wide/k32.ode`, as `place "blake3_servil_avx512_p32" { ... }`: the function has two entries, and a
+place says which entry's proof it is for. As the prover is given it:
 
     place +0xf44 {
         name left = r13
@@ -914,7 +917,7 @@ chosen by whether the low word of the sum is below the low word of `t`. A lemma 
 that this is the high word of `t + i` for every 64-bit `t`, including the values at which the low word,
 or the whole counter, wraps.
 
-The loop invariant is the other entry's with the counters changed (`examples/kernel/k32.places`): lane `i`
+The loop invariant is the other entry's with the counters changed (written beside it in `../wide/k32.ode`, as `place { ... }`): lane `i`
 of the first half has the counter `t + i`, lane `i` of the second half has `t + i + 16`, and the four
 slots hold `lo(t + i)`, `hi(t + i)`, `lo(t + i + 16)` and `hi(t + i + 16)` in word `i`.
 
@@ -1821,7 +1824,7 @@ lines. The proofs of the theorems: 20,315 lines, of which Trace.lean (two runs o
 | the verifier | `Core.lean`; `Arithmetic.lean` (the arithmetic rule and its soundness lemma `refutes_sound`); `Reader.lean` and `Main.lean` (the program `odeverify TABLE STATEMENT PROOF`) |
 | the soundness proofs | `SoundLin.lean` (arithmetic on inequalities), `SoundWord.lean` (terms for 32-bit words and their table), `SoundCode.lean` (each value of the specification language as one number, and back), `SoundState.lean` (how the verifier's symbolic state relates to a machine state), `SoundStep.lean` (one instruction effect on general-purpose registers), `SoundVec.lean` (one instruction effect on vector registers; 16-byte loads and stores), `SoundWide.lean` (512-bit registers; the stack frame rounded down to a 64-byte boundary and the vectors stored in it), `SoundMarks.lean` (the marks: what the verifier takes not to depend on a secret), `SoundSpec.lean` (symbolic evaluation of the specification), `SoundList.lean` (lists and `ensures`), `SoundPlace.lean` (the facts of a loop invariant), `SoundCall.lean` (calls of functions that return a number), `SoundCallW.lean` (calls of functions that write a buffer of words), `SoundCallL.lean` (calls of a function that takes a table of addresses), `SoundSpecW.lean` (evaluation of the specification on terms; `ensures` of a buffer of words), `SoundLoop.lean` (what a loop invariant says of a machine state, vector registers included; first arrival at an invariant and return to it), `SoundTop.lean` (paths and loops: `explore_sound`, by induction on the termination measure; `verify_sound`; `verify_all_sound`; `verify_all_trace`), `Trace.lean` (two runs of the machine with marks, `ends_trace`), `Plain.lean` (the machine without marks: `runs_plain`, `runs_free`, `runs_endsP`, `runs_trace`) |
 | writes the input file (a verdict relies on it for that file saying what the object file and the specification say) | `statement.py` |
-| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/`, `examples/doubling/`, `examples/far/`, `examples/empty/`, `examples/parent/`, `examples/turns/`, `examples/high/`, `examples/quad/` and `examples/lowbyte/` (source, specification and object file); `examples/hash/pad.places` (the loop invariant of `b3l_pad`); `examples/adler32/*.places` (the loop invariants the prover starts from); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` and `p16.places` (the 16-way kernel and its loop invariant); `examples/kernel/p32.contract` and `p32.places` (the 32-way kernel and its loop invariant); `examples/kernel/k32.contract` and `k32.places` (the same kernel by the entry the hash calls) |
+| for someone verifying | `lean_verify.py`; the stored proofs in `proofs/`; `examples/equal/`, `examples/low/`, `examples/table/`, `examples/part/`, `examples/record/`, `examples/tail/`, `examples/keyed/`, `examples/left/`, `examples/split/`, `examples/doubling/`, `examples/far/`, `examples/empty/`, `examples/parent/`, `examples/turns/`, `examples/high/`, `examples/quad/` and `examples/lowbyte/` (source, specification and object file); `examples/kernel/kernel.contract`, `kernel_sse41.contract` and `node_out.contract` (the two BLAKE3 kernels and `b3l_node_out` as they are proved here); `examples/kernel/p16.contract` (the 16-way kernel); `examples/kernel/p32.contract` (the 32-way kernel); `examples/kernel/k32.contract` (the same kernel by the entry the hash calls). The loop invariants of these functions are written at their loops in the sources (`../kcheck/hash.ode`, `../kcheck/programs/adler32/*.ode`, `../wide/p16.ode`, `../wide/k32.ode`), as `place { ... }`; `../lang/odec.py SOURCE NAME --places` prints them as the prover is given them |
 | the prover (a verdict does not rely on it) | `prove.py`, `session.py`, `ProveMain.lean` (`odeprove`), `Advice.lean` (which rows to propose; part of `odeprove` alone) |
 | tests | `test_sound.py`, `test_verify.py`, `test_call.py`, `test_adler.py`, `test_blocks.py`, `test_blocks4.py`, `test_varint.py`, `test_low.py`, `test_table.py`, `test_limits.py`, `test_machine.py`, `test_spec.py`, `test_arith.py`, `test_session.py`, `test_kernel.py`, `test_node.py`, `test_p16_one.py`, `test_p16_table.py`, `test_p16.py`, `test_p32.py`, `test_k32.py`, `test_pad.py`, `test_part.py`, `test_record.py`, `test_tail.py`, `test_chunk.py`, `test_meaning.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_far.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py`, `test_quad.py`, `test_lowbyte.py`, `test_sum.py`, `test_quad32.py`. `MachineMain.lean`, `SpecMain.lean` and `ArithMain.lean` are small programs that three of the tests run. `built.py` runs Lean's build tool once per process. `ensures_meaning.py` has the formal model in Lean evaluate an `ensures` line of the verifier's input file; `test_meaning.py` (the kernels and `b3l_pad`), `test_part.py`, `test_record.py`, `test_tail.py`, `test_keyed.py`, `test_left.py`, `test_split.py`, `test_doubling.py`, `test_empty.py`, `test_parent.py`, `test_turns.py`, `test_high.py` and `test_quad.py` compare the result with a reading of the contract that does not go through `statement.py` (`test_node.py` and `test_chunk.py` do the same with their own copies). |
 

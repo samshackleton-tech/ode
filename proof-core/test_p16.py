@@ -12,7 +12,7 @@ addresses are touched depend on the count of blocks, and not on the key's bytes,
 counter or those four bytes.
 
 The kernel loops over the blocks. The class `Loop` verifies the contract as it is, for every `n` from 1 up.
-The loop is cut at a place (examples/kernel/p16.places) at its bottom, which says how many blocks are
+The loop is cut at a place (written in ../wide/p16.ode, at the loop's bottom), which says how many blocks are
 still to do, how far into the lanes the code has read, and what the vector registers hold: in each lane,
 the chunk's chaining value after the blocks done. The verifier shows that of the first time round, and of
 any later time round from the time before.
@@ -38,11 +38,12 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-for folder in ("proof-core", "kcheck"):
+for folder in ("proof-core", "kcheck", "lang"):
     sys.path.insert(0, str(ROOT / folder))
 
 import built
 import lean_verify
+import odec
 import prove
 import statement
 
@@ -318,8 +319,7 @@ class Loop(Files, unittest.TestCase):
     def setUpClass(cls):
         built.built("odeverify")
         cls.dir = Path(tempfile.mkdtemp(prefix="ode-p16-loop-"))
-        with (HERE / "examples/kernel/p16.places").open() as f:
-            cls.places = f.read()
+        cls.places = odec.places(str(ROOT / "wide/p16.ode"), "p16")          # the place, written at the loop in the source
         cls.statement, cls.proof = cls.dir / "every.statement", cls.dir / "every.proof"
         cls.runs, cls.found = prove.prove(spec_text(), [(OBJ, NAME, cls.places)], str(cls.statement), str(cls.proof))[NAME]
         with cls.statement.open() as f:

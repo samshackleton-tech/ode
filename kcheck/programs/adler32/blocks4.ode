@@ -33,6 +33,20 @@ fn adler32_blocks4 as "ode_adler32_blocks4" {
   mov r15, rax
   // while i < n
 @l0:
+  // The places of the three loops, for the prover of the verifier in Lean (proof-core).
+  // As ode_adler32_blocks, with the bytes of a block taken four at a turn while four are
+  // left, and then one at a turn: three places, the two inside a block saying the same.
+  place {
+    name i = r12
+    name a = r13
+    name b = r14
+    fact i <= len
+    fact a <= 65520
+    fact b <= 65520
+    fact a == s1(input)[i]
+    fact b == s2(input)[i]
+    decreases len - i
+  }
   mov rax, r12
   mov rcx, rbp
   cmp rax, rcx
@@ -53,6 +67,20 @@ fn adler32_blocks4 as "ode_adler32_blocks4" {
 @l2:
   // while 3 < end - i
 @l4:
+  place {
+    name i = r12
+    name a = r13
+    name b = r14
+    name end = r15
+    keep r15
+    fact i <= end
+    fact end <= len
+    fact a + 255 * (end - i) <= 1481280
+    fact b + 1481280 * (end - i) <= 8224132080
+    fact a % 65521 == s1(input)[i]
+    fact b % 65521 == s2(input)[i]
+    decreases end - i
+  }
   mov rax, 3
   mov rcx, r15
   sub rcx, r12
@@ -113,6 +141,20 @@ fn adler32_blocks4 as "ode_adler32_blocks4" {
 @l5:
   // while i < end
 @l6:
+  place {
+    name i = r12
+    name a = r13
+    name b = r14
+    name end = r15
+    keep r15
+    fact i <= end
+    fact end <= len
+    fact a + 255 * (end - i) <= 1481280
+    fact b + 1481280 * (end - i) <= 8224132080
+    fact a % 65521 == s1(input)[i]
+    fact b % 65521 == s2(input)[i]
+    decreases end - i
+  }
   mov rax, r12
   mov rcx, r15
   cmp rax, rcx

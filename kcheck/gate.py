@@ -57,6 +57,7 @@ def main():
         ("test_made (the shipped files' code is what the Ode sources give)", [sys.executable, "test_made.py"]),
         ("test_asm (the assembler by the table writes what clang writes)", [sys.executable, "../lang/test_asm.py"]),
         ("test_inline (a use of an inline function is its instructions)", [sys.executable, "../lang/test_inline.py"]),
+        ("test_places (a place written at its loop: the count is worked out)", [sys.executable, "../lang/test_places.py"]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

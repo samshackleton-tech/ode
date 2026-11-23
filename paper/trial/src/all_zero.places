@@ -1,6 +1,0 @@
-place +0x2 {
-    name i = rcx
-    fact i <= n
-    fact all_zero_from(xs, i) == all_zero(xs)
-    decreases n - i
-}

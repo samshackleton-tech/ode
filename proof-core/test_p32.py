@@ -13,7 +13,7 @@ The class `P32` narrows the contract by one line, `requires n < 2` (one block a 
 (one or two), and gives no place: the verifier follows each count of blocks as a path of its own.
 
 The class `Loop` takes the contract as it is, for every `n`, with a place (a loop invariant) for the loop
-over the blocks: examples/kernel/p32.places. The place says what the vector registers hold after the blocks
+over the blocks, written at the loop in ../wide/k32.ode (`place "blake3_servil_avx512_p32"`). The place says what the vector registers hold after the blocks
 done, as the 16-way kernel's place does, for both halves of the lanes. And it says two things that kernel's
 place has no need of:
 
@@ -50,11 +50,12 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-for folder in ("proof-core", "kcheck"):
+for folder in ("proof-core", "kcheck", "lang"):
     sys.path.insert(0, str(ROOT / folder))
 
 import built
 import lean_verify
+import odec
 import prove
 import statement
 
@@ -334,8 +335,7 @@ class Loop(Files, unittest.TestCase):
     def setUpClass(cls):
         built.built("odeverify")
         cls.dir = Path(tempfile.mkdtemp(prefix="ode-p32-loop-"))
-        with (HERE / "examples/kernel/p32.places").open() as f:
-            cls.places = f.read()
+        cls.places = odec.places(str(ROOT / "wide/k32.ode"), "k32", NAME)          # the place, written at the loop in the source
         cls.statement, cls.proof = cls.dir / "every.statement", cls.dir / "every.proof"
         cls.runs, cls.found = prove.prove(spec_text(), [(OBJ, NAME, cls.places)], str(cls.statement), str(cls.proof))[NAME]
         with cls.statement.open() as f:

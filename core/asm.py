@@ -254,13 +254,16 @@ def instruction(line):
     raise ValueError(f"instruction not in x86.tab: {line}")
 
 
-def build_elf(name, symbol, expanded, notes, data):
-    """Assemble expanded lines into a relocatable little-endian x86-64 ELF object (`bytes`)."""
+def build_elf(name, symbol, expanded, notes, data, where=None):
+    """Assemble expanded lines into a relocatable little-endian x86-64 ELF object (`bytes`).
+    A note ("at", INDEX, LABEL) puts the label LABEL before the instruction of that index and nothing into
+    the object. `where`, if a dict, gets every label's count of bytes from the function's first byte."""
     ins = list(expanded)
     entries = []
     has_place = False
     for note in sorted(notes, key=lambda n: -n[1]):
         if note[0] == "place": ins[note[1]:note[1]] = [f".Lode_place_{name}:"]; has_place = True
+        elif note[0] == "at": ins[note[1]:note[1]] = [f"{note[2]}:"]
         else: ins[note[1]:note[1]] = [f"{note[2]}:"]; entries.append(note[2])
     top_align = 1 << int(ins.pop(0).split()[1]) if ins and ins[0].startswith(".p2align ") else 16
     used = [(n, ws) for n, ws in data if any(f".Lode_data_{n}]" in x or f".Lode_data_{n} " in x for x in ins)]
@@ -294,6 +297,7 @@ def build_elf(name, symbol, expanded, notes, data):
             elif it[0] == "jump":
                 code += encode.encode(ROWS[it[1]][1][1 if idx in long_jumps else 0], {"I": labels[it[2]]}, starts[idx])
         break
+    if where is not None: where.update(labels)
 
     rodata, data_at = bytearray(), {}
     for n, ws in used:

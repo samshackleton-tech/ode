@@ -279,6 +279,20 @@ fn p16 as "blake3_servil_avx512_p16" {
   vpxord zmm5, zmm5, zmm14
   vpxord zmm6, zmm6, zmm15
   vpxord zmm7, zmm7, zmm24
+  // The place of the loop over the blocks, for the prover of the verifier in Lean (proof-core). It is at the
+  // loop's bottom: a block has just been compressed in every lane, and
+  // the count of blocks still to do has not been taken down yet. `left` is that count, the block just done
+  // counted in it: so n - left + 1 blocks are done, and the next block, if there is one, lies 64 bytes after
+  // `off`. In each lane the registers zmm0 to zmm7 hold the chunk's chaining value after the blocks done.
+  place {
+    name left = r13
+    name off = r14
+    fact left >= 1
+    fact left <= n
+    fact off == 64 * (n - left)
+    lane i: zmm0 .. zmm7 = chunk(key, t, flags, start, end, length, n, inputs[i]) after n - left + 1
+    decreases left
+  }
   mov r10d, r8d
   add r14, 64
   dec r13

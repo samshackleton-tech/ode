@@ -171,7 +171,7 @@ def once(old, new):
     return change
 
 
-def places(symbol): return read(os.path.join(HERE, "examples", "hash", "pad.places")) if symbol == PAD else ""
+def places(symbol): return odec.places(os.path.join(KCHECK, "hash.ode"), "pad") if symbol == PAD else ""         # (the place written at its loop)
 
 
 def last_word(functions, change=lambda t: t):

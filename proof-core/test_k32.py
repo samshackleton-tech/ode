@@ -28,7 +28,7 @@ low word of the sum is below the low word of `t` (Core.lean, `hiPlus`; that this
 counter is `hiPlus_sound`).
 
 The class `K32` narrows the contract by one line, `requires n < 2` or `requires n < 3`, and gives no place.
-The class `Loop` takes the contract as it is, for every `n`, with the place of examples/kernel/k32.places:
+The class `Loop` takes the contract as it is, for every `n`, with the place written at the loop in ../wide/k32.ode:
 the place of the other entry, with the counters t + i and t + i + 16 in the lanes and in the four cells of
 the frame that hold the counters' words.
 
@@ -42,11 +42,12 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-for folder in ("proof-core", "kcheck"):
+for folder in ("proof-core", "kcheck", "lang"):
     sys.path.insert(0, str(ROOT / folder))
 
 import built
 import lean_verify
+import odec
 import prove
 import statement
 from test_p32 import Files, once, both, OBJ, FOLLOW, AT_LEAST         # (the same file, and the same words of refusal)
@@ -214,8 +215,7 @@ class Loop(Files, unittest.TestCase):
     def setUpClass(cls):
         built.built("odeverify")
         cls.dir = Path(tempfile.mkdtemp(prefix="ode-k32-loop-"))
-        with (HERE / "examples/kernel/k32.places").open() as f:
-            cls.places = f.read()
+        cls.places = odec.places(str(ROOT / "wide/k32.ode"), "k32")          # the place, written at the loop in the source
         cls.statement, cls.proof = cls.dir / "every.statement", cls.dir / "every.proof"
         cls.runs, cls.found = prove.prove(spec_text(), [(OBJ, NAME, cls.places)], str(cls.statement), str(cls.proof))[NAME]
         with cls.statement.open() as f:

@@ -1,4 +1,4 @@
-// Whether every byte of a run is zero: a scan that leaves at the first byte that is not. The loop's
+// Whether every byte of an array is zero: a scan that leaves at the first byte that is not. The loop's
 // invariant is written at the loop; the tool works out where that is in the code.
 target x86_64
 

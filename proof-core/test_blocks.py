@@ -17,8 +17,8 @@ finds the right one.
     python3 test_blocks.py        (skipped where Lean's `lake` is not installed)"""
 import os, shutil, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-import lean_verify, prove, statement
+sys.path.insert(0, HERE); sys.path.insert(0, os.path.join(HERE, "..", "lang"))
+import lean_verify, odec, prove, statement
 import built
 ADLER = os.path.join(HERE, "..", "kcheck", "programs", "adler32")
 LAKE = lean_verify.LAKE
@@ -55,7 +55,7 @@ class Blocks(unittest.TestCase):
         cls.statement, cls.proof = os.path.join(cls.dir, "blocks.statement"), os.path.join(cls.dir, "blocks.proof")
         cls.kept = os.path.join(HERE, "proofs", "ode_adler32_blocks.proof")
         with open(os.path.join(ADLER, "adler32.spec")) as f: cls.spec = f.read()
-        with open(os.path.join(HERE, "examples", "adler32", "blocks.places")) as f: cls.places = f.read()
+        cls.places = odec.places(os.path.join(ADLER, "blocks.ode"), "adler32_blocks")           # the loops' places, written at the loops in the source
         t = time.time()
         cls.runs, cls.items = prove.prove(cls.spec, [(cls.obj, SYMBOL, cls.places)], cls.statement, cls.proof)[SYMBOL]
         cls.found_in = time.time() - t

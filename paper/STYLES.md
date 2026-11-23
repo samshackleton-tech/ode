@@ -1,6 +1,6 @@
 # One function, several notations
 
-*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. "Today" is what the repository's compiler (`lang/odec.py`) takes. "Prototype" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, not one of the repository's, and not a decision about the language. The inline function of section 1 was the prototype's when this page was first made. It is the compiler's now, and the text macro that it was compared with is gone from the compiler (commit `082ba81` has this page as it was then). The contracts are in today's specification language in both, so an output equation is written with `=` where the report proposes `==`.*
+*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. "Today" is what the repository's compiler (`lang/odec.py`) takes. "Prototype" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, not one of the repository's, and not a decision about the language. The inline function of section 1 and the invariant written at its loop of section 2 were the prototype's when this page was first made. They are the compiler's now. The text macro and the file of typed counts of bytes that they were compared with are gone (commit `082ba81` has this page as it was then). The contracts are in today's specification language in both, so an output equation is written with `=` where the report proposes `==`.*
 
 ## 1. Three mixing steps
 
@@ -97,12 +97,18 @@ contract ode_all_zero(xs: n bytes, n: number) {
 }
 ```
 
-**Today** (`all_zero.ode`, with the loop's invariant in a second file, `all_zero.places`). The invariant is tied to the code by a count of bytes from the function's start, which a person types:
+**Today** (`all_zero.ode`). The loop's invariant stands at the loop, as `place { ... }`:
 
 ```
 fn all_zero_early as "ode_all_zero" {
   xor ecx, ecx
   @loop:
+  place {
+    name i = rcx
+    fact i <= n
+    fact all_zero_from(xs, i) == all_zero(xs)
+    decreases n - i
+  }
   cmp rcx, rsi
   jae @yes
   mov rdx, rdi
@@ -122,6 +128,8 @@ fn all_zero_early as "ode_all_zero" {
 }
 ```
 
+The prover needs the invariant with a count of bytes from the function's first byte to that instruction. The compiler works the count out (`odec.py all_zero.ode all_zero_early --places` prints this):
+
 ```
 place +0x2 {
     name i = rcx
@@ -131,7 +139,7 @@ place +0x2 {
 }
 ```
 
-**Prototype** (`all_zero.ode2`). Registers have names, a store is written `:=`, and the invariant stands at the loop:
+**Prototype** (`all_zero.ode2`). The same, and also names for registers and a store written `:=`:
 
 ```
 target x86_64
@@ -170,9 +178,9 @@ fn all_zero_early as "ode_all_zero" {
 }
 ```
 
-Both give one object file: 14 instructions, 40 bytes of code. The place the tool works out is the one typed in `all_zero.places`. The verifier says `shown`; the statement is 770 bytes and the proof 463.
+Both give one object file, 14 instructions and 40 bytes of code, and the same place. The verifier says `shown`; the statement is 770 bytes and the proof 463.
 
-Then one instruction (`nop`) is added before the loop. The prototype's place moves with it, to `place +0x3`, and the function is `shown` again. The same proof with the place at the count typed before (`place +0x2`) is `refused: live or dead is expected`. The prover, given the place file as typed before, had found no proof and had not stopped after 60 seconds: it does not say that the loop has no place.
+Then one instruction (`nop`) is added before the loop. The place moves with it, to `place +0x3`, and the function is `shown` again. Before, a person typed the count into a second file, and a count that is not moved goes wrong. The same proof with the place at the count as it was before (`place +0x2`) is `refused: live or dead is expected`. The prover, given the place at that count, had found no proof and had not stopped after 60 seconds: it does not say that the loop has no place.
 
 ## 3. A frame
 
@@ -282,7 +290,7 @@ These were run, not verified: there is no verifier for AArch64 yet. On an Apple 
 |---|---|---|---|---|---|
 | `mix16_3` | today, written out | 13 | 61 | shown | 16 |
 | `mix16_3` | today, inline function | 15 | 61 | shown | 16 |
-| `all_zero` | today, with a place file | 26 | 40 | shown | 463 |
+| `all_zero` | today | 26 | 40 | shown | 463 |
 | `all_zero` | prototype | 32 | 40 | shown | 463 |
 | `quad32` | today | 135 | 695 | shown | 15 |
 | `quad32` | prototype | 56 | 695 | shown | 15 |
