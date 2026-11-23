@@ -1,0 +1,47 @@
+// BLAKE3 chunk-tail padding on AArch64: copies src[0..n] into block[0..n] and zero-fills block[n..64].
+// Verified against kcheck/blake3.spec's `padded(src)` with `trace depends on n` (bytes of `src` kept out
+// of the trace). Uses zero stack and fits in 15 instructions (60 bytes, one 64-byte cache line).
+target arm64
+
+fn pad as "b3l_pad_arm64" {
+  budget {
+    max_bytes 64
+    max_icache_lines 1
+    max_frame_bytes 0
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg block = x0
+  reg src = x1
+  reg len = x2
+  reg idx = x3
+  reg saddr = x4
+  reg daddr = x5
+  reg bytew = w6
+  reg bytex = x6
+
+  idx := 64
+  place {
+    name i = idx
+    fact i <= 64
+    wrote block[i ..] = padded(src)
+    decreases i
+  }
+@loop:
+  cmp idx, 0
+  b.eq @done
+  sub idx, idx, 1
+  add daddr, block, idx
+  cmp idx, len
+  b.hs @zero
+  add saddr, src, idx
+  ldrb bytew, [saddr, 0]
+  strb bytew, [daddr, 0]
+  b @loop
+@zero:
+  bytex := 0
+  strb bytew, [daddr, 0]
+  b @loop
+@done:
+  ret
+}

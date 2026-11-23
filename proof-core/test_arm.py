@@ -22,8 +22,8 @@ contract written in C, on random blocks; the changed copies that can be run safe
                                 the runs: skipped where the machine is no AArch64 one, or has no clang)"""
 import os, platform, random, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path[:0] = [HERE, os.path.join(HERE, "..", "arm64"), os.path.join(HERE, "..", "core")]
-import built, lean_verify, prove, statement, table
+sys.path[:0] = [HERE, os.path.join(HERE, "..", "arm64"), os.path.join(HERE, "..", "core"), os.path.join(HERE, "..", "lang")]
+import built, lean_verify, odec, prove, statement, table
 import obj as aobj, word
 
 LAKE = lean_verify.LAKE
@@ -274,6 +274,108 @@ class Run(unittest.TestCase):
                 self.assertIn("differs", said, what)
         # the control: other instructions, the same bytes out
         self.assertEqual(self.run_words(changed(STILL_TRUE[1], os.path.join(self.dir, "true.o"))), "500 cases: arm_mix16_3 same, arm_mix16_again same, arm_mix16_6 same")
+
+
+PAD_HARNESS = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+void b3l_pad_arm64(uint8_t *block, const uint8_t *src, uint64_t n);
+int main(void) {
+    uint8_t src[64], guard[16 + 64 + 16], want[64];
+    for (int i = 0; i < 64; i++) src[i] = (uint8_t)(0x37 + i * 7);
+    for (uint64_t n = 0; n <= 64; n++) {
+        memset(guard, 0xA5, sizeof(guard));
+        uint8_t *block = guard + 16;
+        b3l_pad_arm64(block, src, n);
+        for (int g = 0; g < 16; g++) {
+            if (guard[g] != 0xA5 || guard[16 + 64 + g] != 0xA5) {
+                printf("guard clobbered at n=%llu\n", (unsigned long long)n);
+                return 1;
+            }
+        }
+        memset(want, 0, 64);
+        memcpy(want, src, n);
+        if (memcmp(block, want, 64) != 0) {
+            printf("differs at n=%llu\n", (unsigned long long)n);
+            return 1;
+        }
+    }
+    printf("65 lengths: b3l_pad_arm64 same\n");
+    return 0;
+}
+"""
+
+
+class PadArm64(unittest.TestCase):
+    """First real BLAKE3 function verified on AArch64: `b3l_pad_arm64` against kcheck/blake3.spec."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="odearmpad-")
+        cls.addClassCleanup(shutil.rmtree, cls.dir)
+        cls.src_path = os.path.join(ARM, "pad_arm64.ode")
+        cls.spec_path = os.path.join(ARM, "pad_arm64.spec")
+        with open(os.path.join(HERE, "..", "kcheck", "blake3.spec")) as f:
+            b3 = f.read()
+        with open(cls.spec_path) as f:
+            cls.spec = b3 + "\n" + f.read()
+        with open(cls.src_path) as f:
+            cls.src = f.read()
+        cls.obj = os.path.join(cls.dir, "pad_arm64.o")
+        odec.build(cls.src_path, "pad", cls.obj)
+        cls.places = odec.places(cls.src_path, "pad")
+
+    @unittest.skipUnless(LAKE, "Lean's lake is not installed")
+    def test_b3l_pad_arm64_verified_and_false_mutants_refused(self):
+        built.built("odeverify")
+        st = os.path.join(self.dir, "pad.statement")
+        pf = os.path.join(self.dir, "pad.proof")
+        nums = prove.prove(self.spec, [(self.obj, "b3l_pad_arm64", self.places)], st, pf)
+        self.assertIn("b3l_pad_arm64", nums)
+        self.assertEqual(lean_verify.verify(self.spec, [(self.obj, "b3l_pad_arm64")], pf), (True, "shown"))
+
+        # Negative control 1: zero-fill writes 1 instead of 0 -> refused.
+        bad1_ode = os.path.join(self.dir, "bad1.ode")
+        bad1_obj = os.path.join(self.dir, "bad1.o")
+        self.assertEqual(self.src.count("  bytex := 0\n"), 1)
+        with open(bad1_ode, "w") as f:
+            f.write(self.src.replace("  bytex := 0\n", "  bytex := 1\n", 1))
+        odec.build(bad1_ode, "pad", bad1_obj)
+        ok, _ = lean_verify.verify(self.spec, [(bad1_obj, "b3l_pad_arm64")], pf)
+        self.assertFalse(ok)
+
+        # Negative control 2: contract drops `trace depends on n` -> refused at branch on `n`.
+        bad_spec = self.spec.replace("    trace depends on n\n", "")
+        ok, said = lean_verify.verify(bad_spec, [(self.obj, "b3l_pad_arm64")], pf)
+        self.assertFalse(ok)
+        self.assertIn("kept out of the trace", said)
+
+        # Negative control 3: branch reversed (`b.lo @zero` instead of `b.hs @zero`) -> out-of-bounds / wrong value refused.
+        bad3_ode = os.path.join(self.dir, "bad3.ode")
+        bad3_obj = os.path.join(self.dir, "bad3.o")
+        self.assertEqual(self.src.count("  b.hs @zero\n"), 1)
+        with open(bad3_ode, "w") as f:
+            f.write(self.src.replace("  b.hs @zero\n", "  b.lo @zero\n", 1))
+        odec.build(bad3_ode, "pad", bad3_obj)
+        ok, _ = lean_verify.verify(self.spec, [(bad3_obj, "b3l_pad_arm64")], pf)
+        self.assertFalse(ok)
+
+    @unittest.skipUnless(ARM_MACHINE and shutil.which("clang"), "an AArch64 processor and clang are needed")
+    def test_b3l_pad_arm64_runs_on_hardware(self):
+        words, _ = aobj.words(self.obj, "b3l_pad_arm64")
+        lines = ["#ifdef __APPLE__", "#define SYM(x) _##x", "#else", "#define SYM(x) x", "#endif",
+                 ".text", ".p2align 2", ".globl SYM(b3l_pad_arm64)", "SYM(b3l_pad_arm64):"]
+        for w in words:
+            lines.append(f"    .long 0x{int.from_bytes(w, 'little'):08x}")
+        asm_p = os.path.join(self.dir, "pad.S")
+        c_p = os.path.join(self.dir, "pad_harness.c")
+        exe_p = os.path.join(self.dir, "pad_run")
+        with open(asm_p, "w") as f: f.write("\n".join(lines) + "\n")
+        with open(c_p, "w") as f: f.write(PAD_HARNESS)
+        subprocess.run(["clang", "-O1", "-o", exe_p, c_p, asm_p], check=True, capture_output=True)
+        r = subprocess.run([exe_p], capture_output=True, text=True, check=True, timeout=30)
+        self.assertEqual(r.stdout.strip(), "65 lengths: b3l_pad_arm64 same")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that each proved row's AST matches arm64.tab verbatim.
+  -- 1. Check that each proved row's AST matches arm64.tab verbatim (20 of 36 rows).
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -54,6 +54,18 @@ def main (args : List String) : IO Unit := do
   checkRow table "cmp_rr" ArmAgree.effectCmpRr
   checkRow table "b_hs" ArmAgree.effectBHs
   checkRow table "b_lo" ArmAgree.effectBLo
+  checkRow table "nop" ArmAgree.effectNop
+  checkRow table "mov_ri" ArmAgree.effectMovRi
+  checkRow table "mov32_ri" ArmAgree.effectMovRi
+  checkRow table "mov_rr" ArmAgree.effectMovRr
+  checkRow table "add_rri" ArmAgree.effectAddRri
+  checkRow table "sub_rri" ArmAgree.effectSubRri
+  checkRow table "sub_rrr" ArmAgree.effectSubRrr
+  checkRow table "cmp_ri" ArmAgree.effectCmpRi
+  checkRow table "b" ArmAgree.effectB
+  checkRow table "b_eq" ArmAgree.effectBEq
+  checkRow table "b_ne" ArmAgree.effectBNe
+  checkRow table "strb" ArmAgree.effectStrb
 
   -- 2. Check Ode.findRow and register/immediate lookup for all 31/32 register indices.
   for i in List.range 31 do
@@ -145,8 +157,107 @@ def main (args : List String) : IO Unit := do
     if wordsOnly then
       let q : Int := delta / 4
       let imm19 : BitVec 19 := BitVec.ofInt 19 q
+      let imm26 : BitVec 26 := BitVec.ofInt 26 q
       IO.println s!"b_hs {hex32 (ArmAgree.encodeBHs imm19)} {insHs}"
       IO.println s!"b_lo {hex32 (ArmAgree.encodeBLo imm19)} {insLo}"
+      IO.println s!"b {hex32 (ArmAgree.encodeB imm26)} (.b {delta})"
+      IO.println s!"b_eq {hex32 (ArmAgree.encodeBEq imm19)} (.beq {delta})"
+      IO.println s!"b_ne {hex32 (ArmAgree.encodeBNe imm19)} (.bne {delta})"
+    checkInstance table "b" s!"(.b {delta})" (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+    checkInstance table "b_eq" s!"(.beq {delta})" (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+    checkInstance table "b_ne" s!"(.bne {delta})" (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+
+  checkInstance table "nop" "(.nop)" (fun _ => true)
+  if wordsOnly then
+    IO.println s!"nop {hex32 ArmAgree.encodeNop} (.nop)"
+
+  let movImms : List Nat := [0, 1, 64, 1024, 65535]
+  for i in List.range 31 do
+    for imm in movImms do
+      if i == 0 || i == 7 || i == 30 || imm == 64 then
+        let ins64 := s!"(.movi .x{i} {imm})"
+        checkInstance table "mov_ri" ins64 (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        let ins32 := s!"(.movi32 .x{i} {imm})"
+        checkInstance table "mov32_ri" ins32 (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        if hi : i < 31 then
+          if himm : imm < 65536 then
+            if wordsOnly then
+              IO.println s!"mov_ri {hex32 (ArmAgree.encodeMovRi ⟨i, hi⟩ ⟨imm, himm⟩)} {ins64}"
+              IO.println s!"mov32_ri {hex32 (ArmAgree.encodeMov32Ri ⟨i, hi⟩ ⟨imm, himm⟩)} {ins32}"
+
+  for i in List.range 31 do
+    let s := (i + 9) % 31
+    let p := (i + 23) % 31
+    let insM := s!"(.mov .x{i} .x{s})"
+    checkInstance table "mov_rr" insM (fun bd =>
+      Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+      Ode.regOf bd "S" == some (ArmAgree.armSlot s))
+    let insSub := s!"(.sub .x{i} .x{s} .x{p})"
+    checkInstance table "sub_rrr" insSub (fun bd =>
+      Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+      Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+      Ode.regOf bd "P" == some (ArmAgree.armSlot p))
+    if hi : i < 31 then
+      if wordsOnly then
+        IO.println s!"mov_rr {hex32 (ArmAgree.encodeMovRr ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩)} {insM}"
+        IO.println s!"sub_rrr {hex32 (ArmAgree.encodeSubRrr ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨p, Nat.mod_lt _ (by decide)⟩)} {insSub}"
+
+  let imm12s : List Nat := [0, 1, 8, 64, 1024, 4095]
+  for i in List.range 31 do
+    let s := (i + 3) % 31
+    for imm in imm12s do
+      if i == 0 || i == 2 || i == 30 || imm == 1 then
+        let insAdd := s!"(.addi .x{i} .x{s} {imm})"
+        checkInstance table "add_rri" insAdd (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        let insSub := s!"(.subi .x{i} .x{s} {imm})"
+        checkInstance table "sub_rri" insSub (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        let insCmp := s!"(.cmpi .x{i} {imm})"
+        checkInstance table "cmp_ri" insCmp (fun bd =>
+          Ode.regOf bd "S" == some (ArmAgree.armSlot i) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        let insStrb := s!"(.strb .x{i} .x{s} {imm})"
+        checkInstance table "strb" insStrb (fun bd =>
+          Ode.regOf bd "S" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "B" == some (ArmAgree.armSlot s) &&
+          match bd.find? (fun kv => kv.1 == "N") with
+          | some (_, v) => Ode.readInt v == some (imm : Int)
+          | none => false)
+        if hi : i < 31 then
+          if himm : imm < 4096 then
+            if wordsOnly then
+              IO.println s!"add_rri {hex32 (ArmAgree.encodeAddRri ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨imm, himm⟩)} {insAdd}"
+              IO.println s!"sub_rri {hex32 (ArmAgree.encodeSubRri ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨imm, himm⟩)} {insSub}"
+              IO.println s!"cmp_ri {hex32 (ArmAgree.encodeCmpRi ⟨i, hi⟩ ⟨imm, himm⟩)} {insCmp}"
+              IO.println s!"strb {hex32 (ArmAgree.encodeStrb ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨imm, himm⟩)} {insStrb}"
 
   if !wordsOnly then
-    IO.println "agree-check: 8 rows match arm64.tab"
+    IO.println "agree-check: 20 rows match arm64.tab"
