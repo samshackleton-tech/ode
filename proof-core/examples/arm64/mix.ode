@@ -1,0 +1,82 @@
+// Three functions for AArch64, written in Ode (target arm64) using inline fn, reg, frame, `:=`, and for.
+// Compiles directly to AArch64 ELF object bytes via arm64/arm64.tab (matching mix.s word for word).
+// Their contracts are in mix.spec.
+target arm64
+
+inline fn mix_step(d: vec, a: vec) distinct(d, a) changes d {
+  eor d.16b, d.16b, a.16b
+  rev32 d.8h, d.8h
+}
+
+inline fn mix_quarter(out: gpr, dp: gpr, ap: gpr, d: vec, a: vec)
+  distinct(out, dp, ap) distinct(d, a) changes d, a {
+  ld1 {d.4s}, [dp]
+  ld1 {a.4s}, [ap]
+  mix_step(d, a)
+  mix_step(a, d)
+  mix_step(d, a)
+  st1 {d.4s}, [out]
+}
+
+fn mix16_3 as "arm_mix16_3" {
+  reg out = x0
+  reg dp = x1
+  reg ap = x2
+  reg d = v0
+  reg a = v1
+  for q in 0..3 {
+    mix_quarter(out, dp, ap, d, a)
+    add dp, dp, 16
+    add ap, ap, 16
+    add out, out, 16
+  }
+  mix_quarter(out, dp, ap, d, a)
+  ret
+}
+
+fn mix16_again as "arm_mix16_again" {
+  frame {
+    pad: 8
+    saved_lr: 1 * u64
+  }
+  sub sp, sp, frame.size
+  saved_lr[0] := x30
+  bl arm_mix16_3
+  x30 := saved_lr[0]
+  add sp, sp, frame.size
+  ret
+}
+
+fn mix16_6 as "arm_mix16_6" {
+  frame {
+    mid: 1 * block
+    saved_lr: 1 * u64
+    saved_out: 1 * u64
+    saved_a: 1 * u64
+    pad: 8
+  }
+  reg keep_out = x19
+  reg keep_a = x20
+  reg zero = x9
+  sub sp, sp, frame.size
+  saved_lr[0] := x30
+  saved_out[0] := x19
+  saved_a[0] := x20
+  keep_out := x0
+  keep_a := x2
+  zero := 0
+  for i in 0..8 {
+    mid.u64[$i] := zero
+  }
+  x0 := &mid
+  bl arm_mix16_3
+  x0 := keep_out
+  x1 := &mid
+  x2 := keep_a
+  bl arm_mix16_3
+  x20 := saved_a[0]
+  x19 := saved_out[0]
+  x30 := saved_lr[0]
+  add sp, sp, frame.size
+  ret
+}

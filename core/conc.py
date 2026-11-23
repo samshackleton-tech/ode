@@ -66,9 +66,10 @@ class State:
         self.to, self.called, self.returned = None, None, False
 
 
-def run(row, bind, s):
+def run(row, bind, s, trace=None):
     """The state after one instance of ROW (bind: placeholder -> register name, vector number or number)
-    from state S. A part the row says nothing of is UNKNOWN afterwards."""
+    from state S. A part the row says nothing of is UNKNOWN afterwards. If `trace` is a list, each memory
+    read or write appends ("R"|"W", address, size)."""
     def value(e):
         if e[0] == "number": return e[1]
         if e[0] == "lane": return s.x[bind[e[1]]][e[2]]
@@ -80,12 +81,13 @@ def run(row, bind, s):
             if n in VECTORS: return s.x[bind[n]][:4]
             if n in WIDE: return s.x[bind[WIDE[n]]]
             if n in MASKS: return s.k[bind[n]]
-            if n in NUMBERS: return bind[n] if bind[n] > M64 else bind[n] & M64         # (a number of sixteen words is whole)
+            if n in NUMBERS: return bind[n] if not isinstance(bind[n], int) or bind[n] > M64 else bind[n] & M64         # (a number of sixteen words is whole)
             if n in ("zf", "cf"): return getattr(s, n)
             return s.g[n]
         name, args = e[1], [value(a) for a in e[2]]
         if name in SIZES:
             at, size = sum(args) & M64, SIZES[name]
+            if trace is not None: trace.append(("R", at, size))
             raw = int.from_bytes(bytes(s.mem[at + k] for k in range(size)), "little")
             return tuple((raw >> (32 * k)) & M32 for k in range(size // 4)) if size >= 16 else raw
         return CONC[name](*args)
@@ -106,6 +108,7 @@ def run(row, bind, s):
         v = value(rhs)
         if lhs[0] == "call":
             at, size = sum(value(a) for a in lhs[2]) & M64, SIZES[lhs[1]]
+            if trace is not None: trace.append(("W", at, size))
             raw = sum(w << (32 * k) for k, w in enumerate(v)) if size >= 16 else v
             for k in range(size): s.mem[at + k] = (raw >> (8 * k)) & 0xFF
         elif lhs[1] in REGISTERS: s.g[bind[lhs[1]]] = v if v == UNKNOWN else v & M64

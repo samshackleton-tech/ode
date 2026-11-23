@@ -70,7 +70,7 @@ The forms that expand (a use of an inline function, a `for`, a name for a regist
 frame) do so in the one way written above. Each instruction is then laid down by the instruction table as
 the instruction it names, or refused (../core/asm.py); a refusal names the source line and quotes the line
 as it was typed. What the verifier is given is the object's bytes; nothing here is relied on."""
-import itertools, os, re, shutil, subprocess, sys
+import importlib.util, itertools, os, re, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 G64 = "rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15".split()
@@ -78,7 +78,7 @@ G32 = "eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d".sp
 G16 = "ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w".split()
 G8 = "al cl dl bl spl bpl sil dil r8b r9b r10b r11b r12b r13b r14b r15b".split()
 REGISTERS = set(G64)
-TARGETS = ("x86_64",)
+TARGETS = ("x86_64", "arm64")
 # The classes a parameter of an inline function may be of; and, for every name of a register, the whole
 # register it is or is a part of (`eax` and `al` are parts of `rax`; `xmm3` is a part of `zmm3`).
 CLASSES = {"gpr": set(G64), "gpr32": set(G32), "xmm": {f"xmm{i}" for i in range(32)}, "zmm": {f"zmm{i}" for i in range(32)}}
@@ -86,9 +86,27 @@ WHOLE = {n: G64[i] for names in (G64, G32, G16, G8, ("ah", "ch", "dh", "bh")) fo
 WHOLE.update({f"{p}mm{i}": f"zmm{i}" for p in "xyz" for i in range(32)})
 WHOLE.update({f"k{i}": f"k{i}" for i in range(8)})
 GENERAL = {r: size for names, size in ((G64, 8), (G32, 4), (G16, 2), (G8, 1)) for r in names}        # the general registers, and the bytes of each
+
+ARM_G64 = [f"x{i}" for i in range(31)]
+ARM_G32 = [f"w{i}" for i in range(31)]
+ARM_VEC = [f"v{i}" for i in range(32)]
+ARM_CLASSES = {"gpr": set(ARM_G64), "gpr32": set(ARM_G32), "vec": set(ARM_VEC)}
+ARM_WHOLE = {f"x{i}": f"x{i}" for i in range(31)}
+ARM_WHOLE.update({f"w{i}": f"x{i}" for i in range(31)})
+ARM_WHOLE.update({"sp": "sp", "wsp": "sp", "xzr": "xzr", "wzr": "xzr"})
+ARM_WHOLE.update({f"v{i}": f"v{i}" for i in range(32)})
+ARM_GENERAL = {r: 8 for r in ARM_G64}
+ARM_GENERAL.update({r: 4 for r in ARM_G32})
+
 RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame"}       # words of operands: no name is one
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
 KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
+
+
+def target_spec(target):
+    if target == "arm64":
+        return ARM_CLASSES, ARM_WHOLE, ARM_GENERAL, set(ARM_G64) | {"sp"}, "sp"
+    return CLASSES, WHOLE, GENERAL, set(G64), "rsp"
 
 
 def read_source(src):
@@ -128,9 +146,10 @@ def number(text):
     except ValueError: return None
 
 
-def frame_of(src, n, body, taken):
+def frame_of(src, n, body, taken, target="x86_64"):
     """A frame as (its size, {field: (the bytes before it, how many it holds, the bytes of one)}): the fields
     lie in the order written, the first at the stack pointer. `taken`: the names the function has already."""
+    _, whole, _, _, _ = target_spec(target)
     fields, size = {}, 0
     for k, line in body:
         f = line.split("//")[0].strip()
@@ -138,7 +157,7 @@ def frame_of(src, n, body, taken):
         m = re.fullmatch(r"(\w+)\s*:\s*(.+)", f)
         if not m: stop(src, k, f"a field of a frame is `NAME: COUNT * KIND` or `NAME: BYTES`, not `{f}`")
         name, what = m.groups()
-        if name in WHOLE or name in RESERVED: stop(src, k, f"a field cannot be named `{name}`")
+        if name in whole or name in RESERVED: stop(src, k, f"a field cannot be named `{name}`")
         if name in fields or name in taken: stop(src, k, f"`{name}` is a name already")
         m = re.fullmatch(r"(.+)\*\s*([A-Za-z_]\w*)", what)
         count, kind = (number(m.group(1)), m.group(2)) if m else (number(what), "byte")
@@ -157,14 +176,15 @@ class Inline:
         self.labels = {m.group(1) for _, l in body for m in [re.fullmatch(r"@(\w+):", l.split("//")[0].strip())] if m}
 
 
-def inline_of(src, n, name, params, clauses, body):
+def inline_of(src, n, name, params, clauses, body, target="x86_64"):
     """The inline function a source's lines say, or a refusal of what in it cannot be read."""
+    classes, whole, _, _, _ = target_spec(target)
     ps = []
     for p in [p.strip() for p in params.split(",")] if params.strip() else []:
         m = re.fullmatch(r"(\w+)\s*:\s*(\w+)", p)
         if not m: stop(src, n, f"inline fn {name}: a parameter is `NAME: CLASS`, not `{p}`")
-        if m.group(2) not in CLASSES: stop(src, n, f"inline fn {name}: `{m.group(2)}` is no class of register ({', '.join(CLASSES)})")
-        if m.group(1) in WHOLE: stop(src, n, f"inline fn {name}: a parameter cannot have a register's name, `{m.group(1)}`")
+        if m.group(2) not in classes: stop(src, n, f"inline fn {name}: `{m.group(2)}` is no class of register ({', '.join(classes)})")
+        if m.group(1) in whole: stop(src, n, f"inline fn {name}: a parameter cannot have a register's name, `{m.group(1)}`")
         if m.group(1) in [q for q, _ in ps]: stop(src, n, f"inline fn {name}: two parameters are named `{m.group(1)}`")
         ps.append((m.group(1), m.group(2)))
     names, distinct, changes, rest = [p for p, _ in ps], [], [], clauses.strip()
@@ -185,7 +205,7 @@ def inline_of(src, n, name, params, clauses, body):
         s = line.split("//")[0].strip()
         if re.match(r"(place|entry)\b", s): stop(src, k, f"inline fn {name}: a place or an entry inside an inline function")
         for word in re.findall(r"(?<![@#$\w])[A-Za-z_]\w*", s):
-            if word in WHOLE: stop(src, k, f"inline fn {name}: the line names the register `{word}`; an inline function takes each register it uses as a parameter")
+            if word in whole: stop(src, k, f"inline fn {name}: the line names the register `{word}`; an inline function takes each register it uses as a parameter")
     return Inline(name, n, ps, distinct, changes, body)
 
 
@@ -218,7 +238,7 @@ def source(text, src="the source"):
             if not m: stop(src, i + 1, "the head of an inline fn is `inline fn NAME(P: CLASS, ...) distinct(P, Q) changes P, ... {`")
             j = closing(h)
             if m.group(1) in inlines: stop(src, i + 1, f"a second inline fn {m.group(1)}")
-            inlines[m.group(1)] = inline_of(src, i + 1, m.group(1), m.group(2), m.group(3), [(k + 1, lines[k]) for k in range(h + 1, j)])
+            inlines[m.group(1)] = inline_of(src, i + 1, m.group(1), m.group(2), m.group(3), [(k + 1, lines[k]) for k in range(h + 1, j)], target or TARGETS[0])
             i = j + 1; continue
         m = re.match(r'^fn\s+(\w+)\s+as\s+"(\w+)"\s*\{\s*$', line)
         if m:
@@ -239,16 +259,32 @@ def functions(text, src="the source"):
 
 
 WRITTEN = {}
+_ASM_MODS = {}
 
 
-def written(line):
+def _asm_mod(target):
+    if target not in _ASM_MODS:
+        folder = "arm64" if target == "arm64" else "core"
+        path = os.path.join(HERE, "..", folder, "asm.py")
+        spec = importlib.util.spec_from_file_location(f"_ode_asm_{target}", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _ASM_MODS[target] = mod
+    return _ASM_MODS[target]
+
+
+def written(line, target="x86_64"):
     """The registers an instruction changes, each by the name of the whole register, as its row of the
     instruction table says. (The flags and bytes of memory are not among them.)"""
-    if line not in WRITTEN:
+    key = (target, line)
+    if key not in WRITTEN:
+        if target == "arm64":
+            WRITTEN[key] = _asm_mod("arm64").written(line)
+            return WRITTEN[key]
         core = os.path.join(HERE, "..", "core")
         if core not in sys.path: sys.path.insert(0, core)
-        import asm, decode, table
-        item, regs = asm.instruction(line), set()
+        import decode, table
+        item, regs = _asm_mod("x86_64").instruction(line), set()
         if item[0] != "jump":
             got = decode.decode(item[1], 0, 0, lambda kind, start, end: itertools.repeat("0"))
             if got is None: raise ValueError("the instruction table does not read back the bytes it writes for this")
@@ -262,18 +298,20 @@ def written(line):
                 elif place in table.WIDE: regs.add(f"zmm{bind[table.WIDE[place]]}")
                 elif place in table.MASKS: regs.add(f"k{bind[place]}")
                 else: regs.add(WHOLE.get(place, place))             # a register the row names outright; or `above128` (vzeroupper)
-        WRITTEN[line] = regs
-    return WRITTEN[line]
+        WRITTEN[key] = regs
+    return WRITTEN[key]
 
 
-def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
+def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86_64", meta=None):
     """A function's lines [(number, text)] as instructions: the uses of inline functions and the fors
     expanded, `$x`, `@label` and `#data` replaced. What is no instruction is left out of them and, where
     `notes` is a list, put there with the number of the instruction it stands before:
     ("place", number, the count's name, its lines) for `place b { ... }` (what holds there after b turns of
     the loop: the proof of the loop is written from it); ("entry", number, NAME) for `entry "NAME"` (the
     function is entered there too, under that name). Where `typed_lines` is a list, it gets, for each
-    instruction given back, (the number of its line, the line as it was typed, with a for's number put in)."""
+    instruction given back, (the number of its line, the line as it was typed, with a for's number put in).
+    Where `meta` is a dict, it receives `regs` ({name: register}) and `frame` ((size, fields) or None)."""
+    classes, whole, general, g64_addr, sp_name = target_spec(target)
     out, uses, names, frame = [], [0], {}, [None]          # (names: the registers' names; frame: (size, fields) once it is said)
 
     def field(name, n, inside):
@@ -282,7 +320,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
         return frame[0][1][name]
 
     def address(text, n):
-        """An address of `:=`, a register (or two) and a number, with the number worked out."""
+        """An address of `:=`, a register (or two on x86-64) and a number, with the number worked out."""
         terms, depth, cur, sign = [], 0, "", 1
         for ch in text + "+":
             if ch in "+-" and depth == 0:
@@ -292,22 +330,33 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
             else: depth += ch == "("; depth -= ch == ")"; cur += ch
         regs, total = [], 0
         for sign, term in terms:
-            if term in G64 and sign == 1: regs.append(term)
+            if term in g64_addr and sign == 1: regs.append(term)
             elif number(term) is not None: total += sign * number(term)
             else: stop(src, n, f"an address of `:=` is a register (or two) and a number: not `[{text.strip()}]`")
+        if target == "arm64":
+            if len(regs) != 1 or total < 0:
+                stop(src, n, f"on arm64 an address of `:=` is one base register and a nonnegative offset: not `[{text.strip()}]`")
+            return f"{regs[0]}, {total}"
         if not 1 <= len(regs) <= 2: stop(src, n, f"an address of `:=` is a register (or two) and a number: not `[{text.strip()}]`")
         return " + ".join(regs) + (f" + {total}" if total >= 0 else f" - {-total}")
 
     def operand(text, n, inside):
         """A side of `:=`, as (what it is, how the assembler is given it, its bytes where it has a size)."""
         t = text.strip()
-        if t in GENERAL: return "register", t, GENERAL[t]
-        if t in WHOLE: stop(src, n, f"`:=` is one `mov` or one `lea`: `{t}` is moved by an instruction that the coder names")
+        if t in general: return "register", t, general[t]
+        if t in whole: stop(src, n, f"`:=` is one move or load/store: `{t}` is moved by an instruction that the coder names")
         if number(t) is not None: return "number", str(number(t)), None
         m = re.fullmatch(r"(byte|dword|qword)\s*\[(.*)\]", t)
-        if m: return "memory", f"{m.group(1)} ptr [{address(m.group(2), n)}]", {v: k for k, v in SIZES.items()}[m.group(1)]
+        if m:
+            sz = {v: k for k, v in SIZES.items()}[m.group(1)]
+            if target == "arm64":
+                if sz not in (4, 8): stop(src, n, f"on arm64 `:=` moves 4 or 8 bytes of memory (`dword` or `qword`), not `{m.group(1)}`")
+                return "memory", f"[{address(m.group(2), n)}]", sz
+            return "memory", f"{m.group(1)} ptr [{address(m.group(2), n)}]", sz
         m = re.fullmatch(r"&\s*(\w+)", t)
-        if m: return "address", f"[rsp + {field(m.group(1), n, inside)[0]}]", 8
+        if m:
+            off = field(m.group(1), n, inside)[0]
+            return "address", (f"{sp_name}, {off}" if target == "arm64" else f"[rsp + {off}]"), 8
         m = re.fullmatch(r"(\w+)(?:\.(\w+))?\[(.*)\]", t)
         if m:
             name, view, slot = m.groups()
@@ -319,8 +368,12 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
             i = number(slot)
             if i is None: stop(src, n, f"a slot is a number: not `{slot.strip()}`")
             if not 0 <= i < count: stop(src, n, f"`{t}`: the slots of `{name + ('.' + view if view else '')}` are 0 to {count - 1}")
-            if one not in SIZES: stop(src, n, f"`:=` moves 1, 4 or 8 bytes, and a slot of `{name}` has {one}: take it as `{name}.u64[I]`, or name the instruction")
-            return "memory", f"{SIZES[one]} ptr [rsp + {before + i * one}]", one
+            allowed = (4, 8) if target == "arm64" else tuple(SIZES)
+            if one not in allowed:
+                words = "4 or 8" if target == "arm64" else "1, 4 or 8"
+                stop(src, n, f"`:=` moves {words} bytes, and a slot of `{name}` has {one}: take it as `{name}.u64[I]`, or name the instruction")
+            off = before + i * one
+            return "memory", (f"[{sp_name}, {off}]" if target == "arm64" else f"{SIZES[one]} ptr [rsp + {off}]"), one
         stop(src, n, f"`{t}` is nothing that `:=` moves: a general register, a number, `qword [ADDRESS]`, a slot of the frame or `&FIELD`")
 
     def store(s, n, inside, typed):
@@ -330,6 +383,12 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
         if into is not None and of is not None and into != of:
             was = [side.strip() for side in typed.split(":=", 1)]
             stop(src, n, f"`:=` moves as many bytes as both sides have: `{was[0]}` has {into} and `{was[1]}` has {of}")
+        if target == "arm64":
+            if (a, b) == ("register", "address"): return f"add {dst}, {src_}"
+            if (a, b) in (("register", "register"), ("register", "number")): return f"mov {dst}, {src_}"
+            if (a, b) == ("register", "memory"): return f"ldr {dst}, {src_}"
+            if (a, b) == ("memory", "register"): return f"str {src_}, {dst}"
+            stop(src, n, f"on arm64 `:=` is one `mov`, `ldr`, `str`, or `add` (no store of an immediate to memory): not `{s}`")
         if (a, b) == ("register", "address"): return f"lea {dst}, {src_}"
         if (a, b) in (("register", "register"), ("register", "number"), ("register", "memory"), ("memory", "register"), ("memory", "number")): return f"mov {dst}, {src_}"
         stop(src, n, f"`:=` is one `mov`: into a register from a register, a number or memory, or into memory from a register or a number; not `{s}`")
@@ -347,11 +406,11 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
         if len(args) != len(f.params): stop(src, n, f"{f.name} takes {len(f.params)} registers, not {len(args)}")
         bind = {}
         for (p, cls), a in zip(f.params, args):
-            if a not in CLASSES[cls]: stop(src, n, f"{f.name}: `{p}` is a register of the class {cls}, and `{a}` is not one")
+            if a not in classes[cls]: stop(src, n, f"{f.name}: `{p}` is a register of the class {cls}, and `{a}` is not one")
             bind[p] = a
         for group in f.distinct:
             for a, b in itertools.combinations(group, 2):
-                if WHOLE[bind[a]] == WHOLE[bind[b]]:
+                if whole[bind[a]] == whole[bind[b]]:
                     same = f"both are given {bind[a]}" if bind[a] == bind[b] else f"{bind[a]} and {bind[b]} are parts of one register"
                     stop(src, n, f"{f.name}: `{a}` and `{b}` must differ, and {same}")
         uses[0] += 1
@@ -361,11 +420,11 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
         """An instruction of an inline function changes only what `changes` lists: of that function, and of
         every inline function this use of it stands in."""
         if s.endswith(":") or s.startswith("."): return
-        try: regs = sorted(written(s))
+        try: regs = sorted(written(s, target))
         except (ValueError, KeyError, IndexError) as e: stop(src, n, f"{inside[-1][0].name}, used at line {inside[-1][1]}: `{s}`: {e}")
         for f, at, bind in reversed(inside):
             for r in regs:
-                if r not in {WHOLE[bind[p]] for p in f.changes}:
+                if r not in {whole[bind[p]] for p in f.changes}:
                     stop(src, n, f"{f.name}, used at line {at}: `{s}` changes {r}, which `changes` of {f.name} does not list")
 
     def run(lines, env, labels, inside):
@@ -401,24 +460,25 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
             if m:
                 name, register = m.groups()
                 if env or inside: stop(src, n, f"fn {fn}: a name for a register inside a for or an inline function")
-                if register not in WHOLE: stop(src, n, f"`{register}` is no register")
-                if name in WHOLE or name in RESERVED: stop(src, n, f"a register cannot be named `{name}`")
+                if register not in whole: stop(src, n, f"`{register}` is no register")
+                if name in whole or name in RESERVED: stop(src, n, f"a register cannot be named `{name}`")
                 if name in names or name in inlines or (frame[0] is not None and name in frame[0][1]): stop(src, n, f"`{name}` is a name already")
                 names[name] = register; continue
             if re.fullmatch(r"frame\s*\{", s):
                 if env or inside: stop(src, n, f"fn {fn}: a frame inside a for or an inline function")
                 if frame[0] is not None: stop(src, n, f"fn {fn}: a second frame")
                 body, i = block(lines, i)
-                frame[0] = frame_of(src, n, body, set(names) | set(inlines)); continue
+                frame[0] = frame_of(src, n, body, set(names) | set(inlines), target); continue
             for k, v in env.items():
                 s = re.sub(r"\$" + k + r"\b", v, s)
             if inside and inside[-1][2]:
                 bind = inside[-1][2]
                 s = re.sub(r"(?<![@#$\w])(?:" + "|".join(map(re.escape, bind)) + r")\b", lambda g: bind[g.group(0)], s)
             typed = s
-            m = re.fullmatch(r"call\s+(\w+)", s)
+            call_op = "bl" if target == "arm64" else "call"
+            m = re.fullmatch(rf"{call_op}\s+(\w+)", s)
             if m and m.group(1) in names and not inside:
-                stop(src, n, f"`{m.group(1)}` is the name of a register here ({names[m.group(1)]}), and `call` takes the name a linker knows a function by")
+                stop(src, n, f"`{m.group(1)}` is the name of a register here ({names[m.group(1)]}), and `{call_op}` takes the name a linker knows a function by")
             if names and not inside:                # a register's name, wherever an operand has it (never the instruction's own name)
                 put = lambda text: re.sub(r"(?<![@#$\w.])(?:" + "|".join(map(re.escape, names)) + r")\b", lambda g: names[g.group(0)], text)
                 m = None if ":=" in s else re.match(r"\w+\(|\S+\s+", s)
@@ -431,8 +491,9 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
             if m and m.group(1) in inlines:
                 use(inlines[m.group(1)], [a.strip() for a in m.group(2).split(",")] if m.group(2).strip() else [], n, inside); continue
             if m: stop(src, n, f"`{m.group(1)}` is no inline function of this source")
-            m = re.fullmatch(r"call\s+(\w+)", s)
-            if m and m.group(1) not in REGISTERS: s = f"call CALL({m.group(1)})"          # a function, by the name a linker knows it by
+            if target == "x86_64":
+                m = re.fullmatch(r"call\s+(\w+)", s)
+                if m and m.group(1) not in REGISTERS: s = f"call CALL({m.group(1)})"          # a function, by the name a linker knows it by
             s = re.sub(r"@(\w+)", lambda g: labels.get(g.group(1), f".Lode_{fn}_{g.group(1)}"), s)
             s = re.sub(r"#([A-Za-z_]\w*)", lambda g: f".Lode_data_{g.group(1)}", s)     # `#name` is data; `#4` is a number
             s = re.sub(r"\s+", " ", s)
@@ -441,23 +502,27 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
             if typed_lines is not None: typed_lines.append((n, typed))
 
     run(numbered, {}, {}, [])
+    if meta is not None:
+        meta["regs"] = dict(names)
+        meta["frame"] = frame[0]
     return out
 
 
-def found(src, name):
+def found(src, name, with_target=False):
     """(the data, the symbol, the numbered lines, the source's inline functions) of the function NAME of a source."""
-    _, data, inlines, fns = source(read_source(src), src)
+    target, data, inlines, fns = source(read_source(src), src)
     got = [(symbol, [(first + k, line) for k, line in enumerate(lines)]) for n, symbol, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
-    return data, got[0][0], got[0][1], inlines
+    res = (data, got[0][0], got[0][1], inlines)
+    return (target, *res) if with_target else res
 
 
 def instructions(text, name, src="the source", notes=None):
     """The instructions of the function NAME of a source's text, as expand() gives them."""
-    _, _, inlines, fns = source(text, src)
+    target, _, inlines, fns = source(text, src)
     got = [[(first + k, line) for k, line in enumerate(lines)] for n, _, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
-    return expand(src, name, got[0], inlines, notes)
+    return expand(src, name, got[0], inlines, notes, target=target)
 
 
 def assembly(src, name, symbol=None):
@@ -466,10 +531,10 @@ def assembly(src, name, symbol=None):
     added or changed. Its other entries (`entry "NAME"`) are names of their own; and where the source has a
     `place`, how many bytes into the function it is, as four bytes in a section `.ode.place` that is not
     loaded (the assembler knows the number; place_of() gives the rest of the place's proof)."""
-    data, own, lines, inlines = found(src, name)
+    target, data, own, lines, inlines = found(src, name, with_target=True)
     symbol = symbol or own
     notes = []
-    ins = expand(src, name, lines, inlines, notes)
+    ins = expand(src, name, lines, inlines, notes, target=target)
     notes = [note for note in notes if note[0] != "at"]         # (the places for proof-core's prover are no part of the object)
     for note in sorted(notes, key=lambda n: -n[1]):             # from the last, so the numbers before it stay
         ins[note[1]:note[1]] = [f".Lode_place_{name}:"] if note[0] == "place" else [f".global {note[2]}", f"{note[2]}:"]
@@ -477,6 +542,13 @@ def assembly(src, name, symbol=None):
     # after them: padding inside a labelled entry changes the called code.
     alignment = ins.pop(0) if ins and ins[0].startswith(".p2align ") else ".p2align 4"
     used = [(n, ws) for n, ws in data if any(f".Lode_data_{n}]" in x or f".Lode_data_{n} " in x for x in ins)]
+    if target == "arm64":
+        text = ("// Printed by odec.py from " + src.split("/")[-1] + ". Not written or edited by hand.\n"
+                ".text\n"
+                f".globl {symbol}\n.type {symbol}, %function\n{alignment}\n{symbol}:\n")
+        text += "".join((x + "\n") if x.endswith(":") else ("    " + x + "\n") for x in ins)
+        text += f".size {symbol}, .-{symbol}\n"
+        return text
     text = ("// Printed by odec.py from " + src.split("/")[-1] + ". Not written or edited by hand.\n"
             "#if defined(__ELF__) && defined(__linux__)\n.section .note.GNU-stack,\"\",%progbits\n#endif\n"
             "#ifdef __APPLE__\n#define CALL(f) _##f\n#else\n#define CALL(f) f@PLT\n#endif\n"
@@ -490,25 +562,28 @@ def assembly(src, name, symbol=None):
     return text
 
 
-def assemble(s_path, o_path):
+def assemble(s_path, o_path, target="x86_64"):
+    if target == "arm64":
+        for cc in (["clang", "--target=aarch64-unknown-linux-gnu"], ["clang", "-target", "aarch64-linux-gnu"]):
+            if shutil.which(cc[0]) and subprocess.run(cc + ["-c", "-o", o_path, s_path], capture_output=True).returncode == 0: return
+        raise SystemExit(f"odec: no assembler here makes an AArch64 ELF object of {s_path}")
     for cc in (["clang", "--target=x86_64-unknown-linux-gnu"], ["cc"]):
         if shutil.which(cc[0]) and subprocess.run(cc + ["-c", "-o", o_path, s_path], capture_output=True).returncode == 0: return
     raise SystemExit(f"odec: no assembler here makes an x86-64 ELF object of {s_path}")
 
 
-def elf(src, name, symbol, expanded, typed, notes, data, where=None):
-    """A function's ELF object by the instruction table (../core/asm.py). Where the assembler refuses, the
-    source line is named: that of the first instruction that the assembler refuses by itself, or that jumps
-    to a label the function has not. `typed`: for each of `expanded`, (its line's number, the line as typed)."""
-    core = os.path.join(HERE, "..", "core")
-    if core not in sys.path: sys.path.insert(0, core)
-    import asm
-    try: return asm.build_elf(name, symbol, expanded, notes, data, where)
+def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86_64", locs=None):
+    """A function's ELF object by the instruction table (`../core/asm.py` or `../arm64/asm.py`). Where the
+    assembler refuses, the source line is named: that of the first instruction that the assembler refuses by
+    itself, or that jumps to a label the function has not. `typed`: for each of `expanded`, (its line's
+    number, the line as typed)."""
+    asm_mod = _asm_mod(target)
+    try: return asm_mod.build_elf(name, symbol, expanded, notes, data, where, locs=locs)
     except (ValueError, KeyError, IndexError) as e:
         labels = {x[:-1] for x in expanded if x.endswith(":")}
         for x, (n, was) in zip(expanded, typed):
             if x.endswith(":") or x.startswith("."): continue
-            try: item = asm.instruction(x)
+            try: item = asm_mod.instruction(x)
             except ValueError as why:
                 said = str(why)
                 stop(src, n, f"`{was}`: " + (said[:-len(x) - 2] if said.endswith(": " + x) else said))
@@ -518,12 +593,76 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None):
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 
+def compile_info(src, name, symbol=None):
+    """Compile one function to ELF bytes and return its full metadata (target, symbol, ELF bytes, exact
+    pc-to-source line_map, user register names, frame layout, label offsets, and per-entry places text)."""
+    target, data, own, lines, inlines = found(src, name, with_target=True)
+    sym = symbol or own
+    notes, typed, meta = [], [], {}
+    expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta)
+    entries = {sym} | {note[2] for note in notes if note[0] == "entry"}
+    for note in notes:
+        if note[0] == "at" and note[2] is not None and note[2] not in entries:
+            stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
+    at_notes = [note for note in notes if note[0] == "at"]
+    non_at = [note for note in notes if note[0] != "at"]
+    elf_notes = non_at + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(at_notes)]
+    where, locs = {}, []
+    blob = elf(src, name, sym, expanded, typed, elf_notes, data, where=where, target=target, locs=locs)
+    base = where[sym]
+    line_map = []
+    for off, blen, idx in locs:
+        ln, was = typed[idx]
+        line_map.append({
+            "pc": off - base,
+            "len": blen,
+            "file": src,
+            "line": ln,
+            "typed": was,
+            "asm": expanded[idx],
+        })
+    places_by_entry = {}
+    for entry in sorted(entries):
+        mine = [(k, note) for k, note in enumerate(at_notes) if (note[2] or sym) == entry]
+        if mine:
+            places_by_entry[entry] = "".join(
+                f"place +0x{where[f'.Lode_at_{k}'] - where[entry]:x} {{\n"
+                + "".join(f"    {line}\n" for line in note[3]) + "}\n"
+                for k, note in mine
+            )
+        else:
+            places_by_entry[entry] = ""
+    frame_info = None
+    if meta["frame"] is not None:
+        fsize, ffields = meta["frame"]
+        frame_info = {
+            "size": fsize,
+            "fields": [
+                {"name": fn_, "offset": off, "count": cnt, "elem": elem, "bytes": cnt * elem}
+                for fn_, (off, cnt, elem) in ffields.items()
+            ],
+        }
+    code_bytes = (line_map[-1]["pc"] + line_map[-1]["len"]) if line_map else 0
+    return {
+        "target": target,
+        "name": name,
+        "symbol": sym,
+        "elf": blob,
+        "where": where,
+        "line_map": line_map,
+        "regs": meta["regs"],
+        "frame": frame_info,
+        "places": places_by_entry,
+        "code_bytes": code_bytes,
+    }
+
+
 def build(src, name, obj, symbol=None):
     """Write a function's ELF object using the instruction table."""
-    data, own, lines, inlines = found(src, name)
+    target, data, own, lines, inlines = found(src, name, with_target=True)
     notes, typed = [], []
-    expanded = expand(src, name, lines, inlines, notes, typed)
-    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] != "at"], data)
+    expanded = expand(src, name, lines, inlines, notes, typed, target=target)
+    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] != "at"], data, target=target)
     with open(obj, "wb") as f: f.write(blob)
 
 
@@ -533,9 +672,9 @@ def places(src, name, entry=None):
     function's first byte to the instruction the place stands before. With `entry` (the symbol of an
     `entry "SYMBOL"` of the function): the places written `place "SYMBOL" { LINES }`, counted from that
     entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
-    data, own, lines, inlines = found(src, name)
+    target, data, own, lines, inlines = found(src, name, with_target=True)
     notes, typed = [], []
-    expanded = expand(src, name, lines, inlines, notes, typed)
+    expanded = expand(src, name, lines, inlines, notes, typed, target=target)
     entries = {own} | {note[2] for note in notes if note[0] == "entry"}
     if (entry or own) not in entries: sys.exit(f"{src}: fn {name} has no entry `{entry}`")
     for note in notes:
@@ -543,7 +682,7 @@ def places(src, name, entry=None):
     mine = [note for note in notes if note[0] == "at" and (note[2] or own) == (entry or own)]
     if not mine: return ""
     where = {}
-    elf(src, name, own, expanded, typed, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where)
+    elf(src, name, own, expanded, typed, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where, target=target)
     return "".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine))
 
 
@@ -615,6 +754,11 @@ def main():
         print(f"{len(names)} functions of {os.path.basename(a[0])}: objects in {a[2]}"); return
     if len(a) == 4 and a[0] == "--from": build(source_of(a[1], a[2]), a[2], a[3]); return
     if len(a) in (3, 4) and a[2] == "--places": sys.stdout.write(places(a[0], a[1], *a[3:])); return
+    if len(a) == 3 and a[2] == "--map":
+        info = compile_info(a[0], a[1])
+        for row in info["line_map"]:
+            print(f"+0x{row['pc']:04x} ({row['len']:2d} B)  line {row['line']:4d}  {row['typed']:<36s} | {row['asm']}")
+        return
     if len(a) == 2: sys.stdout.write(assembly(a[0], a[1])); return
     if len(a) == 3: build(a[0], a[1], a[2]); return
     sys.exit(__doc__)

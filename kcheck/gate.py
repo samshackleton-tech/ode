@@ -59,8 +59,12 @@ def main():
         ("test_inline (a use of an inline function is its instructions)", [sys.executable, "../lang/test_inline.py"]),
         ("test_places (a place written at its loop: the count is worked out)", [sys.executable, "../lang/test_places.py"]),
         ("test_forms (names for registers, `:=`, a frame: the instructions written out)", [sys.executable, "../lang/test_forms.py"]),
+        ("test_arm_ode (AArch64 Ode compiler, line maps and negative controls)", [sys.executable, "../lang/test_arm_ode.py"]),
+        ("test_estimate (static bounds, concrete memory hazards and budgets)", [sys.executable, "../advice/test_estimate.py"]),
+        ("test_ode_tool offline (advise and compare on x86-64 and AArch64)", [sys.executable, "../lang/test_ode_tool.py"]),
         ("test_arm64 (AArch64 instruction table, encodings and ELF decoding)", [sys.executable, "../arm64/test_arm64.py"]),
         ("test_arm (three AArch64 functions verified by Core.lean)", [sys.executable, "../proof-core/test_arm.py"]),
+        ("test_ode_tool e2e (integrated check, source-line refusals, loop guard)", [sys.executable, "../proof-core/test_ode_tool.py"]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

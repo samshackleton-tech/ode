@@ -12,8 +12,8 @@ from pathlib import Path
 import re, shutil, subprocess, sys, tempfile, unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "kcheck"), str(ROOT / "core")]
-import asm, kdecode, odec
+sys.path[:0] = [str(ROOT / "kcheck"), str(ROOT / "core"), str(ROOT / "arm64")]
+import asm, kdecode, obj as aobj, odec
 
 # The names that asm.py has a branch for, and some that it has none for (those are refused whatever follows).
 NAMES = ("""nop endbr64 ret vzeroupper prefetcht0 jmp je jz jne jnz jae jb call push pop dec test xor shl shr add sub and or cmp lea movzx mov
@@ -32,12 +32,14 @@ def parts(line):
 
 
 def shapes():
-    """One instruction of each shape that the sources have (its name; each operand's class and size word; whether
+    """One instruction of each shape that the x86-64 sources have (its name; each operand's class and size word; whether
     memory is the file's data, and whether it has an index): the first one met."""
     seen = {}
     for path in sorted(ROOT.glob("**/*.ode")):
         text = path.read_text()
-        for name, _, _ in odec.functions(text, str(path))[1]:
+        target, _, _, fns = odec.source(text, str(path))
+        if target != "x86_64": continue
+        for name, _, _, _ in fns:
             for x in odec.instructions(text, name, str(path)):
                 if x.endswith(":") or x.startswith("."): continue
                 mn, ops = parts(x)
@@ -106,13 +108,17 @@ class Assembler(unittest.TestCase):
             source, clang, own = (Path(d) / f for f in ("ref.S", "ref.o", "ode.o"))
             count = 0
             for path in sorted(ROOT.glob("**/*.ode")):
-                _, functions = odec.functions(path.read_text(), str(path))
-                for name, _, _ in functions:
+                target, _, _, fns = odec.source(path.read_text(), str(path))
+                for name, sym, _, _ in fns:
                     count += 1
                     with self.subTest(source=path.relative_to(ROOT), function=name):
                         source.write_text(odec.assembly(str(path), name))
-                        odec.assemble(str(source), str(clang))
+                        odec.assemble(str(source), str(clang), target=target)
                         odec.build(str(path), name, str(own))
+                        if target == "arm64":
+                            self.assertEqual(aobj.words(str(own), sym)[0], aobj.words(str(clang), sym)[0])
+                            self.assertEqual(aobj.read(str(own), sym), aobj.read(str(clang), sym))
+                            continue
                         got, want = kdecode.Elf(own), kdecode.Elf(clang)
                         for section in (".text", ".rodata", ".ode.place", ".note.GNU-stack"):
                             self.assertEqual(got.bytes_of(section), want.bytes_of(section), section)

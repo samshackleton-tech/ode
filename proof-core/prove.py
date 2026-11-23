@@ -36,6 +36,27 @@ TABLE = os.path.join(HERE, "..", "core", "x86.tab")
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
 FROM_THE_START = bool(os.environ.get("ODE_PROVE_FROM_START"))     # ask `odeverify` each time (the slow way, to compare with)
 REGISTERS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
+REGISTERS_ARM = ["x0", "x1", "x2", "x3", "sp", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+                 "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x4"]
+
+
+def locate(statement_path, proof_path):
+    """Run `odeprove --locate` to get (pc_or_None, fn_or_None, message) on a refusal.
+    Relied on for nothing: only used for error diagnostics."""
+    if not os.path.exists(session.EXE) or not os.path.exists(statement_path) or not os.path.exists(proof_path):
+        return None, None, ""
+    r = subprocess.run([session.EXE, "--locate", table_for(statement_path), statement_path, proof_path],
+                       capture_output=True, text=True)
+    out = r.stdout.strip()
+    pc, fn = None, None
+    body = []
+    for line in out.splitlines():
+        m = re.fullmatch(r"at \+(\d+)", line.strip())
+        if m: pc = int(m.group(1)); continue
+        m = re.fullmatch(r"in (\S+)", line.strip())
+        if m: fn = m.group(1); continue
+        body.append(line)
+    return pc, fn, "\n".join(body)
 
 
 def lane_line(var, regs, use, after, seqs, kinds, counted, name):
@@ -72,10 +93,11 @@ def cell_line(off, var, word, seqs, kinds, name):
     return f"cell {int(off)} {var} " + sexp(by_kind(kbyte.expression(word), kinds, name), seqs)
 
 
-def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}):
+def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}, regs=None):
     """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
     `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
+    reg_list = REGISTERS if regs is None else regs
     out, named, also, lanes, at = [], [], [], [], None
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
@@ -94,8 +116,8 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
         m = re.fullmatch(r"cell \[rsp \+ (\d+)\]: word (\w+) = (.+)", line)
         if m: lanes.append(cell_line(*m.groups(), seqs, kinds, name)); continue
         if line.startswith("decreases "):
-            out.append("keep " + " ".join(r for r in REGISTERS if (r not in named or r in also) and r in keep.get(at, REGISTERS)))
-            if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on a secret on a later coming there
+            out.append("keep " + " ".join(r for r in reg_list if (r not in named or r in also) and r in keep.get(at, reg_list)))
+            if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on values kept out of the trace on a later coming there
             out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs))
             out += lanes; continue
         raise SystemExit(f"prove: a line of a place the verifier in Lean does not read yet: {line}")
@@ -279,10 +301,13 @@ def negation(g): return klin.Lin([(n, -c) for n, c in g.c], -g.k - 1)
 class Unkept(Exception): pass
 
 
-class Marked(Exception): pass           # at a place, a register may depend on a secret that did not on first coming there
+class Marked(Exception): pass           # at a place, a register may depend on a value kept out of the trace that did not on first coming there
 
 
 class GaveUp(Exception): pass           # more runs of the verifier, or more time, than the prover was allowed
+
+
+class NoPlace(Exception): pass          # a path looped back to the same instruction repeatedly with no place
 
 
 class Prover:
@@ -292,6 +317,8 @@ class Prover:
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
         self.session = None                 # the talk with `odeprove`, begun at the first question
+        self.last = None
+        self.last_proof = []
 
     def close(self):
         if self.session is not None: self.session.close(); self.session = None
@@ -331,23 +358,34 @@ class Prover:
             if m: raise Unkept(int(m.group(1)), int(m.group(2)))
             m = re.search(r"at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
             if m: raise Marked(int(m.group(1)), int(m.group(2)))
-            if not said.startswith("need "): self.last = said; self.note(proof, said); return None
+            if not said.startswith("need "): self.last = said; self.last_proof = proof; self.note(proof, said); return None
             lines = said.split("\n")
             what = lines[0][5:]
             facts = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("f ")]
             goals = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("g ")]
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
-                if p is None: self.last = said; self.note(proof, said + ' (no proof found)'); return None
+                if p is None: self.last = said; self.last_proof = proof; self.note(proof, said + ' (no proof found)'); return None
                 proof = proof + proof_text(p, [negation(goals[0])] + facts)
             elif what == "branch":
                 p = refutation(facts, 0)                       # (the newest fact is first)
-                proof = proof + (["t live"] if p is None else ["t dead"] + proof_text(p, facts))
+                if p is None:
+                    # Guard against a loop with no place spinning `t live` forever (REVIEW item 4):
+                    lives = proof.count("t live")
+                    if lives >= 80 and lives % 40 == 0:
+                        with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+                        pc, _, msg = locate(self.statement, self.out)
+                        if pc is not None and "with no place" in msg:
+                            self.last = f"at +{pc}\n{msg}"; self.last_proof = proof
+                            raise NoPlace(self.last)
+                    proof = proof + ["t live"]
+                else:
+                    proof = proof + ["t dead"] + proof_text(p, facts)
             elif what == "below":                              # is a - b below zero: `lt`, or not: `ge`
                 d = goals[0]
                 if refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
-                else: self.last = said; self.note(proof, said + ' (undecided)'); return None
+                else: self.last = said; self.last_proof = proof; self.note(proof, said + ' (undecided)'); return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
                 rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
                 for g, row in zip(goals, rows):
@@ -378,11 +416,11 @@ class Prover:
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])
                 held = int(([l for l in lines if l.startswith("h ")] or ["h 0"])[0].split()[1])
-                before = self.last
+                before, before_proof = self.last, self.last_proof
                 for k in reversed(range(held)):                # a value held, carried over to the fact asked for
                     done = self.solve(proof + [f"t carry {k}"])
                     if done is not None: return done
-                self.last = before or said                     # (a value that does not carry over is not why no proof is found)
+                self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
                 if opened >= 3: return None
                 for k in reversed(range(count)):
                     done = self.solve(proof + [f"t open {k}"])
@@ -409,27 +447,36 @@ def prove(spec_text, targets, statement_out, out):
     seqs = sequences(spec)
     counted = {name: m["state"] for name, m in ode.Parser(spec_text).file()[2].items()}
     with open(statement_out, "w") as f: f.write("\n".join(statement(spec_text, functions)) + "\n")
+    reg_list = REGISTERS_ARM if table_for(statement_out).endswith("arm64.tab") else REGISTERS
     done, numbers = [], {}
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
         keep, marked, runs = {}, {}, 0
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
-            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked), out, later)
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list), out, later)
             p.last = ""
+            p.last_proof = []
             try: proof = p.solve([])
             except Unkept as e:
-                keep[e.args[0]] = [r for r in keep.get(e.args[0], REGISTERS) if r != REGISTERS[e.args[1]]]
+                keep[e.args[0]] = [r for r in keep.get(e.args[0], reg_list) if r != reg_list[e.args[1]]]
                 runs += p.runs
                 p.close()
                 continue
             except Marked as e:
-                if REGISTERS[e.args[1]] in marked.get(e.args[0], []): raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
-                marked[e.args[0]] = marked.get(e.args[0], []) + [REGISTERS[e.args[1]]]
+                if reg_list[e.args[1]] in marked.get(e.args[0], []): raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+                marked[e.args[0]] = marked.get(e.args[0], []) + [reg_list[e.args[1]]]
                 runs += p.runs
                 p.close()
                 continue
-            if proof is None: raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+            except NoPlace:
+                p.close()
+                with open(out, "w") as f: f.write("\n".join(p.lines + p.last_proof) + "\n")
+                raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+            if proof is None:
+                # Preserve partial proof so callers can run `locate()` on the exact point of failure.
+                with open(out, "w") as f: f.write("\n".join(p.lines + p.last_proof) + "\n")
+                raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
             k = len(proof) - 1
             while k >= 0:                              # a use of a definition opened to no purpose is taken out
                 if proof[k].startswith("t open") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]

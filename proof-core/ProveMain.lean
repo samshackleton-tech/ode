@@ -89,6 +89,29 @@ unsafe def lineUnsafe (n : Nat) : Option Item :=
 
 def main (args : List String) : IO UInt32 := do
   match args with
+  | ["--locate", tablePath, statementPath, proofPath] =>
+    let table ← match readTable (← IO.FS.readFile tablePath) with
+      | .ok t => pure t
+      | .error e => IO.println e; return 2
+    let lines (path : String) : IO (List String) := do
+      pure (((← IO.FS.readFile path).splitOn "\n").map fun l => (l.replace "\r" ""))
+    let job ← match (← lines statementPath).foldlM (Job.line table false) {} with
+      | .error e => IO.println e; return 2
+      | .ok job => pure job
+    let job ← match (← lines proofPath).foldlM (Job.line table true) job with
+      | .error e => IO.println e; return 2
+      | .ok job => pure job
+    let mut done : List (String × Contract) := []
+    for f in job.fns do
+      if done.any (fun d => d.1 == f.name) then
+        IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
+      let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done,
+                         pieces := job.pieces, piece := f.piece }
+      match locateRefusal ctx f.proof with
+      | some why => IO.println s!"{why}\nin {f.name}"; return 1
+      | none => done := (f.name, f.contract) :: done
+    IO.println "shown"
+    return 0
   | [tablePath, statementPath, headPath, name] =>
     let table ← match readTable (← IO.FS.readFile tablePath) with
       | .ok t => pure t
@@ -132,4 +155,4 @@ def main (args : List String) : IO UInt32 := do
         | none => done := (f.name, f.contract) :: done
     say ((said.getD "shown") ++ "\n" ++ (if ← ended.get then ".more\n" else ".end\n"))
     return 0
-  | _ => say "odeprove TABLE STATEMENT HEAD NAME\n.end\n"; return 2
+  | _ => say "odeprove TABLE STATEMENT HEAD NAME | odeprove --locate TABLE STATEMENT PROOF\n.end\n"; return 2

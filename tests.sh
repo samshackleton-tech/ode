@@ -58,13 +58,16 @@ one lang test_asm.py "" &
 one lang test_inline.py "" &
 one lang test_places.py "" &
 one lang test_forms.py "" &
+one lang test_arm_ode.py "" &
+one lang test_ode_tool.py "" &
+one advice test_estimate.py "" &
 one arm64 test_arm64.py "" &
 fi
 # proof-core: Lean's lake builds everything once, here; then its tests run side by side (ODE_LEAN_BUILT tells
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.
 lake=$(command -v lake || { [ -x "$HOME/.elan/bin/lake" ] && echo "$HOME/.elan/bin/lake"; })
 lean=""
-pc="test_sound.py test_arith.py test_machine.py test_arm.py test_spec.py test_verify.py test_call.py test_low.py test_table.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py test_session.py test_kernel.py test_node.py test_p16_one.py test_p16_table.py test_p16.py test_p32.py test_k32.py test_pad.py test_part.py test_record.py test_tail.py test_chunk.py test_meaning.py test_keyed.py test_left.py test_split.py test_doubling.py test_far.py test_empty.py test_parent.py test_turns.py test_high.py test_quad.py test_lowbyte.py test_sum.py test_quad32.py"
+pc="test_sound.py test_arith.py test_machine.py test_arm.py test_ode_tool.py test_spec.py test_verify.py test_call.py test_low.py test_table.py test_limits.py test_varint.py test_adler.py test_blocks.py test_blocks4.py test_session.py test_kernel.py test_node.py test_p16_one.py test_p16_table.py test_p16.py test_p32.py test_k32.py test_pad.py test_part.py test_record.py test_tail.py test_chunk.py test_meaning.py test_keyed.py test_left.py test_split.py test_doubling.py test_far.py test_empty.py test_parent.py test_turns.py test_high.py test_quad.py test_lowbyte.py test_sum.py test_quad32.py"
 torun=""
 for t in $pc; do { f=$(kept proof-core "$t" "") && [ -f "$f" ]; } || torun="$torun $t"; done
 if [ -n "$lake" ] && [ -n "$torun" ]; then

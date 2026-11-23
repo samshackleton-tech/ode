@@ -200,7 +200,7 @@ class Inline(unittest.TestCase):
         self.refused(text, "mix16_3", line_of(text, "vprord a, d, 16"), "changes zmm1")
 
     def test_the_target(self):
-        self.refused(changed(MIX, "target x86_64", "target aarch64"), "mix16_3", 1, "odec.py makes code for x86_64 only, not for aarch64")
+        self.refused(changed(MIX, "target x86_64", "target aarch64"), "mix16_3", 1, "odec.py makes code for x86_64, arm64 only, not for aarch64")
         self.refused(changed(MIX, "fn mix16_3", "target x86_64\nfn mix16_3"), "mix16_3", line_of(MIX, "fn mix16_3 as"), "`target` stands once, before the functions")
         self.assertEqual(odec.instructions(changed(MIX, "target x86_64\n", ""), "mix16_3"), odec.instructions(RAW, "mix16_3"))
 

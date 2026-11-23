@@ -352,26 +352,28 @@ def write(line, mn, ops):
     raise ValueError(f"instruction not in x86.tab: {line}")
 
 
-def build_elf(name, symbol, expanded, notes, data, where=None):
+def build_elf(name, symbol, expanded, notes, data, where=None, locs=None):
     """Assemble expanded lines into a relocatable little-endian x86-64 ELF object (`bytes`).
     A note ("at", INDEX, LABEL) puts the label LABEL before the instruction of that index and nothing into
-    the object. `where`, if a dict, gets every label's count of bytes from the function's first byte."""
-    ins = list(expanded)
+    the object. `where`, if a dict, gets every label's count of bytes from the function's first byte.
+    `locs`, if a list, gets (byte_offset, byte_len, orig_expanded_index) for each emitted instruction."""
+    tagged = [(k, s) for k, s in enumerate(expanded)]
     entries = []
     has_place = False
     for note in sorted(notes, key=lambda n: -n[1]):
-        if note[0] == "place": ins[note[1]:note[1]] = [f".Lode_place_{name}:"]; has_place = True
-        elif note[0] == "at": ins[note[1]:note[1]] = [f"{note[2]}:"]
-        else: ins[note[1]:note[1]] = [f"{note[2]}:"]; entries.append(note[2])
-    top_align = 1 << int(ins.pop(0).split()[1]) if ins and ins[0].startswith(".p2align ") else 16
-    used = [(n, ws) for n, ws in data if any(f".Lode_data_{n}]" in x or f".Lode_data_{n} " in x for x in ins)]
+        if note[0] == "place": tagged[note[1]:note[1]] = [(None, f".Lode_place_{name}:")]; has_place = True
+        elif note[0] == "at": tagged[note[1]:note[1]] = [(None, f"{note[2]}:")]
+        else: tagged[note[1]:note[1]] = [(None, f"{note[2]}:")]; entries.append(note[2])
+    top_align = 1 << int(tagged.pop(0)[1].split()[1]) if tagged and tagged[0][1].startswith(".p2align ") else 16
+    used = [(n, ws) for n, ws in data if any(f".Lode_data_{n}]" in x or f".Lode_data_{n} " in x for _, x in tagged)]
 
     items = [("label", symbol)]
-    for s in ins:
-        if s.endswith(":"): items.append(("label", s[:-1]))
-        elif s.startswith(".p2align "): items.append(("align", 1 << int(s.split()[1])))
+    orig_of = [None]
+    for orig_idx, s in tagged:
+        if s.endswith(":"): items.append(("label", s[:-1])); orig_of.append(None)
+        elif s.startswith(".p2align "): items.append(("align", 1 << int(s.split()[1]))); orig_of.append(None)
         elif s.split()[0] in {".cfi_startproc", ".cfi_endproc", ".cfi_offset", ".cfi_restore", ".cfi_def_cfa", ".cfi_def_cfa_offset", ".cfi_def_cfa_register"}: continue
-        else: items.append(instruction(s))
+        else: items.append(instruction(s)); orig_of.append(orig_idx)
 
     long_jumps = set()
     while True:
@@ -388,12 +390,15 @@ def build_elf(name, symbol, expanded, notes, data, where=None):
         code, relocs = bytearray(), []
         for idx, it in enumerate(items):
             if it[0] == "label": continue
+            before = len(code)
             if it[0] == "align": code += nop_pad((-starts[idx]) % it[1])
             elif it[0] == "fixed": code += it[1]
             elif it[0] == "reloc":
                 relocs.append((starts[idx] + it[2], it[3], it[4], it[5])); code += it[1]
             elif it[0] == "jump":
                 code += encode.encode(ROWS[it[1]][1][1 if idx in long_jumps else 0], {"I": labels[it[2]]}, starts[idx])
+            if locs is not None and orig_of[idx] is not None:
+                locs.append((before, len(code) - before, orig_of[idx]))
         break
     if where is not None: where.update(labels)
 

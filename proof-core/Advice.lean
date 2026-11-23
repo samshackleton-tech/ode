@@ -172,4 +172,64 @@ def callRows (ctx : Ctx) (s : Sym) (c : Contract) : List Row :=
 /-- The advice `odeprove` gives the verifier's rules to print. -/
 def adviceFor (ctx : Ctx) : Advice := { ensures := ensureRows ctx, call := callRows ctx }
 
+private def tagPc (pc : Nat) (m : V α) : V α := fun st =>
+  match m st with
+  | .ok v => .ok v
+  | .error why =>
+    if why.startsWith "at +" then .error why
+    else .error s!"at +{pc}\n{why}"
+
+/-- Mirror of `Core.onward` that records the exact `pc` of any refusal and reports a loop with no `place`
+as soon as a path returns to an instruction it already visited without passing a `place`.
+`visited` records `(pc, liveCountAtEntry)` along the current active path so completed sibling
+branches never count toward a later loop's budget. -/
+def onwardAt (ctx : Ctx) (livePrefix : Array Nat) (seen : List Seen) (visited : List (Nat × Nat))
+    (go : List Seen → List (Nat × Nat) → Sym → Nat → V Unit) (next : Sym × Next) : V Unit :=
+  match next.2 with
+  | .returned => pure ()
+  | .at pc' =>
+    match ctx.places.find? (fun p => p.pc == pc') with
+    | none => fun st =>
+      let curLives := livePrefix.getD st.next (livePrefix.getD (livePrefix.size - 1) 0)
+      let hits := visited.filter (·.1 == pc')
+      let vc := hits.length
+      let firstLives := match hits.getLast? with | some (_, l) => l | none => curLives
+      let loopLives := curLives - firstLives
+      if vc ≥ 65 ∨ (vc ≥ 4 ∧ loopLives ≥ 150) then
+        .error s!"at +{pc'}\nrefused: path returned to +{pc'} with no place"
+      else go seen ((pc', curLives) :: visited) next.1 pc' st
+    | some p =>
+      match seen.find? (fun e => e.place.pc == pc') with
+      | some e => tagPc pc' (arrive ctx e.place e.first e.d next.1)
+      | none => do
+        let (g, d, first) ← tagPc pc' (generalize ctx p next.1)
+        go (⟨p, d, { first with q := { regq := placeQuiet p next.1.q.regq } }⟩ :: seen) [(pc', 0)]
+           { g with q := { regq := placeQuiet p next.1.q.regq } } pc'
+
+def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → List Seen → List (Nat × Nat) → Sym → Nat → V Unit
+  | 0, _, _, _, pc => fun _ => .error s!"at +{pc}\nrefused: a path longer than the verifier goes"
+  | fuel + 1, seen, visited, s, pc =>
+    match ctx.code.lookup pc with
+    | none => fun _ => .error s!"at +{pc}\nrefused: no instruction at {pc}"
+    | some i => do
+      let nexts ← tagPc pc (symNext ctx s i)
+      each (onwardAt ctx livePrefix seen visited (exploreAt ctx livePrefix fuel)) nexts
+
+/-- Diagnostic run of `verify` on one function: `none` if shown, else `at +PC\nWHY`. -/
+def locateRefusal (ctx : Ctx) (proof : List Item) : Option String :=
+  let livePrefix := Id.run do
+    let mut arr := Array.mkEmpty (proof.length + 1)
+    let mut acc : Nat := 0
+    arr := arr.push 0
+    for it in proof do
+      if let .tag "live" _ := it then acc := acc + 1
+      arr := arr.push acc
+    pure arr
+  let run : V Unit := do
+    exploreAt ctx livePrefix PATH [] [(0, 0)] (entrySym ctx) 0
+    if ← finished then pure () else refuse "the proof says more than is asked of it"
+  match run (Items.ofList proof) with
+  | .ok _ => none
+  | .error why => some why
+
 end Ode
