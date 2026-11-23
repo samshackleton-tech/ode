@@ -1,5 +1,5 @@
-// Whether every byte of an array is zero: a scan that leaves at the first byte that is not. The loop's
-// invariant is written at the loop; the tool works out where that is in the code.
+// Whether every byte of an array is zero: a scan that leaves at the first byte that is not. As all_zero.ode,
+// with names for the registers and `:=` for the two stores. Both give the same object file.
 target x86_64
 
 fn all_zero_early as "ode_all_zero" {

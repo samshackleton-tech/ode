@@ -1,6 +1,6 @@
 # One function, several notations
 
-*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. "Today" is what the repository's compiler (`lang/odec.py`) takes. "Prototype" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, not one of the repository's, and not a decision about the language. The inline function of section 1 and the invariant written at its loop of section 2 were the prototype's when this page was first made. They are the compiler's now. The text macro and the file of typed counts of bytes that they were compared with are gone (commit `082ba81` has this page as it was then). The contracts are in today's specification language in both, so an output equation is written with `=` where the report proposes `==`.*
+*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. Sections 1 to 3 show each function twice in the notation of the repository's compiler (`lang/odec.py`): with every instruction written out, and with the forms that the compiler expands. The forms came from the trial's prototype. They are the compiler's now, and what they were first compared with, a text macro and a file of typed counts of bytes, is gone (commit `082ba81` has this page as it was at the trial). Section 4 is still made with the prototype, `paper/trial/ode2.py`, a trial's tool: the compiler has no table of AArch64 instructions yet. The contracts are in today's specification language, so an output equation is written with `=` where the report proposes `==`.*
 
 ## 1. Three mixing steps
 
@@ -97,7 +97,7 @@ contract ode_all_zero(xs: n bytes, n: number) {
 }
 ```
 
-**Today** (`all_zero.ode`). The loop's invariant stands at the loop, as `place { ... }`:
+**Every instruction written out** (`all_zero.ode`). The loop's invariant stands at the loop, as `place { ... }`:
 
 ```
 fn all_zero_early as "ode_all_zero" {
@@ -139,7 +139,7 @@ place +0x2 {
 }
 ```
 
-**Prototype** (`all_zero.ode2`). The same, and also names for registers and a store written `:=`:
+**With names for registers and `:=`** (`all_zero_named.ode`). `reg` gives a register a name for the rest of the function. `p := xs` is one instruction, `mov rdx, rdi`:
 
 ```
 target x86_64
@@ -178,7 +178,7 @@ fn all_zero_early as "ode_all_zero" {
 }
 ```
 
-Both give one object file, 14 instructions and 40 bytes of code, and the same place. The verifier says `shown`; the statement is 770 bytes and the proof 463.
+The two give one object file, 14 instructions and 40 bytes of code, and the same place. The verifier says `shown`; the statement is 770 bytes and the proof 463.
 
 Then one instruction (`nop`) is added before the loop. The place moves with it, to `place +0x3`, and the function is `shown` again. Before, a person typed the count into a second file, and a count that is not moved goes wrong. The same proof with the place at the count as it was before (`place +0x2`) is `refused: live or dead is expected`. The prover, given the place at that count, had found no proof and had not stopped after 60 seconds: it does not say that the loop has no place.
 
@@ -186,7 +186,7 @@ Then one instruction (`nop`) is added before the loop. The place moves with it, 
 
 `quad32` makes the parent of two parents with the 32-way kernel. Its frame holds a table of 32 addresses and two arrays of 32 results. This is how the table is filled for the first call.
 
-**Today** (`proof-core/examples/quad/quad32.ode`: 156 lines, 135 of them code). Each store names its place in the frame as a number; `[rsp + N]` stands 73 times in the code. The first lines:
+**Every instruction written out** (`proof-core/examples/quad/quad32.ode`: 156 lines, 135 of them code). Each store names its place in the frame as a number; `[rsp + N]` stands 73 times in the code. The first lines:
 
 ```
 fn quad32 as "ode_quad32" {
@@ -208,7 +208,7 @@ fn quad32 as "ode_quad32" {
 
 and 28 more pairs like the last, to `[rsp + 248]`.
 
-**Prototype** (`quad32.ode2`: 69 lines, 56 of them code). The frame is declared once, and a store names a slot:
+**With a frame** (`quad32.ode`: 69 lines, 56 of them code). The frame is declared once, and a store names a slot. `for i in 2..32` repeats its lines for each number from 2 to 31, with `$i` replaced by the number:
 
 ```
 fn quad32 as "ode_quad32" {
@@ -229,28 +229,34 @@ fn quad32 as "ode_quad32" {
   out := rdi
   kf  := rcx
 
-  // Round 1: lane 0 reads a (rsi), lane 1 reads b (rdx), lanes 2..31 read a
+  // the first round: lane 0 reads a (rsi), lane 1 reads b (rdx), the lanes 2 to 31 read a
   tmp := rsi
   table[0] := tmp
   tmp := rdx
   table[1] := tmp
   for i in 2..32 {
     tmp := rsi
-    table[i] := tmp
+    table[$i] := tmp
   }
 ```
 
-The prototype's object file is the kept one, byte for byte (695 bytes of code), so the kept proofs stand: the verifier says `shown` with them, and `ode_quad32`'s own proof is 15 bytes.
+The two give one object file, the kept one, byte for byte (695 bytes of code). So the kept proofs stand: the verifier says `shown` with them, and `ode_quad32`'s own proof is 15 bytes.
 
-A store past the table's end would land in the first array of results. Today nothing says so. The prototype:
+A store past the table's end would land in the first array of results. Written out, nothing says so. With the frame, the compiler says:
 
 ```
-quad32.ode2:27: frame slot `table[32]` out of bounds (declared 0..32)
+quad32.ode: line 27: `table[32]`: the slots of `table` are 0 to 31
+```
+
+`:=` moves as many bytes as both of its sides have, and never widens or cuts. A slot of the table has eight bytes and `eax` has four, so `table[0] := eax` is refused:
+
+```
+quad32.ode: line 25: `:=` moves as many bytes as both sides have: `table[0]` has 8 and `eax` has 4
 ```
 
 ## 4. The same step on AArch64
 
-Four words to a register in place of sixteen. A rotation by 16 is one instruction there (`rev32` on halfwords); a rotation by 12 needs a third register, which the inline function names and requires to differ from the other two:
+This section is the prototype's. Four words to a register in place of sixteen. A rotation by 16 is one instruction there (`rev32` on halfwords); a rotation by 12 needs a third register, which the inline function names and requires to differ from the other two:
 
 ```
 inline fn mix16(d: vreg, a: vreg) distinct(d, a) changes d {
@@ -286,19 +292,23 @@ These were run, not verified: there is no verifier for AArch64 yet. On an Apple 
 
 ## What was measured
 
+Each row is one function in one notation: the lines of its source that are code, the bytes of code in its object file, what the verifier printed, and the bytes of its proof file.
+
 | Function | Notation | Lines of code | Bytes of code | The verifier | Proof bytes |
 |---|---|---|---|---|---|
-| `mix16_3` | today, written out | 13 | 61 | shown | 16 |
-| `mix16_3` | today, inline function | 15 | 61 | shown | 16 |
-| `all_zero` | today | 26 | 40 | shown | 463 |
-| `all_zero` | prototype | 32 | 40 | shown | 463 |
-| `quad32` | today | 135 | 695 | shown | 15 |
-| `quad32` | prototype | 56 | 695 | shown | 15 |
+| `mix16_3` | written out | 13 | 61 | shown | 16 |
+| `mix16_3` | with an inline function | 15 | 61 | shown | 16 |
+| `all_zero` | written out | 26 | 40 | shown | 463 |
+| `all_zero` | with names and `:=` | 32 | 40 | shown | 463 |
+| `quad32` | written out | 135 | 695 | shown | 15 |
+| `quad32` | with a frame | 56 | 695 | shown | 15 |
 
 Within a function the notations give the same bytes, so the verdict and the proof are one. The verdicts are from an x86-64 Linux work machine with the repository's verifier; `paper/trial/test_styles.py` makes them again.
 
 ## What is not there yet
 
-- An inline function has no contract yet: after a use the caller reasons from the instructions, as if they were written out.
-- The prototype (sections 2 to 4) judges `changes` from the first operand of each instruction as written. The repository's compiler reads what an instruction changes from the instruction table.
-- The prototype knows the forms on this page and no others. It is a trial's tool and is not in the suite.
+- An inline function has no contract yet: the verifier reads the instructions of each use, as if they were written out.
+- A slot of the frame is counted from the stack pointer as it is once the function has taken the frame's size from it. The compiler does not follow the stack pointer; the verifier judges the code.
+- A place names the registers that it speaks of itself (`name i = rcx`). The names that `reg` gives are not carried into it: a name in a place may also be a parameter of the contract, as `xs` and `n` are in section 2.
+- Where the table of instructions lacks the `mov` that a `:=` stands for (a store of a number into eight bytes of memory, for one), the assembler refuses it. Its refusal names the function and the instruction, not the line.
+- The compiler has no table of AArch64 instructions. The prototype, which section 4 is made with, judges `changes` from the first operand of each instruction as written. It is a trial's tool and is not in the suite.

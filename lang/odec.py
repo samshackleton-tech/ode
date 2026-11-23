@@ -19,6 +19,10 @@ Ode has one layer: a function is the instructions its coder chose, one a line, a
       INSTRUCTION                       an instruction (`call SYMBOL` calls a function by its linker name)
       @LABEL:                           a place a jump names: `jmp @LABEL`
       NAME(r, s)                        a use of the inline function NAME: its instructions, here
+      reg NAME = REGISTER               from here on in the function, NAME in an operand is that register (never in
+                                        `call`, which takes the name a linker knows a function by)
+      frame { FIELD: COUNT * KIND ... } the function's frame: its fields in their order, the first at the stack pointer
+      DST := SRC                        one `mov` (or one `lea`): a store into a register or into memory (more below)
       for I in 0..8 { LINES }           LINES eight times, with `$I` replaced by 0 to 7
       place { LINES }                   what holds whenever the code comes to the instruction after it (a loop's
                                         invariant, in the lines the prover of proof-core reads); no part of the object
@@ -32,6 +36,23 @@ Ode has one layer: a function is the instructions its coder chose, one a line, a
 A place is written where it holds. The prover is given it with the count of bytes from the function's first
 byte (or from the entry's) to that instruction: `--places` prints that, and the count is worked out here,
 so it moves with the code.
+
+`DST := SRC` is one instruction, and which one is fixed by what stands on its two sides. A side is a general
+register; a number; memory, written `byte [ADDRESS]`, `dword [ADDRESS]` or `qword [ADDRESS]`, the address being a
+register, or two, and a number; a slot of the frame, `FIELD[I]`; or, on the right, `&FIELD`, the address of a
+field. `R := &FIELD` is `lea R, [rsp + N]`, R being a register of 64 bits. Every other is `mov DST, SRC`: into a
+register from a register, a number or memory, and into memory from a register or a number. Where both sides
+have a size (a register's, or memory's `byte`, `dword`, `qword`, or a slot's kind), the two must be the same:
+`:=` moves as many bytes as both sides say, and never widens or cuts. Whether the table of instructions has
+that `mov` is the assembler's to say, as for a `mov` written out. Numbers in an address and in a slot may be
+sums and products of constants (`[rbx + $w * 8]`), worked out here. A vector register is moved by an
+instruction the coder names.
+
+A frame's fields lie in the order written, each `COUNT * KIND` (kinds: byte, u32, u64, cv of 32 bytes, block
+of 64) or a plain count of bytes. `frame.size` is the bytes of all of them. `FIELD[I]` is the slot I of a
+field, at `[rsp + N]`, and `FIELD.KIND[I]` the same bytes taken as slots of another kind; a slot outside
+the field is refused at its line. The slots are counted from the stack pointer as it is once the function
+has taken `frame.size` from it: nothing here follows the stack pointer, and the verifier judges the code.
 
 An inline function says, of each register it takes, which class it is of (gpr, gpr32, xmm, zmm). It may say
 which of them must differ: `distinct(P, Q, ...)`, as often as needed; no two of those named in one may be
@@ -62,6 +83,10 @@ CLASSES = {"gpr": set(G64), "gpr32": set(G32), "xmm": {f"xmm{i}" for i in range(
 WHOLE = {n: G64[i] for names in (G64, G32, G16, G8, ("ah", "ch", "dh", "bh")) for i, n in enumerate(names)}
 WHOLE.update({f"{p}mm{i}": f"zmm{i}" for p in "xyz" for i in range(32)})
 WHOLE.update({f"k{i}": f"k{i}" for i in range(8)})
+GENERAL = {r: size for names, size in ((G64, 8), (G32, 4), (G16, 2), (G8, 1)) for r in names}        # the general registers, and the bytes of each
+RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame"}       # words of operands: no name is one
+SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
+KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
 
 
 def read_source(src):
@@ -71,6 +96,55 @@ def read_source(src):
 
 def stop(src, n, msg):
     raise SystemExit(f"{src}: line {n}: {msg}")
+
+
+def number(text):
+    """The value of a constant, whole numbers with + - * and brackets; None where the text is not one."""
+    tokens, at = re.findall(r"0[xX][0-9a-fA-F_]+|\d[\d_]*|[-+*()]|\S+", text), [0]
+    def peek(): return tokens[at[0]] if at[0] < len(tokens) else None
+    def take(): at[0] += 1; return tokens[at[0] - 1]
+    def atom():
+        t = take() if peek() is not None else ""
+        if t == "(":
+            v = total()
+            if peek() != ")": raise ValueError(text)
+            take(); return v
+        if t in ("-", "+"): return -atom() if t == "-" else atom()
+        if re.fullmatch(r"0[xX][0-9a-fA-F_]+|\d[\d_]*", t): return int(t.replace("_", ""), 0)
+        raise ValueError(text)
+    def product():
+        v = atom()
+        while peek() == "*": take(); v *= atom()
+        return v
+    def total():
+        v = product()
+        while peek() in ("+", "-"): v = v + product() if take() == "+" else v - product()
+        return v
+    try:
+        v = total()
+        return v if peek() is None else None
+    except ValueError: return None
+
+
+def frame_of(src, n, body, taken):
+    """A frame as (its size, {field: (the bytes before it, how many it holds, the bytes of one)}): the fields
+    lie in the order written, the first at the stack pointer. `taken`: the names the function has already."""
+    fields, size = {}, 0
+    for k, line in body:
+        f = line.split("//")[0].strip()
+        if not f: continue
+        m = re.fullmatch(r"(\w+)\s*:\s*(.+)", f)
+        if not m: stop(src, k, f"a field of a frame is `NAME: COUNT * KIND` or `NAME: BYTES`, not `{f}`")
+        name, what = m.groups()
+        if name in WHOLE or name in RESERVED: stop(src, k, f"a field cannot be named `{name}`")
+        if name in fields or name in taken: stop(src, k, f"`{name}` is a name already")
+        m = re.fullmatch(r"(.+)\*\s*([A-Za-z_]\w*)", what)
+        count, kind = (number(m.group(1)), m.group(2)) if m else (number(what), "byte")
+        if kind not in KINDS: stop(src, k, f"`{kind}` is no kind of a field ({', '.join(KINDS)})")
+        if count is None or count < 1: stop(src, k, f"a field holds a count of things, one or more: not `{what.strip()}`")
+        fields[name] = (size, count, KINDS[kind]); size += count * KINDS[kind]
+    if not fields: stop(src, n, "a frame with no field")
+    return size, fields
 
 
 class Inline:
@@ -197,7 +271,65 @@ def expand(src, fn, numbered, inlines, notes=None):
     ("place", number, the count's name, its lines) for `place b { ... }` (what holds there after b turns of
     the loop: the proof of the loop is written from it); ("entry", number, NAME) for `entry "NAME"` (the
     function is entered there too, under that name)."""
-    out, uses = [], [0]
+    out, uses, names, frame = [], [0], {}, [None]          # (names: the registers' names; frame: (size, fields) once it is said)
+
+    def field(name, n, inside):
+        if inside: stop(src, n, "a field of the frame inside an inline function")
+        if frame[0] is None or name not in frame[0][1]: stop(src, n, f"`{name}` is no field of the function's frame")
+        return frame[0][1][name]
+
+    def address(text, n):
+        """An address of `:=`, a register (or two) and a number, with the number worked out."""
+        terms, depth, cur, sign = [], 0, "", 1
+        for ch in text + "+":
+            if ch in "+-" and depth == 0:
+                if cur.strip(): terms.append((sign, cur.strip())); sign = 1
+                if ch == "-": sign = -sign
+                cur = ""
+            else: depth += ch == "("; depth -= ch == ")"; cur += ch
+        regs, total = [], 0
+        for sign, term in terms:
+            if term in G64 and sign == 1: regs.append(term)
+            elif number(term) is not None: total += sign * number(term)
+            else: stop(src, n, f"an address of `:=` is a register (or two) and a number: not `[{text.strip()}]`")
+        if not 1 <= len(regs) <= 2: stop(src, n, f"an address of `:=` is a register (or two) and a number: not `[{text.strip()}]`")
+        return " + ".join(regs) + (f" + {total}" if total >= 0 else f" - {-total}")
+
+    def operand(text, n, inside):
+        """A side of `:=`, as (what it is, how the assembler is given it, its bytes where it has a size)."""
+        t = text.strip()
+        if t in GENERAL: return "register", t, GENERAL[t]
+        if t in WHOLE: stop(src, n, f"`:=` is one `mov` or one `lea`: `{t}` is moved by an instruction that the coder names")
+        if number(t) is not None: return "number", str(number(t)), None
+        m = re.fullmatch(r"(byte|dword|qword)\s*\[(.*)\]", t)
+        if m: return "memory", f"{m.group(1)} ptr [{address(m.group(2), n)}]", {v: k for k, v in SIZES.items()}[m.group(1)]
+        m = re.fullmatch(r"&\s*(\w+)", t)
+        if m: return "address", f"[rsp + {field(m.group(1), n, inside)[0]}]", 8
+        m = re.fullmatch(r"(\w+)(?:\.(\w+))?\[(.*)\]", t)
+        if m:
+            name, view, slot = m.groups()
+            before, count, one = field(name, n, inside)
+            if view is not None:
+                if view not in KINDS: stop(src, n, f"`{view}` is no kind of a field ({', '.join(KINDS)})")
+                if count * one % KINDS[view]: stop(src, n, f"`{name}` has {count * one} bytes: not a whole count of {view}")
+                count, one = count * one // KINDS[view], KINDS[view]
+            i = number(slot)
+            if i is None: stop(src, n, f"a slot is a number: not `{slot.strip()}`")
+            if not 0 <= i < count: stop(src, n, f"`{t}`: the slots of `{name + ('.' + view if view else '')}` are 0 to {count - 1}")
+            if one not in SIZES: stop(src, n, f"`:=` moves 1, 4 or 8 bytes, and a slot of `{name}` has {one}: take it as `{name}.u64[I]`, or name the instruction")
+            return "memory", f"{SIZES[one]} ptr [rsp + {before + i * one}]", one
+        stop(src, n, f"`{t}` is nothing that `:=` moves: a general register, a number, `qword [ADDRESS]`, a slot of the frame or `&FIELD`")
+
+    def store(s, n, inside, typed):
+        """`DST := SRC` as the one instruction it is (`typed`: the line before a name was replaced by its register)."""
+        left, right = s.split(":=", 1)
+        (a, dst, into), (b, src_, of) = operand(left, n, inside), operand(right, n, inside)
+        if into is not None and of is not None and into != of:
+            was = [side.strip() for side in typed.split(":=", 1)]
+            stop(src, n, f"`:=` moves as many bytes as both sides have: `{was[0]}` has {into} and `{was[1]}` has {of}")
+        if (a, b) == ("register", "address"): return f"lea {dst}, {src_}"
+        if (a, b) in (("register", "register"), ("register", "number"), ("register", "memory"), ("memory", "register"), ("memory", "number")): return f"mov {dst}, {src_}"
+        stop(src, n, f"`:=` is one `mov`: into a register from a register, a number or memory, or into memory from a register or a number; not `{s}`")
 
     def block(lines, start):
         depth, j = 1, start
@@ -262,11 +394,36 @@ def expand(src, fn, numbered, inlines, notes=None):
                 if notes is not None: notes.append(("entry", len(out), m.group(1)))
                 continue
             if re.fullmatch(r"def\s+\w+\s*\(.*\)\s*\{", s): stop(src, n, "`def` is not a form of Ode any more: write an `inline fn`, outside the function")
+            m = re.fullmatch(r"reg\s+(\w+)\s*=\s*(\w+)", s)
+            if m:
+                name, register = m.groups()
+                if env or inside: stop(src, n, f"fn {fn}: a name for a register inside a for or an inline function")
+                if register not in WHOLE: stop(src, n, f"`{register}` is no register")
+                if name in WHOLE or name in RESERVED: stop(src, n, f"a register cannot be named `{name}`")
+                if name in names or name in inlines or (frame[0] is not None and name in frame[0][1]): stop(src, n, f"`{name}` is a name already")
+                names[name] = register; continue
+            if re.fullmatch(r"frame\s*\{", s):
+                if env or inside: stop(src, n, f"fn {fn}: a frame inside a for or an inline function")
+                if frame[0] is not None: stop(src, n, f"fn {fn}: a second frame")
+                body, i = block(lines, i)
+                frame[0] = frame_of(src, n, body, set(names) | set(inlines)); continue
             for k, v in env.items():
                 s = re.sub(r"\$" + k + r"\b", v, s)
             if inside and inside[-1][2]:
                 bind = inside[-1][2]
                 s = re.sub(r"(?<![@#$\w])(?:" + "|".join(map(re.escape, bind)) + r")\b", lambda g: bind[g.group(0)], s)
+            typed = s
+            m = re.fullmatch(r"call\s+(\w+)", s)
+            if m and m.group(1) in names and not inside:
+                stop(src, n, f"`{m.group(1)}` is the name of a register here ({names[m.group(1)]}), and `call` takes the name a linker knows a function by")
+            if names and not inside:                # a register's name, wherever an operand has it (never the instruction's own name)
+                put = lambda text: re.sub(r"(?<![@#$\w.])(?:" + "|".join(map(re.escape, names)) + r")\b", lambda g: names[g.group(0)], text)
+                m = None if ":=" in s else re.match(r"\w+\(|\S+\s+", s)
+                s = put(s) if ":=" in s else s[:m.end()] + put(s[m.end():]) if m else s
+            if re.search(r"\bframe\.size\b", s):
+                if inside or frame[0] is None: stop(src, n, "`frame.size` inside an inline function" if inside else f"`frame.size`, and fn {fn} has said no frame yet")
+                s = re.sub(r"\bframe\.size\b", str(frame[0][0]), s)
+            if ":=" in s: s = store(s, n, inside, typed)
             m = re.fullmatch(r"(\w+)\((.*)\)", s)
             if m and m.group(1) in inlines:
                 use(inlines[m.group(1)], [a.strip() for a in m.group(2).split(",")] if m.group(2).strip() else [], n, inside); continue

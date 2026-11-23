@@ -1,5 +1,5 @@
-// The parent of two parents by the 32-way kernel, in the prototype's notation. Today's notation:
-// proof-core/examples/quad/quad32.ode. Both give the same object file.
+// The parent of two parents by the 32-way kernel, with names for registers, a frame of named fields and `:=`.
+// With every instruction written out: proof-core/examples/quad/quad32.ode. Both give the same object file.
 target x86_64
 
 fn quad32 as "ode_quad32" {
@@ -20,14 +20,14 @@ fn quad32 as "ode_quad32" {
   out := rdi
   kf  := rcx
 
-  // Round 1: lane 0 reads a (rsi), lane 1 reads b (rdx), lanes 2..31 read a
+  // the first round: lane 0 reads a (rsi), lane 1 reads b (rdx), the lanes 2 to 31 read a
   tmp := rsi
   table[0] := tmp
   tmp := rdx
   table[1] := tmp
   for i in 2..32 {
     tmp := rsi
-    table[i] := tmp
+    table[$i] := tmp
   }
 
   tmp := qword [kf + 32]
@@ -40,10 +40,10 @@ fn quad32 as "ode_quad32" {
   r9  := &r1
   call blake3_servil_avx512_p32
 
-  // Round 2: every lane reads first 64 bytes of r1
+  // the second round: every lane reads the first 64 bytes of what the first round left
   tmp := &r1
   for i in 0..32 {
-    table[i] := tmp
+    table[$i] := tmp
   }
 
   tmp := qword [kf + 32]
@@ -56,10 +56,10 @@ fn quad32 as "ode_quad32" {
   r9  := &r2
   call blake3_servil_avx512_p32
 
-  // Copy r2[0] (32 bytes = 4 qwords) into caller's out
+  // the first value of the second round (32 bytes, as four of eight) into the caller's `out`
   for w in 0..4 {
-    tmp := r2.qword[w]
-    qword [out + w * 8] := tmp
+    tmp := r2.u64[$w]
+    qword [out + $w * 8] := tmp
   }
   tmp := 0
   add rsp, frame.size

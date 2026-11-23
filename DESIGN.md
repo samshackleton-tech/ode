@@ -172,9 +172,9 @@ Two questions are kept apart:
 The intended use is a conversation. Bob tries a candidate contract and asks: "if *this* is what I require,
 does *that* library provide it?" His tools answer quickly and cheaply. The answer teaches him something,
 and he revises the candidate, or his intent. For example, Bob at first cares only that a function hashes a
-message correctly. An assistant raises the question of timing. Bob then decides whether the message is
-secret. If it is, he requires that the instructions executed and the addresses touched depend only on the
-length of the message. The tools can tell him which libraries provide each choice. Which choice he should
+message correctly. An assistant raises the question of timing. Bob then decides whether someone who watches
+the timing may learn anything about the message from it. If not, he requires that the instructions
+executed and the addresses touched depend only on the length of the message. The tools can tell him which libraries provide each choice. Which choice he should
 make is for him to decide.
 
 The answers are quick and reliable because they are verifications of evidence:
@@ -627,13 +627,13 @@ Each of these is open on purpose, and each says what will close it.
    for each decision, supplied by the prover, as is done for arithmetic today. *Criterion:* whichever
    keeps the core small on the proofs of the first example.
 4. **Data and file layout**: how code, constants, proof and specification are shipped, and how the names
-   of files and contracts follow the naming rules. *Decided so far (Sam, November 17, 2026):* a proof is
+   of files and contracts follow the naming rules. *Decided so far (November 17, 2026):* a proof is
    a file of its own beside the binary. It is not a section inside the binary. The tools can still read a
    proof stored inside a binary (`.ode.proof`), and the shipped examples still store theirs that way. That
    way is no longer maintained or extended. It is not being removed either, because something like it
    may return. The rest has not been discussed: whether the specification stored in a binary moves out in
    the same way, and what the files are called.
-5. **The word-level layer.** *Decided (Sam, November 17, 2026) and done (November 18):* there is one
+5. **The word-level layer.** *Decided (November 17, 2026) and done (November 18):* there is one
    language. Every function, kernel or not, is written as its instructions, and each instruction,
    register and stack byte is the coder's choice. The word-level layer and its compiler are gone. Its 22
    functions are in the sources as the instructions that it last produced, and the bytes of the shipped

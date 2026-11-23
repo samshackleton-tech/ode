@@ -1,7 +1,7 @@
 # Names and identities in Ode
 
-The requirements below are decided (Sam Shackleton, November 16, 2026). The proposal that follows them
-is a direction she found good so far and has yet to decide. The last section says what the tools do today.
+The requirements below are decided (November 16, 2026). The proposal that follows them
+is a direction found good so far and not yet decided. The last section says what the tools do today.
 
 ## The problem, on one example
 
