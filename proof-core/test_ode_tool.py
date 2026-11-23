@@ -103,6 +103,39 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertIn("shown:", re_b.stdout)
             self.assertIn("FAIL:", re_b.stdout)
 
+    def test_verifier_in_ode_two_targets_and_in_source_budgets(self):
+        vdir = os.path.join(HERE, "examples", "verifier")
+        # 1. x86-64: zero_x86.ode (reg names in place {}, zero stack, in-source budget {})
+        rx = _run_tool(["check", os.path.join(vdir, "zero_x86.ode"), os.path.join(vdir, "zero_x86.spec"),
+                        "--arch", "zen5", "--trace"])
+        self.assertEqual(rx.returncode, 0, rx.stdout + rx.stderr)
+        self.assertIn("shown: v_all_zero", rx.stdout)
+
+        # 2. AArch64: tag_arm64.ode (3 composed functions, in-source budget {})
+        ra = _run_tool(["check", os.path.join(vdir, "tag_arm64.ode"), os.path.join(vdir, "tag_arm64.spec"),
+                        "--arch", "apple_m", "--trace"])
+        self.assertEqual(ra.returncode, 0, ra.stdout + ra.stderr)
+        self.assertIn("shown: v_xor64, v_fold32, v_diff32", ra.stdout)
+
+        # 3. In-source budget max_line_splits=0 catches --align 7 on AmpereOne with NO CLI --max flag!
+        rb = _run_tool(["check", os.path.join(vdir, "tag_arm64.ode"), os.path.join(vdir, "tag_arm64.spec"),
+                        "--arch", "ampere1", "--trace", "--align", "7"])
+        self.assertEqual(rb.returncode, 2, rb.stdout + rb.stderr)
+        self.assertIn("shown: v_xor64, v_fold32, v_diff32", rb.stdout)
+        self.assertIn("max_line_splits=0", rb.stdout)
+
+    def test_compare_with_spec_verifies_both_variants(self):
+        with open(ADLER_ODE) as f: orig = f.read()
+        nops = "".join("  nop\n" for _ in range(20))
+        aligned = orig.replace("@l0:\n", nops + "@l0:\n", 1)
+        with tempfile.TemporaryDirectory() as d:
+            p_al = os.path.join(d, "adler_aligned.ode")
+            with open(p_al, "w") as f: f.write(aligned)
+            r = _run_tool(["compare", ADLER_ODE, p_al, "--spec", ADLER_SPEC, "--arch", "zen5", "--trace"])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("verdicts: A=shown, B=shown", r.stdout)
+            self.assertIn("code bytes", r.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

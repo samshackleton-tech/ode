@@ -1,0 +1,98 @@
+// Verifier-in-Ode building blocks (AArch64): constant-time 64-byte XOR and 32-byte folded difference.
+// Demonstrates `target arm64`, `inline fn`, `reg`, `frame`, `:=`, `for`, `bl`, and advisory `budget`.
+target arm64
+
+inline fn xor_quarter(out: gpr, ap: gpr, bp: gpr, va: vec, vb: vec)
+  distinct(out, ap, bp) distinct(va, vb) changes va, vb {
+  ld1 {va.4s}, [ap]
+  ld1 {vb.4s}, [bp]
+  eor va.16b, va.16b, vb.16b
+  st1 {va.4s}, [out]
+}
+
+fn xor64 as "v_xor64" {
+  budget {
+    max_bytes 112
+    max_icache_lines 2
+    max_frame_bytes 0
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg outp = x0
+  reg ap = x1
+  reg bp = x2
+  reg va = v0
+  reg vb = v1
+
+  for q in 0..3 {
+    xor_quarter(outp, ap, bp, va, vb)
+    add ap, ap, 16
+    add bp, bp, 16
+    add outp, outp, 16
+  }
+  xor_quarter(outp, ap, bp, va, vb)
+  ret
+}
+
+fn fold32 as "v_fold32" {
+  budget {
+    max_bytes 64
+    max_icache_lines 1
+    max_frame_bytes 0
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg outp = x0
+  reg lo = x1
+  reg hi = x2
+
+  add hi, lo, 32
+  ld1 {v0.4s}, [lo]
+  ld1 {v1.4s}, [hi]
+  eor v0.16b, v0.16b, v1.16b
+  st1 {v0.4s}, [outp]
+
+  add lo, lo, 16
+  add hi, hi, 16
+  add outp, outp, 16
+  ld1 {v0.4s}, [lo]
+  ld1 {v1.4s}, [hi]
+  eor v0.16b, v0.16b, v1.16b
+  st1 {v0.4s}, [outp]
+  ret
+}
+
+fn diff32 as "v_diff32" {
+  frame {
+    tmp: 1 * block
+    saved_lr: 1 * u64
+    saved_out: 1 * u64
+  }
+  budget {
+    max_bytes 96
+    max_icache_lines 2
+    max_frame_bytes 80
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg keep_out = x19
+  reg zero = x9
+
+  sub sp, sp, frame.size
+  saved_lr[0] := x30
+  saved_out[0] := keep_out
+  keep_out := x0
+  zero := 0
+  for k in 0..8 {
+    tmp.u64[$k] := zero
+  }
+  x0 := &tmp
+  bl v_xor64
+  x0 := keep_out
+  x1 := &tmp
+  bl v_fold32
+  keep_out := saved_out[0]
+  x30 := saved_lr[0]
+  add sp, sp, frame.size
+  ret
+}

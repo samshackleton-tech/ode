@@ -1,0 +1,43 @@
+// Verifier-in-Ode building block (x86-64): returns 1 if every byte in a[0..n] is zero, else 0.
+// Demonstrates `reg` names inside `place { ... }`, `:=`, zero stack usage, and an advisory `budget`.
+target x86_64
+
+fn all_zero as "v_all_zero" {
+  budget {
+    max_bytes 64
+    max_icache_lines 1
+    max_frame_bytes 0
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg base = rdi
+  reg count = rsi
+  reg idx = rcx
+  reg res = rax
+
+  idx := 0
+  place {
+    name i = idx
+    fact 0 <= i
+    fact i <= n
+    fact all_zero(a) == zero_from(a, i)
+    decreases n - i
+  }
+@loop:
+  cmp idx, count
+  jae @yes
+  mov rdx, base
+  add rdx, idx
+  movzx edx, byte ptr [rdx]
+  cmp rdx, 0
+  jne @no
+  add idx, 1
+  jmp @loop
+@yes:
+  res := 1
+  jmp @done
+@no:
+  res := 0
+@done:
+  ret
+}

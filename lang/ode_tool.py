@@ -220,7 +220,10 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
                 init_r.update(arg_overrides)
             tr = estimate.trace_memory(progs, top_sym, target, init_regs=init_r, init_mem=init_m, line_maps=lmaps)
             mem_rep = estimate.analyze_memory(tr, target, arch, top["frame"])
-        budget_errs = estimate.check_budgets(static_rep, mem_rep, budgets)
+        eff_budgets = dict(top.get("budget") or {})
+        if budgets:
+            eff_budgets.update(budgets)
+        budget_errs = estimate.check_budgets(static_rep, mem_rep, eff_budgets)
 
         return {
             "verdict": "shown",
@@ -235,6 +238,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
             "top_symbol": top_sym,
             "static": static_rep,
             "memory": mem_rep,
+            "budgets": eff_budgets,
             "budget_errors": budget_errs,
             "advice_text": estimate.format_report(top_sym, static_rep, mem_rep),
         }
@@ -280,12 +284,16 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
                 init_r.update(arg_overrides)
             tr = estimate.trace_memory(progs, top_sym, target, init_regs=init_r, init_mem=init_m, line_maps=lmaps)
             mem_rep = estimate.analyze_memory(tr, target, arch, top["frame"])
-        budget_errs = estimate.check_budgets(static_rep, mem_rep, budgets)
+        eff_budgets = dict(top.get("budget") or {})
+        if budgets:
+            eff_budgets.update(budgets)
+        budget_errs = estimate.check_budgets(static_rep, mem_rep, eff_budgets)
         return {
             "target": target,
             "symbol": top_sym,
             "static": static_rep,
             "memory": mem_rep,
+            "budgets": eff_budgets,
             "budget_errors": budget_errs,
             "advice_text": estimate.format_report(top_sym, static_rep, mem_rep),
         }

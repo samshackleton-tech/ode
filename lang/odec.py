@@ -98,9 +98,32 @@ ARM_WHOLE.update({f"v{i}": f"v{i}" for i in range(32)})
 ARM_GENERAL = {r: 8 for r in ARM_G64}
 ARM_GENERAL.update({r: 4 for r in ARM_G32})
 
-RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame"}       # words of operands: no name is one
+RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame", "budget"}       # words of operands: no name is one
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
 KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
+BUDGET_KEYS = {
+    "max_bytes", "max_icache_lines", "max_frame_bytes",
+    "max_line_splits", "max_page_crossings", "max_stlf_partial", "max_alias_4k",
+}
+
+
+def budget_of(src, start_n, body):
+    """Advisory performance/layout budgets declared inside a function (`budget { max_bytes 64 ... }`).
+    Emits zero bytes in the object; checked by ode_tool.py."""
+    out = {}
+    for ln, raw in body:
+        s = raw.split("//")[0].strip()
+        if not s: continue
+        m = re.fullmatch(r"(\w+)\s*(?:[:=]\s*|\s+)(.+)", s)
+        if not m: stop(src, ln, f"a budget line is `KEY NUMBER`, not `{s}`")
+        key, val_s = m.group(1), m.group(2).strip()
+        if key not in BUDGET_KEYS:
+            stop(src, ln, f"`{key}` is no budget key ({', '.join(sorted(BUDGET_KEYS))})")
+        v = number(val_s)
+        if v is None or v < 0: stop(src, ln, f"budget `{key}` takes a nonnegative whole number, not `{val_s}`")
+        if key in out: stop(src, ln, f"budget `{key}` is listed twice")
+        out[key] = v
+    return out
 
 
 def target_spec(target):
@@ -312,7 +335,33 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     instruction given back, (the number of its line, the line as it was typed, with a for's number put in).
     Where `meta` is a dict, it receives `regs` ({name: register}) and `frame` ((size, fields) or None)."""
     classes, whole, general, g64_addr, sp_name = target_spec(target)
-    out, uses, names, frame = [], [0], {}, [None]          # (names: the registers' names; frame: (size, fields) once it is said)
+    out, uses, names, frame, budget = [], [0], {}, [None], [None]          # (names: the registers' names; frame: (size, fields); budget: {key: int})
+
+    def rewrite_place_line(ln, line):
+        """Replace declared `reg` names and `frame` fields in the register/cell positions of a `place { ... }`
+        line so loop invariants can use the coder's own names without colliding with contract variables."""
+        if not names and frame[0] is None:
+            return line
+        m = re.fullmatch(r"name\s+(\w+)\s*=\s*(\w+)", line)
+        if m and m.group(2) in names:
+            return f"name {m.group(1)} = {names[m.group(2)]}"
+        m = re.fullmatch(r"keep\s+(.+)", line)
+        if m:
+            toks = [names.get(t, t) for t in m.group(1).split()]
+            return "keep " + " ".join(toks)
+        m = re.fullmatch(r"lane\s+(\w+):\s*(.+)", line)
+        if m and m.group(1) in names:
+            return f"lane {names[m.group(1)]}: {m.group(2)}"
+        m = re.fullmatch(r"cell\s+(\w+)(?:\[([^\]]+)\])?:\s*(.+)", line)
+        if m and frame[0] is not None and m.group(1) in frame[0][1]:
+            fname, slot_s, rest = m.group(1), m.group(2), m.group(3)
+            before, count, one = frame[0][1][fname]
+            idx = 0 if slot_s is None else number(slot_s)
+            if idx is None or not 0 <= idx < count:
+                stop(src, ln, f"place cell `{fname}[{slot_s}]` is out of range (0 to {count - 1})")
+            off = before + idx * one
+            return f"cell [{sp_name} + {off}]: {rest}"
+        return line
 
     def field(name, n, inside):
         if inside: stop(src, n, "a field of the frame inside an inline function")
@@ -445,11 +494,16 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
                 body, i = block(lines, i)
-                said = [l.split("//")[0].strip() for _, l in body if l.split("//")[0].strip()]
+                said = [rewrite_place_line(ln, l.split("//")[0].strip()) for ln, l in body if l.split("//")[0].strip()]
                 if notes is None: continue
                 if '"' in s or m.group(1) is None: notes.append(("at", len(out), m.group(1), said, n))      # a place for the prover of proof-core
                 else: notes.append(("place", len(out), m.group(1), said))                                # a kernel's, with its count's name
                 continue
+            if re.fullmatch(r"budget\s*\{", s):
+                if env or inside: stop(src, n, f"fn {fn}: a budget inside a for or an inline function")
+                if budget[0] is not None: stop(src, n, f"fn {fn}: a second budget")
+                body, i = block(lines, i)
+                budget[0] = budget_of(src, n, body); continue
             m = re.fullmatch(r'entry\s+"(\w+)"', s)
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: an entry inside a for or an inline function")
@@ -505,6 +559,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     if meta is not None:
         meta["regs"] = dict(names)
         meta["frame"] = frame[0]
+        meta["budget"] = dict(budget[0] or {})
     return out
 
 
@@ -652,6 +707,7 @@ def compile_info(src, name, symbol=None):
         "line_map": line_map,
         "regs": meta["regs"],
         "frame": frame_info,
+        "budget": meta["budget"],
         "places": places_by_entry,
         "code_bytes": code_bytes,
     }

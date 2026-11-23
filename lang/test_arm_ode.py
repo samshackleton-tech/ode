@@ -87,6 +87,72 @@ class Arm64Ode(unittest.TestCase):
         # 8. unknown instruction refused at its line
         self.refused(base.replace("ret", "mul x0, x1, x2", 1), "mix16_3", 34, "no row in arm64.tab matches")
 
+    def test_place_reg_and_frame_rewriting(self):
+        src = """target x86_64
+fn f as "f_sym" {
+  frame {
+    buf: 2 * block
+  }
+  reg idx = r13
+  reg acc = zmm0
+  idx := 0
+  place {
+    name i = idx
+    keep idx
+    lane acc: h = x after i
+    cell buf[1]: word k = w(k)
+    fact 0 <= i
+    decreases n - i
+  }
+  ret
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "pl.ode")
+            with open(p, "w") as f: f.write(src)
+            info = odec.compile_info(p, "f")
+            pl = info["places"]["f_sym"]
+            self.assertIn("name i = r13", pl)
+            self.assertIn("keep r13", pl)
+            self.assertIn("lane zmm0: h = x after i", pl)
+            self.assertIn("cell [rsp + 64]: word k = w(k)", pl)
+            self.assertIn("fact 0 <= i", pl)
+            # Out-of-range frame cell in place is refused with line number
+            self.refused(src.replace("cell buf[1]:", "cell buf[2]:"), "f", 13, "out of range")
+
+    def test_budget_parsing_invariance_and_controls(self):
+        src_plain = """target arm64
+fn f as "f_sym" {
+  add x0, x0, 1
+  ret
+}
+"""
+        src_budget = """target arm64
+fn f as "f_sym" {
+  budget {
+    max_bytes 16
+    max_icache_lines: 1
+    max_line_splits = 0
+  }
+  add x0, x0, 1
+  ret
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            pa, pb = os.path.join(d, "a.ode"), os.path.join(d, "b.ode")
+            with open(pa, "w") as f: f.write(src_plain)
+            with open(pb, "w") as f: f.write(src_budget)
+            ia, ib = odec.compile_info(pa, "f"), odec.compile_info(pb, "f")
+            # Advisory budget changes zero bytes in the emitted ELF object
+            self.assertEqual(ia["elf"], ib["elf"])
+            self.assertEqual(ia["budget"], {})
+            self.assertEqual(ib["budget"], {"max_bytes": 16, "max_icache_lines": 1, "max_line_splits": 0})
+        # Negative controls
+        self.refused(src_budget.replace("max_bytes 16", "max_bogus 16"), "f", 4, "no budget key")
+        self.refused(src_budget.replace("max_bytes 16", "max_bytes -1"), "f", 4, "nonnegative whole number")
+        self.refused(src_budget.replace("max_line_splits = 0", "max_bytes 32"), "f", 6, "listed twice")
+        self.refused(src_budget.replace("ret", "budget {\n    max_bytes 8\n  }\n  ret"), "f", 9, "second budget")
+
 
 if __name__ == "__main__":
     unittest.main()
