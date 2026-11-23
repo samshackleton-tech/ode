@@ -18,7 +18,7 @@ The table below lists each file in this folder and what it does.
 | `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (registers, flags, vector lanes, memory, and faults) with what the row says. |
 | `test_arm64.py` | The tests: on any machine, the instruction words and decoding; on an AArch64 machine with clang, comparison against the processor. |
 | `results/` | What `cross.py --out` wrote on each processor tested (`apple-m6.json`, `ampereone.json`). |
-| `agree/` | A standalone Lean 4 package proving that 20 of the 36 rows of `arm64.tab` (`nop`, `mov_ri`, `mov32_ri`, `mov_rr`, `add_rri`, `sub_rri`, `add_rrr`, `sub_rrr`, `ldr64_sp` aligned and fault, `ldrb`, `strb`, `cmp_rr`, `cmp_ri`, `b`, `b_eq`, `b_ne`, `b_hs`, `b_lo`, `eor_v`, `rev32_8h`) agree with Google DeepMind's `arm64-semantics`. |
+| `agree/` | A standalone Lean 4 package proving that **all 36 of the 36 rows** of `arm64.tab` (38 theorems, including stack-pointer alignment fault theorems for `ldr64_sp` and `str64_sp`) agree with Google DeepMind's `arm64-semantics`. |
 
 The effect language and its interpreter on numbers are shared with the x86-64 table: `../core/table.py`
 and `../core/conc.py`. Three small additions were made to those two files for AArch64:
@@ -79,8 +79,8 @@ One general register per case is left out of the comparison, a different one fro
 the address of the case's state while the instruction runs. On macOS, `x18` is left out as well, because
 the system reserves it. Control-flow rows (`b`, `b_eq`, `b_ne`, `b_hs`, `b_lo`, `bl`, `ret`) are not run
 on the processor inside the single-instruction harness, because they jump out of it; their bit encodings
-are compared directly against `clang` in `test_arm64.py`, and all five branch rows (`b`, `b_eq`, `b_ne`,
-`b_hs`, `b_lo`) are proved in `agree/`.
+are compared directly against `clang` in `test_arm64.py`, and all seven control-flow rows (`b`, `b_eq`,
+`b_ne`, `b_hs`, `b_lo`, `bl`, `ret`) are proved in `agree/`.
 
 The tests give `cross.py` 18 tables with one row changed (a wrong effect, a wrong displacement unit, a
 missing or extra alignment fault, flipped comparison flags, wrong load width, or swapped register fields
@@ -97,6 +97,5 @@ and how many faulted as the rows say.
 - Conditional select (`cset`, `csel`) and flag-setting register arithmetic (`adds`, `subs`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- Agreement proofs in `agree/` for the remaining 16 rows of `arm64.tab` (20 rows — covering arithmetic,
-  moves, byte loads and stores, stack-pointer loads and faults, all comparisons, all five branches,
-  `nop`, and NEON — are proved so far across 21 theorems).
+- All 36 rows currently in `arm64.tab` are proved in `agree/` (38 theorems, zero `sorry`, standard Lean
+  axioms only); any future rows added to `arm64.tab` should be paired with their agreement proof there.

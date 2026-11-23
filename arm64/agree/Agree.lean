@@ -2682,4 +2682,1954 @@ theorem agree_strb (s b : Fin 31) (n : Fin 4096) (numStr : String)
   · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hA.zf
   · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hA.cf
 
+/-! ## Shared helpers for rows 21–30 (stack pointer, loads/stores, call/return) -/
+
+theorem agreeState_writeSp {prog : Ode.Program} {st : Ode.State} {gs : Arm64.State} {next : Nat}
+    (hA : AgreeState st gs) (v : BitVec 64) (val : Nat) (hv : v.toNat = val)
+    (bind : Ode.Bind) (stmt : Ode.Stmt)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+    let st1 : Ode.State := Ode.setReg st0 Ode.RSP val
+    let st' : Ode.State := Ode.noted bind st0 stmt st1
+    AgreeState st' ((gs.writeReg64 .sp v).advancePC) := by
+  intro st0 st1 st'
+  refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro k
+    simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.readReg64, Arm64.State.writeReg64,
+           Ode.setReg, Ode.noted, armSlot_ne_rsp k] using hA.gpr k
+  · simp only [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Ode.setReg, Ode.noted,
+               ↓reduceIte, hv]
+    exact (Nat.mod_eq_of_lt (by rw [← hv]; exact v.isLt)).symm
+  · intro vec j
+    simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Arm64.State.readVReg128,
+           Ode.setReg, Ode.noted] using hA.vec vec j
+  · intro a ha
+    simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Ode.setReg, Ode.noted] using hA.mem a ha
+  · simp only [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Ode.setReg, Ode.noted,
+               BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext]
+    have : 4 % 2 ^ 64 = 4 := by decide
+    unfold Ode.M64 at hpc; rw [this, Nat.mod_eq_of_lt hpc]
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Ode.setReg, Ode.noted] using hA.zf
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeReg64, Ode.setReg, Ode.noted] using hA.cf
+
+theorem read32_eq_load {st : Ode.State} {gs : Arm64.State} (hA : AgreeState st gs)
+    {a : Nat} (hfit : a + 4 ≤ Ode.M64) :
+    (gs.mem.read32 (BitVec.ofNat 64 a)).toNat = Ode.load st.mem a 4 := by
+  unfold Arm64.Memory.read32 Ode.load Ode.load Ode.load Ode.load Ode.load
+  have hb : ∀ k : Nat, k < 4 →
+      (gs.mem.read8 (BitVec.ofNat 64 a + BitVec.ofNat 64 k)).toNat = (st.mem (a + k)).val := by
+    intro k hk
+    have hadd : BitVec.ofNat 64 a + BitVec.ofNat 64 k = BitVec.ofNat 64 (a + k) := by
+      apply BitVec.eq_of_toNat_eq
+      simp only [BitVec.toNat_add, BitVec.toNat_ofNat]
+      unfold Ode.M64 at hfit
+      rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega),
+          Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+    rw [hadd]
+    exact hA.mem (a + k) (by omega)
+  have h0 := hb 0 (by decide); have h1 := hb 1 (by decide); have h2 := hb 2 (by decide); have h3 := hb 3 (by decide)
+  simp only [Nat.add_zero] at h0
+  simp only [toNat_append_eq, Nat.add_assoc]
+  have e2 : (st.mem (a + (1 + 1))).val = (st.mem (a + 2)).val := rfl
+  have e3 : (st.mem (a + (1 + (1 + 1)))).val = (st.mem (a + 3)).val := rfl
+  rw [e2, e3, h0, h1, h2, h3]
+  omega
+
+theorem store_at (mem : Nat → Ode.Byte) : ∀ n a v addr,
+    (Ode.store mem a v n addr).val =
+      if a ≤ addr ∧ addr < a + n then (v / 256 ^ (addr - a)) % 256 else (mem addr).val
+  | 0, a, v, addr => by simp [Ode.store]; omega
+  | n + 1, a, v, addr => by
+    unfold Ode.store
+    rw [store_at _ n (a + 1) (v / 256) addr]
+    by_cases hhi : a + 1 ≤ addr ∧ addr < a + 1 + n
+    · have h1 : a ≤ addr ∧ addr < a + (n + 1) := by omega
+      simp only [hhi, h1, and_self, ↓reduceIte]
+      rw [Nat.div_div_eq_div_mul]
+      have hexp : 256 * 256 ^ (addr - (a + 1)) = 256 ^ (addr - a) := by
+        have hk : addr - a = (addr - (a + 1)) + 1 := by omega
+        rw [hk, Nat.pow_succ, Nat.mul_comm]
+      rw [hexp]
+    · simp only [hhi, ↓reduceIte]
+      by_cases heq : addr = a
+      · subst heq
+        have h1 : addr ≤ addr ∧ addr < addr + (n + 1) := by omega
+        simp [h1]
+      · have h1 : ¬ (a ≤ addr ∧ addr < a + (n + 1)) := by omega
+        simp [heq, h1]
+
+theorem bv64_add_ofNat_eq {a k addr : Nat} (hfit : a + k < Ode.M64) (haddr : addr < Ode.M64) :
+    (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + BitVec.ofNat 64 k) ↔ addr = a + k := by
+  unfold Ode.M64 at hfit haddr
+  constructor
+  · intro h
+    have ht := congrArg BitVec.toNat h
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat] at ht
+    rw [Nat.mod_eq_of_lt haddr, Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega),
+        Nat.mod_eq_of_lt (by omega)] at ht
+    exact ht
+  · intro h; subst h
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat]
+    rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega),
+        Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+
+theorem read8_write8_eq (m : Arm64.Memory) (p q : BitVec 64) (b : BitVec 8) :
+    (m.write8 p b).read8 q = if q = p then b else m.read8 q := by
+  by_cases h : q = p <;> simp [Arm64.Memory.read8, Arm64.Memory.write8, h]
+
+theorem extract_byte_toNat {w : Nat} (v : BitVec w) (k : Nat) :
+    (v.extractLsb' (8 * k) 8).toNat = (v.toNat / 256 ^ k) % 256 := by
+  simp only [BitVec.extractLsb'_toNat, Nat.shiftRight_eq_div_pow]
+  have h1 : 2 ^ (8 * k) = 256 ^ k := by rw [Nat.pow_mul]
+  rw [h1]
+
+theorem write32_eq_store {st : Ode.State} {gs : Arm64.State} (hA : AgreeState st gs)
+    {a : Nat} (hfit : a + 4 ≤ Ode.M64) (v : BitVec 32) (val : Nat) (hv : v.toNat = val)
+    {addr : Nat} (haddr : addr < Ode.M64) :
+    ((gs.mem.write32 (BitVec.ofNat 64 a) v).read8 (BitVec.ofNat 64 addr)).toNat =
+      (Ode.store st.mem a val 4 addr).val := by
+  rw [store_at]
+  unfold Arm64.Memory.write32
+  simp only [read8_write8_eq]
+  have h3 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 3#64) ↔ addr = a + 3 := bv64_add_ofNat_eq (by omega) haddr
+  have h2 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 2#64) ↔ addr = a + 2 := bv64_add_ofNat_eq (by omega) haddr
+  have h1 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 1#64) ↔ addr = a + 1 := bv64_add_ofNat_eq (by omega) haddr
+  have h0 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 0#64) ↔ addr = a + 0 := bv64_add_ofNat_eq (by omega) haddr
+  by_cases c3 : addr = a + 3
+  · simp only [h3.mpr c3, show a ≤ addr ∧ addr < a + 4 by omega, and_self, ↓reduceIte]
+    subst c3; simpa [hv] using extract_byte_toNat v 3
+  · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 3#64 from fun h => c3 (h3.mp h), ↓reduceIte]
+    by_cases c2 : addr = a + 2
+    · simp only [h2.mpr c2, show a ≤ addr ∧ addr < a + 4 by omega, and_self, ↓reduceIte]
+      subst c2; simpa [hv] using extract_byte_toNat v 2
+    · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 2#64 from fun h => c2 (h2.mp h), ↓reduceIte]
+      by_cases c1 : addr = a + 1
+      · simp only [h1.mpr c1, show a ≤ addr ∧ addr < a + 4 by omega, and_self, ↓reduceIte]
+        subst c1; simpa [hv] using extract_byte_toNat v 1
+      · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 1#64 from fun h => c1 (h1.mp h), ↓reduceIte]
+        by_cases c0 : addr = a
+        · simp only [h0.mpr (by omega), show a ≤ addr ∧ addr < a + 4 by omega, and_self, ↓reduceIte]
+          subst c0; simp [hv, extract_byte_toNat v 0]
+        · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 0#64 from fun h => c0 (by have := h0.mp h; omega),
+                     show ¬(a ≤ addr ∧ addr < a + 4) by omega, ↓reduceIte]
+          exact hA.mem addr haddr
+
+theorem write64_eq_store {st : Ode.State} {gs : Arm64.State} (hA : AgreeState st gs)
+    {a : Nat} (hfit : a + 8 ≤ Ode.M64) (v : BitVec 64) (val : Nat) (hv : v.toNat = val)
+    {addr : Nat} (haddr : addr < Ode.M64) :
+    ((gs.mem.write64 (BitVec.ofNat 64 a) v).read8 (BitVec.ofNat 64 addr)).toNat =
+      (Ode.store st.mem a val 8 addr).val := by
+  rw [store_at]
+  unfold Arm64.Memory.write64
+  simp only [read8_write8_eq]
+  have h7 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 7#64) ↔ addr = a + 7 := bv64_add_ofNat_eq (by omega) haddr
+  have h6 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 6#64) ↔ addr = a + 6 := bv64_add_ofNat_eq (by omega) haddr
+  have h5 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 5#64) ↔ addr = a + 5 := bv64_add_ofNat_eq (by omega) haddr
+  have h4 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 4#64) ↔ addr = a + 4 := bv64_add_ofNat_eq (by omega) haddr
+  have h3 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 3#64) ↔ addr = a + 3 := bv64_add_ofNat_eq (by omega) haddr
+  have h2 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 2#64) ↔ addr = a + 2 := bv64_add_ofNat_eq (by omega) haddr
+  have h1 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 1#64) ↔ addr = a + 1 := bv64_add_ofNat_eq (by omega) haddr
+  have h0 : (BitVec.ofNat 64 addr = BitVec.ofNat 64 a + 0#64) ↔ addr = a + 0 := bv64_add_ofNat_eq (by omega) haddr
+  by_cases c7 : addr = a + 7
+  · simp only [h7.mpr c7, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+    subst c7; simpa [hv] using extract_byte_toNat v 7
+  · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 7#64 from fun h => c7 (h7.mp h), ↓reduceIte]
+    by_cases c6 : addr = a + 6
+    · simp only [h6.mpr c6, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+      subst c6; simpa [hv] using extract_byte_toNat v 6
+    · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 6#64 from fun h => c6 (h6.mp h), ↓reduceIte]
+      by_cases c5 : addr = a + 5
+      · simp only [h5.mpr c5, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+        subst c5; simpa [hv] using extract_byte_toNat v 5
+      · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 5#64 from fun h => c5 (h5.mp h), ↓reduceIte]
+        by_cases c4 : addr = a + 4
+        · simp only [h4.mpr c4, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+          subst c4; simpa [hv] using extract_byte_toNat v 4
+        · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 4#64 from fun h => c4 (h4.mp h), ↓reduceIte]
+          by_cases c3 : addr = a + 3
+          · simp only [h3.mpr c3, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+            subst c3; simpa [hv] using extract_byte_toNat v 3
+          · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 3#64 from fun h => c3 (h3.mp h), ↓reduceIte]
+            by_cases c2 : addr = a + 2
+            · simp only [h2.mpr c2, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+              subst c2; simpa [hv] using extract_byte_toNat v 2
+            · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 2#64 from fun h => c2 (h2.mp h), ↓reduceIte]
+              by_cases c1 : addr = a + 1
+              · simp only [h1.mpr c1, show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+                subst c1; simpa [hv] using extract_byte_toNat v 1
+              · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 1#64 from fun h => c1 (h1.mp h), ↓reduceIte]
+                by_cases c0 : addr = a
+                · simp only [h0.mpr (by omega), show a ≤ addr ∧ addr < a + 8 by omega, and_self, ↓reduceIte]
+                  subst c0; simp [hv, extract_byte_toNat v 0]
+                · simp only [show BitVec.ofNat 64 addr ≠ BitVec.ofNat 64 a + 0#64 from fun h => c0 (by have := h0.mp h; omega),
+                             show ¬(a ≤ addr ∧ addr < a + 8) by omega, ↓reduceIte]
+                  exact hA.mem addr haddr
+
+theorem agreeState_setMem {prog : Ode.Program} {st : Ode.State} {gs : Arm64.State} {next : Nat}
+    (hA : AgreeState st gs) (mem' : Nat → Ode.Byte) (gmem' : Arm64.Memory)
+    (hmem : ∀ addr, addr < Ode.M64 → (gmem'.read8 (BitVec.ofNat 64 addr)).toNat = (mem' addr).val)
+    (bind : Ode.Bind) (stmt : Ode.Stmt)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+    let st1 : Ode.State := { st0 with mem := mem' }
+    let st' : Ode.State := Ode.noted bind st0 stmt st1
+    AgreeState st' ((gs.setMem gmem').advancePC) := by
+  intro st0 st1 st'
+  refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro k; simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Arm64.State.readReg64, Ode.noted] using hA.gpr k
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hA.sp
+  · intro v j; simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Arm64.State.readVReg128, Ode.noted] using hA.vec v j
+  · intro addr haddr
+    simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hmem addr haddr
+  · simp only [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted, BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext]
+    have : 4 % 2 ^ 64 = 4 := by decide
+    unfold Ode.M64 at hpc; rw [this, Nat.mod_eq_of_lt hpc]
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hA.zf
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.setMem, Ode.noted] using hA.cf
+
+/-! ## Rows 21, 22 & 23: `add_sp`, `sub_sp`, `add_of_sp` -/
+
+def encodeAddSp (imm : Fin 4096) : BitVec 32 := 0x910003ff#32 ||| (BitVec.ofNat 32 imm.val <<< 10)
+def encodeSubSp (imm : Fin 4096) : BitVec 32 := 0xd10003ff#32 ||| (BitVec.ofNat 32 imm.val <<< 10)
+def encodeAddOfSp (d : Fin 31) (imm : Fin 4096) : BitVec 32 :=
+  0x910003e0#32 ||| (BitVec.ofNat 32 imm.val <<< 10) ||| BitVec.ofNat 32 d.val
+
+def effectAddSp : List Ode.Stmt := [.set (.name "sp") (.call "add64" [.name "sp", .name "I"])]
+def effectSubSp : List Ode.Stmt := [.set (.name "sp") (.call "sub64" [.name "sp", .name "I"])]
+def effectAddOfSp : List Ode.Stmt := [.set (.name "D") (.call "add64" [.name "sp", .name "I"])]
+
+def bindSpImm (numStr : String) : Ode.Bind := [("I", numStr)]
+def bindAddOfSp (d : Fin 31) (numStr : String) : Ode.Bind := [("D", armRegName d.val), ("I", numStr)]
+
+theorem encodeAddSp_fixed (imm : Fin 4096) :
+    encodeAddSp imm &&& 0xffc003ff#32 = 0x910003ff#32 &&& 0xffc003ff#32 := by
+  have hi : imm.val < 2 ^ 12 := imm.isLt
+  have h1 : (BitVec.ofNat 32 imm.val <<< 10) &&& 0xffc003ff#32 = 0#32 := field_and_eq_zero hi (by decide)
+  unfold encodeAddSp; simp only [BitVec.and_or_distrib_right, h1, BitVec.or_zero]
+
+theorem decode_add_sp (imm : Fin 4096) :
+    Arm64.decode (encodeAddSp imm) = some (.addSubImm .W64 .ADD .sp .sp (BitVec.ofNat 12 imm.val) false) := by
+  have hf := encodeAddSp_fixed imm
+  have ex_i : (encodeAddSp imm).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := by
+    unfold encodeAddSp; simp only [extract_or]
+    have h0 : (0x910003ff#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 imm.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := extract_field_hit (by omega)
+    rw [h0, h1]; simp
+  have hsf : (encodeAddSp imm).getLsbD 31 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h30 : (encodeAddSp imm).getLsbD 30 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h29 : (encodeAddSp imm).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h22 : (encodeAddSp imm).getLsbD 22 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hrn : (encodeAddSp imm).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hrd : (encodeAddSp imm).extractLsb' 0 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hf (c := 0xd503201f#32) (by decide),
+             hsf, h30, h29, h22, hrn, hrd, ex_i,
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4000001#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4200000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xfffff01f#32) (c := 0xd503201f#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffff0000#32) (c := 0x00000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffffffe0#32) (c := 0xd50b7420#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f000000#32) (c := 0x10000000#32) (by decide),
+             mask_of_fixed hf (m := 0x1f800000#32) (by decide),
+             Bool.false_eq_true, ↓reduceIte]
+  rfl
+
+theorem agree_add_sp (imm : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (imm.val : Int))
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeAddSp imm) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectAddSp, bindSpImm numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hilt : imm.val < Ode.M64 := by unfold Ode.M64; have := imm.isLt; omega
+  have hmod : ((imm.val : Int) % (Ode.M64 : Int)).toNat = imm.val := by
+    rw [Int.emod_eq_of_lt (Int.natCast_nonneg _) (Int.ofNat_lt.mpr hilt)]; rfl
+  let val := (st.reg Ode.RSP + imm.val) % Ode.M64
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setReg st0 Ode.RSP val
+  let st' : Ode.State := Ode.noted (bindSpImm numStr) st0 (.set (.name "sp") (.call "add64" [.name "sp", .name "I"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectAddSp, bindSpImm numStr, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectAddSp, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindSpImm, List.lookup,
+          regIndex_sp, hnum, hmod, val, st', st1, st0]
+  have himm : ((BitVec.ofNat 12 imm.val).zeroExtend 64).toNat = imm.val := by
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_ofNat]
+    have := imm.isLt; rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hv : (Arm64.AddWithCarry64 gs.sp ((BitVec.ofNat 12 imm.val).zeroExtend 64) false).1.toNat = val := by
+    rw [addWithCarry64_add_val, hA.sp, himm]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.addSubImm .W64 .ADD .sp .sp (BitVec.ofNat 12 imm.val) false) gs =
+      (gs.writeReg64 .sp (Arm64.AddWithCarry64 gs.sp ((BitVec.ofNat 12 imm.val).zeroExtend 64) false).1).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execAddSubImm, Arm64.evalAddSub, Arm64.State.readReg, Arm64.State.readReg64, Arm64.State.writeReg]
+  refine ⟨_, st', decode_add_sp imm, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]; exact agreeState_writeSp hA _ val hv _ _ hnext hpc
+
+theorem encodeSubSp_fixed (imm : Fin 4096) :
+    encodeSubSp imm &&& 0xffc003ff#32 = 0xd10003ff#32 &&& 0xffc003ff#32 := by
+  have hi : imm.val < 2 ^ 12 := imm.isLt
+  have h1 : (BitVec.ofNat 32 imm.val <<< 10) &&& 0xffc003ff#32 = 0#32 := field_and_eq_zero hi (by decide)
+  unfold encodeSubSp; simp only [BitVec.and_or_distrib_right, h1, BitVec.or_zero]
+
+theorem decode_sub_sp (imm : Fin 4096) :
+    Arm64.decode (encodeSubSp imm) = some (.addSubImm .W64 .SUB .sp .sp (BitVec.ofNat 12 imm.val) false) := by
+  have hf := encodeSubSp_fixed imm
+  have ex_i : (encodeSubSp imm).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := by
+    unfold encodeSubSp; simp only [extract_or]
+    have h0 : (0xd10003ff#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 imm.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := extract_field_hit (by omega)
+    rw [h0, h1]; simp
+  have hsf : (encodeSubSp imm).getLsbD 31 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h30 : (encodeSubSp imm).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h29 : (encodeSubSp imm).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h22 : (encodeSubSp imm).getLsbD 22 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hrn : (encodeSubSp imm).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hrd : (encodeSubSp imm).extractLsb' 0 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hf (c := 0xd503201f#32) (by decide),
+             hsf, h30, h29, h22, hrn, hrd, ex_i,
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4000001#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4200000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xfffff01f#32) (c := 0xd503201f#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffff0000#32) (c := 0x00000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffffffe0#32) (c := 0xd50b7420#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f000000#32) (c := 0x10000000#32) (by decide),
+             mask_of_fixed hf (m := 0x1f800000#32) (by decide),
+             Bool.false_eq_true, ↓reduceIte]
+  rfl
+
+theorem agree_sub_sp (imm : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (imm.val : Int))
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeSubSp imm) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectSubSp, bindSpImm numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hilt : imm.val < Ode.M64 := by unfold Ode.M64; have := imm.isLt; omega
+  have hmod : ((imm.val : Int) % (Ode.M64 : Int)).toNat = imm.val := by
+    rw [Int.emod_eq_of_lt (Int.natCast_nonneg _) (Int.ofNat_lt.mpr hilt)]; rfl
+  let val := (st.reg Ode.RSP + (Ode.M64 - imm.val % Ode.M64)) % Ode.M64
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setReg st0 Ode.RSP val
+  let st' : Ode.State := Ode.noted (bindSpImm numStr) st0 (.set (.name "sp") (.call "sub64" [.name "sp", .name "I"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectSubSp, bindSpImm numStr, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectSubSp, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindSpImm, List.lookup,
+          regIndex_sp, hnum, hmod, val, st', st1, st0]
+  have himm : ((BitVec.ofNat 12 imm.val).zeroExtend 64).toNat = imm.val := by
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_ofNat]
+    have := imm.isLt; rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hv : (Arm64.AddWithCarry64 gs.sp (~~~((BitVec.ofNat 12 imm.val).zeroExtend 64)) true).1.toNat = val := by
+    rw [addWithCarry64_sub_val, hA.sp, himm]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.addSubImm .W64 .SUB .sp .sp (BitVec.ofNat 12 imm.val) false) gs =
+      (gs.writeReg64 .sp (Arm64.AddWithCarry64 gs.sp (~~~((BitVec.ofNat 12 imm.val).zeroExtend 64)) true).1).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execAddSubImm, Arm64.evalAddSub, Arm64.State.readReg, Arm64.State.readReg64, Arm64.State.writeReg]
+  refine ⟨_, st', decode_sub_sp imm, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]; exact agreeState_writeSp hA _ val hv _ _ hnext hpc
+
+theorem encodeAddOfSp_fixed (d : Fin 31) (imm : Fin 4096) :
+    encodeAddOfSp d imm &&& 0xffc003e0#32 = 0x910003e0#32 &&& 0xffc003e0#32 := by
+  have hd : d.val < 2 ^ 5 := by omega
+  have hi : imm.val < 2 ^ 12 := imm.isLt
+  have h1 : (BitVec.ofNat 32 imm.val <<< 10) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hi (by decide)
+  have h2 : (BitVec.ofNat 32 d.val <<< 0) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hd (by decide)
+  simp only [BitVec.shiftLeft_zero] at h2
+  unfold encodeAddOfSp; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+
+theorem decode_add_of_sp (d : Fin 31) (imm : Fin 4096) :
+    Arm64.decode (encodeAddOfSp d imm) =
+      some (.addSubImm .W64 .ADD (.gpr (BitVec.ofNat 5 d.val)) .sp (BitVec.ofNat 12 imm.val) false) := by
+  have hf := encodeAddOfSp_fixed d imm
+  have hd : d.val < 2 ^ 5 := by omega
+  have hi : imm.val < 2 ^ 12 := imm.isLt
+  have ex_d : (encodeAddOfSp d imm).extractLsb' 0 5 = BitVec.ofNat 5 d.val := by
+    unfold encodeAddOfSp; simp only [extract_or]
+    have h0 : (0x910003e0#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 imm.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hi (by omega)
+    have h2 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 d.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_i : (encodeAddOfSp d imm).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := by
+    unfold encodeAddOfSp; simp only [extract_or]
+    have h0 : (0x910003e0#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 imm.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 imm.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hd (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have hsf : (encodeAddOfSp d imm).getLsbD 31 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h30 : (encodeAddOfSp d imm).getLsbD 30 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h29 : (encodeAddOfSp d imm).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have h22 : (encodeAddOfSp d imm).getLsbD 22 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hrn : (encodeAddOfSp d imm).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hf (c := 0xd503201f#32) (by decide),
+             hsf, h30, h29, h22, hrn, ex_d, ex_i, fromSPBits_fin31,
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4000001#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4200000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xfffff01f#32) (c := 0xd503201f#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffff0000#32) (c := 0x00000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffffffe0#32) (c := 0xd50b7420#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f000000#32) (c := 0x10000000#32) (by decide),
+             mask_of_fixed hf (m := 0x1f800000#32) (by decide),
+             Bool.false_eq_true, ↓reduceIte]
+  rfl
+
+theorem agree_add_of_sp (d : Fin 31) (imm : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (imm.val : Int))
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeAddOfSp d imm) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectAddOfSp, bindAddOfSp d numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hilt : imm.val < Ode.M64 := by unfold Ode.M64; have := imm.isLt; omega
+  have hmod : ((imm.val : Int) % (Ode.M64 : Int)).toNat = imm.val := by
+    rw [Int.emod_eq_of_lt (Int.natCast_nonneg _) (Int.ofNat_lt.mpr hilt)]; rfl
+  let val := (st.reg Ode.RSP + imm.val) % Ode.M64
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setReg st0 (armSlot d.val) val
+  let st' : Ode.State := Ode.noted (bindAddOfSp d numStr) st0 (.set (.name "D") (.call "add64" [.name "sp", .name "I"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectAddOfSp, bindAddOfSp d numStr, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectAddOfSp, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindAddOfSp, List.lookup,
+          regIndex_armRegName, regIndex_sp, hnum, hmod, val, st', st1, st0]
+  have himm : ((BitVec.ofNat 12 imm.val).zeroExtend 64).toNat = imm.val := by
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_ofNat]
+    have := imm.isLt; rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hv : (Arm64.AddWithCarry64 gs.sp ((BitVec.ofNat 12 imm.val).zeroExtend 64) false).1.toNat = val := by
+    rw [addWithCarry64_add_val, hA.sp, himm]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.addSubImm .W64 .ADD (.gpr (BitVec.ofNat 5 d.val)) .sp (BitVec.ofNat 12 imm.val) false) gs =
+      (gs.writeReg64 (.gpr (BitVec.ofNat 5 d.val)) (Arm64.AddWithCarry64 gs.sp ((BitVec.ofNat 12 imm.val).zeroExtend 64) false).1).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execAddSubImm, Arm64.evalAddSub, Arm64.State.readReg, Arm64.State.readReg64, Arm64.State.writeReg]
+  refine ⟨_, st', decode_add_of_sp d imm, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]; exact agreeState_writeGpr hA d _ val hv _ _ hnext hpc
+
+/-! ## Rows 24, 25, 26, 27 & 28: `ldr64`, `str64`, `ldr32`, `str32`, `str64_sp` -/
+
+def encodeLdr64 (d b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0xf9400000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 d.val
+
+def encodeStr64 (s b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0xf9000000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 s.val
+
+def encodeLdr32 (d b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0xb9400000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 d.val
+
+def encodeStr32 (s b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0xb9000000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 s.val
+
+def encodeStr64Sp (s : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0xf90003e0#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| BitVec.ofNat 32 s.val
+
+def effectLdr64 : List Ode.Stmt := [.set (.name "D") (.call "mem64" [.name "B", .name "N"])]
+def effectStr64 : List Ode.Stmt := [.set (.call "mem64" [.name "B", .name "N"]) (.name "S")]
+def effectLdr32 : List Ode.Stmt := [.set (.name "D") (.call "low32" [.call "mem32" [.name "B", .name "N"]])]
+def effectStr32 : List Ode.Stmt := [.set (.call "mem32" [.name "B", .name "N"]) (.call "low32" [.name "S"])]
+def effectStr64Sp : List Ode.Stmt := [.set (.call "mem64" [.call "on16" [.name "sp"], .name "N"]) (.name "S")]
+
+def bindStr64Sp (s : Fin 31) (numStr : String) : Ode.Bind := [("N", numStr), ("S", armRegName s.val)]
+
+def guardsBeforeLdstImm : List (BitVec 32 × BitVec 32) :=
+  [(0xffe0001f#32, 0xd4000001#32), (0xffe0001f#32, 0xd4200000#32),
+   (0xfffff01f#32, 0xd503201f#32), (0xffff0000#32, 0x00000000#32),
+   (0xffffffe0#32, 0xd50b7420#32), (0x1f000000#32, 0x10000000#32),
+   (0x1f800000#32, 0x11000000#32), (0x1f800000#32, 0x12000000#32),
+   (0x1f800000#32, 0x12800000#32), (0x1f800000#32, 0x13000000#32),
+   (0x7f800000#32, 0x13800000#32), (0x7c000000#32, 0x14000000#32),
+   (0x7e000000#32, 0x34000000#32), (0x7e000000#32, 0x36000000#32),
+   (0xff000010#32, 0x54000000#32), (0xff9ffc1f#32, 0xd61f0000#32),
+   (0x1f000000#32, 0x0a000000#32), (0x1f200000#32, 0x0b000000#32),
+   (0x1fe00000#32, 0x0b200000#32), (0x1fe0fc00#32, 0x1a000000#32),
+   (0x3fe00410#32, 0x3a400000#32), (0x3fe00800#32, 0x1a800000#32),
+   (0x7fff0000#32, 0x5ac00000#32), (0x7fe0e000#32, 0x1ac04000#32),
+   (0x7fe00000#32, 0x1ac00000#32), (0x7f000000#32, 0x1b000000#32),
+   (0x7f800000#32, 0x28000000#32), (0x3e000000#32, 0x28000000#32),
+   (0xffc00000#32, 0xf9800000#32), (0xffe00c00#32, 0xf8800000#32),
+   (0xffe00c00#32, 0xf8a00800#32), (0x3f200c00#32, 0x38200000#32),
+   (0x3f200c00#32, 0x19000000#32)]
+
+/-- Shared decoder helper for unsigned-immediate loads and stores (`bits[29:24] = 111001`). -/
+theorem decode_at_ldstImm {w base fixed : BitVec 32}
+    (hw : w &&& fixed = base &&& fixed)
+    (hnop : ((base &&& fixed) == (0xd503201f#32 &&& fixed)) = false)
+    (hmatch : (0x3f000000#32 &&& fixed = 0x3f000000#32) ∧ (base &&& 0x3f000000#32 = 0x39000000#32))
+    (hskip : skipsAll base fixed guardsBeforeLdstImm = true) :
+    Arm64.decode w =
+      let sizeBits := (w.extractLsb' 30 2).toNat
+      let opc := (w.extractLsb' 22 2).toNat
+      let imm12 := w.extractLsb' 10 12
+      let rn := Arm64.Reg.fromSPBits (w.extractLsb' 5 5)
+      let rt := Arm64.Reg.fromZRBits (w.extractLsb' 0 5)
+      Arm64.mkLoadStoreInst sizeBits opc rt (.Offset rn ((imm12.zeroExtend 64) <<< sizeBits)) := by
+  have sk : ∀ m c, (m, c) ∈ guardsBeforeLdstImm → ((w &&& m) == c) = false :=
+    fun m c hm => skipsAll_mem hw hskip hm
+  have hhit : w &&& 0x3f000000#32 = 0x39000000#32 := by rw [mask_of_fixed hw hmatch.1, hmatch.2]
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hw hnop,
+             sk 0xffe0001f#32 0xd4000001#32 (by decide), sk 0xffe0001f#32 0xd4200000#32 (by decide),
+             sk 0xfffff01f#32 0xd503201f#32 (by decide), sk 0xffff0000#32 0x00000000#32 (by decide),
+             sk 0xffffffe0#32 0xd50b7420#32 (by decide), sk 0x1f000000#32 0x10000000#32 (by decide),
+             sk 0x1f800000#32 0x11000000#32 (by decide), sk 0x1f800000#32 0x12000000#32 (by decide),
+             sk 0x1f800000#32 0x12800000#32 (by decide), sk 0x1f800000#32 0x13000000#32 (by decide),
+             sk 0x7f800000#32 0x13800000#32 (by decide), sk 0x7c000000#32 0x14000000#32 (by decide),
+             sk 0x7e000000#32 0x34000000#32 (by decide), sk 0x7e000000#32 0x36000000#32 (by decide),
+             sk 0xff000010#32 0x54000000#32 (by decide), sk 0xff9ffc1f#32 0xd61f0000#32 (by decide),
+             sk 0x1f000000#32 0x0a000000#32 (by decide), sk 0x1f200000#32 0x0b000000#32 (by decide),
+             sk 0x1fe00000#32 0x0b200000#32 (by decide), sk 0x1fe0fc00#32 0x1a000000#32 (by decide),
+             sk 0x3fe00410#32 0x3a400000#32 (by decide), sk 0x3fe00800#32 0x1a800000#32 (by decide),
+             sk 0x7fff0000#32 0x5ac00000#32 (by decide), sk 0x7fe0e000#32 0x1ac04000#32 (by decide),
+             sk 0x7fe00000#32 0x1ac00000#32 (by decide), sk 0x7f000000#32 0x1b000000#32 (by decide),
+             sk 0x7f800000#32 0x28000000#32 (by decide), sk 0x3e000000#32 0x28000000#32 (by decide),
+             sk 0xffc00000#32 0xf9800000#32 (by decide), sk 0xffe00c00#32 0xf8800000#32 (by decide),
+             sk 0xffe00c00#32 0xf8a00800#32 (by decide), sk 0x3f200c00#32 0x38200000#32 (by decide),
+             sk 0x3f200c00#32 0x19000000#32 (by decide),
+             hhit, beq_self_eq_true, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+
+theorem decode_ldr64 (d b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeLdr64 d b n) =
+      some (.ldr .W64 .X64 false (.gpr (BitVec.ofNat 5 d.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 8)))) := by
+  have hd : d.val < 2 ^ 5 := by omega
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeLdr64 d b n &&& 0xffc00000#32 = 0xf9400000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hd (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeLdr64; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_ldstImm hf (by decide) ⟨by decide, by decide⟩ (by decide)]
+  have ex_d : (encodeLdr64 d b n).extractLsb' 0 5 = BitVec.ofNat 5 d.val := by
+    unfold encodeLdr64; simp only [extract_or]
+    have h0 : (0xf9400000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 d.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeLdr64 d b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeLdr64; simp only [extract_or]
+    have h0 : (0xf9400000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hd (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeLdr64 d b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeLdr64; simp only [extract_or]
+    have h0 : (0xf9400000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hd (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeLdr64 d b n).extractLsb' 30 2 = 3#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeLdr64 d b n).extractLsb' 22 2 = 1#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hshift : (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 3 = BitVec.ofNat 64 (n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+    have := n.isLt; omega
+  simp only [ex_d, ex_b, ex_n, ex_sz, ex_opc, fromZRBits_fin31, fromSPBits_fin31, Arm64.mkLoadStoreInst, BitVec.toNat_ofNat]
+  rw [hshift]
+
+theorem agree_ldr64 (d b : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 8 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 8 + 8 ≤ Ode.M64)
+    (hread : gs.mem.canRead (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 8)) 8 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeLdr64 d b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLdr64, bindLdrb d b numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 8 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  have hmodN : ((n.val * 8 : Int) % (Ode.M64 : Int)).toNat = n.val * 8 := by unfold Ode.M64; have := n.isLt; omega
+  have hea_nat : (st.reg (armSlot b.val) + n.val * 8) % Ode.M64 = st.reg (armSlot b.val) + n.val * 8 :=
+    Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 8) =
+      BitVec.ofNat 64 (st.reg (armSlot b.val) + n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let a := st.reg (armSlot b.val) + n.val * 8
+  let val := Ode.load st.mem a 8
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setReg st0 (armSlot d.val) val
+  let st' : Ode.State := Ode.noted (bindLdrb d b numStr) st0 (.set (.name "D") (.call "mem64" [.name "B", .name "N"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectLdr64, bindLdrb d b numStr, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.read a 8 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectLdr64, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindLdrb, List.lookup, regIndex_armRegName,
+          Ode.sumList, hnum, hmodN, hea_nat, hall, a, val, st', st1, st0]
+  have hread' : gs.mem.canRead (BitVec.ofNat 64 a) 8 = true := by rwa [← hea_bv]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.ldr .W64 .X64 false (.gpr (BitVec.ofNat 5 d.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 8)))) gs =
+      (gs.writeReg64 (.gpr (BitVec.ofNat 5 d.val)) (gs.mem.read64 (BitVec.ofNat 64 a))).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execLdr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.MemWidth.bytes, Arm64.Memory.readSized,
+          Arm64.State.writeReg, hea_bv, a, hread']
+  refine ⟨_, st', decode_ldr64 d b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]; exact agreeState_writeGpr hA d _ val (read64_eq_load hA hfit) _ _ hnext hpc
+
+theorem decode_str64 (s b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeStr64 s b n) =
+      some (.str .X64 (.gpr (BitVec.ofNat 5 s.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 8)))) := by
+  have hs : s.val < 2 ^ 5 := by omega
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeStr64 s b n &&& 0xffc00000#32 = 0xf9000000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hs (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeStr64; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_ldstImm hf (by decide) ⟨by decide, by decide⟩ (by decide)]
+  have ex_s : (encodeStr64 s b n).extractLsb' 0 5 = BitVec.ofNat 5 s.val := by
+    unfold encodeStr64; simp only [extract_or]
+    have h0 : (0xf9000000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 s.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeStr64 s b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeStr64; simp only [extract_or]
+    have h0 : (0xf9000000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hs (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeStr64 s b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeStr64; simp only [extract_or]
+    have h0 : (0xf9000000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hs (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeStr64 s b n).extractLsb' 30 2 = 3#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeStr64 s b n).extractLsb' 22 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hshift : (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 3 = BitVec.ofNat 64 (n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+    have := n.isLt; omega
+  simp only [ex_s, ex_b, ex_n, ex_sz, ex_opc, fromZRBits_fin31, fromSPBits_fin31, Arm64.mkLoadStoreInst, BitVec.toNat_ofNat]
+  rw [hshift]
+
+theorem agree_str64 (s b : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 8 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 8 + 8 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 8)) 8 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeStr64 s b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr64, bindStrb s b numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 8 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  have hmodN : ((n.val * 8 : Int) % (Ode.M64 : Int)).toNat = n.val * 8 := by unfold Ode.M64; have := n.isLt; omega
+  have hea_nat : (st.reg (armSlot b.val) + n.val * 8) % Ode.M64 = st.reg (armSlot b.val) + n.val * 8 :=
+    Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 8) =
+      BitVec.ofNat 64 (st.reg (armSlot b.val) + n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let a := st.reg (armSlot b.val) + n.val * 8
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := Ode.store st.mem a (st.reg (armSlot s.val)) 8 }
+  let st' : Ode.State := Ode.noted (bindStrb s b numStr) st0 (.set (.call "mem64" [.name "B", .name "N"]) (.name "S")) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectStr64, bindStrb s b numStr, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 8 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectStr64, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindStrb, List.lookup, regIndex_armRegName,
+          Ode.sumList, hnum, hmodN, hea_nat, hall, a, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 8 = true := by rwa [← hea_bv]
+  let val64 := gs.readReg64 (.gpr (BitVec.ofNat 5 s.val))
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.str .X64 (.gpr (BitVec.ofNat 5 s.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 8)))) gs =
+      (gs.setMem (gs.mem.write64 (BitVec.ofNat 64 a) val64)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execStr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.MemWidth.bytes, Arm64.Memory.writeSized,
+          hea_bv, a, hwrite', val64]
+  refine ⟨_, st', decode_str64 s b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  exact agreeState_setMem hA _ _ (fun addr haddr => write64_eq_store hA hfit val64 _ (hA.gpr s) haddr) _ _ hnext hpc
+
+theorem decode_ldr32 (d b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeLdr32 d b n) =
+      some (.ldr .W32 .W32 false (.gpr (BitVec.ofNat 5 d.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 4)))) := by
+  have hd : d.val < 2 ^ 5 := by omega
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeLdr32 d b n &&& 0xffc00000#32 = 0xb9400000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hd (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeLdr32; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_ldstImm hf (by decide) ⟨by decide, by decide⟩ (by decide)]
+  have ex_d : (encodeLdr32 d b n).extractLsb' 0 5 = BitVec.ofNat 5 d.val := by
+    unfold encodeLdr32; simp only [extract_or]
+    have h0 : (0xb9400000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 d.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeLdr32 d b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeLdr32; simp only [extract_or]
+    have h0 : (0xb9400000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hd (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeLdr32 d b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeLdr32; simp only [extract_or]
+    have h0 : (0xb9400000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 d.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hd (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeLdr32 d b n).extractLsb' 30 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeLdr32 d b n).extractLsb' 22 2 = 1#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hshift : (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 2 = BitVec.ofNat 64 (n.val * 4) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+    have := n.isLt; omega
+  simp only [ex_d, ex_b, ex_n, ex_sz, ex_opc, fromZRBits_fin31, fromSPBits_fin31, Arm64.mkLoadStoreInst, BitVec.toNat_ofNat]
+  rw [hshift]
+
+theorem agree_ldr32 (d b : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 4 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 4 + 4 ≤ Ode.M64)
+    (hread : gs.mem.canRead (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 4)) 4 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeLdr32 d b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLdr32, bindLdrb d b numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 4 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  have hmodN : ((n.val * 4 : Int) % (Ode.M64 : Int)).toNat = n.val * 4 := by unfold Ode.M64; have := n.isLt; omega
+  have hea_nat : (st.reg (armSlot b.val) + n.val * 4) % Ode.M64 = st.reg (armSlot b.val) + n.val * 4 :=
+    Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 4) =
+      BitVec.ofNat 64 (st.reg (armSlot b.val) + n.val * 4) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let a := st.reg (armSlot b.val) + n.val * 4
+  let val := Ode.load st.mem a 4 % 2 ^ 32
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setReg st0 (armSlot d.val) val
+  let st' : Ode.State := Ode.noted (bindLdrb d b numStr) st0 (.set (.name "D") (.call "low32" [.call "mem32" [.name "B", .name "N"]])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectLdr32, bindLdrb d b numStr, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.read a 4 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectLdr32, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindLdrb, List.lookup, regIndex_armRegName,
+          Ode.sumList, hnum, hmodN, hea_nat, hall, a, val, st', st1, st0]
+  have hread' : gs.mem.canRead (BitVec.ofNat 64 a) 4 = true := by rwa [← hea_bv]
+  have hv : ((((gs.mem.read32 (BitVec.ofNat 64 a)).zeroExtend 64).truncate 32).zeroExtend 64).toNat = val := by
+    have hr := read32_eq_load hA hfit
+    have hlt := (gs.mem.read32 (BitVec.ofNat 64 a)).isLt
+    simp only [BitVec.toNat_setWidth]
+    rw [Nat.mod_eq_of_lt (show (gs.mem.read32 (BitVec.ofNat 64 a)).toNat < 2 ^ 64 by omega), hr,
+        Nat.mod_eq_of_lt (show Ode.load st.mem a 4 % 2 ^ 32 < 2 ^ 64 by omega)]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.ldr .W32 .W32 false (.gpr (BitVec.ofNat 5 d.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 4)))) gs =
+      (gs.writeReg64 (.gpr (BitVec.ofNat 5 d.val)) ((((gs.mem.read32 (BitVec.ofNat 64 a)).zeroExtend 64).truncate 32).zeroExtend 64)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execLdr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.MemWidth.bytes, Arm64.Memory.readSized,
+          Arm64.State.writeReg, hea_bv, a, hread']
+  refine ⟨_, st', decode_ldr32 d b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]; exact agreeState_writeGpr hA d _ val hv _ _ hnext hpc
+
+theorem decode_str32 (s b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeStr32 s b n) =
+      some (.str .W32 (.gpr (BitVec.ofNat 5 s.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 4)))) := by
+  have hs : s.val < 2 ^ 5 := by omega
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeStr32 s b n &&& 0xffc00000#32 = 0xb9000000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hs (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeStr32; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_ldstImm hf (by decide) ⟨by decide, by decide⟩ (by decide)]
+  have ex_s : (encodeStr32 s b n).extractLsb' 0 5 = BitVec.ofNat 5 s.val := by
+    unfold encodeStr32; simp only [extract_or]
+    have h0 : (0xb9000000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 s.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeStr32 s b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeStr32; simp only [extract_or]
+    have h0 : (0xb9000000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hs (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeStr32 s b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeStr32; simp only [extract_or]
+    have h0 : (0xb9000000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hs (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeStr32 s b n).extractLsb' 30 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeStr32 s b n).extractLsb' 22 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hshift : (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 2 = BitVec.ofNat 64 (n.val * 4) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+    have := n.isLt; omega
+  simp only [ex_s, ex_b, ex_n, ex_sz, ex_opc, fromZRBits_fin31, fromSPBits_fin31, Arm64.mkLoadStoreInst, BitVec.toNat_ofNat]
+  rw [hshift]
+
+theorem agree_str32 (s b : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 4 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 4 + 4 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 4)) 4 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeStr32 s b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr32, bindStrb s b numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 4 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  have hmodN : ((n.val * 4 : Int) % (Ode.M64 : Int)).toNat = n.val * 4 := by unfold Ode.M64; have := n.isLt; omega
+  have hea_nat : (st.reg (armSlot b.val) + n.val * 4) % Ode.M64 = st.reg (armSlot b.val) + n.val * 4 :=
+    Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 4) =
+      BitVec.ofNat 64 (st.reg (armSlot b.val) + n.val * 4) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let a := st.reg (armSlot b.val) + n.val * 4
+  let val32Nat := st.reg (armSlot s.val) % 2 ^ 32
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := Ode.store st.mem a val32Nat 4 }
+  let st' : Ode.State := Ode.noted (bindStrb s b numStr) st0 (.set (.call "mem32" [.name "B", .name "N"]) (.call "low32" [.name "S"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectStr32, bindStrb s b numStr, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 4 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectStr32, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindStrb, List.lookup, regIndex_armRegName,
+          Ode.sumList, hnum, hmodN, hea_nat, hall, a, val32Nat, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 4 = true := by rwa [← hea_bv]
+  let val32 := (gs.readReg64 (.gpr (BitVec.ofNat 5 s.val))).truncate 32
+  have hv32 : val32.toNat = val32Nat := by simp [val32, val32Nat, BitVec.toNat_setWidth, hA.gpr s]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.str .W32 (.gpr (BitVec.ofNat 5 s.val)) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 4)))) gs =
+      (gs.setMem (gs.mem.write32 (BitVec.ofNat 64 a) val32)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execStr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.MemWidth.bytes, Arm64.Memory.writeSized,
+          hea_bv, a, hwrite', val32]
+  refine ⟨_, st', decode_str32 s b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  exact agreeState_setMem hA _ _ (fun addr haddr => write32_eq_store hA hfit val32 val32Nat hv32 haddr) _ _ hnext hpc
+
+theorem decode_str64_sp (s : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeStr64Sp s n) =
+      some (.str .X64 (.gpr (BitVec.ofNat 5 s.val)) (.Offset .sp (BitVec.ofNat 64 (n.val * 8)))) := by
+  have hs : s.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeStr64Sp s n &&& 0xffc003e0#32 = 0xf90003e0#32 &&& 0xffc003e0#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 s.val <<< 0) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hs (by decide)
+    simp only [BitVec.shiftLeft_zero] at h2
+    unfold encodeStr64Sp; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+  rw [decode_at_ldstImm hf (by decide) ⟨by decide, by decide⟩ (by decide)]
+  have ex_s : (encodeStr64Sp s n).extractLsb' 0 5 = BitVec.ofNat 5 s.val := by
+    unfold encodeStr64Sp; simp only [extract_or]
+    have h0 : (0xf90003e0#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 s.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_n : (encodeStr64Sp s n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeStr64Sp; simp only [extract_or]
+    have h0 : (0xf90003e0#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 s.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hs (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_b : (encodeStr64Sp s n).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_sz : (encodeStr64Sp s n).extractLsb' 30 2 = 3#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeStr64Sp s n).extractLsb' 22 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hshift : (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 3 = BitVec.ofNat 64 (n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+    have := n.isLt; omega
+  simp only [ex_s, ex_b, ex_n, ex_sz, ex_opc, fromZRBits_fin31, Arm64.mkLoadStoreInst, BitVec.toNat_ofNat]
+  rw [hshift]; rfl
+
+theorem agree_str64_sp_fault (s : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 8 : Int))
+    (hmis : st.reg Ode.RSP % 16 ≠ 0) :
+    ∃ ginst,
+      Arm64.decode (encodeStr64Sp s n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr64Sp, bindStr64Sp s numStr, next⟩ u st = none ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).status = .Exception "SP alignment fault" := by
+  have hsp : gs.spAligned = false := by rw [spAligned_iff hA]; exact decide_eq_false hmis
+  refine ⟨_, decode_str64_sp s n, ?_, ?_⟩
+  · simp [Ode.exec, Ode.execAll, effectStr64Sp, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize,
+          Ode.prim, Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindStr64Sp, List.lookup,
+          regIndex_armRegName, regIndex_sp, hnum, hmis]
+  · simp [Arm64.execInstWithSvc, Arm64.execStr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.State.setStatus, hsp]
+
+theorem agree_str64_sp (s : Fin 31) (n : Fin 4096) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hnum : Ode.readInt numStr = some (n.val * 8 : Int))
+    (hal : st.reg Ode.RSP % 16 = 0)
+    (hfit : st.reg Ode.RSP + n.val * 8 + 8 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.sp + BitVec.ofNat 64 (n.val * 8)) 8 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeStr64Sp s n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr64Sp, bindStr64Sp s numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hsp : gs.spAligned = true := by rw [spAligned_iff hA]; exact decide_eq_true hal
+  have hnlt : n.val * 8 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  have hmodN : ((n.val * 8 : Int) % (Ode.M64 : Int)).toNat = n.val * 8 := by unfold Ode.M64; have := n.isLt; omega
+  have hea_nat : (st.reg Ode.RSP + n.val * 8) % Ode.M64 = st.reg Ode.RSP + n.val * 8 :=
+    Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.sp + BitVec.ofNat 64 (n.val * 8) = BitVec.ofNat 64 (st.reg Ode.RSP + n.val * 8) := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.sp]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let a := st.reg Ode.RSP + n.val * 8
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := Ode.store st.mem a (st.reg (armSlot s.val)) 8 }
+  let st' : Ode.State := Ode.noted (bindStr64Sp s numStr) st0 (.set (.call "mem64" [.call "on16" [.name "sp"], .name "N"]) (.name "S")) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectStr64Sp, bindStr64Sp s numStr, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 8 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectStr64Sp, Ode.execStmt, Ode.isUnknown, Ode.value, Ode.values, Ode.memSize, Ode.prim,
+          Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, bindStr64Sp, List.lookup, regIndex_armRegName, regIndex_sp,
+          Ode.sumList, hnum, hmodN, hal, hea_nat, hall, a, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 8 = true := by rwa [← hea_bv]
+  let val64 := gs.readReg64 (.gpr (BitVec.ofNat 5 s.val))
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.str .X64 (.gpr (BitVec.ofNat 5 s.val)) (.Offset .sp (BitVec.ofNat 64 (n.val * 8)))) gs =
+      (gs.setMem (gs.mem.write64 (BitVec.ofNat 64 a) val64)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.execStr, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.State.readReg64, Arm64.MemWidth.bytes,
+          Arm64.Memory.writeSized, hsp, hea_bv, a, hwrite', val64]
+  refine ⟨_, st', decode_str64_sp s n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  exact agreeState_setMem hA _ _ (fun addr haddr => write64_eq_store hA hfit val64 _ (hA.gpr s) haddr) _ _ hnext hpc
+
+/-! ## Rows 29 & 30: `bl` (`call I link x30`) and `ret` (`return x30`) -/
+
+def encodeBl (imm26 : BitVec 26) : BitVec 32 := 0x94000000#32 ||| BitVec.ofNat 32 imm26.toNat
+def encodeRet : BitVec 32 := 0xd65f03c0#32
+
+def effectBl : List Ode.Stmt := [.callLink (.name "I") "x30"]
+def effectRet : List Ode.Stmt := [.retLink "x30"]
+
+theorem encodeBl_fixed (imm26 : BitVec 26) :
+    encodeBl imm26 &&& 0xfc000000#32 = 0x94000000#32 &&& 0xfc000000#32 := by
+  have hi : imm26.toNat < 2 ^ 26 := imm26.isLt
+  have h1 : (BitVec.ofNat 32 imm26.toNat <<< 0) &&& 0xfc000000#32 = 0#32 := field_and_eq_zero hi (by decide)
+  simp only [BitVec.shiftLeft_zero] at h1
+  unfold encodeBl; simp only [BitVec.and_or_distrib_right, h1, BitVec.or_zero]
+
+theorem decode_bl (imm26 : BitVec 26) :
+    Arm64.decode (encodeBl imm26) = some (.bl ((imm26.signExtend 64) <<< 2)) := by
+  have hf := encodeBl_fixed imm26
+  have ex_i : (encodeBl imm26).extractLsb' 0 26 = imm26 := by
+    unfold encodeBl; simp only [extract_or]
+    have h0 : (0x94000000#32).extractLsb' 0 26 = 0#26 := by decide
+    have h1 : (BitVec.ofNat 32 imm26.toNat <<< 0).extractLsb' 0 26 = BitVec.ofNat 26 imm26.toNat := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h1; rw [h0, h1]; simp
+  have h31 : (encodeBl imm26).getLsbD 31 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hf (c := 0xd503201f#32) (by decide), h31, ex_i,
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4000001#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffe0001f#32) (c := 0xd4200000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xfffff01f#32) (c := 0xd503201f#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffff0000#32) (c := 0x00000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0xffffffe0#32) (c := 0xd50b7420#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f000000#32) (c := 0x10000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f800000#32) (c := 0x11000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f800000#32) (c := 0x12000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f800000#32) (c := 0x12800000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x1f800000#32) (c := 0x13000000#32) (by decide),
+             mask_ne_of_fixed hf (m := 0x7f800000#32) (c := 0x13800000#32) (by decide),
+             mask_of_fixed hf (m := 0x7c000000#32) (by decide),
+             Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+  rfl
+
+theorem agree_bl (imm26 : BitVec 26) (prog callee : Ode.Program) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64)
+    (htarget : callee.base = (gs.pc + ((imm26.signExtend 64) <<< 2)).toNat) :
+    let instr : Ode.Instr := ⟨effectBl, [("I", callee.name)], next⟩
+    ∃ ginst,
+      Arm64.decode (encodeBl imm26) = some ginst ∧
+      Ode.callTarget instr = some callee.name ∧
+      AgreeState (Ode.afterCall prog callee instr st) (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  intro instr
+  have hidx30 : Ode.regIndex "x30" = some (armSlot 30) := by decide
+  have hlink : Ode.callLink instr = some (armSlot 30) := by simp [instr, Ode.callLink, effectBl, hidx30]
+  have htgt : Ode.callTarget instr = some callee.name := by simp [instr, Ode.callTarget, effectBl, List.lookup, hidx30]
+  refine ⟨.bl ((imm26.signExtend 64) <<< 2), decode_bl imm26, htgt, ?_, rfl⟩
+  rw [Ode.afterCall_link hlink]
+  refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro k
+    simp only [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.State.readReg64,
+               Arm64.RegFile.read, Arm64.RegFile.write, toNat_ofNat5_ne31, Bool.false_eq_true, ↓reduceIte]
+    by_cases hk : k = ⟨30, by decide⟩
+    · subst hk
+      change (if (30#5 : BitVec 5) = 30#5 then gs.pc + 4#64 else gs.regs.regs 30#5).toNat = (prog.base + next) % Ode.M64
+      simp only [↓reduceIte, BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext]
+      have : 4 % 2 ^ 64 = 4 := by decide
+      unfold Ode.M64 at hpc ⊢; rw [this, Nat.mod_eq_of_lt hpc]
+    · have hne5 : BitVec.ofNat 5 k.val ≠ 30#5 := fun e => hk (ofNat5_inj (a := k) (b := ⟨30, by decide⟩) e)
+      have hnes : armSlot k.val ≠ armSlot 30 := fun e => hk (armSlot_inj k ⟨30, by decide⟩ e)
+      simp only [hnes, ↓reduceIte]
+      change (if BitVec.ofNat 5 k.val = 30#5 then gs.pc + 4#64 else gs.regs.regs (BitVec.ofNat 5 k.val)).toNat = st.reg (armSlot k.val)
+      simp only [hne5, ↓reduceIte]
+      have hgk := hA.gpr k
+      simpa [Arm64.State.readReg64, Arm64.RegFile.read, toNat_ofNat5_ne31] using hgk
+  · simpa [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.Reg.lr,
+           (armSlot_ne_rsp ⟨30, by decide⟩).symm] using hA.sp
+  · intro v j; simpa [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.Reg.lr, Arm64.State.readVReg128] using hA.vec v j
+  · intro a ha; simpa [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.Reg.lr] using hA.mem a ha
+  · simp [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, htarget]
+  · simpa [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.Reg.lr] using hA.zf
+  · simpa [Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.writeReg64, Arm64.Reg.lr] using hA.cf
+
+theorem decode_ret : Arm64.decode encodeRet = some (.ret (.gpr 30#5)) := by decide
+
+theorem agree_ret (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) :
+    ∃ ginst st',
+      Arm64.decode encodeRet = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectRet, [], next⟩ u st = some (.returned st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st' : Ode.State := { st0 with rip := st.reg (armSlot 30) }
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectRet, [], next⟩ u st = some (.returned st') := by
+    have hidx : Ode.regIndex "x30" = some (armSlot 30) := by decide
+    simp [Ode.exec, Ode.execAll, effectRet, hidx, st', st0]
+  refine ⟨.ret (.gpr 30#5), st', decode_ret, hexec, ?_, rfl⟩
+  refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro k; simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.readReg64] using hA.gpr k
+  · simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC] using hA.sp
+  · intro v j; simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC, Arm64.State.readVReg128] using hA.vec v j
+  · intro a ha; simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC] using hA.mem a ha
+  · simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC] using hA.gpr ⟨30, by decide⟩
+  · simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC] using hA.zf
+  · simpa [st', st0, Arm64.execInstWithSvc, Arm64.State.setPC] using hA.cf
+
+/-! ## Shared helpers for rows 31–36 (remaining NEON vector operations) -/
+
+theorem agreeState_writeVec {prog : Ode.Program} {st : Ode.State} {gs : Arm64.State} {next : Nat}
+    (hA : AgreeState st gs) (x : Fin 32) (v : BitVec 128) (lanes : List Nat) (u0 : Nat)
+    (hlanes : ∀ j : Fin 4, (v.extractLsb' (32 * j.val) 32).toNat = lanes.getD j.val 0)
+    (bind : Ode.Bind) (stmt : Ode.Stmt)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+    let st1 : Ode.State := Ode.setVec st0 x.val lanes u0
+    let st' : Ode.State := Ode.noted bind st0 stmt st1
+    AgreeState st' ((gs.writeVReg128 (BitVec.ofNat 5 x.val) v).advancePC) := by
+  intro st0 st1 st'
+  refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro k; simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Arm64.State.readReg64,
+                    Ode.setVec, Ode.noted] using hA.gpr k
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Ode.setVec, Ode.noted] using hA.sp
+  · intro vec j
+    simp only [st', st1, st0, Arm64.State.advancePC, Arm64.State.readVReg128, Arm64.State.writeVReg128,
+               Arm64.VRegFile.read, Arm64.VRegFile.write, Ode.setVec, Ode.noted]
+    by_cases hvx : vec = x
+    · subst hvx
+      simp only [↓reduceIte, j.isLt]
+      exact hlanes j
+    · have hne5 : BitVec.ofNat 5 vec.val ≠ BitVec.ofNat 5 x.val := fun e => hvx (ofNat5_inj32 e)
+      have hnev : vec.val ≠ x.val := fun e => hvx (Fin.ext e)
+      simp only [hne5, hnev, ↓reduceIte]
+      exact hA.vec vec j
+  · intro a ha; simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Ode.setVec, Ode.noted] using hA.mem a ha
+  · simp only [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Ode.setVec, Ode.noted,
+               BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext]
+    have : 4 % 2 ^ 64 = 4 := by decide
+    unfold Ode.M64 at hpc; rw [this, Nat.mod_eq_of_lt hpc]
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Ode.setVec, Ode.noted] using hA.zf
+  · simpa [st', st1, st0, Arm64.State.advancePC, Arm64.State.writeVReg128, Ode.setVec, Ode.noted] using hA.cf
+
+theorem mask32_getLsbD (i : Nat) :
+    (((1#128 <<< 32) - 1#128 : BitVec 128)).getLsbD i = decide (i < 32) := by
+  have hm : ((1#128 <<< 32) - 1#128 : BitVec 128) = BitVec.ofNat 128 (2 ^ 32 - 1) := by decide
+  rw [hm, BitVec.getLsbD_ofNat]
+  by_cases hi : i < 128
+  · simp only [hi, decide_true, Bool.true_and, Nat.testBit_two_pow_sub_one]
+  · simp [hi, show ¬(i < 32) by omega]
+
+theorem lane_pack4_extract (a0 a1 a2 a3 : BitVec 128) :
+    let m : BitVec 128 := (1#128 <<< 32) - 1#128
+    let v : BitVec 128 := (((0#128 ||| (a0 &&& m) <<< 0) ||| (a1 &&& m) <<< 32) ||| (a2 &&& m) <<< 64) ||| (a3 &&& m) <<< 96
+    v.extractLsb' 0 32 = a0.truncate 32 ∧
+    v.extractLsb' 32 32 = a1.truncate 32 ∧
+    v.extractLsb' 64 32 = a2.truncate 32 ∧
+    v.extractLsb' 96 32 = a3.truncate 32 := by
+  intro m v
+  have hm : ∀ k, m.getLsbD k = decide (k < 32) := mask32_getLsbD
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · apply BitVec.eq_of_getLsbD_eq; intro i hi
+    simp only [v, BitVec.getLsbD_extractLsb', BitVec.getLsbD_or, BitVec.getLsbD_shiftLeft,
+               BitVec.getLsbD_and, BitVec.getLsbD_setWidth, BitVec.getLsbD_zero, hm, hi,
+               Nat.zero_add, Nat.sub_zero, decide_true, Bool.true_and, Bool.and_true, Bool.false_or,
+               show i < 128 by omega, show ¬(i < 0) by omega, show i < 64 by omega, show i < 96 by omega,
+               decide_false, Bool.not_false, Bool.not_true, Bool.and_false, Bool.false_and, Bool.or_false]
+  · apply BitVec.eq_of_getLsbD_eq; intro i hi
+    simp only [v, BitVec.getLsbD_extractLsb', BitVec.getLsbD_or, BitVec.getLsbD_shiftLeft,
+               BitVec.getLsbD_and, BitVec.getLsbD_setWidth, BitVec.getLsbD_zero, hm, hi,
+               Nat.sub_zero, decide_true, Bool.true_and, Bool.and_true, Bool.false_or,
+               show 32 + i < 128 by omega, show ¬(32 + i < 32) by omega, show 32 + i < 64 by omega,
+               show 32 + i < 96 by omega, show 32 + i - 32 = i by omega,
+               decide_false, Bool.not_false, Bool.not_true, Bool.and_false, Bool.false_and, Bool.or_false]
+  · apply BitVec.eq_of_getLsbD_eq; intro i hi
+    simp only [v, BitVec.getLsbD_extractLsb', BitVec.getLsbD_or, BitVec.getLsbD_shiftLeft,
+               BitVec.getLsbD_and, BitVec.getLsbD_setWidth, BitVec.getLsbD_zero, hm, hi,
+               Nat.sub_zero, decide_true, Bool.true_and, Bool.and_true, Bool.false_or,
+               show 64 + i < 128 by omega, show ¬(64 + i < 32) by omega, show ¬(64 + i < 64) by omega,
+               show 64 + i < 96 by omega, show ¬(64 + i - 32 < 32) by omega, show 64 + i - 64 = i by omega,
+               decide_false, Bool.not_false, Bool.not_true, Bool.and_false, Bool.false_and, Bool.or_false]
+  · apply BitVec.eq_of_getLsbD_eq; intro i hi
+    simp only [v, BitVec.getLsbD_extractLsb', BitVec.getLsbD_or, BitVec.getLsbD_shiftLeft,
+               BitVec.getLsbD_and, BitVec.getLsbD_setWidth, BitVec.getLsbD_zero, hm, hi,
+               Nat.sub_zero, decide_true, Bool.true_and, Bool.and_true, Bool.false_or,
+               show 96 + i < 128 by omega, show ¬(96 + i < 32) by omega, show ¬(96 + i < 64) by omega,
+               show ¬(96 + i < 96) by omega, show ¬(96 + i - 32 < 32) by omega, show ¬(96 + i - 64 < 32) by omega,
+               show 96 + i - 96 = i by omega,
+               decide_false, Bool.not_false, Bool.and_false, Bool.or_false]
+
+theorem lane_slice_toNat (v : BitVec 128) (j : Fin 4) :
+    (((v >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)).toNat) = (v.extractLsb' (32 * j.val) 32).toNat := by
+  have heq : (v >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128) = (v.extractLsb' (32 * j.val) 32).zeroExtend 128 := by
+    apply BitVec.eq_of_getLsbD_eq; intro i hi
+    rw [BitVec.getLsbD_and, BitVec.getLsbD_ushiftRight, mask32_getLsbD, BitVec.getLsbD_setWidth, BitVec.getLsbD_extractLsb']
+    by_cases h32 : i < 32
+    · simp [h32, hi, Nat.mul_comm, Nat.add_comm]
+    · simp [h32]
+  rw [heq, BitVec.toNat_setWidth]
+  have := (v.extractLsb' (32 * j.val) 32).isLt
+  exact Nat.mod_eq_of_lt (by omega)
+
+theorem zipSimdLanes_4s_unfold (vn vm : BitVec 128) (f : BitVec 128 → BitVec 128 → BitVec 128) :
+    let m : BitVec 128 := (1#128 <<< 32) - 1#128
+    let out (k : Nat) := f ((vn >>> (k * 32)) &&& m) ((vm >>> (k * 32)) &&& m) &&& m
+    Arm64.zipSimdLanes true 32 vn vm f =
+      (((0#128 ||| out 0 <<< 0) ||| out 1 <<< 32) ||| out 2 <<< 64) ||| out 3 <<< 96 := by
+  simp [Arm64.zipSimdLanes, List.range', List.foldl]
+
+theorem mapSimdLanes_4s_unfold (vn : BitVec 128) (f : BitVec 128 → BitVec 128) :
+    let m : BitVec 128 := (1#128 <<< 32) - 1#128
+    let out (k : Nat) := f ((vn >>> (k * 32)) &&& m) &&& m
+    Arm64.mapSimdLanes true 32 vn f =
+      (((0#128 ||| out 0 <<< 0) ||| out 1 <<< 32) ||| out 2 <<< 64) ||| out 3 <<< 96 := by
+  simp [Arm64.mapSimdLanes, List.range', List.foldl]
+
+/-! ## Row 31: `orr_v` (`orr vX.16b, vY.16b, vZ.16b | .orr X Y Z | X = each32(or32, Y, Z)`) -/
+
+def encodeOrrV (x y z : Fin 32) : BitVec 32 :=
+  0x4ea01c00#32 ||| (BitVec.ofNat 32 z.val <<< 16) ||| (BitVec.ofNat 32 y.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def effectOrrV : List Ode.Stmt :=
+  [.vset (.name "X") (.call "each32" [.name "or32", .name "Y", .name "Z"])]
+
+theorem decode_orr_v (x y z : Fin 32) :
+    Arm64.decode (encodeOrrV x y z) =
+      some (.simdThreeSame true false 2#2 (BitVec.ofNat 5 z.val) 3#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hy : y.val < 2 ^ 5 := y.isLt; have hz : z.val < 2 ^ 5 := z.isLt
+  have hf : encodeOrrV x y z &&& 0xffe0fc00#32 = 0x4ea01c00#32 &&& 0xffe0fc00#32 := by
+    have h1 : (BitVec.ofNat 32 z.val <<< 16) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hz (by decide)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hy (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeOrrV; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdThreeSame hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeOrrV x y z).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeOrrV; simp only [extract_or]
+    have h0 : (0x4ea01c00#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 0 5 = 0#5 := extract_field_miss hz (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_y : (encodeOrrV x y z).extractLsb' 5 5 = BitVec.ofNat 5 y.val := by
+    unfold encodeOrrV; simp only [extract_or]
+    have h0 : (0x4ea01c00#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 5 5 = 0#5 := extract_field_miss hz (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 y.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_z : (encodeOrrV x y z).extractLsb' 16 5 = BitVec.ofNat 5 z.val := by
+    unfold encodeOrrV; simp only [extract_or]
+    have h0 : (0x4ea01c00#32).extractLsb' 16 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 16 5 = BitVec.ofNat 5 z.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 16 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 16 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have hq : (encodeOrrV x y z).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hu : (encodeOrrV x y z).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hsz : (encodeOrrV x y z).extractLsb' 22 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hopc : (encodeOrrV x y z).extractLsb' 11 5 = 3#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hq, hu, hsz, hopc, ex_x, ex_y, ex_z]
+
+theorem agree_orr_v (x y z : Fin 32) (bind : Ode.Bind) (prog : Ode.Program) (u : Nat → Nat)
+    (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hby : Ode.vecOf bind "Y" = some y.val) (hbz : Ode.vecOf bind "Z" = some z.val)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeOrrV x y z) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectOrrV, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  let lanes : List Nat := [st.vec y.val 0 ||| st.vec z.val 0, st.vec y.val 1 ||| st.vec z.val 1,
+                           st.vec y.val 2 ||| st.vec z.val 2, st.vec y.val 3 ||| st.vec z.val 3]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "each32" [.name "or32", .name "Y", .name "Z"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectOrrV, bind, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectOrrV, Ode.execStmt, Ode.lanesOf, Ode.vecArg,
+          hbx, hby, hbz, Ode.prim32, List.range, List.range.loop, List.mapM, List.mapM.loop, lanes, st', st1, st0]
+  let vn := gs.readVReg128 (BitVec.ofNat 5 y.val)
+  let vm := gs.readVReg128 (BitVec.ofNat 5 z.val)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdThreeSame true false 2#2 (BitVec.ofNat 5 z.val) 3#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) (vn ||| vm)).advancePC := by
+    simp [Arm64.execInstWithSvc, vn, vm]
+  refine ⟨_, st', decode_orr_v x y z, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x (vn ||| vm) lanes (u 0) ?_ _ _ hnext hpc
+  intro j
+  have hex : (vn ||| vm).extractLsb' (32 * j.val) 32 = vn.extractLsb' (32 * j.val) 32 ||| vm.extractLsb' (32 * j.val) 32 := by
+    apply BitVec.eq_of_getLsbD_eq; intro i hi
+    simp [BitVec.getLsbD_or, hi]
+  rw [hex, BitVec.toNat_or, hA.vec y j, hA.vec z j]
+  match j with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
+  | ⟨2, _⟩ => rfl
+  | ⟨3, _⟩ => rfl
+
+/-! ## Row 32: `add_4s` (`add vX.4s, vY.4s, vZ.4s | .add4s X Y Z | X = each32(add32, Y, Z)`) -/
+
+def encodeAdd4s (x y z : Fin 32) : BitVec 32 :=
+  0x4ea08400#32 ||| (BitVec.ofNat 32 z.val <<< 16) ||| (BitVec.ofNat 32 y.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def effectAdd4s : List Ode.Stmt :=
+  [.vset (.name "X") (.call "each32" [.name "add32", .name "Y", .name "Z"])]
+
+theorem decode_add_4s (x y z : Fin 32) :
+    Arm64.decode (encodeAdd4s x y z) =
+      some (.simdThreeSame true false 2#2 (BitVec.ofNat 5 z.val) 16#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hy : y.val < 2 ^ 5 := y.isLt; have hz : z.val < 2 ^ 5 := z.isLt
+  have hf : encodeAdd4s x y z &&& 0xffe0fc00#32 = 0x4ea08400#32 &&& 0xffe0fc00#32 := by
+    have h1 : (BitVec.ofNat 32 z.val <<< 16) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hz (by decide)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hy (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeAdd4s; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdThreeSame hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeAdd4s x y z).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeAdd4s; simp only [extract_or]
+    have h0 : (0x4ea08400#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 0 5 = 0#5 := extract_field_miss hz (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_y : (encodeAdd4s x y z).extractLsb' 5 5 = BitVec.ofNat 5 y.val := by
+    unfold encodeAdd4s; simp only [extract_or]
+    have h0 : (0x4ea08400#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 5 5 = 0#5 := extract_field_miss hz (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 y.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_z : (encodeAdd4s x y z).extractLsb' 16 5 = BitVec.ofNat 5 z.val := by
+    unfold encodeAdd4s; simp only [extract_or]
+    have h0 : (0x4ea08400#32).extractLsb' 16 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 z.val <<< 16).extractLsb' 16 5 = BitVec.ofNat 5 z.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 16 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 16 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have hq : (encodeAdd4s x y z).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hu : (encodeAdd4s x y z).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hsz : (encodeAdd4s x y z).extractLsb' 22 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hopc : (encodeAdd4s x y z).extractLsb' 11 5 = 16#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hq, hu, hsz, hopc, ex_x, ex_y, ex_z]
+
+theorem agree_add_4s (x y z : Fin 32) (bind : Ode.Bind) (prog : Ode.Program) (u : Nat → Nat)
+    (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hby : Ode.vecOf bind "Y" = some y.val) (hbz : Ode.vecOf bind "Z" = some z.val)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeAdd4s x y z) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectAdd4s, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  let lanes : List Nat := [(st.vec y.val 0 + st.vec z.val 0) % Ode.W32, (st.vec y.val 1 + st.vec z.val 1) % Ode.W32,
+                           (st.vec y.val 2 + st.vec z.val 2) % Ode.W32, (st.vec y.val 3 + st.vec z.val 3) % Ode.W32]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "each32" [.name "add32", .name "Y", .name "Z"])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectAdd4s, bind, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectAdd4s, Ode.execStmt, Ode.lanesOf, Ode.vecArg,
+          hbx, hby, hbz, Ode.prim32, List.range, List.range.loop, List.mapM, List.mapM.loop, lanes, st', st1, st0]
+  let vn := gs.readVReg128 (BitVec.ofNat 5 y.val)
+  let vm := gs.readVReg128 (BitVec.ofNat 5 z.val)
+  let res := Arm64.zipSimdLanes true 32 vn vm (fun a b => a + b)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdThreeSame true false 2#2 (BitVec.ofNat 5 z.val) 16#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) res).advancePC := by
+    simp [Arm64.execInstWithSvc, vn, vm, res]
+  refine ⟨_, st', decode_add_4s x y z, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x res lanes (u 0) ?_ _ _ hnext hpc
+  have hunf := zipSimdLanes_4s_unfold vn vm (fun a b => a + b)
+  have hpack := lane_pack4_extract
+    (((vn >>> (0 * 32)) &&& ((1#128 <<< 32) - 1#128)) + ((vm >>> (0 * 32)) &&& ((1#128 <<< 32) - 1#128)))
+    (((vn >>> (1 * 32)) &&& ((1#128 <<< 32) - 1#128)) + ((vm >>> (1 * 32)) &&& ((1#128 <<< 32) - 1#128)))
+    (((vn >>> (2 * 32)) &&& ((1#128 <<< 32) - 1#128)) + ((vm >>> (2 * 32)) &&& ((1#128 <<< 32) - 1#128)))
+    (((vn >>> (3 * 32)) &&& ((1#128 <<< 32) - 1#128)) + ((vm >>> (3 * 32)) &&& ((1#128 <<< 32) - 1#128)))
+  have hlane : ∀ j : Fin 4,
+      ((((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)) +
+        ((vm >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128))).truncate 32).toNat =
+      (st.vec y.val j.val + st.vec z.val j.val) % Ode.W32 := by
+    intro j
+    have hyj : ((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)).toNat = st.vec y.val j.val := by
+      rw [lane_slice_toNat vn j]; exact hA.vec y j
+    have hzj : ((vm >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)).toNat = st.vec z.val j.val := by
+      rw [lane_slice_toNat vm j]; exact hA.vec z j
+    have hyLt : st.vec y.val j.val < 2 ^ 32 := by rw [← hA.vec y j]; exact (vn.extractLsb' (32 * j.val) 32).isLt
+    have hzLt : st.vec z.val j.val < 2 ^ 32 := by rw [← hA.vec z j]; exact (vm.extractLsb' (32 * j.val) 32).isLt
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_add, hyj, hzj]
+    rw [Nat.mod_eq_of_lt (show st.vec y.val j.val + st.vec z.val j.val < 2 ^ 128 by omega)]
+    rfl
+  intro j
+  change (res.extractLsb' (32 * j.val) 32).toNat = _
+  rw [show res = _ from hunf]
+  match j with
+  | ⟨0, _⟩ => change ((_ : BitVec 128).extractLsb' 0 32).toNat = _; rw [hpack.1]; exact hlane ⟨0, by decide⟩
+  | ⟨1, _⟩ => change ((_ : BitVec 128).extractLsb' 32 32).toNat = _; rw [hpack.2.1]; exact hlane ⟨1, by decide⟩
+  | ⟨2, _⟩ => change ((_ : BitVec 128).extractLsb' 64 32).toNat = _; rw [hpack.2.2.1]; exact hlane ⟨2, by decide⟩
+  | ⟨3, _⟩ => change ((_ : BitVec 128).extractLsb' 96 32).toNat = _; rw [hpack.2.2.2]; exact hlane ⟨3, by decide⟩
+
+/-! ## Rows 33 & 34: `ushr_4s` (`each32(shr32, Y, I)`) and `shl_4s` (`each32(shl32, Y, I)`) -/
+
+def guardsBeforeSimdImmShift : List (BitVec 32 × BitVec 32) :=
+  guardsBeforeSimdThreeSame.take 59
+
+theorem decode_at_simdImmShift {w base fixed : BitVec 32}
+    (hw : w &&& fixed = base &&& fixed)
+    (hnop : ((base &&& fixed) == (0xd503201f#32 &&& fixed)) = false)
+    (hskip : skipsAll base fixed guardsBeforeSimdImmShift = true)
+    (hmatch : (0x9f800400#32 &&& fixed = 0x9f800400#32) ∧ (base &&& 0x9f800400#32 = 0x0f000400#32)) :
+    Arm64.decode w =
+      some (.simdImmShift (w.getLsbD 30) (w.getLsbD 29) (w.extractLsb' 19 4) (w.extractLsb' 16 3)
+        (w.extractLsb' 11 5) (w.extractLsb' 5 5) (w.extractLsb' 0 5)) := by
+  have sk : ∀ m c, (m, c) ∈ guardsBeforeSimdImmShift → ((w &&& m) == c) = false :=
+    fun m c hm => skipsAll_mem hw hskip hm
+  have hhit : w &&& 0x9f800400#32 = 0x0f000400#32 := by rw [mask_of_fixed hw hmatch.1, hmatch.2]
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hw hnop,
+             sk 0xffe0001f#32 0xd4000001#32 (by decide), sk 0xffe0001f#32 0xd4200000#32 (by decide),
+             sk 0xfffff01f#32 0xd503201f#32 (by decide), sk 0xffff0000#32 0x00000000#32 (by decide),
+             sk 0xffffffe0#32 0xd50b7420#32 (by decide), sk 0x1f000000#32 0x10000000#32 (by decide),
+             sk 0x1f800000#32 0x11000000#32 (by decide), sk 0x1f800000#32 0x12000000#32 (by decide),
+             sk 0x1f800000#32 0x12800000#32 (by decide), sk 0x1f800000#32 0x13000000#32 (by decide),
+             sk 0x7f800000#32 0x13800000#32 (by decide), sk 0x7c000000#32 0x14000000#32 (by decide),
+             sk 0x7e000000#32 0x34000000#32 (by decide), sk 0x7e000000#32 0x36000000#32 (by decide),
+             sk 0xff000010#32 0x54000000#32 (by decide), sk 0xff9ffc1f#32 0xd61f0000#32 (by decide),
+             sk 0x1f000000#32 0x0a000000#32 (by decide), sk 0x1f200000#32 0x0b000000#32 (by decide),
+             sk 0x1fe00000#32 0x0b200000#32 (by decide), sk 0x1fe0fc00#32 0x1a000000#32 (by decide),
+             sk 0x3fe00410#32 0x3a400000#32 (by decide), sk 0x3fe00800#32 0x1a800000#32 (by decide),
+             sk 0x7fff0000#32 0x5ac00000#32 (by decide), sk 0x7fe0e000#32 0x1ac04000#32 (by decide),
+             sk 0x7fe00000#32 0x1ac00000#32 (by decide), sk 0x7f000000#32 0x1b000000#32 (by decide),
+             sk 0x7f800000#32 0x28000000#32 (by decide), sk 0x3e000000#32 0x28000000#32 (by decide),
+             sk 0xffc00000#32 0xf9800000#32 (by decide), sk 0xffe00c00#32 0xf8800000#32 (by decide),
+             sk 0xffe00c00#32 0xf8a00800#32 (by decide), sk 0x3f200c00#32 0x38200000#32 (by decide),
+             sk 0x3f200c00#32 0x19000000#32 (by decide), sk 0x3f000000#32 0x39000000#32 (by decide),
+             sk 0x3f000000#32 0x38000000#32 (by decide), sk 0x3f000000#32 0x18000000#32 (by decide),
+             sk 0x3f000000#32 0x1c000000#32 (by decide), sk 0x3fbffc00#32 0x089ffc00#32 (by decide),
+             sk 0x3fff7c00#32 0x085f7c00#32 (by decide), sk 0x3fe07c00#32 0x08007c00#32 (by decide),
+             sk 0xbfff0000#32 0x887f0000#32 (by decide), sk 0xbfe00000#32 0x88200000#32 (by decide),
+             sk 0x3fa07c00#32 0x08a07c00#32 (by decide), sk 0xbfa07c00#32 0x08207c00#32 (by decide),
+             sk 0xffd00000#32 0xd5100000#32 (by decide), sk 0xfffff01f#32 0xd503301f#32 (by decide),
+             sk 0x3f800000#32 0x2c000000#32 (by decide), sk 0x3e000000#32 0x2c000000#32 (by decide),
+             sk 0x3f000000#32 0x3d000000#32 (by decide), sk 0x3f000000#32 0x3c000000#32 (by decide),
+             sk 0xbfbf0000#32 0x0c000000#32 (by decide), sk 0xbfa00000#32 0x0c800000#32 (by decide),
+             sk 0xbffff000#32 0x0d40c000#32 (by decide), sk 0xbfe0f000#32 0x0dc0c000#32 (by decide),
+             sk 0xbfe00000#32 0x0d800000#32 (by decide), sk 0xbfbf0000#32 0x0d000000#32 (by decide),
+             sk 0xbfe00000#32 0x0dc00000#32 (by decide),
+             sk 0xffffcc00#32 0x4e284800#32 (by decide), sk 0x7f20fc00#32 0x1e200000#32 (by decide),
+             hhit, beq_self_eq_true, Bool.false_or, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+
+def encodeUshr4s (x y : Fin 32) (i : Fin 32) : BitVec 32 :=
+  0x6f200400#32 ||| (BitVec.ofNat 32 i.val <<< 16) ||| (BitVec.ofNat 32 y.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def encodeShl4s (x y : Fin 32) (i : Fin 32) : BitVec 32 :=
+  0x4f205400#32 ||| (BitVec.ofNat 32 i.val <<< 16) ||| (BitVec.ofNat 32 y.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def effectUshr4s : List Ode.Stmt :=
+  [.vset (.name "X") (.call "each32" [.name "shr32", .name "Y", .name "I"])]
+
+def effectShl4s : List Ode.Stmt :=
+  [.vset (.name "X") (.call "each32" [.name "shl32", .name "Y", .name "I"])]
+
+theorem immhb_of_fin32 (i : Fin 32) :
+    ((BitVec.ofNat 4 (4 + i.val / 8) ++ BitVec.ofNat 3 (i.val % 8)) : BitVec 7).toNat = 32 + i.val ∧
+    (BitVec.ofNat 4 (4 + i.val / 8) == 0#4) = false ∧
+    (BitVec.ofNat 4 (4 + i.val / 8)).getLsbD 3 = false := by
+  have hi := i.isLt
+  refine ⟨?_, ?_, ?_⟩
+  · rw [toNat_append_eq]; simp only [BitVec.toNat_ofNat]
+    rw [Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]; omega
+  · apply beq_false_of_ne; intro h
+    have ht := congrArg BitVec.toNat h; simp only [BitVec.toNat_ofNat] at ht
+    rw [Nat.mod_eq_of_lt (by omega)] at ht; omega
+  · rw [BitVec.getLsbD_ofNat]; simp only [show (3 : Nat) < 4 by decide, decide_true, Bool.true_and]
+    rw [Nat.testBit_eq_decide_div_mod_eq]; simp [show (4 + i.val / 8) / 2 ^ 3 = 0 by omega]
+
+theorem extract_immh_immb_ushr : ∀ i : Fin 32,
+    (0x6f200400#32 ||| (BitVec.ofNat 32 i.val <<< 16)).extractLsb' 19 4 = BitVec.ofNat 4 (4 + i.val / 8) ∧
+    (0x6f200400#32 ||| (BitVec.ofNat 32 i.val <<< 16)).extractLsb' 16 3 = BitVec.ofNat 3 (i.val % 8) := by decide
+
+theorem extract_immh_immb_shl : ∀ i : Fin 32,
+    (0x4f205400#32 ||| (BitVec.ofNat 32 i.val <<< 16)).extractLsb' 19 4 = BitVec.ofNat 4 (4 + i.val / 8) ∧
+    (0x4f205400#32 ||| (BitVec.ofNat 32 i.val <<< 16)).extractLsb' 16 3 = BitVec.ofNat 3 (i.val % 8) := by decide
+
+theorem decode_ushr_4s (x y i : Fin 32) :
+    Arm64.decode (encodeUshr4s x y i) =
+      some (.simdImmShift true true (BitVec.ofNat 4 (4 + i.val / 8)) (BitVec.ofNat 3 (i.val % 8))
+        0#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hy : y.val < 2 ^ 5 := y.isLt; have hi : i.val < 2 ^ 5 := i.isLt
+  have hf : encodeUshr4s x y i &&& 0xffe0fc00#32 = 0x6f200400#32 &&& 0xffe0fc00#32 := by
+    have h1 : (BitVec.ofNat 32 i.val <<< 16) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hi (by decide)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hy (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeUshr4s; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdImmShift hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeUshr4s x y i).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeUshr4s; simp only [extract_or]
+    have h0 : (0x6f200400#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 i.val <<< 16).extractLsb' 0 5 = 0#5 := extract_field_miss hi (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_y : (encodeUshr4s x y i).extractLsb' 5 5 = BitVec.ofNat 5 y.val := by
+    unfold encodeUshr4s; simp only [extract_or]
+    have h0 : (0x6f200400#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 i.val <<< 16).extractLsb' 5 5 = 0#5 := extract_field_miss hi (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 y.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_immh : (encodeUshr4s x y i).extractLsb' 19 4 = BitVec.ofNat 4 (4 + i.val / 8) := by
+    unfold encodeUshr4s; rw [extract_or, extract_or]
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 19 4 = 0#4 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 19 4 = 0#4 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [(extract_immh_immb_ushr i).1, h2, h3]; simp
+  have ex_immb : (encodeUshr4s x y i).extractLsb' 16 3 = BitVec.ofNat 3 (i.val % 8) := by
+    unfold encodeUshr4s; rw [extract_or, extract_or]
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 16 3 = 0#3 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 16 3 = 0#3 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [(extract_immh_immb_ushr i).2, h2, h3]; simp
+  have hq : (encodeUshr4s x y i).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hop : (encodeUshr4s x y i).getLsbD 29 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hopc : (encodeUshr4s x y i).extractLsb' 11 5 = 0#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hq, hop, hopc, ex_x, ex_y, ex_immh, ex_immb]
+
+theorem agree_ushr_4s (x y i : Fin 32) (numStr : String) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hby : Ode.vecOf bind "Y" = some y.val)
+    (hbi : bind.lookup "I" = some numStr) (hnum : Ode.readInt numStr = some ((32 - i.val : Nat) : Int))
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeUshr4s x y i) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectUshr4s, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hi := i.isLt
+  have hmodI : (((32 - i.val : Nat) : Int) % (Ode.M64 : Int)).toNat = 32 - i.val := by unfold Ode.M64; omega
+  let sh := 32 - i.val
+  let lanes : List Nat := [st.vec y.val 0 >>> sh, st.vec y.val 1 >>> sh,
+                           st.vec y.val 2 >>> sh, st.vec y.val 3 >>> sh]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "each32" [.name "shr32", .name "Y", .name "I"])) st1
+  have hvecI : Ode.vecOf bind "I" = none := by simp [Ode.vecOf, Ode.isVectorLetter]
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectUshr4s, bind, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectUshr4s, Ode.execStmt, Ode.lanesOf, Ode.vecArg,
+          hbx, hby, hvecI, hbi, Ode.value, Ode.isNumberLetter, hnum, hmodI, Ode.prim32,
+          List.range, List.range.loop, List.mapM, List.mapM.loop, lanes, sh, st', st1, st0]
+  have ⟨himmhb, hnz, _⟩ := immhb_of_fin32 i
+  let vn := gs.readVReg128 (BitVec.ofNat 5 y.val)
+  let res := Arm64.mapSimdLanes true 32 vn (fun lane => lane >>> sh)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdImmShift true true (BitVec.ofNat 4 (4 + i.val / 8)) (BitVec.ofNat 3 (i.val % 8))
+        0#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) res).advancePC := by
+    simp [Arm64.execInstWithSvc, hnz, himmhb, show ¬(32 + i.val ≥ 64) by omega,
+          show 32 + i.val ≥ 32 by omega, show 2 * 32 - (32 + i.val) = sh by omega, vn, res]
+  refine ⟨_, st', decode_ushr_4s x y i, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x res lanes (u 0) ?_ _ _ hnext hpc
+  have hunf := mapSimdLanes_4s_unfold vn (fun lane => lane >>> sh)
+  have hpack := lane_pack4_extract
+    (((vn >>> (0 * 32)) &&& ((1#128 <<< 32) - 1#128)) >>> sh)
+    (((vn >>> (1 * 32)) &&& ((1#128 <<< 32) - 1#128)) >>> sh)
+    (((vn >>> (2 * 32)) &&& ((1#128 <<< 32) - 1#128)) >>> sh)
+    (((vn >>> (3 * 32)) &&& ((1#128 <<< 32) - 1#128)) >>> sh)
+  have hlane : ∀ j : Fin 4,
+      ((((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)) >>> sh).truncate 32).toNat =
+      st.vec y.val j.val >>> sh := by
+    intro j
+    have hyj : ((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)).toNat = st.vec y.val j.val := by
+      rw [lane_slice_toNat vn j]; exact hA.vec y j
+    have hyLt : st.vec y.val j.val < 2 ^ 32 := by rw [← hA.vec y j]; exact (vn.extractLsb' (32 * j.val) 32).isLt
+    have hlt : st.vec y.val j.val >>> sh < 2 ^ 32 := by
+      rw [Nat.shiftRight_eq_div_pow]; exact Nat.lt_of_le_of_lt (Nat.div_le_self _ _) hyLt
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_ushiftRight, hyj]
+    exact Nat.mod_eq_of_lt hlt
+  intro j
+  change (res.extractLsb' (32 * j.val) 32).toNat = _
+  rw [show res = _ from hunf]
+  match j with
+  | ⟨0, _⟩ => change ((_ : BitVec 128).extractLsb' 0 32).toNat = _; rw [hpack.1]; exact hlane ⟨0, by decide⟩
+  | ⟨1, _⟩ => change ((_ : BitVec 128).extractLsb' 32 32).toNat = _; rw [hpack.2.1]; exact hlane ⟨1, by decide⟩
+  | ⟨2, _⟩ => change ((_ : BitVec 128).extractLsb' 64 32).toNat = _; rw [hpack.2.2.1]; exact hlane ⟨2, by decide⟩
+  | ⟨3, _⟩ => change ((_ : BitVec 128).extractLsb' 96 32).toNat = _; rw [hpack.2.2.2]; exact hlane ⟨3, by decide⟩
+
+theorem decode_shl_4s (x y i : Fin 32) :
+    Arm64.decode (encodeShl4s x y i) =
+      some (.simdImmShift true false (BitVec.ofNat 4 (4 + i.val / 8)) (BitVec.ofNat 3 (i.val % 8))
+        10#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hy : y.val < 2 ^ 5 := y.isLt; have hi : i.val < 2 ^ 5 := i.isLt
+  have hf : encodeShl4s x y i &&& 0xffe0fc00#32 = 0x4f205400#32 &&& 0xffe0fc00#32 := by
+    have h1 : (BitVec.ofNat 32 i.val <<< 16) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hi (by decide)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hy (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffe0fc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeShl4s; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdImmShift hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeShl4s x y i).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeShl4s; simp only [extract_or]
+    have h0 : (0x4f205400#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 i.val <<< 16).extractLsb' 0 5 = 0#5 := extract_field_miss hi (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_y : (encodeShl4s x y i).extractLsb' 5 5 = BitVec.ofNat 5 y.val := by
+    unfold encodeShl4s; simp only [extract_or]
+    have h0 : (0x4f205400#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 i.val <<< 16).extractLsb' 5 5 = 0#5 := extract_field_miss hi (by omega)
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 y.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_immh : (encodeShl4s x y i).extractLsb' 19 4 = BitVec.ofNat 4 (4 + i.val / 8) := by
+    unfold encodeShl4s; rw [extract_or, extract_or]
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 19 4 = 0#4 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 19 4 = 0#4 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [(extract_immh_immb_shl i).1, h2, h3]; simp
+  have ex_immb : (encodeShl4s x y i).extractLsb' 16 3 = BitVec.ofNat 3 (i.val % 8) := by
+    unfold encodeShl4s; rw [extract_or, extract_or]
+    have h2 : (BitVec.ofNat 32 y.val <<< 5).extractLsb' 16 3 = 0#3 := extract_field_miss hy (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 16 3 = 0#3 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [(extract_immh_immb_shl i).2, h2, h3]; simp
+  have hq : (encodeShl4s x y i).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hop : (encodeShl4s x y i).getLsbD 29 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hopc : (encodeShl4s x y i).extractLsb' 11 5 = 10#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hq, hop, hopc, ex_x, ex_y, ex_immh, ex_immb]
+
+theorem agree_shl_4s (x y i : Fin 32) (numStr : String) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hby : Ode.vecOf bind "Y" = some y.val)
+    (hbi : bind.lookup "I" = some numStr) (hnum : Ode.readInt numStr = some (i.val : Int))
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeShl4s x y i) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectShl4s, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hi := i.isLt
+  have hmodI : ((i.val : Int) % (Ode.M64 : Int)).toNat = i.val := by unfold Ode.M64; omega
+  let lanes : List Nat := [(st.vec y.val 0 <<< i.val) % Ode.W32, (st.vec y.val 1 <<< i.val) % Ode.W32,
+                           (st.vec y.val 2 <<< i.val) % Ode.W32, (st.vec y.val 3 <<< i.val) % Ode.W32]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "each32" [.name "shl32", .name "Y", .name "I"])) st1
+  have hvecI : Ode.vecOf bind "I" = none := by simp [Ode.vecOf, Ode.isVectorLetter]
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectShl4s, bind, next⟩ u st = some (.next st') := by
+    simp [Ode.exec, Ode.execAll, effectShl4s, Ode.execStmt, Ode.lanesOf, Ode.vecArg,
+          hbx, hby, hvecI, hbi, Ode.value, Ode.isNumberLetter, hnum, hmodI, Ode.prim32,
+          List.range, List.range.loop, List.mapM, List.mapM.loop, lanes, st', st1, st0]
+  have ⟨himmhb, hnz, _⟩ := immhb_of_fin32 i
+  let vn := gs.readVReg128 (BitVec.ofNat 5 y.val)
+  let res := Arm64.mapSimdLanes true 32 vn (fun lane => lane <<< i.val)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdImmShift true false (BitVec.ofNat 4 (4 + i.val / 8)) (BitVec.ofNat 3 (i.val % 8))
+        10#5 (BitVec.ofNat 5 y.val) (BitVec.ofNat 5 x.val)) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) res).advancePC := by
+    simp [Arm64.execInstWithSvc, hnz, himmhb, show ¬(32 + i.val ≥ 64) by omega,
+          show 32 + i.val ≥ 32 by omega, show 32 + i.val - 32 = i.val by omega, vn, res]
+  refine ⟨_, st', decode_shl_4s x y i, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x res lanes (u 0) ?_ _ _ hnext hpc
+  have hunf := mapSimdLanes_4s_unfold vn (fun lane => lane <<< i.val)
+  have hpack := lane_pack4_extract
+    (((vn >>> (0 * 32)) &&& ((1#128 <<< 32) - 1#128)) <<< i.val)
+    (((vn >>> (1 * 32)) &&& ((1#128 <<< 32) - 1#128)) <<< i.val)
+    (((vn >>> (2 * 32)) &&& ((1#128 <<< 32) - 1#128)) <<< i.val)
+    (((vn >>> (3 * 32)) &&& ((1#128 <<< 32) - 1#128)) <<< i.val)
+  have hlane : ∀ j : Fin 4,
+      ((((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)) <<< i.val).truncate 32).toNat =
+      (st.vec y.val j.val <<< i.val) % Ode.W32 := by
+    intro j
+    have hyj : ((vn >>> (j.val * 32)) &&& ((1#128 <<< 32) - 1#128)).toNat = st.vec y.val j.val := by
+      rw [lane_slice_toNat vn j]; exact hA.vec y j
+    have hyLt : st.vec y.val j.val < 2 ^ 32 := by rw [← hA.vec y j]; exact (vn.extractLsb' (32 * j.val) 32).isLt
+    have hpow : 2 ^ i.val < 2 ^ 32 := Nat.pow_lt_pow_right (by decide) hi
+    have hlt128 : st.vec y.val j.val <<< i.val < 2 ^ 128 := by
+      rw [Nat.shiftLeft_eq]
+      have : st.vec y.val j.val * 2 ^ i.val < 2 ^ 32 * 2 ^ 32 := Nat.mul_lt_mul'' hyLt hpow
+      omega
+    simp only [BitVec.toNat_setWidth, BitVec.toNat_shiftLeft, hyj]
+    rw [Nat.mod_eq_of_lt hlt128]; rfl
+  intro j
+  change (res.extractLsb' (32 * j.val) 32).toNat = _
+  rw [show res = _ from hunf]
+  match j with
+  | ⟨0, _⟩ => change ((_ : BitVec 128).extractLsb' 0 32).toNat = _; rw [hpack.1]; exact hlane ⟨0, by decide⟩
+  | ⟨1, _⟩ => change ((_ : BitVec 128).extractLsb' 32 32).toNat = _; rw [hpack.2.1]; exact hlane ⟨1, by decide⟩
+  | ⟨2, _⟩ => change ((_ : BitVec 128).extractLsb' 64 32).toNat = _; rw [hpack.2.2.1]; exact hlane ⟨2, by decide⟩
+  | ⟨3, _⟩ => change ((_ : BitVec 128).extractLsb' 96 32).toNat = _; rw [hpack.2.2.2]; exact hlane ⟨3, by decide⟩
+
+/-! ## Rows 35 & 36: `ld1_4s` (`X = mem128(B, 0)`) and `st1_4s` (`mem128(B, 0) = X`) -/
+
+def guardsBeforeSimdLdSt1Multi : List (BitVec 32 × BitVec 32) :=
+  guardsBeforeSimdThreeSame.take 50
+
+theorem decode_at_simdLdSt1Multi {w base fixed : BitVec 32}
+    (hw : w &&& fixed = base &&& fixed)
+    (hnop : ((base &&& fixed) == (0xd503201f#32 &&& fixed)) = false)
+    (hskip : skipsAll base fixed guardsBeforeSimdLdSt1Multi = true)
+    (hmatch : (0xbfbf0000#32 &&& fixed = 0xbfbf0000#32) ∧ (base &&& 0xbfbf0000#32 = 0x0c000000#32))
+    (hopc : w.extractLsb' 12 4 = 7#4) :
+    Arm64.decode w =
+      some (.simdLdSt1Multi (w.getLsbD 22) (w.getLsbD 30) (w.extractLsb' 10 2) 1
+        (Arm64.Reg.fromSPBits (w.extractLsb' 5 5)) (w.getLsbD 23) (w.extractLsb' 16 5) (w.extractLsb' 0 5)) := by
+  have sk : ∀ m c, (m, c) ∈ guardsBeforeSimdLdSt1Multi → ((w &&& m) == c) = false :=
+    fun m c hm => skipsAll_mem hw hskip hm
+  have hhit : w &&& 0xbfbf0000#32 = 0x0c000000#32 := by rw [mask_of_fixed hw hmatch.1, hmatch.2]
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hw hnop,
+             sk 0xffe0001f#32 0xd4000001#32 (by decide), sk 0xffe0001f#32 0xd4200000#32 (by decide),
+             sk 0xfffff01f#32 0xd503201f#32 (by decide), sk 0xffff0000#32 0x00000000#32 (by decide),
+             sk 0xffffffe0#32 0xd50b7420#32 (by decide), sk 0x1f000000#32 0x10000000#32 (by decide),
+             sk 0x1f800000#32 0x11000000#32 (by decide), sk 0x1f800000#32 0x12000000#32 (by decide),
+             sk 0x1f800000#32 0x12800000#32 (by decide), sk 0x1f800000#32 0x13000000#32 (by decide),
+             sk 0x7f800000#32 0x13800000#32 (by decide), sk 0x7c000000#32 0x14000000#32 (by decide),
+             sk 0x7e000000#32 0x34000000#32 (by decide), sk 0x7e000000#32 0x36000000#32 (by decide),
+             sk 0xff000010#32 0x54000000#32 (by decide), sk 0xff9ffc1f#32 0xd61f0000#32 (by decide),
+             sk 0x1f000000#32 0x0a000000#32 (by decide), sk 0x1f200000#32 0x0b000000#32 (by decide),
+             sk 0x1fe00000#32 0x0b200000#32 (by decide), sk 0x1fe0fc00#32 0x1a000000#32 (by decide),
+             sk 0x3fe00410#32 0x3a400000#32 (by decide), sk 0x3fe00800#32 0x1a800000#32 (by decide),
+             sk 0x7fff0000#32 0x5ac00000#32 (by decide), sk 0x7fe0e000#32 0x1ac04000#32 (by decide),
+             sk 0x7fe00000#32 0x1ac00000#32 (by decide), sk 0x7f000000#32 0x1b000000#32 (by decide),
+             sk 0x7f800000#32 0x28000000#32 (by decide), sk 0x3e000000#32 0x28000000#32 (by decide),
+             sk 0xffc00000#32 0xf9800000#32 (by decide), sk 0xffe00c00#32 0xf8800000#32 (by decide),
+             sk 0xffe00c00#32 0xf8a00800#32 (by decide), sk 0x3f200c00#32 0x38200000#32 (by decide),
+             sk 0x3f200c00#32 0x19000000#32 (by decide), sk 0x3f000000#32 0x39000000#32 (by decide),
+             sk 0x3f000000#32 0x38000000#32 (by decide), sk 0x3f000000#32 0x18000000#32 (by decide),
+             sk 0x3f000000#32 0x1c000000#32 (by decide), sk 0x3fbffc00#32 0x089ffc00#32 (by decide),
+             sk 0x3fff7c00#32 0x085f7c00#32 (by decide), sk 0x3fe07c00#32 0x08007c00#32 (by decide),
+             sk 0xbfff0000#32 0x887f0000#32 (by decide), sk 0xbfe00000#32 0x88200000#32 (by decide),
+             sk 0x3fa07c00#32 0x08a07c00#32 (by decide), sk 0xbfa07c00#32 0x08207c00#32 (by decide),
+             sk 0xffd00000#32 0xd5100000#32 (by decide), sk 0xfffff01f#32 0xd503301f#32 (by decide),
+             sk 0x3f800000#32 0x2c000000#32 (by decide), sk 0x3e000000#32 0x2c000000#32 (by decide),
+             sk 0x3f000000#32 0x3d000000#32 (by decide), sk 0x3f000000#32 0x3c000000#32 (by decide),
+             hhit, hopc, beq_self_eq_true, Bool.true_or, Bool.false_and, Bool.false_eq_true, ↓reduceIte]
+  rfl
+
+def encodeLd1_4s (x : Fin 32) (b : Fin 31) : BitVec 32 :=
+  0x4c407800#32 ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def encodeSt1_4s (x : Fin 32) (b : Fin 31) : BitVec 32 :=
+  0x4c007800#32 ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def effectLd1_4s : List Ode.Stmt := [.vset (.name "X") (.call "mem128" [.name "B", .number 0])]
+def effectSt1_4s : List Ode.Stmt := [.vset (.call "mem128" [.name "B", .number 0]) (.name "X")]
+
+theorem read128_lane_eq_load {st : Ode.State} {gs : Arm64.State} (hA : AgreeState st gs)
+    {a : Nat} (hfit : a + 16 ≤ Ode.M64) (j : Fin 4) :
+    ((gs.mem.read128 (BitVec.ofNat 64 a)).extractLsb' (32 * j.val) 32).toNat =
+      Ode.load st.mem (a + j.val * 4) 4 := by
+  have hlo := read64_eq_load hA (a := a) (by omega)
+  have hadd8 : BitVec.ofNat 64 a + 8#64 = BitVec.ofNat 64 (a + 8) := by
+    apply BitVec.eq_of_toNat_eq; simp only [BitVec.toNat_add, BitVec.toNat_ofNat]
+    unfold Ode.M64 at hfit
+    rw [Nat.mod_eq_of_lt (by omega), show 8 % 2 ^ 64 = 8 by decide, Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hhi : (gs.mem.read64 (BitVec.ofNat 64 a + 8#64)).toNat = Ode.load st.mem (a + 8) 8 := by
+    rw [hadd8]; exact read64_eq_load hA (a := a + 8) (by omega)
+  have hload8 : ∀ b, Ode.load st.mem b 8 = Ode.load st.mem b 4 + 2 ^ 32 * Ode.load st.mem (b + 4) 4 := by
+    intro b
+    unfold Ode.load Ode.load Ode.load Ode.load Ode.load Ode.load Ode.load Ode.load Ode.load
+    have e4 : b + 1 + 1 + 1 + 1 = b + 4 := by omega
+    have e5 : b + 1 + 1 + 1 + 1 + 1 = b + 4 + 1 := by omega
+    have e6 : b + 1 + 1 + 1 + 1 + 1 + 1 = b + 4 + 1 + 1 := by omega
+    have e7 : b + 1 + 1 + 1 + 1 + 1 + 1 + 1 = b + 4 + 1 + 1 + 1 := by omega
+    rw [e4, e5, e6, e7]; omega
+  have hload4lt : ∀ b, Ode.load st.mem b 4 < 2 ^ 32 := by
+    intro b
+    unfold Ode.load Ode.load Ode.load Ode.load Ode.load
+    have b0 := (st.mem b).isLt; have b1 := (st.mem (b + 1)).isLt
+    have b2 := (st.mem (b + 1 + 1)).isLt; have b3 := (st.mem (b + 1 + 1 + 1)).isLt
+    omega
+  unfold Arm64.Memory.read128
+  rw [BitVec.extractLsb'_toNat, toNat_append_eq, hhi, hlo, hload8 a, hload8 (a + 8)]
+  have l0 := hload4lt a; have l1 := hload4lt (a + 4); have l2 := hload4lt (a + 8); have l3 := hload4lt (a + 12)
+  have h12 : a + 8 + 4 = a + 12 := by omega
+  rw [h12]
+  match j with
+  | ⟨0, _⟩ => simp only [Nat.mul_zero, Nat.zero_mul, Nat.shiftRight_zero, Nat.add_zero]; omega
+  | ⟨1, _⟩ => simp only [Nat.mul_one, Nat.one_mul, Nat.shiftRight_eq_div_pow]; omega
+  | ⟨2, _⟩ =>
+    simp only [Nat.shiftRight_eq_div_pow, show 32 * 2 = 64 by decide, show 2 * 4 = 8 by decide]
+    omega
+  | ⟨3, _⟩ =>
+    simp only [Nat.shiftRight_eq_div_pow, show 32 * 3 = 96 by decide, show 3 * 4 = 12 by decide,
+               show (2 : Nat) ^ 96 = 2 ^ 64 * 2 ^ 32 by decide]
+    omega
+
+theorem decode_ld1_4s (x : Fin 32) (b : Fin 31) :
+    Arm64.decode (encodeLd1_4s x b) =
+      some (.simdLdSt1Multi true true 2#2 1 (.gpr (BitVec.ofNat 5 b.val)) false 0#5 (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hb : b.val < 2 ^ 5 := by omega
+  have hf : encodeLd1_4s x b &&& 0xfffffc00#32 = 0x4c407800#32 &&& 0xfffffc00#32 := by
+    have h1 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xfffffc00#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xfffffc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h2
+    unfold encodeLd1_4s; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+  have hopc : (encodeLd1_4s x b).extractLsb' 12 4 = 7#4 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [decode_at_simdLdSt1Multi hf (by decide) (by decide) ⟨by decide, by decide⟩ hopc]
+  have ex_x : (encodeLd1_4s x b).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeLd1_4s; simp only [extract_or]
+    have h0 : (0x4c407800#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_b : (encodeLd1_4s x b).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeLd1_4s; simp only [extract_or]
+    have h0 : (0x4c407800#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have hl : (encodeLd1_4s x b).getLsbD 22 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hq : (encodeLd1_4s x b).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hsz : (encodeLd1_4s x b).extractLsb' 10 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hpi : (encodeLd1_4s x b).getLsbD 23 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hrm : (encodeLd1_4s x b).extractLsb' 16 5 = 0#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hl, hq, hsz, hpi, hrm, ex_x, ex_b, fromSPBits_fin31]
+
+theorem agree_ld1_4s (x : Fin 32) (b : Fin 31) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hbb : Ode.regOf bind "B" = some (armSlot b.val))
+    (hfit : st.reg (armSlot b.val) + 16 ≤ Ode.M64)
+    (hread : gs.mem.canRead (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val))) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeLd1_4s x b) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLd1_4s, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  let a := st.reg (armSlot b.val)
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq; rw [hA.gpr b, BitVec.toNat_ofNat]
+    unfold Ode.M64 at hfit; exact (Nat.mod_eq_of_lt (by omega)).symm
+  let lanes : List Nat := [Ode.load st.mem a 4, Ode.load st.mem (a + 4) 4,
+                           Ode.load st.mem (a + 8) 4, Ode.load st.mem (a + 12) 4]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "mem128" [.name "B", .number 0])) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectLd1_4s, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.read a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectLd1_4s, Ode.execStmt, Ode.lanesOf, Ode.values, Ode.sumList,
+          hbx, Ode.value, Ode.isNumberLetter, hbb, ha_mod, hall,
+          List.range, List.range.loop, lanes, a, st', st1, st0]
+  have hread' : gs.mem.canRead (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdLdSt1Multi true true 2#2 1 (.gpr (BitVec.ofNat 5 b.val)) false 0#5 (BitVec.ofNat 5 x.val)) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) (gs.mem.read128 (BitVec.ofNat 64 a))).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkRegSPAligned, Arm64.SimdMemSize.ofQ, Arm64.SimdMemSize.bytes,
+          Arm64.simdLoadRegs, Arm64.Memory.readSimdSized, hea_bv, hread']
+  refine ⟨_, st', decode_ld1_4s x b, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x (gs.mem.read128 (BitVec.ofNat 64 a)) lanes (u 0) ?_ _ _ hnext hpc
+  intro j
+  rw [read128_lane_eq_load hA hfit j]
+  match j with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
+  | ⟨2, _⟩ => rfl
+  | ⟨3, _⟩ => rfl
+
+theorem decode_st1_4s (x : Fin 32) (b : Fin 31) :
+    Arm64.decode (encodeSt1_4s x b) =
+      some (.simdLdSt1Multi false true 2#2 1 (.gpr (BitVec.ofNat 5 b.val)) false 0#5 (BitVec.ofNat 5 x.val)) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hb : b.val < 2 ^ 5 := by omega
+  have hf : encodeSt1_4s x b &&& 0xfffffc00#32 = 0x4c007800#32 &&& 0xfffffc00#32 := by
+    have h1 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xfffffc00#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xfffffc00#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h2
+    unfold encodeSt1_4s; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+  have hopc : (encodeSt1_4s x b).extractLsb' 12 4 = 7#4 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [decode_at_simdLdSt1Multi hf (by decide) (by decide) ⟨by decide, by decide⟩ hopc]
+  have ex_x : (encodeSt1_4s x b).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeSt1_4s; simp only [extract_or]
+    have h0 : (0x4c007800#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_b : (encodeSt1_4s x b).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeSt1_4s; simp only [extract_or]
+    have h0 : (0x4c007800#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have hl : (encodeSt1_4s x b).getLsbD 22 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hq : (encodeSt1_4s x b).getLsbD 30 = true := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hsz : (encodeSt1_4s x b).extractLsb' 10 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have hpi : (encodeSt1_4s x b).getLsbD 23 = false := by rw [getLsbD_of_fixed hf (by decide)]; decide
+  have hrm : (encodeSt1_4s x b).extractLsb' 16 5 = 0#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  rw [hl, hq, hsz, hpi, hrm, ex_x, ex_b, fromSPBits_fin31]
+
+theorem agree_st1_4s (x : Fin 32) (b : Fin 31) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hbb : Ode.regOf bind "B" = some (armSlot b.val))
+    (hfit : st.reg (armSlot b.val) + 16 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val))) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeSt1_4s x b) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectSt1_4s, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  let a := st.reg (armSlot b.val)
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq; rw [hA.gpr b, BitVec.toNat_ofNat]
+    unfold Ode.M64 at hfit; exact (Nat.mod_eq_of_lt (by omega)).symm
+  let mem' := Ode.store (Ode.store (Ode.store (Ode.store st.mem a (st.vec x.val 0) 4) (a + 4) (st.vec x.val 1) 4)
+                (a + 8) (st.vec x.val 2) 4) (a + 12) (st.vec x.val 3) 4
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := mem' }
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.call "mem128" [.name "B", .number 0]) (.name "X")) st1
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectSt1_4s, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectSt1_4s, Ode.execStmt, Ode.vecArg, Ode.values, Ode.sumList,
+          hbx, Ode.value, Ode.isNumberLetter, hbb, ha_mod, hall,
+          List.range, List.range.loop, mem', a, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  let vx := gs.readVReg128 (BitVec.ofNat 5 x.val)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.simdLdSt1Multi false true 2#2 1 (.gpr (BitVec.ofNat 5 b.val)) false 0#5 (BitVec.ofNat 5 x.val)) gs =
+      (gs.setMem (gs.mem.write128 (BitVec.ofNat 64 a) vx)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkRegSPAligned, Arm64.SimdMemSize.ofQ, Arm64.SimdMemSize.bytes,
+          Arm64.simdStoreRegs, Arm64.Memory.writeSimdSized, hea_bv, hwrite', vx]
+  refine ⟨_, st', decode_st1_4s x b, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_setMem hA mem' (gs.mem.write128 (BitVec.ofNat 64 a) vx) ?_ _ _ hnext hpc
+  intro addr haddr
+  have hadd8 : BitVec.ofNat 64 a + 8#64 = BitVec.ofNat 64 (a + 8) := by
+    apply BitVec.eq_of_toNat_eq; simp only [BitVec.toNat_add, BitVec.toNat_ofNat]
+    unfold Ode.M64 at hfit
+    rw [Nat.mod_eq_of_lt (by omega), show 8 % 2 ^ 64 = 8 by decide, Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hlo64 : (vx.extractLsb' 0 64).toNat = st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1 := by
+    have h0 := hA.vec x ⟨0, by decide⟩; have h1 := hA.vec x ⟨1, by decide⟩
+    have hv0 : (vx.extractLsb' 0 64).extractLsb' 0 32 = vx.extractLsb' 0 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk]
+    have hv1 : (vx.extractLsb' 0 64).extractLsb' 32 32 = vx.extractLsb' 32 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk]
+    have hloLt : (vx.extractLsb' 0 64).toNat < 2 ^ 64 := (vx.extractLsb' 0 64).isLt
+    have e0 := congrArg BitVec.toNat hv0; have e1 := congrArg BitVec.toNat hv1
+    rw [BitVec.extractLsb'_toNat] at e0 e1; simp only [Nat.shiftRight_eq_div_pow] at e0 e1
+    change (vx.extractLsb' 0 32).toNat = st.vec x.val 0 at h0
+    change (vx.extractLsb' 32 32).toNat = st.vec x.val 1 at h1
+    omega
+  have hhi64 : (vx.extractLsb' 64 64).toNat = st.vec x.val 2 + 2 ^ 32 * st.vec x.val 3 := by
+    have h2 := hA.vec x ⟨2, by decide⟩; have h3 := hA.vec x ⟨3, by decide⟩
+    have hv2 : (vx.extractLsb' 64 64).extractLsb' 0 32 = vx.extractLsb' 64 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk, show k < 64 by omega]
+    have hv3 : (vx.extractLsb' 64 64).extractLsb' 32 32 = vx.extractLsb' 96 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk, show 32 + k < 64 by omega, show 64 + (32 + k) = 96 + k by omega]
+    have hhiLt : (vx.extractLsb' 64 64).toNat < 2 ^ 64 := (vx.extractLsb' 64 64).isLt
+    have e2 := congrArg BitVec.toNat hv2; have e3 := congrArg BitVec.toNat hv3
+    rw [BitVec.extractLsb'_toNat] at e2 e3; simp only [Nat.shiftRight_eq_div_pow] at e2 e3
+    change (vx.extractLsb' 64 32).toNat = st.vec x.val 2 at h2
+    change (vx.extractLsb' 96 32).toNat = st.vec x.val 3 at h3
+    omega
+  have hstore8 : ∀ m p w0 w1 (hw0 : w0 < 2 ^ 32) addr,
+      (Ode.store (Ode.store m p w0 4) (p + 4) w1 4 addr).val =
+      (Ode.store m p (w0 + 2 ^ 32 * w1) 8 addr).val := by
+    intro m p w0 w1 hw0 addr
+    rw [store_at, store_at, store_at]
+    by_cases hhi : p + 4 ≤ addr ∧ addr < p + 4 + 4
+    · simp only [hhi, show p ≤ addr ∧ addr < p + 8 by omega, and_self, ↓reduceIte]
+      have hk : addr - p = 4 + (addr - (p + 4)) := by omega
+      rw [hk, Nat.pow_add, show (256 : Nat) ^ 4 = 2 ^ 32 by decide, ← Nat.div_div_eq_div_mul]
+      rw [Nat.add_mul_div_left _ _ (by decide : 0 < 2 ^ 32), Nat.div_eq_of_lt hw0, Nat.zero_add]
+    · simp only [hhi, ↓reduceIte]
+      by_cases hlo : p ≤ addr ∧ addr < p + 4
+      · simp only [hlo, show p ≤ addr ∧ addr < p + 8 by omega, and_self, ↓reduceIte]
+        have hd : 256 ^ (addr - p) * 256 ∣ 2 ^ 32 := by
+          have : addr - p + 1 ≤ 4 := by omega
+          have := Nat.pow_dvd_pow 256 this
+          simpa [Nat.pow_succ] using this
+        obtain ⟨q, hq⟩ := hd
+        have hq2 : 2 ^ 32 * w1 = 256 ^ (addr - p) * (256 * (q * w1)) := by
+          rw [hq, Nat.mul_assoc, Nat.mul_assoc]
+        have hpos : 0 < 256 ^ (addr - p) := Nat.pow_pos (by decide)
+        rw [hq2, Nat.add_mul_div_left _ _ hpos, Nat.add_mul_mod_self_left]
+      · simp only [hlo, show ¬(p ≤ addr ∧ addr < p + 8) by omega, ↓reduceIte]
+  have hw0 : st.vec x.val 0 < 2 ^ 32 := by rw [← hA.vec x ⟨0, by decide⟩]; exact (vx.extractLsb' 0 32).isLt
+  have hw2 : st.vec x.val 2 < 2 ^ 32 := by rw [← hA.vec x ⟨2, by decide⟩]; exact (vx.extractLsb' 64 32).isLt
+  let stMid : Ode.State := { st with mem := Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8 }
+  let gsMid : Arm64.State := gs.setMem (gs.mem.write64 (BitVec.ofNat 64 a) (vx.extractLsb' 0 64))
+  have hMid : AgreeState stMid gsMid :=
+    ⟨hA.running, hA.gpr, hA.sp, hA.vec,
+     fun p hp => write64_eq_store hA (by omega) (vx.extractLsb' 0 64) _ hlo64 hp,
+     hA.pc, hA.zf, hA.cf⟩
+  have hstep2 := write64_eq_store hMid (a := a + 8) (by omega) (vx.extractLsb' 64 64) _ hhi64 haddr
+  unfold Arm64.Memory.write128
+  rw [hadd8]
+  change ((gsMid.mem.write64 (BitVec.ofNat 64 (a + 8)) (vx.extractLsb' 64 64)).read8 (BitVec.ofNat 64 addr)).toNat = _
+  rw [hstep2]
+  change (Ode.store (Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8) (a + 8) (st.vec x.val 2 + 2 ^ 32 * st.vec x.val 3) 8 addr).val = (mem' addr).val
+  have h1 := hstore8 st.mem a (st.vec x.val 0) (st.vec x.val 1) hw0
+  have heqm : Ode.store (Ode.store st.mem a (st.vec x.val 0) 4) (a + 4) (st.vec x.val 1) 4 =
+              Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8 := by
+    funext p; exact Fin.ext (h1 p)
+  have h2 := hstore8 (Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8) (a + 8) (st.vec x.val 2) (st.vec x.val 3) hw2 addr
+  simpa [mem', heqm, show a + 8 + 4 = a + 12 by omega] using h2.symm
+
 end ArmAgree
