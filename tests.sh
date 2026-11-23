@@ -58,6 +58,7 @@ one lang test_asm.py "" &
 one lang test_inline.py "" &
 one lang test_places.py "" &
 one lang test_forms.py "" &
+one arm64 test_arm64.py "" &
 fi
 # proof-core: Lean's lake builds everything once, here; then its tests run side by side (ODE_LEAN_BUILT tells
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.

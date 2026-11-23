@@ -1,0 +1,14 @@
+{
+ "another word than the table writes": 0,
+ "cases a row and way": 200,
+ "differ from the processor": 0,
+ "instances": 9200,
+ "machine": "arm64",
+ "processor": "Apple M6",
+ "rows not run": [
+  "bl",
+  "ret"
+ ],
+ "rows run": 23,
+ "system": "Darwin"
+}

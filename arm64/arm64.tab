@@ -1,0 +1,95 @@
+# A first table of AArch64 instruction forms, one row a form: a measurement, not yet a model anybody relies on.
+#
+#     NAME | ASM | ROW | EFFECT
+#
+# The columns are those of ../core/x86.tab, and the EFFECT is in the same language (../core/table.py), with
+# the same meaning on numbers (../core/conc.py):
+#
+# ASM     how an assembler writes an instance. Random instances are assembled from it and run on a processor
+#         (cross.py): everything the EFFECT assigns must be what the processor leaves, and everything else
+#         must be as it was. `-`: not run on a processor.
+# ROW     the decoded instruction, as the decoder writes it (word.py).
+# EFFECT  what the instruction does: statements, left to right.
+#
+# Under a row, the ways its instances are written, one a line:
+#
+#         = BITS ; NOTES
+#
+# BITS    the instruction word's 32 bits, the highest first; blanks are for the eye. `0` and `1` are that
+#         bit. A letter is a field: every place with that letter, which must lie together, holds one number.
+# NOTES   `N=n*8`: the row's N is the field n times 8 (a displacement counted in units of its size).
+#         `I=32-i`: the row's I is 32 less the field i. `call=I`: the field is where the function called is
+#         (the file's relocations speak for it).
+#
+# In ASM and ROW: D, S, P are general registers x0 to x30 (D64 its 64-bit name, D32 its 32-bit name); B is a
+# base register, x0 to x30 or sp; X, Y, Z are vector registers v0 to v31; I is a number, N a displacement.
+# A field of D, S or P that holds 31 is no instance of the row: there the processor means the register that
+# reads as zero or the stack pointer, by the instruction, and this table has a row of its own wherever it
+# has the instruction at all (`add sp, sp, I`). A field of B that holds 31 is sp.
+# In EFFECT: D, S, P, B are those registers' 64 bits; sp is the stack pointer; X, Y, Z are a vector
+# register's 128 bits as four 32-bit lanes; mem32/mem64/mem128(b, n) the bytes at b + n, the lowest first.
+# The flags are not in this account: no row here reads or writes them, and cross.py asks that each leaves
+# them as they were.
+#
+# An instance is written in ONE way by each line, and four bytes are read as an instance only if this
+# writes those very bytes for it (word.py).
+
+# -- general registers
+mov_rr       | mov D64, S64                 | .mov .D .S           | D = S
+             = 1 01 01010 00 0 SSSSS 000000 11111 DDDDD
+mov_ri       | mov D64, I                   | .movi .D I           | D = I
+             = 1 10 100101 00 IIIIIIIIIIIIIIII DDDDD
+mov32_ri     | mov D32, I                   | .movi32 .D I         | D = I
+             = 0 10 100101 00 IIIIIIIIIIIIIIII DDDDD
+add_rrr      | add D64, S64, P64            | .add .D .S .P        | D = add64(S, P)
+             = 1 0 0 01011 00 0 PPPPP 000000 SSSSS DDDDD
+sub_rrr      | sub D64, S64, P64            | .sub .D .S .P        | D = sub64(S, P)
+             = 1 1 0 01011 00 0 PPPPP 000000 SSSSS DDDDD
+add_rri      | add D64, S64, I              | .addi .D .S I        | D = add64(S, I)
+             = 1 0 0 100010 0 IIIIIIIIIIII SSSSS DDDDD
+sub_rri      | sub D64, S64, I              | .subi .D .S I        | D = sub64(S, I)
+             = 1 1 0 100010 0 IIIIIIIIIIII SSSSS DDDDD
+
+# -- the stack pointer
+add_sp       | add sp, sp, I                | .add_sp I            | sp = add64(sp, I)
+             = 1 0 0 100010 0 IIIIIIIIIIII 11111 11111
+sub_sp       | sub sp, sp, I                | .sub_sp I            | sp = sub64(sp, I)
+             = 1 1 0 100010 0 IIIIIIIIIIII 11111 11111
+add_of_sp    | add D64, sp, I               | .add_of_sp .D I      | D = add64(sp, I)
+             = 1 0 0 100010 0 IIIIIIIIIIII 11111 DDDDD
+
+# -- memory: a base register and a displacement that is not below zero
+ldr64        | ldr D64, [B64, N]            | .ldr64 .D .B N       | D = mem64(B, N)
+             = 11 111 0 01 01 nnnnnnnnnnnn BBBBB DDDDD ; N=n*8
+str64        | str S64, [B64, N]            | .str64 .S .B N       | mem64(B, N) = S
+             = 11 111 0 01 00 nnnnnnnnnnnn BBBBB SSSSS ; N=n*8
+ldr32        | ldr D32, [B64, N]            | .ldr32 .D .B N       | D = low32(mem32(B, N))
+             = 10 111 0 01 01 nnnnnnnnnnnn BBBBB DDDDD ; N=n*4
+str32        | str S32, [B64, N]            | .str32 .S .B N       | mem32(B, N) = low32(S)
+             = 10 111 0 01 00 nnnnnnnnnnnn BBBBB SSSSS ; N=n*4
+
+# -- calls, returns
+bl           | -                            | .bl I                | call I
+             = 1 00101 IIIIIIIIIIIIIIIIIIIIIIIIII ; call=I
+ret          | -                            | .ret                 | return
+             = 1101011 0 0 10 11111 0000 0 0 11110 00000
+nop          | nop                          | .nop                 | nothing
+             = 1101 0101 0000 0011 0010 0000 0001 1111
+
+# -- vectors of four 32-bit lanes
+ld1_4s       | ld1 {vX.4s}, [B64]           | .ld1 X .B            | X = mem128(B, 0)
+             = 0 1 001100 0 1 0 00000 0111 10 BBBBB XXXXX
+st1_4s       | st1 {vX.4s}, [B64]           | .st1 X .B            | mem128(B, 0) = X
+             = 0 1 001100 0 0 0 00000 0111 10 BBBBB XXXXX
+eor_v        | eor vX.16b, vY.16b, vZ.16b   | .eor X Y Z           | X = each32(xor32, Y, Z)
+             = 0 1 1 01110 00 1 ZZZZZ 00011 1 YYYYY XXXXX
+orr_v        | orr vX.16b, vY.16b, vZ.16b   | .orr X Y Z           | X = each32(or32, Y, Z)
+             = 0 1 0 01110 10 1 ZZZZZ 00011 1 YYYYY XXXXX
+add_4s       | add vX.4s, vY.4s, vZ.4s      | .add4s X Y Z         | X = each32(add32, Y, Z)
+             = 0 1 0 01110 10 1 ZZZZZ 10000 1 YYYYY XXXXX
+rev32_8h     | rev32 vX.8h, vY.8h           | .rev32 X Y           | X = each32(ror32, Y, 16)
+             = 0 1 1 01110 01 10000 00000 10 YYYYY XXXXX
+ushr_4s      | ushr vX.4s, vY.4s, I         | .ushr X Y I          | X = each32(shr32, Y, I)
+             = 0 1 1 011110 01 iiiii 00000 1 YYYYY XXXXX ; I=32-i
+shl_4s       | shl vX.4s, vY.4s, I          | .shl X Y I           | X = each32(shl32, Y, I)
+             = 0 1 0 011110 01 IIIII 01010 1 YYYYY XXXXX
