@@ -203,8 +203,8 @@ def onwardAt (ctx : Ctx) (livePrefix : Array Nat) (seen : List Seen) (visited : 
       | some e => tagPc pc' (arrive ctx e.place e.first e.d next.1)
       | none => do
         let (g, d, first) ← tagPc pc' (generalize ctx p next.1)
-        go (⟨p, d, { first with q := { regq := placeQuiet p next.1.q.regq } }⟩ :: seen) [(pc', 0)]
-           { g with q := { regq := placeQuiet p next.1.q.regq } } pc'
+        go (⟨p, d, { first with q := { regq := placeQuiet ctx p next.1.q.regq } }⟩ :: seen) [(pc', 0)]
+           { g with q := { regq := placeQuiet ctx p next.1.q.regq } } pc'
 
 def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → List Seen → List (Nat × Nat) → Sym → Nat → V Unit
   | 0, _, _, _, pc => fun _ => .error s!"at +{pc}\nrefused: a path longer than the verifier goes"
@@ -212,6 +212,7 @@ def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → List Seen → List 
     match ctx.code.lookup pc with
     | none => fun _ => .error s!"at +{pc}\nrefused: no instruction at {pc}"
     | some i => do
+      let s ← tagPc pc (symClears ctx pc CLEARS s)
       let nexts ← tagPc pc (symNext ctx s i)
       each (onwardAt ctx livePrefix seen visited (exploreAt ctx livePrefix fuel)) nexts
 
@@ -225,11 +226,22 @@ def locateRefusal (ctx : Ctx) (proof : List Item) : Option String :=
       if let .tag "live" _ := it then acc := acc + 1
       arr := arr.push acc
     pure arr
-  let run : V Unit := do
-    exploreAt ctx livePrefix PATH [] [(0, 0)] (entrySym ctx) 0
-    if ← finished then pure () else refuse "the proof says more than is asked of it"
-  match run (Items.ofList proof) with
-  | .ok _ => none
-  | .error why => some why
+  let run (c : Ctx) : Option String :=
+    let act : V Unit := do
+      exploreAt c livePrefix PATH [] [(0, 0)] (entrySym c) 0
+      if ← finished then pure () else refuse "the proof says more than is asked of it"
+    match act (Items.ofList proof) with
+    | .ok _ => none
+    | .error why => some why
+  match run ctx with
+  | some why => some why
+  | none =>
+    match ctx.contract.resultHidden with
+    | none => none
+    | some rh =>
+      if !rh.all ctx.contract.hidden.contains then
+        some "at +0\nrefused: result depends on: arguments kept out of the result must be a subset of those kept out of the trace"
+      else
+        run { ctx with contract := ctx.contract.forResult rh, resultPass := true }
 
 end Ode

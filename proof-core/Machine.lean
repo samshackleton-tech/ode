@@ -785,4 +785,24 @@ inductive Runs (world : List Program) : Perm → Program → (State → Prop) �
       (∀ s', R s' → Runs world perm p Q (backFrom (keptAt i) s s')) →
       Runs world perm p Q s
 
+/-- Functional execution without mark checks: from `s`, whatever the unknowns turn out to be, `p` runs on
+instructions it has, touches only what `perm` lets it (`exec`), and returns after finitely many steps in a
+state of which `Q` holds. -/
+inductive RunsPlain (world : List Program) : Perm → Program → (State → Prop) → State → Prop where
+  | step (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr) :
+      p.fetch s.rip = some i →
+      (∀ u, exec perm p i u s ≠ none) →
+      (∀ u s', exec perm p i u s = some (.next s') → RunsPlain world perm p Q s') →
+      (∀ u s', exec perm p i u s = some (.returned s') → Q s') →
+      RunsPlain world perm p Q s
+  | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
+      (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
+      p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
+      (callLink i = none → 8 ≤ s.reg RSP ∧ allowed perm.write (s.reg RSP - 8) 8 = true) →
+      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
+      RunsPlain world inner q R (afterCall p q i s) →
+      (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
+      (∀ s', R s' → RunsPlain world perm p Q (backFrom (keptAt i) s s')) →
+      RunsPlain world perm p Q s
+
 end Ode

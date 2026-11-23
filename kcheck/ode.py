@@ -237,7 +237,7 @@ class Parser:
         self.take("("); args = []
         while not self.maybe(")"):
             arg = self.take(kind="name"); self.take(":"); args.append((arg, self.kind())); self.maybe(",")
-        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, trace=[], conditions=[])
+        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, trace=[], trace_exprs=[], result_dep=None, conditions=[])
         self.take("{")
         def once(what, key):
             # said twice, the second would silently be the one meant
@@ -282,10 +282,20 @@ class Parser:
             elif clause == "returns": once("returns", "returns"); c["returns"] = self.expr()
             elif clause == "writes": c["spoils"].append(self.take(kind="name"))         # written, and nothing said of what
             elif clause == "trace":
-                # trace depends on NAME, ...: which instructions run and which addresses are touched may depend on those bytes
-                if self.take(kind="name") != "depends": raise Err("`trace depends on NAME, ...` expected")
-                self.take("on"); c["trace"].append(self.take(kind="name"))
-                while self.maybe(","): c["trace"].append(self.take(kind="name"))
+                # trace depends on EXPR, ...: which instructions run and which addresses are touched may depend on those arguments or computed values
+                if self.take(kind="name") != "depends": raise Err("`trace depends on EXPR, ...` expected")
+                self.take("on")
+                while True:
+                    e = self.expr()
+                    if e[0] == "name": c["trace"].append(e[1])
+                    else: c["trace_exprs"].append(e)
+                    if not self.maybe(","): break
+            elif clause == "result":
+                # result depends on NAME, ...: for `returns r`, what the returned number may depend on beyond `trace depends on`
+                once("result depends on", "result_dep")
+                if self.take(kind="name") != "depends": raise Err("`result depends on NAME, ...` expected")
+                self.take("on"); c["result_dep"] = [self.take(kind="name")]
+                while self.maybe(","): c["result_dep"].append(self.take(kind="name"))
             elif clause == "stack":
                 once("stack", "stack"); e = self.expr()
                 c["stack"] = e[1] if e[0] == "num" else ("grows", e)
@@ -295,7 +305,7 @@ class Parser:
             elif clause == "needs":
                 # needs FEATURE [if E]: it runs instructions of that kind (only where E holds)
                 name = self.take(kind="name"); c["needs"].append((name, self.expr(1) if self.maybe("if") else None))
-            else: raise Err(f"line {self.t[self.i - 1][2]}: requires, ensures, writes, returns, stack, trace, calls, needs or decreases expected, not {clause!r}")
+            else: raise Err(f"line {self.t[self.i - 1][2]}: requires, ensures, writes, returns, stack, trace, result, calls, needs or decreases expected, not {clause!r}")
         if c["stack"] is None or not (c["leaves"] or c["spoils"] or c["conditions"] or c["returns"] is not None): raise Err("a contract says its stack, and what it ensures, writes or returns")
         return c
 

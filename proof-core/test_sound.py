@@ -19,7 +19,8 @@ THEOREMS = {"Ode.verify_all_sound": "[propext, Classical.choice, Quot.sound]",
             "Ode.runs_plain": "[propext, Classical.choice, Quot.sound]",
             "Ode.runs_free": "[propext, Classical.choice, Quot.sound]",
             "Ode.runs_trace": "[propext, Classical.choice, Quot.sound]",
-            "Ode.verify_all_trace": "[propext, Classical.choice, Quot.sound]"}
+            "Ode.verify_all_trace": "[propext, Classical.choice, Quot.sound]",
+            "Ode.verify_all_result": "[propext, Classical.choice, Quot.sound]"}
 STATEMENTS = [
     # of the functions of a statement together: what `odeverify` says yes of (`pieces`: the read-only data of
     # the object files, as the statement gives it; `Meets` is of every state in which the program is loaded)
@@ -42,14 +43,29 @@ STATEMENTS = [
     # and nothing need be forbidden: it is a run of the plain machine that may touch all memory
     ("Ode.runs_free : ∀ {world : List Ode.Program} {perm : Ode.Perm} {p : Ode.Program} {Q : Ode.State → Prop} {s : Ode.State}, "
      "Ode.Runs world perm p Q s → Ode.RunsP world Ode.Perm.all p (fun t => ∃ s', Q s' ∧ t = s'.plain) s.plain"),
-    # constant time of what the verifier says yes of, on the plain machine: two runs, from two states at entry
-    # alike in everything not marked, let the same things be observed
+    # constant time of what the verifier says yes of, on the plain machine: stated directly on entry agreement
+    # (`traceAgree`), with no mention of marks
     ("Ode.verify_all_trace : ∀ (world : List Ode.Program) (pieces : List Ode.Piece) (defs : List Ode.Def) (fns : List Ode.Fn), "
      "Ode.Linked world fns → Ode.verdictAll pieces defs fns = none → "
      "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ "
-     "∀ (a b : Ode.State), Ode.Loaded pieces a → f.contract.clear world pieces a → f.contract.pre p a → f.contract.quietAt a → "
-     "Ode.Loaded pieces b → f.contract.clear world pieces b → f.contract.pre p b → f.contract.quietAt b → Ode.Alike a b → "
+     "∀ (a b : Ode.State), Ode.Loaded pieces a → f.contract.clear world pieces a → f.contract.pre p a → "
+     "Ode.Loaded pieces b → f.contract.clear world pieces b → f.contract.pre p b → "
+     "f.contract.traceAgree defs a b → "
      "∀ (a' b' : Ode.State), Ode.EndsP world p a.plain a' → Ode.EndsP world p b.plain b' → a'.trace = b'.trace"),
+    # return-value independence (`result depends on`), stated directly on entry agreement (`traceAgree`)
+    ("Ode.verify_all_result : ∀ (world : List Ode.Program) (pieces : List Ode.Piece) (defs : List Ode.Def) (fns : List Ode.Fn), "
+     "Ode.Linked world fns → Ode.verdictAll pieces defs fns = none → "
+     "∀ (f : Ode.Fn), f ∈ fns → ∃ p, Ode.findProgram world f.name = some p ∧ "
+     "(f.contract.resultFollowsTrace = true → "
+     "∀ (a b : Ode.State), Ode.Loaded pieces a → f.contract.clear world pieces a → f.contract.pre p a → "
+     "Ode.Loaded pieces b → f.contract.clear world pieces b → f.contract.pre p b → "
+     "f.contract.traceAgree defs a b → "
+     "∀ (a' b' : Ode.State), Ode.EndsP world p a.plain a' → Ode.EndsP world p b.plain b' → a'.reg 0 = b'.reg 0) ∧ "
+     "∀ (rh : List String), f.contract.resultHidden = some rh → "
+     "∀ (a b : Ode.State), Ode.Loaded pieces a → f.contract.clear world pieces a → f.contract.pre p a → "
+     "Ode.Loaded pieces b → f.contract.clear world pieces b → f.contract.pre p b → "
+     "(f.contract.forResult rh).traceAgree defs a b → "
+     "∀ (a' b' : Ode.State), Ode.EndsP world p a.plain a' → Ode.EndsP world p b.plain b' → a'.reg 0 = b'.reg 0"),
     # a run of the plain machine to a function's return: by `execP` with nothing forbidden
     ("Ode.EndsP.ret : ∀ {world : List Ode.Program} (p : Ode.Program) (s : Ode.State) (i : Ode.Instr) (u : Nat → Nat) (s' : Ode.State), "
      "p.fetch s.rip = some i → Ode.execP Ode.Perm.all p i u s = some (Ode.Outcome.returned s') → Ode.EndsP world p s s'"),
@@ -73,7 +89,7 @@ class Sound(unittest.TestCase):
             with open(path, "w") as f:
                 f.write("import SoundTop\nimport Trace\nimport Plain\n" + "".join(f"#print axioms {name}\n" for name in THEOREMS) +
                         "#check @Ode.verify_all_sound\n#check @Ode.verify_sound\n#print Ode.Linked\n#check @Ode.ends_trace\n#check @Ode.runs_plain\n"
-                        "#check @Ode.runs_free\n#check @Ode.verify_all_trace\n#print Ode.EndsP\n")
+                        "#check @Ode.runs_free\n#check @Ode.verify_all_trace\n#check @Ode.verify_all_result\n#print Ode.EndsP\n")
             r = subprocess.run([LAKE, "env", "lean", path], cwd=HERE, capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         said = " ".join(r.stdout.split())

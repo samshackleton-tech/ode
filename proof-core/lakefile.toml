@@ -30,7 +30,7 @@ name = "Advice"
 
 [[lean_lib]]
 name = "Sound"
-roots = ["SoundLin", "SoundWord", "SoundCode", "SoundState", "SoundStep", "SoundVec", "SoundWide", "SoundSpec", "SoundList", "SoundPlace", "SoundCall", "SoundSpecW", "SoundFrame", "SoundCallW", "SoundCallL", "SoundLoop", "SoundMarks", "SoundTop"]
+roots = ["SoundLin", "SoundWord", "SoundCode", "SoundState", "SoundStep", "SoundVec", "SoundWide", "SoundSpec", "SoundList", "SoundPlace", "SoundCall", "SoundSpecW", "SoundFrame", "SoundCallW", "SoundCallL", "SoundLoop", "SoundMarks", "SoundTrace", "SoundTop"]
 
 [[lean_exe]]
 name = "arith"

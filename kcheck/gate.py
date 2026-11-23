@@ -65,6 +65,7 @@ def main():
         ("test_arm64 (AArch64 instruction table, encodings and ELF decoding)", [sys.executable, "../arm64/test_arm64.py"]),
         ("test_arm (three AArch64 functions verified by Core.lean)", [sys.executable, "../proof-core/test_arm.py"]),
         ("test_ode_tool e2e (integrated check, source-line refusals, loop guard)", [sys.executable, "../proof-core/test_ode_tool.py"]),
+        ("test_trace_proposal (computed trace exprs, clear, result depends on)", [sys.executable, "../proof-core/test_trace_proposal.py"]),
     ]
     for p in ("adler32", "lz4", "varint", "common", "utf8", "base64", "inet", "frame"):
         work.append((f"verify ode{p}.o", [sys.executable, "programs/check_file.py",

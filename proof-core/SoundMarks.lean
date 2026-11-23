@@ -970,8 +970,24 @@ theorem arrive_q {ctx : Ctx} {pl : Place} {first s : Sym} {d : Row} {items : Ite
     next hq => simpa using hq
 
 /-- The registers a place's general state takes as not marked are among those not marked on first coming. -/
-theorem placeQuiet_all (pl : Place) (regq : List Nat) : (placeQuiet pl regq).all regq.contains = true :=
+theorem placeQuiet_all (ctx : Ctx) (pl : Place) (regq : List Nat) : (placeQuiet ctx pl regq).all regq.contains = true :=
   List.all_eq_true.mpr fun r m => List.contains_iff_mem.mpr (List.mem_filter.mp m).1
+
+/-- Clearing the mark of register `r` preserves `MarksOk` and adds `r` to `q.regq`. -/
+theorem MarksOk.unmarkReg {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) (r : Nat) :
+    MarksOk ctx s0 { q with regq := r :: q.regq }
+      { st with marks := { st.marks with reg := fun k => if k = r then false else st.marks.reg k } } := by
+  refine ⟨fun k hk => ?_, M.zf, M.cf, M.stable, M.frame, fun k hk => ?_⟩
+  · rcases List.mem_cons.mp hk with rfl | hk
+    · simp
+    · show (if k = r then false else st.marks.reg k) = false
+      split
+      · rfl
+      · exact M.reg k hk
+  · show ((if k = r then false else st.marks.reg k) && st.marks.low k) = false
+    split
+    · rfl
+    · exact M.low k hk
 
 /-- What is so of the marks where more registers are known not to be marked is so where fewer are. -/
 theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) {regs : List Nat}
@@ -1031,9 +1047,12 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true)
     (hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) :
     st.marks.reg RSP = false ∧ c.quietAt (afterCall p q i st) ∧
-    ∀ s2, c.quietAfter (afterCall p q i st) s2 → MarksOk ctx s0 (afterCallQ c s) (backFrom (keptAt i) st s2) := by
+    ∀ cleanRet s2,
+      (s2.marks.reg RSP = false ∧ (cleanRet = true → s2.marks.reg 0 = false) ∧
+       ∀ a, c.inFrame (afterCall p q i st) a = false → c.inOut (afterCall p q i st) a = false → s2.marks.mem a = (afterCall p q i st).marks.mem a) →
+      MarksOk ctx s0 (afterCallQ cleanRet c s) (backFrom (keptAt i) st s2) := by
   simp only [callQuiet, Bool.and_eq_true] at hq
-  obtain ⟨⟨⟨hregs, hfix⟩, houts⟩, hrun⟩ := hq
+  obtain ⟨⟨⟨⟨hregs, hfix⟩, houts⟩, hrun⟩, _⟩ := hq
   have regs : ∀ r ∈ c.cleanAtEntry, st.marks.reg r = false := fun r hr =>
     M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hregs r hr))
   have notw : ∀ a, ctx.contract.inFrame s0 a = false → ctx.contract.inOut s0 a = false →
@@ -1059,7 +1078,8 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       show (if LINK = LINK then false else st.marks.reg LINK) = false
       rw [if_pos rfl]
   · have hfound := List.all_eq_true.mp hrun (r, l) hm
-    simp only [hnh, Bool.false_or] at hfound
+    simp only [hnh, Bool.false_or, Bool.and_eq_true] at hfound
+    have hfound := hfound.2
     cases hf : findRun s r l ctx.contract.regions 0 with
     | none => simp [hf] at hfound
     | some j =>
@@ -1117,13 +1137,13 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · rfl
         · have e : st.reg r + k = ((s0.reg RSP : Int) + (o + 8 * ((k / 8 : Nat) : Int))).toNat + k % 8 := by omega
           rw [e]; exact c3 (k % 8) (by omega)
-  · intro s2 ⟨qsp, qret, qs⟩
+  · intro cleanRet s2 ⟨qsp, qret, qs⟩
     rw [keptAt_eq F.link]
     refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_, fun _ m => nomatch m⟩
     · show (if c.keeps.contains r then st.marks.reg r else s2.marks.reg r) = false
       rcases List.mem_append.mp hr with h1 | h2
-      · -- the stack pointer, and the number returned where the called function's contract says one is
-        cases hg : c.givesNumber with
+      · -- the stack pointer, and the number returned where `cleanRet` holds
+        cases hg : cleanRet with
         | false =>
           simp only [hg, Bool.false_eq_true, if_false, List.mem_singleton] at h1
           subst h1

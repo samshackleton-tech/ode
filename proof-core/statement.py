@@ -484,6 +484,18 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     # A name in an expression of the contract that is no argument's and is a constant of the specification is
     # that constant (as in a definition).
     scope = Scope(consts, frozenset(names) | frozenset(kinds))
+    for te in c.get("trace_exprs", []):
+        out.append("traceexpr " + sexp(te, seqs, scope))
+    if c.get("result_dep") is not None:
+        if result is None:
+            raise SystemExit(f"statement: the contract of {name} has `result depends on`, which applies only to `returns NAME` with no expression")
+        for arg in c["result_dep"]:
+            if arg not in names:
+                raise SystemExit(f"statement: the contract of {name}: `result depends on {arg}`, and {arg} is no argument")
+        res_allow = set(c["trace"]) | set(c["result_dep"])
+        res_hidden = [arg for arg, _ in c["args"] if not in_register(arg) and arg not in res_allow and arg not in written and arg not in tables]
+        res_hidden += [arg for arg, _ in c["args"] if in_register(arg) and arg not in res_allow]
+        out.append("resultdep" + (" " + " ".join(res_hidden) if res_hidden else ""))
     if result is not None: out.append(f"result {result}")
     elif r is not None: out.append("returns " + sexp(r, seqs, scope))
     for leaf in c["leaves"]:

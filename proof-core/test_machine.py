@@ -217,9 +217,10 @@ def arm_cases(rows, n, rng, across):
     """For each row n instances and states: (row, bind, registers, zf, cf, memory, where the next instruction is, the vector registers' lanes)."""
     out = []
     for row in rows:
-        if row.asm == "-": continue
+        is_jump = any(st[0] == "jump" for st in row.effect)
+        if row.asm == "-" and not is_jump: continue
         for _ in range(n):
-            bind, _ = across.instance(row, rng)
+            bind = {"I": rng.randrange(1 << 16) * 4} if is_jump else across.instance(row, rng)[0]
             g = {name: rng.getrandbits(64) for name in across.X}
             if "B" in bind: g[bind["B"]] = across.BASE
             g["sp"] = across.STACK + (rng.choice((1, 2, 4, 8, 12, 15)) if rng.randrange(4) == 0 else 0)
@@ -261,7 +262,7 @@ def arm_compare(todo, answers, across):
         wrong += [n for n, v, w in (("zf", s.zf, lzf), ("cf", s.cf, lcf)) if int(v) != w]
         wrong += [f"vector register {i} lane {j}" for i in range(32) for j in range(16) if s.x[i][j] != table.UNKNOWN and s.x[i][j] != lanes[16 * i + j]]
         wrong += ["memory"] if bytes(s.mem[across.SCRATCH + i] for i in range(across.ROOM)) != lmem else []
-        wrong += ["where it goes on"] if rip != FUNCTION + nxt or kind != "next" else []
+        wrong += ["where it goes on"] if rip != FUNCTION + (nxt if s.to is None else s.to) or kind != "next" else []
         if wrong: differs.setdefault(row.name, ", ".join(wrong))
         else: same[row.name] = same.get(row.name, 0) + 1
     return same, differs, faults
@@ -284,7 +285,7 @@ class MachineArm64(unittest.TestCase):
         self.assertEqual(differs, {})
         left = [r.name for r in self.rows if r.name not in same]
         self.assertEqual(left, ["bl", "ret"])                    # (a return: the next test; a call is said in Machine.lean itself)
-        self.assertEqual(len(same), 25)
+        self.assertEqual(len(same), 34)
         self.assertGreater(faults, self.n // 4)                  # the two rows at the stack pointer, where it is no multiple of 16
         print(f"\nmachine, AArch64: {len(same)} rows, {sum(same.values())} instances: Machine.lean leaves what conc.py leaves "
               f"({faults} of them faults in both); not compared: {' '.join(left)}", file=sys.stderr)

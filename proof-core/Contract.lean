@@ -36,7 +36,7 @@ inductive SExpr where
   | field (e : SExpr) (name : String)     -- `r.h`
   | theNumber (greatest : Bool) (x : String) (a b cond : SExpr)   -- `the least number x in a..b with cond` (or the greatest)
   | thePower (greatest : Bool) (x : String) (cond : SExpr)        -- `the greatest power of two x with cond` (or the least)
-  deriving Repr, Inhabited
+  deriving Repr, Inhabited, DecidableEq
 
 inductive Val where
   | int (n : Int)
@@ -304,9 +304,12 @@ structure Contract where
   lanes : List (String × String) := []    -- (a run of a fixed count given to read, an argument that is a number): each eight
                                       -- bytes of the run are the address of that many blocks of 64 bytes, given to read
   atLeast : List (String × Nat) := []     -- (an argument that is a number, n): the caller sees to it that the number is no less than n
-  hidden : List String := []              -- the runs given to read whose bytes may be marked (secret), and the
+  hidden : List String := []              -- the runs given to read whose bytes may be marked, and the
                                           -- numbers given that may be: what can be observed of a run of the
                                           -- function must not depend on them
+  traceExprs : List SExpr := []           -- computed values listed in `trace depends on`
+  resultHidden : Option (List String) := none   -- where `result depends on` widens what a `returns r`
+                                          -- result may depend on: the arguments still hidden from it
   arm64 : Bool := false                   -- the function is for AArch64: it is called as C calls a function there
                                           -- (`argRegsArm`, `calleeSavedArm`, the address to return to in x30).
                                           -- Else it is for x86-64, called as C calls a function there.
@@ -476,7 +479,7 @@ themselves are any: a linker and a loader decide them. -/
 def Loaded (pieces : List Piece) (s : State) : Prop :=
   ∀ k pc, pieces[k]? = some pc →
     s.data k + pc.bytes.length < M64 ∧ s.data k % pc.align = 0 ∧
-    ∀ j (h : j < pc.bytes.length), (s.mem (s.data k + j)).val = pc.bytes[j] ∧ s.marks.mem (s.data k + j) = false
+    ∀ j (h : j < pc.bytes.length), (s.mem (s.data k + j)).val = pc.bytes[j]
 
 /-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
 read, its own frame and the return address above it (where that is in memory: `slot`), the blocks a table
@@ -598,10 +601,74 @@ def Contract.backQuiet (c : Contract) (s : State) : Prop :=
 /-- Does the contract say that a number is returned (in rax)? -/
 def Contract.givesNumber (c : Contract) : Bool := c.returns.isSome || c.result.isSome
 
+/-- Does the contract's returned number follow its `trace depends on` line by default?
+True only for `returns r` with no `result depends on` line (a contract with `returns E` specifies the
+value directly; one with `result depends on` checks the returned number against `resultHidden`). -/
+def Contract.resultFollowsTrace (c : Contract) : Bool := c.result.isSome && c.resultHidden.isNone
+
+/-- The contract used for the second pass when `result depends on` is present: `hidden` is narrowed to `rh`
+and `resultHidden` is cleared so `resultFollowsTrace` holds and the return register is checked. -/
+def Contract.forResult (c : Contract) (rh : List String) : Contract :=
+  { c with hidden := rh, resultHidden := none }
+
+/-- Is `x` bound as a readable argument (`.number` or `.bytes` with a length register) in `c.env`? -/
+def envArgIn (c : Contract) (x : String) : List (String × Kind) → List Nat → Bool
+  | (n, .number) :: args, _ :: regs => if n == x then true else envArgIn c x args regs
+  | (n, .bytes len) :: args, _ :: regs => if n == x then (c.regOf len).isSome else envArgIn c x args regs
+  | _ :: args, _ :: regs => envArgIn c x args regs
+  | _, _ => false
+
+def Contract.envArg (c : Contract) (x : String) : Bool := envArgIn c x c.args c.argRegs
+
+def isExpr : SExpr → Bool
+  | .nil => false
+  | .cons _ _ => false
+  | _ => true
+
+/-- Is `e` computed only from constants, bound variables, readable arguments not in `c.hidden`, and
+top-level computed values listed in `c.traceExprs`? -/
+def traceCleanWith (c : Contract) (bound : List String) (e : SExpr) : Bool :=
+  if isExpr e && bound.isEmpty && c.traceExprs.any (· == e) then true
+  else match e with
+    | .num _ => true
+    | .nil => true
+    | .name x => bound.contains x || (c.envArg x && !c.hidden.contains x)
+    | .bin _ a b => traceCleanWith c bound a && traceCleanWith c bound b
+    | .ifx cond a b => traceCleanWith c bound cond && traceCleanWith c bound a && traceCleanWith c bound b
+    | .index a i => traceCleanWith c bound a && traceCleanWith c bound i
+    | .call _ args => traceCleanWith c bound args
+    | .list items => traceCleanWith c bound items
+    | .cons a rest => traceCleanWith c bound a && traceCleanWith c bound rest
+    | .letx x rhs body => traceCleanWith c bound rhs && traceCleanWith c (x :: bound) body
+    | .each body x a b => traceCleanWith c bound a && traceCleanWith c bound b && traceCleanWith c (x :: bound) body
+    | .slice a lo hi => traceCleanWith c bound a && traceCleanWith c bound lo && traceCleanWith c bound hi
+    | .withx a puts => traceCleanWith c bound a && traceCleanWith c bound puts
+    | .record _ items => traceCleanWith c bound items
+    | .field e _ => traceCleanWith c bound e
+    | .theNumber _ x a b cond => traceCleanWith c bound a && traceCleanWith c bound b && traceCleanWith c (x :: bound) cond
+    | .thePower _ x cond => traceCleanWith c (x :: bound) cond
+termination_by e
+
+def Contract.traceClean (c : Contract) (e : SExpr) : Bool := traceCleanWith c [] e
+
 /-- Is the run whose address is in the register `r` one the contract says is hidden? -/
 def Contract.hiddenAt (c : Contract) (r : Nat) : Bool := c.hidden.any fun x => c.regOf x == some r
 
-/-- What the caller sees to about marks (what may depend on a secret): the stack pointer is not marked,
+/-- Two entry states agree on everything the contract's `trace depends on` line lists:
+same addresses (code position, read-only data, stack pointer, return address, argument pointers),
+same values for every argument not in `c.hidden` (numbers, read-only byte runs and their lengths,
+and fixed-size read-only runs), and the same value under `defs` for every computed expression listed
+in `c.traceExprs`. -/
+def Contract.traceAgree (c : Contract) (defs : List Def) (a b : State) : Prop :=
+  a.rip = b.rip ∧ a.data = b.data ∧ a.trace = b.trace ∧ a.reg RSP = b.reg RSP ∧
+  c.backTo a = c.backTo b ∧
+  (∀ r ∈ c.cleanAtEntry, a.reg r = b.reg r) ∧
+  (∀ r l, (r, l) ∈ c.regions → c.hiddenAt r = false →
+    a.reg l = b.reg l ∧ ∀ k, k < a.reg l → a.mem (a.reg r + k) = b.mem (b.reg r + k)) ∧
+  (∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → a.mem (a.reg r + k) = b.mem (b.reg r + k)) ∧
+  (∀ e ∈ c.traceExprs, ∀ v, Value defs (c.env a) e v ↔ Value defs (c.env b) e v)
+
+/-- What the caller sees to about marks: the stack pointer is not marked,
 nor is the register of an argument, but for a number the contract says is hidden (of any other general
 register nothing is asked: it may be marked); the address to return to is not marked; no byte of a run
 given to read is marked, but for the runs the contract says are hidden. -/
@@ -612,12 +679,11 @@ def Contract.quietAt (c : Contract) (s : State) : Prop :=
   ∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false
 
 /-- What the function leaves of the marks, `s` being the state at entry: the stack pointer is not marked;
-the number returned, where the contract says one is, is not marked (of any other general register nothing
-is said: a caller may rely on nothing about it); and outside the function's own frame and the runs given to
-write every byte of memory is marked as it was. -/
+the number returned, where `resultFollowsTrace` asks for it, is not marked; and outside the function's
+own frame and the runs given to write every byte of memory is marked as it was. -/
 def Contract.quietAfter (c : Contract) (s s' : State) : Prop :=
   s'.marks.reg RSP = false ∧
-  (c.givesNumber = true → s'.marks.reg 0 = false) ∧
+  (c.resultFollowsTrace = true → s'.marks.reg 0 = false) ∧
   ∀ a, c.inFrame s a = false → c.inOut s a = false → s'.marks.mem a = s.marks.mem a
 
 /-- What the function leaves: what `post` says, and what `quietAfter` says of the marks. -/
@@ -626,9 +692,9 @@ def Contract.left (c : Contract) (defs : List Def) (s s' : State) : Prop := c.po
 /-- The function's code meets the contract, among the functions of `world` (those it may call), `pieces`
 being the read-only data of the program's object files: from every state at entry in which the program is
 loaded (`Loaded`), in which nothing the function may write is of the program's own bytes (`clear`), and of
-which the caller has seen to what the contract asks, it runs to its return, touching only what it is let,
-using nothing marked in a way that shows, and leaves what the contract says. -/
+which the caller has seen to what the contract asks (`pre`), it runs to its return, touching only what it
+is let (`perm`), and leaves what the contract says (`post`). -/
 def Meets (world : List Program) (pieces : List Piece) (c : Contract) (defs : List Def) (p : Program) : Prop :=
-  ∀ s, Loaded pieces s → c.clear world pieces s → c.pre p s → c.quietAt s → Runs world (c.perm pieces s) p (c.left defs s) s
+  ∀ s, Loaded pieces s → c.clear world pieces s → c.pre p s → RunsPlain world (c.perm pieces s) p (c.post defs s) s
 
 end Ode

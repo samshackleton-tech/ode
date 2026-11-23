@@ -93,7 +93,7 @@ def cell_line(off, var, word, seqs, kinds, name):
     return f"cell {int(off)} {var} " + sexp(by_kind(kbyte.expression(word), kinds, name), seqs)
 
 
-def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}, regs=None):
+def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked={}, regs=None, marked_result={}):
     """The places as the verifier reads them; `keep`: for a place (by where it is), the registers it might keep
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
     `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
@@ -118,6 +118,7 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
         if line.startswith("decreases "):
             out.append("keep " + " ".join(r for r in reg_list if (r not in named or r in also) and r in keep.get(at, reg_list)))
             if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on values kept out of the trace on a later coming there
+            if marked_result.get(at): out.append("marked_result " + " ".join(marked_result[at]))
             out.append("decreases " + sexp(kbyte.expression(line[10:]), seqs))
             out += lanes; continue
         raise SystemExit(f"prove: a line of a place the verifier in Lean does not read yet: {line}")
@@ -304,21 +305,53 @@ class Unkept(Exception): pass
 class Marked(Exception): pass           # at a place, a register may depend on a value kept out of the trace that did not on first coming there
 
 
+class MarkedResult(Exception): pass     # the same, during the `result depends on` pass
+
+
 class GaveUp(Exception): pass           # more runs of the verifier, or more time, than the prover was allowed
 
 
 class NoPlace(Exception): pass          # a path looped back to the same instruction repeatedly with no place
 
 
+def fn_statement_info(statement_path, symbol, reg_list):
+    """Extract (trace_exprs, instrs) for `symbol` from a statement file.
+    `instrs`: list of (pc, next_pc, op, regs_used) in statement order."""
+    trace_exprs, instrs, cur = [], [], None
+    reg_set = set(reg_list)
+    with open(statement_path) as f:
+        for raw in f:
+            line = raw.strip()
+            if not line: continue
+            parts = line.split()
+            if parts[0] == "fn" and len(parts) >= 2:
+                cur = parts[1]; continue
+            if cur != symbol: continue
+            if parts[0] == "traceexpr":
+                trace_exprs.append(line[len("traceexpr "):].strip())
+            elif parts[0] == "i" and len(parts) >= 4:
+                pc, nxt, op = int(parts[1]), int(parts[2]), parts[3]
+                regs = []
+                for tok in parts[4:]:
+                    v = (tok.split("=", 1)[1] if "=" in tok else tok).strip("().")
+                    if v in reg_set and v not in regs: regs.append(v)
+                instrs.append((pc, nxt, op, regs))
+    return trace_exprs, instrs
+
+
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None, until=None):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
+        self.trace_exprs = list(trace_exprs)
+        self.instrs = list(instrs)
+        self.reg_list = list(reg_list)
+        self.tried_clears = set()
 
     def close(self):
         if self.session is not None: self.session.close(); self.session = None
@@ -349,6 +382,32 @@ class Prover:
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
 
+    def clear_candidates(self, fail_pc, said):
+        """Candidate (clear_pc, reg, expr) steps right at or just before `fail_pc`."""
+        by_pc = {pc: (idx, nxt, op, regs) for idx, (pc, nxt, op, regs) in enumerate(self.instrs)}
+        cands = []
+        if fail_pc in by_pc:
+            idx, _, op, regs = by_pc[fail_pc]
+            # Try fail_pc itself (for memory reads, calls, returns) and up to 3 preceding instructions
+            # (for jumps whose flags were set by a preceding test/cmp/subs).
+            window = []
+            for step in range(4):
+                if idx - step < 0: break
+                pc_i, _, op_i, regs_i = self.instrs[idx - step]
+                rs = list(regs_i)
+                if step == 0 and ("return" in said or op_i in ("ret", "ret_link")) and self.reg_list[0] not in rs:
+                    rs.insert(0, self.reg_list[0])
+                if step == 0 and "call" in said:
+                    for r in self.reg_list[:6]:
+                        if r not in rs: rs.append(r)
+                for r in rs:
+                    if r in ("rsp", "sp"): continue
+                    window.append((pc_i, r))
+            for pc_i, r in window:
+                for expr in self.trace_exprs:
+                    cands.append((pc_i, r, expr))
+        return cands
+
     def solve(self, proof):
         """The proof extended until the verifier says shown; None if this way does not get there."""
         while True:
@@ -356,9 +415,25 @@ class Prover:
             if self.finished(said): return proof
             m = re.search(r"at the place (\d+) register (\d+) does not hold", said)
             if m: raise Unkept(int(m.group(1)), int(m.group(2)))
+            m = re.search(r"for `result depends on`:.*at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
+            if m: raise MarkedResult(int(m.group(1)), int(m.group(2)))
             m = re.search(r"at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
             if m: raise Marked(int(m.group(1)), int(m.group(2)))
-            if not said.startswith("need "): self.last = said; self.last_proof = proof; self.note(proof, said); return None
+            if not said.startswith("need "):
+                if "kept out of the trace" in said and self.trace_exprs and "trace-clear" not in said:
+                    with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+                    fail_pc, _, _ = locate(self.statement, self.out)
+                    if fail_pc is not None:
+                        before, before_proof = self.last, self.last_proof
+                        for clear_pc, reg, expr in self.clear_candidates(fail_pc, said):
+                            key = (len(proof), clear_pc, reg, expr)
+                            if key in self.tried_clears: continue
+                            self.tried_clears.add(key)
+                            done = self.solve(proof + [f"clear {clear_pc} {reg} {expr}"])
+                            if done is not None: return done
+                        self.last, self.last_proof = (before, before_proof) if before else (said, proof)
+                        return None
+                self.last = said; self.last_proof = proof; self.note(proof, said); return None
             lines = said.split("\n")
             what = lines[0][5:]
             facts = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("f ")]
@@ -451,10 +526,12 @@ def prove(spec_text, targets, statement_out, out):
     done, numbers = [], {}
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
-        keep, marked, runs = {}, {}, 0
+        keep, marked, marked_result, runs = {}, {}, {}, 0
+        trace_exprs, instrs = fn_statement_info(statement_out, symbol, reg_list)
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
-            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list), out, later)
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
+                       trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list)
             p.last = ""
             p.last_proof = []
             try: proof = p.solve([])
@@ -466,6 +543,12 @@ def prove(spec_text, targets, statement_out, out):
             except Marked as e:
                 if reg_list[e.args[1]] in marked.get(e.args[0], []): raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
                 marked[e.args[0]] = marked.get(e.args[0], []) + [reg_list[e.args[1]]]
+                runs += p.runs
+                p.close()
+                continue
+            except MarkedResult as e:
+                if reg_list[e.args[1]] in marked_result.get(e.args[0], []): raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+                marked_result[e.args[0]] = marked_result.get(e.args[0], []) + [reg_list[e.args[1]]]
                 runs += p.runs
                 p.close()
                 continue

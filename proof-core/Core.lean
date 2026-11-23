@@ -83,6 +83,7 @@ inductive Item where
   | tag (name : String) (n : Nat)
   | proof (starts : List Nat) (steps : List Step)   -- of arithmetic: the rows it starts from, by their numbers among those the verifier holds
   | know (g : Row)                                  -- a row for the verifier to show from the facts, and then to keep among them
+  | clear (pc : Nat) (reg : Nat) (e : SExpr)        -- at `pc`, prove register `reg` equals `e` (allowed by `traceClean`) and clear its mark
   deriving Inhabited
 
 /-- The proof's lines as the verifier takes them: by their numbers, and the number of the next one. (By
@@ -481,7 +482,8 @@ structure Place where
   decreases : SExpr
   lanes : List PlaceLanes := []   -- what the vector registers hold there
   cells : List PlaceCell := []    -- what cells of the frame hold there
-  marked : List Nat := []         -- registers that may depend on a secret on a later coming there (they need not on the first)
+  marked : List Nat := []         -- registers that may depend on values kept out of the trace on a later coming there (they need not on the first)
+  markedResult : List Nat := []   -- the same, for the `result depends on` pass (empty by default)
   wrote : Option (String × SExpr × String × SExpr) := none
                                   -- (run, lo, f, args): from the place `lo` on, the run given to write holds the list `f(args)`, place by place
   deriving Inhabited
@@ -504,6 +506,7 @@ structure Ctx where
   pieces : List Piece := []                     -- the read-only data of the program's object files, by number
   piece : Option Nat := none                    -- the file this function is of, where it takes an address in
                                                 -- that file's read-only data
+  resultPass : Bool := false                    -- true during the second pass for `result depends on`
   deriving Inhabited
 
 /-- The bytes of the read-only data of the function's own file, where the function takes an address there. -/
@@ -2860,7 +2863,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     if ctx.contract.arm64 then refuse "a return to the address at the stack pointer, in a function for AArch64"
     else do
       symReturn ctx s
-      if !(s.q.regq.contains RSP && (!ctx.contract.givesNumber || s.q.regq.contains 0)) then
+      if !(s.q.regq.contains RSP && (!ctx.contract.resultFollowsTrace || s.q.regq.contains 0)) then
         refuse "at the return the stack pointer, or the number returned, may depend on values kept out of the trace"
       else pure [(s, .returned)]
   | .retLink r =>
@@ -2870,7 +2873,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     else if !(s.reg LINK == Lin.var LINK) then refuse "at the return the register that held the address to return to does not hold what it held at entry"
     else do
       symReturn ctx s
-      if !(s.q.regq.contains RSP && (s.q.regq.contains LINK && (!ctx.contract.givesNumber || s.q.regq.contains 0))) then
+      if !(s.q.regq.contains RSP && (s.q.regq.contains LINK && (!ctx.contract.resultFollowsTrace || s.q.regq.contains 0))) then
         refuse "at the return the stack pointer, the address to return to, or the number returned may depend on values kept out of the trace"
       else pure [(s, .returned)]
   | .jump target cond =>
@@ -3687,13 +3690,128 @@ def needsOf (ctx : Ctx) (s : Sym) (c : Contract) : V Unit :=
         | none => false) then pure ()
   else refuse "a called function needs of the processor what this function's contract does not say it needs"
 
+/-- Is `x` a callee argument whose value at the call is already unmarked in `s`? -/
+def callArgClean (ctx : Ctx) (s : Sym) (c : Contract) (x : String) : Bool :=
+  let rec go : List (String × Kind) → List Nat → Bool
+    | (n, .number) :: args, r :: regs => if n == x then s.q.regq.contains r else go args regs
+    | (n, .bytes len) :: args, r :: regs =>
+      if n == x then
+        match c.regOf len with
+        | some l =>
+          s.q.regq.contains l &&
+          match findRun s r l ctx.contract.regions 0 with
+          | some j =>
+            match ctx.contract.regions[j]? with
+            | some (base, _) => !ctx.contract.hiddenAt base
+            | none => false
+          | none => false
+        | none => false
+      else go args regs
+    | _ :: args, _ :: regs => go args regs
+    | _, _ => false
+  go c.args c.argRegs
+
+/-- Is every free variable of `e` (not in `bound`) an argument of `c` that is unmarked at the call? -/
+def callAllClean (ctx : Ctx) (s : Sym) (c : Contract) (bound : List String) : SExpr → Bool
+  | .num _ => true
+  | .nil => true
+  | .name x => bound.contains x || callArgClean ctx s c x
+  | .bin _ a b => callAllClean ctx s c bound a && callAllClean ctx s c bound b
+  | .ifx cond a b => callAllClean ctx s c bound cond && callAllClean ctx s c bound a && callAllClean ctx s c bound b
+  | .index a i => callAllClean ctx s c bound a && callAllClean ctx s c bound i
+  | .call _ args => callAllClean ctx s c bound args
+  | .list items => callAllClean ctx s c bound items
+  | .cons a rest => callAllClean ctx s c bound a && callAllClean ctx s c bound rest
+  | .letx x rhs body => callAllClean ctx s c bound rhs && callAllClean ctx s c (x :: bound) body
+  | .each body x a b => callAllClean ctx s c bound a && callAllClean ctx s c bound b && callAllClean ctx s c (x :: bound) body
+  | .slice a lo hi => callAllClean ctx s c bound a && callAllClean ctx s c bound lo && callAllClean ctx s c bound hi
+  | .withx a puts => callAllClean ctx s c bound a && callAllClean ctx s c bound puts
+  | .record _ items => callAllClean ctx s c bound items
+  | .field e _ => callAllClean ctx s c bound e
+  | .theNumber _ x a b cond => callAllClean ctx s c bound a && callAllClean ctx s c bound b && callAllClean ctx s c (x :: bound) cond
+  | .thePower _ x cond => callAllClean ctx s c (x :: bound) cond
+
+/-- First `.number` argument of `c` in register `r0` (provided no earlier argument shares its name). -/
+def callerNumName (c : Contract) (r0 : Nat) : Option String :=
+  let rec go (seen : List String) : List (String × Kind) → List Nat → Option String
+    | (x, .number) :: args, r :: regs => if r == r0 && !seen.contains x then some x else go (x :: seen) args regs
+    | (x, _) :: args, _ :: regs => go (x :: seen) args regs
+    | _, _ => none
+  go [] c.args c.argRegs
+
+/-- Name of the `j`-th `.bytes` region in `c.regions` (provided no earlier argument shares its name). -/
+def callerRegionName (c : Contract) (j : Nat) : Option String :=
+  let rec go (seen : List String) : List (String × Kind) → List Nat → Nat → Option String
+    | (x, .bytes len) :: args, _ :: regs, k =>
+      match c.regOf len with
+      | some _ => if k == j && !seen.contains x then some x else go (x :: seen) args regs (k + 1)
+      | none => go (x :: seen) args regs k
+    | (x, _) :: args, _ :: regs, k => go (x :: seen) args regs k
+    | _, _, _ => none
+  go [] c.args c.argRegs 0
+
+/-- Map a callee argument `x` to a caller entry expression with the same value at the call. -/
+def callArgExpr (ctx : Ctx) (s : Sym) (c : Contract) (x : String) : Option SExpr :=
+  let rec go : List (String × Kind) → List Nat → Option SExpr
+    | (n, .number) :: args, r :: regs =>
+      if n == x then
+        match Lin.isConst (s.reg r) with
+        | some k => if 0 ≤ k then some (.num k) else none
+        | none =>
+          (List.range ctx.nreg).findSome? fun r0 =>
+            if s.reg r == Lin.var r0 then (callerNumName ctx.contract r0).map .name else none
+      else go args regs
+    | (n, .bytes len) :: args, r :: regs =>
+      if n == x then
+        match c.regOf len with
+        | some l =>
+          match findRun s r l ctx.contract.regions 0 with
+          | some j => (callerRegionName ctx.contract j).map .name
+          | none => none
+        | none => none
+      else go args regs
+    | _ :: args, _ :: regs => go args regs
+    | _, _ => none
+  go c.args c.argRegs
+
+/-- Substitute free callee argument names by caller entry expressions (never capturing bound variables). -/
+def substCallExpr (ctx : Ctx) (s : Sym) (c : Contract) (bound : List String) : SExpr → Option SExpr
+  | .num n => some (.num n)
+  | .nil => some .nil
+  | .name x =>
+    if bound.contains x then some (.name x)
+    else match callArgExpr ctx s c x with
+      | some (.name y) => if bound.contains y then none else some (.name y)
+      | other => other
+  | .bin op a b => do pure (.bin op (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound b))
+  | .ifx cond a b => do pure (.ifx (← substCallExpr ctx s c bound cond) (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound b))
+  | .index a i => do pure (.index (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound i))
+  | .call f args => do pure (.call f (← substCallExpr ctx s c bound args))
+  | .list items => do pure (.list (← substCallExpr ctx s c bound items))
+  | .cons a rest => do pure (.cons (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound rest))
+  | .letx x rhs body => do pure (.letx x (← substCallExpr ctx s c bound rhs) (← substCallExpr ctx s c (x :: bound) body))
+  | .each body x a b => do pure (.each (← substCallExpr ctx s c (x :: bound) body) x (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound b))
+  | .slice a lo hi => do pure (.slice (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound lo) (← substCallExpr ctx s c bound hi))
+  | .withx a puts => do pure (.withx (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound puts))
+  | .record ns items => do pure (.record ns (← substCallExpr ctx s c bound items))
+  | .field e f => do pure (.field (← substCallExpr ctx s c bound e) f)
+  | .theNumber g x a b cond => do pure (.theNumber g x (← substCallExpr ctx s c bound a) (← substCallExpr ctx s c bound b) (← substCallExpr ctx s c (x :: bound) cond))
+  | .thePower g x cond => do pure (.thePower g x (← substCallExpr ctx s c (x :: bound) cond))
+
+/-- Is a callee expression `e` guaranteed to take the same value in any two runs agreeing at this call? -/
+def callExprClean (ctx : Ctx) (s : Sym) (c : Contract) (e : SExpr) : Bool :=
+  callAllClean ctx s c [] e ||
+  match substCallExpr ctx s c [] e with
+  | some e' => ctx.contract.traceClean e'
+  | none => false
+
 /-- What a called function's contract asks about marks is so at the call: the stack pointer and the
-registers of its arguments, but for the numbers its contract says are hidden, are known not to be marked; each run of bytes it is given to read is one its contract
-says is hidden (so nothing is asked of its bytes), or one this function was given to read, whole, that
-this function's contract does not say is hidden; and a run of a fixed count it reads is one its contract
-says is hidden, or a part of the frame whose cells are known not to be marked. And where a cell of the frame is known not to be marked, each run the called function
-may write is within a run this function was given to write (so it is no part of the frame), or is a part
-of the frame that every such cell lies apart from. -/
+registers of its arguments, but for the numbers its contract says are hidden, are known not to be marked;
+each run of bytes it is given to read is one its contract says is hidden (so nothing is asked of its bytes),
+or one this function was given to read, whole, that this function's contract does not say is hidden;
+a run of a fixed count it reads is one its contract says is hidden, or a part of the frame whose cells are
+known not to be marked; and every computed expression in its `trace depends on` line is computed only from
+constants and what this function's `trace depends on` line lists. -/
 def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
   c.cleanAtEntry.all s.q.regq.contains &&
   c.fixeds.all (fun x => c.hidden.contains x.1 ||
@@ -3709,21 +3827,38 @@ def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
      (match frameAt s r with
       | some o => s.q.fq.all fun cell => decide (cell + 8 ≤ o) || decide (o + (n : Int) ≤ cell)
       | none => false))) &&
-  c.regions.all fun (r, l) =>
+  c.regions.all (fun (r, l) =>
     c.hiddenAt r ||
-      match findRun s r l ctx.contract.regions 0 with
-      | some j =>
-        match ctx.contract.regions[j]? with
-        | some (base, _) => !ctx.contract.hiddenAt base
-        | none => false
-      | none => false
+      (s.q.regq.contains l &&
+        match findRun s r l ctx.contract.regions 0 with
+        | some j =>
+          match ctx.contract.regions[j]? with
+          | some (base, _) => !ctx.contract.hiddenAt base
+          | none => false
+        | none => false)) &&
+  c.traceExprs.all (callExprClean ctx s c)
 
-/-- What is known not to be marked after a call: the stack pointer; the number returned, where the called
-function's contract says one is (of the other registers a callee does not keep, nothing: the contract says
-nothing of them); each register a callee keeps that was not marked before; and each cell of the frame not
-marked before that is not below the stack pointer. -/
-def afterCallQ (c : Contract) (s : Sym) : SMarks :=
-  { regq := (if c.givesNumber then [0, RSP] else [RSP]) ++ s.q.regq.filter c.keeps.contains,
+/-- Is the returned number (register 0) known to depend only on what this caller's `trace depends on` line
+lists after calling `c`?
+- `returns E`: yes when `E` is clean at the call (`callExprClean`).
+- `returns r` with no `result depends on`: yes (`callQuiet` already ensured `c`'s trace inputs are clean).
+- `returns r` with `result depends on` (`resultHidden = some rh`): yes when `c.forResult rh` is also quiet at the call. -/
+def callReturnsClean (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
+  match c.returns with
+  | some e => callExprClean ctx s c e
+  | none =>
+    if c.resultFollowsTrace then true
+    else if c.result.isSome then
+      match c.resultHidden with
+      | some rh => callQuiet ctx s (c.forResult rh)
+      | none => false
+    else false
+
+/-- What is known not to be marked after a call: the stack pointer; the number returned, where
+`cleanRet` holds; each register a callee keeps that was not marked before; and each cell of the frame
+not marked before that is not below the stack pointer. -/
+def afterCallQ (cleanRet : Bool) (c : Contract) (s : Sym) : SMarks :=
+  { regq := (if cleanRet then [0, RSP] else [RSP]) ++ s.q.regq.filter c.keeps.contains,
     fq := match s.sp with
       | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
       | none => [] }
@@ -3761,7 +3896,7 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       let s' ← symCall ctx s c
       if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
-      else pure [({ s' with q := afterCallQ c (quietAtCall s c) }, .at i.next)]
+      else pure [({ s' with q := afterCallQ (callReturnsClean ctx (quietAtCall s c) c) c (quietAtCall s c) }, .at i.next)]
   | none => symInstr ctx s i
 
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=
@@ -4014,9 +4149,48 @@ structure Seen where
   first : Sym
 
 /-- Of the registers known not to be marked on first coming to a place, those the place does not say may be
-marked on a later coming. -/
-def placeQuiet (p : Place) (regq : List Nat) : List Nat :=
-  regq.filter fun r => !p.marked.contains r
+marked on a later coming (using `markedResult` during the second pass for `result depends on`). -/
+def placeQuiet (ctx : Ctx) (p : Place) (regq : List Nat) : List Nat :=
+  let m := if ctx.resultPass then p.markedResult else p.marked
+  regq.filter fun r => !m.contains r
+
+/-- Peek for a `clear` item for the current `pc` sitting next in the proof stream. -/
+def popClear (pc : Nat) : V (Option (Nat × SExpr)) := fun items =>
+  match items.line items.next with
+  | some (.clear atPc r e) =>
+    if atPc == pc then .ok (some (r, e), { items with next := items.next + 1 })
+    else .ok (none, items)
+  | _ => .ok (none, items)
+
+/-- Prove that register `r` equals specification expression `e` (evaluated in `symEnv ctx.contract`) and
+that `e` is computed only from what `ctx.contract`'s `trace depends on` line lists; then mark `r` clean. -/
+def symRevealReg (ctx : Ctx) (s : Sym) (r : Nat) (e : SExpr) : V Sym :=
+  if !(r < ctx.nreg) then refuse "a trace-clear step names a register out of range"
+  else if !ctx.contract.traceClean e then
+    refuse "a trace-clear step names an expression that may depend on values kept out of the trace"
+  else do
+    let (res, s1) ← seval ctx (symEnv ctx.contract) s e
+    match res with
+    | .val (.lin v) => do
+      entail s1.facts (Lin.sub v (s1.reg r))
+      entail s1.facts (Lin.sub (s1.reg r) v)
+      pure { s with q := { s.q with regq := r :: s.q.regq } }
+    | .tail c => do
+      let _ ← specGoal ctx 16 s1 (.value c (s1.reg r))
+      pure { s with q := { s.q with regq := r :: s.q.regq } }
+    | _ => refuse "a trace-clear step names an expression that is not a number"
+
+def CLEARS : Nat := 16
+
+/-- Consume any `clear` items for `pc` sitting next in the proof stream. -/
+def symClears (ctx : Ctx) (pc : Nat) : Nat → Sym → V Sym
+  | 0, s => pure s
+  | fuel + 1, s => do
+    match ← popClear pc with
+    | none => pure s
+    | some (r, e) => do
+      let s' ← symRevealReg ctx s r e
+      symClears ctx pc fuel s'
 
 /-- Where a path goes on after an instruction. At the function's return it ends. At a place this path has
 come to before, the coming there is shown to be one that place's general state stands for, with a number
@@ -4036,7 +4210,7 @@ def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V 
         let (g, d, first) ← generalize ctx p next.1
         -- (what is known not to be marked at the place: the registers that are not on this first coming,
         -- but for those the place says may be on a later one)
-        go (⟨p, d, { first with q := { regq := placeQuiet p next.1.q.regq } }⟩ :: seen) { g with q := { regq := placeQuiet p next.1.q.regq } } pc'
+        go (⟨p, d, { first with q := { regq := placeQuiet ctx p next.1.q.regq } }⟩ :: seen) { g with q := { regq := placeQuiet ctx p next.1.q.regq } } pc'
 
 /-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
 def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit
@@ -4045,6 +4219,7 @@ def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit
     match ctx.code.lookup pc with
     | none => refuse s!"no instruction at {pc}"
     | some i => do
+      let s ← symClears ctx pc CLEARS s
       let nexts ← symNext ctx s i
       each (onward ctx seen (explore ctx fuel)) nexts
 
@@ -4055,11 +4230,30 @@ def verify (ctx : Ctx) : V Unit := do
   explore ctx PATH [] (entrySym ctx) 0
   if ← finished then pure () else refuse "the proof says more than is asked of it"
 
-/-- Does the function meet its contract, by this proof? `none`: yes. -/
-def verdict (ctx : Ctx) (proof : List Item) : Option String :=
+/-- One verification pass. `none`: yes. -/
+def verdictOne (ctx : Ctx) (proof : List Item) : Option String :=
   match verify ctx (Items.ofList proof) with
   | .ok _ => none
   | .error why => some why
+
+/-- Does the function meet its contract, by this proof? `none`: yes.
+Where the contract has `result depends on` (`resultHidden = some rh`), runs a second pass against
+`c.forResult rh` to verify the returned number depends only on `trace depends on` and `result depends on`. -/
+def verdict (ctx : Ctx) (proof : List Item) : Option String :=
+  match verdictOne ctx proof with
+  | some why => some why
+  | none =>
+    match ctx.contract.resultHidden with
+    | none => none
+    | some rh =>
+      if !rh.all ctx.contract.hidden.contains then
+        some "result depends on: arguments kept out of the result must be a subset of those kept out of the trace"
+      else if !ctx.contract.result.isSome then
+        some "result depends on requires a named return value"
+      else
+        match verdictOne { ctx with contract := ctx.contract.forResult rh, resultPass := true } proof with
+        | none => none
+        | some why => some s!"for `result depends on`: {why}"
 
 /-- A function of a statement: its name, its instructions and its contract; the object file it is of, by
 number, where it takes an address in that file's read-only data; and, the maker's, its places and its proof. -/

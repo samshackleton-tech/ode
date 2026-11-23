@@ -62,7 +62,7 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "piece", "stack", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "data", "piece", "stack", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -158,6 +158,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     | some n => onLast fun g => { g with contract := { g.contract with atLeast := g.contract.atLeast ++ [(name, n)] } }
     | none => throw s!"cannot read {line}"
   | ["hidden", name] => onLast fun g => { g with contract := { g.contract with hidden := g.contract.hidden ++ [name] } }
+  | "traceexpr" :: _ => do
+    let e ← readSExpr (rest line 1)
+    onLast fun g => { g with contract := { g.contract with traceExprs := g.contract.traceExprs ++ [e] } }
+  | "resultdep" :: names =>
+    onLast fun g => { g with contract := { g.contract with resultHidden := some names } }
   | ["piece", align, hex] => match align.toNat?, readBytes hex.toList with      -- the read-only data of an object file
     | some align, some bytes => pure { t with pieces := t.pieces ++ [{ bytes := bytes, align := align }] }
     | _, _ => throw "cannot read the bytes of a file's read-only data"
@@ -199,6 +204,7 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
   | "marked" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with marked := p.marked ++ rs }
+  | "marked_result" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with markedResult := p.markedResult ++ rs }
   | "fact" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with facts := p.facts ++ [e] }
   | "decreases" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with decreases := e }
   | "lane" :: x :: more => do
@@ -231,6 +237,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | "s" :: numbers => match numbers.mapM String.toNat? with
     | some [i, a, j, b, d] => pure { t with steps := t.steps ++ [⟨i, a, j, b, d⟩] }
     | _ => throw s!"cannot read {line}"
+  | "clear" :: pcStr :: reg :: _ => do
+    let pc ← match pcStr.toNat? with | some n => pure n | none => throw s!"cannot read {line}"
+    let r ← regOrFail reg
+    let e ← readSExpr (rest line 3)
+    onCur fun g => pure { g with proof := g.proof ++ [.clear pc r e] }
   | ["q"] => do
     let t' ← onCur fun g => pure { g with proof := g.proof ++ [.proof t.starts t.steps] }
     pure { t' with starts := [], steps := [] }

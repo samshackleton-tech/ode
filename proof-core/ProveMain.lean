@@ -143,13 +143,23 @@ def main (args : List String) : IO UInt32 := do
       else
         let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done,
                            pieces := job.pieces, piece := f.piece }
-        let why :=
-          if f.name == name then
+        let why ←
+          if f.name == name then do
             -- (with the advice: where the lines have run out before an `ensures` of words or a call, the rows to try are printed)
             match verify { ctx with advice := adviceFor ctx } { line := lineAsItComes } with
-            | .ok _ => none
-            | .error why => some why
-          else verdict ctx f.proof
+            | .error why => pure (some why)
+            | .ok _ =>
+              match ctx.contract.resultHidden with
+              | none => pure none
+              | some rh =>
+                if !rh.all ctx.contract.hidden.contains then
+                  pure (some "result depends on: arguments kept out of the result must be a subset of those kept out of the trace")
+                else
+                  let items ← known.get
+                  match verdictOne { ctx with contract := ctx.contract.forResult rh, resultPass := true } items.toList with
+                  | none => pure none
+                  | some why => pure (some s!"for `result depends on`: {why}")
+          else pure (verdict ctx f.proof)
         match why with
         | some why => said := some s!"{why}\nin {f.name}"
         | none => done := (f.name, f.contract) :: done

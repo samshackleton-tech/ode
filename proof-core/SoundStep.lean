@@ -13,6 +13,7 @@ structure Setting (ctx : Ctx) (p : Program) (s0 : State) : Prop where
   pre : ctx.contract.pre p s0
   quiet : ctx.contract.quietAt s0
   loaded : Loaded ctx.pieces s0
+  dataQuiet : ∀ k pc, ctx.pieces[k]? = some pc → ∀ j, j < pc.bytes.length → s0.marks.mem (s0.data k + j) = false
   apart : ∀ a, inPieces ctx.pieces s0 a = true → ctx.contract.inFrame s0 a = false ∧ ctx.contract.inOut s0 a = false
 
 namespace Setting
@@ -731,7 +732,7 @@ theorem data_byte (hd : ctx.data ≠ []) {k : Nat} (hk : k < ctx.data.length) :
     s0.mem (ctx.own s0 + k) = ctx.data.getD k 0 := by
   obtain ⟨j, pc, hj, hq, e⟩ := Ctx.data_piece hd
   have hk' : k < pc.bytes.length := by rw [← e]; exact hk
-  rw [Ctx.own_eq hj, ((E.loaded j pc hq).2.2 k hk').1, e]
+  rw [Ctx.own_eq hj, (E.loaded j pc hq).2.2 k hk', e]
   simp [List.getD, List.getElem?_eq_getElem hk']
 /-- At entry no byte of the file's data is marked. -/
 theorem data_quiet (hd : ctx.data ≠ []) {k : Nat} (hk : k < ctx.data.length) :
@@ -739,7 +740,7 @@ theorem data_quiet (hd : ctx.data ≠ []) {k : Nat} (hk : k < ctx.data.length) :
   obtain ⟨j, pc, hj, hq, e⟩ := Ctx.data_piece hd
   have hk' : k < pc.bytes.length := by rw [← e]; exact hk
   rw [Ctx.own_eq hj]
-  exact ((E.loaded j pc hq).2.2 k hk').2
+  exact E.dataQuiet j pc hq k hk'
 end Setting
 
 theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : String) (r n : Nat),

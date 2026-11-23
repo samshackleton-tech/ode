@@ -801,6 +801,7 @@ theorem heldFor_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym
       cases it with
       | proof _ _ => exact (refuse_ok h).elim
       | know _ => exact (refuse_ok h).elim
+      | clear _ _ _ => exact (refuse_ok h).elim
       | tag name k =>
         simp only at h
         split at h
@@ -1303,6 +1304,7 @@ theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         cases it with
         | proof _ _ => exact (refuse_ok h).elim
         | know _ => exact (refuse_ok h).elim
+        | clear _ _ _ => exact (refuse_ok h).elim
         | tag name n =>
           simp only at h
           split at h
