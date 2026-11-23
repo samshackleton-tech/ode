@@ -32,11 +32,16 @@ CHANGED = [("add is sub", "| D = add64(S, P)", "| D = sub64(S, P)", "differs"),
            ("sub's registers the other way in the word", "= 1 1 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 1 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "differs"),
            ("add's registers the other way in the word", "= 1 0 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 0 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "word"),
            ("cmp_rr reverses operands for cf", "| zf = equal(S, P); cf = below(S, P)", "| zf = equal(S, P); cf = below(P, S)", "differs"),
-           ("ldrb reads four bytes", "| D = mem8(B, N)", "| D = mem32(B, N)", "differs")]
+           ("ldrb reads four bytes", "| D = mem8(B, N)", "| D = mem32(B, N)", "differs"),
+           ("lsl shifts right", "| D = shl64(S, I)", "| D = shr64(S, I)", "differs"),
+           ("fmov_d puts S in wrong lanes", "| X = lanes_of64(S)", "| X = words(S, 0, 0, 0)", "differs"),
+           ("uzp1 swaps with uzp2", "| X = lanes(Y.0, Y.2, Z.0, Z.2)", "| X = lanes(Y.1, Y.3, Z.1, Z.3)", "differs"),
+           ("zip1_4s swaps middle lanes", "| X = lanes(Y.0, Z.0, Y.1, Z.1)", "| X = lanes(Y.0, Y.1, Z.0, Z.1)", "differs"),
+           ("ext_4 shifts by 8", "| X = lanes(Y.1, Y.2, Y.3, Z.0)", "| X = lanes(Y.2, Y.3, Z.0, Z.1)", "differs")]
 # Words that are instructions and no instance of a row: each has 31 in a field of D, S or P, or a bit the row has fixed.
 NOT_READ = {"aa1f03e0": "mov x0, xzr", "aa0103ff": "mov xzr, x1", "8b1f0020": "add x0, x1, xzr", "91401020": "add x0, x1, #4, lsl #12",
             "f8626820": "ldr x0, [x1, x2]", "f85f8020": "ldur x0, [x1, #-8]", "d65f0020": "ret x1", "4c407420": "ld1 {v0.8h}, [x1]",
-            "00000000": "udf #0"}
+            "d341fc20": "lsr x0, x1, #1 (UBFM imms=63, not LSL)", "00000000": "udf #0"}
 
 
 def text_of(obj):
@@ -59,8 +64,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 36)
-        self.assertEqual(len(self.ways), 36)
+        self.assertEqual(len(self.rows), 47)
+        self.assertEqual(len(self.ways), 47)
         heads = [row.pattern[0] for row in self.rows]
         self.assertEqual(len(set(heads)), len(heads))             # a decoded instruction's first word says its row
         for way in self.ways:                                     # every placeholder of a row is in each of its ways
@@ -78,13 +83,24 @@ class Words(unittest.TestCase):
                     v = rng.randrange(1 << width)
                     if name in word.REGISTER: bind[name] = word.GENERAL[v % 31]
                     elif name.isupper(): bind[name] = v
-                    else:
-                        placeholder, (_, how, k) = next((p, rule) for p, rule in way.rules.items() if rule[0] == name)
+                for placeholder, rs in way.rules.items():
+                    if len(rs) == 1:
+                        field, how, k = rs[0]
+                        width = way.fields[field][1]
+                        v = rng.randrange(1 << width)
                         if how == "pc":
                             signed = v - (1 << width) if v >= (1 << (width - 1)) else v
                             bind[placeholder] = signed * k
                         else:
                             bind[placeholder] = v * k if how == "times" else k - v
+                    else:
+                        lo, hi = -1 << 60, 1 << 60
+                        for field, how, k in rs:
+                            w = way.fields[field][1]
+                            assert how == "from"
+                            lo = max(lo, k - ((1 << w) - 1))
+                            hi = min(hi, k)
+                        bind[placeholder] = rng.randint(lo, hi)
                 got = word.decode(self.ways, word.encode(way, bind))
                 self.assertIsNotNone(got, (row.name, bind))
                 self.assertEqual((got[0].name, got[1]), (row.name, bind))
@@ -108,7 +124,9 @@ class Words(unittest.TestCase):
                            ("add_rri", {"D": "x0", "S": "x1", "I": 4096}), ("ldr64", {"D": "x0", "B": "x1", "N": 12}), ("ldr64", {"D": "x0", "B": "x1", "N": 32768}),
                            ("ldr32", {"D": "x0", "B": "x1", "N": 6}), ("ushr_4s", {"X": 0, "Y": 1, "I": 0}), ("ushr_4s", {"X": 0, "Y": 1, "I": 33}),
                            ("shl_4s", {"X": 0, "Y": 1, "I": 32}), ("eor_v", {"X": 32, "Y": 1, "Z": 2}), ("ldr64", {"D": "x0", "B": "x31", "N": 8}),
-                           ("ldr64", {"D": "x0", "B": "sp", "N": 16}), ("ldr64_sp", {"D": "sp", "N": 16}), ("str64_sp", {"S": "x0", "N": 4})):
+                           ("ldr64", {"D": "x0", "B": "sp", "N": 16}), ("ldr64_sp", {"D": "sp", "N": 16}), ("str64_sp", {"S": "x0", "N": 4}),
+                           ("lsl_ri", {"D": "x0", "S": "x1", "I": 0}), ("lsl_ri", {"D": "x0", "S": "x1", "I": 64}),
+                           ("fmov_d", {"X": 32, "S": "x0"}), ("fmov_d", {"X": 0, "S": "sp"})):
             with self.subTest(row=name, bind=bind):
                 with self.assertRaises(word.Refuse): word.encode(way[name], bind)
         self.assertEqual(word.encode(way["ldr64_sp"], {"D": "x0", "N": 16}).hex(), "e00b40f9")
@@ -156,7 +174,7 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("29 rows, each as the assembler writes it and as the table writes it, 5800 instances: 0 differ from this processor", last)
+        self.assertIn("40 rows, each as the assembler writes it and as the table writes it, 8000 instances: 0 differ from this processor", last)
         self.assertIn("0 of the assembler's words are not the table's; 7 rows are not run: b, b_eq, b_ne, b_hs, b_lo, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)

@@ -43,23 +43,26 @@ class Way:
                 if low != bit + 1: raise ValueError(f"{row.name}: the places of `{ch}` do not lie together in `{text}`")
                 self.fields[ch] = (bit, width + 1)
             else: raise ValueError(f"{row.name}: `{ch}` in `{text}`")
-        # a placeholder that is not a field itself: (the field it is worked out from, how)
+        # a placeholder that is not a field itself: list of (field, how, k) constraints on that placeholder
         self.rules, self.late = {}, None
         for note in notes.split():
             m = re.fullmatch(r"([A-Z])=([a-z])\*(\d+)", note)
-            if m: self.rules[m.group(1)] = (m.group(2), "times", int(m.group(3))); continue
+            if m: self.rules.setdefault(m.group(1), []).append((m.group(2), "times", int(m.group(3)))); continue
             m = re.fullmatch(r"([A-Z])=(\d+)-([a-z])", note)
-            if m: self.rules[m.group(1)] = (m.group(3), "from", int(m.group(2))); continue
+            if m: self.rules.setdefault(m.group(1), []).append((m.group(3), "from", int(m.group(2)))); continue
             m = re.fullmatch(r"(call|pc)=([A-Z])", note)
             if m:
                 self.late = (m.group(1), m.group(2))
                 if m.group(1) == "pc":
-                    self.rules[m.group(2)] = (m.group(2).lower(), "pc", 4)
+                    self.rules.setdefault(m.group(2), []).append((m.group(2).lower(), "pc", 4))
                 continue
             raise ValueError(f"{row.name}: the note `{note}` in `{text}`")
-        for field, _, _ in self.rules.values():
-            if field not in self.fields: raise ValueError(f"{row.name}: no field `{field}` in `{text}`")
-        if any(ch.islower() and ch not in {f for f, _, _ in self.rules.values()} for ch in self.fields):
+        rule_fields = set()
+        for rs in self.rules.values():
+            for field, _, _ in rs:
+                if field not in self.fields: raise ValueError(f"{row.name}: no field `{field}` in `{text}`")
+                rule_fields.add(field)
+        if any(ch.islower() and ch not in rule_fields for ch in self.fields):
             raise ValueError(f"{row.name}: a field that no placeholder is worked out from, in `{text}`")
 
 
@@ -71,20 +74,21 @@ def field_of(way, name, bind):
             if v not in GENERAL: raise Refuse(f"{v} is no register x0 to x30")
             v = GENERAL.index(v)
         return v
-    for placeholder, (field, how, k) in way.rules.items():
-        if field == name:
-            v = bind[placeholder]
-            if how == "times":
-                if v % k: raise Refuse(f"{v} is not a multiple of {k}")
-                return v // k
-            if how == "pc":
-                if not isinstance(v, int) or v % k: raise Refuse(f"{v} is not a multiple of {k}")
-                _, width = way.fields[field]
-                q = v // k
-                if not -(1 << (width - 1)) <= q < (1 << (width - 1)):
-                    raise Refuse(f"{v} does not fit the signed {width}-bit word offset of {placeholder}")
-                return q & ((1 << width) - 1)
-            return k - v
+    for placeholder, rs in way.rules.items():
+        for field, how, k in rs:
+            if field == name:
+                v = bind[placeholder]
+                if how == "times":
+                    if v % k: raise Refuse(f"{v} is not a multiple of {k}")
+                    return v // k
+                if how == "pc":
+                    if not isinstance(v, int) or v % k: raise Refuse(f"{v} is not a multiple of {k}")
+                    _, width = way.fields[field]
+                    q = v // k
+                    if not -(1 << (width - 1)) <= q < (1 << (width - 1)):
+                        raise Refuse(f"{v} does not fit the signed {width}-bit word offset of {placeholder}")
+                    return q & ((1 << width) - 1)
+                return k - v
     raise Refuse(f"nothing says what the field {name} holds")
 
 
@@ -118,12 +122,15 @@ def decode(all_ways, word):
                     bind[name] = GENERAL[v]
                 elif name.isupper(): bind[name] = v
                 else:
-                    placeholder, (_, how, k) = next((p, rule) for p, rule in way.rules.items() if rule[0] == name)
+                    placeholder, (_, how, k) = next((p, rule) for p, rs in way.rules.items() for rule in rs if rule[0] == name)
                     if how == "pc":
                         signed = v - (1 << width) if v >= (1 << (width - 1)) else v
-                        bind[placeholder] = signed * k
+                        val = signed * k
                     else:
-                        bind[placeholder] = v * k if how == "times" else k - v
+                        val = v * k if how == "times" else k - v
+                    if placeholder in bind and bind[placeholder] != val:
+                        raise Refuse("conflicting fields")
+                    bind[placeholder] = val
             if encode(way, bind) != word: continue
         except Refuse: continue
         return way.row, bind
@@ -153,4 +160,4 @@ if __name__ == "__main__":
             for text in row.bytes:
                 way = Way(row, text)
                 print(f"{row.name:12} {way.value:08x} under {way.mask:08x}  " + " ".join(f"{n}:{low + width - 1}..{low}" for n, (low, width) in way.fields.items())
-                      + ("  " + " ".join(f"{p}={'%s*%d' % (f, k) if how == 'times' else '%d-%s' % (k, f)}" for p, (f, how, k) in way.rules.items()) if way.rules else ""))
+                      + ("  " + " ".join(f"{p}={'%s*%d' % (f, k) if how == 'times' else '%d-%s' % (k, f)}" for p, rs in way.rules.items() for f, how, k in rs) if way.rules else ""))

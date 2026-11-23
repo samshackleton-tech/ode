@@ -285,7 +285,7 @@ class MachineArm64(unittest.TestCase):
         self.assertEqual(differs, {})
         left = [r.name for r in self.rows if r.name not in same]
         self.assertEqual(left, ["bl", "ret"])                    # (a return: the next test; a call is said in Machine.lean itself)
-        self.assertEqual(len(same), 34)
+        self.assertEqual(len(same), 45)
         self.assertGreater(faults, self.n // 4)                  # the two rows at the stack pointer, where it is no multiple of 16
         print(f"\nmachine, AArch64: {len(same)} rows, {sum(same.values())} instances: Machine.lean leaves what conc.py leaves "
               f"({faults} of them faults in both); not compared: {' '.join(left)}", file=sys.stderr)

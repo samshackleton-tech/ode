@@ -55,6 +55,8 @@ add_rri      | add D64, S64, I              | .addi .D .S I        | D = add64(S
              = 1 0 0 100010 0 IIIIIIIIIIII SSSSS DDDDD
 sub_rri      | sub D64, S64, I              | .subi .D .S I        | D = sub64(S, I)
              = 1 1 0 100010 0 IIIIIIIIIIII SSSSS DDDDD
+lsl_ri       | lsl D64, S64, I              | .lsl .D .S I         | D = shl64(S, I)
+             = 1 10 100110 1 rrrrrr ssssss SSSSS DDDDD ; I=64-r I=63-s
 
 # -- the stack pointer
 add_sp       | add sp, sp, I                | .add_sp I            | sp = add64(sp, I)
@@ -123,3 +125,23 @@ ushr_4s      | ushr vX.4s, vY.4s, I         | .ushr X Y I          | X = each32(
              = 0 1 1 011110 01 iiiii 00000 1 YYYYY XXXXX ; I=32-i
 shl_4s       | shl vX.4s, vY.4s, I          | .shl X Y I           | X = each32(shl32, Y, I)
              = 0 1 0 011110 01 IIIII 01010 1 YYYYY XXXXX
+fmov_d       | fmov dX, S64                 | .fmovd X .S          | X = lanes_of64(S)
+             = 1 00 11110 01 1 00 111 000000 SSSSS XXXXX
+uzp1_4s      | uzp1 vX.4s, vY.4s, vZ.4s     | .uzp1_4s X Y Z       | X = lanes(Y.0, Y.2, Z.0, Z.2)
+             = 0 1 0 01110 10 0 ZZZZZ 0 001 10 YYYYY XXXXX
+uzp2_4s      | uzp2 vX.4s, vY.4s, vZ.4s     | .uzp2_4s X Y Z       | X = lanes(Y.1, Y.3, Z.1, Z.3)
+             = 0 1 0 01110 10 0 ZZZZZ 0 101 10 YYYYY XXXXX
+zip1_4s      | zip1 vX.4s, vY.4s, vZ.4s     | .zip1_4s X Y Z       | X = lanes(Y.0, Z.0, Y.1, Z.1)
+             = 0 1 0 01110 10 0 ZZZZZ 0 011 10 YYYYY XXXXX
+zip2_4s      | zip2 vX.4s, vY.4s, vZ.4s     | .zip2_4s X Y Z       | X = lanes(Y.2, Z.2, Y.3, Z.3)
+             = 0 1 0 01110 10 0 ZZZZZ 0 111 10 YYYYY XXXXX
+zip1_2d      | zip1 vX.2d, vY.2d, vZ.2d     | .zip1_2d X Y Z       | X = lanes(Y.0, Y.1, Z.0, Z.1)
+             = 0 1 0 01110 11 0 ZZZZZ 0 011 10 YYYYY XXXXX
+zip2_2d      | zip2 vX.2d, vY.2d, vZ.2d     | .zip2_2d X Y Z       | X = lanes(Y.2, Y.3, Z.2, Z.3)
+             = 0 1 0 01110 11 0 ZZZZZ 0 111 10 YYYYY XXXXX
+ext_4        | ext vX.16b, vY.16b, vZ.16b, 4  | .ext4 X Y Z        | X = lanes(Y.1, Y.2, Y.3, Z.0)
+             = 0 1 1 01110 000 ZZZZZ 0 0100 0 YYYYY XXXXX
+ext_8        | ext vX.16b, vY.16b, vZ.16b, 8  | .ext8 X Y Z        | X = lanes(Y.2, Y.3, Z.0, Z.1)
+             = 0 1 1 01110 000 ZZZZZ 0 1000 0 YYYYY XXXXX
+ext_12       | ext vX.16b, vY.16b, vZ.16b, 12 | .ext12 X Y Z       | X = lanes(Y.3, Z.0, Z.1, Z.2)
+             = 0 1 1 01110 000 ZZZZZ 0 1100 0 YYYYY XXXXX

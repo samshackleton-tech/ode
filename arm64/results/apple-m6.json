@@ -1,20 +1,20 @@
 {
- "another word than the table writes": 0,
- "cases a row and way": 200,
- "differ from the processor": 0,
- "faults, as the row says": 193,
- "instances": 11600,
- "machine": "arm64",
- "processor": "Apple M6",
- "rows not run": [
-  "b",
-  "b_eq",
-  "b_ne",
-  "b_hs",
-  "b_lo",
-  "bl",
-  "ret"
- ],
- "rows run": 29,
- "system": "Darwin"
+  "another word than the table writes": 0,
+  "cases a row and way": 200,
+  "differ from the processor": 0,
+  "faults, as the row says": 213,
+  "instances": 16000,
+  "machine": "arm64",
+  "processor": "Apple M6",
+  "rows not run": [
+    "b",
+    "b_eq",
+    "b_ne",
+    "b_hs",
+    "b_lo",
+    "bl",
+    "ret"
+  ],
+  "rows run": 40,
+  "system": "Darwin"
 }

@@ -45,9 +45,9 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that ALL 36 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
-  if table.size != 36 then
-    throw (IO.userError s!"expected 36 rows in arm64.tab, found {table.size}")
+  -- 1. Check that ALL 47 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
+  if table.size != 47 then
+    throw (IO.userError s!"expected 47 rows in arm64.tab, found {table.size}")
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -84,6 +84,17 @@ def main (args : List String) : IO Unit := do
   checkRow table "shl_4s" ArmAgree.effectShl4s
   checkRow table "ld1_4s" ArmAgree.effectLd1_4s
   checkRow table "st1_4s" ArmAgree.effectSt1_4s
+  checkRow table "lsl_ri" ArmAgree.effectLslRi
+  checkRow table "fmov_d" ArmAgree.effectFmovD
+  checkRow table "uzp1_4s" ArmAgree.effectUzp1_4s
+  checkRow table "uzp2_4s" ArmAgree.effectUzp2_4s
+  checkRow table "zip1_4s" ArmAgree.effectZip1_4s
+  checkRow table "zip2_4s" ArmAgree.effectZip2_4s
+  checkRow table "zip1_2d" ArmAgree.effectZip1_2d
+  checkRow table "zip2_2d" ArmAgree.effectZip2_2d
+  checkRow table "ext_4" ArmAgree.effectExt4
+  checkRow table "ext_8" ArmAgree.effectExt8
+  checkRow table "ext_12" ArmAgree.effectExt12
 
   -- 2. Check Ode.findRow and register/immediate lookup for all 31/32 register indices.
   for i in List.range 31 do
@@ -398,5 +409,69 @@ def main (args : List String) : IO Unit := do
               IO.println s!"ushr_4s {hex32 (ArmAgree.encodeUshr4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨sh, hsh⟩)} {insUshr}"
               IO.println s!"shl_4s {hex32 (ArmAgree.encodeShl4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨sh, hsh⟩)} {insShl}"
 
+  let lslShifts : List Nat := [0, 1, 7, 15, 31, 47, 62]
+  for i in List.range 31 do
+    let s := (i + 7) % 31
+    for sh in lslShifts do
+      if i == 0 || i == 9 || i == 30 || sh == 31 then
+        let insLsl := s!"(.lsl .x{i} .x{s} {sh + 1})"
+        checkInstance table "lsl_ri" insLsl (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+          match bd.find? (fun kv => kv.1 == "I") with
+          | some (_, v) => Ode.readInt v == some ((sh + 1 : Nat) : Int)
+          | none => false)
+        if hi : i < 31 then
+          if hsh : sh < 63 then
+            if wordsOnly then
+              IO.println s!"lsl_ri {hex32 (ArmAgree.encodeLslRi ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨sh, hsh⟩)} {insLsl}"
+
+  for i in List.range 32 do
+    let y := (i + 5) % 32
+    let z := (i + 13) % 32
+    let s := i % 31
+    let insFm := s!"(.fmovd {i} .x{s})"
+    checkInstance table "fmov_d" insFm (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.regOf bd "S" == some (ArmAgree.armSlot s))
+    let insUzp1 := s!"(.uzp1_4s {i} {y} {z})"
+    checkInstance table "uzp1_4s" insUzp1 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insUzp2 := s!"(.uzp2_4s {i} {y} {z})"
+    checkInstance table "uzp2_4s" insUzp2 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insZip1 := s!"(.zip1_4s {i} {y} {z})"
+    checkInstance table "zip1_4s" insZip1 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insZip2 := s!"(.zip2_4s {i} {y} {z})"
+    checkInstance table "zip2_4s" insZip2 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insZip1d := s!"(.zip1_2d {i} {y} {z})"
+    checkInstance table "zip1_2d" insZip1d (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insZip2d := s!"(.zip2_2d {i} {y} {z})"
+    checkInstance table "zip2_2d" insZip2d (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insExt4 := s!"(.ext4 {i} {y} {z})"
+    checkInstance table "ext_4" insExt4 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insExt8 := s!"(.ext8 {i} {y} {z})"
+    checkInstance table "ext_8" insExt8 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    let insExt12 := s!"(.ext12 {i} {y} {z})"
+    checkInstance table "ext_12" insExt12 (fun bd =>
+      Ode.vecOf bd "X" == some i && Ode.vecOf bd "Y" == some y && Ode.vecOf bd "Z" == some z)
+    if hi : i < 32 then
+      if wordsOnly then
+        IO.println s!"fmov_d {hex32 (ArmAgree.encodeFmovD ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩)} {insFm}"
+        IO.println s!"uzp1_4s {hex32 (ArmAgree.encodeUzp1_4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insUzp1}"
+        IO.println s!"uzp2_4s {hex32 (ArmAgree.encodeUzp2_4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insUzp2}"
+        IO.println s!"zip1_4s {hex32 (ArmAgree.encodeZip1_4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insZip1}"
+        IO.println s!"zip2_4s {hex32 (ArmAgree.encodeZip2_4s ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insZip2}"
+        IO.println s!"zip1_2d {hex32 (ArmAgree.encodeZip1_2d ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insZip1d}"
+        IO.println s!"zip2_2d {hex32 (ArmAgree.encodeZip2_2d ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insZip2d}"
+        IO.println s!"ext_4 {hex32 (ArmAgree.encodeExt4 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insExt4}"
+        IO.println s!"ext_8 {hex32 (ArmAgree.encodeExt8 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insExt8}"
+        IO.println s!"ext_12 {hex32 (ArmAgree.encodeExt12 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insExt12}"
+
   if !wordsOnly then
-    IO.println "agree-check: all 36 rows match arm64.tab"
+    IO.println "agree-check: all 47 rows match arm64.tab"

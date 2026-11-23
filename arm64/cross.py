@@ -103,15 +103,20 @@ def instance(row, rng):
         if re.search(rf"\b{h}(64|32)\b", asm): bind[h] = rng.choice(free)
     if re.search(r"\bB64\b", asm): bind["B"] = rng.choice(free)
     for h in table.VECTORS:
-        if re.search(rf"\bv{h}\b", asm): bind[h] = rng.randrange(32)
+        if re.search(rf"\b[vd]{h}\b", asm): bind[h] = rng.randrange(32)
     way = word.Way(row, row.bytes[0])
     if re.search(r"\bI\b", asm):
         if "I" in way.fields: bind["I"] = rng.randrange(1 << way.fields["I"][1])
         else:
-            field, how, k = way.rules["I"]
-            bind["I"] = k - rng.randrange(1 << way.fields[field][1])
+            lo, hi = -1 << 60, 1 << 60
+            for field, how, k in way.rules["I"]:
+                w = way.fields[field][1]
+                assert how == "from"
+                lo = max(lo, k - ((1 << w) - 1))
+                hi = min(hi, k)
+            bind["I"] = rng.randint(lo, hi)
     if re.search(r"\bN\b", asm):
-        k = way.rules["N"][2] if "N" in way.rules else 1
+        k = way.rules["N"][0][2] if "N" in way.rules else 1
         bind["N"] = k * rng.randrange(0, (ROOM - 512 - 16) // k)       # the bytes addressed stay within the memory the case has
     text = asm
     for h in ("D", "S", "P", "B"):
@@ -119,7 +124,9 @@ def instance(row, rng):
             text = re.sub(rf"\b{h}64\b", bind[h], text)
             text = re.sub(rf"\b{h}32\b", "w" + bind[h][1:], text)
     for h in table.VECTORS:
-        if h in bind: text = re.sub(rf"\bv{h}\b", f"v{bind[h]}", text)
+        if h in bind:
+            text = re.sub(rf"\bv{h}\b", f"v{bind[h]}", text)
+            text = re.sub(rf"\bd{h}\b", f"d{bind[h]}", text)
     for h in ("I", "N"):
         if h in bind: text = re.sub(rf"\b{h}\b", str(bind[h]), text)
     return bind, text
