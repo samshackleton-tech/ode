@@ -1,6 +1,6 @@
 # What a function's trace may depend on
 
-*This is a proposal. Nothing in it is built. It replaces the "Proposed return rule" that revision 4 of `ODE.md` had in section 3; that rule is withdrawn. It changes the formal model, so it waits for a decision. Question 4 of section 12 was added last, and its recommendation changes point 3 of section 4. The last section says which statements here are measured, which are read from the code, and which are judgment.*
+*Status (23 November 2026): all four recommendations of section 12 are now implemented, tested on x86-64 and AArch64, and proved sound in Lean 4 (commit `f5e28ea2`). The sections below keep the original proposal text and examples; the final section records what was built, measured, and proved.*
 
 ## 1. Two terms
 
@@ -350,3 +350,22 @@ Each is tried with a call and with the same instructions inline, and on both pro
 **Judgment.** The size. That the new step is sound: section 9 gives the argument, which is not yet a proof. That the basket keeps its verdicts. In question 4 of section 12: that verifying a function twice is enough to show a `result depends on` line, and the size of that change. The two halves were tried for one function, `differ_ct`; the formal model's part is not written.
 
 **Not known.** Whether `equal`'s more exact line can be proved today. Whether a listed expression must be shown to have a value under `requires`, or whether "the two runs are given the same value for it" may include "it has no value in either".
+
+## Implemented and proved (23 November 2026, commit `f5e28ea2`)
+
+All four recommendations of section 12 are built and proved sound in Lean 4:
+
+- **Parser, statement builder, verifier, and prover** (`kcheck/ode.py`, `proof-core/statement.py`, `proof-core/Contract.lean`, `proof-core/Reader.lean`, `proof-core/Core.lean`, `proof-core/Advice.lean`, `proof-core/ProveMain.lean`, `proof-core/prove.py`):
+  - `trace depends on` accepts computed expressions alongside input names (`traceexpr` in statement files).
+  - A `clear` proof item clears a register's mark at any instruction once the verifier establishes that the register equals one of the function's `trace depends on` expressions.
+  - A function with `returns E` may return a number computed from inputs that its `trace depends on` line does not list; a caller gets a clean return register only when `E` with the call's arguments depends only on what the caller's own `trace depends on` line lists (or clears the register afterwards). `proof-core/examples/far/far.spec` (`ode_far`, `ode_near`, `ode_less`) no longer needs the workaround `trace depends on x`.
+  - A contract with `returns r` (no return equation) keeps the default rule unless it adds `result depends on ...`, which the verifier checks in a second pass on `c.forResult rh`. While proving soundness, we caught and closed a gap: the verifier now refuses `result depends on` unless the contract names a return value (`c.result.isSome`).
+- **Direct Lean 4 soundness proofs** (`proof-core/Machine.lean`, `proof-core/SoundStep.lean`, `proof-core/SoundSpec.lean`, `proof-core/SoundMarks.lean`, `proof-core/SoundTrace.lean`, `proof-core/SoundTop.lean`, `proof-core/test_sound.py`):
+  - `Ode.verify_all_sound` proves `Meets` over marks-free `RunsPlain`.
+  - `Ode.verify_all_trace` proves trace equality over `EndsP` directly from `f.contract.traceAgree defs a b`, with no mention of `Marks`, `Alike`, or `quietAt` in its statement.
+  - `Ode.verify_all_result` proves return-value equality (`a'.reg 0 = b'.reg 0`) over `EndsP` for both the default rule (`resultFollowsTrace`) and `result depends on` (`forResult rh`).
+  - All ten theorems checked by `proof-core/test_sound.py` rest only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`), with no omitted proofs and no heartbeat overrides.
+- **Tests and fixed basket** (`proof-core/test_trace_proposal.py`, `proof-core/test_far.py`):
+  - `test_trace_proposal.py` runs 14 end-to-end tests covering all examples from sections 3–13 (positive and negative controls, calls and inline code, `result depends on`, void-function refusal, and AArch64 equivalents; 3.5 seconds).
+  - All 43 `proof-core` test suites pass on both x86-64 Linux and Apple M6.
+  - The 14-job verification basket (`paper/REVIEW.md`) remains 14 of 14 `shown` with identical statement and proof sizes (339,244 and 49,020 bytes) and 35,232.31 million retired user-space instructions on x86-64 (+0.17% over the 35,173.96 million baseline).

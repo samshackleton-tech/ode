@@ -1,51 +1,56 @@
 # Reading the Ode design report
 
-This sheet accompanies `ODE.md` (revision 6, 22 November 2026). It is not part of the language definition. It keeps three observations from one revision to the next: how much there is to read, what verifying costs, and who relies on what. It also says what a first trial of the proposed notation showed and what it did not show.
+This sheet accompanies `ODE.md` (revision 7, 23 November 2026). It is not part of the language definition. It keeps three observations from one revision to the next: how much there is to read, what verifying costs, and who relies on what. It also records what the design trial showed and what has landed since.
 
-The verifier is that of commit `1dab0e3`: nothing proposed in `ODE.md` has been added to it. Its two main inputs, by BLAKE3:
+The verifier is that of commit `f5e28ea2`, which now serves both x86-64 and AArch64 and implements all four recommendations of [`TRACE-PROPOSAL.md`](TRACE-PROPOSAL.md) (section 12). Its three main inputs, by BLAKE3:
 
-- `proof-core/Core.lean`: `cc0f1279bc6a3787317b8e6252f468605cad93489a5b400218569c3d58624eea`
+- `proof-core/Core.lean`: `e6e9e7bb5ab32695e007d6784aff06b8b5a1aaba2bab16c0d460dea288794ead`
 - `core/x86.tab`: `66743ef5b540a00ac933537d3d56d0b56ab954ce5ae8d594bc2f9165e2b780d2`
+- `arm64/arm64.tab`: `f72a95802d91c9086f90071198a0eb1d1c73d2d6b3c8f56cefd2a6808a2690aa`
 
-A proposal for a model of AArch64 is in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md).
+The AArch64 design choice is in [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md) (option C, standalone package `arm64/`).
 
 ## Three observations, not one score
 
+Each row gives one observation at revision 7 and how to compare it with future revisions.
+
 | Observation | At this revision | How to compare next time |
 |---|---|---|
-| How much language is there to read? | 5 pages, 2,497 words. (Revisions 1 to 5: 5 pages each; 2,160, 2,393, 2,416, 2,430 and 2,455 words.) Made by `pypy3 render-paper.py ODE.md ODE.pdf`, counted by `pdfinfo ODE.pdf`. Revisions 5 and 6 give the proposed `trace depends on` line one paragraph; its examples, its exact meaning and what it would change are in `TRACE-PROPOSAL.md` (5,804 words, with its code listings), a proposal that is no part of the language yet. Revision 6 rewrote that paragraph and that page in plainer words. | The same renderer, page size and type. Name any rule moved to another document: detail a reader still needs is not a reduction. |
-| What does verifying cost? | The 14 kept proofs of the table below: 35,174 million retired instructions on x86-64. The verifier has not changed since the count. | The same 14 jobs. Give the inputs' hashes, the machine's role, the retired instructions and the elapsed time separately. |
-| Who relies on what, for what? | The routes below. None was added or removed since revision 1. | List dependencies added and removed, new alternatives, and dependencies that were independent and now coincide. |
+| How much language is there to read? | 5 pages, 2,574 words. (Revisions 1 to 6: 5 pages each; 2,160, 2,393, 2,416, 2,430, 2,455 and 2,497 words.) Made by `pypy3 paper/render-paper.py paper/ODE.md paper/ODE.pdf`, counted by `pdfinfo paper/ODE.pdf`. Section 3 now describes the implemented `trace depends on` and `result depends on` rules; worked examples and the direct two-run soundness proofs are in `TRACE-PROPOSAL.md` (6,154 words, with its code listings). | The same renderer, page size and type. Name any rule moved to another document: detail a reader still needs is not a reduction. |
+| What does verifying cost? | The 14 kept proofs of the table below: 35,232.31 million retired instructions on x86-64 (+0.17% over the 35,173.96 million baseline of revisions 1 to 6, after adding AArch64 dual-machine support, computed trace expressions, `clear`, and `result depends on`). All 14 jobs end `shown` with the same statement and proof byte counts. | The same 14 jobs. Give the inputs' hashes, the machine's role, the retired instructions and the elapsed time separately. |
+| Who relies on what, for what? | The routes below. Neither the integrated developer tool (`lang/ode_tool.py`, `advice/`), nor the separate AArch64 agreement proofs (`arm64/agree/`), nor the prover search enters Bob's reliance set. In addition, `Ode.verify_all_trace` and `Ode.verify_all_result` are now stated directly on entry agreement (`traceAgree`) and `EndsP`, removing `Marks`, `Alike`, and `quietAt` from the statements Bob reads for Conclusion A. | List dependencies added and removed, new alternatives, and dependencies that were independent and now coincide. |
 
 The report is a design draft, not a grammar or a machine specification. For an audit the instruction meanings, the encodings and the full contracts still have to be read. The page count is not the size of Bob's reading list.
 
 ## The verification basket
 
-Each of 14 jobs gives `odeverify` a statement made from the repository's objects and contracts, and the proof kept in `proof-core/proofs/`. Every job ended `shown`. The statements and proofs had the same digests on both machines.
+Each of 14 jobs gives `odeverify` (at commit `f5e28ea2`) a statement made from the repository's objects and contracts, and the proof kept in `proof-core/proofs/`. Every job ended `shown`. The statements and proofs had the same digests on both machines.
 
-Retired instructions are user-space instructions counted by `perf stat`, the least of 5 runs, on an x86-64 Linux work machine (Threadripper PRO 7975WX). They are the measure to compare. The times are medians of 11 runs on that machine and on an Apple M6. Both machines are shared and no lock was held, so the times show the order of magnitude and no more.
+Retired instructions are user-space instructions counted by `perf stat`, the least of 5 runs, on an x86-64 Linux work machine (Threadripper PRO 7975WX). They are the measure to compare. The times are medians of 11 runs on that machine and on an Apple M6. Both machines are shared and no lock was held, so the times show the order of magnitude and no more. Each cell holds the byte size, retired instruction count, or median verification time for that job.
 
 | Job | Statement (bytes) | Proof (bytes) | Retired instructions (millions) | Time, x86-64 (ms) | Time, Apple M6 (ms) |
 |---|---:|---:|---:|---:|---:|
-| `ode_sum` (with `ode_third`) | 465 | 26 | 19.22 | 3.69 | 3.62 |
-| `ode_equal` (with `ode_common`) | 2,262 | 723 | 29.23 | 4.31 | 3.78 |
-| `ode_adler32` | 2,493 | 2,967 | 42.80 | 5.07 | 4.31 |
-| `ode_adler32_blocks4` | 6,722 | 22,656 | 404.05 | 27.42 | 23.69 |
-| `ode_varint` | 1,463 | 453 | 39.30 | 5.52 | 4.43 |
-| `compress_avx512` | 9,046 | 131 | 58.82 | 6.28 | 5.12 |
-| `compress_sse41` | 9,512 | 137 | 67.18 | 7.01 | 5.52 |
-| `b3l_node_out` (with 2 kernels) | 13,031 | 306 | 101.60 | 9.27 | 7.00 |
-| `b3l_pad` | 8,129 | 451 | 36.31 | 4.98 | 3.91 |
-| `b3l_chunk_node` (with 3 called functions) | 17,376 | 6,107 | 2,443.70 | 162.22 | 162.70 |
-| `p16` | 27,006 | 2,361 | 2,082.77 | 136.31 | 109.11 |
-| `p32` | 78,240 | 4,178 | 9,759.74 | 665.32 | 561.13 |
-| `k32` | 78,858 | 4,331 | 9,600.23 | 651.60 | 548.04 |
-| `quad32` with `p32` | 84,641 | 4,193 | 10,489.03 | 739.67 | 602.18 |
-| **All 14** | **339,244** | **49,020** | **35,173.96** | **2,428.65** | **2,044.54** |
+| `ode_sum` (with `ode_third`) | 465 | 26 | 19.32 | 4.11 | 3.18 |
+| `ode_equal` (with `ode_common`) | 2,262 | 723 | 29.57 | 4.31 | 3.55 |
+| `ode_adler32` | 2,493 | 2,967 | 42.94 | 5.43 | 4.05 |
+| `ode_adler32_blocks4` | 6,722 | 22,656 | 404.90 | 26.81 | 23.53 |
+| `ode_varint` | 1,463 | 453 | 39.64 | 5.45 | 4.24 |
+| `compress_avx512` | 9,046 | 131 | 59.27 | 6.49 | 4.90 |
+| `compress_sse41` | 9,512 | 137 | 67.76 | 7.45 | 5.29 |
+| `b3l_node_out` (with 2 kernels) | 13,031 | 306 | 102.83 | 9.50 | 6.93 |
+| `b3l_pad` | 8,129 | 451 | 36.38 | 4.99 | 3.90 |
+| `b3l_chunk_node` (with 3 called functions) | 17,376 | 6,107 | 2,460.72 | 165.51 | 163.47 |
+| `p16` | 27,006 | 2,361 | 2,087.57 | 145.27 | 109.90 |
+| `p32` | 78,240 | 4,178 | 9,771.83 | 665.72 | 563.57 |
+| `k32` | 78,858 | 4,331 | 9,612.29 | 660.30 | 551.29 |
+| `quad32` with `p32` | 84,641 | 4,193 | 10,497.31 | 730.04 | 606.18 |
+| **All 14** | **339,244** | **49,020** | **35,232.31** | **2,441.39** | **2,054.00** |
 
 ## Reliance sets
 
-**Conclusion A:** acceptance by the mathematical verifier implies that the modeled function meets the modeled contract. The current theorem is `Ode.verify_all_sound`; it assumes `Linked`, which relates the programs in its world to the instructions given to the verifier. The separate `Ode.verify_all_trace` theorem states what two executions have in common. A proof of either theorem about a different machine or a different contract would not answer the same question.
+**Conclusion A:** acceptance by the mathematical verifier implies that the modeled function meets the modeled contract. The functional theorem is `Ode.verify_all_sound` (on marks-free `Meets` and `RunsPlain`); it assumes `Linked`, which relates the programs in its world to the instructions given to the verifier. Two companion theorems state trace and return-value independence directly on `EndsP` and entry agreement (`traceAgree`), with no mention of marks: `Ode.verify_all_trace` and `Ode.verify_all_result`. All ten theorems checked by `proof-core/test_sound.py` rest only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`), with no omitted proofs. A proof of these theorems about a different machine or a different contract would not answer the same question.
+
+Each row below describes one reader's route to Conclusion A, what that route relies on, and whether it is available today.
 
 | Reader and route | What is needed for A | What is available |
 |---|---|---|
@@ -62,11 +67,20 @@ A reader may separately judge whether the selected contract meets a practical ne
 
 The x86-64 verifier covers 8 of the 14 functions of the Ode hash and 1,470 of its 3,062 instructions. That is not a proof of the production library or of the whole Ode hash. In the small `ode_sum` example the contract says `returns 14` with a stack budget of 16 bytes, and the proof file is 12 bytes (`for ode_sum` and a newline); the rules, the object code, the contracts and the other functions' proofs are not in those 12 bytes. `ode_quad32` fills a table of 32 addresses and calls a kernel through its contract; its stack budget is 6,432 bytes.
 
-The frame notation, the choice of inlining at each use, a `trace depends on` line that lists computed values, a second processor and a verifier written in Ode are proposals. None is in the repository's tools.
+Landed in the repository's tools since revision 6:
+
+- **Higher-level Ode notation on both x86-64 and AArch64 (`lang/odec.py`):** `inline fn` with register classes, `distinct`, and table-checked `changes`; loop invariants written at loops (`place { ... }`); register names (`reg`), typed assignments (`:=`), and named stack frames (`frame`); all emitting the exact instructions chosen by the coder.
+- **Integrated developer tool (`lang/ode_tool.py`, `advice/`, `lang/refute_conc.py`):** compiles, runs proof search and verification, maps verifier refusals back to Ode source lines, searches for concrete failing inputs, estimates loop cache-line footprints and concrete memory hazards, and compares variants on x86-64 and AArch64 — without adding a line to Bob's reliance set.
+- **Standalone AArch64 package (`arm64/`):** 36-row table `arm64/arm64.tab` (covering general arithmetic, stack-pointer loads/stores, byte loads/stores, `cmp`, conditional and unconditional branches, calls/returns, and NEON vectors), ELF object encoder/decoder, cross-checks verified on two real AArch64 processors (Apple M6 and Ampere-1a), and 9 standalone Lean 4 agreement theorems in `arm64/agree/Agree.lean` proving 8 representative rows (`add_rrr`, `ldr64_sp` aligned and misaligned fault, `eor_v`, `rev32_8h`, `ldrb`, `cmp_rr`, `b_hs`, `b_lo`) match Google DeepMind's `arm64-semantics`. The verifier `odeverify` verifies AArch64 functions (`zero_arm64`, `tag_arm64`, `mix`, and the AArch64 trace examples) under the same soundness theorems as x86-64.
+- **Value-level `trace depends on`, `clear`, and `result depends on` (`f5e28ea2`):** all four recommendations of `TRACE-PROPOSAL.md` section 12 are implemented, tested on x86-64 and AArch64 (`proof-core/test_trace_proposal.py`, 14 tests), and proved sound directly on `traceAgree` and `EndsP` (`Ode.verify_all_trace`, `Ode.verify_all_result`). `ode_far`, `ode_near`, and `ode_less` no longer require `trace depends on x`.
+
+Still ahead: the remaining functions of the Ode BLAKE3 hash (starting with `b3l_wide32`), additional AArch64 rows and agreement proofs for BLAKE3 and verifier code, and a verifier written in Ode.
 
 ## The trial
 
-The trial took two programs (a step of the hash, a piece of the verifier) and two processors (x86-64, AArch64), as far as today's tools and a prototype front end reach. [`STYLES.md`](STYLES.md) shows the same functions in each notation, and is made from the files of `paper/trial/`: the front end, the sources, a test that compiles each and compares the bytes, and what the verifier and an Apple M6 said. The programs and result files of the four tests below (the chains of N steps, the scans, the verifier in Ode, the corrections) are kept outside this repository for now; they are to be added there so that every figure below can be made again.
+*(Historical record of the 22 November design trial that preceded the features above. At the time of that trial, Ode had no AArch64 model, so all AArch64 measurements in Tests 1 to 3 below were hardware runs only.)*
+
+The trial took two programs (a step of the hash, a piece of the verifier) and two processors (x86-64, AArch64), as far as the tools of 22 November and a prototype front end reached. [`STYLES.md`](STYLES.md) shows the same functions in each notation, and is made from the files of `paper/trial/`: the front end, the sources, a test that compiles each and compares the bytes, and what the verifier and an Apple M6 said. The programs and result files of the four tests below (the chains of N steps, the scans, the verifier in Ode, the corrections) are kept outside this repository for now; they are to be added there so that every figure below can be made again.
 
 Four words are used exactly:
 
@@ -74,8 +88,6 @@ Four words are used exactly:
 - **Refused with a proof:** `odeverify` printed `refused` for a statement and that proof file. A sound verifier refuses a false statement whatever the proof; one refusal does not demonstrate that.
 - **No proof found:** the prover gave up. The prover is relied on for nothing, so this is not a verdict.
 - **Run:** the code was executed on a processor and its results compared with a model written for the test, on the inputs named. A run is a test, not a proof.
-
-Ode has no model of AArch64. Everything said of AArch64 below is a run.
 
 ### Test 1: one step of the hash, written three ways
 
@@ -149,17 +161,13 @@ One thing came out of this work that is not a form. The compiler's rule is that 
 
 ## What comes next
 
-1. The model of AArch64. Answer C of [`ARM-PROPOSAL.md`](ARM-PROPOSAL.md) is chosen and step 1 has landed on `main`:
-   - `arm64/` (880 lines, independent of Ode's verifier and contracts): a 27-row table `arm64/arm64.tab` (`9ac34610b00f17327ce8f972b8e40f05acea155ff228d134925ec77afe92dc48`), encoder/decoder (`word.py`), ELF object reader (`obj.py`), processor comparison (`cross.py`), and tests (`test_arm64.py`). On both an Apple M6 and an Ampere-1a, 25 runnable rows across 10,000 random instances gave 0 differences from the processor, all 16 fault-injected tables were caught, and 213 / 212 stack-alignment faults occurred exactly where the rows say (`bl` and `ret` are not run in the harness).
-   - Verifier and soundness proofs (`proof-core/Core.lean` `bd1df7e720747c32fe61539cd9819c93e87a44b2444d9693ca749216fad3d55d`): one verifier and one pair of soundness theorems now serve both x86-64 and AArch64. Net growth: +201 lines in definitions and the verifier (6,000 to 6,201; +3.4%) and +532 lines in soundness proofs (22,841 to 23,373; +2.3%); clean build 51.27 s (was ~51 s); `Ode.verify_all_sound` and `Ode.verify_all_trace` still depend only on Lean's three standard axioms. Three AArch64 functions (`arm_mix16_3`, `arm_mix16_again`, `arm_mix16_6`) are verified and run on hardware (`proof-core/test_arm.py`).
-   - Standalone Lean agreement proofs (`arm64/agree/`, 1,352 lines, Lean 4.34.0): proves four representative rows (`add_rrr`, `ldr64_sp` both aligned and misaligned fault, `eor_v`, `rev32_8h`) agree with Google DeepMind's `arm64-semantics` (`b0f729ac`), using only Lean's three standard axioms (66.85 s clean build including Google's `arm64` package; 9.4 s for `Agree.lean`), with `agree-check` and `test_agree.py` checking row ASTs against `arm64.tab` and 162 encoded words against `word.py`.
-   - Still needed in `arm64.tab` for full AArch64 BLAKE3 functions: flags and conditional branches (`subs`, `cmp`, `b.ne`, `cset`), register pairs (`stp`/`ldp`), post-index loads/stores, and the remaining NEON rows, plus agreement proofs for the rest of the table.
-2. A decision on [`TRACE-PROPOSAL.md`](TRACE-PROPOSAL.md), before the formal model changes. It lets a contract's `trace depends on` line list a computed value such as `same(want, tag)`. It keeps the rule that, in a function's code, a branch or an address may depend only on what that function's own line lists. And it removes the rule that a returned number must be computed only from listed things: a function that compares two tags without branching on their bytes cannot be approved under that rule, though its trace depends on the count alone. Question 4 of its section 12, added later, recommends something else for that rule: keep it as the default, ask nothing more of a contract that says what the returned number is, and let a contract that does not say so add to the list with a line `result depends on ...`. The return rule that revision 4 of `ODE.md` proposed is withdrawn.
-3. The rest of the trial's programs into `paper/trial/`: the four tests' programs and their result files. The same functions in each notation are there as files, with the page made from them.
-4. The things found so far that the verifier or the prover does not do, each to be weighed before it is built.
+1. **Grow the AArch64 package (`arm64/` and `arm64/agree/`).** Steps 1 and 2 have landed (`36` rows in `arm64.tab`, verified on Apple M6 and Ampere-1a; `34` of `34` non-call/ret rows cross-checked against `Machine.lean` in `test_machine.py`; `9` Lean agreement theorems covering `8` rows in `arm64/agree/Agree.lean`; verified AArch64 functions in `test_arm.py` and `test_trace_proposal.py`). Still needed for full AArch64 BLAKE3 kernels and verifier code: register pairs (`stp`/`ldp`), post-index loads/stores, conditional select (`cset`), overflow checks (`adds`/`b.vs`/`smulh`), remaining NEON rows, and agreement proofs for the rest of the table.
+2. **Finish the single-threaded Ode BLAKE3 core on x86-64 and AArch64.** Next function on x86-64: `b3l_wide32` and the remaining 6 of 14 functions of the hash, using the higher-level Ode notation and integrated `ode_tool.py` workflow.
+3. **A verifier written in Ode.** Grow the `zero_x86` / `zero_arm64` / `tag_arm64` verified verifier components toward checking complete arithmetic steps and proof files on both targets.
+4. **The rest of the trial's programs into `paper/trial/`:** add the remaining programs and result files from Tests 1 to 4 so every figure from the 22 November trial can be reproduced directly from the repository.
+5. **Verifier and prover limits found during the trial, each to be weighed before building:**
    - Five from the trial: conclude that `x | y` is zero where both are; load more than one byte from an array of bytes; store a vector to the frame with `vmovdqu32`; read a function past its first `ret`; pass over a `let` that nothing uses.
-   - Three from writing a compare of two arrays that has no jump on a byte (`paper/trial/trace/compare.ode`, `compare_diag.py`). For the general registers the table of instructions has `xor` only of a register with itself. The verifier does not follow a subtraction whose result can go below zero. And the table has no instruction that turns a flag into a number without a jump (`setcc`, `sbb`, `adc`, `cmov`), nor `neg` or `not`. Code whose trace must not depend on its data is written with these.
-   - One from the page of styles: the prover, given a file of places that no longer fits the code, had found no proof and had not stopped after 60 seconds. It does not say that the loop has no place (`paper/trial/results/verify.json`).
-5. The forms on AArch64, once the compiler has a table of its instructions (item 1). On x86-64 all of the prototype's forms are in `lang/odec.py`, and the text macro and the files of typed counts are gone.
+   - Three from writing a compare of two arrays with no jump on a byte (`paper/trial/trace/compare.ode`, `compare_diag.py`): general-register `xor` of two distinct registers, signed/wrapping subtraction below zero, and instructions that turn a flag into a number without a jump (`setcc`, `sbb`, `adc`, `cmov`, `neg`, `not`). `test_trace_proposal.py` uses an underflow-free arithmetic form in the meantime.
+   - One from `STYLES.md`: stop cleanly with a message when a proof file's `places` no longer match the code's loop offsets.
 
 After each change, return to this sheet and the report together. A proof file can shrink while the verifier gets harder to understand; inlining can make a loop faster while more instruction lines compete in a caller. None of the three observations stands in for the others.
