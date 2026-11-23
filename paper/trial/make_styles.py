@@ -178,8 +178,6 @@ def main(out):
         "The compiler does not follow the stack pointer; the verifier judges the code.\n"
         "- A place names the registers that it speaks of itself (`name i = rcx`). The names that `reg` gives are not carried into it: "
         "a name in a place may also be a parameter of the contract, as `xs` and `n` are in section 2.\n"
-        "- Where the table of instructions lacks the `mov` that a `:=` stands for (a store of a number into eight bytes of memory, for one), the assembler "
-        "refuses it. Its refusal names the function and the instruction, not the line.\n"
         "- The compiler has no table of AArch64 instructions. The prototype, which section 4 is made with, judges `changes` from the "
         "first operand of each instruction as written. It is a trial's tool and is not in the suite.\n")
     with open(out, "w") as f: f.write("\n".join(p))

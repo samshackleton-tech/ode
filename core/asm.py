@@ -4,7 +4,16 @@
 Called by `lang/odec.py`. Instruction forms use the encodings in `x86.tab` through `encode.py`.
 Jumps start short; each pass widens jumps that no longer fit. `.p2align` uses table NOPs of up to ten
 bytes. These objects are inputs to Ode's fixed-image linker. They carry no unwind information; the
-historical `.cfi` directives are preserved only in the assembly listing."""
+historical `.cfi` directives are preserved only in the assembly listing.
+
+An instruction is written as the row of the table that it is an instance of, or it is refused: after a row
+is chosen, each operand as it is written must be of the class the row's ASM column has in its place (a
+register of 64 bits, of 32, an xmm or a zmm register, memory, a number), and a size word before memory
+(`byte ptr`, `qword ptr`, ...) must be the size that the row moves there (same()). So what is written
+`mov byte ptr [rdi + 0], rax` or `movzx rax, al` or `vprord ymm1, ymm2, 7` is not laid down as another
+instruction that the table happens to have. Which row a name and its operands choose is said by the branches
+of write(). `lang/test_asm.py` compares all of it with clang: every instruction of the sources, changed in
+many ways, is refused here or is the instruction that clang writes for the same text."""
 import os, re, struct, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -14,6 +23,7 @@ import encode, table
 G64 = "rax rcx rdx rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15".split()
 G32 = "eax ecx edx ebx esp ebp esi edi r8d r9d r10d r11d r12d r13d r14d r15d".split()
 G8  = "al cl dl bl spl bpl sil dil r8b r9b r10b r11b r12b r13b r14b r15b".split()
+G16 = "ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w ah ch dh bh".split()         # (no row has one: they are named to be refused)
 
 ROWS = {r.name: (r, [encode.Way(r, t) for t in r.bytes]) for r in table.read()}
 NOPS = {len(w.literal): w.literal for w in ROWS["nop"][1] if w.literal is not None and w.literal != b"\xf3\x0f\x1e\xfa"}
@@ -34,8 +44,66 @@ VEC512 = {
 }
 
 
+# What an operand is, in words; the size word of the memory that a row moves to or from a register of a class;
+# and the old two-operand forms of the rows that the table writes with three (the first operand is both).
+CLASS = {"r64": "a register of 64 bits", "r32": "a register of 32 bits", "r8": "a register of 8 bits", "al": "al", "xmm": "an xmm register",
+         "zmm": "a zmm register", "zmm{k}": "a zmm register under a mask", "k": "a mask register", "number": "a number", "memory": "memory"}
+MOVED = {"r64": "qword", "r32": "dword", "xmm": "xmmword", "zmm": "zmmword", "zmm{k}": "zmmword"}
+TWO = {m for m, (_, k) in VEC128.items() if k == "L"} | {"shufps"}
+WORD = r"(?:(byte|word|dword|qword|xmmword|ymmword|zmmword)\s+ptr\s*)?"
+PICKED = [None]                    # the row that pick() last took
+
+
 def up(n, align): return (n + align - 1) & ~(align - 1)
-def num(tok): return int(tok.replace("_", ""), 0)
+
+
+def num(tok):
+    try: return int(tok.replace("_", ""), 0)
+    except ValueError: raise ValueError(f"not a number: {tok}") from None
+
+
+def operand(text):
+    """An operand as it is written: (its class, the size word before memory or None)."""
+    t = text.strip()
+    m = re.fullmatch(WORD + r"\[.*\]", t, flags=re.I)
+    if m: return "memory", (m.group(1).lower() if m.group(1) else None)
+    for names, cls in ((G64, "r64"), (G32, "r32"), (G8, "r8"), (G16, "r16")):
+        if t in names: return cls, None
+    m = re.fullmatch(r"([xyz]mm)\d+", t)
+    if m: return m.group(1), None
+    if re.fullmatch(r"zmm\d+\s*\{k\d\}", t): return "zmm{k}", None
+    if re.fullmatch(r"k\d", t): return "k", None
+    if re.fullmatch(r"-?(?:0[xX][0-9a-fA-F_]+|\d[\d_]*)", t): return "number", None
+    return "other", None
+
+
+def template(row, mn):
+    """The operands of a row as the table writes an instance of it (its ASM column): [(class, size word)].
+    Memory written there without a size word has the size of the row's register (`mov [B64 + N], S64`: a
+    qword); `lea` moves nothing, so any word may stand before its memory."""
+    out = []
+    for t in [x.strip() for x in row.asm.partition(" ")[2].split(",") if x.strip()]:
+        m = re.fullmatch(WORD + r"\[.*\]", t)
+        if m: out.append(("memory", m.group(1))); continue
+        cls = ("al" if t == "al" else "r64" if re.fullmatch(r"[A-Z]64", t) else "r32" if re.fullmatch(r"[A-Z]32", t) else "r8" if re.fullmatch(r"[A-Z]8", t)
+               else "xmm" if re.fullmatch(r"xmm[A-Z]", t) else "zmm" if re.fullmatch(r"zmm[A-Z]", t) else "zmm{k}" if re.fullmatch(r"zmm[A-Z]\{kM\}", t)
+               else "k" if t == "kM" else "number" if t == "I" or t.isdigit() else None)
+        if cls is None: raise ValueError(f"x86.tab: the operand `{t}` of `{row.asm}` is not read")
+        out.append((cls, None))
+    moved = next((MOVED[c] for c, _ in out if c in MOVED), None)
+    return [(c, w or (moved if c == "memory" and mn != "lea" else None)) for c, w in out]
+
+
+def same(mn, ops, row):
+    """The instruction as it is written is an instance of the row as the table writes it: as many operands,
+    each of the row's class, and memory of the row's size where a size word says one."""
+    want = template(row, mn)
+    if mn in TWO: del want[1]
+    if len(want) != len(ops): raise ValueError(f"{len(ops)} operands where x86.tab's `{row.asm}` has {len(want)}")
+    for text, (cls, word) in zip(ops, want):
+        got, given = operand(text)
+        if (text.strip() != "al") if cls == "al" else (got != cls): raise ValueError(f"`{text.strip()}` where x86.tab's `{row.asm}` has {CLASS[cls]}")
+        if given is not None and word is not None and given != word: raise ValueError(f"`{given} ptr` where x86.tab's `{row.asm}` moves a {word}")
 
 
 def imm(tok, bits):
@@ -54,7 +122,7 @@ def nop_pad(count):
 
 
 def parse_mem(text):
-    s = re.sub(r"^(?:byte|dword|qword|xmmword|zmmword)\s+ptr\s*", "", text.strip(), flags=re.I)
+    s = re.sub(r"^(?:byte|word|dword|qword|xmmword|ymmword|zmmword)\s+ptr\s*", "", text.strip(), flags=re.I)        # (same() reads the word)
     if not (s.startswith("[") and s.endswith("]")): raise ValueError(f"not a memory operand: {text}")
     base, index, disp, sym = None, None, 0, None
     for raw in re.findall(r"[+-]?\s*[^+-]+", s[1:-1].strip()):
@@ -80,6 +148,7 @@ def parse_mem(text):
 
 def pick(row_name, bind, pred=None, at=0):
     best = None
+    PICKED[0] = row_name
     for w in ROWS[row_name][1]:
         if pred is not None and not pred(w): continue
         try: b = encode.encode(w, bind, at)
@@ -90,22 +159,40 @@ def pick(row_name, bind, pred=None, at=0):
 
 
 def instruction(line):
-    """('fixed', bytes) | ('reloc', bytes, field_off, r_type, sym, addend) | ('jump', row_name, label)."""
+    """('fixed', bytes) | ('reloc', bytes, field_off, r_type, sym, addend) | ('jump', row_name, label).
+    What is written is an instance of the row it is laid down by (same()), or ValueError says why not."""
     mn, _, rest = line.partition(" ")
     ops = [p.strip() for p in rest.strip().split(",")] if rest.strip() else []
+    PICKED[0] = None
+    try: item = write(line, mn, ops)
+    except (KeyError, IndexError, TypeError): raise ValueError("instruction not in x86.tab") from None
+    except ValueError as e:
+        if "not in list" in str(e) or "invalid literal" in str(e): raise ValueError("instruction not in x86.tab") from None      # (Python's words for an operand of no class the form has)
+        raise
+    row = ROWS[PICKED[0]][0] if PICKED[0] is not None else None
+    if row is not None and row.asm != "-" and mn != "prefetcht0": same(mn, ops, row)             # (a prefetch is laid down by the row of `nop`)
+    return item
+
+
+def write(line, mn, ops):
+    """The bytes of an instruction by the row that its name and its operands choose (instruction() then asks that it is that row's)."""
     if mn in ("nop", "endbr64", "ret", "vzeroupper") and ops: raise ValueError(f"{mn} takes no operands")
     if mn == "nop": return ("fixed", b"\x90")
     if mn == "endbr64": return ("fixed", b"\xf3\x0f\x1e\xfa")
     if mn in ("ret", "vzeroupper"): return ("fixed", pick(mn, {}))
     if mn == "prefetcht0":
+        if len(ops) != 1 or operand(ops[0])[1] not in (None, "byte"): raise ValueError("a prefetch names one address, with `byte ptr` before it or no size word")
         _, base, idx, disp = parse_mem(ops[0])
         if idx is None: return ("fixed", pick("nop", {"b": base, "n": disp}, lambda w: w.fields.get("base") == ("b",) and "index" not in w.fields))
         return ("fixed", pick("nop", {"b": base, "s": idx, "n": disp}, lambda w: "index" in w.fields))
-    if mn in JUMPS: return ("jump", JUMPS[mn], ops[0])
+    if mn in JUMPS:
+        if len(ops) != 1 or operand(ops[0])[0] != "other": raise ValueError("a jump names one label")
+        return ("jump", JUMPS[mn], ops[0])
     if mn == "call":
-        m = re.fullmatch(r"CALL\((\w+)\)|(\w+)", ops[0])
+        m = re.fullmatch(r"CALL\((\w+)\)|(\w+)", ops[0]) if len(ops) == 1 else None
         if not m: raise ValueError(f"cannot read call target: {line}")
         sym = m.group(1) or m.group(2)
+        if m.group(2) and operand(sym)[0] != "other": raise ValueError("x86.tab has no call of a register: a call names a function")
         b = pick("call", {"I": sym, "field": bytes(4)})
         return ("reloc", b, len(b) - 4, 4, sym, -4)
     if mn in ("push", "pop"):
@@ -135,6 +222,7 @@ def instruction(line):
         if mn == "or" and ops[1] in G32: return ("fixed", pick("or32_rr", {"D": d, "S": G32.index(ops[1])}))
         if mn == "and": return ("fixed", pick("and32_ri", {"D": d, "I": imm(ops[1], 32)}))
     if mn == "lea":
+        if len(ops) != 2: raise ValueError("lea takes a register and an address")
         d, m = G64.index(ops[0]), parse_mem(ops[1])
         if m[0] == "rip":
             b = pick("lea_data", {"D": d, "I": 0, "field": bytes(4)})
@@ -144,11 +232,14 @@ def instruction(line):
     if mn == "movzx":
         d = G32.index(ops[0]) if ops[0] in G32 else G64.index(ops[0])
         if ops[1] in G8: return ("fixed", pick("movzx8_rr", {"D": d, "S": G8.index(ops[1])}))
+        if operand(ops[1]) == ("memory", None): raise ValueError("movzx from memory needs the size word of what it reads: `byte ptr [...]`")
         _, b, idx, disp = parse_mem(ops[1])
         if idx is not None: raise ValueError(f"indexed movzx not in x86.tab: {line}")
         return ("fixed", pick("movzx8_rm", {"D": d, "B": b, "N": disp}))
     if mn == "mov":
-        if ops[0] == "al": return ("fixed", pick("mov8_al_i", {"I": imm(ops[1], 8)}))
+        if ops[0] == "al":
+            if operand(ops[1])[0] != "number": raise ValueError(f"x86.tab has `mov al, I` alone into al (a byte is loaded by `movzx`): not from {ops[1]}")
+            return ("fixed", pick("mov8_al_i", {"I": imm(ops[1], 8)}))
         if ops[0] in G64:
             d = G64.index(ops[0])
             if ops[1] in G64: return ("fixed", pick("mov64_rr", {"D": d, "S": G64.index(ops[1])}))
@@ -169,7 +260,8 @@ def instruction(line):
         if idx is not None: raise ValueError(f"indexed store not in x86.tab: {line}")
         if ops[1] == "al": return ("fixed", pick("mov8_m_al", {"B": b, "N": disp}))
         if ops[1] in G64: return ("fixed", pick("mov64_mr", {"B": b, "N": disp, "S": G64.index(ops[1])}))
-        if not ops[0].lower().startswith("byte ptr"): raise ValueError(f"store immediate not byte ptr: {line}")
+        if operand(ops[1])[0] != "number": raise ValueError(f"x86.tab has a store of al, of a register of 64 bits and of a number of one byte: not of {ops[1]}")
+        if operand(ops[0])[1] != "byte": raise ValueError("x86.tab has a store of a number for one byte only, written `mov byte ptr [...], N`")
         return ("fixed", pick("mov8_mi", {"B": b, "N": disp, "I": imm(ops[1], 8)}))
     if mn in ("movq", "vmovq"):
         k = "V" if mn.startswith("v") else "L"
@@ -177,7 +269,10 @@ def instruction(line):
     if mn in ("movups", "vmovups", "vmovdqu", "movaps", "vmovaps", "movdqa", "vmovdqa"):
         k = "V" if mn.startswith("v") else "L"
         pp = (2 if mn == "vmovdqu" else 1 if mn == "vmovdqa" else 0) if k == "V" else (0x66 if mn == "movdqa" else 0)
+        # The table has the move between registers by the aligned names, and the move from or to memory by the
+        # unaligned names (with the file's data, by movaps): each name is laid down as itself, or refused.
         if re.fullmatch(r"xmm\d+", ops[0]) and re.fullmatch(r"xmm\d+", ops[1]):
+            if mn in ("movups", "vmovups", "vmovdqu"): raise ValueError("x86.tab has the move between xmm registers as movaps, movdqa, vmovaps and vmovdqa")
             return ("fixed", pick("mov128", {"X": int(ops[0][3:]), "Y": int(ops[1][3:])}, lambda w: w.kind == k and w.pp == pp))
         if re.fullmatch(r"xmm\d+", ops[0]):
             x, m = int(ops[0][3:]), parse_mem(ops[1])
@@ -185,8 +280,10 @@ def instruction(line):
                 if mn not in ("movaps", "vmovaps"): raise ValueError(f"rip 128-bit load not movaps: {line}")
                 b = pick("const128", {"X": x, "I": 0, "J": 0, "K": 0, "L": 0, "field": bytes(4)}, lambda w: w.kind == k)
                 return ("reloc", b, len(b) - 4, 2, m[1], m[2] - 4)
+            if mn not in ("movups", "vmovups", "vmovdqu"): raise ValueError("x86.tab has the move of an xmm register from memory as movups, vmovups and vmovdqu")
             if m[2] is not None: raise ValueError(f"indexed 128-bit load not in x86.tab: {line}")
             return ("fixed", pick("loadu128", {"X": x, "B": m[1], "N": m[3]}, lambda w: w.kind == k and w.pp == pp))
+        if mn not in ("movups", "vmovups", "vmovdqu"): raise ValueError("x86.tab has the move of an xmm register to memory as movups, vmovups and vmovdqu")
         _, base, idx, disp = parse_mem(ops[0])
         if idx is not None: raise ValueError(f"indexed 128-bit store not in x86.tab: {line}")
         return ("fixed", pick("storeu128", {"X": int(ops[1][3:]), "B": base, "N": disp}, lambda w: w.kind == k and w.pp == pp))
@@ -247,6 +344,7 @@ def instruction(line):
             if m[0] == "rip":
                 b = pick("paddd512c", {"X": x, "Y": y, "K": 0, "field": bytes(4)})
                 return ("reloc", b, len(b) - 4, 2, m[1], m[2] - 4)
+            if m[2] is None: raise ValueError("x86.tab has `vpaddd zmmX, zmmY, [B64 + S64 + N]`: its memory has an index register")
             return ("fixed", pick("paddd512m", {"X": x, "Y": y, "B": m[1], "S": m[2], "N": m[3]}))
         z = int(ops[2][3:])
         if mn == "vpxord" and y == z: return ("fixed", pick("pxord512_same", {"X": x, "Y": y}))

@@ -66,8 +66,10 @@ instructions there and nothing else: no call, no return, no move. A label in an 
 use's own. An inline function may be used in a `for` and in another inline function; it may hold a `for`
 but no `place`, `entry` or `call`.
 
-The forms that expand (a use of an inline function, a `for`) do so in the one way written above. What the
-verifier is given is the object's bytes; nothing here is relied on."""
+The forms that expand (a use of an inline function, a `for`, a name for a register, `:=`, a slot of the
+frame) do so in the one way written above. Each instruction is then laid down by the instruction table as
+the instruction it names, or refused (../core/asm.py); a refusal names the source line and quotes the line
+as it was typed. What the verifier is given is the object's bytes; nothing here is relied on."""
 import itertools, os, re, shutil, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -264,13 +266,14 @@ def written(line):
     return WRITTEN[line]
 
 
-def expand(src, fn, numbered, inlines, notes=None):
+def expand(src, fn, numbered, inlines, notes=None, typed_lines=None):
     """A function's lines [(number, text)] as instructions: the uses of inline functions and the fors
     expanded, `$x`, `@label` and `#data` replaced. What is no instruction is left out of them and, where
     `notes` is a list, put there with the number of the instruction it stands before:
     ("place", number, the count's name, its lines) for `place b { ... }` (what holds there after b turns of
     the loop: the proof of the loop is written from it); ("entry", number, NAME) for `entry "NAME"` (the
-    function is entered there too, under that name)."""
+    function is entered there too, under that name). Where `typed_lines` is a list, it gets, for each
+    instruction given back, (the number of its line, the line as it was typed, with a for's number put in)."""
     out, uses, names, frame = [], [0], {}, [None]          # (names: the registers' names; frame: (size, fields) once it is said)
 
     def field(name, n, inside):
@@ -435,6 +438,7 @@ def expand(src, fn, numbered, inlines, notes=None):
             s = re.sub(r"\s+", " ", s)
             if inside: kept(s, n, inside)
             out.append(s)
+            if typed_lines is not None: typed_lines.append((n, typed))
 
     run(numbered, {}, {}, [])
     return out
@@ -492,17 +496,34 @@ def assemble(s_path, o_path):
     raise SystemExit(f"odec: no assembler here makes an x86-64 ELF object of {s_path}")
 
 
+def elf(src, name, symbol, expanded, typed, notes, data, where=None):
+    """A function's ELF object by the instruction table (../core/asm.py). Where the assembler refuses, the
+    source line is named: that of the first instruction that the assembler refuses by itself, or that jumps
+    to a label the function has not. `typed`: for each of `expanded`, (its line's number, the line as typed)."""
+    core = os.path.join(HERE, "..", "core")
+    if core not in sys.path: sys.path.insert(0, core)
+    import asm
+    try: return asm.build_elf(name, symbol, expanded, notes, data, where)
+    except (ValueError, KeyError, IndexError) as e:
+        labels = {x[:-1] for x in expanded if x.endswith(":")}
+        for x, (n, was) in zip(expanded, typed):
+            if x.endswith(":") or x.startswith("."): continue
+            try: item = asm.instruction(x)
+            except ValueError as why:
+                said = str(why)
+                stop(src, n, f"`{was}`: " + (said[:-len(x) - 2] if said.endswith(": " + x) else said))
+            if item[0] == "jump" and item[2] not in labels:
+                label = re.search(r"@\w+", was)
+                stop(src, n, f"`{was}`: the function has no label `{label.group(0) if label else item[2]}`")
+        raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
+
+
 def build(src, name, obj, symbol=None):
     """Write a function's ELF object using the instruction table."""
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "core"))
-    from asm import build_elf
     data, own, lines, inlines = found(src, name)
-    notes = []
-    expanded = expand(src, name, lines, inlines, notes)
-    try:
-        blob = build_elf(name, symbol or own, expanded, [note for note in notes if note[0] != "at"], data)
-    except (ValueError, KeyError, IndexError) as e:
-        raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
+    notes, typed = [], []
+    expanded = expand(src, name, lines, inlines, notes, typed)
+    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] != "at"], data)
     with open(obj, "wb") as f: f.write(blob)
 
 
@@ -512,12 +533,9 @@ def places(src, name, entry=None):
     function's first byte to the instruction the place stands before. With `entry` (the symbol of an
     `entry "SYMBOL"` of the function): the places written `place "SYMBOL" { LINES }`, counted from that
     entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
-    core = os.path.join(HERE, "..", "core")
-    if core not in sys.path: sys.path.insert(0, core)
-    from asm import build_elf
     data, own, lines, inlines = found(src, name)
-    notes = []
-    expanded = expand(src, name, lines, inlines, notes)
+    notes, typed = [], []
+    expanded = expand(src, name, lines, inlines, notes, typed)
     entries = {own} | {note[2] for note in notes if note[0] == "entry"}
     if (entry or own) not in entries: sys.exit(f"{src}: fn {name} has no entry `{entry}`")
     for note in notes:
@@ -525,10 +543,7 @@ def places(src, name, entry=None):
     mine = [note for note in notes if note[0] == "at" and (note[2] or own) == (entry or own)]
     if not mine: return ""
     where = {}
-    try:
-        build_elf(name, own, expanded, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where)
-    except (ValueError, KeyError, IndexError) as e:
-        raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
+    elf(src, name, own, expanded, typed, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where)
     return "".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine))
 
 

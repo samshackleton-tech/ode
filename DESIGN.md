@@ -502,8 +502,9 @@ language can read.
   does not write: a prefix that has no effect, a displacement longer than necessary, a bit that an
   encoding does not use. Each of these was a separate question for a decoder written by hand. The same
   function is the assembler for the language (section 14, item 5). `core/asm.py` writes every function in
-  the sources with it, and no outside assembler stands between an Ode source and its bytes. For each of
-  the 27 functions it produces the same bytes as clang (`lang/test_asm.py`).
+  the sources with it, and no outside assembler stands between an Ode source and its bytes. For each
+  function of the sources it produces the same bytes as clang, and it lays an instruction down as the
+  instruction named or refuses it (`lang/test_asm.py`).
 - **Compared with processors.** Each instruction form is run on real processors from random states and
   compared with the model. (Ode 0.1 did this for its AArch64 subset, and the Lean experiments did it for
   x86-64.) In an audit, every changed binary that the verifier accepts is run on a processor against the
