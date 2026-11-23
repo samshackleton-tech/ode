@@ -256,6 +256,21 @@ fn st_ld as "t_st_ld" {
         self.assertTrue(any("max_bytes" in e for e in errs))
         self.assertTrue(any("max_line_splits" in e for e in errs))
 
+    def test_calibrate_predictions_offline(self):
+        import calibrate
+        with tempfile.TemporaryDirectory() as d:
+            _, pairs_x86 = calibrate.predict_x86("zen5", d)
+            _, pairs_arm = calibrate.predict_arm64("ampere1", d)
+        by_x = {p["name"]: p for p in pairs_x86}
+        self.assertGreater(by_x["p16_align"]["pred_b_warm"], by_x["p16_align"]["pred_a_warm"])
+        self.assertGreater(by_x["alias_4k"]["pred_b_warm"], by_x["alias_4k"]["pred_a_warm"])
+        self.assertGreater(by_x["stlf_width"]["pred_b_warm"], by_x["stlf_width"]["pred_a_warm"])
+        self.assertGreater(by_x["l1d_set_conflict"]["pred_b_warm"], by_x["l1d_set_conflict"]["pred_a_warm"])
+        by_a = {p["name"]: p for p in pairs_arm}
+        self.assertGreater(by_a["arm_mix_align"]["pred_b_warm"], by_a["arm_mix_align"]["pred_a_warm"])
+        self.assertGreater(by_a["arm_stlf_width"]["pred_b_warm"], by_a["arm_stlf_width"]["pred_a_warm"])
+        self.assertGreater(by_a["arm_l1d_conflict"]["pred_b_warm"], by_a["arm_l1d_conflict"]["pred_a_warm"])
+
 
 if __name__ == "__main__":
     unittest.main()
