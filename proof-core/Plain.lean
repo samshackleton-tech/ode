@@ -92,6 +92,8 @@ theorem execStmt_plain (perm : Perm) (bind : Bind) (base u : Nat) (s : State) (s
   | nothing => rfl
   | ret => rfl
   | call _ => rfl
+  | retLink _ => rfl
+  | callLink _ _ => rfl
   | vset512 place v => exact execVec512_plain perm bind s place v
   | jump target cond =>
     have hv := value_plain perm bind s target
@@ -184,6 +186,7 @@ def execAllP (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat �
   | _, s, .ret :: _ =>
     let sp := s.reg RSP
     if allowed perm.read sp 8 then some (.returned (setReg { s with rip := load s.mem sp 8, trace := s.trace ++ [(sp, 8)] } RSP (sp + 8))) else none
+  | _, s, .retLink r :: _ => (regIndex r).map fun k => .returned { s with rip := s.reg k }
   | k, s, st :: rest =>
     match execStmt perm bind base (u k) s st with
     | some s' => execAllP perm bind base u (k + 1) (notedP bind s st s') rest
@@ -192,11 +195,24 @@ def execAllP (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat �
 def execP (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) : Option Outcome :=
   execAllP perm i.bind p.base u 0 { s with rip := p.base + i.next, trace := s.trace ++ [(s.rip, 0)] } i.effect
 
-/-- The state a called function starts in, on the plain machine. -/
+/-- The state a called function starts in, on the plain machine: the address to come back to is written
+just below the stack pointer, or put in a register, as the call instruction says. -/
 def afterCallP (p q : Program) (i : Instr) (s : State) : State :=
-  { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
-    marks := {}, trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
+  match callLink i with
+  | none =>
+    { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
+      mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
+      marks := {}, trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
+  | some l =>
+    { reg := fun k => if k = l then (p.base + i.next) % M64 else s.reg k, zf := s.zf, cf := s.cf,
+      mem := s.mem, rip := q.base, vec := s.vec, data := s.data,
+      marks := {}, trace := s.trace ++ [(s.rip, 0)] }
+
+/-- The plain machine's state after a call is the state of the machine with marks after it, without its marks. -/
+theorem afterCallP_plain (p q : Program) (i : Instr) (s : State) : afterCallP p q i s.plain = (afterCall p q i s).plain := by
+  cases hl : callLink i with
+  | none => rw [afterCall_stack hl]; simp only [afterCallP, hl]; rfl
+  | some l => rw [afterCall_link hl]; simp only [afterCallP, hl]; rfl
 
 /-- `Runs` on the plain machine: no word about marks. -/
 inductive RunsP (world : List Program) : Perm → Program → (State → Prop) → State → Prop where
@@ -209,10 +225,10 @@ inductive RunsP (world : List Program) : Perm → Program → (State → Prop) �
   | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
       (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      8 ≤ s.reg RSP → allowed perm.write (s.reg RSP - 8) 8 = true →
+      (callLink i = none → 8 ≤ s.reg RSP ∧ allowed perm.write (s.reg RSP - 8) 8 = true) →
       (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
       RunsP world inner q R (afterCallP p q i s) →
-      (∀ s', R s' → ∀ r ∈ calleeSaved, s'.reg r = s.reg r) →
+      (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
       (∀ s', R s' → RunsP world perm p Q s') →
       RunsP world perm p Q s
 
@@ -225,16 +241,16 @@ theorem execAll_plain {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat}
     execAllP perm bind base u k s.plain stmts = (execAll perm bind base u k s stmts).map Outcome.plain
   | [], _, _ => rfl
   | st :: rest, k, s => by
-    have go : st ≠ .ret → execAllP perm bind base u k s.plain (st :: rest) =
+    have go : st ≠ .ret → (∀ r, st ≠ .retLink r) → execAllP perm bind base u k s.plain (st :: rest) =
         (match execStmt perm bind base (u k) s st with
           | some s' => execAll perm bind base u (k + 1) (noted bind s st s') rest
           | none => none).map Outcome.plain := by
-      intro hr
+      intro hr hl
       have e := execStmt_plain perm bind base (u k) s st
       cases h : execStmt perm bind base (u k) s st with
       | none =>
         rw [h] at e
-        cases st <;> first | exact absurd rfl hr | rfl | (simp only [execAllP, e]; rfl)
+        cases st <;> first | exact absurd rfl hr | exact absurd rfl (hl _) | rfl | (simp only [execAllP, e]; rfl)
       | some s' =>
         rw [h] at e
         have r := execAll_plain (perm := perm) (bind := bind) (base := base) (u := u) rest (k + 1) (noted bind s st s')
@@ -247,12 +263,16 @@ theorem execAll_plain {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat}
     | ret =>
       show (if allowed perm.read (s.reg RSP) 8 = true then _ else _) = Option.map _ (if allowed perm.read (s.reg RSP) 8 = true then _ else _)
       split <;> rfl
-    | nothing => exact go (by intro x; cases x)
-    | call _ => exact go (by intro x; cases x)
-    | jump _ _ => exact go (by intro x; cases x)
-    | set _ _ => exact go (by intro x; cases x)
-    | vset _ _ => exact go (by intro x; cases x)
-    | vset512 _ _ => exact go (by intro x; cases x)
+    | retLink r =>
+      simp only [execAllP, execAll]
+      cases regIndex r <;> rfl
+    | callLink _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | nothing => exact go (by intro x; cases x) (by intro r x; cases x)
+    | call _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | jump _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | set _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | vset _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | vset512 _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
 
 theorem exec_plain (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) :
     execP perm p i u s.plain = (exec perm p i u s).map Outcome.plain :=
@@ -293,8 +313,9 @@ theorem runs_plain {world : List Program} {perm : Perm} {p : Program} {Q : State
       rw [e] at e'
       obtain ⟨s', rfl, rfl⟩ := outcome_returned (Option.some.inj e').symm
       exact ⟨s', hr u s' eq, rfl⟩
-  | call perm p Q s i name q inner R hf hc hw h8 ha _ hir hiw _ hk _ ihq ihp =>
-    refine RunsP.call perm p _ s.plain i name q inner _ hf hc hw h8 ha hir hiw ihq ?_ ?_
+  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+    rw [← afterCallP_plain] at ihq
+    refine RunsP.call perm p _ s.plain i name q inner _ hf hc hw (fun hl => ⟨(hstack hl).1, (hstack hl).2.1⟩) hir hiw ihq ?_ ?_
     · rintro t ⟨s', hs', rfl⟩ r hr
       exact hk s' hs' r hr
     · rintro t ⟨s', hs', rfl⟩
@@ -482,6 +503,8 @@ theorem execStmt_all {perm : Perm} {bind : Bind} {base u : Nat} {s : State} : �
   | .nothing, _, h => h
   | .ret, _, h => h
   | .call _, _, h => h
+  | .retLink _, _, h => h
+  | .callLink _ _, _, h => h
   | .vset512 _ _, _, h => execVec512_all h
   | .jump target cond, s', h => by
     have hv : ∀ {r : State}, (value perm bind s target).map (fun t => { s with rip := base + t }) = some r →
@@ -567,13 +590,13 @@ theorem execAll_all {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat} :
     execAll perm bind base u k s stmts = some o → execAll Perm.all bind base u k s stmts = some o
   | [], _, _, _, h => h
   | st :: rest, k, s, o, h => by
-    have go : st ≠ .ret → execAll Perm.all bind base u k s (st :: rest) = some o := by
-      intro hr
+    have go : st ≠ .ret → (∀ r, st ≠ .retLink r) → execAll Perm.all bind base u k s (st :: rest) = some o := by
+      intro hr hl
       have unf : ∀ pm, execAll pm bind base u k s (st :: rest) =
           (match execStmt pm bind base (u k) s st with
             | some s' => execAll pm bind base u (k + 1) (noted bind s st s') rest
             | none => none) := by
-        intro pm; cases st <;> first | exact absurd rfl hr | rfl
+        intro pm; cases st <;> first | exact absurd rfl hr | exact absurd rfl (hl _) | rfl
       rw [unf] at h ⊢
       cases he : execStmt perm bind base (u k) s st with
       | none => rw [he] at h; cases h
@@ -586,12 +609,16 @@ theorem execAll_all {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat} :
       split at h
       · rw [if_pos (allowed_all _ _).1]; exact h
       · cases h
-    | nothing => exact go (by intro x; cases x)
-    | call _ => exact go (by intro x; cases x)
-    | jump _ _ => exact go (by intro x; cases x)
-    | set _ _ => exact go (by intro x; cases x)
-    | vset _ _ => exact go (by intro x; cases x)
-    | vset512 _ _ => exact go (by intro x; cases x)
+    | retLink r =>
+      simp only [execAll] at h ⊢
+      exact h
+    | callLink _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | nothing => exact go (by intro x; cases x) (by intro r x; cases x)
+    | call _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | jump _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | set _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | vset _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
+    | vset512 _ _ => exact go (by intro x; cases x) (by intro r x; cases x)
 
 /-- What an instruction does where only some memory may be touched, it does where all of it may. -/
 theorem exec_all {perm : Perm} {p : Program} {i : Instr} {u : Nat → Nat} {s : State} {o : Outcome}
@@ -604,6 +631,7 @@ theorem exec_call {p : Program} {i : Instr} {name : String} (h : callTarget i = 
   unfold callTarget at h
   split at h
   next n heff => simp [exec, heff, execAll, execStmt]
+  next n r heff => simp [exec, heff, execAll, execStmt]
   next => cases h
 
 /-- **Nothing forbidden.** A run of the machine with marks that touches only what it is let, to states of
@@ -633,8 +661,9 @@ theorem runs_free {world : List Program} {perm : Perm} {p : Program} {Q : State 
       rw [e] at e'
       obtain ⟨s', rfl, rfl⟩ := outcome_returned (Option.some.inj e').symm
       exact ⟨s', hr u s' eq, rfl⟩
-  | call perm p Q s i name q inner R hf hc hw h8 ha _ hir hiw _ hk _ ihq ihp =>
-    refine RunsP.call Perm.all p _ s.plain i name q Perm.all _ hf hc hw h8 (allowed_all _ _).2 (fun _ h => h) (fun _ h => h) ihq ?_ ?_
+  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+    rw [← afterCallP_plain] at ihq
+    refine RunsP.call Perm.all p _ s.plain i name q Perm.all _ hf hc hw (fun hl => ⟨(hstack hl).1, (allowed_all _ _).2⟩) (fun _ h => h) (fun _ h => h) ihq ?_ ?_
     · rintro t ⟨s', hs', rfl⟩ r hr
       exact hk s' hs' r hr
     · rintro t ⟨s', hs', rfl⟩
@@ -687,7 +716,7 @@ theorem runs_endsP {world : List Program} {perm : Perm} {p : Program} {Q : State
       have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
       subst e
       exact absurd (execQ_call hc perm (fun _ => 0) s) (hn _)
-  | call perm p Q s i name q inner R hf hc hw h8 ha hsp hir hiw _ hk _ ihq ihp =>
+  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
     intro t E
     have no : ∀ u, execP Perm.all p i u s.plain = none := by
       intro u; rw [exec_plain, exec_call hc]; rfl
@@ -705,9 +734,10 @@ theorem runs_endsP {world : List Program} {perm : Perm} {p : Program} {Q : State
       subst e
       rw [hc] at hc2; injection hc2 with e; subst e
       rw [hw] at hw2; injection hw2 with e; subst e
+      rw [afterCallP_plain] at Ein
       obtain ⟨s1', e1, r1, rfl⟩ := ihq Ein
       obtain ⟨s2', e2, q2, rfl⟩ := ihp s1' r1 Eout
-      exact ⟨s2', Ends.call p s i2 name q s1' s2' hf hc hw hsp e1 (hk s1' r1) e2, q2, rfl⟩
+      exact ⟨s2', Ends.call p s i2 name q s1' s2' hf hc hw (fun hl => (hstack hl).2.2) e1 (hk s1' r1) e2, q2, rfl⟩
 
 /-- **TWO RUNS OF THE PLAIN MACHINE.** Two states alike in everything not marked, from each of which the
 machine with marks runs the function without stopping; two runs of the plain machine, from the one state

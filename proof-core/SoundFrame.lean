@@ -100,7 +100,7 @@ theorem frameRows_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
           simpa using this
 
 /-- The terms found for rows are the atoms of those rows: each is that row's number modulo 2^32. -/
-theorem frameIds_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf : WF s) :
+theorem frameIds_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf : WF ctx s) :
     ∀ (rows : List Row) {ids : List Nat}, frameIds s rows = some ids →
       ids.length = rows.length ∧ ∀ j, j < rows.length → ids.getD j 0 < s.terms.length ∧
         (den (inpOf ctx s0) ρ s.terms (ids.getD j 0) : Int) = ev ρ (rows.getD j (Lin.const 0)) % W32i
@@ -134,7 +134,7 @@ theorem frameIds_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf
           simpa using this
 
 /-- The quotient by 2^32 that `highOf` finds speaks of unknowns in use. -/
-theorem highOf_bounded {s : Sym} (wf : WF s) {r q : Row} (hb : bounded s.nvars r) (h : highOf s r = some q) : bounded s.nvars q := by
+theorem highOf_bounded {s : Sym} (wf : WF ctx s) {r q : Row} (hb : bounded s.nvars r) (h : highOf s r = some q) : bounded s.nvars q := by
   have dv : ∀ {q : Row}, (divided s r W32i).map Lin.var = some q → bounded s.nvars q := by
     intro q hq
     cases hd : divided s r W32i with
@@ -151,7 +151,7 @@ theorem highOf_bounded {s : Sym} (wf : WF s) {r q : Row} (hb : bounded s.nvars r
     · exact dv h
 
 /-- A word of the frame read from a cell is a row of unknowns in use. -/
-theorem frameWord_bounded {s : Sym} (wf : WF s) {o : Int} {x : Row} (h : frameWord s o = some x) : bounded s.nvars x := by
+theorem frameWord_bounded {s : Sym} (wf : WF ctx s) {o : Int} {x : Row} (h : frameWord s o = some x) : bounded s.nvars x := by
   unfold frameWord at h
   split at h
   next o' x' hf =>
@@ -167,7 +167,7 @@ theorem frameWord_bounded {s : Sym} (wf : WF s) {o : Int} {x : Row} (h : frameWo
       · exact highOf_bounded wf hb h
     next => cases h
 
-theorem frameRows_bounded {s : Sym} (wf : WF s) (c : Int) :
+theorem frameRows_bounded {s : Sym} (wf : WF ctx s) (c : Int) :
     ∀ (count k : Nat) {rows : List Row}, frameRows s c count k = some rows → ∀ x ∈ rows, bounded s.nvars x
   | 0, k, rows, h => by
     simp only [frameRows, Option.some.injEq] at h; subst h
@@ -188,7 +188,7 @@ theorem frameRows_bounded {s : Sym} (wf : WF s) (c : Int) :
 
 /-- Before a call, putting the frame's words into the table changes nothing the verifier holds. -/
 theorem callFrameTouch_carried {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {st : State} (c : Contract) :
-    ∀ (runs : List (String × Nat × Nat)) {s : Sym}, Holds ctx s0 ρ s st → WF s →
+    ∀ (runs : List (String × Nat × Nat)) {s : Sym}, Holds ctx s0 ρ s st → WF ctx s →
       Carried ctx s0 ρ s ρ (runs.foldl (fun s (x : String × Nat × Nat) =>
         match (frameAt s x.2.1).bind fun k => frameRows s k (x.2.2 / 4) 0 with
         | some rows => { s with tab := (termsOf wAtom rows s.tab).2 }
@@ -212,7 +212,7 @@ theorem callFrameTouch_carried {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {st :
 /-- A part of the frame a called function is given: the register points there, the part lies in the frame
 at or above the stack pointer, in whole cells, and each of its words is the term found for it. -/
 theorem frameRun_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) {r n : Nat} (hr : r < 16) {c : Int} {ids : List Nat}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r n : Nat} (hr : r < ctx.nreg) {c : Int} {ids : List Nat}
     (h : frameRun s r n = some (c, ids)) :
     (∃ sp, s.sp = some sp ∧ sp ≤ c) ∧ c + n ≤ 0 ∧ n % 8 = 0 ∧ (st.reg r : Int) = s0.reg RSP + c ∧ ids.length = n / 4 ∧
       ∀ j, j < n / 4 → ids.getD j 0 < s.terms.length ∧ -(ctx.contract.stack : Int) ≤ c + 4 * (j : Int) ∧
@@ -241,7 +241,7 @@ theorem frameRun_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               have e := ev_isConst (ρ := ρ) (show Lin.isConst (Lin.sub (s.reg r) (Lin.var RSP)) = some c' from hf)
               rw [ev_sub, ev_var] at e
               have h1 := H.reg r hr
-              have h2 := H.entry RSP (by decide)
+              have h2 := H.entry RSP ctx.rsp_lt
               omega
             refine ⟨⟨sp, rfl, hc.1⟩, hc.2.1, hc.2.2, hreg, by omega, fun j hj => ?_⟩
             have hwj := hw j hj

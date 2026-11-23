@@ -7,7 +7,7 @@ does (cross.py), and a table with one row changed is found out.
 
     python3 test_arm64.py"""
 from pathlib import Path
-import os, platform, random, shutil, subprocess, sys, tempfile, unittest
+import os, platform, random, re, shutil, subprocess, sys, tempfile, unittest
 
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "core")]
@@ -26,6 +26,9 @@ CHANGED = [("add is sub", "| D = add64(S, P)", "| D = sub64(S, P)", "differs"),
            ("st1 writes nothing", "| mem128(B, 0) = X", "| nothing", "differs"),
            ("nop sets x0", "| nothing", "| x0 = 0", "differs"),
            ("add sp moves x0", "| sp = add64(sp, I)", "| x0 = add64(sp, I)", "differs"),
+           ("a load at a stack pointer that is no multiple of 16 has no fault", "| D = mem64(on16(sp), N)", "| D = mem64(sp, N)", "differs"),
+           ("a store at a stack pointer that is no multiple of 16 has no fault", "| mem64(on16(sp), N) = S", "| mem64(sp, N) = S", "differs"),
+           ("adding to a stack pointer that is no multiple of 16 has a fault", "| sp = add64(sp, I)", "| sp = add64(on16(sp), I)", "differs"),
            ("sub's registers the other way in the word", "= 1 1 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 1 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "differs"),
            ("add's registers the other way in the word", "= 1 0 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 0 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "word")]
 # Words that are instructions and no instance of a row: each has 31 in a field of D, S or P, or a bit the row has fixed.
@@ -54,8 +57,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 25)
-        self.assertEqual(len(self.ways), 25)
+        self.assertEqual(len(self.rows), 27)
+        self.assertEqual(len(self.ways), 27)
         heads = [row.pattern[0] for row in self.rows]
         self.assertEqual(len(set(heads)), len(heads))             # a decoded instruction's first word says its row
         for way in self.ways:                                     # every placeholder of a row is in each of its ways
@@ -71,8 +74,7 @@ class Words(unittest.TestCase):
                 bind = {}
                 for name, (low, width) in way.fields.items():
                     v = rng.randrange(1 << width)
-                    if name in word.NOT_31: bind[name] = word.GENERAL[v % 31]
-                    elif name in word.MAY_BE_SP: bind[name] = word.GENERAL[v]
+                    if name in word.REGISTER: bind[name] = word.GENERAL[v % 31]
                     elif name.isupper(): bind[name] = v
                     else:
                         placeholder, (_, how, k) = next((p, rule) for p, rule in way.rules.items() if rule[0] == name)
@@ -99,10 +101,12 @@ class Words(unittest.TestCase):
         for name, bind in (("mov_rr", {"D": "x0", "S": "sp"}), ("mov_rr", {"D": "sp", "S": "x1"}), ("mov_ri", {"D": "x0", "I": 65536}),
                            ("add_rri", {"D": "x0", "S": "x1", "I": 4096}), ("ldr64", {"D": "x0", "B": "x1", "N": 12}), ("ldr64", {"D": "x0", "B": "x1", "N": 32768}),
                            ("ldr32", {"D": "x0", "B": "x1", "N": 6}), ("ushr_4s", {"X": 0, "Y": 1, "I": 0}), ("ushr_4s", {"X": 0, "Y": 1, "I": 33}),
-                           ("shl_4s", {"X": 0, "Y": 1, "I": 32}), ("eor_v", {"X": 32, "Y": 1, "Z": 2}), ("ldr64", {"D": "x0", "B": "x31", "N": 8})):
+                           ("shl_4s", {"X": 0, "Y": 1, "I": 32}), ("eor_v", {"X": 32, "Y": 1, "Z": 2}), ("ldr64", {"D": "x0", "B": "x31", "N": 8}),
+                           ("ldr64", {"D": "x0", "B": "sp", "N": 16}), ("ldr64_sp", {"D": "sp", "N": 16}), ("str64_sp", {"S": "x0", "N": 4})):
             with self.subTest(row=name, bind=bind):
                 with self.assertRaises(word.Refuse): word.encode(way[name], bind)
-        self.assertEqual(word.encode(way["ldr64"], {"D": "x0", "B": "sp", "N": 16}).hex(), "e00b40f9")
+        self.assertEqual(word.encode(way["ldr64_sp"], {"D": "x0", "N": 16}).hex(), "e00b40f9")
+        self.assertEqual(word.decode(self.ways, bytes.fromhex("e00b40f9"))[0].name, "ldr64_sp")       # (a base field of 31 is the stack pointer's row)
         self.assertEqual(word.encode(way["ushr_4s"], {"X": 0, "Y": 1, "I": 32}).hex(), "2004206f")
 
     @unittest.skipUnless(shutil.which("clang"), "clang writes the words to compare with")
@@ -139,8 +143,10 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("23 rows, each as the assembler writes it and as the table writes it, 4600 instances: 0 differ from this processor", last)
+        self.assertIn("25 rows, each as the assembler writes it and as the table writes it, 5000 instances: 0 differ from this processor", last)
         self.assertIn("0 of the assembler's words are not the table's; 2 rows are not run: bl, ret", last)
+        faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
+        self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)
 
     def test_a_changed_row_is_found_out(self):
         base = Path(word.TABLE).read_text()

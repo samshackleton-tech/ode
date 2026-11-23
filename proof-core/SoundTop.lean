@@ -14,12 +14,12 @@ open Arithmetic
 /-- An effect the verifier accepts runs in the machine model and preserves the verifier's invariant. -/
 theorem symStmt_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
+    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (base u : Nat) :
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm ctx.pieces s0) bind base u st stmt = some st' ∧ st'.rip = st.rip := by
   cases stmt with
   | vset _ _ => exact symVset_sound E bind h H wf base u
   | vset512 _ _ => exact symVset512_sound E bind h H wf base u
-  | nothing | ret | call _ | jump _ _ | set _ _ =>
+  | nothing | ret | retLink _ | call _ | callLink _ _ | jump _ _ | set _ _ =>
     exact symStmt_scalar E bind h H wf base u (fun _ _ e => by cases e) (fun _ _ e => by cases e)
       (fun a x h8 H8 wf8 hw8 ha8 sx8 => symStore8_sound E a x h8 H8 wf8 hw8 ha8 sx8)
 
@@ -61,7 +61,7 @@ theorem post_fields {c : Contract} {defs : List Def} {s0 st st' : State} (h : c.
 does not stop, and what the verifier has as not marked after them is not marked. -/
 theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) (base : Nat) (u : Nat → Nat) :
     ∀ (stmts : List Stmt) (k : Nat) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    fold (symStmtQ ctx bind) s stmts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → MarksOk ctx s0 s.q st →
+    fold (symStmtQ ctx bind) s stmts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → MarksOk ctx s0 s.q st →
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧
       execAllQ (ctx.contract.perm ctx.pieces s0) bind base u k st stmts = some (.next st') ∧ st'.rip = st.rip ∧ MarksOk ctx s0 s'.q st'
   | [], k, s, s', items, rest, ρ, st, h, H, wf, M => by
@@ -91,6 +91,8 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       refine ⟨ρ2, st2, c1'.then c2, ?_, rip2.trans rip1, M2⟩
       cases stmt with
       | ret => simp only [symStmt] at e1; exact (refuse_ok e1).elim
+      | retLink _ => simp only [symStmt] at e1; exact (refuse_ok e1).elim
+      | callLink _ _ => simp only [symStmt] at e1; exact (refuse_ok e1).elim
       | nothing => simp only [execAllQ, quiet, if_true, x1]; exact x2
       | set _ _ => simp only [execAllQ, quiet, if_true, x1]; exact x2
       | vset _ _ => simp only [execAllQ, quiet, if_true, x1]; exact x2
@@ -98,8 +100,8 @@ theorem stmts_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       | jump _ _ => simp only [execAllQ, quiet, if_true, x1]; exact x2
       | call _ => simp only [execAllQ, quiet, if_true, x1]; exact x2
 
-theorem stackGoals_bounded {ctx : Ctx} {s : Sym} (wf : WF s) {g : Row} (m : g ∈ stackGoals ctx s) : bounded s.nvars g := by
-  have off := bounded_sub (wf.reg RSP (by decide)) (bounded_var (x := RSP) (Nat.lt_of_lt_of_le (by decide) wf.base))
+theorem stackGoals_bounded {ctx : Ctx} {s : Sym} (wf : WF ctx s) {g : Row} (m : g ∈ stackGoals ctx s) : bounded s.nvars g := by
+  have off := bounded_sub (wf.reg RSP ctx.rsp_lt) (bounded_var (x := RSP) (Nat.lt_of_lt_of_le ctx.rsp_lt wf.regs))
   simp only [stackGoals, List.mem_cons, List.mem_append, List.mem_map, Option.mem_toList] at m
   rcases m with rfl | rfl | ⟨⟨o, _⟩, _, rfl⟩ | ⟨⟨o, ids⟩, hs, rfl⟩
   · exact bounded_add off (bounded_const _ _)
@@ -108,7 +110,7 @@ theorem stackGoals_bounded {ctx : Ctx} {s : Sym} (wf : WF s) {g : Row} (m : g �
   · exact bounded_sub (wf.words.spill o ids hs).1 off
 
 theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : settle ctx s items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) : Carried ctx s0 ρ s ρ s' st := by
+    (h : settle ctx s items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) : Carried ctx s0 ρ s ρ s' st := by
   cases hsp : s.sp with
   | none =>
     simp only [settle, hsp] at h
@@ -147,7 +149,7 @@ theorem settle_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {items rest : Items} 
 
 /-- The way the flag is in fact set is among the ways gone. -/
 theorem ways_sound {ctx : Ctx} {s0 : State} {s : Sym} {want : Bool} {target next : Nat} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (b : Bool) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (b : Bool) :
     ∀ (w : List (Bool × List Row)) {nexts : List (Sym × Next)} {items rest : Items},
     ways s want target next w items = .ok (nexts, rest) →
     (∀ sr ∈ w, ∀ r ∈ sr.2, bounded s.nvars r) →
@@ -263,29 +265,29 @@ theorem jumpTarget_value {bind : Bind} {target : Expr} {t : Nat} (h : jumpTarget
 
 /-! ## The return -/
 
-theorem calleeSaved_spec {r : Nat} (h : r ∈ calleeSaved) : r < 16 ∧ r ≠ RSP := by
-  simp only [calleeSaved, List.mem_cons, List.mem_nil_iff, or_false] at h
-  unfold RSP
-  omega
-
 /-- An `ensures` of a whole run of words that the verifier has passed, after the rows the proof file gives
 there (`symEnsureKnown`), holds. -/
 theorem symEnsureKnown_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {e : EnsureW}
     {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st st' : State}
-    (h : symEnsureKnown ctx s e items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hmem : st'.mem = st.mem) :
+    (h : symEnsureKnown ctx s e items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hmem : st'.mem = st.mem) :
     e.holds ctx.contract ctx.defs s0 st' := by
   unfold symEnsureKnown at h
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
   have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
   exact symEnsureW_sound E h C.holds C.wf hmem
 
-/-- At a return the verifier has passed: the machine's return is allowed, and leaves what the contract
-promises. -/
+/-- At a return the verifier has passed: the stack pointer is where it was at entry; and the contract's
+promise is so of every state that has this state's memory and its registers but the stack pointer, the
+stack pointer above the bytes of the address returned to (`slot`: eight on x86-64, none on AArch64), and
+that goes on at the address the contract has the function return to. (The two machines' returns leave
+such states: `symReturn_x86`, `symReturn_arm`.) -/
 theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
     {r : Unit × Items} {ρ : Nat → Int} {st : State}
-    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) :
-    allowed (ctx.contract.perm ctx.pieces s0).read (st.reg RSP) 8 = true ∧
-    ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
+    st.reg RSP = s0.reg RSP ∧
+    ∀ st' : State, st'.mem = st.mem → (∀ r, r ≠ RSP → st'.reg r = st.reg r) →
+      st'.reg RSP = st.reg RSP + ctx.contract.slot → st'.rip = ctx.contract.backTo s0 →
+      ctx.contract.post ctx.defs s0 st' := by
   unfold symReturn at h
   split at h
   next => exact (refuse_ok h).elim
@@ -293,78 +295,63 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     split at h
     next => exact (refuse_ok h).elim
     next hcs =>
+      have hsp' : s.sp = some 0 := by simpa using hsp
+      have hcs' : ∀ r ∈ ctx.contract.keeps, s.reg r = Lin.var r := by simpa using hcs
+      have e := ev_isConst (ρ := ρ) hsp'
+      simp only [ev_sub, ev_var] at e
+      have h1 := H.reg RSP ctx.rsp_lt
+      have h2 := H.entry RSP ctx.rsp_lt
+      have hrsp : st.reg RSP = s0.reg RSP := by omega
+      refine ⟨hrsp, fun st' hmem hreg hsp1 hrip => ?_⟩
+      have hrax' : st'.reg 0 = st.reg 0 := hreg 0 (by decide)
+      have lt0 : 0 < ctx.nreg := ctx.lt_nreg (by decide)
       -- every `ensures` of a whole run of words: of this state's memory, which the return leaves as it is
       obtain ⟨_, rW, enW, h⟩ := V.bind_ok h
-      have hensW : ∀ e ∈ ctx.contract.ensuresW,
-          e.holds ctx.contract ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+      have hensW : ∀ e ∈ ctx.contract.ensuresW, e.holds ctx.contract ctx.defs s0 st' := by
         intro e me
         obtain ⟨items', r', hr⟩ := each_mem enW e me
-        exact symEnsureKnown_sound E hr H wf rfl
+        exact symEnsureKnown_sound E hr H wf hmem
       -- every `ensures` first: of the state the return leaves, whose memory and rax are this state's
       obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
       have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
-        have hsym := (symEnv_bounded ctx.contract).mono wf.base16
+        have hsym := (symEnv_bounded ctx.contract).mono wf.regs
         unfold symEnvAfter
         split
         · intro nv m
           rcases List.mem_cons.mp m with rfl | m
-          · exact wf.reg 0 (by decide)
+          · exact wf.reg 0 lt0
           · exact hsym nv m
         · exact hsym
-      have henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' (symEnvAfter ctx.contract s) =
-          ctx.contract.envAfter s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+      have henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' (symEnvAfter ctx.contract s) = ctx.contract.envAfter s0 st' := by
         intro ρ' a
-        have hsym := semEnv_symEnv ctx s0 ρ' (fun r hr => by rw [← a r (Nat.lt_of_lt_of_le hr wf.base16)]; exact H.entry r hr)
-        have hrax : ev ρ' (s.reg 0) = (st.reg 0 : Int) := by rw [← ev_agree (wf.reg 0 (by decide)) a]; exact (H.reg 0 (by decide)).symm
+        have hsym := semEnv_symEnv ctx s0 ρ' (fun r hr => by rw [← a r (Nat.lt_of_lt_of_le hr wf.regs)]; exact H.entry r hr)
+        have hrax : ev ρ' (s.reg 0) = (st.reg 0 : Int) := by rw [← ev_agree (wf.reg 0 lt0) a]; exact (H.reg 0 lt0).symm
         cases hres : ctx.contract.result with
         | none => simp only [symEnvAfter, Contract.envAfter, hres]; exact hsym
         | some name =>
           simp only [symEnvAfter, Contract.envAfter, hres]
           show (name, semv ctx s0 ρ' (.lin (s.reg 0))) :: semEnv ctx s0 ρ' (symEnv ctx.contract) = _
           rw [hsym]
-          simp only [semv, hrax]
-          simp [setReg, RSP]
-      obtain ⟨ρE, cE, hens⟩ := symEnsures_sound E en H wf henvB henv rfl
-      have hsp' : s.sp = some 0 := by simpa using hsp
-      have hcs' : ∀ r ∈ calleeSaved, s.reg r = Lin.var r := by simpa using hcs
-      have e := ev_isConst (ρ := ρ) hsp'
-      simp only [ev_sub, ev_var] at e
-      have h1 := H.reg RSP (by decide)
-      have h2 := H.entry RSP (by decide)
-      have hrsp : st.reg RSP = s0.reg RSP := by omega
-      have hstack := E.stack
+          simp only [semv, hrax, hrax']
+      obtain ⟨ρE, cE, hens⟩ := symEnsures_sound E en H wf henvB henv hmem
       have habove := E.above
-      refine ⟨allowed_of _ _ _ ?_, ?_, ?_, ?_, ?_, ?_, ?_, hens, hensW⟩
-      · intro x hx1 hx2
-        simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
-        left; left; left; left; right; omega
-      · show load st.mem (st.reg RSP) 8 = load s0.mem (s0.reg RSP) 8
-        rw [hrsp]
-        apply load_congr
-        intro x hx1 hx2
-        apply H.mem
-        · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
-          omega
-        · exact E.frame_notOut (by omega) (by omega)
-      · show (if RSP = RSP then (st.reg RSP + 8) % M64 else st.reg RSP) = s0.reg RSP + 8
-        rw [if_pos rfl, hrsp, Nat.mod_eq_of_lt habove]
+      refine ⟨hrip, by rw [hsp1, hrsp], ?_, ?_, ?_, ?_, hens, hensW⟩
       · intro r hr
-        obtain ⟨lt, ne⟩ := calleeSaved_spec hr
-        show (if r = RSP then (st.reg RSP + 8) % M64 else st.reg r) = s0.reg r
-        rw [if_neg ne]
+        obtain ⟨lt, ne, _⟩ := keeps_spec hr
+        rw [hreg r ne]
         have := H.reg r lt
         rw [hcs' r hr, ev_var, H.entry r lt] at this
         omega
       · intro a ha ho
+        rw [hmem]
         exact H.mem a ha ho
       · intro e he
         simp only [he] at h
         obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
-        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 cE.holds cE.wf ((symEnv_bounded ctx.contract).mono cE.wf.base16)
+        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 cE.holds cE.wf ((symEnv_bounded ctx.contract).mono cE.wf.regs)
         rw [semEnv_symEnv ctx s0 ρ1 c1.holds.entry] at sem
-        show Value ctx.defs (ctx.contract.env s0) e (.int ((if 0 = RSP then (st.reg RSP + 8) % M64 else st.reg 0 : Nat)))
-        rw [if_neg (by decide)]
-        have hrax := c1.holds.reg 0 (by decide)
+        rw [hrax']
+        have hrax := c1.holds.reg 0 lt0
         cases res with
         | list _ => exact (refuse_ok h).elim
         | val v =>
@@ -384,15 +371,64 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         | tail c =>
           simp only at h
           obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
-          obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg 0 (by decide)⟩
+          obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg 0 lt0⟩
           simp only [SFact.holds] at gh
-          rw [← ev_agree (c1.wf.reg 0 (by decide)) c2.agree, ← hrax] at gh
+          rw [← ev_agree (c1.wf.reg 0 lt0) c2.agree, ← hrax] at gh
           exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
       · intro r
-        show (if r = RSP then (st.reg RSP + 8) % M64 else st.reg r) < M64
-        split
-        · exact Nat.mod_lt _ (by unfold M64; omega)
-        · exact H.small r
+        by_cases hr : r = RSP
+        · subst hr; rw [hsp1, hrsp]; exact habove
+        · rw [hreg r hr]; exact H.small r
+
+/-- A return the verifier has passed, on x86-64, in the machine's words: the eight bytes of the address to
+return to may be read, and the state the machine's return leaves is one the contract promises. -/
+theorem symReturn_x86 {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
+    {r : Unit × Items} {ρ : Nat → Int} {st : State}
+    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (ha : ctx.contract.arm64 = false) :
+    allowed (ctx.contract.perm ctx.pieces s0).read (st.reg RSP) 8 = true ∧
+    ctx.contract.post ctx.defs s0 (setReg { st with rip := load st.mem (st.reg RSP) 8 } RSP (st.reg RSP + 8)) := by
+  obtain ⟨hrsp, post⟩ := symReturn_sound E h H wf
+  have hslot : ctx.contract.slot = 8 := by simp only [Contract.slot, ha, Bool.false_eq_true, if_false]
+  have hstack := E.stack
+  have habove := E.above
+  rw [hslot] at habove
+  refine ⟨allowed_of _ _ _ ?_, post _ rfl (fun r hr => ?_) ?_ ?_⟩
+  · intro x hx1 hx2
+    simp only [Contract.perm, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
+    left; left; left; left; right; omega
+  · show (if r = RSP then (st.reg RSP + 8) % M64 else st.reg r) = st.reg r
+    rw [if_neg hr]
+  · show (if RSP = RSP then (st.reg RSP + 8) % M64 else st.reg RSP) = st.reg RSP + ctx.contract.slot
+    rw [if_pos rfl, hslot, Nat.mod_eq_of_lt (by omega)]
+  · show load st.mem (st.reg RSP) 8 = ctx.contract.backTo s0
+    simp only [Contract.backTo, ha, Bool.false_eq_true, if_false]
+    rw [hrsp]
+    apply load_congr
+    intro x hx1 hx2
+    apply H.mem
+    · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
+      omega
+    · exact E.frame_notOut (by omega) (by omega)
+
+/-- A return the verifier has passed, on AArch64, where the register that held the address to return to
+holds what it held at entry: the state the machine's return leaves is one the contract promises. -/
+theorem symReturn_arm {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
+    {r : Unit × Items} {ρ : Nat → Int} {st : State}
+    (h : symReturn ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (ha : ctx.contract.arm64 = true)
+    (hl : s.reg LINK = Lin.var LINK) :
+    ctx.contract.post ctx.defs s0 { st with rip := st.reg LINK } := by
+  obtain ⟨hrsp, post⟩ := symReturn_sound E h H wf
+  have hslot : ctx.contract.slot = 0 := by simp only [Contract.slot, ha, if_true]
+  have lt : LINK < ctx.nreg := by
+    show LINK < ctx.contract.regs
+    simp only [Contract.regs, ha, if_true]
+    decide
+  refine post _ rfl (fun _ _ => rfl) (by rw [hslot, Nat.add_zero]) ?_
+  show st.reg LINK = ctx.contract.backTo s0
+  simp only [Contract.backTo, ha, if_true]
+  have := H.reg LINK lt
+  rw [hl, ev_var, H.entry LINK lt] at this
+  omega
 
 /-! ## An instruction -/
 
@@ -411,6 +447,11 @@ theorem shape_jump {target : Expr} {cond : Option (String × Bool)} : ∀ {l : L
   | [s], h => by cases s <;> simp [shape] at h ⊢; exact h
   | _ :: _ :: _, h => by simp [shape] at h
 
+theorem shape_retLink {r : String} : ∀ {l : List Stmt}, shape l = .retLink r → l = [.retLink r]
+  | [], h => by simp [shape] at h
+  | [s], h => by cases s <;> simp [shape] at h ⊢; exact h
+  | _ :: _ :: _, h => by simp [shape] at h
+
 theorem symReturn_sp {ctx : Ctx} {s : Sym} {items : Items} {r : Unit × Items} (h : symReturn ctx s items = .ok r) : s.sp = some 0 := by
   unfold symReturn at h
   split at h
@@ -423,7 +464,7 @@ says the function leaves is so; if it goes on, it goes on at one of the places t
 a state of which what the verifier holds there is so, the marks too. -/
 theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {i : Instr}
     {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (M : MarksOk ctx s0 s.q st) (u : Nat → Nat) :
+    (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (M : MarksOk ctx s0 s.q st) (u : Nat → Nat) :
     ∃ o, execQ (ctx.contract.perm ctx.pieces s0) p i u st = some o ∧
       match o with
       | .next st' => ∃ s' pc ρ', (s', Next.at pc) ∈ nexts ∧ st'.rip = p.base + pc ∧ Carried ctx s0 ρ s ρ' s' st' ∧ MarksOk ctx s0 s'.q st'
@@ -432,16 +473,21 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have Ms : MarksOk ctx s0 s.q (started p i st) := M.fields rfl
   cases hs : shape i.effect with
   | ret =>
+    -- a return to the address at the stack pointer: x86-64's
     have heff := shape_ret hs
     simp only [symInstr, hs] at h
+    split at h
+    next => exact (refuse_ok h).elim
+    next ha =>
+    have ha : ctx.contract.arm64 = false := by simpa using ha
     obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
     split at h
     next => exact (refuse_ok h).elim
     next hq =>
       have hq : RSP ∈ s.q.regq ∧ (ctx.contract.givesNumber = true → 0 ∈ s.q.regq) := by
         simpa using hq
-      obtain ⟨al, post⟩ := symReturn_sound E e1 (H.rip (p.base + i.next)) wf
-      have qr := return_quiet E Ms Hs (symReturn_sp e1) (List.contains_iff_mem.mpr hq.1)
+      obtain ⟨al, post⟩ := symReturn_x86 E e1 (H.rip (p.base + i.next)) wf ha
+      have qr := return_quiet E Ms Hs ha (symReturn_sp e1) (List.contains_iff_mem.mpr hq.1)
       refine ⟨.returned (setReg { started p i st with rip := load st.mem (st.reg RSP) 8, trace := (started p i st).trace ++ [(st.reg RSP, 8)] } RSP (st.reg RSP + 8)),
         by simp only [execQ, heff, execAllQ]; rw [if_pos (by rw [qr]; exact al)], post_fields post rfl rfl rfl, ?_, ?_, ?_⟩
       · show st.marks.reg RSP = false
@@ -449,6 +495,34 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       · intro hg
         show st.marks.reg 0 = false
         exact M.reg 0 (hq.2 hg)
+      · exact M.stable
+  | retLink r =>
+    -- a return to the address a register holds: AArch64's
+    have heff := shape_retLink hs
+    simp only [symInstr, hs] at h
+    split at h
+    next => exact (refuse_ok h).elim
+    next hm =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next hlink =>
+    have hm : ctx.contract.arm64 = true ∧ regIndex r = some LINK := by simpa using hm
+    have hlink : s.reg LINK = Lin.var LINK := by simpa using hlink
+    obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+    split at h
+    next => exact (refuse_ok h).elim
+    next hq =>
+      have hq : RSP ∈ s.q.regq ∧ LINK ∈ s.q.regq ∧ (ctx.contract.givesNumber = true → 0 ∈ s.q.regq) := by
+        simpa using hq
+      have post := symReturn_arm E e1 (H.rip (p.base + i.next)) wf hm.1 hlink
+      have hmk : st.marks.reg LINK = false := M.reg LINK hq.2.1
+      refine ⟨.returned { started p i st with rip := st.reg LINK },
+        by simp only [execQ, heff, execAllQ, hm.2, Option.bind, hmk, Bool.false_eq_true, if_false], post_fields post rfl rfl rfl, ?_, ?_, ?_⟩
+      · show st.marks.reg RSP = false
+        exact M.reg RSP hq.1
+      · intro hg
+        show st.marks.reg 0 = false
+        exact M.reg 0 (hq.2.2 hg)
       · exact M.stable
   | jump target cond =>
     have heff := shape_jump hs
@@ -538,23 +612,23 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 lay, and the caller has written none of it (no byte of it is in the caller's frame or in a run given to
 write, where alone memory and marks may have changed), nor is the address to come back to written into it. -/
 theorem loaded_call {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (q : Program) (i : Instr)
-    (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true) :
+    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (q : Program) (i : Instr) {c : Contract}
+    (hl : callLink i = c.link) (h8 : c.slot ≤ st.reg RSP)
+    (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true) :
     Loaded ctx.pieces (afterCall p q i st) := by
   intro k pc hk
   obtain ⟨fit, al, bytes⟩ := E.loaded k pc hk
-  have hdata : (afterCall p q i st).data = s0.data := H.data.2
+  have hdata : (afterCall p q i st).data = s0.data := (afterCall_data p q i st).trans H.data.2
   rw [hdata]
   refine ⟨fit, al, fun j hj => ?_⟩
   obtain ⟨hf, ho⟩ := E.apart _ (inPieces_iff.mpr ⟨k, pc, hk, Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩)
-  have hnot : ¬ (st.reg RSP - 8 ≤ s0.data k + j ∧ s0.data k + j < st.reg RSP - 8 + 8) := fun hin => by
+  have hnot : ¬ (st.reg RSP - c.slot ≤ s0.data k + j ∧ s0.data k + j < st.reg RSP - c.slot + c.slot) := fun hin => by
     have := allowed_at hw _ hin.1 hin.2
     simp [Contract.perm, hf, ho] at this
   constructor
-  · show ((store st.mem (st.reg RSP - 8) (p.base + i.next) 8) (s0.data k + j)).val = pc.bytes[j]
-    rw [store_other _ _ _ _ _ (by omega), H.mem _ hf ho]
+  · rw [afterCall_mem hl h8 (by omega), H.mem _ hf ho]
     exact (bytes j hj).1
-  · show markBytes st.marks.mem (st.reg RSP - 8) 8 false (s0.data k + j) = false
+  · rw [afterCall_marks_mem hl]
     unfold markBytes
     rw [if_neg hnot, M.stable _ hf ho]
     exact (bytes j hj).2
@@ -564,13 +638,14 @@ program's own bytes (its files' read-only data, its code): all of that the calle
 caller may write it is so. -/
 theorem clear_call {world : List Program} {ctx : Ctx} {s0 : State} (Kc : ctx.contract.clear world ctx.pieces s0)
     {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) {c : Contract} (p q : Program) (i : Instr)
-    (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true)
+    (hl : callLink i = c.link)
+    (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true)
     (hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) :
     c.clear world ctx.pieces (afterCall p q i st) := by
   intro a hfix
   have hfix0 : Fixed world ctx.pieces s0 a := by
     rcases hfix with h | h
-    · left; rw [← inPieces_data (show (afterCall p q i st).data = s0.data from H.data.2) a]; exact h
+    · left; rw [← inPieces_data (show (afterCall p q i st).data = s0.data from (afterCall_data p q i st).trans H.data.2) a]; exact h
     · right; exact h
   obtain ⟨hf, ho, _⟩ := Kc a hfix0
   have hnw : (ctx.contract.perm ctx.pieces s0).write a = false := by simp [Contract.perm, hf, ho]
@@ -580,10 +655,7 @@ theorem clear_call {world : List Program} {ctx : Ctx} {s0 : State} (Kc : ctx.con
     | true => rw [hwrite a hx] at hnw; cases hnw
   simp only [Contract.perm, Bool.or_eq_false_iff] at hcw
   refine ⟨hcw.1, hcw.2, fun hin => ?_⟩
-  have s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - 8 := by
-    show (if RSP = RSP then st.reg RSP - 8 else st.reg RSP) = _
-    rw [if_pos rfl]
-  rw [s1rsp] at hin
+  rw [afterCall_rsp hl] at hin
   have := allowed_at hw a hin.1 hin.2
   rw [hnw] at this
   cases this
@@ -598,7 +670,7 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
     {s : Sym} {pc : Nat} {i : Instr}
     {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
     (hl : ctx.code.lookup pc = some i) (h : symNext ctx s i items = .ok (nexts, rest))
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hrip : st.rip = p.base + pc) (M : MarksOk ctx s0 s.q st)
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hrip : st.rip = p.base + pc) (M : MarksOk ctx s0 s.q st)
     (K : ∀ s' pc' ρ' st', (s', Next.at pc') ∈ nexts → st'.rip = p.base + pc' → Carried ctx s0 ρ s ρ' s' st' →
       MarksOk ctx s0 s'.q st' → Runs world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.left ctx.defs s0) st') :
     Runs world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.left ctx.defs s0) st := by
@@ -633,6 +705,12 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
     | none => simp only [hl2] at h; exact (refuse_ok h).elim
     | some c =>
       simp only [hl2] at h
+      split at h
+      next => exact (refuse_ok h).elim
+      next hfit =>
+      -- (the call is one of this function's machine, of a function for it: `callFits`)
+      have hfit : callFits ctx s i c = true := by simpa using hfit
+      have F := callFits_sound E H hfit
       obtain ⟨_, _, _, h⟩ := V.bind_ok h
       obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
       split at h
@@ -644,31 +722,38 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
       subst hn
       obtain ⟨q, hq, fitq, meets⟩ := W name c hl2
       have hcode : (pc, i) ∈ p.code := by rw [E.code]; exact lookup_mem hl
-      obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i (E.fits hcode)
-      obtain ⟨hrsp, hquiet, hafter⟩ := callQuiet_sound E (quietAtCall_marks M c) (quietAtCall_holds H c) hcq q i hw hwrite
+      obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i F (E.fits hcode)
+      obtain ⟨hrsp, hquiet, hafter⟩ := callQuiet_sound E (quietAtCall_marks M c) (quietAtCall_holds H c) hcq q i F hw hwrite
+      have hrun := runs_data (meets _ (loaded_call E M H q i F.link h8 hw) (clear_call Kc H p q i F.link hw hwrite) hpre hquiet)
+      rw [afterCall_data] at hrun
       -- (the called function returns with the files' data where it was, `runs_data`; at its entry the program is
       -- loaded, and nothing it may write is of the program's own bytes: `loaded_call`, `clear_call`)
       exact Runs.call _ p _ st i name q (c.perm ctx.pieces (afterCall p q i st))
         (fun s2 => c.left ctx.defs (afterCall p q i st) s2 ∧ s2.data = st.data)
-        hfetch hc hq h8 hw hrsp hread hwrite
-        (runs_data (meets _ (loaded_call E M H q i hw) (clear_call Kc H p q i hw hwrite) hpre hquiet))
+        hfetch hc hq
+        (fun hnone => by
+          -- (where the call writes the address to come back to below the stack pointer: eight bytes)
+          have hs := (Contract.link_none (F.link.symm.trans hnone)).2
+          rw [hs] at h8 hw
+          exact ⟨h8, hw, hrsp⟩)
+        hread hwrite hrun
         (fun s2 lf2 r hr => by
           have lf := lf2.1
+          rw [keptAt_eq F.link] at hr
           have := lf.1.2.2.1 r hr
-          have ne : r ≠ RSP := by intro e; subst e; revert hr; decide
-          have e : (afterCall p q i st).reg r = st.reg r := by show (if r = RSP then _ else st.reg r) = st.reg r; rw [if_neg ne]
-          rw [this, e])
+          obtain ⟨_, ne, nl⟩ := keeps_spec hr
+          rw [this, afterCall_reg F.link (callKeeps ne nl)])
         (fun s2 lf2 => by
           have lf := lf2.1
           obtain ⟨hrip2, ρ', c'⟩ := hpost s2 lf.1 lf2.2
-          exact K _ i.next ρ' (backFrom st s2) (List.mem_cons_self ..) hrip2 ((c'.q _).fields rfl rfl rfl rfl rfl rfl) (hafter s2 lf.2))
+          exact K _ i.next ρ' (backFrom (keptAt i) st s2) (List.mem_cons_self ..) hrip2 ((c'.q _).fields rfl rfl rfl rfl rfl rfl) (hafter s2 lf.2))
 
 /-- What the verifier relies on along a path, of each place the path has come to, `n` being the unknowns
 in use and `ρ` what they are: from every state of the machine at that place of which the place says what
 it says, whose number is less than the number of the place's general state on this path, the machine runs
 to the function's return and leaves what the contract promises. -/
 def Relied (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
-  ∀ e ∈ seen, (∀ nr ∈ e.place.names, nr.2 < 16) ∧ e.first.nvars ≤ n ∧ bounded n e.d ∧
+  ∀ e ∈ seen, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars ≤ n ∧ bounded n e.d ∧
     ∀ ρ' st', AtPlace ctx e.place s0 e.first ρ ρ' st' → st'.rip = p.base + e.place.pc →
       MarksOk ctx s0 { regq := e.first.q.regq } st' →
       (∃ m : Int, Value ctx.defs (placeVals ctx e.place s0 st') e.place.decreases (.int m) ∧ m + 1 ≤ ev ρ e.d) →
@@ -690,7 +775,7 @@ place's number, which every way round to it makes less and which is never below 
 theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeet world ctx)
     (Kc : ctx.contract.clear world ctx.pieces s0) :
     ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State},
-    explore ctx fuel seen s pc items = .ok r → Holds ctx s0 ρ s st → WF s → st.rip = p.base + pc →
+    explore ctx fuel seen s pc items = .ok r → Holds ctx s0 ρ s st → WF ctx s → st.rip = p.base + pc →
     MarksOk ctx s0 s.q st → Relied world ctx p s0 seen s.nvars ρ →
     Runs world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.left ctx.defs s0) st
   | 0, seen, s, pc, items, r, ρ, st, h, H, wf, hrip, M, T => by
@@ -814,16 +899,17 @@ theorem entryFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       injection hf with hf; subst hf
       unfold Contract.tables at hm
       obtain ⟨j, _, hj⟩ := List.mem_filterMap.mp hm
-      -- the blocks end below 2^64, and lie apart from the eight bytes of the address to return to: so
-      -- they end at least 64 bytes below 2^64
-      obtain ⟨fit, apart, _, _⟩ := E.lane hj hc
+      -- the blocks end below 2^64, and lie apart from the frame and the bytes of the address to return
+      -- to, of which there is a byte: so they end at least 64 bytes below 2^64
+      obtain ⟨fit, apart, _, _⟩ := E.lane hj hc.1
+      have hbyte := hc.2
       have above := E.above
       unfold M64 at fit above
       rw [holds_iff]; simp only [ev_sub, ev_const, ev_scale, ev_var]; omega
     next => cases hf
 
 /-- Each fact the verifier starts from speaks of the registers at entry alone. -/
-theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f := by
+theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded ctx.nreg f := by
   intro f m
   simp only [entrySym, entryFacts, List.mem_append] at m
   rcases m with ((((((m | m) | m) | m) | m) | m) | m) | m
@@ -836,8 +922,8 @@ theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f 
     · exact bounded_sub (bounded_const _ _) (bounded_var hr)
   · simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
     rcases m with rfl | rfl
-    · exact bounded_sub (bounded_var (show RSP < 16 by decide)) (bounded_const _ _)
-    · exact bounded_sub (bounded_const _ _) (bounded_var (show RSP < 16 by decide))
+    · exact bounded_sub (bounded_var ctx.rsp_lt) (bounded_const _ _)
+    · exact bounded_sub (bounded_const _ _) (bounded_var ctx.rsp_lt)
   · obtain ⟨⟨b, l⟩, hm, rfl⟩ := List.mem_map.mp m
     have := regions_lt hm
     exact bounded_sub (bounded_sub (bounded_const _ _) (bounded_var this.1)) (bounded_var this.2)
@@ -849,7 +935,7 @@ theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f 
     | some r =>
       simp only [hr, Option.map_some, Option.some.injEq] at hf
       subst hf
-      exact bounded_sub (bounded_const _ _) (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args argRegs r hr)))
+      exact bounded_sub (bounded_const _ _) (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args ctx.contract.argRegs r hr)))
   · obtain ⟨⟨x, b, n⟩, hm, rfl⟩ := List.mem_map.mp m
     exact bounded_sub (bounded_const _ _) (bounded_var (fixeds_lt hm))
   · obtain ⟨⟨x, k⟩, hm, hf⟩ := List.mem_filterMap.mp m
@@ -858,7 +944,7 @@ theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f 
     | some r =>
       simp only [hr, Option.map_some, Option.some.injEq] at hf
       subst hf
-      exact bounded_sub (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args argRegs r hr))) (bounded_const _ _)
+      exact bounded_sub (bounded_var (argRegs_lt (regOfIn_mem x ctx.contract.args ctx.contract.argRegs r hr))) (bounded_const _ _)
   · obtain ⟨⟨x, r, count, l⟩, hm, hf⟩ := List.mem_filterMap.mp m
     split at hf
     next =>
@@ -868,22 +954,22 @@ theorem entryFacts_bounded (ctx : Ctx) : ∀ f ∈ entryFacts ctx, bounded 16 f 
       exact bounded_sub (bounded_const _ _) (bounded_scale _ (bounded_var (tableAt_lt hj)))
     next => cases hf
 
-/-- What the unknowns are at entry: unknown `r` below 16 is what register `r` holds, and unknown 16 is where
-the read-only data of the function's own file lies. -/
-def entryRho (ctx : Ctx) (s0 : State) : Nat → Int := fun k => if k = 16 then (ctx.own s0 : Int) else (s0.reg k : Int)
+/-- What the unknowns are at entry: unknown `r`, for each register `r` of the function's machine, is what
+that register holds, and the unknown after them is where the read-only data of the function's own file lies. -/
+def entryRho (ctx : Ctx) (s0 : State) : Nat → Int := fun k => if k = ctx.nreg then (ctx.own s0 : Int) else (s0.reg k : Int)
 
-theorem entryRho_reg (ctx : Ctx) (s0 : State) {r : Nat} (h : r < 16) : entryRho ctx s0 r = s0.reg r := by
-  show (if r = 16 then (ctx.own s0 : Int) else (s0.reg r : Int)) = s0.reg r
+theorem entryRho_reg (ctx : Ctx) (s0 : State) {r : Nat} (h : r < ctx.nreg) : entryRho ctx s0 r = s0.reg r := by
+  show (if r = ctx.nreg then (ctx.own s0 : Int) else (s0.reg r : Int)) = s0.reg r
   rw [if_neg (by omega)]
 
-theorem entryRho_data (ctx : Ctx) (s0 : State) : entryRho ctx s0 dataVar = ctx.own s0 := by
-  unfold entryRho dataVar
-  simp only [if_true]
+theorem entryRho_data (ctx : Ctx) (s0 : State) : entryRho ctx s0 (dataVar ctx) = ctx.own s0 := by
+  show (if ctx.nreg = ctx.nreg then (ctx.own s0 : Int) else (s0.reg ctx.nreg : Int)) = ctx.own s0
+  rw [if_pos rfl]
 
 /-- At entry, what the verifier starts from about the data's address is so: it is a number from 0 up, and
 the data ends below 2^64. -/
 theorem dataFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
-    ∀ f ∈ dataFacts ctx, f.holds (entryRho ctx s0) ∧ bounded 17 f := by
+    ∀ f ∈ dataFacts ctx, f.holds (entryRho ctx s0) ∧ bounded (ctx.nreg + 1) f := by
   intro f m
   unfold dataFacts at m
   split at m
@@ -892,7 +978,7 @@ theorem dataFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     have hd : ctx.data ≠ [] := fun e => he (by rw [e]; rfl)
     have fit := E.data_fits hd
     unfold M64 at fit
-    have bv : bounded 17 (Lin.var dataVar) := bounded_var (show dataVar < 17 by decide)
+    have bv : bounded (ctx.nreg + 1) (Lin.var (dataVar ctx)) := bounded_var (show dataVar ctx < ctx.nreg + 1 from Nat.lt_succ_self _)
     simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
     rcases m with rfl | rfl
     · exact ⟨by rw [holds_iff, ev_var, entryRho_data]; omega, bv⟩
@@ -901,9 +987,9 @@ theorem dataFacts_hold {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 /-- At entry, what the verifier starts from is so (the unknowns being what the registers hold, and where
 the data of the function's own file lies). -/
 theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
-    Holds ctx s0 (entryRho ctx s0) (entrySym ctx) s0 ∧ WF (entrySym ctx) := by
-  have agree : ∀ k, k < 16 → (fun k => (s0.reg k : Int)) k = entryRho ctx s0 k := fun k hk => (entryRho_reg ctx s0 hk).symm
-  refine ⟨⟨fun r hr => entryRho_reg ctx s0 hr, ⟨by show (if 16 = 16 then (ctx.own s0 : Int) else _) = _; rw [if_pos rfl], rfl⟩,
+    Holds ctx s0 (entryRho ctx s0) (entrySym ctx) s0 ∧ WF ctx (entrySym ctx) := by
+  have agree : ∀ k, k < ctx.nreg → (fun k => (s0.reg k : Int)) k = entryRho ctx s0 k := fun k hk => (entryRho_reg ctx s0 hk).symm
+  refine ⟨⟨fun r hr => entryRho_reg ctx s0 hr, ⟨entryRho_data ctx s0, rfl⟩,
            (fun r hr => by show (s0.reg r : Int) = ev (entryRho ctx s0) (Lin.var r); rw [ev_var, entryRho_reg ctx s0 hr]),
            E.small, trivial, trivial, ?_,
            (fun f m => by
@@ -918,7 +1004,7 @@ theorem entry_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
           ⟨Nat.le_refl _, fun r hr => bounded_var (Nat.lt_succ_of_lt hr), trivial, trivial, ?_,
            (fun f m => by
               rcases List.mem_append.mp m with m | m
-              · exact bounded_mono (n := 16) (m := 17) (by decide) (entryFacts_bounded ctx f m)
+              · exact bounded_mono (show ctx.nreg ≤ ctx.nreg + 1 from Nat.le_succ _) (entryFacts_bounded ctx f m)
               · exact (dataFacts_hold E f m).2), ?_, ?_, (fun _ _ _ m => nomatch m),
            ⟨fun i n h => by simp [entrySym, Sym.terms, Tab.list] at h, fun j r h => by simp [entrySym, Sym.terms, Tab.list] at h,
             fun x ids h => by simp [entrySym] at h,
@@ -949,7 +1035,21 @@ theorem verify_sound (world : List Program) (ctx : Ctx) (p : Program) (proof : L
     unfold verify at hv
     obtain ⟨_, r1, e1, _⟩ := V.bind_ok hv
     obtain ⟨H, wf⟩ := entry_holds E
-    exact explore_sound E W clear PATH e1 H wf (by rw [E.rip]; rfl) ⟨fun r hr => quiet.1 r hr, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, fun _ m => nomatch m⟩ (fun e m => nomatch m)
+    have Mreg : ∀ r ∈ ctx.contract.cleanAtEntry ++ ctx.contract.link.toList, s0.marks.reg r = false := by
+      intro r hr
+      rcases List.mem_append.mp hr with h1 | h2
+      · exact quiet.1 r h1
+      · -- the register that holds the address to return to, on AArch64: the caller has seen to it
+        have hb := quiet.2.1
+        unfold Contract.backQuiet at hb
+        unfold Contract.link at h2
+        split at h2
+        next ha =>
+          rw [if_pos ha] at hb
+          have e : r = LINK := by simpa using h2
+          rw [e]; exact hb
+        next => simp at h2
+    exact explore_sound E W clear PATH e1 H wf (by rw [E.rip]; rfl) ⟨Mreg, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, fun _ m => nomatch m⟩ (fun e m => nomatch m)
 
 /-! ## The functions of a statement, together -/
 

@@ -525,7 +525,7 @@ theorem runBytes_get (s0 : State) (base len k : Nat) (h : k < s0.reg len) : (run
   simp [runBytes, h]
 
 theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s' : Sym} {res : SRes} {items rest : Items}
-    {ρ : Nat → Int} {st : State} (h : scall ctx f vs s items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {ρ : Nat → Int} {st : State} (h : scall ctx f vs s items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (hb : ∀ v ∈ vs, v.bounded s.nvars) (env : List (String × Val)) (args : SExpr)
     (ha : Values ctx.defs env args (vs.map (semv ctx s0 ρ))) :
     s' = s ∧ res.sem ctx s0 ρ env (.call f args) ∧ res.bounded s.nvars := by
@@ -555,7 +555,7 @@ theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s'
             injection hp with e1 e2
             subst e1 e2
             have hlt := (regions_lt (List.mem_of_getElem? hreg)).2
-            refine ⟨rfl, ?_, bounded_var (Nat.lt_of_lt_of_le hlt wf.base16)⟩
+            refine ⟨rfl, ?_, bounded_var (Nat.lt_of_lt_of_le hlt wf.regs)⟩
             simp only [List.map, semv, hreg] at ha
             have := Value.len ha
             simp only [SRes.sem, semv, ev_var, H.entry len hlt]
@@ -643,7 +643,7 @@ theorem reach_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) (fac
 
 /-- A remainder: what `Sym.quotRem` gives is the remainder there is. -/
 theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : smod s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : smod s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (hx : bounded s.nvars x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ v, res = .val v ∧ v.bounded s'.nvars ∧
       binop "%" (.int (ev ρ x)) (.int (ev ρ y)) = some (semv ctx s0 ρ' v) := by
@@ -665,7 +665,7 @@ theorem smod_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes
 
 /-- A quotient: what `Sym.quotRem` gives is the quotient there is. -/
 theorem sdiv_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {res : SRes} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : sdiv s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : sdiv s x y items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (hx : bounded s.nvars x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ v, res = .val v ∧ v.bounded s'.nvars ∧
       binop "/" (.int (ev ρ x)) (.int (ev ρ y)) = some (semv ctx s0 ρ' v) := by
@@ -774,11 +774,11 @@ theorem sameUse_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
 /-- What is asked of a way to open a use of a definition: what the verifier holds after it is so. -/
 def DeeperSound (ctx : Ctx) (s0 : State) (deeper : Sym → SCall → V Sym) : Prop :=
   ∀ {s s' : Sym} {c : SCall} {items rest : Items} {ρ : Nat → Int} {st : State},
-    deeper s c items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → c.bounded s.nvars → ∃ ρ', Carried ctx s0 ρ s ρ' s' st
+    deeper s c items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → c.bounded s.nvars → ∃ ρ', Carried ctx s0 ρ s ρ' s' st
 
 /-- The value the verifier takes a use of a definition to have is its value. -/
 theorem heldFor_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
-    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {c : SCall} (hc : c.bounded s.nvars) {x : Row} {s' : Sym} {items rest : Items}
     (h : heldFor deeper s c items = .ok ((x, s'), rest)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ CallValue ctx s0 ρ' c (.int (ev ρ' x)) ∧ bounded s'.nvars x := by
@@ -837,7 +837,7 @@ theorem heldFor_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym
 
 /-- A result taken where a number is needed: the expression has that number as its value. -/
 theorem numberV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
-    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {env : List (String × Val)} {e : SExpr} {res : SRes} {x : Row} {s' : Sym} {items rest : Items}
     (h : numberV deeper s res items = .ok ((x, s'), rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Value ctx.defs env e (.int (ev ρ' x)) ∧ bounded s'.nvars x := by
@@ -861,7 +861,7 @@ theorem numberV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym
 
 /-- A result taken as one of the things a definition is used with: the expression has that value. -/
 theorem argumentV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V Sym} (D : DeeperSound ctx s0 deeper)
-    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {env : List (String × Val)} {e : SExpr} {res : SRes} {v : SVal} {s' : Sym} {items rest : Items}
     (h : argumentV deeper s res items = .ok ((v, s'), rest)) (sem : res.sem ctx s0 ρ env e) (bd : res.bounded s.nvars) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Value ctx.defs env e (semv ctx s0 ρ' v) ∧ v.bounded s'.nvars := by
@@ -888,7 +888,7 @@ theorem argumentV_sound {ctx : Ctx} {s0 : State} {deeper : Sym → SCall → V S
 theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {deeper : Sym → SCall → V Sym}
     (D : DeeperSound ctx s0 deeper) (env : List (String × SVal)) :
     ∀ (e : SExpr) {s s' : Sym} {res : SRes} {items rest : Items} {ρ : Nat → Int} {st : State},
-    sevalWith ctx deeper env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    sevalWith ctx deeper env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ res.sem ctx s0 ρ' (semEnv ctx s0 ρ' env) e ∧ res.bounded s'.nvars := by
   intro e
   induction e with
@@ -1132,7 +1132,7 @@ theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
      | tail _ m => exact H.spec g m,
    H.mem, H.wrote, H.words, H.known, H.range⟩
 
-theorem WF.withSpec {s : Sym} (wf : WF s) (f : SFact) (hf : f.bounded s.nvars) : WF { s with spec := f :: s.spec } :=
+theorem WF.withSpec {s : Sym} (wf : WF ctx s) (f : SFact) (hf : f.bounded s.nvars) : WF ctx { s with spec := f :: s.spec } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes,
    (fun g m => by
      cases m with
@@ -1193,13 +1193,13 @@ theorem opener_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
 /-- An expression of the specification worked out on symbols: what comes out is what the expression means. -/
 theorem seval_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (e : SExpr) {s s' : Sym} {res : SRes} {items rest : Items} {ρ : Nat → Int} {st : State},
-    seval ctx env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    seval ctx env s e items = .ok ((res, s'), rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ res.sem ctx s0 ρ' (semEnv ctx s0 ρ' env) e ∧ res.bounded s'.nvars :=
   fun e => sevalWith_sound E (opener_sound E DEEP) env e
 
 theorem openCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : SCall}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : openCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hc : c.bounded s.nvars) :
+    (h : openCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hc : c.bounded s.nvars) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st :=
   openCallWith_sound E (opener_sound E DEEP) h H wf hc
 
@@ -1282,7 +1282,7 @@ theorem carry_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
 /-- A fact of the specification the verifier has come to: it is so. -/
 theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
     ∀ (fuel : Nat) {s s' : Sym} {goal : SFact} {items rest : Items} {ρ : Nat → Int} {st : State},
-    specGoal ctx fuel s goal items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → goal.bounded s.nvars →
+    specGoal ctx fuel s goal items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → goal.bounded s.nvars →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ goal.holds ctx s0 ρ'
   | 0, s, s', goal, items, rest, ρ, st, h, H, wf, hg => by
     simp only [specGoal] at h
@@ -1328,8 +1328,8 @@ theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
 
 /-! ## The contract's names -/
 
-theorem symEnvIn_bounded (c : Contract) : ∀ (args : List (String × Kind)) (regs : List Nat) (k : Nat),
-    (∀ r ∈ regs, r < 16) → EnvB 16 (symEnvIn c args regs k)
+theorem symEnvIn_bounded (c : Contract) {N : Nat} : ∀ (args : List (String × Kind)) (regs : List Nat) (k : Nat),
+    (∀ r ∈ regs, r < N) → EnvB N (symEnvIn c args regs k)
   | [], _, _, _ => by intro nv m; simp [symEnvIn] at m
   | _ :: _, [], _, _ => by intro nv m; simp [symEnvIn] at m
   | (n, .number) :: args, r :: regs, k, hr => by
@@ -1360,11 +1360,11 @@ theorem symEnvIn_bounded (c : Contract) : ∀ (args : List (String × Kind)) (re
       · exact symEnvIn_bounded c args regs (k + 1) (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
     · exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
 
-theorem symEnv_bounded (c : Contract) : EnvB 16 (symEnv c) :=
-  symEnvIn_bounded c c.args argRegs 0 (fun _ m => argRegs_lt m)
+theorem symEnv_bounded (c : Contract) : EnvB c.regs (symEnv c) :=
+  symEnvIn_bounded c c.args c.argRegs 0 (fun _ m => argRegs_lt m)
 
-theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r, r < 16 → ρ r = s0.reg r) :
-    ∀ (args : List (String × Kind)) (regs : List Nat) (k : Nat), (∀ r ∈ regs, r < 16) →
+theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) {N : Nat} (hρ : ∀ r, r < N → ρ r = s0.reg r) :
+    ∀ (args : List (String × Kind)) (regs : List Nat) (k : Nat), (∀ r ∈ regs, r < N) →
     (∀ j, (regionsIn ctx.contract args regs)[j]? = ctx.contract.regions[k + j]?) →
     semEnv ctx s0 ρ (symEnvIn ctx.contract args regs k) = envIn ctx.contract s0 args regs
   | [], _, _, _, _ => by simp [symEnvIn, envIn, semEnv]
@@ -1408,8 +1408,8 @@ theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r
       rw [ih]
 
 /-- The contract's names on symbols mean the contract's names in the state at entry. -/
-theorem semEnv_symEnv (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r, r < 16 → ρ r = s0.reg r) :
+theorem semEnv_symEnv (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (hρ : ∀ r, r < ctx.nreg → ρ r = s0.reg r) :
     semEnv ctx s0 ρ (symEnv ctx.contract) = ctx.contract.env s0 :=
-  semEnv_symEnvIn ctx s0 ρ hρ ctx.contract.args argRegs 0 (fun _ m => argRegs_lt m) (by intro j; simp [Contract.regions])
+  semEnv_symEnvIn ctx s0 ρ hρ ctx.contract.args ctx.contract.argRegs 0 (fun _ m => argRegs_lt m) (by intro j; simp [Contract.regions])
 
 end Ode

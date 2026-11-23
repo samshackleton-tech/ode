@@ -527,7 +527,7 @@ def symEnvIn (c : Contract) : List (String × Kind) → List Nat → Nat → Lis
   | _, _, _ => []
 
 /-- The contract's names on symbols: a number is its register at entry; a run of bytes is a run by its number. -/
-def symEnv (c : Contract) : List (String × SVal) := symEnvIn c c.args argRegs 0
+def symEnv (c : Contract) : List (String × SVal) := symEnvIn c c.args c.argRegs 0
 
 def Sym.put (s : Sym) (r : Nat) (v : Row) : Sym := { s with reg := fun k => if k = r then v else s.reg k }
 
@@ -634,13 +634,21 @@ inductive Where where
   | out (w : Nat) (off : Row)
   | data (off : Int)              -- so many bytes into the file's read-only data
 
-/-- The unknown that is where the file's read-only data lies. (Unknowns 0 to 15 are the registers at entry.) -/
-def dataVar : Nat := 16
+/-- How many general registers the verifier follows: as many as the machine of the function's contract has
+(sixteen on x86-64, thirty-two on AArch64). -/
+def Ctx.nreg (ctx : Ctx) : Nat := ctx.contract.regs
+
+/-- The register a name of an EFFECT stands for, where the function's machine has that register. -/
+def Ctx.regOf (ctx : Ctx) (bind : Bind) (n : String) : Option Nat := (Ode.regOf bind n).filter fun r => decide (r < ctx.nreg)
+
+/-- The unknown that is where the file's read-only data lies. (The unknowns before it are the registers at
+entry: 0 to 15 on x86-64.) -/
+def dataVar (ctx : Ctx) : Nat := ctx.nreg
 
 /-- How many bytes into the file's data an address is, where the function's file has data and the address is
 the data's plus a number. -/
 def dataOff (ctx : Ctx) (addr : Row) : Option Int :=
-  if ctx.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var dataVar))
+  if ctx.data.isEmpty then none else Lin.isConst (Lin.sub addr (Lin.var (dataVar ctx)))
 
 /-- The number that `size` bytes of the file's data make, from byte `c` on, the lowest byte first. -/
 def dataWord (data : List Nat) (c size : Nat) : Nat := load (fun x => ⟨data.getD x 0 % 256, Nat.mod_lt _ (by decide)⟩) c size
@@ -900,10 +908,20 @@ def symData (ctx : Ctx) (bind : Bind) (s : Sym) (x : Row) : V (EV × Sym) :=
   if pieceOf bind = ctx.piece then
     match Lin.isConst x with
     | some c =>
-      if 0 ≤ c ∧ c < ctx.data.length then pure (.lin (Lin.add (Lin.var dataVar) (Lin.const c)), s)
+      if 0 ≤ c ∧ c < ctx.data.length then pure (.lin (Lin.add (Lin.var (dataVar ctx)) (Lin.const c)), s)
       else refuse "the address of a place that is not in the file's read-only data (or the file has none)"
     | none => refuse "the address of a place in the file's data that is no number"
   else refuse "the address of a place in the read-only data of another file than the function's own"
+
+/-- `on16(sp)`: AArch64's stack pointer as the base of a load or store, where the processor faults unless
+it is a multiple of 16. It is one where it is a multiple of 16 away from where it was at entry: there the
+caller has seen to it that it is one (`Contract.pre`). -/
+def symOn16 (ctx : Ctx) (s : Sym) (x : Row) : V (EV × Sym) :=
+  match Lin.isConst (Lin.sub x (Lin.var RSP)) with
+  | some c =>
+    if ctx.contract.arm64 && decide (c % 16 = 0) then pure (.lin x, s)
+    else refuse "the stack pointer is the base of a load or store where it is not shown to be a multiple of 16"
+  | none => refuse "what is not the stack pointer is asked to be a multiple of 16"
 
 def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
   | s, .number n => if n < 2 ^ 64 then pure (.lin (Lin.const n), s) else refuse "a number of the table that is no 64-bit number"
@@ -913,13 +931,13 @@ def symValue (ctx : Ctx) (bind : Bind) : Sym → Expr → V (EV × Sym)
       match (bind.lookup n).bind readInt with
       | some i => pure (.lin (Lin.const (i % (M64 : Int))), s)
       | none => refuse "a number that cannot be read"
-    else match regOf bind n with
+    else match ctx.regOf bind n with
       | some r => pure (.lin (s.reg r), s)
       | none => refuse s!"no rule for {n}"
   | s, .call f [a] => do
     let (x, s) ← symValue ctx bind s a
     match x with
-    | .lin x => if f == "data" then symData ctx bind s x else symPrim1 f s x
+    | .lin x => if f == "data" then symData ctx bind s x else if f == "on16" then symOn16 ctx s x else symPrim1 f s x
     | _ => refuse "a flag's value where a number is expected"
   | s, .call f [a, b] => do
     let (x, s) ← symValue ctx bind s a
@@ -951,8 +969,8 @@ def symNumber (bind : Bind) : Expr → Option Int
   | _ => none
 
 /-- What a general register holds. -/
-def symReg (bind : Bind) (s : Sym) : Expr → Option Row
-  | .name n => if isNumberLetter n then none else (regOf bind n).map s.reg
+def symReg (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → Option Row
+  | .name n => if isNumberLetter n then none else (ctx.regOf bind n).map s.reg
   | _ => none
 
 /-- A term for each thing of a list, made one after another: their numbers, and the table then. -/
@@ -1007,20 +1025,20 @@ def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat 
     | _ => refuse s!"{bytes} bytes that are of no run of words given to read"
 
 /-- An unscaled address consists of a base register, a displacement and an optional index register. -/
-def symWordAddr (bind : Bind) (s : Sym) : List Expr → Option Row
+def symWordAddr (ctx : Ctx) (bind : Bind) (s : Sym) : List Expr → Option Row
   | [b, n] => do
-    let x ← symReg bind s b
+    let x ← symReg ctx bind s b
     let k ← symNumber bind n
     some (Lin.add (signed x) (signed (Lin.const k)))
   | [b, n, i] => do
-    let x ← symReg bind s b
+    let x ← symReg ctx bind s b
     let k ← symNumber bind n
-    let y ← symReg bind s i
+    let y ← symReg ctx bind s i
     some (Lin.add (Lin.add (signed x) (signed (Lin.const k))) (signed y))
   | _ => none
 
 def symMemWords (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (width : Nat) : V (List Nat × Sym) :=
-  match symWordAddr bind s args with
+  match symWordAddr ctx bind s args with
   | some a => symLoadWords ctx s a width
   | none => refuse "a word load needs a base register, a displacement and at most one index register"
 
@@ -1137,7 +1155,7 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
     else if f == "lanes_of64" then
       match args with
       | [a] =>
-        match symReg bind s a with
+        match symReg ctx bind s a with
         | some x => symHalves s x
         | none => refuse "the halves of what is no general register"
       | _ => refuse "the halves of what is no one register"
@@ -1231,7 +1249,7 @@ def cellsApart (o o' : Row) : Bool :=
   Lin.sameCoeff o.coeff o'.coeff && (decide (o.constant + 64 ≤ o'.constant) || decide (o'.constant + 64 ≤ o.constant))
 
 def symSpillLoad (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :=
-  match symWordAddr bind s args with
+  match symWordAddr ctx bind s args with
   | some a =>
     match s.spill.find? fun (o, _) => frameOffset a == o with
     | some (_, l) =>
@@ -1243,7 +1261,7 @@ def symSpillLoad (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) : V (Lis
   | none => refuse "no saved stack vector for this aligned load"
 
 def symSpillStore (ctx : Ctx) (bind : Bind) (s : Sym) (args : List Expr) (l : List Nat) : V Sym :=
-  match symWordAddr bind s args with
+  match symWordAddr ctx bind s args with
   | some a =>
     if aligned64 a then do
       each (entail s.facts) (frameSpanGoals ctx s a 64)
@@ -1286,10 +1304,10 @@ def symCellLoad (ctx : Ctx) (s : Sym) (a : Row) (l : List Nat) : V (List Nat × 
 the frame that a vector was stored to, or sixteen words of a run. -/
 def symMem512 (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
   if f == "mem512" then
-    match (symWordAddr bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
+    match (symWordAddr ctx bind s args).bind fun a => (findLane ctx.contract a s.known).map fun x => (a, x) with
     | some (a, v, j, p, l) => symLoadBlock s v j p l a
     | none =>
-      match (symWordAddr bind s args).bind fun a => (s.spill.find? fun (o, _) => frameOffset a == o).map fun c => (a, c) with
+      match (symWordAddr ctx bind s args).bind fun a => (s.spill.find? fun (o, _) => frameOffset a == o).map fun c => (a, c) with
       | some (a, _, l) => symCellLoad ctx s a l
       | none => symMemWords ctx bind s args 16
   else if f == "mem512a" then symSpillLoad ctx bind s args
@@ -1449,7 +1467,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
       | none => refuse "a row that sets what is no 512-bit register"
     | .call f [b, n] =>
       if f == "mem512" then
-        match symVec512 bind s v, symReg bind s b, symNumber bind n with
+        match symVec512 bind s v, symReg ctx bind s b, symNumber bind n with
         | some l, some x, some k => symStoreWords ctx s (Lin.add (signed x) (signed (Lin.const k))) l 16
         | _, _, _ => refuse "a 512-bit store needs a known register, a base register and a displacement"
       else if f == "mem512a" then
@@ -1473,7 +1491,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
       -- sixteen bytes of a run given to write, at a place that is a number divisible by four: four words
       -- of it now hold the register's four words
       if f == "mem128" then
-        match symVec bind s v, symReg bind s b, symNumber bind n with
+        match symVec bind s v, symReg ctx bind s b, symNumber bind n with
         | some l, some x, some k => symStoreWords ctx s (Lin.add (signed x) (signed (Lin.const k))) l 4
         | _, _, _ => refuse "a store of a vector register whose words are not known, or at an address that is not a register and a number"
       else refuse "a store of a vector register of a form that is not read"
@@ -2522,7 +2540,7 @@ def lanesW (c : Contract) : List (String × WVal) :=
   (List.range c.fixeds.length).filterMap fun j => (c.tableAt j).map fun (x, _, count, l) => (x, WVal.lanes j count l)
 
 /-- The names of the contract for an `ensures` of a whole run (as `envW` of the account has them). -/
-def wenv (c : Contract) : List (String × WVal) := lanesW c ++ wenvIn c c.args argRegs
+def wenv (c : Contract) : List (String × WVal) := lanesW c ++ wenvIn c c.args c.argRegs
 
 def WFUEL : Nat := 1000
 
@@ -2605,7 +2623,7 @@ def symEnsureKnown (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit := do
 entry, the runs given to write hold what each `ensures` says, and rax holds what the contract says. -/
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
-  else if !(calleeSaved.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
+  else if !(ctx.contract.keeps.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
   else do
     each (symEnsureKnown ctx s) ctx.contract.ensuresW
     let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
@@ -2655,12 +2673,20 @@ mutual
     | e :: es => quietExprS bind q e && quietAllS bind q es
 end
 
-/-- A register's row, or a number's: what a part of an address is. -/
-def plainRow (bind : Bind) (s : Sym) : Expr → Option Row
+/-- A register's row, or a number's: what a part of an address is. (Or `on16` of a register: AArch64's stack
+pointer as a base, where it is shown to be a multiple of 16, as `symOn16` shows it.) -/
+def plainRow (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → Option Row
   | .number n => if n < 2 ^ 64 then some (Lin.const n) else none
   | .name n =>
     if isNumberLetter n then ((bind.lookup n).bind readInt).map fun i => Lin.const (i % (M64 : Int))
-    else (regOf bind n).map s.reg
+    else (ctx.regOf bind n).map s.reg
+  | .call f [.name n] =>
+    if f == "on16" && !isNumberLetter n then
+      (ctx.regOf bind n).bind fun r =>
+        match Lin.isConst (Lin.sub (s.reg r) (Lin.var RSP)) with
+        | some c => if ctx.contract.arm64 && decide (c % 16 = 0) then some (s.reg r) else none
+        | none => none
+    else none
   | _ => none
 
 /-- A load of `size` bytes at `a + b` reads memory that is given to read only and is not hidden: a byte
@@ -2668,7 +2694,7 @@ of a run of bytes that the contract does not say is hidden, at a place the state
 within the run (`s1` is the state after the statement: the byte is known there); or bytes at a place that is a number, within a run of a fixed count
 that the contract does not say is hidden. Such bytes are not marked at entry, and nothing can write them. -/
 def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) : Bool :=
-  match plainRow bind s a, plainRow bind s b with
+  match plainRow ctx bind s a, plainRow ctx bind s b with
   | some x, some y =>
     let addr := Lin.add (signed x) (signed y)
     match locate ctx addr with
@@ -2723,7 +2749,7 @@ known not to be marked. A store within a run given to write, at a place that is 
 def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) : List Int :=
   match memSize f, args with
   | some size, [a, b] =>
-    match plainRow bind s a, plainRow bind s b with
+    match plainRow ctx bind s a, plainRow ctx bind s b with
     | some x, some y =>
       match locate ctx (Lin.add (signed x) (signed y)) with
       | some (.frame c) =>
@@ -2814,24 +2840,38 @@ def flagWays : Flag → Option (List (Bool × List Row))
   | .equal a b => some [(true, [Lin.sub a b, Lin.sub b a]), (false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
   | .below a b => some [(true, [Lin.sub (Lin.sub b a) (Lin.const 1)]), (false, [Lin.sub a b])]
 
-/-- An effect is a return, a jump, or statements that set registers, flags and memory. -/
+/-- An effect is a return (to the address at the stack pointer, or to the address a register holds), a
+jump, or statements that set registers, flags and memory. -/
 inductive Shape where
   | ret
   | jump (target : Expr) (cond : Option (String × Bool))
   | plain
+  | retLink (link : String)
 
 def shape : List Stmt → Shape
   | [.ret] => .ret
   | [.jump target cond] => .jump target cond
+  | [.retLink r] => .retLink r
   | _ => .plain
 
 def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match shape i.effect with
   | .ret =>
-    do
+    if ctx.contract.arm64 then refuse "a return to the address at the stack pointer, in a function for AArch64"
+    else do
       symReturn ctx s
       if !(s.q.regq.contains RSP && (!ctx.contract.givesNumber || s.q.regq.contains 0)) then
         refuse "at the return the stack pointer, or the number returned, may depend on a secret"
+      else pure [(s, .returned)]
+  | .retLink r =>
+    -- a return to the address a register holds: the register is the one the contract's machine returns by, it
+    -- holds what it held at entry, and it is known not to be marked
+    if !(ctx.contract.arm64 && regIndex r == some LINK) then refuse "a return by a register, in a function whose machine does not return by that register"
+    else if !(s.reg LINK == Lin.var LINK) then refuse "at the return the register that held the address to return to does not hold what it held at entry"
+    else do
+      symReturn ctx s
+      if !(s.q.regq.contains RSP && (s.q.regq.contains LINK && (!ctx.contract.givesNumber || s.q.regq.contains 0))) then
+        refuse "at the return the stack pointer, the address to return to, or the number returned may depend on values kept out of the trace"
       else pure [(s, .returned)]
   | .jump target cond =>
     match jumpTarget i.bind target with
@@ -2853,8 +2893,14 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
 
 /-! ## A call, by the called function's contract -/
 
-/-- The registers a called function may leave anything in: rax, rcx, rdx, rsi, rdi, r8 to r11. -/
-def callerSaved : List Nat := [0, 1, 2, 6, 7, 8, 9, 10, 11]
+/-- The registers a called function may leave anything in, on x86-64: rax, rcx, rdx, rsi, rdi, r8 to r11. -/
+def callerSavedX86 : List Nat := [0, 1, 2, 6, 7, 8, 9, 10, 11]
+
+/-- The same on AArch64: x0 to x18 and x30 (every general register but the stack pointer and x19 to x29). -/
+def callerSavedArm : List Nat := [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 30, 31]
+
+/-- The registers a function with this contract may leave anything in. -/
+def Contract.scratch (c : Contract) : List Nat := if c.arm64 then callerSavedArm else callerSavedX86
 
 /-- Among the runs of bytes this function was given: the one whose address register `b` holds and whose
 length register `l` holds, both as they were at entry. -/
@@ -2882,12 +2928,12 @@ def calleeEnv (ctx : Ctx) (c : Contract) (s : Sym) : List (String × Kind) → L
 registers a callee keeps are as before; every other register holds a number below 2^64 and no more is
 known; nothing is known of the flags; of the frame, only what lies above the stack pointer is kept (the
 called function's frame and its return address were below). -/
-def Sym.afterCall (s : Sym) (sp : Int) : Sym :=
-  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+def Sym.afterCall (c : Contract) (s : Sym) (sp : Int) : Sym :=
+  { reg := fun r => if c.scratch.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
-    facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
-    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
+    facts := (c.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs, wrote := s.wrote,
     tab := s.tab,         -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
     known := s.known }
 
@@ -2899,19 +2945,19 @@ def symCallPlain (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
-    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
     else if !(c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) then
       refuse "a called function that writes for its caller: not here yet"
     else if !c.bounds.isEmpty then refuse "a called function whose contract bounds a number: not here yet"
     else
-      match calleeEnv ctx c s c.args argRegs with
+      match calleeEnv ctx c s c.args c.argRegs with
       | none => refuse "a called function is given a run of bytes that is not one this function was given, whole"
       | some env =>
         match c.returns with
-        | none => pure (s.afterCall sp)
+        | none => pure (s.afterCall c sp)
         | some e => do
-          let (res, s2) ← seval ctx env (s.afterCall sp) e
+          let (res, s2) ← seval ctx env (s.afterCall c sp) e
           match res with
           | .val (.lin v) => pure { s2 with facts := [Lin.sub v (Lin.var s.nvars), Lin.sub (Lin.var s.nvars) v] ++ s2.facts }
           | .tail call => pure { s2 with spec := .value call (Lin.var s.nvars) :: s2.spec }
@@ -3074,14 +3120,14 @@ after any call (`Sym.afterCall`); and each word written is a new unknown from 0 
 of the run are these, and the definition `g`, used with `keys`, is known to be the list of them (or, with
 `bytes`, the list of their bytes). What was known of the run's other words and of the other runs given to
 write stays. -/
-def Sym.afterCallW (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) (bytes : Bool := false) : Sym :=
-  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
-  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+def Sym.afterCallW (c : Contract) (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List Key) (bytes : Bool := false) : Sym :=
+  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + c.regs + k)) s.tab
+  { reg := fun r => if c.scratch.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
     frame := s.frame.filter fun cell => decide (sp ≤ cell.1),
-    facts := ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
-             ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
-    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
+    facts := ((List.range m).map fun k => ranged32 (s.nvars + c.regs + k)).flatten ++
+             ((c.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs + m, wrote := s.wrote,
     tab := made.2,
     intact := s.intact.filter (· != w),
     wroteW := ((List.range m).map fun k => (w, o + k, made.1.getD k 0)) ++
@@ -3092,16 +3138,16 @@ def Sym.afterCallW (s : Sym) (sp : Int) (w o m : Nat) (g : String) (keys : List 
 bytes from where the stack pointer was at entry: as `Sym.afterCallW`, but what is written is cells of the
 frame. Each new word is a new unknown; two words make a cell's number, the first its low half. The cells
 the part overlaps are forgotten; the others at or above the stack pointer stay. -/
-def Sym.afterCallF (s : Sym) (sp c : Int) (m : Nat) (g : String) (keys : List Key) : Sym :=
-  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + 16 + k)) s.tab
-  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+def Sym.afterCallF (ct : Contract) (s : Sym) (sp c : Int) (m : Nat) (g : String) (keys : List Key) : Sym :=
+  let made := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + ct.regs + k)) s.tab
+  { reg := fun r => if ct.scratch.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
     frame := ((List.range (m / 2)).map fun (j : Nat) =>
-                (c + 8 * (j : Int), Lin.add (Lin.var (s.nvars + 16 + 2 * j)) (Lin.scale W32i (Lin.var (s.nvars + 16 + 2 * j + 1))))) ++
+                (c + 8 * (j : Int), Lin.add (Lin.var (s.nvars + ct.regs + 2 * j)) (Lin.scale W32i (Lin.var (s.nvars + ct.regs + 2 * j + 1))))) ++
              s.frame.filter fun cell => decide (sp ≤ cell.1) && (decide (cell.1 + 8 ≤ c) || decide (c + 4 * (m : Int) ≤ cell.1)),
-    facts := ((List.range m).map fun k => ranged32 (s.nvars + 16 + k)).flatten ++
-             ((callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
-    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16 + m, wrote := s.wrote,
+    facts := ((List.range m).map fun k => ranged32 (s.nvars + ct.regs + k)).flatten ++
+             ((ct.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + ct.regs + m, wrote := s.wrote,
     tab := made.2,
     intact := s.intact, wroteW := s.wroteW,
     known := Known.held g keys made.1 :: s.known }
@@ -3130,11 +3176,11 @@ def callWby (find : Nat → Nat → Option (Nat × Nat × List Nat)) (ctx : Ctx)
       if !(run == run' && r == r' && n == n' && e.run == run && e.part.isNone) then
         .error "a called function that writes for its caller, but not one run of words it also reads: not here yet"
       else
-        let T := (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2
+        let T := (termsOf intern (partNodes ctx s c.args c.argRegs) s.tab).2
         match find r n with
         | none => .error "a called function is given to write what is not whole words of a run this function may read and write, each of them known"
         | some (w, o, ids) =>
-          match calleeW ctx s ids c.args argRegs with
+          match calleeW ctx s ids c.args c.argRegs with
           | none => .error "a called function is given a run that is no part of a run this function was given to read"
           | some env =>
             -- its promise: the run is the bytes of the words a definition gives of its arguments
@@ -3161,7 +3207,7 @@ def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
-    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
     else
       match callW ctx s c with
@@ -3172,7 +3218,7 @@ def symCallW' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           match c.regOf xb.1 with
           | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
           | none => pure ()) c.bounds
-        pure (Sym.afterCallW { s with tab := plan.tab } sp plan.w plan.first plan.words plan.g plan.keys)
+        pure (Sym.afterCallW c { s with tab := plan.tab } sp plan.w plan.first plan.words plan.g plan.keys)
 
 /-- A call of a function that writes a run of words: the run of this function that it is given a part of
 is first taken as written with the words it held at entry, where nothing was written to it yet. -/
@@ -3188,7 +3234,7 @@ def symCallF' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
-    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
     else
       match c.outs with
@@ -3209,7 +3255,7 @@ def symCallF' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
                 match c.regOf xb.1 with
                 | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
                 | none => pure ()) c.bounds
-              pure (Sym.afterCallF { s with tab := plan.tab } sp cw plan.words plan.g plan.keys)
+              pure (Sym.afterCallF c { s with tab := plan.tab } sp cw plan.words plan.g plan.keys)
       | _ => refuse "a called function that writes for its caller, but not one run of words it also reads: not here yet"
 
 /-- Such a call: the words of the parts of the frame it is given are first put into the table. -/
@@ -3269,7 +3315,7 @@ def callB (ctx : Ctx) (s : Sym) (c : Contract) : Except String CallW :=
           match callRun ctx s r n with
           | none => .error "a called function is given to write what is not whole words of a run this function may read and write, each of them known"
           | some (w, o, _) =>
-            match calleeB ctx c s c.args argRegs with
+            match calleeB ctx c s c.args c.argRegs with
             | none => .error "a called function is given a run of bytes that is no part of a run of bytes this function was given"
             | some env =>
               -- its promise: the run is the list a definition gives of its arguments
@@ -3294,7 +3340,7 @@ def symCallB' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
-    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
     else
       match callB ctx s c with
@@ -3305,7 +3351,7 @@ def symCallB' (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
           match c.regOf xb.1 with
           | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
           | none => pure ()) c.bounds
-        pure (Sym.afterCallW s sp plan.w plan.first plan.words plan.g plan.keys true)
+        pure (Sym.afterCallW c s sp plan.w plan.first plan.words plan.g plan.keys true)
 
 /-- A call of a function that writes a run of bytes: the run of this function that it is given a part of is
 first taken as written with the words it held at entry, where nothing was written to it yet. -/
@@ -3551,13 +3597,13 @@ def cellsOf (c : Int) : Nat → List Row → List (Int × Row)
 /-- The state after a call of a function that has written `n` bytes of the frame from `cw` on, the words
 written being these rows: as after any call, and the cells of that part are made of the rows, two to a
 cell. The cells the part overlaps are forgotten; the others at or above the stack pointer stay. -/
-def Sym.afterCallL (s : Sym) (sp cw : Int) (n : Nat) (rows : List Row) : Sym :=
-  { reg := fun r => if callerSaved.contains r then Lin.var (s.nvars + r) else s.reg r,
+def Sym.afterCallL (c : Contract) (s : Sym) (sp cw : Int) (n : Nat) (rows : List Row) : Sym :=
+  { reg := fun r => if c.scratch.contains r then Lin.var (s.nvars + r) else s.reg r,
     zf := .unknown, cf := .unknown,
     frame := cellsOf cw 0 rows ++
              s.frame.filter fun cell => decide (sp ≤ cell.1) && (decide (cell.1 + 8 ≤ cw) || decide (cw + (n : Int) ≤ cell.1)),
-    facts := (callerSaved.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
-    bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16, wrote := s.wrote,
+    facts := (c.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
+    bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs, wrote := s.wrote,
     tab := s.tab, intact := s.intact, wroteW := s.wroteW, known := s.known }
 
 /-- A call of a function that is given a table of addresses and writes one run, where both are parts of
@@ -3569,7 +3615,7 @@ def symCallL (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
   | none => refuse "at a call the stack pointer is not known"
   | some sp =>
-    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)) then
+    if !(decide (sp ≤ 0) && decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)) then
       refuse "a call needs more stack than this function's contract allows"
     else if !(c.mbounds.isEmpty && c.inouts.isEmpty && c.ensures.isEmpty && c.regions.isEmpty &&
               c.returns.isNone && c.result.isNone) then
@@ -3588,10 +3634,10 @@ def symCallL (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
                decide (ct + 8 * (count : Int) ≤ 0) && (decide (ct + 8 * (count : Int) ≤ cw) || decide (cw + (n : Int) ≤ ct))) then
             refuse "a called function's table of addresses, or the run it writes, is no part of this function's frame, or the two overlap"
           else
-            match tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 with
+            match tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args c.argRegs) s.tab).2 with
             | none => refuse "a lane of a called function's table is not blocks this function may read, every word of them known"
             | some (lanes, T) =>
-              match calleeL ctx { s with tab := T } tx tr (8 * count) c.args argRegs with
+              match calleeL ctx { s with tab := T } tx tr (8 * count) c.args c.argRegs with
               | none => refuse "a called function is given a run that is no part of a run this function was given to read"
               | some env =>
                 match nameLanes ctx run ((tx, WVal.list lanes) :: env) { s with tab := T } 0 c.ensuresW with
@@ -3604,7 +3650,7 @@ def symCallL (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
                       match c.regOf xb.1 with
                       | some rb => entail s.facts (Lin.sub (Lin.const ((xb.2 : Int) - 1)) (s.reg rb))
                       | none => pure ()) c.bounds
-                    pure (Sym.afterCallL s1 sp cw n rows)
+                    pure (Sym.afterCallL c s1 sp cw n rows)
         | _, _, _ => refuse "a called function's count of blocks is no number of the table, or its table or the run it writes is not in this function's frame"
       | _, _ => refuse "a called function that is given a table of addresses, but not one table and one run to write: not here yet"
 
@@ -3655,10 +3701,10 @@ def callQuiet (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
     match frameAt s x.2.1 with
     | some o => decide (x.2.2 % 8 = 0) && (List.range (x.2.2 / 8)).all fun (i : Nat) => s.q.fq.contains (o + 8 * (i : Int))
     | none => false) &&
-  (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < 16) &&
+  (s.q.fq.isEmpty || c.outs.all fun (_, r, n) => decide (r ≠ RSP) && decide (r < ctx.nreg) &&
     ((ctx.contract.outs.any fun (_, b, n0) =>
       match Lin.isConst (Lin.sub (s.reg r) (Lin.var b)) with
-      | some k => decide (0 ≤ k) && decide (b < 16) && decide (k + n ≤ n0)
+      | some k => decide (0 ≤ k) && decide (b < ctx.nreg) && decide (k + n ≤ n0)
       | none => false) ||
      (match frameAt s r with
       | some o => s.q.fq.all fun cell => decide (cell + 8 ≤ o) || decide (o + (n : Int) ≤ cell)
@@ -3677,7 +3723,7 @@ function's contract says one is (of the other registers a callee does not keep, 
 nothing of them); each register a callee keeps that was not marked before; and each cell of the frame not
 marked before that is not below the stack pointer. -/
 def afterCallQ (c : Contract) (s : Sym) : SMarks :=
-  { regq := (if c.givesNumber then [0, RSP] else [RSP]) ++ s.q.regq.filter calleeSaved.contains,
+  { regq := (if c.givesNumber then [0, RSP] else [RSP]) ++ s.q.regq.filter c.keeps.contains,
     fq := match s.sp with
       | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
       | none => [] }
@@ -3692,13 +3738,25 @@ def quietAtCall (s : Sym) (c : Contract) : Sym :=
     | none => true
   { s with q := { s.q with fq := s.q.fq.filter apart } }
 
+/-- The call is one this function's machine makes, of a function for the same machine: the instruction puts
+the address to come back to where the called function's contract has it. On AArch64 the stack pointer is
+then a multiple of 16 away from where it was at entry (the called function's contract asks that it be a
+multiple of 16, as this function's does of its own entry). -/
+def callFits (ctx : Ctx) (s : Sym) (i : Instr) (c : Contract) : Bool :=
+  c.arm64 == ctx.contract.arm64 && (callLink i == c.link &&
+    (!c.arm64 || match s.sp with
+      | some sp => decide (sp % 16 = 0)
+      | none => false))
+
 /-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
   | some name =>
     match ctx.callees.lookup name with
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
-    | some c => do
+    | some c =>
+      if !callFits ctx s i c then refuse "a call that is not one this function's machine makes of a function for that machine, or a stack pointer that is not shown to be a multiple of 16 at a call"
+      else do
       needsOf ctx s c
       let s' ← symCall ctx s c
       if !callQuiet ctx (quietAtCall s c) c then
@@ -3712,38 +3770,42 @@ def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVa
 /-- What is known at entry: each register a number below 2^64; the frame the contract allows and the return
 address lie in memory; so does each run of bytes given, to read or to write; a number the contract bounds is
 below its bound, and one it asks to be no less than another is so; the blocks a table's addresses point to
-lie in memory. (What is newer comes later: the facts before keep their numbers, by which proofs name them.) -/
+lie in memory, and end at least 64 bytes below 2^64 (they lie apart from the frame and from the bytes of the
+address to return to: so they do where there is such a byte, as there always is on x86-64).
+(What is newer comes later: the facts before keep their numbers, by which proofs name them.) -/
 def entryFacts (ctx : Ctx) : List Row :=
-  ((List.range 16).map ranged).flatten ++
-  [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 9)) (Lin.var RSP)] ++
+  ((List.range ctx.nreg).map ranged).flatten ++
+  [Lin.sub (Lin.var RSP) (Lin.const ctx.contract.stack), Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.contract.slot : Int))) (Lin.var RSP)] ++
   (ctx.contract.regions.map fun (base, len) => Lin.sub (Lin.sub (Lin.const (2 ^ 64)) (Lin.var base)) (Lin.var len)) ++
   (ctx.contract.outs.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
   (ctx.contract.bounds.filterMap fun (name, b) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.const ((b : Int) - 1)) (Lin.var r)) ++
   (ctx.contract.fixeds.map fun (_, base, n) => Lin.sub (Lin.const (2 ^ 64 - (n : Int))) (Lin.var base)) ++
   (ctx.contract.atLeast.filterMap fun (name, k) => (ctx.contract.regOf name).map fun r => Lin.sub (Lin.var r) (Lin.const k)) ++
-  ctx.contract.tables.filterMap fun (_, _, count, l) => if 0 < count then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
+  ctx.contract.tables.filterMap fun (_, _, count, l) =>
+    if 0 < count ∧ 0 < ctx.contract.stack + ctx.contract.slot then some (Lin.sub (Lin.const (2 ^ 64 - 64)) (Lin.scale 64 (Lin.var l))) else none
 
 /-- Where the function's file has data: the data's address is a number from 0 up, and the data ends below
 2^64. (After the other facts: they keep their numbers.) -/
 def dataFacts (ctx : Ctx) : List Row :=
   if ctx.data.isEmpty then []
-  else [Lin.var dataVar, Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.data.length : Int))) (Lin.var dataVar)]
+  else [Lin.var (dataVar ctx), Lin.sub (Lin.const (2 ^ 64 - 1 - (ctx.data.length : Int))) (Lin.var (dataVar ctx))]
 
 def entrySym (ctx : Ctx) : Sym :=
-  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := 17,       -- (unknown 16: where the file's data lies)
-    wrote := [], intact := List.range ctx.contract.outs.length, q := { regq := ctx.contract.cleanAtEntry } }
+  { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := ctx.nreg + 1,       -- (the unknown after the registers': where the file's data lies)
+    wrote := [], intact := List.range ctx.contract.outs.length,
+    q := { regq := ctx.contract.cleanAtEntry ++ ctx.contract.link.toList } }      -- (and the register that holds the address to return to, where one does)
 
 /-- The state that stands for every coming to the place on a path that first came there in `s`: the kept
 registers and the frame as in `s`, every other register any number below 2^64. What `s` knows of the
 unknowns it has (its facts, the bytes of the runs given, the values of uses of definitions) is still so:
 those unknowns are what they were. -/
-def Sym.general (p : Place) (s : Sym) : Sym :=
+def Sym.general (n : Nat) (p : Place) (s : Sym) : Sym :=
   { reg := fun r => if p.keep.contains r then s.reg r else Lin.var (s.nvars + r),
-    zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + 16,
+    zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + n,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
     tab := s.tab,         -- (nor that a run is as it was at entry; what the vector registers hold is said by the place's lanes)
     known := s.known,
-    facts := (((List.range 16).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
+    facts := (((List.range n).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
 /-! ### What a place says of vector registers -/
 
@@ -3904,7 +3966,7 @@ every coming there, of which the place's facts are taken as known, and its numbe
 shown to be no less than zero. Given back with them: the state as it first came, with which every later
 coming is compared. -/
 def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
-  if !p.keep.contains RSP || p.names.any (fun (_, r) => decide (16 ≤ r)) then
+  if !p.keep.contains RSP || p.names.any (fun (_, r) => decide (ctx.nreg ≤ r)) then
     refuse "a place must keep the stack pointer, and name registers"
   else do
     let s ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
@@ -3912,11 +3974,11 @@ def generalize (ctx : Ctx) (p : Place) (s : Sym) : V (Sym × Row × Sym) :=
     else if !(p.cells.all (cellShown ctx p s)) then refuse s!"at the place {p.pc} a cell of the frame is not shown to hold what the place says"
     else do
       let (_, s) ← rangeShown ctx p s
-      let g ← fold (suppose ctx (placeEnv ctx p (s.general p).reg)) (s.general p) p.facts
+      let g ← fold (suppose ctx (placeEnv ctx p (s.general ctx.nreg p).reg)) (s.general ctx.nreg p) p.facts
       let g ← fold (supposeLanes ctx p) g p.lanes
       let g ← fold (supposeCell ctx p) g p.cells
       let g ← supposeRange ctx p g
-      let (d, g) ← seval ctx (placeEnv ctx p (s.general p).reg) g p.decreases
+      let (d, g) ← seval ctx (placeEnv ctx p (s.general ctx.nreg p).reg) g p.decreases
       match d with
       | .val (.lin d) => do
         entail g.facts d

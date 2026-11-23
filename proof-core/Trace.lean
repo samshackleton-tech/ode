@@ -289,6 +289,8 @@ theorem notes_alike {bind : Bind} {a b : State} (A : Alike a b) {st : Stmt} (hq 
   | nothing => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
   | ret => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
   | call _ => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
+  | retLink _ => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
+  | callLink _ _ => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
   | jump _ _ => exact ⟨by simp only [marksAfter, stmtParts, A.marks], rfl⟩
   | set place v =>
     cases place with
@@ -560,6 +562,8 @@ theorem stmt_low {bind : Bind} {base : Nat} {a b a' b' : State} (A : Alike a b) 
     exact A.low
   | ret => simp only [execStmt] at h1; cases h1
   | call _ => simp only [execStmt] at h1; cases h1
+  | retLink _ => simp only [execStmt] at h1; cases h1
+  | callLink _ _ => simp only [execStmt] at h1; cases h1
   | vset place v =>
     intro r hr
     rw [(vset_kept h1).1, (vset_kept h2).1]
@@ -677,6 +681,8 @@ theorem stmt_alike {bind : Bind} {base : Nat} {a b a' b' : State} (A : Alike a b
     exact ⟨A.rip, A.reg, A.zf, A.cf, A.mem⟩
   | ret => simp only [execStmt] at h1; cases h1
   | call _ => simp only [execStmt] at h1; cases h1
+  | retLink _ => simp only [execStmt] at h1; cases h1
+  | callLink _ _ => simp only [execStmt] at h1; cases h1
   | vset place v =>
     refine vec_alike A (vset_kept h1) (vset_kept h2) ?_ ?_
     · cases place with
@@ -857,6 +863,31 @@ theorem all_alike {bind : Bind} {base : Nat} {p1 p2 : Perm} {u1 u2 : Nat → Nat
             · rw [if_neg hkr, if_neg hkr]; exact A.low k hk
         next => cases h2
       next => cases h1
+    | retLink r =>
+      -- a return by a register: the register is not marked, so both go back to the same address
+      simp only [execAllQ] at h1 h2
+      cases hr : regIndex r with
+      | none => simp [hr] at h1
+      | some k =>
+        simp only [hr, Option.bind] at h1 h2
+        split at h1
+        next => cases h1
+        next hm =>
+          split at h2
+          next => cases h2
+          next =>
+            injection h1 with h1; injection h2 with h2; subst h1; subst h2
+            have hk : a.marks.reg k = false := by simpa using hm
+            show Alike _ _
+            exact ⟨A.marks, A.reg k hk, A.data, A.trace, A.reg, A.zf, A.cf, A.mem, A.low⟩
+    | callLink _ _ =>
+      simp only [execAllQ] at h1 h2
+      split at h1
+      next hq =>
+        split at h2
+        next => split at h1 <;> split at h2 <;> first | cases h1 | cases h2 | exact go hq ‹_› ‹_› h1 h2
+        next => cases h2
+      next => cases h1
     | nothing =>
       simp only [execAllQ] at h1 h2
       split at h1
@@ -921,51 +952,74 @@ theorem execQ_call {p : Program} {i : Instr} {name : String} (h : callTarget i =
   unfold callTarget at h
   split at h
   next n heff => simp [execQ, heff, execAllQ, execStmt]
+  next n r heff => simp [execQ, heff, execAllQ, execStmt]
   next => cases h
 
-/-- The state a called function starts in, of two states alike. -/
-theorem afterCall_alike {p q : Program} {i : Instr} {a b : State} (A : Alike a b) (h : a.marks.reg RSP = false) :
+/-- The state a called function starts in, of two states alike. (Where the call writes the address to come
+back to below the stack pointer, the stack pointer is not marked.) -/
+theorem afterCall_alike {p q : Program} {i : Instr} {a b : State} (A : Alike a b) (h : callLink i = none → a.marks.reg RSP = false) :
     Alike (afterCall p q i a) (afterCall p q i b) := by
-  have sp := A.reg RSP h
-  refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_, fun k hk => ?_⟩
-  rotate_right
-  · show (if k = RSP then a.reg RSP - 8 else a.reg k) % 256 = (if k = RSP then b.reg RSP - 8 else b.reg k) % 256
-    by_cases hkr : k = RSP
-    · rw [if_pos hkr, if_pos hkr, sp]
-    · rw [if_neg hkr, if_neg hkr]; exact A.low k hk
-  · show ({ a.marks with mem := markBytes a.marks.mem (a.reg RSP - 8) 8 false } : Marks) =
-      { b.marks with mem := markBytes b.marks.mem (b.reg RSP - 8) 8 false }
-    rw [A.marks, sp]
-  · show a.trace ++ [(a.rip, 0), (a.reg RSP - 8, 8)] = b.trace ++ [(b.rip, 0), (b.reg RSP - 8, 8)]
-    rw [A.trace, A.rip, sp]
-  · show (if k = RSP then a.reg RSP - 8 else a.reg k) = (if k = RSP then b.reg RSP - 8 else b.reg k)
-    by_cases hkr : k = RSP
-    · rw [if_pos hkr, if_pos hkr, sp]
-    · rw [if_neg hkr, if_neg hkr]; exact A.reg k hk
-  · show store a.mem (a.reg RSP - 8) (p.base + i.next) 8 x = store b.mem (b.reg RSP - 8) (p.base + i.next) 8 x
-    have hx : markBytes a.marks.mem (a.reg RSP - 8) 8 false x = false := hx
-    rw [← sp]
-    simp only [markBytes] at hx
-    by_cases hin : a.reg RSP - 8 ≤ x ∧ x < a.reg RSP - 8 + 8
-    · exact store_inside 8 _ _ _ _ x hin.1 hin.2
-    · rw [if_neg hin] at hx
-      rw [store_outside 8 _ _ _ x (by omega), store_outside 8 _ _ _ x (by omega)]
-      exact A.mem x hx
+  cases hl : callLink i with
+  | none =>
+    have sp := A.reg RSP (h hl)
+    rw [afterCall_stack hl, afterCall_stack hl]
+    refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, fun x hx => ?_, fun k hk => ?_⟩
+    rotate_right
+    · show (if k = RSP then a.reg RSP - 8 else a.reg k) % 256 = (if k = RSP then b.reg RSP - 8 else b.reg k) % 256
+      by_cases hkr : k = RSP
+      · rw [if_pos hkr, if_pos hkr, sp]
+      · rw [if_neg hkr, if_neg hkr]; exact A.low k hk
+    · show ({ a.marks with mem := markBytes a.marks.mem (a.reg RSP - 8) 8 false } : Marks) =
+        { b.marks with mem := markBytes b.marks.mem (b.reg RSP - 8) 8 false }
+      rw [A.marks, sp]
+    · show a.trace ++ [(a.rip, 0), (a.reg RSP - 8, 8)] = b.trace ++ [(b.rip, 0), (b.reg RSP - 8, 8)]
+      rw [A.trace, A.rip, sp]
+    · show (if k = RSP then a.reg RSP - 8 else a.reg k) = (if k = RSP then b.reg RSP - 8 else b.reg k)
+      by_cases hkr : k = RSP
+      · rw [if_pos hkr, if_pos hkr, sp]
+      · rw [if_neg hkr, if_neg hkr]; exact A.reg k hk
+    · show store a.mem (a.reg RSP - 8) (p.base + i.next) 8 x = store b.mem (b.reg RSP - 8) (p.base + i.next) 8 x
+      have hx : markBytes a.marks.mem (a.reg RSP - 8) 8 false x = false := hx
+      rw [← sp]
+      simp only [markBytes] at hx
+      by_cases hin : a.reg RSP - 8 ≤ x ∧ x < a.reg RSP - 8 + 8
+      · exact store_inside 8 _ _ _ _ x hin.1 hin.2
+      · rw [if_neg hin] at hx
+        rw [store_outside 8 _ _ _ x (by omega), store_outside 8 _ _ _ x (by omega)]
+        exact A.mem x hx
+  | some l =>
+    -- the address to come back to is put in a register: that register holds the same in both, and is not marked
+    rw [afterCall_link hl, afterCall_link hl]
+    refine ⟨?_, rfl, A.data, ?_, fun k hk => ?_, A.zf, A.cf, A.mem, fun k hk => ?_⟩
+    · show ({ a.marks with reg := fun k => if k = l then false else a.marks.reg k } : Marks) =
+        { b.marks with reg := fun k => if k = l then false else b.marks.reg k }
+      rw [A.marks]
+    · show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]
+      rw [A.trace, A.rip]
+    · have hk : (if k = l then false else a.marks.reg k) = false := hk
+      show (if k = l then (p.base + i.next) % M64 else a.reg k) = (if k = l then (p.base + i.next) % M64 else b.reg k)
+      by_cases hkl : k = l
+      · rw [if_pos hkl, if_pos hkl]
+      · rw [if_neg hkl] at hk; rw [if_neg hkl, if_neg hkl]; exact A.reg k hk
+    · show (if k = l then (p.base + i.next) % M64 else a.reg k) % 256 = (if k = l then (p.base + i.next) % M64 else b.reg k) % 256
+      by_cases hkl : k = l
+      · rw [if_pos hkl, if_pos hkl]
+      · rw [if_neg hkl, if_neg hkl]; exact A.low k hk
 
 /-- The states two callers go on in after a call, of two states alike at the call and two alike at the
-return, the registers a callee keeps holding in each what they held at the call. -/
-theorem backFrom_alike {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
-    (ka : ∀ r ∈ calleeSaved, a1.reg r = a.reg r) (kb : ∀ r ∈ calleeSaved, b1.reg r = b.reg r) :
-    Alike (backFrom a a1) (backFrom b b1) := by
+return, the registers a callee keeps (`kept`) holding in each what they held at the call. -/
+theorem backFrom_alike {kept : List Nat} {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
+    (ka : ∀ r ∈ kept, a1.reg r = a.reg r) (kb : ∀ r ∈ kept, b1.reg r = b.reg r) :
+    Alike (backFrom kept a a1) (backFrom kept b b1) := by
   refine ⟨?_, A1.rip, A1.data, A1.trace, fun r hr => ?_, A1.zf, A1.cf, A1.mem, A1.low⟩
-  · show ({ a1.marks with reg := fun r => if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r } : Marks) =
-      { b1.marks with reg := fun r => if calleeSaved.contains r then b.marks.reg r else b1.marks.reg r }
+  · show ({ a1.marks with reg := fun r => if kept.contains r then a.marks.reg r else a1.marks.reg r } : Marks) =
+      { b1.marks with reg := fun r => if kept.contains r then b.marks.reg r else b1.marks.reg r }
     rw [A.marks, A1.marks]
-  · have hr : (if calleeSaved.contains r then a.marks.reg r else a1.marks.reg r) = false := hr
+  · have hr : (if kept.contains r then a.marks.reg r else a1.marks.reg r) = false := hr
     show a1.reg r = b1.reg r
-    by_cases hc : calleeSaved.contains r = true
+    by_cases hc : kept.contains r = true
     · rw [if_pos hc] at hr
-      have hm : r ∈ calleeSaved := by simpa using hc
+      have hm : r ∈ kept := by simpa using hc
       rw [ka r hm, kb r hm]; exact A.reg r hr
     · rw [if_neg hc] at hr; exact A1.reg r hr
 
@@ -974,7 +1028,7 @@ theorem backFrom_alike {a b a1 b1 : State} (A : Alike a b) (A1 : Alike a1 b1)
 /-- The function `p`, started in the state `s`, has returned in the state `s'`: by instructions of the
 machine that stops where something marked shows, whatever the unknowns turned out to be at each and
 whatever each was let touch; a called function running to its return in its turn, and giving back the
-registers a callee keeps as it found them. -/
+registers a callee keeps as it found them (`keptAt`: which they are goes by the call instruction). -/
 inductive Ends (world : List Program) : Program → State → State → Prop where
   | ret (p : Program) (s : State) (i : Instr) (perm : Perm) (u : Nat → Nat) (s' : State) :
       p.fetch s.rip = some i → execQ perm p i u s = some (.returned s') → Ends world p s s'
@@ -982,9 +1036,9 @@ inductive Ends (world : List Program) : Program → State → State → Prop whe
       p.fetch s.rip = some i → execQ perm p i u s = some (.next s1) → Ends world p s1 s' → Ends world p s s'
   | call (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s1 s' : State) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      s.marks.reg RSP = false →
-      Ends world q (afterCall p q i s) s1 → (∀ r ∈ calleeSaved, s1.reg r = s.reg r) →
-      Ends world p (backFrom s s1) s' → Ends world p s s'
+      (callLink i = none → s.marks.reg RSP = false) →
+      Ends world q (afterCall p q i s) s1 → (∀ r ∈ keptAt i, s1.reg r = s.reg r) →
+      Ends world p (backFrom (keptAt i) s s1) s' → Ends world p s s'
 
 /-- TWO RUNS. Of two runs of a function from states alike in everything not marked, the states at the
 return are alike in everything not marked. -/
@@ -1059,6 +1113,20 @@ theorem execAllQ_execAll {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → N
         simp only [execAll, hq.2, if_true]
         exact h
       next => cases h
+    | retLink r =>
+      simp only [execAllQ] at h
+      cases hr : regIndex r with
+      | none => simp [hr] at h
+      | some k =>
+        simp only [hr, Option.bind] at h
+        split at h
+        next => cases h
+        next => simp only [execAll, hr, Option.map]; exact h
+    | callLink _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => simp only [execAll, e]; exact go e h)
+      next => cases h
     | nothing =>
       simp only [execAllQ] at h
       split at h
@@ -1122,6 +1190,20 @@ theorem execAllQ_data {perm : Perm} {bind : Bind} {base : Nat} {u : Nat → Nat}
       split at h
       next => injection h with h; subst h; rfl
       next => cases h
+    | retLink r =>
+      simp only [execAllQ] at h
+      cases hr : regIndex r with
+      | none => simp [hr] at h
+      | some k =>
+        simp only [hr, Option.bind] at h
+        split at h
+        next => cases h
+        next => injection h with h; subst h; rfl
+    | callLink _ _ =>
+      simp only [execAllQ] at h
+      split at h
+      next => split at h <;> first | cases h | (next s' e => exact go e h)
+      next => cases h
     | nothing =>
       simp only [execAllQ] at h
       split at h
@@ -1168,11 +1250,12 @@ theorem runs_data {world : List Program} {perm : Perm} {p : Program} {Q : State 
     have := ih u s' e
     rw [hd] at this
     exact this
-  | call perm p Q s i name q inner R hf hc hw h8 ha hm hir hiw _ hk _ ihq ihp =>
-    refine Runs.call perm p _ s i name q inner (fun s' => R s' ∧ s'.data = s.data) hf hc hw h8 ha hm hir hiw ihq
+  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+    rw [afterCall_data] at ihq
+    refine Runs.call perm p _ s i name q inner (fun s' => R s' ∧ s'.data = s.data) hf hc hw hstack hir hiw ihq
       (fun s' hs' => hk s' hs'.1) (fun s' hs' => ?_)
     have := ihp s' hs'.1
-    have hd : (backFrom s s').data = s.data := hs'.2
+    have hd : (backFrom (keptAt i) s s').data = s.data := hs'.2
     rw [hd] at this
     exact this
 

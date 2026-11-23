@@ -73,7 +73,7 @@ theorem asserts_symm {defs : List Def} {env : List (String × Val)} {a b : SExpr
 line says is so. -/
 theorem assertion_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
     {s s' : Sym} {rows : List Row} {sfacts : List SFact} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : assertion ctx env s e items = .ok ((rows, sfacts, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env) :
+    (h : assertion ctx env s e items = .ok ((rows, sfacts, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : EnvB s.nvars env) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ (∀ r ∈ rows, bounded s'.nvars r) ∧ (∀ f ∈ sfacts, f.bounded s'.nvars) ∧
       (((∀ r ∈ rows, r.holds ρ') ∧ (∀ f ∈ sfacts, f.holds ctx s0 ρ')) ↔ Asserts ctx.defs (semEnv ctx s0 ρ' env) e) := by
   cases e with
@@ -304,7 +304,7 @@ theorem each_mem {α : Type} {f : α → V Unit} : ∀ {l : List α} {items : It
 /-- Facts of the specification the verifier has come to, one after another: all are so. -/
 theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
     ∀ (goals : List SFact) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    fold (specGoal ctx 16) s goals items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → (∀ f ∈ goals, f.bounded s.nvars) →
+    fold (specGoal ctx 16) s goals items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → (∀ f ∈ goals, f.bounded s.nvars) →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ f ∈ goals, f.holds ctx s0 ρ'
   | [], s, s', items, rest, ρ, st, h, H, wf, hb => by
     simp only [fold] at h
@@ -326,7 +326,7 @@ theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 /-- A line of a place the verifier has shown of a state: what the line says is so. -/
 theorem establish_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
     {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : establish ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env) :
+    (h : establish ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : EnvB s.nvars env) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ Asserts ctx.defs (semEnv ctx s0 ρ' env) e := by
   unfold establish at h
   obtain ⟨⟨rows, sfacts, s1⟩, r1, e1, h⟩ := V.bind_ok h
@@ -343,7 +343,7 @@ theorem establish_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem establish_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    fold (establish ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    fold (establish ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ e ∈ facts, Asserts ctx.defs (semEnv ctx s0 ρ' env) e
   | [], s, s', items, rest, ρ, st, h, H, wf, hb => by
     simp only [fold] at h
@@ -364,7 +364,7 @@ theorem establish_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
 /-- A line of a place taken as known of a state of which it is so: what the verifier then holds is so. -/
 theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) {e : SExpr}
     {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : suppose ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env)
+    (h : suppose ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : EnvB s.nvars env)
     (A : Asserts ctx.defs (semEnv ctx s0 ρ env) e) : ∃ ρ', Carried ctx s0 ρ s ρ' s' st := by
   unfold suppose at h
   obtain ⟨⟨rows, sfacts, s1⟩, r1, e1, h⟩ := V.bind_ok h
@@ -386,7 +386,7 @@ theorem suppose_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
 
 theorem suppose_all {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (env : List (String × SVal)) :
     ∀ (facts : List SExpr) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    fold (suppose ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    fold (suppose ctx env) s facts items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     (∀ e ∈ facts, Asserts ctx.defs (semEnv ctx s0 ρ env) e) → ∃ ρ', Carried ctx s0 ρ s ρ' s' st
   | [], s, s', items, rest, ρ, st, h, H, wf, hb, A => by
     simp only [fold] at h

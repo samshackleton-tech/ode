@@ -112,10 +112,21 @@ structure WordsWF (s : Sym) : Prop where
   wrote : ∀ w j i, (w, j, i) ∈ s.wroteW → i < s.terms.length
   spill : ∀ off ids, (off, ids) ∈ s.spill → bounded s.nvars off ∧ ids.length = 16 ∧ ∀ i ∈ ids, i < s.terms.length
 
-/-- The verifier's state speaks only of unknowns in use. -/
-structure WF (s : Sym) : Prop where
-  base : 17 ≤ s.nvars           -- (the sixteen registers at entry, and where the file's data lies)
-  reg : ∀ r, r < 16 → bounded s.nvars (s.reg r)
+/-- A machine has sixteen general registers at least. -/
+theorem Ctx.nreg_ge (ctx : Ctx) : 16 ≤ ctx.nreg := by
+  unfold Ctx.nreg Contract.regs
+  split <;> decide
+
+/-- A register of the first sixteen is a register of the function's machine. -/
+theorem Ctx.lt_nreg (ctx : Ctx) {r : Nat} (h : r < 16) : r < ctx.nreg := Nat.lt_of_lt_of_le h ctx.nreg_ge
+
+theorem Ctx.rsp_lt (ctx : Ctx) : RSP < ctx.nreg := ctx.lt_nreg (by decide)
+
+/-- The verifier's state speaks only of unknowns in use. (`ctx` is here for the count of the machine's
+registers alone.) -/
+structure WF (ctx : Ctx) (s : Sym) : Prop where
+  base : ctx.nreg + 1 ≤ s.nvars           -- (the registers at entry, and where the file's data lies)
+  reg : ∀ r, r < ctx.nreg → bounded s.nvars (s.reg r)
   zf : s.zf.bounded s.nvars
   cf : s.cf.bounded s.nvars
   frame : ∀ o v, (o, v) ∈ s.frame → bounded s.nvars v
@@ -127,7 +138,8 @@ structure WF (s : Sym) : Prop where
   known : ∀ k ∈ s.known, k.wf s.nvars s.terms.length
   range : ∀ rg, s.range = some rg → bounded s.nvars rg.lo ∧ ∀ v ∈ rg.args, v.bounded s.nvars
 
-theorem WF.base16 {s : Sym} (wf : WF s) : 16 ≤ s.nvars := Nat.le_of_succ_le wf.base
+/-- The unknowns of the registers at entry are in use. -/
+theorem WF.regs {ctx : Ctx} {s : Sym} (wf : WF ctx s) : ctx.nreg ≤ s.nvars := Nat.le_of_succ_le wf.base
 
 /-! ## A contract with no table of addresses -/
 
@@ -179,7 +191,7 @@ theorem perm_read_pieces {c : Contract} {pieces : List Piece} {s : State} {a : N
 theorem lanesEnv_nil {c : Contract} (h : c.lanes = []) (s : State) : c.lanesEnv s = [] := by
   simp [Contract.lanesEnv, tables_nil h]
 
-theorem envW_plain {c : Contract} (h : c.lanes = []) (s : State) : c.envW s = envWIn c s c.args argRegs := by
+theorem envW_plain {c : Contract} (h : c.lanes = []) (s : State) : c.envW s = envWIn c s c.args c.argRegs := by
   simp [Contract.envW, lanesEnv_nil h]
 
 /-- A table of the contract is one of its tables. -/
@@ -333,9 +345,9 @@ theorem Ctx.own_eq {ctx : Ctx} {k : Nat} (h : ctx.piece = some k) (s0 : State) :
 /-- What the verifier holds (`s`) is so of the machine's state `st`, the unknowns being `ρ`, and `s0` the
 state at the function's entry. -/
 structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : State) : Prop where
-  entry : ∀ r, r < 16 → ρ r = s0.reg r
-  data : ρ 16 = ctx.own s0 ∧ st.data = s0.data      -- unknown 16 is where the data of the function's own file lies; every file's lies where it did
-  reg : ∀ r, r < 16 → (st.reg r : Int) = ev ρ (s.reg r)
+  entry : ∀ r, r < ctx.nreg → ρ r = s0.reg r
+  data : ρ (dataVar ctx) = ctx.own s0 ∧ st.data = s0.data      -- the unknown after the registers' is where the data of the function's own file lies; every file's lies where it did
+  reg : ∀ r, r < ctx.nreg → (st.reg r : Int) = ev ρ (s.reg r)
   small : ∀ r, st.reg r < M64
   zf : s.zf.holds ρ st.zf
   cf : s.cf.holds ρ st.cf
@@ -357,7 +369,7 @@ the call where it lay at the caller's entry. -/
 theorem read_pieces {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (p q : Program) (i : Instr) {a : Nat} (h : inPieces ctx.pieces (afterCall p q i st) a = true) :
     (ctx.contract.perm ctx.pieces s0).read a = true := by
-  rw [inPieces_data (show (afterCall p q i st).data = s0.data from H.data.2) a] at h
+  rw [inPieces_data (show (afterCall p q i st).data = s0.data from (afterCall_data p q i st).trans H.data.2) a] at h
   exact perm_read_pieces h
 
 /-- The unknowns in use keep their values. -/
@@ -544,9 +556,9 @@ theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : R
   exact h5 j (by rw [el]; exact lo) hj
 
 theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State}
-    (h : Holds ctx s0 ρ s st) (wf : WF s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
-  entry r hr := (a r (Nat.lt_of_lt_of_le hr wf.base16)).symm.trans (h.entry r hr)
-  data := ⟨(a 16 (Nat.lt_of_lt_of_le (by decide) wf.base)).symm.trans h.data.1, h.data.2⟩
+    (h : Holds ctx s0 ρ s st) (wf : WF ctx s) (a : Agree s.nvars ρ ρ') : Holds ctx s0 ρ' s st where
+  entry r hr := (a r (Nat.lt_of_lt_of_le hr wf.regs)).symm.trans (h.entry r hr)
+  data := ⟨(a (dataVar ctx) wf.base).symm.trans h.data.1, h.data.2⟩
   reg r hr := (h.reg r hr).trans (ev_agree (wf.reg r hr) a)
   small := h.small
   zf := Flag.holds_agree wf.zf a h.zf

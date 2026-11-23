@@ -62,7 +62,7 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "piece", "stack", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "data", "piece", "stack", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -107,6 +107,15 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["fn", name] =>
     if t.fns.any (fun g => g.name == name) then throw s!"refused: two functions are named {name}"
     else pure { t with fns := t.fns ++ [{ name := name }] }
+  | ["machine", name] =>
+    -- the machine the function is for: before its instructions and the lines of its contract
+    match t.fns.reverse with
+    | last :: _ =>
+      if !last.code.isEmpty || !last.contract.args.isEmpty then throw s!"refused: `machine` after an instruction or an argument of the function: {line}"
+      else if name == "arm64" then onLast fun g => { g with contract := { g.contract with arm64 := true } }
+      else if name == "x86-64" then pure t
+      else throw s!"refused: no machine {name}"
+    | [] => throw s!"outside a function: {line}"
   | "i" :: a :: b :: _ =>
     let some ins := parseSexp (rest line 3) | throw s!"cannot read {line}"
     let some (row, bind) := findRow table ins | throw s!"refused: an instruction that is no row of the table: {rest line 3}"

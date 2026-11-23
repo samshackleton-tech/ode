@@ -9,8 +9,10 @@ placeholders are. An EFFECT is statements, run left to right, over primitives:
 
     PLACE = EXPRESSION          a register, a flag (zf, cf) or bytes of memory (mem8/mem32/mem64/mem128/mem512(base, displacement[, index]))
     jump TARGET [if [not] FLAG] the next instruction is at TARGET (if the flag says so)
-    call TARGET                 a call of the function there
-    return                      the function returns
+    call TARGET                 a call of the function there; the address to come back to is put below the stack pointer
+    call TARGET link REGISTER   a call of the function there; the address to come back to is put in the register
+    return                      the function returns to the address at the stack pointer
+    return REGISTER             the function returns to the address the register holds
     nothing
 
 What a primitive means on numbers is in conc.py (compared with a processor by cross.py); what the
@@ -55,7 +57,7 @@ def unify(pattern, ins, bind):
     if isinstance(pattern, list): return isinstance(ins, list) and len(pattern) == len(ins) and all(unify(p, x, bind) for p, x in zip(pattern, ins))
     if not isinstance(ins, str): return False
     if pattern[:1] == "." and pattern[1:] in REGISTERS:
-        if not ins.startswith(".") or pattern == ".P" and ins == ".rsp": return False
+        if not ins.startswith(".") or pattern == ".P" and ins == ".rsp" or ins == ".sp": return False     # (AArch64's sp is named in rows of its own)
         new = ins[1:]
     elif pattern in VECTORS or pattern in MASKS:
         if not ins.isdigit(): return False
@@ -94,8 +96,13 @@ def statement(text):
         flag = t[at + 1] if want else t[at + 2]
         if flag not in ("zf", "cf") or len(t) != at + (2 if want else 3): raise ValueError(f"cannot read {text}")
         return ("jump", expression(t[1:at]), (flag, want))
-    if t[0] == "call": return ("call", expression(t[1:]))
+    if t[0] == "call":
+        if "link" not in t: return ("call", expression(t[1:]))
+        at = t.index("link")
+        if len(t) != at + 2: raise ValueError(f"cannot read {text}")
+        return ("call", expression(t[1:at]), t[at + 1])
     if t in (["return"], ["nothing"]): return (t[0],)
+    if t[0] == "return" and len(t) == 2: return ("return", t[1])
     raise ValueError(f"cannot read {text}")
 
 

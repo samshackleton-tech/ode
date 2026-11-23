@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "core"))
 import table
 
 TABLE = os.path.join(HERE, "arm64.tab")
-GENERAL = [f"x{i}" for i in range(31)] + ["sp"]            # a general register's number: 31 is the stack pointer, where a row lets a field be it
-NOT_31, MAY_BE_SP, VECTOR = "DSP", "B", "XYZ"              # what kind of register a field's letter is
+GENERAL = [f"x{i}" for i in range(31)]                     # a general register's number (a field that holds 31 is no instance: see arm64.tab)
+REGISTER, VECTOR = "DSPB", "XYZ"                           # what kind of register a field's letter is
 
 
 class Refuse(Exception):
@@ -63,10 +63,9 @@ def field_of(way, name, bind):
     """The number that the field `name` of a way holds for an instance."""
     if name in bind:
         v = bind[name]
-        if name in NOT_31 or name in MAY_BE_SP:
-            if v not in GENERAL: raise Refuse(f"{v} is no general register")
+        if name in REGISTER:
+            if v not in GENERAL: raise Refuse(f"{v} is no register x0 to x30")
             v = GENERAL.index(v)
-            if v == 31 and name in NOT_31: raise Refuse("the stack pointer where a register x0 to x30 belongs")
         return v
     for placeholder, (field, how, k) in way.rules.items():
         if field == name:
@@ -103,8 +102,8 @@ def decode(all_ways, word):
         try:
             for name, (low, width) in way.fields.items():
                 v = (w >> low) & ((1 << width) - 1)
-                if name in NOT_31 or name in MAY_BE_SP:
-                    if v == 31 and name in NOT_31: raise Refuse("31")
+                if name in REGISTER:
+                    if v == 31: raise Refuse("31")
                     bind[name] = GENERAL[v]
                 elif name.isupper(): bind[name] = v
                 else:
@@ -117,10 +116,11 @@ def decode(all_ways, word):
 
 
 def written(row, bind):
-    """The decoded instruction as the table's ROW column writes it: a register by its name, a number in hexadecimal."""
+    """The decoded instruction as the table's ROW column writes it: a register by its name, a number in
+    hexadecimal, the function a call names by its name."""
     def one(t):
         if t.startswith(".") and t[1:] in bind: return "." + bind[t[1:]]
-        if t in bind: return str(bind[t]) if t in VECTOR else hex(bind[t])
+        if t in bind: return bind[t] if isinstance(bind[t], str) else str(bind[t]) if t in VECTOR else hex(bind[t])
         return t
     def text(p): return "(" + " ".join(text(x) for x in p) + ")" if isinstance(p, list) else one(p)
     return " ".join(text(p) for p in row.pattern)

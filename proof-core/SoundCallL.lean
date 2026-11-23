@@ -135,13 +135,13 @@ variable {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s s' : Sym} {st : Stat
 
 /-- Along what `nameval` adds to the state (unknowns, facts, what is known; the table stays): a thing let
 through keeps its meaning. -/
-theorem Carried.wden (C : Carried ctx s0 ρ s ρ' s' st) (wf : WF s) (ht : s'.tab = s.tab) {v : WVal} {x : Val}
+theorem Carried.wden (C : Carried ctx s0 ρ s ρ' s' st) (wf : WF ctx s) (ht : s'.tab = s.tab) {v : WVal} {x : Val}
     (d : WDen ctx s0 ρ s.terms v x) (ok : v.ok s.nvars s.terms.length = true) : WDen ctx s0 ρ' s'.terms v x := by
   have et : s'.terms = s.terms := by show s'.tab.list = s.tab.list; rw [ht]
   rw [et]
   exact WDen.mono C.agree wf.words.table wf.words.atoms (Ext.refl _) d ok
 
-theorem Carried.envDen (C : Carried ctx s0 ρ s ρ' s' st) (wf : WF s) (ht : s'.tab = s.tab) {env : List (String × WVal)}
+theorem Carried.envDen (C : Carried ctx s0 ρ s ρ' s' st) (wf : WF ctx s) (ht : s'.tab = s.tab) {env : List (String × WVal)}
     {env' : List (String × Val)} (hE : EnvDen ctx s0 ρ s.terms env env') (hO : EnvOk s.nvars s.terms.length env) :
     EnvDen ctx s0 ρ' s'.terms env env' := by
   have et : s'.terms = s.terms := by show s'.tab.list = s.tab.list; rw [ht]
@@ -196,11 +196,11 @@ abbrev Named (ctx : Ctx) (s0 st : State) (ρ : Nat → Int) (s s' : Sym) (wv : W
 the values of the expression's names. -/
 abbrev NamevalOk (ctx : Ctx) (s0 st : State) (fuel : Nat) : Prop :=
   ∀ (k : Nat) {ρ : Nat → Int} {s s' : Sym} {env : List (String × WVal)} {env' : List (String × Val)} {e : SExpr} {wv : WVal} {v : Val},
-    Holds ctx s0 ρ s st → WF s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
+    Holds ctx s0 ρ s st → WF ctx s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
     nameval ctx fuel s env e = some (wv, s') → evalSpec ctx.defs k env' e = some v → Named ctx s0 st ρ s s' wv v
 
 /-- What `weval` works out of an expression that has a value stands for that value. -/
-theorem weval_value {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem weval_value {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {env : List (String × WVal)} {env' : List (String × Val)} {e : SExpr} {w : WVal} {v : Val} {k : Nat}
     (hw : weval ctx s.tab.find s WFUEL env e = some w) (hE : EnvDen ctx s0 ρ s.terms env env')
     (hev : evalSpec ctx.defs k env' e = some v) : WDen ctx s0 ρ s.terms w v := by
@@ -223,7 +223,7 @@ theorem okAll_words {n t : Nat} : ∀ (ids : List Nat), ids.all (· < t) = true 
 theorem namevalList_sound {ctx : Ctx} {s0 st : State} {fuel : Nat} (ih : NamevalOk ctx s0 st fuel) (k : Nat)
     {env : List (String × WVal)} {env' : List (String × Val)} :
     ∀ (args : SExpr) {ρ : Nat → Int} {s s' : Sym} {vs : List WVal} {as : List Val},
-      Holds ctx s0 ρ s st → WF s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
+      Holds ctx s0 ρ s st → WF ctx s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
       namevalList (fun s e => nameval ctx fuel s env e) s args = some (vs, s') →
       evalList (evalSpec ctx.defs k env') args = some as →
       ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ s'.tab = s.tab ∧ WVal.okAll s'.nvars s'.terms.length vs = true ∧
@@ -575,7 +575,7 @@ holds): the table is only added to; there is a term for each word, and it is the
 now; and the blocks are a part of a run of a fixed count this function was given to read, or a part of its
 frame at or above the stack pointer that lies apart from the part the called function writes. -/
 theorem laneWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) {a : Row} {nb : Nat} {cw : Int} {nout : Nat} {ids : List Nat} {T : Tab} {P : Nat}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {a : Row} {nb : Nat} {cw : Int} {nout : Nat} {ids : List Nat} {T : Tab} {P : Nat}
     (hP : (P : Int) = ev ρ a) (h : laneWords ctx s a nb cw nout = some (ids, T)) :
     Ext s.terms T.list ∧ TableOk s.nvars T.list ∧ ids.length = 16 * nb ∧ (∀ i ∈ ids, i < T.list.length) ∧
     (∀ k, k < 16 * nb → den (inpOf ctx s0) ρ T.list (ids.getD k 0) = load st.mem (P + 4 * k) 4) ∧
@@ -593,7 +593,7 @@ theorem laneWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           (o + 64 * (nb : Int) ≤ cw ∨ cw + (nout : Int) ≤ o))) := by
     intro o sp ho hsp hcond rows hrows hT
     have eo := ev_isConst (ρ := ρ) ho
-    rw [ev_sub, ev_var, H.entry RSP (by decide)] at eo
+    rw [ev_sub, ev_var, H.entry RSP ctx.rsp_lt] at eo
     obtain ⟨rlen, rw4⟩ := frameRows_sound H E.stack o (16 * nb) 0 hrows
     have rb := frameRows_bounded wf o (16 * nb) 0 hrows
     obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ r % W32i).toNat)
@@ -682,7 +682,7 @@ theorem laneWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 /-- A lane's words, in blocks of sixteen, stand for the lane's blocks as the account has them: where each
 term is the word memory holds at its place. -/
-theorem lane_den {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf : WF s) (mem : Nat → Byte) (P : Nat) :
+theorem lane_den {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf : WF ctx s) (mem : Nat → Byte) (P : Nat) :
     ∀ (nb : Nat) (ids : List Nat) (off : Nat), ids.length = 16 * nb →
       (∀ k, k < 16 * nb → den (inpOf ctx s0) ρ s.terms (ids.getD k 0) = load mem (P + 64 * off + 4 * k) 4) →
       WDen ctx s0 ρ s.terms (.list (blocksOf nb (ids.map fun i => WVal.word [i])))
@@ -764,7 +764,7 @@ theorem laneBlocks_congr (mem mem' : Nat → Byte) (P nb : Nat) (h : ∀ x, P �
 only added to; the lanes stand for the blocks at the addresses the table's cells hold now; and each lane's
 blocks lie where this function may read them, apart from what the called function writes. -/
 theorem tableLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) {ct : Int} {nb : Nat} {cw : Int} {nout : Nat} :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {ct : Int} {nb : Nat} {cw : Int} {nout : Nat} :
     ∀ (count i : Nat) {T T' : Tab} {lanes : List WVal}, Ext s.terms T.list → TableOk s.nvars T.list →
       tableLanes ctx s ct nb cw nout count i T = some (lanes, T') →
       Ext T.list T'.list ∧ TableOk s.nvars T'.list ∧ WVal.okAll s.nvars T'.list.length lanes = true ∧
@@ -841,11 +841,11 @@ theorem tableLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
 state it starts in (`s1`): a number is its register; a part of a run of a fixed count is the bytes there,
 as at entry; of the table's own bytes nothing is said. -/
 theorem calleeL_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) {T : List Node}
-    (c : Contract) {s1 : State} {tx : String} {tr nt : Nat}
-    (hreg : ∀ r ∈ argRegs, s1.reg r = st.reg r)
-    (hfix : ∀ r n j b cst, r ∈ argRegs → fixedPart ctx s r n = some (j, b, cst) →
+    (c : Contract) (hm : c.regs = ctx.nreg) {s1 : State} {tx : String} {tr nt : Nat}
+    (hreg : ∀ r ∈ c.argRegs, s1.reg r = st.reg r)
+    (hfix : ∀ r n j b cst, r ∈ c.argRegs → fixedPart ctx s r n = some (j, b, cst) →
       ∀ k, k < n → s1.mem (st.reg r + k) = s0.mem (s0.reg b + cst + k) ∧ (s0.mem (s0.reg b + cst + k)).val < 256) :
-    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r ∈ argRegs) →
+    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r ∈ c.argRegs) →
       calleeL ctx s tx tr nt args regs = some env → EnvDen ctx s0 ρ T env (envWIn c s1 args regs)
   | [], _, env, _, h => by
     simp only [calleeL, Option.some.injEq] at h; subst h; simp [envWIn, EnvDen]
@@ -857,12 +857,12 @@ theorem calleeL_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
     | none => simp [hrec] at h
     | some env' =>
       simp only [hrec, Option.map_some, Option.some.injEq] at h; subst h
-      have ih := calleeL_sound (T := T) H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
+      have ih := calleeL_sound (T := T) H c hm hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
       simp only [envWIn]
       refine ⟨rfl, ?_, ih⟩
       have ra := hr r (List.mem_cons_self ..)
       have := WDen.num (ctx := ctx) (s0 := s0) (ρ := ρ) (T := T) (s.reg r)
-      rw [← H.reg r (argRegs_lt ra), ← hreg r ra] at this
+      rw [← H.reg r (hm ▸ argRegs_lt ra), ← hreg r ra] at this
       exact this
   | (x, .fixed n) :: args, r :: regs, env, hr, h => by
     simp only [calleeL] at h
@@ -872,7 +872,7 @@ theorem calleeL_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
         | none => simp [hrec] at h
         | some env' =>
           simp only [hrec, Option.map_some, Option.some.injEq] at h; subst h
-          have ih := calleeL_sound (T := T) H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
+          have ih := calleeL_sound (T := T) H c hm hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
           simp only [envWIn]
           exact ⟨rfl, WDen.other _, ih⟩
       · cases h
@@ -884,7 +884,7 @@ theorem calleeL_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
         | none => simp [hf, hrec] at h
         | some env' =>
           simp only [hf, hrec, Option.some.injEq] at h; subst h
-          have ih := calleeL_sound (T := T) H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
+          have ih := calleeL_sound (T := T) H c hm hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) hrec
           simp only [envWIn]
           refine ⟨rfl, ?_, ih⟩
           have ra := hr r (List.mem_cons_self ..)
@@ -900,13 +900,13 @@ theorem calleeL_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
   | (x, .out n) :: args, r :: regs, env, hr, h => by
     simp only [calleeL] at h
     simp only [envWIn]
-    exact calleeL_sound (T := T) H c hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) h
+    exact calleeL_sound (T := T) H c hm hreg hfix args regs (fun r' m => hr r' (List.mem_cons_of_mem _ m)) h
   | (x, .inout n) :: args, r :: regs, env, _, h => by simp [calleeL] at h
   | (x, .bytes len) :: args, r :: regs, env, _, h => by simp [calleeL] at h
 
 /-- The called function's names on words speak only of unknowns in use. -/
-theorem calleeL_ok {ctx : Ctx} {s : Sym} (wf : WF s) {tx : String} {tr nt t : Nat} :
-    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r < 16) →
+theorem calleeL_ok {ctx : Ctx} {s : Sym} (wf : WF ctx s) {tx : String} {tr nt t : Nat} :
+    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × WVal)}, (∀ r ∈ regs, r < ctx.nreg) →
       calleeL ctx s tx tr nt args regs = some env → EnvOk s.nvars t env
   | [], _, env, _, h => by
     simp only [calleeL, Option.some.injEq] at h; subst h; intro p m; cases m
@@ -1016,15 +1016,15 @@ theorem cellsOf_mem (c : Int) : ∀ (j : Nat) (rows : List Row) {o : Int} {v : R
       rw [hv, show 2 * (i + 1) = 2 * i + 1 + 1 by omega]
       simp only [List.getD_cons_succ]
 
-theorem afterCallL_wf {s : Sym} (wf : WF s) (sp cw : Int) (n : Nat) {rows : List Row} (hb : ∀ r ∈ rows, bounded s.nvars r) :
-    WF (Sym.afterCallL s sp cw n rows) := by
-  have le : s.nvars ≤ s.nvars + 16 := Nat.le_add_right _ _
+theorem afterCallL_wf {ctx : Ctx} {s : Sym} (wf : WF ctx s) (ct : Contract) (hm : ct.regs = ctx.nreg) (sp cw : Int) (n : Nat) {rows : List Row} (hb : ∀ r ∈ rows, bounded s.nvars r) :
+    WF ctx (Sym.afterCallL ct s sp cw n rows) := by
+  have le : s.nvars ≤ s.nvars + ct.regs := Nat.le_add_right _ _
   refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
     ⟨wf.words.table, fun j r h => bounded_mono le (wf.words.atoms j r h), (fun x ids h => by simp [Sym.afterCallL] at h),
      wf.words.rotrs, wf.words.wrote, fun _ _ h => nomatch h⟩,
     fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m), fun _ h => nomatch h⟩
   · intro r hr
-    show bounded (s.nvars + 16) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
+    show bounded (s.nvars + ct.regs) (if ct.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
     · exact bounded_var (by omega)
     · exact bounded_mono le (wf.reg r hr)
@@ -1042,11 +1042,11 @@ theorem afterCallL_wf {s : Sym} (wf : WF s) (sp cw : Int) (n : Nat) {rows : List
     rcases m with m | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-      have hr := callerSaved_lt hr
+      have hr := scratch_lt hr
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
-      · exact bounded_var (show s.nvars + r < s.nvars + 16 by omega)
-      · exact bounded_sub (bounded_const _ _) (bounded_var (show s.nvars + r < s.nvars + 16 by omega))
+      · exact bounded_var (show s.nvars + r < s.nvars + ct.regs by omega)
+      · exact bounded_sub (bounded_const _ _) (bounded_var (show s.nvars + r < s.nvars + ct.regs by omega))
     · exact bounded_mono le (wf.facts f m)
   · intro v r o m
     have := wf.bytes v r o m
@@ -1059,27 +1059,27 @@ theorem afterCallL_wf {s : Sym} (wf : WF s) (sp cw : Int) (n : Nat) {rows : List
 /-- After a call of a function that has written a part of the frame, where the rows are the words it left
 there: what the verifier then holds is so. -/
 theorem afterCallL_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st s2 : State}
-    {sp : Int} (cs : Nat) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stack : Int) ≤ sp - 8 - cs) (hsp0 : sp ≤ 0)
-    (hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r)
+    {sp : Int} (ct : Contract) (hm : ct.regs = ctx.nreg) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stack : Int) ≤ sp - ct.slot - ct.stack) (hsp0 : sp ≤ 0)
+    (hkeep : ∀ r, r < ctx.nreg → ct.scratch.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
     {c : Int} {n : Nat} {rows : List Row} (hc : sp ≤ c) (hce : c + (n : Int) ≤ 0) (hn : rows.length * 4 = n)
     (hb : ∀ r ∈ rows, bounded s.nvars r)
-    (hmem : ∀ a : Nat, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a →
+    (hmem : ∀ a : Nat, a + ct.slot + ct.stack < st.reg RSP ∨ st.reg RSP ≤ a →
       (a : Int) < s0.reg RSP + c ∨ (s0.reg RSP : Int) + c + (n : Int) ≤ a → s2.mem a = st.mem a)
     (hdata : s2.data = st.data)
     (hrows : ∀ k, k < rows.length →
       (load s2.mem (((s0.reg RSP : Int) + c).toNat + 4 * k) 4 : Int) = ev ρ (rows.getD k (Lin.const 0))) :
-    Holds ctx s0 (afterRho s.nvars ρ s2) (Sym.afterCallL s sp c n rows) s2 := by
+    Holds ctx s0 (afterRho ct.regs s.nvars ρ s2) (Sym.afterCallL ct s sp c n rows) s2 := by
   have hstack := E.stack
-  have ag := afterRho_agree s.nvars ρ s2
+  have ag := afterRho_agree ct.regs s.nvars ρ s2
   have H' := H.agree wf ag
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
     ⟨(fun x ids h => by simp [Sym.afterCallL] at h), ?_, ?_, fun _ _ h => nomatch h⟩, H'.known, fun _ h => nomatch h⟩
   · intro r hr
-    show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
-    cases hcs : callerSaved.contains r with
-    | true => rw [if_pos rfl, ev_var, afterRho_new _ _ _ hr]
+    show (s2.reg r : Int) = ev _ (if ct.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
+    cases hcs : ct.scratch.contains r with
+    | true => rw [if_pos rfl, ev_var, afterRho_new _ _ _ _ (hm ▸ hr)]
     | false =>
       rw [if_neg (by decide), hkeep r hr hcs]
       exact H'.reg r hr
@@ -1113,17 +1113,17 @@ theorem afterCallL_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     rcases m with m | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-      have hr := callerSaved_lt hr
+      have hr := scratch_lt hr
       have sm := hsmall r
       unfold M64 at sm
-      have val := afterRho_new s.nvars ρ s2 hr
+      have val := afterRho_new ct.regs s.nvars ρ s2 hr
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
       · rw [holds_iff, ev_var, val]; omega
       · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
     · exact H'.facts f m
   · intro a ha ho
-    have hfr : a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a := by
+    have hfr : a + ct.slot + ct.stack < st.reg RSP ∨ st.reg RSP ≤ a := by
       simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at ha
       omega
     have hout : (a : Int) < s0.reg RSP + c ∨ (s0.reg RSP : Int) + c + (n : Int) ≤ a := by
@@ -1216,7 +1216,7 @@ bytes: the state it comes back with is carried, with the table as it was; and wh
 things it is used with are in order, and it gives words below 2^32 whose bytes are `l`. -/
 theorem laneUse_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s1 : Sym} {env : List (String × WVal)}
     {env' : List (String × Val)} {e : SExpr} {l : List Nat} {use : Option (String × List Key)}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hE : EnvDen ctx s0 ρ s.terms env env') (hO : EnvOk s.nvars s.terms.length env)
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hE : EnvDen ctx s0 ρ s.terms env env') (hO : EnvOk s.nvars s.terms.length env)
     (hv : Value ctx.defs env' e (.bytes l)) (hu : laneUse ctx s env e = (s1, use)) :
     ∃ ρ1, Carried ctx s0 ρ s ρ1 s1 st ∧ s1.tab = s.tab ∧
       ∀ f keys, use = some (f, keys) → (∀ k ∈ keys, k.wf s1.nvars s1.terms.length) ∧
@@ -1258,7 +1258,7 @@ theorem laneUse_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s1 : Sym
 /-- The terms made for `m` new words whose unknowns begin at `s.nvars`. -/
 def madeN (s : Sym) (m : Nat) : List Nat × Tab := termsOf wAtom ((List.range m).map fun k => Lin.var (s.nvars + k)) s.tab
 
-theorem madeN_table {s : Sym} (wf : WF s) (m : Nat) (inp : Nat → Nat → Nat) (ρ : Nat → Int) :
+theorem madeN_table {s : Sym} (wf : WF ctx s) (m : Nat) (inp : Nat → Nat → Nat) (ρ : Nat → Int) :
     Ext s.terms (madeN s m).2.list ∧ TableOk (s.nvars + m) (madeN s m).2.list ∧ (madeN s m).1.length = m ∧
     (∀ i ∈ (madeN s m).1, i < (madeN s m).2.list.length) ∧
     ∀ k, k < m → den inp ρ (madeN s m).2.list ((madeN s m).1.getD k 0) = (ev ρ (Lin.var (s.nvars + k)) % W32i).toNat := by
@@ -1282,7 +1282,7 @@ theorem madeN_table {s : Sym} (wf : WF s) (m : Nat) (inp : Nat → Nat → Nat) 
 /-- `m` words as new unknowns (`Sym.newWords`), where the unknowns are given the values `w`, each below
 2^32, and, where there is a use, the use gives the words `w`: the state is carried; the rows speak of
 unknowns in use and stand for the words. -/
-theorem newWords_carried {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem newWords_carried {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (m : Nat) (w : Nat → Nat) (hw : ∀ k, k < m → w k < W32) (use : Option (String × List Key))
     (huse : ∀ f keys, use = some (f, keys) → (∀ k ∈ keys, k.wf s.nvars s.terms.length) ∧
       ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
@@ -1377,7 +1377,7 @@ carried; the rows speak of unknowns in use; and each row stands for the word of 
 theorem nameLanes_sound {ctx : Ctx} {s0 st : State} {run : String} {env : List (String × WVal)} {env' : List (String × Val)}
     (mem : Nat → Byte) (R : Nat) :
     ∀ (es : List EnsureW) {ρ : Nat → Int} {s s' : Sym} {a : Nat} {rows : List Row},
-      Holds ctx s0 ρ s st → WF s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
+      Holds ctx s0 ρ s st → WF ctx s → EnvDen ctx s0 ρ s.terms env env' → EnvOk s.nvars s.terms.length env →
       nameLanes ctx run env s a es = some (rows, s') →
       (∀ e ∈ es, ∀ a' m, e.part = some (a', m) → ∃ l : List Nat, Value ctx.defs env' e.value (.bytes l) ∧ l.length = m ∧
         ∀ k (h : k < l.length), (mem (R + a' + k)).val = l[k]) →
@@ -1498,7 +1498,7 @@ address it returns to, or in the frame at or above the stack pointer and apart f
 this function may read them. -/
 theorem LaneAt.where_ {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {P nb : Nat} {cw : Int} {nout : Nat}
     {sp : Int} (hsp : s.sp = some sp) (h : LaneAt ctx s0 s P nb cw nout) :
-    ((P + 64 * nb ≤ M64 ∧ (P + 64 * nb ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ P)) ∨
+    ((P + 64 * nb ≤ M64 ∧ (P + 64 * nb ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ P)) ∨
      (∃ o : Int, (P : Int) = s0.reg RSP + o ∧ sp ≤ o ∧ o + 64 * (nb : Int) ≤ 0 ∧
         (o + 64 * (nb : Int) ≤ cw ∨ cw + (nout : Int) ≤ o))) ∧
     (-(ctx.contract.stack : Int) ≤ sp → ∀ a, P ≤ a → a < P + 64 * nb → (ctx.contract.perm ctx.pieces s0).read a = true) := by
@@ -1521,20 +1521,20 @@ theorem LaneAt.where_ {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
 theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Items} (h : symCallL ctx s c items = .ok (s', rest)) :
     ∃ (sp : Int) (run : String) (r n : Nat) (tx : String) (tr count l : Nat) (nb cw ct : Int) (lanes : List WVal) (T : Tab)
       (env : List (String × WVal)) (rows : List Row) (s1 : Sym),
-      s.sp = some sp ∧ (sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack) ∧
+      s.sp = some sp ∧ (sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack) ∧
       (c.mbounds = [] ∧ c.inouts = [] ∧ c.regions = []) ∧
       (∀ x k, (x, k) ∈ c.atLeast → ∀ r', c.regOf x = some r' → plain s.facts (Lin.sub (s.reg r') (Lin.const (k : Int))) = true) ∧
       c.outs = [(run, r, n)] ∧ c.tables = [(tx, tr, count, l)] ∧
       Lin.isConst (s.reg l) = some nb ∧ frameAt s r = some cw ∧ frameAt s tr = some ct ∧
       (0 ≤ nb ∧ sp ≤ cw ∧ cw + (n : Int) ≤ 0 ∧ n % 8 = 0 ∧ sp ≤ ct ∧ ct + 8 * (count : Int) ≤ 0 ∧
         (ct + 8 * (count : Int) ≤ cw ∨ cw + (n : Int) ≤ ct)) ∧
-      tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 = some (lanes, T) ∧
-      calleeL ctx { s with tab := T } tx tr (8 * count) c.args argRegs = some env ∧
+      tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args c.argRegs) s.tab).2 = some (lanes, T) ∧
+      calleeL ctx { s with tab := T } tx tr (8 * count) c.args c.argRegs = some env ∧
       nameLanes ctx run ((tx, WVal.list lanes) :: env) { s with tab := T } 0 c.ensuresW = some (rows, s1) ∧
       rows.length * 4 = n ∧
       (∀ x bd, (x, bd) ∈ c.bounds → ∀ r', c.regOf x = some r' →
         ∃ items' res, entail s.facts (Lin.sub (Lin.const ((bd : Int) - 1)) (s.reg r')) items' = .ok res) ∧
-      s' = Sym.afterCallL s1 sp cw n rows := by
+      s' = Sym.afterCallL c s1 sp cw n rows := by
   cases hsp : s.sp with
   | none => simp only [symCallL, hsp] at h; exact (refuse_ok h).elim
   | some sp =>
@@ -1542,7 +1542,7 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
     split at h
     next => exact (refuse_ok h).elim
     next hguard =>
-      have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack := by simpa using hguard
+      have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack := by simpa using hguard
       split at h
       next => exact (refuse_ok h).elim
       next hshape =>
@@ -1590,12 +1590,12 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
             obtain ⟨⟨⟨⟨⟨⟨a1, a2⟩, a3⟩, a4⟩, a5⟩, a6⟩, a7⟩ := hfr2
             exact ⟨a1, a2, a3, a4, a5, a6, a7⟩
           obtain ⟨hnb0, hcw1, hcw2, hn8, hct1, hct2, hapart⟩ := hfr'
-          cases hlanes : tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args argRegs) s.tab).2 with
+          cases hlanes : tableLanes ctx s ct nb.toNat cw n count 0 (termsOf intern (partNodes ctx s c.args c.argRegs) s.tab).2 with
           | none => simp only [hlanes] at h; exact (refuse_ok h).elim
           | some pr =>
           obtain ⟨lanes, T⟩ := pr
           simp only [hlanes] at h
-          cases hcal : calleeL ctx { s with tab := T } tx tr (8 * count) c.args argRegs with
+          cases hcal : calleeL ctx { s with tab := T } tx tr (8 * count) c.args c.argRegs with
           | none => simp only [hcal] at h; exact (refuse_ok h).elim
           | some env =>
           simp only [hcal] at h
@@ -1626,9 +1626,9 @@ theorem symCallL_spec {ctx : Ctx} {s s' : Sym} {c : Contract} {items rest : Item
 /-- The state the called function starts in is one its contract's caller has seen to (the facts are those
 `symCallL` has looked up, and what they say of the machine at the call). -/
 theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {c : Contract} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (q : Program) (hq : q.fits) (i : Instr)
+    (H : Holds ctx s0 ρ s st) (q : Program) (hq : q.fits) (i : Instr) (F : Fits ctx st i c)
     {sp cw ct nb : Int} {run tx : String} {r n tr count l : Nat} {T : Tab}
-    (hsp : s.sp = some sp) (hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack)
+    (hsp : s.sp = some sp) (hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)
     (hmb : c.mbounds = []) (hregions' : c.regions = [])
     (hatL : ∀ x k, (x, k) ∈ c.atLeast → ∀ r', c.regOf x = some r' →
       plain s.facts (Lin.sub (s.reg r') (Lin.const (k : Int))) = true)
@@ -1638,13 +1638,13 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     (hbounds : ∀ x bd, (x, bd) ∈ c.bounds → ∀ r', c.regOf x = some r' →
       ∃ items' res, entail s.facts (Lin.sub (Lin.const ((bd : Int) - 1)) (s.reg r')) items' = .ok res)
     (hrsp : (st.reg RSP : Int) = s0.reg RSP + sp)
-    (s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - 8)
-    (s1reg : ∀ r, r ≠ RSP → (afterCall p q i st).reg r = st.reg r)
+    (s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - c.slot)
+    (s1reg : ∀ r, CallKeeps r → (afterCall p q i st).reg r = st.reg r)
     (s1r : (afterCall p q i st).reg r = ((s0.reg RSP : Int) + cw).toNat)
     (s1t : (afterCall p q i st).reg tr = ((s0.reg RSP : Int) + ct).toNat)
     (s1l : (afterCall p q i st).reg l = nb.toNat)
     (HT : Holds ctx s0 ρ { s with tab := T } st)
-    (hfixs : ∀ x r n, (x, r, n) ∈ fixedsIn c.args argRegs →
+    (hfixs : ∀ x r n, (x, r, n) ∈ fixedsIn c.args c.argRegs →
       (x = tx ∧ r = tr ∧ n = 8 * count) ∨ (x ≠ tx ∧ ∃ j b cst, fixedPart ctx { s with tab := T } r n = some (j, b, cst)))
     (hptr : ∀ j, j < count → lanePtr (afterCall p q i st) tr j =
       load st.mem ((s0.reg RSP : Int) + (ct + 8 * (j : Int))).toNat 8)
@@ -1654,12 +1654,10 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
   have hstack := E.stack
   have habove := E.above
   have hsmallsp := H.small RSP
-  have h8 : 8 ≤ st.reg RSP := by omega
-  refine ⟨rfl, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · intro r'
-    by_cases hr : r' = RSP
-    · rw [hr, s1rsp]; omega
-    · rw [s1reg r' hr]; exact H.small r'
+  have hslot := F.slot
+  have h8 : c.slot ≤ st.reg RSP := by omega
+  refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, afterCall_aligned F p q⟩
+  · exact afterCall_small F.link H.small
   · rw [s1rsp]; omega
   · rw [s1rsp]; omega
   · intro r' l' m; rw [hregions'] at m; cases m
@@ -1681,9 +1679,9 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
       obtain ⟨_, e1, e2⟩ := m''
       rw [e1, e2, s1t, s1r]
       omega
-    · have ra := fixedsIn_mem c.args argRegs x' r' n' m
-      obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E HT (argRegs_lt ra) hf
-      have rne' := (argRegs_not_rsp ra).2
+    · have ra := fixedsIn_mem c.args c.argRegs x' r' n' m
+      obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E HT (F.arg ra).1 hf
+      have rne' := (F.arg ra).2
       refine ⟨by rw [s1reg r' rne', g3]; omega, by rw [s1reg r' rne', g3, s1rsp]; omega, ?_⟩
       intro x'' r'' n'' m''
       rw [houts] at m''
@@ -1695,9 +1693,9 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     obtain ⟨items', res, he⟩ := hbounds x' bd m r' hr'
     have hge := entail_sound he ρ H.facts
     rw [ev_sub, ev_const] at hge
-    have ra := regOfIn_mem x' c.args argRegs r' hr'
-    have hreg' := H.reg r' (argRegs_lt ra)
-    rw [s1reg r' (argRegs_not_rsp ra).2]
+    have ra := regOfIn_mem x' c.args c.argRegs r' hr'
+    have hreg' := H.reg r' (F.arg ra).1
+    rw [s1reg r' (F.arg ra).2]
     omega
   · intro x' off bd m; rw [hmb] at m; cases m
   · -- the blocks each address of the table points to
@@ -1730,17 +1728,17 @@ theorem symCallL_pre {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     have hall := hatL x' k' m' r' hr'
     have h0 : 0 ≤ ev ρ (Lin.sub (s.reg r') (Lin.const (k' : Int))) := plain_sound hall ρ H.facts
     rw [ev_sub, ev_const] at h0
-    have ra := regOfIn_mem x' c.args argRegs r' hr'
-    have hreg' := H.reg r' (argRegs_lt ra)
-    rw [s1reg r' (argRegs_not_rsp ra).2]
+    have ra := regOfIn_mem x' c.args c.argRegs r' hr'
+    have hreg' := H.reg r' (F.arg ra).1
+    rw [s1reg r' (F.arg ra).2]
     omega
 
 /-- **A call, by contract, of a function that is given a table of addresses.** -/
 theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCallL ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
+    (h : symCallL ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (q : Program) (hq : q.fits) (i : Instr) (F : Fits ctx st i c) (hret : p.base + i.next < M64) :
+    c.slot ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
@@ -1752,22 +1750,22 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   -- the machine at the call
   have esp := ev_isConst (ρ := ρ) hsp
   simp only [ev_sub, ev_var] at esp
-  have h1 := H.reg RSP (by decide)
-  have h2 := H.entry RSP (by decide)
+  have h1 := H.reg RSP ctx.rsp_lt
+  have h2 := H.entry RSP ctx.rsp_lt
   have hrsp : (st.reg RSP : Int) = s0.reg RSP + sp := by omega
   have hstack := E.stack
   have habove := E.above
   have hsmallsp := H.small RSP
-  have h8 : 8 ≤ st.reg RSP := by omega
-  have s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - 8 := by simp [afterCall]
-  have s1reg : ∀ r, r ≠ RSP → (afterCall p q i st).reg r = st.reg r := fun r hr => by simp [afterCall, hr]
-  have s1mem : ∀ x, x < st.reg RSP - 8 ∨ st.reg RSP ≤ x → (afterCall p q i st).mem x = st.mem x := fun x hx => by
-    show store st.mem (st.reg RSP - 8) (p.base + i.next) 8 x = st.mem x
-    exact store_other _ _ _ _ _ (by omega)
+  have hslot := F.slot
+  have h8 : c.slot ≤ st.reg RSP := by omega
+  have s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - c.slot := afterCall_rsp F.link
+  have s1reg : ∀ r, CallKeeps r → (afterCall p q i st).reg r = st.reg r := fun r hr => afterCall_reg F.link hr
+  have s1mem : ∀ x, x < st.reg RSP - c.slot ∨ st.reg RSP ≤ x → (afterCall p q i st).mem x = st.mem x :=
+    fun x hx => afterCall_mem F.link h8 hx
   -- the run handed over to be written: a part of this function's frame
   have rmem : (run, r, n) ∈ c.outs := by rw [houts]; exact List.mem_cons_self ..
-  have rarg : r ∈ argRegs := outsIn_mem c.args argRegs run r n rmem
-  obtain ⟨r16, rne⟩ := argRegs_not_rsp rarg
+  have rarg : r ∈ c.argRegs := outsIn_mem c.args c.argRegs run r n rmem
+  obtain ⟨r16, rne⟩ := F.arg rarg
   have ecw := ev_isConst (ρ := ρ) hcw
   simp only [ev_sub, ev_var] at ecw
   have hregr := H.reg r r16
@@ -1777,10 +1775,10 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   obtain ⟨j, hj, htj⟩ := List.mem_filterMap.mp (show (tx, tr, count, l) ∈ (List.range c.fixeds.length).filterMap c.tableAt from tmem)
   obtain ⟨nt, y, hfj, hly, hry, hcount⟩ := tableAt_spec htj
   have tfix : (tx, tr, nt) ∈ c.fixeds := List.mem_of_getElem? hfj
-  have targ : tr ∈ argRegs := fixedsIn_mem c.args argRegs tx tr nt tfix
-  have larg : l ∈ argRegs := regOfIn_mem y c.args argRegs l hry
-  obtain ⟨t16, tne⟩ := argRegs_not_rsp targ
-  obtain ⟨l16, lne⟩ := argRegs_not_rsp larg
+  have targ : tr ∈ c.argRegs := fixedsIn_mem c.args c.argRegs tx tr nt tfix
+  have larg : l ∈ c.argRegs := regOfIn_mem y c.args c.argRegs l hry
+  obtain ⟨t16, tne⟩ := F.arg targ
+  obtain ⟨l16, lne⟩ := F.arg larg
   have ect := ev_isConst (ρ := ρ) hct
   simp only [ev_sub, ev_var] at ect
   have hregt := H.reg tr t16
@@ -1790,7 +1788,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have s1l : (afterCall p q i st).reg l = nb.toNat := by rw [s1reg l lne]; omega
   have hregions' : c.regions = [] := hregions
   -- the table of terms with the words of the parts handed over and of the lanes
-  obtain ⟨extT0, okT0⟩ := inputs_table wf (partNodes ctx s c.args argRegs) (partNodes_inputs c.args argRegs)
+  obtain ⟨extT0, okT0⟩ := inputs_table wf (partNodes ctx s c.args c.argRegs) (partNodes_inputs c.args c.argRegs)
   obtain ⟨extL, okL, okLanes, dLanes, atLanes⟩ := tableLanes_sound E H wf count 0 extT0 okT0 hlanes
   simp only [Nat.zero_add] at dLanes atLanes
   have extT : Ext s.terms T.list := extT0.trans extL
@@ -1812,10 +1810,10 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     · exact s1mem x (by omega)
     · exact s1mem x (Or.inr (by omega))
   -- each part handed over to be read lies in one of this function's runs given to read
-  have hfixmem : ∀ r' n' j b' cst, r' ∈ argRegs → fixedPart ctx { s with tab := T } r' n' = some (j, b', cst) →
+  have hfixmem : ∀ r' n' j b' cst, r' ∈ c.argRegs → fixedPart ctx { s with tab := T } r' n' = some (j, b', cst) →
       ∀ k, k < n' → (afterCall p q i st).mem (st.reg r' + k) = s0.mem (s0.reg b' + cst + k) ∧ (s0.mem (s0.reg b' + cst + k)).val < 256 := by
     intro r' n' j b' cst ra hf k hk
-    obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E HT (argRegs_lt ra) hf
+    obtain ⟨g3, -, f1, f2, f3, f4, -⟩ := fixedPart_sound E HT (F.arg ra).1 hf
     refine ⟨?_, f3 k hk⟩
     rw [g3, s1mem _ (by omega)]
     exact H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)
@@ -1826,7 +1824,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         have := f4 x'' r'' n'' hm
         simp only [Bool.and_eq_true, decide_eq_true_eq]
         omega)
-  have hfixs := calleeL_fixeds c.args argRegs hcal
+  have hfixs := calleeL_fixeds c.args c.argRegs hcal
   have hnt : nt = 8 * count := by
     rcases hfixs tx tr nt tfix with ⟨_, _, e⟩ | ⟨ne, _⟩
     · exact e
@@ -1835,7 +1833,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have henvW : c.envW (afterCall p q i st) =
       (tx, Val.list ((List.range count).map fun i' =>
         laneBlocks (afterCall p q i st).mem (lanePtr (afterCall p q i st) tr i') ((afterCall p q i st).reg l))) ::
-        envWIn c (afterCall p q i st) c.args argRegs := by
+        envWIn c (afterCall p q i st) c.args c.argRegs := by
     simp [Contract.envW, Contract.lanesEnv, htab]
   have elanes : (List.range count).map (fun i' =>
         laneBlocks (afterCall p q i st).mem (lanePtr (afterCall p q i st) tr i') ((afterCall p q i st).reg l)) =
@@ -1848,14 +1846,14 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have henv : EnvDen ctx s0 ρ T.list ((tx, WVal.list lanes) :: env)
       ((tx, Val.list ((List.range count).map fun i' =>
         laneBlocks (afterCall p q i st).mem (lanePtr (afterCall p q i st) tr i') ((afterCall p q i st).reg l))) ::
-        envWIn c (afterCall p q i st) c.args argRegs) := by
-    refine ⟨rfl, ?_, calleeL_sound (T := T.list) HT c (fun r' m => s1reg r' (argRegs_not_rsp m).2) hfixmem c.args argRegs (fun _ m => m) hcal⟩
+        envWIn c (afterCall p q i st) c.args c.argRegs) := by
+    refine ⟨rfl, ?_, calleeL_sound (T := T.list) HT c F.regs (fun r' m => s1reg r' (F.arg m).2) hfixmem c.args c.argRegs (fun _ m => m) hcal⟩
     rw [elanes]
     exact dLanes
   have hokenv : EnvOk s.nvars T.list.length ((tx, WVal.list lanes) :: env) :=
-    EnvOk.cons (by simp only [WVal.ok]; exact okLanes) (calleeL_ok wfT c.args argRegs (fun r' m => argRegs_lt m) hcal)
+    EnvOk.cons (by simp only [WVal.ok]; exact okLanes) (calleeL_ok wfT c.args c.argRegs (fun r' m => (F.arg m).1) hcal)
   have hpre : c.pre q (afterCall p q i st) :=
-    symCallL_pre E H q hq i hsp hg hmb hregions' hatL houts htab hcw1 hcw2 hct1 hct2 hapart hbounds hrsp s1rsp s1reg
+    symCallL_pre E H q hq i F hsp hg hmb hregions' hatL houts htab hcw1 hcw2 hct1 hct2 hapart hbounds hrsp s1rsp s1reg
       s1r s1t s1l HT hfixs hptr atLanes
   have hread : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true := by
     intro a ha
@@ -1884,9 +1882,9 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           left; left; left; left; left
           simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
           omega
-        · have ra := fixedsIn_mem c.args argRegs x' r' n' m
-          obtain ⟨g3, -, -, -, -, -, fw⟩ := fixedPart_sound E HT (argRegs_lt ra) hf
-          simp only [Bool.and_eq_true, decide_eq_true_eq, s1reg r' (argRegs_not_rsp ra).2, g3] at hin
+        · have ra := fixedsIn_mem c.args c.argRegs x' r' n' m
+          obtain ⟨g3, -, -, -, -, -, fw⟩ := fixedPart_sound E HT (F.arg ra).1 hf
+          simp only [Bool.and_eq_true, decide_eq_true_eq, s1reg r' (F.arg ra).2, g3] at hin
           rcases fw with ⟨x0, n0, hm0, hle⟩ | ⟨l0, hm0, hle⟩
           · simp only [Contract.perm, Contract.inFixed, Bool.or_eq_true]
             left; left; right; left
@@ -1909,7 +1907,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     · left
       simp only [Contract.inOut, houts, List.any_cons, List.any_nil, Bool.or_false, Bool.and_eq_true, decide_eq_true_eq, s1r] at ha
       omega
-  have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
+  have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true := by
     apply allowed_of
     intro x hx1 hx2
     simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -1918,22 +1916,17 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   intro s2 post hdata2
   obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _, pensW⟩ := post
   have hrip : s2.rip = p.base + i.next := by
-    rw [prip, s1rsp]
-    show load (store st.mem (st.reg RSP - 8) (p.base + i.next) 8) (st.reg RSP - 8) 8 = p.base + i.next
-    exact load_store_same _ _ _ _ (by unfold M64 at hret; omega)
-  have hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r := by
+    rw [prip]
+    exact afterCall_back F.link hret h8
+  have hkeep : ∀ r, r < ctx.nreg → c.scratch.contains r = false → s2.reg r = st.reg r := by
     intro r' hr hc
     by_cases h4 : r' = RSP
     · rw [h4, prsp, s1rsp]; omega
-    · have hmemr : r' ∈ calleeSaved := by
-        unfold RSP at h4
-        simp [callerSaved] at hc
-        simp only [calleeSaved, List.mem_cons, List.mem_nil_iff, or_false]
-        omega
-      rw [psaved r' hmemr, s1reg r' h4]
+    · have hmemr : r' ∈ c.keeps := kept_of_not_scratch (F.regs ▸ hr) h4 hc
+      rw [psaved r' hmemr, s1reg r' (callKeeps h4 (keeps_spec hmemr).2.2)]
   -- memory when the called function has returned: as before but in its frame, at the address it
   -- returned to and in the run it wrote
-  have hmem2 : ∀ a : Nat, a + 8 + c.stack < st.reg RSP ∨ st.reg RSP ≤ a →
+  have hmem2 : ∀ a : Nat, a + c.slot + c.stack < st.reg RSP ∨ st.reg RSP ≤ a →
       (a : Int) < s0.reg RSP + cw ∨ (s0.reg RSP : Int) + cw + (n : Int) ≤ a → s2.mem a = st.mem a := by
     intro a ha hb
     rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega)
@@ -1943,7 +1936,7 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   have hpostL : ∀ e ∈ c.ensuresW, ∀ a' m, e.part = some (a', m) → ∃ l' : List Nat,
       Value ctx.defs ((tx, Val.list ((List.range count).map fun i' =>
         laneBlocks (afterCall p q i st).mem (lanePtr (afterCall p q i st) tr i') ((afterCall p q i st).reg l))) ::
-        envWIn c (afterCall p q i st) c.args argRegs) e.value (.bytes l') ∧ l'.length = m ∧
+        envWIn c (afterCall p q i st) c.args c.argRegs) e.value (.bytes l') ∧ l'.length = m ∧
       ∀ k (h : k < l'.length), (s2.mem ((afterCall p q i st).reg r + a' + k)).val = l'[k] := by
     intro e me a' m hp
     obtain ⟨r_, n_, l', hrm, hval, hll, _, hlm⟩ := pensW e me
@@ -1958,18 +1951,18 @@ theorem symCallL_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
   obtain ⟨ρ1, C1, hb1, hev1⟩ := nameLanes_sound (ctx := ctx) (s0 := s0) (st := st) s2.mem ((afterCall p q i st).reg r)
     c.ensuresW HT wfT henv hokenv hnl hpostL
   have C01 := CT.then C1
-  have Hafter := afterCallL_holds E c.stack C1.holds C1.wf hrsp hg.2 hg.1 hkeep psmall hcw1 hcw2 hrl' hb1 hmem2 hdata2
+  have Hafter := afterCallL_holds E c F.regs C1.holds C1.wf hrsp hg.2 hg.1 hkeep psmall hcw1 hcw2 hrl' hb1 hmem2 hdata2
     (fun k hk => by rw [hev1 k hk, s1r, Nat.add_zero])
-  have wafter := afterCallL_wf C1.wf sp cw n hb1
-  exact ⟨hrip, afterRho s1.nvars ρ1 s2, Agree.trans C01.mono C01.agree (afterRho_agree s1.nvars ρ1 s2),
+  have wafter := afterCallL_wf C1.wf c F.regs sp cw n hb1
+  exact ⟨hrip, afterRho c.regs s1.nvars ρ1 s2, Agree.trans C01.mono C01.agree (afterRho_agree c.regs s1.nvars ρ1 s2),
     Nat.le_trans C01.mono (Nat.le_add_right _ _), Hafter, wafter⟩
 
 /-- A call, by one of the rules (`symCall'`): see `symCall_sound`. -/
 theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCall' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
+    (h : symCall' ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (q : Program) (hq : q.fits) (i : Instr) (F : Fits ctx st i c) (hret : p.base + i.next < M64) :
+    c.slot ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
@@ -1977,7 +1970,7 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       s2.rip = p.base + i.next ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' s2 := by
   unfold symCall' at h
   split at h
-  · exact symCallL_sound E h H wf q hq i hret
+  · exact symCallL_sound E h H wf q hq i F hret
   next hlanes =>
     have hl : c.lanes = [] := by simpa using hlanes
     split at h
@@ -1985,12 +1978,12 @@ theorem symCall'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     next hno =>
       have hal : c.atLeast = [] := by simpa using hno
       split at h
-      · exact symCallPlain_sound E h H wf q hq i hret hl hal
+      · exact symCallPlain_sound E h H wf q hq i F hret hl hal
       · split at h
-        · exact symCallB_sound E h H wf q hq i hret hl hal
+        · exact symCallB_sound E h H wf q hq i F hret hl hal
         · split at h
-          · exact symCallF_sound E h H wf q hq i hret hl hal
-          · exact symCallW_sound E h H wf q hq i hret hl hal
+          · exact symCallF_sound E h H wf q hq i F hret hl hal
+          · exact symCallW_sound E h H wf q hq i F hret hl hal
 
 /-- **A call, by contract.** If the verifier has gone through a call, then of the machine at the call: the
 address to come back to can be written; the state the called function starts in is one its contract's
@@ -1999,9 +1992,9 @@ contract lets it return in, what the verifier holds after the call is so, at the
 rows the proof file gives before the rule, `symKnow`, are shown, and only add to the facts.) -/
 theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
+    (h : symCall ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (q : Program) (hq : q.fits) (i : Instr) (F : Fits ctx st i c) (hret : p.base + i.next < M64) :
+    c.slot ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
@@ -2010,7 +2003,7 @@ theorem symCall_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
   unfold symCall at h
   obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
   have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
-  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i hret
+  obtain ⟨h8, hw, hpre, hread, hwrite, hpost⟩ := symCall'_sound E h C.holds C.wf q hq i F hret
   refine ⟨h8, hw, hpre, hread, hwrite, fun s2 p2 d2 => ?_⟩
   obtain ⟨hrip, ρ', C'⟩ := hpost s2 p2 d2
   exact ⟨hrip, ρ', ⟨Agree.mono C.mono C'.agree, Nat.le_trans C.mono C'.mono, C'.holds, C'.wf⟩⟩

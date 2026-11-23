@@ -180,7 +180,7 @@ theorem termsOf_step {α : Type} {mk : α → Tab → Nat × Tab} {val : α → 
 
 /-! ## The state, with more terms -/
 
-theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {t' : Tab} (e : Ext s.terms t'.list) : Holds ctx s0 ρ { s with tab := t' } st :=
   ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote,
    ⟨fun x ids hx k hk => by
@@ -204,7 +204,7 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
       exact (H.words.spill o ids hs).2 k hk⟩⟩,
    fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m), H.range⟩
 
-theorem WF.terms {s : Sym} (wf : WF s) {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : WF { s with tab := t' } :=
+theorem WF.terms {s : Sym} (wf : WF ctx s) {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : WF ctx { s with tab := t' } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
    ⟨ok.wf, ok.atoms, fun x ids h => ⟨(wf.words.vec x ids h).1, fun i mi => Nat.lt_of_lt_of_le ((wf.words.vec x ids h).2 i mi) e.le⟩,
     ok.rotrs, fun w j i h => Nat.lt_of_lt_of_le (wf.words.wrote w j i h) e.le,
@@ -213,7 +213,7 @@ theorem WF.terms {s : Sym} (wf : WF s) {t' : Tab} (e : Ext s.terms t'.list) (ok 
       exact ⟨bo, len, fun i mi => Nat.lt_of_lt_of_le (lt i mi) e.le⟩⟩,
    fun k m => Known.wf_mono (Nat.le_refl _) e.le (wf.known k m), wf.range⟩
 
-theorem Carried.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem Carried.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : Carried ctx s0 ρ s ρ { s with tab := t' } st :=
   ⟨Agree.refl _ _, Nat.le_refl _, H.terms wf e, wf.terms e ok⟩
 
@@ -231,7 +231,7 @@ theorem list4 {α : Type} : ∀ {l : List α}, l.length = 4 → ∃ a b c d, l =
 
 /-- A vector register the verifier knows the words of: the machine's four low lanes of it are those terms. -/
 theorem symVec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} {bind : Bind} {e : Expr} {l : List Nat}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symVec bind s e = some l) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symVec bind s e = some l) :
     ∃ r, l.length = 4 ∧ (∀ i ∈ l, i < s.terms.length) ∧ vecArg bind st e = some [st.vec r 0, st.vec r 1, st.vec r 2, st.vec r 3] ∧
       ∀ k, k < 4 → st.vec r k = den (inpOf ctx s0) ρ s.terms (l.getD k 0) := by
   cases e with
@@ -256,7 +256,7 @@ theorem symVec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
   | call _ _ => simp [symVec] at h
 
 theorem symLane_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} {bind : Bind} {e : Expr} {i : Nat}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symLane bind s e = some i) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symLane bind s e = some i) :
     i < s.terms.length ∧ ∃ v, laneArg bind st e = some v ∧ v = den (inpOf ctx s0) ρ s.terms i := by
   cases e with
   | lane n k =>
@@ -314,7 +314,7 @@ theorem symNumber_sound {perm : Perm} {bind : Bind} {st : State} {e : Expr} {k :
 
 /-- A general register in an EFFECT: the machine's number in it is the row's. -/
 theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} {bind : Bind} {e : Expr} {x : Row}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symReg bind s e = some x) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symReg ctx bind s e = some x) :
     ∃ xa, value (ctx.contract.perm ctx.pieces s0) bind st e = some xa ∧ xa < M64 ∧ (xa : Int) = ev ρ x ∧ bounded s.nvars x := by
   cases e with
   | name n =>
@@ -322,19 +322,19 @@ theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
     split at h
     next => cases h
     next hl =>
-      cases hr : regOf bind n with
+      cases hr : ctx.regOf bind n with
       | none => simp [hr] at h
       | some r =>
         simp only [hr, Option.map_some] at h
         injection h with h; subst h
-        have lt := regOf_lt hr
-        exact ⟨st.reg r, by simp [value, hl, hr], H.small r, H.reg r lt, wf.reg r lt⟩
+        obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
+        exact ⟨st.reg r, by simp [value, hl, hr'], H.small r, H.reg r lt, wf.reg r lt⟩
   | number _ => simp [symReg] at h
   | lane _ _ => simp [symReg] at h
   | call _ _ => simp [symReg] at h
 
 theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : symReg bind s b = some x) (hk : symNumber bind n = some k) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : symReg ctx bind s b = some x) (hk : symNumber bind n = some k) :
     ∃ xb, values (ctx.contract.perm ctx.pieces s0) bind st [b, n] = some [xb, k.toNat] ∧
       ∀ A : Nat, (A : Int) = ev ρ (Lin.add (signed x) (signed (Lin.const k))) → A < M64 → (xb + k.toNat) % M64 = A := by
   obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound H wf hx
@@ -349,19 +349,19 @@ theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
   omega
 
 theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {args : List Expr} {addr : Row}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (h : symWordAddr bind s args = some addr) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symWordAddr ctx bind s args = some addr) :
     ∃ vs, values (ctx.contract.perm ctx.pieces s0) bind st args = some vs ∧ bounded s.nvars addr ∧
       ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → sumList vs % M64 = A := by
   rcases args with _ | ⟨b, _ | ⟨n, _ | ⟨i, _ | ⟨_, _⟩⟩⟩⟩
   · simp [symWordAddr] at h
   · simp [symWordAddr] at h
-  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp [symWordAddr, hx, hk] at h
+  · cases hx : symReg ctx bind s b <;> cases hk : symNumber bind n <;> simp [symWordAddr, hx, hk] at h
     subst addr
     obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
     obtain ⟨_, _, _, _, bx⟩ := symReg_sound H wf hx
     exact ⟨_, vs, bounded_add (bounded_signed bx) (bounded_signed (bounded_const _ _)),
       by simpa only [sumList, Nat.add_zero] using ha⟩
-  · cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> cases hy : symReg bind s i <;> simp [symWordAddr, hx, hk, hy] at h
+  · cases hx : symReg ctx bind s b <;> cases hk : symNumber bind n <;> cases hy : symReg ctx bind s i <;> simp [symWordAddr, hx, hk, hy] at h
     subst addr
     rename_i x k y
     obtain ⟨xb, vb, xb_lt, xb_ev, bx⟩ := symReg_sound H wf hx
@@ -398,7 +398,7 @@ theorem runAt_spec {r : Nat} : ∀ {l : List (String × Nat × Nat)} {k j : Nat}
       rw [this]; simpa using hj
 
 /-- The terms for a load stand for the words in memory when those bytes still have their entry values. -/
-theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     {j : Nat} {x : String} {r n c width : Nat} (hj : ctx.contract.wordRuns[j]? = some (x, r, n))
     (hmem : ∀ k, k < 4 * width → st.mem (s0.reg r + c + k) = s0.mem (s0.reg r + c + k)) (hc : c % 4 = 0) :
     let made := termsOf intern ((List.range width).map fun i => Node.input j (c / 4 + i)) s.tab
@@ -431,7 +431,7 @@ theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
 
 theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s1 : Sym} {addr : Row} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State} {width : Nat}
-    (h : symLoadWords ctx s addr width items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symLoadWords ctx s addr width items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (nonempty : 0 < width) (a : Nat)
     (ha : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
     allowed (ctx.contract.perm ctx.pieces s0).read a (4 * width) = true ∧ Carried ctx s0 ρ s ρ s1 st ∧ l.length = width ∧
@@ -544,14 +544,14 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             next => exact (refuse_ok h).elim
 
 theorem symMemWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
-    {bind : Bind} {args : List Expr} {width : Nat} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {bind : Bind} {args : List Expr} {width : Nat} {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (nonempty : 0 < width) (h : symMemWords ctx bind s args width items = .ok ((l, s'), rest)) :
     ∃ vs, values (ctx.contract.perm ctx.pieces s0) bind st args = some vs ∧
       let a := sumList vs % M64
       allowed (ctx.contract.perm ctx.pieces s0).read a (4 * width) = true ∧ Carried ctx s0 ρ s ρ s' st ∧ l.length = width ∧
       (∀ i ∈ l, i < s'.terms.length) ∧ ∀ k, k < width → load st.mem (a + 4 * k) 4 = den (inpOf ctx s0) ρ s'.terms (l.getD k 0) := by
   unfold symMemWords at h
-  cases ha : symWordAddr bind s args <;> simp only [ha] at h
+  cases ha : symWordAddr ctx bind s args <;> simp only [ha] at h
   · exact (refuse_ok h).elim
   · obtain ⟨vs, vv, _, loc⟩ := symWordAddr_sound H wf ha
     exact ⟨vs, vv, symLoadWords_sound E h H wf nonempty _ loc⟩
@@ -581,7 +581,7 @@ theorem word_of_const (ρ : Nat → Int) {k : Int} (h : 0 ≤ k) : k.toNat % W32
 /-- The two halves of what a general register holds: the terms made are the machine's two low lanes, and
 two zeros. -/
 theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : List Nat} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symHalves s x items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (xa : Nat) (hxa : xa < M64)
+    (h : symHalves s x items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (xa : Nat) (hxa : xa < M64)
     (hx : (xa : Int) = ev ρ x) (hb : bounded s.nvars x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ (∀ i ∈ l, i < s1.terms.length) ∧
       ∀ k, k < 4 → [xa % W32, xa / W32 % W32, 0, 0].getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
@@ -768,7 +768,7 @@ theorem blend_words {a0 a1 a2 a3 b0 b1 b2 b3 i : Nat} (ha0 : a0 < W32) (ha1 : a1
 /-- `each32`: what the verifier takes the four words to be, the machine sets. -/
 theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {args : List Expr} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symEach32 bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : symEach32 bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm ctx.pieces s0) bind st (.call "each32" args) = some lanes ∧
       (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
   unfold symEach32 at h
@@ -980,7 +980,7 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
 /-- `shuffle_bytes`: what the verifier takes the four words to be, the machine sets. -/
 theorem symShuffle_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {args : List Expr} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symShuffle bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : symShuffle bind s args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm ctx.pieces s0) bind st (.call "shuffle_bytes" args) = some lanes ∧
       (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
   unfold symShuffle at h
@@ -1054,7 +1054,7 @@ theorem symShuffle_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {ar
 /-- `pick4`, `blend4`, `blend_halves`: what the verifier takes the four words to be, the machine sets. -/
 theorem symMoved_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {f : String} {args : List Expr} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symMoved bind s f args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : symMoved bind s f args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm ctx.pieces s0) bind st (.call f args) = some lanes ∧
       (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
   unfold symMoved at h
@@ -1182,7 +1182,7 @@ theorem symMoved_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {f : 
 those lanes. -/
 theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s1 : Sym} {v : Expr} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symLanes ctx bind s v items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : symLanes ctx bind s v items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm ctx.pieces s0) bind st v = some lanes ∧
       (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
   cases v with
@@ -1257,7 +1257,7 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           subst fe
           rcases args with _ | ⟨a, _ | ⟨b, more⟩⟩
           · exact (refuse_ok h).elim
-          · cases hx : symReg bind s a with
+          · cases hx : symReg ctx bind s a with
             | none => simp only [hx] at h; exact (refuse_ok h).elim
             | some x =>
               simp only [hx] at h
@@ -1451,7 +1451,7 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
 
 theorem symStoreWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym}
     {addr : Row} {l lanes : List Nat} {width a : Nat} {items rest : Items} (E : Setting ctx p s0)
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (nonempty : 0 < width)
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (nonempty : 0 < width)
     (h : symStoreWords ctx s addr l width items = .ok (s', rest))
     (ha : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A)
     (hl : lanes.length = width) (hlt : ∀ i ∈ l, i < s.terms.length)
@@ -1529,7 +1529,7 @@ theorem forgetHigh_lookup {vec : List (Nat × List Nat)} {x : Nat} {ids : List N
 
 theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {place v : Expr}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symStmt ctx bind s (.vset place v) items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat) :
+    (h : symStmt ctx bind s (.vset place v) items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (base u : Nat) :
     ∃ ρ' st', Carried ctx s0 ρ s ρ' s' st' ∧ execStmt (ctx.contract.perm ctx.pieces s0) bind base u st (.vset place v) = some st' ∧
       st'.rip = st.rip := by
   simp only [symStmt] at h
@@ -1611,7 +1611,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
     · dsimp only at h
       split at h
       next hf =>
-        cases hl : symVec bind s v <;> cases hx : symReg bind s b <;> cases hk : symNumber bind n <;> simp only [hl, hx, hk] at h
+        cases hl : symVec bind s v <;> cases hx : symReg ctx bind s b <;> cases hk : symNumber bind n <;> simp only [hl, hx, hk] at h
         all_goals try exact (refuse_ok h).elim
         rename_i l x k
         obtain ⟨rv, _, lt, hv, hd⟩ := symVec_sound H wf hl

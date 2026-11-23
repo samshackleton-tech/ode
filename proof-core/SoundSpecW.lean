@@ -424,11 +424,11 @@ theorem highOf_sound (H : Holds ctx s0 ρ s st) {x q : Row} (h : highOf s x = so
         rw [ev_var]; exact (divided_spec H (by decide) hd).1
 
 /-- Every term of the state's table is a word. -/
-theorem Holds.den_lt (wf : WF s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i < W32 :=
+theorem Holds.den_lt (wf : WF ctx s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i < W32 :=
   Ode.den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
 
 /-- The term a word is, where it is one: the sum of the word's terms, wrapping. -/
-theorem idOf_den (wf : WF s) {xs : List Nat} {a : Nat} (h : idOf look xs = some a) :
+theorem idOf_den (wf : WF ctx s) {xs : List Nat} {a : Nat} (h : idOf look xs = some a) :
     den (inpOf ctx s0) ρ s.terms a = sumList (xs.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
   have key : ∀ ys, look (.add ys) = some a →
       den (inpOf ctx s0) ρ s.terms a = sumList (ys.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
@@ -445,19 +445,19 @@ theorem idOf_den (wf : WF s) {xs : List Nat} {a : Nat} (h : idOf look xs = some 
   | b :: c :: more, h => exact key _ h
 
 /-- A term found in the table: it is what its node says. -/
-theorem found_den (wf : WF s) {n : Node} {i : Nat} (h : look n = some i) :
+theorem found_den (wf : WF ctx s) {n : Node} {i : Nat} (h : look n = some i) :
     den (inpOf ctx s0) ρ s.terms i = n.value (inpOf ctx s0) ρ (den (inpOf ctx s0) ρ s.terms) := by
   exact den_node wf.words.table (Looks.found h)
 
 /-- One term as a word. -/
-theorem WDen.one (wf : WF s) (i : Nat) :
+theorem WDen.one (wf : WF ctx s) (i : Nat) :
     WDen ctx s0 ρ s.terms (.word [i]) (.word (den (inpOf ctx s0) ρ s.terms i)) := by
   have h := WDen.word (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) [i]
   simp only [List.map, sumList, Nat.add_zero, Nat.mod_eq_of_lt (Holds.den_lt (ctx := ctx) (s0 := s0) (ρ := ρ) wf i)] at h
   exact h
 
 /-- The terms of a list, each as a word. -/
-theorem WDen.wordsOf (wf : WF s) : ∀ (ids : List Nat),
+theorem WDen.wordsOf (wf : WF ctx s) : ∀ (ids : List Nat),
     WDen ctx s0 ρ s.terms (.list (ids.map fun i => WVal.word [i])) (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)))
   | [] => WDen.nil
   | i :: rest => WDen.cons (WDen.one wf i) (WDen.wordsOf wf rest)
@@ -613,7 +613,7 @@ theorem knownBlock_mem {facts : List Row} {j c : Nat} {off : Row} : ∀ {l : Lis
       exact ⟨o, List.mem_cons_of_mem _ m, hs⟩
 
 /-- Unknowns whose terms are in the table, as words: each is its unknown's remainder by 2^32. -/
-theorem atomWords_sound (wf : WF s) : ∀ {vs : List Nat} {ws : List WVal},
+theorem atomWords_sound (wf : WF ctx s) : ∀ {vs : List Nat} {ws : List WVal},
     atomWords look vs = some ws →
     WDen ctx s0 ρ s.terms (.list ws) (.list (vs.map fun v => Val.word ((ρ v % W32i).toNat)))
   | [], _, h => by simp only [atomWords, Option.some.injEq] at h; subst h; exact WDen.nil
@@ -635,7 +635,7 @@ theorem atomWords_sound (wf : WF s) : ∀ {vs : List Nat} {ws : List WVal},
 
 /-- The block `weval` finds at byte `off` of a lane is the block the account has at that place of the lane:
 the function read it there, within the lane's blocks. -/
-theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {j c : Nat} {off : Row} {v : WVal}
+theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {j c : Nat} {off : Row} {v : WVal}
     (h : blockAt look s j c off = some v) {k : Int} (hk : ev ρ off = 64 * k)
     {x : String} {r count l : Nat} (ht : ctx.contract.tableAt j = some (x, r, count, l)) :
     0 ≤ k ∧ ∃ a, ((List.range (s0.reg l)).map fun b => blockWords s0.mem (lanePtr s0 r (c / 8) + 64 * b))[k.toNat]? = some a ∧
@@ -676,7 +676,7 @@ theorem blockAt_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {j c : Nat} {off : 
   exact hw
 
 /-- The terms of a list of words, where each is one: the words are those terms'. -/
-theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : List Nat},
+theorem wordIds_den (wf : WF ctx s) : ∀ {l : List WVal} {l' : List Val} {ids : List Nat},
     WDen ctx s0 ρ s.terms (.list l) (.list l') → wordIds look l = some ids →
     l' = ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)
   | [], _, _, hd, h => by
@@ -698,7 +698,7 @@ theorem wordIds_den (wf : WF s) : ∀ {l : List WVal} {l' : List Val} {ids : Lis
       | _ => simp [wordIds] at h
 
 /-- A thing a definition is used with, as a key: the key's value is the thing's. -/
-theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
+theorem flatKey_den (wf : WF ctx s) {v : WVal} {a : Val} {k : Key}
     (hd : WDen ctx s0 ρ s.terms v a) (h : flatKey look v = some k) : a = k.val ctx s0 ρ s.terms := by
   cases v with
   | int n =>
@@ -743,7 +743,7 @@ theorem flatKey_den (wf : WF s) {v : WVal} {a : Val} {k : Key}
       simp only [Key.val, ev_var, ev_const, e1, Int.toNat_zero, Nat.add_zero]
   | _ => simp [flatKey] at h
 
-theorem flatKeys_den (wf : WF s) : ∀ {vs : List WVal} {as : List Val} {keys : List Key},
+theorem flatKeys_den (wf : WF ctx s) : ∀ {vs : List WVal} {as : List Val} {keys : List Key},
     WDen ctx s0 ρ s.terms (.list vs) (.list as) → flatKeys look vs = some keys →
     as = keys.map (Key.val ctx s0 ρ s.terms)
   | [], _, _, hd, h => by
@@ -773,7 +773,7 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
-theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v : WVal} {xa ya : Val}
+theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y v : WVal} {xa ya : Val}
     (h : wbin look s op x y = some v) (hx : WDen ctx s0 ρ s.terms x xa) (hy : WDen ctx s0 ρ s.terms y ya) :
     ∃ a, binop op xa ya = some a ∧ WDen ctx s0 ρ s.terms v a := by
   cases x with
@@ -1003,7 +1003,7 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {op : String} {x y v :
   | _ => cases y <;> simp [wbin] at h
 
 /-- The high word of a counter that is a number and a number of the text more: what `hiPlus` finds is it. -/
-theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {r : Row} {i : Nat}
+theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : Nat}
     (h : hiPlus look s r = some i) :
     den (inpOf ctx s0) ρ s.terms i = (ev ρ r).toNat % 2 ^ 64 / W32 := by
   unfold hiPlus at h
@@ -1107,7 +1107,7 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 
 /-- The words of the table that are a run's words: they are what the account's `words` makes of the run's
 bytes, four bytes a word, the lowest first. -/
-theorem toWords_fn (wf : WF s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat) (wvs : List WVal),
+theorem toWords_fn (wf : WF ctx s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat) (wvs : List WVal),
     inputWords look j count k = some wvs → (∀ i, i < 4 * count → g i < 256) →
     (∀ q a, a = 4 * q → q < count →
       inpOf ctx s0 j (k + q) = g a + 256 * g (a + 1) + 65536 * g (a + 2) + 16777216 * g (a + 3)) →
@@ -1154,7 +1154,7 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
-theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {f : String} {vs : List WVal} {as : List Val} {v : WVal}
+theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs : List WVal} {as : List Val} {v : WVal}
     (h : wown ctx look s f vs = some v) (hv : WDen ctx s0 ρ s.terms (.list vs) (.list as)) :
     ∃ a, builtin f as = some a ∧ WDen ctx s0 ρ s.terms v a := by
   rcases vs with _ | ⟨x, _ | ⟨y, more⟩⟩
@@ -1502,7 +1502,7 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 /-- What `weval` gives of an expression stands for what `evalSpec` gives of it with the same fuel and `B`
 more, the names on words standing for the names of the account: `B` being steps enough for every use of a
 definition whose words the state holds (such a use costs `weval` nothing, and `evalSpec` works it out). -/
-theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF s) {B : Nat} (hB : HeldWithin ctx s0 ρ s.terms s.known B) :
+theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {B : Nat} (hB : HeldWithin ctx s0 ρ s.terms s.known B) :
     ∀ (fuel : Nat) (env : List (String × WVal)) (env' : List (String × Val)) (e : SExpr) (v : WVal),
       weval ctx look s fuel env e = some v → EnvDen ctx s0 ρ s.terms env env' →
       ∃ a, evalSpec ctx.defs (fuel + B) env' e = some a ∧ WDen ctx s0 ρ s.terms v a
@@ -1986,8 +1986,8 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
 /-- The names on words stand for the contract's names as the account has them at entry. -/
-theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
-    ∀ (args : List (String × Kind)) (regs : List Nat), (∀ r ∈ regs, r < 16) →
+theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) (hc : c.regs ≤ ctx.nreg) :
+    ∀ (args : List (String × Kind)) (regs : List Nat), (∀ r ∈ regs, r < ctx.nreg) →
       (∀ x r n, (x, r, n) ∈ fixedsIn args regs → ∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) →
       (∀ x r n, (x, r, n) ∈ inoutsIn args regs → ∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) →
       (∀ r l, (r, l) ∈ regionsIn c args regs → ∀ k, k < s0.reg l → (s0.mem (s0.reg r + k)).val < 256) →
@@ -1995,7 +1995,7 @@ theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
   | [], _, _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
   | _ :: _, [], _, _, _, _ => by simp [wenvIn, envWIn, EnvDen]
   | (n, kind) :: args, r :: regs, hreg, hf, hi, hrg => by
-    have ih := wenvIn_sound H (T := T) c args regs (fun r' m => hreg r' (List.mem_cons_of_mem _ m))
+    have ih := wenvIn_sound H (T := T) c hc args regs (fun r' m => hreg r' (List.mem_cons_of_mem _ m))
       (fun x r' n' m => hf x r' n' (fixedsIn_tail (n, kind) r m)) (fun x r' n' m => hi x r' n' (inoutsIn_tail (n, kind) r m))
       (fun r' l' m => hrg r' l' (regionsIn_tail c (n, kind) r m))
     cases kind with
@@ -2012,7 +2012,7 @@ theorem wenvIn_sound (H : Holds ctx s0 ρ s st) {T : List Node} (c : Contract) :
       | some l =>
         refine ⟨rfl, ?_, ih⟩
         simp only [Val.bytes, List.map_map]
-        exact WDen.region r l (H.entry l (argRegs_lt (regOfIn_mem len c.args argRegs l hlen)))
+        exact WDen.region r l (H.entry l (Nat.lt_of_lt_of_le (argRegs_lt (regOfIn_mem len c.args c.argRegs l hlen)) hc))
           (hrg r l (by simp [regionsIn, hlen]))
     | out k =>
       simp only [wenvIn, envWIn]
@@ -2050,8 +2050,8 @@ theorem lanesW_den {T : List Node} : ∀ (js : List Nat),
       exact ⟨rfl, WDen.lanes j count l x r ht, lanesW_den js⟩
 
 theorem wenvIn_all {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) {T : List Node} :
-    EnvDen ctx s0 ρ T (wenvIn ctx.contract ctx.contract.args argRegs) (envWIn ctx.contract s0 ctx.contract.args argRegs) :=
-  wenvIn_sound H ctx.contract ctx.contract.args argRegs (fun _ m => argRegs_lt m)
+    EnvDen ctx s0 ρ T (wenvIn ctx.contract ctx.contract.args ctx.contract.argRegs) (envWIn ctx.contract s0 ctx.contract.args ctx.contract.argRegs) :=
+  wenvIn_sound H ctx.contract (Nat.le_refl _) ctx.contract.args ctx.contract.argRegs (fun _ m => argRegs_lt m)
     (fun _ _ _ m k hk => (E.fixed m).2.2.1 k hk) (fun _ _ _ m _ hk => E.inoutByte m hk) (fun _ _ m k hk => E.byte m k hk)
 
 /-- The contract's names on words stand for its names in the account, a table's name first. -/
@@ -2061,7 +2061,7 @@ theorem wenv_sound {p : Program} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s s
 
 /-- The words the specification gives are the words known written: the bytes of the run are the bytes of
 those words, four a word, the lowest first. -/
-theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : String} {r n : Nat}
+theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {w : Nat} {x : String} {r n : Nat}
     (hw : ctx.contract.outs[w]? = some (x, r, n)) :
     ∀ (l : List WVal) (ws : List Val) (j : Nat), wordsWritten look s.wroteW w j l = true →
       WDen ctx s0 ρ s.terms (.list l) (.list ws) →
@@ -2106,7 +2106,7 @@ theorem written_words (H : Holds ctx s0 ρ s st) (wf : WF s) {w : Nat} {x : Stri
 are the bytes of the words the specification gives of the names at entry. -/
 theorem symEnsureW_sound {p : Program} (E : Setting ctx p s0) {e : EnsureW} {items : Items}
     {r : Unit × Items} {st' : State}
-    (h : symEnsureW ctx s e items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hmem : st'.mem = st.mem) :
+    (h : symEnsureW ctx s e items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hmem : st'.mem = st.mem) :
     e.holds ctx.contract ctx.defs s0 st' := by
   unfold symEnsureW at h
   cases hv : e.value with

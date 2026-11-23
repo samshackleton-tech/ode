@@ -7,7 +7,10 @@ contract's meaning is stated over (`Contract.lean`), and it is meant to say what
 which processors are compared with (`../core/cross.py`).
 
 The model covers general registers, two flags, calls by name, vector operations on four or sixteen 32-bit
-lanes, and the mask registers where a row compares into one or sets a vector register under one. The
+lanes, and the mask registers where a row compares into one or sets a vector register under one. It is
+one machine for the rows of two tables: x86-64's (`../core/x86.tab`) and a first one for AArch64
+(`../arm64/arm64.tab`). They differ in the registers' names, and in where a call puts the address to come
+back to: below the stack pointer, or in a register. The
 read-only data of each object file of the program lies at an address the state holds (`State.data`, by the
 file's number): the linker and the loader decide it, and no instruction changes it.
 
@@ -24,8 +27,19 @@ def indexOf (name : String) : List String → Nat → Option Nat
   | [], _ => none
   | n :: ns, k => if n == name then some k else indexOf name ns (k + 1)
 
-def regIndex (name : String) : Option Nat := indexOf name regNames 0
+/-- AArch64's general registers x0 to x30 and its stack pointer. The stack pointer has the number that
+x86-64's has (`RSP`), so x4 has the last number. -/
+def regNamesArm : List String :=
+  ["x0", "x1", "x2", "x3", "sp", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+   "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x4"]
 
+/-- A general register's number, by its name on either machine (no name is a name on both). -/
+def regIndex (name : String) : Option Nat :=
+  match indexOf name regNames 0 with
+  | some r => some r
+  | none => indexOf name regNamesArm 0
+
+/-- The stack pointer's number: rsp, and AArch64's sp. -/
 def RSP : Nat := 4
 
 def hexDigit (c : Char) : Option Nat :=
@@ -69,7 +83,8 @@ structure Marks where
 abbrev Byte := Fin 256
 
 structure State where
-  reg : Nat → Nat          -- the sixteen general registers, by number (rax 0, rcx 1, rdx 2, rbx 3, rsp 4, …)
+  reg : Nat → Nat          -- the general registers, by number: x86-64's sixteen (rax 0, rcx 1, rdx 2, rbx 3, rsp 4, …),
+                           -- or AArch64's thirty-one and its stack pointer (`regNamesArm`)
   zf : Bool
   cf : Bool
   mem : Nat → Byte         -- memory: the byte at each address
@@ -110,6 +125,8 @@ def prim (f : String) (args : List Nat) : Option Nat :=
   | [a] =>
     if f == "low32" then some (a % 2 ^ 32)
     else if f == "low8" then some (a % 256)
+    -- (AArch64's stack pointer as the base of a load or store: the processor faults where it is no multiple of 16)
+    else if f == "on16" then (if a % 16 = 0 then some a else none)
     else none
   | [a, b] =>
     if f == "add64" || f == "at" then some ((a + b) % M64)
@@ -561,6 +578,8 @@ def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → O
   | .nothing => some s
   | .ret => none
   | .call _ => none
+  | .retLink _ => none
+  | .callLink _ _ => none
   | .vset512 place v => execVec512 perm bind s place v
   | .vset place v =>
     match place with
@@ -604,12 +623,14 @@ inductive Outcome where
   | next (s : State)          -- the instruction is done; the next is at `s.rip`
   | returned (s : State)      -- the function has returned to `s.rip`
 
-/-- An effect's statements, left to right. A `return` takes the address at the stack pointer and moves it up. -/
+/-- An effect's statements, left to right. A `return` takes the address at the stack pointer and moves it up;
+a `return` by a register goes to the address the register holds. -/
 def execAll (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat → State → List Stmt → Option Outcome
   | _, s, [] => some (.next s)
   | _, s, .ret :: _ =>
     let sp := s.reg RSP
     if allowed perm.read sp 8 then some (.returned (setReg { s with rip := load s.mem sp 8, trace := s.trace ++ [(sp, 8)] } RSP (sp + 8))) else none
+  | _, s, .retLink r :: _ => (regIndex r).map fun k => .returned { s with rip := s.reg k }
   | k, s, st :: rest =>
     match execStmt perm bind base (u k) s st with
     | some s' => execAll perm bind base u (k + 1) (noted bind s st s') rest
@@ -618,12 +639,14 @@ def execAll (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat →
 /-- A return uses nothing marked in a way that shows: the stack pointer and the address to return to. -/
 def quietRet (s : State) : Bool := !s.marks.reg RSP && !anyMarked s.marks.mem (s.reg RSP) 8
 
-/-- As `execAll`, and the machine stops where a statement uses something marked in a way that shows. -/
+/-- As `execAll`, and the machine stops where a statement uses something marked in a way that shows. (A
+return by a register: the register that holds the address to return to is not marked.) -/
 def execAllQ (perm : Perm) (bind : Bind) (base : Nat) (u : Nat → Nat) : Nat → State → List Stmt → Option Outcome
   | _, s, [] => some (.next s)
   | _, s, .ret :: _ =>
     let sp := s.reg RSP
     if quietRet s && allowed perm.read sp 8 then some (.returned (setReg { s with rip := load s.mem sp 8, trace := s.trace ++ [(sp, 8)] } RSP (sp + 8))) else none
+  | _, s, .retLink r :: _ => (regIndex r).bind fun k => if s.marks.reg k then none else some (.returned { s with rip := s.reg k })
   | k, s, st :: rest =>
     if quietStmt bind s st then
       match execStmt perm bind base (u k) s st with
@@ -658,37 +681,91 @@ def execQ (perm : Perm) (p : Program) (i : Instr) (u : Nat → Nat) (s : State) 
 def callTarget (i : Instr) : Option String :=
   match i.effect with
   | [.call (.name n)] => i.bind.lookup n
+  | [.callLink (.name n) r] => if (regIndex r).isSome then i.bind.lookup n else none
+  | _ => none
+
+/-- The register a call puts the address to come back to in. None: the call puts it below the stack pointer. -/
+def callLink (i : Instr) : Option Nat :=
+  match i.effect with
+  | [.callLink _ r] => regIndex r
   | _ => none
 
 /-- The function of that name among the functions there are. -/
 def findProgram (world : List Program) (name : String) : Option Program := world.find? fun q => q.name == name
 
-/-- The state a called function starts in: the address to come back to is put just below the stack
-pointer, the stack pointer points at it, and the next instruction is the called function's first. -/
+/-- The state a called function starts in, and the next instruction is the called function's first. Where
+the call puts the address to come back to below the stack pointer: it is put just below, and the stack
+pointer points at it. Where the call puts it in a register: that register holds it, and nothing else
+changes. -/
 def afterCall (p q : Program) (i : Instr) (s : State) : State :=
-  { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
-    mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
-    marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },      -- (the address to come back to is no secret)
-    trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
+  match callLink i with
+  | none =>
+    { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
+      mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
+      marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },      -- (the address to come back to may show in the trace)
+      trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] }
+  | some l =>
+    { reg := fun k => if k = l then (p.base + i.next) % M64 else s.reg k, zf := s.zf, cf := s.cf,
+      mem := s.mem, rip := q.base, vec := s.vec, data := s.data,
+      marks := { s.marks with reg := fun k => if k = l then false else s.marks.reg k },     -- (the address to come back to may show in the trace)
+      trace := s.trace ++ [(s.rip, 0)] }
 
-/-- The registers a called function gives back as it found them: rbx, rbp, r12 to r15. -/
-def calleeSaved : List Nat := [3, 5, 12, 13, 14, 15]
+/-- `afterCall` written out, where the call puts the address to come back to below the stack pointer. -/
+theorem afterCall_stack {p q : Program} {i : Instr} {s : State} (h : callLink i = none) :
+    afterCall p q i s =
+      { reg := fun k => if k = RSP then s.reg RSP - 8 else s.reg k, zf := s.zf, cf := s.cf,
+        mem := store s.mem (s.reg RSP - 8) (p.base + i.next) 8, rip := q.base, vec := s.vec, data := s.data,
+        marks := { s.marks with mem := markBytes s.marks.mem (s.reg RSP - 8) 8 false },
+        trace := s.trace ++ [(s.rip, 0), (s.reg RSP - 8, 8)] } := by
+  simp only [afterCall, h]
+
+/-- `afterCall` written out, where the call puts the address to come back to in the register `l`. -/
+theorem afterCall_link {p q : Program} {i : Instr} {s : State} {l : Nat} (h : callLink i = some l) :
+    afterCall p q i s =
+      { reg := fun k => if k = l then (p.base + i.next) % M64 else s.reg k, zf := s.zf, cf := s.cf,
+        mem := s.mem, rip := q.base, vec := s.vec, data := s.data,
+        marks := { s.marks with reg := fun k => if k = l then false else s.marks.reg k },
+        trace := s.trace ++ [(s.rip, 0)] } := by
+  simp only [afterCall, h]
+
+/-- A called function starts at its first instruction. -/
+theorem afterCall_rip (p q : Program) (i : Instr) (s : State) : (afterCall p q i s).rip = q.base := by
+  cases hl : callLink i with
+  | none => rw [afterCall_stack hl]
+  | some l => rw [afterCall_link hl]
+
+/-- A call leaves the files' data where it is. -/
+theorem afterCall_data (p q : Program) (i : Instr) (s : State) : (afterCall p q i s).data = s.data := by
+  cases hl : callLink i with
+  | none => rw [afterCall_stack hl]
+  | some l => rw [afterCall_link hl]
+
+/-- The registers a called function gives back as it found them, on x86-64: rbx, rbp, r12 to r15. -/
+def calleeSavedX86 : List Nat := [3, 5, 12, 13, 14, 15]
+
+/-- The same on AArch64: x19 to x29. -/
+def calleeSavedArm : List Nat := [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+
+/-- The registers the function called at an instruction gives back as it found them: x86-64's where the
+call puts the address to come back to below the stack pointer, AArch64's where it puts it in a register. -/
+def keptAt (i : Instr) : List Nat := if (callLink i).isSome then calleeSavedArm else calleeSavedX86
 
 /-- The state a caller goes on in when a called function has returned in `s'`, `s` being the state at the
-call: the registers a callee keeps are marked as they were at the call. (They hold what they held then:
-`Runs` and `Ends` ask that of a call. So if they did not depend on a secret before the call, they do not
+call: the registers a callee keeps (`kept`) are marked as they were at the call. (They hold what they held
+then: `Runs` and `Ends` ask that of a call. So if they were not marked before the call, they are not marked
 after it, whatever the called function did with them in between.) -/
-def backFrom (s s' : State) : State :=
-  { s' with marks := { s'.marks with reg := fun r => if calleeSaved.contains r then s.marks.reg r else s'.marks.reg r } }
+def backFrom (kept : List Nat) (s s' : State) : State :=
+  { s' with marks := { s'.marks with reg := fun r => if kept.contains r then s.marks.reg r else s'.marks.reg r } }
 
 /-- From `s`, whatever the unknowns turn out to be: the function `p` runs on instructions it has, touches
 only what `perm` lets it, uses nothing marked in a way that shows (in an address, at a jump, as the address a
 return goes to), and returns after finitely many of them in a state of which `Q` holds.
 
-At a call the address to come back to is written below the stack pointer, and the called function runs in
-its turn, in the same way: on its own instructions, touching only what it is let (never more than its
-caller is), until it returns; in every state it can return in, the registers a callee keeps hold what they
-held at the call, and from that state the caller's run goes on. -/
+At a call the address to come back to is written below the stack pointer (or put in a register, by the
+instruction), and the called function runs in its turn, in the same way: on its own instructions, touching
+only what it is let (never more than its caller is), until it returns; in every state it can return in,
+the registers a callee keeps hold what they held at the call, and from that state the caller's run goes
+on. -/
 inductive Runs (world : List Program) : Perm → Program → (State → Prop) → State → Prop where
   | step (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr) :
       p.fetch s.rip = some i →
@@ -699,11 +776,13 @@ inductive Runs (world : List Program) : Perm → Program → (State → Prop) �
   | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
       (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      8 ≤ s.reg RSP → allowed perm.write (s.reg RSP - 8) 8 = true → s.marks.reg RSP = false →
+      -- (where the address to come back to is written below the stack pointer: there is room, the function
+      -- may write there, and the stack pointer is not marked)
+      (callLink i = none → 8 ≤ s.reg RSP ∧ allowed perm.write (s.reg RSP - 8) 8 = true ∧ s.marks.reg RSP = false) →
       (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
       Runs world inner q R (afterCall p q i s) →
-      (∀ s', R s' → ∀ r ∈ calleeSaved, s'.reg r = s.reg r) →
-      (∀ s', R s' → Runs world perm p Q (backFrom s s')) →
+      (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
+      (∀ s', R s' → Runs world perm p Q (backFrom (keptAt i) s s')) →
       Runs world perm p Q s
 
 end Ode

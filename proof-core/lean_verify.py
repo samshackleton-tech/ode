@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import built, statement
 
-TABLE = os.path.join(HERE, "..", "core", "x86.tab")
+TABLE = statement.TABLES["x86-64"]         # (a statement of functions for AArch64 is given AArch64's table: statement.table_of)
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
 LAKE = shutil.which("lake") or (os.path.expanduser("~/.elan/bin/lake") if os.path.exists(os.path.expanduser("~/.elan/bin/lake")) else None)
 
@@ -28,8 +28,9 @@ def verify(spec_text, functions, proof_path):
     except AssertionError as e: raise SystemExit(f"lean_verify: the verifier does not build: {e}")
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "statement")
-        with open(path, "w") as f: f.write("\n".join(statement.statement(spec_text, functions)) + "\n")
-        r = subprocess.run([EXE, TABLE, path, proof_path], capture_output=True, text=True)
+        lines = statement.statement(spec_text, functions)
+        with open(path, "w") as f: f.write("\n".join(lines) + "\n")
+        r = subprocess.run([EXE, statement.table_of(lines), path, proof_path], capture_output=True, text=True)
     return r.returncode == 0 and r.stdout == "shown\n", r.stdout.strip()
 
 

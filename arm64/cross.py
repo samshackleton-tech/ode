@@ -12,6 +12,9 @@ registers' 128 bits, and 1024 bytes of memory that base registers and the stack 
 the processor leaves is compared with what the row's EFFECT says (../core/conc.py), part by part: a part
 the row does not mention must be as it was. Exit 1 if any instance differs.
 
+In one case of four the stack pointer is no multiple of 16. Where the row says the processor faults then
+(a load or store whose base is the stack pointer), it must fault, and nowhere else may it.
+
 One general register a case is kept out of the comparison: it holds the address of the case's state while
 the instruction runs, and it is one the instance does not name, another one from case to case. On macOS x18
 is kept out too: the system keeps it for itself.
@@ -31,9 +34,11 @@ BASE, STACK = SCRATCH + 256, SCRATCH + 512          # where a base register poin
 IN_G, IN_F, IN_V = 0, 256, 272                      # x0 to x30 and sp; the flags; v0 to v31
 OUT_G, OUT_F, OUT_V = 784, 1040, 1056
 REAL_G, REAL_SP, REAL_V, SIZE = 1568, 1664, 1680, 1808        # x19 to x30; sp; v8 to v15
-IN, OUT = 256 + 8 + 512 + ROOM, 256 + 8 + 512 + ROOM
+IN, OUT = 256 + 8 + 512 + ROOM, 256 + 8 + 512 + ROOM + 1        # (coming out, one byte more: the signal the instruction raised, or 0)
 
 DRIVER = r"""
+#include <setjmp.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,16 +48,25 @@ DRIVER = r"""
 typedef void (*one)(uint8_t *);
 extern one cases[];
 static uint8_t state[%(size)d] __attribute__((aligned(16)));
+static uint8_t other_stack[1 << 16];        /* a handler runs here: the case's own stack pointer may be anything */
+static sigjmp_buf back;
+static volatile sig_atomic_t raised;
+static void on_signal(int sig) { raised = sig; siglongjmp(back, 1); }
 int main(int argc, char **argv) {
     uint8_t *m = mmap(SCRATCH, 16384, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
     if (m != SCRATCH) return 2;
+    stack_t st; memset(&st, 0, sizeof st); st.ss_sp = other_stack; st.ss_size = sizeof other_stack;
+    struct sigaction sa; memset(&sa, 0, sizeof sa); sa.sa_handler = on_signal; sa.sa_flags = SA_ONSTACK | SA_NODEFER; sigemptyset(&sa.sa_mask);
+    if (sigaltstack(&st, 0) || sigaction(SIGBUS, &sa, 0) || sigaction(SIGSEGV, &sa, 0) || sigaction(SIGILL, &sa, 0)) return 2;
     FILE *in = fopen(argv[1], "rb"), *out = fopen(argv[2], "wb");
     if (!in || !out) return 2;
     for (long k = 0; ; k++) {
         if (fread(state + %(in_g)d, 1, 256, in) != 256) break;
         if (fread(state + %(in_f)d, 1, 8, in) != 8 || fread(state + %(in_v)d, 1, 512, in) != 512 || fread(m, 1, ROOM, in) != ROOM) return 2;
-        cases[k](state);
+        uint8_t fault = 0;
+        if (sigsetjmp(back, 1) == 0) cases[k](state); else fault = (uint8_t)raised;
         fwrite(state + %(out_g)d, 1, 256, out); fwrite(state + %(out_f)d, 1, 8, out); fwrite(state + %(out_v)d, 1, 512, out); fwrite(m, 1, ROOM, out);
+        fwrite(&fault, 1, 1, out);
     }
     return fclose(out) != 0;
 }
@@ -87,7 +101,7 @@ def instance(row, rng):
     free = [r for r in X if not (MAC and r == "x18")]
     for h in ("D", "S", "P"):
         if re.search(rf"\b{h}(64|32)\b", asm): bind[h] = rng.choice(free)
-    if re.search(r"\bB64\b", asm): bind["B"] = rng.choice(free + ["sp"])
+    if re.search(r"\bB64\b", asm): bind["B"] = rng.choice(free)
     for h in table.VECTORS:
         if re.search(rf"\bv{h}\b", asm): bind[h] = rng.randrange(32)
     way = word.Way(row, row.bytes[0])
@@ -132,8 +146,8 @@ def main():
                     named = {bind[h] for h in ("D", "S", "P", "B") if h in bind}
                     home = rng.choice([i for i in range(31) if f"x{i}" not in named and not (MAC and i == 18)])
                     g = {name: rng.getrandbits(64) for name in X}
-                    if "B" in bind and bind["B"] != "sp": g[bind["B"]] = BASE
-                    g["sp"] = STACK
+                    if "B" in bind: g[bind["B"]] = BASE
+                    g["sp"] = STACK + (rng.choice((1, 2, 4, 8, 12, 15)) if rng.randrange(4) == 0 else 0)
                     flags = rng.randrange(16) << 28
                     v = {i: tuple(rng.getrandbits(32) for _ in range(4)) for i in range(32)}
                     mem = bytes(rng.getrandbits(8) for _ in range(ROOM))
@@ -158,7 +172,7 @@ def main():
         if m and at is not None:
             w = m.group(1).replace(" ", "")
             laid[at].append(bytes.fromhex(w) if " " in m.group(1) else int(w, 16).to_bytes(4, "little"))
-    bad, other, per = 0, 0, {}
+    bad, other, faults, per = 0, 0, 0, {}
     with open(os.path.join(work, "cases.out"), "rb") as f:
         for n, (row, how, bind, text, home, g, flags, v, mem, where) in enumerate(todo):
             got = f.read(OUT)
@@ -167,12 +181,19 @@ def main():
             gflags, = struct.unpack("<Q", got[256:264])
             gv = {i: struct.unpack("<4I", got[264 + 16 * i:280 + 16 * i]) for i in range(32)}
             gm = got[776:776 + ROOM]
-            s = conc.run(row, bind, conc.State(g, {i: v[i] + (0,) * 12 for i in range(32)}, {SCRATCH + i: b for i, b in enumerate(mem)}, 0, 0))
+            signal = got[776 + ROOM]
+            try: s = conc.run(row, bind, conc.State(g, {i: v[i] + (0,) * 12 for i in range(32)}, {SCRATCH + i: b for i, b in enumerate(mem)}, 0, 0))
+            except conc.Fault: s = None
             skip = {f"x{home}"} | ({"x18"} if MAC else set())
-            wrong = [r for r in X + ["sp"] if r not in skip and s.g[r] != gg[r]]
-            wrong += [f"v{i}" for i in range(32) if tuple(s.x[i][:4]) != gv[i]]
-            wrong += ["memory"] if bytes(s.mem[SCRATCH + i] for i in range(ROOM)) != gm else []
-            wrong += ["the flags"] if gflags != flags else []
+            if s is None or signal:
+                # a fault: the row and the processor must both have it (what the processor then leaves is not looked at)
+                faults += 1 if s is None and signal else 0
+                wrong = [] if s is None and signal else [f"the processor raises signal {signal}, the row has no fault" if signal else "the row has a fault, the processor none"]
+            else:
+                wrong = [r for r in X + ["sp"] if r not in skip and s.g[r] != gg[r]]
+                wrong += [f"v{i}" for i in range(32) if tuple(s.x[i][:4]) != gv[i]]
+                wrong += ["memory"] if bytes(s.mem[SCRATCH + i] for i in range(ROOM)) != gm else []
+                wrong += ["the flags"] if gflags != flags else []
             name = f"{row.name}, {how}"
             per.setdefault(name, [0, 0, 0]); per[name][0] += 1
             if how == "as the assembler writes it":
@@ -187,9 +208,10 @@ def main():
     for name, (n, b, o) in per.items(): print(f"{name:42} {n} instances, {b} differ" + (f", {o} are another word than the table writes" if o else ""))
     ran = sorted({name.split(",")[0] for name in per})
     summary = {"machine": platform.machine(), "system": platform.system(), "processor": processor(), "rows run": len(ran), "instances": sum(p[0] for p in per.values()),
-               "differ from the processor": bad, "another word than the table writes": other, "rows not run": left, "cases a row and way": cases}
+               "differ from the processor": bad, "another word than the table writes": other, "rows not run": left, "cases a row and way": cases,
+               "faults, as the row says": faults}
     print(f"cross: {len(ran)} rows, each as the assembler writes it and as the table writes it, {summary['instances']} instances: {bad} differ from this processor"
-          + ("" if bad else ": every row run is what the processor does") + f"; {other} of the assembler's words are not the table's"
+          + ("" if bad else ": every row run is what the processor does") + f"; {faults} are faults, as the row says; {other} of the assembler's words are not the table's"
           + (f"; {len(left)} rows are not run: {', '.join(left)}" if left else ""))
     if "--out" in a:
         with open(a[a.index("--out") + 1], "w") as f: json.dump(summary, f, indent=1, sort_keys=True); f.write("\n")

@@ -21,8 +21,8 @@ def placeVals (ctx : Ctx) (pl : Place) (s0 st : State) : List (String × Val) :=
   pl.names.map (fun nr => (nr.1, Val.int (st.reg nr.2))) ++ ctx.contract.env s0
 
 theorem semEnv_placeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (pl : Place)
-    (hentry : ∀ r, r < 16 → ρ r = s0.reg r) (hreg : ∀ r, r < 16 → (st.reg r : Int) = ev ρ (s.reg r))
-    (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+    (hentry : ∀ r, r < ctx.nreg → ρ r = s0.reg r) (hreg : ∀ r, r < ctx.nreg → (st.reg r : Int) = ev ρ (s.reg r))
+    (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) :
     semEnv ctx s0 ρ (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
   have h2 := semEnv_symEnv ctx s0 ρ hentry
   unfold semEnv at h2 ⊢
@@ -34,14 +34,14 @@ theorem semEnv_placeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
   simp only [Function.comp, semv]
   rw [hreg r (hn (n, r) m)]
 
-theorem placeEnv_bounded {ctx : Ctx} (pl : Place) {s : Sym} (wf : WF s) (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+theorem placeEnv_bounded {ctx : Ctx} (pl : Place) {s : Sym} (wf : WF ctx s) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) :
     EnvB s.nvars (placeEnv ctx pl s.reg) := by
   intro nv m
   unfold placeEnv at m
   rcases List.mem_append.mp m with m | m
   · obtain ⟨⟨n, r⟩, hm, rfl⟩ := List.mem_map.mp m
     exact wf.reg r (hn (n, r) hm)
-  · exact (symEnv_bounded ctx.contract).mono wf.base16 nv m
+  · exact (symEnv_bounded ctx.contract).mono wf.regs nv m
 
 /-! ## What a place says of vector registers -/
 
@@ -68,7 +68,7 @@ def CellSays (ctx : Ctx) (pl : Place) (s0 st : State) (C : PlaceCell) : Prop :=
 section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 
-theorem namesW_den (H : Holds ctx s0 ρ s st) : ∀ (names : List (String × Nat)), (∀ nr ∈ names, nr.2 < 16) →
+theorem namesW_den (H : Holds ctx s0 ρ s st) : ∀ (names : List (String × Nat)), (∀ nr ∈ names, nr.2 < ctx.nreg) →
     EnvDen ctx s0 ρ s.terms (names.map fun nr => (nr.1, WVal.num (s.reg nr.2))) (names.map fun nr => (nr.1, Val.int (st.reg nr.2)))
   | [], _ => by simp [EnvDen]
   | (x, r) :: more, hn => by
@@ -77,7 +77,7 @@ theorem namesW_den (H : Holds ctx s0 ρ s st) : ∀ (names : List (String × Nat
     exact ⟨rfl, hd, namesW_den H more (fun nr m => hn nr (List.mem_cons_of_mem _ m))⟩
 
 /-- The names at a place on words stand for the names at the place in the account. -/
-theorem placeW_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+theorem placeW_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) :
     EnvDen ctx s0 ρ s.terms (placeW ctx pl s) (placeValsW ctx pl s0 st) :=
   EnvDen.append (namesW_den H pl.names hn) (wenv_sound E H)
 
@@ -105,8 +105,8 @@ theorem laneTerms_sound (H : Holds ctx s0 ρ s st) {i : Nat} : ∀ {regs ids : L
         rw [laneTerms_sound H hr, e, ea]
 
 /-- What the verifier has shown of a place's lanes is so of the machine's state. -/
-theorem lanesShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (hn : ∀ nr ∈ pl.names, nr.2 < 16) {L : PlaceLanes} (h : lanesShown ctx pl s L = true) :
+theorem lanesShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) {L : PlaceLanes} (h : lanesShown ctx pl s L = true) :
     ∀ i, i < 16 → LaneSays ctx pl s0 st L i := by
   intro i hi
   unfold lanesShown at h
@@ -251,7 +251,7 @@ variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {g : Sym} {st : State}
 
 /-- More known of vector registers and of numbers that are no rows: what the state held stays so, where
 what is added is so. -/
-theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF g) (vec : List (Nat × List Nat)) (known : List Known)
+theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF ctx g) (vec : List (Nat × List Nat)) (known : List Known)
     (hv : ∀ x ids, vec.lookup x = some ids → ids.length = 16 ∧ (∀ i ∈ ids, i < g.terms.length) ∧
       ∀ k, k < ids.length → st.vec x k = den (inpOf ctx s0) ρ g.terms (ids.getD k 0))
     (hk : ∀ k ∈ known, k.wf g.nvars g.terms.length ∧ k.holds ctx s0 ρ g.terms) :
@@ -276,7 +276,7 @@ theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF g) (vec : List (Nat
 /-- What a place says of vector registers, taken as known of the general state: where the definition, used
 with each lane's keys, is the list of the words the machine's registers hold in that lane, the new unknowns
 can be those words, and what the state then holds is so. -/
-theorem withLanes_carried (H : Holds ctx s0 ρ g st) (wf : WF g) (L : PlaceLanes) (keys : List (List Key))
+theorem withLanes_carried (H : Holds ctx s0 ρ g st) (wf : WF ctx g) (L : PlaceLanes) (keys : List (List Key))
     (hkeys : ∀ i, i < 16 → (∀ k ∈ keys.getD i [], k.wf g.nvars g.terms.length) ∧
       ∃ d, findDef ctx.defs L.f = some d ∧ d.params.length = (keys.getD i []).length ∧
         Value ctx.defs (d.params.zip ((keys.getD i []).map (Key.val ctx s0 ρ g.terms))) d.body
@@ -372,8 +372,8 @@ theorem withLanes_carried (H : Holds ctx s0 ρ g st) (wf : WF g) (L : PlaceLanes
   exact ⟨laneRho ρ g.nvars L.regs st, c1.then (c2.then c3)⟩
 
 /-- The keys of a lane's things stand for the values of those things at the place. -/
-theorem laneKey_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ g st) (wf : WF g)
-    (hn : ∀ nr ∈ pl.names, nr.2 < 16) {L : PlaceLanes} {i : Nat} {keys : List Key}
+theorem laneKey_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ g st) (wf : WF ctx g)
+    (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) {L : PlaceLanes} {i : Nat} {keys : List Key}
     (h : laneKey ctx g.tab.find (placeW ctx pl g) g L i = some keys) :
     (∀ k ∈ keys, k.wf g.nvars g.terms.length) ∧
     ∃ F, evalList (evalSpec ctx.defs F ((L.x, Val.int (i : Int)) :: placeValsW ctx pl s0 st)) L.args =
@@ -401,9 +401,9 @@ theorem laneKey_den {p : Program} (E : Setting ctx p s0) (pl : Place) (H : Holds
 
 /-- What a place says of vector registers, taken as known of the general state: what the state then holds is
 so, of every state of the machine of which the place says it. -/
-theorem supposeLanes_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+theorem supposeLanes_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
     {g' : Sym} {L : PlaceLanes} {items rest : Items}
-    (h : supposeLanes ctx pl g L items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
+    (h : supposeLanes ctx pl g L items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF ctx g)
     (says : ∀ i, i < 16 → LaneSays ctx pl s0 st L i) :
     ∃ ρ', Carried ctx s0 ρ g ρ' g' st := by
   unfold supposeLanes at h
@@ -438,9 +438,9 @@ theorem supposeLanes_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn
       subst e2
       exact ⟨kwf, d, hd, by simpa using hlen', fuel, hbody⟩
 
-theorem supposeLanes_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+theorem supposeLanes_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) :
     ∀ (lanes : List PlaceLanes) {g g' : Sym} {items rest : Items} {ρ : Nat → Int},
-    fold (supposeLanes ctx pl) g lanes items = .ok (g', rest) → Holds ctx s0 ρ g st → WF g →
+    fold (supposeLanes ctx pl) g lanes items = .ok (g', rest) → Holds ctx s0 ρ g st → WF ctx g →
     (∀ L ∈ lanes, ∀ i, i < 16 → LaneSays ctx pl s0 st L i) → ∃ ρ', Carried ctx s0 ρ g ρ' g' st
   | [], g, g', items, rest, ρ, h, H, wf, _ => by
     simp only [fold] at h
@@ -514,13 +514,13 @@ theorem cellIds_spec {s : Sym} {look : Node → Option Nat} {env : List (String 
 theorem cellRow_eval {s : Sym} (H : Holds ctx s0 ρ s st) (C : PlaceCell) :
     (s0.reg RSP : Int) + ev ρ (cellRow s C) = ((st.reg RSP + C.off : Nat) : Int) := by
   have e1 := frameOffset_eval H (s.reg RSP)
-  have e2 := H.reg RSP (by decide)
+  have e2 := H.reg RSP ctx.rsp_lt
   simp only [cellRow, ev_add, ev_const, e1]
   omega
 
 /-- What the verifier has shown of a cell of the frame is so of the machine's state. -/
-theorem cellShown_sound {p : Program} {s : Sym} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (hn : ∀ nr ∈ pl.names, nr.2 < 16) {C : PlaceCell} (h : cellShown ctx pl s C = true) : CellSays ctx pl s0 st C := by
+theorem cellShown_sound {p : Program} {s : Sym} (E : Setting ctx p s0) (pl : Place) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) {C : PlaceCell} (h : cellShown ctx pl s C = true) : CellSays ctx pl s0 st C := by
   intro i hi
   unfold cellShown at h
   cases hids : cellIds ctx s.tab.find (placeW ctx pl s) s C with
@@ -548,9 +548,9 @@ theorem cellShown_sound {p : Program} {s : Sym} (E : Setting ctx p s0) (pl : Pla
 
 /-- What a place says of a cell of the frame, taken as known of the general state: what the state then
 holds is so, of every state of the machine of which the place says it. -/
-theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
     {g g' : Sym} {C : PlaceCell} {items rest : Items}
-    (h : supposeCell ctx pl g C items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
+    (h : supposeCell ctx pl g C items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF ctx g)
     (says : CellSays ctx pl s0 st C) : Carried ctx s0 ρ g ρ g' st := by
   unfold supposeCell at h
   cases hids : cellIds ctx g.tab.find (placeW ctx pl g) g C with
@@ -576,7 +576,7 @@ theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn 
       injection u with u
       rw [addr, Int.toNat_natCast, ← u, idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hid]
     have bd : bounded g.nvars (cellRow g C) :=
-      bounded_add (bounded_sub (wf.reg RSP (by decide)) (bounded_var (Nat.lt_of_lt_of_le (by decide : RSP < 17) wf.base)))
+      bounded_add (bounded_sub (wf.reg RSP ctx.rsp_lt) (bounded_var (Nat.lt_of_lt_of_le ctx.rsp_lt wf.regs)))
         (bounded_const _ _)
     have lt : ∀ i ∈ ids, i < g.terms.length := by
       intro i mi
@@ -608,9 +608,9 @@ theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn 
               exact ⟨bd, len, lt⟩)
             (wf.words.spill off ids')⟩ }
 
-theorem supposeCells_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16) :
+theorem supposeCells_all {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg) :
     ∀ (cells : List PlaceCell) {g g' : Sym} {items rest : Items},
-    fold (supposeCell ctx pl) g cells items = .ok (g', rest) → Holds ctx s0 ρ g st → WF g →
+    fold (supposeCell ctx pl) g cells items = .ok (g', rest) → Holds ctx s0 ρ g st → WF ctx g →
     (∀ C ∈ cells, CellSays ctx pl s0 st C) → Carried ctx s0 ρ g ρ g' st
   | [], g, g', items, rest, h, H, wf, _ => by
     simp only [fold] at h
@@ -644,15 +644,15 @@ theorem Holds.setRange (H : Holds ctx s0 ρ s st) (rg : RangeF) (h : RangeHolds 
   ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known,
    fun rg' e => by injection e with e; subst e; exact h⟩
 
-theorem WF.setRange (wf : WF s) (rg : RangeF) (bl : bounded s.nvars rg.lo) (ba : ∀ v ∈ rg.args, v.bounded s.nvars) :
-    WF { s with range := some rg } :=
+theorem WF.setRange (wf : WF ctx s) (rg : RangeF) (bl : bounded s.nvars rg.lo) (ba : ∀ v ∈ rg.args, v.bounded s.nvars) :
+    WF ctx { s with range := some rg } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known,
    fun rg' e => by injection e with e; subst e; exact ⟨bl, ba⟩⟩
 
 /-- What the verifier has gone through of what a place says a loop has written is so of the machine's state. -/
-theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
     {s' : Sym} {got : Option RangeF} {items rest : Items}
-    (h : rangeShown ctx pl s items = .ok ((got, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
+    (h : rangeShown ctx pl s items = .ok ((got, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ RangeSays ctx pl s0 st := by
   unfold rangeShown at h
   cases hpw : pl.wrote with
@@ -759,9 +759,9 @@ theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
 
 
 /-- What a place says a loop has written, taken as known in the place's general state: it is so there. -/
-theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
     {g' : Sym} {items rest : Items}
-    (h : supposeRange ctx pl g items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF g)
+    (h : supposeRange ctx pl g items = .ok (g', rest)) (H : Holds ctx s0 ρ g st) (wf : WF ctx g)
     (says : RangeSays ctx pl s0 st) : ∃ ρ', Carried ctx s0 ρ g ρ' g' st := by
   unfold supposeRange at h
   cases hpw : pl.wrote with
@@ -824,9 +824,9 @@ place's facts are so of what the named registers hold, and the vector registers 
 the place says of them. -/
 structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : Nat → Int) (st : State) : Prop where
   outer : Agree first.nvars ρs ρ
-  entry : ∀ r, r < 16 → ρ r = s0.reg r
-  data : ρ 16 = ctx.own s0 ∧ st.data = s0.data
-  kept : ∀ r, r < 16 → pl.keep.contains r = true → (st.reg r : Int) = ev ρ (first.reg r)
+  entry : ∀ r, r < ctx.nreg → ρ r = s0.reg r
+  data : ρ (dataVar ctx) = ctx.own s0 ∧ st.data = s0.data
+  kept : ∀ r, r < ctx.nreg → pl.keep.contains r = true → (st.reg r : Int) = ev ρ (first.reg r)
   small : ∀ r, st.reg r < M64
   frame : ∀ o v, (o, v) ∈ first.frame →
     -(ctx.contract.stack : Int) ≤ o ∧ o + 8 ≤ 0 ∧ (load st.mem ((s0.reg RSP : Int) + o).toNat 8 : Int) = ev ρ v
@@ -836,8 +836,8 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
   cells : ∀ C ∈ pl.cells, CellSays ctx pl s0 st C
   wrote : RangeSays ctx pl s0 st
 
-theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.general pl) := by
-  have le : first.nvars ≤ first.nvars + 16 := Nat.le_add_right _ _
+theorem general_wf (pl : Place) {first : Sym} (wf : WF ctx first) : WF ctx (first.general ctx.nreg pl) := by
+  have le : first.nvars ≤ first.nvars + ctx.nreg := Nat.le_add_right _ _
   refine ⟨Nat.le_trans wf.base le, ?_, trivial, trivial, ?_, ?_,
           (fun v r o m => ⟨Nat.lt_of_lt_of_le (wf.bytes v r o m).1 le, bounded_mono le (wf.bytes v r o m).2⟩),
           (fun f m => SFact.bounded_mono le (wf.spec f m)), (fun _ _ _ m => nomatch m),
@@ -845,7 +845,7 @@ theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.genera
            wf.words.rotrs, (fun w j i h => by simp [Sym.general] at h), fun _ _ h => nomatch h⟩,
           fun k m => Known.wf_mono le (Nat.le_refl _) (wf.known k m), fun _ h => nomatch h⟩
   · intro r hr
-    show bounded (first.nvars + 16) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
+    show bounded (first.nvars + ctx.nreg) (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     split
     · exact bounded_mono (Nat.le_add_right _ _) (wf.reg r hr)
     · exact bounded_var (by omega)
@@ -859,30 +859,30 @@ theorem general_wf (pl : Place) {first : Sym} (wf : WF first) : WF (first.genera
       have hr := List.mem_range.mp (List.mem_filter.mp hr).1
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
-      · exact bounded_var (show first.nvars + r < first.nvars + 16 by omega)
-      · exact bounded_sub (bounded_const _ _) (bounded_var (show first.nvars + r < first.nvars + 16 by omega))
+      · exact bounded_var (show first.nvars + r < first.nvars + ctx.nreg by omega)
+      · exact bounded_sub (bounded_const _ _) (bounded_var (show first.nvars + r < first.nvars + ctx.nreg by omega))
     · exact bounded_mono le (wf.facts f m)
 
 /-- Of every state of the machine of which the place says what it says, what the general state holds is
 so: the registers not kept are the unknowns the general state made for them, and what was so of the
 unknowns of before, when the path first came there, is so still. (What the place says of vector registers
 is taken as known after this: `supposeLanes_all`.) -/
-theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : WF first)
+theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : WF ctx first)
     {ρs ρ : Nat → Int} {stf st : State} (Hf : Holds ctx s0 ρs first stf) (A : AtPlace ctx pl s0 first ρs ρ st) :
-    Holds ctx s0 (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k)
-      (first.general pl) st := by
-  have ag : Agree first.nvars ρ (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) := by
+    Holds ctx s0 (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k)
+      (first.general ctx.nreg pl) st := by
+  have ag : Agree first.nvars ρ (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) := by
     intro k hk
-    show ρ k = if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k
+    show ρ k = if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k
     rw [if_neg (by omega)]
   have base := wf.base
-  have hentry : ∀ r, r < 16 → (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) r = s0.reg r := by
+  have hentry : ∀ r, r < ctx.nreg → (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) r = s0.reg r := by
     intro r hr
-    show (if first.nvars ≤ r ∧ r < first.nvars + 16 then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
+    show (if first.nvars ≤ r ∧ r < first.nvars + ctx.nreg then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
     rw [if_neg (by omega)]
     exact A.entry r hr
-  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + 16 then (st.reg (k - first.nvars) : Int) else ρ k) 16 = ctx.own s0 := by
-    show (if first.nvars ≤ 16 ∧ 16 < first.nvars + 16 then (st.reg (16 - first.nvars) : Int) else ρ 16) = ctx.own s0
+  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) (dataVar ctx) = ctx.own s0 := by
+    show (if first.nvars ≤ ctx.nreg ∧ ctx.nreg < first.nvars + ctx.nreg then (st.reg (ctx.nreg - first.nvars) : Int) else ρ ctx.nreg) = ctx.own s0
     rw [if_neg (by omega)]
     exact A.data.1
   have Hg := Hf.agree wf (Agree.trans (Nat.le_refl _) A.outer ag)
@@ -896,7 +896,7 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
     · rw [if_pos hk, ← ev_agree (wf.reg r hr) ag]
       exact A.kept r hr hk
     · rw [if_neg hk, ev_var]
-      show (st.reg r : Int) = if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + 16 then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)
+      show (st.reg r : Int) = if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + ctx.nreg then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)
       rw [if_pos (by omega), Nat.add_sub_cancel_left]
   · intro o v m
     obtain ⟨h1, h2, h3⟩ := A.frame o v m
@@ -909,7 +909,7 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
       have hr := List.mem_range.mp (List.mem_filter.mp hr).1
       have sm := A.small r
       unfold M64 at sm
-      have val : (if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + 16 then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)) = st.reg r := by
+      have val : (if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + ctx.nreg then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)) = st.reg r := by
         rw [if_pos (by omega), Nat.add_sub_cancel_left]
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
@@ -923,9 +923,9 @@ the general state holds is so, and the place's number there is the general state
 zero. -/
 theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) {s g first : Sym} {d : Row}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : generalize ctx pl s items = .ok ((g, d, first), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) :
-    (∀ nr ∈ pl.names, nr.2 < 16) ∧ ∃ ρ1, Agree s.nvars ρ ρ1 ∧ s.nvars ≤ first.nvars ∧ AtPlace ctx pl s0 first ρ1 ρ1 st ∧
-      WF g ∧ first.nvars ≤ g.nvars ∧ bounded g.nvars d ∧
+    (h : generalize ctx pl s items = .ok ((g, d, first), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
+    (∀ nr ∈ pl.names, nr.2 < ctx.nreg) ∧ ∃ ρ1, Agree s.nvars ρ ρ1 ∧ s.nvars ≤ first.nvars ∧ AtPlace ctx pl s0 first ρ1 ρ1 st ∧
+      WF ctx g ∧ first.nvars ≤ g.nvars ∧ bounded g.nvars d ∧
       ∀ ρ' st', AtPlace ctx pl s0 first ρ1 ρ' st' →
         ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ Agree first.nvars ρ' ρ'' ∧ 0 ≤ ev ρ'' d ∧
           Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d)) := by
@@ -933,10 +933,10 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   split at h
   next => exact (refuse_ok h).elim
   next hguard =>
-    have hnames : ∀ nr ∈ pl.names, nr.2 < 16 := by
+    have hnames : ∀ nr ∈ pl.names, nr.2 < ctx.nreg := by
       intro ⟨n, r⟩ m
-      show r < 16
-      by_cases c : r < 16
+      show r < ctx.nreg
+      by_cases c : r < ctx.nreg
       · exact c
       · exfalso
         apply hguard
@@ -992,16 +992,16 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         injection h2 with hd hf
         rw [hg, hd, hf]
         have G : ∀ ρ' st', AtPlace ctx pl s0 s1b ρ1b ρ' st' →
-            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF g2 ∧ s1b.nvars ≤ g2.nvars ∧ Agree s1b.nvars ρ' ρ'' ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
+            ∃ ρ'', Holds ctx s0 ρ'' g2 st' ∧ WF ctx g2 ∧ s1b.nvars ≤ g2.nvars ∧ Agree s1b.nvars ρ' ρ'' ∧ bounded g2.nvars d' ∧ 0 ≤ ev ρ'' d' ∧
               Value ctx.defs (placeVals ctx pl s0 st') pl.decreases (.int (ev ρ'' d')) := by
           intro ρ' st' A
           have H0 := general_holds pl c1.wf c1.holds A
-          have ag0 : Agree s1b.nvars ρ' (fun k => if s1b.nvars ≤ k ∧ k < s1b.nvars + 16 then (st'.reg (k - s1b.nvars) : Int) else ρ' k) := by
+          have ag0 : Agree s1b.nvars ρ' (fun k => if s1b.nvars ≤ k ∧ k < s1b.nvars + ctx.nreg then (st'.reg (k - s1b.nvars) : Int) else ρ' k) := by
             intro k hk
-            show ρ' k = if s1b.nvars ≤ k ∧ k < s1b.nvars + 16 then (st'.reg (k - s1b.nvars) : Int) else ρ' k
+            show ρ' k = if s1b.nvars ≤ k ∧ k < s1b.nvars + ctx.nreg then (st'.reg (k - s1b.nvars) : Int) else ρ' k
             rw [if_neg (by omega)]
           have w0 := general_wf pl c1.wf
-          have envb0 : EnvB (s1b.general pl).nvars (placeEnv ctx pl (s1b.general pl).reg) := placeEnv_bounded pl w0 hnames
+          have envb0 : EnvB (s1b.general ctx.nreg pl).nvars (placeEnv ctx pl (s1b.general ctx.nreg pl).reg) := placeEnv_bounded pl w0 hnames
           have env0 := semEnv_placeEnv (ctx := ctx) pl H0.entry H0.reg hnames
           obtain ⟨ρa, ca⟩ := suppose_all E _ pl.facts e2 H0 w0 envb0 (fun e m => by rw [env0]; exact A.facts e m)
           obtain ⟨ρl, cl0⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
@@ -1009,11 +1009,11 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           obtain ⟨ρr, cr⟩ := supposeRange_sound E pl hnames er cl'.holds cl'.wf A.wrote
           have cl := cl'.then cr
           obtain ⟨ρb, cb, sem, bd⟩ := seval_sound E _ pl.decreases e3 cl.holds cl.wf (envb0.mono (ca.then cl).mono)
-          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1b.general pl).reg) = placeVals ctx pl s0 st' := by
+          have env2 : semEnv ctx s0 ρb (placeEnv ctx pl (s1b.general ctx.nreg pl).reg) = placeVals ctx pl s0 st' := by
             rw [← semEnv_agree envb0 (ca.then (cl.then cb)).agree]; exact env0
           rw [env2] at sem
-          exact ⟨ρb, cb.holds, cb.wf, Nat.le_trans (Nat.le_add_right _ 16) (ca.then (cl.then cb)).mono,
-                 Agree.trans (Nat.le_add_right _ 16) ag0 (ca.then (cl.then cb)).agree, bd, entail_sound e4 ρb cb.holds.facts, sem⟩
+          exact ⟨ρb, cb.holds, cb.wf, Nat.le_trans (Nat.le_add_right _ ctx.nreg) (ca.then (cl.then cb)).mono,
+                 Agree.trans (Nat.le_add_right _ ctx.nreg) ag0 (ca.then (cl.then cb)).agree, bd, entail_sound e4 ρb cb.holds.facts, sem⟩
         obtain ⟨ρx, Hx, wg, leg, _, bdd, _, _⟩ := G ρ1b st first_at
         refine ⟨hnames, ρ1b, c1.agree, c1.mono, first_at, wg, leg, bdd, ?_⟩
         intro ρ' st' A
@@ -1022,9 +1022,9 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
 
 /-- The verifier's work when a path comes again to a place: of the state of the machine there the place
 says what it says, and the place's number there is less than `d` was. -/
-theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < 16)
+theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place) (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
     {first s : Sym} {d : Row} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State}
-    (h : arrive ctx pl first d s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF s) (hd : bounded s.nvars d) :
+    (h : arrive ctx pl first d s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hd : bounded s.nvars d) :
     AtPlace ctx pl s0 first ρ ρ st ∧
     ∃ n : Int, Value ctx.defs (placeVals ctx pl s0 st) pl.decreases (.int n) ∧ n + 1 ≤ ev ρ d := by
   cases hfind : pl.keep.find? (fun r => s.reg r != first.reg r) with

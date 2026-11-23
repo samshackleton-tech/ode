@@ -29,7 +29,7 @@ KCHECK = os.path.join(HERE, "..", "kcheck")
 sys.path.insert(0, KCHECK)
 import kbyte, klin, kprove, varith
 sys.path.insert(0, HERE)
-from statement import sexp, statement, ordered, sequences, kinds_of, by_kind
+from statement import sexp, statement, ordered, sequences, kinds_of, by_kind, table_for
 import built, ode, session
 
 TABLE = os.path.join(HERE, "..", "core", "x86.tab")
@@ -311,7 +311,7 @@ class Prover:
         if FROM_THE_START or not os.path.exists(session.EXE):
             # the verifier itself, from the proof's first line each time
             with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
-            return subprocess.run([EXE, TABLE, self.statement, self.out], capture_output=True, text=True).stdout
+            return subprocess.run([EXE, table_for(self.statement), self.statement, self.out], capture_output=True, text=True).stdout
         # `odeprove` says what the verifier would say, and goes only through the lines that are new (session.py)
         if self.session is None:
             names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
@@ -440,7 +440,7 @@ def prove(spec_text, targets, statement_out, out):
             break
     with open(out, "w") as f: f.write("\n".join(done) + "\n")
     # the prover's helper is not the verifier: what was found is a proof only if `odeverify` says so
-    said = subprocess.run([EXE, TABLE, statement_out, out], capture_output=True, text=True).stdout
+    said = subprocess.run([EXE, table_for(statement_out), statement_out, out], capture_output=True, text=True).stdout
     if not said.startswith("shown"): raise SystemExit(f"prove: the verifier does not take the proof that was found:\n{said[:400]}")
     return numbers
 

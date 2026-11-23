@@ -1,9 +1,10 @@
 /-!
 # The table of instructions, read
 
-`../core/x86.tab` is the one account of the machine: a row is `NAME | ASM | ROW | EFFECT`. This file reads
-its rows (the lines that say how a row's instances are written in bytes are left to the reader of code),
-and says which row a decoded instruction is an instance of. It follows `../core/table.py` line for line.
+A table (`../core/x86.tab` for x86-64, `../arm64/arm64.tab` for AArch64) is the one account of its machine:
+a row is `NAME | ASM | ROW | EFFECT`. This file reads a table's rows (the lines that say how a row's
+instances are written in bytes are left to the reader of code), and says which row a decoded instruction
+is an instance of. It follows `../core/table.py` line for line.
 -/
 namespace Ode
 
@@ -57,9 +58,11 @@ inductive Stmt where
   | vset (place value : Expr)             -- a 128-bit vector or its memory operand
   | vset512 (place value : Expr)          -- a 512-bit vector or its memory operand
   | jump (target : Expr) (cond : Option (String × Bool))
-  | call (target : Expr)
-  | ret
+  | call (target : Expr)                  -- a call that puts the address to come back to below the stack pointer
+  | ret                                   -- a return to the address at the stack pointer
   | nothing
+  | callLink (target : Expr) (link : String)    -- a call that puts the address to come back to in a register
+  | retLink (link : String)                     -- a return to the address a register holds
   deriving Repr, Inhabited
 
 structure TRow where
@@ -129,8 +132,13 @@ def parseStmt (text : String) : Option Stmt :=
   | none =>
     match t with
     | ["return"] => some .ret
+    | ["return", r] => some (.retLink r)
     | ["nothing"] => some .nothing
-    | "call" :: target => (wholeExpr target).map .call
+    | "call" :: target =>
+      match splitAt "link" target with
+      | none => (wholeExpr target).map .call
+      | some (t, [r]) => (wholeExpr t).map (.callLink · r)
+      | some _ => none
     | "jump" :: rest =>
       match splitAt "if" rest with
       | none => (wholeExpr rest).map (.jump · none)
@@ -166,7 +174,8 @@ def unifyAtom (p ins : String) (bind : Bind) : Option Bind :=
     | none => some ((key, val) :: bind)
   if p == ".D" || p == ".S" || p == ".B" || p == ".P" then
     match ins.toList with
-    | '.' :: name => if p == ".P" && ins == ".rsp" then none else put (String.ofList (p.toList.drop 1)) (String.ofList name)
+    -- (AArch64's stack pointer is no instance of a register's letter: it is named in rows of its own)
+    | '.' :: name => if p == ".P" && ins == ".rsp" || ins == ".sp" then none else put (String.ofList (p.toList.drop 1)) (String.ofList name)
     | _ => none
   else if p == "X" || p == "Y" || p == "Z" || p == "M" then
     if ins.toList.all Char.isDigit && !ins.isEmpty then put p ins else none

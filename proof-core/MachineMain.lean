@@ -6,11 +6,12 @@ For the comparison of `Machine.lean` with `../core/conc.py` (test_machine.py). A
 instruction run from one state:
 
     c BASE NEXT UNKNOWN ZF CF R0 … R15 START BYTES LANES | ROW…
+    d BASE NEXT UNKNOWN ZF CF R0 … R31 START BYTES LANES | ROW…       (thirty-two general registers: AArch64's, by their numbers)
 
 BYTES are the bytes of memory from START, in hexadecimal; everything may be read and written. LANES are the
 vector registers' lanes, eight hexadecimal digits each, sixteen a register, register 0 first (none: all
 zero); after the thirty-two vector registers come the eight mask registers, a bit a lane. The answer is a
-line: `next` or `returned`, then the instruction pointer, the two flags, the sixteen registers, the bytes of
+line: `next` or `returned`, then the instruction pointer, the two flags, the registers (as many as were given), the bytes of
 memory from START, and all sixteen lanes of each of the 32 vector registers and the 8 mask registers; or
 `none` where the row has no meaning here; or `norow`.
 -/
@@ -35,11 +36,13 @@ def runCase (table : Array TRow) (line : String) : String :=
   match line.splitOn " | " with
   | [head, rowText] =>
     match (head.splitOn " ").filter (· ≠ "") with
-    | "c" :: base :: next :: u :: zf :: cf :: more =>
-      let regs := ((more.take 16).map String.toNat!).toArray
-      let start := (more.getD 16 "0").toNat!
-      let bytes := parseHex (more.getD 17 "")
-      let vecs := parseWords (more.getD 18 "")
+    | kind :: base :: next :: u :: zf :: cf :: more =>
+      if kind != "c" && kind != "d" then "unreadable" else
+      let n := if kind == "d" then 32 else 16
+      let regs := ((more.take n).map String.toNat!).toArray
+      let start := (more.getD n "0").toNat!
+      let bytes := parseHex (more.getD (n + 1) "")
+      let vecs := parseWords (more.getD (n + 2) "")
       match parseSexp rowText with
       | some ins =>
         match findRow table ins with
@@ -53,7 +56,7 @@ def runCase (table : Array TRow) (line : String) : String :=
             let (kind, s') := match o with
               | .next s' => ("next", s')
               | .returned s' => ("returned", s')
-            let regsOut := " ".intercalate ((List.range 16).map fun k => toString (s'.reg k))
+            let regsOut := " ".intercalate ((List.range n).map fun k => toString (s'.reg k))
             let memOut := String.join ((List.range bytes.size).map fun k => toHex2 (s'.mem (start + k)))
             let vecOut := String.join ((List.range 40).map fun x => String.join ((List.range 16).map fun k => toHex8 (s'.vec x k)))
             s!"{kind} {s'.rip} {if s'.zf then 1 else 0} {if s'.cf then 1 else 0} {regsOut} {memOut} {vecOut}"

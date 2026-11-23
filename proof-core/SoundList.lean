@@ -81,7 +81,7 @@ theorem numbers_sound {ctx : Ctx} {s0 : State} {facts : List Row} {ρ : Nat → 
 expression is, each no less than zero. -/
 theorem slist_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
     ∀ (fuel : Nat) (env : List (String × SVal)) (e : SExpr) {s s' : Sym} {rows : List Row} {items rest : Items} {ρ : Nat → Int} {st : State},
-    slist ctx fuel env s e items = .ok ((rows, s'), rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    slist ctx fuel env s e items = .ok ((rows, s'), rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ (∀ r ∈ rows, bounded s'.nvars r) ∧ (∀ r ∈ rows, 0 ≤ ev ρ' r) ∧
       Value ctx.defs (semEnv ctx s0 ρ' env) e (.bytes (listOf ρ' rows))
   | 0, _, _, _, _, _, _, _, _, _, h, _, _, _ => by simp only [slist] at h; exact (refuse_ok h).elim
@@ -350,7 +350,7 @@ thing there (the definition's text with the place under its name) has the byte m
 theorem filled_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} {x : String}
     {b : SExpr} {w : Nat} {lo : Row} {name : String} {r n : Nat} (hw : ctx.contract.outs[w]? = some (name, r, n)) :
     ∀ (count k : Nat) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    filled ctx env x b w lo k count s items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env → bounded s.nvars lo →
+    filled ctx env x b w lo k count s items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env → bounded s.nvars lo →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧
       ∀ t, t < count → Value ctx.defs ((x, .int (ev ρ' lo + ((k + t : Nat) : Int))) :: semEnv ctx s0 ρ' env) b
         (.int (st.mem (s0.reg r + (ev ρ' lo + ((k + t : Nat) : Int)).toNat)))
@@ -445,7 +445,7 @@ theorem rangeFor_spec {s : Sym} {v : SExpr} {rg : RangeF} {args : SExpr} (h : ra
 theorem symEnsureRange_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} {s s' : Sym}
     {e : Ensure} {items rest : Items} {ρ : Nat → Int} {st st' : State} {w : Nat} {r n : Nat} {rg : RangeF} {args : SExpr}
     (hw : ctx.contract.outs[w]? = some (e.run, r, n)) (hrf : rangeFor s e.value = some (rg, args))
-    (h : symEnsureRange ctx env s e w rg args items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env)
+    (h : symEnsureRange ctx env s e w rg args items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : EnvB s.nvars env)
     (henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' env = ctx.contract.envAfter s0 st') (hmem : st'.mem = st.mem) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ e.holds ctx.contract ctx.defs s0 st' := by
   obtain ⟨hrange, hvalue⟩ := rangeFor_spec hrf
@@ -541,7 +541,7 @@ theorem symEnsureRange_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
 memory is that of the state `st` the verifier is at). -/
 theorem symEnsure_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} {s s' : Sym}
     {e : Ensure} {items rest : Items} {ρ : Nat → Int} {st st' : State}
-    (h : symEnsure ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : EnvB s.nvars env)
+    (h : symEnsure ctx env s e items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : EnvB s.nvars env)
     (henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' env = ctx.contract.envAfter s0 st') (hmem : st'.mem = st.mem) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ e.holds ctx.contract ctx.defs s0 st' := by
   unfold symEnsure at h
@@ -624,7 +624,7 @@ theorem symEnsure_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 /-- Every `ensures` of a list. -/
 theorem symEnsures_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {env : List (String × SVal)} :
     ∀ {es : List Ensure} {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st st' : State},
-    fold (symEnsure ctx env) s es items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s → EnvB s.nvars env →
+    fold (symEnsure ctx env) s es items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → EnvB s.nvars env →
     (∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' env = ctx.contract.envAfter s0 st') → st'.mem = st.mem →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ e ∈ es, e.holds ctx.contract ctx.defs s0 st'
   | [], s, s', items, rest, ρ, st, st', h, H, wf, _, _, _ => by

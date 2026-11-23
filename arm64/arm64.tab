@@ -21,13 +21,17 @@
 #         `I=32-i`: the row's I is 32 less the field i. `call=I`: the field is where the function called is
 #         (the file's relocations speak for it).
 #
-# In ASM and ROW: D, S, P are general registers x0 to x30 (D64 its 64-bit name, D32 its 32-bit name); B is a
-# base register, x0 to x30 or sp; X, Y, Z are vector registers v0 to v31; I is a number, N a displacement.
-# A field of D, S or P that holds 31 is no instance of the row: there the processor means the register that
-# reads as zero or the stack pointer, by the instruction, and this table has a row of its own wherever it
-# has the instruction at all (`add sp, sp, I`). A field of B that holds 31 is sp.
-# In EFFECT: D, S, P, B are those registers' 64 bits; sp is the stack pointer; X, Y, Z are a vector
-# register's 128 bits as four 32-bit lanes; mem32/mem64/mem128(b, n) the bytes at b + n, the lowest first.
+# In ASM and ROW: D, S, P, B are general registers x0 to x30 (D64 its 64-bit name, D32 its 32-bit name; B is
+# one that holds an address); X, Y, Z are vector registers v0 to v31; I is a number, N a displacement.
+# A field of D, S, P or B that holds 31 is no instance of the row: there the processor means the register
+# that reads as zero or the stack pointer, by the instruction, and this table has a row of its own wherever
+# it has the instruction at all (`add sp, sp, I`; `ldr D64, [sp, N]`).
+# In EFFECT: D, S, P, B are those registers' 64 bits; sp is the stack pointer; x30 is that register; X, Y, Z
+# are a vector register's 128 bits as four 32-bit lanes; mem32/mem64/mem128(b, n) the bytes at b + n, the
+# lowest first. on16(sp) is the stack pointer where it is a multiple of 16: where it is not, the processor
+# faults at a load or store whose base is the stack pointer, and the row has no state after it.
+# `call I link x30`: a call that puts the address to come back to in x30 (on x86-64 a call puts it below the
+# stack pointer). `return x30`: the function returns to the address x30 holds.
 # The flags are not in this account: no row here reads or writes them, and cross.py asks that each leaves
 # them as they were.
 #
@@ -58,7 +62,7 @@ sub_sp       | sub sp, sp, I                | .sub_sp I            | sp = sub64(
 add_of_sp    | add D64, sp, I               | .add_of_sp .D I      | D = add64(sp, I)
              = 1 0 0 100010 0 IIIIIIIIIIII 11111 DDDDD
 
-# -- memory: a base register and a displacement that is not below zero
+# -- memory: a base register x0 to x30 and a displacement that is not below zero
 ldr64        | ldr D64, [B64, N]            | .ldr64 .D .B N       | D = mem64(B, N)
              = 11 111 0 01 01 nnnnnnnnnnnn BBBBB DDDDD ; N=n*8
 str64        | str S64, [B64, N]            | .str64 .S .B N       | mem64(B, N) = S
@@ -68,10 +72,16 @@ ldr32        | ldr D32, [B64, N]            | .ldr32 .D .B N       | D = low32(m
 str32        | str S32, [B64, N]            | .str32 .S .B N       | mem32(B, N) = low32(S)
              = 10 111 0 01 00 nnnnnnnnnnnn BBBBB SSSSS ; N=n*4
 
+# -- memory at the stack pointer, which must be a multiple of 16
+ldr64_sp     | ldr D64, [sp, N]             | .ldr64_sp .D N       | D = mem64(on16(sp), N)
+             = 11 111 0 01 01 nnnnnnnnnnnn 11111 DDDDD ; N=n*8
+str64_sp     | str S64, [sp, N]             | .str64_sp .S N       | mem64(on16(sp), N) = S
+             = 11 111 0 01 00 nnnnnnnnnnnn 11111 SSSSS ; N=n*8
+
 # -- calls, returns
-bl           | -                            | .bl I                | call I
+bl           | -                            | .bl I                | call I link x30
              = 1 00101 IIIIIIIIIIIIIIIIIIIIIIIIII ; call=I
-ret          | -                            | .ret                 | return
+ret          | -                            | .ret                 | return x30
              = 1101011 0 0 10 11111 0000 0 0 11110 00000
 nop          | nop                          | .nop                 | nothing
              = 1101 0101 0000 0011 0010 0000 0001 1111

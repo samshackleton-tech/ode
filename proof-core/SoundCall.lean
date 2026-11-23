@@ -14,7 +14,7 @@ theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : S
   ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame,
    fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
-theorem WF.more {s : Sym} (wf : WF s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF { s with facts := rows ++ s.facts } :=
+theorem WF.more {ctx : Ctx} {s : Sym} (wf : WF ctx s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF ctx { s with facts := rows ++ s.facts } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 /-- Every function this one calls is among the functions there are, lies in memory, and meets the contract
@@ -39,14 +39,207 @@ theorem findRun_spec {s : Sym} {b l : Nat} : ∀ {regs : List (Nat × Nat)} {k j
       have : j - k = (j - (k + 1)) + 1 := by omega
       rw [this, List.getElem?_cons_succ]; exact hr
 
-theorem regions_args {c : Contract} {b l : Nat} (h : (b, l) ∈ c.regions) : b ∈ argRegs ∧ l ∈ argRegs := by
-  obtain ⟨hb, len, hl⟩ := regionsIn_mem c c.args argRegs b l h
-  exact ⟨hb, regOfIn_mem len c.args argRegs l hl⟩
+theorem regions_args {c : Contract} {b l : Nat} (h : (b, l) ∈ c.regions) : b ∈ c.argRegs ∧ l ∈ c.argRegs := by
+  obtain ⟨hb, len, hl⟩ := regionsIn_mem c c.args c.argRegs b l h
+  exact ⟨hb, regOfIn_mem len c.args c.argRegs l hl⟩
 
-theorem argRegs_not_rsp {r : Nat} (h : r ∈ argRegs) : r < 16 ∧ r ≠ RSP := by
-  simp only [argRegs, List.mem_cons, List.mem_nil_iff, or_false] at h
-  unfold RSP
-  omega
+/-- A register an argument is in is one of the machine's, and neither the stack pointer nor the register
+that holds the address to return to on AArch64. -/
+theorem argRegs_spec {c : Contract} {r : Nat} (h : r ∈ c.argRegs) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+  cases ha : c.arm64
+  · have all : ∀ r ∈ argRegsX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+    simp only [Contract.argRegs, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    exact all r h
+  · have all : ∀ r ∈ argRegsArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+    simp only [Contract.argRegs, Contract.regs, ha, ↓reduceIte] at h ⊢
+    exact all r h
+
+/-- The same of a register a called function keeps. -/
+theorem keeps_spec {c : Contract} {r : Nat} (h : r ∈ c.keeps) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+  cases ha : c.arm64
+  · have all : ∀ r ∈ calleeSavedX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+    simp only [Contract.keeps, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    exact all r h
+  · have all : ∀ r ∈ calleeSavedArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+    simp only [Contract.keeps, Contract.regs, ha, ↓reduceIte] at h ⊢
+    exact all r h
+
+/-- A register a called function may leave anything in is one of the machine's. -/
+theorem scratch_lt {c : Contract} {r : Nat} (h : r ∈ c.scratch) : r < c.regs := by
+  cases ha : c.arm64
+  · have all : ∀ r ∈ callerSavedX86, r < 16 := by decide
+    simp only [Contract.scratch, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    exact all r h
+  · have all : ∀ r ∈ callerSavedArm, r < 32 := by decide
+    simp only [Contract.scratch, Contract.regs, ha, ↓reduceIte] at h ⊢
+    exact all r h
+
+/-- A register of the machine is the stack pointer, or one a called function may leave anything in, or one
+it keeps. -/
+theorem kept_of_not_scratch {c : Contract} {r : Nat} (hr : r < c.regs) (h4 : r ≠ RSP) (hc : c.scratch.contains r = false) :
+    r ∈ c.keeps := by
+  cases ha : c.arm64
+  · have all : ∀ r, r < 16 → r ≠ RSP → callerSavedX86.contains r = false → r ∈ calleeSavedX86 := by decide
+    simp only [Contract.scratch, Contract.keeps, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at hr hc ⊢
+    exact all r hr h4 hc
+  · have all : ∀ r, r < 32 → r ≠ RSP → callerSavedArm.contains r = false → r ∈ calleeSavedArm := by decide
+    simp only [Contract.scratch, Contract.keeps, Contract.regs, ha, ↓reduceIte] at hr hc ⊢
+    exact all r hr h4 hc
+
+/-! ## A call, on either machine
+
+`callFits` has seen to it that the call is one the function's machine makes of a function for the same
+machine: the instruction puts the address to come back to where the called function's contract has it,
+below the stack pointer (x86-64) or in the register x30 (AArch64). The lemmas here say what such a call
+does in the words of the contract (`slot`: how many bytes of that address lie at the stack pointer, eight
+or none), so that each rule for a call is shown once, for both machines. -/
+
+/-- A register a call instruction leaves as it is: neither the stack pointer nor the register that holds
+the address to come back to on AArch64. (A word of its own, so that `omega` does not take the two
+inequalities for facts to split on: with three such registers in sight it took eight times as long.) -/
+def CallKeeps (r : Nat) : Prop := r ≠ RSP ∧ r ≠ LINK
+
+theorem callKeeps {r : Nat} (h1 : r ≠ RSP) (h2 : r ≠ LINK) : CallKeeps r := ⟨h1, h2⟩
+
+/-- What `callFits` has seen to, at a call of a function with the contract `c`, `st` being the machine's
+state at the call: the called function is for this function's machine; the call instruction puts the
+address to come back to where the called function's contract has it; and on AArch64 the stack pointer is
+a multiple of 16. -/
+structure Fits (ctx : Ctx) (st : State) (i : Instr) (c : Contract) : Prop where
+  machine : c.arm64 = ctx.contract.arm64
+  link : callLink i = c.link
+  aligned : c.arm64 = true → st.reg RSP % 16 = 0
+
+/-- On AArch64 the stack pointer is a multiple of 16 at a call: it is a multiple of 16 away from where it
+was at this function's entry, where it was one. -/
+theorem callFits_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) {i : Instr} {c : Contract} (h : callFits ctx s i c = true) : Fits ctx st i c := by
+  unfold callFits at h
+  simp only [Bool.and_eq_true, beq_iff_eq, Bool.or_eq_true, Bool.not_eq_true'] at h
+  obtain ⟨h1, h2, h3⟩ := h
+  refine ⟨h1, h2, fun ha => ?_⟩
+  rcases h3 with h3 | h3
+  · rw [ha] at h3; cases h3
+  · cases hs : s.sp with
+    | none => rw [hs] at h3; cases h3
+    | some sp =>
+      rw [hs] at h3
+      have h16 : sp % 16 = 0 := by simpa using h3
+      have e := ev_isConst (ρ := ρ) hs
+      simp only [ev_sub, ev_var] at e
+      have r1 := H.reg RSP ctx.rsp_lt
+      have r2 := H.entry RSP ctx.rsp_lt
+      have al := E.aligned (h1 ▸ ha)
+      omega
+
+namespace Fits
+variable {ctx : Ctx} {st : State} {i : Instr} {c : Contract} (F : Fits ctx st i c)
+include F
+/-- The called function's machine has the registers this function's has. -/
+theorem regs : c.regs = ctx.nreg := by unfold Ctx.nreg Contract.regs; rw [F.machine]
+theorem slot : c.slot = ctx.contract.slot := by unfold Contract.slot; rw [F.machine]
+/-- A register an argument of the called function is in: one of this function's machine's, and neither the
+stack pointer nor the register that holds the address to come back to. -/
+theorem arg {r : Nat} (h : r ∈ c.argRegs) : r < ctx.nreg ∧ CallKeeps r :=
+  ⟨F.regs ▸ (argRegs_spec h).1, (argRegs_spec h).2⟩
+end Fits
+
+theorem Contract.link_none {c : Contract} (h : c.link = none) : c.arm64 = false ∧ c.slot = 8 := by
+  cases ha : c.arm64
+  · exact ⟨rfl, by simp only [Contract.slot, ha, Bool.false_eq_true, ↓reduceIte]⟩
+  · simp only [Contract.link, ha, ↓reduceIte] at h; cases h
+
+theorem Contract.link_some {c : Contract} {l : Nat} (h : c.link = some l) : c.arm64 = true ∧ l = LINK ∧ c.slot = 0 := by
+  cases ha : c.arm64
+  · simp only [Contract.link, ha, Bool.false_eq_true, ↓reduceIte] at h; cases h
+  · simp only [Contract.link, ha, ↓reduceIte] at h
+    injection h with h
+    exact ⟨rfl, h.symm, by simp only [Contract.slot, ha, ↓reduceIte]⟩
+
+/-- The stack pointer the called function starts with: below the caller's by the bytes of the address to
+come back to. -/
+theorem afterCall_rsp {c : Contract} {p q : Program} {i : Instr} {st : State} (hl : callLink i = c.link) :
+    (afterCall p q i st).reg RSP = st.reg RSP - c.slot := by
+  cases h : c.link with
+  | none =>
+    rw [afterCall_stack (hl.trans h), (Contract.link_none h).2]
+    show (if RSP = RSP then st.reg RSP - 8 else st.reg RSP) = st.reg RSP - 8
+    rw [if_pos rfl]
+  | some l =>
+    obtain ⟨_, rfl, e⟩ := Contract.link_some h
+    rw [afterCall_link (hl.trans h), e]
+    show (if RSP = LINK then (p.base + i.next) % M64 else st.reg RSP) = st.reg RSP - 0
+    rw [if_neg (by decide)]; rfl
+
+/-- Every other register, but the one that holds the address to come back to on AArch64, is as it was. -/
+theorem afterCall_reg {c : Contract} {p q : Program} {i : Instr} {st : State} (hl : callLink i = c.link)
+    {r : Nat} (hrk : CallKeeps r) : (afterCall p q i st).reg r = st.reg r := by
+  obtain ⟨hr, hk⟩ := hrk
+  cases h : c.link with
+  | none =>
+    rw [afterCall_stack (hl.trans h)]
+    show (if r = RSP then st.reg RSP - 8 else st.reg r) = st.reg r
+    rw [if_neg hr]
+  | some l =>
+    obtain ⟨_, rfl, _⟩ := Contract.link_some h
+    rw [afterCall_link (hl.trans h)]
+    show (if r = LINK then (p.base + i.next) % M64 else st.reg r) = st.reg r
+    rw [if_neg hk]
+
+/-- Memory is as it was, but for the bytes of the address to come back to below the stack pointer. -/
+theorem afterCall_mem {c : Contract} {p q : Program} {i : Instr} {st : State} (hl : callLink i = c.link)
+    (h8 : c.slot ≤ st.reg RSP) {x : Nat} (hx : x < st.reg RSP - c.slot ∨ st.reg RSP ≤ x) :
+    (afterCall p q i st).mem x = st.mem x := by
+  cases h : c.link with
+  | none =>
+    rw [afterCall_stack (hl.trans h)]
+    rw [(Contract.link_none h).2] at hx h8
+    show store st.mem (st.reg RSP - 8) (p.base + i.next) 8 x = st.mem x
+    exact store_other _ _ _ _ _ (by omega)
+  | some l => rw [afterCall_link (hl.trans h)]
+
+/-- On AArch64 the stack pointer the called function starts with is a multiple of 16, as its contract asks. -/
+theorem afterCall_aligned {ctx : Ctx} {st : State} {i : Instr} {c : Contract} (F : Fits ctx st i c) (p q : Program)
+    (ha : c.arm64 = true) : (afterCall p q i st).reg RSP % 16 = 0 := by
+  have hs : c.slot = 0 := by simp only [Contract.slot, ha, ↓reduceIte]
+  rw [afterCall_rsp F.link, hs]
+  exact F.aligned ha
+
+/-- The registers hold numbers below 2^64 in the state the called function starts in. -/
+theorem afterCall_small {c : Contract} {p q : Program} {i : Instr} {st : State} (hl : callLink i = c.link)
+    (hs : ∀ r, st.reg r < M64) (r : Nat) : (afterCall p q i st).reg r < M64 := by
+  cases h : c.link with
+  | none =>
+    rw [afterCall_stack (hl.trans h)]
+    show (if r = RSP then st.reg RSP - 8 else st.reg r) < M64
+    split
+    · exact Nat.lt_of_le_of_lt (Nat.sub_le _ _) (hs RSP)
+    · exact hs r
+  | some l =>
+    rw [afterCall_link (hl.trans h)]
+    show (if r = l then (p.base + i.next) % M64 else st.reg r) < M64
+    split
+    · exact Nat.mod_lt _ (by decide)
+    · exact hs r
+
+/-- The address the called function's contract has it return to is the instruction after the call. -/
+theorem afterCall_back {c : Contract} {p q : Program} {i : Instr} {st : State} (hl : callLink i = c.link)
+    (hret : p.base + i.next < M64) (h8 : c.slot ≤ st.reg RSP) : c.backTo (afterCall p q i st) = p.base + i.next := by
+  cases h : c.link with
+  | none =>
+    obtain ⟨ha, hs⟩ := Contract.link_none h
+    rw [hs] at h8
+    simp only [Contract.backTo, ha, Bool.false_eq_true, ↓reduceIte]
+    rw [afterCall_stack (hl.trans h)]
+    show load (store st.mem (st.reg RSP - 8) (p.base + i.next) 8) (if RSP = RSP then st.reg RSP - 8 else st.reg RSP) 8 = p.base + i.next
+    rw [if_pos rfl]
+    exact load_store_same _ _ _ _ (by unfold M64 at hret; omega)
+  | some l =>
+    obtain ⟨ha, rfl, _⟩ := Contract.link_some h
+    simp only [Contract.backTo, ha, ↓reduceIte]
+    rw [afterCall_link (hl.trans h)]
+    show (if LINK = LINK then (p.base + i.next) % M64 else st.reg LINK) = p.base + i.next
+    rw [if_pos rfl, Nat.mod_eq_of_lt hret]
 
 /-- Each run of bytes a called function is given is one of this function's own, whole. -/
 theorem calleeEnv_regions {ctx : Ctx} {c : Contract} {s : Sym} : ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × SVal)},
@@ -84,8 +277,8 @@ theorem calleeEnv_regions {ctx : Ctx} {c : Contract} {s : Sym} : ∀ (args : Lis
             exact ⟨j, b0, l0, by simpa using hr, e1, e2⟩
           · exact calleeEnv_regions args regs hrec r l m
 
-theorem calleeEnv_bounded {ctx : Ctx} {c : Contract} {s : Sym} (wf : WF s) : ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × SVal)},
-    (∀ r ∈ regs, r < 16) → calleeEnv ctx c s args regs = some env → EnvB s.nvars env
+theorem calleeEnv_bounded {ctx : Ctx} {c : Contract} {s : Sym} (wf : WF ctx s) : ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × SVal)},
+    (∀ r ∈ regs, r < ctx.nreg) → calleeEnv ctx c s args regs = some env → EnvB s.nvars env
   | [], _, env, _, h => by
     simp only [calleeEnv] at h; injection h with h; subst h; exact fun nv m => nomatch m
   | _ :: _, [], env, _, h => by
@@ -126,10 +319,10 @@ theorem calleeEnv_bounded {ctx : Ctx} {c : Contract} {s : Sym} (wf : WF s) : ∀
 
 /-- A called function's names on symbols mean its names in the state it starts in. -/
 theorem semEnv_calleeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {c : Contract} {s1 : State}
-    (hentry : ∀ r, r < 16 → ρ r = s0.reg r)
-    (hreg : ∀ r ∈ argRegs, (s1.reg r : Int) = ev ρ (s.reg r))
+    (hentry : ∀ r, r < ctx.nreg → ρ r = s0.reg r)
+    (hreg : ∀ r ∈ c.argRegs, (s1.reg r : Int) = ev ρ (s.reg r))
     (hmem : ∀ b0 l0, (b0, l0) ∈ ctx.contract.regions → ∀ k, k < s0.reg l0 → s1.mem (s0.reg b0 + k) = s0.mem (s0.reg b0 + k)) :
-    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × SVal)}, (∀ r ∈ regs, r ∈ argRegs) →
+    ∀ (args : List (String × Kind)) (regs : List Nat) {env : List (String × SVal)}, (∀ r ∈ regs, r ∈ c.argRegs) →
     calleeEnv ctx c s args regs = some env → semEnv ctx s0 ρ env = envIn c s1 args regs
   | [], _, env, _, h => by
     simp only [calleeEnv] at h; injection h with h; subst h; simp [semEnv, envIn]
@@ -170,7 +363,7 @@ theorem semEnv_calleeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {
           have hreg0' : ctx.contract.regions[j]? = some (b0, l0) := by simpa using hreg0
           have hm := List.mem_of_getElem? hreg0'
           have lt := regions_lt hm
-          have hl1 : l1 ∈ argRegs := regOfIn_mem len c.args argRegs l1 hl
+          have hl1 : l1 ∈ c.argRegs := regOfIn_mem len c.args c.argRegs l1 hl
           have rx : s1.reg x = s0.reg b0 := by
             have := hreg x (hr x (List.mem_cons_self ..))
             rw [e1, ev_var, hentry b0 lt.1] at this
@@ -186,30 +379,27 @@ theorem semEnv_calleeEnv {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {
 
 /-! ## The state after a call -/
 
-/-- What the unknowns are after a call: those made for the registers are what the registers then hold. -/
-def afterRho (n : Nat) (ρ : Nat → Int) (s2 : State) : Nat → Int :=
-  fun k => if n ≤ k ∧ k < n + 16 then (s2.reg (k - n) : Int) else ρ k
+/-- What the unknowns are after a call: those made for the registers (`m` of them, from `n` on) are what
+the registers then hold. -/
+def afterRho (m n : Nat) (ρ : Nat → Int) (s2 : State) : Nat → Int :=
+  fun k => if n ≤ k ∧ k < n + m then (s2.reg (k - n) : Int) else ρ k
 
-theorem afterRho_agree (n : Nat) (ρ : Nat → Int) (s2 : State) : Agree n ρ (afterRho n ρ s2) := by
+theorem afterRho_agree (m n : Nat) (ρ : Nat → Int) (s2 : State) : Agree n ρ (afterRho m n ρ s2) := by
   intro k hk
-  show ρ k = if n ≤ k ∧ k < n + 16 then (s2.reg (k - n) : Int) else ρ k
+  show ρ k = if n ≤ k ∧ k < n + m then (s2.reg (k - n) : Int) else ρ k
   rw [if_neg (by omega)]
 
-theorem afterRho_new (n : Nat) (ρ : Nat → Int) (s2 : State) {r : Nat} (hr : r < 16) : afterRho n ρ s2 (n + r) = s2.reg r := by
-  show (if n ≤ n + r ∧ n + r < n + 16 then (s2.reg (n + r - n) : Int) else ρ (n + r)) = s2.reg r
+theorem afterRho_new (m n : Nat) (ρ : Nat → Int) (s2 : State) {r : Nat} (hr : r < m) : afterRho m n ρ s2 (n + r) = s2.reg r := by
+  show (if n ≤ n + r ∧ n + r < n + m then (s2.reg (n + r - n) : Int) else ρ (n + r)) = s2.reg r
   rw [if_pos (by omega), Nat.add_sub_cancel_left]
 
-theorem callerSaved_lt {r : Nat} (h : r ∈ callerSaved) : r < 16 := by
-  simp only [callerSaved, List.mem_cons, List.mem_nil_iff, or_false] at h
-  omega
-
-theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := by
+theorem afterCall_wf {ctx : Ctx} {s : Sym} (wf : WF ctx s) (c : Contract) (hm : c.regs = ctx.nreg) (sp : Int) : WF ctx (s.afterCall c sp) := by
   refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_,
     ⟨wf.words.table, fun j r h => bounded_mono (Nat.le_add_right _ _) (wf.words.atoms j r h), fun x ids h => by simp [Sym.afterCall] at h,
      wf.words.rotrs, (fun _ _ _ h => by simp [Sym.afterCall] at h), fun _ _ h => nomatch h⟩,
     fun k m => Known.wf_mono (Nat.le_add_right _ _) (Nat.le_refl _) (wf.known k m), fun _ h => nomatch h⟩
   · intro r hr
-    show bounded (s.nvars + 16) (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
+    show bounded (s.nvars + c.regs) (if c.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
     · exact bounded_var (by omega)
     · exact bounded_mono (Nat.le_add_right _ _) (wf.reg r hr)
@@ -220,11 +410,11 @@ theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := b
     rcases m with m | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-      have hr := callerSaved_lt hr
+      have hr := scratch_lt hr
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
-      · exact bounded_var (show s.nvars + r < s.nvars + 16 by omega)
-      · exact bounded_sub (bounded_const _ _) (bounded_var (show s.nvars + r < s.nvars + 16 by omega))
+      · exact bounded_var (show s.nvars + r < s.nvars + c.regs by omega)
+      · exact bounded_sub (bounded_const _ _) (bounded_var (show s.nvars + r < s.nvars + c.regs by omega))
     · exact bounded_mono (Nat.le_add_right _ _) (wf.facts f m)
   · intro v r o m
     have := wf.bytes v r o m
@@ -236,28 +426,28 @@ theorem afterCall_wf {s : Sym} (wf : WF s) (sp : Int) : WF (s.afterCall sp) := b
 
 /-- Of the machine's state when the called function has returned, what the verifier holds after the call is
 so: given that the registers a callee keeps and the stack pointer are as before the call, and memory is as
-before but in the called function's frame and at the address it returned to. -/
-theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st s2 : State} {sp : Int} (cs : Nat)
-    (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stack : Int) ≤ sp - 8 - cs) (hsp0 : sp ≤ 0)
+before but in the called function's frame and at the address it returned to (where that is in memory). -/
+theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st s2 : State} {sp : Int} (c : Contract)
+    (hm : c.regs = ctx.nreg) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack) (hsp0 : sp ≤ 0)
     (hstack : ctx.contract.stack ≤ s0.reg RSP)
-    (hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r)
+    (hkeep : ∀ r, r < ctx.nreg → c.scratch.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
-    (hmem : ∀ a, a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
+    (hmem : ∀ a, a + c.slot + c.stack < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
     (hout : ∀ x r n, (x, r, n) ∈ ctx.contract.outs →
-      s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r)
+      s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r)
     (hdata : s2.data = st.data) :
-    Holds ctx s0 (afterRho s.nvars ρ s2) (s.afterCall sp) s2 := by
-  have ag := afterRho_agree s.nvars ρ s2
+    Holds ctx s0 (afterRho c.regs s.nvars ρ s2) (s.afterCall c sp) s2 := by
+  have ag := afterRho_agree c.regs s.nvars ρ s2
   have H' := H.agree wf ag
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
     ⟨(fun x ids h => by simp [Sym.afterCall] at h), (fun w m => by simp [Sym.afterCall] at m),
      (fun w j i m => by simp [Sym.afterCall] at m), fun _ _ h => nomatch h⟩,
     H'.known, fun _ h => nomatch h⟩
   · intro r hr
-    show (s2.reg r : Int) = ev _ (if callerSaved.contains r = true then Lin.var (s.nvars + r) else s.reg r)
-    cases hc : callerSaved.contains r with
-    | true => rw [if_pos rfl, ev_var, afterRho_new _ _ _ hr]
+    show (s2.reg r : Int) = ev _ (if c.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
+    cases hc : c.scratch.contains r with
+    | true => rw [if_pos rfl, ev_var, afterRho_new _ _ _ _ (hm ▸ hr)]
     | false =>
       rw [if_neg (by decide), hkeep r hr hc]
       exact H'.reg r hr
@@ -274,17 +464,17 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     rcases m with m | m
     · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
       obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
-      have hr := callerSaved_lt hr
+      have hr := scratch_lt hr
       have sm := hsmall r
       unfold M64 at sm
-      have val := afterRho_new s.nvars ρ s2 hr
+      have val := afterRho_new c.regs s.nvars ρ s2 hr
       simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
       rcases hf with rfl | rfl
       · rw [holds_iff, ev_var, val]; omega
       · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
     · exact H'.facts f m
   · intro a ha ho
-    have hfr : a + 8 + cs < st.reg RSP ∨ st.reg RSP ≤ a := by
+    have hfr : a + c.slot + c.stack < st.reg RSP ∨ st.reg RSP ≤ a := by
       simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at ha
       omega
     rw [hmem a hfr]
@@ -304,9 +494,9 @@ caller has seen to; what the called function may touch, this function may touch;
 contract lets it return in, what the verifier holds after the call is so, at the next instruction. -/
 theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {c : Contract}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symCallPlain ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
-    (q : Program) (hq : q.fits) (i : Instr) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
-    8 ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true ∧
+    (h : symCallPlain ctx s c items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (q : Program) (hq : q.fits) (i : Instr) (F : Fits ctx st i c) (hret : p.base + i.next < M64) (hl : c.lanes = []) (hal : c.atLeast = []) :
+    c.slot ≤ st.reg RSP ∧ allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true ∧
     c.pre q (afterCall p q i st) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).read a = true → (ctx.contract.perm ctx.pieces s0).read a = true) ∧
     (∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) ∧
@@ -319,7 +509,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
     split at h
     next => exact (refuse_ok h).elim
     next hguard =>
-      have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - 8 - c.stack := by simpa using hguard
+      have hg : sp ≤ 0 ∧ -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack := by simpa using hguard
       -- the called function writes nothing for its caller (the verifier has no rule for that yet)
       have hw : (c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) = true := by
         cases hw : (c.outs.isEmpty && c.ensures.isEmpty && (c.fixeds.isEmpty && (c.inouts.isEmpty && c.ensuresW.isEmpty))) with
@@ -339,33 +529,33 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
       have hew := hall.2.2.2
       have hno : ∀ (x : State) (a : Nat), c.inOut x a = false := fun x a => by simp [Contract.inOut, hout.1]
       have hnf : ∀ (x : State) (a : Nat), c.inFixed x a = false := fun x a => by simp [Contract.inFixed, hfx, hio]
-      cases henv : calleeEnv ctx c s c.args argRegs with
+      cases henv : calleeEnv ctx c s c.args c.argRegs with
       | none => simp only [henv] at h; exact (refuse_ok h).elim
       | some env =>
         simp only [henv] at h
         have e := ev_isConst (ρ := ρ) hsp
         simp only [ev_sub, ev_var] at e
-        have h1 := H.reg RSP (by decide)
-        have h2 := H.entry RSP (by decide)
+        have h1 := H.reg RSP ctx.rsp_lt
+        have h2 := H.entry RSP ctx.rsp_lt
         have hrsp : (st.reg RSP : Int) = s0.reg RSP + sp := by omega
         have hstack := E.stack
         have habove := E.above
         have hsmallsp := H.small RSP
-        have h8 : 8 ≤ st.reg RSP := by omega
-        have s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - 8 := by simp [afterCall]
-        have s1reg : ∀ r, r ≠ RSP → (afterCall p q i st).reg r = st.reg r := fun r hr => by simp [afterCall, hr]
-        have s1mem : ∀ x, x < st.reg RSP - 8 ∨ st.reg RSP ≤ x → (afterCall p q i st).mem x = st.mem x := fun x hx => by
-          show store st.mem (st.reg RSP - 8) (p.base + i.next) 8 x = st.mem x
-          exact store_other _ _ _ _ _ (by omega)
+        have hslot := F.slot
+        have h8 : c.slot ≤ st.reg RSP := by omega
+        have s1rsp : (afterCall p q i st).reg RSP = st.reg RSP - c.slot := afterCall_rsp F.link
+        have s1reg : ∀ r, CallKeeps r → (afterCall p q i st).reg r = st.reg r := fun r hr => afterCall_reg F.link hr
+        have s1mem : ∀ x, x < st.reg RSP - c.slot ∨ st.reg RSP ≤ x → (afterCall p q i st).mem x = st.mem x :=
+          fun x hx => afterCall_mem F.link h8 hx
         have hregion : ∀ r l, (r, l) ∈ c.regions → ∃ b0 l0, (b0, l0) ∈ ctx.contract.regions ∧
             (afterCall p q i st).reg r = s0.reg b0 ∧ (afterCall p q i st).reg l = s0.reg l0 := by
           intro r l m
-          obtain ⟨j, b0, l0, hj, e1, e2⟩ := calleeEnv_regions c.args argRegs henv r l m
+          obtain ⟨j, b0, l0, hj, e1, e2⟩ := calleeEnv_regions c.args c.argRegs henv r l m
           have hm := List.mem_of_getElem? hj
           have lt := regions_lt hm
           obtain ⟨ar, al⟩ := regions_args m
-          obtain ⟨r16, rne⟩ := argRegs_not_rsp ar
-          obtain ⟨l16, lne⟩ := argRegs_not_rsp al
+          obtain ⟨r16, rne⟩ := F.arg ar
+          obtain ⟨l16, lne⟩ := F.arg al
           refine ⟨b0, l0, hm, ?_, ?_⟩
           · rw [s1reg r rne]
             have := H.reg r r16
@@ -376,14 +566,12 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             rw [e2, ev_var, H.entry l0 lt.2] at this
             omega
         have hpre : c.pre q (afterCall p q i st) := by
-          refine ⟨rfl, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
+          refine ⟨afterCall_rip p q i st, ?_, ?_, ?_, hq, ?_, (fun x r n m => by rw [hout.1] at m; cases m), (by rw [hout.1]; exact List.Pairwise.nil),
             (fun x r n m => by rw [hfx] at m; cases m),
             (fun x b m => by rw [hb] at m; cases m), (fun x off b m r n mf => by rw [hfx] at mf; cases mf),
-            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), fun x k m => by rw [hal] at m; cases m⟩
-          · intro r
-            by_cases hr : r = RSP
-            · rw [hr, s1rsp]; omega
-            · rw [s1reg r hr]; exact H.small r
+            (fun j x r count l m => by rw [tableAt_none hl] at m; cases m), (fun x k m => by rw [hal] at m; cases m),
+            afterCall_aligned F p q⟩
+          · exact afterCall_small F.link H.small
           · rw [s1rsp]; omega
           · rw [s1rsp]; omega
           · intro r l m
@@ -409,7 +597,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           intro a ha
           simp only [Contract.perm, hno, Bool.or_false, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, s1rsp] at ha ⊢
           left; omega
-        have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - 8) 8 = true := by
+        have hwr : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true := by
           apply allowed_of
           intro x hx1 hx2
           simp only [Contract.perm, Contract.inFrame, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq]
@@ -418,26 +606,21 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         intro s2 post hdata2
         obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _⟩ := post
         have hrip : s2.rip = p.base + i.next := by
-          rw [prip, s1rsp]
-          show load (store st.mem (st.reg RSP - 8) (p.base + i.next) 8) (st.reg RSP - 8) 8 = p.base + i.next
-          exact load_store_same _ _ _ _ (by unfold M64 at hret; omega)
-        have hkeep : ∀ r, r < 16 → callerSaved.contains r = false → s2.reg r = st.reg r := by
+          rw [prip]
+          exact afterCall_back F.link hret h8
+        have hkeep : ∀ r, r < ctx.nreg → c.scratch.contains r = false → s2.reg r = st.reg r := by
           intro r hr hc
           by_cases h4 : r = RSP
           · rw [h4, prsp, s1rsp]; omega
-          · have hmemr : r ∈ calleeSaved := by
-              unfold RSP at h4
-              simp [callerSaved] at hc
-              simp only [calleeSaved, List.mem_cons, List.mem_nil_iff, or_false]
-              omega
-            rw [psaved r hmemr, s1reg r h4]
-        have hmem2 : ∀ a, a + 8 + c.stack < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a := by
+          · have hmemr : r ∈ c.keeps := kept_of_not_scratch (F.regs ▸ hr) h4 hc
+            rw [psaved r hmemr, s1reg r (callKeeps h4 (keeps_spec hmemr).2.2)]
+        have hmem2 : ∀ a, a + c.slot + c.stack < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a := by
           intro a ha
           rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega) (hno _ a)]
           exact s1mem a (by omega)
-        have Hafter := afterCall_holds c.stack H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.out m).2) hdata2
-        have wafter := afterCall_wf wf sp
-        have ag := afterRho_agree s.nvars ρ s2
+        have Hafter := afterCall_holds c F.regs H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.out m).2) hdata2
+        have wafter := afterCall_wf wf c F.regs sp
+        have ag := afterRho_agree c.regs s.nvars ρ s2
         cases hret' : c.returns with
         | none =>
           simp only [hret'] at h
@@ -448,26 +631,27 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         | some e =>
           simp only [hret'] at h
           obtain ⟨⟨res, s3⟩, r1, e1, h⟩ := V.bind_ok h
-          have envb : EnvB s.nvars env := calleeEnv_bounded wf c.args argRegs (fun r m => (argRegs_not_rsp m).1) henv
+          have envb : EnvB s.nvars env := calleeEnv_bounded wf c.args c.argRegs (fun r m => (F.arg m).1) henv
           obtain ⟨ρ3, c3, sem, bd⟩ := seval_sound E env e e1 Hafter wafter (envb.mono (Nat.le_add_right _ _))
           have ag3 : Agree s.nvars ρ ρ3 := Agree.trans (Nat.le_add_right _ _) ag c3.agree
           have henv3 : semEnv ctx s0 ρ3 env = c.env (afterCall p q i st) := by
             rw [← semEnv_agree envb ag3]
             exact semEnv_calleeEnv H.entry
-              (fun r m => by rw [s1reg r (argRegs_not_rsp m).2]; exact H.reg r (argRegs_not_rsp m).1)
+              (fun r m => by rw [s1reg r (F.arg m).2]; exact H.reg r (F.arg m).1)
               (fun b0 l0 hm k hk => by
                 obtain ⟨fit, apart⟩ := E.region hm
                 rw [s1mem _ (by omega)]
                 exact H.mem _ (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega)
                   (E.region_notOut hm (Nat.le_add_right _ _) (by omega)))
-              c.args argRegs (fun r m => m) henv
+              c.args c.argRegs (fun r m => m) henv
           rw [henv3] at sem
           have val := pret e hret'
+          have pos : 0 < c.regs := by rw [F.regs]; exact ctx.lt_nreg (by decide)
           have hnew : ev ρ3 (Lin.var s.nvars) = s2.reg 0 := by
-            rw [ev_var, ← c3.agree s.nvars (show s.nvars < s.nvars + 16 by omega)]
-            exact afterRho_new s.nvars ρ s2 (r := 0) (by decide)
+            rw [ev_var, ← c3.agree s.nvars (show s.nvars < s.nvars + c.regs by omega)]
+            exact afterRho_new c.regs s.nvars ρ s2 (r := 0) pos
           have bvar : bounded s3.nvars (Lin.var s.nvars) :=
-            bounded_var (Nat.lt_of_lt_of_le (show s.nvars < s.nvars + 16 by omega) c3.mono)
+            bounded_var (Nat.lt_of_lt_of_le (show s.nvars < s.nvars + c.regs by omega) c3.mono)
           cases res with
           | list _ => exact (refuse_ok h).elim
           | tail call =>

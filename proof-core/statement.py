@@ -3,9 +3,10 @@
 
     python3 statement.py SPEC OUT.statement OBJECT:SYMBOL [OBJECT:SYMBOL …]
 
-Each function's instructions as ../kcheck/kdecode.py reads them from its OBJECT's bytes by the table, the
-contract of each SYMBOL in SPEC and the definitions of SPEC as ../kcheck/ode.py reads them, written as the
-lines Main.lean reads. A contract or a definition with anything the verifier in Lean does not read yet is
+Each function's instructions as ../kcheck/kdecode.py reads them from its OBJECT's bytes by the table (an
+object file for AArch64: as ../arm64/obj.py reads them by ../arm64/arm64.tab, and the function's lines say
+`machine arm64`), the contract of each SYMBOL in SPEC and the definitions of SPEC as ../kcheck/ode.py reads
+them, written as the lines Main.lean reads. A contract or a definition with anything the verifier in Lean does not read yet is
 refused here: no line of a contract is left out. A function is written after those it calls (the verifier
 takes a call only by the contract of a function it has shown before). The theorem in SoundTop.lean is about
 what these lines say; that they say what the files' bytes and the specification's text say rests on this
@@ -13,7 +14,29 @@ file and the two it reads with."""
 import os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "kcheck"))
+sys.path.insert(0, os.path.join(HERE, "..", "arm64"))
 import kdecode, ode
+import obj as arm64_obj
+
+
+def arm64(path):
+    """Is the object file one for AArch64?"""
+    return arm64_obj.machine(path) == "arm64"
+
+
+# The table of instructions each machine's functions are read by, here and by the verifier.
+TABLES = {"x86-64": os.path.join(HERE, "..", "core", "x86.tab"), "arm64": os.path.join(HERE, "..", "arm64", "arm64.tab")}
+
+
+def table_of(lines):
+    """The table the verifier is given with a statement: AArch64's where its functions say `machine arm64`,
+    else x86-64's. (A statement's functions are all for one machine: `statement` refuses any other.)"""
+    return TABLES["arm64" if "machine arm64" in lines else "x86-64"]
+
+
+def table_for(path):
+    """The same, of a statement in a file."""
+    with open(path) as f: return table_of(f.read().split("\n"))
 
 
 class Scope:
@@ -501,6 +524,7 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
 
 def called(obj, symbol):
     """The functions SYMBOL calls, by name, in the order of their first call."""
+    if arm64(obj): return arm64_obj.called(obj, symbol)
     out = []
     for _, _, text in kdecode.read(obj, symbol, 0, 0)[0]:
         m = re.fullmatch(r"\.call (\S+)", text)
@@ -550,6 +574,7 @@ def pieces(functions):
     function after those it calls). A file's number in the statement is its place in this list."""
     out, seen = [], set()
     for obj, symbol in ordered(functions):
+        if arm64(obj): continue           # (no row of the AArch64 table takes an address in a file's data yet)
         rows, rodata = kdecode.read(obj, symbol, 0, 0)
         if takes_data(rows) and os.path.realpath(obj) not in seen:
             seen.add(os.path.realpath(obj))
@@ -564,6 +589,7 @@ def statement(spec_text, functions):
     out = []
     spec = ode.Spec(spec_text)
     seqs = sequences(spec)
+    if len({arm64(obj) for obj, _ in functions}) > 1: raise SystemExit("statement: functions for x86-64 and for AArch64 in one statement")
     # Nothing of the specification is left out without a word: what the account in Lean has no meaning for is refused.
     # (A layout says nothing by itself: it is read where an argument of a function to be shown is of its kind.)
     for what, there in (("a lemma", spec.lemmas), ("a kind", spec.kinds)):
@@ -576,6 +602,14 @@ def statement(spec_text, functions):
     for _, align, rodata in files: out.append(f"piece {align} {rodata.hex().upper()}")
     for obj, symbol in ordered(functions):
         out.append(f"fn {symbol}")
+        if arm64(obj):
+            # A function for AArch64: its machine, its instructions by the AArch64 table, its contract.
+            out.append("machine arm64")
+            for a, b, text in arm64_obj.read(obj, symbol): out.append(f"i {a} {b} {text}")
+            if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
+            if spec.contracts[symbol]["needs"]: raise SystemExit(f"statement: the contract of {symbol}, a function for AArch64, says what it needs of the processor: not read yet")
+            out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts)
+            continue
         rows, rodata = kdecode.read(obj, symbol, 0, 0)
         # A function that takes an address in its file's data says which file's it is (before its instructions).
         if takes_data(rows): out.append(f"data {number[os.path.realpath(obj)]}")

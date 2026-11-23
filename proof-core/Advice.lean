@@ -167,7 +167,7 @@ def callNeeds (ctx : Ctx) (s : Sym) (c : Contract) : List (String × Kind) → L
 
 /-- Before a call: the rows its rules will look for that no one fact says. -/
 def callRows (ctx : Ctx) (s : Sym) (c : Contract) : List Row :=
-  (callNeeds ctx s c c.args argRegs).filter fun g => decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
+  (callNeeds ctx s c c.args c.argRegs).filter fun g => decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
 
 /-- The advice `odeprove` gives the verifier's rules to print. -/
 def adviceFor (ctx : Ctx) : Advice := { ensures := ensureRows ctx, call := callRows ctx }

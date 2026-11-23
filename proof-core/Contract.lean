@@ -307,17 +307,45 @@ structure Contract where
   hidden : List String := []              -- the runs given to read whose bytes may be marked (secret), and the
                                           -- numbers given that may be: what can be observed of a run of the
                                           -- function must not depend on them
+  arm64 : Bool := false                   -- the function is for AArch64: it is called as C calls a function there
+                                          -- (`argRegsArm`, `calleeSavedArm`, the address to return to in x30).
+                                          -- Else it is for x86-64, called as C calls a function there.
   deriving Repr, Inhabited
 
-/-- The registers arguments are in, in their order: rdi, rsi, rdx, rcx, r8, r9. -/
-def argRegs : List Nat := [7, 6, 2, 1, 8, 9]
+/-- The registers arguments are in, in their order, on x86-64: rdi, rsi, rdx, rcx, r8, r9. -/
+def argRegsX86 : List Nat := [7, 6, 2, 1, 8, 9]
+
+/-- The same on AArch64: x0 to x7 (x4 has the number 31: `regNamesArm`). -/
+def argRegsArm : List Nat := [0, 1, 2, 3, 31, 5, 6, 7]
+
+/-- The register that holds the address to return to, on AArch64: x30. -/
+def LINK : Nat := 30
+
+/-- The registers the function's arguments are in, in their order. -/
+def Contract.argRegs (c : Contract) : List Nat := if c.arm64 then argRegsArm else argRegsX86
+
+/-- The registers the function gives back as it found them. -/
+def Contract.keeps (c : Contract) : List Nat := if c.arm64 then calleeSavedArm else calleeSavedX86
+
+/-- How many bytes at the stack pointer hold the address to return to, at the function's entry: eight on
+x86-64; none on AArch64, where a register holds it. -/
+def Contract.slot (c : Contract) : Nat := if c.arm64 then 0 else 8
+
+/-- The register that holds the address to return to at the function's entry, where one does. -/
+def Contract.link (c : Contract) : Option Nat := if c.arm64 then some LINK else none
+
+/-- How many general registers the function's machine has. -/
+def Contract.regs (c : Contract) : Nat := if c.arm64 then 32 else 16
+
+/-- The address the function returns to, `s` being the state at entry. -/
+def Contract.backTo (c : Contract) (s : State) : Nat := if c.arm64 then s.reg LINK else load s.mem (s.reg RSP) 8
 
 def regOfIn (name : String) : List (String × Kind) → List Nat → Option Nat
   | (n, _) :: args, r :: regs => if n == name then some r else regOfIn name args regs
   | _, _ => none
 
 /-- The register of the argument of that name. -/
-def Contract.regOf (c : Contract) (name : String) : Option Nat := regOfIn name c.args argRegs
+def Contract.regOf (c : Contract) (name : String) : Option Nat := regOfIn name c.args c.argRegs
 
 def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat × Nat)
   | (_, .bytes len) :: args, r :: regs =>
@@ -331,7 +359,7 @@ def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat 
   | _, _ => []
 
 /-- The runs of bytes the function is given to read: (the register with the address, the register with the length). -/
-def Contract.regions (c : Contract) : List (Nat × Nat) := regionsIn c c.args argRegs
+def Contract.regions (c : Contract) : List (Nat × Nat) := regionsIn c c.args c.argRegs
 
 def outsIn : List (String × Kind) → List Nat → List (String × Nat × Nat)
   | (name, .out n) :: args, r :: regs => (name, r, n) :: outsIn args regs
@@ -351,13 +379,13 @@ def inoutsIn : List (String × Kind) → List Nat → List (String × Nat × Nat
 
 /-- The runs of bytes the function may write: (the argument's name, the register with the address, how many
 bytes). Those it may also read (`inout`) are among them. -/
-def Contract.outs (c : Contract) : List (String × Nat × Nat) := outsIn c.args argRegs
+def Contract.outs (c : Contract) : List (String × Nat × Nat) := outsIn c.args c.argRegs
 
 /-- The runs of a fixed number of bytes the function may only read. -/
-def Contract.fixeds (c : Contract) : List (String × Nat × Nat) := fixedsIn c.args argRegs
+def Contract.fixeds (c : Contract) : List (String × Nat × Nat) := fixedsIn c.args c.argRegs
 
 /-- The runs the function may read and may write. -/
-def Contract.inouts (c : Contract) : List (String × Nat × Nat) := inoutsIn c.args argRegs
+def Contract.inouts (c : Contract) : List (String × Nat × Nat) := inoutsIn c.args c.argRegs
 
 /-- The fixed run of number `j` is a table of addresses (`lanes` names it): the table's name, the register
 with its address, how many addresses it holds (eight bytes each), and the register with the count of blocks. -/
@@ -420,12 +448,12 @@ def envWIn (c : Contract) (s : State) : List (String × Kind) → List Nat → L
 
 /-- The names of the contract as values, in a state at entry: a number is its register; a run of bytes is
 what memory holds there. -/
-def Contract.env (c : Contract) (s : State) : List (String × Val) := envIn c s c.args argRegs
+def Contract.env (c : Contract) (s : State) : List (String × Val) := envIn c s c.args c.argRegs
 
 /-- The same, with the runs of a fixed count as well (those only read, and those read and written): each is
 the bytes memory holds there in the state at entry. An `EnsureW` is said by these names. A table of
 addresses comes first, by its name: there the name is the list of its lanes (the first of a name counts). -/
-def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEnv s ++ envWIn c s c.args argRegs
+def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEnv s ++ envWIn c s c.args c.argRegs
 
 def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
 
@@ -451,42 +479,47 @@ def Loaded (pieces : List Piece) (s : State) : Prop :=
     ∀ j (h : j < pc.bytes.length), (s.mem (s.data k + j)).val = pc.bytes[j] ∧ s.marks.mem (s.data k + j) = false
 
 /-- What the function may touch, `s` being the state at entry: it may read the runs of bytes it is given to
-read, its own frame and the return address above it, the blocks a table of addresses points to, and the
-read-only data of every object file of the program; it may write its own frame and the runs given to write. -/
+read, its own frame and the return address above it (where that is in memory: `slot`), the blocks a table
+of addresses points to, and the read-only data of every object file of the program; it may write its own
+frame and the runs given to write. -/
 def Contract.perm (c : Contract) (pieces : List Piece) (s : State) : Perm where
-  read a := ((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + 8) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || inPieces pieces s a
+  read a := ((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + c.slot) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || inPieces pieces s a
   write a := c.inFrame s a || c.inOut s a
 
 /-- The function's code lies in memory below 2^64. -/
 def Program.fits (p : Program) : Prop := ∀ oi ∈ p.code, p.base + oi.2.next < M64
 
 /-- What the caller sees to: the function is entered at its start; the registers hold numbers below 2^64;
-`stack` bytes below the stack pointer and the eight at it are in memory; each run of bytes given to read
+`stack` bytes below the stack pointer and the bytes of the address to return to at it (`slot`: eight on
+x86-64, none on AArch64) are in memory; each run of bytes given to read
 lies in memory, apart from that frame and from the address to return to; each run given to
 write lies in memory, apart from that frame, from the address to return to, from every run given to read
 and from every other run given to write. A run of a fixed count given to read lies in memory likewise, apart
 from the frame, the address to return to and every run given to write. A number the contract bounds is below its bound, in a register or in memory. The
 blocks each address of a table points to lie in memory, apart from the frame, the address to return to and
-every run given to write. A number the contract asks to be no less than another is so. -/
+every run given to write. A number the contract asks to be no less than another is so. On AArch64 the
+stack pointer is a multiple of 16 (the processor faults at a load or store whose base is a stack pointer
+that is not). -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
-  c.stack ≤ s.reg RSP ∧ s.reg RSP + 8 < M64 ∧ p.fits ∧
+  c.stack ≤ s.reg RSP ∧ s.reg RSP + c.slot < M64 ∧ p.fits ∧
   (∀ r l, (r, l) ∈ c.regions →
-    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r)) ∧
+    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r)) ∧
   (∀ x r n, (x, r, n) ∈ c.outs →
-    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
+    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
     ∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
   (c.outs.Pairwise fun (_, r, n) (_, r', n') => s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x r n, (x, r, n) ∈ c.fixeds →
-    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ s.reg r) ∧
+    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b) ∧
   (∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b) ∧
   (∀ j x r count l, c.tableAt j = some (x, r, count, l) → ∀ i, i < count →
     lanePtr s r i + 64 * s.reg l ≤ M64 ∧
-    (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + 8 ≤ lanePtr s r i) ∧
+    (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ lanePtr s r i) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → lanePtr s r i + 64 * s.reg l ≤ s.reg r' ∨ s.reg r' + n' ≤ lanePtr s r i) ∧
-  ∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r
+  (∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r) ∧
+  (c.arm64 = true → s.reg RSP % 16 = 0)
 
 /-- A byte of the program as it is loaded, which no function writes: a byte of the read-only data of one of
 its object files, or a byte of an instruction of one of its functions. -/
@@ -497,7 +530,7 @@ def Fixed (world : List Program) (pieces : List Piece) (s : State) (a : Nat) : P
 the runs given to write) and no byte of the address to return to is a byte of the program's read-only data
 or of its code. (A run given only to read may lie over read-only data: both are only read.) -/
 def Contract.clear (c : Contract) (world : List Program) (pieces : List Piece) (s : State) : Prop :=
-  ∀ a, Fixed world pieces s a → c.inFrame s a = false ∧ c.inOut s a = false ∧ ¬(s.reg RSP ≤ a ∧ a < s.reg RSP + 8)
+  ∀ a, Fixed world pieces s a → c.inFrame s a = false ∧ c.inOut s a = false ∧ ¬(s.reg RSP ≤ a ∧ a < s.reg RSP + c.slot)
 
 /-- The names of the contract as values when the function has returned: those at entry, and the number
 returned by the name `returns` gives it, where it gives it one. -/
@@ -529,13 +562,14 @@ theorem EnsureW.holds_whole {e : EnsureW} (hp : e.part = none) {c : Contract} {d
       ∀ k (h : k < l.length), (s'.mem (s.reg r + k)).val = l[k] := by
   simp only [EnsureW.holds, EnsureW.first, EnsureW.size, hp, Nat.zero_add, Nat.add_zero, Nat.le_refl, true_and]
 
-/-- What the function leaves, `s` being the state at entry: it has returned to its caller with the stack
-pointer above the return address, the registers a callee keeps as they were, memory outside its own frame
-and the runs given to write as it was, in rax the value the contract says, numbers below 2^64 in the
-registers, and in the runs given to write what each `ensures` says. -/
+/-- What the function leaves, `s` being the state at entry: it has returned to its caller (`backTo`) with the
+stack pointer above the return address (on AArch64: where it was), the registers a callee keeps as they
+were, memory outside its own frame and the runs given to write as it was, in rax (on AArch64: x0) the value
+the contract says, numbers below 2^64 in the registers, and in the runs given to write what each `ensures`
+says. -/
 def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
-  s'.rip = load s.mem (s.reg RSP) 8 ∧ s'.reg RSP = s.reg RSP + 8 ∧
-  (∀ r ∈ calleeSaved, s'.reg r = s.reg r) ∧
+  s'.rip = c.backTo s ∧ s'.reg RSP = s.reg RSP + c.slot ∧
+  (∀ r ∈ c.keeps, s'.reg r = s.reg r) ∧
   (∀ a, c.inFrame s a = false → c.inOut s a = false → s'.mem a = s.mem a) ∧
   (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))) ∧
   (∀ r, s'.reg r < M64) ∧
@@ -554,7 +588,12 @@ def cleanIn (c : Contract) : List (String × Kind) → List Nat → List Nat
 /-- The general registers that are not marked at the function's entry: the stack pointer, and what
 `cleanIn` gives. Any other register may be marked: a number the contract says is hidden, and whatever a
 caller left in a register that holds no argument. -/
-def Contract.cleanAtEntry (c : Contract) : List Nat := RSP :: cleanIn c c.args argRegs
+def Contract.cleanAtEntry (c : Contract) : List Nat := RSP :: cleanIn c c.args c.argRegs
+
+/-- The address to return to is not marked: its eight bytes at the stack pointer; on AArch64, the register
+that holds it. -/
+def Contract.backQuiet (c : Contract) (s : State) : Prop :=
+  if c.arm64 then s.marks.reg LINK = false else ∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false
 
 /-- Does the contract say that a number is returned (in rax)? -/
 def Contract.givesNumber (c : Contract) : Bool := c.returns.isSome || c.result.isSome
@@ -568,7 +607,7 @@ register nothing is asked: it may be marked); the address to return to is not ma
 given to read is marked, but for the runs the contract says are hidden. -/
 def Contract.quietAt (c : Contract) (s : State) : Prop :=
   (∀ r ∈ c.cleanAtEntry, s.marks.reg r = false) ∧
-  (∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false) ∧
+  c.backQuiet s ∧
   (∀ r l, (r, l) ∈ c.regions → c.hiddenAt r = false → ∀ k, k < s.reg l → s.marks.mem (s.reg r + k) = false) ∧
   ∀ x r n, (x, r, n) ∈ c.fixeds → x ∉ c.hidden → ∀ k, k < n → s.marks.mem (s.reg r + k) = false
 

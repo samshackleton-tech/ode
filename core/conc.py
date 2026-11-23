@@ -7,6 +7,16 @@ it wherever they answer (meaning.py). No verification loads this file."""
 from table import M64, M32, UNKNOWN, REGISTERS, VECTORS, NUMBERS, WIDE, MASKS, SIZES, MOVES
 
 
+class Fault(Exception):
+    """The processor faults here: the row has no state after it."""
+
+
+def on16(a):
+    """The number, where it is a multiple of 16 (AArch64's stack pointer as the base of a load or store); a fault where it is not."""
+    if a % 16: raise Fault("a stack pointer that is no multiple of 16 is the base of a load or store")
+    return a
+
+
 def ror32(x, n): n %= 32; return ((x >> n) | (x << (32 - n))) & M32
 
 
@@ -30,7 +40,7 @@ CONC = {
     "shl64": lambda a, n: (a << n) & M64, "shr64": lambda a, n: (a & M64) >> n,
     "low32": lambda a: a & M32, "at": lambda a, n: (a + n) & M64,
     "equal": lambda a, b: int(a & M64 == b & M64), "below": lambda a, b: int(a & M64 < b & M64),
-    "low8": lambda a: a & 0xFF, "sub8": lambda a, b: (a - b) & 0xFF,
+    "low8": lambda a: a & 0xFF, "sub8": lambda a, b: (a - b) & 0xFF, "on16": on16,
     "setlow8": lambda a, b: (a & ~0xFF & M64) | (b & 0xFF),
     "add32": lambda a, b: (a + b) & M32, "xor32": lambda a, b: a ^ b, "ror32": ror32,
     "shl32": lambda a, n: (a << n) & M32, "shr32": lambda a, n: a >> n, "or32": lambda a, b: a | b,
@@ -48,7 +58,9 @@ CONC = {
 class State:
     """Numbers in registers and memory. g: the sixteen general registers by name; x: the vector registers,
     each sixteen 32-bit lanes; k: the mask registers, each sixteen bits; mem: {address: byte}; zf, cf; after a
-    row has run, `to`: where a jump goes (None: the next instruction), `called`: the target of a call, `returned`."""
+    row has run, `to`: where a jump or a return by a register goes (None: the next instruction), `called`: the
+    target of a call, `returned`. (A call that puts the address to come back to in a register leaves that
+    register UNKNOWN here: where the instruction lies is not part of this state.)"""
     def __init__(self, g, x, mem, zf, cf, k=()):
         self.g, self.x, self.mem, self.zf, self.cf, self.k = dict(g), dict(x), dict(mem), zf, cf, dict(k)
         self.to, self.called, self.returned = None, None, False
@@ -81,8 +93,14 @@ def run(row, bind, s):
         if st[0] == "jump":
             if st[2] is None or bool(getattr(s, st[2][0])) == st[2][1]: s.to = value(st[1])
             continue
-        if st[0] == "call": s.called = value(st[1]); continue
-        if st[0] == "return": s.returned = True; continue
+        if st[0] == "call":
+            s.called = value(st[1])
+            if len(st) == 3: s.g[st[2]] = UNKNOWN
+            continue
+        if st[0] == "return":
+            s.returned = True
+            if len(st) == 2: s.to = s.g[st[1]]
+            continue
         if st[0] == "nothing": continue
         _, lhs, rhs = st
         v = value(rhs)

@@ -21,16 +21,16 @@ include E
 theorem rip : s0.rip = p.base := E.pre.1
 theorem small (r : Nat) : s0.reg r < M64 := E.pre.2.1 r
 theorem stack : ctx.contract.stack ≤ s0.reg RSP := E.pre.2.2.1
-theorem above : s0.reg RSP + 8 < M64 := E.pre.2.2.2.1
+theorem above : s0.reg RSP + ctx.contract.slot < M64 := E.pre.2.2.2.1
 theorem fits {o : Nat} {i : Instr} (h : (o, i) ∈ p.code) : p.base + i.next < M64 := E.pre.2.2.2.2.1 (o, i) h
 theorem region {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) :
-    s0.reg r + s0.reg l ≤ M64 ∧ (s0.reg r + s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
+    s0.reg r + s0.reg l ≤ M64 ∧ (s0.reg r + s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r) :=
   E.pre.2.2.2.2.2.1 r l h
 theorem byte {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) (k : Nat) (hk : k < s0.reg l) : (s0.mem (s0.reg r + k)).val < 256 :=
   (s0.mem _).isLt
 /-- A run given to write: in memory, and apart from the frame and the address to return to. -/
 theorem out {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) :
-    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) :=
+    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r) :=
   ⟨(E.pre.2.2.2.2.2.2.1 x r n h).1, (E.pre.2.2.2.2.2.2.1 x r n h).2.1⟩
 theorem outRegion {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.outs) {r' l : Nat} (h' : (r', l) ∈ ctx.contract.regions) :
     s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + s0.reg l ≤ s0.reg r := (E.pre.2.2.2.2.2.2.1 x r n h).2.2 r' l h'
@@ -58,7 +58,7 @@ theorem region_notOut {r l : Nat} (h : (r, l) ∈ ctx.contract.regions) {a : Nat
   simp only [Bool.and_eq_true, decide_eq_true_eq]
   omega
 /-- An address of the frame, or of the address to return to, is in no run given to write. -/
-theorem frame_notOut {a : Nat} (h1 : s0.reg RSP - ctx.contract.stack ≤ a) (h2 : a < s0.reg RSP + 8) :
+theorem frame_notOut {a : Nat} (h1 : s0.reg RSP - ctx.contract.stack ≤ a) (h2 : a < s0.reg RSP + ctx.contract.slot) :
     ctx.contract.inOut s0 a = false := by
   unfold Contract.inOut
   rw [List.any_eq_false]
@@ -77,17 +77,40 @@ theorem indexOf_lt (name : String) : ∀ (l : List String) (k r : Nat), indexOf 
     · have := indexOf_lt name ns (k + 1) r h
       simp only [List.length_cons]; omega
 
-theorem regIndex_lt {name : String} {r : Nat} (h : regIndex name = some r) : r < 16 := by
-  have := indexOf_lt name regNames 0 r h
-  simpa [regNames] using this
+/-- A register's number, by its name on either machine, is below thirty-two. -/
+theorem regIndex_lt {name : String} {r : Nat} (h : regIndex name = some r) : r < 32 := by
+  unfold regIndex at h
+  split at h
+  next r' e =>
+    injection h with h; subst h
+    have := indexOf_lt name regNames 0 r' e
+    simp [regNames] at this
+    omega
+  next =>
+    have := indexOf_lt name regNamesArm 0 r h
+    simpa [regNamesArm] using this
 
-theorem regOf_lt {bind : Bind} {n : String} {r : Nat} (h : regOf bind n = some r) : r < 16 := by
+theorem regOf_lt {bind : Bind} {n : String} {r : Nat} (h : regOf bind n = some r) : r < 32 := by
   unfold regOf at h
   split at h
   · cases hb : bind.lookup n with
     | none => simp [hb] at h
     | some x => simp [hb] at h; exact regIndex_lt h
   · exact regIndex_lt h
+
+/-- The register the verifier reads a name as: the register the machine reads it as, and one the function's
+machine has. -/
+theorem Ctx.regOf_some {ctx : Ctx} {bind : Bind} {n : String} {r : Nat} (h : ctx.regOf bind n = some r) :
+    Ode.regOf bind n = some r ∧ r < ctx.nreg := by
+  unfold Ctx.regOf at h
+  cases hr : Ode.regOf bind n with
+  | none => rw [hr] at h; cases h
+  | some r' =>
+    rw [hr] at h
+    simp only [Option.filter] at h
+    split at h
+    next hlt => injection h with h; subst h; exact ⟨rfl, of_decide_eq_true hlt⟩
+    next => cases h
 
 theorem regOfIn_mem (name : String) : ∀ (args : List (String × Kind)) (regs : List Nat) (r : Nat),
     regOfIn name args regs = some r → r ∈ regs
@@ -132,12 +155,17 @@ theorem regionsIn_mem (c : Contract) : ∀ (args : List (String × Kind)) (regs 
       have := regionsIn_mem c args regs b l h
       exact ⟨List.mem_cons_of_mem _ this.1, this.2⟩
 
-theorem argRegs_lt {r : Nat} (h : r ∈ argRegs) : r < 16 := by
-  simp [argRegs] at h; omega
+/-- A register an argument is in is a register of the function's machine. -/
+theorem argRegs_lt {c : Contract} {r : Nat} (h : r ∈ c.argRegs) : r < c.regs := by
+  unfold Contract.argRegs at h
+  unfold Contract.regs
+  split at h
+  next ha => rw [if_pos ha]; simp [argRegsArm] at h; omega
+  next ha => rw [if_neg ha]; simp [argRegsX86] at h; omega
 
-theorem regions_lt {c : Contract} {b l : Nat} (h : (b, l) ∈ c.regions) : b < 16 ∧ l < 16 := by
-  obtain ⟨hb, len, hl⟩ := regionsIn_mem c c.args argRegs b l h
-  exact ⟨argRegs_lt hb, argRegs_lt (regOfIn_mem len c.args argRegs l hl)⟩
+theorem regions_lt {c : Contract} {b l : Nat} (h : (b, l) ∈ c.regions) : b < c.regs ∧ l < c.regs := by
+  obtain ⟨hb, len, hl⟩ := regionsIn_mem c c.args c.argRegs b l h
+  exact ⟨argRegs_lt hb, argRegs_lt (regOfIn_mem len c.args c.argRegs l hl)⟩
 
 theorem signed_ev (ρ : Nat → Int) (r : Row) : ev ρ (signed r) = ev ρ r ∨ ev ρ (signed r) = ev ρ r - 2 ^ 64 := by
   unfold signed
@@ -162,9 +190,9 @@ structure Carried (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (ρ' : N
   agree : Agree s.nvars ρ ρ'
   mono : s.nvars ≤ s'.nvars
   holds : Holds ctx s0 ρ' s' st'
-  wf : WF s'
+  wf : WF ctx s'
 
-theorem Carried.here {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s) :
+theorem Carried.here {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
     Carried ctx s0 ρ s ρ s st := ⟨Agree.refl _ _, Nat.le_refl _, H, wf⟩
 
 theorem Carried.then {ctx : Ctx} {s0 : State} {ρ ρ1 ρ2 : Nat → Int} {s s1 s2 : Sym} {st1 st2 : State}
@@ -182,7 +210,7 @@ theorem extend_agree (ρ : Nat → Int) (n : Nat) (x : Int) : Agree n ρ (extend
 
 /-- One more unknown, with facts of it and one thing known of it: what the state held stays so, where the
 facts and the thing known are so of the value the unknown is given. -/
-theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (x : Int) (rows : List Row) (k : Known)
     (hb : ∀ f ∈ rows, bounded (s.nvars + 1) f) (hk : k.wf (s.nvars + 1) s.terms.length)
     (hrows : ∀ f ∈ rows, f.holds (extend ρ s.nvars x)) (hknown : k.holds ctx s0 (extend ρ s.nvars x) s.terms) :
@@ -219,7 +247,7 @@ theorem Carried.fresh {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st 
 
 /-- More unknowns at once, with facts of them and one thing known of them: what the state held stays so,
 where the facts and the thing known are so of the values the unknowns are given. -/
-theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (m : Nat) (ag : Agree s.nvars ρ ρ') (rows : List Row) (k : Known)
     (hb : ∀ f ∈ rows, bounded (s.nvars + m) f) (hk : k.wf (s.nvars + m) s.terms.length)
     (hrows : ∀ f ∈ rows, f.holds ρ') (hknown : k.holds ctx s0 ρ' s.terms) :
@@ -254,7 +282,7 @@ theorem Carried.more {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {
         · exact Known.wf_mono le (Nat.le_refl _) (wf.known k' m) }
 
 /-- More unknowns at once, of which nothing is said: what the state held stays so. -/
-theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF s)
+theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (m : Nat) (ag : Agree s.nvars ρ ρ') :
     Carried ctx s0 ρ s ρ' { s with nvars := s.nvars + m } st := by
   have H' := H.agree wf ag
@@ -278,8 +306,8 @@ theorem Carried.unknowns {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sy
       facts := fun f m => bounded_mono le (wf.facts f m)
       known := fun k' m => Known.wf_mono le (Nat.le_refl _) (wf.known k' m) }
 
-/-- The register with a table's count of blocks is one of the sixteen. -/
-theorem tableAt_lt {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : c.tableAt j = some (x, r, count, l)) : l < 16 := by
+/-- The register with a table's count of blocks is one of the machine's. -/
+theorem tableAt_lt {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : c.tableAt j = some (x, r, count, l)) : l < c.regs := by
   unfold Contract.tableAt at h
   cases hj : c.fixeds[j]? with
   | none => rw [hj] at h; cases h
@@ -298,11 +326,11 @@ theorem tableAt_lt {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : 
         rw [hr] at h
         simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq] at h
         obtain ⟨_, _, _, rfl⟩ := h
-        exact argRegs_lt (regOfIn_mem y c.args argRegs l' hr)
+        exact argRegs_lt (regOfIn_mem y c.args c.argRegs l' hr)
 
 theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {r : Nat} {o v : Row}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : readByte ctx s r o items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars o) :
+    (h : readByte ctx s r o items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : bounded s.nvars o) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ bounded s'.nvars v ∧
       ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧ 0 ≤ ev ρ' o ∧ ev ρ' o < s0.reg len ∧
         ev ρ' v = s0.mem (s0.reg base + (ev ρ' o).toNat) := by
@@ -315,7 +343,7 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     obtain ⟨_, r2, e2, h⟩ := V.bind_ok h
     have g1 := entail_sound e1 ρ H.facts
     have g2 := entail_sound e2 ρ H.facts
-    have hlen : len < 16 := (regions_lt (List.mem_of_getElem? hreg)).2
+    have hlen : len < ctx.nreg := (regions_lt (List.mem_of_getElem? hreg)).2
     simp only [ev_sub, ev_var, ev_const] at g2
     rw [H.entry len hlen] at g2
     cases hv : lookupByte r o s.bytes with
@@ -481,8 +509,8 @@ theorem outsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x : S
     · injection e with _ e; injection e with e _; rw [e]; exact List.mem_cons_self ..
     · exact List.mem_cons_of_mem _ (outsIn_mem args regs x r n h)
 
-theorem outs_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.outs) : r < 16 :=
-  argRegs_lt (outsIn_mem c.args argRegs x r n h)
+theorem outs_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.outs) : r < c.regs :=
+  argRegs_lt (outsIn_mem c.args c.argRegs x r n h)
 
 /-- What `keepWrote` keeps was known before, and is of another run or of another place of this run. -/
 theorem keepWrote_spec {w : Nat} {o : Row} : ∀ {l rest : List (Nat × Row × Row)}, keepWrote w o l = some rest →
@@ -588,7 +616,7 @@ theorem locate_out {ctx : Ctx} {addr : Row} {w : Nat} {o : Row} (h : locate ctx 
 /-- An address the verifier places in the file's data: the function's file has data, and the address is the
 unknown that is the data's address, plus that number. -/
 theorem locate_data {ctx : Ctx} {addr : Row} {c : Int} (h : locate ctx addr = some (.data c)) :
-    ctx.data ≠ [] ∧ Lin.isConst (Lin.sub addr (Lin.var dataVar)) = some c := by
+    ctx.data ≠ [] ∧ Lin.isConst (Lin.sub addr (Lin.var (dataVar ctx))) = some c := by
   cases hk : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
   | some c' => simp only [locate, hk] at h; injection h with h; cases h
   | none =>
@@ -646,7 +674,7 @@ include E
 /-- A run of a fixed count given to read: in memory, apart from the frame and the address to return to,
 holding bytes, and apart from every run given to write. -/
 theorem fixed {x : String} {r n : Nat} (h : (x, r, n) ∈ ctx.contract.fixeds) :
-    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ s0.reg r) ∧
+    s0.reg r + n ≤ M64 ∧ (s0.reg r + n ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r) ∧
     (∀ k, k < n → (s0.mem (s0.reg r + k)).val < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → s0.reg r + n ≤ s0.reg r' ∨ s0.reg r' + n' ≤ s0.reg r :=
   have h' := E.pre.2.2.2.2.2.2.2.2.1 x r n h
@@ -669,7 +697,7 @@ theorem mbound {x : String} {off b r n : Nat}
 to, holding bytes, and apart from every run given to write. -/
 theorem lane {j : Nat} {x : String} {r count l : Nat} (h : ctx.contract.tableAt j = some (x, r, count, l)) {i : Nat} (hi : i < count) :
     lanePtr s0 r i + 64 * s0.reg l ≤ M64 ∧
-    (lanePtr s0 r i + 64 * s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + 8 ≤ lanePtr s0 r i) ∧
+    (lanePtr s0 r i + 64 * s0.reg l ≤ s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP + ctx.contract.slot ≤ lanePtr s0 r i) ∧
     (∀ k, k < 64 * s0.reg l → (s0.mem (lanePtr s0 r i + k)).val < 256) ∧
     ∀ x' r' n', (x', r', n') ∈ ctx.contract.outs → lanePtr s0 r i + 64 * s0.reg l ≤ s0.reg r' ∨ s0.reg r' + n' ≤ lanePtr s0 r i :=
   have h' := E.pre.2.2.2.2.2.2.2.2.2.2.2.1 j x r count l h i hi
@@ -677,7 +705,9 @@ theorem lane {j : Nat} {x : String} {r count l : Nat} (h : ctx.contract.tableAt 
 
 /-- A number the contract asks to be no less than another is so at entry. -/
 theorem atLeast {x : String} {k r : Nat} (h : (x, k) ∈ ctx.contract.atLeast) (hr : ctx.contract.regOf x = some r) : k ≤ s0.reg r :=
-  E.pre.2.2.2.2.2.2.2.2.2.2.2.2 x k h r hr
+  E.pre.2.2.2.2.2.2.2.2.2.2.2.2.1 x k h r hr
+/-- On AArch64 the stack pointer is a multiple of 16 at entry. -/
+theorem aligned (h : ctx.contract.arm64 = true) : s0.reg RSP % 16 = 0 := E.pre.2.2.2.2.2.2.2.2.2.2.2.2.2 h
 /-- The read-only data of the function's own file, where it has any, ends below 2^64. -/
 theorem data_fits (hd : ctx.data ≠ []) : ctx.own s0 + ctx.data.length < M64 := by
   obtain ⟨k, pc, hk, hq, e⟩ := Ctx.data_piece hd
@@ -734,8 +764,8 @@ theorem fixedsIn_mem : ∀ (args : List (String × Kind)) (regs : List Nat) (x :
     simp only [fixedsIn] at h
     exact List.mem_cons_of_mem _ (fixedsIn_mem args regs x r n h)
 
-theorem fixeds_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.fixeds) : r < 16 :=
-  argRegs_lt (fixedsIn_mem c.args argRegs x r n h)
+theorem fixeds_lt {c : Contract} {x : String} {r n : Nat} (h : (x, r, n) ∈ c.fixeds) : r < c.regs :=
+  argRegs_lt (fixedsIn_mem c.args c.argRegs x r n h)
 
 theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j c l = some v → Known.load v j c ∈ l
   | [], _, h => by simp [knownLoad] at h
@@ -761,7 +791,7 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
 as it was at entry (the function may not write it), so the number is what `load` reads there at entry. -/
 theorem symLoadFixed_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symLoadFixed ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symLoadFixed ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
   unfold symLoadFixed at h
@@ -874,7 +904,7 @@ theorem dataAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {
   obtain ⟨hd, hc⟩ := locate_data hl
   have e := ev_isConst (ρ := ρ) hc
   rw [ev_sub, ev_var] at e
-  have pin : ρ dataVar = ctx.own s0 := H.data.1
+  have pin : ρ (dataVar ctx) = ctx.own s0 := H.data.1
   have fit := E.data_fits hd
   unfold M64 at hlt fit
   refine ⟨hd, ?_⟩
@@ -882,12 +912,12 @@ theorem dataAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {
 
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (hb : bounded s.nvars addr)
+    (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : bounded s.nvars addr)
     (a : Nat) (hlt : a < M64) (ha : (a : Int) % 2 ^ 64 = ev ρ addr % 2 ^ 64) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ allowed (ctx.contract.perm ctx.pieces s0).read a size = true ∧ EV.sem ρ' s'.nvars (load st.mem a size) v := by
   have hstack := E.stack
   have habove := E.above
-  have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by decide)
+  have hrsp : ρ RSP = s0.reg RSP := H.entry RSP ctx.rsp_lt
   unfold M64 at hlt habove
   cases hl : locate ctx addr with
   | none =>
@@ -966,7 +996,7 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         injection hp with h1 h2
         subst h1 h2
         have hbo : bounded s.nvars o := by
-          rw [ho]; exact bounded_sub hb (bounded_var (Nat.lt_of_lt_of_le hbl.1 wf.base16))
+          rw [ho]; exact bounded_sub hb (bounded_var (Nat.lt_of_lt_of_le hbl.1 wf.regs))
         obtain ⟨ρ', c1, bv, base', len', hreg', g1, g2, g3⟩ := readByte_sound E e1 H wf hbo
         rw [hreg] at hreg'
         injection hreg' with hreg'
@@ -1014,7 +1044,7 @@ theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x 
 
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
 theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (s.divide x m) st ∧ ρ' s.nvars = ev ρ x / m ∧ ρ' (s.nvars + 1) = ev ρ x % m := by
   let ρ' : Nat → Int := fun k => if k = s.nvars then ev ρ x / m else if k = s.nvars + 1 then ev ρ x % m else ρ k
   have ag : Agree s.nvars ρ ρ' := fun k hk => by
@@ -1090,7 +1120,7 @@ theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
 /-- A number of the machine divided by a number above zero: what `symDivide` gives is the quotient and the
 remainder. -/
 theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (symDivide s x m).2.2 st ∧
       ev ρ' (symDivide s x m).1 = ev ρ x / m ∧ ev ρ' (symDivide s x m).2.1 = ev ρ x % m ∧
       bounded (symDivide s x m).2.2.nvars (symDivide s x m).1 ∧ bounded (symDivide s x m).2.2.nvars (symDivide s x m).2.1 := by
@@ -1158,7 +1188,7 @@ theorem knownNonneg_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} 
 
 /-- Any number divided by a number above zero: what `Sym.quotRem` gives is the quotient and the remainder. -/
 theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (s.quotRem x m).2.2 st ∧
       ev ρ' (s.quotRem x m).1 = ev ρ x / m ∧ ev ρ' (s.quotRem x m).2.1 = ev ρ x % m ∧
       bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).1 ∧ bounded (s.quotRem x m).2.2.nvars (s.quotRem x m).2.1 := by
@@ -1181,7 +1211,7 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
            bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
 
 theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (symLow s x m).2 st ∧ ev ρ' (symLow s x m).1 = ev ρ x % m ∧
       bounded (symLow s x m).2.nvars (symLow s x m).1 := by
   cases hk : (x.coeff.all fun c => c % m == 0) with
@@ -1202,7 +1232,7 @@ theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
       exact ⟨ρ', c, hr, br⟩
 
 theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
-    (H : Holds ctx s0 ρ s st) (wf : WF s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (symQuot s x m).2 st ∧ ev ρ' (symQuot s x m).1 = ev ρ x / m ∧
       bounded (symQuot s x m).2.nvars (symQuot s x m).1 := by
   cases hk : (x.coeff.all fun c => c % m == 0) with
@@ -1238,7 +1268,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
 theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symOrKnown s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symOrKnown s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
   obtain ⟨hx1, hx2, hx3⟩ := hx
@@ -1374,7 +1404,7 @@ theorem orParts_sound {facts : List Row} {x y : Row} {k : Int} {j : Nat} (h : or
 /-- The bits of a small number and of a number of the table that is 2^j or more, put together: what
 `symOrSmall` gives is that number. -/
 theorem symOrSmall_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {k : Int} {j : Nat} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symOrSmall s x k j items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symOrSmall s x k j items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hk : (xb : Int) = k) (hb : xb < M64)
     (small : xa < 2 ^ j) (j32 : j ≤ 32) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
@@ -1417,7 +1447,7 @@ theorem symOrSmall_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {k : In
 
 /-- Two numbers' bits put together, one of the two being the number zero or neither. -/
 theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ xa ||| xb < M64 ∧ EV.sem ρ' s'.nvars (xa ||| xb) v := by
   unfold symOr at h
@@ -1478,7 +1508,7 @@ theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64)
   omega
 
 theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa, xb] = some z ∧ EV.sem ρ' s'.nvars z v := by
   have hf := H.facts
@@ -1711,10 +1741,38 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
 
 theorem M64_cast : (M64 : Int) = 2 ^ 64 := by decide
 
+/-- `on16`: in a function for AArch64 the stack pointer is a multiple of 16 where it is a multiple of 16 away
+from where it was at the function's entry (there the caller has seen to it that it is one). So the
+processor does not fault, and the value is the stack pointer. -/
+theorem symOn16_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {x : Row} {v : EV}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symOn16 ctx s x items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (xa : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim "on16" [xa] = some z ∧ EV.sem ρ' s'.nvars z v := by
+  obtain ⟨hx1, hx2, hx3⟩ := hx
+  unfold symOn16 at h
+  cases hc : Lin.isConst (Lin.sub x (Lin.var RSP)) with
+  | none => simp only [hc] at h; exact (refuse_ok h).elim
+  | some c =>
+    simp only [hc] at h
+    split at h
+    next hcond =>
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
+      have e := ev_isConst (ρ := ρ) hc
+      rw [ev_sub, ev_var, H.entry RSP ctx.rsp_lt] at e
+      have al := E.aligned hcond.1
+      have hz : xa % 16 = 0 := by omega
+      exact ⟨ρ, Carried.here H wf, xa, by simp [prim, hz], hx1, hx2, hx3⟩
+    next => exact (refuse_ok h).elim
+
 /-- A primitive of one number: what the verifier holds for it is what the account says of it; and it is no
 reading of memory. -/
 theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symPrim1 f s x items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    (h : symPrim1 f s x items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) :
     memSize f = none ∧ ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∃ z, prim f [xa] = some z ∧ EV.sem ρ' s'.nvars z v := by
   obtain ⟨hx1, hx2, hx3⟩ := hx
@@ -1747,7 +1805,7 @@ theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : R
 
 theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
     ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State},
-    symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF s →
+    symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF ctx s →
     ∃ ρ' x, Carried ctx s0 ρ s ρ' s' st ∧ value (ctx.contract.perm ctx.pieces s0) bind st e = some x ∧ EV.sem ρ' s'.nvars x v
   | .number n, s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
@@ -1778,7 +1836,7 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         · rw [M64_cast]; unfold M64; omega
         · rw [ev_const, M64_cast]; omega
     next hletter =>
-      cases hr : regOf bind n with
+      cases hr : ctx.regOf bind n with
       | none => simp only [hr] at h; exact (refuse_ok h).elim
       | some r =>
         simp only [hr] at h
@@ -1786,8 +1844,8 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         injection this with hp _
         injection hp with h1 h2
         subst h1 h2
-        have lt := regOf_lt hr
-        exact ⟨ρ, st.reg r, Carried.here H wf, by simp [value, hletter, hr], H.small r, H.reg r lt, wf.reg r lt⟩
+        obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
+        exact ⟨ρ, st.reg r, Carried.here H wf, by simp [value, hletter, hr'], H.small r, H.reg r lt, wf.reg r lt⟩
   | .call f [a, b], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h
@@ -1876,10 +1934,10 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               have ec := ev_isConst (ρ := ρ1) hc
               have fit := E.data_fits hd
               have pin := c1.holds.data
-              have pin1 : ρ1 dataVar = ctx.own s0 := pin.1
+              have pin1 : ρ1 (dataVar ctx) = ctx.own s0 := pin.1
               rw [Ctx.own_eq hk] at fit pin1
               refine ⟨ρ1, (st.data k + sumList [xa]) % M64, c1, by simp [value, values, va, memSize, fe, hpb], Nat.mod_lt _ (by decide), ?_,
-                bounded_add (bounded_var (Nat.lt_of_lt_of_le (show dataVar < 17 by decide) c1.wf.base)) (bounded_const _ _)⟩
+                bounded_add (bounded_var (x := dataVar ctx) c1.wf.base) (bounded_const _ _)⟩
               rw [ev_add, ev_var, ev_const, pin1, pin.2]
               simp only [sumList]
               unfold M64 at *
@@ -1887,9 +1945,18 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             · rw [if_neg hin] at h; exact (refuse_ok h).elim
         next => exact (refuse_ok h).elim
       next hnd0 =>
-        obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
         have hnd : (f == "data") = false := by simpa using hnd0
-        exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
+        split at h
+        next hon =>
+          -- `on16(sp)`: the stack pointer as the base of a load or store
+          have fe : f = "on16" := by simpa using hon
+          obtain ⟨ρ2, c2, z, hz, sz⟩ := symOn16_sound E h c1.holds c1.wf xa sa
+          subst fe
+          have hm : memSize "on16" = none := by decide
+          exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
+        next =>
+          obtain ⟨hm, ρ2, c2, z, hz, sz⟩ := symPrim1_sound h c1.holds c1.wf xa sa
+          exact ⟨ρ2, z, c1.then c2, by simp only [value, values, va, hm, hz, hnd, Bool.false_eq_true, if_false], sz⟩
   | .call f (_ :: _ :: _ :: _), s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     exact (refuse_ok h).elim
@@ -1904,10 +1971,10 @@ theorem Holds.setCf {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
     (f : Flag) (b : Bool) (hf : f.holds ρ b) : Holds ctx s0 ρ { s with cf := f } { st with cf := b } :=
   ⟨H.entry, H.data, H.reg, H.small, H.zf, hf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
-theorem WF.setZf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with zf := f } :=
+theorem WF.setZf {s : Sym} (wf : WF ctx s) (f : Flag) (hb : f.bounded s.nvars) : WF ctx { s with zf := f } :=
   ⟨wf.base, wf.reg, hb, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
-theorem WF.setCf {s : Sym} (wf : WF s) (f : Flag) (hb : f.bounded s.nvars) : WF { s with cf := f } :=
+theorem WF.setCf {s : Sym} (wf : WF ctx s) (f : Flag) (hb : f.bounded s.nvars) : WF ctx { s with cf := f } :=
   ⟨wf.base, wf.reg, wf.zf, hb, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
@@ -1936,7 +2003,7 @@ theorem Holds.put {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : St
   words := H.words
   known := H.known
 
-theorem WF.put {s : Sym} (wf : WF s) (r : Nat) (xr : Row) (hb : bounded s.nvars xr) : WF (s.put r xr) where
+theorem WF.put {s : Sym} (wf : WF ctx s) (r : Nat) (xr : Row) (hb : bounded s.nvars xr) : WF ctx (s.put r xr) where
   range := wf.range
   base := wf.base
   reg r' hr' := by
@@ -2029,8 +2096,8 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
       exact g3 b hb
   known := H.known
 
-theorem WF.write {s : Sym} (wf : WF s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
-    WF { s with spill := [], range := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
+theorem WF.write {s : Sym} (wf : WF ctx s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
+    WF ctx { s with spill := [], range := none, frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o) } where
   range := fun _ h => nomatch h
   base := wf.base
   reg := wf.reg
@@ -2155,9 +2222,9 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       exact g3 b hb
   known := H.known
 
-theorem WF.writeOut {s : Sym} (wf : WF s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
+theorem WF.writeOut {s : Sym} (wf : WF ctx s) {w : Nat} {o xr : Row} (ho : bounded s.nvars o) (hx : bounded s.nvars xr)
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest) :
-    WF { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] } where
+    WF ctx { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] } where
   range := wf.range
   base := wf.base
   reg := wf.reg
@@ -2180,7 +2247,7 @@ theorem values_two {perm : Perm} {bind : Bind} {st : State} {a b : Expr} {xa xb 
 
 theorem frameOffset_eval {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} (H : Holds ctx s0 ρ s st) (addr : Row) :
     ev ρ (frameOffset addr) = ev ρ addr - s0.reg RSP := by
-  simp only [frameOffset, ev_sub, ev_var, H.entry RSP (by decide)]
+  simp only [frameOffset, ev_sub, ev_var, H.entry RSP ctx.rsp_lt]
 
 theorem frameSpan_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s : Sym} {addr : Row} {n : Nat}
     (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (ok : ∀ g ∈ frameSpanGoals ctx s addr n, g.holds ρ) :
@@ -2264,7 +2331,7 @@ theorem savedWordSpan_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : 
   omega
 
 theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {addr : Row}
-    {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF s)
+    {items rest : Items} (E : Setting ctx p s0) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (h : symTouchFrame ctx s addr items = .ok (s', rest)) (a x : Nat)
     (matchAddr : ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → a = A) :
     allowed (ctx.contract.perm ctx.pieces s0).write a 1 = true ∧ Carried ctx s0 ρ s ρ s' { st with mem := store st.mem a x 1 } := by
@@ -2284,11 +2351,11 @@ theorem symTouchFrame_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
 
 theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s' : Sym} {stmt : Stmt}
     {items rest : Items} {ρ : Nat → Int} {st : State}
-    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF s) (base u : Nat)
+    (h : symStmt ctx bind s stmt items = .ok (s', rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (base u : Nat)
     (hv : ∀ place v, stmt ≠ .vset place v) (hw : ∀ place v, stmt ≠ .vset512 place v)
     -- (a store of eight bytes as two words of a run: its rule is shown where the words of runs are, SoundCallW.lean)
     (h8 : ∀ {s s' : Sym} {w n base : Nat} {name : String} {o xr : Row} {items rest : Items} {ρ : Nat → Int} {st : State} (a x : Nat),
-      symStore8 ctx s w n o xr items = .ok (s', rest) → Holds ctx s0 ρ s st → WF s →
+      symStore8 ctx s w n o xr items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s →
       ctx.contract.outs[w]? = some (name, base, n) →
       (∀ c : Int, ev ρ o = c → 0 ≤ c → c + 8 ≤ n → a = s0.reg base + c.toNat) →
       EV.sem ρ s.nvars x (.lin xr) →
@@ -2304,6 +2371,8 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     exact ⟨ρ, st, Carried.here H wf, rfl, rfl⟩
   | ret => simp only [symStmt] at h; exact (refuse_ok h).elim
   | call t => simp only [symStmt] at h; exact (refuse_ok h).elim
+  | retLink r => simp only [symStmt] at h; exact (refuse_ok h).elim
+  | callLink t r => simp only [symStmt] at h; exact (refuse_ok h).elim
   | jump t c => simp only [symStmt] at h; exact (refuse_ok h).elim
   | vset place v => exact (hv place v rfl).elim
   | vset512 place v => exact (hw place v rfl).elim
@@ -2493,7 +2562,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                               exact List.any_eq_true.mpr ⟨(name, base, n), hm, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
                             have hbo : bounded s3.nvars o := by
                               rw [ho]
-                              exact bounded_sub (bounded_add (bounded_signed sa3.2.2) (bounded_signed sb.2.2)) (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) c3.wf.base16))
+                              exact bounded_sub (bounded_add (bounded_signed sa3.2.2) (bounded_signed sb.2.2)) (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) c3.wf.regs))
                             refine ⟨ρ3, { st with mem := store st.mem ((xa + xb) % M64) x 1 },
                               ⟨Agree.trans c1.mono c1.agree (Agree.trans c2.mono c2.agree c3.agree),
                                Nat.le_trans c1.mono (Nat.le_trans c2.mono c3.mono),
@@ -2531,7 +2600,7 @@ theorem symStmt_scalar {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                           obtain ⟨sp, _, _, h8, hst⟩ := inFrame_spec hin
                           have hstack := E.stack
                           have habove := E.above
-                          have hrsp : ρ3 RSP = s0.reg RSP := c3.holds.entry RSP (by decide)
+                          have hrsp : ρ3 RSP = s0.reg RSP := c3.holds.entry RSP ctx.rsp_lt
                           have e := ev_isConst (ρ := ρ3) (locate_frame hl)
                           simp only [ev_sub, ev_add, ev_var, hrsp] at e
                           have sgx := signed_ev ρ3 ar

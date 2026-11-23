@@ -12,7 +12,8 @@ Nobody relies on this: the finished proof is given to `odeverify`."""
 import os, subprocess, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeprove")
-TABLE = os.path.join(HERE, "..", "core", "x86.tab")
+import statement
+TABLE = statement.TABLES["x86-64"]         # (a statement of functions for AArch64 is given AArch64's table: statement.table_for)
 DEPTH = 300
 
 
@@ -33,7 +34,7 @@ class Session:
         with f: f.write("".join(l + "\n" for l in self.head + base))
         self.file, self.base, self.batches, self.said = f.name, list(base), [], []      # said[k]: what was said after batch k
         self.begun += 1
-        self.p = subprocess.Popen([EXE, TABLE, self.statement, self.file, self.name], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.p = subprocess.Popen([EXE, statement.table_for(self.statement), self.statement, self.file, self.name], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.first, more = self.read()
         if not more: self.end()                      # nothing waits: what it starts from is refused, or shows everything
 
