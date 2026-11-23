@@ -54,6 +54,8 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertIn("bad_arm.ode:81", ra.stdout)
             self.assertIn("x19=keep_out", ra.stdout)
             self.assertIn("a register a callee keeps", ra.stdout)
+            self.assertIn("FALSE on probe", ra.stdout)
+            self.assertIn("callee-saved register x19 changed", ra.stdout)
 
             # B: misaligned sp in AArch64 mix16_6 -> line 62 (`saved_lr[0] := x30` / `str x30, [sp, 64]`)
             bad_sp = os.path.join(d, "bad_sp.ode")
@@ -64,6 +66,7 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertIn("bad_sp.ode:62", rb.stdout)
             self.assertIn("saved_lr[0] := x30", rb.stdout)
             self.assertIn("multiple of 16", rb.stdout)
+            self.assertIn("FALSE on probe", rb.stdout)
 
             # C1: linear loop with no place (common.ode) -> terminates quickly and names the loop head line
             t0 = time.time()
@@ -74,6 +77,7 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertLess(dt1, 15.0, f"linear loop with no place took {dt1:.2f}s")
             self.assertIn("common.ode:28", rc1.stdout)
             self.assertIn("with no place", rc1.stdout)
+            self.assertIn("none found on 16 concrete probe", rc1.stdout)
 
             # C2: multi-branch loop with no place (adler32.ode with place removed) -> terminates and names line 34
             with open(ADLER_ODE) as f: c = f.read()
@@ -86,6 +90,7 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertLess(dt, 60.0, f"loop with no place took {dt:.2f}s")
             self.assertIn("bad_loop.ode:34", rc.stdout)
             self.assertIn("with no place", rc.stdout)
+            self.assertIn("none found on 16 concrete probe", rc.stdout)
 
             # D: x86-64 adler32 branch on value kept out of the trace -> line 48 (`jae @l1`)
             with open(ADLER_SPEC) as f: sp = f.read()
@@ -96,6 +101,7 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertIn("adler32.ode:48", rd.stdout)
             self.assertIn("jae @l1", rd.stdout)
             self.assertIn("values kept out of the trace", rd.stdout)
+            self.assertIn("none found on 16 concrete probe", rd.stdout)
 
             # E: budget enforcement after `shown` returns exit code 2
             re_b = _run_tool(["check", MIX_ODE, MIX_SPEC, "--arch", "ampere1", "--trace", "--align", "7", "--max-line-splits", "0"])

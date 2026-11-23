@@ -65,6 +65,52 @@ fn f as "f_sym" {
             self.assertIn("partial STLF stalls", r.stdout)
             self.assertIn("+1", r.stdout)
 
+    def test_refute_clean_and_planted_bugs_both_targets(self):
+        vdir = os.path.join(ROOT, "proof-core", "examples", "verifier")
+        zero_ode, zero_spec = os.path.join(vdir, "zero_x86.ode"), os.path.join(vdir, "zero_x86.spec")
+        tag_ode, tag_spec = os.path.join(vdir, "tag_arm64.ode"), os.path.join(vdir, "tag_arm64.spec")
+
+        # Clean functions: none refuted
+        for ode_p, spec_p in ((MIX_ODE, MIX_SPEC), (tag_ode, tag_spec), (zero_ode, zero_spec), (ADLER_ODE, ADLER_SPEC)):
+            r = _run_tool(["refute", ode_p, spec_p])
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("none found", r.stdout)
+
+        with tempfile.TemporaryDirectory() as d:
+            # 1. AArch64 wrong math (drop rev32) -> FALSE with differing output word
+            with open(MIX_ODE) as f: m = f.read()
+            p1 = os.path.join(d, "bad_math.ode")
+            with open(p1, "w") as f: f.write(m.replace("  rev32 d.8h, d.8h\n", ""))
+            r1 = _run_tool(["refute", p1, MIX_SPEC])
+            self.assertEqual(r1.returncode, 1)
+            self.assertIn("FALSE on probe", r1.stdout)
+            self.assertIn("output `out[0]` disagrees", r1.stdout)
+
+            # 2. AArch64 wrong callee-saved restore -> FALSE naming x19
+            p2 = os.path.join(d, "bad_x19.ode")
+            with open(p2, "w") as f: f.write(m.replace("x19 := saved_out[0]", "x19 := saved_a[0]"))
+            r2 = _run_tool(["refute", p2, MIX_SPEC])
+            self.assertEqual(r2.returncode, 1)
+            self.assertIn("callee-saved register x19 changed", r2.stdout)
+
+            # 3. x86-64 off-by-one step (add idx, 2) -> FALSE on a=[0, 1], n=2
+            with open(zero_ode) as f: z = f.read()
+            p3 = os.path.join(d, "bad_step.ode")
+            with open(p3, "w") as f: f.write(z.replace("add idx, 1", "add idx, 2"))
+            r3 = _run_tool(["refute", p3, zero_spec])
+            self.assertEqual(r3.returncode, 1)
+            self.assertIn("a=[0, 1], n=2", r3.stdout)
+            self.assertIn("expected: 0", r3.stdout)
+            self.assertIn("actual:   1", r3.stdout)
+
+            # 4. Read-only input modified on AArch64 (even when `out` is right!) -> FALSE naming read-only input `a`
+            with open(tag_ode) as f: tg = f.read()
+            p4 = os.path.join(d, "bad_ro.ode")
+            with open(p4, "w") as f: f.write(tg.replace("st1 {va.4s}, [out]", "st1 {va.4s}, [out]\n  st1 {va.4s}, [ap]", 1))
+            r4 = _run_tool(["refute", p4, tag_spec, "--fn", "xor64"])
+            self.assertEqual(r4.returncode, 1)
+            self.assertIn("read-only input `a` modified", r4.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

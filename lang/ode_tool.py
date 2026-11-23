@@ -19,7 +19,7 @@ for d in (HERE, os.path.join(ROOT, "advice"), os.path.join(ROOT, "proof-core"),
           os.path.join(ROOT, "kcheck"), os.path.join(ROOT, "arm64"), os.path.join(ROOT, "core")):
     if d not in sys.path:
         sys.path.insert(0, d)
-import estimate, odec
+import estimate, odec, refute_conc
 
 ARG_REGS_X86 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 ARG_REGS_ARM = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
@@ -64,8 +64,13 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason):
         out.append(f"refused in {fn_sym}:")
     else:
         out.append("refused:")
-    for line in reason.strip().splitlines():
-        out.append(f"  {line}")
+    raw_lines = reason.strip().splitlines()
+    f_count = sum(1 for l in raw_lines if l.startswith("f "))
+    if f_count >= 4 and raw_lines and raw_lines[0].startswith("need "):
+        out.append(f"  {raw_lines[0]} (arithmetic fact not shown from {f_count} inequalities in context)")
+    else:
+        for line in raw_lines:
+            out.append(f"  {line}")
     return "\n".join(out)
 
 
@@ -173,18 +178,28 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
             if fn_sym is None:
                 m = re.search(r"in (\S+)", str(exc))
                 if m: fn_sym = m.group(1)
+            if fn_sym is None:
+                m = re.search(r"no proof of (\S+) found", str(exc))
+                if m: fn_sym = m.group(1)
             if pc is None:
                 m = re.search(r"at \+(\d+)", str(exc))
                 if m: pc = int(m.group(1))
             diag = format_source_diagnostic(by_sym, pc, fn_sym, raw)
+            ref = None
+            probe_sym = fn_sym if fn_sym in progs else compiled[-1]["symbol"]
+            if probe_sym in progs:
+                ref = refute_conc.refute_function(progs, probe_sym, spec_text, target)
+                diag = diag + "\n" + refute_conc.format_refutation(ref, probe_sym)
+            verdict = "FALSE" if (ref and ref["status"] == "FALSE") else "no proof found"
             return {
-                "verdict": "no proof found",
+                "verdict": verdict,
                 "target": target,
                 "compile_s": round(t_compile, 3),
                 "prove_s": round(t_prove, 3),
                 "verify_s": 0.0,
                 "pc": pc,
                 "fn": fn_sym,
+                "refutation": ref,
                 "diagnostic": diag,
                 "raw": str(exc),
             }
@@ -197,14 +212,20 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
         if vr.returncode != 0 or not vr.stdout.startswith("shown"):
             pc, fn_sym, loc_msg = prove.locate(st_path, pf_path)
             diag = format_source_diagnostic(by_sym, pc, fn_sym, loc_msg or vr.stdout)
+            probe_sym = fn_sym if fn_sym in progs else compiled[-1]["symbol"]
+            ref = refute_conc.refute_function(progs, probe_sym, spec_text, target) if probe_sym in progs else None
+            if ref is not None:
+                diag = diag + "\n" + refute_conc.format_refutation(ref, probe_sym)
+            verdict = "FALSE" if (ref and ref["status"] == "FALSE") else "refused"
             return {
-                "verdict": "refused",
+                "verdict": verdict,
                 "target": target,
                 "compile_s": round(t_compile, 3),
                 "prove_s": round(t_prove, 3),
                 "verify_s": round(t_verify, 3),
                 "pc": pc,
                 "fn": fn_sym,
+                "refutation": ref,
                 "diagnostic": diag,
                 "raw": vr.stdout,
             }
@@ -299,6 +320,27 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
         }
 
 
+def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1):
+    """Compile and run table-driven concrete counterexample probes (no Lean needed)."""
+    target, compiled = compile_source(src_path, fn_names)
+    with open(spec_path) as f:
+        spec_text = f.read()
+    with tempfile.TemporaryDirectory() as td:
+        progs = {}
+        for info in compiled:
+            sym = info["symbol"]
+            op = os.path.join(td, f"{sym}.o")
+            with open(op, "wb") as f:
+                f.write(info["elf"])
+            _, dec = estimate.decode_object(op, sym, target)
+            progs[sym] = dec
+        results = {}
+        for info in compiled:
+            sym = info["symbol"]
+            results[sym] = refute_conc.refute_function(progs, sym, spec_text, target, cases=cases, seed=seed)
+        return target, results
+
+
 def _add_common_flags(p):
     p.add_argument("--arch", choices=sorted(estimate.ARCHS), default=None, help="microarchitecture profile")
     p.add_argument("--trace", action="store_true", help="run concrete memory-access trace via core/conc.py")
@@ -337,9 +379,16 @@ def main(argv=None):
     p_cmp.add_argument("--spec", default=None, help="optional .spec file (verifies both variants via odeverify)")
     _add_common_flags(p_cmp)
 
+    p_ref = sub.add_parser("refute", help="run concrete counterexample probes via core/conc.py (no Lean)")
+    p_ref.add_argument("source", help=".ode source file")
+    p_ref.add_argument("spec", help=".spec contract file")
+    p_ref.add_argument("--fn", action="append", default=None, help="function name(s) in source (default: all)")
+    p_ref.add_argument("--cases", type=int, default=16, help="number of concrete probe cases per function")
+    p_ref.add_argument("--seed", type=int, default=1)
+
     args = ap.parse_args(argv)
-    overrides = parse_arg_overrides(args.arg)
-    budgets = parse_budgets(args)
+    overrides = parse_arg_overrides(getattr(args, "arg", None))
+    budgets = parse_budgets(args) if args.cmd in ("check", "advise", "compare") else {}
 
     if args.cmd == "check":
         res = run_check(args.source, args.spec, fn_names=args.fn, out_dir=args.out, arch=args.arch,
@@ -388,6 +437,15 @@ def main(argv=None):
         print(estimate.compare_reports(os.path.basename(args.source_a), ra["static"], ra["memory"],
                                        os.path.basename(args.source_b), rb["static"], rb["memory"]))
         return 0
+
+    if args.cmd == "refute":
+        target, results = run_refute(args.source, args.spec, fn_names=args.fn, cases=args.cases, seed=args.seed)
+        any_false = False
+        for sym, res in results.items():
+            print(refute_conc.format_refutation(res, sym))
+            if res["status"] == "FALSE":
+                any_false = True
+        return 1 if any_false else 0
 
 
 if __name__ == "__main__":

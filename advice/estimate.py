@@ -417,6 +417,8 @@ def trace_memory(programs, entry, target, init_regs=None, init_mem=None, max_ste
             })
         steps += 1
         if st.returned:
+            if target == "x86_64":
+                st.g["rsp"] = (st.g["rsp"] + 8) & table.M64
             if not call_stack:
                 returned = True
                 break
@@ -466,6 +468,7 @@ def trace_memory(programs, entry, target, init_regs=None, init_mem=None, max_ste
         "accesses": accesses,
         "dyn_ops": dyn_ops,
         "final_regs": dict(st.g),
+        "final_mem": dict(st.mem),
         "sp_entry": sp_entry,
     }
 
