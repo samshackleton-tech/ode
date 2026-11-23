@@ -34,7 +34,7 @@ Three design decisions follow from that picture:
 
 [DESIGN.md](DESIGN.md) is the full design.
 
-## Where the project stands (November 18, 2026)
+## Where the project stands (November 23, 2026)
 
 It is a research prototype. Nothing here is ready to protect anything of value.
 
@@ -49,33 +49,38 @@ validator.
 
 ### The main weakness
 
-The verifier that checks those programs is about 3,300 lines of Python that nobody has proved correct. It
-is tested and audited, and we attack it ourselves. On November 17 and 18 we found eight ways to make it
-accept a wrong binary, and closed them. A verifier that can be fooled defeats the purpose, so this is the
-main thing we are working on.
+The original verifier that checks all fourteen functions of that hash (`kcheck/`) is about 3,300 lines of
+Python that nobody has proved correct. It is tested and audited, and we attack it ourselves. On November
+17 and 18 we found eight ways to make it accept a wrong binary, and closed them. A verifier that can be
+fooled defeats the purpose, so moving verification onto a formally proved core is the main thing we are
+working on.
 
 ### What we are doing about it
 
-The folder `proof-core/` holds a second, much smaller verifier, written in Lean 4. With it comes a
-soundness theorem that Lean checks: if this verifier accepts a function, the function satisfies its
-contract, whatever proof it was given. So far it can verify five of the twelve small functions and eight
-of the fourteen functions of BLAKE3: the two versions of the kernel that compresses one 64-byte block;
-`b3l_node_out`, which reads a node record and calls whichever kernel the processor supports; the
-16-way kernel, with its loop over the blocks of sixteen chunks, for every number of blocks; the 32-way
-kernel, likewise for thirty-two chunks, through each of its two entries (one gives every chunk the same
-counter; the other, which the hash calls, gives chunk `i` the counter `t + i`); `b3l_pad`, whose loop
-writes a padded block byte by byte; and `b3l_chunk_node`, which calls a one-block kernel for each block
-of a chunk but the last, calls `b3l_pad` for the last, and stores three numbers into the chunk's record.
-It can follow arithmetic and shuffles on 512-bit registers, compares into mask registers and additions
-under a mask, loads and stores of 512-bit registers in buffers and on the stack, loads through a table of
-addresses, loads of constants from the object file's read-only data, and calls of functions that read such
-constants, whichever object file they are in.
+The folder `proof-core/` holds a second, smaller verifier, written in Lean 4, serving both x86-64 and
+AArch64. With it comes a soundness theorem that Lean checks (`Ode.verify_all_sound`): if this verifier
+accepts a function, the function satisfies its contract, whatever proof it was given. So far it verifies
+five of the twelve small x86-64 functions and **ten of the fourteen functions of the x86-64 BLAKE3 hash
+(3,098 of its 3,761 instructions, or 82.4%)**: the two one-block compression kernels (AVX-512 and SSE4.1),
+`b3l_node_out`, the 16-way kernel `p16`, the 32-way kernel through both entries (`p32` and `k32`),
+`b3l_pad`, `b3l_chunk_node`, and the two shipped tree-folding functions `b3l_wide32` and `b3l_wide128`.
+A written proposal (`paper/RECURSION-PROPOSAL.md`) covers the remaining four recursive tree functions
+(`b3l_take`, `b3l_part32`, `b3l_subtree`, `b3l_hashr`, 663 instructions).
 
-A second theorem is about constant time. For a function the verifier accepts, take two runs from inputs
-that differ only in what the contract hides, such as a key or a message block. The two runs execute the
-same instructions and touch the same memory addresses. The theorem is stated on a model of the processor
-that has no notion of secrecy at all.
-[proof-core/README.md](proof-core/README.md) says exactly what the two theorems assume.
+On **AArch64**, the standalone package `arm64/` defines a 47-row instruction table (`arm64/arm64.tab`)
+cross-checked on real Apple M6 and Ampere-1a hardware, with **all 47 of 47 rows (49 theorems)** formally
+proved in Lean 4 (`arm64/agree/`) to agree with Google DeepMind's `arm64-semantics`. Under the same
+soundness theorems, `proof-core` verifies AArch64 functions including BLAKE3's `b3l_pad_arm64` and a
+zero-stack, constant-time 7-round NEON one-block compression kernel
+(`blake3_servil_compress_in_place_arm64`, 116 instructions, 137-byte proof), matching all 35 official
+BLAKE3 test vectors in both standard and keyed modes (70 vectors) on Apple M6 hardware.
+
+Two companion soundness theorems (`Ode.verify_all_trace` and `Ode.verify_all_result`) cover timing-trace
+and return-value independence. For a function the verifier accepts, take two runs from inputs that agree
+on everything named in `trace depends on` (which may list computed values such as `same(want, tag)`). The
+two runs execute the same instructions and touch the same memory addresses. The theorems are stated
+directly on the processor model, with no marks in their statements.
+[proof-core/README.md](proof-core/README.md) says exactly what the theorems assume.
 
 Section 13 of DESIGN.md compares the current state with the design, point by point.
 
@@ -179,3 +184,5 @@ choice (the same four as [smalloc](https://github.com/zooko/smalloc)):
 
 The files under `reference/blake3-servil/` are BLAKE3-Servil's, kept for comparison, and carry the licence
 texts they came with.
+
+*Ode stands for Observable, Direct, Exact.*

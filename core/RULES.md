@@ -278,3 +278,5 @@ verified. Distinct functions may not form a call ring (`ring_of`). Every instruc
 must belong to features its contract unconditionally `needs` (`kspec.fits`). Every public contract of the
 reader's specification is printed, failing the verification if unverified while present in the file or in a
 nameless file.
+
+*Ode stands for Only Direct Execution.*

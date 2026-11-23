@@ -134,3 +134,5 @@ constants of `blake3.spec` are used by no contract.
 Unbuilt: the form with names replaced and its hash; glossaries; Bob's own list and "new to you"; file and
 contract names under the same rules; comments citing documents by hash; the language page's hash at the
 head of a full contract; separated domains.
+
+*Ode stands for Outsmarting Deceitful Executables.*

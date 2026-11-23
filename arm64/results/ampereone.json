@@ -3,7 +3,7 @@
  "cases a row and way": 200,
  "differ from the processor": 0,
  "faults, as the row says": 210,
- "instances": 11600,
+ "instances": 16000,
  "machine": "aarch64",
  "processor": "implementer 0xc0, part 0xac4",
  "rows not run": [
@@ -15,6 +15,6 @@
   "bl",
   "ret"
  ],
- "rows run": 29,
+ "rows run": 40,
  "system": "Linux"
 }

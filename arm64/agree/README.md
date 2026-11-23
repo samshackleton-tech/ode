@@ -103,3 +103,5 @@ python3 test_agree.py
 The first `lake build` fetches Google DeepMind's `code-verification` repository at the pinned commit and
 builds its zero-dependency `arm64` library (`Arm64.Trusted.*`), then builds `Table`, `Machine`, `Agree`,
 and `agree-check`.
+
+*Ode stands for Opcodes Don't Equivocate.*

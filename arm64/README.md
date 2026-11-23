@@ -99,3 +99,5 @@ and how many faulted as the rows say.
   and negative displacements.
 - All 47 rows currently in `arm64.tab` are proved in `agree/` (49 theorems, zero `sorry`, standard Lean
   axioms only); any future rows added to `arm64.tab` should be paired with their agreement proof there.
+
+*Ode stands for Opcode Discipline with Evidence.*

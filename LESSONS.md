@@ -322,3 +322,5 @@ blurred which code a reader relies on.
 
 *For Ode:* the **prover** finds or writes a proof and is relied on for
 nothing. The **verifier** decides, and is what the reader relies on.
+
+*Ode stands for Oh, Don't Exaggerate.*

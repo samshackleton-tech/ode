@@ -161,3 +161,5 @@ small verifier itself.
 An SMT solver searches; its yes is hard to check by other means, and its no is silence. Here the search
 (which facts of arithmetic to add up) is done by a prover whose output the verifier checks by adding:
 the proofs travel in the binary, a few kilobytes.
+
+*Ode stands for Obvious Design for Evaluation.*

@@ -96,3 +96,5 @@ pypy3 advice/test_estimate.py
 ## Earlier study
 
 - `uops-test/` (November 20, 2026): a first test of whether `uops.info`'s per-processor table predicts the cycles the 16-way BLAKE3 kernel takes per block. It ranks three processors correctly and is low by 17% to 35%. See also `DESIGN.md`, section 5.
+
+*Ode stands for Ordered Data & Execution.*

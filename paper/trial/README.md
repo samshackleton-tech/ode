@@ -21,3 +21,5 @@ python3 make_styles.py ../STYLES.md
 ```
 
 The first runs anywhere with Python. The second needs the verifier built (`proof-core/README.md`) and takes about two minutes, one of them waiting for a prover that does not stop. The third needs clang on an AArch64 Mac.
+
+*Ode stands for Optimizer Detox Environment.*

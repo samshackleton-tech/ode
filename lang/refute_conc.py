@@ -320,3 +320,5 @@ def format_refutation(res, symbol):
         return (f"counterexample ({symbol}): none found on {res['cases_run']} concrete probe input(s) "
                 f"(code matched contract functionally; check loop place, trace clause, or proof)")
     return f"counterexample ({symbol}): skipped ({res.get('reason', '')})"
+
+# Ode stands for Oops-Detecting Engine.

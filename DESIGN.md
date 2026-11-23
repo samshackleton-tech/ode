@@ -705,3 +705,5 @@ design.
   4, 5 and 11 above.
 - **The verifier of binaries** (since November 14, 2026): developed at the same place, in `kcheck/`, up to
   commit `dca7275f`. It moved here on November 17, 2026 and continues here.
+
+*Ode stands for Opcodes, Data, Evidence.*
