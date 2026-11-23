@@ -20,7 +20,7 @@ contract written in C, on random blocks; the changed copies that can be run safe
 
     python3 test_arm.py        (the verification: skipped where Lean's `lake` is not installed;
                                 the runs: skipped where the machine is no AArch64 one, or has no clang)"""
-import os, platform, random, shutil, subprocess, sys, tempfile, unittest
+import json, os, platform, random, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "arm64"), os.path.join(HERE, "..", "core"), os.path.join(HERE, "..", "lang")]
 import built, lean_verify, odec, prove, statement, table
@@ -376,6 +376,284 @@ class PadArm64(unittest.TestCase):
         subprocess.run(["clang", "-O1", "-o", exe_p, c_p, asm_p], check=True, capture_output=True)
         r = subprocess.run([exe_p], capture_output=True, text=True, check=True, timeout=30)
         self.assertEqual(r.stdout.strip(), "65 lengths: b3l_pad_arm64 same")
+
+
+COMPRESS_HARNESS = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+void b3l_pad_arm64(uint8_t *block, const uint8_t *src, uint64_t n);
+void blake3_servil_compress_in_place_arm64(uint8_t *h, const uint8_t *m, uint64_t length, uint64_t t, uint64_t flags);
+
+static const uint32_t IV_U32[8] = {
+    0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u, 0xA54FF53Au,
+    0x510E527Fu, 0x9B05688Cu, 0x1F83D9ABu, 0x5BE0CD19u,
+};
+
+static int call_compress_guarded(uint8_t h[32], const uint8_t m[64], uint64_t len, uint64_t t, uint32_t flg) {
+    uint8_t guard[16 + 32 + 16];
+    memset(guard, 0x5A, sizeof(guard));
+    memcpy(guard + 16, h, 32);
+    /* Pass non-zero upper 32 bits in flags to exercise the `flags: low word` contract. */
+    uint64_t noisy_flags = 0xDEADBEEF00000000ULL | (uint64_t)flg;
+    blake3_servil_compress_in_place_arm64(guard + 16, m, len, t, noisy_flags);
+    for (int i = 0; i < 16; i++) {
+        if (guard[i] != 0x5A || guard[16 + 32 + i] != 0x5A) return 0;
+    }
+    memcpy(h, guard + 16, 32);
+    return 1;
+}
+
+static int compress_chunk(uint8_t out_cv[32], const uint8_t key[32], const uint8_t *data, size_t len,
+                          uint64_t chunk_idx, uint32_t base_flags, int is_root) {
+    uint8_t cv[32], blk[64];
+    memcpy(cv, key, 32);
+    if (len == 0) {
+        b3l_pad_arm64(blk, data, 0);
+        uint32_t f = base_flags | 1u | 2u | (is_root ? 8u : 0u);
+        if (!call_compress_guarded(cv, blk, 0, chunk_idx, f)) return 0;
+    } else {
+        size_t pos = 0;
+        while (pos + 64 < len) {
+            uint32_t f = base_flags | (pos == 0 ? 1u : 0u);
+            if (!call_compress_guarded(cv, data + pos, 64, chunk_idx, f)) return 0;
+            pos += 64;
+        }
+        size_t rem = len - pos;
+        b3l_pad_arm64(blk, data + pos, rem);
+        uint32_t f = base_flags | (pos == 0 ? 1u : 0u) | 2u | (is_root ? 8u : 0u);
+        if (!call_compress_guarded(cv, blk, rem, chunk_idx, f)) return 0;
+    }
+    memcpy(out_cv, cv, 32);
+    return 1;
+}
+
+static int blake3_hash_32(uint8_t out[32], const uint8_t key[32], uint32_t base_flags,
+                          const uint8_t *msg, size_t len) {
+    if (len <= 1024) {
+        return compress_chunk(out, key, msg, len, 0, base_flags, 1);
+    }
+    uint8_t stack[54][32];
+    int sp = 0;
+    size_t total_chunks = (len + 1023) / 1024;
+    for (size_t c = 0; c + 1 < total_chunks; c++) {
+        uint8_t cv[32];
+        if (!compress_chunk(cv, key, msg + c * 1024, 1024, (uint64_t)c, base_flags, 0)) return 0;
+        size_t n = c + 1;
+        while ((n & 1) == 0) {
+            uint8_t blk[64], pcv[32];
+            sp--;
+            memcpy(blk, stack[sp], 32);
+            memcpy(blk + 32, cv, 32);
+            memcpy(pcv, key, 32);
+            if (!call_compress_guarded(pcv, blk, 64, 0, base_flags | 4u)) return 0;
+            memcpy(cv, pcv, 32);
+            n >>= 1;
+        }
+        memcpy(stack[sp++], cv, 32);
+    }
+    size_t last = total_chunks - 1;
+    uint8_t cv[32];
+    if (!compress_chunk(cv, key, msg + last * 1024, len - last * 1024, (uint64_t)last, base_flags, 0)) return 0;
+    while (sp > 0) {
+        uint8_t blk[64], pcv[32];
+        sp--;
+        memcpy(blk, stack[sp], 32);
+        memcpy(blk + 32, cv, 32);
+        memcpy(pcv, key, 32);
+        uint32_t f = base_flags | 4u | (sp == 0 ? 8u : 0u);
+        if (!call_compress_guarded(pcv, blk, 64, 0, f)) return 0;
+        memcpy(cv, pcv, 32);
+    }
+    memcpy(out, cv, 32);
+    return 1;
+}
+
+static void hex32(const uint8_t b[32], char out[65]) {
+    static const char H[] = "0123456789abcdef";
+    for (int i = 0; i < 32; i++) {
+        out[2 * i] = H[b[i] >> 4];
+        out[2 * i + 1] = H[b[i] & 15];
+    }
+    out[64] = '\0';
+}
+
+int main(void) {
+    uint8_t iv[32];
+    for (int i = 0; i < 8; i++) {
+        iv[4 * i + 0] = (uint8_t)(IV_U32[i] & 0xffu);
+        iv[4 * i + 1] = (uint8_t)((IV_U32[i] >> 8) & 0xffu);
+        iv[4 * i + 2] = (uint8_t)((IV_U32[i] >> 16) & 0xffu);
+        iv[4 * i + 3] = (uint8_t)((IV_U32[i] >> 24) & 0xffu);
+    }
+    const uint8_t keyed_key[32] = "whats the Elvish word for friend";
+    size_t max_len = 102400;
+    uint8_t *msg = (uint8_t *)malloc(max_len);
+    for (size_t i = 0; i < max_len; i++) msg[i] = (uint8_t)(i % 251);
+    size_t len;
+    int count = 0;
+    while (scanf("%zu", &len) == 1) {
+        uint8_t h1[32], h2[32];
+        char s1[65], s2[65];
+        if (!blake3_hash_32(h1, iv, 0u, msg, len)) { printf("guard fail hash %zu\n", len); return 2; }
+        if (!blake3_hash_32(h2, keyed_key, 16u, msg, len)) { printf("guard fail keyed %zu\n", len); return 2; }
+        hex32(h1, s1);
+        hex32(h2, s2);
+        printf("%zu %s %s\n", len, s1, s2);
+        count++;
+    }
+    free(msg);
+    return 0;
+}
+"""
+
+
+class CompressArm64(unittest.TestCase):
+    """AArch64 NEON one-block BLAKE3 compression kernel (`blake3_servil_compress_in_place_arm64`)."""
+
+    SYM = "blake3_servil_compress_in_place_arm64"
+    KEPT_PROOF = os.path.join(HERE, "proofs", "blake3_servil_compress_in_place_arm64.proof")
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="odearmcomp-")
+        cls.addClassCleanup(shutil.rmtree, cls.dir)
+        cls.src_path = os.path.join(ARM, "compress_arm64.ode")
+        cls.spec_path = os.path.join(ARM, "compress_arm64.spec")
+        with open(os.path.join(HERE, "..", "kcheck", "blake3.spec")) as f:
+            cls.b3_spec = f.read()
+        with open(cls.spec_path) as f:
+            cls.contract_spec = f.read()
+        cls.spec = cls.b3_spec + "\n" + cls.contract_spec
+        with open(cls.src_path) as f:
+            cls.src = f.read()
+        cls.obj = os.path.join(cls.dir, "compress_arm64.o")
+        odec.build(cls.src_path, "compress1_arm64", cls.obj)
+        cls.pad_obj = os.path.join(cls.dir, "pad_arm64.o")
+        odec.build(os.path.join(ARM, "pad_arm64.ode"), "pad", cls.pad_obj)
+
+    def test_advice_budget_passes_on_both_arm64_profiles(self):
+        tool = os.path.join(HERE, "..", "lang", "ode_tool.py")
+        for arch in ("apple_m", "ampere1"):
+            r = subprocess.run(
+                [sys.executable, tool, "advise", "--arch", arch, self.src_path],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertIn("116 instructions, 464 bytes", r.stdout)
+            self.assertNotIn("budget exceeded", r.stdout)
+
+    @unittest.skipUnless(LAKE, "Lean's lake is not installed")
+    def test_compress_arm64_shown_and_matches_kept_proof(self):
+        built.built("odeverify")
+        self.assertEqual(lean_verify.verify(self.spec, [(self.obj, self.SYM)], self.KEPT_PROOF), (True, "shown"))
+        st = os.path.join(self.dir, "comp.statement")
+        pf = os.path.join(self.dir, "comp.proof")
+        nums = prove.prove(self.spec, [(self.obj, self.SYM, "")], st, pf)
+        self.assertIn(self.SYM, nums)
+        with open(self.KEPT_PROOF) as f, open(pf) as g:
+            self.assertEqual(f.read(), g.read())
+
+    @unittest.skipUnless(LAKE, "Lean's lake is not installed")
+    def test_compress_arm64_refuses_wrong_spec_contract_and_code(self):
+        built.built("odeverify")
+        spec_muts = [
+            ("rotation 16 -> 15", ">>> 16", ">>> 15"),
+            ("rotation 12 -> 13", ">>> 12", ">>> 13"),
+            ("rotation 8 -> 9", ">>> 8", ">>> 9"),
+            ("rotation 7 -> 9", ">>> 7", ">>> 9"),
+            ("IV[0] changed", "0x6A09E667", "0x6A09E668"),
+            ("counter halves swapped", "lo(t), hi(t)", "hi(t), lo(t)"),
+            ("length and flags swapped", "word(length), word(flags)", "word(flags), word(length)"),
+            ("six rounds", "[s[7][i] ^ s[7][i + 8] for i in 0..8]", "[s[6][i] ^ s[6][i + 8] for i in 0..8]"),
+        ]
+        for label, old, new in spec_muts:
+            with self.subTest(spec_mut=label):
+                self.assertEqual(self.b3_spec.count(old), 1, label)
+                bad_spec = self.b3_spec.replace(old, new, 1) + "\n" + self.contract_spec
+                ok, _ = lean_verify.verify(bad_spec, [(self.obj, self.SYM)], self.KEPT_PROOF)
+                self.assertFalse(ok, label)
+
+        contract_muts = [
+            ("contract swaps length and flags", "compress(h, m, t, length, flags)", "compress(h, m, t, flags, length)"),
+            ("contract omits word bound on length", "length: word", "length: number"),
+            ("contract omits counter type on t", "t: counter", "t: number"),
+            ("contract swaps h and m", "compress(h, m, t, length, flags)", "compress(m, h, t, length, flags)"),
+        ]
+        for label, old, new in contract_muts:
+            with self.subTest(contract_mut=label):
+                self.assertEqual(self.contract_spec.count(old), 1, label)
+                bad_spec = self.b3_spec + "\n" + self.contract_spec.replace(old, new, 1)
+                ok, _ = lean_verify.verify(bad_spec, [(self.obj, self.SYM)], self.KEPT_PROOF)
+                self.assertFalse(ok, label)
+
+        code_muts = [
+            ("wrong shift 12 -> 11", "  ushr t.4s, b.4s, 12\n", "  ushr t.4s, b.4s, 11\n", ""),
+            ("dropped rev32", "  rev32 d.8h, d.8h\n", "  nop\n", ""),
+            ("six rounds", "  rounds := 7\n", "  rounds := 6\n", ""),
+            ("wrong IV[0] low half", "  tmp := 0xE667\n", "  tmp := 0xE668\n", ""),
+            ("wrong flags shift", "  lsl tmp, flg, 32\n", "  lsl tmp, flg, 31\n", ""),
+            ("wrong diagonal ext", "  ext v0.16b, v0.16b, v0.16b, 12\n", "  ext v0.16b, v0.16b, v0.16b, 4\n", ""),
+            ("missing final xor", "  eor v0.16b, v0.16b, v2.16b\n", "  nop\n", ""),
+            ("branch on hidden flags", "  rounds := 7\n", "  cmp flg, 0\n  b.eq @done\n  rounds := 7\n", "kept out of the trace"),
+        ]
+        for idx, (label, old, new, want) in enumerate(code_muts):
+            with self.subTest(code_mut=label):
+                self.assertEqual(self.src.count(old), 1, label)
+                bad_ode = os.path.join(self.dir, f"bad_comp_{idx}.ode")
+                bad_obj = os.path.join(self.dir, f"bad_comp_{idx}.o")
+                with open(bad_ode, "w") as f:
+                    f.write(self.src.replace(old, new, 1))
+                odec.build(bad_ode, "compress1_arm64", bad_obj)
+                ok, said = lean_verify.verify(self.spec, [(bad_obj, self.SYM)], self.KEPT_PROOF)
+                self.assertFalse(ok, label)
+                if want:
+                    self.assertIn(want, said, label)
+
+    @unittest.skipUnless(ARM_MACHINE and shutil.which("clang"), "an AArch64 processor and clang are needed")
+    def test_compress_arm64_matches_all_official_blake3_vectors_on_hardware(self):
+        tv_path = os.path.join(HERE, "..", "reference", "blake3-servil", "test_vectors", "test_vectors.json")
+        with open(tv_path) as f:
+            cases = json.load(f)["cases"]
+        self.assertEqual(len(cases), 35)
+
+        def run_with(comp_obj, tag):
+            lines = ["#ifdef __APPLE__", "#define SYM(x) _##x", "#else", "#define SYM(x) x", "#endif", ".text", ".p2align 2"]
+            for o_path, sym in ((self.pad_obj, "b3l_pad_arm64"), (comp_obj, self.SYM)):
+                words, _ = aobj.words(o_path, sym)
+                lines += [f".globl SYM({sym})", f"SYM({sym}):"]
+                for w in words:
+                    lines.append(f"    .long 0x{int.from_bytes(w, 'little'):08x}")
+            asm_p = os.path.join(self.dir, f"b3_{tag}.S")
+            c_p = os.path.join(self.dir, f"b3_{tag}.c")
+            exe_p = os.path.join(self.dir, f"b3_{tag}")
+            with open(asm_p, "w") as f: f.write("\n".join(lines) + "\n")
+            with open(c_p, "w") as f: f.write(COMPRESS_HARNESS)
+            subprocess.run(["clang", "-O1", "-o", exe_p, c_p, asm_p], check=True, capture_output=True)
+            inp = "\n".join(str(c["input_len"]) for c in cases) + "\n"
+            r = subprocess.run([exe_p], input=inp, capture_output=True, text=True, check=True, timeout=60)
+            got = {}
+            for ln in r.stdout.strip().splitlines():
+                n_s, h1, h2 = ln.split()
+                got[int(n_s)] = (h1, h2)
+            return got
+
+        got = run_with(self.obj, "good")
+        for c in cases:
+            n = c["input_len"]
+            h1, h2 = got[n]
+            self.assertEqual(h1, c["hash"][:64], f"hash differs at len={n}")
+            self.assertEqual(h2, c["keyed_hash"][:64], f"keyed_hash differs at len={n}")
+
+        # Hardware negative control: 6 rounds produces wrong digests on the real processor.
+        bad_ode = os.path.join(self.dir, "bad6.ode")
+        bad_obj = os.path.join(self.dir, "bad6.o")
+        with open(bad_ode, "w") as f:
+            f.write(self.src.replace("  rounds := 7\n", "  rounds := 6\n", 1))
+        odec.build(bad_ode, "compress1_arm64", bad_obj)
+        bad_got = run_with(bad_obj, "bad6")
+        self.assertNotEqual(bad_got[0][0], cases[0]["hash"][:64])
 
 
 if __name__ == "__main__":
