@@ -31,6 +31,7 @@ theorem WVal.ok_mono {n n' t t' : Nat} (hn : n ≤ n') (ht : t ≤ t') : ∀ (v 
   | .use u, h => by simp only [WVal.ok, decide_eq_true_eq] at h ⊢; omega
   | .run _ _, _ => by simp [WVal.ok]
   | .part _ _ _, _ => by simp [WVal.ok]
+  | .pbyte _ _, _ => by simp [WVal.ok]
   | .other, _ => by simp [WVal.ok]
   | .region _ _, h => by simp [WVal.ok] at h
   | .span _ _ _, h => by simp [WVal.ok] at h
@@ -75,6 +76,7 @@ theorem WDen.mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : List N
     exact WDen.cons (ih1 ok.1) (ih2 (by simp only [WVal.ok]; exact ok.2))
   | run r k hb => intro _; exact WDen.run r k hb
   | part r off k hb => intro _; exact WDen.part r off k hb
+  | pbyte r off hb => intro _; exact WDen.pbyte r off hb
   | use u =>
     intro ok
     have hu : u < n := by simpa [WVal.ok] using ok

@@ -28,6 +28,8 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
       WDen ctx s0 ρ T (.run r n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + k))))
   | part (r off n : Nat) (hb : ∀ k, k < n → (s0.mem (s0.reg r + off + k)).val < 256) :
       WDen ctx s0 ρ T (.part r off n) (.list ((List.range n).map fun k => Val.int (s0.mem (s0.reg r + off + k))))
+  | pbyte (r off : Nat) (hb : (s0.mem (s0.reg r + off)).val < 256) :
+      WDen ctx s0 ρ T (.pbyte r off) (.int (s0.mem (s0.reg r + off)))
   | region (r l : Nat) (hl : ρ l = s0.reg l) (hb : ∀ k, k < s0.reg l → (s0.mem (s0.reg r + k)).val < 256) :
       WDen ctx s0 ρ T (.region r l) (.list ((List.range (s0.reg l)).map fun k => Val.int (s0.mem (s0.reg r + k))))
   | span (r : Nat) (off len : Row) (ho : 0 ≤ ev ρ off) (hn : 0 ≤ ev ρ len) :
@@ -1154,6 +1156,41 @@ variable {look : Node → Option Nat} [Looks look s.terms]
 
 local notation "𝔻" => den (inpOf ctx s0) ρ s.terms
 
+theorem pbytesSpan_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} :
+    ∀ (r off : Nat) (bs : List WVal) (as : List Val),
+      WDen ctx s0 ρ T (.list bs) (.list as) → pbytesSpan r off bs = true →
+      as = (List.range bs.length).map (fun k => Val.int (s0.mem (s0.reg r + off + k))) ∧
+      ∀ k, k < bs.length → (s0.mem (s0.reg r + off + k)).val < 256
+  | _, _, [], _, hd, _ => by cases hd; exact ⟨rfl, fun k hk => absurd hk (Nat.not_lt_zero _)⟩
+  | r, off, b :: more, _, hd, hp => by
+    cases hd with
+    | cons h1 h2 =>
+      cases b with
+      | pbyte r' off' =>
+        simp only [pbytesSpan, Bool.and_eq_true, decide_eq_true_eq] at hp
+        obtain ⟨⟨hr, hoff⟩, hpm⟩ := hp
+        subst hr; subst hoff
+        cases h1 with
+        | pbyte _ _ hb =>
+          obtain ⟨has, hbm⟩ := pbytesSpan_sound r' (off' + 1) more _ h2 hpm
+          refine ⟨?_, ?_⟩
+          · rw [has, List.length_cons, List.range_succ_eq_map, List.map_cons, List.map_map]
+            simp only [Nat.add_zero]
+            congr 1
+            apply List.map_congr_left
+            intro k _
+            have e : s0.reg r' + (off' + 1) + k = s0.reg r' + off' + (k + 1) := by omega
+            simp [Function.comp, e]
+          · intro k hk
+            simp only [List.length_cons] at hk
+            cases k with
+            | zero => simp [hb]
+            | succ k =>
+              have := hbm k (by omega)
+              have e : s0.reg r' + off' + (k + 1) = s0.reg r' + (off' + 1) + k := by omega
+              rw [e]; exact this
+      | _ => simp [pbytesSpan] at hp
+
 theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs : List WVal} {as : List Val} {v : WVal}
     (h : wown ctx look s f vs = some v) (hv : WDen ctx s0 ρ s.terms (.list vs) (.list as)) :
     ∃ a, builtin f as = some a ∧ WDen ctx s0 ρ s.terms v a := by
@@ -1402,6 +1439,53 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
             exact Holds.den_lt wf i)
           simp [builtin, e]
         next => simp at h
+      | list bs =>
+        cases bs with
+        | nil => simp [wown] at h
+        | cons b0 more =>
+          cases b0 with
+          | pbyte r off =>
+            obtain ⟨as', rfl⟩ := WDen.list_inv hx
+            simp only [wown] at h
+            split at h
+            next hc =>
+              obtain ⟨hf, o4, n4, hps⟩ := hc
+              have fe : f = "words" := by simpa using hf
+              subst fe
+              cases hra : runAt r ctx.contract.wordRuns 0 with
+              | none => simp [hra] at h
+              | some j =>
+                simp only [hra, Option.bind_some] at h
+                cases hin : inputWords look j ((more.length + 1) / 4) (off / 4) with
+                | none => simp [hin] at h
+                | some wvs =>
+                  simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
+                  obtain ⟨_, x', n', hj⟩ := runAt_spec hra
+                  have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
+                  obtain ⟨has', hb⟩ := pbytesSpan_sound r off (.pbyte r off :: more) as' hx hps
+                  simp only [List.length_cons] at has' hb
+                  obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf ((more.length + 1) / 4) (off / 4)
+                    (fun i => (s0.mem (s0.reg r + off + i)).val) wvs hin
+                    (fun i hi => hb i (by omega))
+                    (fun q a ha hq => by
+                      subst ha
+                      have b0 := hb (4 * q) (by omega)
+                      have b1 := hb (4 * q + 1) (by omega)
+                      have b2 := hb (4 * q + 2) (by omega)
+                      have b3 := hb (4 * q + 3) (by omega)
+                      have ea : s0.reg r + 4 * (off / 4 + q) = s0.reg r + off + 4 * q := by omega
+                      have e0 : inpOf ctx s0 j (off / 4 + q) = load s0.mem (s0.reg r + off + 4 * q) 4 := by simp only [inpOf, hj', ea]
+                      have e1 : s0.reg r + off + 4 * q + 1 = s0.reg r + off + (4 * q + 1) := by omega
+                      have e2 : s0.reg r + off + 4 * q + 1 + 1 = s0.reg r + off + (4 * q + 2) := by omega
+                      have e3 : s0.reg r + off + 4 * q + 1 + 1 + 1 = s0.reg r + off + (4 * q + 3) := by omega
+                      rw [e0, load4, e3, e2, e1]
+                      omega)
+                  have en : 4 * ((more.length + 1) / 4) = more.length + 1 := by omega
+                  rw [en] at hw
+                  rw [has']
+                  exact ⟨.list ws, by simp [builtin, hw], hd⟩
+            next => simp at h
+          | _ => simp [wown] at h
       | _ => simp [wown] at h
   · cases x <;> simp [wown] at h
 
@@ -1577,6 +1661,36 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {B : Nat} (hB : H
             simp only [evalSpec, ea, ei]; rw [if_pos k0]; exact er
           next => simp at h
         | _ => simp at h
+      | run r n =>
+        cases iv with
+        | int k =>
+          cases di
+          cases da with
+          | run _ _ hb =>
+            simp only at h
+            split at h
+            next hk =>
+              simp only [Option.some.injEq] at h; subst h
+              refine ⟨Val.int (s0.mem (s0.reg r + k.toNat)), ?_, WDen.pbyte r k.toNat (hb k.toNat hk.2)⟩
+              simp only [evalSpec, ea, ei]; rw [if_pos hk.1, List.getElem?_map, List.getElem?_range hk.2]; rfl
+            next => simp at h
+        | _ => simp at h
+      | part r off n =>
+        cases iv with
+        | int k =>
+          cases di
+          cases da with
+          | part _ _ _ hb =>
+            simp only at h
+            split at h
+            next hk =>
+              simp only [Option.some.injEq] at h; subst h
+              have e : s0.reg r + (off + k.toNat) = s0.reg r + off + k.toNat := by omega
+              refine ⟨Val.int (s0.mem (s0.reg r + off + k.toNat)), ?_, ?_⟩
+              · simp only [evalSpec, ea, ei]; rw [if_pos hk.1, List.getElem?_map, List.getElem?_range hk.2]; rfl
+              · rw [← e]; exact WDen.pbyte r (off + k.toNat) (by rw [e]; exact hb k.toNat hk.2)
+            next => simp at h
+        | _ => simp at h
       | lanes j count l =>
         cases iv with
         | int k =>
@@ -1649,6 +1763,24 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {B : Nat} (hB : H
                 simp only [evalSpec, el]; rw [if_pos hlen]
                 simp only [List.length_map, List.length_range, Option.some.injEq, Val.int.injEq]
                 omega
+          next r n =>
+            simp only [Option.some.injEq] at h; subst h
+            cases dl with
+            | cons hv hrest =>
+              cases hrest
+              cases hv with
+              | run _ _ _ =>
+                refine ⟨_, ?_, WDen.int n⟩
+                simp only [evalSpec, el]; rw [if_pos hlen]; simp
+          next r off n =>
+            simp only [Option.some.injEq] at h; subst h
+            cases dl with
+            | cons hv hrest =>
+              cases hrest
+              cases hv with
+              | part _ _ _ _ =>
+                refine ⟨_, ?_, WDen.int n⟩
+                simp only [evalSpec, el]; rw [if_pos hlen]; simp
           next => simp at h
         next hlen =>
           split at h

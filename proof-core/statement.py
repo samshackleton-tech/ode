@@ -413,6 +413,7 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     sizes.update({arg: 8 * count for arg, count in tables.items()})
     sizes.update({arg: 32 * count for arg, count in values.items()})
     sizes.update({arg: None for arg in packed})
+    sizes.update({arg: int(kind.split()[0]) for arg, kind in c["args"] if re.fullmatch(r"\d+ bytes", kind)})
     said = sorted({kind for arg, kind in c["args"] if arg in kinds})     # (for messages)
     # `returns r`, r no name of the specification's (LANGUAGE.md): the number returned is called r in `ensures` lines.
     r = c["returns"]
@@ -426,6 +427,7 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         if kind == "number" and arg not in written: out.append(f"arg {arg} number")
         elif m and not m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} bytes {m.group(1)}")
         elif m and m.group(1).isdigit() and arg in written: out.append(f"arg {arg} out {int(m.group(1))}")
+        elif m and m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} fixed {int(m.group(1))}")
         elif arg in tables and arg not in written: out += [f"arg {arg} fixed {8 * tables[arg]}", f"lanes {arg} n"]
         elif arg in values and arg in written: out.append(f"arg {arg} out {32 * values[arg]}")
         elif arg in packed and arg not in written: out.append(f"arg {arg} number")
@@ -455,6 +457,13 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
                 and e[3][0] == "num" and 0 <= e[3][1] < 2 ** 64): out.append(f"{'atleast' if e[1] == '>=' else 'below'} {e[2][1]} {e[3][1]}")
         elif (e[0] == "bin" and e[1] == "<=" and e[2][0] == "name" and dict(c["args"]).get(e[2][1]) == "number"
                 and e[3][0] == "num" and 0 <= e[3][1] < 2 ** 64 - 1): out.append(f"below {e[2][1]} {e[3][1] + 1}")
+        elif (e[0] == "bin" and e[1] == "<=" and e[2][0] == "bin" and e[2][1] == "+"
+                and e[2][2][0] == "bin" and e[2][2][1] == "*"
+                and e[2][2][2][0] == "num" and e[2][2][2][1] > 0
+                and e[2][2][3][0] == "name" and dict(c["args"]).get(e[2][2][3][1]) == "number"
+                and e[2][3][0] == "num" and e[3][0] == "num"
+                and 0 <= e[2][3][1] <= e[3][1] and (e[3][1] - e[2][3][1]) // e[2][2][2][1] < 2 ** 64 - 1):
+            out.append(f"below {e[2][2][3][1]} {(e[3][1] - e[2][3][1]) // e[2][2][2][1] + 1}")
         else: raise SystemExit(f"statement: the contract of {name} has a `requires` the verifier in Lean does not read yet")
     for key in ("calls", "conditions", "given", "spoils"):
         if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")

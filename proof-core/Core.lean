@@ -992,8 +992,26 @@ def runAt (r : Nat) : List (String × Nat × Nat) → Nat → Option Nat
   | [], _ => none
   | (_, r', _) :: more, j => if r' = r then some j else runAt r more (j + 1)
 
-/-- Read words at a fixed offset divisible by four. They must lie in a read-only run or a read/write run
-that has not been written since entry. -/
+/-- Two 32-bit word rows from an 8-byte frame cell at `o` (so many bytes from where the stack pointer was at
+entry): the low word and high word, where the cell is known and its low 32 bits lie in `[0, 2^32)`. -/
+def frameCellWords (s : Sym) (o : Int) : Option (Row × Row) :=
+  match s.frame.find? (fun cell => cell.1 == o) with
+  | some (_, x) =>
+    if knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then
+      some (x, Lin.high x)
+    else none
+  | none => none
+
+/-- `pairs` 8-byte frame cells from `o` on as `2 * pairs` 32-bit word rows. -/
+def framePairRows (s : Sym) (o : Int) : Nat → Option (List Row)
+  | 0 => some []
+  | pairs + 1 =>
+    match frameCellWords s o, framePairRows s (o + 8) pairs with
+    | some (lo, hi), some rest => some (lo :: hi :: rest)
+    | _, _ => none
+
+/-- Read words at a fixed offset divisible by four. They must lie in a read-only run, a read/write run
+that has not been written since entry, or known 8-byte cells of the stack frame. -/
 def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat × Sym) :=
   let bytes := if width = 4 then "sixteen" else if width = 1 then "four" else "sixty-four"
   let badSize := if width = 4 then "sixteen bytes that are not four words of the run"
@@ -1025,7 +1043,17 @@ def symLoadWords (ctx : Ctx) (s : Sym) (addr : Row) (width : Nat) : V (List Nat 
           | none => refuse s!"{bytes} bytes of a run given only to write"
         | none => refuse s!"{bytes} bytes of a run given only to write"
       | _, _ => refuse s!"{bytes} bytes at a place of a run that is no number"
-    | _ => refuse s!"{bytes} bytes that are of no run of words given to read"
+    | _ =>
+      match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
+      | some o, some sp =>
+        if sp ≤ o ∧ o + 4 * (width : Int) ≤ 0 ∧ width % 2 = 0 then
+          match framePairRows s o (width / 2) with
+          | some rows =>
+            let made := termsOf wAtom rows s.tab
+            pure (made.1, { s with tab := made.2 })
+          | none => refuse s!"{bytes} bytes of the frame that are not known words"
+        else refuse s!"{bytes} bytes that are of no run of words given to read"
+      | _, _ => refuse s!"{bytes} bytes that are of no run of words given to read"
 
 /-- An unscaled address consists of a base register, a displacement and an optional index register. -/
 def symWordAddr (ctx : Ctx) (bind : Bind) (s : Sym) : List Expr → Option Row
@@ -2088,6 +2116,7 @@ inductive WVal where
   | list (l : List WVal)
   | run (r n : Nat)               -- the `n` bytes at the address register `r` held at entry, as they were at entry
   | part (r off n : Nat)          -- `n` of those bytes, from place `off` on
+  | pbyte (r off : Nat)           -- one byte of run `r`, at byte offset `off`, as it was at entry
   | region (r l : Nat)            -- the bytes at the address register `r` held at entry, as many as register `l` held then, as they were at entry
   | span (r : Nat) (off len : Row)    -- `len` of the bytes at the address register `r` held at entry, from place `off` on, as they were at entry (place and length are rows)
   | wbytes (ids : List Nat)       -- the bytes of the words of these terms, four a word, the lowest first
@@ -2253,6 +2282,12 @@ def inputWords (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (
     | some i, some rest => some (.word [i] :: rest)
     | _, _ => none
 
+/-- Whether a list of `WVal` is the consecutive bytes `off, off+1, ...` of run `r`. -/
+def pbytesSpan (r off : Nat) : List WVal → Bool
+  | [] => true
+  | .pbyte r' off' :: more => decide (r' = r ∧ off' = off) && pbytesSpan r (off + 1) more
+  | _ => false
+
 /-- The language's own names (`builtin` of the account), on words. -/
 def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List WVal → Option WVal
   | [.int n] =>
@@ -2286,6 +2321,11 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
       (runAt r ctx.contract.fixeds 0).bind fun j => (knownLoad j off s.known).map fun v => .num (Lin.var v)
     else none
   | [.wbytes ids] => if f == "words" then some (.list (ids.map fun i => WVal.word [i])) else none
+  | [.list (.pbyte r off :: more)] =>
+    let n := more.length + 1
+    if f == "words" ∧ off % 4 = 0 ∧ n % 4 = 0 ∧ pbytesSpan r off (.pbyte r off :: more) = true then
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
+    else none
   | _ => none
 
 def wevalList (ev : SExpr → Option WVal) : SExpr → Option (List WVal)
@@ -2437,6 +2477,8 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
     | .index a i =>
       match weval ctx look s fuel env a, weval ctx look s fuel env i with
       | some (.list l), some (.int k) => if 0 ≤ k then l[k.toNat]? else none
+      | some (.run r n), some (.int k) => if 0 ≤ k ∧ k.toNat < n then some (.pbyte r k.toNat) else none
+      | some (.part r off n), some (.int k) => if 0 ≤ k ∧ k.toNat < n then some (.pbyte r (off + k.toNat)) else none
       | some (.lanes j count l), some (.int k) => if 0 ≤ k ∧ k.toNat < count then some (.lane j (8 * k.toNat) l) else none
       | some (.lane j c _), some (.int k) => if 0 ≤ k then blockAt look s j c (Lin.const (64 * k)) else none
       | some (.lane j c _), some (.num r) => blockAt look s j c (Lin.scale 64 r)
@@ -2450,6 +2492,8 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
           match vs with
           | [.region _ l] => some (.num (Lin.var l))
           | [.span _ _ len] => some (.num len)
+          | [.run _ n] => some (.int n)
+          | [.part _ _ n] => some (.int n)
           | _ => none
         else if own.contains f then wown ctx look s f vs
         else if !knowsOf f s.known then
@@ -3388,6 +3432,7 @@ def WVal.ok (n t : Nat) : WVal → Bool
   | .use h => decide (h < n)
   | .run _ _ => true
   | .part _ _ _ => true
+  | .pbyte _ _ => true
   | .other => true
   | _ => false
 def WVal.okAll (n t : Nat) : List WVal → Bool

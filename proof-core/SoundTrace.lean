@@ -2269,6 +2269,29 @@ theorem symValue_flag_operands {ctx : Ctx} {p : Program} {a0 b0 sta stb : State}
 
 theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : List Nat} {items rest : Items}
     (h : symLoadWords ctx s addr w items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
+  have hframe : ∀ {bytes : String},
+      (match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
+       | some o, some sp =>
+         if sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 ∧ w % 2 = 0 then
+           match framePairRows s o (w / 2) with
+           | some rows => let made := termsOf wAtom rows s.tab; pure (made.1, { s with tab := made.2 })
+           | none => refuse s!"{bytes} bytes of the frame that are not known words"
+         else refuse s!"{bytes} bytes that are of no run of words given to read"
+       | _, _ => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
+      s1.zf = s.zf ∧ s1.cf = s.cf := by
+    intro bytes h'
+    cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
+    | none => simp only [hc] at h'; exact (refuse_ok (items := items) h').elim
+    | some o =>
+      cases hsp : s.sp with
+      | none => simp only [hc, hsp] at h'; exact (refuse_ok (items := items) h').elim
+      | some sp =>
+        simp only [hc, hsp] at h'
+        split at h'
+        · cases hpr : framePairRows s o (w / 2) <;> simp only [hpr] at h'
+          · exact (refuse_ok (items := items) h').elim
+          · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+        · exact (refuse_ok (items := items) h').elim
   unfold symLoadWords at h
   cases hf : findOut addr ctx.contract.fixeds 0 with
   | some loc =>
@@ -2286,9 +2309,9 @@ theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : 
     | frame _ | region _ _ | data _ =>
       dsimp only at h
       cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
-      · exact (refuse_ok (items := items) h).elim
+      · exact hframe h
       · rename_i loc2; cases loc2 with
-        | frame _ | region _ _ | data _ => dsimp only at h; exact (refuse_ok (items := items) h).elim
+        | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
         | out w0 off =>
           dsimp only at h
           cases hc : Lin.isConst off <;> simp only [hc] at h
@@ -2308,9 +2331,9 @@ theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : 
   | none =>
     simp only [hf] at h
     cases hf2 : findOut addr ctx.contract.outs 0 <;> simp only [hf2] at h
-    · exact (refuse_ok (items := items) h).elim
+    · exact hframe h
     · rename_i loc2; cases loc2 with
-      | frame _ | region _ _ | data _ => dsimp only at h; exact (refuse_ok (items := items) h).elim
+      | frame _ | region _ _ | data _ => dsimp only at h; exact hframe h
       | out w0 off =>
         dsimp only at h
         cases hc : Lin.isConst off <;> simp only [hc] at h

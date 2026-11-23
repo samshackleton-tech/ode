@@ -429,6 +429,90 @@ theorem loadWords_terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
   have ey : s0.reg r + c + (y - (s0.reg r + c)) = y := by omega
   rw [ey] at this; exact this
 
+/-- Eight bytes are two words: the low one and 2^32 times the high one. -/
+theorem load_halves_vec (mem : Nat → Byte) (a : Nat) : load mem a 8 = load mem a 4 + 4294967296 * load mem (a + 4) 4 := by
+  simp only [load, Nat.add_assoc, Nat.reduceAdd]
+  omega
+
+theorem frameCellWords_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    (wf : WF ctx s) {o : Int} {lo hi : Row} (h : frameCellWords s o = some (lo, hi)) :
+    -(ctx.contract.stack : Int) ≤ o ∧ o + 8 ≤ 0 ∧
+    bounded s.nvars lo ∧ bounded s.nvars hi ∧
+    (load st.mem ((s0.reg RSP : Int) + o).toNat 4 : Int) = ev ρ lo % W32i ∧
+    (load st.mem (((s0.reg RSP : Int) + o).toNat + 4) 4 : Int) = ev ρ hi % W32i := by
+  have h4 : (256 : Nat) ^ 4 = 4294967296 := by decide
+  unfold frameCellWords at h
+  cases hf : s.frame.find? (fun cell => cell.1 == o) with
+  | none => simp [hf] at h
+  | some p =>
+    obtain ⟨o', x⟩ := p
+    simp only [hf] at h
+    split at h
+    next hk =>
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨rfl, rfl⟩ := h
+      have hm := List.mem_of_find?_eq_some hf
+      have ho : o' = o := by have := List.find?_some hf; simpa using this
+      subst ho
+      obtain ⟨g1, g2, g3⟩ := H.frame _ _ hm
+      have bx : bounded s.nvars x := wf.frame _ _ hm
+      have bh : bounded s.nvars (Lin.high x) := bounded_high bx
+      have hk' : knownNonneg s (Lin.word x) = true ∧ plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) = true := by
+        simpa using hk
+      have h0 := knownNonneg_sound H hk'.1
+      have h1 := plain_sound hk'.2 ρ H.facts
+      simp only [ev_sub, ev_const] at h1
+      have eh := ev_high ρ x
+      have e := load_halves_vec st.mem ((s0.reg RSP : Int) + o').toNat
+      have lt1 := load_lt st.mem ((s0.reg RSP : Int) + o').toNat 4
+      have lt2 := load_lt st.mem (((s0.reg RSP : Int) + o').toNat + 4) 4
+      rw [h4] at lt1 lt2
+      refine ⟨g1, g2, bx, bh, ?_, ?_⟩
+      · rw [e] at g3; rw [← g3]; unfold W32i; omega
+      · rw [e] at g3; unfold W32i at h1 eh ⊢; omega
+    next => simp at h
+
+theorem framePairRows_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
+    (wf : WF ctx s) (hst : ctx.contract.stack ≤ s0.reg RSP) :
+    ∀ (pairs : Nat) (o : Int) {rows : List Row}, framePairRows s o pairs = some rows →
+      rows.length = 2 * pairs ∧
+      (∀ r ∈ rows, bounded s.nvars r) ∧
+      ∀ k, k < 2 * pairs →
+        -(ctx.contract.stack : Int) ≤ o + 4 * (k : Int) ∧ o + 4 * (k : Int) + 4 ≤ 0 ∧
+        (load st.mem (((s0.reg RSP : Int) + o).toNat + 4 * k) 4 : Int) = ev ρ (rows.getD k (Lin.const 0)) % W32i
+  | 0, o, rows, h => by
+    simp only [framePairRows, Option.some.injEq] at h; subst h
+    exact ⟨rfl, fun _ m => absurd m (by simp), fun k hk => absurd hk (Nat.not_lt_zero _)⟩
+  | pairs + 1, o, rows, h => by
+    simp only [framePairRows] at h
+    cases hc : frameCellWords s o with
+    | none => simp [hc] at h
+    | some lh =>
+      obtain ⟨lo, hi⟩ := lh
+      cases hr : framePairRows s (o + 8) pairs with
+      | none => simp [hc, hr] at h
+      | some rest =>
+        simp only [hc, hr, Option.some.injEq] at h; subst h
+        obtain ⟨g1, g2, blo, bhi, hlo, hhi⟩ := frameCellWords_sound H wf hc
+        obtain ⟨rlen, rbd, rmem⟩ := framePairRows_sound H wf hst pairs (o + 8) hr
+        refine ⟨by simp [rlen]; omega, ?_, ?_⟩
+        · intro r mr
+          rcases List.mem_cons.mp mr with rfl | mr
+          · exact blo
+          · rcases List.mem_cons.mp mr with rfl | mr
+            · exact bhi
+            · exact rbd r mr
+        · intro k hk
+          match k with
+          | 0 => refine ⟨by omega, by omega, by simpa using hlo⟩
+          | 1 => refine ⟨by omega, by omega, by simpa using hhi⟩
+          | k + 2 =>
+            obtain ⟨m1, m2, m3⟩ := rmem k (by omega)
+            have e1 : ((s0.reg RSP : Int) + (o + 8)).toNat + 4 * k = ((s0.reg RSP : Int) + o).toNat + 4 * (k + 2) := by omega
+            rw [e1] at m3
+            refine ⟨by omega, by omega, ?_⟩
+            simpa [List.getD] using m3
+
 theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s1 : Sym} {addr : Row} {l : List Nat}
     {items rest : Items} {ρ : Nat → Int} {st : State} {width : Nat}
     (h : symLoadWords ctx s addr width items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
@@ -489,7 +573,59 @@ theorem symLoadWords_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
   | none =>
     simp only [hf] at h
     cases hf2 : findOut addr ctx.contract.outs 0 with
-    | none => simp only [hf2] at h; exact (refuse_ok h).elim
+    | none =>
+      simp only [hf2] at h
+      cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
+      | none => simp only [hc] at h; exact (refuse_ok h).elim
+      | some o =>
+        cases hsp : s.sp with
+        | none => simp only [hc, hsp] at h; exact (refuse_ok h).elim
+        | some sp =>
+          simp only [hc, hsp] at h
+          split at h
+          next hcond =>
+            obtain ⟨hso, ho0, hw2⟩ := hcond
+            cases hpr : framePairRows s o (width / 2) with
+            | none => simp only [hpr] at h; exact (refuse_ok h).elim
+            | some rows =>
+              simp only [hpr] at h
+              have := V.pure_ok h
+              injection this with h1 _
+              injection h1 with h1 h2
+              subst h1 h2
+              obtain ⟨rlen, rbd, rmem⟩ := framePairRows_sound H wf E.stack (width / 2) o hpr
+              have hlen : rows.length = width := by omega
+              have h2w : 2 * (width / 2) = width := by omega
+              have hbound0 : -(ctx.contract.stack : Int) ≤ o := by
+                have := (rmem 0 (by omega)).1; omega
+              have hrsp : ρ RSP = s0.reg RSP := H.entry RSP (by unfold Ctx.nreg Contract.regs RSP; split <;> omega)
+              have eoff := ev_isConst (ρ := ρ) hc
+              rw [ev_sub, ev_var, hrsp] at eoff
+              have hsmall := E.small RSP
+              have hstack := E.stack
+              have hA : a = ((s0.reg RSP : Int) + o).toNat := ha ((s0.reg RSP : Int) + o).toNat (by omega) (by unfold M64 at hsmall ⊢; omega)
+              obtain ⟨e, ok, tlen, tlt, tdn⟩ := termsOf_step (mk := wAtom)
+                (val := fun r => (ev ρ r % W32i).toNat)
+                (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) rows s.tab
+                (fun r mr T _ okT => wAtom_step okT (rbd r mr))
+                (Ext.refl _) wf.words.ok
+              refine ⟨allowed_of _ _ _ ?_, Carried.terms H wf e ok, by omega, tlt, ?_⟩
+              · intro y hy1 hy2
+                simp only [Contract.perm, Bool.or_eq_true]
+                left; left; left
+                simp only [Contract.inFrame, Bool.and_eq_true, decide_eq_true_eq]
+                omega
+              · intro k hk
+                rw [hA]
+                have hm := (rmem k (by omega)).2.2
+                have hd := tdn k (by omega)
+                have hget : rows[k]'(by omega) = rows.getD k (Lin.const 0) := by
+                  have hlt : k < rows.length := by omega
+                  simp only [List.getD, List.getElem?_eq_getElem hlt, Option.getD_some]
+                rw [hget] at hd
+                rw [hd]
+                omega
+          next => exact (refuse_ok h).elim
     | some w0 =>
       obtain ⟨w, off, x, r, n, rfl, _, hw, ho⟩ := findOut_spec hf2
       simp only [hf2] at h
