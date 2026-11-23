@@ -1,0 +1,45 @@
+// Verifier-in-Ode building block (AArch64): returns 1 if every byte in a[0..n] is zero, else 0.
+// Demonstrates AArch64 loops (cmp, b.hs, b.ne, b, ldrb), `reg` names inside `place { ... }`,
+// `:=`, zero stack usage, and an advisory `budget`.
+target arm64
+
+fn all_zero as "arm_all_zero" {
+  budget {
+    max_bytes 64
+    max_icache_lines 1
+    max_frame_bytes 0
+    max_line_splits 0
+    max_stlf_partial 0
+  }
+  reg base = x0
+  reg count = x1
+  reg idx = x2
+  reg addr = x3
+  reg cur = w4
+  reg cur64 = x4
+
+  idx := 0
+  place {
+    name i = idx
+    fact 0 <= i
+    fact i <= n
+    fact all_zero(a) == zero_from(a, i)
+    decreases n - i
+  }
+@loop:
+  cmp idx, count
+  b.hs @yes
+  add addr, base, idx
+  ldrb cur, [addr, 0]
+  cmp cur64, 0
+  b.ne @no
+  add idx, idx, 1
+  b @loop
+@yes:
+  x0 := 1
+  b @done
+@no:
+  x0 := 0
+@done:
+  ret
+}

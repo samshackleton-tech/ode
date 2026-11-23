@@ -11,13 +11,14 @@ The table below lists each file in this folder and what it does.
 
 | File | What it does |
 |---|---|
-| `arm64.tab` | The table: 27 instruction forms, one row per form. A row says how an assembler writes the form, how the decoded instruction is written, what the instruction does, and how its 32 bits are laid out. The top of the file explains the format. |
-| `word.py` | Writes an instance of a row as its 32-bit instruction word, and reads four bytes back as an instance. A word is read only if the table writes that exact word for the instance, so nothing is read that is not written. |
-| `obj.py` | Reads a function's instructions from an AArch64 ELF object file using the table alone, including `bl` call targets from ELF relocations. Refuses any word that is not an instance of a row. |
-| `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (and whether it faults) with what the row says. |
+| `arm64.tab` | The table: 36 instruction forms, one row per form (general arithmetic, 64/32/8-bit loads and stores, stack-pointer loads and stores with 16-byte alignment checks, 64-bit comparisons, unconditional and conditional branches, calls and returns, and 128-bit NEON vector operations). The top of the file explains the format. |
+| `word.py` | Writes an instance of a row as its 32-bit instruction word, and reads four bytes back as an instance (including signed PC-relative branch offsets). A word is read only if the table writes that exact word for the instance, so nothing is read that is not written. |
+| `asm.py` | Table-driven AArch64 assembler that writes an ELF object file directly from Ode instructions, checking every emitted word back through `word.decode`. |
+| `obj.py` | Reads a function's instructions from an AArch64 ELF object file using the table alone, resolving PC-relative branch targets and `bl` call targets from ELF relocations. Refuses any word that is not an instance of a row. |
+| `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (registers, flags, vector lanes, memory, and faults) with what the row says. |
 | `test_arm64.py` | The tests: on any machine, the instruction words and decoding; on an AArch64 machine with clang, comparison against the processor. |
 | `results/` | What `cross.py --out` wrote on each processor tested (`apple-m6.json`, `ampereone.json`). |
-| `agree/` | A standalone Lean 4 package proving that four rows of `arm64.tab` (`add_rrr`, `ldr64_sp` aligned and fault, `eor_v`, `rev32_8h`) agree with Google DeepMind's `arm64-semantics`. |
+| `agree/` | A standalone Lean 4 package proving that eight rows of `arm64.tab` (`add_rrr`, `ldr64_sp` aligned and fault, `eor_v`, `rev32_8h`, `ldrb`, `cmp_rr`, `b_hs`, `b_lo`) agree with Google DeepMind's `arm64-semantics`. |
 
 The effect language and its interpreter on numbers are shared with the x86-64 table: `../core/table.py`
 and `../core/conc.py`. Three small additions were made to those two files for AArch64:
@@ -69,16 +70,20 @@ pointer is not a multiple of 16.
 
 After the instruction runs, every part of the state is compared with what the row's effect says. Where the
 row says the processor faults (`on16(sp)` with a misaligned stack pointer), the processor must raise a
-signal, and nowhere else may it. Any part of the state that the row does not mention must be unchanged;
-that includes the flags, which no row of this table reads or writes.
+signal, and nowhere else may it. For comparison rows (`cmp_rr`, `cmp_ri`), `cross.py` checks that hardware
+`PSTATE.Z` matches `zf` and hardware `PSTATE.C` equals `1 - cf` (AArch64 sets `C = 1` when no borrow
+occurred, the inverse of Ode's unsigned-below flag `cf`). Any part of the state that the row does not
+mention must stay unchanged.
 
 One general register per case is left out of the comparison, a different one from case to case: it holds
 the address of the case's state while the instruction runs. On macOS, `x18` is left out as well, because
-the system reserves it. `bl` and `ret` are not run on the processor: they jump out of the test harness.
+the system reserves it. Control-flow rows (`b`, `b_eq`, `b_ne`, `b_hs`, `b_lo`, `bl`, `ret`) are not run
+on the processor inside the single-instruction harness, because they jump out of it; their bit encodings
+are compared directly against `clang` in `test_arm64.py`, and `b_hs` and `b_lo` are proved in `agree/`.
 
-The tests give `cross.py` 16 tables with one row changed (a wrong effect, a wrong displacement unit, a
-missing or extra alignment fault, or swapped register fields in the instruction word). Each change must be
-caught, and is.
+The tests give `cross.py` 18 tables with one row changed (a wrong effect, a wrong displacement unit, a
+missing or extra alignment fault, flipped comparison flags, wrong load width, or swapped register fields
+in the instruction word). Each change must be caught, and is.
 
 ## What was measured
 
@@ -88,8 +93,9 @@ and how many faulted as the rows say.
 
 ## What is not here yet
 
-- The flags, and instructions that read or write them (`subs`, `cmp`, `b.ne`, `cset`).
+- Conditional select (`cset`, `csel`) and flag-setting register arithmetic (`adds`, `subs`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- Agreement proofs in `agree/` for the remaining 23 rows of `arm64.tab` (four representative rows are
-  proved so far).
+- Agreement proofs in `agree/` for the remaining 28 rows of `arm64.tab` (eight representative rows,
+  covering arithmetic, memory, stack faults, byte loads, comparisons, conditional branches, and NEON,
+  are proved so far).

@@ -130,6 +130,31 @@ class EndToEndToolTests(unittest.TestCase):
         self.assertIn("shown: v_xor64, v_fold32, v_diff32", rb.stdout)
         self.assertIn("max_line_splits=0", rb.stdout)
 
+        # 4. AArch64 verified loop: zero_arm64.ode (cmp, b.hs, b.ne, b, ldrb, reg names in place {}, budget {})
+        rz = _run_tool(["check", os.path.join(vdir, "zero_arm64.ode"), os.path.join(vdir, "zero_arm64.spec"),
+                        "--arch", "apple_m", "--trace"])
+        self.assertEqual(rz.returncode, 0, rz.stdout + rz.stderr)
+        self.assertIn("shown: arm_all_zero", rz.stdout)
+        # Planted off-by-one / wrong return in AArch64 loop -> refused AND caught as FALSE on probe!
+        with open(os.path.join(vdir, "zero_arm64.ode")) as f:
+            z_src = f.read()
+        with tempfile.TemporaryDirectory() as d:
+            bad_z = os.path.join(d, "bad_zero.ode")
+            with open(bad_z, "w") as f:
+                f.write(z_src.replace("x0 := 0", "x0 := 1"))
+            r_bad = _run_tool(["check", bad_z, os.path.join(vdir, "zero_arm64.spec")])
+            self.assertEqual(r_bad.returncode, 1)
+            self.assertIn("FALSE on probe", r_bad.stdout)
+            # Planted loop with no place on AArch64 -> fast termination and exact loop-head line!
+            no_pl = os.path.join(d, "no_place.ode")
+            with open(no_pl, "w") as f:
+                f.write(re.sub(r"  place \{.*?\n  \}\n", "", z_src, flags=re.S))
+            t0 = time.time()
+            r_np = _run_tool(["check", no_pl, os.path.join(vdir, "zero_arm64.spec")])
+            self.assertEqual(r_np.returncode, 1)
+            self.assertLess(time.time() - t0, 15.0)
+            self.assertIn("with no place", r_np.stdout)
+
     def test_compare_with_spec_verifies_both_variants(self):
         with open(ADLER_ODE) as f: orig = f.read()
         nops = "".join("  nop\n" for _ in range(20))

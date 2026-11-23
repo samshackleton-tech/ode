@@ -112,7 +112,7 @@ def read(obj, symbol, tab=None):
         row, bind = got
         way = next(x for x in ways if x.row is row and word.encode(x, bind) == w)
         rel = relocs.pop(value + at, None)
-        if way.late is not None:
+        if way.late is not None and way.late[0] == "call":
             # a call: the word names no place (its field is zero), and the relocation names the function called
             _, placeholder = way.late
             if rel is None: raise Stop(f"{symbol}+{at:#x}: a call that no relocation gives a function for")
@@ -121,6 +121,13 @@ def read(obj, symbol, tab=None):
             name, sbind, skind, _, _, _ = symbols[number]
             if not name or sbind not in (1, 2) or skind not in (0, 2): raise Stop(f"{symbol}+{at:#x}: a call of what is no named function")
             bind = dict(bind); bind[placeholder] = name
+        elif way.late is not None and way.late[0] == "pc":
+            if rel is not None: raise Stop(f"{symbol}+{at:#x}: a relocation at an internal branch")
+            _, placeholder = way.late
+            target_off = at + bind[placeholder]
+            if not 0 <= target_off < size or target_off % 4:
+                raise Stop(f"{symbol}+{at:#x}: branch target {target_off:#x} is outside the function")
+            bind = dict(bind); bind[placeholder] = target_off
         elif rel is not None: raise Stop(f"{symbol}+{at:#x}: a relocation at an instruction that is no call")
         rows.append((at, at + 4, word.written(row, bind)))
     if any(value <= at < value + size for at in relocs): raise Stop(f"{symbol}: a relocation that is not at an instruction's first byte")

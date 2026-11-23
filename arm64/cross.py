@@ -111,7 +111,7 @@ def instance(row, rng):
             field, how, k = way.rules["I"]
             bind["I"] = k - rng.randrange(1 << way.fields[field][1])
     if re.search(r"\bN\b", asm):
-        _, _, k = way.rules["N"]
+        k = way.rules["N"][2] if "N" in way.rules else 1
         bind["N"] = k * rng.randrange(0, (ROOM - 512 - 16) // k)       # the bytes addressed stay within the memory the case has
     text = asm
     for h in ("D", "S", "P", "B"):
@@ -147,6 +147,13 @@ def main():
                     home = rng.choice([i for i in range(31) if f"x{i}" not in named and not (MAC and i == 18)])
                     g = {name: rng.getrandbits(64) for name in X}
                     if "B" in bind: g[bind["B"]] = BASE
+                    # For comparisons, hit equal operands 25% of the time so Z=1 / C=1 edge cases are tested too.
+                    if row.name == "cmp_rr" and rng.randrange(4) == 0:
+                        g[bind["P"]] = g[bind["S"]]
+                    elif row.name == "cmp_ri" and rng.randrange(4) == 0:
+                        g[bind["S"]] = bind["I"]
+                    elif row.name == "cmp_ri" and rng.randrange(4) == 0:
+                        g[bind["S"]] = rng.randrange(1 << 12)
                     g["sp"] = STACK + (rng.choice((1, 2, 4, 8, 12, 15)) if rng.randrange(4) == 0 else 0)
                     flags = rng.randrange(16) << 28
                     v = {i: tuple(rng.getrandbits(32) for _ in range(4)) for i in range(32)}
@@ -193,7 +200,14 @@ def main():
                 wrong = [r for r in X + ["sp"] if r not in skip and s.g[r] != gg[r]]
                 wrong += [f"v{i}" for i in range(32) if tuple(s.x[i][:4]) != gv[i]]
                 wrong += ["memory"] if bytes(s.mem[SCRATCH + i] for i in range(ROOM)) != gm else []
-                wrong += ["the flags"] if gflags != flags else []
+                sets_flags = any(st[0] == "set" and st[1] in (("name", "zf"), ("name", "cf")) for st in row.effect)
+                if sets_flags:
+                    # AArch64 NZCV bits: Z is bit 30 (== s.zf); C is bit 29 (borrow-free carry == 1 - s.cf).
+                    got_z, got_c = (gflags >> 30) & 1, (gflags >> 29) & 1
+                    if got_z != s.zf or got_c != (1 - s.cf):
+                        wrong += [f"flags (got Z={got_z} C={got_c}, want Z={s.zf} C={1 - s.cf})"]
+                else:
+                    wrong += ["the flags"] if gflags != flags else []
             name = f"{row.name}, {how}"
             per.setdefault(name, [0, 0, 0]); per[name][0] += 1
             if how == "as the assembler writes it":

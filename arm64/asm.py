@@ -85,12 +85,14 @@ def _load():
 
 ROWS, ALL_WAYS, BY_NAME, MATCHERS = _load()
 NOP_WORD = word.encode(BY_NAME["nop"][0], {})
+BRANCH_ROWS = {"b": "b", "b.eq": "b_eq", "b.ne": "b_ne", "b.hs": "b_hs", "b.cs": "b_hs", "b.lo": "b_lo", "b.cc": "b_lo"}
 
 
 def instruction(line):
     """Assemble one AArch64 instruction line into:
       ("fixed", 4-byte bytes, row, bind)
       ("reloc", 4-byte bytes, 0, R_AARCH64_CALL26, symbol, 0, row, bind)
+      ("jump", way, label, row, bind)
     Raises ValueError if the instruction is not an instance of a row in arm64.tab."""
     s = line.split("//")[0].strip()
     if s == "ret":
@@ -101,6 +103,11 @@ def instruction(line):
         w = BY_NAME["bl"][0]
         sym = m.group(1)
         return ("reloc", word.encode(w, {"I": 0}), 0, R_AARCH64_CALL26, sym, 0, w.row, {"I": sym})
+    m = re.fullmatch(r"(b(?:\.(?:eq|ne|hs|cs|lo|cc))?)\s+([A-Za-z_.$][\w.$]*)", s)
+    if m:
+        w = BY_NAME[BRANCH_ROWS[m.group(1)]][0]
+        lbl = m.group(2)
+        return ("jump", w, lbl, w.row, {"I": lbl})
 
     last_err = None
     for w, rx, groups in MATCHERS:
@@ -209,18 +216,32 @@ def build_elf(name, symbol, ins, notes, data, where=None, locs=None):
             it = instruction(s)
             items.append((orig_idx, *it))
 
-    code = bytearray()
+    # Pass 1: compute exact byte offsets of all labels (every AArch64 instruction is 4 bytes).
     labels = {}
+    pos = 0
+    for it in items:
+        kind = it[1]
+        if kind == "label":
+            labels[it[2]] = pos
+        elif kind == "align":
+            al = it[2]
+            pad = (-pos) % al
+            if pad % 4:
+                raise ValueError(f"AArch64 alignment pad {pad} not a multiple of 4")
+            pos += pad
+        elif kind in ("fixed", "reloc", "jump"):
+            pos += 4
+
+    # Pass 2: emit bytes and resolve internal PC-relative branches.
+    code = bytearray()
     relocs = []
     for it in items:
         orig_idx, kind = it[0], it[1]
         if kind == "label":
-            labels[it[2]] = len(code)
+            assert labels[it[2]] == len(code)
         elif kind == "align":
             al = it[2]
             pad = (-len(code)) % al
-            if pad % 4:
-                raise ValueError(f"AArch64 alignment pad {pad} not a multiple of 4")
             code += NOP_WORD * (pad // 4)
         elif kind == "fixed":
             start = len(code)
@@ -231,6 +252,19 @@ def build_elf(name, symbol, ins, notes, data, where=None, locs=None):
             start = len(code)
             relocs.append((start + it[3], it[4], it[5], it[6]))
             code += it[2]
+            if locs is not None and orig_idx is not None:
+                locs.append((start, 4, orig_idx))
+        elif kind == "jump":
+            start = len(code)
+            w_way, lbl = it[2], it[3]
+            if lbl not in labels:
+                raise ValueError(f"unknown label {lbl}")
+            delta = labels[lbl] - start
+            raw = word.encode(w_way, {"I": delta})
+            got = word.decode(ALL_WAYS, raw)
+            if got is None or got[0].name != w_way.row.name:
+                raise ValueError(f"arm64.tab does not read back branch to {lbl}")
+            code += raw
             if locs is not None and orig_idx is not None:
                 locs.append((start, 4, orig_idx))
     if where is not None:

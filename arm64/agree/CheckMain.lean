@@ -50,6 +50,10 @@ def main (args : List String) : IO Unit := do
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
   checkRow table "rev32_8h" ArmAgree.effectRev32
+  checkRow table "ldrb" ArmAgree.effectLdrb
+  checkRow table "cmp_rr" ArmAgree.effectCmpRr
+  checkRow table "b_hs" ArmAgree.effectBHs
+  checkRow table "b_lo" ArmAgree.effectBLo
 
   -- 2. Check Ode.findRow and register/immediate lookup for all 31/32 register indices.
   for i in List.range 31 do
@@ -97,5 +101,52 @@ def main (args : List String) : IO Unit := do
         let wR := ArmAgree.encodeRev32 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩
         IO.println s!"rev32_8h {hex32 wR} {insR}"
 
+  let ldrbOffsets : List Nat := [0, 1, 7, 31, 63, 1024, 4095]
+  for i in List.range 31 do
+    let b := (i + 11) % 31
+    for n in ldrbOffsets do
+      if i == 0 || i == 4 || i == 30 || n == 7 then
+        let ins := s!"(.ldrb .x{i} .x{b} {n})"
+        checkInstance table "ldrb" ins (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "B" == some (ArmAgree.armSlot b) &&
+          match bd.find? (fun kv => kv.1 == "N") with
+          | some (_, v) => Ode.readInt v == some (n : Int)
+          | none => false)
+        if hi : i < 31 then
+          if hn : n < 4096 then
+            if wordsOnly then
+              let w := ArmAgree.encodeLdrb ⟨i, hi⟩ ⟨b, Nat.mod_lt _ (by decide)⟩ ⟨n, hn⟩
+              IO.println s!"ldrb {hex32 w} {ins}"
+
+  for i in List.range 31 do
+    let p := (i + 13) % 31
+    let ins := s!"(.cmp .x{i} .x{p})"
+    checkInstance table "cmp_rr" ins (fun bd =>
+      Ode.regOf bd "S" == some (ArmAgree.armSlot i) &&
+      Ode.regOf bd "P" == some (ArmAgree.armSlot p))
+    if hi : i < 31 then
+      if wordsOnly then
+        let w := ArmAgree.encodeCmpRr ⟨i, hi⟩ ⟨p, Nat.mod_lt _ (by decide)⟩
+        IO.println s!"cmp_rr {hex32 w} {ins}"
+
+  let branchDeltas : List Int := [0, 4, 16, 64, 1024, -4, -12, -28, -512]
+  for delta in branchDeltas do
+    let insHs := s!"(.bhs {delta})"
+    checkInstance table "b_hs" insHs (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+    let insLo := s!"(.blo {delta})"
+    checkInstance table "b_lo" insLo (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+    if wordsOnly then
+      let q : Int := delta / 4
+      let imm19 : BitVec 19 := BitVec.ofInt 19 q
+      IO.println s!"b_hs {hex32 (ArmAgree.encodeBHs imm19)} {insHs}"
+      IO.println s!"b_lo {hex32 (ArmAgree.encodeBLo imm19)} {insLo}"
+
   if !wordsOnly then
-    IO.println "agree-check: 4 rows match arm64.tab"
+    IO.println "agree-check: 8 rows match arm64.tab"

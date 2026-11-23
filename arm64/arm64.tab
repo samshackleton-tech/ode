@@ -19,7 +19,8 @@
 #         bit. A letter is a field: every place with that letter, which must lie together, holds one number.
 # NOTES   `N=n*8`: the row's N is the field n times 8 (a displacement counted in units of its size).
 #         `I=32-i`: the row's I is 32 less the field i. `call=I`: the field is where the function called is
-#         (the file's relocations speak for it).
+#         (the file's relocations speak for it). `pc=I`: the field is a signed count of instruction words
+#         from this instruction to the target byte offset I (`I = pc + sign_extend(i) * 4`).
 #
 # In ASM and ROW: D, S, P, B are general registers x0 to x30 (D64 its 64-bit name, D32 its 32-bit name; B is
 # one that holds an address); X, Y, Z are vector registers v0 to v31; I is a number, N a displacement.
@@ -32,8 +33,9 @@
 # faults at a load or store whose base is the stack pointer, and the row has no state after it.
 # `call I link x30`: a call that puts the address to come back to in x30 (on x86-64 a call puts it below the
 # stack pointer). `return x30`: the function returns to the address x30 holds.
-# The flags are not in this account: no row here reads or writes them, and cross.py asks that each leaves
-# them as they were.
+# Flags: `zf` holds 1 when two compared values are equal (hardware PSTATE.Z). `cf` holds 1 when the first
+# operand is unsigned-below the second (the inverse of AArch64's hardware borrow-free carry PSTATE.C, so
+# `b.hs` jumps on `not cf` and `b.lo` jumps on `cf`). Rows that do not write `zf`/`cf` leave NZCV unchanged.
 #
 # An instance is written in ONE way by each line, and four bytes are read as an instance only if this
 # writes those very bytes for it (word.py).
@@ -71,6 +73,10 @@ ldr32        | ldr D32, [B64, N]            | .ldr32 .D .B N       | D = low32(m
              = 10 111 0 01 01 nnnnnnnnnnnn BBBBB DDDDD ; N=n*4
 str32        | str S32, [B64, N]            | .str32 .S .B N       | mem32(B, N) = low32(S)
              = 10 111 0 01 00 nnnnnnnnnnnn BBBBB SSSSS ; N=n*4
+ldrb         | ldrb D32, [B64, N]           | .ldrb .D .B N        | D = mem8(B, N)
+             = 00 111 0 01 01 NNNNNNNNNNNN BBBBB DDDDD
+strb         | strb S32, [B64, N]           | .strb .S .B N        | mem8(B, N) = low8(S)
+             = 00 111 0 01 00 NNNNNNNNNNNN BBBBB SSSSS
 
 # -- memory at the stack pointer, which must be a multiple of 16
 ldr64_sp     | ldr D64, [sp, N]             | .ldr64_sp .D N       | D = mem64(on16(sp), N)
@@ -78,7 +84,21 @@ ldr64_sp     | ldr D64, [sp, N]             | .ldr64_sp .D N       | D = mem64(o
 str64_sp     | str S64, [sp, N]             | .str64_sp .S N       | mem64(on16(sp), N) = S
              = 11 111 0 01 00 nnnnnnnnnnnn 11111 SSSSS ; N=n*8
 
-# -- calls, returns
+# -- comparisons, branches, calls, returns
+cmp_rr       | cmp S64, P64                 | .cmp .S .P           | zf = equal(S, P); cf = below(S, P)
+             = 1 1 1 01011 00 0 PPPPP 000000 SSSSS 11111
+cmp_ri       | cmp S64, I                   | .cmpi .S I           | zf = equal(S, I); cf = below(S, I)
+             = 1 1 1 100010 0 IIIIIIIIIIII SSSSS 11111
+b            | -                            | .b I                 | jump I
+             = 0 00101 iiiiiiiiiiiiiiiiiiiiiiiiii ; pc=I
+b_eq         | -                            | .beq I               | jump I if zf
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0000 ; pc=I
+b_ne         | -                            | .bne I               | jump I if not zf
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0001 ; pc=I
+b_hs         | -                            | .bhs I               | jump I if not cf
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0010 ; pc=I
+b_lo         | -                            | .blo I               | jump I if cf
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0011 ; pc=I
 bl           | -                            | .bl I                | call I link x30
              = 1 00101 IIIIIIIIIIIIIIIIIIIIIIIIII ; call=I
 ret          | -                            | .ret                 | return x30

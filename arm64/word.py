@@ -50,8 +50,12 @@ class Way:
             if m: self.rules[m.group(1)] = (m.group(2), "times", int(m.group(3))); continue
             m = re.fullmatch(r"([A-Z])=(\d+)-([a-z])", note)
             if m: self.rules[m.group(1)] = (m.group(3), "from", int(m.group(2))); continue
-            m = re.fullmatch(r"(call)=([A-Z])", note)
-            if m: self.late = (m.group(1), m.group(2)); continue
+            m = re.fullmatch(r"(call|pc)=([A-Z])", note)
+            if m:
+                self.late = (m.group(1), m.group(2))
+                if m.group(1) == "pc":
+                    self.rules[m.group(2)] = (m.group(2).lower(), "pc", 4)
+                continue
             raise ValueError(f"{row.name}: the note `{note}` in `{text}`")
         for field, _, _ in self.rules.values():
             if field not in self.fields: raise ValueError(f"{row.name}: no field `{field}` in `{text}`")
@@ -73,6 +77,13 @@ def field_of(way, name, bind):
             if how == "times":
                 if v % k: raise Refuse(f"{v} is not a multiple of {k}")
                 return v // k
+            if how == "pc":
+                if not isinstance(v, int) or v % k: raise Refuse(f"{v} is not a multiple of {k}")
+                _, width = way.fields[field]
+                q = v // k
+                if not -(1 << (width - 1)) <= q < (1 << (width - 1)):
+                    raise Refuse(f"{v} does not fit the signed {width}-bit word offset of {placeholder}")
+                return q & ((1 << width) - 1)
             return k - v
     raise Refuse(f"nothing says what the field {name} holds")
 
@@ -108,7 +119,11 @@ def decode(all_ways, word):
                 elif name.isupper(): bind[name] = v
                 else:
                     placeholder, (_, how, k) = next((p, rule) for p, rule in way.rules.items() if rule[0] == name)
-                    bind[placeholder] = v * k if how == "times" else k - v
+                    if how == "pc":
+                        signed = v - (1 << width) if v >= (1 << (width - 1)) else v
+                        bind[placeholder] = signed * k
+                    else:
+                        bind[placeholder] = v * k if how == "times" else k - v
             if encode(way, bind) != word: continue
         except Refuse: continue
         return way.row, bind

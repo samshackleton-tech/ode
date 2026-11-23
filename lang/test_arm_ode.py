@@ -153,6 +153,63 @@ fn f as "f_sym" {
         self.refused(src_budget.replace("max_line_splits = 0", "max_bytes 32"), "f", 6, "listed twice")
         self.refused(src_budget.replace("ret", "budget {\n    max_bytes 8\n  }\n  ret"), "f", 9, "second budget")
 
+    def test_arm64_loop_branches_and_zero_arm64(self):
+        z_ode = os.path.join(ROOT, "proof-core", "examples", "verifier", "zero_arm64.ode")
+        info = odec.compile_info(z_ode, "all_zero")
+        self.assertEqual(info["target"], "arm64")
+        self.assertEqual(info["symbol"], "arm_all_zero")
+        self.assertEqual(info["code_bytes"], 52)
+        self.assertEqual(len(info["line_map"]), 13)
+        # Forward b.hs jumps from pc=12 to pc=48 (+36); backward b.lo jumps from pc=44 to pc=16 (-28)
+        with tempfile.TemporaryDirectory() as d:
+            obj_p = os.path.join(d, "zero.o")
+            with open(obj_p, "wb") as f:
+                f.write(info["elf"])
+            rows = aobj.read(obj_p, "arm_all_zero")
+            by_at = {at: (ins, nxt) for at, nxt, ins in rows}
+            self.assertEqual(by_at[8][0], ".bhs 0x24")
+            self.assertEqual(by_at[24][0], ".bne 0x2c")
+            self.assertEqual(by_at[32][0], ".b 0x4")
+            self.assertEqual(by_at[40][0], ".b 0x30")
+            # Native AArch64 execution test when running on arm64 with clang
+            import platform, shutil, subprocess
+            if platform.machine() in ("arm64", "aarch64") and shutil.which("clang"):
+                driver = os.path.join(d, "run.c")
+                exe = os.path.join(d, "run")
+                with open(driver, "w") as f:
+                    f.write(
+                        "#include <stdint.h>\n"
+                        "#include <stdio.h>\n"
+                        "extern uint64_t arm_all_zero(const uint8_t *p, uint64_t n);\n"
+                        "int main(void) {\n"
+                        "  uint8_t a[16] = {0};\n"
+                        "  if (arm_all_zero(a, 0) != 1) return 1;\n"
+                        "  if (arm_all_zero(a, 16) != 1) return 2;\n"
+                        "  a[0] = 1; if (arm_all_zero(a, 16) != 0) return 3;\n"
+                        "  a[0] = 0; a[15] = 0x80; if (arm_all_zero(a, 16) != 0) return 4;\n"
+                        "  if (arm_all_zero(a, 15) != 1) return 5;\n"
+                        "  return 0;\n"
+                        "}\n"
+                    )
+                if platform.system() == "Darwin":
+                    # Assemble the exact ELF .text words into a Mach-O symbol and run on Apple Silicon
+                    ws, _ = aobj.words(obj_p, "arm_all_zero")
+                    s_p = os.path.join(d, "zero_macho.s")
+                    with open(s_p, "w") as f:
+                        f.write(".text\n.globl _arm_all_zero\n.p2align 2\n_arm_all_zero:\n")
+                        for w in ws:
+                            f.write(f"  .long 0x{int.from_bytes(w, 'little'):08x}\n")
+                    subprocess.run(["clang", "-O1", driver, s_p, "-o", exe], check=True)
+                    subprocess.run([exe], check=True)
+                else:
+                    subprocess.run(["clang", "-O1", driver, obj_p, "-o", exe], check=True)
+                    subprocess.run([exe], check=True)
+        # Negative controls: unknown label and out-of-range ldrb immediate
+        with open(z_ode) as f:
+            z_src = f.read()
+        self.refused(z_src.replace("b.hs @yes", "b.hs @missing"), "all_zero", 31, "has no label")
+        self.refused(z_src.replace("ldrb cur, [addr, 0]", "ldrb cur, [addr, 4096]"), "all_zero", 33, "12 bits")
+
 
 if __name__ == "__main__":
     unittest.main()

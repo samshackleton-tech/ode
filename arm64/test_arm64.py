@@ -30,7 +30,9 @@ CHANGED = [("add is sub", "| D = add64(S, P)", "| D = sub64(S, P)", "differs"),
            ("a store at a stack pointer that is no multiple of 16 has no fault", "| mem64(on16(sp), N) = S", "| mem64(sp, N) = S", "differs"),
            ("adding to a stack pointer that is no multiple of 16 has a fault", "| sp = add64(sp, I)", "| sp = add64(on16(sp), I)", "differs"),
            ("sub's registers the other way in the word", "= 1 1 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 1 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "differs"),
-           ("add's registers the other way in the word", "= 1 0 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 0 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "word")]
+           ("add's registers the other way in the word", "= 1 0 0 01011 00 0 PPPPP 000000 SSSSS DDDDD", "= 1 0 0 01011 00 0 SSSSS 000000 PPPPP DDDDD", "word"),
+           ("cmp_rr reverses operands for cf", "| zf = equal(S, P); cf = below(S, P)", "| zf = equal(S, P); cf = below(P, S)", "differs"),
+           ("ldrb reads four bytes", "| D = mem8(B, N)", "| D = mem32(B, N)", "differs")]
 # Words that are instructions and no instance of a row: each has 31 in a field of D, S or P, or a bit the row has fixed.
 NOT_READ = {"aa1f03e0": "mov x0, xzr", "aa0103ff": "mov xzr, x1", "8b1f0020": "add x0, x1, xzr", "91401020": "add x0, x1, #4, lsl #12",
             "f8626820": "ldr x0, [x1, x2]", "f85f8020": "ldur x0, [x1, #-8]", "d65f0020": "ret x1", "4c407420": "ld1 {v0.8h}, [x1]",
@@ -57,8 +59,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 27)
-        self.assertEqual(len(self.ways), 27)
+        self.assertEqual(len(self.rows), 36)
+        self.assertEqual(len(self.ways), 36)
         heads = [row.pattern[0] for row in self.rows]
         self.assertEqual(len(set(heads)), len(heads))             # a decoded instruction's first word says its row
         for way in self.ways:                                     # every placeholder of a row is in each of its ways
@@ -78,7 +80,11 @@ class Words(unittest.TestCase):
                     elif name.isupper(): bind[name] = v
                     else:
                         placeholder, (_, how, k) = next((p, rule) for p, rule in way.rules.items() if rule[0] == name)
-                        bind[placeholder] = v * k if how == "times" else k - v
+                        if how == "pc":
+                            signed = v - (1 << width) if v >= (1 << (width - 1)) else v
+                            bind[placeholder] = signed * k
+                        else:
+                            bind[placeholder] = v * k if how == "times" else k - v
                 got = word.decode(self.ways, word.encode(way, bind))
                 self.assertIsNotNone(got, (row.name, bind))
                 self.assertEqual((got[0].name, got[1]), (row.name, bind))
@@ -114,11 +120,18 @@ class Words(unittest.TestCase):
         """On any machine: clang assembles for AArch64 whatever it runs on."""
         rng = random.Random(3)
         lines, want = [], []
+        br_op = {"b": "b", "b_eq": "b.eq", "b_ne": "b.ne", "b_hs": "b.hs", "b_lo": "b.lo"}
         for row in self.rows:
             way = next(w for w in self.ways if w.row is row)
-            for _ in range(50):
+            for k_i in range(50):
                 if row.asm == "-":
-                    text, bind = {"bl": "bl there", "ret": "ret"}[row.name], ({"I": 0} if row.name == "bl" else {})
+                    if row.name in br_op:
+                        # Alternate backward (-4 * (k_i % 5)) and forward (+4 * (1 + k_i % 5)) relative offsets
+                        delta = (-4 * (k_i % 5)) if (k_i % 2 == 0) else (4 * (1 + k_i % 5))
+                        sign = "+" if delta >= 0 else ""
+                        text, bind = f"{br_op[row.name]} .{sign}{delta}", {"I": delta}
+                    else:
+                        text, bind = {"bl": "bl there", "ret": "ret"}[row.name], ({"I": 0} if row.name == "bl" else {})
                 else: bind, text = cross.instance(row, rng)
                 lines.append(text); want.append(word.encode(way, bind))
         with tempfile.TemporaryDirectory() as d:
@@ -143,8 +156,8 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("25 rows, each as the assembler writes it and as the table writes it, 5000 instances: 0 differ from this processor", last)
-        self.assertIn("0 of the assembler's words are not the table's; 2 rows are not run: bl, ret", last)
+        self.assertIn("29 rows, each as the assembler writes it and as the table writes it, 5800 instances: 0 differ from this processor", last)
+        self.assertIn("0 of the assembler's words are not the table's; 7 rows are not run: b, b_eq, b_ne, b_hs, b_lo, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)
 

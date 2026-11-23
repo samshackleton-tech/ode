@@ -53,6 +53,7 @@ def classify_row(row_name, target):
         if row_name == "mov_rr": return "mov_rr"
         if row_name == "bl": return "call"
         if row_name == "ret": return "ret"
+        if row_name in ("b", "b_eq", "b_ne", "b_hs", "b_lo"): return "branch"
         if row_name.startswith("ldr"): return "load"
         if row_name.startswith("str"): return "store"
         if row_name == "ld1_4s": return "vec_load"

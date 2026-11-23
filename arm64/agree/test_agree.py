@@ -15,6 +15,10 @@ THEOREMS = [
     "ArmAgree.agree_ldr64_sp",
     "ArmAgree.agree_eor_v",
     "ArmAgree.agree_rev32",
+    "ArmAgree.agree_ldrb",
+    "ArmAgree.agree_cmp_rr",
+    "ArmAgree.agree_b_hs",
+    "ArmAgree.agree_b_lo",
 ]
 ALLOWED_AXIOMS = "[propext, Classical.choice, Quot.sound]"
 CHECK_BIN = os.path.join(HERE, ".lake", "build", "bin", "agree-check")
@@ -66,7 +70,7 @@ class BuiltChecks(unittest.TestCase):
             text=True,
             check=True,
         )
-        self.assertEqual(r.stdout.strip(), "agree-check: 4 rows match arm64.tab")
+        self.assertEqual(r.stdout.strip(), "agree-check: 8 rows match arm64.tab")
 
     def test_encodings_match_word_py(self):
         r = subprocess.run(
@@ -92,7 +96,10 @@ class BuiltChecks(unittest.TestCase):
             self.assertEqual(got_row.name, row_name, line)
             self.assertEqual(norm_sexp(word.written(got_row, bind)), norm_sexp(sexp), line)
             self.assertEqual(word.encode(by_name[row_name], bind), raw, line)
-        self.assertEqual(seen, {"add_rrr", "ldr64_sp", "eor_v", "rev32_8h"})
+        self.assertEqual(
+            seen,
+            {"add_rrr", "ldr64_sp", "eor_v", "rev32_8h", "ldrb", "cmp_rr", "b_hs", "b_lo"},
+        )
 
     def test_axioms(self):
         lake = lake_bin()
