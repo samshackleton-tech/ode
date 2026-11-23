@@ -42,11 +42,45 @@ The table below lists the five processor profiles in `advice/arch.json`. Each ro
 
 | Profile | Target | Cache line | Page | L1D cache | Instruction timings |
 | --- | --- | --- | --- | --- | --- |
-| `zen5` | `x86_64` | 64 B | 4 KiB | 48 KiB, 12-way | `uops.info` measurements |
+| `zen5` | `x86_64` | 64 B | 4 KiB | 48 KiB, 12-way | `uops.info` + hardware calibration |
 | `zen4` | `x86_64` | 64 B | 4 KiB | 32 KiB, 8-way | `uops.info` (double-pumped 512-bit) |
-| `icelake` | `x86_64` | 64 B | 4 KiB | 48 KiB, 12-way | `uops.info` measurements |
+| `icelake` | `x86_64` | 64 B | 4 KiB | 48 KiB, 12-way | `uops.info` + hardware calibration |
 | `apple_m` | `arm64` | 128 B | 16 KiB | 128 KiB, 8-way | Architecture docs (calibration pending) |
-| `ampere1` | `arm64` | 64 B | 4 KiB | 64 KiB, 4-way | Architecture docs (calibration pending) |
+| `ampere1` | `arm64` | 64 B | 4 KiB | 64 KiB, 4-way | Architecture docs + hardware calibration |
+
+## Hardware calibration (`calibrate.py`, `results/`)
+
+On 23 November 2026 we ran `advice/calibrate.py --run --rounds 11` (interleaved A/B rounds using Linux `perf_event_open` hardware CPU cycle counters on pinned cores) across four processors: an AMD Ryzen 7 9700X (Zen 5), an AMD Zen 5 24-core server processor, an Intel Xeon Gold 6330 (Ice Lake), and an Ampere-1a (AArch64). Full JSON logs live in `advice/results/`.
+
+The table below compares each variant pair's measured slowdown (`B / A` in hardware CPU cycles per call) against the estimator's ranking. Each cell shows the measured median cycles for Variant A and Variant B, their ratio, and whether the estimator predicted the same ordering.
+
+| Processor | Pair (A vs B) | Measured A (cyc) | Measured B (cyc) | Ratio B/A | Estimator rank |
+| --- | --- | ---: | ---: | ---: | --- |
+| Zen 5 desktop | `p16_align`: aligned vs +7 B (`wide/p16.ode`) | 1605.5 | 1666.7 | 1.04x | agreed |
+| Zen 5 desktop | `alias_4k`: +0x10400 vs +0x10000 (64x) | 83.2 | 89.7 | 1.08x | agreed |
+| Zen 5 desktop | `stlf_width`: 16 B vs 2x8 B->16 B (64x) | 779.2 | 990.3 | 1.27x | agreed |
+| Zen 5 desktop | `l1d_set_conflict`: 8 vs 16 lines in set 0 | 115.9 | 186.9 | 1.61x | agreed |
+| Zen 5 desktop | `adler_loop_align`: 2-line aligned vs 3-line | 877.4 | 1059.6 | 1.21x | loop hint (+20.8%) |
+| Zen 5 server | `p16_align`: aligned vs +7 B (`wide/p16.ode`) | 1607.6 | 1680.2 | 1.05x | agreed |
+| Zen 5 server | `alias_4k`: +0x10400 vs +0x10000 (64x) | 83.1 | 89.7 | 1.08x | agreed |
+| Zen 5 server | `stlf_width`: 16 B vs 2x8 B->16 B (64x) | 713.1 | 905.1 | 1.27x | agreed |
+| Zen 5 server | `l1d_set_conflict`: 8 vs 16 lines in set 0 | 115.9 | 186.8 | 1.61x | agreed |
+| Zen 5 server | `adler_loop_align`: 2-line aligned vs 3-line | 838.5 | 1031.2 | 1.23x | loop hint (+23.0%) |
+| Ice Lake | `p16_align`: aligned vs +7 B (`wide/p16.ode`) | 2042.8 | 2122.0 | 1.04x | agreed |
+| Ice Lake | `alias_4k`: +0x10400 vs +0x10000 (64x) | 124.7 | 129.6 | 1.04x | agreed |
+| Ice Lake | `stlf_width`: 16 B vs 2x8 B->16 B (64x) | 471.3 | 1158.4 | 2.46x | agreed |
+| Ice Lake | `l1d_set_conflict`: 8 vs 16 lines in set 0 | 146.0 | 153.9 | 1.05x | agreed |
+| Ice Lake | `adler_loop_align`: 2-line aligned vs 3-line | 1352.6 | 1494.4 | 1.10x | loop hint (+10.5%) |
+| Ampere-1a | `arm_mix_align`: aligned vs +7 B (`mix.ode`) | 40.5 | 42.0 | 1.04x | agreed |
+| Ampere-1a | `arm_stlf_width`: 16 B vs 2x8 B->16 B (16x) | 251.1 | 362.7 | 1.44x | agreed |
+| Ampere-1a | `arm_l1d_conflict`: 4 vs 8 lines in set 0 | 33.8 | 41.0 | 1.21x | agreed |
+
+Summary of what calibration showed:
+
+- **Ranking:** all 15 hazard variant pairs agreed with hardware across all four processors. In addition, the static loop-alignment hint that `estimate.py` automatically reported on existing `kcheck/programs/adler32/adler32.ode` produced a real 20.8%–23.0% speedup on Zen 5 and 10.5% on Ice Lake when tested.
+- **Two corrections made from the data:**
+  1. The first version of `estimate.py` only tracked register dependencies and static `[sp + offset]` frame slots in its critical path, missing store-to-load chains through non-`sp` pointers (such as `add x2, sp, 0; st1 [x2]; ld1 [x2]` in `arm_stlf_width`). `analyze_memory` now tracks store-to-load dependency edges on exact concrete byte addresses from the trace.
+  2. Summing raw L2 miss latency (10 cycles) or raw 4K-alias replay latency (10–12 cycles) per event overstated slowdowns because out-of-order memory-level parallelism and disambiguation predictors hide most of that latency. `arch.json` now uses amortized effective hazard penalties while Layer-1 hazard counts remain exact.
 
 ## Explicit budgets
 

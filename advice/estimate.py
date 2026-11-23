@@ -606,19 +606,38 @@ def analyze_memory(trace_result, target, arch_name=None, frame=None, store_windo
         + len(stlf_partial) * hz["stlf_partial"]
         + len(alias_4k) * hz["alias_4k"]
     )
-    # Dynamic compute lower bound across the actual executed trace (including loops and callees)
+    # Dynamic compute lower bound across the actual executed trace (including loops, callees,
+    # and concrete memory store-to-load dependency chains on matching byte addresses).
+    acc_by_step = collections.defaultdict(list)
+    for a in accesses:
+        acc_by_step[a["step"]].append(a)
     classes = arch["classes"]
     d_ready = collections.defaultdict(float)
+    mem_ready = {}
     d_uops = 0.0
     d_unit = collections.defaultdict(float)
-    for rname, rset, wset in trace_result.get("dyn_ops", ()):
+    for step_idx, (rname, rset, wset) in enumerate(trace_result.get("dyn_ops", ())):
         c = classes[classify_row(rname, target)]
         d_uops += c["uops"]
         d_unit[c["unit"]] += c["rtp"]
-        start = max((d_ready[r] for r in rset), default=0.0)
+        start = max((d_ready[r] for r in rset if not r.startswith("frame:")), default=0.0)
+        step_accs = acc_by_step.get(step_idx)
+        if step_accs:
+            for a in step_accs:
+                if a["kind"] == "R":
+                    for b in range(a["addr"], a["addr"] + a["size"]):
+                        t_w = mem_ready.get(b)
+                        if t_w is not None and t_w > start:
+                            start = t_w
         fin = start + c["lat"]
         for w in wset:
-            d_ready[w] = fin
+            if not w.startswith("frame:"):
+                d_ready[w] = fin
+        if step_accs:
+            for a in step_accs:
+                if a["kind"] == "W":
+                    for b in range(a["addr"], a["addr"] + a["size"]):
+                        mem_ready[b] = fin
     d_crit = max(d_ready.values(), default=0.0)
     d_fe = d_uops / arch["issue_width"]
     d_bounds = {"critical_path": d_crit, "frontend_issue": d_fe}
