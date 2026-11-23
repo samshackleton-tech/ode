@@ -1,0 +1,23 @@
+name = "armagree"
+defaultTargets = ["Agree", "agree-check"]
+
+[[require]]
+name = "arm64"
+git = "https://github.com/google-deepmind/code-verification.git"
+rev = "b0f729accbc21a0413e7ca4e1da43fa45b5f2e1b"
+subDir = "arm64-semantics/Arm64"
+
+[[lean_lib]]
+name = "Table"
+srcDir = "../../proof-core"
+
+[[lean_lib]]
+name = "Machine"
+srcDir = "../../proof-core"
+
+[[lean_lib]]
+name = "Agree"
+
+[[lean_exe]]
+name = "agree-check"
+root = "CheckMain"

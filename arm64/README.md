@@ -16,7 +16,8 @@ The table below lists each file in this folder and what it does.
 | `obj.py` | Reads a function's instructions from an AArch64 ELF object file using the table alone, including `bl` call targets from ELF relocations. Refuses any word that is not an instance of a row. |
 | `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (and whether it faults) with what the row says. |
 | `test_arm64.py` | The tests: on any machine, the instruction words and decoding; on an AArch64 machine with clang, comparison against the processor. |
-| `results/` | What `cross.py --out` wrote on each processor tested. |
+| `results/` | What `cross.py --out` wrote on each processor tested (`apple-m6.json`, `ampereone.json`). |
+| `agree/` | A standalone Lean 4 package proving that four rows of `arm64.tab` (`add_rrr`, `ldr64_sp` aligned and fault, `eor_v`, `rev32_8h`) agree with Google DeepMind's `arm64-semantics`. |
 
 The effect language and its interpreter on numbers are shared with the x86-64 table: `../core/table.py`
 and `../core/conc.py`. Three small additions were made to those two files for AArch64:
@@ -90,4 +91,5 @@ and how many faulted as the rows say.
 - The flags, and instructions that read or write them (`subs`, `cmp`, `b.ne`, `cset`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- A Lean proof that rows of this table agree with Google's `arm64-semantics`.
+- Agreement proofs in `agree/` for the remaining 23 rows of `arm64.tab` (four representative rows are
+  proved so far).
