@@ -1,10 +1,10 @@
 # One function, several notations
 
-*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. "Today" is what the repository's compiler takes. "Prototype" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, not one of the repository's, and not a decision about the language. The contracts are in today's specification language in both, so an output equation is written with `=` where the report proposes `==`.*
+*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in `paper/trial/results/`. Its counts and verdicts are read from them. "Today" is what the repository's compiler (`lang/odec.py`) takes. "Prototype" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, not one of the repository's, and not a decision about the language. The inline function of section 1 was the prototype's when this page was first made. It is the compiler's now, and the text macro that it was compared with is gone from the compiler (commit `082ba81` has this page as it was then). The contracts are in today's specification language in both, so an output equation is written with `=` where the report proposes `==`.*
 
 ## 1. Three mixing steps
 
-The function reads two runs of sixteen words, `d` and `a`, mixes them three times and writes `d` back. One step is `(x ^ y) ror 16` in each word: into `d`, then into `a`, then into `d` again. Its contract:
+The function reads two arrays of sixteen words, `d` and `a`, mixes them three times and writes `d` back. One step is `(x ^ y) ror 16` in each word: into `d`, then into `a`, then into `d` again. Its contract:
 
 ```
 def xor_ror16(d, a) { (d ^ a) >>> 16 }
@@ -24,7 +24,7 @@ contract ode_mix16_3(out: block, d: block, a: block) {
 }
 ```
 
-**Today, every instruction written out** (`mix16_raw.ode`):
+**Every instruction written out** (`mix16_raw.ode`):
 
 ```
 fn mix16_3 as "ode_mix16_3" {
@@ -42,26 +42,7 @@ fn mix16_3 as "ode_mix16_3" {
 }
 ```
 
-**Today, with a text macro** (`mix16_macro.ode`). The macro's lines are pasted at each use with the names replaced:
-
-```
-fn mix16_3 as "ode_mix16_3" {
-  def mix16(dst, src) {
-    vpxord $dst, $dst, $src
-    vprord $dst, $dst, 16
-  }
-  vmovdqu32 zmm0, [rsi + 0]
-  vmovdqu32 zmm1, [rdx + 0]
-  mix16(zmm0, zmm1)
-  mix16(zmm1, zmm0)
-  mix16(zmm0, zmm1)
-  vmovdqu32 [rdi + 0], zmm0
-  vzeroupper
-  ret
-}
-```
-
-**Prototype, with an inline function** (`mix16.ode2`). It says what kind of register each operand is, that the two must differ, and which one it changes:
+**With an inline function** (`mix16.ode`). It says which class of register each operand is of, that the two must differ, and which one it changes:
 
 ```
 target x86_64
@@ -83,21 +64,22 @@ fn mix16_3 as "ode_mix16_3" {
 }
 ```
 
-The three give one object file, byte for byte: 11 instructions, 61 bytes of code. The verifier says `shown` of it; the proof file is 16 bytes and the statement 810.
+The two give one object file, byte for byte: 11 instructions, 61 bytes of code. The verifier says `shown` of it; the proof file is 16 bytes and the statement 810.
 
-What each form does with a mistake at a use:
+What the compiler says of four mistakes. Each refusal names the line of the mistake:
 
-| The mistake | Today's macro | The prototype's inline function |
-|---|---|---|
-| one register for both operands: `mix16(zmm1, zmm1)` | taken: 61 bytes of code | refused: `` mix16.ode2:14: inline fn `mix16`: distinct(d, a) violated (both bound to zmm1) `` |
-| a general register where a vector register belongs: `mix16(rax, zmm0)` | refused: fn mix16_3: instruction not in x86.tab: vpxord rax, rax, zmm0 | refused: `` mix16.ode2:14: register `rax` is not of kind `zmm` on x86_64 `` |
-| the body writes a register it was not given: `vprord zmm2, d, 16` | taken: 61 bytes of code | refused: `` mix16.ode2:7: inline fn `mix16`: instruction `vprord zmm2, zmm0, 16` writes `zmm2`, not listed in changes (d) `` |
+| The mistake | What the compiler says |
+|---|---|
+| one register for both operands: `mix16(zmm1, zmm1)` | `` mix16.ode: line 14: mix16: `d` and `a` must differ, and both are given zmm1 `` |
+| a general register where a vector register belongs: `mix16(rax, zmm0)` | `` mix16.ode: line 14: mix16: `d` is a register of the class zmm, and `rax` is not one `` |
+| the inline function names a register that it was not given: `vprord zmm2, d, 16` | `` mix16.ode: line 7: inline fn mix16: the line names the register `zmm2`; an inline function takes each register it uses as a parameter `` |
+| the inline function changes a register that `changes` does not list: `vprord a, d, 16` | `` mix16.ode: line 7: mix16, used at line 13: `vprord zmm1, zmm0, 16` changes zmm1, which `changes` of mix16 does not list `` |
 
-The macro's one refusal comes from the assembler, which has no such instruction; it names the function and not the line. The first and third mistakes assemble, and the function then computes something else.
+With the text macro that the compiler had before, the second of these was refused by the assembler, which named the function and not the line. The first and the third were taken, and the function then computed something else.
 
 ## 2. A scan with a loop
 
-The function says whether every byte of a run is zero, and leaves at the first byte that is not. Its contract:
+The function says whether every byte of an array is zero, and leaves at the first byte that is not. Its contract:
 
 ```
 def all_zero_from(xs, at) {
@@ -299,8 +281,7 @@ These were run, not verified: there is no verifier for AArch64 yet. On an Apple 
 | Function | Notation | Lines of code | Bytes of code | The verifier | Proof bytes |
 |---|---|---|---|---|---|
 | `mix16_3` | today, written out | 13 | 61 | shown | 16 |
-| `mix16_3` | today, macro | 14 | 61 | shown | 16 |
-| `mix16_3` | prototype, inline function | 15 | 61 | shown | 16 |
+| `mix16_3` | today, inline function | 15 | 61 | shown | 16 |
 | `all_zero` | today, with a place file | 26 | 40 | shown | 463 |
 | `all_zero` | prototype | 32 | 40 | shown | 463 |
 | `quad32` | today | 135 | 695 | shown | 15 |
@@ -308,8 +289,8 @@ These were run, not verified: there is no verifier for AArch64 yet. On an Apple 
 
 Within a function the notations give the same bytes, so the verdict and the proof are one. The verdicts are from an x86-64 Linux work machine with the repository's verifier; `paper/trial/test_styles.py` makes them again.
 
-## What the prototype does not have
+## What is not there yet
 
-- An inline function has no contract yet: after a use the caller reasons from the instructions, as after a macro.
-- `changes` is judged from the first operand of each instruction as written, not from the instruction table.
-- It knows the forms on this page and no others. It is a trial's tool and is not in the suite.
+- An inline function has no contract yet: after a use the caller reasons from the instructions, as if they were written out.
+- The prototype (sections 2 to 4) judges `changes` from the first operand of each instruction as written. The repository's compiler reads what an instruction changes from the instruction table.
+- The prototype knows the forms on this page and no others. It is a trial's tool and is not in the suite.

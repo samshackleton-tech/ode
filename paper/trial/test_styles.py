@@ -1,5 +1,8 @@
 """The trial's sources (src/): one function in each notation gives the same bytes; the prototype front end's
 refusals; and, where asked, what the prover and the verifier say, and what an AArch64 processor computes.
+(The inline function of src/mix16.ode is built by the repository's compiler, which has had inline functions
+since they were moved into it from the prototype; its own test is lang/test_inline.py. The text macro that
+the trial compared with is gone from the compiler and from here.)
 
     python3 test_styles.py                   compiles, compares bytes, tries the refusals (any machine)
     python3 test_styles.py --verify OUT      also proves and verifies each x86-64 function, and writes what was
@@ -61,11 +64,11 @@ class Styles(unittest.TestCase):
     def tearDownClass(cls):
         cls.folder.cleanup()
 
-    def test_the_mixing_steps_are_the_same_bytes_written_out_by_macro_and_by_inline_function(self):
-        raw, macro = today("mix16_raw.ode", "mix16_3", self.d), today("mix16_macro.ode", "mix16_3", self.d)
-        inline, places = prototype(text("mix16.ode2"))
-        self.assertEqual(raw, macro)
+    def test_the_mixing_steps_are_the_same_bytes_written_out_and_by_inline_function(self):
+        raw, inline = today("mix16_raw.ode", "mix16_3", self.d), today("mix16.ode", "mix16_3", self.d)
+        again, places = prototype(text("mix16.ode"))                # the prototype takes the same source
         self.assertEqual(raw, inline)
+        self.assertEqual(raw, again)
         self.assertEqual(places, "")
         self.assertEqual(len(code_of(raw)), 61)
 
@@ -118,9 +121,9 @@ REFUSALS = [
     ("quad32.ode2", "table[0] := tmp", "table[-1] := tmp", ["table[-1]"]),                              # a slot before its start
     ("quad32.ode2", "tmp := r2.qword[w]", "tmp := r2.qword[128]", ["r2.qword[128]", "0..128"]),          # past the end of the results
     ("quad32.ode2", "r9  := &r1", "r9  := &missing", ["missing"]),                                      # a piece the frame has not
-    ("mix16.ode2", "mix16(zmm1, zmm0)", "mix16(zmm1, zmm1)", ["distinct(d, a)", "zmm1"]),              # one register for two that must differ
-    ("mix16.ode2", "vprord d, d, 16", "vprord zmm2, d, 16", ["zmm2", "changes"]),                       # a register changed that is not declared
-    ("mix16.ode2", "mix16(zmm1, zmm0)", "mix16(rax, zmm0)", ["rax", "zmm"]),                             # a general register for a vector register
+    ("mix16.ode", "mix16(zmm1, zmm0)", "mix16(zmm1, zmm1)", ["distinct(d, a)", "zmm1"]),              # one register for two that must differ
+    ("mix16.ode", "vprord d, d, 16", "vprord zmm2, d, 16", ["zmm2", "changes"]),                       # a register changed that is not declared
+    ("mix16.ode", "mix16(zmm1, zmm0)", "mix16(rax, zmm0)", ["rax", "zmm"]),                             # a general register for a vector register
     ("arm.ode2", "mix12(v0, v1, v2)", "mix12(v0, v1, v0)", ["distinct(d, tmp)", "v0"]),                  # the scratch register is the destination
     ("arm.ode2", "rev32 d.8h, d.8h", "rev32 v5.8h, d.8h", ["v5", "changes"]),                            # a register changed that is not declared
 ]
@@ -175,10 +178,9 @@ def verify(out):
              {"verifier": shown(os.path.join(d, "moved.statement"), stale), "place": "place +0x2"})
         note("all_zero with an instruction added before the loop, the prover with the place file typed before",
              dict(proved("stale", text("all_zero.spec"), moved, "ode_all_zero", text("all_zero.places"), limit=60), place="place +0x2"))
-        # the mixing steps: three notations, one object file
-        raw, macro = today("mix16_raw.ode", "mix16_3", d), today("mix16_macro.ode", "mix16_3", d)
-        inline, _ = prototype(text("mix16.ode2"))
-        assert raw == macro == inline
+        # the mixing steps: written out and with an inline function, one object file
+        raw, inline = today("mix16_raw.ode", "mix16_3", d), today("mix16.ode", "mix16_3", d)
+        assert raw == inline == prototype(text("mix16.ode"))[0]
         note("mix16_3", proved("mix16", text("mix16.spec"), raw, "ode_mix16_3", ""))
         # quad32: the prototype's object file is the kept one, so the kept statement's inputs and the kept proofs stand
         target, data, fns = ode2.compile_source(text("quad32.ode2"), "quad32.ode2")

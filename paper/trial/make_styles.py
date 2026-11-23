@@ -56,18 +56,13 @@ def refusal(name, old, new):
     raise AssertionError(f"{name}: {new} is taken")
 
 
-def today_says(name, fn, old, new):
-    """What today's compiler says of a source with one piece changed: its refusal, or the bytes it makes."""
+def today_refuses(name, fn, old, new):
+    """What the repository's compiler says of a source with one piece changed, which it must refuse."""
     source = text(name)
     assert source.count(old) == 1, old
-    with tempfile.TemporaryDirectory(prefix="ode-styles-") as d:
-        path = os.path.join(d, name)
-        with open(path, "w") as f: f.write(source.replace(old, new))
-        try:
-            odec.build(path, fn, os.path.join(d, "o"))
-        except SystemExit as e:
-            return "refused: " + str(e).split(": ", 2)[-1]
-        with open(os.path.join(d, "o"), "rb") as f: return f"taken: {len(t.code_of(f.read()))} bytes of code"
+    try: odec.instructions(source.replace(old, new), fn, name)
+    except SystemExit as e: return str(e)
+    raise AssertionError(f"{name}: {new} is taken")
 
 
 def main(out):
@@ -76,11 +71,10 @@ def main(out):
     with open(TODAY_QUAD) as f: quad_today = f.read()
     quad_new = text("quad32.ode2")
     with tempfile.TemporaryDirectory(prefix="ode-styles-") as d:
-        raw, macro = t.today("mix16_raw.ode", "mix16_3", d), t.today("mix16_macro.ode", "mix16_3", d)
+        raw, inline = t.today("mix16_raw.ode", "mix16_3", d), t.today("mix16.ode", "mix16_3", d)
         scan = t.today("all_zero.ode", "all_zero_early", d)
-    inline, _ = t.prototype(text("mix16.ode2"))
     scan_new, places = t.prototype(text("all_zero.ode2"))
-    assert raw == macro == inline and scan == scan_new and places == text("all_zero.places")
+    assert raw == inline and scan == scan_new and places == text("all_zero.places")
     mix, zero, quad = v["mix16_3"], v["all_zero"], v["quad32"]
     moved = v["all_zero with an instruction added before the loop, the place the tool finds"]
     stale = v["all_zero with an instruction added before the loop, that proof with the place at the count typed before"]
@@ -102,35 +96,36 @@ def main(out):
     say("# One function, several notations\n")
     say("*This page is made by `paper/trial/make_styles.py` from the files in `paper/trial/src/` and the results in "
         "`paper/trial/results/`. Its counts and verdicts are read from them. \"Today\" is what the repository's "
-        "compiler takes. \"Prototype\" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, "
-        "not one of the repository's, and not a decision about the language. The contracts are in today's specification "
+        "compiler (`lang/odec.py`) takes. \"Prototype\" is what the trial's front end `paper/trial/ode2.py` takes: a trial's tool, "
+        "not one of the repository's, and not a decision about the language. The inline function of section 1 was the "
+        "prototype's when this page was first made. It is the compiler's now, and the text macro that it was compared with "
+        "is gone from the compiler (commit `082ba81` has this page as it was then). The contracts are in today's specification "
         "language in both, so an output equation is written with `=` where the report proposes `==`.*\n")
 
     say("## 1. Three mixing steps\n")
-    say("The function reads two runs of sixteen words, `d` and `a`, mixes them three times and writes `d` back. "
+    say("The function reads two arrays of sixteen words, `d` and `a`, mixes them three times and writes `d` back. "
         "One step is `(x ^ y) ror 16` in each word: into `d`, then into `a`, then into `d` again. Its contract:\n")
     say(block(body(text("mix16.spec"))))
-    say("**Today, every instruction written out** (`mix16_raw.ode`):\n")
+    say("**Every instruction written out** (`mix16_raw.ode`):\n")
     say(block(body(text("mix16_raw.ode"))))
-    say("**Today, with a text macro** (`mix16_macro.ode`). The macro's lines are pasted at each use with the names replaced:\n")
-    say(block(body(text("mix16_macro.ode"))))
-    say("**Prototype, with an inline function** (`mix16.ode2`). It says what kind of register each operand is, "
+    say("**With an inline function** (`mix16.ode`). It says which class of register each operand is of, "
         "that the two must differ, and which one it changes:\n")
-    say(block(body(text("mix16.ode2"))))
-    say(f"The three give one object file, byte for byte: {mix['instructions']} instructions, {mix['code bytes']} bytes of code. "
+    say(block(body(text("mix16.ode"))))
+    say(f"The two give one object file, byte for byte: {mix['instructions']} instructions, {mix['code bytes']} bytes of code. "
         f"The verifier says `{mix['verifier']}` of it; the proof file is {mix['proof bytes']} bytes and the statement {mix['statement bytes']}.\n")
-    say("What each form does with a mistake at a use:\n")
-    say("| The mistake | Today's macro | The prototype's inline function |\n|---|---|---|")
-    for what, (m_old, m_new), (i_old, i_new) in (
-            ("one register for both operands", ("  mix16(zmm1, zmm0)\n", "  mix16(zmm1, zmm1)\n"), ("  mix16(zmm1, zmm0)\n", "  mix16(zmm1, zmm1)\n")),
-            ("a general register where a vector register belongs", ("  mix16(zmm1, zmm0)\n", "  mix16(rax, zmm0)\n"), ("  mix16(zmm1, zmm0)\n", "  mix16(rax, zmm0)\n")),
-            ("the body writes a register it was not given", ("    vprord $dst, $dst, 16\n", "    vprord zmm2, $dst, 16\n"), ("  vprord d, d, 16\n", "  vprord zmm2, d, 16\n"))):
-        say(f"| {what}: `{i_new.strip()}` | {today_says('mix16_macro.ode', 'mix16_3', m_old, m_new)} | refused: `` {refusal('mix16.ode2', i_old, i_new)} `` |")
-    say("\nThe macro's one refusal comes from the assembler, which has no such instruction; it names the function and not the line. "
-        "The first and third mistakes assemble, and the function then computes something else.\n")
+    say("What the compiler says of four mistakes. Each refusal names the line of the mistake:\n")
+    say("| The mistake | What the compiler says |\n|---|---|")
+    for what, old, new in (
+            ("one register for both operands", "  mix16(zmm1, zmm0)\n", "  mix16(zmm1, zmm1)\n"),
+            ("a general register where a vector register belongs", "  mix16(zmm1, zmm0)\n", "  mix16(rax, zmm0)\n"),
+            ("the inline function names a register that it was not given", "  vprord d, d, 16\n", "  vprord zmm2, d, 16\n"),
+            ("the inline function changes a register that `changes` does not list", "  vprord d, d, 16\n", "  vprord a, d, 16\n")):
+        say(f"| {what}: `{new.strip()}` | `` {today_refuses('mix16.ode', 'mix16_3', old, new)} `` |")
+    say("\nWith the text macro that the compiler had before, the second of these was refused by the assembler, which named the "
+        "function and not the line. The first and the third were taken, and the function then computed something else.\n")
 
     say("## 2. A scan with a loop\n")
-    say("The function says whether every byte of a run is zero, and leaves at the first byte that is not. Its contract:\n")
+    say("The function says whether every byte of an array is zero, and leaves at the first byte that is not. Its contract:\n")
     say(block(body(text("all_zero.spec"))))
     say("**Today** (`all_zero.ode`, with the loop's invariant in a second file, `all_zero.places`). "
         "The invariant is tied to the code by a count of bytes from the function's start, which a person types:\n")
@@ -171,8 +166,7 @@ def main(out):
 
     say("## What was measured\n")
     say("| Function | Notation | Lines of code | Bytes of code | The verifier | Proof bytes |\n|---|---|---|---|---|---|")
-    for fn, name, src, r in (("mix16_3", "today, written out", text("mix16_raw.ode"), mix), ("mix16_3", "today, macro", text("mix16_macro.ode"), mix),
-                             ("mix16_3", "prototype, inline function", text("mix16.ode2"), mix),
+    for fn, name, src, r in (("mix16_3", "today, written out", text("mix16_raw.ode"), mix), ("mix16_3", "today, inline function", text("mix16.ode"), mix),
                              ("all_zero", "today, with a place file", text("all_zero.ode") + text("all_zero.places"), zero),
                              ("all_zero", "prototype", text("all_zero.ode2"), zero)):
         say(f"| `{fn}` | {name} | {len(code_lines(src))} | {r['code bytes']} | {r['verifier']} | {r['proof bytes']} |")
@@ -181,10 +175,11 @@ def main(out):
     say("\nWithin a function the notations give the same bytes, so the verdict and the proof are one. "
         "The verdicts are from an x86-64 Linux work machine with the repository's verifier; `paper/trial/test_styles.py` makes them again.\n")
 
-    say("## What the prototype does not have\n")
-    say("- An inline function has no contract yet: after a use the caller reasons from the instructions, as after a macro.\n"
-        "- `changes` is judged from the first operand of each instruction as written, not from the instruction table.\n"
-        "- It knows the forms on this page and no others. It is a trial's tool and is not in the suite.\n")
+    say("## What is not there yet\n")
+    say("- An inline function has no contract yet: after a use the caller reasons from the instructions, as if they were written out.\n"
+        "- The prototype (sections 2 to 4) judges `changes` from the first operand of each instruction as written. "
+        "The repository's compiler reads what an instruction changes from the instruction table.\n"
+        "- The prototype knows the forms on this page and no others. It is a trial's tool and is not in the suite.\n")
     with open(out, "w") as f: f.write("\n".join(p))
     print(f"{out}: {sum(len(x.split()) for x in p)} words")
 

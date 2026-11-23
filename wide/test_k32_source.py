@@ -22,9 +22,8 @@ NAMES = {'.Lode_data_k32_iv': '.Liv32', '.Lode_data_k32_indices': '.Lindices32',
 
 
 def canonical(source):
-    data, kernels = odec.functions(source)
-    name, _, lines = next(k for k in kernels if k[0] == 'k32')
-    expanded = odec.expand(name, lines, {}, {})
+    data, _ = odec.functions(source)
+    expanded = odec.instructions(source, 'k32')
     assert expanded[0] == '.p2align 6'
     out = []
     for s in expanded[1:]:

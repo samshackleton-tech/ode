@@ -6,66 +6,71 @@
 
 data p16_iv = 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a
 
+inline fn g4(a0: zmm, a1: zmm, a2: zmm, a3: zmm, b0: zmm, b1: zmm, b2: zmm, b3: zmm,
+             c0: zmm, c1: zmm, c2: zmm, c3: zmm, d0: zmm, d1: zmm, d2: zmm, d3: zmm,
+             x0: zmm, x1: zmm, x2: zmm, x3: zmm, y0: zmm, y1: zmm, y2: zmm, y3: zmm)
+    distinct(a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3, x0, x1, x2, x3, y0, y1, y2, y3)
+    changes a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3 {
+  vpaddd a0, a0, x0
+  vpaddd a1, a1, x1
+  vpaddd a2, a2, x2
+  vpaddd a3, a3, x3
+  vpaddd a0, a0, b0
+  vpaddd a1, a1, b1
+  vpaddd a2, a2, b2
+  vpaddd a3, a3, b3
+  vpxord d0, d0, a0
+  vpxord d1, d1, a1
+  vpxord d2, d2, a2
+  vpxord d3, d3, a3
+  vprord d0, d0, 16
+  vprord d1, d1, 16
+  vprord d2, d2, 16
+  vprord d3, d3, 16
+  vpaddd c0, c0, d0
+  vpaddd c1, c1, d1
+  vpaddd c2, c2, d2
+  vpaddd c3, c3, d3
+  vpxord b0, b0, c0
+  vpxord b1, b1, c1
+  vpxord b2, b2, c2
+  vpxord b3, b3, c3
+  vprord b0, b0, 12
+  vprord b1, b1, 12
+  vprord b2, b2, 12
+  vprord b3, b3, 12
+  vpaddd a0, a0, y0
+  vpaddd a1, a1, y1
+  vpaddd a2, a2, y2
+  vpaddd a3, a3, y3
+  vpaddd a0, a0, b0
+  vpaddd a1, a1, b1
+  vpaddd a2, a2, b2
+  vpaddd a3, a3, b3
+  vpxord d0, d0, a0
+  vpxord d1, d1, a1
+  vpxord d2, d2, a2
+  vpxord d3, d3, a3
+  vprord d0, d0, 8
+  vprord d1, d1, 8
+  vprord d2, d2, 8
+  vprord d3, d3, 8
+  vpaddd c0, c0, d0
+  vpaddd c1, c1, d1
+  vpaddd c2, c2, d2
+  vpaddd c3, c3, d3
+  vpxord b0, b0, c0
+  vpxord b1, b1, c1
+  vpxord b2, b2, c2
+  vpxord b3, b3, c3
+  vprord b0, b0, 7
+  vprord b1, b1, 7
+  vprord b2, b2, 7
+  vprord b3, b3, 7
+}
+
 fn p16 as "blake3_servil_avx512_p16" {
   .p2align 6
-  def g4(a0, a1, a2, a3, b0, b1, b2, b3, c0, c1, c2, c3, d0, d1, d2, d3, x0, x1, x2, x3, y0, y1, y2, y3) {
-    vpaddd $a0, $a0, $x0
-    vpaddd $a1, $a1, $x1
-    vpaddd $a2, $a2, $x2
-    vpaddd $a3, $a3, $x3
-    vpaddd $a0, $a0, $b0
-    vpaddd $a1, $a1, $b1
-    vpaddd $a2, $a2, $b2
-    vpaddd $a3, $a3, $b3
-    vpxord $d0, $d0, $a0
-    vpxord $d1, $d1, $a1
-    vpxord $d2, $d2, $a2
-    vpxord $d3, $d3, $a3
-    vprord $d0, $d0, 16
-    vprord $d1, $d1, 16
-    vprord $d2, $d2, 16
-    vprord $d3, $d3, 16
-    vpaddd $c0, $c0, $d0
-    vpaddd $c1, $c1, $d1
-    vpaddd $c2, $c2, $d2
-    vpaddd $c3, $c3, $d3
-    vpxord $b0, $b0, $c0
-    vpxord $b1, $b1, $c1
-    vpxord $b2, $b2, $c2
-    vpxord $b3, $b3, $c3
-    vprord $b0, $b0, 12
-    vprord $b1, $b1, 12
-    vprord $b2, $b2, 12
-    vprord $b3, $b3, 12
-    vpaddd $a0, $a0, $y0
-    vpaddd $a1, $a1, $y1
-    vpaddd $a2, $a2, $y2
-    vpaddd $a3, $a3, $y3
-    vpaddd $a0, $a0, $b0
-    vpaddd $a1, $a1, $b1
-    vpaddd $a2, $a2, $b2
-    vpaddd $a3, $a3, $b3
-    vpxord $d0, $d0, $a0
-    vpxord $d1, $d1, $a1
-    vpxord $d2, $d2, $a2
-    vpxord $d3, $d3, $a3
-    vprord $d0, $d0, 8
-    vprord $d1, $d1, 8
-    vprord $d2, $d2, 8
-    vprord $d3, $d3, 8
-    vpaddd $c0, $c0, $d0
-    vpaddd $c1, $c1, $d1
-    vpaddd $c2, $c2, $d2
-    vpaddd $c3, $c3, $d3
-    vpxord $b0, $b0, $c0
-    vpxord $b1, $b1, $c1
-    vpxord $b2, $b2, $c2
-    vpxord $b3, $b3, $c3
-    vprord $b0, $b0, 7
-    vprord $b1, $b1, 7
-    vprord $b2, $b2, 7
-    vprord $b3, $b3, 7
-  }
 
   .cfi_startproc
   endbr64

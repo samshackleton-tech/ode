@@ -1,4 +1,4 @@
-// Three mixing steps with an inline function: it says what kind each register is, that the two differ,
+// Three mixing steps with an inline function: it says what class each register is of, that the two differ,
 // and which one it changes. A use that breaks one of these is refused at its line.
 target x86_64
 

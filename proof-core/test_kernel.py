@@ -107,12 +107,12 @@ END = "  ret\n}\n\n// The same for processors with SSE4.1"            # (the end
 STORES = "  vmovdqu xmmword ptr [rdi], xmm0\n  vmovdqu xmmword ptr [rdi+0x10], xmm1\n" + END
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
-    ("a turn by 15 for 16", "    vprord xmm3, xmm3, 16\n", "    vprord xmm3, xmm3, 15\n", FOLLOW),
-    ("a turn by 6 for 7", "    vprord xmm1, xmm1, 7\n", "    vprord xmm1, xmm1, 6\n", FOLLOW),
+    ("a turn by 15 for 16", "  vprord d, d, 16\n", "  vprord d, d, 15\n", FOLLOW),
+    ("a turn by 6 for 7", "  vprord b, b, 7\n", "  vprord b, b, 6\n", FOLLOW),
     ("the block's words taken the other way", "  vshufps xmm4, xmm8, xmm9, 136\n  vshufps xmm5, xmm8, xmm9, 221\n  vmovups xmm8, xmmword ptr [rsi+0x20]",
      "  vshufps xmm4, xmm8, xmm9, 221\n  vshufps xmm5, xmm8, xmm9, 136\n  vmovups xmm8, xmmword ptr [rsi+0x20]", FOLLOW),
     ("six rounds", "  vpshufd xmm7, xmm7, 0x93\n  mov al, 7\n", "  vpshufd xmm7, xmm7, 0x93\n  mov al, 6\n", FOLLOW),
-    ("a row of the state turned the other way", "  g(xmm4, xmm5)\n  vpshufd xmm0, xmm0, 0x93\n", "  g(xmm4, xmm5)\n  vpshufd xmm0, xmm0, 0x39\n", FOLLOW),
+    ("a row of the state turned the other way", "  g_avx512(xmm0, xmm1, xmm2, xmm3, xmm4, xmm5)\n  vpshufd xmm0, xmm0, 0x93\n", "  g_avx512(xmm0, xmm1, xmm2, xmm3, xmm4, xmm5)\n  vpshufd xmm0, xmm0, 0x39\n", FOLLOW),
     ("the block's permutation changed in one word", "  vpblendd xmm9, xmm9, xmm8, 0xAA\n", "  vpblendd xmm9, xmm9, xmm8, 0xA8\n", FOLLOW),
     ("the halves of the state joined crosswise", "  vpxor xmm0, xmm0, xmm2\n  vpxor xmm1, xmm1, xmm3\n", "  vpxor xmm0, xmm0, xmm3\n  vpxor xmm1, xmm1, xmm2\n", FOLLOW),
     ("the counter and the length exchanged", "  vmovq xmm3, rcx\n  vmovq xmm4, rdx\n", "  vmovq xmm3, rdx\n  vmovq xmm4, rcx\n", FOLLOW),
@@ -132,11 +132,11 @@ SOURCES = [
 END_SSE41 = "  ret\n}\n"                                               # (the file's end)
 STORES_SSE41 = "  movups xmmword ptr [rdi], xmm0\n  movups xmmword ptr [rdi+0x10], xmm1\n" + END_SSE41
 SOURCES_SSE41 = [
-    ("a shift to the left by 19 for 20", "    pslld xmm1, 20\n", "    pslld xmm1, 19\n", OR_TURN),
-    ("a shift to the right by 13 for 12", "    psrld xmm11, 12\n", "    psrld xmm11, 13\n", OR_TURN),
-    ("a turn by 8 for 7", "    pslld xmm1, 25\n    psrld xmm11, 7\n", "    pslld xmm1, 24\n    psrld xmm11, 8\n", FOLLOW),
-    ("the or takes another register", "    por xmm1, xmm11\n    paddd xmm0, $y\n", "    por xmm1, xmm3\n    paddd xmm0, $y\n", OR_TURN),
-    ("the shuffle for 8 bits where that for 16 is", "    pshufb xmm3, xmm15\n", "    pshufb xmm3, xmm14\n", FOLLOW),
+    ("a shift to the left by 19 for 20", "  pslld b, 20\n", "  pslld b, 19\n", OR_TURN),
+    ("a shift to the right by 13 for 12", "  psrld t, 12\n", "  psrld t, 13\n", OR_TURN),
+    ("a turn by 8 for 7", "  pslld b, 25\n  psrld t, 7\n", "  pslld b, 24\n  psrld t, 8\n", FOLLOW),
+    ("the or takes another register", "  por b, t\n  paddd a, y\n", "  por b, d\n  paddd a, y\n", OR_TURN),
+    ("the shuffle for 8 bits where that for 16 is", "  pshufb d, rot16\n", "  pshufb d, rot8\n", FOLLOW),
     ("a byte of a shuffle's constant", "data one_rot8 = 0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D", "data one_rot8 = 0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0C", SHUFFLE),
     ("a blend that takes half a word", "  pblendw xmm9, xmm8, 0xCC\n", "  pblendw xmm9, xmm8, 0xC4\n", SPLIT),
     ("a blend of another word", "  pblendw xmm8, xmm6, 0xC0\n", "  pblendw xmm8, xmm6, 0x30\n", FOLLOW),

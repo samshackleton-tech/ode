@@ -19,9 +19,8 @@ BASELINE_SHA256 = '1ef109be28848a619d0b36911b62c332e4caaefa1f6c0e085431e585aba7c
 
 
 def canonical(source):
-    data, kernels = odec.functions(source)
-    name, _, lines = next(k for k in kernels if k[0] == 'p16')
-    expanded = odec.expand(name, lines, {}, {})
+    data, _ = odec.functions(source)
+    expanded = odec.instructions(source, 'p16')
     assert expanded[0] == '.p2align 6'
     return [s.replace('.Lode_data_p16_iv', '.Liv32').replace('.Lode_p16_', '.L')
             for s in expanded[1:]], dict(data)
@@ -39,10 +38,10 @@ class P16Source(unittest.TestCase):
 
     def test_wrong_rotation_changes_identity(self):
         source = SOURCE.read_text()
-        old = 'vprord $d0, $d0, 16'
+        old = 'vprord d0, d0, 16'
         self.assertEqual(source.count(old), 1)
         baseline, _ = canonical(source)
-        changed, _ = canonical(source.replace(old, 'vprord $d0, $d0, 17'))
+        changed, _ = canonical(source.replace(old, 'vprord d0, d0, 17'))
         self.assertNotEqual(changed, baseline)
 
     def test_entry_alignment_precedes_symbols(self):

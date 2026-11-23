@@ -10,25 +10,26 @@
 
 data one_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
+// half of a round: the four columns (or, the rows turned, the four diagonals) mixed with eight words of the block
+inline fn g_avx512(a: xmm, b: xmm, c: xmm, d: xmm, x: xmm, y: xmm) distinct(a, b, c, d, x, y) changes a, b, c, d {
+  vpaddd a, a, x
+  vpaddd a, a, b
+  vpxord d, d, a
+  vprord d, d, 16
+  vpaddd c, c, d
+  vpxord b, b, c
+  vprord b, b, 12
+  vpaddd a, a, y
+  vpaddd a, a, b
+  vpxord d, d, a
+  vprord d, d, 8
+  vpaddd c, c, d
+  vpxord b, b, c
+  vprord b, b, 7
+}
+
 fn compress1 as "blake3_servil_compress_in_place_avx512" {
   .p2align 6
-  // half of a round: the four columns (or, the rows turned, the four diagonals) mixed with eight words of the block
-  def g(x, y) {
-    vpaddd xmm0, xmm0, $x
-    vpaddd xmm0, xmm0, xmm1
-    vpxord xmm3, xmm3, xmm0
-    vprord xmm3, xmm3, 16
-    vpaddd xmm2, xmm2, xmm3
-    vpxord xmm1, xmm1, xmm2
-    vprord xmm1, xmm1, 12
-    vpaddd xmm0, xmm0, $y
-    vpaddd xmm0, xmm0, xmm1
-    vpxord xmm3, xmm3, xmm0
-    vprord xmm3, xmm3, 8
-    vpaddd xmm2, xmm2, xmm3
-    vpxord xmm1, xmm1, xmm2
-    vprord xmm1, xmm1, 7
-  }
   vmovdqu xmm0, xmmword ptr [rdi]
   vmovdqu xmm1, xmmword ptr [rdi+0x10]
   movzx eax, r8b
@@ -51,11 +52,11 @@ fn compress1 as "blake3_servil_compress_in_place_avx512" {
   vpshufd xmm7, xmm7, 0x93
   mov al, 7
   @round:
-  g(xmm4, xmm5)
+  g_avx512(xmm0, xmm1, xmm2, xmm3, xmm4, xmm5)
   vpshufd xmm0, xmm0, 0x93
   vpshufd xmm3, xmm3, 0x4E
   vpshufd xmm2, xmm2, 0x39
-  g(xmm6, xmm7)
+  g_avx512(xmm0, xmm1, xmm2, xmm3, xmm6, xmm7)
   vpshufd xmm0, xmm0, 0x39
   vpshufd xmm3, xmm3, 0x4E
   vpshufd xmm2, xmm2, 0x93
@@ -90,31 +91,32 @@ fn compress1 as "blake3_servil_compress_in_place_avx512" {
 data one_rot8 = 0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D
 data one_rot16 = 0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E
 
+// half of a round
+inline fn g_sse41(a: xmm, b: xmm, c: xmm, d: xmm, x: xmm, y: xmm, t: xmm, rot16: xmm, rot8: xmm) distinct(a, b, c, d, x, y, t, rot16, rot8) changes a, b, c, d, t {
+  paddd a, x
+  paddd a, b
+  pxor d, a
+  pshufb d, rot16
+  paddd c, d
+  pxor b, c
+  movdqa t, b
+  pslld b, 20
+  psrld t, 12
+  por b, t
+  paddd a, y
+  paddd a, b
+  pxor d, a
+  pshufb d, rot8
+  paddd c, d
+  pxor b, c
+  movdqa t, b
+  pslld b, 25
+  psrld t, 7
+  por b, t
+}
+
 fn compress1_sse41 as "blake3_servil_compress_in_place_sse41" {
   .p2align 6
-  // half of a round
-  def g(x, y) {
-    paddd xmm0, $x
-    paddd xmm0, xmm1
-    pxor xmm3, xmm0
-    pshufb xmm3, xmm15
-    paddd xmm2, xmm3
-    pxor xmm1, xmm2
-    movdqa xmm11, xmm1
-    pslld xmm1, 20
-    psrld xmm11, 12
-    por xmm1, xmm11
-    paddd xmm0, $y
-    paddd xmm0, xmm1
-    pxor xmm3, xmm0
-    pshufb xmm3, xmm14
-    paddd xmm2, xmm3
-    pxor xmm1, xmm2
-    movdqa xmm11, xmm1
-    pslld xmm1, 25
-    psrld xmm11, 7
-    por xmm1, xmm11
-  }
   movups xmm0, xmmword ptr [rdi]
   movups xmm1, xmmword ptr [rdi+0x10]
   movaps xmm2, xmmword ptr [rip + #one_iv]
@@ -140,11 +142,11 @@ fn compress1_sse41 as "blake3_servil_compress_in_place_sse41" {
   movaps xmm15, xmmword ptr [rip + #one_rot16]
   mov al, 7
   @round:
-  g(xmm4, xmm5)
+  g_sse41(xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm11, xmm15, xmm14)
   pshufd xmm0, xmm0, 0x93
   pshufd xmm3, xmm3, 0x4E
   pshufd xmm2, xmm2, 0x39
-  g(xmm6, xmm7)
+  g_sse41(xmm0, xmm1, xmm2, xmm3, xmm6, xmm7, xmm11, xmm15, xmm14)
   pshufd xmm0, xmm0, 0x39
   pshufd xmm3, xmm3, 0x4E
   pshufd xmm2, xmm2, 0x93

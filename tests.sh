@@ -55,6 +55,7 @@ for t in test_sources.py test_p16_source.py test_k32_source.py; do one wide "$t"
 one core test_core.py "" &
 [ -n "${IN_TEST_TESTS:-}" ] || one . test_tests.py "" &         # (not inside itself)
 one lang test_asm.py "" &
+one lang test_inline.py "" &
 fi
 # proof-core: Lean's lake builds everything once, here; then its tests run side by side (ODE_LEAN_BUILT tells
 # them not to ask lake again: built.py). Where lake does not build, that is one failed line and they are not run.

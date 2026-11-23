@@ -254,11 +254,13 @@ compilation) are used for that purpose.
 
 Consequences:
 
-- **The compiler does what is written, or it refuses.** It expands the coder's macros, resolves labels
+- **The compiler does what is written, or it refuses.** It puts an inline function's instructions where
+  the coder uses it, repeats the lines of a `for`, resolves labels
   and distances, and writes the proof next to the code. It does not add an instruction, move one, or pick
   a register or a layout as an optimization. Where the source does not settle a choice, it stops and says so.
 - **The coder can predict the result.** The same source for the same target gives the same bytes. The
-  bytes of one function depend only on the source of that function. Both properties are tested.
+  bytes of one function depend only on the source of that function and of the inline functions it uses.
+  Both properties are tested.
 - **Generators, macros and searching agents are welcome on the coder's side.** They may propose and
   measure thousands of candidates. The source that is accepted records the decisions, so compiling it
   makes no new decisions.

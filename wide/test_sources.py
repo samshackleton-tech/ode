@@ -91,9 +91,9 @@ class Sources(unittest.TestCase):
         one = "blake3_servil_compress_in_place_sse41"
         with open(os.path.join(HERE, "one.ode")) as f: text = f.read()
         src = os.path.join(self.dir, "one-changed.ode")
-        at = text.index("fn compress1_sse41")
-        self.assertEqual(text.count("    pslld xmm1, 20\n", at), 1)
-        with open(src, "w") as f: f.write(text[:at] + text[at:].replace("    pslld xmm1, 20\n", "    pslld xmm1, 21\n"))
+        at = text.index("inline fn g_sse41")                    # the half of a round that the function uses four times
+        self.assertEqual(text.count("  pslld b, 20\n", at), 1)
+        with open(src, "w") as f: f.write(text[:at] + text[at:].replace("  pslld b, 20\n", "  pslld b, 21\n"))
         with open(os.path.join(self.dir, "one-changed.S"), "w") as f: f.write(odec.assembly(src, "compress1_sse41"))
         kernels.assemble(os.path.join(self.dir, "one-changed.S"), os.path.join(self.dir, "one-changed.o"))
         self.assertNotEqual(body(os.path.join(self.dir, "one-changed.o"), one)[0], body(os.path.join(self.dir, "one_sse41.o"), one)[0])
