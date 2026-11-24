@@ -1,0 +1,41 @@
+target x86_64
+
+fn b64_encode_char as "ode_b64_encode_char" {
+  reg v = rdi
+  reg res = rax
+
+  // First branch: v < 26 -> 'A'..'Z'
+  cmp v, 26
+  if lo {
+    res := 65
+    add res, v
+    ret
+  }
+
+  // Second branch: v < 52 -> 'a'..'z'
+  cmp v, 52
+  if lo {
+    res := 71
+    add res, v
+    ret
+  }
+
+  // Third branch: v < 62 -> '0'..'9'
+  cmp v, 62
+  if lo {
+    res := v
+    sub res, 4
+    ret
+  }
+
+  // Fourth branch: v == 62 -> '+'
+  cmp v, 62
+  if eq {
+    res := 43
+    ret
+  }
+
+  // Final case: v == 63 -> '/'
+  res := 47
+  ret
+}

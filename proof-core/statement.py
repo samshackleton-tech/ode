@@ -544,6 +544,16 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
                 and e[2][3][0] == "num" and e[3][0] == "num"
                 and 0 <= e[2][3][1] <= e[3][1] and (e[3][1] - e[2][3][1]) // e[2][2][2][1] < 2 ** 64 - 1):
             out.append(f"below {e[2][2][3][1]} {(e[3][1] - e[2][3][1]) // e[2][2][2][1] + 1}")
+        elif e[0] == "bin" and e[1] == "==":
+            la, lb = linear_expr(e[2], num_args), linear_expr(e[3], num_args)
+            if la is None or lb is None:
+                raise SystemExit(f"statement: the contract of {name} has a `requires` the verifier in Lean does not read yet")
+            for k, cs in (
+                (lb[0] - la[0], {a: lb[1].get(a, 0) - la[1].get(a, 0) for a in set(la[1]) | set(lb[1])}),
+                (la[0] - lb[0], {a: la[1].get(a, 0) - lb[1].get(a, 0) for a in set(la[1]) | set(lb[1])}),
+            ):
+                pairs = " ".join(f"{a} {cs[a]}" for a, _ in c["args"] if cs.get(a, 0) != 0)
+                out.append(f"linpre {k}" + (f" {pairs}" if pairs else ""))
         elif e[0] == "bin" and e[1] in ("<=", "<", ">=", ">"):
             la, lb = linear_expr(e[2], num_args), linear_expr(e[3], num_args)
             if la is None or lb is None:

@@ -112,7 +112,7 @@ another project, copy only:
 - Conditional select (`cset`, `csel`) and flag-setting register arithmetic (`adds`, `subs`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- All 49 rows currently in `arm64.tab` are proved in `agree/` (51 theorems, zero `sorry`, standard Lean
+- All 50 rows currently in `arm64.tab` are proved in `agree/` (52 theorems, zero `sorry`, standard Lean
   axioms only); any future rows added to `arm64.tab` should be paired with their agreement proof there.
 
 *Ode stands for Opcode Discipline with Evidence.*

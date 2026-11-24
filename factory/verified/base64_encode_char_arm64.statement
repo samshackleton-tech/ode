@@ -1,0 +1,25 @@
+fn ode_b64_encode_char
+machine arm64
+i 0 4 .cmpi .x0 0x1a
+i 4 8 .bhs 0x10
+i 8 12 .addi .x0 .x0 0x41
+i 12 16 .ret
+i 16 20 .cmpi .x0 0x34
+i 20 24 .bhs 0x20
+i 24 28 .addi .x0 .x0 0x47
+i 28 32 .ret
+i 32 36 .cmpi .x0 0x3e
+i 36 40 .bhs 0x30
+i 40 44 .subi .x0 .x0 0x4
+i 44 48 .ret
+i 48 52 .cmpi .x0 0x3e
+i 52 56 .bne 0x40
+i 56 60 .movi .x0 0x2b
+i 60 64 .ret
+i 64 68 .movi .x0 0x2f
+i 68 72 .ret
+arg v number
+below v 64
+returns (call b64_letter (name v))
+stack 0
+def b64_letter v = (ifx (bin < (name v) (num 26)) (bin + (num 65) (name v)) (ifx (bin < (name v) (num 52)) (bin + (num 71) (name v)) (ifx (bin < (name v) (num 62)) (bin - (name v) (num 4)) (ifx (bin == (name v) (num 62)) (num 43) (num 47)))))

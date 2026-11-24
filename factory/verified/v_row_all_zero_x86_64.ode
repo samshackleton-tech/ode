@@ -1,0 +1,35 @@
+target x86_64
+
+fn v_row_all_zero as "ode_v_row_all_zero" {
+  reg base = rdi
+  reg count = rsi
+  reg idx = rcx
+  reg addr = rdx
+  reg cur = al
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact row_zero_from(row, 0) == row_zero_from(row, i)
+      decreases n - i
+    }
+    cmp idx, count
+    if uge {
+      rax := 1
+      ret
+    }
+    addr := base
+    add addr, idx
+    movzx eax, byte ptr [addr]
+    cmp rax, 0
+    if ne {
+      rax := 0
+      ret
+    }
+    add idx, 1
+  }
+  ret
+}

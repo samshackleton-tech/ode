@@ -1,0 +1,43 @@
+target arm64
+
+fn lz4_pad_lit32 as "ode_lz4_pad_lit32" {
+  reg dst = x0
+  reg src = x1
+  reg n = x2
+  reg i = x3
+  reg src_addr = x4
+  reg dst_addr = x5
+  reg cur = w6
+  reg zero = w7
+
+  i := 0
+  zero := 0
+  
+  loop {
+    place {
+      name idx = i
+      fact 0 <= idx
+      fact idx <= 32
+      wrote out[.. idx] = pad32(src)
+      decreases 32 - idx
+    }
+    
+    cmp i, 32
+    if eq {
+      ret
+    }
+    
+    add dst_addr, dst, i
+    
+    cmp i, n
+    if ult {
+      add src_addr, src, i
+      ldrb cur, [src_addr, 0]
+      strb cur, [dst_addr, 0]
+    } else {
+      strb zero, [dst_addr, 0]
+    }
+    
+    add i, i, 1
+  }
+}

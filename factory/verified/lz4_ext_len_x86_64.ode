@@ -1,0 +1,48 @@
+target x86_64
+
+fn lz4_ext_len as "ode_lz4_ext_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg at = rcx
+  reg acc = rdx
+  reg cur_byte = r8b
+  reg cur_byte64 = r8
+  reg addr = r9
+
+  at := 0
+  acc := 15
+
+  loop {
+    place {
+      name i = at
+      name a = acc
+      fact 0 <= i
+      fact i <= n
+      fact a == 15 + 255 * i
+      fact lz4_len_from(buf, 0, 15) == lz4_len_from(buf, i, a)
+      decreases n - i
+    }
+    
+    cmp at, n
+    if eq {
+      rax := 0
+      ret
+    }
+    
+    addr := buf
+    add addr, at
+    movzx r8d, byte ptr [addr]
+    cmp cur_byte64, 255
+    if ne {
+      add acc, cur_byte64
+      rax := acc
+      ret
+    }
+    
+    add acc, 255
+    add at, 1
+  }
+  
+  // This should never be reached, but required for x86-64 single ret
+  ret
+}

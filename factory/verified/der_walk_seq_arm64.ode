@@ -1,0 +1,105 @@
+target arm64
+
+fn der_walk_seq as "ode_der_walk_seq" {
+  reg base = x0
+  reg count = x1
+  reg pos = x2
+  reg addr = x3
+  reg rem = x4
+  reg tag = x5
+  reg lb = x6
+  reg v = x7
+  reg w = x8
+  reg sz = x9
+
+  mov pos, 0
+  loop {
+    place {
+      name at = pos
+      fact 0 <= at
+      fact at <= n
+      fact der_seq_from(buf, 0) == der_seq_from(buf, at)
+      decreases n - at
+    }
+    cmp pos, count
+    if eq {
+      mov x0, 1
+      ret
+    }
+    sub rem, count, pos
+    cmp rem, 2
+    if ult {
+      mov x0, 0
+      ret
+    }
+    add addr, base, pos
+    ldrb w5, [addr, 0]
+    lsl tag, tag, 59
+    lsr tag, tag, 59
+    cmp tag, 31
+    if eq {
+      mov x0, 0
+      ret
+    }
+    ldrb w6, [addr, 1]
+    cmp lb, 128
+    if ult {
+      add sz, lb, 2
+      cmp rem, sz
+      if ult {
+        mov x0, 0
+        ret
+      }
+      add pos, pos, sz
+      continue
+    }
+    cmp lb, 129
+    if eq {
+      cmp rem, 3
+      if ult {
+        mov x0, 0
+        ret
+      }
+      ldrb w7, [addr, 2]
+      cmp v, 128
+      if ult {
+        mov x0, 0
+        ret
+      }
+      add sz, v, 3
+      cmp rem, sz
+      if ult {
+        mov x0, 0
+        ret
+      }
+      add pos, pos, sz
+      continue
+    }
+    cmp lb, 130
+    if ne {
+      mov x0, 0
+      ret
+    }
+    cmp rem, 4
+    if ult {
+      mov x0, 0
+      ret
+    }
+    ldrb w7, [addr, 2]
+    cmp v, 1
+    if ult {
+      mov x0, 0
+      ret
+    }
+    ldrb w8, [addr, 3]
+    lsl v, v, 8
+    add v, v, w
+    add sz, v, 4
+    cmp rem, sz
+    if ult {
+      mov x0, 0
+      ret
+    }
+    add pos, pos, sz
+  }
+}

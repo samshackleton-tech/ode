@@ -1,0 +1,37 @@
+target x86_64
+
+fn lz4_pad_lit32 as "ode_lz4_pad_lit32" {
+  reg dst = rdi
+  reg src = rsi
+  reg n = rdx
+  reg idx = rcx
+  reg tmp = r8d
+  reg src_ptr = r9
+  reg dst_ptr = r10
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact i <= 32
+      wrote out[.. i] = pad32(src)
+      decreases 32 - i
+    }
+    cmp idx, 32
+    break if eq
+    // Compute dst_ptr = dst + i
+    lea dst_ptr, [dst + idx]
+    cmp idx, n
+    if ult {
+      // Copy src[i] to out[i]
+      lea src_ptr, [src + idx]
+      movzx tmp, byte ptr [src_ptr]
+      mov byte ptr [dst_ptr], r8b
+    } else {
+      // Zero pad
+      mov byte ptr [dst_ptr], 0
+    }
+    add idx, 1
+  }
+  ret
+}

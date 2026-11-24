@@ -1,0 +1,17 @@
+target arm64
+
+fn v_arm64_rd_valid as "ode_v_arm64_rd_valid" {
+    // Extract low 5 bits of w (w % 32) using shift operations
+    // lsl x0, x0, 59; lsr x0, x0, 59 isolates bits 0-4
+    lsl x0, x0, 59
+    lsr x0, x0, 59
+    
+    // Compare against 31: if x0 < 31 return 1, else return 0
+    cmp x0, 31
+    if lo {
+        x0 := 1
+    } else {
+        x0 := 0
+    }
+    ret
+}

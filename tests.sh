@@ -80,6 +80,7 @@ if [ "$lean" != broken ]; then
         ( [ "$lean" = built ] && export ODE_LEAN_BUILT=1; one proof-core "$t" "" ) &
     done
     [ -n "$lake" ] && one lean2ode test_lean2ode.py "" &
+    [ -n "$lake" ] && one factory test_factory_native.py "" &
 fi
 wait
 total=$(grep -c '' "$out")

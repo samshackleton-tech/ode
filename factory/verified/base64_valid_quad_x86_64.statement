@@ -1,0 +1,105 @@
+fn ode_b64_char_val
+i 0 4 .cmp 64 (.reg .rdi) (.imm 0x41)
+i 4 6 .jb 0x2C
+i 6 10 .cmp 64 (.reg .rdi) (.imm 0x5B)
+i 10 12 .jb 0x1A
+i 12 16 .cmp 64 (.reg .rdi) (.imm 0x61)
+i 16 18 .jb 0x61
+i 18 22 .cmp 64 (.reg .rdi) (.imm 0x7B)
+i 22 24 .jb 0x23
+i 24 26 .jmp 0x61
+i 26 29 .mov 64 (.reg .rax) (.reg .rdi)
+i 29 33 .sub 64 (.reg .rax) (.imm 0x41)
+i 33 35 .jmp 0x68
+i 35 38 .mov 64 (.reg .rax) (.reg .rdi)
+i 38 42 .sub 64 (.reg .rax) (.imm 0x47)
+i 42 44 .jmp 0x68
+i 44 48 .cmp 64 (.reg .rdi) (.imm 0x2B)
+i 48 50 .je 0x4F
+i 50 54 .cmp 64 (.reg .rdi) (.imm 0x2F)
+i 54 56 .je 0x58
+i 56 60 .cmp 64 (.reg .rdi) (.imm 0x30)
+i 60 62 .jb 0x61
+i 62 66 .cmp 64 (.reg .rdi) (.imm 0x3A)
+i 66 68 .jb 0x46
+i 68 70 .jmp 0x61
+i 70 73 .mov 64 (.reg .rax) (.reg .rdi)
+i 73 77 .add 64 (.reg .rax) (.imm 0x4)
+i 77 79 .jmp 0x68
+i 79 86 .mov 64 (.reg .rax) (.imm 0x3E)
+i 86 88 .jmp 0x68
+i 88 95 .mov 64 (.reg .rax) (.imm 0x3F)
+i 95 97 .jmp 0x68
+i 97 104 .mov 64 (.reg .rax) (.imm 0xFF)
+i 104 105 .ret
+arg b number
+below b 256
+returns (call b64_val (name b))
+stack 0
+fn ode_b64_valid_quad
+i 0 1 .push .rbx
+i 1 3 .push .r12
+i 3 5 .push .r13
+i 5 7 .push .r14
+i 7 9 .push .r15
+i 9 12 .mov 64 (.reg .r12) (.reg .rsi)
+i 12 15 .mov 64 (.reg .r13) (.reg .rdx)
+i 15 18 .mov 64 (.reg .r14) (.reg .rcx)
+i 18 23 .call ode_b64_char_val
+i 23 26 .mov 64 (.reg .rbx) (.reg .rax)
+i 26 29 .mov 64 (.reg .rdi) (.reg .r12)
+i 29 34 .call ode_b64_char_val
+i 34 37 .mov 64 (.reg .r15) (.reg .rax)
+i 37 40 .mov 64 (.reg .rdi) (.reg .r13)
+i 40 45 .call ode_b64_char_val
+i 45 48 .mov 64 (.reg .r12) (.reg .rax)
+i 48 51 .mov 64 (.reg .rdi) (.reg .r14)
+i 51 56 .call ode_b64_char_val
+i 56 63 .cmp 64 (.reg .rbx) (.imm 0xFF)
+i 63 65 .je 0x9D
+i 65 72 .cmp 64 (.reg .r15) (.imm 0xFF)
+i 72 74 .je 0x9D
+i 74 78 .cmp 64 (.reg .r13) (.imm 0x3D)
+i 78 80 .jne 0x65
+i 80 84 .cmp 64 (.reg .r14) (.imm 0x3D)
+i 84 86 .jne 0x9D
+i 86 89 .mov 64 (.reg .rcx) (.reg .r15)
+i 89 93 .and 64 (.reg .rcx) (.imm 0xF)
+i 93 97 .cmp 64 (.reg .rcx) (.imm 0x0)
+i 97 99 .jne 0x9D
+i 99 101 .jmp 0x94
+i 101 105 .cmp 64 (.reg .r14) (.imm 0x3D)
+i 105 107 .jne 0x83
+i 107 114 .cmp 64 (.reg .r12) (.imm 0xFF)
+i 114 116 .je 0x9D
+i 116 119 .mov 64 (.reg .rcx) (.reg .r12)
+i 119 123 .and 64 (.reg .rcx) (.imm 0x3)
+i 123 127 .cmp 64 (.reg .rcx) (.imm 0x0)
+i 127 129 .jne 0x9D
+i 129 131 .jmp 0x94
+i 131 138 .cmp 64 (.reg .r12) (.imm 0xFF)
+i 138 140 .je 0x9D
+i 140 146 .cmp 64 (.reg .rax) (.imm 0xFF)
+i 146 148 .je 0x9D
+i 148 155 .mov 64 (.reg .rax) (.imm 0x1)
+i 155 157 .jmp 0xA0
+i 157 160 .xor 64 (.reg .rax) (.reg .rax)
+i 160 162 .pop .r15
+i 162 164 .pop .r14
+i 164 166 .pop .r13
+i 166 168 .pop .r12
+i 168 169 .pop .rbx
+i 169 170 .ret
+arg c0 number
+arg c1 number
+arg c2 number
+arg c3 number
+below c0 256
+below c1 256
+below c2 256
+below c3 256
+returns (call b64_valid_quad (name c0) (name c1) (name c2) (name c3))
+stack 64
+def b64_val b = (ifx (ifx (bin >= (name b) (num 65)) (bin <= (name b) (num 90)) (bin == (num 0) (num 1))) (bin - (name b) (num 65)) (ifx (ifx (bin >= (name b) (num 97)) (bin <= (name b) (num 122)) (bin == (num 0) (num 1))) (bin - (name b) (num 71)) (ifx (ifx (bin >= (name b) (num 48)) (bin <= (name b) (num 57)) (bin == (num 0) (num 1))) (bin + (name b) (num 4)) (ifx (bin == (name b) (num 43)) (num 62) (ifx (bin == (name b) (num 47)) (num 63) (num 255))))))
+def b64_quad_ok v0 v1 c2 v2 c3 v3 = (ifx (ifx (bin == (name v0) (num 255)) (bin == (num 0) (num 0)) (bin == (name v1) (num 255))) (num 0) (ifx (bin == (name c2) (num 61)) (ifx (ifx (bin == (name c3) (num 61)) (bin == (bin % (name v1) (num 16)) (num 0)) (bin == (num 0) (num 1))) (num 1) (num 0)) (ifx (bin == (name c3) (num 61)) (ifx (ifx (bin != (name v2) (num 255)) (bin == (bin % (name v2) (num 4)) (num 0)) (bin == (num 0) (num 1))) (num 1) (num 0)) (ifx (ifx (bin != (name v2) (num 255)) (bin != (name v3) (num 255)) (bin == (num 0) (num 1))) (num 1) (num 0)))))
+def b64_valid_quad c0 c1 c2 c3 = (call b64_quad_ok (call b64_val (name c0)) (call b64_val (name c1)) (name c2) (call b64_val (name c2)) (name c3) (call b64_val (name c3)))

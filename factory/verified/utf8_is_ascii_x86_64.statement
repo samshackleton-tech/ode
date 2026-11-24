@@ -1,0 +1,20 @@
+fn ode_utf8_is_ascii
+i 0 7 .mov 64 (.reg .rcx) (.imm 0x0)
+i 7 10 .cmp 64 (.reg .rcx) (.reg .rsi)
+i 10 12 .jae 0x2C
+i 12 15 .mov 64 (.reg .rdx) (.reg .rdi)
+i 15 18 .add 64 (.reg .rdx) (.reg .rcx)
+i 18 21 .movzx8 .rdx (.mem .rdx 0x0)
+i 21 28 .cmp 64 (.reg .rdx) (.imm 0x80)
+i 28 30 .jb 0x26
+i 30 37 .mov 64 (.reg .rax) (.imm 0x0)
+i 37 38 .ret
+i 38 42 .add 64 (.reg .rcx) (.imm 0x1)
+i 42 44 .jmp 0x7
+i 44 51 .mov 64 (.reg .rax) (.imm 0x1)
+i 51 52 .ret
+arg input bytes n
+arg n number
+returns (call ascii_from (name input) (num 0))
+stack 0
+def ascii_from a at = (ifx (bin == (name at) (call len (name a))) (num 1) (ifx (bin >= (index (name a) (name at)) (num 128)) (num 0) (call ascii_from (name a) (bin + (name at) (num 1)))))

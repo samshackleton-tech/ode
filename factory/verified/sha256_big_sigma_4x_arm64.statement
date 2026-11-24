@@ -1,0 +1,39 @@
+fn ode_sha256_big_sigma_4x
+machine arm64
+i 0 4 .ld1 0 .x1
+i 4 8 .ld1 1 .x2
+i 8 12 .ushr 2 0 0x2
+i 12 16 .shl 3 0 0x1e
+i 16 20 .orr 2 2 3
+i 20 24 .ushr 3 0 0xd
+i 24 28 .shl 4 0 0x13
+i 28 32 .orr 3 3 4
+i 32 36 .ushr 4 0 0x16
+i 36 40 .shl 5 0 0xa
+i 40 44 .orr 4 4 5
+i 44 48 .eor 2 2 3
+i 48 52 .eor 2 2 4
+i 52 56 .ushr 3 1 0x6
+i 56 60 .shl 4 1 0x1a
+i 60 64 .orr 3 3 4
+i 64 68 .ushr 4 1 0xb
+i 68 72 .shl 5 1 0x15
+i 72 76 .orr 4 4 5
+i 76 80 .ushr 5 1 0x19
+i 80 84 .shl 6 1 0x7
+i 84 88 .orr 5 5 6
+i 88 92 .eor 3 3 4
+i 92 96 .eor 3 3 5
+i 96 100 .add4s 0 2 3
+i 100 104 .st1 0 .x0
+i 104 108 .ret
+arg out inout 16
+arg a fixed 16
+arg e fixed 16
+hidden a
+hidden e
+ensuresw out (call bytes_of (call big_sigma_sum4 (call words (name a)) (call words (name e))))
+stack 0
+def big_sigma0 a = (bin ^ (bin ^ (bin >>> (name a) (num 2)) (bin >>> (name a) (num 13))) (bin >>> (name a) (num 22)))
+def big_sigma1 e = (bin ^ (bin ^ (bin >>> (name e) (num 6)) (bin >>> (name e) (num 11))) (bin >>> (name e) (num 25)))
+def big_sigma_sum4 a e = (each (bin + (call big_sigma0 (index (name a) (name i))) (call big_sigma1 (index (name e) (name i)))) i (num 0) (num 4))

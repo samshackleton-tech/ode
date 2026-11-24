@@ -1,0 +1,49 @@
+fn ode_chacha20_qround_4x
+machine arm64
+i 0 4 .ld1 0 .x1
+i 4 8 .addi .x2 .x1 0x10
+i 8 12 .ld1 1 .x2
+i 12 16 .addi .x2 .x1 0x20
+i 16 20 .ld1 2 .x2
+i 20 24 .addi .x2 .x1 0x30
+i 24 28 .ld1 3 .x2
+i 28 32 .add4s 0 0 1
+i 32 36 .eor 3 3 0
+i 36 40 .rev32 3 3
+i 40 44 .add4s 2 2 3
+i 44 48 .eor 1 1 2
+i 48 52 .ushr 4 1 0x14
+i 52 56 .shl 1 1 0xc
+i 56 60 .orr 1 1 4
+i 60 64 .add4s 0 0 1
+i 64 68 .eor 3 3 0
+i 68 72 .ushr 4 3 0x18
+i 72 76 .shl 3 3 0x8
+i 76 80 .orr 3 3 4
+i 80 84 .add4s 2 2 3
+i 84 88 .eor 1 1 2
+i 88 92 .ushr 4 1 0x19
+i 92 96 .shl 1 1 0x7
+i 96 100 .orr 1 1 4
+i 100 104 .st1 0 .x0
+i 104 108 .addi .x2 .x0 0x10
+i 108 112 .st1 1 .x2
+i 112 116 .addi .x2 .x0 0x20
+i 116 120 .st1 2 .x2
+i 120 124 .addi .x2 .x0 0x30
+i 124 128 .st1 3 .x2
+i 128 132 .ret
+arg out inout 64
+arg state fixed 64
+hidden state
+ensuresw out (call bytes_of (call chacha_qr (call words (name state))))
+stack 0
+def qr_a1 a b = (bin + (name a) (name b))
+def qr_d1 a1 d = (bin >>> (bin ^ (name d) (name a1)) (num 16))
+def qr_c1 c d1 = (bin + (name c) (name d1))
+def qr_b1 b c1 = (bin >>> (bin ^ (name b) (name c1)) (num 20))
+def qr_a2 a1 b1 = (bin + (name a1) (name b1))
+def qr_d2 a2 d1 = (bin >>> (bin ^ (name d1) (name a2)) (num 24))
+def qr_c2 c1 d2 = (bin + (name c1) (name d2))
+def qr_b2 b1 c2 = (bin >>> (bin ^ (name b1) (name c2)) (num 25))
+def chacha_qr s = (let a (list (index (name s) (num 0)) (index (name s) (num 1)) (index (name s) (num 2)) (index (name s) (num 3))) (let b (list (index (name s) (num 4)) (index (name s) (num 5)) (index (name s) (num 6)) (index (name s) (num 7))) (let c (list (index (name s) (num 8)) (index (name s) (num 9)) (index (name s) (num 10)) (index (name s) (num 11))) (let d (list (index (name s) (num 12)) (index (name s) (num 13)) (index (name s) (num 14)) (index (name s) (num 15))) (let a1 (each (call qr_a1 (index (name a) (name i)) (index (name b) (name i))) i (num 0) (num 4)) (let d1 (each (call qr_d1 (index (name a1) (name i)) (index (name d) (name i))) i (num 0) (num 4)) (let c1 (each (call qr_c1 (index (name c) (name i)) (index (name d1) (name i))) i (num 0) (num 4)) (let b1 (each (call qr_b1 (index (name b) (name i)) (index (name c1) (name i))) i (num 0) (num 4)) (let a2 (each (call qr_a2 (index (name a1) (name i)) (index (name b1) (name i))) i (num 0) (num 4)) (let d2 (each (call qr_d2 (index (name a2) (name i)) (index (name d1) (name i))) i (num 0) (num 4)) (let c2 (each (call qr_c2 (index (name c1) (name i)) (index (name d2) (name i))) i (num 0) (num 4)) (let b2 (each (call qr_b2 (index (name b1) (name i)) (index (name c2) (name i))) i (num 0) (num 4)) (bin ++ (bin ++ (bin ++ (name a2) (name b2)) (name c2)) (name d2))))))))))))))

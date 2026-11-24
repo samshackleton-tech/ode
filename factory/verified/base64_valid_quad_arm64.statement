@@ -1,0 +1,106 @@
+fn ode_b64_char_val
+machine arm64
+i 0 4 .cmpi .x0 0x61
+i 4 8 .blo 0x18
+i 8 12 .cmpi .x0 0x7b
+i 12 16 .bhs 0x58
+i 16 20 .subi .x0 .x0 0x47
+i 20 24 .ret
+i 24 28 .cmpi .x0 0x41
+i 28 32 .blo 0x30
+i 32 36 .cmpi .x0 0x5b
+i 36 40 .bhs 0x58
+i 40 44 .subi .x0 .x0 0x41
+i 44 48 .ret
+i 48 52 .cmpi .x0 0x30
+i 52 56 .blo 0x48
+i 56 60 .cmpi .x0 0x3a
+i 60 64 .bhs 0x58
+i 64 68 .addi .x0 .x0 0x4
+i 68 72 .ret
+i 72 76 .cmpi .x0 0x2b
+i 76 80 .beq 0x60
+i 80 84 .cmpi .x0 0x2f
+i 84 88 .beq 0x68
+i 88 92 .movi .x0 0xff
+i 92 96 .ret
+i 96 100 .movi .x0 0x3e
+i 100 104 .ret
+i 104 108 .movi .x0 0x3f
+i 108 112 .ret
+arg b number
+below b 256
+returns (call b64_val (name b))
+stack 0
+fn ode_b64_valid_quad
+machine arm64
+i 0 4 .sub_sp 0x40
+i 4 8 .str64_sp .x30 0x0
+i 8 12 .str64_sp .x19 0x8
+i 12 16 .str64_sp .x20 0x10
+i 16 20 .str64_sp .x21 0x18
+i 20 24 .str64_sp .x22 0x20
+i 24 28 .str64_sp .x23 0x28
+i 28 32 .mov .x19 .x2
+i 32 36 .mov .x20 .x3
+i 36 40 .mov .x21 .x1
+i 40 44 .bl ode_b64_char_val
+i 44 48 .mov .x23 .x0
+i 48 52 .mov .x0 .x21
+i 52 56 .bl ode_b64_char_val
+i 56 60 .mov .x21 .x0
+i 60 64 .mov .x0 .x19
+i 64 68 .bl ode_b64_char_val
+i 68 72 .mov .x22 .x0
+i 72 76 .mov .x0 .x20
+i 76 80 .bl ode_b64_char_val
+i 80 84 .mov .x9 .x0
+i 84 88 .movi .x0 0x0
+i 88 92 .cmpi .x23 0xff
+i 92 96 .beq 0xc4
+i 96 100 .cmpi .x21 0xff
+i 100 104 .beq 0xc4
+i 104 108 .cmpi .x19 0x3d
+i 108 112 .beq 0x90
+i 112 116 .cmpi .x20 0x3d
+i 116 120 .beq 0xac
+i 120 124 .cmpi .x22 0xff
+i 124 128 .beq 0xc4
+i 128 132 .cmpi .x9 0xff
+i 132 136 .beq 0xc4
+i 136 140 .movi .x0 0x1
+i 140 144 .b 0xc4
+i 144 148 .cmpi .x20 0x3d
+i 148 152 .bne 0xc4
+i 152 156 .lsl .x10 .x21 0x3c
+i 156 160 .cmpi .x10 0x0
+i 160 164 .bne 0xc4
+i 164 168 .movi .x0 0x1
+i 168 172 .b 0xc4
+i 172 176 .cmpi .x22 0xff
+i 176 180 .beq 0xc4
+i 180 184 .lsl .x10 .x22 0x3e
+i 184 188 .cmpi .x10 0x0
+i 188 192 .bne 0xc4
+i 192 196 .movi .x0 0x1
+i 196 200 .ldr64_sp .x23 0x28
+i 200 204 .ldr64_sp .x22 0x20
+i 204 208 .ldr64_sp .x21 0x18
+i 208 212 .ldr64_sp .x20 0x10
+i 212 216 .ldr64_sp .x19 0x8
+i 216 220 .ldr64_sp .x30 0x0
+i 220 224 .add_sp 0x40
+i 224 228 .ret
+arg c0 number
+arg c1 number
+arg c2 number
+arg c3 number
+below c0 256
+below c1 256
+below c2 256
+below c3 256
+returns (call b64_valid_quad (name c0) (name c1) (name c2) (name c3))
+stack 64
+def b64_val b = (ifx (ifx (bin >= (name b) (num 65)) (bin <= (name b) (num 90)) (bin == (num 0) (num 1))) (bin - (name b) (num 65)) (ifx (ifx (bin >= (name b) (num 97)) (bin <= (name b) (num 122)) (bin == (num 0) (num 1))) (bin - (name b) (num 71)) (ifx (ifx (bin >= (name b) (num 48)) (bin <= (name b) (num 57)) (bin == (num 0) (num 1))) (bin + (name b) (num 4)) (ifx (bin == (name b) (num 43)) (num 62) (ifx (bin == (name b) (num 47)) (num 63) (num 255))))))
+def b64_quad_ok v0 v1 c2 v2 c3 v3 = (ifx (ifx (bin == (name v0) (num 255)) (bin == (num 0) (num 0)) (bin == (name v1) (num 255))) (num 0) (ifx (bin == (name c2) (num 61)) (ifx (ifx (bin == (name c3) (num 61)) (bin == (bin % (name v1) (num 16)) (num 0)) (bin == (num 0) (num 1))) (num 1) (num 0)) (ifx (bin == (name c3) (num 61)) (ifx (ifx (bin != (name v2) (num 255)) (bin == (bin % (name v2) (num 4)) (num 0)) (bin == (num 0) (num 1))) (num 1) (num 0)) (ifx (ifx (bin != (name v2) (num 255)) (bin != (name v3) (num 255)) (bin == (num 0) (num 1))) (num 1) (num 0)))))
+def b64_valid_quad c0 c1 c2 c3 = (call b64_quad_ok (call b64_val (name c0)) (call b64_val (name c1)) (name c2) (call b64_val (name c2)) (name c3) (call b64_val (name c3)))

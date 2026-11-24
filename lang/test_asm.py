@@ -17,7 +17,7 @@ import asm, kdecode, obj as aobj, odec
 
 # The names that asm.py has a branch for, and some that it has none for (those are refused whatever follows).
 NAMES = ("""nop endbr64 ret vzeroupper prefetcht0 jmp je jz jne jnz jae jb call push pop dec test xor shl shr add sub and or cmp lea movzx mov
-            movq vmovq movups vmovups vmovdqu movaps vmovaps movdqa vmovdqa vmovdqa32 vmovdqu32 pslld psrld pshufb pblendw pshufd vpshufd shufps
+            movq vmovq movups vmovups vmovdqu movaps vmovaps movdqa vmovdqa vmovdqa32 vmovdqu32 pslld vpslld psrld vpsrld pshufb pblendw pshufd vpshufd shufps
             vshufps vpblendd vprord vpbroadcastd vpcmpud vshufi32x4 paddd vpaddd pxor vpxor vpxord por vpor punpckldq vpunpckldq punpckhdq
             vpunpckhdq punpcklqdq vpunpcklqdq vpunpckhqdq""".split())
 STRANGERS = "imul neg not adc sbb inc xchg bswap cmovb setb movsx movsxd movdqu vmovdqu8 vmovdqu64 vmovdqa64 vpxorq vpord pand".split()
@@ -253,7 +253,7 @@ class Refused(unittest.TestCase):
                            ("vmovdqu32 [rdi + 0], xmm1", "`xmm1` where x86.tab's `vmovdqu32 [B64 + N], zmmX` has a zmm register"),
                            ("movups [rdi + 0], zmm1", "`zmm1` where x86.tab's `vmovdqu [B64 + N], xmmX` has an xmm register"),
                            ("vpbroadcastd xmm1, eax", "`xmm1` where x86.tab's `vpbroadcastd zmmX, S32` has a zmm register"),
-                           ("pslld zmm1, 5", "`zmm1` where x86.tab's `pslld xmmX, I` has an xmm register"),
+                           ("pslld zmm1, 5", "`zmm1` where x86.tab's `vpslld xmmX, xmmY, I` has an xmm register"),
                            ("vpaddd xmm1, ymm2, zmm3", "`ymm2` where x86.tab's `vpaddd xmmX, xmmY, xmmZ` has an xmm register"),
                            ("mov rax, rcx, rdx", "3 operands where x86.tab's `mov D64, S64` has 2"),
                            ("vpaddd zmm1, zmm2, [rdi + 64]", "its memory has an index register"),

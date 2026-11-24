@@ -1,0 +1,19 @@
+target x86_64
+
+fn v_arm64_rd_valid as "ode_v_arm64_rd_valid" {
+  reg w = rdi
+  reg rd = rax
+
+  // Extract low 5 bits: w % 32
+  rd := w
+  and rd, 31
+
+  // Compare against 31: return 1 if rd < 31 else 0
+  cmp rd, 31
+  if ult {
+    rax := 1
+  } else {
+    rax := 0
+  }
+  ret
+}

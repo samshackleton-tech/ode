@@ -1,0 +1,32 @@
+for ode_b64_encode_char
+t live
+t live
+t open 0
+t lt
+t live
+t live
+t open 0
+t ge
+t lt
+t live
+t live
+t open 0
+t ge
+t ge
+t lt
+t live
+t live
+t dead
+p 1 0 70
+s 0 1 1 1 1
+q
+t open 0
+t ge
+t ge
+t ge
+t eq
+t open 0
+t ge
+t ge
+t ge
+t gt

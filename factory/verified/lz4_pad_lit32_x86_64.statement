@@ -1,0 +1,23 @@
+fn ode_lz4_pad_lit32
+i 0 7 .mov 64 (.reg .rcx) (.imm 0x0)
+i 7 11 .cmp 64 (.reg .rcx) (.imm 0x20)
+i 11 13 .je 0x2D
+i 13 17 .lea_idx .r10 .rdi .rcx 0x0
+i 17 20 .cmp 64 (.reg .rcx) (.reg .rdx)
+i 20 22 .jae 0x23
+i 22 26 .lea_idx .r9 .rsi .rcx 0x0
+i 26 30 .movzx8 .r8 (.mem .r9 0x0)
+i 30 33 .mov 8 (.mem .r10 0x0) (.reg .r8)
+i 33 35 .jmp 0x27
+i 35 39 .mov 8 (.mem .r10 0x0) (.imm 0x0)
+i 39 43 .add 64 (.reg .rcx) (.imm 0x1)
+i 43 45 .jmp 0x7
+i 45 46 .ret
+arg out out 32
+arg src bytes n
+arg n number
+below n 33
+hidden src
+ensures out (num 0) (num 32) (call pad32 (name src))
+stack 0
+def pad32 src = (each (ifx (bin < (name i) (call len (name src))) (index (name src) (name i)) (num 0)) i (num 0) (num 32))

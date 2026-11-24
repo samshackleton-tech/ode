@@ -1,0 +1,21 @@
+fn ode_v_row_all_zero
+i 0 7 .mov 64 (.reg .rcx) (.imm 0x0)
+i 7 10 .cmp 64 (.reg .rcx) (.reg .rsi)
+i 10 12 .jb 0x14
+i 12 19 .mov 64 (.reg .rax) (.imm 0x1)
+i 19 20 .ret
+i 20 23 .mov 64 (.reg .rdx) (.reg .rdi)
+i 23 26 .add 64 (.reg .rdx) (.reg .rcx)
+i 26 29 .movzx8 .rax (.mem .rdx 0x0)
+i 29 33 .cmp 64 (.reg .rax) (.imm 0x0)
+i 33 35 .je 0x2B
+i 35 42 .mov 64 (.reg .rax) (.imm 0x0)
+i 42 43 .ret
+i 43 47 .add 64 (.reg .rcx) (.imm 0x1)
+i 47 49 .jmp 0x7
+i 49 50 .ret
+arg row bytes n
+arg n number
+returns (call row_zero_from (name row) (num 0))
+stack 0
+def row_zero_from a at = (ifx (bin == (name at) (call len (name a))) (num 1) (ifx (bin != (index (name a) (name at)) (num 0)) (num 0) (call row_zero_from (name a) (bin + (name at) (num 1)))))

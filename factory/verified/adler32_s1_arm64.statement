@@ -1,0 +1,22 @@
+fn ode_adler32_s1
+machine arm64
+i 0 4 .movi .x3 0x1
+i 4 8 .movi .x2 0x0
+i 8 12 .movi .x5 0xfff1
+i 12 16 .cmp .x2 .x1
+i 16 20 .beq 0x34
+i 20 24 .add .x6 .x0 .x2
+i 24 28 .ldrb .x4 .x6 0x0
+i 28 32 .add .x3 .x3 .x4
+i 32 36 .cmp .x3 .x5
+i 36 40 .blo 0x2c
+i 40 44 .sub .x3 .x3 .x5
+i 44 48 .addi .x2 .x2 0x1
+i 48 52 .b 0xc
+i 52 56 .mov .x0 .x3
+i 56 60 .ret
+arg input bytes n
+arg n number
+returns (call s1 (name input) (name n))
+stack 0
+def s1 bytes place = (ifx (bin == (name place) (num 0)) (num 1) (bin % (bin + (call s1 (name bytes) (bin - (name place) (num 1))) (index (name bytes) (bin - (name place) (num 1)))) (num 65521)))

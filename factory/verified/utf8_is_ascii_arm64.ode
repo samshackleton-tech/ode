@@ -1,0 +1,34 @@
+target arm64
+
+fn utf8_is_ascii as "ode_utf8_is_ascii" {
+  reg base = x0
+  reg count = x1
+  reg idx = x2
+  reg addr = x3
+  reg cur = w4
+  reg cur64 = x4
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact ascii_from(input, 0) == ascii_from(input, i)
+      decreases n - i
+    }
+    cmp idx, count
+    if uge {
+      x0 := 1
+      ret
+    }
+    add addr, base, idx
+    ldrb cur, [addr, 0]
+    cmp cur64, 128
+    if uge {
+      x0 := 0
+      ret
+    }
+    add idx, idx, 1
+  }
+}

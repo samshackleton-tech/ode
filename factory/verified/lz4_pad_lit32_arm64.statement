@@ -1,0 +1,25 @@
+fn ode_lz4_pad_lit32
+machine arm64
+i 0 4 .movi .x3 0x0
+i 4 8 .movi32 .x7 0x0
+i 8 12 .cmpi .x3 0x20
+i 12 16 .bne 0x14
+i 16 20 .ret
+i 20 24 .add .x5 .x0 .x3
+i 24 28 .cmp .x3 .x2
+i 28 32 .bhs 0x30
+i 32 36 .add .x4 .x1 .x3
+i 36 40 .ldrb .x6 .x4 0x0
+i 40 44 .strb .x6 .x5 0x0
+i 44 48 .b 0x34
+i 48 52 .strb .x7 .x5 0x0
+i 52 56 .addi .x3 .x3 0x1
+i 56 60 .b 0x8
+arg out out 32
+arg src bytes n
+arg n number
+below n 33
+hidden src
+ensures out (num 0) (num 32) (call pad32 (name src))
+stack 0
+def pad32 src = (each (ifx (bin < (name i) (call len (name src))) (index (name src) (name i)) (num 0)) i (num 0) (num 32))

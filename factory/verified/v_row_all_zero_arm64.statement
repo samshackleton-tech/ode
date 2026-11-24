@@ -1,0 +1,20 @@
+fn ode_v_row_all_zero
+machine arm64
+i 0 4 .movi .x2 0x0
+i 4 8 .cmp .x2 .x1
+i 8 12 .blo 0x14
+i 12 16 .movi .x0 0x1
+i 16 20 .ret
+i 20 24 .add .x3 .x0 .x2
+i 24 28 .ldrb .x4 .x3 0x0
+i 28 32 .cmpi .x4 0x0
+i 32 36 .beq 0x2c
+i 36 40 .movi .x0 0x0
+i 40 44 .ret
+i 44 48 .addi .x2 .x2 0x1
+i 48 52 .b 0x4
+arg row bytes n
+arg n number
+returns (call row_zero_from (name row) (num 0))
+stack 0
+def row_zero_from a at = (ifx (bin == (name at) (call len (name a))) (num 1) (ifx (bin != (index (name a) (name at)) (num 0)) (num 0) (call row_zero_from (name a) (bin + (name at) (num 1)))))

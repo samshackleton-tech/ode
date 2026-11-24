@@ -1,0 +1,32 @@
+target x86_64
+
+fn utf8_is_ascii as "ode_utf8_is_ascii" {
+  reg base = rdi
+  reg count = rsi
+  reg idx = rcx
+  reg cur = rdx
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact ascii_from(input, 0) == ascii_from(input, i)
+      decreases n - i
+    }
+    cmp idx, count
+    break if uge
+    mov rdx, base
+    add rdx, idx
+    movzx edx, byte ptr [rdx]
+    cmp rdx, 128
+    if uge {
+      rax := 0
+      ret
+    }
+    add idx, 1
+  }
+  rax := 1
+  ret
+}

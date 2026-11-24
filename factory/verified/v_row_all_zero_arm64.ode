@@ -1,0 +1,34 @@
+target arm64
+
+fn v_row_all_zero as "ode_v_row_all_zero" {
+  reg base = x0
+  reg count = x1
+  reg idx = x2
+  reg addr = x3
+  reg cur = w4
+  reg cur64 = x4
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact row_zero_from(row, 0) == row_zero_from(row, i)
+      decreases n - i
+    }
+    cmp idx, count
+    if uge {
+      x0 := 1
+      ret
+    }
+    add addr, base, idx
+    ldrb cur, [addr, 0]
+    cmp cur64, 0
+    if ne {
+      x0 := 0
+      ret
+    }
+    add idx, idx, 1
+  }
+}

@@ -1,0 +1,38 @@
+target arm64
+
+fn lz4_ext_len as "ode_lz4_ext_len" {
+  reg buf = x0
+  reg n = x1
+  reg at = x2
+  reg acc = x3
+  reg cur_byte = w4
+  reg cur_byte64 = x4
+
+  at := 0
+  acc := 15
+  loop {
+    place {
+      name at = at
+      name acc = acc
+      fact at <= n
+      fact acc == 15 + 255 * at
+      fact lz4_len_from(buf, 0, 15) == lz4_len_from(buf, at, acc)
+      decreases n - at
+    }
+    cmp at, n
+    if eq {
+      x0 := 0
+      ret
+    }
+    add x5, buf, at
+    ldrb cur_byte, [x5, 0]
+    cmp cur_byte64, 255
+    if eq {
+      add acc, acc, 255
+      add at, at, 1
+      continue
+    }
+    add x0, acc, cur_byte64
+    ret
+  }
+}

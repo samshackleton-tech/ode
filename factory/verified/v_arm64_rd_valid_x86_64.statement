@@ -1,0 +1,13 @@
+fn ode_v_arm64_rd_valid
+i 0 3 .mov 64 (.reg .rax) (.reg .rdi)
+i 3 7 .and 64 (.reg .rax) (.imm 0x1F)
+i 7 11 .cmp 64 (.reg .rax) (.imm 0x1F)
+i 11 13 .jae 0x16
+i 13 20 .mov 64 (.reg .rax) (.imm 0x1)
+i 20 22 .jmp 0x1D
+i 22 29 .mov 64 (.reg .rax) (.imm 0x0)
+i 29 30 .ret
+arg w number
+returns (call rd_valid (name w))
+stack 0
+def rd_valid w = (ifx (bin < (bin % (name w) (num 32)) (num 31)) (num 1) (num 0))

@@ -1,0 +1,106 @@
+target x86_64
+
+fn b64_char_val as "ode_b64_char_val" {
+  cmp rdi, 65
+  jb @h_low
+  cmp rdi, 91
+  jb @h_upper
+  cmp rdi, 97
+  jb @h_bad
+  cmp rdi, 123
+  jb @h_lower
+  jmp @h_bad
+@h_upper:
+  mov rax, rdi
+  sub rax, 65
+  jmp @h_done
+@h_lower:
+  mov rax, rdi
+  sub rax, 71
+  jmp @h_done
+@h_low:
+  cmp rdi, 43
+  je @h_plus
+  cmp rdi, 47
+  je @h_slash
+  cmp rdi, 48
+  jb @h_bad
+  cmp rdi, 58
+  jb @h_digit
+  jmp @h_bad
+@h_digit:
+  mov rax, rdi
+  add rax, 4
+  jmp @h_done
+@h_plus:
+  mov rax, 62
+  jmp @h_done
+@h_slash:
+  mov rax, 63
+  jmp @h_done
+@h_bad:
+  mov rax, 255
+@h_done:
+  ret
+}
+
+fn b64_valid_quad as "ode_b64_valid_quad" {
+  push rbx
+  push r12
+  push r13
+  push r14
+  push r15
+  mov r12, rsi
+  mov r13, rdx
+  mov r14, rcx
+  call ode_b64_char_val
+  mov rbx, rax
+  mov rdi, r12
+  call ode_b64_char_val
+  mov r15, rax
+  mov rdi, r13
+  call ode_b64_char_val
+  mov r12, rax
+  mov rdi, r14
+  call ode_b64_char_val
+  cmp rbx, 255
+  je @q_fail
+  cmp r15, 255
+  je @q_fail
+  cmp r13, 61
+  jne @q_not_c2
+  cmp r14, 61
+  jne @q_fail
+  mov rcx, r15
+  and rcx, 15
+  cmp rcx, 0
+  jne @q_fail
+  jmp @q_ok
+@q_not_c2:
+  cmp r14, 61
+  jne @q_plain
+  cmp r12, 255
+  je @q_fail
+  mov rcx, r12
+  and rcx, 3
+  cmp rcx, 0
+  jne @q_fail
+  jmp @q_ok
+@q_plain:
+  cmp r12, 255
+  je @q_fail
+  cmp rax, 255
+  je @q_fail
+@q_ok:
+  mov rax, 1
+  jmp @q_done
+@q_fail:
+  xor rax, rax
+@q_done:
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbx
+  ret
+}

@@ -1,0 +1,45 @@
+fn ode_chacha20_qround_4x
+i 0 4 .xloadu 0 .rsi 0x0
+i 4 9 .xloadu 1 .rsi 0x10
+i 9 14 .xloadu 2 .rsi 0x20
+i 14 19 .xloadu 3 .rsi 0x30
+i 19 23 .xpaddd 0 0 1
+i 23 27 .xpxor 3 3 0
+i 27 32 .xpsrld 4 3 16
+i 32 37 .xpslld 5 3 16
+i 37 41 .xpor 3 4 5
+i 41 45 .xpaddd 2 2 3
+i 45 49 .xpxor 1 1 2
+i 49 54 .xpsrld 4 1 20
+i 54 59 .xpslld 5 1 12
+i 59 63 .xpor 1 4 5
+i 63 67 .xpaddd 0 0 1
+i 67 71 .xpxor 3 3 0
+i 71 76 .xpsrld 4 3 24
+i 76 81 .xpslld 5 3 8
+i 81 85 .xpor 3 4 5
+i 85 89 .xpaddd 2 2 3
+i 89 93 .xpxor 1 1 2
+i 93 98 .xpsrld 4 1 25
+i 98 103 .xpslld 5 1 7
+i 103 107 .xpor 1 4 5
+i 107 111 .xstoreu .rdi 0x0 0
+i 111 116 .xstoreu .rdi 0x10 1
+i 116 121 .xstoreu .rdi 0x20 2
+i 121 126 .xstoreu .rdi 0x30 3
+i 126 127 .ret
+arg out inout 64
+arg state fixed 64
+needs avx
+hidden state
+ensuresw out (call bytes_of (call chacha_qr (call words (name state))))
+stack 0
+def qr_a1 a b = (bin + (name a) (name b))
+def qr_d1 a1 d = (bin >>> (bin ^ (name d) (name a1)) (num 16))
+def qr_c1 c d1 = (bin + (name c) (name d1))
+def qr_b1 b c1 = (bin >>> (bin ^ (name b) (name c1)) (num 20))
+def qr_a2 a1 b1 = (bin + (name a1) (name b1))
+def qr_d2 a2 d1 = (bin >>> (bin ^ (name d1) (name a2)) (num 24))
+def qr_c2 c1 d2 = (bin + (name c1) (name d2))
+def qr_b2 b1 c2 = (bin >>> (bin ^ (name b1) (name c2)) (num 25))
+def chacha_qr s = (let a (list (index (name s) (num 0)) (index (name s) (num 1)) (index (name s) (num 2)) (index (name s) (num 3))) (let b (list (index (name s) (num 4)) (index (name s) (num 5)) (index (name s) (num 6)) (index (name s) (num 7))) (let c (list (index (name s) (num 8)) (index (name s) (num 9)) (index (name s) (num 10)) (index (name s) (num 11))) (let d (list (index (name s) (num 12)) (index (name s) (num 13)) (index (name s) (num 14)) (index (name s) (num 15))) (let a1 (each (call qr_a1 (index (name a) (name i)) (index (name b) (name i))) i (num 0) (num 4)) (let d1 (each (call qr_d1 (index (name a1) (name i)) (index (name d) (name i))) i (num 0) (num 4)) (let c1 (each (call qr_c1 (index (name c) (name i)) (index (name d1) (name i))) i (num 0) (num 4)) (let b1 (each (call qr_b1 (index (name b) (name i)) (index (name c1) (name i))) i (num 0) (num 4)) (let a2 (each (call qr_a2 (index (name a1) (name i)) (index (name b1) (name i))) i (num 0) (num 4)) (let d2 (each (call qr_d2 (index (name a2) (name i)) (index (name d1) (name i))) i (num 0) (num 4)) (let c2 (each (call qr_c2 (index (name c1) (name i)) (index (name d2) (name i))) i (num 0) (num 4)) (let b2 (each (call qr_b2 (index (name b1) (name i)) (index (name c2) (name i))) i (num 0) (num 4)) (bin ++ (bin ++ (bin ++ (name a2) (name b2)) (name c2)) (name d2))))))))))))))

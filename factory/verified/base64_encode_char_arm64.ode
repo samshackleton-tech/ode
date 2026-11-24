@@ -1,0 +1,39 @@
+target arm64
+
+fn b64_encode_char as "ode_b64_encode_char" {
+  reg v = x0
+  reg tmp = x1
+  reg result = x0
+
+  // v < 26 -> 'A' + v
+  cmp v, 26
+  if lo {
+    add result, v, 65
+    ret
+  }
+
+  // v < 52 -> 'a' + (v - 26) = v + 71
+  cmp v, 52
+  if lo {
+    add result, v, 71
+    ret
+  }
+
+  // v < 62 -> '0' + (v - 52) = v - 4
+  cmp v, 62
+  if lo {
+    sub result, v, 4
+    ret
+  }
+
+  // v == 62 -> '+'
+  cmp v, 62
+  if eq {
+    mov result, 43
+    ret
+  }
+
+  // v == 63 -> '/'
+  mov result, 47
+  ret
+}

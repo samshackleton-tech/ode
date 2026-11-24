@@ -1,0 +1,126 @@
+target arm64
+
+fn b64_char_val as "ode_b64_char_val" {
+  cmp x0, 97
+  b.lo @below97
+  cmp x0, 123
+  b.hs @bad
+  sub x0, x0, 71
+  ret
+
+@below97:
+  cmp x0, 65
+  b.lo @below65
+  cmp x0, 91
+  b.hs @bad
+  sub x0, x0, 65
+  ret
+
+@below65:
+  cmp x0, 48
+  b.lo @lowpunct
+  cmp x0, 58
+  b.hs @bad
+  add x0, x0, 4
+  ret
+
+@lowpunct:
+  cmp x0, 43
+  b.eq @plus
+  cmp x0, 47
+  b.eq @slash
+
+@bad:
+  mov x0, 255
+  ret
+
+@plus:
+  mov x0, 62
+  ret
+
+@slash:
+  mov x0, 63
+  ret
+}
+
+fn b64_valid_quad as "ode_b64_valid_quad" {
+  frame {
+    saved_lr: 1 * u64
+    s19: 1 * u64
+    s20: 1 * u64
+    s21: 1 * u64
+    s22: 1 * u64
+    s23: 1 * u64
+    pad: 16
+  }
+
+  sub sp, sp, frame.size
+  saved_lr[0] := x30
+  s19[0] := x19
+  s20[0] := x20
+  s21[0] := x21
+  s22[0] := x22
+  s23[0] := x23
+
+  mov x19, x2
+  mov x20, x3
+  mov x21, x1
+
+  bl ode_b64_char_val
+  mov x23, x0
+
+  mov x0, x21
+  bl ode_b64_char_val
+  mov x21, x0
+
+  mov x0, x19
+  bl ode_b64_char_val
+  mov x22, x0
+
+  mov x0, x20
+  bl ode_b64_char_val
+  mov x9, x0
+
+  mov x0, 0
+  cmp x23, 255
+  b.eq @done
+  cmp x21, 255
+  b.eq @done
+  cmp x19, 61
+  b.eq @c2pad
+  cmp x20, 61
+  b.eq @c3pad
+  cmp x22, 255
+  b.eq @done
+  cmp x9, 255
+  b.eq @done
+  mov x0, 1
+  b @done
+
+@c2pad:
+  cmp x20, 61
+  b.ne @done
+  lsl x10, x21, 60
+  cmp x10, 0
+  b.ne @done
+  mov x0, 1
+  b @done
+
+@c3pad:
+  cmp x22, 255
+  b.eq @done
+  lsl x10, x22, 62
+  cmp x10, 0
+  b.ne @done
+  mov x0, 1
+
+@done:
+  x23 := s23[0]
+  x22 := s22[0]
+  x21 := s21[0]
+  x20 := s20[0]
+  x19 := s19[0]
+  x30 := saved_lr[0]
+  add sp, sp, frame.size
+  ret
+}

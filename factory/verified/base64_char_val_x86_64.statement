@@ -1,0 +1,51 @@
+fn ode_b64_char_val
+i 0 4 .cmp 64 (.reg .rdi) (.imm 0x41)
+i 4 6 .jae 0x8
+i 6 8 .jmp 0x1E
+i 8 12 .cmp 64 (.reg .rdi) (.imm 0x5A)
+i 12 14 .jb 0x16
+i 14 18 .cmp 64 (.reg .rdi) (.imm 0x5B)
+i 18 20 .jb 0x16
+i 20 22 .jmp 0x1E
+i 22 25 .mov 64 (.reg .rax) (.reg .rdi)
+i 25 29 .sub 64 (.reg .rax) (.imm 0x41)
+i 29 30 .ret
+i 30 34 .cmp 64 (.reg .rdi) (.imm 0x61)
+i 34 36 .jae 0x26
+i 36 38 .jmp 0x3C
+i 38 42 .cmp 64 (.reg .rdi) (.imm 0x7A)
+i 42 44 .jb 0x34
+i 44 48 .cmp 64 (.reg .rdi) (.imm 0x7B)
+i 48 50 .jb 0x34
+i 50 52 .jmp 0x3C
+i 52 55 .mov 64 (.reg .rax) (.reg .rdi)
+i 55 59 .sub 64 (.reg .rax) (.imm 0x47)
+i 59 60 .ret
+i 60 64 .cmp 64 (.reg .rdi) (.imm 0x30)
+i 64 66 .jae 0x44
+i 66 68 .jmp 0x5A
+i 68 72 .cmp 64 (.reg .rdi) (.imm 0x39)
+i 72 74 .jb 0x52
+i 74 78 .cmp 64 (.reg .rdi) (.imm 0x3A)
+i 78 80 .jb 0x52
+i 80 82 .jmp 0x5A
+i 82 85 .mov 64 (.reg .rax) (.reg .rdi)
+i 85 89 .add 64 (.reg .rax) (.imm 0x4)
+i 89 90 .ret
+i 90 94 .cmp 64 (.reg .rdi) (.imm 0x2B)
+i 94 96 .je 0x62
+i 96 98 .jmp 0x6A
+i 98 105 .mov 64 (.reg .rax) (.imm 0x3E)
+i 105 106 .ret
+i 106 110 .cmp 64 (.reg .rdi) (.imm 0x2F)
+i 110 112 .je 0x72
+i 112 114 .jmp 0x7A
+i 114 121 .mov 64 (.reg .rax) (.imm 0x3F)
+i 121 122 .ret
+i 122 129 .mov 64 (.reg .rax) (.imm 0xFF)
+i 129 130 .ret
+arg b number
+below b 256
+returns (call b64_val (name b))
+stack 0
+def b64_val b = (ifx (ifx (bin >= (name b) (num 65)) (bin <= (name b) (num 90)) (bin == (num 0) (num 1))) (bin - (name b) (num 65)) (ifx (ifx (bin >= (name b) (num 97)) (bin <= (name b) (num 122)) (bin == (num 0) (num 1))) (bin - (name b) (num 71)) (ifx (ifx (bin >= (name b) (num 48)) (bin <= (name b) (num 57)) (bin == (num 0) (num 1))) (bin + (name b) (num 4)) (ifx (bin == (name b) (num 43)) (num 62) (ifx (bin == (name b) (num 47)) (num 63) (num 255))))))

@@ -1,0 +1,57 @@
+target arm64
+
+fn chacha20_qround_4x as "ode_chacha20_qround_4x" {
+  // Load the four 16-byte rows into vector registers
+  ld1 {v0.4s}, [x1]
+  add x2, x1, 16
+  ld1 {v1.4s}, [x2]
+  add x2, x1, 32
+  ld1 {v2.4s}, [x2]
+  add x2, x1, 48
+  ld1 {v3.4s}, [x2]
+
+  // a += b
+  add v0.4s, v0.4s, v1.4s
+
+  // d = (d ^ a) >>> 16
+  eor v3.16b, v3.16b, v0.16b
+  rev32 v3.8h, v3.8h
+
+  // c += d
+  add v2.4s, v2.4s, v3.4s
+
+  // b = (b ^ c) >>> 20
+  eor v1.16b, v1.16b, v2.16b
+  ushr v4.4s, v1.4s, 20
+  shl v1.4s, v1.4s, 12
+  orr v1.16b, v1.16b, v4.16b
+
+  // a += b
+  add v0.4s, v0.4s, v1.4s
+
+  // d = (d ^ a) >>> 24
+  eor v3.16b, v3.16b, v0.16b
+  ushr v4.4s, v3.4s, 24
+  shl v3.4s, v3.4s, 8
+  orr v3.16b, v3.16b, v4.16b
+
+  // c += d
+  add v2.4s, v2.4s, v3.4s
+
+  // b = (b ^ c) >>> 25
+  eor v1.16b, v1.16b, v2.16b
+  ushr v4.4s, v1.4s, 25
+  shl v1.4s, v1.4s, 7
+  orr v1.16b, v1.16b, v4.16b
+
+  // Store results: a, b, c, d
+  st1 {v0.4s}, [x0]
+  add x2, x0, 16
+  st1 {v1.4s}, [x2]
+  add x2, x0, 32
+  st1 {v2.4s}, [x2]
+  add x2, x0, 48
+  st1 {v3.4s}, [x2]
+
+  ret
+}

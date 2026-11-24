@@ -61,6 +61,8 @@ lsr_ri       | lsr D64, S64, I              | .lsr .D .S I         | D = shr64(S
              = 1 10 100110 1 IIIIII 111111 SSSSS DDDDD
 orr_rrr      | orr D64, S64, P64            | .orr64 .D .S .P      | D = or64(S, P)
              = 1 01 01010 00 0 PPPPP 000000 SSSSS DDDDD
+and_rrr      | and D64, S64, P64            | .and64 .D .S .P      | D = and64(S, P)
+             = 1 00 01010 00 0 PPPPP 000000 SSSSS DDDDD
 
 # -- the stack pointer
 add_sp       | add sp, sp, I                | .add_sp I            | sp = add64(sp, I)

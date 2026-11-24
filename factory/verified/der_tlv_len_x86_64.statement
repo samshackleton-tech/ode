@@ -1,0 +1,82 @@
+fn ode_der_tlv_len
+i 0 7 .mov 64 (.reg .rax) (.imm 0x0)
+i 7 11 .cmp 64 (.reg .rsi) (.imm 0x2)
+i 11 13 .jae 0xE
+i 13 14 .ret
+i 14 17 .movzx8 .rdx (.mem .rdi 0x0)
+i 17 20 .mov 64 (.reg .r10) (.reg .rdx)
+i 20 24 .and 64 (.reg .r10) (.imm 0x1F)
+i 24 28 .cmp 64 (.reg .r10) (.imm 0x1F)
+i 28 30 .jne 0x1F
+i 30 31 .ret
+i 31 35 .movzx8 .rcx (.mem .rdi 0x1)
+i 35 42 .cmp 64 (.reg .rcx) (.imm 0x80)
+i 42 44 .jae 0x53
+i 44 51 .mov 64 (.reg .r9) (.imm 0x2)
+i 51 54 .mov 64 (.reg .r8) (.reg .rcx)
+i 54 57 .mov 64 (.reg .r10) (.reg .rsi)
+i 57 60 .sub 64 (.reg .r10) (.reg .r9)
+i 60 63 .cmp 64 (.reg .r8) (.reg .r10)
+i 63 66 .cmp 64 (.reg .r10) (.reg .r8)
+i 66 68 .jae 0x4C
+i 68 75 .mov 64 (.reg .rax) (.imm 0x0)
+i 75 76 .ret
+i 76 79 .mov 64 (.reg .rax) (.reg .r9)
+i 79 82 .add 64 (.reg .rax) (.reg .r8)
+i 82 83 .ret
+i 83 90 .cmp 64 (.reg .rcx) (.imm 0x81)
+i 90 92 .jne 0xA4
+i 92 96 .cmp 64 (.reg .rsi) (.imm 0x3)
+i 96 98 .jae 0x6A
+i 98 105 .mov 64 (.reg .rax) (.imm 0x0)
+i 105 106 .ret
+i 106 111 .movzx8 .r8 (.mem .rdi 0x2)
+i 111 118 .cmp 64 (.reg .r8) (.imm 0x80)
+i 118 120 .jae 0x80
+i 120 127 .mov 64 (.reg .rax) (.imm 0x0)
+i 127 128 .ret
+i 128 135 .mov 64 (.reg .r9) (.imm 0x3)
+i 135 138 .mov 64 (.reg .r10) (.reg .rsi)
+i 138 141 .sub 64 (.reg .r10) (.reg .r9)
+i 141 144 .cmp 64 (.reg .r8) (.reg .r10)
+i 144 147 .cmp 64 (.reg .r10) (.reg .r8)
+i 147 149 .jae 0x9D
+i 149 156 .mov 64 (.reg .rax) (.imm 0x0)
+i 156 157 .ret
+i 157 160 .mov 64 (.reg .rax) (.reg .r9)
+i 160 163 .add 64 (.reg .rax) (.reg .r8)
+i 163 164 .ret
+i 164 171 .cmp 64 (.reg .rcx) (.imm 0x82)
+i 171 173 .jne 0xFE
+i 173 177 .cmp 64 (.reg .rsi) (.imm 0x4)
+i 177 179 .jae 0xBB
+i 179 186 .mov 64 (.reg .rax) (.imm 0x0)
+i 186 187 .ret
+i 187 192 .movzx8 .r8 (.mem .rdi 0x2)
+i 192 196 .cmp 64 (.reg .r8) (.imm 0x1)
+i 196 198 .jae 0xCE
+i 198 205 .mov 64 (.reg .rax) (.imm 0x0)
+i 205 206 .ret
+i 206 211 .movzx8 .r10 (.mem .rdi 0x3)
+i 211 215 .shl64 .r8 8
+i 215 218 .add 64 (.reg .r8) (.reg .r10)
+i 218 225 .mov 64 (.reg .r9) (.imm 0x4)
+i 225 228 .mov 64 (.reg .r10) (.reg .rsi)
+i 228 231 .sub 64 (.reg .r10) (.reg .r9)
+i 231 234 .cmp 64 (.reg .r8) (.reg .r10)
+i 234 237 .cmp 64 (.reg .r10) (.reg .r8)
+i 237 239 .jae 0xF7
+i 239 246 .mov 64 (.reg .rax) (.imm 0x0)
+i 246 247 .ret
+i 247 250 .mov 64 (.reg .rax) (.reg .r9)
+i 250 253 .add 64 (.reg .rax) (.reg .r8)
+i 253 254 .ret
+i 254 261 .mov 64 (.reg .rax) (.imm 0x0)
+i 261 262 .ret
+arg buf bytes n
+arg n number
+returns (call der_tlv_size (name buf) (num 0))
+stack 0
+def der_tlv_l1 buf at = (ifx (bin > (bin + (name at) (num 3)) (call len (name buf))) (num 0) (ifx (ifx (bin >= (index (name buf) (bin + (name at) (num 2))) (num 128)) (bin <= (bin + (bin + (name at) (num 3)) (index (name buf) (bin + (name at) (num 2)))) (call len (name buf))) (bin == (num 0) (num 1))) (bin + (num 3) (index (name buf) (bin + (name at) (num 2)))) (num 0)))
+def der_tlv_l2 buf at = (ifx (bin > (bin + (name at) (num 4)) (call len (name buf))) (num 0) (ifx (ifx (bin >= (index (name buf) (bin + (name at) (num 2))) (num 1)) (bin <= (bin + (bin + (bin + (name at) (num 4)) (bin * (num 256) (index (name buf) (bin + (name at) (num 2))))) (index (name buf) (bin + (name at) (num 3)))) (call len (name buf))) (bin == (num 0) (num 1))) (bin + (bin + (num 4) (bin * (num 256) (index (name buf) (bin + (name at) (num 2))))) (index (name buf) (bin + (name at) (num 3)))) (num 0)))
+def der_tlv_size buf at = (ifx (bin > (bin + (name at) (num 2)) (call len (name buf))) (num 0) (ifx (bin == (bin % (index (name buf) (name at)) (num 32)) (num 31)) (num 0) (ifx (bin < (index (name buf) (bin + (name at) (num 1))) (num 128)) (ifx (bin <= (bin + (bin + (name at) (num 2)) (index (name buf) (bin + (name at) (num 1)))) (call len (name buf))) (bin + (num 2) (index (name buf) (bin + (name at) (num 1)))) (num 0)) (ifx (bin == (index (name buf) (bin + (name at) (num 1))) (num 129)) (call der_tlv_l1 (name buf) (name at)) (ifx (bin == (index (name buf) (bin + (name at) (num 1))) (num 130)) (call der_tlv_l2 (name buf) (name at)) (num 0))))))

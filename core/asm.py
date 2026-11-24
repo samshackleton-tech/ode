@@ -49,7 +49,7 @@ VEC512 = {
 CLASS = {"r64": "a register of 64 bits", "r32": "a register of 32 bits", "r8": "a register of 8 bits", "al": "al", "xmm": "an xmm register",
          "zmm": "a zmm register", "zmm{k}": "a zmm register under a mask", "k": "a mask register", "number": "a number", "memory": "memory"}
 MOVED = {"r64": "qword", "r32": "dword", "r8": "byte", "xmm": "xmmword", "zmm": "zmmword", "zmm{k}": "zmmword"}
-TWO = {m for m, (_, k) in VEC128.items() if k == "L"} | {"shufps"}
+TWO = {m for m, (_, k) in VEC128.items() if k == "L"} | {"shufps", "pslld", "psrld"}
 WORD = r"(?:(byte|word|dword|qword|xmmword|ymmword|zmmword)\s+ptr\s*)?"
 PICKED = [None]                    # the row that pick() last took
 
@@ -314,7 +314,11 @@ def write(line, mn, ops):
         _, base, idx, disp = parse_mem(ops[0])
         if idx is not None: raise ValueError(f"indexed 512-bit store: {line}")
         return ("fixed", pick("store512a" if aligned else "store512", {"X": int(ops[1][3:]), "B": base, "N": disp}))
-    if mn in ("pslld", "psrld"): return ("fixed", pick(f"{mn}128", {"X": int(ops[0][3:]), "I": num(ops[1])}))
+    if mn in ("pslld", "psrld"):
+        x = int(ops[0][3:])
+        return ("fixed", pick(f"{mn}128", {"X": x, "Y": x, "I": num(ops[1])}, lambda w: w.kind == "L"))
+    if mn in ("vpslld", "vpsrld"):
+        return ("fixed", pick(f"{mn[1:]}128", {"X": int(ops[0][3:]), "Y": int(ops[1][3:]), "I": num(ops[2])}, lambda w: w.kind == "V"))
     if mn == "pshufb": return ("fixed", pick("pshufb128", {"X": int(ops[0][3:]), "Z": int(ops[1][3:])}))
     if mn == "pblendw": return ("fixed", pick("pblendw128", {"X": int(ops[0][3:]), "Z": int(ops[1][3:]), "I": num(ops[2])}))
     if mn in ("pshufd", "vpshufd"):

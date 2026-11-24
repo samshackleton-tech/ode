@@ -194,7 +194,7 @@ def written(line):
     for st in row.effect:
         if st[0] in ("call", "call_link"):
             raise ValueError("a call inside an inline function: not supported yet")
-        if st[0] != "set" or st[1][0] != "name":
+        if st[0] != "set" or st[1][0] != "name" or st[1][1] in ("zf", "cf"):
             continue
         place = st[1][1]
         if place in table.REGISTERS:

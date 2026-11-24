@@ -1,0 +1,25 @@
+fn ode_lz4_ext_len
+i 0 7 .mov 64 (.reg .rcx) (.imm 0x0)
+i 7 14 .mov 64 (.reg .rdx) (.imm 0xF)
+i 14 17 .cmp 64 (.reg .rcx) (.reg .rsi)
+i 17 19 .jne 0x1B
+i 19 26 .mov 64 (.reg .rax) (.imm 0x0)
+i 26 27 .ret
+i 27 30 .mov 64 (.reg .r9) (.reg .rdi)
+i 30 33 .add 64 (.reg .r9) (.reg .rcx)
+i 33 37 .movzx8 .r8 (.mem .r9 0x0)
+i 37 44 .cmp 64 (.reg .r8) (.imm 0xFF)
+i 44 46 .je 0x35
+i 46 49 .add 64 (.reg .rdx) (.reg .r8)
+i 49 52 .mov 64 (.reg .rax) (.reg .rdx)
+i 52 53 .ret
+i 53 60 .add 64 (.reg .rdx) (.imm 0xFF)
+i 60 64 .add 64 (.reg .rcx) (.imm 0x1)
+i 64 66 .jmp 0xE
+i 66 67 .ret
+arg buf bytes n
+arg n number
+below n 65537
+returns (call lz4_len_from (name buf) (num 0) (num 15))
+stack 0
+def lz4_len_from buf at acc = (ifx (bin >= (name at) (call len (name buf))) (num 0) (ifx (bin == (index (name buf) (name at)) (num 255)) (call lz4_len_from (name buf) (bin + (name at) (num 1)) (bin + (name acc) (num 255))) (bin + (name acc) (index (name buf) (name at)))))

@@ -1,0 +1,36 @@
+for ode_v_row_all_zero
+place 7
+name i rcx
+fact (bin <= (num 0) (name i))
+fact (bin <= (name i) (name n))
+fact (bin == (call row_zero_from (name row) (num 0)) (call row_zero_from (name row) (name i)))
+keep rbx rsp rbp rsi rdi r8 r9 r10 r11 r12 r13 r14 r15
+decreases (bin - (name n) (name i))
+t live
+t live
+p 3 24 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 1 44 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 1 0 46
+s 0 1 1 1 1
+q
+p 5 27 0
+s 0 1 1 1 1
+s 2 1 3 1 1
+q
+t open 1
+t lt
+t eq
+t open 1
+t lt
+t gt
+t open 1
+t eq

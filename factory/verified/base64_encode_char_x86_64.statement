@@ -1,0 +1,27 @@
+fn ode_b64_encode_char
+i 0 4 .cmp 64 (.reg .rdi) (.imm 0x1A)
+i 4 6 .jae 0x11
+i 6 13 .mov 64 (.reg .rax) (.imm 0x41)
+i 13 16 .add 64 (.reg .rax) (.reg .rdi)
+i 16 17 .ret
+i 17 21 .cmp 64 (.reg .rdi) (.imm 0x34)
+i 21 23 .jae 0x22
+i 23 30 .mov 64 (.reg .rax) (.imm 0x47)
+i 30 33 .add 64 (.reg .rax) (.reg .rdi)
+i 33 34 .ret
+i 34 38 .cmp 64 (.reg .rdi) (.imm 0x3E)
+i 38 40 .jae 0x30
+i 40 43 .mov 64 (.reg .rax) (.reg .rdi)
+i 43 47 .sub 64 (.reg .rax) (.imm 0x4)
+i 47 48 .ret
+i 48 52 .cmp 64 (.reg .rdi) (.imm 0x3E)
+i 52 54 .jne 0x3E
+i 54 61 .mov 64 (.reg .rax) (.imm 0x2B)
+i 61 62 .ret
+i 62 69 .mov 64 (.reg .rax) (.imm 0x2F)
+i 69 70 .ret
+arg v number
+below v 64
+returns (call b64_letter (name v))
+stack 0
+def b64_letter v = (ifx (bin < (name v) (num 26)) (bin + (num 65) (name v)) (ifx (bin < (name v) (num 52)) (bin + (num 71) (name v)) (ifx (bin < (name v) (num 62)) (bin - (name v) (num 4)) (ifx (bin == (name v) (num 62)) (num 43) (num 47)))))

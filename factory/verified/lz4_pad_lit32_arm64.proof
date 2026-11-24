@@ -1,0 +1,34 @@
+for ode_lz4_pad_lit32
+place 8
+name idx x3
+fact (bin <= (num 0) (name idx))
+fact (bin <= (name idx) (num 32))
+keep x0 x1 x2 sp x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30
+decreases (bin - (num 32) (name idx))
+wrote_pre out (index (call pad32 (name src)) (name idx))
+t live
+t dead
+p 0 1 79
+s 0 1 1 1 1
+q
+t live
+p 3 12 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 79 1 0
+s 2 1 0 1 1
+s 3 1 1 1 1
+q
+t live
+t live
+p 4 15 0
+s 1 1 2 1 1
+s 0 1 3 1 1
+q
+p 1 79 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t lt
+t ge

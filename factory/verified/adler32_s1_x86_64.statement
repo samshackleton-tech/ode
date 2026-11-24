@@ -1,0 +1,19 @@
+fn ode_adler32_s1
+i 0 7 .mov 64 (.reg .rax) (.imm 0x1)
+i 7 14 .mov 64 (.reg .rcx) (.imm 0x0)
+i 14 17 .cmp 64 (.reg .rcx) (.reg .rsi)
+i 17 19 .je 0x32
+i 19 23 .lea_idx .r9 .rdi .rcx 0x0
+i 23 27 .movzx8 .r8 (.mem .r9 0x0)
+i 27 30 .add 64 (.reg .rax) (.reg .r8)
+i 30 36 .cmp 64 (.reg .rax) (.imm 0xFFF1)
+i 36 38 .jb 0x2C
+i 38 44 .sub 64 (.reg .rax) (.imm 0xFFF1)
+i 44 48 .add 64 (.reg .rcx) (.imm 0x1)
+i 48 50 .jmp 0xE
+i 50 51 .ret
+arg input bytes n
+arg n number
+returns (call s1 (name input) (name n))
+stack 0
+def s1 bytes place = (ifx (bin == (name place) (num 0)) (num 1) (bin % (bin + (call s1 (name bytes) (bin - (name place) (num 1))) (index (name bytes) (bin - (name place) (num 1)))) (num 65521)))

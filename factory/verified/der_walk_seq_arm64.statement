@@ -1,0 +1,78 @@
+fn ode_der_walk_seq
+machine arm64
+i 0 4 .movi .x2 0x0
+i 4 8 .cmp .x2 .x1
+i 8 12 .bne 0x14
+i 12 16 .movi .x0 0x1
+i 16 20 .ret
+i 20 24 .sub .x4 .x1 .x2
+i 24 28 .cmpi .x4 0x2
+i 28 32 .bhs 0x28
+i 32 36 .movi .x0 0x0
+i 36 40 .ret
+i 40 44 .add .x3 .x0 .x2
+i 44 48 .ldrb .x5 .x3 0x0
+i 48 52 .lsl .x5 .x5 0x3b
+i 52 56 .lsr .x5 .x5 0x3b
+i 56 60 .cmpi .x5 0x1f
+i 60 64 .bne 0x48
+i 64 68 .movi .x0 0x0
+i 68 72 .ret
+i 72 76 .ldrb .x6 .x3 0x1
+i 76 80 .cmpi .x6 0x80
+i 80 84 .bhs 0x70
+i 84 88 .addi .x9 .x6 0x2
+i 88 92 .cmp .x4 .x9
+i 92 96 .bhs 0x68
+i 96 100 .movi .x0 0x0
+i 100 104 .ret
+i 104 108 .add .x2 .x2 .x9
+i 108 112 .b 0x4
+i 112 116 .cmpi .x6 0x81
+i 116 120 .bne 0xb8
+i 120 124 .cmpi .x4 0x3
+i 124 128 .bhs 0x88
+i 128 132 .movi .x0 0x0
+i 132 136 .ret
+i 136 140 .ldrb .x7 .x3 0x2
+i 140 144 .cmpi .x7 0x80
+i 144 148 .bhs 0x9c
+i 148 152 .movi .x0 0x0
+i 152 156 .ret
+i 156 160 .addi .x9 .x7 0x3
+i 160 164 .cmp .x4 .x9
+i 164 168 .bhs 0xb0
+i 168 172 .movi .x0 0x0
+i 172 176 .ret
+i 176 180 .add .x2 .x2 .x9
+i 180 184 .b 0x4
+i 184 188 .cmpi .x6 0x82
+i 188 192 .beq 0xc8
+i 192 196 .movi .x0 0x0
+i 196 200 .ret
+i 200 204 .cmpi .x4 0x4
+i 204 208 .bhs 0xd8
+i 208 212 .movi .x0 0x0
+i 212 216 .ret
+i 216 220 .ldrb .x7 .x3 0x2
+i 220 224 .cmpi .x7 0x1
+i 224 228 .bhs 0xec
+i 228 232 .movi .x0 0x0
+i 232 236 .ret
+i 236 240 .ldrb .x8 .x3 0x3
+i 240 244 .lsl .x7 .x7 0x8
+i 244 248 .add .x7 .x7 .x8
+i 248 252 .addi .x9 .x7 0x4
+i 252 256 .cmp .x4 .x9
+i 256 260 .bhs 0x10c
+i 260 264 .movi .x0 0x0
+i 264 268 .ret
+i 268 272 .add .x2 .x2 .x9
+i 272 276 .b 0x4
+arg buf bytes n
+arg n number
+returns (call der_seq_from (name buf) (num 0))
+stack 32
+def der_seq_l1 buf at = (ifx (bin > (bin + (name at) (num 3)) (call len (name buf))) (num 0) (ifx (ifx (bin >= (index (name buf) (bin + (name at) (num 2))) (num 128)) (bin <= (bin + (bin + (name at) (num 3)) (index (name buf) (bin + (name at) (num 2)))) (call len (name buf))) (bin == (num 0) (num 1))) (call der_seq_from (name buf) (bin + (bin + (name at) (num 3)) (index (name buf) (bin + (name at) (num 2))))) (num 0)))
+def der_seq_l2 buf at = (ifx (bin > (bin + (name at) (num 4)) (call len (name buf))) (num 0) (ifx (ifx (bin >= (index (name buf) (bin + (name at) (num 2))) (num 1)) (bin <= (bin + (bin + (bin + (name at) (num 4)) (bin * (num 256) (index (name buf) (bin + (name at) (num 2))))) (index (name buf) (bin + (name at) (num 3)))) (call len (name buf))) (bin == (num 0) (num 1))) (call der_seq_from (name buf) (bin + (bin + (bin + (name at) (num 4)) (bin * (num 256) (index (name buf) (bin + (name at) (num 2))))) (index (name buf) (bin + (name at) (num 3))))) (num 0)))
+def der_seq_from buf at = (ifx (bin == (name at) (call len (name buf))) (num 1) (ifx (bin > (bin + (name at) (num 2)) (call len (name buf))) (num 0) (ifx (bin == (bin % (index (name buf) (name at)) (num 32)) (num 31)) (num 0) (ifx (bin < (index (name buf) (bin + (name at) (num 1))) (num 128)) (ifx (bin <= (bin + (bin + (name at) (num 2)) (index (name buf) (bin + (name at) (num 1)))) (call len (name buf))) (call der_seq_from (name buf) (bin + (bin + (name at) (num 2)) (index (name buf) (bin + (name at) (num 1))))) (num 0)) (ifx (bin == (index (name buf) (bin + (name at) (num 1))) (num 129)) (call der_seq_l1 (name buf) (name at)) (ifx (bin == (index (name buf) (bin + (name at) (num 1))) (num 130)) (call der_seq_l2 (name buf) (name at)) (num 0)))))))

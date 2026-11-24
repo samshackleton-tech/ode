@@ -1,0 +1,72 @@
+target x86_64
+
+fn der_walk_seq as "ode_der_walk_seq" {
+  reg base = rdi
+  reg count = rsi
+  reg idx = rcx
+  reg res = rax
+
+  idx := 0
+  res := 0
+  loop {
+    place {
+      name at = idx
+      fact 0 <= at
+      fact at <= n
+      fact der_seq_from(buf, 0) == der_seq_from(buf, at)
+      decreases n - at
+    }
+    cmp idx, count
+    if eq {
+      res := 1
+      break
+    }
+    mov r8, count
+    sub r8, idx
+    cmp r8, 2
+    break if ult
+    mov rdx, base
+    add rdx, idx
+    movzx r9d, byte ptr [rdx]
+    and r9d, 31
+    cmp r9, 31
+    break if eq
+    movzx r10d, byte ptr [rdx + 1]
+    cmp r10, 128
+    if ult {
+      lea r11, [r10 + 2]
+      cmp r8, r11
+      break if ult
+      add idx, r11
+      continue
+    }
+    cmp r10, 129
+    if eq {
+      cmp r8, 3
+      break if ult
+      movzx r11d, byte ptr [rdx + 2]
+      cmp r11, 128
+      break if ult
+      add r11, 3
+      cmp r8, r11
+      break if ult
+      add idx, r11
+      continue
+    }
+    cmp r10, 130
+    break if ne
+    cmp r8, 4
+    break if ult
+    movzx r11d, byte ptr [rdx + 2]
+    cmp r11, 1
+    break if ult
+    movzx r9d, byte ptr [rdx + 3]
+    shl r11, 8
+    add r11, r9
+    add r11, 4
+    cmp r8, r11
+    break if ult
+    add idx, r11
+  }
+  ret
+}

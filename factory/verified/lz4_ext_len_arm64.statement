@@ -1,0 +1,24 @@
+fn ode_lz4_ext_len
+machine arm64
+i 0 4 .movi .x2 0x0
+i 4 8 .movi .x3 0xf
+i 8 12 .cmp .x2 .x1
+i 12 16 .bne 0x18
+i 16 20 .movi .x0 0x0
+i 20 24 .ret
+i 24 28 .add .x5 .x0 .x2
+i 28 32 .ldrb .x4 .x5 0x0
+i 32 36 .cmpi .x4 0xff
+i 36 40 .bne 0x34
+i 40 44 .addi .x3 .x3 0xff
+i 44 48 .addi .x2 .x2 0x1
+i 48 52 .b 0x8
+i 52 56 .add .x0 .x3 .x4
+i 56 60 .ret
+i 60 64 .b 0x8
+arg buf bytes n
+arg n number
+below n 65537
+returns (call lz4_len_from (name buf) (num 0) (num 15))
+stack 0
+def lz4_len_from buf at acc = (ifx (bin >= (name at) (call len (name buf))) (num 0) (ifx (bin == (index (name buf) (name at)) (num 255)) (call lz4_len_from (name buf) (bin + (name at) (num 1)) (bin + (name acc) (num 255))) (bin + (name acc) (index (name buf) (name at)))))

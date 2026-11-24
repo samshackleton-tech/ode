@@ -229,10 +229,12 @@ pxor128      | vpxord xmmX, xmmY, xmmZ | .xpxor X Y Z                  | X = eac
              = EVEX.128.66.0F.W0 EF /r ; reg=X vvvv=Y rm=Z
 prord128     | vprord xmmX, xmmY, I    | .xprord X Y I                 | X = each32(ror32, Y, I)
              = EVEX.128.66.0F.W0 72 /0 cb ; vvvv=X rm=Y imm=I
-pslld128     | pslld xmmX, I           | .xpslld X X I                 | X = each32(shl32, X, I)
-             = 66 0F 72 /6 cb ; rm=X imm=I
-psrld128     | psrld xmmX, I           | .xpsrld X X I                 | X = each32(shr32, X, I)
-             = 66 0F 72 /2 cb ; rm=X imm=I
+pslld128     | vpslld xmmX, xmmY, I    | .xpslld X Y I                 | X = each32(shl32, Y, I)
+             = 66 0F 72 /6 cb ; rm=X,Y imm=I
+             = VEX.128.66.0F.W0 72 /6 cb ; vvvv=X rm=Y imm=I
+psrld128     | vpsrld xmmX, xmmY, I    | .xpsrld X Y I                 | X = each32(shr32, Y, I)
+             = 66 0F 72 /2 cb ; rm=X,Y imm=I
+             = VEX.128.66.0F.W0 72 /2 cb ; vvvv=X rm=Y imm=I
 por128       | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
              = 66 0F EB /r ; reg=X,Y rm=Z
              = VEX.128.66.0F.W0 EB /r ; reg=X vvvv=Y rm=Z
