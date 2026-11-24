@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 252" width="680" height="252">
+  <defs>
+    <marker id="arr-ink" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1,1.3 L7,4 L1,6.7" fill="none" stroke="#1C1E21" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arr-slate" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1,1.3 L7,4 L1,6.7" fill="none" stroke="#5B6470" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arr-accent" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M1,1.3 L7,4 L1,6.7" fill="none" stroke="#9E2A2B" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <text x="44" y="20" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">SHORT INPUTS  (64 B – 1 KiB)</text>
+  <text x="44" y="32" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="normal" font-style="italic" fill="#5B6470">Custom calling + zero-copy + tail calls close the C-ABI gap</text>
+  <line x1="44" y1="202.0" x2="272" y2="202.0" stroke="#1C1E21" stroke-width="0.7"/>
+  <text x="38" y="205.0" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">0.0</text>
+  <line x1="44" y1="149.33333333333334" x2="272" y2="149.33333333333334" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="38" y="152.33333333333334" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">0.5</text>
+  <line x1="44" y1="96.66666666666667" x2="272" y2="96.66666666666667" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="38" y="99.66666666666667" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">1.0</text>
+  <line x1="44" y1="44.0" x2="272" y2="44.0" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="38" y="47.0" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">1.5</text>
+  <text x="12" y="123.0" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#5B6470">GiB/s</text>
+  <rect x="54" y="131.42666666666668" width="11.5" height="70.57333333333332" rx="0.5" fill="#D6D1C6" stroke="#5B6470" stroke-width="0.5"/>
+  <rect x="68.5" y="66.54133333333331" width="11.5" height="135.4586666666667" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.6"/>
+  <rect x="82.5" y="65.06666666666666" width="11.5" height="136.93333333333334" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.6"/>
+  <rect x="97" y="79.708" width="11.5" height="122.292" rx="0.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75"/>
+  <text x="73.5" y="60.06666666666666" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="bold" font-style="normal" fill="#9E2A2B">1.29</text>
+  <text x="60.5" y="127.42666666666668" text-anchor="middle" font-family="Palatino" font-size="7.2" font-weight="normal" font-style="normal" fill="#5B6470">0.67</text>
+  <text x="82" y="216" text-anchor="middle" font-family="Palatino" font-size="8.2" font-weight="normal" font-style="normal" fill="#1C1E21">64 B</text>
+  <rect x="130" y="103.93466666666666" width="11.5" height="98.06533333333334" rx="0.5" fill="#D6D1C6" stroke="#5B6470" stroke-width="0.5"/>
+  <rect x="144.5" y="98.984" width="11.5" height="103.016" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.6"/>
+  <rect x="158.5" y="93.19066666666667" width="11.5" height="108.80933333333333" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.6"/>
+  <rect x="173" y="106.77866666666667" width="11.5" height="95.22133333333333" rx="0.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75"/>
+  <text x="149.5" y="88.19066666666667" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="bold" font-style="normal" fill="#9E2A2B">0.98</text>
+  <text x="158" y="216" text-anchor="middle" font-family="Palatino" font-size="8.2" font-weight="normal" font-style="normal" fill="#1C1E21">256 B</text>
+  <rect x="206" y="102.98666666666668" width="11.5" height="99.01333333333332" rx="0.5" fill="#D6D1C6" stroke="#5B6470" stroke-width="0.5"/>
+  <rect x="220.5" y="101.828" width="11.5" height="100.172" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.6"/>
+  <rect x="234.5" y="98.66799999999999" width="11.5" height="103.33200000000001" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.6"/>
+  <rect x="249" y="103.724" width="11.5" height="98.276" rx="0.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75"/>
+  <text x="225.5" y="93.66799999999999" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="bold" font-style="normal" fill="#9E2A2B">0.95</text>
+  <text x="234" y="216" text-anchor="middle" font-family="Palatino" font-size="8.2" font-weight="normal" font-style="normal" fill="#1C1E21">1 KiB</text>
+  <rect x="44" y="225.5" width="7" height="7" rx="0.5" fill="#D6D1C6" stroke="#5B6470" stroke-width="0.75"/>
+  <text x="54" y="232" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="normal" fill="#5B6470">Ode baseline</text>
+  <rect x="114" y="225.5" width="7" height="7" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.75"/>
+  <text x="124" y="232" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="bold" font-style="normal" fill="#9E2A2B">Ode verified</text>
+  <rect x="182" y="225.5" width="7" height="7" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.75"/>
+  <text x="192" y="232" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="normal" fill="#5B6470">next (hand)</text>
+  <rect x="246" y="225.5" width="7" height="7" rx="0.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75"/>
+  <text x="256" y="232" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="normal" fill="#5B6470">official</text>
+  <text x="334" y="20" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">LARGE INPUTS  (4 KiB – 1 MiB)</text>
+  <text x="334" y="32" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="normal" font-style="italic" fill="#5B6470">Verified AVX-512 32-way tree reaches 98.4% of next, 131.7% of official</text>
+  <line x1="334" y1="202.0" x2="608" y2="202.0" stroke="#1C1E21" stroke-width="0.7"/>
+  <text x="328" y="205.0" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">0</text>
+  <line x1="334" y1="166.88888888888889" x2="608" y2="166.88888888888889" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="328" y="169.88888888888889" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">4</text>
+  <line x1="334" y1="131.77777777777777" x2="608" y2="131.77777777777777" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="328" y="134.77777777777777" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">8</text>
+  <line x1="334" y1="96.66666666666667" x2="608" y2="96.66666666666667" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="328" y="99.66666666666667" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">12</text>
+  <line x1="334" y1="61.55555555555557" x2="608" y2="61.55555555555557" stroke="#CFC9BC" stroke-width="0.45"/>
+  <text x="328" y="64.55555555555557" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">16</text>
+  <path d="M 346.0 172.0 L 387.7 107.8 L 429.3 100.3 L 471.0 96.5 L 512.7 94.3 L 554.3 93.1 L 596.0 93.5" fill="none" stroke="#7D8590" stroke-width="1.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3,2.5"/>
+  <path d="M 346.0 172.7 L 387.7 108.0 L 429.3 67.4 L 471.0 61.6 L 512.7 58.4 L 554.3 56.3 L 596.0 61.3" fill="none" stroke="#3A3F47" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 346.0 183.0 L 387.7 146.7 L 429.3 121.1 L 471.0 72.1 L 512.7 73.3 L 554.3 58.6 L 596.0 62.9" fill="none" stroke="#9E2A2B" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="346.0" cy="183.0" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="346.0" cy="172.7" r="1.7" fill="#3A3F47"/>
+  <text x="346.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">4K</text>
+  <circle cx="387.7" cy="146.7" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="387.7" cy="108.0" r="1.7" fill="#3A3F47"/>
+  <text x="387.7" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">16K</text>
+  <circle cx="429.3" cy="121.1" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="429.3" cy="67.4" r="1.7" fill="#3A3F47"/>
+  <text x="429.3" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">32K</text>
+  <circle cx="471.0" cy="72.1" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="471.0" cy="61.6" r="1.7" fill="#3A3F47"/>
+  <text x="471.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">64K</text>
+  <circle cx="512.7" cy="73.3" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="512.7" cy="58.4" r="1.7" fill="#3A3F47"/>
+  <text x="512.7" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">128K</text>
+  <circle cx="554.3" cy="58.6" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="554.3" cy="56.3" r="1.7" fill="#3A3F47"/>
+  <text x="554.3" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">256K</text>
+  <circle cx="596.0" cy="62.9" r="2.3" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="596.0" cy="61.3" r="1.7" fill="#3A3F47"/>
+  <text x="596.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">1M</text>
+  <text x="614" y="57.27466666666666" text-anchor="start" font-family="Palatino" font-size="7.7" font-weight="normal" font-style="normal" fill="#3A3F47">next  16.0</text>
+  <text x="614" y="69.86344444444444" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="bold" font-style="normal" fill="#9E2A2B">Ode  15.9</text>
+  <text x="614" y="96.54177777777778" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#7D8590">official  12.4</text>
+  <line x1="389.6666666666667" y1="149.70877777777778" x2="409.6666666666667" y2="173.9111111111111" stroke="#5B6470" stroke-width="0.6"/>
+  <text x="412.6666666666667" y="175.66666666666666" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">4–32 KiB gap: 4/8/16-way</text>
+  <text x="412.6666666666667" y="186.2" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">tiers not yet added</text>
+  <text x="554.3" y="48.280111111111125" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="bold" font-style="normal" fill="#9E2A2B">16.34</text>
+  <text x="328" y="46.633333333333354" text-anchor="end" font-family="Palatino" font-size="7.2" font-weight="normal" font-style="italic" fill="#5B6470">GiB/s</text>
+  <text x="334" y="232" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">Zen 5 Linux · verified pinned-run · 45 interleaved trials/size · median GiB/s</text>
+</svg>

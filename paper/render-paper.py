@@ -1,35 +1,31 @@
 #!/usr/bin/env pypy3
-"""Render the report with the same mandoc layout on every revision. No third-party Python packages."""
+"""Regenerate the Ode Language Report vector figures and compile paper/ODE.pdf via Typst.
+
+Usage:
+    pypy3 paper/render-paper.py
+    pypy3 paper/render-paper.py paper/ode.typ paper/ODE.pdf
+"""
 from pathlib import Path
 import subprocess
 import sys
 
-source = Path(sys.argv[1])
-dest = Path(sys.argv[2])
-with source.open() as f:
-    lines = f.read().splitlines()
-roff = ['.Dd November 22, 2026', '.Dt ODE 7', '.Os Ode']
-literal = False
+HERE = Path(__file__).resolve().parent
 
-def esc(line):
-    return r'\&' + line.replace('\\', r'\e').replace('`', '')
 
-for line in lines:
-    if line.startswith('```'):
-        roff.append('.Ed' if literal else '.Bd -literal -offset indent')
-        literal = not literal
-    elif literal:
-        roff.append(esc(line))
-    elif line.startswith('# '):
-        roff.extend(('.Sh TITLE', esc(line[2:])))
-    elif line.startswith('## '):
-        roff.append('.Sh "' + line[3:].replace('"', '') + '"')
-    elif line:
-        roff.append(esc(line))
-    else:
-        roff.append('.Pp')
-assert not literal
-rendered = subprocess.run(['mandoc', '-Tpdf', '-O', 'paper=letter'], input=('\n'.join(roff)+'\n').encode(), stdout=subprocess.PIPE, check=True).stdout
-assert rendered.startswith(b'%PDF-')
-with dest.open('wb') as f:
-    f.write(rendered)
+def main() -> None:
+    source = Path(sys.argv[1]) if len(sys.argv) >= 2 else HERE / "ode.typ"
+    dest = Path(sys.argv[2]) if len(sys.argv) >= 3 else HERE / "ODE.pdf"
+
+    # 1. Regenerate all six co-designed SVG figures deterministically.
+    subprocess.run([sys.executable, str(HERE / "make_figures.py")], check=True)
+
+    # 2. Compile the Typst monograph cleanly with zero warnings expected.
+    subprocess.run(["typst", "compile", str(source), str(dest)], check=True)
+    with dest.open("rb") as f:
+        header = f.read(5)
+    assert header == b"%PDF-", f"unexpected PDF header: {header!r}"
+    print(f"Rendered {dest} ({dest.stat().st_size} bytes)")
+
+
+if __name__ == "__main__":
+    main()
