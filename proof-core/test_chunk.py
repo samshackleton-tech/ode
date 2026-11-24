@@ -59,10 +59,16 @@ FUNCTIONS = [(OBJ, AVX512), (OBJ, SSE41), (OBJ, PAD), (OBJ, CHUNK)]
 # the record the contract says the run becomes, and its bytes: those of its fields' words, a number being the
 # two words of its eight bytes where it is below what the layout asks
 RECORD = "(call chunk_node (call words (slice (name nd) (num 0) (num 32))) (name t) (name flags) (name input))"
+def field_words(field, count):
+    x = f"(field (name record) {field})"
+    return f"(ifx (bin == (call len {x}) (num {count})) {x} (index (list (num 0)) (num 1)))"
+def byte_words(field, count):
+    x = f"(field (name record) {field})"
+    return f"(ifx (bin == (call len {x}) (num {count})) (call words {x}) (index (list (num 0)) (num 1)))"
 def number_words(field, bound):
     x = f"(field (name record) {field})"
     return f"(ifx (bin < {x} (num {bound})) (list (call lo (call counter {x})) (call hi (call counter {x}))) (index (list (num 0)) (num 1)))"
-ENSURES = (f"(call bytes_of (let record {RECORD} (bin ++ (field (name record) h) (bin ++ (call words (field (name record) block)) "
+ENSURES = (f"(call bytes_of (let record {RECORD} (bin ++ {field_words('h', 8)} (bin ++ {byte_words('block', 64)} "
            f"(bin ++ {number_words('counter', 2 ** 64)} (bin ++ {number_words('length', 65)} {number_words('flags', 256)}))))))")
 CONTRACT = ["arg nd inout 120", "arg input bytes len", "arg len number", "arg t number", "arg flags number", "arg plat number",
             "below flags 256", "needs sse41", "needsif avx512 plat 5", "below len 1025", "hidden input", "hidden t", "hidden flags",

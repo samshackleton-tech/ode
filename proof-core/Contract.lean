@@ -255,6 +255,15 @@ inductive Kind where
   | out (count : Nat)           -- the address of so many bytes that the function may write, and does not read
   | fixed (count : Nat)         -- the address of so many bytes that the function may read, and does not write
   | inout (count : Nat)         -- the address of so many bytes that the function may read and may write
+  | valArray (len : String) (chunk elem : Nat) -- read-only array of `len / chunk` entries, each `elem` bytes (`chunk > 0`, `elem % 4 = 0`)
+  deriving Repr, Inhabited
+
+/-- Entry-value promise for a `valArray` argument: for each `i < len / chunk`, entry `i` holds the words of `expr`
+with `idx := i`. -/
+structure ValArraySpec where
+  name : String
+  idx  : String
+  expr : SExpr
   deriving Repr, Inhabited
 
 /-- `ensures RUN[lo .. hi] = value`: when the function has returned, those bytes of the run are that list. -/
@@ -287,10 +296,28 @@ def EnsureW.size (e : EnsureW) (n : Nat) : Nat :=
   | some (_, m) => m
   | none => n
 
+/-- A stack budget term `step * bits((arg - sub) / div)`, where `bits(0) = 0` and `bits(n) = log2(n) + 1`
+for `n > 0`. Together with `Contract.stack` (`base`), the contract allows `base + step * bits(...)` bytes. -/
+structure StackBits where
+  step : Nat
+  arg  : String
+  sub  : Nat := 0
+  div  : Nat := 1
+  deriving Repr, Inhabited
+
+/-- Number of bits needed to write `n`: `0` for `0`, and `floor(log2(n)) + 1` for `n > 0`. -/
+def bitsNat : Nat → Nat
+  | 0 => 0
+  | n + 1 => Nat.log2 (n + 1) + 1
+
 structure Contract where
   args : List (String × Kind)
   returns : Option SExpr
   stack : Nat
+  stackBits : Option StackBits := none    -- optional logarithmic stack budget term `step * bits((arg - sub) / div)`
+  decreases : Option String := none       -- argument that strictly decreases on every direct recursive self-call
+  preLines : List (Int × List (String × Int)) := []  -- (k, [(arg, a), ...]): linear entry precondition `0 ≤ k + Σ a * arg`
+  valSpecs : List ValArraySpec := []      -- per-entry specification for each read-only `valArray` argument
   result : Option String := none      -- `returns r`, r no name of the specification's: the number returned, by that name in `ensures`
   ensures : List Ensure := []
   ensuresW : List EnsureW := []
@@ -359,6 +386,7 @@ def regionsIn (c : Contract) : List (String × Kind) → List Nat → List (Nat 
   | (_, .out _) :: args, _ :: regs => regionsIn c args regs
   | (_, .fixed _) :: args, _ :: regs => regionsIn c args regs
   | (_, .inout _) :: args, _ :: regs => regionsIn c args regs
+  | (_, .valArray _ _ _) :: args, _ :: regs => regionsIn c args regs
   | _, _ => []
 
 /-- The runs of bytes the function is given to read: (the register with the address, the register with the length). -/
@@ -389,6 +417,26 @@ def Contract.fixeds (c : Contract) : List (String × Nat × Nat) := fixedsIn c.a
 
 /-- The runs the function may read and may write. -/
 def Contract.inouts (c : Contract) : List (String × Nat × Nat) := inoutsIn c.args c.argRegs
+
+def valArraysIn (c : Contract) : List (String × Kind) → List Nat → List (String × Nat × Nat × Nat × Nat)
+  | (x, .valArray len ch el) :: args, r :: regs =>
+    match c.regOf len with
+    | some l => if 0 < ch ∧ 0 < el ∧ el % 4 = 0 then (x, r, l, ch, el) :: valArraysIn c args regs else valArraysIn c args regs
+    | none => valArraysIn c args regs
+  | _ :: args, _ :: regs => valArraysIn c args regs
+  | _, _ => []
+
+/-- The read-only value arrays the function is given: `(name, ptrReg, lenReg, chunk, elem)`. -/
+def Contract.valArrays (c : Contract) : List (String × Nat × Nat × Nat × Nat) :=
+  valArraysIn c c.args c.argRegs
+
+/-- The entry-value specification `(idx, expr)` attached to value-array argument `x`, if any. -/
+def Contract.valSpecOf (c : Contract) (x : String) : Option (String × SExpr) :=
+  c.valSpecs.findSome? fun vs => if vs.name == x then some (vs.idx, vs.expr) else none
+
+/-- The address lies in a read-only value array given at entry state `s`. -/
+def Contract.inValArray (c : Contract) (s : State) (a : Nat) : Bool :=
+  c.valArrays.any fun (_, r, l, ch, el) => s.reg r ≤ a && a < s.reg r + el * (s.reg l / ch)
 
 /-- The fixed run of number `j` is a table of addresses (`lanes` names it): the table's name, the register
 with its address, how many addresses it holds (eight bytes each), and the register with the count of blocks. -/
@@ -436,6 +484,7 @@ def envIn (c : Contract) (s : State) : List (String × Kind) → List Nat → Li
   | (_, .out _) :: args, _ :: regs => envIn c s args regs        -- (a run only written has no value at entry)
   | (_, .fixed _) :: args, _ :: regs => envIn c s args regs      -- (a run of a fixed count has its value in `envW`)
   | (_, .inout _) :: args, _ :: regs => envIn c s args regs
+  | (_, .valArray _ _ _) :: args, _ :: regs => envIn c s args regs
   | _, _ => []
 
 def envWIn (c : Contract) (s : State) : List (String × Kind) → List Nat → List (String × Val)
@@ -447,6 +496,7 @@ def envWIn (c : Contract) (s : State) : List (String × Kind) → List Nat → L
   | (_, .out _) :: args, _ :: regs => envWIn c s args regs
   | (n, .fixed count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => (s.mem (s.reg r + k)).val)) :: envWIn c s args regs
   | (n, .inout count) :: args, r :: regs => (n, .bytes ((List.range count).map fun k => (s.mem (s.reg r + k)).val)) :: envWIn c s args regs
+  | (_, .valArray _ _ _) :: args, _ :: regs => envWIn c s args regs
   | _, _ => []
 
 /-- The names of the contract as values, in a state at entry: a number is its register; a run of bytes is
@@ -458,7 +508,27 @@ the bytes memory holds there in the state at entry. An `EnsureW` is said by thes
 addresses comes first, by its name: there the name is the list of its lanes (the first of a name counts). -/
 def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEnv s ++ envWIn c s c.args c.argRegs
 
-def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stack ≤ a && a < s.reg RSP
+/-- The stack budget at entry state `s`: `c.stack` plus `step * bits((arg - sub) / div)` if present.
+When `c.stackBits = none`, this is `c.stack` by definition. -/
+def Contract.stackAt (c : Contract) (s : State) : Nat :=
+  c.stack + match c.stackBits with
+  | none => 0
+  | some sb =>
+    match c.regOf sb.arg with
+    | some r => sb.step * bitsNat ((s.reg r - sb.sub) / sb.div)
+    | none => 0
+
+theorem Contract.stack_le_stackAt (c : Contract) (s : State) : c.stack ≤ c.stackAt s :=
+  Nat.le_add_right _ _
+
+/-- Value of a linear entry precondition `(k, ts)` at entry state `s`. -/
+def preLineVal (c : Contract) (s : State) (k : Int) (ts : List (String × Int)) : Int :=
+  k + ts.foldl (fun acc (x, a) =>
+    match c.regOf x with
+    | some r => acc + a * (s.reg r : Int)
+    | none => acc) 0
+
+def Contract.inFrame (c : Contract) (s : State) (a : Nat) : Bool := s.reg RSP - c.stackAt s ≤ a && a < s.reg RSP
 
 /-- The read-only data of an object file of the program: its bytes, and the boundary it lies on (where it
 lies is a multiple of that). -/
@@ -486,7 +556,7 @@ read, its own frame and the return address above it (where that is in memory: `s
 of addresses points to, and the read-only data of every object file of the program; it may write its own
 frame and the runs given to write. -/
 def Contract.perm (c : Contract) (pieces : List Piece) (s : State) : Perm where
-  read a := ((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + c.slot) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || inPieces pieces s a
+  read a := (((((c.inFrame s a || s.reg RSP ≤ a && a < s.reg RSP + c.slot) || c.regions.any fun (r, l) => s.reg r ≤ a && a < s.reg r + s.reg l) || c.inFixed s a) || c.inLane s a) || c.inValArray s a) || inPieces pieces s a
   write a := c.inFrame s a || c.inOut s a
 
 /-- The function's code lies in memory below 2^64. -/
@@ -505,24 +575,39 @@ stack pointer is a multiple of 16 (the processor faults at a load or store whose
 that is not). -/
 def Contract.pre (c : Contract) (p : Program) (s : State) : Prop :=
   s.rip = p.base ∧ (∀ r, s.reg r < M64) ∧
-  c.stack ≤ s.reg RSP ∧ s.reg RSP + c.slot < M64 ∧ p.fits ∧
+  c.stackAt s ≤ s.reg RSP ∧ s.reg RSP + c.slot < M64 ∧ p.fits ∧
   (∀ r l, (r, l) ∈ c.regions →
-    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r)) ∧
+    s.reg r + s.reg l ≤ M64 ∧ (s.reg r + s.reg l ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r)) ∧
   (∀ x r n, (x, r, n) ∈ c.outs →
-    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
+    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
     ∀ r' l, (r', l) ∈ c.regions → s.reg r + n ≤ s.reg r' ∨ s.reg r' + s.reg l ≤ s.reg r) ∧
   (c.outs.Pairwise fun (_, r, n) (_, r', n') => s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x r n, (x, r, n) ∈ c.fixeds →
-    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
+    s.reg r + n ≤ M64 ∧ (s.reg r + n ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + n ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r) ∧
   (∀ x b, (x, b) ∈ c.bounds → ∀ r, c.regOf x = some r → s.reg r < b) ∧
   (∀ x off b, (x, off, b) ∈ c.mbounds → ∀ r n, (x, r, n) ∈ c.fixeds → load s.mem (s.reg r + off) 8 < b) ∧
   (∀ j x r count l, c.tableAt j = some (x, r, count, l) → ∀ i, i < count →
     lanePtr s r i + 64 * s.reg l ≤ M64 ∧
-    (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stack ∨ s.reg RSP + c.slot ≤ lanePtr s r i) ∧
+    (lanePtr s r i + 64 * s.reg l ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ lanePtr s r i) ∧
     ∀ x' r' n', (x', r', n') ∈ c.outs → lanePtr s r i + 64 * s.reg l ≤ s.reg r' ∨ s.reg r' + n' ≤ lanePtr s r i) ∧
   (∀ x k, (x, k) ∈ c.atLeast → ∀ r, c.regOf x = some r → k ≤ s.reg r) ∧
-  (c.arm64 = true → s.reg RSP % 16 = 0)
+  (c.arm64 = true → s.reg RSP % 16 = 0) ∧
+  (∀ k ts, (k, ts) ∈ c.preLines → 0 ≤ preLineVal c s k ts) ∧
+  (∀ x r l ch el, (x, r, l, ch, el) ∈ c.valArrays →
+    s.reg r + el * (s.reg l / ch) < M64 ∧
+    (s.reg r + el * (s.reg l / ch) ≤ s.reg RSP - c.stackAt s ∨ s.reg RSP + c.slot ≤ s.reg r) ∧
+    ∀ x' r' n', (x', r', n') ∈ c.outs → s.reg r + el * (s.reg l / ch) ≤ s.reg r' ∨ s.reg r' + n' ≤ s.reg r)
+
+/-- Entry-value promises for every read-only `valArray` argument: for each `i < len / chunk`,
+the `elem` bytes at `r + elem * i` are the `elem / 4` words of `expr` with `idx := i`.
+Vacuously `True` when `c.valArrays = []`. -/
+def Contract.preVals (c : Contract) (defs : List Def) (s : State) : Prop :=
+  ∀ x r l ch el, (x, r, l, ch, el) ∈ c.valArrays →
+    ∀ idx expr, c.valSpecOf x = some (idx, expr) →
+      ∀ i, i < s.reg l / ch →
+        Value defs ((idx, .int i) :: c.envW s) expr
+          (.list ((List.range (el / 4)).map fun k => Val.word (load s.mem (s.reg r + el * i + 4 * k) 4)))
 
 /-- A byte of the program as it is loaded, which no function writes: a byte of the read-only data of one of
 its object files, or a byte of an instruction of one of its functions. -/
@@ -576,8 +661,7 @@ def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   (∀ a, c.inFrame s a = false → c.inOut s a = false → s'.mem a = s.mem a) ∧
   (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))) ∧
   (∀ r, s'.reg r < M64) ∧
-  (∀ e ∈ c.ensures, e.holds c defs s s') ∧
-  ∀ e ∈ c.ensuresW, e.holds c defs s s'
+  (c.preVals defs s → (∀ e ∈ c.ensures, e.holds c defs s s') ∧ ∀ e ∈ c.ensuresW, e.holds c defs s s')
 
 /-- The registers of the arguments that hold nothing hidden: each argument's register, but for a number the
 contract says is hidden. (An address is never hidden: the function reads or writes there, so it shows.) -/

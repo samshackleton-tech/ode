@@ -112,7 +112,7 @@ end
 
 /-! ## A load of memory given to read only -/
 
-theorem notFrame {ctx : Ctx} {s0 : State} {a : Nat} (h : a < s0.reg RSP - ctx.contract.stack ∨ s0.reg RSP ≤ a) :
+theorem notFrame {ctx : Ctx} {s0 : State} {a : Nat} (h : a < s0.reg RSP - ctx.contract.stackAt s0 ∨ s0.reg RSP ≤ a) :
     ctx.contract.inFrame s0 a = false := by
   simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]
   omega
@@ -271,7 +271,7 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have hbase := (regions_lt hmem).1
             have eo : ev ρ1 o = ev ρ (Lin.add (signed x) (signed y)) - s0.reg base := by
               rw [ho, ev_sub, ev_var, C.holds.entry base hbase, ← ev_agree hb C.agree]
-            obtain ⟨r1, r2⟩ := E.region hmem
+            obtain ⟨r1, r2⟩ := E.regionAt hmem
             have had : (va + (vb + 0)) % M64 = s0.reg base + (ev ρ1 o).toNat := by
               unfold M64 at *
               omega
@@ -298,7 +298,7 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             have hbase := fixeds_lt hmem
             have eo : (c : Int) = ev ρ (Lin.add (signed x) (signed y)) - s0.reg base := by
               rw [← ev_isConst (ρ := ρ) hc, hoff, ev_sub, ev_var, H.entry base hbase]
-            obtain ⟨f1, f2, _, f4⟩ := E.fixed hmem
+            obtain ⟨f1, f2, _, f4⟩ := E.fixedAt hmem
             by_cases hz : size = 0
             · subst hz; rfl
             have had : (va + (vb + 0)) % M64 = s0.reg base + c.toNat := by
@@ -558,6 +558,96 @@ theorem marksAfter_same {bind : Bind} {st : State} {stmt : Stmt} {place v : Expr
     | lane _ _ => exact ⟨rfl, rfl, rfl, rfl⟩
     | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
 
+/-- A store to memory of `size` bytes: the cells of the frame the verifier has as not marked after it are not marked. -/
+theorem cellsAfterSize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
+    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {bind : Bind} {stmt : Stmt} {f : String}
+    {args : List Expr} {v : Expr} {size : Nat} {m b : Bool}
+    (hpos : 0 < size) (hmemEq : ∀ ad, addrOf bind st args = some ad → (marksAfter bind st stmt).mem = markBytes st.marks.mem ad size b)
+    (mv : m = false → b = false) :
+    CellsOk ctx s0 (cellsAfterSize ctx bind s size args m) (marksAfter bind st stmt).mem := by
+  unfold cellsAfterSize
+  match args with
+  | [] => exact CellsOk.nil
+  | [_] => exact CellsOk.nil
+  | _ :: _ :: _ :: _ => exact CellsOk.nil
+  | [a, b0] =>
+    simp only
+    cases hx : plainRow ctx bind s a with
+    | none => exact CellsOk.nil
+    | some x =>
+      cases hy : plainRow ctx bind s b0 with
+      | none => exact CellsOk.nil
+      | some y =>
+        simp only
+        cases hl : locate ctx (Lin.add (signed x) (signed y)) with
+        | none => exact CellsOk.nil
+        | some w =>
+          cases w with
+          | region _ _ => exact CellsOk.nil
+          | out w o =>
+            simp only
+            obtain ⟨name, base, n, hw, ho⟩ := locate_out hl
+            simp only [hw]
+            cases hc : Lin.isConst o with
+            | none => exact CellsOk.nil
+            | some c =>
+              simp only
+              split
+              next hb =>
+                simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+                obtain ⟨va, ea, xa, la, ba⟩ := plainRow_value E H wf hx
+                obtain ⟨vb, eb, xb, lb, bb⟩ := plainRow_value E H wf hy
+                have sx := signed_ev ρ x
+                have sy := signed_ev ρ y
+                have hm := List.mem_of_getElem? hw
+                have hbase : ρ base = s0.reg base := H.entry base (outs_lt hm)
+                have hfit := (E.out hm).1
+                have hfr := (E.out hm).2
+                have hcv := ev_isConst (ρ := ρ) hc
+                rw [ho, ev_sub, ev_add, ev_var, hbase] at hcv
+                have hs := E.stack
+                have had : (va + (vb + 0)) % M64 = s0.reg base + c.toNat := by unfold M64 at *; omega
+                have e1 : addrOf bind st [a, b0] = some ((va + (vb + 0)) % M64) := by
+                  simp only [addrOf, values, ea, eb, Option.map, sumList]
+                rw [hmemEq _ e1, had]
+                intro o' ho'
+                obtain ⟨o1, o2, o3⟩ := M.frame o' ho'
+                refine ⟨o1, o2, fun k hk => ?_⟩
+                unfold markBytes
+                rw [if_neg (by omega)]
+                exact o3 k hk
+              next => exact CellsOk.nil
+          | data _ => exact CellsOk.nil
+          | frame c =>
+            simp only
+            split
+            next hb =>
+              simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
+              obtain ⟨ad, e1, e2⟩ := frameAddr E H wf hx hy hl
+              have e2 := e2 hb.1 (by omega)
+              have hs := E.stack
+              rw [hmemEq _ e1]
+              intro o ho
+              rcases List.mem_append.mp ho with h1 | h2
+              · split at h1
+                next h8 =>
+                  simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h8
+                  have : o = c := by simpa using h1
+                  subst this
+                  refine ⟨hb.1, by omega, fun k hk => ?_⟩
+                  unfold markBytes
+                  rw [if_pos ⟨by omega, by omega⟩]
+                  exact mv h8.2
+                next => cases h1
+              · obtain ⟨hin, hap⟩ := List.mem_filter.mp h2
+                simp only [Bool.or_eq_true, decide_eq_true_eq] at hap
+                obtain ⟨o1, o2, o3⟩ := M.frame o hin
+                refine ⟨o1, o2, fun k hk => ?_⟩
+                unfold markBytes
+                rw [if_neg (by omega)]
+                exact o3 k hk
+            next => exact CellsOk.nil
+
 /-- A store to memory: the cells of the frame the verifier has as not marked after it are not marked. -/
 theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {bind : Bind} {f : String} {args : List Expr} {v : Expr}
@@ -567,108 +657,41 @@ theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
   cases hsz : memSize f with
   | none => exact CellsOk.nil
   | some size =>
-    match args with
-    | [] => exact CellsOk.nil
-    | [_] => exact CellsOk.nil
-    | _ :: _ :: _ :: _ => exact CellsOk.nil
-    | [a, b] =>
-      simp only
-      cases hx : plainRow ctx bind s a with
-      | none => exact CellsOk.nil
-      | some x =>
-        cases hy : plainRow ctx bind s b with
-        | none => exact CellsOk.nil
-        | some y =>
-          simp only
-          cases hl : locate ctx (Lin.add (signed x) (signed y)) with
-          | none => exact CellsOk.nil
-          | some w =>
-            cases w with
-            | region _ _ => exact CellsOk.nil
-            | out w o =>
-              -- a store within a run given to write: the run is no part of the frame, so each cell stays as it was
-              simp only
-              obtain ⟨name, base, n, hw, ho⟩ := locate_out hl
-              simp only [hw]
-              cases hc : Lin.isConst o with
-              | none => exact CellsOk.nil
-              | some c =>
-                simp only
-                split
-                next hb =>
-                  simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
-                  obtain ⟨va, ea, xa, la, ba⟩ := plainRow_value E H wf hx
-                  obtain ⟨vb, eb, xb, lb, bb⟩ := plainRow_value E H wf hy
-                  have sx := signed_ev ρ x
-                  have sy := signed_ev ρ y
-                  have hm := List.mem_of_getElem? hw
-                  have hbase : ρ base = s0.reg base := H.entry base (outs_lt hm)
-                  have hfit := (E.out hm).1
-                  have hfr := (E.out hm).2
-                  have hcv := ev_isConst (ρ := ρ) hc
-                  rw [ho, ev_sub, ev_add, ev_var, hbase] at hcv
-                  have hs := E.stack
-                  have hpos : 0 < size := by
-                    unfold memSize at hsz
-                    split at hsz
-                    · injection hsz with hsz; omega
-                    · split at hsz
-                      · injection hsz with hsz; omega
-                      · split at hsz
-                        · injection hsz with hsz; omega
-                        · cases hsz
-                  have had : (va + (vb + 0)) % M64 = s0.reg base + c.toNat := by unfold M64 at *; omega
-                  have e1 : addrOf bind st [a, b] = some ((va + (vb + 0)) % M64) := by
-                    simp only [addrOf, values, ea, eb, Option.map, sumList]
-                  have hmem : (marksAfter bind st (.set (.call f [a, b]) v)).mem =
-                      markBytes st.marks.mem ((va + (vb + 0)) % M64) size (exprMark bind st v) := by
-                    simp only [marksAfter, stmtParts, placeWidth, hsz, e1]
-                  rw [hmem, had]
-                  intro o' ho'
-                  obtain ⟨o1, o2, o3⟩ := M.frame o' ho'
-                  refine ⟨o1, o2, fun k hk => ?_⟩
-                  unfold markBytes
-                  rw [if_neg (by omega)]
-                  exact o3 k hk
-                next => exact CellsOk.nil
-            | data _ => exact CellsOk.nil
-            | frame c =>
-              simp only
-              split
-              next hb =>
-                simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
-                obtain ⟨ad, e1, e2⟩ := frameAddr E H wf hx hy hl
-                have e2 := e2 hb.1 (by omega)
-                have hs := E.stack
-                have hmem : (marksAfter bind st (.set (.call f [a, b]) v)).mem = markBytes st.marks.mem ad size (exprMark bind st v) := by
-                  simp only [marksAfter, stmtParts, placeWidth, hsz, e1]
-                rw [hmem]
-                intro o ho
-                rcases List.mem_append.mp ho with h1 | h2
-                · split at h1
-                  next h8 =>
-                    simp only [Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h8
-                    have : o = c := by simpa using h1
-                    subst this
-                    refine ⟨hb.1, by omega, fun k hk => ?_⟩
-                    unfold markBytes
-                    rw [if_pos ⟨by omega, by omega⟩]
-                    exact mv h8.2
-                  next => cases h1
-                · obtain ⟨hin, hap⟩ := List.mem_filter.mp h2
-                  simp only [Bool.or_eq_true, decide_eq_true_eq] at hap
-                  obtain ⟨o1, o2, o3⟩ := M.frame o hin
-                  refine ⟨o1, o2, fun k hk => ?_⟩
-                  unfold markBytes
-                  rw [if_neg (by omega)]
-                  exact o3 k hk
-              next => exact CellsOk.nil
+    have hpos : 0 < size := by
+      unfold memSize at hsz
+      split at hsz
+      · injection hsz with hsz; omega
+      · split at hsz
+        · injection hsz with hsz; omega
+        · split at hsz
+          · injection hsz with hsz; omega
+          · cases hsz
+    exact cellsAfterSize_sound E M H wf (f := f) (v := v) hpos
+      (fun ad e1 => by simp only [marksAfter, stmtParts, placeWidth, hsz, e1]) mv
 
 /-! The marks of a statement are worked out from the registers of the state before and from what is known
 not to be marked there, and from nothing else of it. -/
 
 theorem plainRow_light (bind : Bind) (s : Sym) (e : Expr) : plainRow ctx bind s.light e = plainRow ctx bind s e := by
   cases e <;> rfl
+
+theorem cellsAfterSize_light (ctx : Ctx) (bind : Bind) (s : Sym) (size : Nat) (args : List Expr) (m : Bool) :
+    cellsAfterSize ctx bind s.light size args m = cellsAfterSize ctx bind s size args m := by
+  unfold cellsAfterSize
+  cases args with
+  | nil => rfl
+  | cons a rest =>
+    cases rest with
+    | nil => rfl
+    | cons b rest2 =>
+      cases rest2 with
+      | cons _ _ => rfl
+      | nil => simp only [plainRow_light]; rfl
+
+theorem cellsAfter_light (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) :
+    cellsAfter ctx bind s.light f args m = cellsAfter ctx bind s f args m := by
+  unfold cellsAfter
+  cases memSize f <;> simp [cellsAfterSize_light]
 
 theorem publicLoad_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) :
     publicLoad ctx bind s.light s1 size a b = publicLoad ctx bind s s1 size a b := by
@@ -699,7 +722,9 @@ theorem lowClean_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (v : Expr) :
 theorem stmtMarks_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (st : Stmt) :
     stmtMarks ctx bind s.light s1 st = stmtMarks ctx bind s s1 st := by
   cases st with
-  | set place v => simp only [stmtMarks, markOf_light, lowClean_light]; rfl
+  | set place v => simp only [stmtMarks, markOf_light, lowClean_light, cellsAfter_light]; rfl
+  | vset place v =>
+    cases place <;> simp only [stmtMarks, cellsAfterSize_light] <;> rfl
   | _ => rfl
 
 /-- Where the verifier has the lowest byte of what an expression stands for as not marked, it is not. -/
@@ -765,7 +790,9 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         next hc =>
           injection hm with hm; subst hm
           obtain ⟨c1, c2⟩ := cleanAll_sound M.reg args hc
-          exact ⟨by simp only [quietStmt, stmtParts, qv, c1, c2, Bool.not_false, Bool.and_true], keep rfl trivial CellsOk.nil⟩
+          have hcs := cellsAfterSize_sound E M H wf (bind := bind) (stmt := .vset (.call f args) v) (f := f) (args := args) (v := v) (size := 16) (m := true) (b := true)
+            (by omega) (fun ad e1 => by simp [marksAfter, stmtParts, placeWidth, e1]) (fun h => by cases h)
+          exact ⟨by simp only [quietStmt, stmtParts, qv, c1, c2, Bool.not_false, Bool.and_true], keep rfl trivial hcs⟩
         next => cases hm
       | name _ => simp only at hm; injection hm with hm; subst hm; exact ⟨by simp only [quietStmt, stmtParts, qv, Bool.and_true], keep rfl trivial M.frame⟩
       | number _ => simp only at hm; injection hm with hm; subst hm; exact ⟨by simp only [quietStmt, stmtParts, qv, Bool.and_true], keep rfl trivial M.frame⟩
@@ -911,10 +938,10 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem Holds.q {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : SMarks) :
     Holds ctx s0 ρ { s with q := x } st :=
-  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.q {s : Sym} (wf : WF ctx s) (x : SMarks) : WF ctx { s with q := x } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
 
 theorem Carried.q {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s s' : Sym} {st : State} (c : Carried ctx s0 ρ s ρ' s' st) (x : SMarks) :
     Carried ctx s0 ρ s ρ' { s' with q := x } st := ⟨c.agree, c.mono, c.holds.q x, c.wf.q x⟩
@@ -1108,7 +1135,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       unfold markBytes
       split
       · rfl
-      · obtain ⟨_, r2⟩ := E.region hmem
+      · obtain ⟨_, r2⟩ := E.regionAt hmem
         rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
         exact E.quiet.2.2.1 b0 l0 hmem hnh0 k hk
   · have hx := List.all_eq_true.mp hfix (x, r, n) hm

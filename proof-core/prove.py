@@ -376,7 +376,7 @@ class Prover:
         if self.session is None:
             names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
             if not names: raise SystemExit("prove: the lines before the proof name no function (`for NAME`)")
-            self.session = session.Session(self.statement, self.lines, names[-1])
+            self.session = session.Session(self.statement, self.lines, names[-1], only=True)
         return self.session.ask(proof)
 
     def note(self, proof, said):

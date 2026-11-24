@@ -34,7 +34,9 @@ FUNCTIONS = [(os.path.join(KCHECK, "b3hashr.o"), PAD), (os.path.join(TAIL, "odet
 # the record is had once, by a `let`, and its bytes are those of its fields' words
 NEW = "(record (h (call words (slice (name r) (num 0) (num 32)))) (block (call padded (slice (name src) (num 16) (name len)))))"
 CONTRACT = ["arg r inout 96", "arg src bytes len", "arg len number", "atleast len 17", "below len 81", "hidden src",
-            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ (field (name record) h) (call words (field (name record) block)))))",
+            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ "
+            "(ifx (bin == (call len (field (name record) h)) (num 8)) (field (name record) h) (index (list (num 0)) (num 1))) "
+            "(ifx (bin == (call len (field (name record) block)) (num 64)) (call words (field (name record) block)) (index (list (num 0)) (num 1))))))",
             "stack 64"]
 # Why the verifier refuses, or what the prover cannot give it.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"

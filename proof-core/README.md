@@ -10,22 +10,17 @@ is the first version of such a core. It contains:
   The theorem holds for every possible proof input, so a wrong or malicious proof cannot make the verifier
   accept a wrong function.
 
-It is not finished. Today it handles both x86-64 and AArch64, and covers a large part of what the Python
-verifier in `kcheck/` handles. That is enough for five of the twelve small shipped functions, for a
-function that calls one of them, and for **ten of the fourteen functions of the x86-64 BLAKE3 hash**
-(3,098 of the 3,761 instructions in `kcheck/b3hashr.o`, or 82.4%): the two versions of the kernel that
-compresses one 64-byte block (one written with AVX-512 instructions and one with SSE4.1 instructions);
-`b3l_node_out`, the function that reads a node record and calls the kernel selected by its `plat`
-argument; the 16-way kernel, which compresses sixteen chunks at once, block after block, in a loop; the
-32-way kernel, which does the same for thirty-two chunks, through each of its two entries (one gives every
-chunk the same counter; the other, which the hash calls, gives chunk `i` the counter `t + i`);
-`b3l_pad`, which copies the last bytes of a chunk into a block and fills the rest with zeros;
-`b3l_chunk_node`, which calls a one-block kernel for each block of a chunk but the last, calls `b3l_pad`
-for the last, and stores three numbers into the chunk's record; and the two shipped AVX-512 tree-folding
-functions `b3l_wide32` and `b3l_wide128`. On AArch64, it also verifies BLAKE3's `b3l_pad_arm64` and the
-7-round NEON one-block compression kernel `blake3_servil_compress_in_place_arm64`.
-For the final four recursive functions of the x86-64 hash (`b3l_take`, `b3l_part32`, `b3l_subtree`,
-`b3l_hashr`, 663 instructions), see `paper/RECURSION-PROPOSAL.md`.
+Today it handles both x86-64 and AArch64. It verifies five of the twelve small shipped functions, a
+function that calls one of them, and **all fourteen of the fourteen functions of the single-threaded
+x86-64 BLAKE3 hash** (3,761 of the 3,761 instructions in `kcheck/b3hashr.o`, or 100%) in a single
+`odeverify` run (~26 s, 457 kB combined proof file; see `test_hashr.py`): the two one-block
+compression kernels (AVX-512 and SSE4.1); `b3l_node_out`; the 16-way kernel `p16`; the 32-way kernel
+through both entries (`p32` and `k32`); `b3l_pad`; `b3l_chunk_node`; the AVX-512 tree-folding functions
+`b3l_wide32` and `b3l_wide128`; and the four recursive tree functions (`b3l_take`, `b3l_part32`,
+`b3l_subtree`, and the top-level entry `b3l_hashr`), with direct self-recursion, logarithmic stack
+bounds (`bits(...)`), and read-only value arrays (`cvs`) proved sound under the exact same top-level
+soundness theorems. On AArch64, it also verifies BLAKE3's `b3l_pad_arm64` and the 7-round NEON
+one-block compression kernel `blake3_servil_compress_in_place_arm64`.
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
 ships is a plain text file, and a verifier for it can be written in any language.
@@ -106,12 +101,16 @@ The functions it verifies today:
 | `b3l_chunk_node` | for a chunk of at most 1024 bytes: compresses each 64-byte block but the last into the chaining value of a 120-byte record, by calling one of the one-block kernels; calls `b3l_pad` to write the last block into the record; stores the chunk's number, the last block's length and the flags there; the input bytes are kept out of the trace | 81 instructions, 1 loop of at most 15 iterations | 663 lines, 5.4 kB | 0.16 s with the three functions it calls |
 | `b3l_wide32` | shipped AVX-512 32-chunk (32 KiB) subtree folding function: calls `k32` once and `p16` five times | 259 instructions | 1 line, 15 bytes | 0.8 s with its kernels |
 | `b3l_wide128` | shipped AVX-512 128-chunk (128 KiB) subtree folding function: calls `k32` four times and `p16` seven times | 670 instructions | 1 line, 16 bytes | 2.6 s with its kernels |
+| `b3l_take` | recursive tree folding over a read-only chaining-value array `cvs` (`decreases len`, logarithmic stack `bits((len - 1) / 1024)`) | 133 instructions, 1 loop, 2 recursive self-calls | 4,701 lines, 54.3 kB | in the 26.1 s full-hash run |
+| `b3l_part32` | folds up to 32 KiB of chunks by calling `k32`, `p16`, `b3l_chunk_node`, and `b3l_take` | 76 instructions | 5,713 lines, 55.5 kB | in the 26.1 s full-hash run |
+| `b3l_subtree` | recursive BLAKE3 subtree over arbitrary message lengths (`decreases len`, logarithmic stack `bits((len - 1) / 1024)`) | 189 instructions, 1 loop, 2 recursive self-calls | 13,811 lines, 152.6 kB | in the 26.1 s full-hash run |
+| `b3l_hashr` | top-level single-threaded BLAKE3 hash function (`bytes_of(hash_words(words(key), flags, input))`, stack `18688 + 384 * bits(len / 1024)`, also verified with `trace depends on len, plat` omitting `flags`) | 265 instructions, 1 loop | 16,491 lines, 177.4 kB | 26.1 s for all 14 functions together (457 kB total) |
 | `b3l_pad_arm64` | AArch64 chunk-tail padding function verified against `kcheck/blake3.spec`'s `padded(src)`; input bytes kept out of the trace | 15 instructions (60 B), 1 loop of 64 iterations | 459 bytes | 0.14 s |
 | `blake3_servil_compress_in_place_arm64` | AArch64 NEON 7-round one-block BLAKE3 compression kernel (zero stack, zero read-only data, constant-time), verified against `compress` | 116 instructions (464 B), 1 loop of 7 iterations | 10 lines, 137 bytes | 0.17 s |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
-them), the two functions of `examples/sum/`, `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last`, the three functions of `examples/far/`, `ode_empty`, `ode_parent`, `ode_turns`, `ode_high`, `ode_quad`, `ode_rounds` and `ode_quad32` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. Ten (`blake3_servil_compress_in_place_avx512`, `blake3_servil_compress_in_place_sse41`, `b3l_node_out`, `blake3_servil_avx512_p16`, `blake3_servil_avx512_p32`, `blake3_servil_avx512_k32`, `b3l_pad`, `b3l_chunk_node`, `b3l_wide32`, `b3l_wide128`) are ten of the fourteen functions in the shipped
-BLAKE3 object file `kcheck/b3hashr.o` (3,098 of its 3,761 instructions), and the last two are AArch64 BLAKE3 functions verified against the same specification. Each one-block kernel's contract says that the eight 32-bit words
+them), the two functions of `examples/sum/`, `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last`, the three functions of `examples/far/`, `ode_empty`, `ode_parent`, `ode_turns`, `ode_high`, `ode_quad`, `ode_rounds` and `ode_quad32` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. Fourteen (`blake3_servil_compress_in_place_avx512`, `blake3_servil_compress_in_place_sse41`, `b3l_node_out`, `blake3_servil_avx512_p16`, `blake3_servil_avx512_p32`, `blake3_servil_avx512_k32`, `b3l_pad`, `b3l_chunk_node`, `b3l_wide32`, `b3l_wide128`, `b3l_take`, `b3l_part32`, `b3l_subtree`, `b3l_hashr`) are all fourteen functions in the shipped
+BLAKE3 object file `kcheck/b3hashr.o` (3,761 of its 3,761 instructions = 100%), verified together in one `odeverify` run (`test_hashr.py`), and the last two are AArch64 BLAKE3 functions verified against the same specification. Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
 kernel's contract says, for every `n` from 1 up, that the sixteen chaining values at `out` are

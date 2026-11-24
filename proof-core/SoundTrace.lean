@@ -736,7 +736,7 @@ theorem envIn_lookup_agree {c : Contract} {defs : List Def} {a b : State} (ta : 
         | false =>
           simp only [envArgIn, str_beq_comm n x, hxn, Bool.false_eq_true, ite_false] at he
           exact envIn_lookup_agree ta args regs x hnd' hcl' hreg' hro' he hnh
-    | out _ | fixed _ | inout _ =>
+    | out _ | fixed _ | inout _ | valArray _ _ =>
       simp only [envIn]
       simp only [envArgIn] at he
       exact envIn_lookup_agree ta args regs x hnd' hcl' hreg' hro' he hnh
@@ -941,7 +941,7 @@ theorem afterCall_region_byte {ctx : Ctx} {p q : Program} {s0 st : State} (E : S
     (hw : allowed (ctx.contract.perm ctx.pieces s0).write (st.reg RSP - c.slot) c.slot = true)
     {b0 l0 k : Nat} (hm : (b0, l0) ∈ ctx.contract.regions) (hk : k < s0.reg l0) :
     (afterCall p q i st).mem (s0.reg b0 + k) = s0.mem (s0.reg b0 + k) := by
-  obtain ⟨_, r2⟩ := E.region hm
+  obtain ⟨_, r2⟩ := E.regionAt hm
   have hnf : ctx.contract.inFrame s0 (s0.reg b0 + k) = false := notFrame (by omega)
   have hno : ctx.contract.inOut s0 (s0.reg b0 + k) = false := E.region_notOut hm (by omega) (by omega)
   have hnot : s0.reg b0 + k < st.reg RSP - c.slot ∨ st.reg RSP ≤ s0.reg b0 + k := by
@@ -1031,7 +1031,7 @@ theorem callArgClean_agree {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}
         | false =>
           simp only [callArgClean.go, str_beq_comm n x, hxn, Bool.false_eq_true, ite_false] at h
           exact callArgClean_agree Ea Eb ta Ha Hb Ma A Fa Fb h8a h8b hwa hwb args regs x hregs' h
-    | out _ | fixed _ | inout _ =>
+    | out _ | fixed _ | inout _ | valArray _ _ =>
       simp only [envIn]
       simp only [callArgClean.go] at h
       exact callArgClean_agree Ea Eb ta Ha Hb Ma A Fa Fb h8a h8b hwa hwb args regs x hregs' h
@@ -1150,7 +1150,7 @@ theorem callerNumName_spec {c : Contract} {s0 : State} {r0 : Nat} :
       cases c.regOf len with
       | none => exact hl
       | some _ => simp only [List.lookup_cons, beq_false_of_ne hs.1]; exact hl
-    | out _ | fixed _ | inout _ =>
+    | out _ | fixed _ | inout _ | valArray _ _ =>
       simp only [callerNumName.go] at h
       obtain ⟨hs, hl⟩ := callerNumName_spec (x :: seen) args regs y h
       simp only [List.contains_cons, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hs
@@ -1199,7 +1199,7 @@ theorem callerRegionName_spec {c : Contract} {s0 : State} {j : Nat} :
       simp only [List.contains_cons, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hs
       exact ⟨hs.2, b0, l0, by simpa [regionsIn] using hget, hle,
         by simp only [envIn, List.lookup_cons, beq_false_of_ne hs.1]; exact hl⟩
-    | out _ | fixed _ | inout _ =>
+    | out _ | fixed _ | inout _ | valArray _ _ =>
       simp only [callerRegionName.go] at h
       obtain ⟨hs, b0, l0, hget, hle, hl⟩ := callerRegionName_spec (x :: seen) args regs k y h
       simp only [List.contains_cons, Bool.or_eq_false_iff, beq_eq_false_iff_ne] at hs
@@ -1314,7 +1314,7 @@ theorem callArgExpr_spec {ctx : Ctx} {p q : Program} {s0 st : State} (E : Settin
         | false =>
           simp only [callArgExpr.go, str_beq_comm n x, hxn, Bool.false_eq_true, ite_false] at h
           exact callArgExpr_spec E H F h8 hw args regs x e' hregs' h
-    | out _ | fixed _ | inout _ =>
+    | out _ | fixed _ | inout _ | valArray _ _ =>
       simp only [envIn]
       simp only [callArgExpr.go] at h
       exact callArgExpr_spec E H F h8 hw args regs x e' hregs' h
@@ -1564,7 +1564,7 @@ theorem callQuiet_traceAgree {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}
                   rcases List.mem_cons.mp h with he | ht
                   · injection he with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
                   · exact List.mem_append_right _ (ih rs ht)
-              | number | out _ | fixed _ | inout _ =>
+              | number | out _ | fixed _ | inout _ | valArray _ _ =>
                 simp only [regionsIn] at h
                 exact List.mem_append_right _ (ih rs h))))
     refine ⟨hlen, fun k hk => ?_⟩
@@ -1591,7 +1591,7 @@ theorem callQuiet_traceAgree {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}
               · injection he with _ he2; injection he2 with er _; subst er
                 exact List.mem_append_left _ (List.mem_cons_self ..)
               · exact List.mem_append_right _ (ih rs ht)
-            | number | bytes _ | out _ | inout _ =>
+            | number | bytes _ | out _ | inout _ | valArray _ _ =>
               simp only [fixedsIn] at h
               exact List.mem_append_right _ (ih rs h))))
     rw [← hbase]
@@ -1661,7 +1661,7 @@ theorem initMarks_alike {c : Contract} {pieces : List Piece} {defs : List Def} {
               rw [hrl] at h; rcases List.mem_cons.mp h with he | ht
               · injection he with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
               · exact List.mem_append_right _ (ih rs ht)
-          | number | out _ | fixed _ | inout _ => simp only [regionsIn] at h; exact List.mem_append_right _ (ih rs h)))
+          | number | out _ | fixed _ | inout _ | valArray _ _ => simp only [regionsIn] at h; exact List.mem_append_right _ (ih rs h)))
       have hk := (hreg r l hm hnh).2 (a - a0.reg r) (by omega)
       have heq : a0.reg r + (a - a0.reg r) = a := by omega
       rw [← hbase, heq] at hk; exact hk
@@ -1682,7 +1682,7 @@ theorem initMarks_alike {c : Contract} {pieces : List Piece} {defs : List Def} {
             simp only [fixedsIn] at h; rcases List.mem_cons.mp h with he | ht
             · injection he with _ he2; injection he2 with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
             · exact List.mem_append_right _ (ih rs ht)
-          | number | bytes _ | out _ | inout _ => simp only [fixedsIn] at h; exact List.mem_append_right _ (ih rs h)))
+          | number | bytes _ | out _ | inout _ | valArray _ _ => simp only [fixedsIn] at h; exact List.mem_append_right _ (ih rs h)))
       have hk := hfix x r n hm hnot (a - a0.reg r) (by omega)
       have heq : a0.reg r + (a - a0.reg r) = a := by omega
       rw [← hbase, heq] at hk; exact hk
@@ -1740,7 +1740,7 @@ theorem initMarks_quiet {c : Contract} {pieces : List Piece} {defs : List Def} {
             rw [hrl] at h; rcases List.mem_cons.mp h with he | ht
             · injection he with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
             · exact List.mem_append_right _ (ih rs ht)
-        | number | out _ | fixed _ | inout _ => simp only [regionsIn] at h; exact List.mem_append_right _ (ih rs h)))
+        | number | out _ | fixed _ | inout _ | valArray _ _ => simp only [regionsIn] at h; exact List.mem_append_right _ (ih rs h)))
     have hlen : a0.reg l = b0.reg l := (hreg r l hm hnh).1
     have hka : k < a0.reg l := hlen ▸ hk
     rw [← hbase]; exact q_a.2.2.1 r l hm hnh k hka
@@ -1755,7 +1755,7 @@ theorem initMarks_quiet {c : Contract} {pieces : List Piece} {defs : List Def} {
           simp only [fixedsIn] at h; rcases List.mem_cons.mp h with he | ht
           · injection he with _ he2; injection he2 with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
           · exact List.mem_append_right _ (ih rs ht)
-        | number | bytes _ | out _ | inout _ => simp only [fixedsIn] at h; exact List.mem_append_right _ (ih rs h)))
+        | number | bytes _ | out _ | inout _ | valArray _ _ => simp only [fixedsIn] at h; exact List.mem_append_right _ (ih rs h)))
     rw [← hbase]; exact q_a.2.2.2 x r n hm hnot k hk
 
 theorem initMarks_dataQuiet {c : Contract} {pieces : List Piece} {a0 : State} :
@@ -2269,27 +2269,64 @@ theorem symValue_flag_operands {ctx : Ctx} {p : Program} {a0 b0 sta stb : State}
 
 theorem symLoadWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {w : Nat} {l : List Nat} {items rest : Items}
     (h : symLoadWords ctx s addr w items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
-  have hframe : ∀ {bytes : String},
+  have hval : ∀ {bytes badSize : String},
+      (match findValArray addr ctx.contract.valArrays 0 with
+       | some (k, _, _, l0, ch, el, c) =>
+         let i := c.toNat / el
+         if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
+           entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
+           let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
+           let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
+           pure (made.1, { s with tab := made.2 })
+         else refuse badSize
+       | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
+      s1.zf = s.zf ∧ s1.cf = s.cf := by
+    intro bytes badSize h'
+    cases hfv : findValArray addr ctx.contract.valArrays 0 with
+    | none => simp only [hfv] at h'; exact (refuse_ok (items := items) h').elim
+    | some found =>
+      obtain ⟨k, _, _, l0, ch, el, c⟩ := found
+      simp only [hfv] at h'
+      split at h'
+      · obtain ⟨_, _, _, h'⟩ := V.bind_ok h'
+        have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
+      · exact (refuse_ok (items := items) h').elim
+  have hframe : ∀ {bytes badSize : String},
       (match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
        | some o, some sp =>
-         if sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 ∧ w % 2 = 0 then
-           match framePairRows s o (w / 2) with
+         if sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 then
+           match (if w % 2 = 0 then framePairRows s o (w / 2) else none) with
            | some rows => let made := termsOf wAtom rows s.tab; pure (made.1, { s with tab := made.2 })
-           | none => refuse s!"{bytes} bytes of the frame that are not known words"
+           | none =>
+             match frameWIds s.frameW o w 0 with
+             | some ids => pure (ids, s)
+             | none => refuse s!"{bytes} bytes of the frame that are not known words"
          else refuse s!"{bytes} bytes that are of no run of words given to read"
-       | _, _ => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
+       | _, _ =>
+         match findValArray addr ctx.contract.valArrays 0 with
+         | some (k, _, _, l0, ch, el, c) =>
+           let i := c.toNat / el
+           if 0 < ch ∧ 0 < el ∧ el % 4 = 0 ∧ c.toNat + 4 * w ≤ el * (i + 1) then do
+             entail s.facts (Lin.sub (Lin.var l0) (Lin.const ((i + 1) * ch)))
+             let j := ctx.contract.fixeds.length + ctx.contract.inouts.length + ctx.contract.regions.length + k
+             let made := termsOf intern ((List.range w).map fun m => Node.input j (c.toNat / 4 + m)) s.tab
+             pure (made.1, { s with tab := made.2 })
+           else refuse badSize
+         | none => refuse s!"{bytes} bytes that are of no run of words given to read") items = .ok ((l, s1), rest) →
       s1.zf = s.zf ∧ s1.cf = s.cf := by
-    intro bytes h'
+    intro bytes badSize h'
     cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) with
-    | none => simp only [hc] at h'; exact (refuse_ok (items := items) h').elim
+    | none => simp only [hc] at h'; exact hval h'
     | some o =>
       cases hsp : s.sp with
-      | none => simp only [hc, hsp] at h'; exact (refuse_ok (items := items) h').elim
+      | none => simp only [hc, hsp] at h'; exact hval h'
       | some sp =>
         simp only [hc, hsp] at h'
         split at h'
-        · cases hpr : framePairRows s o (w / 2) <;> simp only [hpr] at h'
-          · exact (refuse_ok (items := items) h').elim
+        · cases hpr : (if w % 2 = 0 then framePairRows s o (w / 2) else none) <;> simp only [hpr] at h'
+          · cases hfw : frameWIds s.frameW o w 0 <;> simp only [hfw] at h'
+            · exact (refuse_ok (items := items) h').elim
+            · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
           · have := V.pure_ok h'; injection this with h' _; injection h' with _ h'; subst h'; exact ⟨rfl, rfl⟩
         · exact (refuse_ok (items := items) h').elim
   unfold symLoadWords at h
@@ -2755,11 +2792,29 @@ theorem symLanes512_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {v : Expr} {l :
 
 theorem symStoreWords_flags {ctx : Ctx} {s s1 : Sym} {addr : Row} {l : List Nat} {w : Nat} {items rest : Items}
     (h : symStoreWords ctx s addr l w items = .ok (s1, rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
+  have hfr : ∀ {bytes : String},
+      (match Lin.isConst (Lin.sub addr (Lin.var RSP)), s.sp with
+       | some o, some sp =>
+         if -(ctx.contract.stack : Int) ≤ o ∧ sp ≤ o ∧ o + 4 * (w : Int) ≤ 0 ∧ l.length == w then
+           pure { s with
+             spill := [], range := none,
+             frame := s.frame.filter fun (cell : Int × Row) => decide (cell.1 + 8 ≤ o) || decide (o + 4 * (w : Int) ≤ cell.1),
+             frameW := ((List.range w).map fun (k : Nat) => (o + 4 * (k : Int), l.getD k 0)) ++
+                       s.frameW.filter fun (cell : Int × Nat) => decide (cell.1 + 4 ≤ o) || decide (o + 4 * (w : Int) ≤ cell.1) }
+         else refuse s!"{bytes} bytes written to what is no run given to write"
+       | _, _ => refuse s!"{bytes} bytes written to what is no run given to write") items = .ok (s1, rest) →
+      s1.zf = s.zf ∧ s1.cf = s.cf := by
+    intro bytes h'
+    cases hc : Lin.isConst (Lin.sub addr (Lin.var RSP)) <;> cases hsp : s.sp <;> simp only [hc, hsp] at h'
+    all_goals try exact (refuse_ok (items := items) h').elim
+    split at h'
+    · have := V.pure_ok h'; injection this with h' _; subst h'; exact ⟨rfl, rfl⟩
+    · exact (refuse_ok (items := items) h').elim
   unfold symStoreWords at h
   cases hf : findOut addr ctx.contract.outs 0 <;> simp only [hf] at h
-  · exact (refuse_ok (items := items) h).elim
+  · exact hfr h
   · rename_i loc; cases loc with
-    | frame _ | region _ _ | data _ => exact (refuse_ok (items := items) h).elim
+    | frame _ | region _ _ | data _ => dsimp only at h; exact hfr h
     | out w0 off =>
       dsimp only at h
       cases hc : Lin.isConst off <;> cases hg : ctx.contract.outs[w0]? <;> simp only [hc, hg] at h

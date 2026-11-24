@@ -31,7 +31,9 @@ NEW = ("(record (tag (call words (slice (name r) (num 0) (num 32)))) (h (call co
        "(call words (slice (name r) (num 32) (num 64))) (call words (name m)) "
        "(call counter (num 0)) (num 64) (num 0)) (call words (name m2)) (call counter (num 0)) (num 64) (num 0))))")
 CONTRACT = ["arg r inout 64", "arg m fixed 64", "arg m2 fixed 64", "needs sse41", "hidden m", "hidden m2",
-            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ (field (name record) tag) (field (name record) h))))",
+            f"ensuresw r (call bytes_of (let record {NEW} (bin ++ "
+            "(ifx (bin == (call len (field (name record) tag)) (num 8)) (field (name record) tag) (index (list (num 0)) (num 1))) "
+            "(ifx (bin == (call len (field (name record) h)) (num 8)) (field (name record) h) (index (list (num 0)) (num 1))))))",
             "stack 32"]
 # Why the verifier refuses, or what the prover cannot give it.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
@@ -139,7 +141,8 @@ class Statement(unittest.TestCase):
         self.assertIn("(let record (record (tag (num 5)) (more (slice (name r) (num 8) (num 32)))", ensures)
         self.assertIn("(bin ++ (ifx (bin < (field (name record) tag) (num 9)) (list (call lo (call counter (field (name record) tag))) "
                       "(call hi (call counter (field (name record) tag)))) (index (list (num 0)) (num 1))) "
-                      "(bin ++ (call words (field (name record) more)) (field (name record) h)))", ensures)
+                      "(bin ++ (ifx (bin == (call len (field (name record) more)) (num 24)) (call words (field (name record) more)) (index (list (num 0)) (num 1))) "
+                      "(ifx (bin == (call len (field (name record) h)) (num 8)) (field (name record) h) (index (list (num 0)) (num 1)))))", ensures)
         self.assertFalse([l for l in lines if l.startswith("mbelow ")])
         # the bound is the least of 2^64 (the number is eight bytes), 256 for a `byte`, and what `below` says
         layout = lambda field: once("tag: r.tag", "tag: 5, more: r.more")(once("tag: cv at 0, h: cv at 32", field + ", more: 24 bytes at 8, h: cv at 32")(spec_text()))

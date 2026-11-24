@@ -34,7 +34,7 @@ Three design decisions follow from that picture:
 
 [DESIGN.md](DESIGN.md) is the full design.
 
-## Where the project stands (November 23, 2026)
+## Where the project stands (November 24, 2026)
 
 It is a research prototype. Nothing here is ready to protect anything of value.
 
@@ -59,13 +59,16 @@ working on.
 
 The folder `proof-core/` holds a second, smaller verifier, written in Lean 4, serving both x86-64 and
 AArch64. With it comes a soundness theorem that Lean checks (`Ode.verify_all_sound`): if this verifier
-accepts a function, the function satisfies its contract, whatever proof it was given. So far it verifies
-five of the twelve small x86-64 functions and **ten of the fourteen functions of the x86-64 BLAKE3 hash
-(3,098 of its 3,761 instructions, or 82.4%)**: the two one-block compression kernels (AVX-512 and SSE4.1),
+accepts a function, the function satisfies its contract, whatever proof it was given. It verifies five of
+the twelve small x86-64 functions and **all fourteen of the fourteen functions of the single-threaded
+x86-64 BLAKE3 hash (`kcheck/b3hashr.o`, 3,761 of 3,761 instructions, or 100%)** in a single `odeverify`
+run (~26 s, 457 kB combined proof file): the two one-block compression kernels (AVX-512 and SSE4.1),
 `b3l_node_out`, the 16-way kernel `p16`, the 32-way kernel through both entries (`p32` and `k32`),
-`b3l_pad`, `b3l_chunk_node`, and the two shipped tree-folding functions `b3l_wide32` and `b3l_wide128`.
-A written proposal (`paper/RECURSION-PROPOSAL.md`) covers the remaining four recursive tree functions
-(`b3l_take`, `b3l_part32`, `b3l_subtree`, `b3l_hashr`, 663 instructions).
+`b3l_pad`, `b3l_chunk_node`, `b3l_wide32`, `b3l_wide128`, and the four recursive tree functions
+(`b3l_take`, `b3l_part32`, `b3l_subtree`, and the top-level entry `b3l_hashr`), following
+`paper/RECURSION-PROPOSAL.md`. Under the same soundness theorem, `b3l_hashr` also satisfies an even
+stronger trace contract whose `trace depends on` line names only `len` and `plat` (neither `key`,
+`input`, nor `flags`).
 
 On **AArch64**, the standalone package `arm64/` defines a 47-row instruction table (`arm64/arm64.tab`)
 cross-checked on real Apple M6 and Ampere-1a hardware, with **all 47 of 47 rows (49 theorems)** formally
@@ -134,7 +137,7 @@ on a real processor and compared with a reference implementation. It takes hours
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
-| `proof-core/` | a first small verifier, in Lean 4, with the theorem that its yes is right whatever proof it is handed (`verify_all_sound`), and a second theorem that the instructions an accepted function executes and the addresses it touches depend only on what its contract lists in its `trace depends on` line (`verify_all_trace`); it shows five shipped functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, and `ode_varint`, which writes its result into memory its caller gives it), a function that calls the first, and eight of the hash's fourteen functions, so far. Its `README.md` says what that rests on. No other folder needs Lean |
+| `proof-core/` | a small verifier in Lean 4, with soundness theorems proved from Lean's three standard axioms alone (`verify_all_sound`, `verify_all_trace`, `verify_all_result`); it verifies five shipped small functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, `ode_varint`), **all fourteen of the fourteen functions (3,761 of 3,761 instructions) of the single-threaded x86-64 BLAKE3 hash `kcheck/b3hashr.o` in one run**, and AArch64 BLAKE3 functions (`b3l_pad_arm64`, `blake3_servil_compress_in_place_arm64`). Its `README.md` says what those theorems assume. No other folder needs Lean |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a use of an inline function, a `for`, a name for a register, `:=`, a slot of the frame), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources; an instruction is laid down as the instruction it names or refused, asked of every instruction of the sources changed in many ways and compared with clang; a refusal names the source line; `test_inline.py`: a use of an inline function is its instructions and nothing else, and a use that breaks what the function says of its registers is refused at its line; `test_places.py`: a loop's invariant is written at the loop, and the count of bytes that the prover needs with it is worked out; `test_forms.py`: a name for a register, `:=` and a frame of named fields give the instructions that the function has written out; a slot outside its field, and a store whose two sides have different sizes, are refused at their lines) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |

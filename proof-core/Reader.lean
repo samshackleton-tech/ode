@@ -51,6 +51,14 @@ def words (line : String) : List String := (line.splitOn " ").filter (· ≠ "")
 
 def rest (line : String) (n : Nat) : String := " ".intercalate ((words line).drop n)
 
+def readLinPairs : List String → Option (List (String × Int))
+  | [] => some []
+  | x :: a :: rest => do
+    let ai ← readInt a
+    let more ← readLinPairs rest
+    some ((x, ai) :: more)
+  | _ => none
+
 def regOrFail (name : String) : Except String Nat :=
   match regIndex name with
   | some r => pure r
@@ -62,7 +70,7 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "data", "piece", "stack", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "data", "piece", "stack", "stackbits", "fndecreases", "linpre", "valspec", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -132,6 +140,14 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["arg", name, "inout", n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .inout n)] } }
     | none => throw s!"cannot read {line}"
+  | ["arg", name, "valarray", len, ch, el] => match ch.toNat?, el.toNat? with
+    | some ch, some el =>
+      if ch == 0 || el == 0 || el % 4 != 0 then throw s!"cannot read {line}"
+      else onLast fun g => { g with contract := { g.contract with args := g.contract.args ++ [(name, .valArray len ch el)] } }
+    | _, _ => throw s!"cannot read {line}"
+  | "valspec" :: name :: idx :: _ => do
+    let e ← readSExpr (rest line 3)
+    onLast fun g => { g with contract := { g.contract with valSpecs := g.contract.valSpecs ++ [⟨name, idx, e⟩] } }
   | "ensuresw" :: name :: more => do
     -- (two numbers before the expression: the part of the run spoken of, its first byte and how many bytes)
     match more with
@@ -190,6 +206,15 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["stack", n] => match n.toNat? with
     | some n => onLast fun g => { g with contract := { g.contract with stack := n } }
     | none => throw s!"cannot read {line}"
+  | ["stackbits", step, arg, sub, div] => match step.toNat?, sub.toNat?, div.toNat? with
+    | some step, some sub, some div =>
+      if div == 0 then throw s!"cannot read {line}"
+      else onLast fun g => { g with contract := { g.contract with stackBits := some ⟨step, arg, sub, div⟩ } }
+    | _, _, _ => throw s!"cannot read {line}"
+  | ["fndecreases", name] => onLast fun g => { g with contract := { g.contract with decreases := some name } }
+  | "linpre" :: c :: more => match readInt c, readLinPairs more with
+    | some ci, some ps => onLast fun g => { g with contract := { g.contract with preLines := g.contract.preLines ++ [(ci, ps)] } }
+    | _, _ => throw s!"cannot read {line}"
   | "def" :: name :: more =>
     let params := more.takeWhile (· ≠ "=")
     pure { t with defs := t.defs ++ [⟨name, params, ← readSExpr (rest line (3 + params.length))⟩] }

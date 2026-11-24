@@ -23,8 +23,8 @@ def whole(lines):
 
 
 class Session:
-    def __init__(self, statement_path, head, name):
-        self.statement, self.head, self.name, self.sent, self.begun, self.p, self.file = statement_path, list(head), name, 0, 0, None, None
+    def __init__(self, statement_path, head, name, only=False):
+        self.statement, self.head, self.name, self.only, self.sent, self.begun, self.p, self.file = statement_path, list(head), name, only, 0, 0, None, None
         self.begin([])
 
     def begin(self, base):
@@ -34,7 +34,8 @@ class Session:
         with f: f.write("".join(l + "\n" for l in self.head + base))
         self.file, self.base, self.batches, self.said = f.name, list(base), [], []      # said[k]: what was said after batch k
         self.begun += 1
-        self.p = subprocess.Popen([EXE, statement.table_for(self.statement), self.statement, self.file, self.name], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        cmd = [EXE] + (["--only"] if self.only else []) + [statement.table_for(self.statement), self.statement, self.file, self.name]
+        self.p = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.first, more = self.read()
         if not more: self.end()                      # nothing waits: what it starts from is refused, or shows everything
 

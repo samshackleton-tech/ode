@@ -31,7 +31,7 @@ ENSURES = "compress(zero_cv(), a, counter(0), 64, 0) ++ compress(zero_cv(), b, c
 # Why the verifier refuses.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
-NO_CELLS = "refused: a called function is given to write what is not whole cells of this function's frame, each of them known"
+KEEPS = "refused: at the return a register a callee keeps does not hold what it held at entry"
 STACK = "refused: a call needs more stack than this function's contract allows"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [
@@ -41,9 +41,9 @@ CONTRACTS = [
 ]
 # (what is changed, the source as it is, the source changed, what the verifier then says)
 SOURCES = [
-    ("one cell of the block is not set to zero", "  mov qword ptr [rsp + 24], rax\n", "", NO_CELLS),
+    ("one cell of the block is not set to zero", "  mov qword ptr [rsp + 24], rax\n", "", FOLLOW),
     ("the second value is written four bytes early: it overlaps the first", "  lea rdi, [rsp + 32]\n", "  lea rdi, [rsp + 28]\n", NO_PART),
-    ("the second value is written eight bytes late: over a saved register", "  lea rdi, [rsp + 32]\n", "  lea rdi, [rsp + 40]\n", NO_CELLS),
+    ("the second value is written eight bytes late: over a saved register", "  lea rdi, [rsp + 32]\n", "  lea rdi, [rsp + 40]\n", KEEPS),
     ("the second call is given the first block again", "  mov rsi, r12\n", "  mov rsi, rbp\n", FOLLOW),
     ("the block is read from eight bytes on: a saved register at its end", "  lea rsi, [rsp + 0]\n", "  lea rsi, [rsp + 8]\n", NO_PART),
 ]

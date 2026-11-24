@@ -55,11 +55,11 @@ SOURCES = [
     # the counter's cell and the parts given to the kernel
     ("the counter is kept in the block's last cell, which the second call reads and writes",
      [("qword ptr [rsp + 64]", "qword ptr [rsp + 56]", 4)], ENTAIL),
-    ("the counter overlaps the block's last four bytes", [("qword ptr [rsp + 64]", "qword ptr [rsp + 60]", 4)], NO_CELLS),
+    ("the counter overlaps the block's last four bytes", [("qword ptr [rsp + 64]", "qword ptr [rsp + 60]", 4)], NOTHING),
     ("the counter is not set to zero", [("  // i = 0\n  mov qword ptr [rsp + 64], rax\n", "", 1)], NOTHING),
-    ("the loop goes on while i < 3: a third call is given the counter's cell and what lies above it", [("  cmp rax, 2\n", "  cmp rax, 3\n", 1)], NO_CELLS),
+    ("the loop goes on while i < 3: a third call is given the counter's cell and what lies above it", [("  cmp rax, 2\n", "  cmp rax, 3\n", 1)], ENTAIL),
     ("the counter goes up by two: the second value is never made", [("  add rax, 1\n", "  add rax, 2\n", 1)], FOLLOW),
-    ("one cell of the block is not set to zero", [("  mov qword ptr [rsp + 8], rax\n", "", 1)], NO_CELLS),
+    ("one cell of the block is not set to zero", [("  mov qword ptr [rsp + 8], rax\n", "", 1)], FOLLOW),
     # the values
     ("b is compressed on the first turn and a on the second", [("  jb @first\n", "  jae @first\n", 1)], FOLLOW),
     ("a is compressed on both turns", [("  mov rsi, r12\n", "  mov rsi, rbp\n", 1)], FOLLOW),

@@ -309,13 +309,18 @@ def record_words(kind, lay, e, name):
             raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind}, whose fields do not lie one after another, each one thing: not read yet")
         if f["below"] is not None and f["kind"] not in ("number", "byte"):
             raise SystemExit(f"statement: the layout {kind} says `below` of a field that is no number ({field})")
-        if f["kind"] == "cv": parts.append(("field", e, field)); at += 32
-        elif m and int(m.group(1)) % 4 == 0: parts.append(("call", "words", [("field", e, field)])); at += int(m.group(1))
+        none = ("index", ("list", [("num", 0)]), ("num", 1))          # (the place 1 of a list of one thing: no value)
+        if f["kind"] == "cv":
+            x = ("field", e, field)
+            parts.append(("ifx", ("bin", "==", ("call", "len", [x]), ("num", 8)), x, none)); at += 32
+        elif m and int(m.group(1)) % 4 == 0:
+            nbytes = int(m.group(1))
+            x = ("field", e, field)
+            parts.append(("ifx", ("bin", "==", ("call", "len", [x]), ("num", nbytes)), ("call", "words", [x]), none)); at += nbytes
         elif f["kind"] in ("number", "byte"):
             bound = number_bound(f)
             x = ("field", e, field)
             words = ("list", [("call", "lo", [("call", "counter", [x])]), ("call", "hi", [("call", "counter", [x])])])
-            none = ("index", ("list", [("num", 0)]), ("num", 1))          # (the place 1 of a list of one thing: no value)
             parts.append(("ifx", ("bin", "<", x, ("num", bound)), words, none)); at += 8
         else: raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind} with a field of a kind the verifier in Lean does not read there yet: {field}: {f['kind']}")
     if at != lay["size"] or not parts: raise SystemExit(f"statement: the contract of {name} writes a record of the layout {kind}, whose fields do not fill it: not read yet")
@@ -392,6 +397,47 @@ def kinds_of(c, name, layouts={}):
     return kinds
 
 
+def linear_expr(e, num_args):
+    """Parse a linear integer combination of number parameters: returns (const, {name: coeff}) or None."""
+    if e[0] == "num": return (e[1], {})
+    if e[0] == "name" and e[1] in num_args: return (0, {e[1]: 1})
+    if e[0] == "bin" and e[1] in ("+", "-"):
+        a, b = linear_expr(e[2], num_args), linear_expr(e[3], num_args)
+        if a is None or b is None: return None
+        sign = 1 if e[1] == "+" else -1
+        c = dict(a[1])
+        for k, v in b[1].items(): c[k] = c.get(k, 0) + sign * v
+        return (a[0] + sign * b[0], c)
+    if e[0] == "bin" and e[1] == "*":
+        a, b = linear_expr(e[2], num_args), linear_expr(e[3], num_args)
+        if a is None or b is None: return None
+        if not a[1]: return (a[0] * b[0], {k: a[0] * v for k, v in b[1].items()})
+        if not b[1]: return (b[0] * a[0], {k: b[0] * v for k, v in a[1].items()})
+    return None
+
+
+def stack_bits_spec(e, num_args):
+    """Parse `BASE + STEP * bits((ARG - SUB) / DIV)` (with optional `- SUB` and `/ DIV`), or None."""
+    if not (e[0] == "bin" and e[1] == "+" and e[2][0] == "num" and e[2][1] >= 0): return None
+    base = e[2][1]
+    rhs = e[3]
+    if not (rhs[0] == "bin" and rhs[1] == "*" and rhs[2][0] == "num" and rhs[2][1] >= 0): return None
+    step = rhs[2][1]
+    call = rhs[3]
+    if not (call[0] == "call" and call[1] == "bits" and len(call[2]) == 1): return None
+    inner = call[2][0]
+    sub, div = 0, 1
+    if inner[0] == "bin" and inner[1] == "/" and inner[3][0] == "num" and inner[3][1] > 0:
+        div = inner[3][1]
+        inner = inner[2]
+    if inner[0] == "bin" and inner[1] == "-" and inner[3][0] == "num" and inner[3][1] >= 0:
+        sub = inner[3][1]
+        inner = inner[2]
+    if inner[0] == "name" and inner[1] in num_args:
+        return (base, step, inner[1], sub, div)
+    return None
+
+
 def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     """A contract as the lines Reader.lean reads."""
     out = []
@@ -422,14 +468,45 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     # it (which is less than the contract lets it do), and nothing is said of what the run held before.
     written = [leaf["name"] for leaf in c["leaves"]]
     if len(set(written)) != len(written): raise SystemExit(f"statement: the contract of {name} has two `ensures` of one run: the verifier in Lean does not read that yet")
+    # A written `N bytes` (N % 4 == 0) whose ensures is `bytes_of(...)` is treated as word-level (`inout` + `ensuresw`),
+    # matching `cv` and allowing callees like `compress_in_place` to read back bytes the function wrote to `out`.
+    word_out_bytes = {
+        leaf["name"] for leaf in c["leaves"]
+        if leaf["index"] is None and leaf["each"] is None and leaf["cond"] is None and leaf["part"] is None
+        and leaf["name"] not in kinds and leaf["name"] not in laid and leaf["name"] not in values
+        and leaf["expr"][0] == "call" and leaf["expr"][1] == "bytes_of"
+        and any(arg == leaf["name"] and re.fullmatch(r"\d+ bytes", kind) and int(kind.split()[0]) % 4 == 0
+                for arg, kind in c["args"])
+    }
+    num_args = {arg for arg, kind in c["args"] if kind == "number"}
+    given_map = {}
+    for g in c["given"]:
+        gn, gi, geach = g["name"], g["index"], g["each"]
+        if gn in given_map:
+            raise SystemExit(f"statement: the contract of {name} has two `requires {gn}[i] == ...` clauses")
+        if dict(c["args"]).get(gn) != "cvs" or gn in written:
+            raise SystemExit(f"statement: the contract of {name} has `requires {gn}[i] == ...` on an argument that is not a read-only `cvs`")
+        if not (geach[0] == ("num", 0) and geach[1][0] == "bin" and geach[1][1] == "/"
+                and geach[1][2][0] == "name" and geach[1][2][1] in num_args
+                and geach[1][3][0] == "num" and geach[1][3][1] > 0):
+            raise SystemExit(f"statement: the contract of {name} has a `requires {gn}[i] == ...` range the verifier in Lean does not read yet")
+        if gi in names or gi in kinds:
+            raise SystemExit(f"statement: the contract of {name}: `requires {gn}[{gi}] == ...` reuses an argument name")
+        given_map[gn] = (geach[1][2][1], geach[1][3][1], g)
     for arg, kind in c["args"]:
         m = re.fullmatch(r"(\w+) bytes", kind)
         if kind == "number" and arg not in written: out.append(f"arg {arg} number")
         elif m and not m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} bytes {m.group(1)}")
+        elif m and m.group(1).isdigit() and arg in word_out_bytes: out.append(f"arg {arg} inout {int(m.group(1))}")
         elif m and m.group(1).isdigit() and arg in written: out.append(f"arg {arg} out {int(m.group(1))}")
         elif m and m.group(1).isdigit() and arg not in written: out.append(f"arg {arg} fixed {int(m.group(1))}")
         elif arg in tables and arg not in written: out += [f"arg {arg} fixed {8 * tables[arg]}", f"lanes {arg} n"]
         elif arg in values and arg in written: out.append(f"arg {arg} out {32 * values[arg]}")
+        elif kind == "cvs" and arg not in written:
+            if arg not in given_map:
+                raise SystemExit(f"statement: the contract of {name} has `cvs` argument {arg} without `requires {arg}[i] == ...`")
+            len_arg, ch, _ = given_map[arg]
+            out.append(f"arg {arg} valarray {len_arg} {ch} 32")
         elif arg in packed and arg not in written: out.append(f"arg {arg} number")
         # a run of words: read and written where an `ensures` speaks of it, only read where none does
         elif kind in KINDS and KINDS[kind][0] is not None: out.append(f"arg {arg} {'inout' if arg in written else 'fixed'} {KINDS[kind][0]}")
@@ -464,10 +541,26 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
                 and e[2][3][0] == "num" and e[3][0] == "num"
                 and 0 <= e[2][3][1] <= e[3][1] and (e[3][1] - e[2][3][1]) // e[2][2][2][1] < 2 ** 64 - 1):
             out.append(f"below {e[2][2][3][1]} {(e[3][1] - e[2][3][1]) // e[2][2][2][1] + 1}")
+        elif e[0] == "bin" and e[1] in ("<=", "<", ">=", ">"):
+            la, lb = linear_expr(e[2], num_args), linear_expr(e[3], num_args)
+            if la is None or lb is None:
+                raise SystemExit(f"statement: the contract of {name} has a `requires` the verifier in Lean does not read yet")
+            if e[1] in ("<=", "<"):
+                k = lb[0] - la[0] - (1 if e[1] == "<" else 0)
+                cs = {a: lb[1].get(a, 0) - la[1].get(a, 0) for a in set(la[1]) | set(lb[1])}
+            else:
+                k = la[0] - lb[0] - (1 if e[1] == ">" else 0)
+                cs = {a: la[1].get(a, 0) - lb[1].get(a, 0) for a in set(la[1]) | set(lb[1])}
+            pairs = " ".join(f"{a} {cs[a]}" for a, _ in c["args"] if cs.get(a, 0) != 0)
+            out.append(f"linpre {k}" + (f" {pairs}" if pairs else ""))
         else: raise SystemExit(f"statement: the contract of {name} has a `requires` the verifier in Lean does not read yet")
-    for key in ("calls", "conditions", "given", "spoils"):
+    for key in ("calls", "conditions", "spoils"):
         if c[key]: raise SystemExit(f"statement: the contract of {name} has `{key}`, which the verifier in Lean does not read yet")
-    if c["decreases"]: raise SystemExit(f"statement: the contract of {name} has a line the verifier in Lean does not read yet")
+    if c["decreases"]:
+        if c["decreases"][0] == "name" and c["decreases"][1] in num_args:
+            out.append(f"fndecreases {c['decreases'][1]}")
+        else:
+            raise SystemExit(f"statement: the contract of {name} has a `decreases` line the verifier in Lean does not read yet")
     # What is written is taken to overlap nothing else given (the account in Lean asks it of the caller), so the
     # contract must ask it of the caller too: `requires no_overlap` of every address among the arguments.
     addresses = [arg for arg, kind in c["args"] if not in_register(arg)]
@@ -493,6 +586,8 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
     # A name in an expression of the contract that is no argument's and is a constant of the specification is
     # that constant (as in a definition).
     scope = Scope(consts, frozenset(names) | frozenset(kinds))
+    for g in c["given"]:
+        out.append(f"valspec {g['name']} {g['index']} " + sexp(by_kind(g["expr"], kinds, name), seqs, scope.with_name(g["index"])))
     for te in c.get("trace_exprs", []):
         out.append("traceexpr " + sexp(te, seqs, scope))
     if c.get("result_dep") is not None:
@@ -535,11 +630,24 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
             if leaf["part"] is not None: raise SystemExit(f"statement: the contract of {name} has an `ensures` of a part of a run of words, which the verifier in Lean does not read yet")
             out.append(f"ensuresw {leaf['name']} " + sexp(("call", "bytes_of", [by_kind(leaf["expr"], kinds, name)]), seqs, scope))
             continue
+        if leaf["name"] in word_out_bytes:
+            out.append(f"ensuresw {leaf['name']} " + sexp(by_kind(leaf["expr"], kinds, name), seqs, scope))
+            continue
         if kinds: raise SystemExit(f"statement: the contract of {name} has an `ensures` of bytes beside arguments of the kinds {', '.join(said)}: not read yet")
         count = next(int(re.fullmatch(r"(\d+) bytes", kind).group(1)) for arg, kind in c["args"] if arg == leaf["name"])
         lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
         out.append(f"ensures {leaf['name']} {sexp(lo, seqs, scope)} {sexp(hi, seqs, scope)} {sexp(leaf['expr'], seqs, scope)}")
-    out.append(f"stack {c['stack']}")
+    if isinstance(c["stack"], int):
+        out.append(f"stack {c['stack']}")
+    elif isinstance(c["stack"], tuple) and c["stack"][0] == "grows":
+        sb = stack_bits_spec(c["stack"][1], num_args)
+        if sb is None:
+            raise SystemExit(f"statement: the contract of {name} has a `stack` formula the verifier in Lean does not read yet")
+        base, step, arg, sub, div = sb
+        out.append(f"stack {base}")
+        out.append(f"stackbits {step} {arg} {sub} {div}")
+    else:
+        raise SystemExit(f"statement: the contract of {name} has a `stack` line the verifier in Lean does not read yet")
     return out
 
 
@@ -568,6 +676,7 @@ def ordered(functions):
         if symbol in path: raise SystemExit(f"statement: a ring of calls: {' -> '.join(path + [symbol])}")
         if symbol in out: return
         for name in calls[symbol]:
+            if name == symbol: continue
             if name not in calls: raise SystemExit(f"statement: {symbol} calls {name}, which is not among the functions to be shown")
             visit(name, path + [symbol])
         out.append(symbol)

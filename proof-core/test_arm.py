@@ -70,8 +70,8 @@ CHANGES = [
     ("x19 is taken back from x20's cell", [(SIX, 22, "ldr64_sp", {"D": "x19", "N": 80})], KEEPS),
     ("the first call is given d to write", [(SIX, 15, "mov_rr", {"D": "x0", "S": "x1"})],
      "refused: a called function is given to write what is not whole words of a run this function may read and write, each of them known"),
-    ("a cell of the frame's block is not written before the first call", [(SIX, 10, "nop", {})],
-     "refused: a called function is given to write what is not whole cells of this function's frame, each of them known"),
+    ("the first call is given a block reaching past the frame's top", [(SIX, 15, "add_of_sp", {"D": "x0", "I": 64})],
+     "refused: a called function is given to write what is not whole cells of this function's frame"),
 ]
 # A change that leaves the statement true: the frame's block is written with ones, not zeros, before the first call writes it.
 STILL_TRUE = ("the frame's block is written with ones first", [(SIX, 6, "mov_ri", {"D": "x9", "I": 1})])
@@ -143,10 +143,11 @@ class Verified(unittest.TestCase):
                 self.assertTrue(last.startswith(why), f"{what}: {last[:200]}")
 
     def test_a_change_that_leaves_the_statement_true_is_still_shown(self):
-        what, patches = STILL_TRUE
-        o = changed(patches, self.path("true.o"))
-        with open(o, "rb") as f, open(OBJ, "rb") as g: self.assertNotEqual(f.read(), g.read())
-        self.assertEqual(lean_verify.verify(self.spec, self.fns(o), KEPT), (True, "shown"))
+        for what, patches in (STILL_TRUE, ("a cell of the frame's write-only block is not zeroed before the first call", [(SIX, 10, "nop", {})])):
+            with self.subTest(what=what):
+                o = changed(patches, self.path("true.o"))
+                with open(o, "rb") as f, open(OBJ, "rb") as g: self.assertNotEqual(f.read(), g.read())
+                self.assertEqual(lean_verify.verify(self.spec, self.fns(o), KEPT), (True, "shown"))
 
     def test_a_contract_changed_in_one_place(self):
         for what, old, new, why in SPECS:

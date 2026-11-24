@@ -397,7 +397,7 @@ theorem findLane_spec {c : Contract} {addr : Row} : ∀ {l : List Known} {v j p 
         next =>
           obtain ⟨m, t⟩ := findLane_spec h
           exact ⟨List.mem_cons_of_mem _ m, t⟩
-    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ =>
+    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ =>
       simp only [findLane] at h
       obtain ⟨m, t⟩ := findLane_spec h
       exact ⟨List.mem_cons_of_mem _ m, t⟩
@@ -432,7 +432,7 @@ theorem symLoadBlock_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
     have ilt : pl / 8 < count := by rw [hcount]; omega
     have eptr : lanePtr s0 r' (pl / 8) = load s0.mem (s0.reg r' + pl) 8 := by
       unfold lanePtr; rw [show 8 * (pl / 8) = pl by omega]
-    obtain ⟨fit, apart, bytes, outs⟩ := E.lane ht ilt
+    obtain ⟨fit, apart, bytes, outs⟩ := E.laneAt ht ilt
     have lr16 : lr < ctx.nreg := tableAt_lt ht
     have hlr := H.entry lr lr16
     rw [hlr, hv, ← eptr] at g2
@@ -464,7 +464,7 @@ theorem symLoadBlock_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
       intro y h1 h2
       obtain ⟨i1, i2⟩ := inside y h1 h2
       simp only [Contract.perm, Bool.or_eq_true]
-      left; right
+      left; left; right
       unfold Contract.inLane
       exact List.any_eq_true.mpr ⟨(x', r', count, lr), tableAt_mem ht,
         List.any_eq_true.mpr ⟨pl / 8, List.mem_range.mpr ilt, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩⟩
@@ -943,7 +943,7 @@ theorem symSpillStore_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
         have ha' : (a : Int) = (s0.reg RSP : Int) + ev ρ (frameOffset addr) := by rw [off, ← ea]; omega
         generalize ((s0.reg RSP : Int) + ev ρ o).toNat = A at hA hy1 hy2
         omega
-    · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes, wf.spec, wf.wrote,
+    · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, (fun _ _ h => nomatch h), wf.facts, wf.bytes, wf.spec, wf.wrote,
         ⟨wf.words.table, wf.words.atoms, wf.words.vec, wf.words.rotrs, wf.words.wrote, fun o ids h => by
           rcases List.mem_cons.mp h with h | h
           · simp only [Prod.mk.injEq] at h
@@ -1011,7 +1011,7 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
     have he := V.pure_ok h
     injection he with h1 _; subst s'
     refine ⟨ρ', setVec512 st r lanes, ⟨c.agree, c.mono, ?_, ?_⟩, ?_, rfl⟩
-    · exact ⟨c.holds.entry, c.holds.data, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.facts, c.holds.bytes,
+    · exact ⟨c.holds.entry, c.holds.data, c.holds.reg, c.holds.small, c.holds.zf, c.holds.cf, c.holds.frame, c.holds.frameW, c.holds.facts, c.holds.bytes,
         c.holds.spec, c.holds.mem, c.holds.wrote,
         ⟨fun x ids hx k hk => by
           show (if x = r then lanes.getD k 0 else st.vec x k) = _
@@ -1020,7 +1020,7 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             simp only [List.getD, List.getElem?_eq_getElem hk, List.getElem?_map, Option.map_some, Option.getD_some]
           · rw [ite_eq_right ne]; exact c.holds.words.vec x ids hx' k hk,
          c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range⟩
-    · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
+    · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.frameW, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
         ⟨c.wf.words.table, c.wf.words.atoms,
          fun x ids hx => by
            rcases lookup_cons_cases hx with ⟨_, rfl⟩ | ⟨_, hx'⟩

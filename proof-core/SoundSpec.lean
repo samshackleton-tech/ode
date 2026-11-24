@@ -1126,7 +1126,7 @@ theorem mem_zip_right {α β : Type} : ∀ {l : List α} {m : List β} {a : α} 
 
 theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (f : SFact) (hf : f.holds ctx s0 ρ) : Holds ctx s0 ρ { s with spec := f :: s.spec } st :=
-  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.facts, H.bytes,
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW, H.facts, H.bytes,
    fun g m => by
      cases m with
      | head => exact hf
@@ -1134,7 +1134,7 @@ theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
    H.mem, H.wrote, H.words, H.known, H.range⟩
 
 theorem WF.withSpec {s : Sym} (wf : WF ctx s) (f : SFact) (hf : f.bounded s.nvars) : WF ctx { s with spec := f :: s.spec } :=
-  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.facts, wf.bytes,
+  ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, wf.facts, wf.bytes,
    (fun g m => by
      cases m with
      | head => exact hf
@@ -1352,6 +1352,10 @@ theorem symEnvIn_bounded (c : Contract) {N : Nat} : ∀ (args : List (String × 
     intro nv m
     simp only [symEnvIn] at m
     exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
+  | (n, .valArray _ _ _) :: args, r :: regs, k, hr => by
+    intro nv m
+    simp only [symEnvIn] at m
+    exact symEnvIn_bounded c args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m')) nv m
   | (n, .bytes len) :: args, r :: regs, k, hr => by
     intro nv m
     simp only [symEnvIn] at m
@@ -1387,6 +1391,11 @@ theorem semEnv_symEnvIn (ctx : Ctx) (s0 : State) (ρ : Nat → Int) {N : Nat} (h
     simp only [symEnvIn, envIn]
     exact ih
   | (n, .inout _) :: args, r :: regs, k, hr, hj => by
+    have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
+      (by intro j; have := hj j; simpa only [regionsIn] using this)
+    simp only [symEnvIn, envIn]
+    exact ih
+  | (n, .valArray _ _ _) :: args, r :: regs, k, hr, hj => by
     have ih := semEnv_symEnvIn ctx s0 ρ hρ args regs k (fun r' m' => hr r' (List.mem_cons_of_mem _ m'))
       (by intro j; have := hj j; simpa only [regionsIn] using this)
     simp only [symEnvIn, envIn]

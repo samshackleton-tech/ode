@@ -91,6 +91,25 @@ def Key.wf (n t : Nat) : Key → Prop
   | .span _ off len => bounded n off ∧ bounded n len
   | .use h => h < n
 
+theorem Tab.size_eq_length (t : Tab) : t.size = t.list.length := by
+  simp [Tab.size, Tab.list]
+
+/-- A serialized record layout matches `fvs` against the word values `ws`: each `.words` field has `n`
+words, each `.bytes` field has `n` bytes (`n % 4 = 0`) equal to `wordBytes` of `n / 4` words, and each
+`.u64` field is an integer `< bd` split into low/high 32-bit words `lo + 2^32 * hi`. -/
+def RecFieldsHolds : List RecField → List Nat → List (String × Val) → Prop
+  | [], [], [] => True
+  | .words fn n :: fs, ws, (x, .list vs) :: rest =>
+    x = fn ∧ n ≤ ws.length ∧ vs = (ws.take n).map Val.word ∧ RecFieldsHolds fs (ws.drop n) rest
+  | .bytes fn n :: fs, ws, (x, .list vs) :: rest =>
+    x = fn ∧ n % 4 = 0 ∧ n / 4 ≤ ws.length ∧ vs = (ws.take (n / 4)).flatMap (fun w =>
+      [.int (w % 256 : Nat), .int (w / 256 % 256 : Nat), .int (w / 65536 % 256 : Nat), .int (w / 16777216 % 256 : Nat)]) ∧
+    RecFieldsHolds fs (ws.drop (n / 4)) rest
+  | .u64 fn bd :: fs, lo :: hi :: ws, (x, .int v) :: rest =>
+    x = fn ∧ 0 ≤ v ∧ v < (bd : Int) ∧ bd ≤ M64 ∧ v = (lo : Int) + W32i * (hi : Int) ∧
+    lo < W32 ∧ hi < W32 ∧ RecFieldsHolds fs ws rest
+  | _, _, _ => False
+
 /-- What is known of a number that is no row speaks only of unknowns in use (`n` of them) and of terms of
 the table (`t` of them). -/
 def Known.wf (n t : Nat) : Known → Prop
@@ -101,6 +120,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .div x _ q => bounded n x ∧ q + 1 < n
   | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
   | .use _ keys h => (∀ k ∈ keys, k.wf n t) ∧ h < n
+  | .record u _ ids => u < n ∧ ∀ i ∈ ids, i < t
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
@@ -130,6 +150,7 @@ structure WF (ctx : Ctx) (s : Sym) : Prop where
   zf : s.zf.bounded s.nvars
   cf : s.cf.bounded s.nvars
   frame : ∀ o v, (o, v) ∈ s.frame → bounded s.nvars v
+  frameW : ∀ o i, (o, i) ∈ s.frameW → i < s.terms.length
   facts : ∀ f ∈ s.facts, bounded s.nvars f
   bytes : ∀ v r o, (v, r, o) ∈ s.bytes → v < s.nvars ∧ bounded s.nvars o
   spec : ∀ f ∈ s.spec, f.bounded s.nvars
@@ -240,7 +261,25 @@ among those two. -/
 theorem wordRuns_of {c : Contract} {j : Nat} {x : String × Nat × Nat} (h : (c.fixeds ++ c.inouts)[j]? = some x) :
     c.wordRuns[j]? = some x := by
   unfold Contract.wordRuns
-  rw [List.getElem?_append_left (List.getElem?_eq_some_iff.mp h).1]; exact h
+  have hj := (List.getElem?_eq_some_iff.mp h).1
+  rw [List.getElem?_append_left (by simp only [List.length_append, List.length_map]; simp only [List.length_append] at hj; omega)]
+  rw [List.getElem?_append_left hj]
+  exact h
+
+theorem wordRuns_of_region {c : Contract} {k : Nat} {r l : Nat} (h : c.regions[k]? = some (r, l)) :
+    c.wordRuns[c.fixeds.length + c.inouts.length + k]? = some ("", r, 0) := by
+  unfold Contract.wordRuns
+  have hk := (List.getElem?_eq_some_iff.mp h).1
+  rw [List.getElem?_append_left (by simp only [List.length_append, List.length_map]; omega)]
+  rw [List.getElem?_append_right (by simp only [List.length_append]; omega)]
+  simp only [List.length_append, Nat.add_sub_cancel_left, List.getElem?_map, h, Option.map_some]
+
+theorem wordRuns_of_valArray {c : Contract} {k : Nat} {x : String} {r l ch el : Nat}
+    (h : c.valArrays[k]? = some (x, r, l, ch, el)) :
+    c.wordRuns[c.fixeds.length + c.inouts.length + c.regions.length + k]? = some (x, r, 0) := by
+  unfold Contract.wordRuns
+  rw [List.getElem?_append_right (by simp only [List.length_append, List.length_map]; omega)]
+  simp only [List.length_append, List.length_map, Nat.add_sub_cancel_left, List.getElem?_map, h, Option.map_some]
 
 /-- Known words agree with the machine's vector registers and memory. -/
 structure WordFacts (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (terms : List Node)
@@ -277,16 +316,18 @@ noncomputable def Key.val (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List 
 def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Known → Prop
   | .load v j c => ∃ x r n, ctx.contract.fixeds[j]? = some (x, r, n) ∧ c + 8 ≤ n ∧ ρ v = (Ode.load s0.mem (s0.reg r + c) 8 : Nat)
   | .or v x y => 0 ≤ ev ρ x ∧ 0 ≤ ev ρ y ∧ ρ v = (((ev ρ x).toNat ||| (ev ρ y).toNat : Nat) : Int)
-  | .held f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+  | .held f keys ids => ctx.contract.preVals ctx.defs s0 → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ T i)))
-  | .heldB f keys ids => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+  | .heldB f keys ids => ctx.contract.preVals ctx.defs s0 → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (.list (wordBytes (ids.map fun i => den (inpOf ctx s0) ρ T i)))
   | .div x m q => 0 < m → ρ q = ev ρ x / m ∧ ρ (q + 1) = ev ρ x % m
   | .block j c off vs => ∃ x r count l, ctx.contract.tableAt j = some (x, r, count, l) ∧ c % 8 = 0 ∧ c / 8 < count ∧
       0 ≤ ev ρ off ∧ ev ρ off + 64 ≤ 64 * (s0.reg l : Int) ∧ vs.length = 16 ∧
       ∀ w, w < 16 → ρ (vs.getD w 0) = (Ode.load s0.mem (lanePtr s0 r (c / 8) + (ev ρ off).toNat + 4 * w) 4 : Nat)
-  | .use f keys h => ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
+  | .use f keys h => ctx.contract.preVals ctx.defs s0 → ∃ d, findDef ctx.defs f = some d ∧ d.params.length = keys.length ∧
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (Val.decode (ρ h).toNat)
+  | .record u fields ids => ctx.contract.preVals ctx.defs s0 → ∃ fvs, Val.decode (ρ u).toNat = .record fvs ∧
+      RecFieldsHolds fields (ids.map fun i => den (inpOf ctx s0) ρ T i) fvs
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -352,7 +393,10 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   zf : s.zf.holds ρ st.zf
   cf : s.cf.holds ρ st.cf
   frame : ∀ o v, (o, v) ∈ s.frame →
-    -(ctx.contract.stack : Int) ≤ o ∧ o + 8 ≤ 0 ∧ (load st.mem ((s0.reg RSP : Int) + o).toNat 8 : Int) = ev ρ v
+    -(ctx.contract.stackAt s0 : Int) ≤ o ∧ o + 8 ≤ 0 ∧ (load st.mem ((s0.reg RSP : Int) + o).toNat 8 : Int) = ev ρ v
+  frameW : ∀ o i, (o, i) ∈ s.frameW →
+    -(ctx.contract.stackAt s0 : Int) ≤ o ∧ o + 4 ≤ 0 ∧
+    load st.mem ((s0.reg RSP : Int) + o).toNat 4 = den (inpOf ctx s0) ρ s.terms i
   facts : ∀ f ∈ s.facts, f.holds ρ
   bytes : ∀ v r o, (v, r, o) ∈ s.bytes → ∃ base len, ctx.contract.regions[r]? = some (base, len) ∧
     0 ≤ ev ρ o ∧ ev ρ o < s0.reg len ∧ ρ v = s0.mem (s0.reg base + (ev ρ o).toNat)
@@ -488,7 +532,8 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     rw [← ev_agree wk.2.1 a, ← ev_agree wk.2.2 a, ← a v wk.1]
     exact ⟨h1, h2, h3⟩
   | held f keys ids =>
-    obtain ⟨d, h1, h2, h3⟩ := h
+    intro hpv
+    obtain ⟨d, h1, h2, h3⟩ := h hpv
     refine ⟨d, h1, h2, ?_⟩
     have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
       List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
@@ -496,7 +541,8 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
       List.map_congr_left fun i hi => by rw [den_mono hw ha a e (wk.2 i hi)]
     rw [ek, ei]; exact h3
   | heldB f keys ids =>
-    obtain ⟨d, h1, h2, h3⟩ := h
+    intro hpv
+    obtain ⟨d, h1, h2, h3⟩ := h hpv
     refine ⟨d, h1, h2, ?_⟩
     have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
       List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
@@ -518,11 +564,19 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
       exact List.getElem_mem _
     rw [← eo, ← a _ (wk.2 _ hm)]; exact h7 w hw
   | use f keys u =>
-    obtain ⟨d, h1, h2, h3⟩ := h
+    intro hpv
+    obtain ⟨d, h1, h2, h3⟩ := h hpv
     refine ⟨d, h1, h2, ?_⟩
     have ek : keys.map (Key.val ctx s0 ρ' T') = keys.map (Key.val ctx s0 ρ T) :=
       List.map_congr_left fun k hk => Key.val_mono (wk.1 k hk) a hw ha e
     rw [ek, ← a u wk.2]; exact h3
+  | record u fields ids =>
+    intro hpv
+    obtain ⟨fvs, h1, h2⟩ := h hpv
+    refine ⟨fvs, by rw [← a u wk.1]; exact h1, ?_⟩
+    have ei : (ids.map fun i => den (inpOf ctx s0) ρ' T' i) = ids.map fun i => den (inpOf ctx s0) ρ T i :=
+      List.map_congr_left fun i hi => den_mono hw ha a e (wk.2 i hi)
+    rw [ei]; exact h2
 
 theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -542,6 +596,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | div x m q => exact ⟨bounded_mono hn wk.1, Nat.lt_of_lt_of_le wk.2 hn⟩
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
   | use f keys h => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), Nat.lt_of_lt_of_le wk.2 hn⟩
+  | record u fields ids => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Byte} {n : Nat}
@@ -566,6 +621,9 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
   frame o v m := by
     obtain ⟨h1, h2, h3⟩ := h.frame o v m
     exact ⟨h1, h2, h3.trans (ev_agree (wf.frame o v m) a)⟩
+  frameW o i m := by
+    obtain ⟨h1, h2, h3⟩ := h.frameW o i m
+    exact ⟨h1, h2, h3.trans (den_agree wf.words.table (fun j r hj => (ev_agree (wf.words.atoms j r hj) a).symm) (wf.frameW o i m)).symm⟩
   facts f m := by
     have := h.facts f m
     rw [holds_iff] at this ⊢

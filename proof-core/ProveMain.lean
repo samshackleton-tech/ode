@@ -105,14 +105,18 @@ def main (args : List String) : IO UInt32 := do
     for f in job.fns do
       if done.any (fun d => d.1 == f.name) then
         IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
-      let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done,
-                         pieces := job.pieces, piece := f.piece }
+      let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
+      let selfName := if f.contract.decreases.isSome then some f.name else none
+      let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
+                         selfName := selfName, pieces := job.pieces, piece := f.piece }
       match locateRefusal ctx f.proof with
       | some why => IO.println s!"{why}\nin {f.name}"; return 1
       | none => done := (f.name, f.contract) :: done
     IO.println "shown"
     return 0
+  | ["--only", tablePath, statementPath, headPath, name]
   | [tablePath, statementPath, headPath, name] =>
+    let onlyTarget := args.length == 5
     let table ← match readTable (← IO.FS.readFile tablePath) with
       | .ok t => pure t
       | .error e => say s!"{e}\n.end\n"; return 2
@@ -141,12 +145,18 @@ def main (args : List String) : IO UInt32 := do
       if said.isSome then break
       if done.any (fun d => d.1 == f.name) then said := some s!"refused: two functions are named {f.name}"
       else
-        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := done,
-                           pieces := job.pieces, piece := f.piece }
+        let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
+        let selfName := if f.contract.decreases.isSome then some f.name else none
+        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
+                           selfName := selfName, pieces := job.pieces, piece := f.piece }
         let why ←
           if f.name == name then do
             -- (with the advice: where the lines have run out before an `ensures` of words or a call, the rows to try are printed)
-            match verify { ctx with advice := adviceFor ctx } { line := lineAsItComes } with
+            if !ctx.contract.stackBitsOk then
+              pure (some "refused: stack bits argument must be a parameter listed in `trace depends on` with a positive divisor")
+            else if !ctx.contract.decreasesOk then
+              pure (some "refused: `decreases` argument must be a parameter listed in `trace depends on`")
+            else match verify { ctx with advice := adviceFor ctx } { line := lineAsItComes } with
             | .error why => pure (some why)
             | .ok _ =>
               match ctx.contract.resultHidden with
@@ -159,10 +169,13 @@ def main (args : List String) : IO UInt32 := do
                   match verdictOne { ctx with contract := ctx.contract.forResult rh, resultPass := true } items.toList with
                   | none => pure none
                   | some why => pure (some s!"for `result depends on`: {why}")
+          else if onlyTarget then pure none
           else pure (verdict ctx f.proof)
         match why with
         | some why => said := some s!"{why}\nin {f.name}"
-        | none => done := (f.name, f.contract) :: done
+        | none =>
+          done := (f.name, f.contract) :: done
+          if onlyTarget && f.name == name then break
     say ((said.getD "shown") ++ "\n" ++ (if ← ended.get then ".more\n" else ".end\n"))
     return 0
   | _ => say "odeprove TABLE STATEMENT HEAD NAME | odeprove --locate TABLE STATEMENT PROOF\n.end\n"; return 2

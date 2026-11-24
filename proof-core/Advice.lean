@@ -53,9 +53,11 @@ mutual
           | some x, some y =>
             let pair := fun (p q : Row) =>
               -- (only where `wnum` turns on how the two compare)
-              if !(op == "-" || op == "==" || op == "<" || op == ">=") then none
+              if !(op == "-" || op == "==" || op == "<" || op == ">=" || op == "<=" || op == ">") then none
               -- `==`, where the first is known to be no less than the second: is the second below the first?
-              else if op == "==" && plain s.facts (Lin.sub p q) then some (q, p) else some (p, q)
+              else if op == "==" && plain s.facts (Lin.sub p q) then some (q, p)
+              else if op == "<=" || op == ">" then some (q, p)
+              else some (p, q)
             (match x, y with
              | .num p, .num q => pair p q
              | .num p, .int m => pair p (Lin.const m)
@@ -165,9 +167,36 @@ def callNeeds (ctx : Ctx) (s : Sym) (c : Contract) : List (String × Kind) → L
   | _ :: args, _ :: regs => callNeeds ctx s c args regs
   | _, _ => []
 
-/-- Before a call: the rows its rules will look for that no one fact says. -/
+/-- Before a call: the rows its rules will look for that no one fact says (region bounds, lane region bounds,
+and conditional `needsIf` equalities). -/
+def laneRegionNeeds (ctx : Ctx) (s : Sym) (ct : Int) (nb : Nat) : Nat → Nat → List Row
+  | 0, _ => []
+  | count + 1, i =>
+    (match s.frame.find? (fun cell => cell.1 == ct + 8 * (i : Int)) with
+     | some (_, a) =>
+       match findRegion a ctx.contract.regions 0 with
+       | some (.region k off) =>
+         match Lin.isConst off, ctx.contract.regions[k]? with
+         | some c0, some (_, l) => [Lin.sub (Lin.var l) (Lin.const (c0 + 64 * (nb : Int)))]
+         | _, _ => []
+       | _ => []
+     | none => []) ++ laneRegionNeeds ctx s ct nb count (i + 1)
+
 def callRows (ctx : Ctx) (s : Sym) (c : Contract) : List Row :=
-  (callNeeds ctx s c c.args c.argRegs).filter fun g => decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
+  let laneRows := match c.tables with
+    | [(_, tr, count, l)] =>
+      match Lin.isConst (s.reg l), frameAt s tr with
+      | some nb, some ct => if 0 ≤ nb then laneRegionNeeds ctx s ct nb.toNat count 0 else []
+      | _, _ => []
+    | _ => []
+  let needRows := (c.needs.map fun what =>
+    if ctx.contract.needs.contains what then []
+    else (ctx.contract.needsIf.filter fun x => x.1 == what).flatMap fun (_, arg0, k0) =>
+      match ctx.contract.regOf arg0 with
+      | some r0 => [Lin.sub (Lin.var r0) (Lin.const k0), Lin.sub (Lin.const k0) (Lin.var r0)]
+      | none => []).flatten
+  (callNeeds ctx s c c.args c.argRegs ++ laneRows ++ needRows).filter fun g =>
+    decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
 
 /-- The advice `odeprove` gives the verifier's rules to print. -/
 def adviceFor (ctx : Ctx) : Advice := { ensures := ensureRows ctx, call := callRows ctx }
