@@ -1,0 +1,21 @@
+name = "specagree"
+defaultTargets = ["SpecAgree", "spec-agree-check"]
+
+[[lean_lib]]
+name = "Table"
+srcDir = "../../proof-core"
+
+[[lean_lib]]
+name = "Machine"
+srcDir = "../../proof-core"
+
+[[lean_lib]]
+name = "Contract"
+srcDir = "../../proof-core"
+
+[[lean_lib]]
+name = "SpecAgree"
+
+[[lean_exe]]
+name = "spec-agree-check"
+root = "CheckMain"
