@@ -1019,7 +1019,11 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           · rw [ite_eq_left rfl, eq]
             simp only [List.getD, List.getElem?_eq_getElem hk, List.getElem?_map, Option.map_some, Option.getD_some]
           · rw [ite_eq_right ne]; exact c.holds.words.vec x ids hx' k hk,
-         c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range⟩
+         c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range,
+        fun x hx => by
+          have hne : x ≠ r := by have := (List.mem_filter.mp hx).2; simpa using this
+          funext k; simp only [setVec512, ite_eq_right hne]
+          exact congrFun (c.holds.vecIntact x (List.mem_filter.mp hx).1) k⟩
     · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.frameW, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
         ⟨c.wf.words.table, c.wf.words.atoms,
          fun x ids hx => by

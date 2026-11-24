@@ -1131,7 +1131,7 @@ theorem Holds.withSpec {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
      cases m with
      | head => exact hf
      | tail _ m => exact H.spec g m,
-   H.mem, H.wrote, H.words, H.known, H.range⟩
+   H.mem, H.wrote, H.words, H.known, H.range, H.vecIntact⟩
 
 theorem WF.withSpec {s : Sym} (wf : WF ctx s) (f : SFact) (hf : f.bounded s.nvars) : WF ctx { s with spec := f :: s.spec } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, wf.facts, wf.bytes,

@@ -441,7 +441,89 @@ def stack_bits_spec(e, num_args):
     return None
 
 
-def contract_lines(c, name, seqs={}, consts=(), layouts={}):
+_X86_GPRS = frozenset(["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"])
+_ARM64_GPRS = frozenset([f"x{i}" for i in range(31)] + ["sp"])
+_X86_VECS = frozenset([f"{p}{i}" for p in ("xmm", "ymm") for i in range(16)] + [f"zmm{i}" for i in range(32)])
+_ARM64_VECS = frozenset([f"v{i}" for i in range(32)])
+
+
+def _vec_num(vname):
+    return int(vname[3:] if vname.startswith(("xmm", "ymm", "zmm")) else vname[1:])
+
+
+def _calling_lines(cc, name, arg_names, ret_expr, result_name, is_arm64):
+    """Validate an optional `calling { ... }` block and emit `argregs`/`retreg`/`keeps`/`keepsvec`."""
+    if cc is None:
+        return []
+    gprs = _ARM64_GPRS if is_arm64 else _X86_GPRS
+    vecs = _ARM64_VECS if is_arm64 else _X86_VECS
+    arch = "AArch64" if is_arm64 else "x86-64"
+    forbidden = {"sp", "x30"} if is_arm64 else {"rsp"}
+
+    def check_gpr(reg, role):
+        if reg not in gprs:
+            raise SystemExit(f"statement: the contract of {name}: calling `{role}` register {reg!r} is not an {arch} general register")
+        if reg in forbidden:
+            raise SystemExit(f"statement: the contract of {name}: calling `{role}` cannot use reserved register {reg!r}")
+
+    out = []
+    if cc["in"] is not None:
+        assigned = cc["in"]
+        extra = [p for p in assigned if p not in arg_names]
+        if extra:
+            raise SystemExit(f"statement: the contract of {name}: calling `in` assigns unknown parameter(s): {', '.join(extra)}")
+        missing = [p for p in arg_names if p not in assigned]
+        if missing:
+            raise SystemExit(f"statement: the contract of {name}: calling `in` must assign every parameter (missing: {', '.join(missing)})")
+        regs = [assigned[p] for p in arg_names]
+        seen = set()
+        for reg in regs:
+            check_gpr(reg, "in")
+            if reg in seen:
+                raise SystemExit(f"statement: the contract of {name}: calling `in` uses register {reg!r} more than once")
+            seen.add(reg)
+        out.append("argregs" + (" " + " ".join(regs) if regs else ""))
+
+    if cc["out"] is not None:
+        if result_name is not None:
+            raise SystemExit(f"statement: the contract of {name}: calling `out` cannot be used with abstract `returns {result_name}`")
+        if ret_expr is None:
+            raise SystemExit(f"statement: the contract of {name}: calling `out` requires a `returns EXPR` clause")
+        check_gpr(cc["out"], "out")
+        out.append(f"retreg {cc['out']}")
+
+    if cc["preserves"] is not None:
+        seen = set()
+        for reg in cc["preserves"]:
+            check_gpr(reg, "preserves")
+            if reg in seen:
+                raise SystemExit(f"statement: the contract of {name}: calling `preserves` lists register {reg!r} more than once")
+            seen.add(reg)
+        out.append("keeps" + (" " + " ".join(cc["preserves"]) if cc["preserves"] else ""))
+
+    if ret_expr is not None or result_name is not None:
+        eff_ret = cc["out"] if cc["out"] is not None else ("x0" if is_arm64 else "rax")
+        eff_keeps = cc["preserves"] if cc["preserves"] is not None else (
+            [f"x{i}" for i in range(19, 30)] if is_arm64 else ["rbx", "rbp", "r12", "r13", "r14", "r15"]
+        )
+        if eff_ret in eff_keeps:
+            raise SystemExit(f"statement: the contract of {name}: calling `out` register {eff_ret!r} cannot also be in `preserves`")
+
+    if cc["preserves_vec"] is not None:
+        seen_idx = set()
+        for vreg in cc["preserves_vec"]:
+            if vreg not in vecs:
+                raise SystemExit(f"statement: the contract of {name}: calling `preserves_vec` register {vreg!r} is not an {arch} vector register")
+            idx = _vec_num(vreg)
+            if idx in seen_idx:
+                raise SystemExit(f"statement: the contract of {name}: calling `preserves_vec` lists vector register {idx} more than once ({vreg!r})")
+            seen_idx.add(idx)
+        out.append("keepsvec" + (" " + " ".join(cc["preserves_vec"]) if cc["preserves_vec"] else ""))
+
+    return out
+
+
+def contract_lines(c, name, seqs={}, consts=(), layouts={}, is_arm64=False):
     """A contract as the lines Reader.lean reads."""
     out = []
     # the arguments whose names stand for something other than the register's number or the run's bytes: each
@@ -661,6 +743,7 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}):
         out.append(f"stackbits {step} {arg} {sub} {div}")
     else:
         raise SystemExit(f"statement: the contract of {name} has a `stack` line the verifier in Lean does not read yet")
+    out += _calling_lines(c.get("calling"), name, names, r, result, is_arm64)
     return out
 
 
@@ -751,14 +834,14 @@ def statement(spec_text, functions):
             for a, b, text in arm64_obj.read(obj, symbol): out.append(f"i {a} {b} {text}")
             if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
             if spec.contracts[symbol]["needs"]: raise SystemExit(f"statement: the contract of {symbol}, a function for AArch64, says what it needs of the processor: not read yet")
-            out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts)
+            out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts, is_arm64=True)
             continue
         rows, rodata = kdecode.read(obj, symbol, 0, 0)
         # A function that takes an address in its file's data says which file's it is (before its instructions).
         if takes_data(rows): out.append(f"data {number[os.path.realpath(obj)]}")
         for a, b, text in rows: out.append(f"i {a} {b} {text}")
         if symbol not in spec.contracts: raise SystemExit(f"statement: no contract of {symbol} in the specification")
-        out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts)
+        out += contract_lines(spec.contracts[symbol], symbol, seqs, spec.consts, spec.layouts, is_arm64=False)
         # The machine of the account in Lean has every instruction of the table. A processor has those of the
         # kinds it has: so a function's instructions must be of kinds its contract says it needs (as
         # ../kcheck/kspec.py `fits` has it: a processor with AVX-512 has AVX and SSE4.1; one with AVX, SSE4.1).

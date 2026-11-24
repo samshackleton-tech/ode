@@ -1,7 +1,10 @@
 # Proposal: Custom Calling Conventions for Calls Between Ode Functions
 
-*Status: written proposal for review. Nothing in `proof-core/` or `lang/` is changed until this
-proposal is approved.*
+*Status: Revision 2 — Phase 1 implemented, proved sound in Lean 4 (`proof-core/SoundTop.lean`,
+standard Lean axioms only, all 10 soundness theorem statements unchanged), and verified end-to-end
+on x86-64 and AArch64 (`proof-core/test_call_conv.py`). Exported `.ocl` contracts carry no register
+names; `STB_GLOBAL` exports obey the full C ABI including AArch64 `v8..v15`; internal `STB_LOCAL`
+Ode-to-Ode helpers may declare `calling { in ... out = ... preserves ... preserves_vec ... }`.*
 
 ## 1. Why Change Calls Between Ode Functions
 
@@ -100,35 +103,46 @@ Cells count instructions or bytes added solely for calling-convention bookkeepin
 
 ---
 
-## 3. Proposed Contract Syntax and Rules
+## 3. Unified Calling and Visibility Model (No Register Names in `.ocl`)
 
-A contract without a `calling` block keeps the exact C calling convention of its architecture (100%
-backward compatible with every existing contract, proof, and FFI boundary).
+To keep contracts clean for auditors and unify designation with authority at the linker boundary:
 
-A contract with a `calling` block may write up to three lines inside `calling { ... }`:
-
-1. **`in param = reg, ...`** — assigns each contract parameter to a specific general-purpose
-   register on the target architecture. Every parameter of the contract must be listed once, and all
-   chosen registers must be distinct and must not be the stack pointer (`rsp` / `sp`) or the return
-   link register (`x30` on AArch64).
-2. **`out = reg`** — names the single general-purpose register carrying the returned number when the
-   contract has a `returns` line. It must not be the stack pointer or the AArch64 link register. If
-   omitted, it defaults to `rax` (x86-64) or `x0` (AArch64).
-3. **`preserves r1, r2, ...`** — lists the exact set of general-purpose registers whose values the
-   called function must leave equal to their entry values at every `ret`. Every listed register must
-   be valid, distinct from the stack pointer (which is always preserved), and distinct from `out`
-   when the contract returns a number. Any general-purpose register not listed in `preserves` (and
-   not `rsp`/`sp` or `x30`) is treated by the caller as overwritten by the call.
+1. **Exported FFI functions (`STB_GLOBAL`, symbol `ode_<52-char-base32>`):** Always obey the target
+   processor's C calling convention — System V AMD64 on x86-64, and AAPCS64 **including callee-saved
+   vector registers `v8..v15`** on AArch64. An auditor's `.ocl` contract carries **zero** register
+   names; `lang/ode_canon.py` and `lang/ode_audit.py` refuse any `calling { ... }` block on an
+   exported `.ocl` contract.
+2. **Internal Ode-to-Ode helper functions (`STB_LOCAL`, never exported to the OS linker):** Never
+   reachable from C or Rust directly. Their internal helper specification (checked mechanically by
+   `odeverify` at both the callee's `ret` and every caller's `call`/`bl`) may write up to four lines
+   inside `calling { ... }`:
+   - **`in param = reg, ...`** — assigns each parameter to a specific general-purpose register on the
+     target architecture. Every parameter must appear once; chosen registers must be pairwise distinct
+     and must not be the stack pointer (`rsp` / `sp`) or the AArch64 link register (`x30`).
+   - **`out = reg`** — names the single general-purpose register carrying the returned number when
+     the helper has a `returns E` expression. Must not be the stack pointer, `x30`, or in `preserves`.
+     Defaults to `rax` (x86-64) or `x0` (AArch64). For abstract `returns r` contracts (`c.result`),
+     the return register stays `rax`/`x0` (index `0`) so `Ode.verify_all_result` stays unchanged.
+   - **`preserves r1, r2, ...`** — lists the exact set of general-purpose registers the helper must
+     leave equal to their entry values at every `ret` (may be empty: `preserves` with no registers).
+     Any other general-purpose register (except `rsp`/`sp`) is treated by callers as overwritten.
+   - **`preserves_vec v1, v2, ...`** — lists the exact set of vector registers (`v0..v31` /
+     `xmm0..xmm15` / `zmm0..zmm31`) the helper must leave equal to their entry values at every `ret`.
+     Defaults to **`v8..v15` on AArch64** (AAPCS64) and empty on x86-64 (System V AMD64). An internal
+     AArch64 helper may pass `preserves_vec` (empty) to use `v8..v15` freely, or list extra live
+     vector registers so a SIMD caller does not spill them across the call.
 
 ### Optional Phase 2 Extensions (Not in Phase 1)
 
-Two natural extensions are kept separate so Phase 1 stays tiny:
-- **Preserved vector registers (`preserves xmm6, xmm7` / `v8..v15`):** useful when a wide SIMD loop
-  calls a small scalar helper without spilling live vector accumulators.
-- **Custom link register (`link = x15` on AArch64) and tail calls (`jmp` / `b`):** on AArch64, if a
-  leaf helper receives its return address in a chosen register (`x15`, via `adr` + `b`, or via tail
-  call `b`), the caller does not even overwrite `x30`, eliminating the caller's entire stack frame
-  (`stack 0`!) for non-recursive callers.
+Two natural extensions remain separate so Phase 1 stays small:
+- **Spilling and restoring callee-saved vector registers:** Phase 1 proves vector preservation by
+  tracking vector registers that are never modified (`Sym.vecIntact`), which covers all 100% of our
+  existing AArch64 routines (which use caller-saved `v0..v7` and `v16..v31`). Saving and restoring a
+  vector register on the stack can be added in Phase 2 if a routine ever needs more than 24 live
+  vector registers at once.
+- **Custom link register (`link = x15` on AArch64) and tail calls (`jmp` / `b`):** lets a leaf
+  helper avoid overwriting `x30`, eliminating the caller's stack frame (`stack 0`) for non-recursive
+  callers.
 
 ---
 
@@ -146,12 +160,13 @@ size of the change in lines of code.
 
 | File | Change in Phase 1 | Estimated Size |
 |---|---|---:|
-| `kcheck/ode.py` | Parse optional `calling { in ...; out = ...; preserves ... }` block on contracts | ~45 lines Python |
-| `proof-core/statement.py` | Emit `argregs ...`, `retreg N`, `keeps ...` lines into `.statement` when a `calling` block is present; validate register names and disjointness | ~35 lines Python |
-| `proof-core/Reader.lean` | Read optional `argregs`, `retreg`, `keeps` lines into `Contract` (defaulting to C ABI when absent) | ~30 lines Lean |
-| `proof-core/Contract.lean` | Add three optional fields (`customArgs`, `customRet`, `customKeeps`) to `Contract`; check validity (`validCalling`: all registers `< nreg`, distinct from `RSP`/`LINK`, pairwise distinct `argRegs`, `retReg` not in `keeps`); use `c.retReg` where `0` is currently hardcoded for the returned number | ~35 lines Lean |
-| `proof-core/Core.lean` | Replace hardcoded register `0` with `c.retReg` in `symReturn` (return check) and `afterCall` / `afterCallQ` (caller state after a call); check `c.validCalling` at entry | ~25 lines Lean |
-| `proof-core/SoundCall.lean` & `SoundTop.lean` | Replace concrete register `0` with `c.retReg` and pass `c.validCalling` where `argRegs` / `keeps` properties were previously proved by `decide` on the fixed C ABI lists | ~60 lines Lean |
+| `kcheck/ode.py` | Parse optional `calling { in ...; out = ...; preserves ...; preserves_vec ... }` block on internal helper contracts | ~55 lines Python |
+| `lang/ode_canon.py` | Refuse any `calling { ... }` block when canonicalizing an auditor `.ocl` contract (register names stay out of `.ocl`) | ~5 lines Python |
+| `proof-core/statement.py` | Emit `argregs ...`, `retreg REG`, `keeps ...`, `keepsvec ...` lines into `.statement` when a `calling` block is present; validate register names and disjointness | ~45 lines Python |
+| `proof-core/Reader.lean` | Read optional `argregs`, `retreg`, `keeps`, `keepsvec` lines into `Contract` (defaulting to C ABI, with `keepsVec = [8..15]` on AArch64) | ~20 lines Lean |
+| `proof-core/Contract.lean` | Add `customArgs`, `customRet`, `customKeeps`, `customKeepsVec` with self-validating accessors (`argRegs`, `keeps`, `retReg`, `keepsVec`), `callingOk`, and `∀ r ∈ c.keepsVec, s'.vec r = s.vec r` in `Contract.post` | ~55 lines Lean |
+| `proof-core/Core.lean` | Check `callingOk` at `verdict` entry; define `Contract.scratch` as the complement of `c.keeps` and `RSP`; use `c.retReg` in `symEnvAfter`, `symReturn`, `symCallPlain`, `afterCallQ`; track vector registers that are never modified via `Sym.vecIntact` across `vset`, `vset512`, calls, loops (`general`/`arrive`), and `symReturn` | ~45 lines Lean |
+| `proof-core/Sound*.lean` | Prove `argRegs_spec`, `keeps_spec`, `argRegs_nodup`, `retReg_spec`, `scratch_lt`, `kept_of_not_scratch`, `Holds.vecIntact`, and custom `retReg` across `SoundState`, `SoundStep`, `SoundVec`, `SoundWide`, `SoundCall`, `SoundCallW`, `SoundCallL`, `SoundLoop`, `SoundMarks`, `SoundTrace`, `SoundTop` (standard Lean axioms only, all 10 `test_sound.py` theorem statements unchanged) | ~120 lines Lean |
 
 ### What Does Not Change
 
@@ -231,18 +246,15 @@ concrete gap in the existing C-boundary ABI model in `proof-core/Contract.lean` 
 
 ---
 
-## 6. Questions for Review Before Building
+## 6. Decisions Recorded for Phase 1 Implementation
 
-1. **Syntax:** Is the explicit `calling { in ...; out = ...; preserves ... }` block inside `contract`
-   clear and readable for an auditor, or do you prefer putting register names directly inline in the
-   parameter header (for example `contract helper(b in x9: number) -> x10`)?
-2. **Scope of Phase 1:** Should we build Phase 1 (custom GPR `in`, `out`, `preserves`, ~230 lines
-   across Python and Lean) first and measure the 64-byte BLAKE3 and Base64 speedups before deciding
-   whether Phase 2 (preserved vector registers + custom AArch64 link register / tail calls) is worth
-   its added Lean lines?
-3. **FFI guard:** Should a top-level contract checked without callers (or marked `export`) refuse a
-   custom `calling` block by default so a programmer cannot accidentally export a non-C-ABI function
-   to Rust or C?
-4. **AAPCS64 `d8..d15` fix:** Should we bundle the C-boundary AArch64 `v8..v15` preservation rule
-   into Phase 1 immediately (forbidding writes to `v8..v15` on default C-ABI AArch64 contracts unless
-   restored)?
+1. **No register names in auditor `.ocl` contracts:** `calling { ... }` is allowed only on internal
+   helper contracts (`STB_LOCAL`); `lang/ode_canon.py` refuses it on exported `.ocl` contracts so
+   exporting to C/Rust (`STB_GLOBAL`) always enforces the full C ABI.
+2. **AAPCS64 `v8..v15` bundled in Phase 1:** `Contract.keepsVec` defaults to `[8, 9, 10, 11, 12,
+   13, 14, 15]` on AArch64 and `[]` on x86-64, enforced in `Contract.post` and `Core.lean` via
+   `Sym.vecIntact`.
+3. **Self-validating accessors + `callingOk`:** `Contract.argRegs`, `Contract.keeps`,
+   `Contract.retReg`, and `Contract.keepsVec` preserve all soundness invariants unconditionally while
+   `verdict` refuses any invalid custom field loudly. All 10 theorem statements in
+   `proof-core/test_sound.py` remain unchanged.

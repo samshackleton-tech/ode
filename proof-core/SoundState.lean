@@ -407,6 +407,7 @@ structure Holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (s : Sym) (st : Stat
   words : VecOk ctx s0 ρ s st
   known : ∀ k ∈ s.known, k.holds ctx s0 ρ s.terms
   range : ∀ rg, s.range = some rg → RangeHolds ctx s0 ρ rg st.mem
+  vecIntact : ∀ r ∈ s.vecIntact, st.vec r = s0.vec r
 
 /-- What a called function may read of the program's read-only data, its caller may read: the data lies at
 the call where it lay at the caller's entry. -/
@@ -645,6 +646,7 @@ theorem Holds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {s : Sym} {s
   words := VecOk.agree wf.words a h.words
   known k m := Known.holds_mono (wf.known k m) a wf.words.table wf.words.atoms (Ext.refl _) (h.known k m)
   range rg hr := RangeHolds.agree (wf.range rg hr).1 (wf.range rg hr).2 a (h.range rg hr)
+  vecIntact := h.vecIntact
 
 /-- More unknowns in use: the verifier's state still speaks only of unknowns in use. -/
 theorem Flag.bounded_mono {n m : Nat} {f : Flag} (h : n ≤ m) (hb : f.bounded n) : f.bounded m := by
@@ -736,5 +738,120 @@ theorem allowed_of (p : Nat → Bool) (a n : Nat) (h : ∀ x, a ≤ x → x < a 
   | succ n ih =>
     simp only [allowed, Bool.and_eq_true]
     exact ⟨h a (by omega) (by omega), ih (a + 1) fun x h1 h2 => h x (by omega) (by omega)⟩
+
+theorem noDupB_nodup : ∀ (rs : List Nat), noDupB rs = true → rs.Nodup
+  | [], _ => List.Pairwise.nil
+  | r :: rs, h => by
+    simp only [noDupB, Bool.and_eq_true, Bool.not_eq_true'] at h
+    refine List.nodup_cons.mpr ⟨fun hm => ?_, noDupB_nodup rs h.2⟩
+    have hc : rs.contains r = true := List.contains_iff_mem.mpr hm
+    rw [h.1] at hc; cases hc
+
+theorem validRegList_spec {nreg : Nat} {rs : List Nat} (hv : validRegList nreg rs = true) :
+    (∀ r ∈ rs, r < nreg ∧ r ≠ RSP ∧ r ≠ LINK) ∧ rs.Nodup := by
+  simp only [validRegList, Bool.and_eq_true, List.all_eq_true, bne_iff_ne, decide_eq_true_eq] at hv
+  exact ⟨fun r hr => by have := hv.1 r hr; exact ⟨this.1.1, this.1.2, this.2⟩, noDupB_nodup rs hv.2⟩
+
+theorem retReg_spec (c : Contract) :
+    c.retReg < c.regs ∧ c.retReg ≠ RSP ∧ c.retReg ≠ LINK ∧ (c.result.isSome = true → c.retReg = 0) := by
+  have h0 : 0 < c.regs ∧ 0 ≠ RSP ∧ 0 ≠ LINK := by
+    cases ha : c.arm64 <;> simp [Contract.regs, RSP, LINK, ha]
+  unfold Contract.retReg
+  cases hr : c.customRet with
+  | none => exact ⟨h0.1, h0.2.1, h0.2.2, fun _ => rfl⟩
+  | some r =>
+    simp only
+    by_cases hv : (decide (r < c.regs) && r != RSP && r != LINK && !c.result.isSome) = true
+    · simp only [hv, ↓reduceIte]
+      simp only [Bool.and_eq_true, bne_iff_ne, decide_eq_true_eq, Bool.not_eq_true'] at hv
+      exact ⟨hv.1.1.1, hv.1.1.2, hv.1.2, fun h => by rw [h] at hv; exact absurd hv.2 (by decide)⟩
+    · simp only [hv]
+      exact ⟨h0.1, h0.2.1, h0.2.2, fun _ => rfl⟩
+
+theorem argRegs_spec {c : Contract} {r : Nat} (h : r ∈ c.argRegs) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+  have hdef : r ∈ (if c.arm64 then argRegsArm else argRegsX86) → r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+    cases ha : c.arm64
+    · have all : ∀ r ∈ argRegsX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+      simp only [Contract.regs, ha, Bool.false_eq_true, ↓reduceIte]; exact all r
+    · have all : ∀ r ∈ argRegsArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+      simp only [Contract.regs, ha, ↓reduceIte]; exact all r
+  unfold Contract.argRegs at h
+  cases hc : c.customArgs with
+  | none => rw [hc] at h; exact hdef h
+  | some rs =>
+    rw [hc] at h; simp only at h
+    by_cases hv : validRegList c.regs rs = true
+    · simp only [hv, ↓reduceIte] at h; exact (validRegList_spec hv).1 r h
+    · simp only [hv] at h; exact hdef h
+
+theorem argRegs_nodup (c : Contract) : c.argRegs.Nodup := by
+  have hdef : (if c.arm64 then argRegsArm else argRegsX86).Nodup := by
+    cases c.arm64
+    · have nd : argRegsX86.Nodup := by decide
+      simp only [Bool.false_eq_true, ↓reduceIte]; exact nd
+    · have nd : argRegsArm.Nodup := by decide
+      simp only [↓reduceIte]; exact nd
+  unfold Contract.argRegs
+  cases hc : c.customArgs with
+  | none => exact hdef
+  | some rs =>
+    simp only
+    by_cases hv : validRegList c.regs rs = true
+    · simp only [hv, ↓reduceIte]; exact (validRegList_spec hv).2
+    · simp only [hv]; exact hdef
+
+theorem keeps_spec {c : Contract} {r : Nat} (h : r ∈ c.keeps) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+  have hdef : r ∈ (if c.arm64 then calleeSavedArm else calleeSavedX86) → r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
+    cases ha : c.arm64
+    · have all : ∀ r ∈ calleeSavedX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+      simp only [Contract.regs, ha, Bool.false_eq_true, ↓reduceIte]; exact all r
+    · have all : ∀ r ∈ calleeSavedArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
+      simp only [Contract.regs, ha, ↓reduceIte]; exact all r
+  unfold Contract.keeps at h
+  have hraw : r ∈ (match c.customKeeps with
+      | some rs => if validRegList c.regs rs then rs else if c.arm64 then calleeSavedArm else calleeSavedX86
+      | none => if c.arm64 then calleeSavedArm else calleeSavedX86) := by
+    cases hg : c.givesNumber with
+    | false => simp only [hg, Bool.false_eq_true, ↓reduceIte] at h; exact h
+    | true => simp only [hg, ↓reduceIte] at h; exact (List.mem_filter.mp h).1
+  cases hc : c.customKeeps with
+  | none => rw [hc] at hraw; exact hdef hraw
+  | some rs =>
+    rw [hc] at hraw; simp only at hraw
+    by_cases hv : validRegList c.regs rs = true
+    · simp only [hv, ↓reduceIte] at hraw; exact (validRegList_spec hv).1 r hraw
+    · simp only [hv] at hraw; exact hdef hraw
+
+theorem retReg_not_kept {c : Contract} (hg : c.givesNumber = true) : c.keeps.contains c.retReg = false := by
+  cases hk : c.keeps.contains c.retReg with
+  | false => rfl
+  | true =>
+    have hm : c.retReg ∈ c.keeps := List.contains_iff_mem.mp hk
+    unfold Contract.keeps at hm
+    simp only [hg, ↓reduceIte] at hm
+    have hne := (List.mem_filter.mp hm).2
+    simp only [bne_self_eq_false] at hne
+    cases hne
+
+theorem scratch_lt {c : Contract} {r : Nat} (h : r ∈ c.scratch) : r < c.regs := by
+  unfold Contract.scratch at h
+  exact List.mem_range.mp (List.mem_filter.mp h).1
+
+theorem kept_of_not_scratch {c : Contract} {r : Nat} (hr : r < c.regs) (h4 : r ≠ RSP) (hc : c.scratch.contains r = false) :
+    r ∈ c.keeps := by
+  cases hk : c.keeps.contains r with
+  | true => exact List.contains_iff_mem.mp hk
+  | false =>
+    have hmem : r ∈ c.scratch := by
+      unfold Contract.scratch
+      refine List.mem_filter.mpr ⟨List.mem_range.mpr hr, ?_⟩
+      simp only [Bool.and_eq_true, bne_iff_ne, Bool.not_eq_true']
+      exact ⟨h4, hk⟩
+    have hct : c.scratch.contains r = true := List.contains_iff_mem.mpr hmem
+    rw [hc] at hct; cases hct
+
+theorem afterCall_vec (p q : Program) (i : Instr) (st : State) : (afterCall p q i st).vec = st.vec := by
+  unfold afterCall
+  cases callLink i <;> rfl
 
 end Ode

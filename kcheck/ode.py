@@ -237,7 +237,7 @@ class Parser:
         self.take("("); args = []
         while not self.maybe(")"):
             arg = self.take(kind="name"); self.take(":"); args.append((arg, self.kind())); self.maybe(",")
-        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, trace=[], trace_exprs=[], result_dep=None, conditions=[])
+        c = dict(args=args, asks=[], given=[], leaves=[], spoils=[], returns=None, stack=None, calls=[], needs=[], decreases=None, no_overlap=None, trace=[], trace_exprs=[], result_dep=None, conditions=[], calling=None)
         self.take("{")
         def once(what, key):
             # said twice, the second would silently be the one meant
@@ -305,9 +305,53 @@ class Parser:
             elif clause == "needs":
                 # needs FEATURE [if E]: it runs instructions of that kind (only where E holds)
                 name = self.take(kind="name"); c["needs"].append((name, self.expr(1) if self.maybe("if") else None))
-            else: raise Err(f"line {self.t[self.i - 1][2]}: requires, ensures, writes, returns, stack, trace, result, calls, needs or decreases expected, not {clause!r}")
+            elif clause == "calling":
+                # calling { in PARAM = REG, ... | out = REG | preserves REG, ... | preserves_vec VREG, ... }
+                once("calling", "calling")
+                c["calling"] = self.calling_block()
+            else: raise Err(f"line {self.t[self.i - 1][2]}: requires, ensures, writes, returns, stack, trace, result, calls, needs, decreases or calling expected, not {clause!r}")
         if c["stack"] is None or not (c["leaves"] or c["spoils"] or c["conditions"] or c["returns"] is not None): raise Err("a contract says its stack, and what it ensures, writes or returns")
         return c
+
+    def calling_block(self):
+        """Parse an optional `calling { in ... | out = ... | preserves ... | preserves_vec ... }` block."""
+        self.take("{")
+        cc = {"in": None, "out": None, "preserves": None, "preserves_vec": None}
+        clause_starts = ("out", "preserves", "preserves_vec")
+        def at_clause_boundary():
+            k, v, _ = self.t[self.i]
+            return (k == "sym" and v == "}") or (k == "key" and v == "in") or (k == "name" and v in clause_starts)
+        while not self.maybe("}"):
+            if self.maybe("in"):
+                if cc["in"] is None: cc["in"] = {}
+                while True:
+                    pname = self.take(kind="name")
+                    self.take("=")
+                    rname = self.take(kind="name")
+                    if pname in cc["in"]:
+                        raise Err(f"line {self.t[self.i - 1][2]}: `calling` assigns parameter `{pname}` more than once")
+                    cc["in"][pname] = rname
+                    if not self.maybe(","): break
+            else:
+                sub = self.take(kind="name")
+                line = self.t[self.i - 1][2]
+                if sub == "out":
+                    if cc["out"] is not None: raise Err(f"line {line}: `calling` says `out` once")
+                    self.take("=")
+                    cc["out"] = self.take(kind="name")
+                elif sub in ("preserves", "preserves_vec"):
+                    if cc[sub] is not None: raise Err(f"line {line}: `calling` says `{sub}` once")
+                    regs = []
+                    if not at_clause_boundary():
+                        first = self.take(kind="name")
+                        if first != "none":
+                            regs.append(first)
+                            while self.maybe(","):
+                                regs.append(self.take(kind="name"))
+                    cc[sub] = regs
+                else:
+                    raise Err(f"line {line}: inside `calling`, expected `in`, `out`, `preserves` or `preserves_vec`, not {sub!r}")
+        return cc
 
     def params(self):
         self.take("("); out = []

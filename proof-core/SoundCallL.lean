@@ -1447,13 +1447,18 @@ theorem afterCallL_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       (a : Int) < s0.reg RSP + c ∨ (s0.reg RSP : Int) + c + (n : Int) ≤ a → s2.mem a = st.mem a)
     (hdata : s2.data = st.data)
     (hrows : ∀ k, k < rows.length →
-      (load s2.mem (((s0.reg RSP : Int) + c).toNat + 4 * k) 4 : Int) = ev ρ (rows.getD k (Lin.const 0))) :
+      (load s2.mem (((s0.reg RSP : Int) + c).toNat + 4 * k) 4 : Int) = ev ρ (rows.getD k (Lin.const 0)))
+    (hvec : ∀ r ∈ ct.keepsVec, s2.vec r = st.vec r) :
     Holds ctx s0 (afterRho ct.regs s.nvars ρ s2) (Sym.afterCallL ct s sp c n rows) s2 := by
   have hstack := E.stackAt
   have ag := afterRho_agree ct.regs s.nvars ρ s2
   have H' := H.agree wf ag
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
-    ⟨(fun x ids h => by simp [Sym.afterCallL] at h), ?_, ?_, fun _ _ h => nomatch h⟩, H'.known, fun _ h => nomatch h⟩
+    ⟨(fun x ids h => by simp [Sym.afterCallL] at h), ?_, ?_, fun _ _ h => nomatch h⟩, H'.known, (fun _ h => nomatch h),
+    fun r hr => by
+      obtain ⟨hr1, hr2⟩ := List.mem_filter.mp hr
+      rw [hvec r (List.contains_iff_mem.mp hr2)]
+      exact H'.vecIntact r hr1⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if ct.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hcs : ct.scratch.contains r with
@@ -2436,7 +2441,9 @@ theorem symCallL'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     left; omega
   refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
   intro s2 post hdata2
-  obtain ⟨prip, prsp, psaved, pmem, pret, psmall, pens⟩ := post
+  obtain ⟨prip, prsp, psaved, pmem, pret, psmall, pens, pvec⟩ := post
+  have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
+    (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
   have pensW := (pens (fun _ _ _ _ _ m => by rw [hva] at m; cases m)).2
   have hrip : s2.rip = p.base + i.next := by
     rw [prip]
@@ -2480,7 +2487,7 @@ theorem symCallL'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         c.ensuresW HT wfT hokenv hnl
   have C01 := CT.then C1
   have Hafter := afterCallL_holds E c (c.stackAt (afterCall p q i st)) F.regs C1.holds C1.wf hrsp hg.2 hg.1 hkeep psmall hcw1 hcw2 hrl' hb1 hmem2 hdata2
-    (fun k hk => by rw [hev1 k hk, s1r, Nat.add_zero])
+    (fun k hk => by rw [hev1 k hk, s1r, Nat.add_zero]) hvec2
   have wafter := afterCallL_wf C1.wf c F.regs sp cw n hb1
   exact ⟨hrip, afterRho c.regs s1.nvars ρ1 s2, Agree.trans C01.mono C01.agree (afterRho_agree c.regs s1.nvars ρ1 s2),
     Nat.le_trans C01.mono (Nat.le_add_right _ _), Hafter, wafter⟩

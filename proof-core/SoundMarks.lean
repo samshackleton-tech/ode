@@ -938,7 +938,7 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
 
 theorem Holds.q {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st) (x : SMarks) :
     Holds ctx s0 ρ { s with q := x } st :=
-  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+  ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range, H.vecIntact⟩
 
 theorem WF.q {s : Sym} (wf : WF ctx s) (x : SMarks) : WF ctx { s with q := x } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, wf.facts, wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
@@ -1026,18 +1026,25 @@ theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : Ma
 /-- The stack pointer is no register a called function is said to keep; nor is the register a number is
 returned in. -/
 theorem rsp_not_kept (c : Contract) : c.keeps.contains RSP = false := by
-  unfold Contract.keeps; split <;> decide
+  cases hk : c.keeps.contains RSP with
+  | false => rfl
+  | true => exact absurd rfl (keeps_spec (List.contains_iff_mem.mp hk)).2.1
 
-theorem rax_not_kept (c : Contract) : c.keeps.contains 0 = false := by
-  unfold Contract.keeps; split <;> decide
-
-/-- The registers the function called at an instruction gives back as it found them are those its contract
-says it keeps, where the call is one of the called function's machine. -/
-theorem keptAt_eq {i : Instr} {c : Contract} (hl : callLink i = c.link) : keptAt i = c.keeps := by
-  unfold keptAt Contract.keeps
-  rw [hl]
-  unfold Contract.link
-  cases c.arm64 <;> rfl
+theorem callReturnsClean_givesNumber {ctx : Ctx} {s : Sym} {c : Contract} (h : callReturnsClean ctx s c = true) :
+    c.givesNumber = true := by
+  unfold callReturnsClean at h
+  unfold Contract.givesNumber
+  cases hr : c.returns with
+  | some e => simp [hr]
+  | none =>
+    simp only [hr, Option.isSome_none, Bool.false_or] at h ⊢
+    by_cases hrf : c.resultFollowsTrace = true
+    · unfold Contract.resultFollowsTrace at hrf
+      exact (Bool.and_eq_true _ _ |>.mp hrf).1
+    · simp only [hrf, Bool.false_eq_true, ↓reduceIte] at h
+      cases hri : c.result.isSome with
+      | true => rfl
+      | false => simp [hri] at h
 
 /-- A call marks no register: one that was not marked is not marked in the state the called function
 starts in. -/
@@ -1075,9 +1082,10 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
     (hwrite : ∀ a, (c.perm ctx.pieces (afterCall p q i st)).write a = true → (ctx.contract.perm ctx.pieces s0).write a = true) :
     st.marks.reg RSP = false ∧ c.quietAt (afterCall p q i st) ∧
     ∀ cleanRet s2,
-      (s2.marks.reg RSP = false ∧ (cleanRet = true → s2.marks.reg 0 = false) ∧
+      (cleanRet = true → c.givesNumber = true) →
+      (s2.marks.reg RSP = false ∧ (cleanRet = true → s2.marks.reg c.retReg = false) ∧
        ∀ a, c.inFrame (afterCall p q i st) a = false → c.inOut (afterCall p q i st) a = false → s2.marks.mem a = (afterCall p q i st).marks.mem a) →
-      MarksOk ctx s0 (afterCallQ cleanRet c s) (backFrom (keptAt i) st s2) := by
+      MarksOk ctx s0 (afterCallQ cleanRet c s) (backFrom c.keeps st s2) := by
   simp only [callQuiet, Bool.and_eq_true] at hq
   obtain ⟨⟨⟨⟨hregs, hfix⟩, houts⟩, hrun⟩, _⟩ := hq
   have regs : ∀ r ∈ c.cleanAtEntry, st.marks.reg r = false := fun r hr =>
@@ -1164,8 +1172,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         · rfl
         · have e : st.reg r + k = ((s0.reg RSP : Int) + (o + 8 * ((k / 8 : Nat) : Int))).toNat + k % 8 := by omega
           rw [e]; exact c3 (k % 8) (by omega)
-  · intro cleanRet s2 ⟨qsp, qret, qs⟩
-    rw [keptAt_eq F.link]
+  · intro cleanRet s2 hgn ⟨qsp, qret, qs⟩
     refine ⟨fun r hr => ?_, (fun x => by cases x), (fun x => by cases x), fun a hf ho => ?_, fun cc hcc => ?_, fun _ m => nomatch m⟩
     · show (if c.keeps.contains r then st.marks.reg r else s2.marks.reg r) = false
       rcases List.mem_append.mp hr with h1 | h2
@@ -1178,7 +1185,7 @@ theorem callQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         | true =>
           simp only [hg, if_true, List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at h1
           rcases h1 with h1 | h1
-          · subst h1; rw [if_neg (by rw [rax_not_kept]; decide)]; exact qret hg
+          · subst h1; rw [if_neg (by rw [retReg_not_kept (hgn hg)]; decide)]; exact qret hg
           · subst h1; rw [if_neg (by rw [rsp_not_kept]; decide)]; exact qsp
       · rw [if_pos (List.mem_filter.mp h2).2]; exact M.reg r (List.mem_filter.mp h2).1
     · show s2.marks.mem a = s0.marks.mem a

@@ -796,13 +796,13 @@ inductive RunsPlain (world : List Program) : Perm → Program → (State → Pro
       (∀ u s', exec perm p i u s = some (.returned s') → Q s') →
       RunsPlain world perm p Q s
   | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
-      (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
+      (name : String) (q : Program) (inner : Perm) (R : State → Prop) (kept : List Nat) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
       (callLink i = none → 8 ≤ s.reg RSP ∧ allowed perm.write (s.reg RSP - 8) 8 = true) →
       (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
       RunsPlain world inner q R (afterCall p q i s) →
-      (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
-      (∀ s', R s' → RunsPlain world perm p Q (backFrom (keptAt i) s s')) →
+      (∀ s', R s' → ∀ r ∈ kept, s'.reg r = s.reg r) →
+      (∀ s', R s' → RunsPlain world perm p Q (backFrom kept s s')) →
       RunsPlain world perm p Q s
 
 end Ode

@@ -524,6 +524,11 @@ class _Canon:
 
     def canonical_contract(self, contract_name):
         c = self.sp.contracts[contract_name]
+        if c.get("calling") is not None:
+            raise ValueError(
+                "exported auditor `.ocl` contracts cannot declare `calling { ... }`: "
+                "exported functions obey the target C calling convention and `.ocl` contracts carry no register names"
+            )
         if contract_name != _SENTINEL_NAME:
             self.glossary["contract"] = contract_name
         env = {}

@@ -206,7 +206,7 @@ theorem Holds.terms {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
       show Ode.load st.mem _ 4 = den (inpOf ctx s0) ρ t'.list (ids.getD k 0)
       rw [den_ext wf.words.table e (by rw [hc]; exact lt _ (List.getElem_mem hk))]
       exact (H.words.spill o ids hs).2 k hk⟩⟩,
-   fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m), H.range⟩
+   fun k m => Known.holds_mono (wf.known k m) (Agree.refl _ _) wf.words.table wf.words.atoms e (H.known k m), H.range, H.vecIntact⟩
 
 theorem WF.terms {s : Sym} (wf : WF ctx s) {t' : Tab} (e : Ext s.terms t'.list) (ok : TableOk s.nvars t'.list) : WF ctx { s with tab := t' } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame,
@@ -1691,6 +1691,7 @@ theorem Holds.storeRunWords {ctx : Ctx} {p : Program} {s0 : State} (E : Setting 
     (a : Nat) (ha : a = s0.reg r + c) :
     Holds ctx s0 ρ (rememberStore s w (c / 4) l) { st with mem := storeWords st.mem a lanes } where
   range := fun _ h => nomatch h
+  vecIntact := H.vecIntact
   entry := H.entry
   data := H.data
   reg := H.reg
@@ -1807,6 +1808,7 @@ theorem Holds.storeFrameWords {ctx : Ctx} {p : Program} {s0 : State} (E : Settin
                 s.frameW.filter fun (c, _) => decide (c + 4 ≤ o) || decide (o + 4 * (width : Int) ≤ c) }
       { st with mem := storeWords st.mem a lanes } where
   range := fun _ h => nomatch h
+  vecIntact := H.vecIntact
   entry := H.entry
   data := H.data
   reg := H.reg
@@ -2026,7 +2028,11 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                · rw [ite_eq_left (Or.inr (by omega)), ite_eq_right low]
                  rw [ite_eq_right low] at hk
                  exact H.words.vec x old ho k hk,
-             H.words.intact, H.words.wrote, H.words.spill⟩, H.known, H.range⟩
+             H.words.intact, H.words.wrote, H.words.spill⟩, H.known, H.range,
+            fun x hx => by
+              have h16 : 16 ≤ x := by have := (List.mem_filter.mp hx).2; simpa using this
+              funext k; simp only [ite_eq_left (Or.inr h16)]
+              exact congrFun (H.vecIntact x (List.mem_filter.mp hx).1) k⟩
         · exact ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, wf.facts, wf.bytes, wf.spec, wf.wrote,
             ⟨wf.words.table, wf.words.atoms,
              fun x ids hx => by
@@ -2061,7 +2067,11 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
                  · have h4 : k < 4 := by simpa only [e2, len] using hk
                    rw [if_pos e, if_pos h4, e2]; exact dn k h4
                  · rw [if_neg ne]; exact c.holds.words.vec x ids hx' k hk,
-               c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range⟩
+               c.holds.words.intact, c.holds.words.wrote, c.holds.words.spill⟩, c.holds.known, c.holds.range,
+              fun x hx => by
+                have hne : x ≠ r := by have := (List.mem_filter.mp hx).2; simpa using this
+                funext k; simp only [setVec, ite_eq_right hne]
+                exact congrFun (c.holds.vecIntact x (List.mem_filter.mp hx).1) k⟩
           · exact ⟨c.wf.base, c.wf.reg, c.wf.zf, c.wf.cf, c.wf.frame, c.wf.frameW, c.wf.facts, c.wf.bytes, c.wf.spec, c.wf.wrote,
               ⟨c.wf.words.table, c.wf.words.atoms,
                fun x ids hx => by

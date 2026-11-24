@@ -266,7 +266,8 @@ theorem Carried.vecKnown (H : Holds ctx s0 ρ g st) (wf : WF ctx g) (vec : List 
       bytes := H.bytes, spec := H.spec, mem := H.mem, wrote := H.wrote,
       words := ⟨fun x ids hx k hk' => (lookup_append_or hx).elim (fun h => (hv x ids h).2.2 k hk') (fun h => H.words.vec x ids h k hk'),
                 H.words.intact, H.words.wrote, H.words.spill⟩,
-      known := fun k m => (List.mem_append.mp m).elim (fun m => (hk k m).2) (H.known k) }
+      known := fun k m => (List.mem_append.mp m).elim (fun m => (hk k m).2) (H.known k),
+      vecIntact := H.vecIntact }
   · exact {
       range := wf.range
       base := wf.base, reg := wf.reg, zf := wf.zf, cf := wf.cf, frame := wf.frame, frameW := wf.frameW, facts := wf.facts, bytes := wf.bytes,
@@ -606,7 +607,8 @@ theorem supposeCell_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn 
               injection e with eo ei
               subst eo; subst ei
               exact ⟨pos, words⟩)
-            (H.words.spill off ids')⟩ }
+            (H.words.spill off ids')⟩,
+        vecIntact := H.vecIntact }
     · exact {
         range := wf.range
         base := wf.base, reg := wf.reg, zf := wf.zf, cf := wf.cf, frame := wf.frame, frameW := wf.frameW, facts := wf.facts, bytes := wf.bytes,
@@ -667,7 +669,7 @@ theorem rangeBase_bounded {ctx : Ctx} {s : Sym} (wf : WF ctx s) (w : Nat) (f : S
 theorem Holds.setRange (H : Holds ctx s0 ρ s st) (rg : RangeF) (h : RangeHolds ctx s0 ρ rg st.mem) :
     Holds ctx s0 ρ { s with range := some rg } st :=
   ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW, H.facts, H.bytes, H.spec, H.mem, H.wrote, H.words, H.known,
-   fun rg' e => by injection e with e; subst e; exact h⟩
+   (fun rg' e => by injection e with e; subst e; exact h), H.vecIntact⟩
 
 theorem WF.setRange (wf : WF ctx s) (rg : RangeF) (bl : bounded s.nvars rg.lo) (ba : ∀ v ∈ rg.args, v.bounded s.nvars) :
     WF ctx { s with range := some rg } :=
@@ -914,6 +916,7 @@ structure AtPlace (ctx : Ctx) (pl : Place) (s0 : State) (first : Sym) (ρs ρ : 
   lanes : ∀ L ∈ pl.lanes, ∀ i, i < 16 → LaneSays ctx pl s0 st L i
   cells : ∀ C ∈ pl.cells, CellSays ctx pl s0 st C
   wrote : RangeSays ctx pl s0 st
+  vecIntact : ∀ r ∈ first.vecIntact, st.vec r = s0.vec r
 
 theorem general_wf (pl : Place) {first : Sym} (wf : WF ctx first) : WF ctx (first.general ctx.nreg pl) := by
   have le : first.nvars ≤ first.nvars + ctx.nreg := Nat.le_add_right _ _
@@ -968,7 +971,7 @@ theorem general_holds {ctx : Ctx} {s0 : State} (pl : Place) {first : Sym} (wf : 
   refine ⟨hentry, ⟨hdata, A.data.2⟩, ?_, A.small, trivial, trivial, ?_, (fun _ _ m => nomatch m), ?_, Hg.bytes, Hg.spec, A.mem, (fun _ _ _ m => nomatch m),
     ⟨(fun x ids h => by simp [Sym.general] at h), (fun w m => by simp [Sym.general] at m),
      (fun w j i m => by simp [Sym.general] at m), fun _ _ h => nomatch h⟩,
-    Hg.known, fun _ h => nomatch h⟩
+    Hg.known, (fun _ h => nomatch h), A.vecIntact⟩
   · intro r hr
     show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
     by_cases hk : pl.keep.contains r = true
@@ -1062,7 +1065,7 @@ theorem generalize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       ⟨Agree.refl _ _, c1.holds.entry, c1.holds.data, fun r hr _ => c1.holds.reg r hr, c1.holds.small, c1.holds.frame, c1.holds.mem,
        fun e m => by rw [← env1]; exact a1 e m,
        fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hnames (shown L mL),
-       fun C mC => cellShown_sound E pl c1'.holds c1'.wf hnames (cshown C mC), says⟩
+       fun C mC => cellShown_sound E pl c1'.holds c1'.wf hnames (cshown C mC), says, c1.holds.vecIntact⟩
     cases dres with
     | list _ => exact (refuse_ok h).elim
     | tail _ => exact (refuse_ok h).elim
@@ -1124,6 +1127,9 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     split at h
     next => exact (refuse_ok h).elim
     next hframe =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next hvec =>
       have hkeep : ∀ r, pl.keep.contains r = true → s.reg r = first.reg r := by
         intro r hr
         have hm : r ∈ pl.keep := List.contains_iff_mem.mp hr
@@ -1137,6 +1143,12 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
         | false => rw [hx] at hframe; exact (hframe rfl).elim
       have hfr : ∀ o v, (o, v) ∈ first.frame → (o, v) ∈ s.frame := fun o v m =>
         List.contains_iff_mem.mp (List.all_eq_true.mp hall (o, v) m)
+      have hvall : (first.vecIntact.all s.vecIntact.contains) = true := by
+        cases hx : (first.vecIntact.all s.vecIntact.contains) with
+        | true => rfl
+        | false => rw [hx] at hvec; exact (hvec rfl).elim
+      have hvi : ∀ r ∈ first.vecIntact, r ∈ s.vecIntact := fun r m =>
+        List.contains_iff_mem.mp (List.all_eq_true.mp hvall r m)
       obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
       split at h
       next => exact (refuse_ok h).elim
@@ -1167,7 +1179,8 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
       refine ⟨⟨Agree.refl _ _, H.entry, H.data, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
                (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m),
                fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL),
-               fun C mC => cellShown_sound E pl c1'.holds c1'.wf hn (cshown C mC), says⟩, ?_⟩
+               fun C mC => cellShown_sound E pl c1'.holds c1'.wf hn (cshown C mC), says,
+               fun r hr => H.vecIntact r (hvi r hr)⟩, ?_⟩
       cases dres with
       | list _ => exact (refuse_ok h).elim
       | tail _ => exact (refuse_ok h).elim

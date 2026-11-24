@@ -51,9 +51,8 @@ canonical `.ocl` form. Every exported linker symbol is derived directly from tha
 (`ode_<52-character-hash>`), so swapping in a binary with a different contract fails at link time as
 well as during `ode audit`.
 
-When you already know the expected contract hash (for example, from a prior review or specification
-registry), pass it to the tool instead of comparing hashes by eye—full tool comparison defeats
-vanity look-alike hashes that match at the start and end:
+When you already know the expected contract hash (for example, from a prior review or registry),
+pass it to `--expect-contract` so the tool checks it:
 
 ```sh
 ode audit path/to/binary --proof path/to/binary.proof \
@@ -82,9 +81,8 @@ a mistake, a backdoor, or excess looseness in the contract itself.
 ### A complete canonical contract example
 
 Below is the exact canonical `.ocl` contract whose 52-character base-32 BLAKE3 hash is
-`jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa`. Notice that every helper and parameter uses a
-neutral slot (`f0`, `a0`, `a1`, `p0`): author-chosen names live only in an optional glossary file,
-never inside the contract hash.
+`jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa`. Every helper and parameter uses a neutral
+slot (`f0`, `a0`, `a1`, `p0`); author-chosen names live in an optional glossary file.
 
 ```ocl
 def f0(p0) {
@@ -117,16 +115,16 @@ and AArch64 implementations share this exact same 52-character contract hash.
 The table below lists each clause that can appear inside a `contract` block, what it establishes,
 and what to check while reading it.
 
-| Clause | What it establishes | What to check in the contract |
+| Clause | What the verifier proves | What you need to check |
 |---|---|---|
-| `a0: a1 bytes` / `64 bytes` / `cv` | Memory buffer passed by pointer (`cv` = 32 B, `block` = 64 B). Read-only unless written by `ensures`. | Size and layout match the protocol or API. |
-| `a1: number` | 64-bit unsigned integer argument. | No wraparound or sentinel-value ambiguity. |
-| `requires COND` | Precondition callers must satisfy (e.g. `no_overlap(a0, a1)`, `a1 <= 64`). | Not contradictory, and no stronger than what callers guarantee. |
-| `returns EXPR` | Exact value returned by the function. | Edge cases: empty input, maximum length, malformed input, error sentinel. |
-| `ensures a0 = EXPR` | Exact bytes written into output buffer `a0`. | Every byte of `a0` is specified and matches the standard. |
-| `stack N` (or formula) | Upper bound on stack bytes used (including callees). | Fits safely inside the caller's stack budget. |
-| `decreases EXPR` | Non-negative measure that strictly drops on every recursive call. | Guarantees termination (no infinite loops). |
-| `needs avx` / `avx512` | CPU instruction set used by the binary. | Callers gate on CPU feature detection before invoking the function. |
+| `a0: a1 bytes` / `64 bytes` / `cv` | Memory buffer passed by pointer (`cv` = 32 B, `block` = 64 B); read-only unless written by `ensures`. | Buffer size and layout match what callers pass. |
+| `a1: number` | 64-bit unsigned integer argument. | Range and sentinel values match what callers expect. |
+| `requires COND` | Assumed true at entry (for example, `no_overlap(a0, a1)`, `a1 <= 64`). | Callers actually satisfy it, and the preconditions are not contradictory. |
+| `returns EXPR` | Binary returns `EXPR` on every valid input. | Edge cases (empty, maximum-length, malformed inputs) match the intended behavior. |
+| `ensures a0 = EXPR` | Binary writes `EXPR` into `a0` on every valid input. | Every byte of `a0` matches the intended behavior. |
+| `stack N` (or formula) | Binary uses at most `N` bytes of stack (including callees). | Fits inside the caller's stack budget. |
+| `decreases EXPR` | Recursive calls strictly decrease `EXPR` (so the function terminates). | Nothing — checked mechanically by the verifier. |
+| `needs avx` / `avx512` | Binary uses only instructions from the listed CPU features. | Callers check CPU features before calling the function. |
 
 ### Testing the contract on concrete vectors
 

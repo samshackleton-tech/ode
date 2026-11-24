@@ -64,13 +64,18 @@ def regOrFail (name : String) : Except String Nat :=
   | some r => pure r
   | none => throw s!"no register {name}"
 
-/-- A vector register by its name: `zmm0` to `zmm31`. -/
+/-- A vector register by its name: `zmm0`..`zmm31`, `v0`..`v31`, `xmm0`..`xmm15`, or `ymm0`..`ymm15`. -/
 def vecOrFail (name : String) : Except String Nat :=
-  match if name.startsWith "zmm" then (name.drop 3).toNat? else none with
+  let parsed :=
+    if name.startsWith "zmm" then (name.drop 3).toNat?
+    else if name.startsWith "xmm" || name.startsWith "ymm" then (name.drop 3).toNat?
+    else if name.startsWith "v" then (name.drop 1).toNat?
+    else none
+  match parsed with
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "data", "piece", "stack", "stackbits", "fndecreases", "linpre", "valspec", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "argregs", "retreg", "keeps", "keepsvec", "data", "piece", "stack", "stackbits", "fndecreases", "linpre", "valspec", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -179,6 +184,18 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     onLast fun g => { g with contract := { g.contract with traceExprs := g.contract.traceExprs ++ [e] } }
   | "resultdep" :: names =>
     onLast fun g => { g with contract := { g.contract with resultHidden := some names } }
+  | "argregs" :: regs => do
+    let rs ← regs.mapM regOrFail
+    onLast fun g => { g with contract := { g.contract with customArgs := some rs } }
+  | ["retreg", reg] => do
+    let r ← regOrFail reg
+    onLast fun g => { g with contract := { g.contract with customRet := some r } }
+  | "keeps" :: regs => do
+    let rs ← regs.mapM regOrFail
+    onLast fun g => { g with contract := { g.contract with customKeeps := some rs } }
+  | "keepsvec" :: regs => do
+    let rs ← regs.mapM vecOrFail
+    onLast fun g => { g with contract := { g.contract with customKeepsVec := some rs } }
   | ["piece", align, hex] => match align.toNat?, readBytes hex.toList with      -- the read-only data of an object file
     | some align, some bytes => pure { t with pieces := t.pieces ++ [{ bytes := bytes, align := align }] }
     | _, _ => throw "cannot read the bytes of a file's read-only data"

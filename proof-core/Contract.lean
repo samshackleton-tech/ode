@@ -340,6 +340,10 @@ structure Contract where
   arm64 : Bool := false                   -- the function is for AArch64: it is called as C calls a function there
                                           -- (`argRegsArm`, `calleeSavedArm`, the address to return to in x30).
                                           -- Else it is for x86-64, called as C calls a function there.
+  customArgs : Option (List Nat) := none      -- custom Ode-to-Ode argument registers (when present)
+  customRet : Option Nat := none              -- custom Ode-to-Ode return register (when present)
+  customKeeps : Option (List Nat) := none     -- custom Ode-to-Ode callee-saved GPRs (when present)
+  customKeepsVec : Option (List Nat) := none  -- custom Ode-to-Ode callee-saved vector registers (when present)
   deriving Repr, Inhabited
 
 /-- The registers arguments are in, in their order, on x86-64: rdi, rsi, rdx, rcx, r8, r9. -/
@@ -348,14 +352,65 @@ def argRegsX86 : List Nat := [7, 6, 2, 1, 8, 9]
 /-- The same on AArch64: x0 to x7 (x4 has the number 31: `regNamesArm`). -/
 def argRegsArm : List Nat := [0, 1, 2, 3, 31, 5, 6, 7]
 
+/-- Vector registers a callee must preserve under AArch64 AAPCS64: v8 through v15. -/
+def calleeSavedVecArm : List Nat := [8, 9, 10, 11, 12, 13, 14, 15]
+
 /-- The register that holds the address to return to, on AArch64: x30. -/
 def LINK : Nat := 30
 
-/-- The registers the function's arguments are in, in their order. -/
-def Contract.argRegs (c : Contract) : List Nat := if c.arm64 then argRegsArm else argRegsX86
+/-- Decidable duplicate check for register lists. -/
+def noDupB : List Nat → Bool
+  | [] => true
+  | r :: rs => !rs.contains r && noDupB rs
 
-/-- The registers the function gives back as it found them. -/
-def Contract.keeps (c : Contract) : List Nat := if c.arm64 then calleeSavedArm else calleeSavedX86
+/-- Every register in `rs` is a valid general register of the machine, not `RSP`, not `LINK`, and distinct. -/
+def validRegList (nreg : Nat) (rs : List Nat) : Bool :=
+  rs.all (fun r => r < nreg && r != RSP && r != LINK) && noDupB rs
+
+/-- How many general registers the function's machine has. -/
+def Contract.regs (c : Contract) : Nat := if c.arm64 then 32 else 16
+
+/-- Does the contract say that a number is returned? -/
+def Contract.givesNumber (c : Contract) : Bool := c.returns.isSome || c.result.isSome
+
+/-- The register carrying the returned number: custom `out` when valid (and not an abstract `returns r`
+contract), else `0` (`rax` on x86-64, `x0` on AArch64). -/
+def Contract.retReg (c : Contract) : Nat :=
+  match c.customRet with
+  | some r => if r < c.regs && r != RSP && r != LINK && !c.result.isSome then r else 0
+  | none => 0
+
+/-- The registers the function's arguments are in, in their order. -/
+def Contract.argRegs (c : Contract) : List Nat :=
+  match c.customArgs with
+  | some rs => if validRegList c.regs rs then rs else if c.arm64 then argRegsArm else argRegsX86
+  | none => if c.arm64 then argRegsArm else argRegsX86
+
+/-- The general registers the function gives back as it found them. -/
+def Contract.keeps (c : Contract) : List Nat :=
+  let raw :=
+    match c.customKeeps with
+    | some rs => if validRegList c.regs rs then rs else if c.arm64 then calleeSavedArm else calleeSavedX86
+    | none => if c.arm64 then calleeSavedArm else calleeSavedX86
+  if c.givesNumber then raw.filter (· != c.retReg) else raw
+
+/-- The vector registers the function gives back as it found them (AAPCS64 `v8..v15` by default on AArch64,
+empty by default on x86-64). -/
+def Contract.keepsVec (c : Contract) : List Nat :=
+  match c.customKeepsVec with
+  | some rs => if rs.all (· < 32) && noDupB rs then rs else if c.arm64 then calleeSavedVecArm else []
+  | none => if c.arm64 then calleeSavedVecArm else []
+
+/-- Are any custom calling-convention fields on `c` well-formed? Checked at verifier entry. -/
+def Contract.callingOk (c : Contract) : Bool :=
+  let rawKeeps := match c.customKeeps with
+    | some rs => rs
+    | none => if c.arm64 then calleeSavedArm else calleeSavedX86
+  (match c.customArgs with | none => true | some rs => validRegList c.regs rs && decide (c.args.length ≤ rs.length)) &&
+  (match c.customRet with | none => true | some r => r < c.regs && r != RSP && r != LINK && !c.result.isSome) &&
+  (match c.customKeeps with | none => true | some rs => validRegList c.regs rs) &&
+  !(c.givesNumber && rawKeeps.contains c.retReg) &&
+  (match c.customKeepsVec with | none => true | some rs => rs.all (· < 32) && noDupB rs)
 
 /-- How many bytes at the stack pointer hold the address to return to, at the function's entry: eight on
 x86-64; none on AArch64, where a register holds it. -/
@@ -363,9 +418,6 @@ def Contract.slot (c : Contract) : Nat := if c.arm64 then 0 else 8
 
 /-- The register that holds the address to return to at the function's entry, where one does. -/
 def Contract.link (c : Contract) : Option Nat := if c.arm64 then some LINK else none
-
-/-- How many general registers the function's machine has. -/
-def Contract.regs (c : Contract) : Nat := if c.arm64 then 32 else 16
 
 /-- The address the function returns to, `s` being the state at entry. -/
 def Contract.backTo (c : Contract) (s : State) : Nat := if c.arm64 then s.reg LINK else load s.mem (s.reg RSP) 8
@@ -624,7 +676,7 @@ def Contract.clear (c : Contract) (world : List Program) (pieces : List Piece) (
 returned by the name `returns` gives it, where it gives it one. -/
 def Contract.envAfter (c : Contract) (s s' : State) : List (String × Val) :=
   match c.result with
-  | some name => (name, .int (s'.reg 0)) :: c.env s
+  | some name => (name, .int (s'.reg c.retReg)) :: c.env s
   | none => c.env s
 
 /-- `ensures RUN[lo .. hi] = value` holds, `s` being the state at entry and `s'` the state at the return:
@@ -659,9 +711,10 @@ def Contract.post (c : Contract) (defs : List Def) (s s' : State) : Prop :=
   s'.rip = c.backTo s ∧ s'.reg RSP = s.reg RSP + c.slot ∧
   (∀ r ∈ c.keeps, s'.reg r = s.reg r) ∧
   (∀ a, c.inFrame s a = false → c.inOut s a = false → s'.mem a = s.mem a) ∧
-  (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg 0))) ∧
+  (∀ e, c.returns = some e → Value defs (c.env s) e (.int (s'.reg c.retReg))) ∧
   (∀ r, s'.reg r < M64) ∧
-  (c.preVals defs s → (∀ e ∈ c.ensures, e.holds c defs s s') ∧ ∀ e ∈ c.ensuresW, e.holds c defs s s')
+  (c.preVals defs s → (∀ e ∈ c.ensures, e.holds c defs s s') ∧ ∀ e ∈ c.ensuresW, e.holds c defs s s') ∧
+  (∀ r ∈ c.keepsVec, s'.vec r = s.vec r)
 
 /-- The registers of the arguments that hold nothing hidden: each argument's register, but for a number the
 contract says is hidden. (An address is never hidden: the function reads or writes there, so it shows.) -/
@@ -681,9 +734,6 @@ def Contract.cleanAtEntry (c : Contract) : List Nat := RSP :: cleanIn c c.args c
 that holds it. -/
 def Contract.backQuiet (c : Contract) (s : State) : Prop :=
   if c.arm64 then s.marks.reg LINK = false else ∀ k, k < 8 → s.marks.mem (s.reg RSP + k) = false
-
-/-- Does the contract say that a number is returned (in rax)? -/
-def Contract.givesNumber (c : Contract) : Bool := c.returns.isSome || c.result.isSome
 
 /-- Does the contract's returned number follow its `trace depends on` line by default?
 True only for `returns r` with no `result depends on` line (a contract with `returns E` specifies the

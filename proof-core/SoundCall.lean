@@ -12,7 +12,7 @@ open Arithmetic
 theorem Holds.more {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} (H : Holds ctx s0 ρ s st)
     (rows : List Row) (hr : ∀ r ∈ rows, r.holds ρ) : Holds ctx s0 ρ { s with facts := rows ++ s.facts } st :=
   ⟨H.entry, H.data, H.reg, H.small, H.zf, H.cf, H.frame, H.frameW,
-   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩
+   fun f m => (List.mem_append.mp m).elim (hr f) (H.facts f), H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range, H.vecIntact⟩
 
 theorem WF.more {ctx : Ctx} {s : Sym} (wf : WF ctx s) (rows : List Row) (hb : ∀ r ∈ rows, bounded s.nvars r) : WF ctx { s with facts := rows ++ s.facts } :=
   ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW, fun f m => (List.mem_append.mp m).elim (hb f) (wf.facts f), wf.bytes, wf.spec, wf.wrote, wf.words.mono rfl rfl rfl (Nat.le_refl _), wf.known, wf.range⟩
@@ -186,49 +186,6 @@ theorem findRun_spec {s : Sym} {b l : Nat} : ∀ {regs : List (Nat × Nat)} {k j
 theorem regions_args {c : Contract} {b l : Nat} (h : (b, l) ∈ c.regions) : b ∈ c.argRegs ∧ l ∈ c.argRegs := by
   obtain ⟨hb, len, hl⟩ := regionsIn_mem c c.args c.argRegs b l h
   exact ⟨hb, regOfIn_mem len c.args c.argRegs l hl⟩
-
-/-- A register an argument is in is one of the machine's, and neither the stack pointer nor the register
-that holds the address to return to on AArch64. -/
-theorem argRegs_spec {c : Contract} {r : Nat} (h : r ∈ c.argRegs) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
-  cases ha : c.arm64
-  · have all : ∀ r ∈ argRegsX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
-    simp only [Contract.argRegs, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
-    exact all r h
-  · have all : ∀ r ∈ argRegsArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
-    simp only [Contract.argRegs, Contract.regs, ha, ↓reduceIte] at h ⊢
-    exact all r h
-
-/-- The same of a register a called function keeps. -/
-theorem keeps_spec {c : Contract} {r : Nat} (h : r ∈ c.keeps) : r < c.regs ∧ r ≠ RSP ∧ r ≠ LINK := by
-  cases ha : c.arm64
-  · have all : ∀ r ∈ calleeSavedX86, r < 16 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
-    simp only [Contract.keeps, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
-    exact all r h
-  · have all : ∀ r ∈ calleeSavedArm, r < 32 ∧ r ≠ RSP ∧ r ≠ LINK := by decide
-    simp only [Contract.keeps, Contract.regs, ha, ↓reduceIte] at h ⊢
-    exact all r h
-
-/-- A register a called function may leave anything in is one of the machine's. -/
-theorem scratch_lt {c : Contract} {r : Nat} (h : r ∈ c.scratch) : r < c.regs := by
-  cases ha : c.arm64
-  · have all : ∀ r ∈ callerSavedX86, r < 16 := by decide
-    simp only [Contract.scratch, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at h ⊢
-    exact all r h
-  · have all : ∀ r ∈ callerSavedArm, r < 32 := by decide
-    simp only [Contract.scratch, Contract.regs, ha, ↓reduceIte] at h ⊢
-    exact all r h
-
-/-- A register of the machine is the stack pointer, or one a called function may leave anything in, or one
-it keeps. -/
-theorem kept_of_not_scratch {c : Contract} {r : Nat} (hr : r < c.regs) (h4 : r ≠ RSP) (hc : c.scratch.contains r = false) :
-    r ∈ c.keeps := by
-  cases ha : c.arm64
-  · have all : ∀ r, r < 16 → r ≠ RSP → callerSavedX86.contains r = false → r ∈ calleeSavedX86 := by decide
-    simp only [Contract.scratch, Contract.keeps, Contract.regs, ha, Bool.false_eq_true, ↓reduceIte] at hr hc ⊢
-    exact all r hr h4 hc
-  · have all : ∀ r, r < 32 → r ≠ RSP → callerSavedArm.contains r = false → r ∈ calleeSavedArm := by decide
-    simp only [Contract.scratch, Contract.keeps, Contract.regs, ha, ↓reduceIte] at hr hc ⊢
-    exact all r hr h4 hc
 
 /-! ## A call, on either machine
 
@@ -1212,14 +1169,19 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
     (hmem : ∀ a, a + c.slot + cst < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
     (hout : ∀ x r n, (x, r, n) ∈ ctx.contract.outs →
       s0.reg r + n ≤ s0.reg RSP - ctx.contract.stackAt s0 ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r)
-    (hdata : s2.data = st.data) :
+    (hdata : s2.data = st.data)
+    (hvec : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r) :
     Holds ctx s0 (afterRho c.regs s.nvars ρ s2) (s.afterCall c sp) s2 := by
   have ag := afterRho_agree c.regs s.nvars ρ s2
   have H' := H.agree wf ag
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
     ⟨(fun x ids h => by simp [Sym.afterCall] at h), (fun w m => by simp [Sym.afterCall] at m),
      (fun w j i m => by simp [Sym.afterCall] at m), fun _ _ h => nomatch h⟩,
-    H'.known, fun _ h => nomatch h⟩
+    H'.known, (fun _ h => nomatch h),
+    fun r hr => by
+      obtain ⟨hr1, hr2⟩ := List.mem_filter.mp hr
+      rw [hvec r (List.contains_iff_mem.mp hr2)]
+      exact H'.vecIntact r hr1⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if c.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : c.scratch.contains r with
@@ -1389,7 +1351,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
         intro s2 post hdata2
-        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _⟩ := post
+        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, _, pvec⟩ := post
         have hrip : s2.rip = p.base + i.next := by
           rw [prip]
           exact afterCall_back F.link hret h8
@@ -1403,7 +1365,9 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           intro a ha
           rw [pmem a (by simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not, s1rsp]; omega) (hno _ a)]
           exact s1mem a (by omega)
-        have Hafter := afterCall_holds c (c.stackAt (afterCall p q i st)) F.regs H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.outAt m).2) hdata2
+        have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
+          (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
+        have Hafter := afterCall_holds c (c.stackAt (afterCall p q i st)) F.regs H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.outAt m).2) hdata2 hvec2
         have wafter := afterCall_wf wf c F.regs sp
         have ag := afterRho_agree c.regs s.nvars ρ s2
         cases hret' : c.returns with
@@ -1431,12 +1395,12 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
               c.args c.argRegs (fun r m => m) henv
           rw [henv3] at sem
           have val := pret e hret'
-          have pos : 0 < c.regs := by rw [F.regs]; exact ctx.lt_nreg (by decide)
-          have hnew : ev ρ3 (Lin.var s.nvars) = s2.reg 0 := by
-            rw [ev_var, ← c3.agree s.nvars (show s.nvars < s.nvars + c.regs by omega)]
-            exact afterRho_new c.regs s.nvars ρ s2 (r := 0) pos
-          have bvar : bounded s3.nvars (Lin.var s.nvars) :=
-            bounded_var (Nat.lt_of_lt_of_le (show s.nvars < s.nvars + c.regs by omega) c3.mono)
+          have pos : c.retReg < c.regs := (retReg_spec c).1
+          have hnew : ev ρ3 (Lin.var (s.nvars + c.retReg)) = s2.reg c.retReg := by
+            rw [ev_var, ← c3.agree (s.nvars + c.retReg) (by simp only [Sym.afterCall]; omega)]
+            exact afterRho_new c.regs s.nvars ρ s2 (r := c.retReg) pos
+          have bvar : bounded s3.nvars (Lin.var (s.nvars + c.retReg)) :=
+            bounded_var (Nat.lt_of_lt_of_le (show s.nvars + c.retReg < s.nvars + c.regs by omega) c3.mono)
           cases res with
           | list _ => exact (refuse_ok h).elim
           | tail call =>
@@ -1444,8 +1408,8 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
             have := V.pure_ok h
             injection this with h1 _
             subst h1
-            have hv : SFact.holds ctx s0 ρ3 (.value call (Lin.var s.nvars)) := by
-              show CallValue ctx s0 ρ3 call (.int (ev ρ3 (Lin.var s.nvars)))
+            have hv : SFact.holds ctx s0 ρ3 (.value call (Lin.var (s.nvars + c.retReg))) := by
+              show CallValue ctx s0 ρ3 call (.int (ev ρ3 (Lin.var (s.nvars + c.retReg))))
               rw [hnew]
               exact (sem _).mp val
             exact ⟨hrip, ρ3, ag3, Nat.le_trans (Nat.le_add_right _ _) c3.mono, c3.holds.withSpec _ hv, c3.wf.withSpec _ ⟨bd, bvar⟩⟩

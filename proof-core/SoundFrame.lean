@@ -395,7 +395,7 @@ theorem frameFill_sound {ctx : Ctx} {s0 : State} {st : State} (hst : ctx.contrac
       have hH1 : Holds ctx s0 ρ1 { s with nvars := v + 1 } st := by
         have hH0 := H.agree wf hag1
         exact ⟨hH0.entry, hH0.data, hH0.reg, hH0.small, hH0.zf, hH0.cf, hH0.frame, hH0.frameW,
-          hH0.facts, hH0.bytes, hH0.spec, hH0.mem, hH0.wrote, hH0.words, hH0.known, hH0.range⟩
+          hH0.facts, hH0.bytes, hH0.spec, hH0.mem, hH0.wrote, hH0.words, hH0.known, hH0.range, hH0.vecIntact⟩
       have le : s.nvars ≤ v + 1 := Nat.le_succ _
       have hwf1 : WF ctx { s with nvars := v + 1 } :=
         ⟨Nat.le_trans wf.base le, fun r hr => bounded_mono le (wf.reg r hr),

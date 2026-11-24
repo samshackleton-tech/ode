@@ -778,7 +778,8 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
           (if bytes then .list (wordBytes nums) else .list (nums.map Val.word)))) ∨
       (!rfs.isEmpty ∧ ∃ d fvs, recVal = some (.record fvs) ∧ RecFieldsHolds rfs nums fvs ∧
         (ctx.contract.preVals ctx.defs s0 → findDef ctx.defs g = some d ∧ d.params.length = keys.length ∧
-          Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.record fvs)))) :
+          Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.record fvs))))
+    (hvec : ∀ r ∈ ct.keepsVec, s2.vec r = st.vec r) :
     Holds ctx s0 (afterRhoW ct.regs s.nvars ρ s2 nums recVal) (s.afterCallW ct sp w o m g keys bytes rfs) s2 := by
   let ρ' := afterRhoW ct.regs s.nvars ρ s2 nums recVal
   have hstack := E.stackAt
@@ -802,7 +803,11 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       den (inpOf ctx s0) ρ' (madeW ct.regs s m).2 i = den (inpOf ctx s0) ρ s.terms i :=
     fun i hi => den_mono wf.words.table wf.words.atoms ag ext hi
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
-    ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
+    ⟨(fun x ids h => by simp [Sym.afterCallW] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, (fun _ h => nomatch h),
+    fun r hr => by
+      obtain ⟨hr1, hr2⟩ := List.mem_filter.mp hr
+      rw [hvec r (List.contains_iff_mem.mp hr2)]
+      exact H'.vecIntact r hr1⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if ct.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hc : ct.scratch.contains r with
@@ -1091,7 +1096,8 @@ theorem afterCallF_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.list (nums.map Val.word)))) ∨
       (!rfs.isEmpty ∧ ∃ d fvs, recVal = some (.record fvs) ∧ RecFieldsHolds rfs nums fvs ∧
         (ctx.contract.preVals ctx.defs s0 → findDef ctx.defs g = some d ∧ d.params.length = keys.length ∧
-          Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.record fvs)))) :
+          Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ s.terms))) d.body (.record fvs))))
+    (hvec : ∀ r ∈ ct.keepsVec, s2.vec r = st.vec r) :
     Holds ctx s0 (afterRhoW ct.regs s.nvars ρ s2 nums recVal) (s.afterCallF ct sp c m g keys rfs) s2 := by
   let ρ' := afterRhoW ct.regs s.nvars ρ s2 nums recVal
   have hstack := E.stackAt
@@ -1111,7 +1117,11 @@ theorem afterCallF_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
       den (inpOf ctx s0) ρ' (madeW ct.regs s m).2 i = den (inpOf ctx s0) ρ s.terms i :=
     fun i hi => den_mono wf.words.table wf.words.atoms ag ext hi
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
-    ⟨(fun x ids h => by simp [Sym.afterCallF] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, fun _ h => nomatch h⟩
+    ⟨(fun x ids h => by simp [Sym.afterCallF] at h), ?_, ?_, fun _ _ h => nomatch h⟩, ?_, (fun _ h => nomatch h),
+    fun r hr => by
+      obtain ⟨hr1, hr2⟩ := List.mem_filter.mp hr
+      rw [hvec r (List.contains_iff_mem.mp hr2)]
+      exact H'.vecIntact r hr1⟩
   · intro r hr
     show (s2.reg r : Int) = ev _ (if ct.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     cases hcs : ct.scratch.contains r with
@@ -3079,7 +3089,9 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
         intro s2 post hdata2
-        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens⟩ := post
+        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens, pvec⟩ := post
+        have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
+          (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
         have hrip : s2.rip = p.base + i.next := by
           rw [prip]
           exact afterCall_back F.link hret h8
@@ -3125,7 +3137,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             subst heqn
             exact ⟨d, hfd, hdl, hv'⟩
           have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
-            hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := none) hheld
+            hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := none) hheld hvec2
           have wafter := afterCallW_wf wfT c F.regs sp plan.w plan.first (n / 4) plan.g hkeys false plan.recFields (fun h => by simp [hnoRec] at h)
           rw [hwords]
           exact ⟨hrip, _, afterRhoW_agree c.regs s.nvars ρ s2 nums none,
@@ -3146,7 +3158,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [show s0.reg b + 4 * (plan.first + k) + bb = s0.reg b + 4 * plan.first + 4 * k + bb by omega, this, ← getD_of_lt l 0 lt']
             exact hlget k (by omega) bb hbb
           have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
-            hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := some (.record fvs)) (Or.inr ⟨hne, d, fvs, rfl, hrf, hv⟩)
+            hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := some (.record fvs)) (Or.inr ⟨hne, d, fvs, rfl, hrf, hv⟩) hvec2
           have wafter := afterCallW_wf wfT c F.regs sp plan.w plan.first (n / 4) plan.g hkeys false plan.recFields (fun _ => by omega)
           rw [hwords]
           exact ⟨hrip, _, afterRhoW_agree c.regs s.nvars ρ s2 nums (some (.record fvs)),
@@ -3475,7 +3487,9 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           left; omega
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
         intro s2 post hdata2
-        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens⟩ := post
+        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens, pvec⟩ := post
+        have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
+          (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
         have hrip : s2.rip = p.base + i.next := by
           rw [prip]
           exact afterCall_back F.link hret h8
@@ -3515,7 +3529,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             subst heqn
             exact ⟨d, hfd, hdl, hv'⟩
           have Hafter := afterCallF_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall hlew (show cw + 4 * ((n / 4 : Nat) : Int) ≤ 0 by omega) hmem2 hdata2
-            hnums hlt hrun hkeys (rfs := plan.recFields) (recVal := none) hheld
+            hnums hlt hrun hkeys (rfs := plan.recFields) (recVal := none) hheld hvec2
           have wafter := afterCallF_wf wfT c F.regs sp cw (n / 4) plan.g hkeys plan.recFields (fun h => by simp [hnoRec] at h)
           rw [hwords]
           have Cafter : Carried ctx s0 ρ1 sFill (afterRhoW c.regs sFill.nvars ρ1 s2 nums none)
@@ -3541,7 +3555,7 @@ theorem symCallF'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [this, ← getD_of_lt l 0 lt']
             exact hlget k (by omega) bb hbb
           have Hafter := afterCallF_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall hlew (show cw + 4 * ((n / 4 : Nat) : Int) ≤ 0 by omega) hmem2 hdata2
-            hnums hlt hrun hkeys (rfs := plan.recFields) (recVal := some (.record fvs)) (Or.inr ⟨hne, d, fvs, rfl, hrf, hv⟩)
+            hnums hlt hrun hkeys (rfs := plan.recFields) (recVal := some (.record fvs)) (Or.inr ⟨hne, d, fvs, rfl, hrf, hv⟩) hvec2
           have wafter := afterCallF_wf wfT c F.regs sp cw (n / 4) plan.g hkeys plan.recFields (fun _ => by omega)
           rw [hwords]
           have Cafter : Carried ctx s0 ρ1 sFill (afterRhoW c.regs sFill.nvars ρ1 s2 nums (some (.record fvs)))
@@ -3577,7 +3591,7 @@ theorem touch_carried {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         have wfT := CT.wf
         refine ⟨Agree.refl _ _, Nat.le_refl _, ?_, ?_⟩
         · refine ⟨HT.entry, HT.data, HT.reg, HT.small, HT.zf, HT.cf, HT.frame, HT.frameW, HT.facts, HT.bytes, HT.spec, HT.mem, HT.wrote,
-            ⟨HT.words.vec, (fun w' mw' => HT.words.intact w' (List.mem_filter.mp mw').1), ?_, HT.words.spill⟩, HT.known, HT.range⟩
+            ⟨HT.words.vec, (fun w' mw' => HT.words.intact w' (List.mem_filter.mp mw').1), ?_, HT.words.spill⟩, HT.known, HT.range, HT.vecIntact⟩
           intro w' k i mw' x'' r'' n'' ho'
           rcases List.mem_append.mp mw' with mn | mo
           · obtain ⟨k', hk', e⟩ := List.mem_map.mp mn
@@ -4194,7 +4208,9 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         refine ⟨h8, hwr, hpre, hread, hwrite, ?_⟩
         intro s2 post hdata2
         have hbytes2 : ∀ a, s2.mem a = (afterCall p q i st).mem a ∨ (s2.mem a).val < 256 := fun a => Or.inr (s2.mem a).isLt
-        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens⟩ := post
+        obtain ⟨prip, prsp, psaved, pmem, pret, psmall, hpost_ens, pvec⟩ := post
+        have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
+          (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
         have hrip : s2.rip = p.base + i.next := by
           rw [prip]
           exact afterCall_back F.link hret h8
@@ -4295,7 +4311,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           have ekeys : as2 = plan.keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf das hfk
           exact ⟨d, hfd, hdl, f2, by rw [← ekeys, if_pos rfl, ← hlb]; exact hev2⟩
         have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs H wf hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
-          hnl hlt hrun hkeys (bytes := true) (rfs := []) (recVal := none) (Or.inl ⟨rfl, hheld⟩)
+          hnl hlt hrun hkeys (bytes := true) (rfs := []) (recVal := none) (Or.inl ⟨rfl, hheld⟩) hvec2
         have wafter := afterCallW_wf wf c F.regs sp plan.w plan.first (n / 4) plan.g hkeys true [] (fun h => by simp at h)
         rw [hwords]
         exact ⟨hrip, _, afterRhoW_agree c.regs s.nvars ρ s2 _, by rw [afterCallW_nvars]; show s.nvars ≤ s.nvars + c.regs + n / 4 + _; omega, Hafter, wafter⟩
@@ -4350,7 +4366,7 @@ theorem symKnow_sound {ctx : Ctx} {s0 : State} {advice : Sym → List Row} {ρ :
               rcases List.mem_cons.mp m with rfl | m
               · exact hrow
               · exact H.facts g' m,
-            H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range⟩ :
+            H.bytes, H.spec, H.mem, H.wrote, H.words, H.known, H.range, H.vecIntact⟩ :
             Holds ctx s0 ρ { s with facts := g :: s.facts } st)
           ⟨wf.base, wf.reg, wf.zf, wf.cf, wf.frame, wf.frameW,
             fun g' m => by

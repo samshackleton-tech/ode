@@ -465,6 +465,7 @@ structure Sym where
   tab : Tab := {}                 -- the table of words
   vec : List (Nat × List Nat) := []   -- (vector register, known low lanes as term numbers); the first entry for each register counts
   intact : List Nat := []         -- the runs given to write that nothing has been written to yet (by their numbers): they hold what they held at entry
+  vecIntact : List Nat := []      -- the callee-saved vector registers still holding their entry values
   wroteW : List (Nat × Nat × Nat) := []   -- (run given to write, which word of it, the term): that word of that run now holds that term
   frameW : List (Int × Nat) := [] -- (entry-relative offset, term id): 4 bytes of the frame holding that 32-bit word term
   spill : List (Row × List Nat) := []  -- the aligned vector spills still known: each one's entry-relative offset and lane terms
@@ -1564,7 +1565,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
       match vecOf512 bind n with
       | some r => do
         let (l, s) ← symLanes512 ctx bind s v
-        if l.length == 16 then pure { s with vec := (r, l) :: s.vec } else refuse "expected sixteen lanes"
+        if l.length == 16 then pure { s with vec := (r, l) :: s.vec, vecIntact := s.vecIntact.filter (· != r) } else refuse "expected sixteen lanes"
       | none => refuse "a row that sets what is no 512-bit register"
     | .call f [b, n] =>
       if f == "mem512" then
@@ -1581,12 +1582,12 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
     match place with
     | .name n =>
       if n == "above128" then
-        if isUnknown v then pure { s with vec := forgetHigh s.vec } else refuse "a row that sets the high lanes: not here yet"
+        if isUnknown v then pure { s with vec := forgetHigh s.vec, vecIntact := s.vecIntact.filter (fun x => decide (16 ≤ x)) } else refuse "a row that sets the high lanes: not here yet"
       else
         match vecOf bind n with
         | some r => do
           let (l, s) ← symLanes ctx bind s v
-          if l.length == 4 then pure { s with vec := (r, l) :: s.vec } else refuse "four words are not four"
+          if l.length == 4 then pure { s with vec := (r, l) :: s.vec, vecIntact := s.vecIntact.filter (· != r) } else refuse "four words are not four"
         | none => refuse "a row that sets what is no vector register"
     | .call f [b, n] =>
       -- sixteen bytes of a run given to write, at a place that is a number divisible by four: four words
@@ -2068,7 +2069,7 @@ def LIST : Nat := 100
 /-- The contract's names at the return: those at entry, and the name `returns` gives the number returned. -/
 def symEnvAfter (c : Contract) (s : Sym) : List (String × SVal) :=
   match c.result with
-  | some name => (name, .lin (s.reg 0)) :: symEnv c
+  | some name => (name, .lin (s.reg c.retReg)) :: symEnv c
   | none => symEnv c
 
 /-- The run given to write of that name: which it is, and how many bytes. -/
@@ -2923,6 +2924,7 @@ entry, the runs given to write hold what each `ensures` says, and rax holds what
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(ctx.contract.keeps.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
+  else if !(ctx.contract.keepsVec.all fun r => s.vecIntact.contains r) then refuse "at the return a callee-saved vector register was modified"
   else do
     each (symEnsureKnown ctx s) ctx.contract.ensuresW
     let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
@@ -2930,12 +2932,13 @@ def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
     | none => pure ()
     | some e => do
       let (res, s) ← seval ctx (symEnv ctx.contract) s e
+      let rr := ctx.contract.retReg
       match res with
       | .val (.lin v) => do
-        entail s.facts (Lin.sub v (s.reg 0))
-        entail s.facts (Lin.sub (s.reg 0) v)
+        entail s.facts (Lin.sub v (s.reg rr))
+        entail s.facts (Lin.sub (s.reg rr) v)
       | .tail c => do
-        let _ ← specGoal ctx 16 s (.value c (s.reg 0))
+        let _ ← specGoal ctx 16 s (.value c (s.reg rr))
         pure ()
       | _ => refuse "a function returns a number"
 
@@ -3203,8 +3206,10 @@ def callerSavedX86 : List Nat := [0, 1, 2, 6, 7, 8, 9, 10, 11]
 /-- The same on AArch64: x0 to x18 and x30 (every general register but the stack pointer and x19 to x29). -/
 def callerSavedArm : List Nat := [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 30, 31]
 
-/-- The registers a function with this contract may leave anything in. -/
-def Contract.scratch (c : Contract) : List Nat := if c.arm64 then callerSavedArm else callerSavedX86
+/-- The registers a function with this contract may leave anything in: every general register of the
+machine except `RSP` and those listed in `c.keeps`. -/
+def Contract.scratch (c : Contract) : List Nat :=
+  (List.range c.regs).filter fun r => r != RSP && !c.keeps.contains r
 
 /-- Among the runs of bytes this function was given: the one whose address register `b` holds and whose
 length register `l` holds, both as they were at entry. -/
@@ -3241,6 +3246,7 @@ def Sym.afterCall (c : Contract) (s : Sym) (sp : Int) : Sym :=
     facts := (c.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs, wrote := s.wrote,
     tab := s.tab,         -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
+    vecIntact := s.vecIntact.filter c.keepsVec.contains,
     known := s.known }
 
 /-- The linear row for an entry precondition `(k, ts)` evaluated under register rows `val`. -/
@@ -3359,9 +3365,10 @@ def symCallPlain (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
         | none => pure (s.afterCall c sp)
         | some e => do
           let (res, s2) ← seval ctx env (s.afterCall c sp) e
+          let rv := s.nvars + c.retReg
           match res with
-          | .val (.lin v) => pure { s2 with facts := [Lin.sub v (Lin.var s.nvars), Lin.sub (Lin.var s.nvars) v] ++ s2.facts }
-          | .tail call => pure { s2 with spec := .value call (Lin.var s.nvars) :: s2.spec }
+          | .val (.lin v) => pure { s2 with facts := [Lin.sub v (Lin.var rv), Lin.sub (Lin.var rv) v] ++ s2.facts }
+          | .tail call => pure { s2 with spec := .value call (Lin.var rv) :: s2.spec }
           | _ => refuse "a function returns a number"
 
 /-! ## A call of a function that writes a run of words for its caller
@@ -3644,6 +3651,7 @@ def Sym.afterCallW (c : Contract) (s : Sym) (sp : Int) (w o m : Nat) (g : String
     bytes := s.bytes, spec := s.spec, nvars := base + m + (if isRec then 1 else 0), wrote := s.wrote,
     tab := made.2,
     intact := s.intact.filter (· != w),
+    vecIntact := s.vecIntact.filter c.keepsVec.contains,
     wroteW := ((List.range m).map fun k => (w, o + k, made.1.getD k 0)) ++
               s.wroteW.filter fun e => e.1 != w || decide (e.2.1 < o) || decide (o + m ≤ e.2.1),
     known := (if isRec then [Known.use g keys u, Known.record u recFields made.1]
@@ -3669,7 +3677,7 @@ def Sym.afterCallF (ct : Contract) (s : Sym) (sp c : Int) (m : Nat) (g : String)
              ((ct.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts),
     bytes := s.bytes, spec := s.spec, nvars := base + m + (if isRec then 1 else 0), wrote := s.wrote,
     tab := made.2,
-    intact := s.intact, wroteW := s.wroteW,
+    intact := s.intact, vecIntact := s.vecIntact.filter ct.keepsVec.contains, wroteW := s.wroteW,
     known := (if isRec then [Known.use g keys u, Known.record u recFields made.1]
               else [Known.held g keys made.1]) ++ s.known }
 
@@ -4258,7 +4266,7 @@ def Sym.afterCallL (c : Contract) (s : Sym) (sp cw : Int) (n : Nat) (rows : List
     frameW := s.frameW.filter fun cell => decide (sp ≤ cell.1) && (decide (cell.1 + 4 ≤ cw) || decide (cw + (n : Int) ≤ cell.1)),
     facts := (c.scratch.map fun r => ranged (s.nvars + r)).flatten ++ s.facts,
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs, wrote := s.wrote,
-    tab := s.tab, intact := s.intact, wroteW := s.wroteW, known := s.known }
+    tab := s.tab, intact := s.intact, vecIntact := s.vecIntact.filter c.keepsVec.contains, wroteW := s.wroteW, known := s.known }
 
 /-- A call of a function that is given a table of addresses and writes one run, where both are parts of
 this function's frame, apart from each other, at or above the stack pointer and below the address to return
@@ -4577,7 +4585,7 @@ def callReturnsClean (ctx : Ctx) (s : Sym) (c : Contract) : Bool :=
 `cleanRet` holds; each register a callee keeps that was not marked before; and each cell of the frame
 not marked before that is not below the stack pointer. -/
 def afterCallQ (cleanRet : Bool) (c : Contract) (s : Sym) : SMarks :=
-  { regq := (if cleanRet then [0, RSP] else [RSP]) ++ s.q.regq.filter c.keeps.contains,
+  { regq := (if cleanRet then [c.retReg, RSP] else [RSP]) ++ s.q.regq.filter c.keeps.contains,
     fq := match s.sp with
       | some sp => s.q.fq.filter fun c => decide (sp ≤ c)
       | none => [] }
@@ -4657,6 +4665,7 @@ def entrySym (ctx : Ctx) : Sym :=
   addValArrayFacts
     { reg := Lin.var, zf := .unknown, cf := .unknown, frame := [], facts := entryFacts ctx ++ dataFacts ctx, bytes := [], spec := [], nvars := ctx.nreg + 1,       -- (the unknown after the registers': where the file's data lies)
       wrote := [], intact := List.range ctx.contract.outs.length,
+      vecIntact := ctx.contract.keepsVec,
       q := { regq := ctx.contract.cleanAtEntry ++ ctx.contract.link.toList } }      -- (and the register that holds the address to return to, where one does)
     ctx.contract.valArrays
 
@@ -4669,6 +4678,7 @@ def Sym.general (n : Nat) (p : Place) (s : Sym) : Sym :=
     zf := .unknown, cf := .unknown, frame := s.frame, bytes := s.bytes, spec := s.spec, nvars := s.nvars + n,
     wrote := [],    -- (what was written before a loop is not carried into it yet)
     tab := s.tab,         -- (nor that a run is as it was at entry; what the vector registers hold is said by the place's lanes)
+    vecIntact := s.vecIntact,
     known := s.known,
     facts := (((List.range n).filter fun r => !p.keep.contains r).map fun r => ranged (s.nvars + r)).flatten ++ s.facts }
 
@@ -4864,6 +4874,7 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
   else
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
+  else if !(first.vecIntact.all s.vecIntact.contains) then refuse "at the place a callee-saved vector register was modified in the loop"
   else do
     let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
     if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the place {p.pc} the vector registers are not shown to hold what the place says, on coming there again"
@@ -4984,7 +4995,9 @@ def Contract.decreasesOk (c : Contract) : Bool :=
 
 /-- One verification pass. `none`: yes. -/
 def verdictOne (ctx : Ctx) (proof : List Item) : Option String :=
-  if !ctx.contract.stackBitsOk then
+  if !ctx.contract.callingOk then
+    some "refused: invalid custom calling convention (register out of range, duplicate, RSP/LINK, or return register preserved)"
+  else if !ctx.contract.stackBitsOk then
     some "refused: stack bits argument must be a parameter listed in `trace depends on` with a positive divisor"
   else if !ctx.contract.decreasesOk then
     some "refused: `decreases` argument must be a parameter listed in `trace depends on`"

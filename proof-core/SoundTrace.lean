@@ -64,8 +64,8 @@ theorem runsPlain_mono {world : List Program} {perm : Perm} {p : Program} {Q R :
   induction h with
   | step perm p Q s i hf hn _ hr ih =>
     exact RunsPlain.step perm p R s i hf hn (fun u s' hx => ih u s' hx imp) (fun u s' hx => imp s' (hr u s' hx))
-  | call perm p Q s i name q inner M hf hc hw hstack hir hiw hq hk _ _ ihp =>
-    exact RunsPlain.call perm p R s i name q inner M hf hc hw hstack hir hiw hq hk (fun s' h' => ihp s' h' imp)
+  | call perm p Q s i name q inner M kept hf hc hw hstack hir hiw hq hk _ _ ihp =>
+    exact RunsPlain.call perm p R s i name q inner M kept hf hc hw hstack hir hiw hq hk (fun s' h' => ihp s' h' imp)
 
 theorem runsPlain_data {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
     (h : RunsPlain world perm p Q s) : RunsPlain world perm p (fun s' => Q s' ∧ s'.data = s.data) s := by
@@ -75,14 +75,14 @@ theorem runsPlain_data {world : List Program} {perm : Perm} {p : Program} {Q : S
     have h1 := ih u s' hx
     have hd : s'.data = s.data := exec_data hx
     simpa [hd] using h1
-  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
-    refine RunsPlain.call perm p _ s i name q inner (fun s1 => R s1 ∧ s1.data = s.data) hf hc hw hstack hir hiw ?_
+  | call perm p Q s i name q inner R kept hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+    refine RunsPlain.call perm p _ s i name q inner (fun s1 => R s1 ∧ s1.data = s.data) kept hf hc hw hstack hir hiw ?_
       (fun s1 h1 r hr => hk s1 h1.1 r hr) (fun s1 h1 => ?_)
     · have h1 := ihq
       rw [afterCall_data] at h1
       exact h1
     · have h2 := ihp s1 h1.1
-      have hd : (backFrom (keptAt i) s s1).data = s.data := h1.2
+      have hd : (backFrom kept s s1).data = s.data := h1.2
       simpa [hd] using h2
 
 theorem plain_eq_fields {s1 s2 : State} (h : s1.plain = s2.plain) :
@@ -137,19 +137,19 @@ theorem runsPlain_of_plain_aux {world : List Program} {perm : Perm} {p : Program
         rw [e2] at e2'; injection e2' with e2'; subst e2'
         obtain ⟨t1, rfl, ht⟩ := outcome_returned (show o1.plain = .returned t2.plain from ho)
         exact ⟨t1, hr u t1 e1, ht.symm⟩
-  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+  | call perm p Q s i name q inner R kept hf hc hw hstack hir hiw _ hk _ ihq ihp =>
     intro s2 hp
     have ⟨hrip, hreg, _, _, _, _, _, _⟩ := plain_eq_fields hp
     have hac : (afterCall p q i s).plain = (afterCall p q i s2).plain := by
       rw [← afterCallP_plain, hp, afterCallP_plain]
-    refine RunsPlain.call perm p _ s2 i name q inner (fun t => ∃ t0, R t0 ∧ t0.plain = t.plain)
+    refine RunsPlain.call perm p _ s2 i name q inner (fun t => ∃ t0, R t0 ∧ t0.plain = t.plain) kept
       (by rw [← hrip]; exact hf) hc hw
       (fun hl => by rw [← hreg]; exact hstack hl) hir hiw
       (ihq (afterCall p q i s2) hac)
       (fun s' ⟨t0, ht0, hpt⟩ r hr => by
         rw [← hreg, ← (plain_eq_fields hpt).2.1]
         exact hk t0 ht0 r hr)
-      (fun s' ⟨t0, ht0, hpt⟩ => ihp t0 ht0 (backFrom (keptAt i) s2 s') (by
+      (fun s' ⟨t0, ht0, hpt⟩ => ihp t0 ht0 (backFrom kept s2 s') (by
         have ⟨r1, r2, r3, r4, r5, r6, r7, r8⟩ := plain_eq_fields hpt
         simp only [backFrom, State.plain, hreg, r1, r2, r3, r4, r5, r6, r7, r8]))
 
@@ -188,7 +188,7 @@ theorem runsPlain_endsP {world : List Program} {perm : Perm} {p : Program} {Q : 
       have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
       subst e
       exact absurd (exec_call hc perm (fun _ => 0) s) (hn _)
-  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
+  | call perm p Q s i name q inner R kept hf hc hw hstack hir hiw _ hk _ ihq ihp =>
     intro t E
     have no : ∀ u, execP Perm.all p i u s.plain = none := by
       intro u; rw [exec_plain, exec_call hc]; rfl
@@ -640,10 +640,6 @@ theorem ExprImp.thePower {defs : List Def} {env1 env2 : List (String × Val)} {g
       exact ⟨fc + 1, by simp only [evalSpec]; exact hfc⟩
 
 /-! ## Agreement on `envIn` and `traceClean` -/
-
-theorem argRegs_nodup (c : Contract) : c.argRegs.Nodup := by
-  unfold Contract.argRegs
-  cases c.arm64 <;> decide
 
 theorem regOfIn_eq_head {x y : String} {k : Kind} {args : List (String × Kind)} {r : Nat} {regs : List Nat}
     (hnd : (r :: regs).Nodup) (h : regOfIn y ((x, k) :: args) (r :: regs) = some r) : y = x := by
@@ -1769,7 +1765,7 @@ theorem initMarks_dataQuiet {c : Contract} {pieces : List Piece} {a0 : State} :
 unmarking `RSP`, `0` (when `cleanRet = true`), and every memory byte outside callee's frame and outs
 that was unmarked at call entry. -/
 def postCallMarks (c : Contract) (cleanRet : Bool) (call_a : State) : Marks where
-  reg r := !(r == RSP || (cleanRet && r == 0))
+  reg r := !(r == RSP || (cleanRet && r == c.retReg))
   low _ := true
   zf := true
   cf := true
