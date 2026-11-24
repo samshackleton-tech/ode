@@ -85,7 +85,7 @@ AArch64 silicon in `factory/test_factory_native.py`.
 |---|---|---|---:|---:|---:|---:|---:|
 | `b3hashr.o` (14/14 fns, full BLAKE3) | x86-64 | Hand / Ode | — | 3,761 | 23,820 | 1.07 MB | 26.1 s |
 | `b3hashr_arm64.o` (7/7 fns, full BLAKE3 + 4-way NEON) | AArch64 | Hand / Ode | — | 1,832 | 7,328 | 79.2 KB | 3.30 s |
-| `ode_chacha20_blocks16` (16-block AVX-512, 1,024 B/call) | x86-64 | Hand / Ode | — | 1,090 | 6,921 | 26 B | 0.042 s |
+| `ode_chacha20_blocks16` (16-block AVX-512, 1,024 B/call, 9.41 GiB/s Zen 5) | x86-64 | Hand / Ode | — | 1,090 | 6,921 | 26 B | 0.042 s |
 | `ode_chacha20_blocks4_arm64` (4-block NEON, 256 B/call, 1.70 GiB/s M6) | AArch64 | Hand / Ode | — | 1,759 | 7,036 | 31 B | 0.035 s |
 | `v_row_contradicts`, `v_row_sum16`, `v_bytes_eq` (6 fns) | x86-64 & AArch64 | Hand / Ode | — | 110 | 440 | 4.8 KB | < 0.2 s |
 | `base64_char_val_x86_64` (1.62x Zen 5 winner) | x86-64 | `claude-sonnet-5.5` (opt) | $0.0055 | 30 | 93 | 577 B | 0.004 s |

@@ -83,6 +83,20 @@ vectors and boundary lengths up to 102,400 bytes in both standard and keyed mode
 hardware (`proof-core/test_hashr_arm64.py`, reaching `2.194 GiB/s` at 16 KiB on Apple M6 — 84.4% of
 official hand-written NEON `blake3 1.8.7`).
 
+A second complete cryptographic primitive — **RFC 8439 ChaCha20** (all 20 rounds plus feed-forward state
+addition, branch-free and constant-time with no `trace` clause) — is also verified by `odeverify` on both
+architectures (`proof-core/test_chacha20.py`): single-block `ode_chacha20_block` (AVX and NEON, 23 B
+proofs, < 10 ms to verify), 16-block parallel AVX-512 `ode_chacha20_blocks16` (1,024 bytes per call,
+1,090 instructions, `stack 0`, 26 B proof, 42 ms to verify, measured at **`9.412 GiB/s`** on Zen 5), and
+4-block interleaved NEON `ode_chacha20_blocks4_arm64` (256 bytes per call, 1,759 instructions, 31 B
+proof, 35 ms to verify, measured at **`1.701 GiB/s`** on Apple M6). Alongside BLAKE3 and ChaCha20,
+`CATALOG.md` and `factory/verified/` hold **38 standalone Lean-4-verified native routines** (19 real-world
+parsers, codecs, checksums, SIMD primitives, and verifier building blocks across both x86-64 and AArch64;
+2,164 instructions, 60.7 kB of proofs, 0.21 s total `odeverify` time, all executed on real x86-64 and
+Apple M6 hardware in `factory/test_factory_native.py`). `lean2ode/` translates pure Lean 4 specifications
+into Ode specifications, and `lean2ode/agree/` proves exact functional agreement in Lean 4 without
+entering Bob's verifier.
+
 Two companion soundness theorems (`Ode.verify_all_trace` and `Ode.verify_all_result`) cover timing-trace
 and return-value independence. For a function the verifier accepts, take two runs from inputs that agree
 on everything named in `trace depends on` (which may list computed values such as `same(want, tag)`). The
