@@ -134,7 +134,8 @@ def classify_failure(resp):
 def format_feedback(arm, resp):
     """Construct the turn feedback message seen by the model under each arm."""
     if resp.get("error"):
-        return f"Compilation / tool error:\n{resp['error']}\nPlease fix the `.ode` file and return the complete code."
+        extra = f"\n{resp['hint']}" if (arm == "arm_c" and resp.get("hint")) else ""
+        return f"Compilation / tool error:\n{resp['error']}{extra}\nPlease fix the `.ode` file and return the complete code."
     res = resp.get("result") or {}
     if arm in ("arm_a", "arm_b"):
         # Raw verifier / prover failure message only (no decoded inequalities, hints, or concrete probes).

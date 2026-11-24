@@ -113,6 +113,8 @@ mov64_mr     | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B
              = REX.W 89 /r ; reg=S mem=B+N
 lea          | lea D64, [B64 + N]      | .lea .D .B N                  | D = at(B, N)
              = REX.W 8D /r ; reg=D mem=B+N
+lea_idx      | lea D64, [B64 + S64 + N] | .lea_idx .D .B .S N          | D = add64(add64(B, S), N)
+             = REX.W 8D /r ; reg=D mem=B+S+N
 lea_data     | -                       | .lea_data .D I                | D = data(I)
              = REX.W 8D /r ; reg=D data=I
 
@@ -146,8 +148,8 @@ movzx8_rr    | movzx D32, S8           | .movzx8 .D (.reg .S)          | D = low
              = 0F B6 /r ; reg=D rm8=S
 mov8_al_i    | mov al, I               | .mov 8 (.reg .rax) (.imm I)   | rax = setlow8(rax, I)
              = B0 ib ; imm=I
-mov8_m_al    | mov byte ptr [B64 + N], al | .mov 8 (.mem .B N) (.reg .rax) | mem8(B, N) = low8(rax)
-             = 88 /0 ; mem=B+N
+mov8_mr      | mov byte ptr [B64 + N], S8 | .mov 8 (.mem .B N) (.reg .S) | mem8(B, N) = low8(S)
+             = 88 /r ; reg8=S mem=B+N
 mov8_mi      | mov byte ptr [B64 + N], I | .mov 8 (.mem .B N) (.imm I) | mem8(B, N) = I
              = C6 /0 ib ; mem=B+N imm=I
 dec8_al      | dec al                  | .decb .rax                    | rax = setlow8(rax, sub8(low8(rax), 1)); zf = equal(low8(rax), 0); cf = unknown

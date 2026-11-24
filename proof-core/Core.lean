@@ -449,6 +449,7 @@ structure RangeF where
   lo : Row
   f : String
   args : List SVal
+  fromStart : Bool := false
   deriving Inhabited
 
 structure Sym where
@@ -508,8 +509,8 @@ structure Place where
   cells : List PlaceCell := []    -- what cells of the frame hold there
   marked : List Nat := []         -- registers that may depend on values kept out of the trace on a later coming there (they need not on the first)
   markedResult : List Nat := []   -- the same, for the `result depends on` pass (empty by default)
-  wrote : Option (String × SExpr × String × SExpr) := none
-                                  -- (run, lo, f, args): from the place `lo` on, the run given to write holds the list `f(args)`, place by place
+  wrote : Option (String × SExpr × String × SExpr × Bool) := none
+                                  -- (run, bound, f, args, fromStart): suffix [bound..hi) or prefix [0..bound) of `run` holds `f(args)`
   deriving Inhabited
 
 /-- What a prover's helper may say where a proof that is still being written has run out: the rows it
@@ -1467,11 +1468,15 @@ def symLanes512 (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sy
     else symShuffle512 bind s f args
   | _ => refuse "no proof rule for this 512-bit value"
 
-/-- Where a place has said what the run `w` holds from some place on, a byte written to the run at `o` goes
-below that. -/
+/-- Where a place has said what the run `w` holds on a prefix or suffix, a byte written to the run at `o`
+lies outside that range. -/
 def belowRange (s : Sym) (w : Nat) (o : Row) : V Unit :=
   match s.range with
-  | some rg => if rg.w == w then entail s.facts (Lin.sub (Lin.sub rg.lo o) (Lin.const 1)) else pure ()
+  | some rg =>
+    if rg.w == w then
+      if rg.fromStart then entail s.facts (Lin.sub o rg.lo)
+      else entail s.facts (Lin.sub (Lin.sub rg.lo o) (Lin.const 1))
+    else pure ()
   | none => pure ()
 
 /-- Keep only the lanes the machine model preserves across `above128 = unknown`. -/
@@ -2133,7 +2138,7 @@ def symEnsureRange (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : Ensu
         entail s.facts (Lin.scale (-1) lo)
         entail s.facts (Lin.sub top (Lin.const hi))
         entail s.facts (Lin.sub (Lin.const hi) top)
-        entail s.facts (Lin.scale (-1) rg.lo)
+        entail s.facts (if rg.fromStart then Lin.sub rg.lo (Lin.const hi) else Lin.scale (-1) rg.lo)
         if w != rg.w then refuse "an `ensures`: another run than the place said" else pure s
   | _ => refuse "an `ensures`: a definition used with what is no list of things"
 
@@ -4763,23 +4768,24 @@ def supposeLanes (ctx : Ctx) (p : Place) (g : Sym) (L : PlaceLanes) : V Sym :=
     | some keys => pure (g.withLanes L keys)
     | none => refuse "what a place says of vector registers is not followed in its general state"
 
-/-- The place from which the state already holds the run `w` as written with the list `f(vs)`, by an earlier
-coming to the place; where it holds nothing of that, the list's end. -/
-def rangeBase (s : Sym) (w : Nat) (f : String) (vs : List SVal) (hi : Nat) : Row :=
+/-- The boundary already held for the run `w` with the list `f(vs)` by an earlier coming to the place; where
+nothing is held of that, `0` for a prefix range or `hi` for a suffix range. -/
+def rangeBase (s : Sym) (w : Nat) (f : String) (vs : List SVal) (hi : Nat) (fromStart : Bool) : Row :=
   match s.range with
-  | some rg => if rg.w == w && rg.f == f && rg.args == vs then rg.lo else Lin.const hi
-  | none => Lin.const hi
+  | some rg => if rg.w == w && rg.f == f && rg.args == vs && rg.fromStart == fromStart then rg.lo
+               else if fromStart then Lin.const 0 else Lin.const hi
+  | none => if fromStart then Lin.const 0 else Lin.const hi
 
 /-- The most places a place's range may grow by at one coming there. -/
 def GROW : Int := 64
 
-/-- What the place says a loop has written is so of this state: the places from `lo` on that the state
-does not already hold as written by an earlier coming (`Sym.range`) are known written, each with the
-list's thing. Given back: the run's number, `lo`, and the things the definition is used with. -/
+/-- What the place says a loop has written is so of this state: the places in the prefix (`0..lo`) or suffix
+(`lo..hi`) not already held written by an earlier coming (`Sym.range`) are known written, each with the
+list's thing. -/
 def rangeShown (ctx : Ctx) (p : Place) (s : Sym) : V (Option RangeF × Sym) :=
   match p.wrote with
   | none => pure (none, s)
-  | some (run, lo, f, args) =>
+  | some (run, lo, f, args, fromStart) =>
     match findOutNamed run ctx.contract.outs 0 with
     | none => refuse "a place says what is written of what is no run given to write"
     | some (w, n) => do
@@ -4795,12 +4801,15 @@ def rangeShown (ctx : Ctx) (p : Place) (s : Sym) : V (Option RangeF × Sym) :=
           if n < hi then refuse "a place says more is written than the run has places"
           else do
             entail s.facts lo
-            match Lin.isConst (Lin.sub (rangeBase s w f vs hi) lo) with
+            let base := rangeBase s w f vs hi fromStart
+            let diff := if fromStart then Lin.sub lo base else Lin.sub base lo
+            let start := if fromStart then base else lo
+            match Lin.isConst diff with
             | some k =>
               if k < 0 || GROW < k then refuse "a place: what is written does not reach from where the place says"
               else do
-                let s ← filled ctx (params.zip vs) x b w lo 0 k.toNat s
-                pure (some ⟨w, lo, f, vs⟩, s)
+                let s ← filled ctx (params.zip vs) x b w start 0 k.toNat s
+                pure (some ⟨w, lo, f, vs, fromStart⟩, s)
             | none => refuse "a place: where the written places begin is not known by a number from where they began before"
       | _ => refuse "a place: a definition used with what is no list of things"
 
@@ -4809,7 +4818,7 @@ as known. -/
 def supposeRange (ctx : Ctx) (p : Place) (g : Sym) : V Sym :=
   match p.wrote with
   | none => pure g
-  | some (run, lo, f, args) =>
+  | some (run, lo, f, args, fromStart) =>
     match findOutNamed run ctx.contract.outs 0 with
     | none => refuse "a place says what is written of what is no run given to write"
     | some (w, _) => do
@@ -4818,7 +4827,7 @@ def supposeRange (ctx : Ctx) (p : Place) (g : Sym) : V Sym :=
       let (lo, g) ← numberV (opener ctx DEEP) g lo
       let (vs, g) ← seval ctx env g args
       match vs with
-      | .list vs => pure { g with range := some ⟨w, lo, f, vs⟩ }
+      | .list vs => pure { g with range := some ⟨w, lo, f, vs, fromStart⟩ }
       | _ => refuse "a place: a definition used with what is no list of things"
 
 /-- On first coming to the place: what holds there is shown of this state; then the state that stands for

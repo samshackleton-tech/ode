@@ -93,6 +93,17 @@ NOP_WORD = word.encode(BY_NAME["nop"][0], {})
 BRANCH_ROWS = {"b": "b", "b.eq": "b_eq", "b.ne": "b_ne", "b.hs": "b_hs", "b.cs": "b_hs", "b.lo": "b_lo", "b.cc": "b_lo"}
 
 
+def forms_for(mn):
+    """Supported ASM templates from arm64.tab for mnemonic `mn` (read directly from the table)."""
+    forms = []
+    for row in ROWS:
+        if row.asm != "-" and row.asm.split()[0] == mn and row.asm not in forms:
+            forms.append(row.asm)
+    if mn == "mov" and "mov vX.16b, vY.16b" not in forms:
+        forms.append("mov vX.16b, vY.16b")
+    return forms
+
+
 def instruction(line):
     """Assemble one AArch64 instruction line into:
       ("fixed", 4-byte bytes, row, bind)
@@ -100,6 +111,10 @@ def instruction(line):
       ("jump", way, label, row, bind)
     Raises ValueError if the instruction is not an instance of a row in arm64.tab."""
     s = line.split("//")[0].strip()
+    # Official ARMv8 architectural alias: `mov vD.16b, vS.16b` is encoded identically to `orr vD.16b, vS.16b, vS.16b`.
+    mv = re.fullmatch(r"mov\s+(v\d+\.16b)\s*,\s*(v\d+\.16b)", s)
+    if mv:
+        s = f"orr {mv.group(1)}, {mv.group(2)}, {mv.group(2)}"
     if s == "ret":
         w = BY_NAME["ret"][0]
         return ("fixed", word.encode(w, {}), w.row, {})

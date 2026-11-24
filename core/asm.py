@@ -48,7 +48,7 @@ VEC512 = {
 # and the old two-operand forms of the rows that the table writes with three (the first operand is both).
 CLASS = {"r64": "a register of 64 bits", "r32": "a register of 32 bits", "r8": "a register of 8 bits", "al": "al", "xmm": "an xmm register",
          "zmm": "a zmm register", "zmm{k}": "a zmm register under a mask", "k": "a mask register", "number": "a number", "memory": "memory"}
-MOVED = {"r64": "qword", "r32": "dword", "xmm": "xmmword", "zmm": "zmmword", "zmm{k}": "zmmword"}
+MOVED = {"r64": "qword", "r32": "dword", "r8": "byte", "xmm": "xmmword", "zmm": "zmmword", "zmm{k}": "zmmword"}
 TWO = {m for m, (_, k) in VEC128.items() if k == "L"} | {"shufps"}
 WORD = r"(?:(byte|word|dword|qword|xmmword|ymmword|zmmword)\s+ptr\s*)?"
 PICKED = [None]                    # the row that pick() last took
@@ -158,6 +158,15 @@ def pick(row_name, bind, pred=None, at=0):
     return best
 
 
+def forms_for(mn):
+    """Supported ASM templates from x86.tab for mnemonic `mn` (read directly from the table)."""
+    forms = []
+    for row, _ in ROWS.values():
+        if row.asm != "-" and row.asm.split()[0] == mn and row.asm not in forms:
+            forms.append(row.asm)
+    return forms
+
+
 def instruction(line):
     """('fixed', bytes) | ('reloc', bytes, field_off, r_type, sym, addend) | ('jump', row_name, label).
     What is written is an instance of the row it is laid down by (same()), or ValueError says why not."""
@@ -227,7 +236,12 @@ def write(line, mn, ops):
         if m[0] == "rip":
             b = pick("lea_data", {"D": d, "I": 0, "field": bytes(4)})
             return ("reloc", b, len(b) - 4, 2, m[1], m[2] - 4)
-        if m[2] is not None: raise ValueError(f"indexed lea not in x86.tab: {line}")
+        if m[2] is not None:
+            b, idx = m[1], m[2]
+            if idx == 4:
+                if b == 4: raise ValueError(f"x86-64 cannot use rsp as both base and index: {line}")
+                b, idx = idx, b
+            return ("fixed", pick("lea_idx", {"D": d, "B": b, "S": idx, "N": m[3]}))
         return ("fixed", pick("lea", {"D": d, "B": m[1], "N": m[3]}))
     if mn == "movzx":
         d = G32.index(ops[0]) if ops[0] in G32 else G64.index(ops[0])
@@ -258,9 +272,9 @@ def write(line, mn, ops):
             return ("fixed", pick("mov32_ri", {"D": d, "I": imm(ops[1], 32)}))
         _, b, idx, disp = parse_mem(ops[0])
         if idx is not None: raise ValueError(f"indexed store not in x86.tab: {line}")
-        if ops[1] == "al": return ("fixed", pick("mov8_m_al", {"B": b, "N": disp}))
+        if ops[1] in G8: return ("fixed", pick("mov8_mr", {"B": b, "N": disp, "S": G8.index(ops[1])}))
         if ops[1] in G64: return ("fixed", pick("mov64_mr", {"B": b, "N": disp, "S": G64.index(ops[1])}))
-        if operand(ops[1])[0] != "number": raise ValueError(f"x86.tab has a store of al, of a register of 64 bits and of a number of one byte: not of {ops[1]}")
+        if operand(ops[1])[0] != "number": raise ValueError(f"x86.tab has a store of an 8-bit register, of a 64-bit register, and of an 8-bit number: not of {ops[1]}")
         if operand(ops[0])[1] != "byte": raise ValueError("x86.tab has a store of a number for one byte only, written `mov byte ptr [...], N`")
         return ("fixed", pick("mov8_mi", {"B": b, "N": disp, "I": imm(ops[1], 8)}))
     if mn in ("movq", "vmovq"):

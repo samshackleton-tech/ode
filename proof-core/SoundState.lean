@@ -357,12 +357,12 @@ def Flag.holds (ρ : Nat → Int) (set : Bool) : Flag → Prop
   | .below a b => set = decide (ev ρ a < ev ρ b)
 
 /-- What a place has said a loop has written is so of memory: the run is one given to write; the definition
-is a list made thing by thing, of no more things than the run has places; and each place from `lo` on holds
-the list's thing there. -/
+is a list made thing by thing, of no more things than the run has places; and each place in the prefix
+(`0..lo`) or suffix (`lo..hi`) holds the list's thing there. -/
 def RangeHolds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (rg : RangeF) (mem : Nat → Byte) : Prop :=
   ∃ name r n params x b hi, ctx.contract.outs[rg.w]? = some (name, r, n) ∧
     eachOf ctx rg.f rg.args.length = some (params, x, b, hi) ∧ hi ≤ n ∧ 0 ≤ ev ρ rg.lo ∧
-    ∀ j : Nat, ev ρ rg.lo ≤ j → j < hi →
+    ∀ j : Nat, (if rg.fromStart then (j : Int) < ev ρ rg.lo else ev ρ rg.lo ≤ j) → j < hi →
       Value ctx.defs ((x, .int j) :: params.zip (rg.args.map (semv ctx s0 ρ))) b (.int (mem (s0.reg r + j)))
 
 /-- Where the read-only data of the function's own file lies, `s0` being the state at entry. -/

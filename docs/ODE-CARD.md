@@ -22,8 +22,9 @@ Every `check` run gives one of four outcomes: `shown` (accepted by `odeverify`),
 
 ## 2. Registers and Calling Conventions
 
-Each row in the table below lists the ABI role, the x86-64 System V registers, and the AArch64 AAPCS64
-registers for that role.
+Today's verifier checks functions against the platform C calling convention below (custom Ode-to-Ode
+calling conventions for internal calls are planned so C's convention applies only at the FFI boundary).
+Each row lists the ABI role, x86-64 System V registers, and AArch64 AAPCS64 registers.
 
 | Role | x86-64 (System V) | AArch64 (AAPCS64) |
 |---|---|---|
@@ -49,34 +50,33 @@ only fixed notations and never inserts hidden moves, spills, or comparisons.
     saved_lr: 1 * u64
   }
   ```
-  `frame.size` equals the total byte size of the frame (keep it a multiple of 16 on AArch64).
+  `frame.size` equals the total byte size of the frame, and `frame.<field>` equals that field's byte
+  offset (keep `frame.size` a multiple of 16 on AArch64).
   `&buf` computes `[rsp + off]` (x86-64 `lea`) or `sp, off` (AArch64 `add`).
   `saved_lr[0]` accesses slot 0 of that field; `buf.u64[k]` reinterprets `buf` as 8-byte slots.
 - **Typed single-instruction assignment (`:=`):**
-  - `dst := src` expands to exactly ONE instruction (`mov`, `lea`, `ldr`, `str`, or `add`), matching
-    operand sizes (`byte`, `dword`, `qword`, or frame slot size). On AArch64, `:=` cannot store an
-    immediate directly to memory (load into a register first).
+  - `dst := src` expands to ONE instruction (`mov`, `lea`, `ldr`, `str`, or `add`) with matching
+    widths (`byte`, `u32`/`dword`, `u64`/`qword`, or frame slot). On AArch64, load immediates into a
+    register before storing to memory.
 - **Explicit local control flow (zero hidden `cmp`, byte-identical to labels):**
-  Write your own `cmp` (or `test`), then branch on one of the four supported conditions: `eq` (equal /
-  zero), `ne` (not equal / nonzero), `ult` (unsigned `<`), or `uge` (unsigned `>=`).
-  - `if COND { ... }` and `if COND { ... } else { ... }` (emits one conditional branch, plus one jump for `else`).
-  - `loop { ... }` (top-tested loop; emits an unconditional back-edge at `}`).
-  - `loop { ... } while COND` (bottom-tested loop; emits one conditional back-edge `<branch(COND)>`).
-  - Inside a `loop`: `break`, `break if COND`, `continue`, `continue if COND`.
-  - Raw labels (`@name:`) and jumps (`jmp @name`, `je @name`, `b @name`, `b.eq @name`) also work everywhere.
-  - On x86-64, place a single `ret` at the end of each function (jump or `break` to it rather than writing an early `ret` mid-function).
-  - Raw assembly operands take literal integer offsets (such as `[rsi + 16]`); constant arithmetic like `$k * 16` works inside `:=` and frame slots (`buf.u64[$k]`).
+  Write your own `cmp` (or `test`), then branch on `eq`, `ne`, `ult`/`lo` (unsigned `<`), or
+  `uge`/`hs` (unsigned `>=`):
+  - `if COND { ... }` and `if COND { ... } else { ... }`, `loop { ... } [while COND]`,
+    `break [if COND]`, `continue [if COND]`.
+  - Raw labels (`@name:`) and jumps (`jmp`/`je`/`jb`/`jae`, `b`/`b.eq`/`b.lo`/`b.hs`) also work.
+  - On x86-64, place a single `ret` at the end of each function.
+  - Constant arithmetic like `$k * 16` works inside `:=` and frame slots (`buf.u64[$k]`).
 - **Inline macros (`inline fn`):**
-  `inline fn NAME(p: gpr, q: vec) distinct(p, q) changes p { ... }` — checked against the instruction
-  table so every modified register is listed in `changes`.
+  `inline fn NAME(p: gpr, q: vec) distinct(p, q) changes p { ... }` — every modified register must be
+  listed in `changes`.
 - **Loop invariants (`place { ... }`):**
-  Every loop head needs a `place { ... }` block telling the prover what stays true on every iteration:
+  Every loop head needs a `place { ... }` block stating what stays true on every iteration:
   - `name i = idx` — names the register holding the loop counter.
   - `fact 0 <= i`, `fact i <= n` — linear bounds on counters and values.
   - `fact all_zero(a) == zero_from(a, i)` — specification equality linking loop state to the goal.
-  - `wrote out[i ..] = expr` or `wrote out[.. i] = expr` — slice written so far.
+  - `wrote out[.. i] = expr` (forward `0..i`) or `wrote out[i ..] = expr` (countdown `i..N`).
   - `keep r1 r2` — extra registers kept unchanged across the loop.
-  - `decreases n - i` — nonnegative expression that strictly decreases each turn.
+  - `decreases n - i` (or `decreases i`) — nonnegative expression that strictly decreases each turn.
 
 ## 4. Verified Instruction Reference
 
@@ -89,21 +89,21 @@ The tables below list the core verified instructions accepted by `odeverify` fro
 |---|---|
 | 64-bit arithmetic & logic | `add r, r/imm`, `sub r, r/imm`, `and r, r/imm`, `or r, r/imm`, `xor r, r` (zero), `shl r, imm`, `shr r, imm`, `dec r` |
 | 32-bit arithmetic & logic | `mov r32, r32/imm/[base+n]`, `or r32, r32`, `and r32, imm`, `xor r32, r32`, `shr r32, imm`, `dec r32` |
-| Loads, stores & addresses | `mov r, r/imm`, `mov r, qword ptr [base+n]`, `mov qword ptr [base+n], r`, `lea r, [base+n]`, `movzx r32, byte ptr [base+n]`, `mov byte ptr [base+n], al/imm` |
+| Loads, stores & addresses | `mov r, r/imm`, `mov r, qword ptr [base+n]`, `mov qword ptr [base+n], r`, `lea r, [base+n]` or `[base+idx+n]`, `movzx r32, byte ptr [base+n]`, `mov byte ptr [base+n], r8/imm` |
 | Compare, test & branches | `cmp r, r/imm`, `test r, r`, `jmp @L`, `je @L`, `jne @L`, `jb @L`, `jae @L` |
 | Stack & calls | `push r`, `pop r`, `sub rsp, imm`, `add rsp, imm`, `call SYMBOL`, `ret` |
 | SIMD 128-bit (`needs avx512` / `sse41`) | `vmovdqu xmmX, [base+N]`, `vmovdqu [base+N], xmmX`, `vmovdqa xmmX, xmmY`, `vpaddd xmmX, xmmY, xmmZ`, `vpxord xmmX, xmmY, xmmZ`, `vpor xmmX, xmmY, xmmZ`, `vprord xmmX, xmmY, imm`, `psrld xmmX, imm`, `pslld xmmX, imm`, `pshufb xmmX, xmmY` |
 | SIMD 512-bit (`needs avx512`) | `vmovdqu32 zmmX, [base+N]`, `vmovdqu32 [base+N], zmmX`, `vpaddd`, `vpxord`, `vprord`, `vpshufb`, `vshufi32x4`, `vpermq`, `vpbroadcastd` |
 
-### AArch64 (`arm64/arm64.tab` — all 47 rows formally proved against `arm64-semantics`)
+### AArch64 (`arm64/arm64.tab` — all 49 rows formally proved against `arm64-semantics`)
 
 | Category | Exact assembly syntax |
 |---|---|
-| Integer moves & arithmetic | `mov xd, xs/imm`, `mov wd, imm`, `add xd, xs, xp/imm`, `sub xd, xs, xp/imm`, `lsl xd, xs, imm` |
+| Integer moves & arithmetic | `mov xd, xs/imm`, `mov wd, imm`, `add xd, xs, xp/imm`, `sub xd, xs, xp/imm`, `lsl xd, xs, imm`, `lsr xd, xs, imm`, `orr xd, xs, xp` |
 | Stack pointer | `sub sp, sp, imm`, `add sp, sp, imm`, `add xd, sp, imm`, `ldr xd, [sp, off]`, `str xs, [sp, off]` |
 | Memory loads & stores | `ldr xd, [xb, off]`, `str xs, [xb, off]`, `ldr wd, [xb, off]`, `str ws, [xb, off]`, `ldrb wd, [xb, off]`, `strb ws, [xb, off]` |
 | Compare, branch & call | `cmp xs, xp/imm`, `b @L`, `b.eq @L`, `b.ne @L`, `b.hs @L`, `b.lo @L`, `bl SYMBOL`, `ret`, `nop` |
-| NEON 128-bit vector | `ld1 {vX.4s}, [xb]`, `st1 {vX.4s}, [xb]`, `eor vD.16b, vA.16b, vB.16b`, `orr vD.16b, vA.16b, vB.16b`, `add vD.4s, vA.4s, vB.4s`, `rev32 vD.8h, vS.8h`, `ushr vD.4s, vS.4s, imm`, `shl vD.4s, vS.4s, imm`, `fmov dX, xS`, `uzp1`/`uzp2`/`zip1`/`zip2` (`.4s`/`.2d`), `ext vD.16b, vA.16b, vB.16b, 4/8/12` |
+| NEON 128-bit vector | `ld1 {vX.4s}, [xb]`, `st1 {vX.4s}, [xb]`, `mov vD.16b, vS.16b`, `eor`/`orr` (`.16b`), `add vD.4s, vA.4s, vB.4s`, `rev32 vD.8h, vS.8h`, `ushr`/`shl` (`.4s`, imm), `fmov dX, xS`, `uzp1`/`uzp2`/`zip1`/`zip2`, `ext ... 4/8/12` |
 
 ## 5. Contracts and Specifications
 
@@ -336,6 +336,54 @@ fn xor16_twice as "card_xor16_twice" {
   keep_out := saved_out[0]
   x30 := saved_lr[0]
   add sp, sp, frame.size
+  ret
+}
+```
+
+### Example 5: Forward byte-write loop with `wrote out[.. i]` (x86-64)
+
+<!-- card-example: pad8_x86 x86_64 -->
+```spec
+def pad8(src) { [if i < len(src) then src[i] else 0 for i in 0..8] }
+
+contract card_pad8_x86(out: 8 bytes, src: n bytes, n: number) {
+    requires no_overlap(out, src)
+    requires n <= 8
+    ensures out = pad8(src)
+    trace depends on n
+    stack 0
+}
+```
+```ode
+target x86_64
+
+fn pad8 as "card_pad8_x86" {
+  reg dst = rdi
+  reg src = rsi
+  reg n = rdx
+  reg idx = rcx
+
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact i <= 8
+      wrote out[.. i] = pad8(src)
+      decreases 8 - i
+    }
+    cmp idx, 8
+    break if eq
+    lea r8, [dst + idx]
+    cmp idx, n
+    if ult {
+      lea r9, [src + idx]
+      movzx r10d, byte ptr [r9]
+      mov byte ptr [r8], r10b
+    } else {
+      mov byte ptr [r8], 0
+    }
+    add idx, 1
+  }
   ret
 }
 ```

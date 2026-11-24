@@ -190,6 +190,99 @@ class Pad(unittest.TestCase):
         # without the line the count is hidden, and the loop goes round by it: a false statement, refused
         self.assertEqual(last_word(spec=once("    trace depends on n\n", "")), "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them")
 
+    def test_forward_wrote_prefix_both_targets_and_negative_controls(self):
+        """`wrote out[.. i] = expr` verifies ascending loops on both x86-64 and AArch64 and refuses mutations."""
+        import ode_tool
+        spec_src = """def pad8(src) { [if i < len(src) then src[i] else 0 for i in 0..8] }
+contract fwd_pad8(out: 8 bytes, src: n bytes, n: number) {
+    requires no_overlap(out, src)
+    requires n <= 8
+    ensures out = pad8(src)
+    trace depends on n
+    stack 0
+}
+"""
+        x86_src = """target x86_64
+fn pad8 as "fwd_pad8" {
+  reg dst = rdi
+  reg src = rsi
+  reg n = rdx
+  reg idx = rcx
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact i <= 8
+      wrote out[.. i] = pad8(src)
+      decreases 8 - i
+    }
+    cmp idx, 8
+    break if eq
+    lea r8, [dst + idx]
+    cmp idx, n
+    if ult {
+      lea r9, [src + idx]
+      movzx r10d, byte ptr [r9]
+      mov byte ptr [r8], r10b
+    } else {
+      mov byte ptr [r8], 0
+    }
+    add idx, 1
+  }
+  ret
+}
+"""
+        arm_src = """target arm64
+fn pad8 as "fwd_pad8" {
+  reg dst = x0
+  reg src = x1
+  reg n = x2
+  reg idx = x3
+  idx := 0
+  loop {
+    place {
+      name i = idx
+      fact i <= 8
+      wrote out[.. i] = pad8(src)
+      decreases 8 - i
+    }
+    cmp idx, 8
+    break if eq
+    add x4, dst, idx
+    cmp idx, n
+    if lo {
+      add x5, src, idx
+      ldrb w6, [x5, 0]
+      strb w6, [x4, 0]
+    } else {
+      mov w6, 0
+      strb w6, [x4, 0]
+    }
+    add idx, idx, 1
+  }
+  ret
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            sp = os.path.join(d, "pad8.spec")
+            with open(sp, "w") as f: f.write(spec_src)
+            for tag, src in (("x86", x86_src), ("arm", arm_src)):
+                op = os.path.join(d, f"{tag}.ode")
+                with open(op, "w") as f: f.write(src)
+                res = ode_tool.run_check(op, sp, do_trace=False)
+                self.assertEqual(res["verdict"], "shown", f"{tag}: {res.get('diagnostic')}")
+            # Negative controls on forward prefix:
+            for what, old, new in (
+                ("wrong pad byte", "mov byte ptr [r8], 0", "mov byte ptr [r8], 1"),
+                ("stops one byte early", "cmp idx, 8", "cmp idx, 7"),
+                ("clobbers prefix byte 0", "add idx, 1", "mov byte ptr [dst + 0], 0\n    add idx, 1"),
+            ):
+                with self.subTest(neg=what):
+                    op = os.path.join(d, "neg.ode")
+                    with open(op, "w") as f: f.write(x86_src.replace(old, new, 1))
+                    res = ode_tool.run_check(op, sp, do_trace=False)
+                    self.assertNotEqual(res["verdict"], "shown", f"neg {what} must not verify")
+
 
 if __name__ == "__main__":
     unittest.main()

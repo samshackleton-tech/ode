@@ -174,6 +174,18 @@ class Words(unittest.TestCase):
         for k, (line, w) in enumerate(zip(lines, want)):
             with self.subTest(line=line): self.assertEqual(code[4 * k:4 * k + 4].hex(), w.hex())
 
+    def test_official_mov_vector_alias_matches_orr(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_arm64_asm_test", HERE / "asm.py")
+        arm_asm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(arm_asm)
+        for d, s in ((0, 1), (2, 0), (15, 31)):
+            a = arm_asm.instruction(f"mov v{d}.16b, v{s}.16b")
+            b = arm_asm.instruction(f"orr v{d}.16b, v{s}.16b, v{s}.16b")
+            self.assertEqual(a[1], b[1])
+            self.assertEqual(a[2].name, "orr_v")
+        self.assertIn("mov vX.16b, vY.16b", arm_asm.forms_for("mov"))
+
 
 @unittest.skipUnless(ARM and shutil.which("clang"), "an AArch64 processor and clang are needed")
 class Processor(unittest.TestCase):

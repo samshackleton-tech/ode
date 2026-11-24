@@ -29,7 +29,7 @@ class ReferenceCardTests(unittest.TestCase):
         words = len(text.split())
         self.assertLessEqual(words, 2500, f"ODE-CARD.md has {words} words (target <= 2500)")
         exs = extract_examples(text)
-        self.assertEqual(len(exs), 4, f"expected 4 card examples, found {len(exs)}")
+        self.assertEqual(len(exs), 5, f"expected 5 card examples, found {len(exs)}")
 
     @unittest.skipUnless(built.LAKE is not None, "Lean toolchain not installed")
     def test_every_card_example_verifies_shown(self):

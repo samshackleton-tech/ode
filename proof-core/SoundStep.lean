@@ -2222,15 +2222,20 @@ theorem WF.write {s : Sym} (wf : WF ctx s) (c : Int) (xr : Row) (hb : bounded s.
   words := wf.words.mono rfl rfl rfl (Nat.le_refl _)
   known := wf.known
 
-/-- One byte written into a run given to write. -/
+/-- One byte written into a run given to write lies outside the tracked range. -/
 theorem belowRange_sound {s : Sym} {w : Nat} {o : Row} {items : Items} {r : Unit × Items} {ρ : Nat → Int}
     (h : belowRange s w o items = .ok r) (hf : ∀ f ∈ s.facts, f.holds ρ) :
-    ∀ rg, s.range = some rg → rg.w = w → ev ρ o + 1 ≤ ev ρ rg.lo := by
+    ∀ rg, s.range = some rg → rg.w = w →
+      if rg.fromStart then ev ρ rg.lo ≤ ev ρ o else ev ρ o + 1 ≤ ev ρ rg.lo := by
   intro rg hr hw
   simp only [belowRange, hr, hw, beq_self_eq_true, if_true] at h
-  have := entail_sound h ρ hf
-  simp only [ev_sub, ev_const] at this
-  omega
+  cases hfs : rg.fromStart <;> simp only [hfs, Bool.false_eq_true, ↓reduceIte] at h ⊢
+  · have := entail_sound h ρ hf
+    simp only [ev_sub, ev_const] at this
+    omega
+  · have := entail_sound h ρ hf
+    simp only [ev_sub] at this
+    omega
 
 theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) {w : Nat} {name : String} {r n : Nat} (hw : ctx.contract.outs[w]? = some (name, r, n))
@@ -2238,7 +2243,8 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     {rest : List (Nat × Row × Row)} (hk : keepWrote w o s.wrote = some rest)
     (hnw : (s.wroteW.any fun e => e.1 == w) = false)
     (a : Nat) (ha : a = s0.reg r + (ev ρ o).toNat)
-    (below : ∀ rg, s.range = some rg → rg.w = w → ev ρ o + 1 ≤ ev ρ rg.lo) :
+    (below : ∀ rg, s.range = some rg → rg.w = w →
+      if rg.fromStart then ev ρ rg.lo ≤ ev ρ o else ev ρ o + 1 ≤ ev ρ rg.lo) :
     Holds ctx s0 ρ { s with wrote := (w, o, xr) :: rest, intact := s.intact.filter (· != w), spill := [] }
       { st with mem := store st.mem a x 1 } where
   range rg hr := by
@@ -2247,11 +2253,11 @@ theorem Holds.writeOut {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
     show Value ctx.defs _ b (.int (store st.mem a x 1 (s0.reg r' + j)))
     have hne : s0.reg r' + j < a ∨ a + 1 ≤ s0.reg r' + j := by
       by_cases e : rg.w = w
-      · have := below rg hr e
+      · have hb := below rg hr e
         rw [e, hw] at g1
         injection g1 with g1; injection g1 with _ g1; injection g1 with g1 gn
         subst g1 gn
-        omega
+        cases hfs : rg.fromStart <;> simp only [hfs, Bool.false_eq_true, ↓reduceIte] at hb lo <;> omega
       · have := E.outOut hw g1 (Ne.symm e)
         omega
     rw [store_other _ _ _ _ _ hne]

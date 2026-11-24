@@ -111,6 +111,8 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
         if line.startswith("fact "): out.append("fact " + sexp(of_kinds(kbyte.expression(line[5:]), line, kinds, name), seqs)); continue
         m = re.fullmatch(r"wrote (\w+)\[(.+) \.\.\] = (.+)", line)       # from that place on, the run holds that list, place by place
         if m: lanes.append(f"wrote {m.group(1)} (index {sexp(kbyte.expression(m.group(3)), seqs)} {sexp(kbyte.expression(m.group(2)), seqs)})"); continue
+        m = re.fullmatch(r"wrote (\w+)\[\.\. (.+)\] = (.+)", line)       # up to that place (0..HI), the run holds that list, place by place
+        if m: lanes.append(f"wrote_pre {m.group(1)} (index {sexp(kbyte.expression(m.group(3)), seqs)} {sexp(kbyte.expression(m.group(2)), seqs)})"); continue
         m = re.fullmatch(r"lane (\w+): (.+?) = (.+) after (.+)", line)
         if m: lanes.append(lane_line(*m.groups(), seqs, kinds, counted, name)); continue
         m = re.fullmatch(r"cell \[rsp \+ (\d+)\]: word (\w+) = (.+)", line)

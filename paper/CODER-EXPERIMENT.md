@@ -259,4 +259,103 @@ second table shows `pass@1 / pass@5` out of the 6 full models for one task and o
   3-operand syntax avoided x86-64 table quirks (`mov byte ptr [addr], al` requiring `al`, 64-bit-only
   `cmp`, no indexed `[base + reg]` in `lea`).
 
+## 10. Round 2 Live Results (After Root-Cause Language and Tool Fixes)
+
+Rather than adding a list of "gotchas to avoid" to `docs/ODE-CARD.md`, Round 2 fixed the five root
+causes revealed by Round 1 directly in Ode's tables, compiler, prover, verifier, and live diagnostics:
+
+1. **General 8-bit x86-64 byte stores (`core/x86.tab`):** Replaced the hardcoded `al`-only row
+   `mov8_m_al` with `mov8_mr` (`mov byte ptr [B64 + N], S8`, any 8-bit register `al..r15b`, 0 new rows,
+   0 Lean lines, cross-checked against real x86-64 silicon and `clang`).
+2. **Indexed x86-64 `lea` (`core/x86.tab`):** Added `lea_idx` (`lea D64, [B64 + S64 + N]`, +1 table row,
+   0 Lean lines, cross-checked against real x86-64 silicon and `clang`).
+3. **Official ARMv8 vector-copy alias (`arm64/asm.py`):** Accepted `mov vD.16b, vS.16b` as the official
+   architectural alias of `orr vD.16b, vS.16b, vS.16b` (identical 4-byte encoding, 0 new rows, 0 Lean lines).
+4. **Uniform `frame.<field>` offsets, `u32`/`u64`, condition aliases, and live table-driven diagnostics
+   (`lang/odec.py`, `lang/ode_tool.py`):** Exposed `frame.<field>` byte offsets in every instruction,
+   accepted `lo`/`cc` (`ult`) and `hs`/`cs` (`uge`) in structured control flow, and generated "supported
+   forms" hints in `arm_c` directly from `x86.tab` and `arm64.tab` (zero hardcoded gotcha lists).
+5. **Forward byte-write loops (`proof-core/Core.lean`, `SoundLoop.lean`, `prove.py`):** Generalized
+   `RangeF` to support ascending `wrote out[.. i] = expr` loops alongside descending `wrote out[i ..] = expr`
+   loops, proved sound across all 18 Lean 4 soundness modules (zero `sorry`, all 10 top-level theorems
+   unchanged), and added a clean forward-loop 5th example (`card_pad8_x86`) to `docs/ODE-CARD.md`
+   (2,473 words, all 5 examples verified `shown`).
+
+Round 2 re-ran `arm_b` and `arm_c` on the same 6 full models and 8 tasks (`95/96` trials recorded in
+[`coder-exp/results/live-round2-20261124.jsonl`](coder-exp/results/live-round2-20261124.jsonl); one trial,
+`qwen/qwen3-coder-next` `arm_c` `T2_arm_mix_step`, hit an upstream HTTP 429 rate limit). Total spend for
+all 95 Round 2 trials was **$0.75** (less than half of the $1.68 spent on the same two arms in Round 1).
+
+### Round 1 vs Round 2 aggregate (6 full models, `arm_b` and `arm_c`)
+
+Each row compares Round 1 and Round 2 for one arm (`arm_b` = quick-start card plus raw verifier output;
+`arm_c` = quick-start card plus surgical diagnostics and live table hints). Columns show completed trials
+(`n`), turn-1 pass rate (`pass@1`), 5-turn pass rate (`pass@5`), total API spend (`Spend`), and API cost
+per verified function (`$/ver`).
+
+| Round & Arm | n | pass@1 | pass@5 | Spend | $/ver |
+|---|---:|---:|---:|---:|---:|
+| Round 1 `arm_b` | 48 | 19/48 (39.6%) | 25/48 (52.1%) | $0.7637 | $0.0305 |
+| **Round 2 `arm_b`** | **48** | **29/48 (60.4%)** | **34/48 (70.8%)** | **$0.3954** | **$0.0116** |
+| Round 1 `arm_c` | 48 | 16/48 (33.3%) | 25/48 (52.1%) | $0.9191 | $0.0368 |
+| **Round 2 `arm_c`** | **47** | **23/47 (48.9%)** | **34/47 (72.3%)** | **$0.3556** | **$0.0105** |
+
+### Round 2 per model (`arm_b` and `arm_c`)
+
+Each row gives one model and one arm in Round 2. Columns show completed tasks (`n`), `pass@1`, `pass@5`,
+total API spend (`Spend`), cost per verified function (`$/ver`), and tool wall-clock share (`Tool %`).
+
+| Model | Arm | n | pass@1 | pass@5 | Spend | $/ver | Tool % |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `anthropic/claude-sonnet-5.5` | `arm_b` | 8 | 8 | 8 | $0.1955 | $0.0244 | 0.95% |
+| `anthropic/claude-sonnet-5.5` | `arm_c` | 8 | 8 | 8 | $0.1973 | $0.0247 | 0.89% |
+| `openai/gpt-5-mini` | `arm_b` | 8 | 6 | 7 | $0.0964 | $0.0138 | 0.14% |
+| `openai/gpt-5-mini` | `arm_c` | 8 | 4 | 8 | $0.0533 | $0.0067 | 0.22% |
+| `deepseek/deepseek-v3.2` | `arm_b` | 8 | 5 | 6 | $0.0198 | $0.0033 | 0.29% |
+| `deepseek/deepseek-v3.2` | `arm_c` | 8 | 4 | 6 | $0.0199 | $0.0033 | 0.24% |
+| `mistralai/devstral-2512` | `arm_b` | 8 | 5 | 6 | $0.0233 | $0.0039 | 1.80% |
+| `mistralai/devstral-2512` | `arm_c` | 8 | 4 | 6 | $0.0267 | $0.0044 | 1.44% |
+| `qwen/qwen3-coder-30b-a3b-instruct` | `arm_b` | 8 | 3 | 4 | $0.0303 | $0.0076 | 2.09% |
+| `qwen/qwen3-coder-30b-a3b-instruct` | `arm_c` | 8 | 2 | 4 | $0.0346 | $0.0086 | 1.99% |
+| `qwen/qwen3-coder-next` | `arm_b` | 8 | 2 | 3 | $0.0301 | $0.0100 | 0.41% |
+| `qwen/qwen3-coder-next` *(1 rate-limited)* | `arm_c` | 7 | 1 | 2 | $0.0238 | $0.0119 | 0.25% |
+
+### Round 2 per task (`pass@1 / pass@5` across the 6 models)
+
+Each cell shows `pass@1 / pass@5` out of the 6 models for one task and one arm in Round 2 (Round 1
+`arm_b` / `arm_c` `pass@5` shown in parentheses for comparison).
+
+| Task | Round 2 `arm_b` | Round 2 `arm_c` | Round 1 `pass@5` (`b`/`c`) |
+|---|---:|---:|---:|
+| `T1_x86_mix_step` | 5 / 6 | 4 / 4 | (4 / 4) |
+| `T2_arm_mix_step` | 4 / 5 | 2 / 5 *(of 5)* | (5 / 5) |
+| `T3_x86_lead_zeros` | 4 / 4 | 3 / 4 | (5 / 5) |
+| `T4_arm_lead_zeros` | 5 / 6 | 5 / 5 | (6 / 5) |
+| **`T5_x86_pad16`** | **6 / 6** | **4 / 6** | **(0 / 0)** |
+| **`T6_arm_pad16`** | **2 / 4** | **2 / 5** | **(0 / 0)** |
+| `T7_x86_mix_twice` | 1 / 1 | 1 / 2 | (2 / 3) |
+| `T8_arm_mix_twice` | 2 / 2 | 2 / 3 | (3 / 3) |
+
+### Key findings from Round 2
+
+- **Fixing root causes beats documenting workarounds:** Aggregate `pass@1` jumped from **39.6% to 60.4%**
+  (`arm_b`) and **33.3% to 48.9%** (`arm_c`), `pass@5` jumped from **52.1% to 70.8% / 72.3%**, and API
+  cost per verified function dropped **2.6x–3.5x** (**$0.0116** in `arm_b`, **$0.0105** in `arm_c`).
+- **Two frontier/mini models hit 100%:** `anthropic/claude-sonnet-5.5` verified **16/16 on turn 1**
+  (100% `pass@1` across all 8 tasks on both arms, at **$0.0244/verified** — 4.6x cheaper than Round 1),
+  and `openai/gpt-5-mini` verified **8/8 (100%) in `arm_c`** at **$0.0067/verified** (cutting its cost in
+  half relative to `arm_b` at $0.0138/verified).
+- **Sub-cent verified code from cheap open models:** Both `deepseek/deepseek-v3.2` (**$0.0033/verified**)
+  and `mistralai/devstral-2512` (**$0.0039/verified**) solved **6/6 (100%)** of all single-function tasks
+  (`T1`–`T6`), and `T5_x86_pad16` jumped from **0/12 to 12/12 (100%)** across all six models.
+- **x86-64 parity restored (H4):** Removing the two x86-64 table quirks (`al`-only byte stores and
+  missing indexed `lea`) more than doubled x86-64 `pass@1` from **27.1% to 58.3%** (now ahead of AArch64's
+  **51.1%** `pass@1`; `pass@5` 68.8% x86-64 vs 74.5% AArch64).
+- **`arm_c` now beats `arm_b` on both `pass@5` (72.3% vs 70.8%) and cost per verified function
+  ($0.0105 vs $0.0116):** With table-driven compile hints active, `arm_c` confirmed both H1 and H2.
+- **The clear next bottleneck is C calling-convention boilerplate:** Every remaining failure of
+  `deepseek-v3.2` and `devstral-2512` was on `T7`/`T8` (`mix_twice`, calling a helper with C callee-saved
+  register spills). Designing custom Ode-to-Ode calling conventions directly addresses both code speed
+  and multi-function AI coder reliability.
+
 *Ode stands for Obsessively Double-checking Everything.*

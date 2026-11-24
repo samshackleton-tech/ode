@@ -643,14 +643,26 @@ end
 
 /-- What a place says a loop has written, of a state of the machine there: the run is one given to write;
 the definition is a list made thing by thing, of no more things than the run has places; and each place
-of the run from `lo` on holds the list's thing there. -/
+of the run in the prefix (`0..lo`) or suffix (`lo..hi`) holds the list's thing there. -/
 def RangeSays (ctx : Ctx) (pl : Place) (s0 st : State) : Prop :=
-  ∀ run lo f args, pl.wrote = some (run, lo, f, args) →
+  ∀ run lo f args fromStart, pl.wrote = some (run, lo, f, args, fromStart) →
     ∃ w r n a vs params x b hi, findOutNamed run ctx.contract.outs 0 = some (w, n) ∧ ctx.contract.outs[w]? = some (run, r, n) ∧
       Value ctx.defs (placeVals ctx pl s0 st) lo (.int a) ∧ 0 ≤ a ∧
       Values ctx.defs (placeVals ctx pl s0 st) args vs ∧
       eachOf ctx f vs.length = some (params, x, b, hi) ∧ hi ≤ n ∧
-      ∀ j : Nat, a ≤ j → j < hi → Value ctx.defs ((x, .int (j : Int)) :: params.zip vs) b (.int (st.mem (s0.reg r + j)))
+      ∀ j : Nat, (if fromStart then (j : Int) < a else a ≤ j) → j < hi →
+        Value ctx.defs ((x, .int (j : Int)) :: params.zip vs) b (.int (st.mem (s0.reg r + j)))
+
+theorem rangeBase_bounded {ctx : Ctx} {s : Sym} (wf : WF ctx s) (w : Nat) (f : String) (vs : List SVal) (hi : Nat) (fromStart : Bool) :
+    bounded s.nvars (rangeBase s w f vs hi fromStart) := by
+  unfold rangeBase
+  cases hr : s.range with
+  | none => cases fromStart <;> exact bounded_const _ _
+  | some rg =>
+    dsimp only
+    split
+    · exact (wf.range rg hr).1
+    · cases fromStart <;> exact bounded_const _ _
 
 theorem Holds.setRange (H : Holds ctx s0 ρ s st) (rg : RangeF) (h : RangeHolds ctx s0 ρ rg st.mem) :
     Holds ctx s0 ρ { s with range := some rg } st :=
@@ -672,9 +684,9 @@ theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
   | none =>
     simp only [hpw] at h
     obtain ⟨_, rfl⟩ := pure_pair h
-    exact ⟨ρ, Carried.here H wf, fun _ _ _ _ e => by rw [hpw] at e; cases e⟩
+    exact ⟨ρ, Carried.here H wf, fun _ _ _ _ _ e => by rw [hpw] at e; cases e⟩
   | some q =>
-    obtain ⟨run, lo, f, args⟩ := q
+    obtain ⟨run, lo, f, args, fromStart⟩ := q
     simp only [hpw] at h
     cases hfo : findOutNamed run ctx.contract.outs 0 with
     | none => simp only [hfo] at h; exact (refuse_ok h).elim
@@ -708,10 +720,21 @@ theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
           next hnhi =>
           obtain ⟨_, r4, g1, h⟩ := V.bind_ok h
           have g1 : 0 ≤ ev ρ3 L := entail_sound g1 ρ3 c3.holds.facts
-          cases hk : Lin.isConst (Lin.sub (rangeBase s3 w f vs hi) L) with
-          | none => simp only [hk] at h; exact (refuse_ok h).elim
+          let base := rangeBase s3 w f vs hi fromStart
+          let diff := if fromStart = true then Lin.sub L base else Lin.sub base L
+          let start := if fromStart = true then base else L
+          have bbase : bounded s3.nvars base := rangeBase_bounded c3.wf w f vs hi fromStart
+          have bstart : bounded s3.nvars start := by
+            cases fromStart
+            · exact bounded_mono c3.mono bL
+            · exact bbase
+          cases hk : Lin.isConst diff with
+          | none =>
+            have hk' : Lin.isConst (if fromStart = true then Lin.sub L (rangeBase s3 w f vs hi fromStart) else Lin.sub (rangeBase s3 w f vs hi fromStart) L) = none := hk
+            simp only [hk'] at h; exact (refuse_ok h).elim
           | some k =>
-            simp only [hk] at h
+            have hk' : Lin.isConst (if fromStart = true then Lin.sub L (rangeBase s3 w f vs hi fromStart) else Lin.sub (rangeBase s3 w f vs hi fromStart) L) = some k := hk
+            simp only [hk'] at h
             split at h
             next => exact (refuse_ok h).elim
             next hkk =>
@@ -719,13 +742,13 @@ theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
             obtain ⟨s4, r5, e5, h⟩ := V.bind_ok h
             obtain ⟨_, rfl⟩ := pure_pair h
             have bvs : ∀ v ∈ vs, v.bounded s3.nvars := bd3
-            obtain ⟨ρ4, c4, fill⟩ := filled_sound E hw k.toNat 0 e5 c3.holds c3.wf (EnvB.zip params vs bvs) (bounded_mono c3.mono bL)
+            obtain ⟨ρ4, c4, fill⟩ := filled_sound E hw k.toNat 0 e5 c3.holds c3.wf (EnvB.zip params vs bvs) bstart
             refine ⟨ρ4, c13.then c4, ?_⟩
-            intro run' lo' f' args' e
+            intro run' lo' f' args' fs' e
             rw [hpw] at e
             injection e with e
-            injection e with e1 e; injection e with e2 e; injection e with e3 e4
-            subst e1 e2 e3 e4
+            injection e with e1 e; injection e with e2 e; injection e with e3 e; injection e with e4 e5'
+            subst e1 e2 e3 e4 e5'
             have eL : ev ρ2 L = ev ρ4 L := ev_agree bL (c3.then c4).agree
             have same : vs.map (semv ctx s0 ρ3) = vs.map (semv ctx s0 ρ4) :=
               List.map_congr_left fun v hv => semv_agree (bvs v hv) c4.agree
@@ -738,37 +761,80 @@ theorem rangeShown_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn :
               by rw [List.length_map]; exact heach, by omega, ?_⟩
             intro j lej hj
             have ek := ev_isConst (ρ := ρ4) hk
-            rw [ev_sub] at ek
-            by_cases near : (j : Int) < ev ρ4 L + k
-            · -- a place gone through just now
-              have := fill (j - (ev ρ4 L).toNat) (by omega)
-              have e1 : ev ρ4 L + ((0 + (j - (ev ρ4 L).toNat) : Nat) : Int) = (j : Int) := by omega
-              rw [e1, semEnv_zip] at this
-              simpa using this
-            · -- a place held since an earlier coming
-              unfold rangeBase at ek
-              cases hr : s3.range with
-              | none => rw [hr] at ek; simp only [ev_const] at ek; omega
-              | some rg =>
-                rw [hr] at ek
-                simp only at ek
-                split at ek
-                next hsame =>
-                  simp only [Bool.and_eq_true, beq_iff_eq] at hsame
-                  obtain ⟨⟨hw', hf'⟩, hargs⟩ := hsame
-                  obtain ⟨name', r', n', params', x', b', hi', q1, q2, q3, q4, q5⟩ :=
-                    RangeHolds.agree (c3.wf.range rg hr).1 (c3.wf.range rg hr).2 c4.agree (c3.holds.range rg hr)
-                  rw [hw', hw] at q1
-                  injection q1 with q1; injection q1 with _ q1; injection q1 with q1 qn
-                  subst q1 qn
-                  rw [hf', hargs, heach] at q2
-                  injection q2 with q2
-                  injection q2 with p1 q2; injection q2 with p2 q2; injection q2 with p3 p4
-                  subst p1 p2 p3 p4
-                  have := q5 j (by omega) hj
-                  rw [hargs] at this
-                  exact this
-                next => simp only [ev_const] at ek; omega
+            cases fromStart
+            · -- suffix: lo <= j < hi
+              simp only [Bool.false_eq_true, ↓reduceIte] at lej
+              simp only [diff, start, Bool.false_eq_true, ↓reduceIte, ev_sub] at ek fill
+              by_cases near : (j : Int) < ev ρ4 L + k
+              · have := fill (j - (ev ρ4 L).toNat) (by omega)
+                have e1 : ev ρ4 L + ((0 + (j - (ev ρ4 L).toNat) : Nat) : Int) = (j : Int) := by omega
+                rw [e1, semEnv_zip] at this
+                simpa using this
+              · simp only [base, rangeBase] at ek
+                cases hr : s3.range with
+                | none => rw [hr] at ek; simp only [Bool.false_eq_true, ↓reduceIte, ev_const] at ek; omega
+                | some rg =>
+                  rw [hr] at ek
+                  dsimp only at ek
+                  split at ek
+                  next hsame =>
+                    simp only [Bool.and_eq_true, beq_iff_eq] at hsame
+                    obtain ⟨⟨⟨hw', hf'⟩, hargs⟩, hfs'⟩ := hsame
+                    obtain ⟨name', r', n', params', x', b', hi', q1, q2, q3, q4, q5⟩ :=
+                      RangeHolds.agree (c3.wf.range rg hr).1 (c3.wf.range rg hr).2 c4.agree (c3.holds.range rg hr)
+                    rw [hw', hw] at q1
+                    injection q1 with q1; injection q1 with _ q1; injection q1 with q1 qn
+                    subst q1 qn
+                    rw [hf', hargs, heach] at q2
+                    injection q2 with q2
+                    injection q2 with p1 q2; injection q2 with p2 q2; injection q2 with p3 p4
+                    subst p1 p2 p3 p4
+                    have := q5 j (by rw [hfs']; simp only [Bool.false_eq_true, ↓reduceIte]; omega) hj
+                    rw [hargs] at this
+                    exact this
+                  next => simp only [Bool.false_eq_true, ↓reduceIte, ev_const] at ek; omega
+            · -- prefix: 0 <= j < lo (and j < hi)
+              simp only [↓reduceIte] at lej
+              simp only [diff, start, ↓reduceIte, ev_sub] at ek fill
+              have hbase0 : 0 ≤ ev ρ4 base := by
+                simp only [base, rangeBase]
+                cases hr : s3.range with
+                | none => simp only [↓reduceIte, ev_const]; omega
+                | some rg =>
+                  dsimp only
+                  split
+                  · obtain ⟨_, _, _, _, _, _, _, _, _, _, q4, _⟩ :=
+                      RangeHolds.agree (c3.wf.range rg hr).1 (c3.wf.range rg hr).2 c4.agree (c3.holds.range rg hr)
+                    exact q4
+                  · simp only [↓reduceIte, ev_const]; omega
+              by_cases near : ev ρ4 base ≤ (j : Int)
+              · have := fill (j - (ev ρ4 base).toNat) (by omega)
+                have e1 : ev ρ4 base + ((0 + (j - (ev ρ4 base).toNat) : Nat) : Int) = (j : Int) := by omega
+                rw [e1, semEnv_zip] at this
+                simpa using this
+              · simp only [base, rangeBase] at near
+                cases hr : s3.range with
+                | none => rw [hr] at near; simp only [↓reduceIte, ev_const] at near; omega
+                | some rg =>
+                  rw [hr] at near
+                  dsimp only at near
+                  split at near
+                  next hsame =>
+                    simp only [Bool.and_eq_true, beq_iff_eq] at hsame
+                    obtain ⟨⟨⟨hw', hf'⟩, hargs⟩, hfs'⟩ := hsame
+                    obtain ⟨name', r', n', params', x', b', hi', q1, q2, q3, q4, q5⟩ :=
+                      RangeHolds.agree (c3.wf.range rg hr).1 (c3.wf.range rg hr).2 c4.agree (c3.holds.range rg hr)
+                    rw [hw', hw] at q1
+                    injection q1 with q1; injection q1 with _ q1; injection q1 with q1 qn
+                    subst q1 qn
+                    rw [hf', hargs, heach] at q2
+                    injection q2 with q2
+                    injection q2 with p1 q2; injection q2 with p2 q2; injection q2 with p3 p4
+                    subst p1 p2 p3 p4
+                    have := q5 j (by rw [hfs']; simp only [↓reduceIte]; omega) hj
+                    rw [hargs] at this
+                    exact this
+                  next => simp only [↓reduceIte, ev_const] at near; omega
 
 
 /-- What a place says a loop has written, taken as known in the place's general state: it is so there. -/
@@ -785,7 +851,7 @@ theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn
     subst h1
     exact ⟨ρ, Carried.here H wf⟩
   | some q =>
-    obtain ⟨run, lo, f, args⟩ := q
+    obtain ⟨run, lo, f, args, fromStart⟩ := q
     simp only [hpw] at h
     cases hfo : findOutNamed run ctx.contract.outs 0 with
     | none => simp only [hfo] at h; exact (refuse_ok h).elim
@@ -811,7 +877,7 @@ theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn
         injection this with h1 _
         subst h1
         have bvs : ∀ v ∈ vs, v.bounded g3.nvars := bd3
-        obtain ⟨w', r, n', a, vsem, params, x, b, hi, hfo', hw, va, a0, vargs, heach, hin, hall⟩ := says run lo f args hpw
+        obtain ⟨w', r, n', a, vsem, params, x, b, hi, hfo', hw, va, a0, vargs, heach, hin, hall⟩ := says run lo f args fromStart hpw
         rw [hfo] at hfo'
         injection hfo' with hfo'
         injection hfo' with hw' hn'
@@ -827,7 +893,7 @@ theorem supposeRange_sound {p : Program} (E : Setting ctx p s0) (pl : Place) (hn
         have evs : vsem = vs.map (semv ctx s0 ρ3) := Values.unique vargs vargs'
         subst evs
         rw [List.length_map] at heach
-        refine ⟨ρ3, c13.agree, c13.mono, c3.holds.setRange ⟨w, L, f, vs⟩ ?_, c3.wf.setRange ⟨w, L, f, vs⟩ (bounded_mono c3.mono bL) bvs⟩
+        refine ⟨ρ3, c13.agree, c13.mono, c3.holds.setRange ⟨w, L, f, vs, fromStart⟩ ?_, c3.wf.setRange ⟨w, L, f, vs, fromStart⟩ (bounded_mono c3.mono bL) bvs⟩
         exact ⟨run, r, n, params, x, b, hi, hw, heach, hin, by rw [← ea]; exact a0, fun j lej hj => hall j (by rw [ea]; exact lej) hj⟩
 
 /-- What a place says of a state of the machine there, `first` being what the verifier held when a path

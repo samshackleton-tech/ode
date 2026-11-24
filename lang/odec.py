@@ -103,6 +103,7 @@ RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "
 BRANCH_X86 = {"eq": "je", "ne": "jne", "ult": "jb", "uge": "jae"}
 BRANCH_ARM = {"eq": "b.eq", "ne": "b.ne", "ult": "b.lo", "uge": "b.hs"}
 INVERT_COND = {"eq": "ne", "ne": "eq", "ult": "uge", "uge": "ult"}
+COND_ALIAS = {"lo": "ult", "cc": "ult", "hs": "uge", "cs": "uge"}
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
 KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
 BUDGET_KEYS = {
@@ -344,9 +345,10 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     out, uses, ctrl_seq, names, frame, budget = [], [0], [0], {}, [None], [None]          # (names: the registers' names; frame: (size, fields); budget: {key: int})
 
     def branch_op(cond, n, invert=False):
-        if cond not in INVERT_COND:
-            stop(src, n, f"unknown condition `{cond}` (supported: eq, ne, ult, uge)")
-        return branch_map[INVERT_COND[cond] if invert else cond]
+        c = COND_ALIAS.get(cond, cond)
+        if c not in INVERT_COND:
+            stop(src, n, f"unknown condition `{cond}` (supported: eq, ne, ult/lo, uge/hs)")
+        return branch_map[INVERT_COND[c] if invert else c]
 
     def emit(n, asm_line, typed_line, inside):
         if inside: kept(asm_line, n, inside)
@@ -411,13 +413,14 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
         if t in general: return "register", t, general[t]
         if t in whole: stop(src, n, f"`:=` is one move or load/store: `{t}` is moved by an instruction that the coder names")
         if number(t) is not None: return "number", str(number(t)), None
-        m = re.fullmatch(r"(byte|dword|qword)\s*\[(.*)\]", t)
+        m = re.fullmatch(r"(byte|dword|qword|u32|u64)\s*\[(.*)\]", t)
         if m:
-            sz = {v: k for k, v in SIZES.items()}[m.group(1)]
+            w = {"byte": "byte", "u32": "dword", "dword": "dword", "u64": "qword", "qword": "qword"}[m.group(1)]
+            sz = {v: k for k, v in SIZES.items()}[w]
             if target == "arm64":
-                if sz not in (4, 8): stop(src, n, f"on arm64 `:=` moves 4 or 8 bytes of memory (`dword` or `qword`), not `{m.group(1)}`")
+                if sz not in (4, 8): stop(src, n, f"on arm64 `:=` moves 4 or 8 bytes of memory (`u32`/`dword` or `u64`/`qword`), not `{m.group(1)}`")
                 return "memory", f"[{address(m.group(2), n)}]", sz
-            return "memory", f"{m.group(1)} ptr [{address(m.group(2), n)}]", sz
+            return "memory", f"{w} ptr [{address(m.group(2), n)}]", sz
         m = re.fullmatch(r"&\s*(\w+)", t)
         if m:
             off = field(m.group(1), n, inside)[0]
@@ -641,9 +644,16 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 put = lambda text: re.sub(r"(?<![@#$\w.])(?:" + "|".join(map(re.escape, names)) + r")\b", lambda g: names[g.group(0)], text)
                 m = None if ":=" in s else re.match(r"\w+\(|\S+\s+", s)
                 s = put(s) if ":=" in s else s[:m.end()] + put(s[m.end():]) if m else s
-            if re.search(r"\bframe\.size\b", s):
-                if inside or frame[0] is None: stop(src, n, "`frame.size` inside an inline function" if inside else f"`frame.size`, and fn {fn} has said no frame yet")
-                s = re.sub(r"\bframe\.size\b", str(frame[0][0]), s)
+            if re.search(r"\bframe\.\w+\b", s):
+                if inside or frame[0] is None:
+                    what = re.search(r"\bframe\.\w+\b", s).group(0)
+                    stop(src, n, f"`{what}` inside an inline function" if inside else f"`{what}`, and fn {fn} has said no frame yet")
+                def _frame_const(g):
+                    key = g.group(1)
+                    if key == "size": return str(frame[0][0])
+                    if key in frame[0][1]: return str(frame[0][1][key][0])
+                    stop(src, n, f"`{key}` is no field of the function's frame (fields: {', '.join(frame[0][1])})")
+                s = re.sub(r"\bframe\.(\w+)\b", _frame_const, s)
             if ":=" in s: s = store(s, n, inside, typed)
             m = re.fullmatch(r"(\w+)\((.*)\)", s)
             if m and m.group(1) in inlines:

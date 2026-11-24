@@ -503,8 +503,15 @@ theorem symEnsureRange_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
       have g2 : 0 ≤ ev ρ5 (Lin.scale (-1) lo) := entail_sound g2 ρ5 c5.holds.facts
       have g3 : 0 ≤ ev ρ5 (Lin.sub top (Lin.const hi)) := entail_sound g3 ρ5 c5.holds.facts
       have g4 : 0 ≤ ev ρ5 (Lin.sub (Lin.const hi) top) := entail_sound g4 ρ5 c5.holds.facts
-      have g5 : 0 ≤ ev ρ5 (Lin.scale (-1) rg.lo) := entail_sound g5 ρ5 c5.holds.facts
-      simp only [ev_sub, ev_const, ev_scale] at g2 g3 g4 g5
+      have g5 : if rg.fromStart then (hi : Int) ≤ ev ρ5 rg.lo else ev ρ5 rg.lo ≤ 0 := by
+        cases hfs : rg.fromStart <;> simp only [hfs, Bool.false_eq_true, ↓reduceIte] at g5 ⊢
+        · have := entail_sound g5 ρ5 c5.holds.facts
+          simp only [ev_scale] at this
+          omega
+        · have := entail_sound g5 ρ5 c5.holds.facts
+          simp only [ev_sub, ev_const] at this
+          omega
+      simp only [ev_sub, ev_const, ev_scale] at g2 g3 g4
       have lo0 : ev ρ5 lo = 0 := by omega
       have tophi : ev ρ5 top = (hi : Int) := by omega
       -- what the place said, under the unknowns as they are now
@@ -524,7 +531,8 @@ theorem symEnsureRange_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
       have body : Value ctx.defs (d.params.zip (vs.map (semv ctx s0 ρ1))) d.body
           (.bytes ((List.range hi).map fun j => (st.mem (s0.reg r + j)).val)) := by
         rw [hbody, hparams, same]
-        exact Value.each_bytes (fun j => (st.mem (s0.reg r + j)).val) hi (fun j hj => q5 j (by omega) hj)
+        exact Value.each_bytes (fun j => (st.mem (s0.reg r + j)).val) hi fun j hj =>
+          q5 j (by cases hfs : rg.fromStart <;> simp only [hfs, Bool.false_eq_true, ↓reduceIte] at g5 ⊢ <;> omega) hj
       have val : Value ctx.defs (ctx.contract.envAfter s0 st') e.value
           (.bytes ((List.range hi).map fun j => (st.mem (s0.reg r + j)).val)) := by
         rw [hvalue]

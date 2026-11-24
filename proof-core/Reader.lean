@@ -247,8 +247,13 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | "wrote" :: run :: _ => do
     -- wrote RUN (index (call F THING …) LO): from the place LO on, the run holds the list F gives, place by place
     match ← readSExpr (rest line 2) with
-    | .index (.call f args) lo => inPlace fun p => { p with wrote := some (run, lo, f, args) }
+    | .index (.call f args) lo => inPlace fun p => { p with wrote := some (run, lo, f, args, false) }
     | _ => throw s!"refused: what a place says is written is said by the use of a definition, from a place on: {line}"
+  | "wrote_pre" :: run :: _ => do
+    -- wrote_pre RUN (index (call F THING …) HI): before the place HI (0..HI), the run holds the list F gives, place by place
+    match ← readSExpr (rest line 2) with
+    | .index (.call f args) hi => inPlace fun p => { p with wrote := some (run, hi, f, args, true) }
+    | _ => throw s!"refused: what a place says is written is said by the use of a definition, up to a place: {line}"
   | ["t", name] => onCur fun g => pure { g with proof := g.proof ++ [.tag name 0] }
   | ["t", name, n] => match n.toNat? with
     | some n => onCur fun g => pure { g with proof := g.proof ++ [.tag name n] }

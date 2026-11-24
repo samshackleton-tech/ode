@@ -276,7 +276,7 @@ class Refused(unittest.TestCase):
                 ("  movzx rax, byte ptr [rdi + 0]\n", 2, "`movzx rax, byte ptr [rdi + 0]`: `rax` where x86.tab's `movzx D32, byte ptr [B64 + N]` has a register of 32 bits"),
                 ("  nop\n  @a:\n  imul rax, rdi\n  jmp @a\n", 4, "`imul rax, rdi`: instruction not in x86.tab"),
                 ("  mov qword ptr [rsp + 0], 5\n", 2, "`mov qword ptr [rsp + 0], 5`: x86.tab has a store of a number for one byte only"),
-                ("  mov dword ptr [rdi + 0], eax\n", 2, "`mov dword ptr [rdi + 0], eax`: x86.tab has a store of al, of a register of 64 bits and of a number of one byte: not of eax"),
+                ("  mov dword ptr [rdi + 0], eax\n", 2, "`mov dword ptr [rdi + 0], eax`: x86.tab has a store of an 8-bit register, of a 64-bit register, and of an 8-bit number: not of eax"),
                 ("  mov al, byte ptr [rdi + 0]\n", 2, "`mov al, byte ptr [rdi + 0]`: x86.tab has `mov al, I` alone into al"),
                 ("  mov byte ptr [rdi + 0], 256\n", 2, "`mov byte ptr [rdi + 0], 256`: immediate outside 8 bits: 256"),
                 ("  mov rax, 0x100000000000\n", 2, "`mov rax, 0x100000000000`: no way in x86.tab writes mov64_ri"),
@@ -296,7 +296,18 @@ class Refused(unittest.TestCase):
                 if "imul" in body: self.assertEqual(got, f"s.ode: line {line}: {said}")              # (the instruction is said once)
 
     def test_what_is_taken_is_built(self):
-        self.assertIsNone(self.said("  mov rax, qword ptr [rdi + 0]\n  mov byte ptr [rdi + 0], al\n  mov byte ptr [rdi + 1], 7\n  @here:\n  jmp @here\n"))
+        self.assertIsNone(self.said(
+            "  mov rax, qword ptr [rdi + 0]\n"
+            "  mov byte ptr [rdi + 0], al\n"
+            "  mov byte ptr [rdi + 1], dl\n"
+            "  mov byte ptr [rdi + 2], sil\n"
+            "  mov byte ptr [rdi + 3], r9b\n"
+            "  mov byte ptr [rdi + 4], 7\n"
+            "  lea r8, [rdi + rcx]\n"
+            "  lea r9, [rdi + rcx + 8]\n"
+            "  @here:\n  jmp @here\n"
+        ))
+        self.assertIsNotNone(self.said("  mov byte ptr [rdi + 0], ah\n"))
 
 
 if __name__ == "__main__": unittest.main()

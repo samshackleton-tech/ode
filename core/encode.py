@@ -41,7 +41,7 @@ class Way:
         self.literal = bytes(int(x, 16) for x in t) if all(hexbyte(x) for x in t) and not ops.strip() else None
         self.kind, self.pp, self.W, self.map, self.L = "L", 0, 0, 0, 0
         self.opcode, self.plus, self.modrm, self.digit, self.imm, self.scale8 = None, False, False, None, None, 1
-        self.fields, self.fixed, self.late, self.below, self.byte8, self.rip = {}, {}, None, None, False, False
+        self.fields, self.fixed, self.late, self.below, self.byte8, self.rip = {}, {}, None, None, None, False
         if self.literal is not None: return
         i = 0
         if t[0].startswith(("VEX.", "EVEX.")):
@@ -73,8 +73,9 @@ class Way:
                 self.fields["base"], self.fields["disp"] = (parts[0],), (parts[-1],)
                 if len(parts) == 3: self.fields["index"] = (parts[1],)
             elif lhs in LATE: self.late = (lhs, tuple(rhs.split(",")))
-            elif lhs in ("reg", "rm", "rm8", "r", "vvvv", "k", "imm", "rel"):
-                if lhs == "rm8": self.byte8, lhs = True, "rm"
+            elif lhs in ("reg", "reg8", "rm", "rm8", "r", "vvvv", "k", "imm", "rel"):
+                if lhs == "rm8": self.byte8, lhs = "rm", "rm"
+                elif lhs == "reg8": self.byte8, lhs = "reg", "reg"
                 if "<" in rhs: rhs, _, n = rhs.partition("<"); self.below = int(n)
                 self.fields[lhs] = tuple(value(x) for x in rhs.split(","))
             elif len(lhs) == 1: self.fixed[lhs] = value(rhs)
@@ -125,7 +126,7 @@ def encode(way, bind, at=0):
     reg = way.digit if way.digit is not None else register("reg")
     v, r, k = register("vvvv"), register("r"), register("k")
     if "k" in way.fields and k == 0: raise Refuse("no mask register")              # (k0 written there says: no mask)
-    R, R2, X, B, tail, low_byte = (reg >> 3) & 1, reg >> 4, 0, r >> 3, b"", False
+    R, R2, X, B, tail, low_byte = (reg >> 3) & 1, reg >> 4, 0, r >> 3, b"", (way.byte8 == "reg" and 4 <= reg <= 7)
     if "base" in way.fields:                    # memory at base + displacement (+ index)
         base, disp, index = register("base"), signed(value("disp")), register("index") if "index" in way.fields else None
         if not -1 << 31 <= disp < 1 << 31: raise Refuse("a displacement of more than 32 bits")
@@ -139,7 +140,7 @@ def encode(way, bind, at=0):
     elif way.rip: tail = bytes([(reg & 7) << 3 | 5]) + bytes(bind["field"])        # in the file's data: four bytes the file speaks for
     elif way.modrm:
         rm = register("rm")
-        low_byte = way.byte8 and 4 <= rm <= 7           # the low byte of rsp, rbp, rsi, rdi: named so only after a REX prefix (without one: ah, ch, dh, bh)
+        if way.byte8 == "rm" and 4 <= rm <= 7: low_byte = True  # the low byte of rsp, rbp, rsi, rdi: named so only after a REX prefix (without one: ah, ch, dh, bh)
         X, B, tail = rm >> 4, (rm >> 3) & 1, bytes([0xC0 | (reg & 7) << 3 | rm & 7])
     opcode = bytes([way.opcode | (r & 7 if way.plus else 0)])
     if way.kind == "L":

@@ -216,6 +216,30 @@ class Forms(unittest.TestCase):
         wider = changed(NAMED, "    table: 4 * u64\n", "    table: 2 * 4 * u64\n")
         self.assertEqual(odec.instructions(wider, "fill")[1], "sub rsp, 136")
         self.assertIn("lea r9, [rsp + 64]", odec.instructions(wider, "fill"))
+        # Uniform `frame.<field>` offset constants + `u32`/`u64` + general `byte [p] := r8`
+        src_u = """target arm64
+fn f as "f_arm" {
+  frame {
+    tmp: 1 * block
+    saved_lr: 1 * u64
+    pad: 8
+  }
+  sub sp, sp, frame.size
+  str x30, [sp, frame.saved_lr]
+  add x0, sp, frame.tmp
+  x1 := u64 [x0 + 8]
+  w2 := u32 [x0]
+  ldr x30, [sp, frame.saved_lr]
+  add sp, sp, frame.size
+  ret
+}
+"""
+        self.assertEqual(odec.instructions(src_u, "f"), [
+            "sub sp, sp, 80", "str x30, [sp, 64]", "add x0, sp, 0",
+            "ldr x1, [x0, 8]", "ldr w2, [x0, 0]", "ldr x30, [sp, 64]", "add sp, sp, 80", "ret"
+        ])
+        self.assertEqual(odec.instructions('fn g as "g" {\n  byte [rdi + 2] := dl\n  rax := u64 [rsi + 8]\n  ret\n}\n', "g"),
+                         ["mov byte ptr [rdi + 2], dl", "mov rax, qword ptr [rsi + 8]", "ret"])
 
 
 if __name__ == "__main__": unittest.main()

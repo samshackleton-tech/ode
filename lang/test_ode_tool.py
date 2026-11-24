@@ -111,6 +111,22 @@ fn f as "f_sym" {
             self.assertEqual(r4.returncode, 1)
             self.assertIn("read-only input `a` modified", r4.stdout)
 
+    def test_table_driven_compile_hints_and_empty_source(self):
+        import ode_tool
+        h_x86 = ode_tool._compile_error_hint("s.ode: line 3: `cmp edx, 0`: instruction not in x86.tab")
+        self.assertIsNotNone(h_x86)
+        self.assertIn("cmp D64, I", h_x86)
+        h_arm = ode_tool._compile_error_hint("s.ode: line 4: `ldr x6, [x1, x3]`: not an instance of a row in arm64.tab")
+        self.assertIsNotNone(h_arm)
+        self.assertIn("ldr D64, [B64, N]", h_arm)
+        with tempfile.TemporaryDirectory() as d:
+            empty = os.path.join(d, "empty.ode")
+            with open(empty, "w") as f: f.write("// no fn\n")
+            resp = ode_tool.handle_request({"cmd": "check", "source": empty, "spec": MIX_SPEC})
+            self.assertFalse(resp["ok"])
+            self.assertIn("no `fn` definitions", resp["error"])
+            self.assertIn("hint:", resp.get("hint", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

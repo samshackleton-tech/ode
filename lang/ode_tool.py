@@ -38,6 +38,8 @@ def compile_source(src_path, fn_names=None):
     text = odec.read_source(src_path)
     target, _, _, fns = odec.source(text, src_path)
     want = fn_names if fn_names else [name for name, _, _, _ in fns]
+    if not want:
+        raise ValueError(f"{src_path}: source contains no `fn` definitions")
     compiled = []
     for name in want:
         compiled.append(odec.compile_info(src_path, name))
@@ -186,6 +188,32 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
+    if "is not one expression" in reason and "wrote" in reason:
+        return "hint: `wrote` syntax is `wrote out[.. i] = expr` (forward) or `wrote out[i ..] = expr` (countdown), naming the full output value"
+    return None
+
+
+def _compile_error_hint(err):
+    """Produce a concise, table-driven fix hint for Ode compile / place-syntax errors (zero drift)."""
+    if "no `fn` definitions" in err:
+        return "hint: return a complete `.ode` file starting with `target x86_64` or `target arm64` and `fn NAME as \"SYMBOL\" { ... }`"
+    if "not a number: &" in err:
+        return "hint: use `REG := &field` (or `frame.<field>` for the byte offset) to reference a stack-frame field"
+    if "is not one expression" in err:
+        return "hint: in `place { ... }`, write `wrote out[.. i] = spec_expr` or `wrote out[i ..] = spec_expr` (e.g. `wrote out[.. i] = pad16(src)`)"
+    # Live table lookup directly from x86.tab / arm64.tab whenever an instruction fails to match.
+    target = "arm64" if "arm64.tab" in err else ("x86_64" if "x86.tab" in err else None)
+    if target is not None:
+        m = re.search(r"`([A-Za-z][A-Za-z0-9.]*)\b[^`]*`:", err)
+        if m:
+            mn = m.group(1)
+            asm_mod = odec._asm_mod(target)
+            forms = asm_mod.forms_for(mn)
+            tab_name = "arm64.tab" if target == "arm64" else "x86.tab"
+            if forms:
+                return f"hint: supported `{mn}` forms in {tab_name}: " + "; ".join(forms[:8])
+            avail = sorted({r.asm.split()[0] for r in (asm_mod.ROWS if target == "arm64" else [v[0] for v in asm_mod.ROWS.values()]) if r.asm != "-"})
+            return f"hint: `{mn}` is not in {tab_name} (available mnemonics: {', '.join(avail[:24])})"
     return None
 
 
@@ -564,7 +592,12 @@ def handle_request(req):
     except BaseException as exc:
         if isinstance(exc, KeyboardInterrupt):
             raise
-        return {"ok": False, "error": str(exc)}
+        err = str(exc)
+        out = {"ok": False, "error": err}
+        hint = _compile_error_hint(err)
+        if hint:
+            out["hint"] = hint
+        return out
 
 
 def main(argv=None):
