@@ -12,6 +12,7 @@ sys.path[:0] = [HERE, os.path.join(HERE, "..", "core")]
 import table, word
 
 EM_AARCH64 = 183
+R_AARCH64_JUMP26 = 282
 R_AARCH64_CALL26 = 283
 G64 = {f"x{i}": f"x{i}" for i in range(31)}
 G32 = {f"w{i}": f"x{i}" for i in range(31)}
@@ -284,6 +285,13 @@ def build_elf(name, symbol, ins, notes, data, where=None, locs=None):
             start = len(code)
             w_way, lbl = it[2], it[3]
             if lbl not in labels:
+                if w_way.row.name == "b" and not lbl.startswith("."):
+                    raw = word.encode(w_way, {"I": 0})
+                    relocs.append((start, R_AARCH64_JUMP26, lbl, 0))
+                    code += raw
+                    if locs is not None and orig_idx is not None:
+                        locs.append((start, 4, orig_idx))
+                    continue
                 raise ValueError(f"unknown label {lbl}")
             delta = labels[lbl] - start
             raw = word.encode(w_way, {"I": delta})

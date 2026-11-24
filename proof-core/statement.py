@@ -748,12 +748,12 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}, is_arm64=False):
 
 
 def called(obj, symbol):
-    """The functions SYMBOL calls, by name, in the order of their first call."""
+    """The functions SYMBOL calls (or tail-jumps to), by name, in order of first mention."""
     if arm64(obj): return arm64_obj.called(obj, symbol)
     out = []
     for _, _, text in kdecode.read(obj, symbol, 0, 0)[0]:
-        m = re.fullmatch(r"\.call (\S+)", text)
-        if m and m.group(1) not in out: out.append(m.group(1))
+        m = re.fullmatch(r"\.(?:call|jmp) (\S+)", text)
+        if m and not m.group(1).startswith("0x") and m.group(1) not in out: out.append(m.group(1))
     return out
 
 

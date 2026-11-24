@@ -761,12 +761,12 @@ before but in the called function's frame, at the address it returned to and in 
 gives those words (or a serialized record). -/
 theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st s2 : State}
     {sp : Int} (ct : Contract) (cst : Nat) (hm : ct.regs = ctx.nreg) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
-    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stackAt s0 : Int) ≤ sp - ct.slot - cst) (hsp0 : sp ≤ 0)
+    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stackAt s0 : Int) ≤ sp - cst) (hsp0 : sp ≤ 0)
     (hkeep : ∀ r, r < ctx.nreg → ct.scratch.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
     {w o m : Nat} {x : String} {b n : Nat} (hw : ctx.contract.outs[w]? = some (x, b, n)) (hn : 4 * (o + m) ≤ n)
     (hnow : ∀ e ∈ s.wrote, e.1 ≠ w)
-    (hmem : ∀ a, a + ct.slot + cst < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b + 4 * o ∨ s0.reg b + 4 * (o + m) ≤ a → s2.mem a = st.mem a)
+    (hmem : ∀ a, a + cst < st.reg RSP ∨ st.reg RSP ≤ a → a < s0.reg b + 4 * o ∨ s0.reg b + 4 * (o + m) ≤ a → s2.mem a = st.mem a)
     (hdata : s2.data = st.data)
     {nums : List Nat} (hlen : nums.length = m) (hlt : ∀ v ∈ nums, v < W32)
     (hrun : ∀ k, k < m → ∀ bb, bb < 4 → s2.mem (s0.reg b + 4 * (o + k) + bb) = nums.getD k 0 / 256 ^ bb % 256)
@@ -865,7 +865,7 @@ theorem afterCallW_holds {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
       · exact H'.facts f mf
   · intro a ha ho
-    have hfr : a + ct.slot + cst < st.reg RSP ∨ st.reg RSP ≤ a := by
+    have hfr : a + cst < st.reg RSP ∨ st.reg RSP ≤ a := by
       simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at ha
       omega
     have hnot : a < s0.reg b ∨ s0.reg b + n ≤ a := by
@@ -3136,7 +3136,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
               rw [show s0.reg b + 4 * plan.first + 4 * k = s0.reg b + 4 * (plan.first + k) by omega]
             subst heqn
             exact ⟨d, hfd, hdl, hv'⟩
-          have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
+          have Hafter := afterCallW_holds E c (c.slot + c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp (by omega) hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow (fun a ha hb => hmem2 a (by omega) hb) hdata2
             hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := none) hheld hvec2
           have wafter := afterCallW_wf wfT c F.regs sp plan.w plan.first (n / 4) plan.g hkeys false plan.recFields (fun h => by simp [hnoRec] at h)
           rw [hwords]
@@ -3157,7 +3157,7 @@ theorem symCallW'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
             rw [s1r, ← Nat.add_assoc] at this
             rw [show s0.reg b + 4 * (plan.first + k) + bb = s0.reg b + 4 * plan.first + 4 * k + bb by omega, this, ← getD_of_lt l 0 lt']
             exact hlget k (by omega) bb hbb
-          have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
+          have Hafter := afterCallW_holds E c (c.slot + c.stackAt (afterCall p q i st)) F.regs HT wfT hrsp (by omega) hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow (fun a ha hb => hmem2 a (by omega) hb) hdata2
             hnums hlt hrun hkeys (bytes := false) (rfs := plan.recFields) (recVal := some (.record fvs)) (Or.inr ⟨hne, d, fvs, rfl, hrf, hv⟩) hvec2
           have wafter := afterCallW_wf wfT c F.regs sp plan.w plan.first (n / 4) plan.g hkeys false plan.recFields (fun _ => by omega)
           rw [hwords]
@@ -4310,7 +4310,7 @@ theorem symCallB'_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
           subst same
           have ekeys : as2 = plan.keys.map (Key.val ctx s0 ρ s.terms) := flatKeys_den wf das hfk
           exact ⟨d, hfd, hdl, f2, by rw [← ekeys, if_pos rfl, ← hlb]; exact hev2⟩
-        have Hafter := afterCallW_holds E c (c.stackAt (afterCall p q i st)) F.regs H wf hrsp hg.2 hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow hmem2 hdata2
+        have Hafter := afterCallW_holds E c (c.slot + c.stackAt (afterCall p q i st)) F.regs H wf hrsp (by omega) hg.1 hkeep psmall how (show 4 * (plan.first + n / 4) ≤ n0 by omega) hnow (fun a ha hb => hmem2 a (by omega) hb) hdata2
           hnl hlt hrun hkeys (bytes := true) (rfs := []) (recVal := none) (Or.inl ⟨rfl, hheld⟩) hvec2
         have wafter := afterCallW_wf wf c F.regs sp plan.w plan.first (n / 4) plan.g hkeys true [] (fun h => by simp at h)
         rw [hwords]

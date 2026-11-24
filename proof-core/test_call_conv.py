@@ -101,7 +101,8 @@ def emit_arm64_asm(fns):
             rel = relocs.get(value + off)
             if rel is not None:
                 target_sym = symbols[rel[1]][0]
-                lines.append(f"  bl SYM({target_sym})")
+                op = "b" if rel[0] == aobj.R_AARCH64_JUMP26 else "bl"
+                lines.append(f"  {op} SYM({target_sym})")
             else:
                 w = int.from_bytes(code[off:off + 4], "little")
                 lines.append(f"  .word 0x{w:08x}")
@@ -672,6 +673,513 @@ class CallingConvVerification(unittest.TestCase):
                 ok, msg = run_verify_raw(arch, stmt)
                 self.assertFalse(ok, f"expected Lean callingOk refusal for:\n{stmt}")
                 self.assertIn("invalid custom calling convention", msg)
+
+
+@unittest.skipUnless(LAKE, "Lean 4 (lake) not installed")
+class TailCallsAndZeroStackArm64(unittest.TestCase):
+    """Phase 2 calling conventions: verified tail calls (`jmp` / `b`) on x86-64 & AArch64,
+    zero-stack AArch64 callers keeping `x30` in a custom callee-preserved register, and
+    negative controls."""
+
+    @classmethod
+    def setUpClass(cls):
+        built.built("odeverify")
+        built.built("odeprove")
+
+    def test_x86_tail_call_positive_and_native_and_bundle_audit(self):
+        """x86-64 `stack 0` caller tail-jumps (`jmp`) to a custom-calling helper (and also
+        supports a conditional branch where one arm returns directly and the other tail-jumps),
+        runs natively on x86-64 Linux, and passes `ode pack` + `ode audit`."""
+        ode_src = """
+        target x86_64
+
+        fn tail_add as "ode_tail_add" {
+            add r10, r11
+            mov rax, r10
+            ret
+        }
+
+        fn dispatch as "ode_tail_dispatch" {
+            cmp rdi, 0
+            jne @use_tail
+            mov rax, rsi
+            ret
+        @use_tail:
+            mov r10, rdi
+            mov r11, rsi
+            jmp ode_tail_add
+        }
+        """
+        spec = """
+        def sum2(a, b) { a + b }
+
+        contract ode_tail_add(a: number, b: number) {
+            requires a < 1000
+            requires b < 1000
+            returns sum2(a, b)
+            trace depends on a, b
+            stack 0
+            calling {
+                in a = r10, b = r11
+                out = rax
+                preserves rbx, rbp, r12, r13, r14, r15
+            }
+        }
+
+        contract ode_tail_dispatch(x: number, y: number) {
+            requires x < 1000
+            requires y < 1000
+            returns sum2(x, y)
+            trace depends on x, y
+            stack 0
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_src, [("tail_add", "ode_tail_add"), ("dispatch", "ode_tail_dispatch")])
+            ok, msg, _ = prove_and_verify(spec, fns, "x86-64")
+            self.assertTrue(ok, f"x86-64 tail call failed:\n{msg}")
+
+            # Verify unified `.ode` multi-function `ode pack` + `ode audit` handles R_X86_64_PLT32 tail jumps!
+            import ode_audit, ode_tool
+            unified_p = os.path.join(d, "prog_unified.ode")
+            with open(unified_p, "w") as f:
+                f.write(textwrap.dedent("""
+                def sum2(a, b) { a + b }
+
+                fn tail_add(a: number, b: number)
+                    requires a < 1000
+                    requires b < 1000
+                    returns sum2(a, b)
+                    trace depends on a, b
+                {
+                    for x86_64 stack 0 calling {
+                        in a = r10, b = r11
+                        out = rax
+                        preserves rbx, rbp, r12, r13, r14, r15
+                    } {
+                        add r10, r11
+                        mov rax, r10
+                        ret
+                    }
+                }
+
+                fn dispatch(x: number, y: number)
+                    requires x < 1000
+                    requires y < 1000
+                    returns sum2(x, y)
+                    trace depends on x, y
+                {
+                    for x86_64 stack 0 {
+                        cmp rdi, 0
+                        jne @use_tail
+                        mov rax, rsi
+                        ret
+                    @use_tail:
+                        mov r10, rdi
+                        mov r11, rsi
+                        jmp tail_add
+                    }
+                }
+                """).lstrip())
+            bundle_o = os.path.join(d, "bundle.o")
+            bundle_p = os.path.join(d, "bundle.proof")
+            rc = ode_tool.main([
+                "pack", unified_p,
+                "--fn", "dispatch", "--out", bundle_o, "--proof", bundle_p,
+            ])
+            self.assertEqual(rc, 0, "ode pack failed on x86-64 tail-call bundle")
+            aud = ode_audit.audit_binary(bundle_o, proof_path=bundle_p)
+            self.assertEqual(aud["verdict"], "shown", f"ode audit refused x86-64 tail-call bundle: {aud}")
+
+            if X86_LINUX and shutil.which("cc"):
+                so = os.path.join(d, "libt.so")
+                r = subprocess.run(["cc", "-shared", "-o", so, fns[0][0], fns[1][0]], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                lib = ctypes.CDLL(so)
+                fn = lib.ode_tail_dispatch
+                fn.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+                fn.restype = ctypes.c_uint64
+                for x, y in [(0, 42), (1, 2), (500, 499), (999, 999)]:
+                    self.assertEqual(fn(x, y), x + y)
+
+    def test_arm64_tail_call_positive_and_native_and_bundle_audit(self):
+        """AArch64 `stack 0` caller tail-branches (`b`) to a custom-calling helper, runs
+        natively on Apple Silicon / Linux AArch64, and passes `ode pack` + `ode audit`."""
+        ode_src = """
+        target arm64
+
+        fn tail_add as "ode_tail_add_arm" {
+            add x10, x10, x11
+            mov x0, x10
+            ret
+        }
+
+        fn dispatch as "ode_tail_dispatch_arm" {
+            cmp x0, 0
+            b.ne @use_tail
+            mov x0, x1
+            ret
+        @use_tail:
+            mov x10, x0
+            mov x11, x1
+            b ode_tail_add_arm
+        }
+        """
+        spec = """
+        def sum2(a, b) { a + b }
+
+        contract ode_tail_add_arm(a: number, b: number) {
+            requires a < 1000
+            requires b < 1000
+            returns sum2(a, b)
+            trace depends on a, b
+            stack 0
+            calling {
+                in a = x10, b = x11
+                out = x0
+                preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+                preserves_vec v8, v9, v10, v11, v12, v13, v14, v15
+            }
+        }
+
+        contract ode_tail_dispatch_arm(x: number, y: number) {
+            requires x < 1000
+            requires y < 1000
+            returns sum2(x, y)
+            trace depends on x, y
+            stack 0
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_src, [("tail_add", "ode_tail_add_arm"), ("dispatch", "ode_tail_dispatch_arm")])
+            ok, msg, _ = prove_and_verify(spec, fns, "arm64")
+            self.assertTrue(ok, f"AArch64 tail call failed:\n{msg}")
+
+            import ode_audit, ode_tool
+            unified_p = os.path.join(d, "prog_unified.ode")
+            with open(unified_p, "w") as f:
+                f.write(textwrap.dedent("""
+                def sum2(a, b) { a + b }
+
+                fn tail_add(a: number, b: number)
+                    requires a < 1000
+                    requires b < 1000
+                    returns sum2(a, b)
+                    trace depends on a, b
+                {
+                    for arm64 stack 0 calling {
+                        in a = x10, b = x11
+                        out = x0
+                        preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+                        preserves_vec v8, v9, v10, v11, v12, v13, v14, v15
+                    } {
+                        add x10, x10, x11
+                        mov x0, x10
+                        ret
+                    }
+                }
+
+                fn dispatch(x: number, y: number)
+                    requires x < 1000
+                    requires y < 1000
+                    returns sum2(x, y)
+                    trace depends on x, y
+                {
+                    for arm64 stack 0 {
+                        cmp x0, 0
+                        b.ne @use_tail
+                        mov x0, x1
+                        ret
+                    @use_tail:
+                        mov x10, x0
+                        mov x11, x1
+                        b tail_add
+                    }
+                }
+                """).lstrip())
+            bundle_o = os.path.join(d, "bundle.o")
+            bundle_p = os.path.join(d, "bundle.proof")
+            rc = ode_tool.main([
+                "pack", unified_p,
+                "--fn", "dispatch", "--out", bundle_o, "--proof", bundle_p,
+            ])
+            self.assertEqual(rc, 0, "ode pack failed on AArch64 tail-call bundle")
+            aud = ode_audit.audit_binary(bundle_o, proof_path=bundle_p)
+            self.assertEqual(aud["verdict"], "shown", f"ode audit refused AArch64 tail-call bundle: {aud}")
+
+            if ARM_MACHINE and shutil.which("cc"):
+                asm_p = os.path.join(d, "both.S")
+                so_p = os.path.join(d, "libt.dylib" if platform.system() == "Darwin" else "libt.so")
+                with open(asm_p, "w") as f:
+                    f.write(emit_arm64_asm(fns))
+                r = subprocess.run(["cc", "-shared", "-o", so_p, asm_p], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                lib = ctypes.CDLL(so_p)
+                fn = lib.ode_tail_dispatch_arm
+                fn.argtypes = [ctypes.c_uint64, ctypes.c_uint64]
+                fn.restype = ctypes.c_uint64
+                for x, y in [(0, 42), (1, 2), (500, 499), (999, 999)]:
+                    self.assertEqual(fn(x, y), x + y)
+
+    def test_arm64_zero_stack_caller_link_in_x15(self):
+        """AArch64 non-leaf caller with `stack 0`: saves `x30` in caller-saved scratch `x15`,
+        calls a custom-calling helper that lists `x15` in `preserves`, restores `x30`, and
+        returns — zero stack writes on AArch64, proved sound and executed natively."""
+        ode_src = """
+        target arm64
+
+        fn leaf_step as "ode_leaf_x15" {
+            add x10, x10, x11
+            ret
+        }
+
+        fn caller as "ode_zero_stack_arm" {
+            mov x15, x30
+            mov x10, x0
+            mov x11, x1
+            bl ode_leaf_x15
+            add x0, x10, x2
+            mov x30, x15
+            ret
+        }
+        """
+        spec = """
+        contract ode_leaf_x15(a: number, b: number) {
+            requires a < 1000
+            requires b < 1000
+            returns a + b
+            trace depends on a, b
+            stack 0
+            calling {
+                in a = x10, b = x11
+                out = x10
+                preserves x2, x15, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+                preserves_vec v8, v9, v10, v11, v12, v13, v14, v15
+            }
+        }
+
+        contract ode_zero_stack_arm(a: number, b: number, c: number) {
+            requires a < 1000
+            requires b < 1000
+            requires c < 1000
+            returns a + b + c
+            trace depends on a, b, c
+            stack 0
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_src, [("leaf_step", "ode_leaf_x15"), ("caller", "ode_zero_stack_arm")])
+            ok, msg, _ = prove_and_verify(spec, fns, "arm64")
+            self.assertTrue(ok, f"AArch64 stack-0 x15 link save failed:\n{msg}")
+
+            if ARM_MACHINE and shutil.which("cc"):
+                asm_p = os.path.join(d, "both.S")
+                so_p = os.path.join(d, "libz.dylib" if platform.system() == "Darwin" else "libz.so")
+                with open(asm_p, "w") as f:
+                    f.write(emit_arm64_asm(fns))
+                r = subprocess.run(["cc", "-shared", "-o", so_p, asm_p], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                lib = ctypes.CDLL(so_p)
+                fn = lib.ode_zero_stack_arm
+                fn.argtypes = [ctypes.c_uint64, ctypes.c_uint64, ctypes.c_uint64]
+                fn.restype = ctypes.c_uint64
+                for a, b, c in [(0, 0, 0), (10, 20, 30), (999, 999, 999)]:
+                    self.assertEqual(fn(a, b, c), a + b + c)
+
+    def test_tail_call_negative_controls_x86(self):
+        """Every invalid x86-64 tail call must be refused by the Lean verifier:
+        (1) sp != 0, (2) callee does not preserve caller's keeps, (3) caller clobbered its own
+        keeps before jmp, (4) callee stack > caller stack, (5) trace leak, (6) self tail call."""
+        base_spec = """
+        def sum2(a, b) { a + b }
+
+        contract ode_tcallee(a: number, b: number) {
+            requires a < 1000
+            requires b < 1000
+            returns sum2(a, b)
+            trace depends on a, b
+            stack 0
+            calling {
+                in a = rdi, b = rsi
+                out = rax
+                preserves rbx, rbp, r12, r13, r14, r15
+            }
+        }
+
+        contract ode_tcaller(x: number, y: number) {
+            requires x < 1000
+            requires y < 1000
+            returns sum2(x, y)
+            trace depends on x, y
+            stack 0
+        }
+        """
+        # 1. sp != 0 at tail jump
+        ode_sp = """
+        target x86_64
+        fn callee as "ode_tcallee" {
+            mov rax, rdi
+            add rax, rsi
+            ret
+        }
+        fn caller as "ode_tcaller" {
+            sub rsp, 16
+            jmp ode_tcallee
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_sp, [("callee", "ode_tcallee"), ("caller", "ode_tcaller")])
+            ok, msg, _ = prove_and_verify(base_spec.replace("stack 0\n        }", "stack 16\n        }"), fns, "x86-64")
+            self.assertFalse(ok, "tail call with sp != 0 must be refused!")
+
+        # 2. callee omits r12 from preserves (caller promises to preserve r12)
+        ode_ok = """
+        target x86_64
+        fn callee as "ode_tcallee" {
+            mov rax, rdi
+            add rax, rsi
+            ret
+        }
+        fn caller as "ode_tcaller" {
+            jmp ode_tcallee
+        }
+        """
+        spec_no_r12 = base_spec.replace("preserves rbx, rbp, r12, r13, r14, r15", "preserves rbx, rbp, r13, r14, r15")
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_ok, [("callee", "ode_tcallee"), ("caller", "ode_tcaller")])
+            ok, msg, _ = prove_and_verify(spec_no_r12, fns, "x86-64")
+            self.assertFalse(ok, "tail call whose callee does not preserve caller keeps must be refused!")
+
+        # 3. caller clobbers rbx and forgets to restore it before tail jump
+        ode_clobber = """
+        target x86_64
+        fn callee as "ode_tcallee" {
+            mov rax, rdi
+            add rax, rsi
+            ret
+        }
+        fn caller as "ode_tcaller" {
+            mov rbx, 7
+            jmp ode_tcallee
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_clobber, [("callee", "ode_tcallee"), ("caller", "ode_tcaller")])
+            ok, msg, _ = prove_and_verify(base_spec, fns, "x86-64")
+            self.assertFalse(ok, "tail call with changed caller callee-saved reg must be refused!")
+
+        # 4. callee stack (64) exceeds caller stack (32)
+        spec_big_stack = base_spec.replace("stack 0\n            calling", "stack 64\n            calling").replace("stack 0\n        }", "stack 32\n        }")
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_ok, [("callee", "ode_tcallee"), ("caller", "ode_tcaller")])
+            ok, msg, _ = prove_and_verify(spec_big_stack, fns, "x86-64")
+            self.assertFalse(ok, "tail call whose callee stack exceeds caller stack must be refused!")
+
+        # 5. trace leak: caller keeps x out of trace, tail-jumps to callee whose trace depends on a (= x)
+        spec_leak = base_spec.replace("trace depends on x, y", "trace depends on y")
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_ok, [("callee", "ode_tcallee"), ("caller", "ode_tcaller")])
+            ok, msg, _ = prove_and_verify(spec_leak, fns, "x86-64")
+            self.assertFalse(ok, "tail call leaking value kept out of trace must be refused!")
+
+        # 6. self tail call (bypassing decreases)
+        ode_self = """
+        target x86_64
+        fn self_tail as "ode_tself" {
+            jmp ode_tself
+        }
+        """
+        spec_self = """
+        contract ode_tself(x: number) {
+            requires x < 100
+            returns x
+            trace depends on x
+            stack 0
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_self, [("self_tail", "ode_tself")])
+            ok, msg, _ = prove_and_verify(spec_self, fns, "x86-64")
+            self.assertFalse(ok, "self tail call must be refused!")
+
+    def test_tail_call_negative_controls_arm64(self):
+        """AArch64 negative controls: clobbered `x30` before `b callee`, `sp != 0`, and
+        callee omitting `v8` from `preserves_vec` must all be refused."""
+        base_spec = """
+        def sum2(a, b) { a + b }
+
+        contract ode_arm_tc(a: number, b: number) {
+            requires a < 1000
+            requires b < 1000
+            returns sum2(a, b)
+            trace depends on a, b
+            stack 0
+            calling {
+                in a = x0, b = x1
+                out = x0
+                preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+                preserves_vec v8, v9, v10, v11, v12, v13, v14, v15
+            }
+        }
+
+        contract ode_arm_tcaller(x: number, y: number) {
+            requires x < 1000
+            requires y < 1000
+            returns sum2(x, y)
+            trace depends on x, y
+            stack 16
+        }
+        """
+        # 1. clobbered x30 before b
+        ode_lr = """
+        target arm64
+        fn callee as "ode_arm_tc" {
+            add x0, x0, x1
+            ret
+        }
+        fn caller as "ode_arm_tcaller" {
+            mov x30, x0
+            b ode_arm_tc
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_lr, [("callee", "ode_arm_tc"), ("caller", "ode_arm_tcaller")])
+            ok, msg, _ = prove_and_verify(base_spec, fns, "arm64")
+            self.assertFalse(ok, "AArch64 tail call with clobbered x30 must be refused!")
+
+        # 2. sp != 0 before b
+        ode_sp = """
+        target arm64
+        fn callee as "ode_arm_tc" {
+            add x0, x0, x1
+            ret
+        }
+        fn caller as "ode_arm_tcaller" {
+            sub sp, sp, 16
+            b ode_arm_tc
+        }
+        """
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_sp, [("callee", "ode_arm_tc"), ("caller", "ode_arm_tcaller")])
+            ok, msg, _ = prove_and_verify(base_spec, fns, "arm64")
+            self.assertFalse(ok, "AArch64 tail call with sp != 0 must be refused!")
+
+        # 3. callee omits v8 from preserves_vec while caller promises default C ABI v8..v15
+        ode_ok = """
+        target arm64
+        fn callee as "ode_arm_tc" {
+            add x0, x0, x1
+            ret
+        }
+        fn caller as "ode_arm_tcaller" {
+            b ode_arm_tc
+        }
+        """
+        spec_nov8 = base_spec.replace("preserves_vec v8, v9", "preserves_vec v9")
+        with tempfile.TemporaryDirectory() as d:
+            fns = build_ode_pair(d, ode_ok, [("callee", "ode_arm_tc"), ("caller", "ode_arm_tcaller")])
+            ok, msg, _ = prove_and_verify(spec_nov8, fns, "arm64")
+            self.assertFalse(ok, "AArch64 tail call whose callee drops v8 from preserves_vec must be refused!")
 
 
 if __name__ == "__main__":

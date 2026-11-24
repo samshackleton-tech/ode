@@ -195,7 +195,12 @@ def write(line, mn, ops):
         if idx is None: return ("fixed", pick("nop", {"b": base, "n": disp}, lambda w: w.fields.get("base") == ("b",) and "index" not in w.fields))
         return ("fixed", pick("nop", {"b": base, "s": idx, "n": disp}, lambda w: "index" in w.fields))
     if mn in JUMPS:
-        if len(ops) != 1 or operand(ops[0])[0] != "other": raise ValueError("a jump names one label")
+        if len(ops) != 1: raise ValueError("a jump names one label")
+        if mn == "jmp":
+            mc = re.fullmatch(r"CALL\((\w+)\)", ops[0])
+            if mc:
+                return ("reloc", b"\xe9\x00\x00\x00\x00", 1, 4, mc.group(1), -4)
+        if operand(ops[0])[0] != "other": raise ValueError("a jump names one label")
         return ("jump", JUMPS[mn], ops[0])
     if mn == "call":
         m = re.fullmatch(r"CALL\((\w+)\)|(\w+)", ops[0]) if len(ops) == 1 else None
@@ -397,6 +402,13 @@ def build_elf(name, symbol, expanded, notes, data, where=None, locs=None):
         elif s.split()[0] in {".cfi_startproc", ".cfi_endproc", ".cfi_offset", ".cfi_restore", ".cfi_def_cfa", ".cfi_def_cfa_offset", ".cfi_def_cfa_register"}: continue
         else: items.append(instruction(s)); orig_of.append(orig_idx)
 
+    defined_labels = {it[1] for it in items if it[0] == "label"}
+    items = [
+        ("reloc", b"\xe9\x00\x00\x00\x00", 1, 4, it[2], -4)
+        if it[0] == "jump" and it[1] == "jmp" and it[2] not in defined_labels and not it[2].startswith(".")
+        else it
+        for it in items
+    ]
     long_jumps = set()
     while True:
         off, labels, starts = 0, {}, {}

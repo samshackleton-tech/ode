@@ -1,10 +1,12 @@
 # Proposal: Custom Calling Conventions for Calls Between Ode Functions
 
-*Status: Revision 2 — Phase 1 implemented, proved sound in Lean 4 (`proof-core/SoundTop.lean`,
-standard Lean axioms only, all 10 soundness theorem statements unchanged), and verified end-to-end
-on x86-64 and AArch64 (`proof-core/test_call_conv.py`). Exported `.ocl` contracts carry no register
-names; `STB_GLOBAL` exports obey the full C ABI including AArch64 `v8..v15`; internal `STB_LOCAL`
-Ode-to-Ode helpers may declare `calling { in ... out = ... preserves ... preserves_vec ... }`.*
+*Status: Revision 3 — Phase 1 and Phase 2 implemented, proved sound in Lean 4
+(`proof-core/SoundTail.lean` and `proof-core/SoundTop.lean`, standard Lean axioms only, all 11
+soundness theorem statements unchanged, zero new instruction-table rows), and verified end-to-end
+on x86-64 Linux and Apple Silicon AArch64 (`proof-core/test_call_conv.py` and
+`proof-core/test_hashr_fast.py`). Exported `.ocl` contracts carry no register names; `STB_GLOBAL`
+exports obey the full C ABI including AArch64 `v8..v15`; internal `STB_LOCAL` Ode-to-Ode helpers
+may declare custom calling blocks and callers may tail-jump (`jmp` on x86-64, `b` on AArch64).*
 
 ## 1. Why Change Calls Between Ode Functions
 
@@ -256,5 +258,50 @@ concrete gap in the existing C-boundary ABI model in `proof-core/Contract.lean` 
    `Sym.vecIntact`.
 3. **Self-validating accessors + `callingOk`:** `Contract.argRegs`, `Contract.keeps`,
    `Contract.retReg`, and `Contract.keepsVec` preserve all soundness invariants unconditionally while
-   `verdict` refuses any invalid custom field loudly. All 10 theorem statements in
+   `verdict` refuses any invalid custom field loudly. All 11 theorem statements in
    `proof-core/test_sound.py` remain unchanged.
+
+---
+
+## 7. Phase 2: Verified Tail Calls (`jmp` / `b`) and Zero-Stack AArch64 Callers
+
+Phase 2 removes the remaining call/return bookkeeping from Ode-to-Ode calls with zero new rows in
+`core/x86.tab` or `arm64/arm64.tab` and zero changes to `arm64/agree/Agree.lean`.
+
+### 7.1 Verified Tail Calls (`jmp callee` on x86-64, `b callee` on AArch64)
+
+When a function finishes by jumping directly to another function's entry point:
+
+- **Encoding and decoding:** On x86-64, `jmp callee` emits a 5-byte relative jump (`E9`) with an
+  `R_X86_64_PLT32` relocation (or a settled relative offset after bundling) decoded as `.jmp NAME`.
+  On AArch64, `b callee` emits an unconditional branch (`0x14000000`) with an `R_AARCH64_JUMP26`
+  relocation (type `282`) decoded as `.b NAME`. `Machine.tailTarget` distinguishes named tail
+  targets from local branch offsets without adding any instruction-table row.
+- **What the verifier checks at a tail jump (`Core.symTail`, proved sound in `SoundTail.lean`):**
+  1. The caller's stack pointer is back at entry (`sp == 0`), and on AArch64 the link register
+     `x30` still holds the caller's entry return address.
+  2. The callee's declared stack budget fits inside the caller's declared stack budget.
+  3. Every register the caller promises to preserve (`keeps` and `keepsVec`) still equals its entry
+     value at the jump and is also preserved by the callee.
+  4. The callee is an earlier function in the topological verification order (no self-tail-call
+     bypassing termination).
+  5. Every precondition, disjointness condition, writable output span, and trace condition of the
+     callee holds at the jump, and the resulting state after the callee returns satisfies every
+     postcondition and trace rule of the caller's own contract.
+
+Applied to x86-64 BLAKE3 (`proof-core/examples/hashr_fast/hash_fast.ode`), tail calls turn:
+- the 64-byte fast path in `b3l_hashr` into a 12-instruction, zero-copy, zero-stack jump directly
+  into `blake3_servil_compress_in_place_avx512` or `sse41`;
+- the single-block chunk path in `b3l_chunk_node_fast` into a zero-stack jump directly into
+  custom-calling `b3l_pad_fast`;
+- the long-input path (`len > 1024`) into a 1-instruction jump directly into `b3l_hashr_long`.
+
+### 7.2 Zero-Stack Non-Leaf AArch64 Callers (Link Register in a Preserved Scratch Register)
+
+On AArch64, `bl helper` writes the return address into `x30`. Under the C ABI, every non-leaf
+function must allocate a 16-byte stack frame just to save and restore `x30`. With Phase 1 custom
+conventions, a non-recursive AArch64 caller can already achieve `stack 0` with zero new verifier
+rules: move `x30` into a caller-saved scratch register such as `x15`, list `x15` in the internal
+helper's `preserves` list, call `bl helper`, move `x15` back into `x30`, and return. This pattern
+is proved end-to-end and executed natively on Apple Silicon in `proof-core/test_call_conv.py`.
+

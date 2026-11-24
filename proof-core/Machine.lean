@@ -690,6 +690,75 @@ def callLink (i : Instr) : Option Nat :=
   | [.callLink _ r] => regIndex r
   | _ => none
 
+/-- The function an instruction tail-calls (an unconditional jump whose target is a named function rather
+than an integer offset inside this function). -/
+def tailTarget (i : Instr) : Option String :=
+  match i.effect with
+  | [.jump (.name n) none] =>
+    if isNumberLetter n then
+      match i.bind.lookup n with
+      | some name => if (readInt name).isNone then some name else none
+      | none => none
+    else none
+  | _ => none
+
+theorem tailTarget_not_call {i : Instr} {name : String} (h : tailTarget i = some name) : callTarget i = none := by
+  unfold tailTarget at h
+  cases heff : i.effect with
+  | nil => simp [heff] at h
+  | cons st more =>
+    cases st <;> cases more <;> simp [heff] at h
+    simp [callTarget, heff]
+
+theorem exec_tail {p : Program} {i : Instr} {name : String} (h : tailTarget i = some name) (perm : Perm) (u : Nat → Nat)
+    (s : State) : exec perm p i u s = none := by
+  unfold tailTarget at h
+  cases heff : i.effect with
+  | nil => simp [heff] at h
+  | cons st more =>
+    cases st <;> cases more <;> simp [heff] at h
+    rename_i tgt cond
+    cases tgt <;> cases cond <;> simp at h
+    rename_i n
+    obtain ⟨hn, hlk⟩ := h
+    cases hl : i.bind.lookup n with
+    | none => simp [hl] at hlk
+    | some nm =>
+      simp only [hl] at hlk
+      cases hr : readInt nm with
+      | some _ => simp [hr] at hlk
+      | none =>
+        simp [exec, heff, execAll, execStmt, value, hn, hl, hr]
+
+theorem execQ_tail {p : Program} {i : Instr} {name : String} (h : tailTarget i = some name) (perm : Perm) (u : Nat → Nat)
+    (s : State) : execQ perm p i u s = none := by
+  unfold tailTarget at h
+  cases heff : i.effect with
+  | nil => simp [heff] at h
+  | cons st more =>
+    cases st <;> cases more <;> simp [heff] at h
+    rename_i tgt cond
+    cases tgt <;> cases cond <;> simp at h
+    rename_i n
+    obtain ⟨hn, hlk⟩ := h
+    cases hl : i.bind.lookup n with
+    | none => simp [hl] at hlk
+    | some nm =>
+      simp only [hl] at hlk
+      cases hr : readInt nm with
+      | some _ => simp [hr] at hlk
+      | none =>
+        simp [execQ, heff, execAllQ, execStmt, value, hn, hl, hr]
+
+/-- The state a tail-called function starts in: control jumps directly to `q.base` without touching the stack
+or any register, recording the jump's own fetch in the trace. -/
+def afterTail (q : Program) (s : State) : State :=
+  { s with rip := q.base, trace := s.trace ++ [(s.rip, 0)] }
+
+theorem afterTail_rip (q : Program) (s : State) : (afterTail q s).rip = q.base := rfl
+
+theorem afterTail_data (q : Program) (s : State) : (afterTail q s).data = s.data := rfl
+
 /-- The function of that name among the functions there are. -/
 def findProgram (world : List Program) (name : String) : Option Program := world.find? fun q => q.name == name
 
@@ -784,6 +853,12 @@ inductive Runs (world : List Program) : Perm → Program → (State → Prop) �
       (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
       (∀ s', R s' → Runs world perm p Q (backFrom (keptAt i) s s')) →
       Runs world perm p Q s
+  | tail (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
+      (name : String) (q : Program) (inner : Perm) :
+      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
+      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
+      Runs world inner q Q (afterTail q s) →
+      Runs world perm p Q s
 
 /-- Functional execution without mark checks: from `s`, whatever the unknowns turn out to be, `p` runs on
 instructions it has, touches only what `perm` lets it (`exec`), and returns after finitely many steps in a
@@ -803,6 +878,12 @@ inductive RunsPlain (world : List Program) : Perm → Program → (State → Pro
       RunsPlain world inner q R (afterCall p q i s) →
       (∀ s', R s' → ∀ r ∈ kept, s'.reg r = s.reg r) →
       (∀ s', R s' → RunsPlain world perm p Q (backFrom kept s s')) →
+      RunsPlain world perm p Q s
+  | tail (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
+      (name : String) (q : Program) (inner : Perm) :
+      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
+      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
+      RunsPlain world inner q Q (afterTail q s) →
       RunsPlain world perm p Q s
 
 end Ode

@@ -608,12 +608,12 @@ theorem stackAt_afterCall {ctx : Ctx} {st : State} {i : Instr} {c : Contract} (F
       have rarg : r ∈ c.argRegs := regOfIn_mem sb.arg c.args c.argRegs r hr
       simp only [hr, afterCall_reg F.link (F.arg rarg).2]
 
-theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
-    {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st)
-    (hg : stackFits ctx s sp c = true) :
-    sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - c.slot - (c.stackAt (afterCall p q i st) : Int) := by
-  rw [stackAt_afterCall F p q]
-  unfold stackFits at hg
+theorem stackFitsAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {extra : Nat} {c : Contract}
+    (harm : c.arm64 = ctx.contract.arm64) (H : Holds ctx s0 ρ s st)
+    (hg : stackFitsAt ctx s sp extra c = true) :
+    sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - extra - (c.stackAt st : Int) := by
+  have hregs : c.regs = ctx.nreg := by unfold Ctx.nreg Contract.regs; rw [harm]
+  unfold stackFitsAt at hg
   obtain ⟨hsp0, hrest⟩ := Bool.and_eq_true_iff.mp hg
   have hsp0' : sp ≤ 0 := by simpa using hsp0
   refine ⟨hsp0', ?_⟩
@@ -621,19 +621,19 @@ theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
   cases hcb : c.stackBits with
   | none =>
     simp only [hcb] at hrest
-    have hlow : -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack := by simpa using hrest
+    have hlow : -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by simpa using hrest
     simp only [Contract.stackAt, hcb, Nat.add_zero]; omega
   | some cb =>
     simp only [hcb] at hrest
     cases hrcal : c.regOf cb.arg with
     | none =>
       simp only [hrcal] at hrest
-      have hlow : -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack := by simpa using hrest
+      have hlow : -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by simpa using hrest
       simp only [Contract.stackAt, hcb, hrcal, Nat.add_zero]; omega
     | some rcal =>
       simp only [hrcal, Bool.or_eq_true] at hrest
       have rcal_arg : rcal ∈ c.argRegs := regOfIn_mem cb.arg c.args c.argRegs rcal hrcal
-      have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (F.arg rcal_arg).1
+      have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (hregs ▸ (argRegs_spec rcal_arg).1)
       rcases hrest with hconst | hpar
       · obtain ⟨d, _, hd⟩ := List.any_eq_true.mp hconst
         simp only [Bool.and_eq_true, decide_eq_true_eq] at hd
@@ -713,20 +713,27 @@ theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
                   pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
               omega
 
-theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
-    {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st) {items rest : Items}
-    (h : stackFitsM ctx s sp c items = .ok ((), rest)) :
+theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
+    {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st)
+    (hg : stackFits ctx s sp c = true) :
     sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - c.slot - (c.stackAt (afterCall p q i st) : Int) := by
-  unfold stackFitsM at h
+  rw [stackAt_afterCall F p q]
+  exact stackFitsAt_sound F.machine H hg
+
+theorem stackFitsMAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {extra : Nat} {c : Contract}
+    (harm : c.arm64 = ctx.contract.arm64) (H : Holds ctx s0 ρ s st) {items rest : Items}
+    (h : stackFitsMAt ctx s sp extra c items = .ok ((), rest)) :
+    sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - extra - (c.stackAt st : Int) := by
+  have hregs : c.regs = ctx.nreg := by unfold Ctx.nreg Contract.regs; rw [harm]
+  unfold stackFitsMAt at h
   split at h
-  next hfast => exact stackFits_sound F p q H hfast
+  next hfast => exact stackFitsAt_sound harm H hfast
   next =>
     split at h
     · exact (refuse_ok h).elim
     next hsp0 =>
       have hsp0' : sp ≤ 0 := by simpa using hsp0
       refine ⟨hsp0', ?_⟩
-      rw [stackAt_afterCall F p q]
       have hle0 := Contract.stack_le_stackAt ctx.contract s0
       cases hcb : c.stackBits with
       | none => simp [hcb] at h; exact (refuse_ok h).elim
@@ -741,13 +748,13 @@ theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym
           next hdivc =>
             have hdivc' : 0 < cb.div := by simp at hdivc; omega
             have rcal_arg : rcal ∈ c.argRegs := regOfIn_mem cb.arg c.args c.argRegs rcal hrcal
-            have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (F.arg rcal_arg).1
+            have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (hregs ▸ (argRegs_spec rcal_arg).1)
             cases hpb : ctx.contract.stackBits with
             | none =>
               simp only [hpb] at h
               split at h
               next hrem =>
-                let rem := (ctx.contract.stack : Int) + sp - c.slot - c.stack
+                let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
                 let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
                 have hok := entail_sound h ρ H.facts
                 simp only [ev_sub, ev_const, ← hrcal_val] at hok
@@ -783,7 +790,7 @@ theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym
                   obtain ⟨hstep, hdivp⟩ := hspb'
                   split at h
                   next hmono =>
-                    have hmono' : cb.div = pb.div ∧ pb.sub ≤ cb.sub ∧ -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack := by
+                    have hmono' : cb.div = pb.div ∧ pb.sub ≤ cb.sub ∧ -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by
                       simp at hmono; exact ⟨hmono.1.1, hmono.1.2, hmono.2⟩
                     have hok := entail_sound h ρ H.facts
                     simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
@@ -880,6 +887,13 @@ theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym
                             omega
                           next => exact (refuse_ok h).elim
                     next => exact (refuse_ok h).elim
+
+theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
+    {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st) {items rest : Items}
+    (h : stackFitsM ctx s sp c items = .ok ((), rest)) :
+    sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - c.slot - (c.stackAt (afterCall p q i st) : Int) := by
+  rw [stackAt_afterCall F p q]
+  exact stackFitsMAt_sound F.machine H h
 
 theorem fixedPart_of_fixeds {ctx : Ctx} {s : Sym} {r n j b0 c0 : Nat}
     (hfp : fixedPart ctx s r n = some (j, b0, c0))
@@ -1162,11 +1176,11 @@ so: given that the registers a callee keeps and the stack pointer are as before 
 before but in the called function's frame and at the address it returned to (where that is in memory). -/
 theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st s2 : State} {sp : Int} (c : Contract) (cst : Nat)
     (hm : c.regs = ctx.nreg) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
-    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stackAt s0 : Int) ≤ sp - c.slot - cst) (hsp0 : sp ≤ 0)
+    (hsp : (st.reg RSP : Int) = s0.reg RSP + sp) (hlow : -(ctx.contract.stackAt s0 : Int) ≤ sp - cst) (hsp0 : sp ≤ 0)
     (hstack : ctx.contract.stackAt s0 ≤ s0.reg RSP)
     (hkeep : ∀ r, r < ctx.nreg → c.scratch.contains r = false → s2.reg r = st.reg r)
     (hsmall : ∀ r, s2.reg r < M64)
-    (hmem : ∀ a, a + c.slot + cst < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
+    (hmem : ∀ a, a + cst < st.reg RSP ∨ st.reg RSP ≤ a → s2.mem a = st.mem a)
     (hout : ∀ x r n, (x, r, n) ∈ ctx.contract.outs →
       s0.reg r + n ≤ s0.reg RSP - ctx.contract.stackAt s0 ∨ s0.reg RSP + ctx.contract.slot ≤ s0.reg r)
     (hdata : s2.data = st.data)
@@ -1220,7 +1234,7 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
       · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
     · exact H'.facts f m
   · intro a ha ho
-    have hfr : a + c.slot + cst < st.reg RSP ∨ st.reg RSP ≤ a := by
+    have hfr : a + cst < st.reg RSP ∨ st.reg RSP ≤ a := by
       simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not] at ha
       omega
     rw [hmem a hfr]
@@ -1367,7 +1381,7 @@ theorem symCallPlain_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
           exact s1mem a (by omega)
         have hvec2 : ∀ r ∈ c.keepsVec, s2.vec r = st.vec r := fun r hr =>
           (pvec r hr).trans (congrFun (afterCall_vec p q i st) r)
-        have Hafter := afterCall_holds c (c.stackAt (afterCall p q i st)) F.regs H wf hrsp hg.2 hg.1 hstack hkeep psmall hmem2 (fun x r n m => (E.outAt m).2) hdata2 hvec2
+        have Hafter := afterCall_holds c (c.slot + c.stackAt (afterCall p q i st)) F.regs H wf hrsp (by omega) hg.1 hstack hkeep psmall (fun a ha => hmem2 a (by omega)) (fun x r n m => (E.outAt m).2) hdata2 hvec2
         have wafter := afterCall_wf wf c F.regs sp
         have ag := afterRho_agree c.regs s.nvars ρ s2
         cases hret' : c.returns with

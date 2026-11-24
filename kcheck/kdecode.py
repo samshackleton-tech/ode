@@ -69,7 +69,7 @@ class Elf:
             strtab = self.sections[symtab["link"]]
             for i in range(symtab["size"] // 24):
                 name, info, other, shndx, value, size = struct.unpack_from("<IBBHQQ", b, symtab["off"] + 24 * i)
-                self.symbols.append(dict(name=cstr(strtab, name), type=info & 15, bind=info >> 4, shndx=shndx, value=value, other=other & 3))
+                self.symbols.append(dict(name=cstr(strtab, name), type=info & 15, bind=info >> 4, shndx=shndx, value=value, other=other & 3, size=size))
         self.index = {s["name"]: i for i, s in enumerate(self.sections)}
         phoff, = struct.unpack_from("<Q", b, 32); phentsize, phnum = struct.unpack_from("<HH", b, 54)
         self.segments = []
@@ -163,6 +163,7 @@ class Settled:
             if s["name"] and s["type"] in (0, 2) and inside(s): places.setdefault(s["name"], set()).add(s["value"] - self.lo)
         for name, value in GIVEN.items(): places.setdefault(name, set()).add(value - self.lo)        # names a proof gives: as the file's own
         self.at = {name: min(where) for name, where in places.items() if len(where) == 1}
+        self.sizes = {s["name"]: s["size"] for s in e.symbols if s["name"] and s["type"] == 2 and inside(s) and s["size"]}
         self.names = {}
         for name, v in self.at.items(): self.names.setdefault(v, []).append(name)
 
@@ -224,7 +225,7 @@ def linkable(e):
     return None, names
 
 
-def decode(code, at, relocs, rodata, rodata_at, base, start):
+def decode(code, at, relocs, rodata, rodata_at, base, start, sym_size=0):
     """One instruction at `at`: (its length, its text as the table's ROW writes it), by the table of instructions
     (../core/decode.py: bytes are read as an instance of a row only if the table writes those very bytes for it).
     What the table leaves to the file is answered here: four bytes that stand for a place in the file's
@@ -241,6 +242,17 @@ def decode(code, at, relocs, rodata, rodata_at, base, start):
         return ("0x" + "".join(f"{x:02X}" for x in reversed(rodata[off:off + size])) + ("#512" if kind == "data16" else ""),)
     got = table_decode.decode(code, at, base + at - start, late)
     if got is None: raise Stop(f"an instruction this verifier does not know: {bytes(code[at:at + 6]).hex()}")
+    n, text = got
+    if n == 5 and code[at] == 0xE9 and text.startswith(".jmp "):
+        if isinstance(relocs, Named) and (at + 1) in relocs.table:
+            kind, target_name = relocs.table[at + 1]
+            if kind != "call": raise Stop("a jump with a relocation that names no function")
+            if code[at + 1:at + 5] != b"\x00\x00\x00\x00": raise Stop("a tail jump with a nonzero displacement beside its relocation")
+            return 5, f".jmp {target_name}"
+        if isinstance(relocs, Settled):
+            tgt = relocs.target(code, at + 1, at + 5)
+            if sym_size and not (start <= tgt < start + sym_size) and tgt in relocs.names:
+                return 5, f".jmp {relocs.callee(code, at + 1, at + 5)}"
     return got
 
 
@@ -266,11 +278,12 @@ def boundary(obj, symbol):
 
 def read(obj, symbol, base, rodata_at):
     text, start, relocs, rodata = place(Elf(obj), symbol)
+    sym_size = relocs.sizes.get(symbol, 0) if isinstance(relocs, Settled) else 0
     at = start
     rows = []
     farthest = base
     while True:
-        n, ins = decode(text, at, relocs, rodata, rodata_at, base, start)
+        n, ins = decode(text, at, relocs, rodata, rodata_at, base, start, sym_size=sym_size)
         if isinstance(relocs, Settled) and not relocs.runs(at, at + n): raise Stop("the code runs out of what is loaded to be run")
         pc = base + at - start
         nxt = pc + n
@@ -280,7 +293,8 @@ def read(obj, symbol, base, rodata_at):
             tgt = int(parts[1], 16)
             if tgt > farthest: farthest = tgt
         at += n
-        if ins == ".ret" and nxt > farthest: break
+        is_tail = len(parts) == 2 and parts[0] == ".jmp" and not parts[1].startswith("0x")
+        if (ins == ".ret" or is_tail) and nxt > farthest: break
         if at >= len(text): raise Stop("the code runs off the section")
     return rows, rodata
 

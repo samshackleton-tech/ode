@@ -17,6 +17,7 @@ import table, word
 
 EM_AARCH64, ET_REL = 183, 1
 SHT_PROGBITS, SHT_SYMTAB, SHT_RELA, SHF_EXECINSTR = 1, 2, 4, 4
+R_AARCH64_JUMP26 = 282
 R_AARCH64_CALL26 = 283
 MACHINES = {62: "x86-64", EM_AARCH64: "arm64"}
 
@@ -122,12 +123,19 @@ def read(obj, symbol, tab=None):
             if not name or sbind not in (0, 1, 2) or skind not in (0, 2) or (sbind == 0 and skind != 2): raise Stop(f"{symbol}+{at:#x}: a call of what is no named function")
             bind = dict(bind); bind[placeholder] = name
         elif way.late is not None and way.late[0] == "pc":
-            if rel is not None: raise Stop(f"{symbol}+{at:#x}: a relocation at an internal branch")
             _, placeholder = way.late
-            target_off = at + bind[placeholder]
-            if not 0 <= target_off < size or target_off % 4:
-                raise Stop(f"{symbol}+{at:#x}: branch target {target_off:#x} is outside the function")
-            bind = dict(bind); bind[placeholder] = target_off
+            if rel is not None:
+                if row.name != "b": raise Stop(f"{symbol}+{at:#x}: a relocation at an internal branch")
+                kind, number, add = rel
+                if kind != R_AARCH64_JUMP26 or add != 0 or bind[placeholder] != 0: raise Stop(f"{symbol}+{at:#x}: a relocation that is no plain tail branch to a function")
+                name, sbind, skind, _, _, _ = symbols[number]
+                if not name or sbind not in (0, 1, 2) or skind not in (0, 2) or (sbind == 0 and skind != 2): raise Stop(f"{symbol}+{at:#x}: a tail branch to what is no named function")
+                bind = dict(bind); bind[placeholder] = name
+            else:
+                target_off = at + bind[placeholder]
+                if not 0 <= target_off < size or target_off % 4:
+                    raise Stop(f"{symbol}+{at:#x}: branch target {target_off:#x} is outside the function")
+                bind = dict(bind); bind[placeholder] = target_off
         elif rel is not None: raise Stop(f"{symbol}+{at:#x}: a relocation at an instruction that is no call")
         rows.append((at, at + 4, word.written(row, bind)))
     if any(value <= at < value + size for at in relocs): raise Stop(f"{symbol}: a relocation that is not at an instruction's first byte")
@@ -135,11 +143,12 @@ def read(obj, symbol, tab=None):
 
 
 def called(obj, symbol, tab=None):
-    """The functions `symbol` calls, by name, in the order of their first call."""
+    """The functions `symbol` calls (or tail-branches to), by name, in order of first mention."""
     out = []
     for _, _, text in read(obj, symbol, tab):
         parts = text.split()
-        if parts[0] == ".bl" and parts[1] not in out: out.append(parts[1])
+        if (parts[0] == ".bl" or (parts[0] == ".b" and not parts[1].startswith("0x") and not parts[1].lstrip("-").isdigit())) and parts[1] not in out:
+            out.append(parts[1])
     return out
 
 

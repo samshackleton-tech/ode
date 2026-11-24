@@ -93,7 +93,8 @@ fn pad_fast as "b3l_pad_fast" {
 }
 
 // Fast `chunk_node` using custom-calling `b3l_pad_fast`:
-//   - For single-block chunks (`len <= 64`): ZERO callee-saved pushes/pops, 8-byte align only!
+//   - For single-block chunks (`len <= 64`): ZERO callee-saved pushes/pops, ZERO stack use,
+//     tail-jumps directly into `b3l_pad_fast`!
 //   - For multi-block chunks (`64 < len <= 1024`): registers hold live state, calls `b3l_pad_fast`.
 fn chunk_node_fast as "b3l_chunk_node_fast" {
   cmp rdx, 65
@@ -104,10 +105,7 @@ fn chunk_node_fast as "b3l_chunk_node_fast" {
   or r8, 2
   mov qword ptr [rdi + 112], r8
   lea r10, [rdi + 32]
-  sub rsp, 8
-  call b3l_pad_fast
-  add rsp, 8
-  ret
+  jmp b3l_pad_fast
 
 @multi:
   push rbx
@@ -166,13 +164,13 @@ fn chunk_node_fast as "b3l_chunk_node_fast" {
 }
 
 // Fast `hashr` entry point:
-//   - `len == 64`:   15-instruction ZERO-COPY fast path! Calls `compress_in_place` directly on
-//                    `input` (zero callee-saved pushes/pops, zero stack block copy, zero
-//                    `b3l_chunk_node_fast`/`b3l_pad_fast`/`b3l_node_out` calls!).
+//   - `len == 64`:   12-instruction ZERO-COPY tail-call fast path! Tail-jumps directly into
+//                    `compress_in_place` on `input` (zero stack adjustment, zero pushes/pops,
+//                    zero stack block copy, zero `call`/`ret` round-trip!).
 //   - `len <= 1024` (other than 64): ZERO callee-saved pushes/pops in `hashr`, 136-byte stack
-//                    (vs 1,672 B!), calls `b3l_chunk_node_fast` (ZERO pushes/pops for `len <= 64`
-//                    + custom-calling `b3l_pad_fast` with `stack 0`) + `b3l_node_out`.
-//   - `len > 1024`:  delegates to `b3l_hashr_long` (full AVX-512 32-way / 128-KiB tree).
+//                    (vs 1,672 B!), calls `b3l_chunk_node_fast` (which tail-jumps into
+//                    `b3l_pad_fast` with `stack 0` for `len <= 64`) + `b3l_node_out`.
+//   - `len > 1024`:  1-instruction tail jump to `b3l_hashr_long` (full AVX-512 32-way / 128-KiB tree).
 fn hashr_fast as "b3l_hashr" {
   cmp rdx, 64
   jne @not64
@@ -184,16 +182,11 @@ fn hashr_fast as "b3l_hashr" {
   or r8, 2
   or r8, 8
   mov rcx, 0
-  sub rsp, 8
   cmp r9, 5
   jne @eq64_sse
-  call blake3_servil_compress_in_place_avx512
-  add rsp, 8
-  ret
+  jmp blake3_servil_compress_in_place_avx512
 @eq64_sse:
-  call blake3_servil_compress_in_place_sse41
-  add rsp, 8
-  ret
+  jmp blake3_servil_compress_in_place_sse41
 
 @not64:
   cmp rdx, 1025
@@ -217,8 +210,5 @@ fn hashr_fast as "b3l_hashr" {
   ret
 
 @over1024:
-  sub rsp, 8
-  call b3l_hashr_long
-  add rsp, 8
-  ret
+  jmp b3l_hashr_long
 }

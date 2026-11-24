@@ -61,6 +61,7 @@ STT_SECTION = 3
 
 R_X86_64_PC32 = 2
 R_X86_64_PLT32 = 4
+R_AARCH64_JUMP26 = 282
 R_AARCH64_CALL26 = 283
 
 HELPERS_BEGIN = "=== ode-helpers ==="
@@ -360,7 +361,7 @@ def _called_symbols(elf_bytes):
                 r_type = r_info & 0xFFFFFFFF
                 rsym = syms[r_info >> 32]
                 is_call = (
-                    r_type in (R_X86_64_PLT32, R_AARCH64_CALL26)
+                    r_type in (R_X86_64_PLT32, R_AARCH64_CALL26, R_AARCH64_JUMP26)
                     or (r_type == R_X86_64_PC32 and rsym["shndx"] != ro_idx)
                 )
                 if is_call and rsym["name"] and rsym["name"] not in seen:
@@ -450,7 +451,7 @@ def merge_elf_objects(units, target, rename_map, export_sym, embedded_ocl_bytes=
                     if r_type == R_X86_64_PC32 and ro_idx >= 0 and rsym["shndx"] == ro_idx:
                         reloc_recs.append(("rodata", text_base + r_off, R_X86_64_PC32, ro_base + rsym["value"] + r_addend))
                     elif (
-                        r_type in (R_X86_64_PLT32, R_AARCH64_CALL26)
+                        r_type in (R_X86_64_PLT32, R_AARCH64_CALL26, R_AARCH64_JUMP26)
                         or (r_type == R_X86_64_PC32 and rsym["shndx"] == 0)
                     ):
                         orig_tgt = rsym["name"]

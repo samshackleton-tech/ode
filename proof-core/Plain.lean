@@ -231,6 +231,12 @@ inductive RunsP (world : List Program) : Perm → Program → (State → Prop) �
       (∀ s', R s' → ∀ r ∈ keptAt i, s'.reg r = s.reg r) →
       (∀ s', R s' → RunsP world perm p Q s') →
       RunsP world perm p Q s
+  | tail (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
+      (name : String) (q : Program) (inner : Perm) :
+      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
+      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
+      RunsP world inner q Q (afterTail q s) →
+      RunsP world perm p Q s
 
 def Outcome.plain : Outcome → Outcome
   | .next s => .next s.plain
@@ -320,6 +326,8 @@ theorem runs_plain {world : List Program} {perm : Perm} {p : Program} {Q : State
       exact hk s' hs' r hr
     · rintro t ⟨s', hs', rfl⟩
       exact ihp s' hs'
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    exact RunsP.tail perm p _ s.plain i name q inner hf ht hw hir hiw ihq
 
 
 /-! ## Nothing forbidden
@@ -668,6 +676,8 @@ theorem runs_free {world : List Program} {perm : Perm} {p : Program} {Q : State 
       exact hk s' hs' r hr
     · rintro t ⟨s', hs', rfl⟩
       exact ihp s' hs'
+  | tail perm p Q s i name q inner hf ht hw _ _ _ ihq =>
+    exact RunsP.tail Perm.all p _ s.plain i name q Perm.all hf ht hw (fun _ h => h) (fun _ h => h) ihq
 
 /-! ## Two runs of the plain machine -/
 
@@ -682,6 +692,9 @@ inductive EndsP (world : List Program) : Program → State → State → Prop wh
   | call (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s1 s' : State) :
       p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
       EndsP world q (afterCallP p q i s) s1 → EndsP world p s1 s' → EndsP world p s s'
+  | tail (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s' : State) :
+      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
+      EndsP world q (afterTail q s) s' → EndsP world p s s'
 
 /-- Where the machine with marks runs a function from `s` (to states of which `Q` holds, touching only what
 it is let, stopping nowhere), every run of the plain machine from `s` without its marks is that machine's
@@ -716,6 +729,10 @@ theorem runs_endsP {world : List Program} {perm : Perm} {p : Program} {Q : State
       have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
       subst e
       exact absurd (execQ_call hc perm (fun _ => 0) s) (hn _)
+    | tail _ _ i2 name q _ hf2 ht _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      exact absurd (execQ_tail ht perm (fun _ => 0) s) (hn _)
   | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
     intro t E
     have no : ∀ u, execP Perm.all p i u s.plain = none := by
@@ -738,6 +755,34 @@ theorem runs_endsP {world : List Program} {perm : Perm} {p : Program} {Q : State
       obtain ⟨s1', e1, r1, rfl⟩ := ihq Ein
       obtain ⟨s2', e2, q2, rfl⟩ := ihp s1' r1 Eout
       exact ⟨s2', Ends.call p s i2 name q s1' s2' hf hc hw (fun hl => (hstack hl).2.2) e1 (hk s1' r1) e2, q2, rfl⟩
+    | tail _ _ i2 name2 q2 _ hf2 ht2 _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [tailTarget_not_call ht2] at hc; cases hc
+  | tail perm p Q s i name q inner hf ht hw _ _ _ ihq =>
+    intro t E
+    have no : ∀ u, execP Perm.all p i u s.plain = none := by
+      intro u; rw [exec_plain, exec_tail ht]; rfl
+    cases E with
+    | ret _ _ i2 u s' hf2 hx =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [no u] at hx; cases hx
+    | step _ _ i2 u s1 _ hf2 hx _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [no u] at hx; cases hx
+    | call _ _ i2 name2 q2 s1 _ hf2 hc2 _ _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [tailTarget_not_call ht] at hc2; cases hc2
+    | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [ht] at ht2; injection ht2 with e; subst e
+      rw [hw] at hw2; injection hw2 with e; subst e
+      obtain ⟨s', e', q', rfl⟩ := ihq Ein
+      exact ⟨s', Ends.tail p s i2 name q s' hf ht hw e', q', rfl⟩
 
 /-- **TWO RUNS OF THE PLAIN MACHINE.** Two states alike in everything not marked, from each of which the
 machine with marks runs the function without stopping; two runs of the plain machine, from the one state

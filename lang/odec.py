@@ -677,9 +677,10 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 s = re.sub(r"(?<![@#$\w])(?:" + "|".join(map(re.escape, bind)) + r")\b", lambda g: bind[g.group(0)], s)
             typed = s
             call_op = "bl" if target == "arm64" else "call"
-            m = re.fullmatch(rf"{call_op}\s+(\w+)", s)
-            if m and m.group(1) in names and not inside:
-                stop(src, n, f"`{m.group(1)}` is the name of a register here ({names[m.group(1)]}), and `{call_op}` takes the name a linker knows a function by")
+            tail_op = "b" if target == "arm64" else "jmp"
+            m = re.fullmatch(rf"({call_op}|{tail_op})\s+(\w+)", s)
+            if m and m.group(2) in names and not inside:
+                stop(src, n, f"`{m.group(2)}` is the name of a register here ({names[m.group(2)]}), and `{m.group(1)}` takes the name a linker knows a function by")
             if names and not inside:                # a register's name, wherever an operand has it (never the instruction's own name)
                 put = lambda text: re.sub(r"(?<![@#$\w.])(?:" + "|".join(map(re.escape, names)) + r")\b", lambda g: names[g.group(0)], text)
                 m = None if ":=" in s else re.match(r"\w+\(|\S+\s+", s)
@@ -700,8 +701,8 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 use(inlines[m.group(1)], [a.strip() for a in m.group(2).split(",")] if m.group(2).strip() else [], n, inside); continue
             if m: stop(src, n, f"`{m.group(1)}` is no inline function of this source")
             if target == "x86_64":
-                m = re.fullmatch(r"call\s+(\w+)", s)
-                if m and m.group(1) not in REGISTERS: s = f"call CALL({m.group(1)})"          # a function, by the name a linker knows it by
+                m = re.fullmatch(r"(call|jmp)\s+(\w+)", s)
+                if m and m.group(2) not in REGISTERS: s = f"{m.group(1)} CALL({m.group(2)})"          # a function, by the name a linker knows it by
             s = re.sub(r"@(\w+)", lambda g: labels.get(g.group(1), f".Lode_{fn}_{g.group(1)}"), s)
             s = re.sub(r"#([A-Za-z_]\w*)", lambda g: f".Lode_data_{g.group(1)}", s)     # `#name` is data; `#4` is a number
             s = re.sub(r"\s+", " ", s)
@@ -797,8 +798,13 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
                 said = str(why)
                 stop(src, n, f"`{was}`: " + (said[:-len(x) - 2] if said.endswith(": " + x) else said))
             if item[0] == "jump" and item[2] not in labels:
-                label = re.search(r"@\w+", was)
-                stop(src, n, f"`{was}`: the function has no label `{label.group(0) if label else item[2]}`")
+                is_ext_tail = (
+                    ((target == "arm64" and item[1].row.name == "b") or (target != "arm64" and item[1] == "jmp"))
+                    and not item[2].startswith(".")
+                )
+                if not is_ext_tail:
+                    label = re.search(r"@\w+", was)
+                    stop(src, n, f"`{was}`: the function has no label `{label.group(0) if label else item[2]}`")
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 

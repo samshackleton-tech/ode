@@ -3260,21 +3260,22 @@ def preLineRow (c : Contract) (val : Nat → Row) (k : Int) (ts : List (String �
     | some r => Lin.add acc (Lin.scale a (val r))
     | none => acc) (Lin.const k)
 
-/-- Does the callee's stack budget `c.stackAt` plus `c.slot` fit below `sp` inside the caller's stack budget
-`ctx.contract.stackAt`? Checked by pure linear arithmetic on `s.facts`, using the exact `Nat` identities:
+/-- Does the callee's stack budget `c.stackAt` plus `extra` (`c.slot` for a normal call, `0` for a tail call)
+fit below `sp` inside the caller's stack budget `ctx.contract.stackAt`? Checked by pure linear arithmetic on
+`s.facts`, using the exact `Nat` identities:
 `(a - sub) / div < 2^d ↔ a < sub + div * 2^d` and `2^d ≤ (a - sub) / div ↔ sub + div * 2^d ≤ a`. -/
-def stackFits (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : Bool :=
+def stackFitsAt (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) : Bool :=
   decide (sp ≤ 0) &&
   match c.stackBits with
-  | none => decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)
+  | none => decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack)
   | some cb =>
     match c.regOf cb.arg with
-    | none => decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack)
+    | none => decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack)
     | some rcal =>
       let acal := s.reg rcal
       ((List.range 64).any fun d =>
         decide (0 < cb.div) &&
-        decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - (c.stack + cb.step * d : Nat)) &&
+        decide (-(ctx.contract.stack : Int) ≤ sp - extra - (c.stack + cb.step * d : Nat)) &&
         plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)) ||
       match ctx.contract.stackBits with
       | none => false
@@ -3284,22 +3285,25 @@ def stackFits (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : Bool :=
         | some rpar =>
           decide (cb.step ≤ pb.step) &&
           ((decide (cb.div = pb.div) && decide (pb.sub ≤ cb.sub) &&
-            decide (-(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack) &&
+            decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack) &&
             plain s.facts (Lin.sub (Lin.var rpar) acal)) ||
            (decide (0 < cb.div) && decide (0 < pb.div) &&
-            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - c.slot - c.stack) &&
+            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
             (List.range 64).any fun d =>
               plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal) &&
               plain s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))) ||
            (decide (cb.div = pb.div) && decide (cb.sub = pb.sub) && decide (0 < cb.div) &&
-            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - c.slot - c.stack) &&
+            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
             plain s.facts (Lin.sub (Lin.add (Lin.var rpar) (Lin.const cb.sub)) (Lin.scale 2 acal)) &&
             plain s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))))
 
-/-- Monadic stack-budget check at a call: first tries the zero-item `stackFits` fast path, then uses
-`entail` for symbolic arithmetic (fixed-caller cap, monotone, power-of-two split, or halving). -/
-def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
-  if stackFits ctx s sp c then pure ()
+def stackFits (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : Bool :=
+  stackFitsAt ctx s sp c.slot c
+
+/-- Monadic stack-budget check at a call or tail call: first tries the zero-item `stackFitsAt` fast path,
+then uses `entail` for symbolic arithmetic (fixed-caller cap, monotone, power-of-two split, or halving). -/
+def stackFitsMAt (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) : V Unit :=
+  if stackFitsAt ctx s sp extra c then pure ()
   else if !(sp ≤ 0) then refuse "a call needs more stack than this function's contract allows"
   else match c.stackBits with
   | none => refuse "a call needs more stack than this function's contract allows"
@@ -3312,7 +3316,7 @@ def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
         let acal := s.reg rcal
         match ctx.contract.stackBits with
         | none =>
-          let rem := (ctx.contract.stack : Int) + sp - c.slot - c.stack
+          let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
           if 0 ≤ rem then
             let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
             entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)
@@ -3323,9 +3327,9 @@ def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
           | some rpar =>
             if !(cb.step ≤ pb.step && 0 < pb.div) then
               refuse "a call needs more stack than this function's contract allows"
-            else if cb.div == pb.div && pb.sub ≤ cb.sub && -(ctx.contract.stack : Int) ≤ sp - c.slot - c.stack then
+            else if cb.div == pb.div && pb.sub ≤ cb.sub && -(ctx.contract.stack : Int) ≤ sp - extra - c.stack then
               entail s.facts (Lin.sub (Lin.var rpar) acal)
-            else if -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - c.slot - c.stack then
+            else if -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack then
               match Lin.isConst acal with
               | some k =>
                 if 0 ≤ k then
@@ -3350,6 +3354,9 @@ def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
                     entail s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))
                   else refuse "a call needs more stack than this function's contract allows"
             else refuse "a call needs more stack than this function's contract allows"
+
+def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
+  stackFitsMAt ctx s sp c.slot c
 
 def symCallPlain (ctx : Ctx) (s : Sym) (c : Contract) : V Sym :=
   match s.sp with
@@ -4614,7 +4621,55 @@ def callFits (ctx : Ctx) (s : Sym) (i : Instr) (c : Contract) : Bool :=
       | some sp => decide (sp % 16 = 0)
       | none => false))
 
-/-- An instruction: a call, by the called function's contract; any other, by its row's effect. -/
+/-- Check whether a tail call to `c` is valid at state `s`: non-self target, same architecture, stack pointer
+restored to entry (`sp = 0`) and clean, AArch64 link register restored and clean, every register and
+vector register this function promises to preserve restored and also preserved by `c`, no table of lane
+addresses, and no callee input or output pointing into this function's dead stack frame. -/
+def tailFits (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : Bool :=
+  ctx.selfName != some name &&
+  c.arm64 == ctx.contract.arm64 &&
+  s.sp == some 0 &&
+  s.q.regq.contains RSP &&
+  (!ctx.contract.arm64 || (s.reg LINK == Lin.var LINK && s.q.regq.contains LINK)) &&
+  (ctx.contract.keeps.all fun r => s.reg r == Lin.var r && c.keeps.contains r) &&
+  (ctx.contract.keepsVec.all fun v => s.vecIntact.contains v && c.keepsVec.contains v) &&
+  c.lanes.isEmpty &&
+  c.valArrays.isEmpty &&
+  (c.outs.all fun x => (frameAt s x.2.1).isNone) &&
+  (c.fixeds.all fun x => (frameAt s x.2.1).isNone)
+
+/-- Entry preconditions at a tail call: callee stack fits with zero extra return-address slot (`extra = 0`),
+plus callee `mbounds`, `atLeast`, and `preLines`. -/
+def tailPreOk (ctx : Ctx) (s : Sym) (c : Contract) : V Unit := do
+  stackFitsMAt ctx s 0 0 c
+  callMboundsOk ctx s 0 c
+  each (fun (xk : String × Nat) =>
+    match c.regOf xk.1 with
+    | some rb => entail s.facts (Lin.sub (s.reg rb) (Lin.const xk.2))
+    | none => pure ()) c.atLeast
+  each (fun (kt : Int × List (String × Int)) =>
+    entail s.facts (preLineRow c s.reg kt.1 kt.2)) c.preLines
+
+/-- A tail call: checks `tailFits`, `needsOf`, `symKnow`, `tailPreOk`, `symCall'`, `callQuiet`,
+`resultFollowsTrace` on `retReg`, and `symReturn` on the resulting post-call state. -/
+def symTail (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
+  if !tailFits ctx s name c then
+    refuse "a tail call requires the same machine, sp at entry, preserved registers and link restored and kept by the callee, and no stack-frame operand"
+  else do
+    needsOf ctx s c
+    let s ← symKnow (ctx.advice.call · c) KNOWN s
+    tailPreOk ctx s c
+    let s' ← symCall' ctx s c
+    if !callQuiet ctx (quietAtCall s c) c then
+      refuse "at a tail call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
+    else
+      let q' := afterCallQ (callReturnsClean ctx (quietAtCall s c) c) c (quietAtCall s c)
+      if ctx.contract.resultFollowsTrace && !q'.regq.contains ctx.contract.retReg then
+        refuse "at a tail call, the returned value may depend on data kept out of the trace"
+      else
+        symReturn ctx { s' with q := q' }
+
+/-- An instruction: a call, a tail call, or any other instruction by its row's effect. -/
 def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match callTarget i with
   | some name =>
@@ -4628,7 +4683,15 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
       else pure [({ s' with q := afterCallQ (callReturnsClean ctx (quietAtCall s c) c) c (quietAtCall s c) }, .at i.next)]
-  | none => symInstr ctx s i
+  | none =>
+    match tailTarget i with
+    | some name =>
+      match ctx.callees.lookup name with
+      | none => refuse s!"a tail call of {name}, which is not a function shown before this one"
+      | some c => do
+        symTail ctx s name c
+        pure []
+    | none => symInstr ctx s i
 
 def placeEnv (ctx : Ctx) (p : Place) (value : Nat → Row) : List (String × SVal) :=
   p.names.map (fun (n, r) => (n, SVal.lin (value r))) ++ symEnv ctx.contract

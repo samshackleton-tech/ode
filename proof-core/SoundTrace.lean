@@ -66,6 +66,8 @@ theorem runsPlain_mono {world : List Program} {perm : Perm} {p : Program} {Q R :
     exact RunsPlain.step perm p R s i hf hn (fun u s' hx => ih u s' hx imp) (fun u s' hx => imp s' (hr u s' hx))
   | call perm p Q s i name q inner M kept hf hc hw hstack hir hiw hq hk _ _ ihp =>
     exact RunsPlain.call perm p R s i name q inner M kept hf hc hw hstack hir hiw hq hk (fun s' h' => ihp s' h' imp)
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    exact RunsPlain.tail perm p R s i name q inner hf ht hw hir hiw (ihq imp)
 
 theorem runsPlain_data {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
     (h : RunsPlain world perm p Q s) : RunsPlain world perm p (fun s' => Q s' ∧ s'.data = s.data) s := by
@@ -84,6 +86,11 @@ theorem runsPlain_data {world : List Program} {perm : Perm} {p : Program} {Q : S
     · have h2 := ihp s1 h1.1
       have hd : (backFrom kept s s1).data = s.data := h1.2
       simpa [hd] using h2
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    refine RunsPlain.tail perm p _ s i name q inner hf ht hw hir hiw ?_
+    have h1 := ihq
+    rw [afterTail_data] at h1
+    exact h1
 
 theorem plain_eq_fields {s1 s2 : State} (h : s1.plain = s2.plain) :
     s1.rip = s2.rip ∧ s1.reg = s2.reg ∧ s1.zf = s2.zf ∧ s1.cf = s2.cf ∧
@@ -152,6 +159,12 @@ theorem runsPlain_of_plain_aux {world : List Program} {perm : Perm} {p : Program
       (fun s' ⟨t0, ht0, hpt⟩ => ihp t0 ht0 (backFrom kept s2 s') (by
         have ⟨r1, r2, r3, r4, r5, r6, r7, r8⟩ := plain_eq_fields hpt
         simp only [backFrom, State.plain, hreg, r1, r2, r3, r4, r5, r6, r7, r8]))
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    intro s2 hp
+    have ⟨hrip, hreg, hzf, hcf, hmem, hvec, hdata, htrace⟩ := plain_eq_fields hp
+    have hat : (afterTail q s).plain = (afterTail q s2).plain := by
+      simp only [afterTail, State.plain, hrip, hreg, hzf, hcf, hmem, hvec, hdata, htrace]
+    exact RunsPlain.tail perm p _ s2 i name q inner (by rw [← hrip]; exact hf) ht hw hir hiw (ihq (afterTail q s2) hat)
 
 theorem runsPlain_of_plain {world : List Program} {perm : Perm} {p : Program} {Q : State → Prop}
     (hQ : ∀ s1 s2, s1.plain = s2.plain → Q s1 → Q s2) {s1 : State}
@@ -188,6 +201,10 @@ theorem runsPlain_endsP {world : List Program} {perm : Perm} {p : Program} {Q : 
       have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
       subst e
       exact absurd (exec_call hc perm (fun _ => 0) s) (hn _)
+    | tail _ _ i2 name q _ hf2 ht _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      exact absurd (exec_tail ht perm (fun _ => 0) s) (hn _)
   | call perm p Q s i name q inner R kept hf hc hw hstack hir hiw _ hk _ ihq ihp =>
     intro t E
     have no : ∀ u, execP Perm.all p i u s.plain = none := by
@@ -209,6 +226,35 @@ theorem runsPlain_endsP {world : List Program} {perm : Perm} {p : Program} {Q : 
       rw [afterCallP_plain] at Ein
       obtain ⟨s1', r1, rfl⟩ := ihq Ein
       exact ihp s1' r1 Eout
+    | tail _ _ i2 name2 q2 _ hf2 ht2 _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [tailTarget_not_call ht2] at hc; cases hc
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    intro t E
+    have no : ∀ u, execP Perm.all p i u s.plain = none := by
+      intro u; rw [exec_plain, exec_tail ht]; rfl
+    cases E with
+    | ret _ _ i2 u s' hf2 hx =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [no u] at hx; cases hx
+    | step _ _ i2 u s1 _ hf2 hx _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [no u] at hx; cases hx
+    | call _ _ i2 name2 q2 s1 _ hf2 hc2 _ _ _ =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [tailTarget_not_call ht] at hc2; cases hc2
+    | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
+      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+      subst e
+      rw [ht] at ht2; injection ht2 with e; subst e
+      rw [hw] at hw2; injection hw2 with e; subst e
+      have hpl : afterTail q s.plain = (afterTail q s).plain := rfl
+      rw [hpl] at Ein
+      exact ihq Ein
 
 /-! ## Little-endian byte uniqueness for `load` -/
 

@@ -1029,6 +1029,9 @@ theorem backFrom_alike {kept : List Nat} {a b a1 b1 : State} (A : Alike a b) (A1
 machine that stops where something marked shows, whatever the unknowns turned out to be at each and
 whatever each was let touch; a called function running to its return in its turn, and giving back the
 registers a callee keeps as it found them (`keptAt`: which they are goes by the call instruction). -/
+theorem afterTail_alike {q : Program} {a b : State} (A : Alike a b) : Alike (afterTail q a) (afterTail q b) :=
+  ⟨A.marks, rfl, A.data, by show a.trace ++ [(a.rip, 0)] = b.trace ++ [(b.rip, 0)]; rw [A.trace, A.rip], A.reg, A.zf, A.cf, A.mem, A.low⟩
+
 inductive Ends (world : List Program) : Program → State → State → Prop where
   | ret (p : Program) (s : State) (i : Instr) (perm : Perm) (u : Nat → Nat) (s' : State) :
       p.fetch s.rip = some i → execQ perm p i u s = some (.returned s') → Ends world p s s'
@@ -1039,6 +1042,9 @@ inductive Ends (world : List Program) : Program → State → State → Prop whe
       (callLink i = none → s.marks.reg RSP = false) →
       Ends world q (afterCall p q i s) s1 → (∀ r ∈ keptAt i, s1.reg r = s.reg r) →
       Ends world p (backFrom (keptAt i) s s1) s' → Ends world p s s'
+  | tail (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s' : State) :
+      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
+      Ends world q (afterTail q s) s' → Ends world p s s'
 
 /-- TWO RUNS. Of two runs of a function from states alike in everything not marked, the states at the
 return are alike in everything not marked. -/
@@ -1057,6 +1063,9 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
     | call _ _ i2 name q s1 _ hf2 hc _ _ _ _ _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [execQ_call hc] at hx; cases hx
+    | tail _ _ i2 name q _ hf2 ht _ _ =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [execQ_tail ht] at hx; cases hx
   | step p s i perm u s1 s' hf hx _ ih =>
     intro b b' A E2
     cases E2 with
@@ -1069,6 +1078,9 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
     | call _ _ i2 name q t1 _ hf2 hc _ _ _ _ _ =>
       rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
       rw [execQ_call hc] at hx; cases hx
+    | tail _ _ i2 name q _ hf2 ht _ _ =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [execQ_tail ht] at hx; cases hx
   | call p s i name q s1 s' hf hc hw hsp _ hk _ ih1 ih2 =>
     intro b b' A E2
     cases E2 with
@@ -1083,6 +1095,26 @@ theorem ends_alike {world : List Program} {p : Program} {a a' : State} (E1 : End
       rw [hc] at hc2; injection hc2 with e; subst e
       rw [hw] at hw2; injection hw2 with e; subst e
       exact ih2 (backFrom_alike A (ih1 (afterCall_alike A hsp) Ein) hk hk2) Eout
+    | tail _ _ i2 name2 q2 _ hf2 ht2 _ _ =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [tailTarget_not_call ht2] at hc; cases hc
+  | tail p s i name q s' hf ht hw _ ih =>
+    intro b b' A E2
+    cases E2 with
+    | ret _ _ i2 perm2 u2 _ hf2 hx2 =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [execQ_tail ht] at hx2; cases hx2
+    | step _ _ i2 perm2 u2 t1 _ hf2 hx2 _ =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [execQ_tail ht] at hx2; cases hx2
+    | call _ _ i2 name2 q2 t1 _ hf2 hc2 _ _ _ _ _ =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [tailTarget_not_call ht] at hc2; cases hc2
+    | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
+      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
+      rw [ht] at ht2; injection ht2 with e; subst e
+      rw [hw] at hw2; injection hw2 with e; subst e
+      exact ih (afterTail_alike A) Ein
 
 /-- THE TRACE. Two runs of a function from states alike in everything not marked let the same things be
 observed: the same instructions at the same addresses, touching the same memory. -/
@@ -1258,5 +1290,7 @@ theorem runs_data {world : List Program} {perm : Perm} {p : Program} {Q : State 
     have hd : (backFrom (keptAt i) s s').data = s.data := hs'.2
     rw [hd] at this
     exact this
+  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
+    exact Runs.tail perm p _ s i name q inner hf ht hw hir hiw ihq
 
 end Ode

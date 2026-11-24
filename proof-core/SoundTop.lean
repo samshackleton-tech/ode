@@ -6,6 +6,7 @@ import SoundWide
 import SoundList
 import Plain
 import SoundTrace
+import SoundTail
 /-!
 # Why the verifier's yes is right, 4: instructions, paths, and the theorem
 -/
@@ -775,28 +776,78 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
     exact hl
   cases hc : callTarget i with
   | none =>
-    simp only [symNext, hc] at h
-    apply RunsPlain.step _ p _ st i hfetch
-    · intro u hn
-      obtain ⟨o, ho, _⟩ := symInstr_sound E h H wf M u
-      have hx := execQ_exec ho
-      rw [hx] at hn
-      cases hn
-    · intro u st' hx
-      obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
-      have ho' := execQ_exec ho
-      rw [hx] at ho'
-      injection ho' with ho'
-      subst ho'
-      obtain ⟨s', pc', ρ', m, hrip', c', M'⟩ := hmatch
-      exact K s' pc' ρ' st' m hrip' c' M'
-    · intro u st' hx
-      obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
-      have ho' := execQ_exec ho
-      rw [hx] at ho'
-      injection ho' with ho'
-      subst ho'
-      exact hmatch.1
+    cases ht : tailTarget i with
+    | none =>
+      simp only [symNext, hc, ht] at h
+      apply RunsPlain.step _ p _ st i hfetch
+      · intro u hn
+        obtain ⟨o, ho, _⟩ := symInstr_sound E h H wf M u
+        have hx := execQ_exec ho
+        rw [hx] at hn
+        cases hn
+      · intro u st' hx
+        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
+        have ho' := execQ_exec ho
+        rw [hx] at ho'
+        injection ho' with ho'
+        subst ho'
+        obtain ⟨s', pc', ρ', m, hrip', c', M'⟩ := hmatch
+        exact K s' pc' ρ' st' m hrip' c' M'
+      · intro u st' hx
+        obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
+        have ho' := execQ_exec ho
+        rw [hx] at ho'
+        injection ho' with ho'
+        subst ho'
+        exact hmatch.1
+    | some name =>
+      simp only [symNext, hc, ht] at h
+      cases hl2 : ctx.callees.lookup name with
+      | none => simp only [hl2] at h; exact (refuse_ok h).elim
+      | some c =>
+        simp only [hl2] at h
+        obtain ⟨_, _, htail, _⟩ := V.bind_ok h
+        unfold symTail at htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next htf =>
+        have T : TailOk ctx s name c := tailFits_spec (by simpa using htf)
+        obtain ⟨_, _, _, htail⟩ := V.bind_ok htail
+        obtain ⟨s1, _, e0, htail⟩ := V.bind_ok htail
+        obtain ⟨_, _, e1, htail⟩ := V.bind_ok htail
+        obtain ⟨s', _, e2, htail⟩ := V.bind_ok htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next hcq =>
+        dsimp only at htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next =>
+        have c1 := symKnow_sound KNOWN e0 H wf
+        have T1 := symKnow_tailOk T KNOWN e0
+        have EX := tailPreOk_sound E T1 c1.holds e1
+        obtain ⟨q, hq, fitq, meets⟩ := W name c hl2
+        obtain ⟨hpre, hread, hwrite, hpost⟩ := tailCall'_sound E T1 EX e2 c1.holds c1.wf q fitq
+        have hbd : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q st).reg r < m := by
+          intro r m hb
+          unfold Ctx.recBound at hb
+          have hne : (ctx.selfName == some name) = false := beq_false_of_ne T.notSelf
+          simp only [hne, Bool.false_eq_true, ite_false] at hb
+          cases hb
+        have hrun := runsPlain_data (meets (afterTail q st) hbd (loaded_tail E c1.holds q) (clear_tail Kc T1 c1.holds q hwrite) hpre)
+        rw [afterTail_data] at hrun
+        apply RunsPlain.tail _ p _ st i name q (c.perm ctx.pieces (afterTail q st)) hfetch ht hq hread hwrite
+        refine runsPlain_mono (fun s2 ⟨hpost2, hdata2⟩ => ?_) hrun
+        obtain ⟨ρ', c'⟩ := hpost s2 hpost2 hdata2
+        have c'q : Carried ctx s0 ρ s1 ρ' { s' with q := afterCallQ (callReturnsClean ctx (quietAtCall s1 c) c) c (quietAtCall s1 c) }
+            (setReg s2 RSP (s0.reg RSP)) := c'.q _
+        obtain ⟨_, hret⟩ := symReturn_sound E htail c'q.holds c'q.wf
+        apply hret s2 rfl rfl (fun r hr => by simp [setReg, hr])
+        · have hs2rsp := hpost2.2.1
+          simp only [afterTail] at hs2rsp
+          rw [hs2rsp, T1.rsp_eq c1.holds, T1.slot]
+          simp only [setReg, ite_true, Nat.mod_eq_of_lt (E.small RSP)]
+        · rw [hpost2.1, T1.backTo_eq E c1.holds q]
   | some name =>
     simp only [symNext, hc] at h
     cases hl2 : ctx.callees.lookup name with
@@ -2458,54 +2509,228 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
   intro a' b' Epa Epb
   cases hc : callTarget i with
   | none =>
-    simp only [symNext, hc] at h
-    have noCall : ∀ {st : State} {t : State}, p.fetch st.rip = some i →
-        EndsP world p st.plain t →
-        (∃ u, execP Perm.all p i u st.plain = some (.returned t)) ∨
-        (∃ u s1, execP Perm.all p i u st.plain = some (.next s1) ∧ EndsP world p s1 t) := by
-      intro st t hf Ep
-      cases Ep with
-      | ret _ _ i2 u _ hf2 hx =>
-        have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-        subst e; exact Or.inl ⟨u, hx⟩
-      | step _ _ i2 u s1 _ hf2 hx E1 =>
-        have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-        subst e; exact Or.inr ⟨u, s1, hx, E1⟩
-      | call _ _ i2 _ _ _ _ hf2 hc2 _ _ _ =>
-        have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-        subst e; rw [hc] at hc2; cases hc2
-    rcases noCall hfetcha Epa with ⟨ua, hxa⟩ | ⟨ua, s1a, hxa, E1a⟩ <;>
-    rcases noCall hfetchb Epb with ⟨ub, hxb⟩ | ⟨ub, s1b, hxb, E1b⟩
-    · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
-      have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
-      have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
-      rw [hxa] at hpa; rw [hxb] at hpb
-      obtain ⟨ra, rfl, rfl⟩ := outcome_returned (Option.some.inj hpa).symm
-      obtain ⟨rb, rfl, rfl⟩ := outcome_returned (Option.some.inj hpb).symm
-      obtain ⟨lfa, _, Alr⟩ := hmatch
-      exact ⟨Alr.trace, fun hrf => Alr.reg 0 (lfa.2.2.1 hrf)⟩
-    · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
-      have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
-      have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
-      rw [hxa] at hpa; rw [hxb] at hpb
-      obtain ⟨ra, rfl, _⟩ := outcome_returned (Option.some.inj hpa).symm
-      obtain ⟨sb1, rfl, _⟩ := outcome_next (Option.some.inj hpb).symm
-      exact hmatch.elim
-    · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
-      have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
-      have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
-      rw [hxa] at hpa; rw [hxb] at hpb
-      obtain ⟨sa1, rfl, _⟩ := outcome_next (Option.some.inj hpa).symm
-      obtain ⟨rb, rfl, _⟩ := outcome_returned (Option.some.inj hpb).symm
-      exact hmatch.elim
-    · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
-      have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
-      have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
-      rw [hxa] at hpa; rw [hxb] at hpb
-      obtain ⟨sa1, rfl, rfl⟩ := outcome_next (Option.some.inj hpa).symm
-      obtain ⟨sb1, rfl, rfl⟩ := outcome_next (Option.some.inj hpb).symm
-      obtain ⟨s', pc', ρa', ρb', m, hra, hrb, ca', cb', Ma', Mb', A', FE'⟩ := hmatch
-      exact K s' pc' ρa' ρb' sa1 sb1 m hra hrb ca' cb' Ma' Mb' A' FE' a' b' E1a E1b
+    cases ht : tailTarget i with
+    | none =>
+      simp only [symNext, hc, ht] at h
+      have noCall : ∀ {st : State} {t : State}, p.fetch st.rip = some i →
+          EndsP world p st.plain t →
+          (∃ u, execP Perm.all p i u st.plain = some (.returned t)) ∨
+          (∃ u s1, execP Perm.all p i u st.plain = some (.next s1) ∧ EndsP world p s1 t) := by
+        intro st t hf Ep
+        cases Ep with
+        | ret _ _ i2 u _ hf2 hx =>
+          have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+          subst e; exact Or.inl ⟨u, hx⟩
+        | step _ _ i2 u s1 _ hf2 hx E1 =>
+          have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+          subst e; exact Or.inr ⟨u, s1, hx, E1⟩
+        | call _ _ i2 _ _ _ _ hf2 hc2 _ _ _ =>
+          have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+          subst e; rw [hc] at hc2; cases hc2
+        | tail _ _ i2 _ _ _ hf2 ht2 _ _ =>
+          have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+          subst e; rw [ht] at ht2; cases ht2
+      rcases noCall hfetcha Epa with ⟨ua, hxa⟩ | ⟨ua, s1a, hxa, E1a⟩ <;>
+      rcases noCall hfetchb Epb with ⟨ub, hxb⟩ | ⟨ub, s1b, hxb, E1b⟩
+      · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
+        have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+        have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+        rw [hxa] at hpa; rw [hxb] at hpb
+        obtain ⟨ra, rfl, rfl⟩ := outcome_returned (Option.some.inj hpa).symm
+        obtain ⟨rb, rfl, rfl⟩ := outcome_returned (Option.some.inj hpb).symm
+        obtain ⟨lfa, _, Alr⟩ := hmatch
+        exact ⟨Alr.trace, fun hrf => Alr.reg 0 (lfa.2.2.1 hrf)⟩
+      · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
+        have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+        have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+        rw [hxa] at hpa; rw [hxb] at hpb
+        obtain ⟨ra, rfl, _⟩ := outcome_returned (Option.some.inj hpa).symm
+        obtain ⟨sb1, rfl, _⟩ := outcome_next (Option.some.inj hpb).symm
+        exact hmatch.elim
+      · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
+        have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+        have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+        rw [hxa] at hpa; rw [hxb] at hpb
+        obtain ⟨sa1, rfl, _⟩ := outcome_next (Option.some.inj hpa).symm
+        obtain ⟨rb, rfl, _⟩ := outcome_returned (Option.some.inj hpb).symm
+        exact hmatch.elim
+      · obtain ⟨oa, ob, hoa, hob, hmatch⟩ := symInstr_two_sound Ea Eb h Ha Hb wf Ma Mb A FE ua ub
+        have hpa : execP Perm.all p i ua sta.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+        have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+        rw [hxa] at hpa; rw [hxb] at hpb
+        obtain ⟨sa1, rfl, rfl⟩ := outcome_next (Option.some.inj hpa).symm
+        obtain ⟨sb1, rfl, rfl⟩ := outcome_next (Option.some.inj hpb).symm
+        obtain ⟨s', pc', ρa', ρb', m, hra, hrb, ca', cb', Ma', Mb', A', FE'⟩ := hmatch
+        exact K s' pc' ρa' ρb' sa1 sb1 m hra hrb ca' cb' Ma' Mb' A' FE' a' b' E1a E1b
+    | some name =>
+      simp only [symNext, hc, ht] at h
+      cases hl2 : ctx.callees.lookup name with
+      | none => simp only [hl2] at h; exact (refuse_ok h).elim
+      | some c =>
+        simp only [hl2] at h
+        obtain ⟨_, _, htail, _⟩ := V.bind_ok h
+        unfold symTail at htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next htf =>
+        have T : TailOk ctx s name c := tailFits_spec (by simpa using htf)
+        obtain ⟨_, _, _, htail⟩ := V.bind_ok htail
+        obtain ⟨s1, _, e0, htail⟩ := V.bind_ok htail
+        obtain ⟨_, _, e1, htail⟩ := V.bind_ok htail
+        obtain ⟨s', _, e2, htail⟩ := V.bind_ok htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next hcq =>
+        have hcq : callQuiet ctx (quietAtCall s1 c) c = true := by simpa using hcq
+        dsimp only at htail
+        split at htail
+        next => exact (refuse_ok htail).elim
+        next hretq =>
+        obtain ⟨q, hq, fitq, _, _, meets, trok, trok2⟩ := W name c hl2
+        have isTail : ∀ {st t : State}, p.fetch st.rip = some i → EndsP world p st.plain t →
+            EndsP world q (afterTail q st).plain t := by
+          intro st t hf Ep
+          have no : ∀ u, execP Perm.all p i u st.plain = none := fun u => by rw [exec_plain, exec_tail ht]; rfl
+          cases Ep with
+          | ret _ _ i2 u _ hf2 hx =>
+            have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+            subst e; rw [no u] at hx; cases hx
+          | step _ _ i2 u _ _ hf2 hx _ =>
+            have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+            subst e; rw [no u] at hx; cases hx
+          | call _ _ i2 _ _ _ _ hf2 hc2 _ _ _ =>
+            have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+            subst e; rw [hc] at hc2; cases hc2
+          | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
+            have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+            subst e
+            rw [ht] at ht2; injection ht2 with e; subst e
+            rw [hq] at hw2; injection hw2 with e; subst e
+            exact Ein
+        have Eina := isTail hfetcha Epa
+        have Einb := isTail hfetchb Epb
+        have c1a := symKnow_sound KNOWN e0 Ha wf
+        have c1b := symKnow_sound KNOWN e0 Hb wf
+        have T1 := symKnow_tailOk T KNOWN e0
+        have hqeq : s1.q = s.q := (symKnow_sp KNOWN e0).2.1
+        have Ma1 : MarksOk ctx a0 s1.q sta := hqeq ▸ Ma
+        have Mb1 : MarksOk ctx b0 s1.q stb := hqeq ▸ Mb
+        have EXa := tailPreOk_sound Ea T1 c1a.holds e1
+        have EXb := tailPreOk_sound Eb T1 c1b.holds e1
+        obtain ⟨hprea, _, hwritea, _⟩ := tailCall'_sound Ea T1 EXa e2 c1a.holds c1a.wf q fitq
+        obtain ⟨hpreb, _, hwriteb, _⟩ := tailCall'_sound Eb T1 EXb e2 c1b.holds c1b.wf q fitq
+        have hbda : ∀ r m, ctx.recBound name c a0 = some (r, m) → (afterTail q sta).reg r < m := by
+          intro r m hb; unfold Ctx.recBound at hb
+          have hne : (ctx.selfName == some name) = false := beq_false_of_ne T.notSelf
+          simp only [hne, Bool.false_eq_true, ite_false] at hb; cases hb
+        have hbdb : ∀ r m, ctx.recBound name c a0 = some (r, m) → (afterTail q stb).reg r < m := by
+          intro r m hb; unfold Ctx.recBound at hb
+          have hne : (ctx.selfName == some name) = false := beq_false_of_ne T.notSelf
+          simp only [hne, Bool.false_eq_true, ite_false] at hb; cases hb
+        have hloada := loaded_tail Ea c1a.holds q
+        have hloadb := loaded_tail Eb c1b.holds q
+        have hclra := clear_tail Ka T1 c1a.holds q hwritea
+        have hclrb := clear_tail Kb T1 c1b.holds q hwriteb
+        have hruna := runsPlain_data (meets (afterTail q sta) hbda hloada hclra hprea)
+        have hrunb := runsPlain_data (meets (afterTail q stb) hbdb hloadb hclrb hpreb)
+        obtain ⟨s2a, ⟨hpost2a, _⟩, ha'eq⟩ := runsPlain_endsP hruna Eina
+        obtain ⟨s2b, ⟨hpost2b, _⟩, hb'eq⟩ := runsPlain_endsP hrunb Einb
+        have T1q : TailOk ctx (quietAtCall s1 c) name c :=
+          ⟨T1.notSelf, T1.machine, T1.sp0, T1.rspClean, T1.linkOk, T1.keeps, T1.keepsVec,
+           T1.noLanes, T1.noValArrays, T1.noFrameOut, T1.noFrameFix⟩
+        have hta_call := tailQuiet_traceAgree (q := q) Ea Eb ta T1q
+          (quietAtCall_holds c1a.holds c) (quietAtCall_holds c1b.holds c)
+          (quietAtCall_marks Ma1 c) (quietAtCall_marks Mb1 c) A hcq
+        obtain ⟨htr, hrf2⟩ := trok _ _ hbda hloada hclra hprea hloadb hclrb hpreb hta_call a' b' Eina Einb
+        refine ⟨htr, fun hrft => ?_⟩
+        have hri0 : ctx.contract.result.isSome = true := (Bool.and_eq_true _ _ |>.mp hrft).1
+        have hrr0 : ctx.contract.retReg = 0 := (retReg_spec ctx.contract).2.2.2 hri0
+        let cleanRet := callReturnsClean ctx (quietAtCall s1 c) c
+        let q' := afterCallQ cleanRet c (quietAtCall s1 c)
+        have hmem0 : 0 ∈ q'.regq := by
+          have hnot : ¬(ctx.contract.resultFollowsTrace = true ∧ q'.regq.contains ctx.contract.retReg = false) := by
+            simpa [q', cleanRet, Bool.and_eq_true, Bool.not_eq_true'] using hretq
+          have hcont : q'.regq.contains 0 = true := by
+            rw [← hrr0]; cases hc0 : q'.regq.contains ctx.contract.retReg with
+            | true => rfl
+            | false => exact absurd ⟨hrft, hc0⟩ hnot
+          exact List.contains_iff_mem.mp hcont
+        have ha0 : a'.reg 0 = s2a.reg 0 := by rw [ha'eq]; rfl
+        have hb0 : b'.reg 0 = s2b.reg 0 := by rw [hb'eq]; rfl
+        simp only [q', afterCallQ, List.mem_append, List.mem_filter, List.contains_iff_mem] at hmem0
+        rcases hmem0 with hhead | ⟨hq0, hkeep0⟩
+        · have hcr : cleanRet = true ∧ c.retReg = 0 := by
+            cases hcr' : cleanRet with
+            | false =>
+              simp only [hcr', Bool.false_eq_true, ite_false, List.mem_singleton] at hhead
+              exact absurd hhead (by decide)
+            | true =>
+              simp only [hcr', ite_true, List.mem_cons, List.mem_singleton] at hhead
+              rcases hhead with h0 | h0
+              · exact ⟨rfl, h0.symm⟩
+              · exact absurd h0 (by decide)
+          obtain ⟨hcr, hcreg0⟩ := hcr
+          simp only [cleanRet, callReturnsClean] at hcr
+          cases hret : c.returns with
+          | some e =>
+            simp only [hret] at hcr
+            have hvea := hpost2a.2.2.2.2.1 e hret
+            have hveb := hpost2b.2.2.2.2.1 e hret
+            have hsame := (tailExprClean_same Ea Eb ta T1q
+              (quietAtCall_holds c1a.holds c) (quietAtCall_holds c1b.holds c)
+              (quietAtCall_marks Ma1 c) (quietAtCall_marks Mb1 c) A hcr (.int (s2a.reg c.retReg))).mp hvea
+            have hu := Value.unique hsame hveb
+            injection hu with hu
+            have hreg_eq : s2a.reg c.retReg = s2b.reg c.retReg := Int.ofNat.inj hu
+            rw [hcreg0] at hreg_eq; omega
+          | none =>
+            simp only [hret] at hcr
+            by_cases hrf : c.resultFollowsTrace = true
+            · exact hrf2 hrf
+            · simp only [hrf, Bool.false_eq_true, ite_false] at hcr
+              cases hri : c.result.isSome with
+              | false => simp [hri] at hcr
+              | true =>
+                simp only [hri, ite_true] at hcr
+                cases hrh : c.resultHidden with
+                | none => simp [hrh] at hcr
+                | some rh =>
+                  simp only [hrh] at hcr
+                  obtain ⟨_, trokr⟩ := trok2 rh hrh
+                  have T1_r : TailOk ctx (quietAtCall s1 c) name (c.forResult rh) :=
+                    ⟨T1q.notSelf, T1q.machine, T1q.sp0, T1q.rspClean, T1q.linkOk,
+                     by intro r hr; rw [show (c.forResult rh).keeps = c.keeps from rfl]; exact T1q.keeps r hr,
+                     by intro v hv; rw [show (c.forResult rh).keepsVec = c.keepsVec from rfl]; exact T1q.keepsVec v hv,
+                     T1q.noLanes,
+                     (by
+                       have hgo : ∀ args regs, valArraysIn (c.forResult rh) args regs = valArraysIn c args regs := by
+                         intro args; induction args with
+                         | nil => intro regs; rfl
+                         | cons ak more ih =>
+                           obtain ⟨nm, kd⟩ := ak
+                           intro regs; cases regs with
+                           | nil => simp [valArraysIn]
+                           | cons r rs =>
+                             cases kd with
+                             | valArray len ch el =>
+                               simp only [valArraysIn, show (c.forResult rh).regOf len = c.regOf len from rfl, ih]
+                             | number | bytes _ | out _ | fixed _ | inout _ => simp only [valArraysIn, ih]
+                       exact (hgo c.args c.argRegs).trans T1q.noValArrays),
+                     by intro x hx; rw [show (c.forResult rh).outs = c.outs from rfl] at hx; exact T1q.noFrameOut x hx,
+                     by intro x hx; rw [show (c.forResult rh).fixeds = c.fixeds from rfl] at hx; exact T1q.noFrameFix x hx⟩
+                  have hta_r := tailQuiet_traceAgree (q := q) (c := c.forResult rh) Ea Eb ta T1_r
+                    (quietAtCall_holds c1a.holds c) (quietAtCall_holds c1b.holds c)
+                    (quietAtCall_marks Ma1 c) (quietAtCall_marks Mb1 c) A hcr
+                  have hrf_r : (c.forResult rh).resultFollowsTrace = true := by
+                    simp [Contract.forResult, Contract.resultFollowsTrace, hri]
+                  exact (trokr _ _ hbda hloada ((forResult_clear c rh _ _ _).mpr hclra) ((forResult_pre c rh _ _).mpr hprea)
+                    hloadb ((forResult_clear c rh _ _ _).mpr hclrb) ((forResult_pre c rh _ _).mpr hpreb)
+                    hta_r a' b' Eina Einb).2 hrf_r
+        · have hmk0 : sta.marks.reg 0 = false := (quietAtCall_marks Ma1 c).reg 0 hq0
+          have heq_st : sta.reg 0 = stb.reg 0 := A.reg 0 hmk0
+          have hk_a : s2a.reg 0 = sta.reg 0 := hpost2a.2.2.1 0 hkeep0
+          have hk_b : s2b.reg 0 = stb.reg 0 := hpost2b.2.2.1 0 hkeep0
+          omega
   | some name =>
     simp only [symNext, hc] at h
     cases hl2 : ctx.callees.lookup name with
@@ -2544,6 +2769,10 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
           rw [hq] at hw2; injection hw2 with e; subst e
           rw [afterCallP_plain] at Ein
           exact ⟨s1, Ein, Eout⟩
+        | tail _ _ i2 _ _ _ hf2 ht2 _ _ =>
+          have e : i2 = i := by have := hf2; rw [show st.plain.rip = st.rip from rfl, hf] at this; exact (Option.some.inj this).symm
+          subst e
+          rw [tailTarget_not_call ht2] at hc; cases hc
       obtain ⟨s1a, Eina, Eouta⟩ := isCall hfetcha Epa
       obtain ⟨s1b, Einb, Eoutb⟩ := isCall hfetchb Epb
       have hcode : (pc, i) ∈ p.code := by rw [Ea.code]; exact lookup_mem hl
