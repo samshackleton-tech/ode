@@ -229,7 +229,9 @@ def write(line, mn, ops):
             return ("fixed", pick(f"{base_row}_ri", {"D": d, "I": imm(ops[1], 64)}))
         d = G32.index(ops[0])
         if mn == "or" and ops[1] in G32: return ("fixed", pick("or32_rr", {"D": d, "S": G32.index(ops[1])}))
-        if mn == "and": return ("fixed", pick("and32_ri", {"D": d, "I": imm(ops[1], 32)}))
+        if mn == "and":
+            v = imm(ops[1], 32)
+            return ("fixed", pick("and32_ri", {"D": d, "I": (v - (1 << 32)) & table.M64 if v >= 0xFFFFFF80 else v}))
     if mn == "lea":
         if len(ops) != 2: raise ValueError("lea takes a register and an address")
         d, m = G64.index(ops[0]), parse_mem(ops[1])
