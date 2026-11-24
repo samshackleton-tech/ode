@@ -268,12 +268,19 @@ def read(obj, symbol, base, rodata_at):
     text, start, relocs, rodata = place(Elf(obj), symbol)
     at = start
     rows = []
+    farthest = base
     while True:
         n, ins = decode(text, at, relocs, rodata, rodata_at, base, start)
         if isinstance(relocs, Settled) and not relocs.runs(at, at + n): raise Stop("the code runs out of what is loaded to be run")
-        rows.append((base + at - start, base + at - start + n, ins))
+        pc = base + at - start
+        nxt = pc + n
+        rows.append((pc, nxt, ins))
+        parts = ins.split()
+        if len(parts) == 2 and parts[0] in (".jmp", ".je", ".jne", ".jae", ".jb") and parts[1].startswith("0x"):
+            tgt = int(parts[1], 16)
+            if tgt > farthest: farthest = tgt
         at += n
-        if ins == ".ret": break
+        if ins == ".ret" and nxt > farthest: break
         if at >= len(text): raise Stop("the code runs off the section")
     return rows, rodata
 

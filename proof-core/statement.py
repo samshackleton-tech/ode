@@ -66,7 +66,10 @@ def sexp(e, seqs={}, scope=None):
         if e[1] in scope.local: raise SystemExit(f"statement: {scope.own}: the sequence {e[1]} is used other than at a place of it")
         if scope.given is not None and e[1] not in scope.given and e[1] in scope.consts: return f"(call {e[1]})"
         return f"(name {e[1]})"
-    if kind == "bin": return f"(bin {e[1]} {go(e[2])} {go(e[3])})"
+    if kind == "bin":
+        if e[1] == "&&": return f"(ifx {go(e[2])} {go(e[3])} (bin == (num 0) (num 1)))"
+        if e[1] == "||": return f"(ifx {go(e[2])} (bin == (num 0) (num 0)) {go(e[3])})"
+        return f"(bin {e[1]} {go(e[2])} {go(e[3])})"
     if kind == "list": return "(" + " ".join(["list"] + [go(a) for a in e[1]]) + ")"
     if kind == "ifx": return f"(ifx {go(e[1])} {go(e[2])} {go(e[3])})"
     if kind == "index":

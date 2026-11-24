@@ -1,0 +1,8 @@
+name = "lean2ode"
+version = "0.1.0"
+defaultTargets = ["lean2ode"]
+
+[[lean_exe]]
+name = "lean2ode"
+root = "Main"
+supportInterpreter = true
