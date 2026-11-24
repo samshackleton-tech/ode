@@ -184,17 +184,19 @@ def run_episode(rid, target, arch, model, arm, card, api_key, pool, spend_lock, 
                 pool.put(worker)
             t_tool = round(t_tool, 3)
 
-            verdict = resp.get("verdict") or resp.get("error")
-            if verdict == "shown":
-                adv = ode_tool.run_advise(src_p, spec_path=tmp_spec, arch=arch)
-                cw = adv["static"]["whole"]
+            res = resp.get("result") or {}
+            if resp.get("ok"):
+                cw = (res.get("static") or {}).get("whole")
+                if not cw:
+                    adv = ode_tool.run_advise(src_p, spec_path=tmp_spec, arch=arch)
+                    cw = adv["static"]["whole"]
                 changed = (c_hash != base_hash)
                 strict_better = score_tuple(cw) < score_tuple(base_w)
                 rec = {
                     "turn": turn, "bucket": "shown", "hash": c_hash, "changed": changed,
                     "strict_better": strict_better, "llm_s": t_llm, "tool_s": t_tool,
-                    "cost": round(cost, 6), "whole": cw, "verify_s": resp.get("verify_s", 0.0),
-                    "proof_bytes": resp.get("proof_bytes", 0),
+                    "cost": round(cost, 6), "whole": cw, "verify_s": res.get("verify_s", 0.0),
+                    "proof_bytes": res.get("proof_bytes", 0),
                 }
                 attempts.append(rec)
                 verified_list.append((rec, code))
@@ -229,7 +231,7 @@ def run_episode(rid, target, arch, model, arm, card, api_key, pool, spend_lock, 
                         ),
                     })
             else:
-                diag = resp.get("diagnostic") or resp.get("error") or str(resp)
+                diag = resp.get("error") or res.get("diagnostic") or res.get("raw") or str(resp)
                 bucket = rexp.classify_failure(resp)
                 attempts.append({
                     "turn": turn, "bucket": bucket, "llm_s": t_llm, "tool_s": t_tool,
