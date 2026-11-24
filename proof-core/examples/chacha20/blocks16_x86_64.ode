@@ -1,0 +1,293 @@
+target x86_64
+
+data chacha_lane_inc = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
+
+// One 16-lane AVX-512 ChaCha20 quarter-round: 12 instructions, zero shuffles!
+inline fn qr(a: zmm, b: zmm, c: zmm, d: zmm)
+    distinct(a, b, c, d) changes a, b, c, d {
+  vpaddd a, a, b
+  vpxord d, d, a
+  vprord d, d, 16
+  vpaddd c, c, d
+  vpxord b, b, c
+  vprord b, b, 20
+  vpaddd a, a, b
+  vpxord d, d, a
+  vprord d, d, 24
+  vpaddd c, c, d
+  vpxord b, b, c
+  vprord b, b, 25
+}
+
+// One full 16-lane double round (4 column QRs + 4 diagonal QRs, interleaved for ILP!).
+inline fn dround(s0: zmm, s1: zmm, s2: zmm, s3: zmm,
+                 s4: zmm, s5: zmm, s6: zmm, s7: zmm,
+                 s8: zmm, s9: zmm, s10: zmm, s11: zmm,
+                 s12: zmm, s13: zmm, s14: zmm, s15: zmm)
+    distinct(s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15)
+    changes s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15 {
+  // Column round (4 independent quarter-rounds interleaved by step for full port utilization)
+  vpaddd s0, s0, s4
+  vpaddd s1, s1, s5
+  vpaddd s2, s2, s6
+  vpaddd s3, s3, s7
+  vpxord s12, s12, s0
+  vpxord s13, s13, s1
+  vpxord s14, s14, s2
+  vpxord s15, s15, s3
+  vprord s12, s12, 16
+  vprord s13, s13, 16
+  vprord s14, s14, 16
+  vprord s15, s15, 16
+  vpaddd s8,  s8,  s12
+  vpaddd s9,  s9,  s13
+  vpaddd s10, s10, s14
+  vpaddd s11, s11, s15
+  vpxord s4, s4, s8
+  vpxord s5, s5, s9
+  vpxord s6, s6, s10
+  vpxord s7, s7, s11
+  vprord s4, s4, 20
+  vprord s5, s5, 20
+  vprord s6, s6, 20
+  vprord s7, s7, 20
+  vpaddd s0, s0, s4
+  vpaddd s1, s1, s5
+  vpaddd s2, s2, s6
+  vpaddd s3, s3, s7
+  vpxord s12, s12, s0
+  vpxord s13, s13, s1
+  vpxord s14, s14, s2
+  vpxord s15, s15, s3
+  vprord s12, s12, 24
+  vprord s13, s13, 24
+  vprord s14, s14, 24
+  vprord s15, s15, 24
+  vpaddd s8,  s8,  s12
+  vpaddd s9,  s9,  s13
+  vpaddd s10, s10, s14
+  vpaddd s11, s11, s15
+  vpxord s4, s4, s8
+  vpxord s5, s5, s9
+  vpxord s6, s6, s10
+  vpxord s7, s7, s11
+  vprord s4, s4, 25
+  vprord s5, s5, 25
+  vprord s6, s6, 25
+  vprord s7, s7, 25
+
+  // Diagonal round (4 independent quarter-rounds interleaved by step; zero shuffles!)
+  vpaddd s0, s0, s5
+  vpaddd s1, s1, s6
+  vpaddd s2, s2, s7
+  vpaddd s3, s3, s4
+  vpxord s15, s15, s0
+  vpxord s12, s12, s1
+  vpxord s13, s13, s2
+  vpxord s14, s14, s3
+  vprord s15, s15, 16
+  vprord s12, s12, 16
+  vprord s13, s13, 16
+  vprord s14, s14, 16
+  vpaddd s10, s10, s15
+  vpaddd s11, s11, s12
+  vpaddd s8,  s8,  s13
+  vpaddd s9,  s9,  s14
+  vpxord s5, s5, s10
+  vpxord s6, s6, s11
+  vpxord s7, s7, s8
+  vpxord s4, s4, s9
+  vprord s5, s5, 20
+  vprord s6, s6, 20
+  vprord s7, s7, 20
+  vprord s4, s4, 20
+  vpaddd s0, s0, s5
+  vpaddd s1, s1, s6
+  vpaddd s2, s2, s7
+  vpaddd s3, s3, s4
+  vpxord s15, s15, s0
+  vpxord s12, s12, s1
+  vpxord s13, s13, s2
+  vpxord s14, s14, s3
+  vprord s15, s15, 24
+  vprord s12, s12, 24
+  vprord s13, s13, 24
+  vprord s14, s14, 24
+  vpaddd s10, s10, s15
+  vpaddd s11, s11, s12
+  vpaddd s8,  s8,  s13
+  vpaddd s9,  s9,  s14
+  vpxord s5, s5, s10
+  vpxord s6, s6, s11
+  vpxord s7, s7, s8
+  vpxord s4, s4, s9
+  vprord s5, s5, 25
+  vprord s6, s6, 25
+  vprord s7, s7, 25
+  vprord s4, s4, 25
+}
+
+// 16-block parallel AVX-512 ChaCha20 (1,024 bytes/call, stack 0, constant-time).
+fn chacha20_blocks16 as "ode_chacha20_blocks16" {
+  reg out = rdi
+  reg st  = rsi
+
+  // Broadcast all 16 initial state words into zmm16..zmm31 (saved), add lane
+  // offsets 0..15 to block counter word 12, and copy to working state zmm0..zmm15.
+  vpbroadcastd zmm16, dword ptr [st + 0]
+  vpbroadcastd zmm17, dword ptr [st + 4]
+  vpbroadcastd zmm18, dword ptr [st + 8]
+  vpbroadcastd zmm19, dword ptr [st + 12]
+  vpbroadcastd zmm20, dword ptr [st + 16]
+  vpbroadcastd zmm21, dword ptr [st + 20]
+  vpbroadcastd zmm22, dword ptr [st + 24]
+  vpbroadcastd zmm23, dword ptr [st + 28]
+  vpbroadcastd zmm24, dword ptr [st + 32]
+  vpbroadcastd zmm25, dword ptr [st + 36]
+  vpbroadcastd zmm26, dword ptr [st + 40]
+  vpbroadcastd zmm27, dword ptr [st + 44]
+  vpbroadcastd zmm28, dword ptr [st + 48]
+  vpbroadcastd zmm29, dword ptr [st + 52]
+  vpbroadcastd zmm30, dword ptr [st + 56]
+  vpbroadcastd zmm31, dword ptr [st + 60]
+  vpaddd zmm28, zmm28, zmmword ptr [rip + #chacha_lane_inc + 0]
+
+  vmovdqa32 zmm0,  zmm16
+  vmovdqa32 zmm1,  zmm17
+  vmovdqa32 zmm2,  zmm18
+  vmovdqa32 zmm3,  zmm19
+  vmovdqa32 zmm4,  zmm20
+  vmovdqa32 zmm5,  zmm21
+  vmovdqa32 zmm6,  zmm22
+  vmovdqa32 zmm7,  zmm23
+  vmovdqa32 zmm8,  zmm24
+  vmovdqa32 zmm9,  zmm25
+  vmovdqa32 zmm10, zmm26
+  vmovdqa32 zmm11, zmm27
+  vmovdqa32 zmm12, zmm28
+  vmovdqa32 zmm13, zmm29
+  vmovdqa32 zmm14, zmm30
+  vmovdqa32 zmm15, zmm31
+
+  // 10 double rounds = 20 ChaCha20 rounds across all 16 blocks in parallel!
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+  dround(zmm0, zmm1, zmm2, zmm3, zmm4, zmm5, zmm6, zmm7, zmm8, zmm9, zmm10, zmm11, zmm12, zmm13, zmm14, zmm15)
+
+  // Feed-forward addition with saved initial states (frees zmm16..zmm31 for transpose).
+  vpaddd zmm0,  zmm0,  zmm16
+  vpaddd zmm1,  zmm1,  zmm17
+  vpaddd zmm2,  zmm2,  zmm18
+  vpaddd zmm3,  zmm3,  zmm19
+  vpaddd zmm4,  zmm4,  zmm20
+  vpaddd zmm5,  zmm5,  zmm21
+  vpaddd zmm6,  zmm6,  zmm22
+  vpaddd zmm7,  zmm7,  zmm23
+  vpaddd zmm8,  zmm8,  zmm24
+  vpaddd zmm9,  zmm9,  zmm25
+  vpaddd zmm10, zmm10, zmm26
+  vpaddd zmm11, zmm11, zmm27
+  vpaddd zmm12, zmm12, zmm28
+  vpaddd zmm13, zmm13, zmm29
+  vpaddd zmm14, zmm14, zmm30
+  vpaddd zmm15, zmm15, zmm31
+
+  // 16x16 in-register transpose (64 ZMM ops, zero stack spills):
+  // Stage 1: 32-bit pairs -> zmm16..zmm31
+  vpunpckldq zmm16, zmm0,  zmm1
+  vpunpckhdq zmm17, zmm0,  zmm1
+  vpunpckldq zmm18, zmm2,  zmm3
+  vpunpckhdq zmm19, zmm2,  zmm3
+  vpunpckldq zmm20, zmm4,  zmm5
+  vpunpckhdq zmm21, zmm4,  zmm5
+  vpunpckldq zmm22, zmm6,  zmm7
+  vpunpckhdq zmm23, zmm6,  zmm7
+  vpunpckldq zmm24, zmm8,  zmm9
+  vpunpckhdq zmm25, zmm8,  zmm9
+  vpunpckldq zmm26, zmm10, zmm11
+  vpunpckhdq zmm27, zmm10, zmm11
+  vpunpckldq zmm28, zmm12, zmm13
+  vpunpckhdq zmm29, zmm12, zmm13
+  vpunpckldq zmm30, zmm14, zmm15
+  vpunpckhdq zmm31, zmm14, zmm15
+
+  // Stage 2: 64-bit pairs -> zmm0..zmm15
+  vpunpcklqdq zmm0,  zmm16, zmm18
+  vpunpcklqdq zmm1,  zmm17, zmm19
+  vpunpckhqdq zmm2,  zmm16, zmm18
+  vpunpckhqdq zmm3,  zmm17, zmm19
+  vpunpcklqdq zmm4,  zmm20, zmm22
+  vpunpcklqdq zmm5,  zmm21, zmm23
+  vpunpckhqdq zmm6,  zmm20, zmm22
+  vpunpckhqdq zmm7,  zmm21, zmm23
+  vpunpcklqdq zmm8,  zmm24, zmm26
+  vpunpcklqdq zmm9,  zmm25, zmm27
+  vpunpckhqdq zmm10, zmm24, zmm26
+  vpunpckhqdq zmm11, zmm25, zmm27
+  vpunpcklqdq zmm12, zmm28, zmm30
+  vpunpcklqdq zmm13, zmm29, zmm31
+  vpunpckhqdq zmm14, zmm28, zmm30
+  vpunpckhqdq zmm15, zmm29, zmm31
+
+  // Stage 3: 128-bit pairs -> zmm16..zmm31
+  vshufi32x4 zmm16, zmm0,  zmm4,  0x88
+  vshufi32x4 zmm20, zmm0,  zmm4,  0xdd
+  vshufi32x4 zmm17, zmm1,  zmm5,  0x88
+  vshufi32x4 zmm21, zmm1,  zmm5,  0xdd
+  vshufi32x4 zmm18, zmm2,  zmm6,  0x88
+  vshufi32x4 zmm22, zmm2,  zmm6,  0xdd
+  vshufi32x4 zmm19, zmm3,  zmm7,  0x88
+  vshufi32x4 zmm23, zmm3,  zmm7,  0xdd
+  vshufi32x4 zmm24, zmm8,  zmm12, 0x88
+  vshufi32x4 zmm28, zmm8,  zmm12, 0xdd
+  vshufi32x4 zmm25, zmm9,  zmm13, 0x88
+  vshufi32x4 zmm29, zmm9,  zmm13, 0xdd
+  vshufi32x4 zmm26, zmm10, zmm14, 0x88
+  vshufi32x4 zmm30, zmm10, zmm14, 0xdd
+  vshufi32x4 zmm27, zmm11, zmm15, 0x88
+  vshufi32x4 zmm31, zmm11, zmm15, 0xdd
+
+  // Stage 4: 256-bit pairs -> final 16 contiguous blocks in zmm0..zmm15
+  vshufi32x4 zmm0,  zmm16, zmm24, 0x88
+  vshufi32x4 zmm8,  zmm16, zmm24, 0xdd
+  vshufi32x4 zmm1,  zmm17, zmm25, 0x88
+  vshufi32x4 zmm9,  zmm17, zmm25, 0xdd
+  vshufi32x4 zmm2,  zmm18, zmm26, 0x88
+  vshufi32x4 zmm10, zmm18, zmm26, 0xdd
+  vshufi32x4 zmm3,  zmm19, zmm27, 0x88
+  vshufi32x4 zmm11, zmm19, zmm27, 0xdd
+  vshufi32x4 zmm4,  zmm20, zmm28, 0x88
+  vshufi32x4 zmm12, zmm20, zmm28, 0xdd
+  vshufi32x4 zmm5,  zmm21, zmm29, 0x88
+  vshufi32x4 zmm13, zmm21, zmm29, 0xdd
+  vshufi32x4 zmm6,  zmm22, zmm30, 0x88
+  vshufi32x4 zmm14, zmm22, zmm30, 0xdd
+  vshufi32x4 zmm7,  zmm23, zmm31, 0x88
+  vshufi32x4 zmm15, zmm23, zmm31, 0xdd
+
+  // Store all 16 contiguous 64-byte keystream blocks (1,024 bytes total)!
+  vmovdqu32 [out + 0],   zmm0
+  vmovdqu32 [out + 64],  zmm2
+  vmovdqu32 [out + 128], zmm1
+  vmovdqu32 [out + 192], zmm3
+  vmovdqu32 [out + 256], zmm4
+  vmovdqu32 [out + 320], zmm6
+  vmovdqu32 [out + 384], zmm5
+  vmovdqu32 [out + 448], zmm7
+  vmovdqu32 [out + 512], zmm8
+  vmovdqu32 [out + 576], zmm10
+  vmovdqu32 [out + 640], zmm9
+  vmovdqu32 [out + 704], zmm11
+  vmovdqu32 [out + 768], zmm12
+  vmovdqu32 [out + 832], zmm14
+  vmovdqu32 [out + 896], zmm13
+  vmovdqu32 [out + 960], zmm15
+  ret
+}

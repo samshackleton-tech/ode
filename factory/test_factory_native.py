@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Independent verification + real-silicon RFC/ITU/FIPS execution suite for all 36 Wave 1 & 2 Factory artifacts.
+"""Independent verification + real-silicon RFC/ITU/FIPS execution suite for all 38 Factory artifacts.
 
-Two independent checks:
-1. Re-compiles every verified `.ode` file (18 x86-64 + 18 AArch64), checks its `.statement`,
-   and runs Lean 4 `odeverify` against the saved `.proof` -> must say `shown` (36/36).
-2. Links the verified machine bytes of every routine for the host CPU (18 x86-64 on x86-64,
-   18 AArch64 on Apple Silicon / ARM64) into a C test harness and executes it on real hardware
+Three independent checks:
+1. Re-compiles every verified `.ode` file (19 x86-64 + 19 AArch64), checks its `.statement`,
+   and runs Lean 4 `odeverify` against the saved `.proof` -> must say `shown` (38/38).
+2. Audits every AArch64 `.ode` file to confirm zero writes to AAPCS64 callee-saved `v8..v15`.
+3. Links the verified machine bytes of every routine for the host CPU (19 x86-64 on x86-64,
+   19 AArch64 on Apple Silicon / ARM64) into a C test harness and executes it on real hardware
    against official RFC 4648, ITU-T X.690, RFC 8439, FIPS 180-4, RFC 1950, RFC 3629, RFC 1071,
    Protobuf/Wasm LEB128, and CVE negative vectors.
 """
@@ -58,6 +59,7 @@ WAVE2_VERIFIED_IDS = [
     "utf8_decode_2byte",
     "hex_decode_byte",
     "inet_sum16",
+    "chacha20_block",
 ]
 
 ALL_VERIFIED_IDS = WAVE1_VERIFIED_IDS + WAVE2_VERIFIED_IDS
@@ -493,11 +495,38 @@ int main(void) {
   return 0;
 }
 """,
+    "chacha20_block": r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+extern void ode_chacha20_block(uint8_t out[64], const uint32_t state[16]);
+int main(void) {
+  const uint32_t s[16] = {
+    0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u,
+    0x03020100u, 0x07060504u, 0x0b0a0908u, 0x0f0e0d0cu,
+    0x13121110u, 0x17161514u, 0x1b1a1918u, 0x1f1e1d1cu,
+    0x00000001u, 0x09000000u, 0x4a000000u, 0x00000000u
+  };
+  static const uint8_t want[64] = {
+    0x10, 0xf1, 0xe7, 0xe4, 0xd1, 0x3b, 0x59, 0x15,
+    0x50, 0x0f, 0xdd, 0x1f, 0xa3, 0x20, 0x71, 0xc4,
+    0xc7, 0xd1, 0xf4, 0xc7, 0x33, 0xc0, 0x68, 0x03,
+    0x04, 0x22, 0xaa, 0x9a, 0xc3, 0xd4, 0x6c, 0x4e,
+    0xd2, 0x82, 0x64, 0x46, 0x07, 0x9f, 0xaa, 0x09,
+    0x14, 0xc2, 0xd7, 0x05, 0xd9, 0x8b, 0x02, 0xa2,
+    0xb5, 0x12, 0x9c, 0xd1, 0xde, 0x16, 0x4e, 0xb9,
+    0xcb, 0xd0, 0x83, 0xe8, 0xa2, 0x50, 0x3c, 0x4e
+  };
+  uint8_t got[64];
+  ode_chacha20_block(got, s);
+  return memcmp(got, want, 64) == 0 ? 0 : 1;
+}
+""",
 }
 
 
 class TestFactoryWave1(unittest.TestCase):
-    def test_all_36_odeverify_shown(self):
+    def test_all_38_odeverify_shown(self):
         self.assertTrue(os.path.exists(ODEVERIFY), f"missing {ODEVERIFY}")
         routines = {r["id"]: r for r in catalog.ALL_ROUTINES}
         for rid in ALL_VERIFIED_IDS:
@@ -529,9 +558,22 @@ class TestFactoryWave1(unittest.TestCase):
                     )
                     self.assertTrue(res.stdout.startswith("shown"), f"{tid}: {res.stdout}")
 
+    def test_arm64_no_callee_saved_vector_clobber(self):
+        import re
+        pat = re.compile(r"\b[vq](8|9|1[0-5])\b")
+        for rid in ALL_VERIFIED_IDS:
+            ode_p = os.path.join(VERIFIED_DIR, f"{rid}_arm64.ode")
+            with open(ode_p) as f:
+                for ln, raw in enumerate(f, 1):
+                    code = raw.split("//")[0]
+                    self.assertIsNone(
+                        pat.search(code),
+                        f"{ode_p}:{ln} touches AAPCS64 callee-saved vector register: {code.strip()}",
+                    )
+
     @unittest.skipUnless(HOST_TARGET and shutil.which("cc"),
                          "native compiler and x86_64/arm64 host required")
-    def test_all_18_native_vectors_on_real_silicon(self):
+    def test_all_19_native_vectors_on_real_silicon(self):
         cc = shutil.which("clang") or shutil.which("cc")
         for rid in ALL_VERIFIED_IDS:
             tid = f"{rid}_{HOST_TARGET}"

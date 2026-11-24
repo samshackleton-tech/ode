@@ -64,10 +64,10 @@ fn chacha20_double_round_4x as "ode_chacha20_double_round_4x" {
   add v5.4s, v5.4s, v7.4s
   
   // b ^= c, b >>>= 20
-  eor v8.16b, v4.16b, v5.16b
-  ushr v9.4s, v8.4s, 20
-  shl v8.4s, v8.4s, 12
-  orr v4.16b, v8.16b, v9.16b
+  eor v16.16b, v4.16b, v5.16b
+  ushr v17.4s, v16.4s, 20
+  shl v16.4s, v16.4s, 12
+  orr v4.16b, v16.16b, v17.16b
   
   // a += b
   add v0.4s, v0.4s, v4.4s
@@ -83,9 +83,9 @@ fn chacha20_double_round_4x as "ode_chacha20_double_round_4x" {
   
   // b ^= c, b >>>= 25
   eor v7.16b, v4.16b, v5.16b
-  ushr v8.4s, v7.4s, 25
+  ushr v16.4s, v7.4s, 25
   shl v7.4s, v7.4s, 7
-  orr v4.16b, v7.16b, v8.16b
+  orr v4.16b, v7.16b, v16.16b
 
   // Rotate rows back to original positions
   // b = [b3, b0, b1, b2] (rotate right by 1 lane)

@@ -92,18 +92,18 @@ The tables below list the core verified instructions accepted by `odeverify` fro
 | Loads, stores & addresses | `mov r, r/imm`, `mov r, qword ptr [base+n]`, `mov qword ptr [base+n], r`, `lea r, [base+n]` or `[base+idx+n]`, `movzx r32, byte ptr [base+n]`, `mov byte ptr [base+n], r8/imm` |
 | Compare, test & branches | `cmp r, r/imm`, `test r, r`, `jmp @L`, `je @L`, `jne @L`, `jb @L`, `jae @L` |
 | Stack & calls | `push r`, `pop r`, `sub rsp, imm`, `add rsp, imm`, `call SYMBOL`, `ret` |
-| SIMD 128-bit (`needs avx512` / `sse41`) | `vmovdqu xmmX, [base+N]`, `vmovdqu [base+N], xmmX`, `vmovdqa xmmX, xmmY`, `vpaddd xmmX, xmmY, xmmZ`, `vpxord xmmX, xmmY, xmmZ`, `vpor xmmX, xmmY, xmmZ`, `vprord xmmX, xmmY, imm`, `psrld xmmX, imm`, `pslld xmmX, imm`, `pshufb xmmX, xmmY` |
+| SIMD 128-bit (`needs avx` / `avx512` / `sse41`) | `vmovdqu xmmX, [base+N]`, `vmovdqu [base+N], xmmX`, `vmovdqa xmmX, xmmY`, `vpaddd xmmX, xmmY, xmmZ`, `vpxor`/`vpxord xmmX, xmmY, xmmZ`, `vpor xmmX, xmmY, xmmZ`, `vpslld`/`vpsrld xmmX, xmmY, imm`, `vpshufd xmmX, xmmY, imm`, `vprord xmmX, xmmY, imm`, `psrld`/`pslld xmmX, imm`, `pshufb xmmX, xmmY` |
 | SIMD 512-bit (`needs avx512`) | `vmovdqu32 zmmX, [base+N]`, `vmovdqu32 [base+N], zmmX`, `vpaddd`, `vpxord`, `vprord`, `vpshufb`, `vshufi32x4`, `vpermq`, `vpbroadcastd` |
 
-### AArch64 (`arm64/arm64.tab` — all 49 rows formally proved against `arm64-semantics`)
+### AArch64 (`arm64/arm64.tab` — all 54 rows formally proved against `arm64-semantics`)
 
 | Category | Exact assembly syntax |
 |---|---|
-| Integer moves & arithmetic | `mov xd, xs/imm`, `mov wd, imm`, `add xd, xs, xp/imm`, `sub xd, xs, xp/imm`, `lsl xd, xs, imm`, `lsr xd, xs, imm`, `orr xd, xs, xp` |
-| Stack pointer | `sub sp, sp, imm`, `add sp, sp, imm`, `add xd, sp, imm`, `ldr xd, [sp, off]`, `str xs, [sp, off]` |
-| Memory loads & stores | `ldr xd, [xb, off]`, `str xs, [xb, off]`, `ldr wd, [xb, off]`, `str ws, [xb, off]`, `ldrb wd, [xb, off]`, `strb ws, [xb, off]` |
+| Integer moves & arithmetic | `mov xd, xs/imm`, `mov wd, imm`, `add xd, xs, xp/imm`, `sub xd, xs, xp/imm`, `lsl xd, xs, imm`, `lsr xd, xs, imm`, `orr xd, xs, xp`, `and xd, xs, xp` |
+| Stack pointer | `sub/add sp, sp, imm`, `add xd, sp, imm`, `ldr/str xd, [sp, off]`, `ldr/str qX, [sp, off]` |
+| Memory loads & stores | `ldr/str xd/wd, [xb, off]`, `ldrb/strb wd, [xb, off]`, `ldr/str qX, [xb, off]` |
 | Compare, branch & call | `cmp xs, xp/imm`, `b @L`, `b.eq @L`, `b.ne @L`, `b.hs @L`, `b.lo @L`, `bl SYMBOL`, `ret`, `nop` |
-| NEON 128-bit vector | `ld1 {vX.4s}, [xb]`, `st1 {vX.4s}, [xb]`, `mov vD.16b, vS.16b`, `eor`/`orr` (`.16b`), `add vD.4s, vA.4s, vB.4s`, `rev32 vD.8h, vS.8h`, `ushr`/`shl` (`.4s`, imm), `fmov dX, xS`, `uzp1`/`uzp2`/`zip1`/`zip2`, `ext ... 4/8/12` |
+| NEON 128-bit vector | `ldr/str qX, [xb, off]`, `ld1/st1 {vX.4s}, [xb]`, `mov/eor/orr` (`.16b`), `add` (`.4s`), `rev32` (`.8h`), `ushr/shl` (`.4s`, imm), `fmov dX, xS`, `uzp1/uzp2/zip1/zip2`, `ext 4/8/12` (keep `v8..v15` preserved under AAPCS64) |
 
 ## 5. Contracts and Specifications
 
@@ -113,7 +113,7 @@ A `.spec` file defines pure declarative functions (`def`) and function contracts
   `cv` (32 bytes = 8 words), `block` (64 bytes = 16 words), `N bytes` (fixed size), or a named `layout`.
 - Common clauses inside `contract SYMBOL(...) { ... }`:
   - `requires no_overlap(out, a, b)` — memory buffers do not share any byte.
-  - `requires n <= 64` — linear bounds on numeric inputs.
+  - `requires n <= 64` or `requires len == 2 * pairs` — linear bounds and equalities on numeric inputs.
   - `ensures out = expr` — postcondition for a written buffer.
   - `returns expr` — postcondition for the return register (`rax` / `x0`).
   - `trace depends on n` — lists inputs (or computed values) that branches and memory addresses may

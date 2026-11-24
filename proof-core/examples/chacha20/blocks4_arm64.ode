@@ -1,0 +1,235 @@
+target arm64
+
+// Interleaved 4-block NEON quarter-round across 4 independent ChaCha20 blocks:
+//   block 0: (a0, b0, c0, d0) scratch t0
+//   block 1: (a1, b1, c1, d1) scratch t1
+//   block 2: (a2, b2, c2, d2) scratch t2
+//   block 3: (a3, b3, c3, d3) scratch t3
+// Interleaving all 4 independent blocks saturates wide AArch64 NEON pipelines.
+// Zero callee-saved vector registers (v8..v15) are touched.
+inline fn qr4(a0: vec, b0: vec, c0: vec, d0: vec, t0: vec,
+              a1: vec, b1: vec, c1: vec, d1: vec, t1: vec,
+              a2: vec, b2: vec, c2: vec, d2: vec, t2: vec,
+              a3: vec, b3: vec, c3: vec, d3: vec, t3: vec)
+    distinct(a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3)
+    changes a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3 {
+  add   a0.4s, a0.4s, b0.4s
+  add   a1.4s, a1.4s, b1.4s
+  add   a2.4s, a2.4s, b2.4s
+  add   a3.4s, a3.4s, b3.4s
+  eor   d0.16b, d0.16b, a0.16b
+  eor   d1.16b, d1.16b, a1.16b
+  eor   d2.16b, d2.16b, a2.16b
+  eor   d3.16b, d3.16b, a3.16b
+  rev32 d0.8h, d0.8h
+  rev32 d1.8h, d1.8h
+  rev32 d2.8h, d2.8h
+  rev32 d3.8h, d3.8h
+
+  add   c0.4s, c0.4s, d0.4s
+  add   c1.4s, c1.4s, d1.4s
+  add   c2.4s, c2.4s, d2.4s
+  add   c3.4s, c3.4s, d3.4s
+  eor   b0.16b, b0.16b, c0.16b
+  eor   b1.16b, b1.16b, c1.16b
+  eor   b2.16b, b2.16b, c2.16b
+  eor   b3.16b, b3.16b, c3.16b
+  ushr  t0.4s, b0.4s, 20
+  ushr  t1.4s, b1.4s, 20
+  ushr  t2.4s, b2.4s, 20
+  ushr  t3.4s, b3.4s, 20
+  shl   b0.4s, b0.4s, 12
+  shl   b1.4s, b1.4s, 12
+  shl   b2.4s, b2.4s, 12
+  shl   b3.4s, b3.4s, 12
+  orr   b0.16b, b0.16b, t0.16b
+  orr   b1.16b, b1.16b, t1.16b
+  orr   b2.16b, b2.16b, t2.16b
+  orr   b3.16b, b3.16b, t3.16b
+
+  add   a0.4s, a0.4s, b0.4s
+  add   a1.4s, a1.4s, b1.4s
+  add   a2.4s, a2.4s, b2.4s
+  add   a3.4s, a3.4s, b3.4s
+  eor   d0.16b, d0.16b, a0.16b
+  eor   d1.16b, d1.16b, a1.16b
+  eor   d2.16b, d2.16b, a2.16b
+  eor   d3.16b, d3.16b, a3.16b
+  ushr  t0.4s, d0.4s, 24
+  ushr  t1.4s, d1.4s, 24
+  ushr  t2.4s, d2.4s, 24
+  ushr  t3.4s, d3.4s, 24
+  shl   d0.4s, d0.4s, 8
+  shl   d1.4s, d1.4s, 8
+  shl   d2.4s, d2.4s, 8
+  shl   d3.4s, d3.4s, 8
+  orr   d0.16b, d0.16b, t0.16b
+  orr   d1.16b, d1.16b, t1.16b
+  orr   d2.16b, d2.16b, t2.16b
+  orr   d3.16b, d3.16b, t3.16b
+
+  add   c0.4s, c0.4s, d0.4s
+  add   c1.4s, c1.4s, d1.4s
+  add   c2.4s, c2.4s, d2.4s
+  add   c3.4s, c3.4s, d3.4s
+  eor   b0.16b, b0.16b, c0.16b
+  eor   b1.16b, b1.16b, c1.16b
+  eor   b2.16b, b2.16b, c2.16b
+  eor   b3.16b, b3.16b, c3.16b
+  ushr  t0.4s, b0.4s, 25
+  ushr  t1.4s, b1.4s, 25
+  ushr  t2.4s, b2.4s, 25
+  ushr  t3.4s, b3.4s, 25
+  shl   b0.4s, b0.4s, 7
+  shl   b1.4s, b1.4s, 7
+  shl   b2.4s, b2.4s, 7
+  shl   b3.4s, b3.4s, 7
+  orr   b0.16b, b0.16b, t0.16b
+  orr   b1.16b, b1.16b, t1.16b
+  orr   b2.16b, b2.16b, t2.16b
+  orr   b3.16b, b3.16b, t3.16b
+}
+
+inline fn dr4(a0: vec, b0: vec, c0: vec, d0: vec, t0: vec,
+              a1: vec, b1: vec, c1: vec, d1: vec, t1: vec,
+              a2: vec, b2: vec, c2: vec, d2: vec, t2: vec,
+              a3: vec, b3: vec, c3: vec, d3: vec, t3: vec)
+    distinct(a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3)
+    changes a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3 {
+  qr4(a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3)
+  ext b0.16b, b0.16b, b0.16b, 4
+  ext b1.16b, b1.16b, b1.16b, 4
+  ext b2.16b, b2.16b, b2.16b, 4
+  ext b3.16b, b3.16b, b3.16b, 4
+  ext c0.16b, c0.16b, c0.16b, 8
+  ext c1.16b, c1.16b, c1.16b, 8
+  ext c2.16b, c2.16b, c2.16b, 8
+  ext c3.16b, c3.16b, c3.16b, 8
+  ext d0.16b, d0.16b, d0.16b, 12
+  ext d1.16b, d1.16b, d1.16b, 12
+  ext d2.16b, d2.16b, d2.16b, 12
+  ext d3.16b, d3.16b, d3.16b, 12
+  qr4(a0, b0, c0, d0, t0, a1, b1, c1, d1, t1, a2, b2, c2, d2, t2, a3, b3, c3, d3, t3)
+  ext b0.16b, b0.16b, b0.16b, 12
+  ext b1.16b, b1.16b, b1.16b, 12
+  ext b2.16b, b2.16b, b2.16b, 12
+  ext b3.16b, b3.16b, b3.16b, 12
+  ext c0.16b, c0.16b, c0.16b, 8
+  ext c1.16b, c1.16b, c1.16b, 8
+  ext c2.16b, c2.16b, c2.16b, 8
+  ext c3.16b, c3.16b, c3.16b, 8
+  ext d0.16b, d0.16b, d0.16b, 4
+  ext d1.16b, d1.16b, d1.16b, 4
+  ext d2.16b, d2.16b, d2.16b, 4
+  ext d3.16b, d3.16b, d3.16b, 4
+}
+
+// Complete 4-block parallel RFC 8439 ChaCha20 keystream kernel on AArch64 NEON
+// (256 bytes/call, stack 48, zero v8..v15 touched, constant-time).
+fn chacha20_blocks4_arm64 as "ode_chacha20_blocks4_arm64" {
+  sub sp, sp, 48
+  add x17, sp, 0
+
+  // Build [1, 2, 3, 0] in v24 via two 64-bit stores on our 48-byte stack frame,
+  // then construct exact row-3 vectors [c+1, n0, n1, n2], [c+2, n0, n1, n2],
+  // [c+3, n0, n1, n2] using pure NEON ext/add/zip1 (zero scalar reads of state!).
+  mov x2, 2
+  lsl x2, x2, 32
+  add x2, x2, 1          // low64 = [1, 2]
+  mov x3, 3              // high64 = [3, 0]
+  str x2, [sp, 0]
+  str x3, [sp, 8]
+  ldr q24, [x17, 0]      // [1, 2, 3, 0]
+  ext v25.16b, v24.16b, v24.16b, 4   // [2, 3, 0, 1]
+  ext v26.16b, v24.16b, v24.16b, 8   // [3, 0, 1, 2]
+
+  ldr q3, [x1, 48]                   // [c, n0, n1, n2]
+  add v28.4s, v3.4s, v24.4s          // lane 0 = c + 1
+  add v29.4s, v3.4s, v25.4s          // lane 0 = c + 2
+  add v30.4s, v3.4s, v26.4s          // lane 0 = c + 3
+  ext v27.16b, v3.16b, v3.16b, 4     // [n0, n1, n2, c]
+  ext v31.16b, v3.16b, v3.16b, 8     // [n1, n2, c, n0]
+  zip1 v28.4s, v28.4s, v27.4s        // [c+1, n0, ...]
+  zip1 v29.4s, v29.4s, v27.4s        // [c+2, n0, ...]
+  zip1 v30.4s, v30.4s, v27.4s        // [c+3, n0, ...]
+  zip1 v7.2d,  v28.2d, v31.2d        // [c+1, n0, n1, n2]
+  zip1 v19.2d, v29.2d, v31.2d        // [c+2, n0, n1, n2]
+  zip1 v23.2d, v30.2d, v31.2d        // [c+3, n0, n1, n2]
+  str q7,  [x17, 0]
+  str q19, [x17, 16]
+  str q23, [x17, 32]
+
+  // Load rows 0..2 for all 4 blocks into caller-saved v0..v7 and v16..v23 (zero v8..v15!).
+  ldr q0,  [x1, 0]
+  ldr q1,  [x1, 16]
+  ldr q2,  [x1, 32]
+  ldr q4,  [x1, 0]
+  ldr q5,  [x1, 16]
+  ldr q6,  [x1, 32]
+  ldr q16, [x1, 0]
+  ldr q17, [x1, 16]
+  ldr q18, [x1, 32]
+  ldr q20, [x1, 0]
+  ldr q21, [x1, 16]
+  ldr q22, [x1, 32]
+
+  // 10 double rounds = 20 ChaCha20 rounds across all 4 blocks interleaved!
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+  dr4(v0, v1, v2, v3, v24, v4, v5, v6, v7, v25, v16, v17, v18, v19, v26, v20, v21, v22, v23, v27)
+
+  // Feed-forward addition with initial states and store all 256 bytes!
+  ldr q24, [x1, 0]
+  ldr q25, [x1, 16]
+  ldr q26, [x1, 32]
+  ldr q27, [x1, 48]
+  ldr q28, [x17, 0]
+  ldr q29, [x17, 16]
+  ldr q30, [x17, 32]
+
+  add v0.4s,  v0.4s,  v24.4s
+  add v1.4s,  v1.4s,  v25.4s
+  add v2.4s,  v2.4s,  v26.4s
+  add v3.4s,  v3.4s,  v27.4s
+  str q0,  [x0, 0]
+  str q1,  [x0, 16]
+  str q2,  [x0, 32]
+  str q3,  [x0, 48]
+
+  add v4.4s,  v4.4s,  v24.4s
+  add v5.4s,  v5.4s,  v25.4s
+  add v6.4s,  v6.4s,  v26.4s
+  add v7.4s,  v7.4s,  v28.4s
+  str q4,  [x0, 64]
+  str q5,  [x0, 80]
+  str q6,  [x0, 96]
+  str q7,  [x0, 112]
+
+  add v16.4s, v16.4s, v24.4s
+  add v17.4s, v17.4s, v25.4s
+  add v18.4s, v18.4s, v26.4s
+  add v19.4s, v19.4s, v29.4s
+  str q16, [x0, 128]
+  str q17, [x0, 144]
+  str q18, [x0, 160]
+  str q19, [x0, 176]
+
+  add v20.4s, v20.4s, v24.4s
+  add v21.4s, v21.4s, v25.4s
+  add v22.4s, v22.4s, v26.4s
+  add v23.4s, v23.4s, v30.4s
+  str q20, [x0, 192]
+  str q21, [x0, 208]
+  str q22, [x0, 224]
+  str q23, [x0, 240]
+
+  add sp, sp, 48
+  ret
+}

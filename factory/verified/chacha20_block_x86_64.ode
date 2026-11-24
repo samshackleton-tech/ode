@@ -1,0 +1,79 @@
+target x86_64
+
+// One 4-way SIMD quarter-round over rows (a, b, c, d) using scratch t.
+inline fn qround(a: xmm, b: xmm, c: xmm, d: xmm, t: xmm)
+    distinct(a, b, c, d, t) changes a, b, c, d, t {
+  vpaddd a, a, b
+  vpxor  d, d, a
+  vpsrld t, d, 16
+  vpslld d, d, 16
+  vpor   d, d, t
+  vpaddd c, c, d
+  vpxor  b, b, c
+  vpsrld t, b, 20
+  vpslld b, b, 12
+  vpor   b, b, t
+  vpaddd a, a, b
+  vpxor  d, d, a
+  vpsrld t, d, 24
+  vpslld d, d, 8
+  vpor   d, d, t
+  vpaddd c, c, d
+  vpxor  b, b, c
+  vpsrld t, b, 25
+  vpslld b, b, 7
+  vpor   b, b, t
+}
+
+// One RFC 8439 double round (column round + diagonal round).
+inline fn dround(a: xmm, b: xmm, c: xmm, d: xmm, t: xmm)
+    distinct(a, b, c, d, t) changes a, b, c, d, t {
+  qround(a, b, c, d, t)
+  vpshufd b, b, 0x39
+  vpshufd c, c, 0x4E
+  vpshufd d, d, 0x93
+  qround(a, b, c, d, t)
+  vpshufd b, b, 0x93
+  vpshufd c, c, 0x4E
+  vpshufd d, d, 0x39
+}
+
+// Complete RFC 8439 Section 2.3 ChaCha20 64-byte keystream block:
+// 20 rounds (10 double rounds) + feed-forward state addition, stack 0, constant-time.
+fn chacha20_block as "ode_chacha20_block" {
+  reg out = rdi
+  reg st  = rsi
+
+  // Load initial 16 words into both saved (xmm4..7) and working (xmm0..3) rows.
+  vmovdqu xmm4, [st + 0]
+  vmovdqu xmm5, [st + 16]
+  vmovdqu xmm6, [st + 32]
+  vmovdqu xmm7, [st + 48]
+  vmovdqa xmm0, xmm4
+  vmovdqa xmm1, xmm5
+  vmovdqa xmm2, xmm6
+  vmovdqa xmm3, xmm7
+
+  // 10 double rounds = 20 ChaCha20 rounds.
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+  dround(xmm0, xmm1, xmm2, xmm3, xmm8)
+
+  // Feed-forward addition with initial state and store 64-byte keystream block.
+  vpaddd xmm0, xmm0, xmm4
+  vpaddd xmm1, xmm1, xmm5
+  vpaddd xmm2, xmm2, xmm6
+  vpaddd xmm3, xmm3, xmm7
+  vmovdqu [out + 0],  xmm0
+  vmovdqu [out + 16], xmm1
+  vmovdqu [out + 32], xmm2
+  vmovdqu [out + 48], xmm3
+  ret
+}

@@ -210,6 +210,34 @@ fn f as "f_sym" {
         self.refused(z_src.replace("b.hs @yes", "b.hs @missing"), "all_zero", 31, "has no label")
         self.refused(z_src.replace("ldrb cur, [addr, 0]", "ldrb cur, [addr, 4096]"), "all_zero", 33, "12 bits")
 
+    def test_wirth_diagnostics_and_arm64_ptr_name(self):
+        # On AArch64, `ptr`/`word`/`byte` are not operand keywords and work as register names.
+        arm_src = """target arm64
+fn f as "f_sym" {
+  reg ptr = x0
+  reg word = x1
+  add x0, ptr, word
+  ret
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "p.ode")
+            with open(p, "w") as f:
+                f.write(arm_src)
+            info = odec.compile_info(p, "f")
+            self.assertEqual(info["code_bytes"], 8)
+        # On x86-64, `reg ptr` is refused with an actionable hint naming alternatives.
+        x86_src = """target x86_64
+fn f as "f_sym" {
+  reg ptr = rdi
+  ret
+}
+"""
+        self.refused(x86_src, "f", 3, "byte ptr")
+        # AArch64 out-of-range immediates include exact fix guidance.
+        self.refused("target arm64\nfn f as \"f_sym\" {\n  mov x0, 65536\n  ret\n}\n", "f", 3, "mov + lsl + add")
+        self.refused("target arm64\nfn f as \"f_sym\" {\n  cmp x0, 4096\n  ret\n}\n", "f", 3, "scratch register")
+
 
 if __name__ == "__main__":
     unittest.main()

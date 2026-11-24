@@ -98,8 +98,20 @@ ARM_WHOLE.update({f"v{i}": f"v{i}" for i in range(32)})
 ARM_GENERAL = {r: 8 for r in ARM_G64}
 ARM_GENERAL.update({r: 4 for r in ARM_G32})
 
-RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame", "budget",
-            "if", "else", "loop", "while", "break", "continue"}       # words of operands and control forms: no name is one
+RESERVED_COMMON = {"frame", "budget", "if", "else", "loop", "while", "break", "continue"}
+RESERVED_X86 = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip"}
+RESERVED = RESERVED_COMMON | RESERVED_X86                             # kept for callers importing RESERVED
+
+
+def _reserved_for(target):
+    return RESERVED_COMMON if target == "arm64" else RESERVED
+
+
+def _reserved_err(what, name, target):
+    if target != "arm64" and name in RESERVED_X86:
+        return (f"{what} cannot be named `{name}` on x86-64 "
+                f"(reserved for memory operands like `byte ptr [...]`; use `p` or `buf` instead)")
+    return f"{what} cannot be named `{name}`"
 BRANCH_X86 = {"eq": "je", "ne": "jne", "ult": "jb", "uge": "jae"}
 BRANCH_ARM = {"eq": "b.eq", "ne": "b.ne", "ult": "b.lo", "uge": "b.hs"}
 INVERT_COND = {"eq": "ne", "ne": "eq", "ult": "uge", "uge": "ult"}
@@ -185,7 +197,7 @@ def frame_of(src, n, body, taken, target="x86_64"):
         m = re.fullmatch(r"(\w+)\s*:\s*(.+)", f)
         if not m: stop(src, k, f"a field of a frame is `NAME: COUNT * KIND` or `NAME: BYTES`, not `{f}`")
         name, what = m.groups()
-        if name in whole or name in RESERVED: stop(src, k, f"a field cannot be named `{name}`")
+        if name in whole or name in _reserved_for(target): stop(src, k, _reserved_err("a field", name, target))
         if name in fields or name in taken: stop(src, k, f"`{name}` is a name already")
         m = re.fullmatch(r"(.+)\*\s*([A-Za-z_]\w*)", what)
         count, kind = (number(m.group(1)), m.group(2)) if m else (number(what), "byte")
@@ -622,7 +634,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 name, register = m.groups()
                 if env or inside: stop(src, n, f"fn {fn}: a name for a register inside a for or an inline function")
                 if register not in whole: stop(src, n, f"`{register}` is no register")
-                if name in whole or name in RESERVED: stop(src, n, f"a register cannot be named `{name}`")
+                if name in whole or name in _reserved_for(target): stop(src, n, _reserved_err("a register", name, target))
                 if name in names or name in inlines or (frame[0] is not None and name in frame[0][1]): stop(src, n, f"`{name}` is a name already")
                 names[name] = register; continue
             if re.fullmatch(r"frame\s*\{", s):

@@ -207,6 +207,30 @@ Before any Phase 1 implementation is merged, it will include:
 
 ---
 
+## 5b. Real C-Boundary Finding Caught During AArch64 Audit: AAPCS64 `d8..d15`
+
+While auditing all AArch64 binaries produced by the Spec-First AI Factory on 24 November, we caught a
+concrete gap in the existing C-boundary ABI model in `proof-core/Contract.lean` and
+`proof-core/Machine.lean`:
+
+- On AArch64 (AAPCS64, used by both Linux and macOS), the low 64 bits of vector registers `v8..v15`
+  (`d8..d15`) are callee-saved alongside general-purpose registers `x19..x29`.
+- Today `Contract.keeps` checks `calleeSavedArm = [19..29]` (general-purpose registers only) and
+  places no preservation check on `v8..v15`. As a result, a generated AArch64 SIMD routine
+  (`chacha20_double_round_4x_arm64`) wrote to `v8` and `v9`, passed `odeverify`, and would have
+  clobbered a C or Rust caller's live `d8`/`d9` values.
+- Immediate mitigation (already landed): we audited every AArch64 `.ode` file in the repository,
+  replaced `v8`/`v9` in `chacha20_double_round_4x_arm64.ode` with caller-saved `v16`/`v17`, and
+  added a live hardware `d8..d15` preservation check to `proof-core/test_chacha20.py` and
+  `factory/test_factory_native.py`.
+- Proposed model fix (bundled with Phase 1 of this proposal): for default C-ABI AArch64 contracts
+  (those without a custom `calling` block), forbid writing to `v8..v15` unless saved and restored
+  (or track `v8..v15` preservation in `Contract.keepsVec`, defaulting to `[8..15]` on AArch64 C ABI
+  and `[]` on x86-64 System V ABI). Custom Ode-to-Ode `calling` blocks may explicitly list vector
+  registers to clobber or preserve.
+
+---
+
 ## 6. Questions for Review Before Building
 
 1. **Syntax:** Is the explicit `calling { in ...; out = ...; preserves ... }` block inside `contract`
@@ -219,3 +243,6 @@ Before any Phase 1 implementation is merged, it will include:
 3. **FFI guard:** Should a top-level contract checked without callers (or marked `export`) refuse a
    custom `calling` block by default so a programmer cannot accidentally export a non-C-ABI function
    to Rust or C?
+4. **AAPCS64 `d8..d15` fix:** Should we bundle the C-boundary AArch64 `v8..v15` preservation rule
+   into Phase 1 immediately (forbidding writes to `v8..v15` on default C-ABI AArch64 contracts unless
+   restored)?

@@ -130,6 +130,7 @@ def instruction(line):
         return ("jump", w, lbl, w.row, {"I": lbl})
 
     last_err = None
+    encode_err = None
     for w, rx, groups in MATCHERS:
         m = rx.match(s)
         if not m:
@@ -176,13 +177,18 @@ def instruction(line):
         try:
             raw = word.encode(w, bind)
         except word.Refuse as e:
-            last_err = str(e)
+            msg = str(e)
+            if "16 bits of I" in msg and w.row.name in ("mov_ri", "mov32_ri"):
+                msg += " (AArch64 mov immediate takes 0..65535; build larger constants with mov + lsl + add)"
+            elif "12 bits of I" in msg and w.row.name in ("add_ri", "sub_ri", "cmp_ri", "add_sp", "sub_sp"):
+                msg += " (AArch64 immediate takes 0..4095; load larger constants into a scratch register first)"
+            encode_err = msg
             continue
         got = word.decode(ALL_WAYS, raw)
         if got is None or got[0].name != w.row.name:
             raise ValueError(f"arm64.tab does not read back the word written for `{s}`")
         return ("fixed", raw, w.row, bind)
-    raise ValueError(f"{last_err or 'no row in arm64.tab matches'}: {s}")
+    raise ValueError(f"{encode_err or last_err or 'no row in arm64.tab matches'}: {s}")
 
 
 def written(line):
