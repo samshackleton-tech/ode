@@ -166,3 +166,97 @@ cd proof-core && python3 test_coder_exp.py -v
 OPENROUTER_API_KEY=... python3 paper/coder-exp/run_experiment.py \
     --mode live --max-usd 5.00 --out results/coder-exp-20261124.jsonl
 ```
+
+## 9. Round 1 Live Results (24 November 2026)
+
+Raw per-trial logs for all 150 live trials are recorded in
+[`coder-exp/results/live-20261124.jsonl`](coder-exp/results/live-20261124.jsonl).
+Total live spend across Round 1 was **$2.68** (well under the $5.00 cap).
+
+**Disclosed operational deviations from the pre-registered harness:**
+1. Before live trials began, a zero-task compatibility check showed that reasoning models
+   (`z-ai/glm-4.7-flash`, `openai/gpt-5-mini`) count internal reasoning tokens against `max_tokens`.
+   `max_tokens` was raised from `2048` to `8192` so reasoning chains were not truncated mid-code, and
+   transient HTTP retry and parallel trial workers (`--workers 16`, `--resume`) were added. No prompt,
+   card, task, contract, or scoring rule was changed.
+2. `z-ai/glm-4.7-flash` was stopped early after 6 partial trials (`$0.046` spent) because its reasoning
+   chains took 435–750 seconds per failed trial (often hitting the 8,192-token limit and returning an
+   empty reply). All 6 partial records remain in the JSONL log; aggregate comparisons below report the
+   6 full models (**144 trials**, 48 per arm, **$2.63 total**).
+
+### Results by model and arm
+
+Each row below gives one model and one arm (`arm_a` = baseline without the card, `arm_b` = card plus raw
+verifier output, `arm_c` = card plus surgical diagnostics and structured control flow). Columns show
+completed tasks (`n`), tasks verified `shown` on turn 1 (`pass@1`), tasks verified `shown` within 5 turns
+(`pass@5`), total API spend (`Spend`), cost per verified function (`$/ver`), and the percentage of total
+wall-clock time spent inside `ode_tool` rather than waiting on the model (`Tool %`).
+
+| Model | Arm | n | pass@1 | pass@5 | Spend | $/ver | Tool % |
+|---|---|---:|---:|---:|---:|---:|---:|
+| `anthropic/claude-sonnet-5.5` | `arm_a` | 8 | 0 | 2 | $0.6510 | $0.3255 | 0.05% |
+| `anthropic/claude-sonnet-5.5` | `arm_b` | 8 | 6 | 6 | $0.5320 | $0.0887 | 0.32% |
+| `anthropic/claude-sonnet-5.5` | `arm_c` | 8 | 6 | 6 | $0.6773 | $0.1129 | 0.24% |
+| `openai/gpt-5-mini` | `arm_a` | 8 | 0 | 1 | $0.1534 | $0.1534 | 0.00% |
+| `openai/gpt-5-mini` | `arm_b` | 8 | 3 | 6 | $0.1127 | $0.0188 | 0.07% |
+| `openai/gpt-5-mini` | `arm_c` | 8 | 2 | 6 | $0.1182 | $0.0197 | 0.08% |
+| `deepseek/deepseek-v3.2` | `arm_a` | 8 | 0 | 1 | $0.0180 | $0.0180 | 0.02% |
+| `deepseek/deepseek-v3.2` | `arm_b` | 8 | 4 | 5 | $0.0243 | $0.0049 | 0.29% |
+| `deepseek/deepseek-v3.2` | `arm_c` | 8 | 3 | 5 | $0.0246 | $0.0049 | 0.13% |
+| `mistralai/devstral-2512` | `arm_a` | 8 | 0 | 1 | $0.0503 | $0.0503 | 0.05% |
+| `mistralai/devstral-2512` | `arm_b` | 8 | 4 | 4 | $0.0312 | $0.0078 | 0.58% |
+| `mistralai/devstral-2512` | `arm_c` | 8 | 3 | 4 | $0.0328 | $0.0082 | 0.67% |
+| `qwen/qwen3-coder-30b-a3b-instruct` | `arm_a` | 8 | 0 | 0 | $0.0167 | — | 0.01% |
+| `qwen/qwen3-coder-30b-a3b-instruct` | `arm_b` | 8 | 2 | 2 | $0.0311 | $0.0155 | 0.83% |
+| `qwen/qwen3-coder-30b-a3b-instruct` | `arm_c` | 8 | 1 | 2 | $0.0368 | $0.0184 | 2.05% |
+| `qwen/qwen3-coder-next` | `arm_a` | 8 | 0 | 0 | $0.0570 | — | 0.00% |
+| `qwen/qwen3-coder-next` | `arm_b` | 8 | 0 | 2 | $0.0323 | $0.0162 | 0.54% |
+| `qwen/qwen3-coder-next` | `arm_c` | 8 | 1 | 2 | $0.0295 | $0.0147 | 0.45% |
+| `z-ai/glm-4.7-flash` *(stopped early)* | `arm_a`/`b`/`c` | 3/2/1 | 0/0/0 | 0/0/1 | $0.0462 | $0.0462 | 0.01% |
+
+### Aggregate by arm and by task (6 full models, 48 trials per arm)
+
+Each row in the first table summarizes one arm across all 6 full models (48 trials). Each cell in the
+second table shows `pass@1 / pass@5` out of the 6 full models for one task and one arm.
+
+| Arm | pass@1 | pass@5 | Total spend | $/verified | Top final failure buckets |
+|---|---:|---:|---:|---:|---|
+| `arm_a` (no card) | 0/48 (0.0%) | 5/48 (10.4%) | $0.9465 | $0.1893 | `compile_error` (40), `other_refused` (2), `proof_arithmetic` (1) |
+| `arm_b` (+card) | 19/48 (39.6%) | 25/48 (52.1%) | $0.7637 | $0.0305 | `false_functional` (8), `other_refused` (7), `compile_error` (6), `proof_arithmetic` (2) |
+| `arm_c` (full Step 2) | 16/48 (33.3%) | 25/48 (52.1%) | $0.9191 | $0.0368 | `other_refused` (10), `compile_error` (7), `false_functional` (4), `proof_arithmetic` (2) |
+
+| Task | `arm_a` | `arm_b` | `arm_c` |
+|---|---:|---:|---:|
+| `T1_x86_mix_step` | 0 / 3 | 4 / 4 | 2 / 4 |
+| `T2_arm_mix_step` | 0 / 1 | 4 / 5 | 4 / 5 |
+| `T3_x86_lead_zeros` | 0 / 0 | 3 / 5 | 2 / 5 |
+| `T4_arm_lead_zeros` | 0 / 0 | 5 / 6 | 5 / 5 |
+| `T5_x86_pad16` | 0 / 0 | 0 / 0 | 0 / 0 |
+| `T6_arm_pad16` | 0 / 0 | 0 / 0 | 0 / 0 |
+| `T7_x86_mix_twice` | 0 / 1 | 1 / 2 | 1 / 3 |
+| `T8_arm_mix_twice` | 0 / 0 | 2 / 3 | 2 / 3 |
+
+### Evaluation of pre-registered hypotheses (Round 1)
+
+- **H1 (Pass rate lift — partially confirmed):** Adding `docs/ODE-CARD.md` (`arm_a -> arm_b`) raised
+  aggregate `pass@1` from **0.0% to 39.6%** and `pass@5` from **10.4% to 52.1%** (and **69.4%** across
+  the 6 non-`pad16` tasks, with Claude Sonnet 5.5 at 6/6 `pass@1`, GPT-5-mini at 6/6 `pass@5`, and
+  DeepSeek v3.2 at 5/6 `pass@5`). However, **`arm_c` did not exceed `arm_b` in Round 1** (both 52.1%
+  `pass@5`; `arm_c` slightly lower on `pass@1` at 33.3%). Two concrete causes explain this:
+  1. Only 2 of 23 failures in `arm_b` were `proof_arithmetic`, so Upgrade A's decoded arithmetic hints
+     rarely fired; most remaining failures were compile/syntax errors or an inaccurate card line.
+  2. Our own `docs/ODE-CARD.md` falsely listed `wrote out[.. i] = expr` alongside `wrote out[i ..] = expr`
+     and omitted a worked countdown-write example. Every model (including Claude Sonnet 5.5 and
+     GPT-5-mini) tried forward loops with `wrote out[.. i]`, which `prove.py` refuses — causing **0/24**
+     across every model on `T5_x86_pad16` and `T6_arm_pad16`.
+- **H2 (Cost per verified function — confirmed vs `arm_a`, not yet `arm_c < arm_b`):** Cost per verified
+  function fell **6.2x** from `arm_a` (**$0.1893**) to `arm_b` (**$0.0305**), with DeepSeek v3.2 at
+  **$0.0049/verified** and Devstral 2512 at **$0.0078/verified**.
+- **H3 (Tool latency share < 5% — strongly confirmed):** Tool/verifier wall-clock share ranged from
+  **0.00% to 2.05%** across all models and arms; LLM token latency dominates by 50x–500x.
+- **H4 (Architecture symmetry):** Across `arm_b` + `arm_c` (48 trials per target), **AArch64 outperformed
+  x86-64**: **45.8% vs 27.1% `pass@1`** and **56.2% vs 47.9% `pass@5`**, because AArch64's uniform
+  3-operand syntax avoided x86-64 table quirks (`mov byte ptr [addr], al` requiring `al`, 64-bit-only
+  `cmp`, no indexed `[base + reg]` in `lea`).
+
+*Ode stands for Obsessively Double-checking Everything.*

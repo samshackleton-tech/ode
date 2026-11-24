@@ -1,0 +1,100 @@
+// Verifier-in-Ode building blocks for AArch64:
+//   - `v_row_contradicts_arm64`: final arithmetic refutation check (`Arithmetic.lean`)
+//   - `v_row_sum16_arm64`: 16-word NEON coefficient-row addition (`Arithmetic.sum`)
+//   - `v_bytes_eq_arm64`: exact byte-slice equality (`Reader.lean` token/symbol matching)
+target arm64
+
+inline fn sum4_neon(out: gpr, a: gpr, b: gpr, va: vec, vb: vec)
+  distinct(out, a, b) distinct(va, vb) changes va, vb {
+  ld1 {va.4s}, [a]
+  ld1 {vb.4s}, [b]
+  add va.4s, va.4s, vb.4s
+  st1 {va.4s}, [out]
+}
+
+fn row_contradicts as "v_row_contradicts_arm64" {
+  reg coeffs = x0
+  reg count = x1
+  reg pos = x2
+  reg neg = x3
+  reg idx = x4
+  reg addr = x5
+  reg res = x6
+
+  res := 0
+  cmp pos, neg
+  if ult {
+    idx := 0
+    res := 1
+    loop {
+      place {
+        name i = idx
+        fact 0 <= i
+        fact i <= n
+        fact row_contradicts(coeffs, pos, neg) == all_zero_from(coeffs, i)
+        decreases n - i
+      }
+      cmp idx, count
+      break if uge
+      add addr, coeffs, idx
+      ldrb w7, [addr, 0]
+      cmp x7, 0
+      if ne {
+        res := 0
+        break
+      }
+      add idx, idx, 1
+    }
+  }
+  x0 := res
+  ret
+}
+
+fn row_sum16 as "v_row_sum16_arm64" {
+  reg out = x0
+  reg a = x1
+  reg b = x2
+
+  for q in 0..3 {
+    sum4_neon(out, a, b, v0, v1)
+    add out, out, 16
+    add a, a, 16
+    add b, b, 16
+  }
+  sum4_neon(out, a, b, v0, v1)
+  ret
+}
+
+fn bytes_eq as "v_bytes_eq_arm64" {
+  reg a = x0
+  reg b = x1
+  reg count = x2
+  reg idx = x3
+  reg res = x4
+
+  idx := 0
+  res := 1
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact bytes_eq(a, b) == eq_from(a, b, i)
+      decreases n - i
+    }
+    cmp idx, count
+    break if uge
+    add x5, a, idx
+    ldrb w6, [x5, 0]
+    add x7, b, idx
+    ldrb w8, [x7, 0]
+    cmp x6, x8
+    if ne {
+      res := 0
+      break
+    }
+    add idx, idx, 1
+  }
+  x0 := res
+  ret
+}

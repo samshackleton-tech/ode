@@ -92,6 +92,21 @@ See `results/`. Each JSON file records one run of `cross.py --cases 200` on an A
 processor ran it, how many rows and instances were run, how many instances differed from the processor,
 and how many faulted as the rows say.
 
+## Using `arm64/` as a standalone package
+
+Nothing in `arm64/` or `arm64/agree/` depends on Ode's verifier, contracts, compiler, or soundness proofs
+(enforced by `test_standalone_package_has_no_ode_verifier_dependencies` in `test_arm64.py`).
+
+To reuse this AArch64 table, encoder/decoder, hardware comparison script, or Lean 4 agreement proofs in
+another project, copy only:
+
+- **Table, encoder/decoder, assembler, and hardware comparison script (1,351 lines total):** `arm64/` plus
+  the two shared parser/evaluator modules `core/table.py` and `core/conc.py` (Python 3 standard library
+  only; no external packages).
+- **Lean 4 agreement proofs against Google DeepMind's `arm64-semantics` (7,287 lines total):**
+  `arm64/agree/` plus `proof-core/Table.lean` and `proof-core/Machine.lean` (built with Lean 4.34.0 via
+  `cd arm64/agree && lake build`).
+
 ## What is not here yet
 
 - Conditional select (`cset`, `csel`) and flag-setting register arithmetic (`adds`, `subs`).

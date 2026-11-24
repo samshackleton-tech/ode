@@ -66,6 +66,18 @@ class Words(unittest.TestCase):
     def test_the_table_is_read(self):
         self.assertEqual(len(self.rows), 49)
         self.assertEqual(len(self.ways), 49)
+
+    def test_standalone_package_has_no_ode_verifier_dependencies(self):
+        """`arm64/` is an independent AArch64 ISA package: no code file here may import
+        or name Ode's verifier, soundness proofs, compiler, or contracts."""
+        banned = re.compile(r"\b(Core\.lean|Contract\.lean|Sound[A-Z]\w*\.lean|odeverify|odeprove|kcheck|odec)\b")
+        for p in sorted(HERE.rglob("*")):
+            if p.is_dir() or ".lake" in p.parts or "__pycache__" in p.parts: continue
+            if p.suffix not in (".py", ".lean", ".toml", ".tab"): continue
+            if p.resolve() == Path(__file__).resolve(): continue
+            text = p.read_text(encoding="utf-8")
+            m = banned.search(text)
+            self.assertIsNone(m, f"arm64/ file {p.relative_to(HERE)} depends on Ode verifier/compiler: {m and m.group(0)}")
         heads = [row.pattern[0] for row in self.rows]
         self.assertEqual(len(set(heads)), len(heads))             # a decoded instruction's first word says its row
         for way in self.ways:                                     # every placeholder of a row is in each of its ways

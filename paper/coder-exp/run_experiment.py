@@ -11,7 +11,7 @@ Every candidate `.ode` program is judged strictly by the Lean 4 verifier `odever
 Runs cleanly in `--mock` mode (zero network, zero cost) for deterministic testing, or `--live` against
 OpenRouter with a hard `--max-usd` cap enforced before every API request.
 """
-import argparse, json, os, re, subprocess, sys, tempfile, time, urllib.request
+import argparse, concurrent.futures, json, os, queue, re, subprocess, sys, tempfile, threading, time, urllib.error, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -174,37 +174,60 @@ class ToolWorker:
             self.p = None
 
 
-def call_openrouter(model, messages, api_key, max_tokens=2048, timeout=120):
+def call_openrouter(model, messages, api_key, max_tokens=8192, timeout=180, max_retries=4):
     payload = json.dumps({
         "model": model,
         "messages": messages,
         "temperature": 0.0,
         "max_tokens": max_tokens,
     }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "X-Title": "ode-coder-experiment",
-        },
-        method="POST",
-    )
-    t0 = time.perf_counter()
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        data = json.loads(r.read().decode("utf-8"))
-    dt = time.perf_counter() - t0
-    choice = data["choices"][0]["message"]["content"]
-    usage = data.get("usage") or {}
-    pt = int(usage.get("prompt_tokens", 0) or 0)
-    ct = int(usage.get("completion_tokens", 0) or 0)
-    if "cost" in usage and usage["cost"] is not None:
-        cost = float(usage["cost"])
-    else:
-        pin, pout = FALLBACK_PRICING.get(model, (1.0, 4.0))
-        cost = (pt * pin + ct * pout) / 1e6
-    return choice, pt, ct, cost, dt
+    last_err = None
+    for attempt in range(max_retries):
+        req = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "X-Title": "ode-coder-experiment",
+            },
+            method="POST",
+        )
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            dt = time.perf_counter() - t0
+            if "choices" not in data or not data["choices"]:
+                raise RuntimeError(f"empty OpenRouter response: {str(data)[:200]}")
+            choice = (data["choices"][0].get("message") or {}).get("content") or ""
+            usage = data.get("usage") or {}
+            pt = int(usage.get("prompt_tokens", 0) or 0)
+            ct = int(usage.get("completion_tokens", 0) or 0)
+            if "cost" in usage and usage["cost"] is not None:
+                cost = float(usage["cost"])
+            else:
+                pin, pout = FALLBACK_PRICING.get(model, (1.0, 4.0))
+                cost = (pt * pin + ct * pout) / 1e6
+            return choice, pt, ct, cost, dt
+        except urllib.error.HTTPError as e:
+            body = ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")[:200]
+            except Exception:
+                pass
+            last_err = RuntimeError(f"HTTP {e.code}: {body}")
+            if e.code in (429, 500, 502, 503, 504) and attempt + 1 < max_retries:
+                time.sleep(min(20.0, 2.0 * (2 ** attempt)))
+                continue
+            raise last_err
+        except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as e:
+            last_err = e
+            if attempt + 1 < max_retries:
+                time.sleep(min(20.0, 2.0 * (2 ** attempt)))
+                continue
+            raise
+    raise last_err
 
 
 def run_trial(worker, task, arm, model, call_fn, card_text, max_turns=5):
@@ -245,6 +268,8 @@ def run_trial(worker, task, arm, model, call_fn, card_text, max_turns=5):
             total_tool_s += tool_s
             bucket = classify_failure(resp)
             last_bucket = bucket
+            raw_err = "" if resp.get("ok") else ((resp.get("error") or (resp.get("result") or {}).get("raw") or "").strip().splitlines()[:2] or [""])[0][:180]
+            raw_err = raw_err.replace(td, "<tmp>")
             turns.append({
                 "turn": turn,
                 "ok": bool(resp.get("ok")),
@@ -254,6 +279,7 @@ def run_trial(worker, task, arm, model, call_fn, card_text, max_turns=5):
                 "prompt_tokens": pt,
                 "completion_tokens": ct,
                 "cost_usd": round(cost, 6),
+                "err": raw_err,
             })
             if resp.get("ok"):
                 passed_turn = turn
@@ -312,6 +338,8 @@ def main(argv=None):
     ap.add_argument("--tasks", nargs="+", default=None, help="subset of task IDs")
     ap.add_argument("--max-turns", type=int, default=5)
     ap.add_argument("--max-usd", type=float, default=5.0, help="hard cumulative USD cap in live mode")
+    ap.add_argument("--workers", type=int, default=1, help="parallel model workers (each with its own ToolWorker)")
+    ap.add_argument("--resume", action="store_true", help="skip (model, arm, task_id) records already in --out")
     ap.add_argument("--out", required=True, help="JSONL output log path")
     args = ap.parse_args(argv)
 
@@ -320,16 +348,31 @@ def main(argv=None):
         raise SystemExit("no tasks selected")
     card_text = load_card()
 
+    done_keys = set()
+    records = []
     spent = [0.0]
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    if args.resume and os.path.exists(args.out):
+        with open(args.out) as f:
+            for line in f:
+                if line.strip():
+                    rec = json.loads(line)
+                    done_keys.add((rec["model"], rec["arm"], rec["task_id"]))
+                    records.append(rec)
+                    spent[0] += float(rec.get("cost_usd", 0.0))
+
+    lock = threading.Lock()
     if args.mode == "live":
         api_key = os.environ.get("OPENROUTER_API_KEY")
         if not api_key:
             raise SystemExit("OPENROUTER_API_KEY must be set for --mode live")
         def call_fn(model, messages, turn, task, arm):
-            if spent[0] >= args.max_usd:
-                raise SystemExit(f"hard budget cap reached: ${spent[0]:.4f} >= ${args.max_usd:.2f}")
+            with lock:
+                if spent[0] >= args.max_usd:
+                    raise RuntimeError(f"hard budget cap reached: ${spent[0]:.4f} >= ${args.max_usd:.2f}")
             reply, pt, ct, cost, dt = call_openrouter(model, messages, api_key)
-            spent[0] += cost
+            with lock:
+                spent[0] += cost
             return reply, pt, ct, cost, dt
     else:
         # Deterministic mock: Turn 1 returns the planted negative control; Turn 2 returns the reference
@@ -338,20 +381,55 @@ def main(argv=None):
             code = task["reference"] if (arm == "arm_c" and turn >= 2) else task["negative"]
             return f"```ode\n{code}\n```", 500, 150, 0.0001, 0.01
 
-    records = []
-    worker = ToolWorker()
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-        with open(args.out, "w") as logf:
-            for model in args.models:
-                for arm in args.arms:
-                    for task in selected:
+    mode_str = "a" if (args.resume and os.path.exists(args.out)) else "w"
+    todo = queue.Queue()
+    for model in args.models:
+        for arm in args.arms:
+            for task in selected:
+                if (model, arm, task["id"]) not in done_keys:
+                    todo.put((model, arm, task))
+
+    with open(args.out, mode_str) as logf:
+        def worker_loop():
+            worker = ToolWorker()
+            try:
+                while True:
+                    try:
+                        model, arm, task = todo.get_nowait()
+                    except queue.Empty:
+                        return
+                    with lock:
+                        if args.mode == "live" and spent[0] >= args.max_usd:
+                            return
+                    try:
                         rec = run_trial(worker, task, arm, model, call_fn, card_text, max_turns=args.max_turns)
+                    except RuntimeError as e:
+                        if "hard budget cap" in str(e):
+                            return
+                        raise
+                    with lock:
                         records.append(rec)
                         logf.write(json.dumps(rec) + "\n")
                         logf.flush()
-    finally:
-        worker.close()
+                        if args.mode == "live":
+                            print(
+                                f"[{len(records):3d}] {model:34s} {arm} {task['id']:16s} "
+                                f"pass={str(rec['passed']):5s} turn={str(rec['passed_turn']):4s} "
+                                f"bucket={rec['final_bucket']:16s} cost=${rec['cost_usd']:.4f} "
+                                f"cum=${spent[0]:.4f}",
+                                file=sys.stderr, flush=True,
+                            )
+            finally:
+                worker.close()
+
+        n_workers = max(1, min(args.workers, todo.qsize() or 1))
+        if n_workers == 1:
+            worker_loop()
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as pool:
+                futs = [pool.submit(worker_loop) for _ in range(n_workers)]
+                for fut in futs:
+                    fut.result()
 
     for row in summarize_records(records):
         print(json.dumps(row))

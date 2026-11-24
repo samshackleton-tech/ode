@@ -1,0 +1,89 @@
+// Verifier-in-Ode building blocks for x86-64:
+//   - `v_row_contradicts_x86`: final arithmetic refutation check (`Arithmetic.lean`)
+//   - `v_row_sum16_x86`: 16-word SIMD coefficient-row addition (`Arithmetic.sum`)
+//   - `v_bytes_eq_x86`: exact byte-slice equality (`Reader.lean` token/symbol matching)
+target x86_64
+
+fn row_contradicts as "v_row_contradicts_x86" {
+  reg coeffs = rdi
+  reg count = rsi
+  reg pos = rdx
+  reg neg = rcx
+  reg idx = r8
+  reg addr = r9
+  reg res = rax
+
+  res := 0
+  cmp pos, neg
+  if ult {
+    idx := 0
+    res := 1
+    loop {
+      place {
+        name i = idx
+        fact 0 <= i
+        fact i <= n
+        fact row_contradicts(coeffs, pos, neg) == all_zero_from(coeffs, i)
+        decreases n - i
+      }
+      cmp idx, count
+      break if uge
+      addr := coeffs
+      add addr, idx
+      movzx r10d, byte ptr [addr]
+      cmp r10, 0
+      if ne {
+        res := 0
+        break
+      }
+      add idx, 1
+    }
+  }
+  ret
+}
+
+fn row_sum16 as "v_row_sum16_x86" {
+  reg out = rdi
+  reg a = rsi
+  reg b = rdx
+  vmovdqu32 zmm0, zmmword ptr [a + 0]
+  vmovdqu32 zmm1, zmmword ptr [b + 0]
+  vpaddd zmm0, zmm0, zmm1
+  vmovdqu32 zmmword ptr [out + 0], zmm0
+  ret
+}
+
+fn bytes_eq as "v_bytes_eq_x86" {
+  reg a = rdi
+  reg b = rsi
+  reg count = rdx
+  reg idx = rcx
+  reg res = rax
+
+  idx := 0
+  res := 1
+  loop {
+    place {
+      name i = idx
+      fact 0 <= i
+      fact i <= n
+      fact bytes_eq(a, b) == eq_from(a, b, i)
+      decreases n - i
+    }
+    cmp idx, count
+    break if uge
+    mov r8, a
+    add r8, idx
+    movzx r8d, byte ptr [r8]
+    mov r9, b
+    add r9, idx
+    movzx r9d, byte ptr [r9]
+    cmp r8, r9
+    if ne {
+      res := 0
+      break
+    }
+    add idx, 1
+  }
+  ret
+}
