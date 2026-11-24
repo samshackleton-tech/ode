@@ -19,8 +19,11 @@ through both entries (`p32` and `k32`); `b3l_pad`; `b3l_chunk_node`; the AVX-512
 `b3l_wide32` and `b3l_wide128`; and the four recursive tree functions (`b3l_take`, `b3l_part32`,
 `b3l_subtree`, and the top-level entry `b3l_hashr`), with direct self-recursion, logarithmic stack
 bounds (`bits(...)`), and read-only value arrays (`cvs`) proved sound under the exact same top-level
-soundness theorems. On AArch64, it also verifies BLAKE3's `b3l_pad_arm64` and the 7-round NEON
-one-block compression kernel `blake3_servil_compress_in_place_arm64`.
+soundness theorems. On **AArch64**, it verifies the **complete single-threaded AArch64 BLAKE3 hash**
+(all six functions, 368 instructions = 1,472 bytes, verified together in one `0.41 s` `odeverify` run
+using the 79 kB kept proof `proofs/b3hashr_arm64.proof`; see `test_hashr_arm64.py`):
+`blake3_servil_compress_in_place_arm64`, `b3l_pad_arm64`, `b3l_node_out_arm64`, `b3l_chunk_node_arm64`,
+`b3l_subtree_arm64`, and `b3l_hashr_arm64` (with `trace depends on len` only).
 
 Lean is how this version is implemented. Nobody needs Lean in order to use Ode: the proof that an author
 ships is a plain text file, and a verifier for it can be written in any language.
@@ -107,10 +110,11 @@ The functions it verifies today:
 | `b3l_hashr` | top-level single-threaded BLAKE3 hash function (`bytes_of(hash_words(words(key), flags, input))`, stack `18688 + 384 * bits(len / 1024)`, also verified with `trace depends on len, plat` omitting `flags`) | 265 instructions, 1 loop | 16,491 lines, 177.4 kB | 26.1 s for all 14 functions together (457 kB total) |
 | `b3l_pad_arm64` | AArch64 chunk-tail padding function verified against `kcheck/blake3.spec`'s `padded(src)`; input bytes kept out of the trace | 15 instructions (60 B), 1 loop of 64 iterations | 459 bytes | 0.14 s |
 | `blake3_servil_compress_in_place_arm64` | AArch64 NEON 7-round one-block BLAKE3 compression kernel (zero stack, zero read-only data, constant-time), verified against `compress` | 116 instructions (464 B), 1 loop of 7 iterations | 10 lines, 137 bytes | 0.17 s |
+| `b3l_node_out_arm64`, `b3l_chunk_node_arm64`, `b3l_subtree_arm64`, `b3l_hashr_arm64` | complete single-threaded AArch64 BLAKE3 hash (`examples/arm64/hash_arm64.ode`, recursive tree + chunk + node out; `trace depends on len` only; stack `656 + 272 * bits(len / 1024)`), verified together with `compress_arm64` and `pad_arm64` (`test_hashr_arm64.py`) | 237 instructions (368 total across all 6 functions = 1,472 B) | 6,758 lines, 79.1 kB (`proofs/b3hashr_arm64.proof`, all 6 functions) | 0.41 s for all 6 functions together |
 
 `ode_equal`, `ode_low`, `ode_eighth`, the four functions of `examples/table/` (`ode_third` is one of
 them), the two functions of `examples/sum/`, `ode_second_block`, `ode_absorb`, `ode_tail`, `ode_keyed`, `ode_left_block`, `ode_split_block`, `ode_left_last`, the three functions of `examples/far/`, `ode_empty`, `ode_parent`, `ode_turns`, `ode_high`, `ode_quad`, `ode_rounds` and `ode_quad32` are small examples written for this folder. Five are shipped functions from `kcheck/programs/`. Fourteen (`blake3_servil_compress_in_place_avx512`, `blake3_servil_compress_in_place_sse41`, `b3l_node_out`, `blake3_servil_avx512_p16`, `blake3_servil_avx512_p32`, `blake3_servil_avx512_k32`, `b3l_pad`, `b3l_chunk_node`, `b3l_wide32`, `b3l_wide128`, `b3l_take`, `b3l_part32`, `b3l_subtree`, `b3l_hashr`) are all fourteen functions in the shipped
-BLAKE3 object file `kcheck/b3hashr.o` (3,761 of its 3,761 instructions = 100%), verified together in one `odeverify` run (`test_hashr.py`), and the last two are AArch64 BLAKE3 functions verified against the same specification. Each one-block kernel's contract says that the eight 32-bit words
+BLAKE3 object file `kcheck/b3hashr.o` (3,761 of its 3,761 instructions = 100%), verified together in one `odeverify` run (`test_hashr.py`), and the last six are all six functions of the complete single-threaded AArch64 BLAKE3 hash verified together in one `odeverify` run against the same specification (`test_hashr_arm64.py`). Each one-block kernel's contract says that the eight 32-bit words
 at `h` end up holding `compress(h, m, t, length, flags)`, as `kcheck/blake3.spec` defines it.
 `b3l_node_out`'s contract says that `out` ends up holding `bytes_of(node_value(nd, root))`. The 16-way
 kernel's contract says, for every `n` from 1 up, that the sixteen chaining values at `out` are

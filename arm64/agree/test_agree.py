@@ -59,6 +59,8 @@ THEOREMS = [
     "ArmAgree.agree_ext_4",
     "ArmAgree.agree_ext_8",
     "ArmAgree.agree_ext_12",
+    "ArmAgree.agree_lsr_ri",
+    "ArmAgree.agree_orr_rrr",
 ]
 ALLOWED_AXIOMS = "[propext, Classical.choice, Quot.sound]"
 CHECK_BIN = os.path.join(HERE, ".lake", "build", "bin", "agree-check")
@@ -110,7 +112,7 @@ class BuiltChecks(unittest.TestCase):
             text=True,
             check=True,
         )
-        self.assertEqual(r.stdout.strip(), "agree-check: all 47 rows match arm64.tab")
+        self.assertEqual(r.stdout.strip(), "agree-check: all 49 rows match arm64.tab")
 
     def test_encodings_match_word_py(self):
         r = subprocess.run(

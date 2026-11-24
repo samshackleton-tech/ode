@@ -1,0 +1,330 @@
+// Complete single-threaded BLAKE3 hash for AArch64, written in higher-level Ode.
+//
+// Together with `compress_arm64.ode` (`blake3_servil_compress_in_place_arm64`) and
+// `pad_arm64.ode` (`b3l_pad_arm64`), these four functions (`b3l_node_out_arm64`,
+// `b3l_chunk_node_arm64`, `b3l_subtree_arm64`, `b3l_hashr_arm64`) implement arbitrary-length
+// BLAKE3 hashing and keyed hashing directly against `kcheck/blake3.spec`.
+//
+// Every branch depends only on the message length `len`: `b3l_hashr_arm64` satisfies
+// `trace depends on len` (no dependency on `input`, `key`, or `flags`).
+target arm64
+
+// Copy a 32-byte chaining value (`src` -> `dst`) using two 128-bit NEON transfers.
+inline fn copy_cv(dst: gpr, src: gpr, tmp_d: gpr, tmp_s: gpr, va: vec, vb: vec)
+  distinct(dst, src, tmp_d, tmp_s) distinct(va, vb) changes tmp_d, tmp_s, va, vb {
+  ld1 {va.4s}, [src]
+  add tmp_s, src, 16
+  ld1 {vb.4s}, [tmp_s]
+  st1 {va.4s}, [dst]
+  add tmp_d, dst, 16
+  st1 {vb.4s}, [tmp_d]
+}
+
+// Compress a chunk node into its 32-byte chaining value (or root hash when `root == 8`).
+// Arguments: (out, nd, root) in (x0, x1, x2).
+fn node_out_arm64 as "b3l_node_out_arm64" {
+  frame {
+    saved_lr: 1 * u64
+    pad: 8
+  }
+  sub sp, sp, frame.size
+  saved_lr[0] := x30
+
+  copy_cv(x0, x1, x9, x10, v0, v1)
+  ldr x4, [x1, 112]
+  orr x4, x4, x2
+  ldr x2, [x1, 104]
+  ldr x3, [x1, 96]
+  add x1, x1, 32
+  bl blake3_servil_compress_in_place_arm64
+
+  x30 := saved_lr[0]
+  add sp, sp, frame.size
+  ret
+}
+
+// Compress all full blocks of a chunk (`len <= 1024`) except the final block, pad the final
+// block into `nd.block`, and write `nd.counter`, `nd.length`, and `nd.flags`.
+// Arguments: (nd, input, len, t, flags) in (x0, x1, x2, x3, x4).
+fn chunk_node_arm64 as "b3l_chunk_node_arm64" {
+  frame {
+    saved: 7 * u64
+    pad: 8
+  }
+  reg nd = x19
+  reg p = x20
+  reg rem = x21
+  reg counter = x22
+  reg flags = x23
+  reg first = x24
+
+  sub sp, sp, frame.size
+  saved[0] := x30
+  saved[1] := x19
+  saved[2] := x20
+  saved[3] := x21
+  saved[4] := x22
+  saved[5] := x23
+  saved[6] := x24
+
+  nd := x0
+  p := x1
+  rem := x2
+  counter := x3
+  flags := x4
+  first := 1
+
+  loop {
+    cmp rem, 65
+    break if ult
+    x0 := nd
+    x1 := p
+    x2 := 64
+    x3 := counter
+    orr x4, flags, first
+    bl blake3_servil_compress_in_place_arm64
+    first := 0
+    add p, p, 64
+    sub rem, rem, 64
+  }
+
+  add x0, nd, 32
+  x1 := p
+  x2 := rem
+  bl b3l_pad_arm64
+
+  str counter, [nd, 96]
+  str rem, [nd, 104]
+  orr x9, flags, first
+  x10 := 2
+  orr x9, x9, x10
+  str x9, [nd, 112]
+
+  x24 := saved[6]
+  x23 := saved[5]
+  x22 := saved[4]
+  x21 := saved[3]
+  x20 := saved[2]
+  x19 := saved[1]
+  x30 := saved[0]
+  add sp, sp, frame.size
+  ret
+}
+
+// Compute the chaining value of the BLAKE3 Merkle subtree covering `input[0..len]` (`len >= 1`)
+// starting at chunk counter `t`.
+// Arguments: (out, input, len, kf, t) in (x0, x1, x2, x3, x4).
+fn subtree_arm64 as "b3l_subtree_arm64" {
+  frame {
+    nd: 16 * u64
+    blk: 1 * block
+    saved: 9 * u64
+    pad: 8
+  }
+  reg out = x19
+  reg inp = x20
+  reg length = x21
+  reg kf = x22
+  reg counter = x23
+  reg k = x24
+  reg n = x25
+  reg flags = x26
+
+  sub sp, sp, frame.size
+  saved[0] := x30
+  saved[1] := x19
+  saved[2] := x20
+  saved[3] := x21
+  saved[4] := x22
+  saved[5] := x23
+  saved[6] := x24
+  saved[7] := x25
+  saved[8] := x26
+
+  out := x0
+  inp := x1
+  length := x2
+  kf := x3
+  counter := x4
+  ldr flags, [kf, 32]
+
+  cmp length, 1025
+  if uge {
+    // Largest power of two k with 1024 * k < length
+    sub x9, length, 1
+    lsr x9, x9, 10
+    add x9, x9, 1
+    k := 1
+    x10 := 2
+    loop {
+      cmp x10, x9
+      break if uge
+      k := x10
+      lsl x10, x10, 1
+    }
+    lsl n, k, 10
+
+    // Left subtree into blk[0..32]
+    x0 := &blk
+    x1 := inp
+    x2 := n
+    x3 := kf
+    x4 := counter
+    bl b3l_subtree_arm64
+
+    // Right subtree into blk[32..64]
+    x0 := &blk
+    add x0, x0, 32
+    add x1, inp, n
+    sub x2, length, n
+    x3 := kf
+    add x4, counter, k
+    bl b3l_subtree_arm64
+
+    // Parent compression into out[0..32]
+    copy_cv(out, kf, x9, x10, v0, v1)
+    x0 := out
+    x1 := &blk
+    x2 := 64
+    x3 := 0
+    x9 := 4
+    orr x4, flags, x9
+    bl blake3_servil_compress_in_place_arm64
+  } else {
+    x9 := &nd
+    copy_cv(x9, kf, x10, x11, v0, v1)
+    x0 := &nd
+    x1 := inp
+    x2 := length
+    x3 := counter
+    x4 := flags
+    bl b3l_chunk_node_arm64
+
+    x0 := out
+    x1 := &nd
+    x2 := 0
+    bl b3l_node_out_arm64
+  }
+
+  x26 := saved[8]
+  x25 := saved[7]
+  x24 := saved[6]
+  x23 := saved[5]
+  x22 := saved[4]
+  x21 := saved[3]
+  x20 := saved[2]
+  x19 := saved[1]
+  x30 := saved[0]
+  add sp, sp, frame.size
+  ret
+}
+
+// Top-level BLAKE3 hash (and keyed hash) for arbitrary-length messages on AArch64.
+// Arguments: (out, input, len, key, flags) in (x0, x1, x2, x3, x4).
+fn hashr_arm64 as "b3l_hashr_arm64" {
+  frame {
+    kf: 6 * u64
+    nd: 16 * u64
+    blk: 1 * block
+    saved: 8 * u64
+  }
+  reg out = x19
+  reg inp = x20
+  reg length = x21
+  reg key = x22
+  reg flags = x23
+  reg k = x24
+  reg n = x25
+
+  sub sp, sp, frame.size
+  saved[0] := x30
+  saved[1] := x19
+  saved[2] := x20
+  saved[3] := x21
+  saved[4] := x22
+  saved[5] := x23
+  saved[6] := x24
+  saved[7] := x25
+
+  out := x0
+  inp := x1
+  length := x2
+  key := x3
+  flags := x4
+
+  cmp length, 1025
+  if uge {
+    // Pack keyed record (key[0..32], flags) into kf
+    x9 := &kf
+    copy_cv(x9, key, x10, x11, v0, v1)
+    str flags, [x9, 32]
+
+    // Largest power of two k with 1024 * k < length
+    sub x9, length, 1
+    lsr x9, x9, 10
+    add x9, x9, 1
+    k := 1
+    x10 := 2
+    loop {
+      cmp x10, x9
+      break if uge
+      k := x10
+      lsl x10, x10, 1
+    }
+    lsl n, k, 10
+
+    // Left subtree into blk[0..32]
+    x0 := &blk
+    x1 := inp
+    x2 := n
+    x3 := &kf
+    x4 := 0
+    bl b3l_subtree_arm64
+
+    // Right subtree into blk[32..64]
+    x0 := &blk
+    add x0, x0, 32
+    add x1, inp, n
+    sub x2, length, n
+    x3 := &kf
+    x4 := k
+    bl b3l_subtree_arm64
+
+    // Root parent compression: flags = (flags | PARENT) | ROOT
+    copy_cv(out, key, x9, x10, v0, v1)
+    x0 := out
+    x1 := &blk
+    x2 := 64
+    x3 := 0
+    x9 := 4
+    orr x4, flags, x9
+    x9 := 8
+    orr x4, x4, x9
+    bl blake3_servil_compress_in_place_arm64
+  } else {
+    x9 := &nd
+    copy_cv(x9, key, x10, x11, v0, v1)
+    x0 := &nd
+    x1 := inp
+    x2 := length
+    x3 := 0
+    x4 := flags
+    bl b3l_chunk_node_arm64
+
+    x0 := out
+    x1 := &nd
+    x2 := 8
+    bl b3l_node_out_arm64
+  }
+
+  x25 := saved[7]
+  x24 := saved[6]
+  x23 := saved[5]
+  x22 := saved[4]
+  x21 := saved[3]
+  x20 := saved[2]
+  x19 := saved[1]
+  x30 := saved[0]
+  add sp, sp, frame.size
+  ret
+}

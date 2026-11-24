@@ -92,3 +92,5 @@ Read in the code; the list may not be complete.
 3. **A load that moves its base.** `ldr w2, [x0], #4` changes two registers. A row's effect is already a list of statements (`push` has two), so the table's language needs nothing new for it.
 4. **Vectors.** The table has rows on four lanes and on sixteen lanes of 32 bits. NEON has four lanes; the table's lane-wise operations (`each32` with `xor32` or `ror32`) say what `eor` and a rotate do there.
 5. **Encoding.** Every AArch64 instruction is four bytes, so the part of the table that says how a row is written in bytes should be simpler than for x86-64. That is an expectation.
+
+*Ode stands for Obviously Didn't Explode.*

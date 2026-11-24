@@ -369,3 +369,5 @@ All four recommendations of section 12 are built and proved sound in Lean 4:
   - `test_trace_proposal.py` runs 14 end-to-end tests covering all examples from sections 3–13 (positive and negative controls, calls and inline code, `result depends on`, void-function refusal, and AArch64 equivalents; 3.5 seconds).
   - All 43 `proof-core` test suites pass on both x86-64 Linux and Apple M6.
   - The 14-job verification basket (`paper/REVIEW.md`) remains 14 of 14 `shown` with identical statement and proof sizes (339,244 and 49,020 bytes) and 35,232.31 million retired user-space instructions on x86-64 (+0.17% over the 35,173.96 million baseline).
+
+*Ode stands for Overthinking Details Endlessly.*

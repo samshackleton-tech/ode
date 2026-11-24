@@ -278,3 +278,5 @@ No code for these four additions has been written in `proof-core/` yet. Please c
 2. **Stack budgets of the form `base + step * bits(expr)`** (fixed `stack N` kept as the `step = 0` case).
 3. **Read-only value-array preconditions `requires A[i] == E(i) for i in 0..count`** (for `cvs` in `b3l_take`).
 4. **Multi-variable linear entry preconditions** (`requires 1024 * t + len <= 2^64 - 1`, generalizing `bounds` and `atLeast`).
+
+*Ode stands for Obsessively Double-checking Everything.*

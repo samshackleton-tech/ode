@@ -1,6 +1,6 @@
 # Proving rows of `arm64.tab` against Google DeepMind's `arm64-semantics`
 
-This folder is a standalone Lean 4 package. It proves that **all 47 of the 47 rows** of `../arm64.tab`
+This folder is a standalone Lean 4 package. It proves that **all 49 of the 49 rows** of `../arm64.tab`
 agree with Google DeepMind's `arm64-semantics` (package `arm64` in `google-deepmind/code-verification` at
 commit `b0f729accbc21a0413e7ca4e1da43fa45b5f2e1b`, under Lean 4.34.0).
 
@@ -9,7 +9,7 @@ and Google DeepMind's `Arm64.Trusted.ISA` (`Decode` and `Eval`).
 
 ## What is proved
 
-The table below lists all 49 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
+The table below lists all 51 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
 misaligned-stack fault theorems for `ldr64_sp` and `str64_sp`), the row each theorem covers, and what it
 states for every valid choice of operands and matching starting states.
 
@@ -64,8 +64,10 @@ states for every valid choice of operands and matching starting states.
 | `ArmAgree.agree_ext_4` | `ext_4` (`X = lanes(Y.1, Y.2, Y.3, Z.0)`) | For all `v0`..`v31` operands `x, y, z`, `EXT Vx.16B, Vy.16B, Vz.16B, #4` extracts 32-bit lanes `(Y.1, Y.2, Y.3, Z.0)`. |
 | `ArmAgree.agree_ext_8` | `ext_8` (`X = lanes(Y.2, Y.3, Z.0, Z.1)`) | For all `v0`..`v31` operands `x, y, z`, `EXT Vx.16B, Vy.16B, Vz.16B, #8` extracts 32-bit lanes `(Y.2, Y.3, Z.0, Z.1)`. |
 | `ArmAgree.agree_ext_12` | `ext_12` (`X = lanes(Y.3, Z.0, Z.1, Z.2)`) | For all `v0`..`v31` operands `x, y, z`, `EXT Vx.16B, Vy.16B, Vz.16B, #12` extracts 32-bit lanes `(Y.3, Z.0, Z.1, Z.2)`. |
+| `ArmAgree.agree_lsr_ri` | `lsr_ri` (`D = shr64(S, I)`) | For all `x0`..`x30` operands `d, s` and shift `I = 0..63` (`UBFM Xd, Xs, #I, #63`), both models write `s >>> I` into `d`. |
+| `ArmAgree.agree_orr_rrr` | `orr_rrr` (`D = or64(S, P)`) | For all `x0`..`x30` operands `d, s, p`, `ORR Xd, Xs, Xp` writes the 64-bit bitwise OR of `s` and `p` into `d`. |
 
-All 49 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
+All 51 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
 with no `sorry`, no `admit`, and no `bv_decide` axioms.
 
 ## What else is checked
@@ -76,12 +78,12 @@ the register-name lookup results as hypotheses. Two executable tests close that 
 files:
 
 - `CheckMain.lean` (`agree-check`) reads `../arm64.tab` through `Ode.readTable`, checks that the table
-  has 47 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
+  has 49 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
   `Ode.findRow`, `Ode.regOf`, `Ode.vecOf`, and `Ode.readInt` across all 31 general registers, all 32
   vector registers, sample displacements, immediates, shifts, and signed branch offsets.
-- `test_agree.py` runs `agree-check`, compares encoded 32-bit words for all 47 rows against `../word.py`
+- `test_agree.py` runs `agree-check`, compares encoded 32-bit words for all 49 rows against `../word.py`
   (both `word.decode` and `word.encode`, verifying the proved set equals the full set of rows in
-  `arm64.tab`), and checks `#print axioms` on all 49 theorems.
+  `arm64.tab`), and checks `#print axioms` on all 51 theorems.
 
 ## Known differences between the two models
 

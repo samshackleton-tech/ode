@@ -11,14 +11,14 @@ The table below lists each file in this folder and what it does.
 
 | File | What it does |
 |---|---|
-| `arm64.tab` | The table: 47 instruction forms, one row per form (general arithmetic and immediate shifts, 64/32/8-bit loads and stores, stack-pointer loads and stores with 16-byte alignment checks, 64-bit comparisons, unconditional and conditional branches, calls and returns, scalar-to-vector moves, and 128-bit NEON vector arithmetic, shifts, permutes, and extracts). The top of the file explains the format. |
+| `arm64.tab` | The table: 49 instruction forms, one row per form (general arithmetic, bitwise OR, and immediate shifts, 64/32/8-bit loads and stores, stack-pointer loads and stores with 16-byte alignment checks, 64-bit comparisons, unconditional and conditional branches, calls and returns, scalar-to-vector moves, and 128-bit NEON vector arithmetic, shifts, permutes, and extracts). The top of the file explains the format. |
 | `word.py` | Writes an instance of a row as its 32-bit instruction word, and reads four bytes back as an instance (including signed PC-relative branch offsets). A word is read only if the table writes that exact word for the instance, so nothing is read that is not written. |
 | `asm.py` | Table-driven AArch64 assembler that writes an ELF object file directly from Ode instructions, checking every emitted word back through `word.decode`. |
 | `obj.py` | Reads a function's instructions from an AArch64 ELF object file using the table alone, resolving PC-relative branch targets and `bl` call targets from ELF relocations. Refuses any word that is not an instance of a row. |
 | `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (registers, flags, vector lanes, memory, and faults) with what the row says. |
 | `test_arm64.py` | The tests: on any machine, the instruction words and decoding; on an AArch64 machine with clang, comparison against the processor. |
 | `results/` | What `cross.py --out` wrote on each processor tested (`apple-m6.json`, `ampereone.json`). |
-| `agree/` | A standalone Lean 4 package proving that **all 47 of the 47 rows** of `arm64.tab` (49 theorems, including stack-pointer alignment fault theorems for `ldr64_sp` and `str64_sp`) agree with Google DeepMind's `arm64-semantics`. |
+| `agree/` | A standalone Lean 4 package proving that **all 49 of the 49 rows** of `arm64.tab` (51 theorems, including stack-pointer alignment fault theorems for `ldr64_sp` and `str64_sp`) agree with Google DeepMind's `arm64-semantics`. |
 
 The effect language and its interpreter on numbers are shared with the x86-64 table: `../core/table.py`
 and `../core/conc.py`. Three small additions were made to those two files for AArch64:
@@ -97,7 +97,7 @@ and how many faulted as the rows say.
 - Conditional select (`cset`, `csel`) and flag-setting register arithmetic (`adds`, `subs`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- All 47 rows currently in `arm64.tab` are proved in `agree/` (49 theorems, zero `sorry`, standard Lean
+- All 49 rows currently in `arm64.tab` are proved in `agree/` (51 theorems, zero `sorry`, standard Lean
   axioms only); any future rows added to `arm64.tab` should be paired with their agreement proof there.
 
 *Ode stands for Opcode Discipline with Evidence.*

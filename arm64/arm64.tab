@@ -57,6 +57,10 @@ sub_rri      | sub D64, S64, I              | .subi .D .S I        | D = sub64(S
              = 1 1 0 100010 0 IIIIIIIIIIII SSSSS DDDDD
 lsl_ri       | lsl D64, S64, I              | .lsl .D .S I         | D = shl64(S, I)
              = 1 10 100110 1 rrrrrr ssssss SSSSS DDDDD ; I=64-r I=63-s
+lsr_ri       | lsr D64, S64, I              | .lsr .D .S I         | D = shr64(S, I)
+             = 1 10 100110 1 IIIIII 111111 SSSSS DDDDD
+orr_rrr      | orr D64, S64, P64            | .orr64 .D .S .P      | D = or64(S, P)
+             = 1 01 01010 00 0 PPPPP 000000 SSSSS DDDDD
 
 # -- the stack pointer
 add_sp       | add sp, sp, I                | .add_sp I            | sp = add64(sp, I)

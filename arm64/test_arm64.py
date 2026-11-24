@@ -41,7 +41,7 @@ CHANGED = [("add is sub", "| D = add64(S, P)", "| D = sub64(S, P)", "differs"),
 # Words that are instructions and no instance of a row: each has 31 in a field of D, S or P, or a bit the row has fixed.
 NOT_READ = {"aa1f03e0": "mov x0, xzr", "aa0103ff": "mov xzr, x1", "8b1f0020": "add x0, x1, xzr", "91401020": "add x0, x1, #4, lsl #12",
             "f8626820": "ldr x0, [x1, x2]", "f85f8020": "ldur x0, [x1, #-8]", "d65f0020": "ret x1", "4c407420": "ld1 {v0.8h}, [x1]",
-            "d341fc20": "lsr x0, x1, #1 (UBFM imms=63, not LSL)", "00000000": "udf #0"}
+            "9341fc20": "asr x0, x1, #1 (SBFM, not UBFM)", "00000000": "udf #0"}
 
 
 def text_of(obj):
@@ -64,8 +64,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 47)
-        self.assertEqual(len(self.ways), 47)
+        self.assertEqual(len(self.rows), 49)
+        self.assertEqual(len(self.ways), 49)
         heads = [row.pattern[0] for row in self.rows]
         self.assertEqual(len(set(heads)), len(heads))             # a decoded instruction's first word says its row
         for way in self.ways:                                     # every placeholder of a row is in each of its ways
@@ -126,6 +126,7 @@ class Words(unittest.TestCase):
                            ("shl_4s", {"X": 0, "Y": 1, "I": 32}), ("eor_v", {"X": 32, "Y": 1, "Z": 2}), ("ldr64", {"D": "x0", "B": "x31", "N": 8}),
                            ("ldr64", {"D": "x0", "B": "sp", "N": 16}), ("ldr64_sp", {"D": "sp", "N": 16}), ("str64_sp", {"S": "x0", "N": 4}),
                            ("lsl_ri", {"D": "x0", "S": "x1", "I": 0}), ("lsl_ri", {"D": "x0", "S": "x1", "I": 64}),
+                           ("lsr_ri", {"D": "x0", "S": "x1", "I": 64}), ("orr_rrr", {"D": "x0", "S": "sp", "P": "x1"}),
                            ("fmov_d", {"X": 32, "S": "x0"}), ("fmov_d", {"X": 0, "S": "sp"})):
             with self.subTest(row=name, bind=bind):
                 with self.assertRaises(word.Refuse): word.encode(way[name], bind)
@@ -174,7 +175,7 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("40 rows, each as the assembler writes it and as the table writes it, 8000 instances: 0 differ from this processor", last)
+        self.assertIn("42 rows, each as the assembler writes it and as the table writes it, 8400 instances: 0 differ from this processor", last)
         self.assertIn("0 of the assembler's words are not the table's; 7 rows are not run: b, b_eq, b_ne, b_hs, b_lo, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)

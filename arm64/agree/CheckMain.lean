@@ -45,9 +45,9 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that ALL 47 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
-  if table.size != 47 then
-    throw (IO.userError s!"expected 47 rows in arm64.tab, found {table.size}")
+  -- 1. Check that ALL 49 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
+  if table.size != 49 then
+    throw (IO.userError s!"expected 49 rows in arm64.tab, found {table.size}")
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -85,6 +85,8 @@ def main (args : List String) : IO Unit := do
   checkRow table "ld1_4s" ArmAgree.effectLd1_4s
   checkRow table "st1_4s" ArmAgree.effectSt1_4s
   checkRow table "lsl_ri" ArmAgree.effectLslRi
+  checkRow table "lsr_ri" ArmAgree.effectLsrRi
+  checkRow table "orr_rrr" ArmAgree.effectOrrRrr
   checkRow table "fmov_d" ArmAgree.effectFmovD
   checkRow table "uzp1_4s" ArmAgree.effectUzp1_4s
   checkRow table "uzp2_4s" ArmAgree.effectUzp2_4s
@@ -473,5 +475,27 @@ def main (args : List String) : IO Unit := do
         IO.println s!"ext_8 {hex32 (ArmAgree.encodeExt8 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insExt8}"
         IO.println s!"ext_12 {hex32 (ArmAgree.encodeExt12 ⟨i, hi⟩ ⟨y, Nat.mod_lt _ (by decide)⟩ ⟨z, Nat.mod_lt _ (by decide)⟩)} {insExt12}"
 
+  let lsrShifts : List Nat := [0, 1, 7, 10, 31, 47, 63]
+  for i in List.range 31 do
+    let s := (i + 7) % 31
+    let p := (i + 13) % 31
+    let insOrr := s!"(.orr64 .x{i} .x{s} .x{p})"
+    checkInstance table "orr_rrr" insOrr (fun bd =>
+      Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+      Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+      Ode.regOf bd "P" == some (ArmAgree.armSlot p))
+    if hi : i < 31 then
+      if wordsOnly then
+        IO.println s!"orr_rrr {hex32 (ArmAgree.encodeOrrRrr ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨p, Nat.mod_lt _ (by decide)⟩)} {insOrr}"
+      for sh in lsrShifts do
+        let insLsr := s!"(.lsr .x{i} .x{s} {sh})"
+        checkInstance table "lsr_ri" insLsr (fun bd =>
+          Ode.regOf bd "D" == some (ArmAgree.armSlot i) &&
+          Ode.regOf bd "S" == some (ArmAgree.armSlot s) &&
+          (bd.lookup "I").bind Ode.readInt == some (sh : Int))
+        if hsh : sh < 64 then
+          if wordsOnly then
+            IO.println s!"lsr_ri {hex32 (ArmAgree.encodeLsrRi ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨sh, hsh⟩)} {insLsr}"
+
   if !wordsOnly then
-    IO.println "agree-check: all 47 rows match arm64.tab"
+    IO.println "agree-check: all 49 rows match arm64.tab"
