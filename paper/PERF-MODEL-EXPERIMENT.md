@@ -244,3 +244,28 @@ speedup, and API spend by model across both arms (8 episodes per model per arm).
 Across all 160 attempts per arm:
 - **Arm P0:** 88 `shown`, 46 `compile_error`, 13 `other_refused`, 7 `proof_arithmetic`, 5 `false_functional`, 1 `tool_error`.
 - **Arm P1:** 92 `shown`, 39 `compile_error`, 19 `other_refused`, 8 `proof_arithmetic`, 2 `false_functional`, 0 `tool_error`.
+
+### 7.7 Post-Experiment Fix to `advice/estimate.py` (Re-Scored on Frozen Hardware Data)
+
+Following the diagnosis in Section 7.3, `advice/estimate.py` was updated so `static_analyze` splits
+branching functions into basic blocks and evaluates each acyclic entry-to-exit path separately
+(never chaining register dependencies across `ret` boundaries, and reporting per-path min, expected,
+mean, and worst-case cycle lower bounds in `paths`). Straight-line functions and single-entry loops
+are unchanged.
+
+Re-scoring the exact same **58 frozen real-silicon timings** from Section 7.2 without re-running any
+model or benchmark produced the calibration shift below (each cell shows Spearman `rho` between
+predicted and measured speedup):
+
+| Subset (`N`) | Pre-Fix Flat `advise` (`rho`) | Post-Fix CFG Worst-Path `advise` (`rho`) | Shift |
+|---|---:|---:|---:|
+| Combined Zen 5 + Apple M6 (58) | `+0.268` | **`+0.474`** | **`+0.206`** |
+| Zen 5 branchy (`base64_char_val`, `der_tlv_len`, 11) | `+0.397` | **`+0.918`** | **`+0.521`** |
+| Apple M6 all (31) | `-0.266` | **`+0.286`** | **`+0.552`** |
+| Apple M6 branchy (`base64_char_val`, `der_tlv_len`, 16) | `-0.399` | **`+0.364`** | **`+0.763`** |
+
+Specifically, on `base64_char_val_arm64`, the proxy-gaming variant `ae0594b63d4d` (which deleted 5
+early `ret` instructions and ran `0.935x` slower on Apple M6) now scores worse on expected path cost
+(`3.75` vs `2.55` cycles) rather than better (`4.5` vs `7.0`), and `der_tlv_len_arm64` `aa4465f24bed`
+(`1.328x` faster on Apple M6) no longer suffers the bogus cross-`ret` `18.0`-cycle critical-path
+penalty (`8.0` cycles worst-path).

@@ -248,10 +248,14 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
         reads, writes, jtgt, is_call = row_rw(row, bind, target)
         cls = classify_row(row.name, target)
         cost = classes[cls]
+        is_uncond = row.name in ("jmp", "b")
+        is_cond = cls == "branch" and not is_uncond
+        is_ret = cls == "ret"
         parsed.append({
             "pc": pc, "end": end_pc, "len": end_pc - pc, "text": text,
             "row": row.name, "class": cls, "cost": cost,
             "reads": reads, "writes": writes, "jump": jtgt, "call": is_call,
+            "uncond": is_uncond, "cond": is_cond, "ret": is_ret,
         })
 
     code_bytes = parsed[-1]["end"] if parsed else 0
@@ -323,7 +327,77 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
                 "body": analyze_seq(body),
             })
 
-    whole = analyze_seq(parsed)
+    # Build basic-block DAG (ignoring loop back-edges, which `loops` analyzes separately)
+    # so branching functions never chain register dependencies across `ret` boundaries or sum
+    # mutually exclusive early-return blocks into one fake straight-line trace.
+    paths_summary = None
+    if parsed:
+        pc_to_idx = {it["pc"]: i for i, it in enumerate(parsed)}
+        leaders = {0}
+        for i, it in enumerate(parsed):
+            if it["jump"] is not None and it["jump"] in pc_to_idx:
+                leaders.add(pc_to_idx[it["jump"]])
+            if (it["cond"] or it["uncond"] or it["ret"]) and i + 1 < len(parsed):
+                leaders.add(i + 1)
+        ls = sorted(leaders)
+        blocks = []
+        idx_to_blk = {}
+        for bi, s in enumerate(ls):
+            e = ls[bi + 1] if bi + 1 < len(ls) else len(parsed)
+            blocks.append(parsed[s:e])
+            idx_to_blk[s] = bi
+        succs = [[] for _ in blocks]
+        for bi, blk in enumerate(blocks):
+            last = blk[-1]
+            if last["ret"]:
+                continue
+            if last["uncond"]:
+                if last["jump"] in pc_to_idx and last["jump"] > last["pc"]:
+                    succs[bi].append(idx_to_blk[pc_to_idx[last["jump"]]])
+            elif last["cond"]:
+                if bi + 1 < len(blocks):
+                    succs[bi].append(bi + 1)
+                if last["jump"] in pc_to_idx and last["jump"] > last["pc"]:
+                    tbi = idx_to_blk[pc_to_idx[last["jump"]]]
+                    if tbi not in succs[bi]:
+                        succs[bi].append(tbi)
+            elif bi + 1 < len(blocks):
+                succs[bi].append(bi + 1)
+        dag_paths = []
+        def _walk_dag(bi, acc, prob):
+            if len(dag_paths) >= 512:
+                return
+            acc2 = acc + blocks[bi]
+            if not succs[bi]:
+                dag_paths.append((prob, acc2))
+                return
+            p2 = prob / len(succs[bi])
+            for nb in succs[bi]:
+                _walk_dag(nb, acc2, p2)
+        _walk_dag(0, [], 1.0)
+    else:
+        dag_paths = []
+
+    flat = analyze_seq(parsed)
+    if len(dag_paths) > 1:
+        tot_p = sum(p for p, _ in dag_paths)
+        path_reps = [(p / tot_p, analyze_seq(seq)) for p, seq in dag_paths]
+        worst = max((r for _, r in path_reps), key=lambda r: (r["compute_lower_bound"], r["critical_path"], r["uops"]))
+        exp_lb = sum(w * r["compute_lower_bound"] for w, r in path_reps)
+        mean_lb = sum(r["compute_lower_bound"] for _, r in path_reps) / len(path_reps)
+        min_lb = min(r["compute_lower_bound"] for _, r in path_reps)
+        whole = dict(flat)
+        for k in ("uops", "critical_path", "frontend_issue", "unit_throughput", "compute_lower_bound", "limiting"):
+            whole[k] = worst[k]
+        paths_summary = {
+            "count": len(path_reps),
+            "min_lower_bound": round(min_lb, 2),
+            "expected_lower_bound": round(exp_lb, 2),
+            "mean_lower_bound": round(mean_lb, 2),
+            "worst_lower_bound": worst["compute_lower_bound"],
+        }
+    else:
+        whole = flat
     return {
         "target": target,
         "arch": arch_key,
@@ -334,6 +408,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
         "icache_lines": icache_lines,
         "frame_bytes": frame["size"] if frame else 0,
         "whole": whole,
+        "paths": paths_summary,
         "loops": loops,
     }
 
@@ -729,6 +804,13 @@ def format_report(symbol, static_rep, mem_rep=None):
         f"(limiting: {w['limiting']}; crit={w['critical_path']:.1f}, fe={w['frontend_issue']:.1f}, "
         f"uops={w['uops']:.1f}, gpr={w['distinct_gpr']}, vec={w['distinct_vec']})"
     )
+    ps = static_rep.get("paths")
+    if ps and ps["count"] > 1:
+        lines.append(
+            f"  paths:  {ps['count']} acyclic entry-to-exit path(s) — "
+            f"min {ps['min_lower_bound']:.1f}, expected {ps['expected_lower_bound']:.2f}, "
+            f"mean {ps['mean_lower_bound']:.2f}, worst {ps['worst_lower_bound']:.1f} cyc"
+        )
     for idx, lp in enumerate(static_rep["loops"]):
         lb = lp["body"]
         src_note = f" lines {lp['source_lines'][0]}..{lp['source_lines'][1]}" if lp["source_lines"] else ""

@@ -271,6 +271,82 @@ fn st_ld as "t_st_ld" {
         self.assertGreater(by_a["arm_stlf_width"]["pred_b_warm"], by_a["arm_stlf_width"]["pred_a_warm"])
         self.assertGreater(by_a["arm_l1d_conflict"]["pred_b_warm"], by_a["arm_l1d_conflict"]["pred_a_warm"])
 
+    def test_cfg_no_cross_ret_dependency_and_no_early_ret_penalty(self):
+        # 1. Mutually exclusive early-returning blocks writing the same register x4 must NOT
+        # chain their critical paths across `ret` instructions (bug found on der_tlv_len_arm64).
+        src_split = """target arm64
+fn two_arms as "t_two_arms" {
+  cmp x0, 1
+  b.eq @arm1
+  add x4, x1, 1
+  add x4, x4, 2
+  add x4, x4, 3
+  mov x0, x4
+  ret
+@arm1:
+  add x4, x1, 4
+  add x4, x4, 5
+  add x4, x4, 6
+  mov x0, x4
+  ret
+}
+"""
+        t, progs, lmaps, frames = _compile_and_decode(src_split, ["two_arms"])
+        rep = estimate.static_analyze(progs["t_two_arms"], t, "apple_m", lmaps["t_two_arms"], frames["t_two_arms"])
+        self.assertIsNotNone(rep["paths"])
+        self.assertEqual(rep["paths"]["count"], 2)
+        # Each arm has 3 dependent adds (crit = 3.0), NEVER 6.0 chained across `ret`!
+        self.assertLessEqual(rep["whole"]["critical_path"], 4.0)
+
+        # 2. Removing early `ret` instructions so execution falls through every branch must NOT
+        # improve expected path cost (bug found on base64_char_val_arm64).
+        src_early = """target arm64
+fn early as "t_early" {
+  cmp x0, 1
+  if eq {
+    mov x0, 10
+    ret
+  }
+  cmp x0, 2
+  if eq {
+    mov x0, 20
+    ret
+  }
+  cmp x0, 3
+  if eq {
+    mov x0, 30
+    ret
+  }
+  mov x0, 99
+  ret
+}
+"""
+        src_fall = """target arm64
+fn fall as "t_fall" {
+  mov x1, x0
+  mov x0, 99
+  cmp x1, 1
+  if eq {
+    mov x0, 10
+  }
+  cmp x1, 2
+  if eq {
+    mov x0, 20
+  }
+  cmp x1, 3
+  if eq {
+    mov x0, 30
+  }
+  ret
+}
+"""
+        t1, p1, lm1, f1 = _compile_and_decode(src_early, ["early"])
+        t2, p2, lm2, f2 = _compile_and_decode(src_fall, ["fall"])
+        r_early = estimate.static_analyze(p1["t_early"], t1, "apple_m", lm1["t_early"], f1["t_early"])
+        r_fall = estimate.static_analyze(p2["t_fall"], t2, "apple_m", lm2["t_fall"], f2["t_fall"])
+        self.assertLess(r_early["paths"]["expected_lower_bound"], r_fall["paths"]["expected_lower_bound"])
+        self.assertLessEqual(r_early["whole"]["compute_lower_bound"], r_fall["whole"]["compute_lower_bound"])
+
 
 if __name__ == "__main__":
     unittest.main()
