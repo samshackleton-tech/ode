@@ -155,19 +155,18 @@ def run_episode(rid, target, arch, model, arm, card, api_key, pool, spend_lock, 
             with spend_lock:
                 if spend[0] >= max_usd:
                     break
-            t_llm0 = time.time()
             try:
-                content, usage, cost = rexp.call_openrouter(model, messages, api_key, timeout=120, max_retries=2)
+                content, pt, ct, cost, t_llm = rexp.call_openrouter(model, messages, api_key, timeout=120, max_retries=2)
             except Exception as e:
                 attempts.append({"turn": turn, "bucket": "api_error", "error": str(e)[:300]})
                 break
-            t_llm = round(time.time() - t_llm0, 2)
+            t_llm = round(t_llm, 2)
             ep_cost += cost
             with spend_lock:
                 spend[0] += cost
 
             messages.append({"role": "assistant", "content": content})
-            code = rexp.extract_ode_block(content)
+            code = rexp.extract_ode_source(content)
             if not code:
                 attempts.append({"turn": turn, "bucket": "no_code_block", "llm_s": t_llm, "cost": round(cost, 6)})
                 messages.append({"role": "user", "content": "No ```ode ... ``` block found. Reply with ONLY one complete ```ode``` code block."})
@@ -179,12 +178,11 @@ def run_episode(rid, target, arch, model, arm, card, api_key, pool, spend_lock, 
             c_hash = hashlib.sha256(code.strip().encode()).hexdigest()[:12]
 
             worker = pool.get()
-            t_tool0 = time.time()
             try:
-                resp = worker.check(src_p, tmp_spec, arch=arch)
+                resp, t_tool = worker.check(src_p, tmp_spec, arch=arch, out_dir=td)
             finally:
                 pool.put(worker)
-            t_tool = round(time.time() - t_tool0, 3)
+            t_tool = round(t_tool, 3)
 
             verdict = resp.get("verdict") or resp.get("error")
             if verdict == "shown":
