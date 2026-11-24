@@ -1,0 +1,87 @@
+fn ode_varint_decode_u32
+i 0 4 .cmp 64 (.reg .rsi) (.imm 0x0)
+i 4 10 .je 0x137
+i 10 14 .movzx8 .r8 (.mem .rdi 0x0)
+i 14 21 .cmp 64 (.reg .r8) (.imm 0x80)
+i 21 23 .jb 0x7C
+i 23 27 .cmp 64 (.reg .rsi) (.imm 0x1)
+i 27 33 .je 0x137
+i 33 38 .movzx8 .r9 (.mem .rdi 0x1)
+i 38 45 .cmp 64 (.reg .r9) (.imm 0x80)
+i 45 47 .jb 0x84
+i 47 51 .cmp 64 (.reg .rsi) (.imm 0x2)
+i 51 57 .je 0x137
+i 57 62 .movzx8 .r10 (.mem .rdi 0x2)
+i 62 69 .cmp 64 (.reg .r10) (.imm 0x80)
+i 69 71 .jb 0xA3
+i 71 75 .cmp 64 (.reg .rsi) (.imm 0x3)
+i 75 81 .je 0x137
+i 81 86 .movzx8 .r11 (.mem .rdi 0x3)
+i 86 93 .cmp 64 (.reg .r11) (.imm 0x80)
+i 93 95 .jb 0xCD
+i 95 99 .cmp 64 (.reg .rsi) (.imm 0x4)
+i 99 105 .je 0x137
+i 105 109 .movzx8 .rdx (.mem .rdi 0x4)
+i 109 113 .cmp 64 (.reg .rdx) (.imm 0x10)
+i 113 119 .jb 0xFD
+i 119 124 .jmp 0x137
+i 124 127 .mov 64 (.reg .rax) (.reg .r8)
+i 127 132 .jmp 0x144
+i 132 136 .cmp 64 (.reg .r9) (.imm 0x0)
+i 136 142 .je 0x137
+i 142 145 .mov 64 (.reg .rax) (.reg .r9)
+i 145 149 .shl64 .rax 7
+i 149 155 .sub 64 (.reg .rax) (.imm 0x80)
+i 155 158 .add 64 (.reg .rax) (.reg .r8)
+i 158 163 .jmp 0x144
+i 163 167 .cmp 64 (.reg .r10) (.imm 0x0)
+i 167 173 .je 0x137
+i 173 176 .mov 64 (.reg .rcx) (.reg .r10)
+i 176 180 .shl64 .rcx 14
+i 180 183 .mov 64 (.reg .rax) (.reg .r9)
+i 183 187 .shl64 .rax 7
+i 187 190 .add 64 (.reg .rcx) (.reg .rax)
+i 190 193 .add 64 (.reg .rcx) (.reg .r8)
+i 193 200 .sub 64 (.reg .rcx) (.imm 0x4080)
+i 200 203 .mov 64 (.reg .rax) (.reg .rcx)
+i 203 205 .jmp 0x144
+i 205 209 .cmp 64 (.reg .r11) (.imm 0x0)
+i 209 211 .je 0x137
+i 211 214 .mov 64 (.reg .rcx) (.reg .r11)
+i 214 218 .shl64 .rcx 21
+i 218 221 .mov 64 (.reg .rax) (.reg .r10)
+i 221 225 .shl64 .rax 14
+i 225 228 .add 64 (.reg .rcx) (.reg .rax)
+i 228 231 .mov 64 (.reg .rax) (.reg .r9)
+i 231 235 .shl64 .rax 7
+i 235 238 .add 64 (.reg .rcx) (.reg .rax)
+i 238 241 .add 64 (.reg .rcx) (.reg .r8)
+i 241 248 .sub 64 (.reg .rcx) (.imm 0x204080)
+i 248 251 .mov 64 (.reg .rax) (.reg .rcx)
+i 251 253 .jmp 0x144
+i 253 257 .cmp 64 (.reg .rdx) (.imm 0x0)
+i 257 259 .je 0x137
+i 259 262 .mov 64 (.reg .rcx) (.reg .rdx)
+i 262 266 .shl64 .rcx 28
+i 266 269 .mov 64 (.reg .rax) (.reg .r11)
+i 269 273 .shl64 .rax 21
+i 273 276 .add 64 (.reg .rcx) (.reg .rax)
+i 276 279 .mov 64 (.reg .rax) (.reg .r10)
+i 279 283 .shl64 .rax 14
+i 283 286 .add 64 (.reg .rcx) (.reg .rax)
+i 286 289 .mov 64 (.reg .rax) (.reg .r9)
+i 289 293 .shl64 .rax 7
+i 293 296 .add 64 (.reg .rcx) (.reg .rax)
+i 296 299 .add 64 (.reg .rcx) (.reg .r8)
+i 299 306 .sub 64 (.reg .rcx) (.imm 0x10204080)
+i 306 309 .mov 64 (.reg .rax) (.reg .rcx)
+i 309 311 .jmp 0x144
+i 311 318 .mov 64 (.reg .rax) (.imm 0x1)
+i 318 322 .shl64 .rax 32
+i 322 324 .jmp 0x144
+i 324 325 .ret
+arg input bytes n
+arg n number
+returns (call varint32 (name input))
+stack 0
+def varint32 a = (ifx (bin == (call len (name a)) (num 0)) (num 4294967296) (ifx (bin < (index (name a) (num 0)) (num 128)) (index (name a) (num 0)) (ifx (bin == (call len (name a)) (num 1)) (num 4294967296) (ifx (bin < (index (name a) (num 1)) (num 128)) (ifx (bin == (index (name a) (num 1)) (num 0)) (num 4294967296) (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (index (name a) (num 1))))) (ifx (bin == (call len (name a)) (num 2)) (num 4294967296) (ifx (bin < (index (name a) (num 2)) (num 128)) (ifx (bin == (index (name a) (num 2)) (num 0)) (num 4294967296) (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (index (name a) (num 2))))) (ifx (bin == (call len (name a)) (num 3)) (num 4294967296) (ifx (bin < (index (name a) (num 3)) (num 128)) (ifx (bin == (index (name a) (num 3)) (num 0)) (num 4294967296) (bin + (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (bin - (index (name a) (num 2)) (num 128)))) (bin * (num 2097152) (index (name a) (num 3))))) (ifx (bin == (call len (name a)) (num 4)) (num 4294967296) (ifx (bin < (index (name a) (num 4)) (num 16)) (ifx (bin == (index (name a) (num 4)) (num 0)) (num 4294967296) (bin + (bin + (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (bin - (index (name a) (num 2)) (num 128)))) (bin * (num 2097152) (bin - (index (name a) (num 3)) (num 128)))) (bin * (num 268435456) (index (name a) (num 4))))) (num 4294967296)))))))))))

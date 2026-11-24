@@ -22,6 +22,7 @@ import run_experiment as rexp
 
 DEFAULT_TIERS = [
     ("deepseek/deepseek-v3.2", 3),
+    ("openai/gpt-5-mini", 3),
     ("anthropic/claude-sonnet-5.5", 4),
 ]
 
@@ -227,6 +228,7 @@ def main():
     ap = argparse.ArgumentParser(description="Run Spec-First AI Factory over Wave 1 routines.")
     ap.add_argument("--only", action="append", default=None, help="restrict to routine id(s)")
     ap.add_argument("--target", choices=["x86_64", "arm64", "both"], default="both")
+    ap.add_argument("--wave", choices=["1", "2", "all"], default="1")
     ap.add_argument("--workers", type=int, default=12)
     ap.add_argument("--tool-workers", type=int, default=6)
     ap.add_argument("--max-usd", type=float, default=15.0)
@@ -240,7 +242,11 @@ def main():
     api_key = load_openrouter_key()
     card_text = rexp.load_card()
     targets = ["x86_64", "arm64"] if args.target == "both" else [args.target]
-    routines = catalog.WAVE1_ROUTINES
+    routines = (
+        catalog.WAVE1_ROUTINES if args.wave == "1"
+        else catalog.WAVE2_ROUTINES if args.wave == "2"
+        else catalog.ALL_ROUTINES
+    )
     if args.only:
         want = set(args.only)
         routines = [r for r in routines if r["id"] in want]
@@ -255,7 +261,7 @@ def main():
                         done_tids.add(rec["tid"])
 
     jobs = [(r, t) for r in routines for t in targets if f"{r['id']}_{t}" not in done_tids]
-    print(f"Spec-First AI Factory Wave 1: {len(jobs)} jobs to run ({len(done_tids)} resumed), max ${args.max_usd:.2f}")
+    print(f"Spec-First AI Factory Wave {args.wave}: {len(jobs)} jobs to run ({len(done_tids)} resumed), max ${args.max_usd:.2f}")
     sys.stdout.flush()
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)

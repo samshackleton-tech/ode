@@ -1,0 +1,64 @@
+fn ode_hex_decode_byte
+i 0 7 .mov 64 (.reg .rax) (.imm 0x10)
+i 7 11 .cmp 64 (.reg .rdi) (.imm 0x30)
+i 11 13 .jb 0x13
+i 13 17 .cmp 64 (.reg .rdi) (.imm 0x3A)
+i 17 19 .jb 0x2D
+i 19 23 .cmp 64 (.reg .rdi) (.imm 0x61)
+i 23 25 .jb 0x1F
+i 25 29 .cmp 64 (.reg .rdi) (.imm 0x67)
+i 29 31 .jb 0x36
+i 31 35 .cmp 64 (.reg .rdi) (.imm 0x41)
+i 35 37 .jb 0x48
+i 37 41 .cmp 64 (.reg .rdi) (.imm 0x47)
+i 41 43 .jb 0x3F
+i 43 45 .jmp 0x48
+i 45 48 .mov 64 (.reg .rax) (.reg .rdi)
+i 48 52 .sub 64 (.reg .rax) (.imm 0x30)
+i 52 54 .jmp 0x48
+i 54 57 .mov 64 (.reg .rax) (.reg .rdi)
+i 57 61 .sub 64 (.reg .rax) (.imm 0x57)
+i 61 63 .jmp 0x48
+i 63 66 .mov 64 (.reg .rax) (.reg .rdi)
+i 66 70 .sub 64 (.reg .rax) (.imm 0x37)
+i 70 72 .jmp 0x48
+i 72 79 .mov 64 (.reg .rdx) (.imm 0x10)
+i 79 83 .cmp 64 (.reg .rsi) (.imm 0x30)
+i 83 85 .jb 0x5B
+i 85 89 .cmp 64 (.reg .rsi) (.imm 0x3A)
+i 89 91 .jb 0x75
+i 91 95 .cmp 64 (.reg .rsi) (.imm 0x61)
+i 95 97 .jb 0x67
+i 97 101 .cmp 64 (.reg .rsi) (.imm 0x67)
+i 101 103 .jb 0x7E
+i 103 107 .cmp 64 (.reg .rsi) (.imm 0x41)
+i 107 109 .jb 0x90
+i 109 113 .cmp 64 (.reg .rsi) (.imm 0x47)
+i 113 115 .jb 0x87
+i 115 117 .jmp 0x90
+i 117 120 .mov 64 (.reg .rdx) (.reg .rsi)
+i 120 124 .sub 64 (.reg .rdx) (.imm 0x30)
+i 124 126 .jmp 0x90
+i 126 129 .mov 64 (.reg .rdx) (.reg .rsi)
+i 129 133 .sub 64 (.reg .rdx) (.imm 0x57)
+i 133 135 .jmp 0x90
+i 135 138 .mov 64 (.reg .rdx) (.reg .rsi)
+i 138 142 .sub 64 (.reg .rdx) (.imm 0x37)
+i 142 144 .jmp 0x90
+i 144 148 .cmp 64 (.reg .rax) (.imm 0x10)
+i 148 150 .je 0xA5
+i 150 154 .cmp 64 (.reg .rdx) (.imm 0x10)
+i 154 156 .je 0xA5
+i 156 160 .shl64 .rax 4
+i 160 163 .add 64 (.reg .rax) (.reg .rdx)
+i 163 165 .jmp 0xAC
+i 165 172 .mov 64 (.reg .rax) (.imm 0x100)
+i 172 173 .ret
+arg hi number
+arg lo number
+below hi 256
+below lo 256
+returns (call hex_pair (name hi) (name lo))
+stack 0
+def hex_nib b = (ifx (ifx (bin >= (name b) (num 48)) (bin <= (name b) (num 57)) (bin == (num 0) (num 1))) (bin - (name b) (num 48)) (ifx (ifx (bin >= (name b) (num 97)) (bin <= (name b) (num 102)) (bin == (num 0) (num 1))) (bin - (name b) (num 87)) (ifx (ifx (bin >= (name b) (num 65)) (bin <= (name b) (num 70)) (bin == (num 0) (num 1))) (bin - (name b) (num 55)) (num 16))))
+def hex_pair hi lo = (ifx (ifx (bin == (call hex_nib (name hi)) (num 16)) (bin == (num 0) (num 0)) (bin == (call hex_nib (name lo)) (num 16))) (num 256) (bin + (bin * (call hex_nib (name hi)) (num 16)) (call hex_nib (name lo))))

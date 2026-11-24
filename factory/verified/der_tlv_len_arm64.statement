@@ -1,67 +1,50 @@
 fn ode_der_tlv_len
 machine arm64
 i 0 4 .cmpi .x1 0x2
-i 4 8 .bhs 0x10
-i 8 12 .movi .x0 0x0
-i 12 16 .ret
-i 16 20 .ldrb .x9 .x0 0x0
-i 20 24 .lsl .x9 .x9 0x3b
-i 24 28 .lsr .x9 .x9 0x3b
-i 28 32 .cmpi .x9 0x1f
-i 32 36 .bne 0x2c
-i 36 40 .movi .x0 0x0
-i 40 44 .ret
-i 44 48 .ldrb .x10 .x0 0x1
-i 48 52 .cmpi .x10 0x80
-i 52 56 .bhs 0x54
-i 56 60 .addi .x12 .x10 0x2
-i 60 64 .cmp .x1 .x12
-i 64 68 .bhs 0x4c
-i 68 72 .movi .x0 0x0
-i 72 76 .ret
-i 76 80 .mov .x0 .x12
-i 80 84 .ret
-i 84 88 .cmpi .x10 0x81
-i 88 92 .bne 0x9c
-i 92 96 .cmpi .x1 0x3
-i 96 100 .bhs 0x6c
-i 100 104 .movi .x0 0x0
-i 104 108 .ret
-i 108 112 .ldrb .x11 .x0 0x2
-i 112 116 .cmpi .x11 0x80
-i 116 120 .bhs 0x80
-i 120 124 .movi .x0 0x0
-i 124 128 .ret
-i 128 132 .addi .x12 .x11 0x3
-i 132 136 .cmp .x1 .x12
-i 136 140 .bhs 0x94
-i 140 144 .movi .x0 0x0
-i 144 148 .ret
-i 148 152 .mov .x0 .x12
-i 152 156 .ret
-i 156 160 .cmpi .x10 0x82
-i 160 164 .bne 0xf0
-i 164 168 .cmpi .x1 0x4
-i 168 172 .bhs 0xb4
+i 4 8 .blo 0xac
+i 8 12 .ldrb .x2 .x0 0x0
+i 12 16 .lsl .x2 .x2 0x3b
+i 16 20 .lsr .x2 .x2 0x3b
+i 20 24 .cmpi .x2 0x1f
+i 24 28 .beq 0xac
+i 28 32 .ldrb .x3 .x0 0x1
+i 32 36 .cmpi .x3 0x80
+i 36 40 .blo 0x3c
+i 40 44 .cmpi .x3 0x81
+i 44 48 .beq 0x50
+i 48 52 .cmpi .x3 0x82
+i 52 56 .beq 0x78
+i 56 60 .b 0xac
+i 60 64 .addi .x4 .x3 0x2
+i 64 68 .cmp .x1 .x4
+i 68 72 .blo 0xac
+i 72 76 .mov .x0 .x4
+i 76 80 .ret
+i 80 84 .cmpi .x1 0x3
+i 84 88 .blo 0xac
+i 88 92 .ldrb .x5 .x0 0x2
+i 92 96 .cmpi .x5 0x80
+i 96 100 .blo 0xac
+i 100 104 .addi .x4 .x5 0x3
+i 104 108 .cmp .x1 .x4
+i 108 112 .blo 0xac
+i 112 116 .mov .x0 .x4
+i 116 120 .ret
+i 120 124 .cmpi .x1 0x4
+i 124 128 .blo 0xac
+i 128 132 .ldrb .x5 .x0 0x2
+i 132 136 .cmpi .x5 0x0
+i 136 140 .beq 0xac
+i 140 144 .ldrb .x6 .x0 0x3
+i 144 148 .lsl .x5 .x5 0x8
+i 148 152 .add .x4 .x5 .x6
+i 152 156 .addi .x4 .x4 0x4
+i 156 160 .cmp .x1 .x4
+i 160 164 .blo 0xac
+i 164 168 .mov .x0 .x4
+i 168 172 .ret
 i 172 176 .movi .x0 0x0
 i 176 180 .ret
-i 180 184 .ldrb .x11 .x0 0x2
-i 184 188 .cmpi .x11 0x1
-i 188 192 .bhs 0xc8
-i 192 196 .movi .x0 0x0
-i 196 200 .ret
-i 200 204 .ldrb .x12 .x0 0x3
-i 204 208 .lsl .x11 .x11 0x8
-i 208 212 .add .x11 .x11 .x12
-i 212 216 .addi .x11 .x11 0x4
-i 216 220 .cmp .x1 .x11
-i 220 224 .bhs 0xe8
-i 224 228 .movi .x0 0x0
-i 228 232 .ret
-i 232 236 .mov .x0 .x11
-i 236 240 .ret
-i 240 244 .movi .x0 0x0
-i 244 248 .ret
 arg buf bytes n
 arg n number
 returns (call der_tlv_size (name buf) (num 0))

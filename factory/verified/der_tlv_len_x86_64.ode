@@ -9,120 +9,66 @@ fn der_tlv_len as "ode_der_tlv_len" {
   reg header = r9
   reg tmp = r10
 
-  // Initialize rax to 0
-  rax := 0
-
-  // Check n >= 2
+  // Fast path: n < 2 -> return 0
   cmp n, 2
-  if lo {
-    ret  // rax already 0
-  }
+  jb @fail
 
-  // Load tag byte and check (tag & 31) != 31
+  // Load tag and check (tag & 31) != 31
   movzx edx, byte ptr [buf]
-  mov tmp, rdx
-  and tmp, 31
-  cmp tmp, 31
-  if eq {
-    ret  // rax already 0
-  }
+  and edx, 31
+  cmp rdx, 31
+  je @fail
 
   // Load length byte l0 = buf[1]
   movzx ecx, byte ptr [buf + 1]
 
   // Short form: l0 < 128
   cmp l0, 128
-  if lo {
-    // header = 2, l = l0
-    header := 2
-    l := rcx
-    // Check header + l <= n (i.e., l <= n - header)
-    mov tmp, n
-    sub tmp, header
-    cmp l, tmp
-    // if l > tmp then invalid (use ult with swapped operands: tmp < l)
-    cmp tmp, l
-    if lo {
-      rax := 0
-      ret
-    }
-    // rax = header + l
-    rax := header
-    add rax, l
-    ret
-  }
+  jb @short_form
 
-  // Long form: check l0 == 129 (1-byte) or l0 == 130 (2-byte)
+  // Long form: l0 == 129 or l0 == 130
   cmp l0, 129
-  if eq {
-    // 1-byte long form: need n >= 3
-    cmp n, 3
-    if lo {
-      rax := 0
-      ret
-    }
-    // Load buf[2], must be >= 128 (non-minimal)
-    movzx r8d, byte ptr [buf + 2]
-    cmp l, 128
-    if lo {
-      rax := 0
-      ret
-    }
-    header := 3
-    // Check header + l <= n (l <= n - header)
-    mov tmp, n
-    sub tmp, header
-    cmp l, tmp
-    // if l > tmp then invalid
-    cmp tmp, l
-    if lo {
-      rax := 0
-      ret
-    }
-    // rax = header + l
-    rax := header
-    add rax, l
-    ret
-  }
-
+  je @long_form_1
   cmp l0, 130
-  if eq {
-    // 2-byte long form: need n >= 4
-    cmp n, 4
-    if lo {
-      rax := 0
-      ret
-    }
-    // Load buf[2], must be >= 1 (non-minimal high byte)
-    movzx r8d, byte ptr [buf + 2]
-    cmp l, 1
-    if lo {
-      rax := 0
-      ret
-    }
-    // Load buf[3] into tmp
-    movzx r10d, byte ptr [buf + 3]
-    // l = (buf[2] << 8) + buf[3]
-    shl l, 8
-    add l, tmp
-    header := 4
-    // Check header + l <= n (l <= n - header)
-    mov tmp, n
-    sub tmp, header
-    cmp l, tmp
-    // if l > tmp then invalid
-    cmp tmp, l
-    if lo {
-      rax := 0
-      ret
-    }
-    // rax = header + l
-    rax := header
-    add rax, l
-    ret
-  }
+  jne @fail
 
-  // Any other l0 value is invalid
-  rax := 0
+  // 2-byte long form: need n >= 4
+  cmp n, 4
+  jb @fail
+  movzx r8d, byte ptr [buf + 2]
+  test r8, r8
+  jz @fail
+  movzx r10d, byte ptr [buf + 3]
+  shl r8, 8
+  add r8, r10
+  lea tmp, [n - 4]
+  cmp tmp, r8
+  jb @fail
+  lea rax, [r8 + 4]
+  ret
+
+@long_form_1:
+  // 1-byte long form: need n >= 3
+  cmp n, 3
+  jb @fail
+  movzx r8d, byte ptr [buf + 2]
+  cmp r8, 128
+  jb @fail
+  lea tmp, [n - 3]
+  cmp tmp, r8
+  jb @fail
+  lea rax, [r8 + 3]
+  ret
+
+@short_form:
+  lea tmp, [n - 2]
+  cmp tmp, l0
+  jb @fail
+  lea rax, [l0 + 2]
+  ret
+
+@fail:
+  xor eax, eax
   ret
 }
+

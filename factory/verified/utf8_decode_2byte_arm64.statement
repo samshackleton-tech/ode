@@ -1,0 +1,45 @@
+fn ode_utf8_decode_2byte
+machine arm64
+i 0 4 .movi .x9 0x1
+i 4 8 .lsl .x9 .x9 0x20
+i 8 12 .subi .x9 .x9 0x1
+i 12 16 .cmpi .x1 0x0
+i 16 20 .bne 0x1c
+i 20 24 .mov .x0 .x9
+i 24 28 .ret
+i 28 32 .ldrb .x2 .x0 0x0
+i 32 36 .cmpi .x2 0x80
+i 36 40 .bhs 0x30
+i 40 44 .mov .x0 .x2
+i 44 48 .ret
+i 48 52 .cmpi .x2 0xc2
+i 52 56 .bhs 0x40
+i 56 60 .mov .x0 .x9
+i 60 64 .ret
+i 64 68 .cmpi .x2 0xe0
+i 68 72 .blo 0x50
+i 72 76 .mov .x0 .x9
+i 76 80 .ret
+i 80 84 .cmpi .x1 0x2
+i 84 88 .bhs 0x60
+i 88 92 .mov .x0 .x9
+i 92 96 .ret
+i 96 100 .ldrb .x4 .x0 0x1
+i 100 104 .cmpi .x4 0x80
+i 104 108 .bhs 0x74
+i 108 112 .mov .x0 .x9
+i 112 116 .ret
+i 116 120 .cmpi .x4 0xc0
+i 120 124 .blo 0x84
+i 124 128 .mov .x0 .x9
+i 128 132 .ret
+i 132 136 .subi .x5 .x4 0x80
+i 136 140 .subi .x6 .x2 0xc0
+i 140 144 .lsl .x6 .x6 0x6
+i 144 148 .add .x0 .x6 .x5
+i 148 152 .ret
+arg input bytes n
+arg n number
+returns (call utf8_cp2 (name input))
+stack 0
+def utf8_cp2 a = (ifx (bin == (call len (name a)) (num 0)) (num 4294967295) (ifx (bin < (index (name a) (num 0)) (num 128)) (index (name a) (num 0)) (ifx (ifx (bin >= (index (name a) (num 0)) (num 194)) (bin <= (index (name a) (num 0)) (num 223)) (bin == (num 0) (num 1))) (ifx (ifx (ifx (bin >= (call len (name a)) (num 2)) (bin >= (index (name a) (num 1)) (num 128)) (bin == (num 0) (num 1))) (bin <= (index (name a) (num 1)) (num 191)) (bin == (num 0) (num 1))) (bin + (bin * (bin - (index (name a) (num 0)) (num 192)) (num 64)) (bin - (index (name a) (num 1)) (num 128))) (num 4294967295)) (num 4294967295))))

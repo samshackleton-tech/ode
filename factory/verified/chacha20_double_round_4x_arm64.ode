@@ -1,0 +1,107 @@
+target arm64
+
+fn chacha20_double_round_4x as "ode_chacha20_double_round_4x" {
+  // Load four 16-byte rows into vector registers
+  ldr q0, [x0, 0]    // a = state[0..3]
+  ldr q1, [x0, 16]   // b = state[4..7]
+  ldr q2, [x0, 32]   // c = state[8..11]
+  ldr q3, [x0, 48]   // d = state[12..15]
+
+  // Column quarter-round
+  // a += b
+  add v0.4s, v0.4s, v1.4s
+  
+  // d ^= a, d >>>= 16
+  eor v4.16b, v3.16b, v0.16b
+  rev32 v4.8h, v4.8h
+  
+  // c += d
+  add v2.4s, v2.4s, v4.4s
+  
+  // b ^= c, b >>>= 20
+  eor v5.16b, v1.16b, v2.16b
+  ushr v6.4s, v5.4s, 20
+  shl v5.4s, v5.4s, 12
+  orr v1.16b, v5.16b, v6.16b
+  
+  // a += b
+  add v0.4s, v0.4s, v1.4s
+  
+  // d ^= a, d >>>= 24
+  eor v3.16b, v4.16b, v0.16b
+  ushr v4.4s, v3.4s, 24
+  shl v3.4s, v3.4s, 8
+  orr v3.16b, v3.16b, v4.16b
+  
+  // c += d
+  add v2.4s, v2.4s, v3.4s
+  
+  // b ^= c, b >>>= 25
+  eor v4.16b, v1.16b, v2.16b
+  ushr v5.4s, v4.4s, 25
+  shl v4.4s, v4.4s, 7
+  orr v1.16b, v4.16b, v5.16b
+
+  // Rotate rows for diagonal round
+  // b = [b1, b2, b3, b0] (rotate left by 1 lane)
+  ext v4.16b, v1.16b, v1.16b, 4
+  
+  // c = [c2, c3, c0, c1] (rotate left by 2 lanes)
+  ext v5.16b, v2.16b, v2.16b, 8
+  
+  // d = [d3, d0, d1, d2] (rotate left by 3 lanes)
+  ext v6.16b, v3.16b, v3.16b, 12
+
+  // Diagonal quarter-round
+  // a += b
+  add v0.4s, v0.4s, v4.4s
+  
+  // d ^= a, d >>>= 16
+  eor v7.16b, v6.16b, v0.16b
+  rev32 v7.8h, v7.8h
+  
+  // c += d
+  add v5.4s, v5.4s, v7.4s
+  
+  // b ^= c, b >>>= 20
+  eor v8.16b, v4.16b, v5.16b
+  ushr v9.4s, v8.4s, 20
+  shl v8.4s, v8.4s, 12
+  orr v4.16b, v8.16b, v9.16b
+  
+  // a += b
+  add v0.4s, v0.4s, v4.4s
+  
+  // d ^= a, d >>>= 24
+  eor v6.16b, v7.16b, v0.16b
+  ushr v7.4s, v6.4s, 24
+  shl v6.4s, v6.4s, 8
+  orr v6.16b, v6.16b, v7.16b
+  
+  // c += d
+  add v5.4s, v5.4s, v6.4s
+  
+  // b ^= c, b >>>= 25
+  eor v7.16b, v4.16b, v5.16b
+  ushr v8.4s, v7.4s, 25
+  shl v7.4s, v7.4s, 7
+  orr v4.16b, v7.16b, v8.16b
+
+  // Rotate rows back to original positions
+  // b = [b3, b0, b1, b2] (rotate right by 1 lane)
+  ext v1.16b, v4.16b, v4.16b, 12
+  
+  // c = [c2, c3, c0, c1] -> need [c0, c1, c2, c3] (rotate right by 2 lanes)
+  ext v2.16b, v5.16b, v5.16b, 8
+  
+  // d = [d1, d2, d3, d0] (rotate right by 3 lanes = left by 1)
+  ext v3.16b, v6.16b, v6.16b, 4
+
+  // Store results back to memory
+  str q0, [x0, 0]
+  str q1, [x0, 16]
+  str q2, [x0, 32]
+  str q3, [x0, 48]
+
+  ret
+}

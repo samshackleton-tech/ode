@@ -1,0 +1,55 @@
+target arm64
+
+fn inet_sum16 as "ode_inet_sum16" {
+  reg input = x0
+  reg len = x1
+  reg pairs = x2
+  reg i = x3
+  reg s = x4
+  reg addr = x5
+  reg hi = w6
+  reg lo = w7
+  reg hi64 = x6
+  reg lo64 = x7
+  reg tmp = x8
+  reg carry = x9
+
+  i := 0
+  s := 0
+  loop {
+    place {
+      name idx = i
+      name cur = s
+      fact 0 <= idx
+      fact idx <= pairs
+      fact cur == inet16(input)[idx]
+      fact cur < 65536
+      decreases pairs - idx
+    }
+    cmp i, pairs
+    if uge {
+      x0 := s
+      ret
+    }
+    // off = i * 2
+    lsl addr, i, 1
+    add addr, input, addr
+    ldrb hi, [addr, 0]
+    ldrb lo, [addr, 1]
+    // hi << 8
+    lsl hi64, hi64, 8
+    // s + (hi << 8) + lo
+    add s, s, hi64
+    add s, s, lo64
+    // if s >= 65536: s = s - 65535
+    // build 65536 in tmp
+    mov tmp, 1
+    lsl tmp, tmp, 16  // tmp = 65536
+    cmp s, tmp
+    if uge {
+      sub tmp, tmp, 1  // tmp = 65535
+      sub s, s, tmp
+    }
+    add i, i, 1
+  }
+}

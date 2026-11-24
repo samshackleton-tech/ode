@@ -1,78 +1,47 @@
 fn ode_der_tlv_len
-i 0 7 .mov 64 (.reg .rax) (.imm 0x0)
-i 7 11 .cmp 64 (.reg .rsi) (.imm 0x2)
-i 11 13 .jae 0xE
-i 13 14 .ret
-i 14 17 .movzx8 .rdx (.mem .rdi 0x0)
-i 17 20 .mov 64 (.reg .r10) (.reg .rdx)
-i 20 24 .and 64 (.reg .r10) (.imm 0x1F)
-i 24 28 .cmp 64 (.reg .r10) (.imm 0x1F)
-i 28 30 .jne 0x1F
-i 30 31 .ret
-i 31 35 .movzx8 .rcx (.mem .rdi 0x1)
-i 35 42 .cmp 64 (.reg .rcx) (.imm 0x80)
-i 42 44 .jae 0x53
-i 44 51 .mov 64 (.reg .r9) (.imm 0x2)
-i 51 54 .mov 64 (.reg .r8) (.reg .rcx)
-i 54 57 .mov 64 (.reg .r10) (.reg .rsi)
-i 57 60 .sub 64 (.reg .r10) (.reg .r9)
-i 60 63 .cmp 64 (.reg .r8) (.reg .r10)
-i 63 66 .cmp 64 (.reg .r10) (.reg .r8)
-i 66 68 .jae 0x4C
-i 68 75 .mov 64 (.reg .rax) (.imm 0x0)
-i 75 76 .ret
-i 76 79 .mov 64 (.reg .rax) (.reg .r9)
-i 79 82 .add 64 (.reg .rax) (.reg .r8)
-i 82 83 .ret
-i 83 90 .cmp 64 (.reg .rcx) (.imm 0x81)
-i 90 92 .jne 0xA4
-i 92 96 .cmp 64 (.reg .rsi) (.imm 0x3)
-i 96 98 .jae 0x6A
-i 98 105 .mov 64 (.reg .rax) (.imm 0x0)
-i 105 106 .ret
-i 106 111 .movzx8 .r8 (.mem .rdi 0x2)
-i 111 118 .cmp 64 (.reg .r8) (.imm 0x80)
-i 118 120 .jae 0x80
-i 120 127 .mov 64 (.reg .rax) (.imm 0x0)
-i 127 128 .ret
-i 128 135 .mov 64 (.reg .r9) (.imm 0x3)
-i 135 138 .mov 64 (.reg .r10) (.reg .rsi)
-i 138 141 .sub 64 (.reg .r10) (.reg .r9)
-i 141 144 .cmp 64 (.reg .r8) (.reg .r10)
-i 144 147 .cmp 64 (.reg .r10) (.reg .r8)
-i 147 149 .jae 0x9D
-i 149 156 .mov 64 (.reg .rax) (.imm 0x0)
-i 156 157 .ret
-i 157 160 .mov 64 (.reg .rax) (.reg .r9)
-i 160 163 .add 64 (.reg .rax) (.reg .r8)
-i 163 164 .ret
-i 164 171 .cmp 64 (.reg .rcx) (.imm 0x82)
-i 171 173 .jne 0xFE
-i 173 177 .cmp 64 (.reg .rsi) (.imm 0x4)
-i 177 179 .jae 0xBB
-i 179 186 .mov 64 (.reg .rax) (.imm 0x0)
-i 186 187 .ret
-i 187 192 .movzx8 .r8 (.mem .rdi 0x2)
-i 192 196 .cmp 64 (.reg .r8) (.imm 0x1)
-i 196 198 .jae 0xCE
-i 198 205 .mov 64 (.reg .rax) (.imm 0x0)
-i 205 206 .ret
-i 206 211 .movzx8 .r10 (.mem .rdi 0x3)
-i 211 215 .shl64 .r8 8
-i 215 218 .add 64 (.reg .r8) (.reg .r10)
-i 218 225 .mov 64 (.reg .r9) (.imm 0x4)
-i 225 228 .mov 64 (.reg .r10) (.reg .rsi)
-i 228 231 .sub 64 (.reg .r10) (.reg .r9)
-i 231 234 .cmp 64 (.reg .r8) (.reg .r10)
-i 234 237 .cmp 64 (.reg .r10) (.reg .r8)
-i 237 239 .jae 0xF7
-i 239 246 .mov 64 (.reg .rax) (.imm 0x0)
-i 246 247 .ret
-i 247 250 .mov 64 (.reg .rax) (.reg .r9)
-i 250 253 .add 64 (.reg .rax) (.reg .r8)
-i 253 254 .ret
-i 254 261 .mov 64 (.reg .rax) (.imm 0x0)
-i 261 262 .ret
+i 0 4 .cmp 64 (.reg .rsi) (.imm 0x2)
+i 4 10 .jb 0x8F
+i 10 13 .movzx8 .rdx (.mem .rdi 0x0)
+i 13 16 .and 32 (.reg .rdx) (.imm 0x1F)
+i 16 20 .cmp 64 (.reg .rdx) (.imm 0x1F)
+i 20 22 .je 0x8F
+i 22 26 .movzx8 .rcx (.mem .rdi 0x1)
+i 26 33 .cmp 64 (.reg .rcx) (.imm 0x80)
+i 33 35 .jb 0x81
+i 35 42 .cmp 64 (.reg .rcx) (.imm 0x81)
+i 42 44 .je 0x5F
+i 44 51 .cmp 64 (.reg .rcx) (.imm 0x82)
+i 51 53 .jne 0x8F
+i 53 57 .cmp 64 (.reg .rsi) (.imm 0x4)
+i 57 59 .jb 0x8F
+i 59 64 .movzx8 .r8 (.mem .rdi 0x2)
+i 64 67 .test 64 (.reg .r8) (.reg .r8)
+i 67 69 .je 0x8F
+i 69 74 .movzx8 .r10 (.mem .rdi 0x3)
+i 74 78 .shl64 .r8 8
+i 78 81 .add 64 (.reg .r8) (.reg .r10)
+i 81 85 .lea .r10 .rsi 0xFFFFFFFFFFFFFFFC
+i 85 88 .cmp 64 (.reg .r10) (.reg .r8)
+i 88 90 .jb 0x8F
+i 90 94 .lea .rax .r8 0x4
+i 94 95 .ret
+i 95 99 .cmp 64 (.reg .rsi) (.imm 0x3)
+i 99 101 .jb 0x8F
+i 101 106 .movzx8 .r8 (.mem .rdi 0x2)
+i 106 113 .cmp 64 (.reg .r8) (.imm 0x80)
+i 113 115 .jb 0x8F
+i 115 119 .lea .r10 .rsi 0xFFFFFFFFFFFFFFFD
+i 119 122 .cmp 64 (.reg .r10) (.reg .r8)
+i 122 124 .jb 0x8F
+i 124 128 .lea .rax .r8 0x3
+i 128 129 .ret
+i 129 133 .lea .r10 .rsi 0xFFFFFFFFFFFFFFFE
+i 133 136 .cmp 64 (.reg .r10) (.reg .rcx)
+i 136 138 .jb 0x8F
+i 138 142 .lea .rax .rcx 0x2
+i 142 143 .ret
+i 143 145 .xor 32 (.reg .rax) (.reg .rax)
+i 145 146 .ret
 arg buf bytes n
 arg n number
 returns (call der_tlv_size (name buf) (num 0))

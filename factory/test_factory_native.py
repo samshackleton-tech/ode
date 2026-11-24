@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Independent verification + real-silicon RFC/ITU/FIPS execution suite for all 26 Wave 1 Factory artifacts.
+"""Independent verification + real-silicon RFC/ITU/FIPS execution suite for all 36 Wave 1 & 2 Factory artifacts.
 
 Two independent checks:
-1. Re-compiles every verified `.ode` file (13 x86-64 + 13 AArch64), checks its `.statement`,
-   and runs Lean 4 `odeverify` against the saved `.proof` -> must say `shown` (26/26).
-2. Links the verified machine bytes of every routine for the host CPU (13 x86-64 on x86-64,
-   13 AArch64 on Apple Silicon / ARM64) into a C test harness and executes it on real hardware
-   against official RFC 4648, ITU-T X.690, RFC 8439, FIPS 180-4, RFC 1950, and CVE negative vectors.
+1. Re-compiles every verified `.ode` file (18 x86-64 + 18 AArch64), checks its `.statement`,
+   and runs Lean 4 `odeverify` against the saved `.proof` -> must say `shown` (36/36).
+2. Links the verified machine bytes of every routine for the host CPU (18 x86-64 on x86-64,
+   18 AArch64 on Apple Silicon / ARM64) into a C test harness and executes it on real hardware
+   against official RFC 4648, ITU-T X.690, RFC 8439, FIPS 180-4, RFC 1950, RFC 3629, RFC 1071,
+   Protobuf/Wasm LEB128, and CVE negative vectors.
 """
 
 import os
@@ -51,6 +52,15 @@ WAVE1_VERIFIED_IDS = [
     "v_arm64_rd_valid",
 ]
 
+WAVE2_VERIFIED_IDS = [
+    "chacha20_double_round_4x",
+    "varint_decode_u32",
+    "utf8_decode_2byte",
+    "hex_decode_byte",
+    "inet_sum16",
+]
+
+ALL_VERIFIED_IDS = WAVE1_VERIFIED_IDS + WAVE2_VERIFIED_IDS
 HOST_ARCH = platform.machine().lower()
 HOST_TARGET = (
     "x86_64" if HOST_ARCH in ("x86_64", "amd64")
@@ -351,14 +361,146 @@ int main(void) {
   return 0;
 }
 """,
+    "chacha20_double_round_4x": r"""
+#include <stdint.h>
+#include <stdio.h>
+extern void ode_chacha20_double_round_4x(uint32_t state[16]);
+int main(void) {
+  // Exact RFC 8439 Section 2.3.2 ChaCha20 block test vector (10 double rounds = 20 rounds)
+  uint32_t s[16] = {
+    0x61707865u, 0x3320646eu, 0x79622d32u, 0x6b206574u,
+    0x03020100u, 0x07060504u, 0x0b0a0908u, 0x0f0e0d0cu,
+    0x13121110u, 0x17161514u, 0x1b1a1918u, 0x1f1e1d1cu,
+    0x00000001u, 0x09000000u, 0x4a000000u, 0x00000000u
+  };
+  static const uint32_t want[16] = {
+    0x837778abu, 0xe238d763u, 0xa67ae21eu, 0x5950bb2fu,
+    0xc4f2d0c7u, 0xfc62bb2fu, 0x8fa018fcu, 0x3f5ec7b7u,
+    0x335271c2u, 0xf29489f3u, 0xeabda8fcu, 0x82e46ebdu,
+    0xd19c12b4u, 0xb04e16deu, 0x9e83d0cbu, 0x4e3c50a2u
+  };
+  for (int r = 0; r < 10; r++) ode_chacha20_double_round_4x(s);
+  for (int i = 0; i < 16; i++) {
+    if (s[i] != want[i]) {
+      fprintf(stderr, "word %d got=0x%08x want=0x%08x\n", i, s[i], want[i]);
+      return 1;
+    }
+  }
+  return 0;
+}
+""",
+    "varint_decode_u32": r"""
+#include <stdint.h>
+#include <stdio.h>
+extern uint64_t ode_varint_decode_u32(const uint8_t *buf, uint64_t n);
+int main(void) {
+  const uint64_t BAD = 4294967296ULL;
+  uint8_t dummy[1] = {0};
+  if (ode_varint_decode_u32(dummy, 0) != BAD) return 1;            // empty
+  uint8_t v0[] = {0x00};
+  if (ode_varint_decode_u32(v0, 1) != 0) return 2;
+  uint8_t v127[] = {0x7f};
+  if (ode_varint_decode_u32(v127, 1) != 127) return 3;
+  uint8_t v300[] = {0xac, 0x02};                                   // Protobuf spec example = 300
+  if (ode_varint_decode_u32(v300, 2) != 300) return 4;
+  uint8_t over2[] = {0x80, 0x00};                                  // non-canonical overlong!
+  if (ode_varint_decode_u32(over2, 2) != BAD) return 5;
+  uint8_t trunc1[] = {0x80};                                       // truncated!
+  if (ode_varint_decode_u32(trunc1, 1) != BAD) return 6;
+  uint8_t max32[] = {0xff, 0xff, 0xff, 0xff, 0x0f};                // 0xFFFFFFFF
+  if (ode_varint_decode_u32(max32, 5) != 0xffffffffULL) return 7;
+  uint8_t ovf32[] = {0xff, 0xff, 0xff, 0xff, 0x10};                // >32-bit overflow!
+  if (ode_varint_decode_u32(ovf32, 5) != BAD) return 8;
+  uint8_t over5[] = {0x81, 0x80, 0x80, 0x80, 0x00};                // 5-byte overlong!
+  if (ode_varint_decode_u32(over5, 5) != BAD) return 9;
+  return 0;
+}
+""",
+    "utf8_decode_2byte": r"""
+#include <stdint.h>
+#include <stdio.h>
+extern uint64_t ode_utf8_decode_2byte(const uint8_t *buf, uint64_t n);
+int main(void) {
+  const uint64_t BAD = 4294967295ULL;
+  uint8_t z[1] = {0};
+  if (ode_utf8_decode_2byte(z, 0) != BAD) return 1;
+  uint8_t a[] = {'A'};
+  if (ode_utf8_decode_2byte(a, 1) != 'A') return 2;
+  uint8_t cent[] = {0xc2, 0xa2};                                   // U+00A2 CENT SIGN
+  if (ode_utf8_decode_2byte(cent, 2) != 0xa2) return 3;
+  uint8_t max2[] = {0xdf, 0xbf};                                   // U+07FF
+  if (ode_utf8_decode_2byte(max2, 2) != 0x7ff) return 4;
+  uint8_t cve_slash[] = {0xc0, 0xaf};                              // CVE-2008-2938 overlong '/'!
+  if (ode_utf8_decode_2byte(cve_slash, 2) != BAD) return 5;
+  uint8_t over_c1[] = {0xc1, 0xbf};                                // overlong 0xC1!
+  if (ode_utf8_decode_2byte(over_c1, 2) != BAD) return 6;
+  uint8_t bad_cont[] = {0xc2, 0xc0};                               // invalid continuation!
+  if (ode_utf8_decode_2byte(bad_cont, 2) != BAD) return 7;
+  uint8_t trunc2[] = {0xc2};                                       // truncated 2-byte!
+  if (ode_utf8_decode_2byte(trunc2, 1) != BAD) return 8;
+  uint8_t lead3[] = {0xe2, 0x82, 0xac};                            // 3-byte lead rejected here
+  if (ode_utf8_decode_2byte(lead3, 3) != BAD) return 9;
+  return 0;
+}
+""",
+    "hex_decode_byte": r"""
+#include <stdint.h>
+#include <stdio.h>
+extern uint64_t ode_hex_decode_byte(uint64_t hi, uint64_t lo);
+static int nib(int c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+int main(void) {
+  // Exhaustive over all 65,536 byte pairs (hi, lo)!
+  for (int hi = 0; hi < 256; hi++) {
+    int nh = nib(hi);
+    for (int lo = 0; lo < 256; lo++) {
+      int nl = nib(lo);
+      uint64_t want = (nh < 0 || nl < 0) ? 256ULL : (uint64_t)((nh << 4) | nl);
+      uint64_t got = ode_hex_decode_byte((uint64_t)hi, (uint64_t)lo);
+      if (got != want) {
+        fprintf(stderr, "hi=%d lo=%d got=%llu want=%llu\n", hi, lo, (unsigned long long)got, (unsigned long long)want);
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+""",
+    "inet_sum16": r"""
+#include <stdint.h>
+#include <stdio.h>
+extern uint64_t ode_inet_sum16(const uint8_t *buf, uint64_t len, uint64_t pairs);
+int main(void) {
+  uint8_t z[2] = {0, 0};
+  if (ode_inet_sum16(z, 0, 0) != 0) return 1;
+  // Exact RFC 1071 Section 3 example: 0001 + f203 + f4f5 + f6f7 = 0xddf2
+  uint8_t rfc1071[8] = {0x00, 0x01, 0xf2, 0x03, 0xf4, 0xf5, 0xf6, 0xf7};
+  uint64_t got = ode_inet_sum16(rfc1071, 8, 4);
+  if (got != 0xddf2ULL) { fprintf(stderr, "rfc1071 got=0x%llx\n", (unsigned long long)got); return 2; }
+  // Carry-wrap stress: 0xffff + 0xffff = 0x1fffe -> folds to 0xffff; + 0x0001 -> folds to 0x0001
+  uint8_t wrap[6] = {0xff, 0xff, 0xff, 0xff, 0x00, 0x01};
+  if (ode_inet_sum16(wrap, 6, 3) != 0x0001ULL) return 3;
+  // RFC 791 IPv4 header checksum check (20 bytes = 10 pairs -> 1's complement sum == 0xffff)
+  uint8_t ipv4[20] = {
+    0x45, 0x00, 0x00, 0x73, 0x00, 0x00, 0x40, 0x00, 0x40, 0x11,
+    0xb8, 0x61, 0xc0, 0xa8, 0x00, 0x01, 0xc0, 0xa8, 0x00, 0xc7
+  };
+  if (ode_inet_sum16(ipv4, 20, 10) != 0xffffULL) return 4;
+  return 0;
+}
+""",
 }
 
 
 class TestFactoryWave1(unittest.TestCase):
-    def test_all_26_odeverify_shown(self):
+    def test_all_36_odeverify_shown(self):
         self.assertTrue(os.path.exists(ODEVERIFY), f"missing {ODEVERIFY}")
-        routines = {r["id"]: r for r in catalog.WAVE1_ROUTINES}
-        for rid in WAVE1_VERIFIED_IDS:
+        routines = {r["id"]: r for r in catalog.ALL_ROUTINES}
+        for rid in ALL_VERIFIED_IDS:
             r = routines[rid]
             for target in ("x86_64", "arm64"):
                 tid = f"{rid}_{target}"
@@ -389,9 +531,9 @@ class TestFactoryWave1(unittest.TestCase):
 
     @unittest.skipUnless(HOST_TARGET and shutil.which("cc"),
                          "native compiler and x86_64/arm64 host required")
-    def test_all_13_native_vectors_on_real_silicon(self):
+    def test_all_18_native_vectors_on_real_silicon(self):
         cc = shutil.which("clang") or shutil.which("cc")
-        for rid in WAVE1_VERIFIED_IDS:
+        for rid in ALL_VERIFIED_IDS:
             tid = f"{rid}_{HOST_TARGET}"
             ode_p = os.path.join(VERIFIED_DIR, f"{tid}.ode")
             with tempfile.TemporaryDirectory() as d:

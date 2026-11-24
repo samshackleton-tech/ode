@@ -1,0 +1,106 @@
+fn ode_varint_decode_u32
+machine arm64
+i 0 4 .movi .x5 0x1
+i 4 8 .lsl .x5 .x5 0x20
+i 8 12 .cmpi .x1 0x0
+i 12 16 .bne 0x18
+i 16 20 .mov .x0 .x5
+i 20 24 .ret
+i 24 28 .ldrb .x2 .x0 0x0
+i 28 32 .cmpi .x2 0x80
+i 32 36 .bhs 0x2c
+i 36 40 .mov .x0 .x2
+i 40 44 .ret
+i 44 48 .cmpi .x1 0x2
+i 48 52 .bhs 0x3c
+i 52 56 .mov .x0 .x5
+i 56 60 .ret
+i 60 64 .ldrb .x6 .x0 0x1
+i 64 68 .mov .x6 .x6
+i 68 72 .cmpi .x6 0x80
+i 72 76 .bhs 0x70
+i 76 80 .cmpi .x6 0x0
+i 80 84 .bne 0x5c
+i 84 88 .mov .x0 .x5
+i 88 92 .ret
+i 92 96 .subi .x3 .x2 0x80
+i 96 100 .lsl .x7 .x6 0x7
+i 100 104 .add .x3 .x3 .x7
+i 104 108 .mov .x0 .x3
+i 108 112 .ret
+i 112 116 .cmpi .x1 0x3
+i 116 120 .bhs 0x80
+i 120 124 .mov .x0 .x5
+i 124 128 .ret
+i 128 132 .ldrb .x7 .x0 0x2
+i 132 136 .mov .x7 .x7
+i 136 140 .cmpi .x7 0x80
+i 140 144 .bhs 0xc0
+i 144 148 .cmpi .x7 0x0
+i 148 152 .bne 0xa0
+i 152 156 .mov .x0 .x5
+i 156 160 .ret
+i 160 164 .subi .x3 .x2 0x80
+i 164 168 .subi .x8 .x6 0x80
+i 168 172 .lsl .x8 .x8 0x7
+i 172 176 .add .x3 .x3 .x8
+i 176 180 .lsl .x8 .x7 0xe
+i 180 184 .add .x3 .x3 .x8
+i 184 188 .mov .x0 .x3
+i 188 192 .ret
+i 192 196 .cmpi .x1 0x4
+i 196 200 .bhs 0xd0
+i 200 204 .mov .x0 .x5
+i 204 208 .ret
+i 208 212 .ldrb .x8 .x0 0x3
+i 212 216 .mov .x8 .x8
+i 216 220 .cmpi .x8 0x80
+i 220 224 .bhs 0x11c
+i 224 228 .cmpi .x8 0x0
+i 228 232 .bne 0xf0
+i 232 236 .mov .x0 .x5
+i 236 240 .ret
+i 240 244 .subi .x3 .x2 0x80
+i 244 248 .subi .x9 .x6 0x80
+i 248 252 .lsl .x9 .x9 0x7
+i 252 256 .add .x3 .x3 .x9
+i 256 260 .subi .x9 .x7 0x80
+i 260 264 .lsl .x9 .x9 0xe
+i 264 268 .add .x3 .x3 .x9
+i 268 272 .lsl .x9 .x8 0x15
+i 272 276 .add .x3 .x3 .x9
+i 276 280 .mov .x0 .x3
+i 280 284 .ret
+i 284 288 .cmpi .x1 0x5
+i 288 292 .bhs 0x12c
+i 292 296 .mov .x0 .x5
+i 296 300 .ret
+i 300 304 .ldrb .x9 .x0 0x4
+i 304 308 .mov .x9 .x9
+i 308 312 .cmpi .x9 0x10
+i 312 316 .blo 0x144
+i 316 320 .mov .x0 .x5
+i 320 324 .ret
+i 324 328 .cmpi .x9 0x0
+i 328 332 .bne 0x154
+i 332 336 .mov .x0 .x5
+i 336 340 .ret
+i 340 344 .subi .x3 .x2 0x80
+i 344 348 .subi .x10 .x6 0x80
+i 348 352 .lsl .x10 .x10 0x7
+i 352 356 .add .x3 .x3 .x10
+i 356 360 .subi .x10 .x7 0x80
+i 360 364 .lsl .x10 .x10 0xe
+i 364 368 .add .x3 .x3 .x10
+i 368 372 .subi .x10 .x8 0x80
+i 372 376 .lsl .x10 .x10 0x15
+i 376 380 .add .x3 .x3 .x10
+i 380 384 .lsl .x10 .x9 0x1c
+i 384 388 .add .x3 .x3 .x10
+i 388 392 .mov .x0 .x3
+i 392 396 .ret
+arg input bytes n
+arg n number
+returns (call varint32 (name input))
+stack 0
+def varint32 a = (ifx (bin == (call len (name a)) (num 0)) (num 4294967296) (ifx (bin < (index (name a) (num 0)) (num 128)) (index (name a) (num 0)) (ifx (bin == (call len (name a)) (num 1)) (num 4294967296) (ifx (bin < (index (name a) (num 1)) (num 128)) (ifx (bin == (index (name a) (num 1)) (num 0)) (num 4294967296) (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (index (name a) (num 1))))) (ifx (bin == (call len (name a)) (num 2)) (num 4294967296) (ifx (bin < (index (name a) (num 2)) (num 128)) (ifx (bin == (index (name a) (num 2)) (num 0)) (num 4294967296) (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (index (name a) (num 2))))) (ifx (bin == (call len (name a)) (num 3)) (num 4294967296) (ifx (bin < (index (name a) (num 3)) (num 128)) (ifx (bin == (index (name a) (num 3)) (num 0)) (num 4294967296) (bin + (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (bin - (index (name a) (num 2)) (num 128)))) (bin * (num 2097152) (index (name a) (num 3))))) (ifx (bin == (call len (name a)) (num 4)) (num 4294967296) (ifx (bin < (index (name a) (num 4)) (num 16)) (ifx (bin == (index (name a) (num 4)) (num 0)) (num 4294967296) (bin + (bin + (bin + (bin + (bin - (index (name a) (num 0)) (num 128)) (bin * (num 128) (bin - (index (name a) (num 1)) (num 128)))) (bin * (num 16384) (bin - (index (name a) (num 2)) (num 128)))) (bin * (num 2097152) (bin - (index (name a) (num 3)) (num 128)))) (bin * (num 268435456) (index (name a) (num 4))))) (num 4294967296)))))))))))

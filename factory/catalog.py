@@ -501,7 +501,207 @@ contract ode_v_arm64_rd_valid(w: number) {
 """,
         "prompt_notes": (
             "Extract low 5 bits `w % 32`: on x86-64 use `and rdi, 31`; on AArch64 use `lsl x0, x0, 59; lsr x0, x0, 59` "
-            "(since `and` is not in arm64.tab). Compare against 31 and return 1 if `< 31` else 0."
+            "(or `and` with a register holding 31). Compare against 31 and return 1 if `< 31` else 0."
         ),
     },
 ]
+
+WAVE2_ROUTINES = [
+    # ------------------------------------------------------------------
+    # Wave 2: Cryptography (RFC 8439 ChaCha20 full double round),
+    # Protobuf/Wasm LEB128 Varint, Strict RFC 3629 UTF-8 2-byte decoder,
+    # RFC 4648 Hex byte decoder, and RFC 1071 Internet Checksum loop.
+    # ------------------------------------------------------------------
+    {
+        "id": "chacha20_double_round_4x",
+        "pillar": "chacha20",
+        "title": "RFC 8439 full ChaCha20 double round (4 column + 4 diagonal quarter-rounds, 4-way SIMD, constant-time)",
+        "symbol": "ode_chacha20_double_round_4x",
+        "spec": """// RFC 8439 Section 2.3 full ChaCha20 double round (4 column + 4 diagonal quarter-rounds)
+// in 4-way SIMD, branch-free and constant-time (no `trace` clause).
+def qr_a1(a, b) { a + b }
+def qr_d1(a, b, d) { (d ^ qr_a1(a, b)) >>> 16 }
+def qr_c1(a, b, c, d) { c + qr_d1(a, b, d) }
+def qr_b1(a, b, c, d) { (b ^ qr_c1(a, b, c, d)) >>> 20 }
+def qr_a2(a, b, c, d) { qr_a1(a, b) + qr_b1(a, b, c, d) }
+def qr_d2(a, b, c, d) { (qr_d1(a, b, d) ^ qr_a2(a, b, c, d)) >>> 24 }
+def qr_c2(a, b, c, d) { qr_c1(a, b, c, d) + qr_d2(a, b, c, d) }
+def qr_b2(a, b, c, d) { (qr_b1(a, b, c, d) ^ qr_c2(a, b, c, d)) >>> 25 }
+
+def col_round(s) {
+    [qr_a2(s[0], s[4], s[8],  s[12]), qr_a2(s[1], s[5], s[9],  s[13]),
+     qr_a2(s[2], s[6], s[10], s[14]), qr_a2(s[3], s[7], s[11], s[15]),
+     qr_b2(s[0], s[4], s[8],  s[12]), qr_b2(s[1], s[5], s[9],  s[13]),
+     qr_b2(s[2], s[6], s[10], s[14]), qr_b2(s[3], s[7], s[11], s[15]),
+     qr_c2(s[0], s[4], s[8],  s[12]), qr_c2(s[1], s[5], s[9],  s[13]),
+     qr_c2(s[2], s[6], s[10], s[14]), qr_c2(s[3], s[7], s[11], s[15]),
+     qr_d2(s[0], s[4], s[8],  s[12]), qr_d2(s[1], s[5], s[9],  s[13]),
+     qr_d2(s[2], s[6], s[10], s[14]), qr_d2(s[3], s[7], s[11], s[15])]
+}
+
+def diag_round(s) {
+    [qr_a2(s[0], s[5], s[10], s[15]), qr_a2(s[1], s[6], s[11], s[12]),
+     qr_a2(s[2], s[7], s[8],  s[13]), qr_a2(s[3], s[4], s[9],  s[14]),
+     qr_b2(s[3], s[4], s[9],  s[14]), qr_b2(s[0], s[5], s[10], s[15]),
+     qr_b2(s[1], s[6], s[11], s[12]), qr_b2(s[2], s[7], s[8],  s[13]),
+     qr_c2(s[2], s[7], s[8],  s[13]), qr_c2(s[3], s[4], s[9],  s[14]),
+     qr_c2(s[0], s[5], s[10], s[15]), qr_c2(s[1], s[6], s[11], s[12]),
+     qr_d2(s[1], s[6], s[11], s[12]), qr_d2(s[2], s[7], s[8],  s[13]),
+     qr_d2(s[3], s[4], s[9],  s[14]), qr_d2(s[0], s[5], s[10], s[15])]
+}
+
+def chacha20_dround(s) { diag_round(col_round(s)) }
+
+contract ode_chacha20_double_round_4x(state: 64 bytes) {
+    ensures state = bytes_of(chacha20_dround(words(state)))
+    stack 0
+}
+""",
+        "needs_x86": "    needs avx\n",
+        "prompt_notes": (
+            "Load the four 16-byte rows a=[state+0], b=[state+16], c=[state+32], d=[state+48] into four 128-bit vector registers. "
+            "Apply the column quarter-round (a+=b; d=(d^a)>>>16; c+=d; b=(b^c)>>>20; a+=b; d=(d^a)>>>24; c+=d; b=(b^c)>>>25), "
+            "then rotate rows for the diagonal round: b left by 1 lane ([1,2,3,0]), c by 2 lanes ([2,3,0,1]), d by 3 lanes ([3,0,1,2]), "
+            "apply the second quarter-round, and rotate rows back (b right 1 = [3,0,1,2], c by 2 = [2,3,0,1], d right 3 = [1,2,3,0]). "
+            "On x86-64 use VEX 128-bit instructions (`vmovdqu`, `vpaddd`, `vpxor`, `vpsrld`, `vpslld`, `vpor`, `vpshufd` — 0x39=[1,2,3,0], 0x4E=[2,3,0,1], 0x93=[3,0,1,2]). "
+            "On AArch64 use `ldr qX, [x0, N]` / `str qX, [x0, N]`, `rev32 .8h` for >>>16, `ushr`/`shl`/`orr` for >>>20/24/25, and `ext vD.16b, vS.16b, vS.16b, 4|8|12` for lane rotations."
+        ),
+    },
+    {
+        "id": "varint_decode_u32",
+        "pillar": "varint",
+        "title": "Canonical unsigned 32-bit LEB128 / Protobuf / WebAssembly varint decoder (rejects overlong & overflow)",
+        "symbol": "ode_varint_decode_u32",
+        "spec": """// Canonical unsigned 32-bit LEB128 / Protobuf / WebAssembly varint decoder.
+// Rejects empty/truncated input, non-canonical trailing 0x00 bytes on multi-byte encodings,
+// and >32-bit overflow (5th byte >= 16), returning 4294967296 (2^32) as sentinel.
+def varint32(a) {
+    if len(a) == 0 then 4294967296
+    else if a[0] < 128 then a[0]
+    else if len(a) == 1 then 4294967296
+    else if a[1] < 128 then
+        if a[1] == 0 then 4294967296 else (a[0] - 128) + 128 * a[1]
+    else if len(a) == 2 then 4294967296
+    else if a[2] < 128 then
+        if a[2] == 0 then 4294967296 else (a[0] - 128) + 128 * (a[1] - 128) + 16384 * a[2]
+    else if len(a) == 3 then 4294967296
+    else if a[3] < 128 then
+        if a[3] == 0 then 4294967296 else (a[0] - 128) + 128 * (a[1] - 128) + 16384 * (a[2] - 128) + 2097152 * a[3]
+    else if len(a) == 4 then 4294967296
+    else if a[4] < 16 then
+        if a[4] == 0 then 4294967296 else (a[0] - 128) + 128 * (a[1] - 128) + 16384 * (a[2] - 128) + 2097152 * (a[3] - 128) + 268435456 * a[4]
+    else 4294967296
+}
+
+contract ode_varint_decode_u32(input: n bytes, n: number) {
+    returns varint32(input)
+    trace depends on input, n
+    stack 0
+}
+""",
+        "prompt_notes": (
+            "Unroll the 1..5 byte LEB128 cases straight-line (no loop needed, stack 0). "
+            "Use shifts (`shl` / `lsl` by 7, 14, 21, 28) and `sub` by 128 + `add` to accumulate the exact value. "
+            "To load sentinel 4294967296 (2^32) on x86-64 or AArch64: set register to 1 and shift left by 32."
+        ),
+    },
+    {
+        "id": "utf8_decode_2byte",
+        "pillar": "utf8",
+        "title": "Strict RFC 3629 UTF-8 1-byte and 2-byte decoder (rejects overlong 0xC0/0xC1 & truncation)",
+        "symbol": "ode_utf8_decode_2byte",
+        "spec": """// Strict RFC 3629 UTF-8 1-byte and 2-byte scalar decoder.
+// Accepts ASCII (0x00..0x7F -> 0..127) and canonical 2-byte sequences (0xC2..0xDF, 0x80..0xBF -> 128..2047).
+// Rejects truncation, overlong 0xC0/0xC1 encodings (CVE-2008-2938), invalid continuations,
+// and 3+/4-byte lead octets, returning 4294967295 (0xFFFFFFFF).
+def utf8_cp2(a) {
+    if len(a) == 0 then 4294967295
+    else if a[0] < 128 then a[0]
+    else if a[0] >= 194 && a[0] <= 223 then
+        if len(a) >= 2 && a[1] >= 128 && a[1] <= 191 then
+            (a[0] - 192) * 64 + (a[1] - 128)
+        else 4294967295
+    else 4294967295
+}
+
+contract ode_utf8_decode_2byte(input: n bytes, n: number) {
+    returns utf8_cp2(input)
+    trace depends on input, n
+    stack 0
+}
+""",
+        "prompt_notes": (
+            "Check `n == 0` -> return 0xFFFFFFFF (on AArch64, `movz` only takes 16-bit immediates: build 0xFFFFFFFF via `x0 := 1; lsl x0, x0, 32; sub x0, x0, 1`). "
+            "Load `b0 = input[0]`. If `b0 < 128` return `b0`. "
+            "If `194 <= b0 <= 223` and `n >= 2`, load `b1 = input[1]`; if `128 <= b1 <= 191`, return `((b0 - 192) << 6) + (b1 - 128)`. "
+            "Otherwise return 0xFFFFFFFF."
+        ),
+    },
+    {
+        "id": "hex_decode_byte",
+        "pillar": "encoding",
+        "title": "Strict RFC 4648 two-character hexadecimal byte decoder (returns 0..255 or 256)",
+        "symbol": "ode_hex_decode_byte",
+        "spec": """// Strict RFC 4648 two-character ASCII hexadecimal byte decoder (0-9, a-f, A-F).
+// Returns decoded byte 0..255 on valid hex pair (hi, lo), or 256 if either byte is not hex.
+def hex_nib(b) {
+    if b >= 48 && b <= 57 then b - 48
+    else if b >= 97 && b <= 102 then b - 87
+    else if b >= 65 && b <= 70 then b - 55
+    else 16
+}
+
+def hex_pair(hi, lo) {
+    if hex_nib(hi) == 16 || hex_nib(lo) == 16 then 256
+    else hex_nib(hi) * 16 + hex_nib(lo)
+}
+
+contract ode_hex_decode_byte(hi: number, lo: number) {
+    requires hi < 256
+    requires lo < 256
+    returns hex_pair(hi, lo)
+    trace depends on hi, lo
+    stack 0
+}
+""",
+        "prompt_notes": (
+            "Decode `hi` (arg0) into 0..15 or return 256 immediately; decode `lo` (arg1) into 0..15 or return 256; "
+            "combine as `(hi_nib << 4) + lo_nib`. Zero stack, no helper call needed."
+        ),
+    },
+    {
+        "id": "inet_sum16",
+        "pillar": "checksum",
+        "title": "RFC 1071 Internet checksum 16-bit one's-complement accumulator over `pairs` big-endian 16-bit words",
+        "symbol": "ode_inet_sum16",
+        "spec": """// RFC 1071 Internet checksum 16-bit one's-complement sum over `pairs` big-endian 16-bit words
+// (len == 2 * pairs bytes, e.g. IPv4/TCP/UDP headers): s[0] = 0, each word w adds into s
+// with end-around carry folding (s + w >= 65536 -> s + w - 65535), keeping s < 65536.
+def fold16(x) {
+    if x >= 65536 then x - 65535 else x
+}
+
+sequence inet16(bytes) {
+    s[0] = 0
+    s[i + 1] = fold16(s[i] + 256 * bytes[2 * i] + bytes[2 * i + 1])
+}
+
+contract ode_inet_sum16(input: len bytes, len: number, pairs: number) {
+    requires len == 2 * pairs
+    returns inet16(input)[pairs]
+    trace depends on input, len, pairs
+    stack 0
+}
+""",
+        "prompt_notes": (
+            "Loop `i := 0` while `i < pairs` with `s := 0`. "
+            "Inside the loop body compute `off := i << 1; addr := input + off`, load `hi = [addr]` and `lo = [addr + 1]`, "
+            "compute `s := s + (hi << 8) + lo`, and if `s >= 65536` subtract `65535` (on AArch64 build 65536 inside the loop via `tmp := 1; lsl tmp, tmp, 16` since `mov` is 16-bit!). "
+            "Loop invariant (ONLY numeric registers `i` and `s`!): "
+            "`place { name idx = i; name cur = s; fact 0 <= idx; fact idx <= pairs; fact cur == inet16(input)[idx]; fact cur < 65536; decreases pairs - idx }`. "
+            "When `i == pairs`, return `s` directly (zero tail branch needed!)."
+        ),
+    },
+]
+
+ALL_ROUTINES = WAVE1_ROUTINES + WAVE2_ROUTINES

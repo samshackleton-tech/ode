@@ -1,0 +1,73 @@
+target x86_64
+
+fn chacha20_double_round_4x as "ode_chacha20_double_round_4x" {
+  reg state = rdi
+
+  // Load four rows a,b,c,d
+  vmovdqu xmm0, [state + 0]
+  vmovdqu xmm1, [state + 16]
+  vmovdqu xmm2, [state + 32]
+  vmovdqu xmm3, [state + 48]
+
+  // Column quarter-round
+  vpaddd xmm0, xmm0, xmm1      // a += b
+  vpxor xmm3, xmm3, xmm0       // d ^= a
+  vpsrld xmm4, xmm3, 16        // d >>> 16
+  vpslld xmm3, xmm3, 16
+  vpor xmm3, xmm3, xmm4
+  vpaddd xmm2, xmm2, xmm3      // c += d
+  vpxor xmm1, xmm1, xmm2       // b ^= c
+  vpsrld xmm4, xmm1, 20        // b >>> 20
+  vpslld xmm1, xmm1, 12
+  vpor xmm1, xmm1, xmm4
+  vpaddd xmm0, xmm0, xmm1      // a += b
+  vpxor xmm3, xmm3, xmm0       // d ^= a
+  vpsrld xmm4, xmm3, 24        // d >>> 24
+  vpslld xmm3, xmm3, 8
+  vpor xmm3, xmm3, xmm4
+  vpaddd xmm2, xmm2, xmm3      // c += d
+  vpxor xmm1, xmm1, xmm2       // b ^= c
+  vpsrld xmm4, xmm1, 25        // b >>> 25
+  vpslld xmm1, xmm1, 7
+  vpor xmm1, xmm1, xmm4
+
+  // Rotate rows for diagonal round: b left 1, c left 2, d left 3
+  vpshufd xmm1, xmm1, 0x39     // [1,2,3,0]
+  vpshufd xmm2, xmm2, 0x4E     // [2,3,0,1]
+  vpshufd xmm3, xmm3, 0x93     // [3,0,1,2]
+
+  // Diagonal quarter-round
+  vpaddd xmm0, xmm0, xmm1      // a += b
+  vpxor xmm3, xmm3, xmm0       // d ^= a
+  vpsrld xmm4, xmm3, 16        // d >>> 16
+  vpslld xmm3, xmm3, 16
+  vpor xmm3, xmm3, xmm4
+  vpaddd xmm2, xmm2, xmm3      // c += d
+  vpxor xmm1, xmm1, xmm2       // b ^= c
+  vpsrld xmm4, xmm1, 20        // b >>> 20
+  vpslld xmm1, xmm1, 12
+  vpor xmm1, xmm1, xmm4
+  vpaddd xmm0, xmm0, xmm1      // a += b
+  vpxor xmm3, xmm3, xmm0       // d ^= a
+  vpsrld xmm4, xmm3, 24        // d >>> 24
+  vpslld xmm3, xmm3, 8
+  vpor xmm3, xmm3, xmm4
+  vpaddd xmm2, xmm2, xmm3      // c += d
+  vpxor xmm1, xmm1, xmm2       // b ^= c
+  vpsrld xmm4, xmm1, 25        // b >>> 25
+  vpslld xmm1, xmm1, 7
+  vpor xmm1, xmm1, xmm4
+
+  // Rotate rows back: b right 1, c right 2, d right 3
+  vpshufd xmm1, xmm1, 0x93     // [3,0,1,2] = right 1
+  vpshufd xmm2, xmm2, 0x4E     // [2,3,0,1] = right 2
+  vpshufd xmm3, xmm3, 0x39     // [1,2,3,0] = right 3
+
+  // Store back
+  vmovdqu [state + 0], xmm0
+  vmovdqu [state + 16], xmm1
+  vmovdqu [state + 32], xmm2
+  vmovdqu [state + 48], xmm3
+
+  ret
+}

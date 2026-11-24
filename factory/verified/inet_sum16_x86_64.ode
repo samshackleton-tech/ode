@@ -1,0 +1,57 @@
+target x86_64
+
+fn inet_sum16 as "ode_inet_sum16" {
+  reg input = rdi
+  reg len = rsi
+  reg pairs = rdx
+  reg i = rcx
+  reg s = rax
+  reg addr = r8
+  reg hi = r9b
+  reg lo = r10b
+  reg word_val = r11
+
+  i := 0
+  s := 0
+  loop {
+    place {
+      name idx = i
+      name cur = s
+      fact 0 <= idx
+      fact idx <= pairs
+      fact cur == inet16(input)[idx]
+      fact cur < 65536
+      decreases pairs - idx
+    }
+    cmp i, pairs
+    break if eq
+    
+    // off = i * 2
+    mov r11, i
+    shl r11, 1
+    
+    // addr = input + off
+    lea addr, [input + r11]
+    
+    // Load big-endian 16-bit word
+    movzx r9d, byte ptr [addr]
+    movzx r10d, byte ptr [addr + 1]
+    
+    // word_val = (hi << 8) + lo
+    mov word_val, r9
+    shl word_val, 8
+    add word_val, r10
+    
+    // s += word_val
+    add s, word_val
+    
+    // Fold carry if s >= 65536
+    cmp s, 65536
+    if uge {
+      sub s, 65535
+    }
+    
+    add i, 1
+  }
+  ret
+}

@@ -1,0 +1,30 @@
+fn ode_utf8_decode_2byte
+i 0 5 .mov 32 (.reg .rax) (.imm 0xFFFFFFFF)
+i 5 9 .cmp 64 (.reg .rsi) (.imm 0x0)
+i 9 11 .je 0x5B
+i 11 14 .movzx8 .rcx (.mem .rdi 0x0)
+i 14 21 .cmp 64 (.reg .rcx) (.imm 0x80)
+i 21 23 .jae 0x1C
+i 23 26 .mov 64 (.reg .rax) (.reg .rcx)
+i 26 28 .jmp 0x5B
+i 28 35 .cmp 64 (.reg .rcx) (.imm 0xC2)
+i 35 37 .jb 0x5B
+i 37 44 .cmp 64 (.reg .rcx) (.imm 0xE0)
+i 44 46 .jae 0x5B
+i 46 50 .cmp 64 (.reg .rsi) (.imm 0x2)
+i 50 52 .jb 0x5B
+i 52 56 .movzx8 .rdx (.mem .rdi 0x1)
+i 56 63 .cmp 64 (.reg .rdx) (.imm 0x80)
+i 63 65 .jb 0x5B
+i 65 72 .cmp 64 (.reg .rdx) (.imm 0xC0)
+i 72 74 .jae 0x5B
+i 74 78 .shl64 .rcx 6
+i 78 81 .add 64 (.reg .rcx) (.reg .rdx)
+i 81 88 .sub 64 (.reg .rcx) (.imm 0x3080)
+i 88 91 .mov 64 (.reg .rax) (.reg .rcx)
+i 91 92 .ret
+arg input bytes n
+arg n number
+returns (call utf8_cp2 (name input))
+stack 0
+def utf8_cp2 a = (ifx (bin == (call len (name a)) (num 0)) (num 4294967295) (ifx (bin < (index (name a) (num 0)) (num 128)) (index (name a) (num 0)) (ifx (ifx (bin >= (index (name a) (num 0)) (num 194)) (bin <= (index (name a) (num 0)) (num 223)) (bin == (num 0) (num 1))) (ifx (ifx (ifx (bin >= (call len (name a)) (num 2)) (bin >= (index (name a) (num 1)) (num 128)) (bin == (num 0) (num 1))) (bin <= (index (name a) (num 1)) (num 191)) (bin == (num 0) (num 1))) (bin + (bin * (bin - (index (name a) (num 0)) (num 192)) (num 64)) (bin - (index (name a) (num 1)) (num 128))) (num 4294967295)) (num 4294967295))))

@@ -1,0 +1,71 @@
+fn ode_chacha20_double_round_4x
+i 0 4 .xloadu 0 .rdi 0x0
+i 4 9 .xloadu 1 .rdi 0x10
+i 9 14 .xloadu 2 .rdi 0x20
+i 14 19 .xloadu 3 .rdi 0x30
+i 19 23 .xpaddd 0 0 1
+i 23 27 .xpxor 3 3 0
+i 27 32 .xpsrld 4 3 16
+i 32 37 .xpslld 3 3 16
+i 37 41 .xpor 3 3 4
+i 41 45 .xpaddd 2 2 3
+i 45 49 .xpxor 1 1 2
+i 49 54 .xpsrld 4 1 20
+i 54 59 .xpslld 1 1 12
+i 59 63 .xpor 1 1 4
+i 63 67 .xpaddd 0 0 1
+i 67 71 .xpxor 3 3 0
+i 71 76 .xpsrld 4 3 24
+i 76 81 .xpslld 3 3 8
+i 81 85 .xpor 3 3 4
+i 85 89 .xpaddd 2 2 3
+i 89 93 .xpxor 1 1 2
+i 93 98 .xpsrld 4 1 25
+i 98 103 .xpslld 1 1 7
+i 103 107 .xpor 1 1 4
+i 107 112 .xpshufd 1 1 57
+i 112 117 .xpshufd 2 2 78
+i 117 122 .xpshufd 3 3 147
+i 122 126 .xpaddd 0 0 1
+i 126 130 .xpxor 3 3 0
+i 130 135 .xpsrld 4 3 16
+i 135 140 .xpslld 3 3 16
+i 140 144 .xpor 3 3 4
+i 144 148 .xpaddd 2 2 3
+i 148 152 .xpxor 1 1 2
+i 152 157 .xpsrld 4 1 20
+i 157 162 .xpslld 1 1 12
+i 162 166 .xpor 1 1 4
+i 166 170 .xpaddd 0 0 1
+i 170 174 .xpxor 3 3 0
+i 174 179 .xpsrld 4 3 24
+i 179 184 .xpslld 3 3 8
+i 184 188 .xpor 3 3 4
+i 188 192 .xpaddd 2 2 3
+i 192 196 .xpxor 1 1 2
+i 196 201 .xpsrld 4 1 25
+i 201 206 .xpslld 1 1 7
+i 206 210 .xpor 1 1 4
+i 210 215 .xpshufd 1 1 147
+i 215 220 .xpshufd 2 2 78
+i 220 225 .xpshufd 3 3 57
+i 225 229 .xstoreu .rdi 0x0 0
+i 229 234 .xstoreu .rdi 0x10 1
+i 234 239 .xstoreu .rdi 0x20 2
+i 239 244 .xstoreu .rdi 0x30 3
+i 244 245 .ret
+arg state inout 64
+needs avx
+ensuresw state (call bytes_of (call chacha20_dround (call words (name state))))
+stack 0
+def qr_a1 a b = (bin + (name a) (name b))
+def qr_d1 a b d = (bin >>> (bin ^ (name d) (call qr_a1 (name a) (name b))) (num 16))
+def qr_c1 a b c d = (bin + (name c) (call qr_d1 (name a) (name b) (name d)))
+def qr_b1 a b c d = (bin >>> (bin ^ (name b) (call qr_c1 (name a) (name b) (name c) (name d))) (num 20))
+def qr_a2 a b c d = (bin + (call qr_a1 (name a) (name b)) (call qr_b1 (name a) (name b) (name c) (name d)))
+def qr_d2 a b c d = (bin >>> (bin ^ (call qr_d1 (name a) (name b) (name d)) (call qr_a2 (name a) (name b) (name c) (name d))) (num 24))
+def qr_c2 a b c d = (bin + (call qr_c1 (name a) (name b) (name c) (name d)) (call qr_d2 (name a) (name b) (name c) (name d)))
+def qr_b2 a b c d = (bin >>> (bin ^ (call qr_b1 (name a) (name b) (name c) (name d)) (call qr_c2 (name a) (name b) (name c) (name d))) (num 25))
+def col_round s = (list (call qr_a2 (index (name s) (num 0)) (index (name s) (num 4)) (index (name s) (num 8)) (index (name s) (num 12))) (call qr_a2 (index (name s) (num 1)) (index (name s) (num 5)) (index (name s) (num 9)) (index (name s) (num 13))) (call qr_a2 (index (name s) (num 2)) (index (name s) (num 6)) (index (name s) (num 10)) (index (name s) (num 14))) (call qr_a2 (index (name s) (num 3)) (index (name s) (num 7)) (index (name s) (num 11)) (index (name s) (num 15))) (call qr_b2 (index (name s) (num 0)) (index (name s) (num 4)) (index (name s) (num 8)) (index (name s) (num 12))) (call qr_b2 (index (name s) (num 1)) (index (name s) (num 5)) (index (name s) (num 9)) (index (name s) (num 13))) (call qr_b2 (index (name s) (num 2)) (index (name s) (num 6)) (index (name s) (num 10)) (index (name s) (num 14))) (call qr_b2 (index (name s) (num 3)) (index (name s) (num 7)) (index (name s) (num 11)) (index (name s) (num 15))) (call qr_c2 (index (name s) (num 0)) (index (name s) (num 4)) (index (name s) (num 8)) (index (name s) (num 12))) (call qr_c2 (index (name s) (num 1)) (index (name s) (num 5)) (index (name s) (num 9)) (index (name s) (num 13))) (call qr_c2 (index (name s) (num 2)) (index (name s) (num 6)) (index (name s) (num 10)) (index (name s) (num 14))) (call qr_c2 (index (name s) (num 3)) (index (name s) (num 7)) (index (name s) (num 11)) (index (name s) (num 15))) (call qr_d2 (index (name s) (num 0)) (index (name s) (num 4)) (index (name s) (num 8)) (index (name s) (num 12))) (call qr_d2 (index (name s) (num 1)) (index (name s) (num 5)) (index (name s) (num 9)) (index (name s) (num 13))) (call qr_d2 (index (name s) (num 2)) (index (name s) (num 6)) (index (name s) (num 10)) (index (name s) (num 14))) (call qr_d2 (index (name s) (num 3)) (index (name s) (num 7)) (index (name s) (num 11)) (index (name s) (num 15))))
+def diag_round s = (list (call qr_a2 (index (name s) (num 0)) (index (name s) (num 5)) (index (name s) (num 10)) (index (name s) (num 15))) (call qr_a2 (index (name s) (num 1)) (index (name s) (num 6)) (index (name s) (num 11)) (index (name s) (num 12))) (call qr_a2 (index (name s) (num 2)) (index (name s) (num 7)) (index (name s) (num 8)) (index (name s) (num 13))) (call qr_a2 (index (name s) (num 3)) (index (name s) (num 4)) (index (name s) (num 9)) (index (name s) (num 14))) (call qr_b2 (index (name s) (num 3)) (index (name s) (num 4)) (index (name s) (num 9)) (index (name s) (num 14))) (call qr_b2 (index (name s) (num 0)) (index (name s) (num 5)) (index (name s) (num 10)) (index (name s) (num 15))) (call qr_b2 (index (name s) (num 1)) (index (name s) (num 6)) (index (name s) (num 11)) (index (name s) (num 12))) (call qr_b2 (index (name s) (num 2)) (index (name s) (num 7)) (index (name s) (num 8)) (index (name s) (num 13))) (call qr_c2 (index (name s) (num 2)) (index (name s) (num 7)) (index (name s) (num 8)) (index (name s) (num 13))) (call qr_c2 (index (name s) (num 3)) (index (name s) (num 4)) (index (name s) (num 9)) (index (name s) (num 14))) (call qr_c2 (index (name s) (num 0)) (index (name s) (num 5)) (index (name s) (num 10)) (index (name s) (num 15))) (call qr_c2 (index (name s) (num 1)) (index (name s) (num 6)) (index (name s) (num 11)) (index (name s) (num 12))) (call qr_d2 (index (name s) (num 1)) (index (name s) (num 6)) (index (name s) (num 11)) (index (name s) (num 12))) (call qr_d2 (index (name s) (num 2)) (index (name s) (num 7)) (index (name s) (num 8)) (index (name s) (num 13))) (call qr_d2 (index (name s) (num 3)) (index (name s) (num 4)) (index (name s) (num 9)) (index (name s) (num 14))) (call qr_d2 (index (name s) (num 0)) (index (name s) (num 5)) (index (name s) (num 10)) (index (name s) (num 15))))
+def chacha20_dround s = (call diag_round (call col_round (name s)))

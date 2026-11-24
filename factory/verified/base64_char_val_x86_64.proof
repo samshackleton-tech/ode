@@ -2,11 +2,6 @@ for ode_b64_char_val
 t live
 t live
 t live
-t dead
-p 0 1 36
-s 0 1 1 1 1
-q
-t live
 t live
 t live
 t live
@@ -17,29 +12,29 @@ t lt
 t lt
 t eq
 t live
+t dead
+p 0 2 38
+s 0 1 1 1 1
+q
+t live
+t open 0
+t lt
+t lt
+t lt
+t gt
+t eq
+t open 0
+t lt
+t lt
+t lt
+t gt
+t lt
 t dead
 p 0 2 39
 s 0 1 1 1 1
 q
-t live
-t open 0
-t lt
-t lt
-t lt
-t gt
-t eq
-t open 0
-t lt
-t lt
-t lt
-t gt
-t lt
 t dead
-p 0 2 40
-s 0 1 1 1 1
-q
-t dead
-p 0 1 39
+p 0 1 38
 s 0 1 1 1 1
 q
 t live
@@ -56,31 +51,6 @@ t lt
 t lt
 t ge
 t ge
-t live
-t live
-t open 0
-t lt
-t lt
-t ge
-t ge
-t dead
-p 2 1 41
-s 0 1 1 1 1
-q
-t live
-t dead
-p 1 0 40
-s 0 1 1 1 1
-q
-t dead
-p 3 1 42
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 0 41
-s 0 1 1 1 1
-q
 t open 0
 t lt
 t lt
@@ -97,44 +67,6 @@ t live
 t live
 t open 0
 t ge
-t ge
-t live
-t live
-t dead
-p 2 0 39
-s 0 1 1 1 1
-q
-t live
-t dead
-p 3 0 40
-s 0 1 1 1 1
-q
-t live
-t dead
-p 4 0 41
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 1 43
-s 0 1 1 1 1
-q
-t live
-t dead
-p 1 0 42
-s 0 1 1 1 1
-q
-t dead
-p 3 1 44
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 0 43
-s 0 1 1 1 1
-q
-t open 0
-t ge
 t lt
 t lt
 t ge
@@ -148,46 +80,6 @@ t ge
 t lt
 t ge
 t ge
-t live
-t live
-t open 0
-t ge
-t lt
-t ge
-t ge
-t dead
-p 1 0 41
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 0 42
-s 0 1 1 1 1
-q
-t live
-t dead
-p 3 0 43
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 1 45
-s 0 1 1 1 1
-q
-t live
-t dead
-p 1 0 44
-s 0 1 1 1 1
-q
-t dead
-p 3 1 46
-s 0 1 1 1 1
-q
-t live
-t dead
-p 2 0 45
-s 0 1 1 1 1
-q
 t open 0
 t ge
 t lt

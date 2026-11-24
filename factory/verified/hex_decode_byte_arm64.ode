@@ -1,0 +1,87 @@
+target arm64
+
+fn hex_decode_byte as "ode_hex_decode_byte" {
+  reg hi = x0
+  reg lo = x1
+  reg hi_n = x2
+  reg lo_n = x3
+
+  // Decode high nibble:
+  cmp hi, 48
+  b.lo @hi_try_lower
+  cmp hi, 58        // hi < 58 -> '0'..'9' (48..57)
+  b.lo @hi_digit_ok
+
+@hi_try_lower:
+  cmp hi, 97
+  b.lo @hi_try_upper
+  cmp hi, 103       // hi < 103 -> 'a'..'f' (97..102)
+  b.lo @hi_lower_ok
+
+@hi_try_upper:
+  cmp hi, 65
+  b.lo @bad
+  cmp hi, 71        // hi < 71 -> 'A'..'F' (65..70)
+  b.lo @hi_upper_ok
+  b @bad
+
+@hi_digit_ok:
+  mov hi_n, hi
+  sub hi_n, hi_n, 48
+  b @hi_decoded
+
+@hi_lower_ok:
+  mov hi_n, hi
+  sub hi_n, hi_n, 87
+  b @hi_decoded
+
+@hi_upper_ok:
+  mov hi_n, hi
+  sub hi_n, hi_n, 55
+  b @hi_decoded
+
+@hi_decoded:
+  // Decode low nibble:
+  cmp lo, 48
+  b.lo @lo_try_lower
+  cmp lo, 58        // lo < 58 -> '0'..'9'
+  b.lo @lo_digit_ok
+
+@lo_try_lower:
+  cmp lo, 97
+  b.lo @lo_try_upper
+  cmp lo, 103       // lo < 103 -> 'a'..'f'
+  b.lo @lo_lower_ok
+
+@lo_try_upper:
+  cmp lo, 65
+  b.lo @bad
+  cmp lo, 71        // lo < 71 -> 'A'..'F'
+  b.lo @lo_upper_ok
+  b @bad
+
+@lo_digit_ok:
+  mov lo_n, lo
+  sub lo_n, lo_n, 48
+  b @lo_decoded
+
+@lo_lower_ok:
+  mov lo_n, lo
+  sub lo_n, lo_n, 87
+  b @lo_decoded
+
+@lo_upper_ok:
+  mov lo_n, lo
+  sub lo_n, lo_n, 55
+  b @lo_decoded
+
+@lo_decoded:
+  // Combine and return (hi_n << 4) + lo_n
+  lsl hi_n, hi_n, 4
+  add x0, hi_n, lo_n
+  ret
+
+@bad:
+  mov x0, 256
+  ret
+}

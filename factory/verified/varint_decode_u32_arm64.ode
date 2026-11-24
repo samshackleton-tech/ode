@@ -1,0 +1,160 @@
+target arm64
+
+fn varint_decode_u32 as "ode_varint_decode_u32" {
+  reg base = x0
+  reg len = x1
+  reg cur = w2
+  reg cur64 = x2
+  reg acc = x3
+  reg shift = x4
+  reg sentinel = x5
+  reg b1 = x6
+  reg b2 = x7
+  reg b3 = x8
+  reg b4 = x9
+  reg b5 = x10
+
+  // sentinel = 1 << 32 = 4294967296
+  sentinel := 1
+  lsl sentinel, sentinel, 32
+
+  // Check empty input
+  cmp len, 0
+  if eq {
+    x0 := sentinel
+    ret
+  }
+
+  // Load first byte
+  ldrb cur, [base, 0]
+  cmp cur64, 128
+  if lo {
+    // 1-byte case: value < 128
+    x0 := cur64
+    ret
+  }
+
+  // Need at least 2 bytes
+  cmp len, 2
+  if lo {
+    x0 := sentinel
+    ret
+  }
+
+  // Load second byte
+  ldrb w6, [base, 1]
+  mov b1, x6
+  cmp b1, 128
+  if lo {
+    // 2-byte case: second byte < 128
+    cmp b1, 0
+    if eq {
+      x0 := sentinel
+      ret
+    }
+    // acc = (cur - 128) + 128 * b1
+    sub acc, cur64, 128
+    lsl b2, b1, 7
+    add acc, acc, b2
+    x0 := acc
+    ret
+  }
+
+  // Need at least 3 bytes
+  cmp len, 3
+  if lo {
+    x0 := sentinel
+    ret
+  }
+
+  // Load third byte
+  ldrb w7, [base, 2]
+  mov b2, x7
+  cmp b2, 128
+  if lo {
+    // 3-byte case: third byte < 128
+    cmp b2, 0
+    if eq {
+      x0 := sentinel
+      ret
+    }
+    // acc = (cur - 128) + 128 * (b1 - 128) + 16384 * b2
+    sub acc, cur64, 128
+    sub b3, b1, 128
+    lsl b3, b3, 7
+    add acc, acc, b3
+    lsl b3, b2, 14
+    add acc, acc, b3
+    x0 := acc
+    ret
+  }
+
+  // Need at least 4 bytes
+  cmp len, 4
+  if lo {
+    x0 := sentinel
+    ret
+  }
+
+  // Load fourth byte
+  ldrb w8, [base, 3]
+  mov b3, x8
+  cmp b3, 128
+  if lo {
+    // 4-byte case: fourth byte < 128
+    cmp b3, 0
+    if eq {
+      x0 := sentinel
+      ret
+    }
+    // acc = (cur - 128) + 128 * (b1 - 128) + 16384 * (b2 - 128) + 2097152 * b3
+    sub acc, cur64, 128
+    sub b4, b1, 128
+    lsl b4, b4, 7
+    add acc, acc, b4
+    sub b4, b2, 128
+    lsl b4, b4, 14
+    add acc, acc, b4
+    lsl b4, b3, 21
+    add acc, acc, b4
+    x0 := acc
+    ret
+  }
+
+  // Need at least 5 bytes
+  cmp len, 5
+  if lo {
+    x0 := sentinel
+    ret
+  }
+
+  // Load fifth byte
+  ldrb w9, [base, 4]
+  mov b4, x9
+  cmp b4, 16
+  if hs {
+    x0 := sentinel
+    ret
+  }
+  cmp b4, 0
+  if eq {
+    x0 := sentinel
+    ret
+  }
+  // 5-byte case: fifth byte < 16
+  // acc = (cur - 128) + 128 * (b1 - 128) + 16384 * (b2 - 128) + 2097152 * (b3 - 128) + 268435456 * b4
+  sub acc, cur64, 128
+  sub b5, b1, 128
+  lsl b5, b5, 7
+  add acc, acc, b5
+  sub b5, b2, 128
+  lsl b5, b5, 14
+  add acc, acc, b5
+  sub b5, b3, 128
+  lsl b5, b5, 21
+  add acc, acc, b5
+  lsl b5, b4, 28
+  add acc, acc, b5
+  x0 := acc
+  ret
+}

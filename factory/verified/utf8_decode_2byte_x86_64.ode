@@ -1,0 +1,38 @@
+target x86_64
+
+fn utf8_decode_2byte as "ode_utf8_decode_2byte" {
+  reg base = rdi
+  reg count = rsi
+
+  mov eax, 4294967295
+  cmp count, 0
+  if ne {
+    movzx ecx, byte ptr [base]
+    cmp rcx, 128
+    if ult {
+      mov rax, rcx
+    } else {
+      cmp rcx, 194
+      if uge {
+        cmp rcx, 224
+        if ult {
+          cmp count, 2
+          if uge {
+            movzx edx, byte ptr [base+1]
+            cmp rdx, 128
+            if uge {
+              cmp rdx, 192
+              if ult {
+                shl rcx, 6
+                add rcx, rdx
+                sub rcx, 12416
+                mov rax, rcx
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  ret
+}

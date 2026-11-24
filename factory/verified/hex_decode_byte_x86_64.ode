@@ -1,0 +1,90 @@
+target x86_64
+
+fn hex_decode_byte as "ode_hex_decode_byte" {
+  reg hi = rdi
+  reg lo = rsi
+  reg hn = rax
+  reg ln = rdx
+
+  // Default nibble = 16 (invalid)
+  hn := 16
+
+  // Decode high nibble
+  cmp hi, 48
+  jb @check_hi_a
+  cmp hi, 58
+  jb @hi_digit
+@check_hi_a:
+  cmp hi, 97
+  jb @check_hi_upper
+  cmp hi, 103
+  jb @hi_lower
+@check_hi_upper:
+  cmp hi, 65
+  jb @hi_done
+  cmp hi, 71
+  jb @hi_upper
+  jmp @hi_done
+@hi_digit:
+  mov hn, hi
+  sub hn, 48
+  jmp @dec_lo
+@hi_lower:
+  mov hn, hi
+  sub hn, 87
+  jmp @dec_lo
+@hi_upper:
+  mov hn, hi
+  sub hn, 55
+  jmp @dec_lo
+@hi_done:
+  // hn remains 16
+
+@dec_lo:
+  // Default low nibble = 16 (invalid)
+  ln := 16
+
+  // Decode low nibble
+  cmp lo, 48
+  jb @check_lo_a
+  cmp lo, 58
+  jb @lo_digit
+@check_lo_a:
+  cmp lo, 97
+  jb @check_lo_upper
+  cmp lo, 103
+  jb @lo_lower
+@check_lo_upper:
+  cmp lo, 65
+  jb @lo_done
+  cmp lo, 71
+  jb @lo_upper
+  jmp @lo_done
+@lo_digit:
+  mov ln, lo
+  sub ln, 48
+  jmp @combine
+@lo_lower:
+  mov ln, lo
+  sub ln, 87
+  jmp @combine
+@lo_upper:
+  mov ln, lo
+  sub ln, 55
+  jmp @combine
+@lo_done:
+  // ln remains 16
+
+@combine:
+  cmp hn, 16
+  je @bad
+  cmp ln, 16
+  je @bad
+  shl hn, 4
+  add hn, ln
+  jmp @ret
+@bad:
+  hn := 256
+@ret:
+  ret
+}

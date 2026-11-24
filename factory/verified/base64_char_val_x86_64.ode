@@ -4,80 +4,47 @@ fn b64_char_val as "ode_b64_char_val" {
   reg b = rdi
   reg res = rax
   reg tmp = rcx
-  
-  // Handle uppercase A-Z (65-90) -> 0-25
+
   cmp b, 65
-  if lo {
-    jmp @check_lower
-  }
-  cmp b, 90
-  if uge {
-    // Check if b > 90 (i.e., b >= 91)
-    cmp b, 91
-    if uge {
-      jmp @check_lower
-    }
-  }
+  jae @ge65
+  cmp b, 48
+  jb @low
+  cmp b, 58
+  jae @invalid
+  // digits 48..57 -> 52..61
+  lea rax, [rdi + 4]
+  ret
+
+@low:
+  cmp b, 43
+  jne @chk_slash
+  res := 62
+  ret
+
+@chk_slash:
+  cmp b, 47
+  jne @invalid
+  res := 63
+  ret
+
+@ge65:
+  cmp b, 91
+  jae @ge91
   res := b
   sub res, 65
   ret
-  
-@check_lower:
-  // Handle lowercase a-z (97-122) -> 26-51
+
+@ge91:
   cmp b, 97
-  if lo {
-    jmp @check_digit
-  }
-  cmp b, 122
-  if uge {
-    // Check if b > 122 (i.e., b >= 123)
-    cmp b, 123
-    if uge {
-      jmp @check_digit
-    }
-  }
+  jb @invalid
+  cmp b, 123
+  jae @invalid
   res := b
-  sub res, 71  // 97 - 26 = 71
+  sub res, 71
   ret
-  
-@check_digit:
-  // Handle digits 0-9 (48-57) -> 52-61
-  cmp b, 48
-  if lo {
-    jmp @check_plus
-  }
-  cmp b, 57
-  if uge {
-    // Check if b > 57 (i.e., b >= 58)
-    cmp b, 58
-    if uge {
-      jmp @check_plus
-    }
-  }
-  res := b
-  add res, 4  // 48 + 4 = 52
-  ret
-  
-@check_plus:
-  // Handle '+' (43) -> 62
-  cmp b, 43
-  if ne {
-    jmp @check_slash
-  }
-  res := 62
-  ret
-  
-@check_slash:
-  // Handle '/' (47) -> 63
-  cmp b, 47
-  if ne {
-    jmp @invalid
-  }
-  res := 63
-  ret
-  
+
 @invalid:
-  // Any other byte -> 255
   res := 255
   ret
 }
+

@@ -1,0 +1,29 @@
+fn ode_inet_sum16
+i 0 7 .mov 64 (.reg .rcx) (.imm 0x0)
+i 7 14 .mov 64 (.reg .rax) (.imm 0x0)
+i 14 17 .cmp 64 (.reg .rcx) (.reg .rdx)
+i 17 19 .je 0x47
+i 19 22 .mov 64 (.reg .r11) (.reg .rcx)
+i 22 25 .shl64 .r11 1
+i 25 29 .lea_idx .r8 .rdi .r11 0x0
+i 29 33 .movzx8 .r9 (.mem .r8 0x0)
+i 33 38 .movzx8 .r10 (.mem .r8 0x1)
+i 38 41 .mov 64 (.reg .r11) (.reg .r9)
+i 41 45 .shl64 .r11 8
+i 45 48 .add 64 (.reg .r11) (.reg .r10)
+i 48 51 .add 64 (.reg .rax) (.reg .r11)
+i 51 57 .cmp 64 (.reg .rax) (.imm 0x10000)
+i 57 59 .jb 0x41
+i 59 65 .sub 64 (.reg .rax) (.imm 0xFFFF)
+i 65 69 .add 64 (.reg .rcx) (.imm 0x1)
+i 69 71 .jmp 0xE
+i 71 72 .ret
+arg input bytes len
+arg len number
+arg pairs number
+linpre 0 len -1 pairs 2
+linpre 0 len 1 pairs -2
+returns (call inet16 (name input) (name pairs))
+stack 0
+def fold16 x = (ifx (bin >= (name x) (num 65536)) (bin - (name x) (num 65535)) (name x))
+def inet16 bytes place = (ifx (bin == (name place) (num 0)) (num 0) (call fold16 (bin + (bin + (call inet16 (name bytes) (bin - (name place) (num 1))) (bin * (num 256) (index (name bytes) (bin * (num 2) (bin - (name place) (num 1)))))) (index (name bytes) (bin + (bin * (num 2) (bin - (name place) (num 1))) (num 1))))))

@@ -1,0 +1,121 @@
+target x86_64
+
+fn varint_decode_u32 as "ode_varint_decode_u32" {
+  reg base = rdi
+  reg n = rsi
+
+  reg b0 = r8
+  reg b1 = r9
+  reg b2 = r10
+  reg b3 = r11
+  reg b4 = rdx
+
+  reg tmp = rcx
+  reg out = rax
+
+  cmp n, 0
+  je @sentinel
+
+  movzx r8d, byte ptr [rdi + 0]
+  cmp r8, 128
+  jb @return_b0
+
+  cmp n, 1
+  je @sentinel
+
+  movzx r9d, byte ptr [rdi + 1]
+  cmp r9, 128
+  jb @case2
+
+  cmp n, 2
+  je @sentinel
+
+  movzx r10d, byte ptr [rdi + 2]
+  cmp r10, 128
+  jb @case3
+
+  cmp n, 3
+  je @sentinel
+
+  movzx r11d, byte ptr [rdi + 3]
+  cmp r11, 128
+  jb @case4
+
+  cmp n, 4
+  je @sentinel
+
+  movzx edx, byte ptr [rdi + 4]
+  cmp rdx, 16
+  jb @case5
+
+  jmp @sentinel
+
+@return_b0:
+  mov rax, r8
+  jmp @done
+
+@case2:
+  cmp r9, 0
+  je @sentinel
+  mov rax, r9
+  shl rax, 7
+  sub rax, 128
+  add rax, r8
+  jmp @done
+
+@case3:
+  cmp r10, 0
+  je @sentinel
+  mov tmp, r10
+  shl tmp, 14
+  mov rax, r9
+  shl rax, 7
+  add tmp, rax
+  add tmp, r8
+  sub tmp, 16512            // 128 + 16384
+  mov rax, tmp
+  jmp @done
+
+@case4:
+  cmp r11, 0
+  je @sentinel
+  mov tmp, r11
+  shl tmp, 21
+  mov rax, r10
+  shl rax, 14
+  add tmp, rax
+  mov rax, r9
+  shl rax, 7
+  add tmp, rax
+  add tmp, r8
+  sub tmp, 2113664          // 128 + 16384 + 2097152
+  mov rax, tmp
+  jmp @done
+
+@case5:
+  cmp rdx, 0
+  je @sentinel
+  mov tmp, rdx
+  shl tmp, 28
+  mov rax, r11
+  shl rax, 21
+  add tmp, rax
+  mov rax, r10
+  shl rax, 14
+  add tmp, rax
+  mov rax, r9
+  shl rax, 7
+  add tmp, rax
+  add tmp, r8
+  sub tmp, 270549120        // 128 + 16384 + 2097152 + 268435456
+  mov rax, tmp
+  jmp @done
+
+@sentinel:
+  mov rax, 1
+  shl rax, 32               // produce 2^32 sentinel
+  jmp @done
+
+@done:
+  ret
+}

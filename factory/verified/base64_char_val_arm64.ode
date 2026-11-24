@@ -2,52 +2,62 @@ target arm64
 
 fn base64_char_val as "ode_b64_char_val" {
   reg b = x0
+  reg t = x1
 
   // 'A'..'Z' (65..90) -> 0..25
   cmp b, 65
-  if uge {
-    cmp b, 91
-    if ult {
-      sub x0, b, 65
-      ret
-    }
-  }
+  b.lo @check_lower
+  sub t, b, 65
+  cmp t, 26
+  b.lo @ret_upper
 
+@check_lower:
   // 'a'..'z' (97..122) -> 26..51
   cmp b, 97
-  if uge {
-    cmp b, 123
-    if ult {
-      sub x0, b, 71
-      ret
-    }
-  }
+  b.lo @check_digit
+  sub t, b, 97
+  cmp t, 26
+  b.lo @ret_lower
 
+@check_digit:
   // '0'..'9' (48..57) -> 52..61
   cmp b, 48
-  if uge {
-    cmp b, 58
-    if ult {
-      add x0, b, 4
-      ret
-    }
-  }
+  b.lo @check_plus
+  sub t, b, 48
+  cmp t, 10
+  b.lo @ret_digit
 
+@check_plus:
   // '+' -> 62
   cmp b, 43
-  if eq {
-    mov x0, 62
-    ret
-  }
+  b.eq @plus
 
   // '/' -> 63
   cmp b, 47
-  if eq {
-    mov x0, 63
-    ret
-  }
+  b.eq @slash
 
-  // not in the alphabet
+  // not in the alphabet -> 255
   mov x0, 255
   ret
+
+@ret_upper:
+  mov x0, t
+  ret
+
+@ret_lower:
+  add x0, t, 26
+  ret
+
+@ret_digit:
+  add x0, t, 52
+  ret
+
+@plus:
+  mov x0, 62
+  ret
+
+@slash:
+  mov x0, 63
+  ret
 }
+

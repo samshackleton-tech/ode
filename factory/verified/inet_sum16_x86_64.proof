@@ -1,0 +1,130 @@
+for ode_inet_sum16
+place 14
+name idx rcx
+name cur rax
+fact (bin <= (num 0) (name idx))
+fact (bin <= (name idx) (name pairs))
+fact (bin == (name cur) (call inet16 (name input) (name idx)))
+fact (bin < (name cur) (num 65536))
+keep rdx rbx rsp rbp rsi rdi r12 r13 r14 r15
+decreases (bin - (name pairs) (name idx))
+t open 0
+t live
+t dead
+p 0 2 52
+s 0 1 1 1 1
+q
+t live
+t carry 0
+t exact
+p 1 53 30 0
+s 3 1 0 1 1
+s 1 1 2 1 2
+s 4 1 5 1 1
+q
+p 4 31 0
+s 1 1 2 1 2
+s 0 1 3 1 1
+q
+p 1 53 51 0
+s 0 2 1 1 1
+s 3 1 2 1 1
+s 4 1 5 1 1
+q
+p 4 31 0
+s 1 1 2 1 2
+s 0 1 3 1 1
+q
+p 1 53 51 0
+s 0 2 1 1 1
+s 3 1 2 1 1
+s 4 1 5 1 1
+q
+p 4 0
+s 0 2 1 1 1
+q
+p 1 53 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+p 6 0
+s 0 2 1 1 1
+q
+p 3 55 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+p 1 3 0
+s 1 256 2 1 1
+s 0 1 3 1 1
+q
+p 4 2 0
+s 2 1 0 256 1
+s 3 1 1 1 1
+q
+p 9 1 3 0
+s 2 256 3 1 1
+s 1 1 4 1 1
+s 0 1 5 1 1
+q
+p 4 2 6 0
+s 3 1 0 256 1
+s 4 1 1 1 1
+s 5 1 2 1 1
+q
+t live
+t live
+p 6 27 0
+s 2 1 0 1 1
+s 3 1 1 1 1
+q
+t open 2
+t gt
+p 9 0
+s 0 2 1 1 1
+q
+p 6 58 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+p 9 0
+s 0 2 1 1 1
+q
+p 6 58 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+t open 3
+t lt
+p 5 3 7 0
+s 3 1 0 256 1
+s 4 1 1 1 1
+s 5 1 2 1 1
+q
+p 6 27 0
+s 2 1 0 1 1
+s 3 1 1 1 1
+q
+t open 2
+t gt
+p 9 0
+s 0 2 1 1 1
+q
+p 6 58 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+p 9 0
+s 0 2 1 1 1
+q
+p 6 58 0
+s 2 1 0 2 1
+s 3 1 1 1 1
+q
+t open 3
+t ge
+p 5 3 7 0
+s 3 1 0 256 1
+s 4 1 1 1 1
+s 5 1 2 1 1
+q

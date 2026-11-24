@@ -1,0 +1,67 @@
+target arm64
+
+fn utf8_decode_2byte as "ode_utf8_decode_2byte" {
+  reg base = x0
+  reg count = x1
+  reg first = x2
+  reg first_w = w2
+  reg second = x4
+  reg second_w = w4
+  reg low = x5
+  reg acc = x6
+  reg fail = x9
+
+  fail := 1
+  lsl fail, fail, 32
+  sub fail, fail, 1
+
+  cmp count, 0
+  if eq {
+    x0 := fail
+    ret
+  }
+
+  ldrb first_w, [base, 0]
+  cmp first, 128
+  if lo {
+    x0 := first
+    ret
+  }
+
+  cmp first, 194
+  if lo {
+    x0 := fail
+    ret
+  }
+
+  cmp first, 224
+  if uge {
+    x0 := fail
+    ret
+  }
+
+  cmp count, 2
+  if lo {
+    x0 := fail
+    ret
+  }
+
+  ldrb second_w, [base, 1]
+  cmp second, 128
+  if lo {
+    x0 := fail
+    ret
+  }
+
+  cmp second, 192
+  if uge {
+    x0 := fail
+    ret
+  }
+
+  sub low, second, 128
+  sub acc, first, 192
+  lsl acc, acc, 6
+  add x0, acc, low
+  ret
+}

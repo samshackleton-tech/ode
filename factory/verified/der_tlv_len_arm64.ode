@@ -3,91 +3,67 @@ target arm64
 fn der_tlv_len as "ode_der_tlv_len" {
   reg buf = x0
   reg n = x1
+  reg tag = w2
+  reg len_byte = w3
+  reg total = x4
+  reg tmp = w5
+  reg tmp2 = w6
 
-  // need at least tag + length byte
   cmp n, 2
-  if ult {
-    x0 := 0
-    ret
-  }
+  b.lo @fail
 
-  // reject high-tag-number form: (tag & 31) == 31
-  ldrb w9, [buf, 0]
-  lsl x9, x9, 59
-  lsr x9, x9, 59
-  cmp x9, 31
-  if eq {
-    x0 := 0
-    ret
-  }
+  ldrb tag, [buf, 0]
+  lsl x2, x2, 59
+  lsr x2, x2, 59
+  cmp x2, 31
+  b.eq @fail
 
-  ldrb w10, [buf, 1]
+  ldrb len_byte, [buf, 1]
+  cmp x3, 128
+  b.lo @short_form
 
-  // short form: l0 < 128, total = 2 + l0 (no overflow; l0 is a byte)
-  cmp x10, 128
-  if ult {
-    add x12, x10, 2
-    cmp n, x12
-    if ult {
-      x0 := 0
-      ret
-    }
-    x0 := x12
-    ret
-  }
+  cmp x3, 129
+  b.eq @long_form_1
+  cmp x3, 130
+  b.eq @long_form_2
+  b @fail
 
-  // 1-byte long form: 0x81, buf[2] >= 128
-  cmp x10, 129
-  if eq {
-    cmp n, 3
-    if ult {
-      x0 := 0
-      ret
-    }
-    ldrb w11, [buf, 2]
-    cmp x11, 128
-    if ult {
-      x0 := 0
-      ret
-    }
-    add x12, x11, 3
-    cmp n, x12
-    if ult {
-      x0 := 0
-      ret
-    }
-    x0 := x12
-    ret
-  }
+@short_form:
+  add total, x3, 2
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
 
-  // 2-byte long form: 0x82, buf[2] >= 1
-  cmp x10, 130
-  if eq {
-    cmp n, 4
-    if ult {
-      x0 := 0
-      ret
-    }
-    ldrb w11, [buf, 2]
-    cmp x11, 1
-    if ult {
-      x0 := 0
-      ret
-    }
-    ldrb w12, [buf, 3]
-    lsl x11, x11, 8
-    add x11, x11, x12
-    add x11, x11, 4
-    cmp n, x11
-    if ult {
-      x0 := 0
-      ret
-    }
-    x0 := x11
-    ret
-  }
+@long_form_1:
+  cmp n, 3
+  b.lo @fail
+  ldrb tmp, [buf, 2]
+  cmp x5, 128
+  b.lo @fail
+  add total, x5, 3
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
 
-  // indefinite (0x80), 0x83+ : malformed
+@long_form_2:
+  cmp n, 4
+  b.lo @fail
+  ldrb tmp, [buf, 2]
+  cmp x5, 0
+  b.eq @fail
+  ldrb tmp2, [buf, 3]
+  lsl x5, x5, 8
+  add total, x5, x6
+  add total, total, 4
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
+
+@fail:
   x0 := 0
   ret
 }
+

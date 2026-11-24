@@ -1,0 +1,59 @@
+fn ode_hex_decode_byte
+machine arm64
+i 0 4 .cmpi .x0 0x30
+i 4 8 .blo 0x10
+i 8 12 .cmpi .x0 0x3a
+i 12 16 .blo 0x34
+i 16 20 .cmpi .x0 0x61
+i 20 24 .blo 0x20
+i 24 28 .cmpi .x0 0x67
+i 28 32 .blo 0x40
+i 32 36 .cmpi .x0 0x41
+i 36 40 .blo 0xbc
+i 40 44 .cmpi .x0 0x47
+i 44 48 .blo 0x4c
+i 48 52 .b 0xbc
+i 52 56 .mov .x2 .x0
+i 56 60 .subi .x2 .x2 0x30
+i 60 64 .b 0x58
+i 64 68 .mov .x2 .x0
+i 68 72 .subi .x2 .x2 0x57
+i 72 76 .b 0x58
+i 76 80 .mov .x2 .x0
+i 80 84 .subi .x2 .x2 0x37
+i 84 88 .b 0x58
+i 88 92 .cmpi .x1 0x30
+i 92 96 .blo 0x68
+i 96 100 .cmpi .x1 0x3a
+i 100 104 .blo 0x8c
+i 104 108 .cmpi .x1 0x61
+i 108 112 .blo 0x78
+i 112 116 .cmpi .x1 0x67
+i 116 120 .blo 0x98
+i 120 124 .cmpi .x1 0x41
+i 124 128 .blo 0xbc
+i 128 132 .cmpi .x1 0x47
+i 132 136 .blo 0xa4
+i 136 140 .b 0xbc
+i 140 144 .mov .x3 .x1
+i 144 148 .subi .x3 .x3 0x30
+i 148 152 .b 0xb0
+i 152 156 .mov .x3 .x1
+i 156 160 .subi .x3 .x3 0x57
+i 160 164 .b 0xb0
+i 164 168 .mov .x3 .x1
+i 168 172 .subi .x3 .x3 0x37
+i 172 176 .b 0xb0
+i 176 180 .lsl .x2 .x2 0x4
+i 180 184 .add .x0 .x2 .x3
+i 184 188 .ret
+i 188 192 .movi .x0 0x100
+i 192 196 .ret
+arg hi number
+arg lo number
+below hi 256
+below lo 256
+returns (call hex_pair (name hi) (name lo))
+stack 0
+def hex_nib b = (ifx (ifx (bin >= (name b) (num 48)) (bin <= (name b) (num 57)) (bin == (num 0) (num 1))) (bin - (name b) (num 48)) (ifx (ifx (bin >= (name b) (num 97)) (bin <= (name b) (num 102)) (bin == (num 0) (num 1))) (bin - (name b) (num 87)) (ifx (ifx (bin >= (name b) (num 65)) (bin <= (name b) (num 70)) (bin == (num 0) (num 1))) (bin - (name b) (num 55)) (num 16))))
+def hex_pair hi lo = (ifx (ifx (bin == (call hex_nib (name hi)) (num 16)) (bin == (num 0) (num 0)) (bin == (call hex_nib (name lo)) (num 16))) (num 256) (bin + (bin * (call hex_nib (name hi)) (num 16)) (call hex_nib (name lo))))
