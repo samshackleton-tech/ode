@@ -1,0 +1,668 @@
+for b3l_chunk_node_fast
+t live
+t live
+t dead
+p 1 0 39
+s 0 1 1 1 1
+q
+t live
+t live
+t live
+t live
+p 42 78 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 82
+s 0 1 1 1 1
+q
+t dead
+p 36 0 82
+s 0 1 1 1 1
+q
+p 37 115 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 119
+s 0 1 1 1 1
+q
+t dead
+p 36 0 119
+s 0 1 1 1 1
+q
+p 37 152 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 156
+s 0 1 1 1 1
+q
+t dead
+p 36 0 156
+s 0 1 1 1 1
+q
+p 37 189 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 193
+s 0 1 1 1 1
+q
+t dead
+p 36 0 193
+s 0 1 1 1 1
+q
+p 37 226 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 230
+s 0 1 1 1 1
+q
+t dead
+p 36 0 230
+s 0 1 1 1 1
+q
+p 37 263 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 267
+s 0 1 1 1 1
+q
+t dead
+p 36 0 267
+s 0 1 1 1 1
+q
+p 37 300 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 304
+s 0 1 1 1 1
+q
+t dead
+p 36 0 304
+s 0 1 1 1 1
+q
+p 37 337 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 341
+s 0 1 1 1 1
+q
+t dead
+p 36 0 341
+s 0 1 1 1 1
+q
+p 37 374 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 378
+s 0 1 1 1 1
+q
+t dead
+p 36 0 378
+s 0 1 1 1 1
+q
+p 37 411 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 415
+s 0 1 1 1 1
+q
+t dead
+p 36 0 415
+s 0 1 1 1 1
+q
+p 37 448 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 452
+s 0 1 1 1 1
+q
+t dead
+p 36 0 452
+s 0 1 1 1 1
+q
+p 37 485 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 489
+s 0 1 1 1 1
+q
+t dead
+p 36 0 489
+s 0 1 1 1 1
+q
+p 37 522 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 526
+s 0 1 1 1 1
+q
+t dead
+p 36 0 526
+s 0 1 1 1 1
+q
+p 37 559 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t live
+t dead
+p 0 37 563
+s 0 1 1 1 1
+q
+t dead
+p 36 0 563
+s 0 1 1 1 1
+q
+p 37 596 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t dead
+p 0 599
+s 0 1 1 1 1
+q
+p 41 77 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 82
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 81
+s 0 1 1 1 1
+q
+p 36 113 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 118
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 117
+s 0 1 1 1 1
+q
+p 36 149 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 154
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 153
+s 0 1 1 1 1
+q
+p 36 185 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 190
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 189
+s 0 1 1 1 1
+q
+p 36 221 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 226
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 225
+s 0 1 1 1 1
+q
+p 36 257 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 262
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 261
+s 0 1 1 1 1
+q
+p 36 293 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 298
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 297
+s 0 1 1 1 1
+q
+p 36 329 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 334
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 333
+s 0 1 1 1 1
+q
+p 36 365 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 370
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 369
+s 0 1 1 1 1
+q
+p 36 401 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 406
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 405
+s 0 1 1 1 1
+q
+p 36 437 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 442
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 441
+s 0 1 1 1 1
+q
+p 36 473 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 478
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 477
+s 0 1 1 1 1
+q
+p 36 509 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 514
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 513
+s 0 1 1 1 1
+q
+p 36 545 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 37 1 550
+s 0 1 1 1 1
+q
+t live
+t dead
+p 36 0 549
+s 0 1 1 1 1
+q
+p 36 581 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t dead
+p 0 584
+s 0 1 1 1 1
+q
+p 41 77 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 82
+s 0 1 1 1 1
+q
+t dead
+p 0 36 81
+s 0 1 1 1 1
+q
+t live
+p 36 113 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 118
+s 0 1 1 1 1
+q
+t dead
+p 0 36 117
+s 0 1 1 1 1
+q
+t live
+p 36 149 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 154
+s 0 1 1 1 1
+q
+t dead
+p 0 36 153
+s 0 1 1 1 1
+q
+t live
+p 36 185 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 190
+s 0 1 1 1 1
+q
+t dead
+p 0 36 189
+s 0 1 1 1 1
+q
+t live
+p 36 221 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 226
+s 0 1 1 1 1
+q
+t dead
+p 0 36 225
+s 0 1 1 1 1
+q
+t live
+p 36 257 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 262
+s 0 1 1 1 1
+q
+t dead
+p 0 36 261
+s 0 1 1 1 1
+q
+t live
+p 36 293 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 298
+s 0 1 1 1 1
+q
+t dead
+p 0 36 297
+s 0 1 1 1 1
+q
+t live
+p 36 329 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 334
+s 0 1 1 1 1
+q
+t dead
+p 0 36 333
+s 0 1 1 1 1
+q
+t live
+p 36 365 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 370
+s 0 1 1 1 1
+q
+t dead
+p 0 36 369
+s 0 1 1 1 1
+q
+t live
+p 36 401 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 406
+s 0 1 1 1 1
+q
+t dead
+p 0 36 405
+s 0 1 1 1 1
+q
+t live
+p 36 437 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 442
+s 0 1 1 1 1
+q
+t dead
+p 0 36 441
+s 0 1 1 1 1
+q
+t live
+p 36 473 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 478
+s 0 1 1 1 1
+q
+t dead
+p 0 36 477
+s 0 1 1 1 1
+q
+t live
+p 36 509 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 514
+s 0 1 1 1 1
+q
+t dead
+p 0 36 513
+s 0 1 1 1 1
+q
+t live
+p 36 545 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t live
+t dead
+p 0 37 550
+s 0 1 1 1 1
+q
+t dead
+p 0 36 549
+s 0 1 1 1 1
+q
+t live
+p 36 581 0
+s 2 1 1 1 1
+s 0 1 3 1 1
+q
+t live
+t dead
+p 0 584
+s 0 1 1 1 1
+q

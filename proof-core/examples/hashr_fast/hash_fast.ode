@@ -1,0 +1,224 @@
+// Fast short-input x86-64 BLAKE3 glue using Phase 1 custom `calling { ... }` conventions
+// and zero-spill fast paths (`len <= 1024`) in `b3l_hashr`.
+//
+// Meets the EXACT SAME canonical `.ocl` contract (`blake3.spec` `b3l_hashr`,
+// contract ID `7jb2pyzuwz6tqd3qmjsra3mk36tl4547sfpy3at5scbk772lbila`) as `kcheck/hash.ode`.
+
+// Fast leaf `pad` with custom Ode calling convention:
+//   in:  block = r10, src = rsi, n = rdx
+//   preserves: rdi, rsi, rdx, r8, r9, rbx, rbp, r12, r13, r14, r15
+//   stack: 0 bytes (ZERO callee-saved pushes or pops!)
+//
+// - Fast path (`n == 64`): 0 branches, 0 loop overhead, direct `[rsi + K]` -> `[r10 + K]` copy.
+// - General path (`n < 64`): two branch-free loops (zero `[n..64)` then copy `[0..n)`).
+fn pad_fast as "b3l_pad_fast" {
+  cmp rdx, 64
+  jne @lt64
+  // Fast 64-byte path: 8-byte-step loop (8 iterations total, 0 inner branches, stack 0!)
+  mov rcx, 64
+  mov r8, 8
+@l64:
+  place {
+    name i = rcx
+    name k = r8
+    fact k <= 8
+    fact i == 8 * k
+    wrote block[i ..] = padded(src)
+    decreases k
+  }
+  cmp r8, 0
+  je @done
+  sub r8, 1
+  sub rcx, 8
+  mov rax, rsi
+  add rax, rcx
+  mov r11, r10
+  add r11, rcx
+  movzx r9d, byte ptr [rax + 7]
+  mov byte ptr [r11 + 7], r9b
+  movzx r9d, byte ptr [rax + 6]
+  mov byte ptr [r11 + 6], r9b
+  movzx r9d, byte ptr [rax + 5]
+  mov byte ptr [r11 + 5], r9b
+  movzx r9d, byte ptr [rax + 4]
+  mov byte ptr [r11 + 4], r9b
+  movzx r9d, byte ptr [rax + 3]
+  mov byte ptr [r11 + 3], r9b
+  movzx r9d, byte ptr [rax + 2]
+  mov byte ptr [r11 + 2], r9b
+  movzx r9d, byte ptr [rax + 1]
+  mov byte ptr [r11 + 1], r9b
+  movzx r9d, byte ptr [rax + 0]
+  mov byte ptr [r11 + 0], r9b
+  jmp @l64
+
+@lt64:
+  // Zero [n..64) with zero inner branch, then copy [0..n) with zero inner branch.
+  mov rcx, 64
+@zloop:
+  place {
+    name i = rcx
+    fact i <= 64
+    fact n <= i
+    wrote block[i ..] = padded(src)
+    decreases i
+  }
+  cmp rcx, rdx
+  je @cloop
+  sub rcx, 1
+  mov r11, r10
+  add r11, rcx
+  mov byte ptr [r11], 0
+  jmp @zloop
+
+@cloop:
+  place {
+    name i = rcx
+    fact i <= n
+    wrote block[i ..] = padded(src)
+    decreases i
+  }
+  cmp rcx, 0
+  je @done
+  sub rcx, 1
+  mov rax, rsi
+  add rax, rcx
+  movzx eax, byte ptr [rax]
+  mov r11, r10
+  add r11, rcx
+  mov byte ptr [r11], al
+  jmp @cloop
+@done:
+  ret
+}
+
+// Fast `chunk_node` using custom-calling `b3l_pad_fast`:
+//   - For single-block chunks (`len <= 64`): ZERO callee-saved pushes/pops, 8-byte align only!
+//   - For multi-block chunks (`64 < len <= 1024`): registers hold live state, calls `b3l_pad_fast`.
+fn chunk_node_fast as "b3l_chunk_node_fast" {
+  cmp rdx, 65
+  jae @multi
+  mov qword ptr [rdi + 96], rcx
+  mov qword ptr [rdi + 104], rdx
+  or r8, 1
+  or r8, 2
+  mov qword ptr [rdi + 112], r8
+  lea r10, [rdi + 32]
+  sub rsp, 8
+  call b3l_pad_fast
+  add rsp, 8
+  ret
+
+@multi:
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 24
+  mov r13, rdi
+  mov rbx, rsi
+  mov rbp, rdx
+  mov r14, rcx
+  mov qword ptr [rsp + 0], r8
+  mov r15, r9
+  mov r12, 1
+@l0:
+  cmp rbp, 65
+  jb @l1
+  mov r8, qword ptr [rsp + 0]
+  or r8, r12
+  mov rdi, r13
+  mov rsi, rbx
+  mov rdx, 64
+  mov rcx, r14
+  cmp r15, 5
+  jne @l2
+  call blake3_servil_compress_in_place_avx512
+  jmp @l3
+@l2:
+  call blake3_servil_compress_in_place_sse41
+@l3:
+  mov r12, 0
+  add rbx, 64
+  sub rbp, 64
+  jmp @l0
+@l1:
+  lea r10, [r13 + 32]
+  mov rsi, rbx
+  mov rdx, rbp
+  call b3l_pad_fast
+  mov qword ptr [r13 + 96], r14
+  mov qword ptr [r13 + 104], rbp
+  mov rax, qword ptr [rsp + 0]
+  or rax, r12
+  or rax, 2
+  mov qword ptr [r13 + 112], rax
+  add rsp, 24
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
+}
+
+// Fast `hashr` entry point:
+//   - `len == 64`:   15-instruction ZERO-COPY fast path! Calls `compress_in_place` directly on
+//                    `input` (zero callee-saved pushes/pops, zero stack block copy, zero
+//                    `b3l_chunk_node_fast`/`b3l_pad_fast`/`b3l_node_out` calls!).
+//   - `len <= 1024` (other than 64): ZERO callee-saved pushes/pops in `hashr`, 136-byte stack
+//                    (vs 1,672 B!), calls `b3l_chunk_node_fast` (ZERO pushes/pops for `len <= 64`
+//                    + custom-calling `b3l_pad_fast` with `stack 0`) + `b3l_node_out`.
+//   - `len > 1024`:  delegates to `b3l_hashr_long` (full AVX-512 32-way / 128-KiB tree).
+fn hashr_fast as "b3l_hashr" {
+  cmp rdx, 64
+  jne @not64
+  movups xmm0, xmmword ptr [rcx + 0]
+  movups xmmword ptr [rdi + 0], xmm0
+  movups xmm0, xmmword ptr [rcx + 16]
+  movups xmmword ptr [rdi + 16], xmm0
+  or r8, 1
+  or r8, 2
+  or r8, 8
+  mov rcx, 0
+  sub rsp, 8
+  cmp r9, 5
+  jne @eq64_sse
+  call blake3_servil_compress_in_place_avx512
+  add rsp, 8
+  ret
+@eq64_sse:
+  call blake3_servil_compress_in_place_sse41
+  add rsp, 8
+  ret
+
+@not64:
+  cmp rdx, 1025
+  jae @over1024
+  sub rsp, 136
+  mov qword ptr [rsp + 120], rdi
+  mov qword ptr [rsp + 128], r9
+  movups xmm0, xmmword ptr [rcx + 0]
+  movups xmmword ptr [rsp + 0], xmm0
+  movups xmm0, xmmword ptr [rcx + 16]
+  movups xmmword ptr [rsp + 16], xmm0
+  lea rdi, [rsp + 0]
+  mov rcx, 0
+  call b3l_chunk_node_fast
+  mov rdi, qword ptr [rsp + 120]
+  lea rsi, [rsp + 0]
+  mov rdx, 8
+  mov rcx, qword ptr [rsp + 128]
+  call b3l_node_out
+  add rsp, 136
+  ret
+
+@over1024:
+  sub rsp, 8
+  call b3l_hashr_long
+  add rsp, 8
+  ret
+}

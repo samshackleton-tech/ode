@@ -2042,6 +2042,31 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hpv : ctx.contra
               · rw [← e]; exact WDen.pbyte r (off + k.toNat) (by rw [e]; exact hb k.toNat hk.2)
             next => simp at h
         | _ => simp at h
+      | span r off slen =>
+        cases iv with
+        | int k =>
+          cases di
+          cases da with
+          | span _ _ _ ho hn =>
+            simp only at h
+            cases hco : Lin.isConst off with
+            | none => simp [hco] at h
+            | some c =>
+              simp only [hco] at h
+              split at h
+              next hk =>
+                simp only [Option.some.injEq] at h; subst h
+                have hce := ev_isConst (ρ := ρ) hco
+                have hkl := plain_sound hk.2.2 ρ H.facts
+                simp only [Row.holds, ev_sub, ev_const] at hkl
+                have hlt : k.toNat < (ev ρ slen).toNat := by omega
+                have hcn : (ev ρ off).toNat = c.toNat := by rw [hce]
+                have e : s0.reg r + (c.toNat + k.toNat) = s0.reg r + (ev ρ off).toNat + k.toNat := by omega
+                refine ⟨Val.int (s0.mem (s0.reg r + (ev ρ off).toNat + k.toNat)), ?_, ?_⟩
+                · simp only [evalSpec, ea, ei]; rw [if_pos hk.2.1, List.getElem?_map, List.getElem?_range hlt]; rfl
+                · rw [← e]; exact WDen.pbyte r (c.toNat + k.toNat) (s0.mem _).isLt
+              next => simp at h
+        | _ => simp at h
       | lanes j count l =>
         cases iv with
         | int k =>

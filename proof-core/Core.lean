@@ -2608,6 +2608,10 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
       | some (.list l), some (.int k) => if 0 ≤ k then l[k.toNat]? else none
       | some (.run r n), some (.int k) => if 0 ≤ k ∧ k.toNat < n then some (.pbyte r k.toNat) else none
       | some (.part r off n), some (.int k) => if 0 ≤ k ∧ k.toNat < n then some (.pbyte r (off + k.toNat)) else none
+      | some (.span r off slen), some (.int k) =>
+        match Lin.isConst off with
+        | some c => if 0 ≤ c ∧ 0 ≤ k ∧ plain s.facts (Lin.sub slen (Lin.const (k + 1))) = true then some (.pbyte r (c.toNat + k.toNat)) else none
+        | none => none
       | some (.lanes j count l), some (.int k) => if 0 ≤ k ∧ k.toNat < count then some (.lane j (8 * k.toNat) l) else none
       | some (.lane j c _), some (.int k) => if 0 ≤ k then blockAt look s j c (Lin.const (64 * k)) else none
       | some (.lane j c _), some (.num r) => blockAt look s j c (Lin.scale 64 r)
