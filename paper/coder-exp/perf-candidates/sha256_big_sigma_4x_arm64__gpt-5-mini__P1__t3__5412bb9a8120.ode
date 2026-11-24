@@ -1,0 +1,57 @@
+target arm64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  // Inputs: x0 = out (16 bytes), x1 = a (16 bytes), x2 = e (16 bytes)
+  // Use v0-v6 only, reuse temporaries to reduce register pressure and critical path.
+
+  // Load inputs
+  ld1 {v0.4s}, [x1]   // v0 = a
+  ld1 {v1.4s}, [x2]   // v1 = e
+
+  // --- Sigma0(a) in v2 ---
+  // ROTR2(a)
+  ushr v2.4s, v0.4s, 2
+  shl  v3.4s, v0.4s, 30
+  orr  v2.16b, v2.16b, v3.16b   // v2 = ROTR2
+
+  // ROTR13(a)
+  ushr v3.4s, v0.4s, 13
+  shl  v4.4s, v0.4s, 19
+  orr  v3.16b, v3.16b, v4.16b   // v3 = ROTR13
+
+  // ROTR22(a)
+  ushr v4.4s, v0.4s, 22
+  shl  v5.4s, v0.4s, 10
+  orr  v4.16b, v4.16b, v5.16b   // v4 = ROTR22
+
+  // XOR the three rotations -> v2 = Sigma0(a)
+  eor  v2.16b, v2.16b, v3.16b
+  eor  v2.16b, v2.16b, v4.16b
+
+  // --- Sigma1(e) in v3 (reuse v3-v5 temporaries) ---
+  // ROTR6(e)
+  ushr v3.4s, v1.4s, 6
+  shl  v4.4s, v1.4s, 26
+  orr  v3.16b, v3.16b, v4.16b   // v3 = ROTR6
+
+  // ROTR11(e)
+  ushr v4.4s, v1.4s, 11
+  shl  v5.4s, v1.4s, 21
+  orr  v4.16b, v4.16b, v5.16b   // v4 = ROTR11
+
+  // ROTR25(e)
+  ushr v5.4s, v1.4s, 25
+  shl  v6.4s, v1.4s, 7
+  orr  v5.16b, v5.16b, v6.16b   // v5 = ROTR25
+
+  // XOR the three rotations -> v3 = Sigma1(e)
+  eor  v3.16b, v3.16b, v4.16b
+  eor  v3.16b, v3.16b, v5.16b
+
+  // Add Sigma0 + Sigma1 into v2 and store
+  add  v2.4s, v2.4s, v3.4s
+  st1  {v2.4s}, [x0]
+
+  ret
+}
+

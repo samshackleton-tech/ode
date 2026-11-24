@@ -1,0 +1,101 @@
+target arm64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = x0
+  reg n = x1
+  reg tag = x9
+  reg len_byte = x10
+  reg tmp = x11
+  reg total = x12
+
+  // Early check: need at least tag + length byte
+  cmp n, 2
+  if ult {
+    x0 := 0
+    ret
+  }
+
+  // Load tag and length bytes
+  ldrb w9, [buf, 0]
+  ldrb w10, [buf, 1]
+
+  // Reject high-tag-number form: (tag & 31) == 31
+  // Use bit operations: lsl/lsr to isolate bits 0-4
+  lsl x9, x9, 59
+  lsr x9, x9, 59
+  cmp x9, 31
+  if eq {
+    x0 := 0
+    ret
+  }
+
+  // Short form: len_byte < 128
+  cmp x10, 128
+  if ult {
+    add total, x10, 2
+    cmp n, total
+    if ult {
+      x0 := 0
+      ret
+    }
+    x0 := total
+    ret
+  }
+
+  // Handle long forms - early check for 0x81/0x82
+  cmp x10, 129
+  if eq {
+    // 1-byte long form: 0x81
+    cmp n, 3
+    if ult {
+      x0 := 0
+      ret
+    }
+    ldrb w11, [buf, 2]
+    cmp x11, 128
+    if ult {
+      x0 := 0
+      ret
+    }
+    add total, x11, 3
+    cmp n, total
+    if ult {
+      x0 := 0
+      ret
+    }
+    x0 := total
+    ret
+  }
+
+  // Check for 0x82 - if not, return 0
+  cmp x10, 130
+  if ne {
+    x0 := 0
+    ret
+  }
+
+  // 2-byte long form: 0x82
+  cmp n, 4
+  if ult {
+    x0 := 0
+    ret
+  }
+  ldrb w11, [buf, 2]
+  cmp x11, 1
+  if ult {
+    x0 := 0
+    ret
+  }
+  ldrb w12, [buf, 3]
+  lsl x11, x11, 8
+  add x11, x11, x12
+  add total, x11, 4
+  cmp n, total
+  if ult {
+    x0 := 0
+    ret
+  }
+  x0 := total
+  ret
+}
+

@@ -1,0 +1,67 @@
+target x86_64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  reg out_ptr = rdi
+  reg a_ptr = rsi
+  reg e_ptr = rdx
+
+  // Load inputs - use non-overlapping registers for better scheduling
+  vmovdqu xmm0, [a_ptr]  // a
+  vmovdqu xmm1, [e_ptr]  // e
+
+  // Compute Sigma0(a) = (a >>> 2) ^ (a >>> 13) ^ (a >>> 22)
+  // Parallel computation of rotations to maximize ILP
+  
+  // xmm2 = a >>> 2
+  vpsrld xmm2, xmm0, 2
+  vpslld xmm3, xmm0, 30
+  
+  // xmm4 = a >>> 13 (start early)
+  vpsrld xmm4, xmm0, 13
+  vpslld xmm5, xmm0, 19
+  
+  // xmm6 = a >>> 22 (start early)
+  vpsrld xmm6, xmm0, 22
+  vpslld xmm7, xmm0, 10
+  
+  // Complete rotations
+  vpor xmm2, xmm2, xmm3
+  vpor xmm4, xmm4, xmm5
+  vpor xmm6, xmm6, xmm7
+  
+  // Combine Sigma0 - parallel XOR tree
+  vpxor xmm2, xmm2, xmm4
+  vpxor xmm2, xmm2, xmm6
+
+  // Compute Sigma1(e) = (e >>> 6) ^ (e >>> 11) ^ (e >>> 25)
+  // Parallel computation using available registers
+  
+  // xmm3 = e >>> 6
+  vpsrld xmm3, xmm1, 6
+  vpslld xmm4, xmm1, 26
+  
+  // xmm5 = e >>> 11 (start early)
+  vpsrld xmm5, xmm1, 11
+  vpslld xmm6, xmm1, 21
+  
+  // xmm7 = e >>> 25 (start early)
+  vpsrld xmm7, xmm1, 25
+  vpslld xmm0, xmm1, 7
+  
+  // Complete rotations
+  vpor xmm3, xmm3, xmm4
+  vpor xmm5, xmm5, xmm6
+  vpor xmm7, xmm7, xmm0
+  
+  // Combine Sigma1 - parallel XOR tree
+  vpxor xmm3, xmm3, xmm5
+  vpxor xmm3, xmm3, xmm7
+
+  // Add Sigma0(a) + Sigma1(e) modulo 2^32
+  vpaddd xmm0, xmm2, xmm3
+
+  // Store result
+  vmovdqu [out_ptr], xmm0
+  ret
+}
+

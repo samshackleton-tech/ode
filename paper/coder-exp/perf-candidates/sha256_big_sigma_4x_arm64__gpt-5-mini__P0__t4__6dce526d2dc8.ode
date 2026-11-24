@@ -1,0 +1,56 @@
+target arm64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  // Inputs: x0 = out (16 bytes), x1 = a (16 bytes), x2 = e (16 bytes)
+  // Tighter register reuse and shorter dependency chains:
+  // compute each rotate in-place using two temporaries, fold a's sigma first,
+  // then reuse temporaries for e, then add.
+
+  ld1 {v0.4s}, [x1]   // v0 = a
+  ld1 {v1.4s}, [x2]   // v1 = e
+
+  // ROTR^2(a) -> v2
+  ushr v2.4s, v0.4s, 2
+  shl  v3.4s, v0.4s, 30
+  orr  v2.16b, v2.16b, v3.16b
+
+  // ROTR^13(a) -> v3
+  ushr v3.4s, v0.4s, 13
+  shl  v4.4s, v0.4s, 19
+  orr  v3.16b, v3.16b, v4.16b
+
+  // ROTR^22(a) -> v4
+  ushr v4.4s, v0.4s, 22
+  shl  v5.4s, v0.4s, 10
+  orr  v4.16b, v4.16b, v5.16b
+
+  // Sigma0(a) in v2
+  eor  v2.16b, v2.16b, v3.16b
+  eor  v2.16b, v2.16b, v4.16b
+
+  // ROTR^6(e) -> v3 (reuse)
+  ushr v3.4s, v1.4s, 6
+  shl  v4.4s, v1.4s, 26
+  orr  v3.16b, v3.16b, v4.16b
+
+  // ROTR^11(e) -> v4
+  ushr v4.4s, v1.4s, 11
+  shl  v5.4s, v1.4s, 21
+  orr  v4.16b, v4.16b, v5.16b
+
+  // ROTR^25(e) -> v5
+  ushr v5.4s, v1.4s, 25
+  shl  v6.4s, v1.4s, 7
+  orr  v5.16b, v5.16b, v6.16b
+
+  // Sigma1(e) in v3
+  eor  v3.16b, v3.16b, v4.16b
+  eor  v3.16b, v3.16b, v5.16b
+
+  // Add and store
+  add  v0.4s, v2.4s, v3.4s
+  st1  {v0.4s}, [x0]
+
+  ret
+}
+

@@ -1,0 +1,55 @@
+target x86_64
+
+fn b64_char_val as "ode_b64_char_val" {
+  reg b = rdi
+  reg res = rax
+
+  // Fast, compact range checks with a single return at the end.
+  cmp b, 65
+  jb @check_lower
+  cmp b, 91
+  jae @check_lower
+  // 'A'..'Z' -> 0..25
+  res := b
+  sub res, 65
+  jmp @done
+
+@check_lower:
+  cmp b, 97
+  jb @check_digit
+  cmp b, 123
+  jae @check_digit
+  // 'a'..'z' -> 26..51
+  res := b
+  sub res, 71
+  jmp @done
+
+@check_digit:
+  cmp b, 48
+  jb @check_plus
+  cmp b, 58
+  jae @check_plus
+  // '0'..'9' -> 52..61
+  res := b
+  add res, 4
+  jmp @done
+
+@check_plus:
+  cmp b, 43
+  jne @check_slash
+  res := 62
+  jmp @done
+
+@check_slash:
+  cmp b, 47
+  jne @invalid
+  res := 63
+  jmp @done
+
+@invalid:
+  res := 255
+
+@done:
+  ret
+}
+

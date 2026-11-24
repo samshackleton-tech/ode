@@ -1,0 +1,53 @@
+target arm64
+
+fn base64_char_val as "ode_b64_char_val" {
+  reg b = x0
+
+  cmp b, 65
+  if uge {
+    cmp b, 97
+    if uge {
+      cmp b, 123
+      if ult {
+        sub x0, b, 71
+        ret
+      }
+      mov x0, 255
+      ret
+    }
+    cmp b, 91
+    if ult {
+      sub x0, b, 65
+      ret
+    }
+    mov x0, 255
+    ret
+  }
+
+  cmp b, 48
+  if uge {
+    cmp b, 58
+    if ult {
+      add x0, b, 4
+      ret
+    }
+    mov x0, 255
+    ret
+  }
+
+  cmp b, 43
+  if eq {
+    mov x0, 62
+    ret
+  }
+
+  cmp b, 47
+  if eq {
+    mov x0, 63
+    ret
+  }
+
+  mov x0, 255
+  ret
+}
+

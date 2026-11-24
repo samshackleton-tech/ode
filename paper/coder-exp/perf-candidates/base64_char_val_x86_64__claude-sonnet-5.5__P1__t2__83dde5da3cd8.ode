@@ -1,0 +1,53 @@
+target x86_64
+
+fn b64_char_val as "ode_b64_char_val" {
+  reg b = rdi
+  reg res = rax
+
+  cmp b, 65
+  if lo {
+    cmp b, 58
+    if lo {
+      cmp b, 48
+      if lo {
+        cmp b, 43
+        if eq {
+          res := 62
+        } else {
+          cmp b, 47
+          if eq {
+            res := 63
+          } else {
+            res := 255
+          }
+        }
+      } else {
+        res := b
+        add res, 4
+      }
+    } else {
+      res := 255
+    }
+  } else {
+    cmp b, 91
+    if lo {
+      res := b
+      sub res, 65
+    } else {
+      cmp b, 97
+      if lo {
+        res := 255
+      } else {
+        cmp b, 123
+        if lo {
+          res := b
+          sub res, 71
+        } else {
+          res := 255
+        }
+      }
+    }
+  }
+  ret
+}
+

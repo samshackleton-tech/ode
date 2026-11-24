@@ -1,0 +1,74 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg l = r8
+  reg header = r9
+  reg tmp = r10
+
+  // Fast path: n < 2 -> return 0
+  cmp n, 2
+  jb @fail
+
+  // Load tag and check (tag & 31) != 31
+  movzx edx, byte ptr [buf]
+  and edx, 31
+  cmp rdx, 31
+  je @fail
+
+  // Load length byte l0 = buf[1]
+  movzx ecx, byte ptr [buf + 1]
+
+  // Short form: l0 < 128
+  cmp l0, 128
+  jb @short_form
+
+  // Long form: l0 == 129 or l0 == 130
+  cmp l0, 129
+  je @long_form_1
+  cmp l0, 130
+  jne @fail
+
+  // 2-byte long form: need n >= 4
+  cmp n, 4
+  jb @fail
+  movzx r8d, byte ptr [buf + 2]
+  test r8, r8
+  jz @fail
+  movzx r10d, byte ptr [buf + 3]
+  shl r8, 8
+  add r8, r10
+  lea tmp, [n - 4]
+  cmp tmp, r8
+  jb @fail
+  lea rax, [r8 + 4]
+  ret
+
+@long_form_1:
+  // 1-byte long form: need n >= 3
+  cmp n, 3
+  jb @fail
+  movzx r8d, byte ptr [buf + 2]
+  cmp r8, 128
+  jb @fail
+  lea tmp, [n - 3]
+  cmp tmp, r8
+  jb @fail
+  lea rax, [r8 + 3]
+  ret
+
+@short_form:
+  lea tmp, [n - 2]
+  cmp tmp, l0
+  jb @fail
+  lea rax, [l0 + 2]
+  ret
+
+@fail:
+  xor eax, eax
+  ret
+}
+

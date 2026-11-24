@@ -1,0 +1,92 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg tmp = r8
+  reg hb = r9
+  reg lb = r10
+
+  // default result = 0
+  rax := 0
+
+  // need at least 2 bytes for tag+len
+  cmp n, 2
+  jb @done
+
+  // load tag and check single-byte tag (tag & 31) != 31
+  movzx edx, byte ptr [buf]
+  and rdx, 31
+  cmp rdx, 31
+  je @done
+
+  // load first length byte l0 = buf[1]
+  movzx ecx, byte ptr [buf + 1]
+
+  // short form: l0 < 128
+  cmp rcx, 128
+  jb @short
+
+  // check 0x81 (one-octet length)
+  cmp rcx, 129
+  je @long1
+
+  // check 0x82 (two-octet length)
+  cmp rcx, 130
+  je @long2
+
+  // other forms invalid
+  jmp @done
+
+@short:
+  // ensure n - 2 >= l0
+  tmp := n
+  sub tmp, 2
+  cmp tmp, rcx
+  jb @done
+  // return header + length = 2 + l0
+  rax := rcx
+  add rax, 2
+  jmp @done
+
+@long1:
+  // need at least 3 bytes
+  cmp n, 3
+  jb @done
+  movzx r9d, byte ptr [buf + 2]   // hb = buf[2]
+  // must be >= 128 (non-minimal)
+  cmp r9, 128
+  jb @done
+  tmp := n
+  sub tmp, 3
+  cmp tmp, r9
+  jb @done
+  rax := r9
+  add rax, 3
+  jmp @done
+
+@long2:
+  // need at least 4 bytes
+  cmp n, 4
+  jb @done
+  movzx r9d, byte ptr [buf + 2]   // hb = buf[2]
+  // high byte must be >= 1 (non-minimal)
+  cmp r9, 1
+  jb @done
+  movzx r10d, byte ptr [buf + 3]  // lb = buf[3]
+  shl r9, 8
+  add r9, r10
+  tmp := n
+  sub tmp, 4
+  cmp tmp, r9
+  jb @done
+  rax := r9
+  add rax, 4
+  jmp @done
+
+@done:
+  ret
+}
+

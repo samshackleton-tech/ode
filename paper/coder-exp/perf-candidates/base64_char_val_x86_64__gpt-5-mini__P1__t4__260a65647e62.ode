@@ -1,0 +1,67 @@
+target x86_64
+
+fn b64_char_val as "ode_b64_char_val" {
+  reg b = rdi
+  reg res = rax
+  reg t = rcx
+
+  // Uppercase A-Z: if 65 <= b < 91 then res = b - 65
+  cmp b, 65
+  jb @check_lower
+  mov t, b
+  sub t, 65
+  cmp t, 26
+  jb @upper
+
+@check_lower:
+  // Lowercase a-z: if 97 <= b < 123 then res = b - 97 + 26
+  cmp b, 97
+  jb @check_digit
+  mov t, b
+  sub t, 97
+  cmp t, 26
+  jb @lower
+
+@check_digit:
+  // Digits 0-9: if 48 <= b < 58 then res = b - 48 + 52
+  cmp b, 48
+  jb @check_plus
+  mov t, b
+  sub t, 48
+  cmp t, 10
+  jb @digit
+
+@check_plus:
+  // '+' -> 62, '/' -> 63, otherwise 255
+  cmp b, 43
+  je @set62
+  cmp b, 47
+  je @set63
+  res := 255
+  jmp @done
+
+@upper:
+  res := t
+  jmp @done
+
+@lower:
+  res := t
+  add res, 26
+  jmp @done
+
+@digit:
+  res := t
+  add res, 52
+  jmp @done
+
+@set62:
+  res := 62
+  jmp @done
+
+@set63:
+  res := 63
+
+@done:
+  ret
+}
+

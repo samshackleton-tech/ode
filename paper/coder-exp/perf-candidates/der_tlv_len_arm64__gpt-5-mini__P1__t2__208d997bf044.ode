@@ -1,0 +1,82 @@
+target arm64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = x0
+  reg n = x1
+
+  reg tag = x2
+  reg l1 = x3
+  reg b2 = x4
+  reg b3 = x5
+  reg tmp = x6
+
+  // need at least tag + length byte
+  cmp n, 2
+  b.lo @ret_zero
+
+  // reject high-tag-number form: (tag & 31) == 31
+  ldrb w2, [buf, 0]
+  lsl tag, tag, 59
+  lsr tag, tag, 59
+  cmp tag, 31
+  b.eq @ret_zero
+
+  // load length-of-length byte
+  ldrb w3, [buf, 1]
+
+  // short form: l1 < 128 -> total = 2 + l1
+  cmp l1, 128
+  b.lo @short
+
+  // 1-byte long form: 0x81
+  cmp l1, 129
+  b.eq @long1
+
+  // 2-byte long form: 0x82
+  cmp l1, 130
+  b.eq @long2
+
+  // otherwise malformed (indefinite 0x80 or 0x83+)
+  b @ret_zero
+
+@short:
+  add tmp, l1, 2
+  cmp n, tmp
+  b.lo @ret_zero
+  mov x0, tmp
+  ret
+
+@long1:
+  cmp n, 3
+  b.lo @ret_zero
+  ldrb w4, [buf, 2]
+  cmp b2, 128
+  b.lo @ret_zero
+  add tmp, b2, 3
+  cmp n, tmp
+  b.lo @ret_zero
+  mov x0, tmp
+  ret
+
+@long2:
+  cmp n, 4
+  b.lo @ret_zero
+  ldrb w4, [buf, 2]
+  cmp b2, 1
+  b.lo @ret_zero
+  ldrb w5, [buf, 3]
+  // tmp = (b2 << 8) + b3 + 4
+  mov tmp, b2
+  lsl tmp, tmp, 8
+  add tmp, tmp, b3
+  add tmp, tmp, 4
+  cmp n, tmp
+  b.lo @ret_zero
+  mov x0, tmp
+  ret
+
+@ret_zero:
+  x0 := 0
+  ret
+}
+

@@ -1,0 +1,124 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg l = r8
+  reg tmp = r9
+  reg header = r10
+
+  // Initialize rax to 0
+  xor rax, rax
+
+  // Check n >= 2
+  cmp n, 2
+  if lo {
+    ret
+  }
+
+  // Load tag byte and check (tag & 31) != 31
+  movzx edx, byte ptr [buf]
+  mov tmp, rdx
+  and tmp, 31
+  cmp tmp, 31
+  if eq {
+    ret
+  }
+
+  // Load length byte l0 = buf[1]
+  movzx ecx, byte ptr [buf + 1]
+
+  // Short form: l0 < 128
+  cmp l0, 128
+  if lo {
+    // header = 2, l = l0
+    mov header, 2
+    mov l, rcx
+    // Check 2 + l0 <= n
+    lea tmp, [header + l]
+    cmp tmp, n
+    // if tmp > n then invalid
+    cmp n, tmp
+    if lo {
+      xor rax, rax
+      ret
+    }
+    mov rax, tmp
+    ret
+  }
+
+  // Long form: check l0 == 129 (1-byte) or l0 == 130 (2-byte)
+  cmp l0, 129
+  if eq {
+    jmp @check_one_byte
+  }
+  cmp l0, 130
+  if eq {
+    jmp @check_two_bytes
+  }
+  // Any other l0 value is invalid
+  xor rax, rax
+  ret
+
+@check_one_byte:
+  // 1-byte long form: need n >= 3
+  cmp n, 3
+  if lo {
+    xor rax, rax
+    ret
+  }
+  // Load buf[2], must be >= 128 (non-minimal)
+  movzx r8d, byte ptr [buf + 2]
+  cmp l, 128
+  if lo {
+    xor rax, rax
+    ret
+  }
+  mov header, 3
+  // Check 3 + l <= n
+  lea tmp, [header + l]
+  cmp tmp, n
+  // if tmp > n then invalid
+  cmp n, tmp
+  if lo {
+    xor rax, rax
+    ret
+  }
+  mov rax, tmp
+  ret
+
+@check_two_bytes:
+  // 2-byte long form: need n >= 4
+  cmp n, 4
+  if lo {
+    xor rax, rax
+    ret
+  }
+  // Load buf[2], must be >= 1 (non-minimal high byte)
+  movzx r8d, byte ptr [buf + 2]
+  cmp l, 1
+  if lo {
+    xor rax, rax
+    ret
+  }
+  // Load buf[3] into tmp
+  movzx r9d, byte ptr [buf + 3]
+  // l = (buf[2] << 8) + buf[3]
+  shl l, 8
+  add l, r9
+  mov header, 4
+  // Check 4 + l <= n
+  lea tmp, [header + l]
+  cmp tmp, n
+  // if tmp > n then invalid
+  cmp n, tmp
+  if lo {
+    xor rax, rax
+    ret
+  }
+  mov rax, tmp
+  ret
+}
+

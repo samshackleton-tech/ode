@@ -1,0 +1,43 @@
+target x86_64
+
+fn b64_char_val as "ode_b64_char_val" {
+  reg b = rdi
+  reg res = rax
+
+  res := 255
+  cmp b, 65
+  jae @ge65
+  cmp b, 58
+  jae @end
+  cmp b, 48
+  jae @digit
+  cmp b, 43
+  je @plus
+  cmp b, 47
+  jne @end
+  res := 63
+  jmp @end
+@plus:
+  res := 62
+  jmp @end
+@digit:
+  res := b
+  add res, 4
+  jmp @end
+@ge65:
+  cmp b, 91
+  jae @ge91
+  res := b
+  sub res, 65
+  jmp @end
+@ge91:
+  cmp b, 97
+  jb @end
+  cmp b, 123
+  jae @end
+  res := b
+  sub res, 71
+@end:
+  ret
+}
+

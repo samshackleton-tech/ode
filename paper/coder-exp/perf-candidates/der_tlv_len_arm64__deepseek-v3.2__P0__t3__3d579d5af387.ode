@@ -1,0 +1,97 @@
+target arm64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = x0
+  reg n = x1
+
+  // Early check for minimum buffer size
+  cmp n, 2
+  if ult {
+    x0 := 0
+    ret
+  }
+
+  // Load tag and length bytes
+  ldrb w9, [buf, 0]      // tag
+  ldrb w10, [buf, 1]     // length byte
+
+  // Check for high-tag-number form: (tag & 31) == 31
+  // Use 64-bit registers for bitmasking
+  mov x11, 31
+  and x9, x9, x11
+  cmp x9, 31
+  if eq {
+    x0 := 0
+    ret
+  }
+
+  // Short form: length byte < 128
+  cmp x10, 128
+  if ult {
+    add x11, x10, 2       // total = 2 + l0
+    cmp n, x11
+    if ult {
+      x0 := 0
+      ret
+    }
+    x0 := x11
+    ret
+  }
+
+  // Long form cases
+  cmp x10, 129
+  if eq {
+    // 1-byte long form: 0x81
+    cmp n, 3
+    if ult {
+      x0 := 0
+      ret
+    }
+    ldrb w11, [buf, 2]
+    cmp x11, 128
+    if ult {
+      x0 := 0
+      ret
+    }
+    add x12, x11, 3       // total = 3 + buf[2]
+    cmp n, x12
+    if ult {
+      x0 := 0
+      ret
+    }
+    x0 := x12
+    ret
+  }
+
+  cmp x10, 130
+  if eq {
+    // 2-byte long form: 0x82
+    cmp n, 4
+    if ult {
+      x0 := 0
+      ret
+    }
+    ldrb w11, [buf, 2]    // high byte
+    cmp x11, 1
+    if ult {
+      x0 := 0
+      ret
+    }
+    ldrb w12, [buf, 3]    // low byte
+    lsl x11, x11, 8
+    add x11, x11, x12
+    add x11, x11, 4       // total = 4 + (buf[2]<<8 | buf[3])
+    cmp n, x11
+    if ult {
+      x0 := 0
+      ret
+    }
+    x0 := x11
+    ret
+  }
+
+  // All other cases: indefinite length (0x80) or 0x83+
+  x0 := 0
+  ret
+}
+

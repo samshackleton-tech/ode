@@ -1,0 +1,48 @@
+target x86_64
+
+fn adler32_s1 as "ode_adler32_s1" {
+  reg input = rdi
+  reg n = rsi
+  reg i = rcx
+  reg s = rax
+  reg addr = r9
+
+  // Initialize: s = 1, i = 0
+  s := 1
+  i := 0
+  
+  loop {
+    place {
+      name idx = i
+      name cur = s
+      fact 0 <= idx
+      fact idx <= n
+      fact cur == s1(input)[idx]
+      fact cur < 65521
+      decreases n - idx
+    }
+    
+    cmp i, n
+    break if eq
+    
+    // Compute address: input + i
+    lea addr, [input + i]
+    
+    // Load byte (zero-extend) into 32-bit register, then zero-extend to 64-bit
+    movzx r8d, byte ptr [addr]
+    
+    // Add to s (64-bit addition)
+    add s, r8
+    
+    // Compare with 65521 (0xFFF1) and conditionally subtract
+    cmp s, 65521
+    if uge {
+      sub s, 65521
+    }
+    
+    add i, 1
+  }
+  
+  ret
+}
+

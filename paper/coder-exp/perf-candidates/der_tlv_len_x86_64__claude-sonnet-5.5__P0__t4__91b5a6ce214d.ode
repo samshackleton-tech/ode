@@ -1,0 +1,92 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg l = r8
+  reg header = r9
+  reg tmp = r10
+
+  rax := 0
+
+  // Check n >= 2
+  cmp n, 2
+  if lo {
+    ret
+  }
+
+  // Issue both loads up front so they execute in parallel
+  movzx edx, byte ptr [buf]
+  movzx ecx, byte ptr [buf + 1]
+
+  // Tag check: (tag & 31) != 31
+  and edx, 31
+  cmp rdx, 31
+  if eq {
+    ret
+  }
+
+  // Short form: l0 < 128
+  cmp l0, 128
+  if lo {
+    lea rax, [rcx + 2]
+    cmp n, rax
+    if lo {
+      rax := 0
+      ret
+    }
+    ret
+  }
+
+  cmp l0, 129
+  if eq {
+    cmp n, 3
+    if lo {
+      rax := 0
+      ret
+    }
+    movzx r8d, byte ptr [buf + 2]
+    cmp l, 128
+    if lo {
+      rax := 0
+      ret
+    }
+    lea rax, [r8 + 3]
+    cmp n, rax
+    if lo {
+      rax := 0
+      ret
+    }
+    ret
+  }
+
+  cmp l0, 130
+  if eq {
+    cmp n, 4
+    if lo {
+      rax := 0
+      ret
+    }
+    movzx r8d, byte ptr [buf + 2]
+    movzx r10d, byte ptr [buf + 3]
+    cmp l, 1
+    if lo {
+      rax := 0
+      ret
+    }
+    shl l, 8
+    lea rax, [r8 + r10 + 4]
+    cmp n, rax
+    if lo {
+      rax := 0
+      ret
+    }
+    ret
+  }
+
+  rax := 0
+  ret
+}
+

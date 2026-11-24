@@ -1,0 +1,50 @@
+target arm64
+
+fn adler32_s1 as "ode_adler32_s1" {
+  reg input = x0
+  reg n = x1
+  reg i = x2
+  reg cur = x3
+  reg bytew = w4
+  reg bytex = x4
+  reg addr = x5
+  reg modv = x6
+
+  // Initialize: cur = 1 (s1[0])
+  cur := 1
+  i := 0
+  mov w6, 65521
+
+  loop {
+    place {
+      name loop_i = i
+      name loop_cur = cur
+      fact 0 <= loop_i
+      fact loop_i <= n
+      fact loop_cur == s1(input)[loop_i]
+      fact loop_cur < 65521
+      decreases n - loop_i
+    }
+
+    cmp i, n
+    break if eq
+
+    // Load byte and add to cur
+    add addr, input, i
+    ldrb bytew, [addr, 0]
+    add cur, cur, bytex
+
+    // Reduce mod 65521 if needed
+    cmp cur, modv
+    if uge {
+      sub cur, cur, modv
+    }
+
+    add i, i, 1
+  }
+
+  // Return cur (s1[n])
+  x0 := cur
+  ret
+}
+

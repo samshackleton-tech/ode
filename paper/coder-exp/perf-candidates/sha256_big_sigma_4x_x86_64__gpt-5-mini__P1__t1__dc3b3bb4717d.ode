@@ -1,0 +1,52 @@
+target x86_64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  reg out_ptr = rdi
+  reg a_ptr = rsi
+  reg e_ptr = rdx
+
+  // Load inputs
+  vmovdqu xmm0, [a_ptr]    // a
+  vmovdqu xmm1, [e_ptr]    // e
+
+  // Compute all shifts for a in parallel
+  vpsrld xmm2, xmm0, 2
+  vpsrld xmm3, xmm0, 13
+  vpsrld xmm4, xmm0, 22
+  vpslld xmm5, xmm0, 30
+  vpslld xmm6, xmm0, 19
+  vpslld xmm7, xmm0, 10
+
+  // Compute all shifts for e in parallel (use higher regs)
+  vpsrld xmm8, xmm1, 6
+  vpsrld xmm9, xmm1, 11
+  vpsrld xmm10, xmm1, 25
+  vpslld xmm11, xmm1, 26
+  vpslld xmm12, xmm1, 21
+  vpslld xmm13, xmm1, 7
+
+  // Combine rotations for a: (>>n) | (<< (32-n))
+  vpor xmm2, xmm2, xmm5    // a >>> 2
+  vpor xmm3, xmm3, xmm6    // a >>> 13
+  vpor xmm4, xmm4, xmm7    // a >>> 22
+
+  // Combine rotations for e
+  vpor xmm8, xmm8, xmm11   // e >>> 6
+  vpor xmm9, xmm9, xmm12   // e >>> 11
+  vpor xmm10, xmm10, xmm13 // e >>> 25
+
+  // XOR the three rotated values to form Sigma0(a) and Sigma1(e)
+  vpxor xmm2, xmm2, xmm3
+  vpxor xmm2, xmm2, xmm4   // xmm2 = Sigma0(a)
+
+  vpxor xmm8, xmm8, xmm9
+  vpxor xmm8, xmm8, xmm10  // xmm8 = Sigma1(e)
+
+  // Add modulo 2^32 across lanes
+  vpaddd xmm0, xmm2, xmm8
+
+  // Store result
+  vmovdqu [out_ptr], xmm0
+  ret
+}
+

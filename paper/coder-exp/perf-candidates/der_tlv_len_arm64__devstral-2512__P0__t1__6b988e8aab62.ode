@@ -1,0 +1,68 @@
+target arm64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = x0
+  reg n = x1
+  reg tag = w2
+  reg len_byte = w3
+  reg total = x4
+  reg tmp = x5
+
+  cmp n, 2
+  b.lo @fail
+
+  ldrb tag, [buf, 0]
+  lsl x2, x2, 59
+  lsr x2, x2, 59
+  cmp x2, 31
+  b.eq @fail
+
+  ldrb len_byte, [buf, 1]
+  cmp x3, 128
+  b.lo @short_form
+
+  cmp x3, 129
+  b.eq @long1
+  cmp x3, 130
+  b.eq @long2
+  b @fail
+
+@short_form:
+  add total, x3, 2
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
+
+@long1:
+  cmp n, 3
+  b.lo @fail
+  ldrb w4, [buf, 2]
+  cmp x4, 128
+  b.lo @fail
+  add total, x4, 3
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
+
+@long2:
+  cmp n, 4
+  b.lo @fail
+  ldrb w4, [buf, 2]
+  cmp x4, 1
+  b.lo @fail
+  ldrb w5, [buf, 3]
+  lsl x4, x4, 8
+  add total, x4, x5
+  add total, total, 4
+  cmp n, total
+  b.lo @fail
+  x0 := total
+  ret
+
+@fail:
+  x0 := 0
+  ret
+}
+

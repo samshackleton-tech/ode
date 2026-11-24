@@ -1,0 +1,47 @@
+target arm64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  // Inputs: x0 = out (16 bytes), x1 = a (16 bytes), x2 = e (16 bytes)
+  // Reduced regs and shorter dependency chains for faster real-world throughput.
+
+  // Load inputs
+  ld1 {v0.4s}, [x1]   // v0 = a
+  ld1 {v1.4s}, [x2]   // v1 = e
+
+  // Sigma0(a) = ROTR2 ^ ROTR13 ^ ROTR22 stored into v2
+  ushr v2.4s, v0.4s, 2
+  shl  v3.4s, v0.4s, 30
+  orr  v2.16b, v2.16b, v3.16b    // rot2(a)
+
+  ushr v3.4s, v0.4s, 13
+  shl  v4.4s, v0.4s, 19
+  orr  v3.16b, v3.16b, v4.16b    // rot13(a)
+  eor  v2.16b, v2.16b, v3.16b
+
+  ushr v3.4s, v0.4s, 22
+  shl  v4.4s, v0.4s, 10
+  orr  v3.16b, v3.16b, v4.16b    // rot22(a)
+  eor  v2.16b, v2.16b, v3.16b    // v2 = Sigma0(a)
+
+  // Sigma1(e) = ROTR6 ^ ROTR11 ^ ROTR25 stored into v3
+  ushr v3.4s, v1.4s, 6
+  shl  v4.4s, v1.4s, 26
+  orr  v3.16b, v3.16b, v4.16b    // rot6(e)
+
+  ushr v4.4s, v1.4s, 11
+  shl  v5.4s, v1.4s, 21
+  orr  v4.16b, v4.16b, v5.16b    // rot11(e)
+  eor  v3.16b, v3.16b, v4.16b
+
+  ushr v4.4s, v1.4s, 25
+  shl  v5.4s, v1.4s, 7
+  orr  v4.16b, v4.16b, v5.16b    // rot25(e)
+  eor  v3.16b, v3.16b, v4.16b    // v3 = Sigma1(e)
+
+  // Add lanes modulo 2^32 and store
+  add v0.4s, v2.4s, v3.4s
+  st1 {v0.4s}, [x0]
+
+  ret
+}
+

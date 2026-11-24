@@ -1,0 +1,59 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg l = r8
+  reg tmp = r10
+
+  cmp n, 2
+  jb @zero
+
+  movzx edx, byte ptr [buf]
+  and tag, 31
+  cmp tag, 31
+  je @zero
+
+  movzx ecx, byte ptr [buf + 1]
+
+  cmp l0, 128
+  jae @long
+  lea rax, [l0 + 2]
+  jmp @fin
+
+@long:
+  cmp l0, 130
+  je @b130
+  cmp l0, 129
+  jne @zero
+  cmp n, 3
+  jb @zero
+  movzx r8d, byte ptr [buf + 2]
+  cmp l, 128
+  jb @zero
+  lea rax, [l + 3]
+  jmp @fin
+
+@b130:
+  cmp n, 4
+  jb @zero
+  movzx r8d, byte ptr [buf + 2]
+  cmp l, 1
+  jb @zero
+  movzx r10d, byte ptr [buf + 3]
+  shl l, 8
+  lea rax, [l + tmp + 4]
+
+@fin:
+  cmp n, rax
+  jae @done
+
+@zero:
+  rax := 0
+
+@done:
+  ret
+}
+

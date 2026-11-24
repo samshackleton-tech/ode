@@ -1,0 +1,105 @@
+target x86_64
+
+fn der_tlv_len as "ode_der_tlv_len" {
+  reg buf = rdi
+  reg n = rsi
+  reg tag = rdx
+  reg l0 = rcx
+  reg rlen = r8
+  reg b3 = r9
+  reg tmp = r10
+
+  // default return = 0
+  rax := 0
+
+  // need at least 2 bytes for tag+len
+  cmp n, 2
+  if lo {
+    ret
+  }
+
+  // load tag and ensure single-byte tag (tag & 31) != 31
+  movzx edx, byte ptr [buf]
+  and rdx, 31
+  cmp rdx, 31
+  if eq {
+    ret
+  }
+
+  // load first length octet
+  movzx ecx, byte ptr [buf + 1]
+
+  // short form: l0 < 128
+  cmp rcx, 128
+  if lo {
+    // require l0 <= n - 2  <=>  not (n - 2 < l0)
+    tmp := n
+    sub tmp, 2
+    cmp tmp, rcx
+    if lo {
+      ret
+    }
+    rax := 2
+    add rax, rcx
+    ret
+  }
+
+  // long form 1: l0 == 129
+  cmp rcx, 129
+  if eq {
+    // need at least 3 bytes
+    cmp n, 3
+    if lo {
+      ret
+    }
+    movzx r8d, byte ptr [buf + 2]   // content length
+    // must be >= 128 (non-minimal)
+    cmp r8, 128
+    if lo {
+      ret
+    }
+    // require r8 <= n - 3  <=> not (n - 3 < r8)
+    tmp := n
+    sub tmp, 3
+    cmp tmp, r8
+    if lo {
+      ret
+    }
+    rax := 3
+    add rax, r8
+    ret
+  }
+
+  // long form 2: l0 == 130
+  cmp rcx, 130
+  if eq {
+    // need at least 4 bytes
+    cmp n, 4
+    if lo {
+      ret
+    }
+    movzx r8d, byte ptr [buf + 2]   // high byte
+    // high byte must be >= 1 (non-minimal)
+    cmp r8, 1
+    if lo {
+      ret
+    }
+    movzx r9d, byte ptr [buf + 3]   // low byte
+    shl r8, 8
+    add r8, r9                      // r8 = combined length
+    // require r8 <= n - 4  <=> not (n - 4 < r8)
+    tmp := n
+    sub tmp, 4
+    cmp tmp, r8
+    if lo {
+      ret
+    }
+    rax := 4
+    add rax, r8
+    ret
+  }
+
+  // any other length-of-length value is invalid
+  ret
+}
+

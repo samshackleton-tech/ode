@@ -1,0 +1,54 @@
+target arm64
+
+fn base64_char_val as "ode_b64_char_val" {
+  reg b = x0
+
+  // Fast path: 'A'..'Z' (65..90) -> 0..25
+  cmp b, 65
+  if uge {
+    cmp b, 91
+    if ult {
+      sub x0, b, 65
+      ret
+    }
+  }
+
+  // Fast path: 'a'..'z' (97..122) -> 26..51
+  cmp b, 97
+  if uge {
+    cmp b, 123
+    if ult {
+      sub x0, b, 71
+      ret
+    }
+  }
+
+  // Fast path: '0'..'9' (48..57) -> 52..61
+  cmp b, 48
+  if uge {
+    cmp b, 58
+    if ult {
+      add x0, b, 4
+      ret
+    }
+  }
+
+  // Fast path: '+' -> 62
+  cmp b, 43
+  if eq {
+    mov x0, 62
+    ret
+  }
+
+  // Fast path: '/' -> 63
+  cmp b, 47
+  if eq {
+    mov x0, 63
+    ret
+  }
+
+  // not in the alphabet
+  mov x0, 255
+  ret
+}
+

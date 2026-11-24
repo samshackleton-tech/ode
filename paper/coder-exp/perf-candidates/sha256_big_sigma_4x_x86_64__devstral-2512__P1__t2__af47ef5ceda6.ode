@@ -1,0 +1,45 @@
+target x86_64
+
+fn sha256_big_sigma_4x as "ode_sha256_big_sigma_4x" {
+  reg out_ptr = rdi
+  reg a_ptr = rsi
+  reg e_ptr = rdx
+
+  // Load inputs
+  vmovdqu xmm0, [a_ptr]  // a
+  vmovdqu xmm1, [e_ptr]  // e
+
+  // Compute Sigma0(a) = (a >>> 2) ^ (a >>> 13) ^ (a >>> 22)
+  vpsrld xmm2, xmm0, 2
+  vpslld xmm3, xmm0, 30
+  vpor xmm2, xmm2, xmm3
+  vpsrld xmm3, xmm0, 13
+  vpslld xmm4, xmm0, 19
+  vpor xmm3, xmm3, xmm4
+  vpxor xmm2, xmm2, xmm3
+  vpsrld xmm3, xmm0, 22
+  vpslld xmm4, xmm0, 10
+  vpor xmm3, xmm3, xmm4
+  vpxor xmm2, xmm2, xmm3
+
+  // Compute Sigma1(e) = (e >>> 6) ^ (e >>> 11) ^ (e >>> 25)
+  vpsrld xmm3, xmm1, 6
+  vpslld xmm4, xmm1, 26
+  vpor xmm3, xmm3, xmm4
+  vpsrld xmm4, xmm1, 11
+  vpslld xmm5, xmm1, 21
+  vpor xmm4, xmm4, xmm5
+  vpxor xmm3, xmm3, xmm4
+  vpsrld xmm4, xmm1, 25
+  vpslld xmm5, xmm1, 7
+  vpor xmm4, xmm4, xmm5
+  vpxor xmm3, xmm3, xmm4
+
+  // Add Sigma0(a) + Sigma1(e) modulo 2^32
+  vpaddd xmm0, xmm2, xmm3
+
+  // Store result
+  vmovdqu [out_ptr], xmm0
+  ret
+}
+
