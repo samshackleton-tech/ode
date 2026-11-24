@@ -315,8 +315,8 @@ def parse_unified(text, src="<ode>"):
         if m:
             claim(m.group(1), m.group(2), line_no)
             bopen = _find_open_brace(text, pos + m.end())
-            if bopen == -1:
-                raise UnifiedErr(f"{src}: line {line_no}: `{m.group(1)} {m.group(2)}` missing `{{`")
+            if bopen == -1 or "=" in text[pos + m.end():bopen]:
+                raise UnifiedErr(f"{src}: line {line_no}: `{m.group(1)} {m.group(2)}` body must be enclosed in `{{ ... }}`")
             bclose = _find_matching_brace(text, bopen, src)
             spec_defs.append(text[pos:bclose + 1])
             pos = _skip_ws_and_comments(text, bclose + 1)

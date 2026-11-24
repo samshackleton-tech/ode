@@ -675,7 +675,7 @@ def main(argv=None):
 
     p_aud = sub.add_parser("audit", help="binary-first auditor: check coverage, .ode.ocl, BLAKE3 hashes, and odeverify")
     p_aud.add_argument("binary", help="compiled ELF binary (.o) to audit")
-    p_aud.add_argument("--proof", required=True, help="separate .proof file")
+    p_aud.add_argument("--proof", default=None, help="separate .proof file (optional for loop-free single-function .o)")
     p_aud.add_argument("--expect-contract", default=None, help="full 52-char lowercase base-32 BLAKE3 contract ID")
     p_aud.add_argument("--contract", default=None, help="optional external .ocl/.spec file (must match embedded .ode.ocl if present)")
     p_aud.add_argument("--glossary", default=None, help="optional local glossary JSON for --show-contract rendering")

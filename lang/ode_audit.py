@@ -41,6 +41,7 @@ EM_AARCH64 = 183
 SHT_PROGBITS = 1
 SHT_SYMTAB = 2
 SHT_STRTAB = 3
+SHT_RELA = 4
 SHT_INIT_ARRAY = 14
 SHT_FINI_ARRAY = 15
 SHT_PREINIT_ARRAY = 16
@@ -48,12 +49,22 @@ SHT_PREINIT_ARRAY = 16
 SHF_WRITE = 0x1
 SHF_ALLOC = 0x2
 SHF_EXECINSTR = 0x4
+SHF_INFO_LINK = 0x40
 
 STB_LOCAL = 0
 STB_GLOBAL = 1
 STB_WEAK = 2
 
+STT_OBJECT = 1
 STT_FUNC = 2
+STT_SECTION = 3
+
+R_X86_64_PC32 = 2
+R_X86_64_PLT32 = 4
+R_AARCH64_CALL26 = 283
+
+HELPERS_BEGIN = "=== ode-helpers ==="
+PROOF_BEGIN = "=== ode-proof ==="
 
 FORBIDDEN_HOOK_TYPES = frozenset({SHT_INIT_ARRAY, SHT_FINI_ARRAY, SHT_PREINIT_ARRAY})
 FORBIDDEN_HOOK_NAMES = frozenset({
@@ -298,22 +309,270 @@ def _find_odeverify(verify_bin=None):
     )
 
 
+def format_proof_bundle(order, helper_spec_text, raw_proof_text):
+    """Wrap helper contracts/calling lemmas and raw `odeverify` proof lines into one `.proof` file."""
+    if len(order) <= 1 and not helper_spec_text.strip():
+        return raw_proof_text
+    lines = [HELPERS_BEGIN, "order: " + " ".join(order)]
+    if helper_spec_text.strip():
+        lines.append(helper_spec_text.rstrip("\n"))
+    lines.append(PROOF_BEGIN)
+    lines.append(raw_proof_text.rstrip("\n"))
+    return "\n".join(lines) + "\n"
+
+
+def split_proof_bundle(proof_text):
+    """Split a `.proof` file into `(order_or_None, helper_spec_text, raw_proof_text)`."""
+    if not proof_text.startswith(HELPERS_BEGIN + "\n"):
+        return None, "", proof_text
+    marker = "\n" + PROOF_BEGIN + "\n"
+    idx = proof_text.find(marker)
+    if idx < 0:
+        raise ValueError(f"proof file begins with `{HELPERS_BEGIN}` but lacks `{PROOF_BEGIN}`")
+    head = proof_text[len(HELPERS_BEGIN) + 1 : idx]
+    raw_proof = proof_text[idx + len(marker) :]
+    hlines = head.splitlines()
+    if not hlines or not hlines[0].startswith("order:"):
+        raise ValueError(f"`{HELPERS_BEGIN}` block must start with `order: sym1 sym2 ...`")
+    order = hlines[0][len("order:"):].split()
+    if not order:
+        raise ValueError("`order:` line in proof file is empty")
+    helper_spec = "\n".join(hlines[1:]).strip()
+    return order, (helper_spec + "\n" if helper_spec else ""), raw_proof
+
+
+def _called_symbols(elf_bytes):
+    """Return ordered list of called function symbol names referenced by `.rela.text`."""
+    elf = parse_elf64(elf_bytes)
+    text_secs = elf["by_name"].get(".text", [])
+    if not text_secs:
+        return []
+    text_idx = text_secs[0]["idx"]
+    ro_secs = elf["by_name"].get(".rodata", [])
+    ro_idx = ro_secs[0]["idx"] if ro_secs else -1
+    syms = elf["symbols"]
+    called = []
+    seen = set()
+    for s in elf["sections"]:
+        if s["type"] == SHT_RELA and s["info"] == text_idx:
+            for pos in range(0, len(s["body"]), 24):
+                _off, r_info, _add = struct.unpack_from("<QQq", s["body"], pos)
+                r_type = r_info & 0xFFFFFFFF
+                rsym = syms[r_info >> 32]
+                is_call = (
+                    r_type in (R_X86_64_PLT32, R_AARCH64_CALL26)
+                    or (r_type == R_X86_64_PC32 and rsym["shndx"] != ro_idx)
+                )
+                if is_call and rsym["name"] and rsym["name"] not in seen:
+                    seen.add(rsym["name"])
+                    called.append(rsym["name"])
+    return called
+
+
+def merge_elf_objects(units, target, rename_map, export_sym, embedded_ocl_bytes=None):
+    """Merge relocatable ELF64 `.o` byte blobs into one clean relocatable ELF64 `.o` (pure Python).
+
+    - `.text` packs all units with 16-byte pure-NOP alignment (pad strictly < 16 bytes).
+    - `.rodata` (if any) is kept strictly non-executable (`SHF_ALLOC`, 64-byte aligned).
+    - `.symtab` places all `STB_LOCAL` symbols first (section symbol + local `STT_FUNC` helpers),
+      followed by the single `STB_GLOBAL` `STT_FUNC` exported symbol `export_sym`.
+    - Zero `SHN_UNDEF` symbols remain; any call targeting a symbol outside `rename_map` is refused.
+    - If `embedded_ocl_bytes` is provided, appends non-allocated `.ode.ocl` (`sh_flags = 0`).
+    """
+    if target == "x86-64":
+        machine = EM_X86_64
+        nop_unit = b"\x90"
+    elif target == "arm64":
+        machine = EM_AARCH64
+        nop_unit = _ARM64_NOP
+    else:
+        raise ValueError(f"unsupported target `{target}` for ELF merge")
+
+    merged_text = bytearray()
+    merged_rodata = bytearray()
+    defined_funcs = {}  # new_name -> (text_off, st_size, is_global)
+    local_order = []
+    reloc_recs = []     # ("rodata", off, rtype, addend) | ("call", off, rtype, new_tgt, addend)
+
+    for u_bytes in units:
+        elf = parse_elf64(u_bytes)
+        if elf["target"] != target:
+            raise ValueError(f"ELF target mismatch during merge: expected {target}, got {elf['target']}")
+        text_secs = elf["by_name"].get(".text", [])
+        if len(text_secs) != 1 or text_secs[0]["size"] == 0:
+            raise ValueError("input ELF unit lacks a single non-empty `.text` section")
+        tsec = text_secs[0]
+        t_idx = tsec["idx"]
+
+        # Align `.text` to 16 bytes with pure NOPs (pad is always 0..15 bytes).
+        pad_len = (-len(merged_text)) % 16
+        if pad_len:
+            if pad_len % len(nop_unit) != 0:
+                raise ValueError(f"alignment pad {pad_len} is not a multiple of instruction width")
+            merged_text += nop_unit * (pad_len // len(nop_unit))
+        text_base = len(merged_text)
+        merged_text += tsec["body"]
+
+        ro_secs = elf["by_name"].get(".rodata", [])
+        ro_idx = -1
+        ro_base = 0
+        if ro_secs:
+            if len(ro_secs) != 1:
+                raise ValueError("input ELF unit has multiple `.rodata` sections")
+            rsec = ro_secs[0]
+            ro_idx = rsec["idx"]
+            ro_pad = (-len(merged_rodata)) % 64
+            if ro_pad:
+                merged_rodata += bytes(ro_pad)
+            ro_base = len(merged_rodata)
+            merged_rodata += rsec["body"]
+
+        syms = elf["symbols"]
+        for sym in syms:
+            if sym["shndx"] == t_idx and sym["name"] and sym["type"] in (0, STT_FUNC):
+                orig = sym["name"]
+                if orig not in rename_map:
+                    raise ValueError(f"input ELF defines symbol `{orig}` absent from rename_map")
+                new_nm = rename_map[orig]
+                if new_nm in defined_funcs:
+                    raise ValueError(f"duplicate merged function symbol `{new_nm}`")
+                is_glob = (new_nm == export_sym)
+                defined_funcs[new_nm] = (text_base + sym["value"], sym["size"], is_glob)
+                if not is_glob:
+                    local_order.append(new_nm)
+
+        for s in elf["sections"]:
+            if s["type"] == SHT_RELA and s["info"] == t_idx:
+                for pos in range(0, len(s["body"]), 24):
+                    r_off, r_info, r_addend = struct.unpack_from("<QQq", s["body"], pos)
+                    r_type = r_info & 0xFFFFFFFF
+                    rsym = syms[r_info >> 32]
+                    if r_type == R_X86_64_PC32 and ro_idx >= 0 and rsym["shndx"] == ro_idx:
+                        reloc_recs.append(("rodata", text_base + r_off, R_X86_64_PC32, ro_base + rsym["value"] + r_addend))
+                    elif (
+                        r_type in (R_X86_64_PLT32, R_AARCH64_CALL26)
+                        or (r_type == R_X86_64_PC32 and rsym["shndx"] == 0)
+                    ):
+                        orig_tgt = rsym["name"]
+                        if orig_tgt not in rename_map:
+                            raise ValueError(
+                                f"call to external symbol `{orig_tgt}` is missing from this bundle"
+                            )
+                        reloc_recs.append(("call", text_base + r_off, r_type, rename_map[orig_tgt], r_addend))
+                    else:
+                        raise ValueError(f"unsupported relocation type {r_type} to `{rsym['name']}`")
+
+    if export_sym not in defined_funcs:
+        raise ValueError(f"exported symbol `{export_sym}` was not defined by any input ELF unit")
+
+    # Assemble clean sections: .text, [.rodata], .note.GNU-stack, [.rela.text], .symtab, .strtab, .shstrtab, [.ode.ocl]
+    sec_list = [(".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, 16, 0, bytes(merged_text))]
+    rodata_sec_idx = None
+    if merged_rodata:
+        rodata_sec_idx = len(sec_list) + 1
+        sec_list.append((".rodata", SHT_PROGBITS, SHF_ALLOC, 64, 0, bytes(merged_rodata)))
+    sec_list.append((".note.GNU-stack", SHT_PROGBITS, 0, 1, 0, b""))
+
+    strtab = bytearray(b"\x00")
+    syms_buf = bytearray(24)  # index 0: STN_UNDEF
+    def add_str(nm):
+        if not nm:
+            return 0
+        off = len(strtab)
+        strtab.extend(nm.encode("utf-8") + b"\x00")
+        return off
+
+    rodata_sym_idx = None
+    if rodata_sec_idx is not None:
+        rodata_sym_idx = len(syms_buf) // 24
+        syms_buf += struct.pack("<IBBHQQ", 0, (STB_LOCAL << 4) | STT_SECTION, 0, rodata_sec_idx, 0, 0)
+
+    sym_idx = {}
+    for nm in local_order:
+        val, sz, _ = defined_funcs[nm]
+        sym_idx[nm] = len(syms_buf) // 24
+        syms_buf += struct.pack("<IBBHQQ", add_str(nm), (STB_LOCAL << 4) | STT_FUNC, 0, 1, val, sz)
+
+    first_global = len(syms_buf) // 24
+    exp_val, exp_sz, _ = defined_funcs[export_sym]
+    sym_idx[export_sym] = first_global
+    syms_buf += struct.pack("<IBBHQQ", add_str(export_sym), (STB_GLOBAL << 4) | STT_FUNC, 0, 1, exp_val, exp_sz)
+
+    rela_buf = bytearray()
+    for rec in reloc_recs:
+        if rec[0] == "rodata":
+            _, r_off, r_type, r_add = rec
+            rela_buf += struct.pack("<QQq", r_off, (rodata_sym_idx << 32) | r_type, r_add)
+        else:
+            _, r_off, r_type, tgt_nm, r_add = rec
+            if tgt_nm not in sym_idx:
+                raise ValueError(f"call target `{tgt_nm}` not defined in merged ELF")
+            rela_buf += struct.pack("<QQq", r_off, (sym_idx[tgt_nm] << 32) | r_type, r_add)
+
+    rela_sec_idx = None
+    if rela_buf:
+        rela_sec_idx = len(sec_list) + 1
+        sec_list.append((".rela.text", SHT_RELA, SHF_INFO_LINK, 8, 24, bytes(rela_buf)))
+
+    symtab_sec_idx = len(sec_list) + 1
+    strtab_sec_idx = symtab_sec_idx + 1
+    shstrtab_sec_idx = strtab_sec_idx + 1
+    sec_list.append((".symtab", SHT_SYMTAB, 0, 8, 24, bytes(syms_buf)))
+    sec_list.append((".strtab", SHT_STRTAB, 0, 1, 0, bytes(strtab)))
+
+    extra_names = [".shstrtab"]
+    if embedded_ocl_bytes is not None:
+        extra_names.append(".ode.ocl")
+    shstr = bytearray(b"\x00")
+    sh_names = {}
+    for sname in [x[0] for x in sec_list] + extra_names:
+        sh_names[sname] = len(shstr)
+        shstr.extend(sname.encode("utf-8") + b"\x00")
+    sec_list.append((".shstrtab", SHT_STRTAB, 0, 1, 0, bytes(shstr)))
+    if embedded_ocl_bytes is not None:
+        sec_list.append((".ode.ocl", SHT_PROGBITS, 0, 1, 0, bytes(embedded_ocl_bytes)))
+
+    blob = bytearray(64)
+    headers = [bytes(64)]
+    for idx, (sname, stype, sflags, salign, sentsize, sbytes) in enumerate(sec_list, 1):
+        blob += bytes(_up(len(blob), max(salign, 1)) - len(blob))
+        soff = len(blob)
+        blob += sbytes
+        slink = symtab_sec_idx if idx == rela_sec_idx else (strtab_sec_idx if idx == symtab_sec_idx else 0)
+        sinfo = 1 if idx == rela_sec_idx else (first_global if idx == symtab_sec_idx else 0)
+        headers.append(struct.pack(
+            "<IIQQQQIIQQ",
+            sh_names[sname], stype, sflags, 0, soff, len(sbytes), slink, sinfo, salign, sentsize,
+        ))
+    blob += bytes(_up(len(blob), 8) - len(blob))
+    shoff = len(blob)
+    for h in headers:
+        blob += h
+    blob[:64] = (
+        b"\x7fELF\x02\x01\x01"
+        + bytes(9)
+        + struct.pack("<HHIQQQIHHHHHH", 1, machine, 1, 0, 0, shoff, 0, 64, 0, 0, 64, len(headers), shstrtab_sec_idx)
+    )
+    return bytes(blob)
+
+
 # ---------------------------------------------------------------------------
 # Binary-first auditor (`ode_tool.py audit`)
 # ---------------------------------------------------------------------------
 
 def audit_binary(
     bin_path,
-    proof_path,
+    proof_path=None,
     expect_contract=None,
     contract_path=None,
     verify_bin=None,
 ):
     """Audit a compiled ELF64 binary directly against its canonical `.ocl` contract and separate `.proof`.
 
-    Returns a structured dict with `verdict` (`"shown"` or `"refused"`), both 52-char base-32
-    BLAKE3 digests (`binary_b32`, `contract_b32`), coverage stats, canonical `.ocl` text, and
-    any refusal errors.
+    Supports both single-function `.o` files and multi-function `.o` bundles containing `STB_LOCAL`
+    callees whose contracts and custom `calling` conventions travel inside `.proof`. When
+    `proof_path` is omitted on a single-function binary, tries auto-proving loop-free code and
+    verifies the result with `odeverify`.
     """
     errors = []
     if not os.path.isfile(bin_path):
@@ -442,7 +701,7 @@ def audit_binary(
         )
         return res
 
-    # 6. Check exported symbols (100% symbol coverage + hash-bound symbol rule).
+    # 6. Check exported, local, and undefined symbols (100% symbol coverage + hash-bound symbol rule).
     defined_exports = [
         sym for sym in elf["symbols"]
         if sym["bind"] in (STB_GLOBAL, STB_WEAK) and sym["shndx"] != 0
@@ -462,81 +721,212 @@ def audit_binary(
             f"exported symbol `{exp_sym}` does not match canonical contract hash symbol `{expected_hash_sym}`"
         )
 
-    # Also reject any extra local STT_FUNC symbols outside the verified function.
-    extra_local_funcs = [
+    undef_syms = [
         sym["name"] for sym in elf["symbols"]
-        if sym["bind"] == STB_LOCAL and sym["type"] == STT_FUNC and sym["shndx"] == text_idx and sym["name"] != exp_sym
+        if sym["index"] != 0 and sym["shndx"] == 0
     ]
-    if extra_local_funcs:
-        errors.append(f"extra local function symbol(s) in `.text` outside the verified function: {extra_local_funcs}")
+    if undef_syms:
+        errors.append(f"binary has external undefined symbol(s) outside verified `.text`: {undef_syms}")
 
-    if exp["value"] != 0:
-        errors.append(f"exported function `{exp_sym}` starts at `.text` offset {exp['value']} != 0 (extra leading bytes)")
+    local_funcs = {}
+    for sym in elf["symbols"]:
+        if sym["bind"] == STB_LOCAL and sym["shndx"] == text_idx:
+            if sym["type"] == STT_SECTION:
+                continue
+            if sym["type"] != STT_FUNC or not sym["name"]:
+                errors.append(f"non-function local symbol `{sym['name']}` in `.text` (type={sym['type']})")
+                continue
+            if sym["name"] == exp_sym or sym["name"] in local_funcs:
+                errors.append(f"duplicate local function symbol `{sym['name']}` in `.text`")
+                continue
+            local_funcs[sym["name"]] = sym
 
     if errors:
         return res
 
-    # 7. Decode `.text` and confirm 100% executable-byte coverage (allowing only trailing alignment NOPs < 16 B).
-    try:
-        if target == "arm64":
-            rows = arm64_obj.read(bin_path, exp_sym)
+    # 7. Parse `.proof` (or auto-prove loop-free single-function binary when `--proof` is omitted).
+    bound_spec = ode_canon.bind_symbol(canonical_ocl, exp_sym)
+    auto_proved = False
+    raw_proof_text = None
+    if proof_path is None:
+        if local_funcs:
+            errors.append(
+                f"multi-function binary has {len(local_funcs)} local helper function(s) "
+                f"({sorted(local_funcs)}); pass `--proof FILE`"
+            )
+            return res
+        order = [exp_sym]
+        combined_spec = bound_spec
+        auto_proved = True
+    else:
+        if not os.path.isfile(proof_path):
+            errors.append(f"proof file not found: {proof_path}")
+            return res
+        with open(proof_path, "r", encoding="utf-8") as pf:
+            proof_text = pf.read()
+        try:
+            p_order, helper_spec, raw_proof_text = split_proof_bundle(proof_text)
+        except ValueError as exc:
+            errors.append(f"malformed proof file: {exc}")
+            return res
+        if local_funcs:
+            if p_order is None:
+                errors.append(
+                    f"extra local function symbol(s) in `.text` with no helper proof block: {sorted(local_funcs)}"
+                )
+                return res
+            if len(p_order) != len(set(p_order)):
+                errors.append(f"duplicate symbol in proof `order:` line: {p_order}")
+                return res
+            if p_order[-1] != exp_sym:
+                errors.append(
+                    f"proof `order:` must end with exported symbol `{exp_sym}`, got `{p_order[-1]}`"
+                )
+                return res
+            if set(p_order[:-1]) != set(local_funcs.keys()):
+                missing = sorted(set(local_funcs.keys()) - set(p_order[:-1]))
+                extra = sorted(set(p_order[:-1]) - set(local_funcs.keys()))
+                errors.append(
+                    f"local function set mismatch between `.text` and `.proof` "
+                    f"(missing from proof={missing}, absent from `.text`={extra})"
+                )
+                return res
+            try:
+                checked_sp = ode.with_proof(bound_spec, helper_spec)
+            except BaseException as exc:
+                errors.append(f"helper specification in `.proof` refused: {exc}")
+                return res
+            for hsym in p_order[:-1]:
+                if hsym not in checked_sp.contracts:
+                    errors.append(f"helper specification in `.proof` lacks a contract for `{hsym}`")
+                    return res
+            order = p_order
+            combined_spec = bound_spec + "\n" + helper_spec
         else:
-            rows, _ = kdecode.read(bin_path, exp_sym, 0, 0)
-    except BaseException as exc:
-        errors.append(f"instruction decode failed for `{exp_sym}`: {exc}")
+            if p_order is not None:
+                if p_order != [exp_sym] or helper_spec.strip():
+                    errors.append(f"single-function binary cannot carry extra helper proof entries: {p_order}")
+                    return res
+            order = [exp_sym]
+            combined_spec = bound_spec
+
+    # 8. Decode EVERY function in `order` and enforce 100% `.text` executable-byte coverage.
+    sym_by_name = dict(local_funcs)
+    sym_by_name[exp_sym] = exp
+    spans = []
+    for fn_sym in order:
+        try:
+            if target == "arm64":
+                rows = arm64_obj.read(bin_path, fn_sym)
+            else:
+                rows, _ = kdecode.read(bin_path, fn_sym, 0, 0)
+        except BaseException as exc:
+            errors.append(f"instruction decode failed for `{fn_sym}`: {exc}")
+            return res
+        if not rows:
+            errors.append(f"no instructions decoded for `{fn_sym}`")
+            return res
+        if rows[0][0] != 0:
+            errors.append(f"first decoded instruction of `{fn_sym}` starts at offset {rows[0][0]} != 0")
+            return res
+        for idx in range(len(rows) - 1):
+            if rows[idx][1] != rows[idx + 1][0]:
+                errors.append(
+                    f"gap in decoded `.text` of `{fn_sym}` between bytes {rows[idx][1]} and {rows[idx + 1][0]}"
+                )
+                return res
+        start = sym_by_name[fn_sym]["value"]
+        span_len = rows[-1][1]
+        end = start + span_len
+        if end > len(text_bytes):
+            errors.append(f"decoded span of `{fn_sym}` ({start}..{end}) extends past `.text` ({len(text_bytes)})")
+            return res
+        if sym_by_name[fn_sym]["size"] and sym_by_name[fn_sym]["size"] < span_len:
+            errors.append(
+                f"symbol `{fn_sym}` size {sym_by_name[fn_sym]['size']} is smaller than decoded span {span_len}"
+            )
+            return res
+        spans.append((start, end, fn_sym, rows))
+
+    spans.sort(key=lambda item: (item[0], -item[1]))
+    if spans[0][0] != 0:
+        errors.append(f"first function `{spans[0][2]}` starts at `.text` offset {spans[0][0]} != 0 (extra leading bytes)")
         return res
-    if not rows:
-        errors.append(f"no instructions decoded for `{exp_sym}`")
-        return res
-    if rows[0][0] != 0:
-        errors.append(f"first decoded instruction starts at offset {rows[0][0]} != 0")
-    for idx in range(len(rows) - 1):
-        if rows[idx][1] != rows[idx + 1][0]:
-            errors.append(f"gap in decoded `.text` between bytes {rows[idx][1]} and {rows[idx + 1][0]}")
-    covered_end = rows[-1][1]
+
+    covered_end = 0
+    covered_insn_starts = set()
+    for start, end, fn_sym, rows in spans:
+        if start >= covered_end:
+            gap = text_bytes[covered_end:start]
+            if not _is_pure_nop_pad(gap, target):
+                errors.append(
+                    f"extra non-NOP bytes in `.text` between offset {covered_end} and `{fn_sym}` ({start}): "
+                    f"{len(gap)} bytes ({gap[:16].hex()})"
+                )
+                return res
+            for a, _, _ in rows:
+                covered_insn_starts.add(start + a)
+            covered_end = end
+        else:
+            # Shared-tail secondary entry point (e.g. `p32` inside `k32`): must begin at a decoded
+            # instruction boundary inside the enclosing span and end at the exact same address.
+            if start not in covered_insn_starts or end != covered_end:
+                errors.append(
+                    f"overlapping `.text` span for `{fn_sym}` ({start}..{end}) does not share an instruction-aligned tail (covered_end={covered_end})"
+                )
+                return res
+
     tail = text_bytes[covered_end:]
     if not _is_pure_nop_pad(tail, target):
         errors.append(
             f"extra trailing executable bytes in `.text` after offset {covered_end}: "
             f"{len(tail)} bytes ({tail[:16].hex()})"
         )
-    if exp["size"] and exp["size"] < covered_end:
-        errors.append(f"symbol `{exp_sym}` size {exp['size']} is smaller than decoded span {covered_end}")
-    if errors:
         return res
 
     res["coverage"] = {
-        "functions": 1,
-        "instructions": len(rows),
+        "functions": len(order),
+        "local_helpers": len(order) - 1,
+        "instructions": len(covered_insn_starts),
         "code_bytes": covered_end,
         "text_bytes": len(text_bytes),
         "exported_symbols": 1,
         "hooks": 0,
     }
 
-    # 8. Check proof file exists and invoke Lean 4 `odeverify` directly on the binary!
-    if not proof_path or not os.path.isfile(proof_path):
-        errors.append(f"proof file not found: {proof_path}")
-        return res
+    # 9. Invoke Lean 4 `odeverify` directly on ALL functions in topological order!
     try:
         verifier = _find_odeverify(verify_bin)
     except FileNotFoundError as exc:
         errors.append(str(exc))
         return res
 
-    bound_spec = ode_canon.bind_symbol(canonical_ocl, exp_sym)
     with tempfile.TemporaryDirectory(prefix="ode_audit_") as tmp:
         stmt_path = os.path.join(tmp, "audit.statement")
-        try:
-            stmt_lines = statement.statement(bound_spec, [(bin_path, exp_sym)])
-        except BaseException as exc:
-            errors.append(f"statement build failed: {exc}")
-            return res
-        with open(stmt_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(stmt_lines) + "\n")
+        if auto_proved:
+            auto_proof_path = os.path.join(tmp, "auto.proof")
+            try:
+                prove.prove(combined_spec, [(bin_path, exp_sym, "")], stmt_path, auto_proof_path)
+            except BaseException as exc:
+                errors.append(f"auto-proving failed (pass `--proof FILE` for functions with loops or hints): {exc}")
+                return res
+            verify_proof_path = auto_proof_path
+            with open(stmt_path, "r", encoding="utf-8") as sf:
+                stmt_lines = sf.read().splitlines()
+        else:
+            try:
+                stmt_lines = statement.statement(combined_spec, [(bin_path, s) for s in order])
+            except BaseException as exc:
+                errors.append(f"statement build failed: {exc}")
+                return res
+            with open(stmt_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(stmt_lines) + "\n")
+            verify_proof_path = os.path.join(tmp, "audit.proof")
+            with open(verify_proof_path, "w", encoding="utf-8") as pf:
+                pf.write(raw_proof_text)
         table_path = statement.table_of(stmt_lines)
         proc = subprocess.run(
-            [verifier, table_path, stmt_path, proof_path],
+            [verifier, table_path, stmt_path, verify_proof_path],
             capture_output=True,
             text=True,
             check=False,
@@ -548,6 +938,8 @@ def audit_binary(
             return res
 
     res["verdict"] = "shown"
+    if auto_proved:
+        res["auto_proved"] = True
     return res
 
 
@@ -562,9 +954,16 @@ def format_audit_report(res, show_contract=False, glossary=None):
         lines.append(f"  SYMBOL:            {res['symbol']}")
     cov = res.get("coverage") or {}
     if cov:
+        n_fn = cov["functions"]
+        n_loc = cov.get("local_helpers", 0)
+        fn_desc = (
+            f"{n_fn} functions (1 exported, {n_loc} local)"
+            if n_loc
+            else f"{n_fn} function"
+        )
         lines.append(
             f"  COVERAGE:          100% of executable code "
-            f"({cov['functions']} function, {cov['instructions']} instructions, "
+            f"({fn_desc}, {cov['instructions']} instructions, "
             f"{cov['code_bytes']} B, {cov['exported_symbols']} exported symbol, {cov['hooks']} hooks)"
         )
     lines.append(f"  VERDICT:           {res['verdict']}")
@@ -582,8 +981,121 @@ def format_audit_report(res, show_contract=False, glossary=None):
 
 
 # ---------------------------------------------------------------------------
-# Hash-bound builder (`ode_tool.py pack`)
+# Hash-bound builder (`ode_tool.py pack`) & multi-object bundler
 # ---------------------------------------------------------------------------
+
+def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
+    """Remap specification definition (and, for export, parameter) names inside loop place hints."""
+    if not pl_text:
+        return ""
+    import re as _re
+    inv_map = {}
+    for can, orig in canon_glossary.items():
+        if can == "contract" or "." in can:
+            continue
+        if is_export or can[0] in ("C", "f", "s", "L"):
+            inv_map[orig] = can
+    inv_map[orig_sym] = new_sym
+    if not inv_map:
+        return pl_text
+    pat = _re.compile(r"\b(" + "|".join(_re.escape(k) for k in sorted(inv_map, key=len, reverse=True)) + r")\b")
+    return pat.sub(lambda m: inv_map[m.group(1)], pl_text)
+
+
+def pack_bundle(
+    unit_elfs,
+    orig_order,
+    export_orig_sym,
+    full_spec_text,
+    out_obj,
+    out_proof,
+    places_by_sym=None,
+    existing_proof_path=None,
+    glossary_out=None,
+    verify_bin=None,
+):
+    """Pack a pre-compiled multi-function set of relocatable ELF64 `.o` blobs into one hash-bound
+    `.o` + self-contained `.proof`, and run Bob's full `audit_binary`.
+
+    - `orig_order`: topological list of original symbol names ending in `export_orig_sym`.
+    - `existing_proof_path`: optional pre-built `odeverify` proof file for `orig_order`; when given,
+      remaps its symbols/definitions instead of re-running the prover from scratch.
+    """
+    if not orig_order or orig_order[-1] != export_orig_sym:
+        raise ValueError(f"orig_order must end with exported symbol `{export_orig_sym}`")
+    target = parse_elf64(unit_elfs[0])["target"]
+    canon = ode_canon.canonicalize(full_spec_text, contract_name=export_orig_sym)
+    cid = canon["contract_id"]
+    hash_sym = canon["symbol"]
+
+    rename_map = {}
+    helper_rename = {}
+    for idx, orig in enumerate(orig_order[:-1]):
+        hnm = f"h{idx}"
+        rename_map[orig] = hnm
+        helper_rename[orig] = hnm
+    rename_map[export_orig_sym] = hash_sym
+    new_order = [rename_map[s] for s in orig_order]
+
+    obj_bytes = merge_elf_objects(
+        unit_elfs, target, rename_map, hash_sym,
+        embedded_ocl_bytes=canon["canonical"].encode("utf-8"),
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(out_obj)), exist_ok=True)
+    with open(out_obj, "wb") as f:
+        f.write(obj_bytes)
+
+    bound_spec = ode_canon.bind_symbol(canon["canonical"], hash_sym)
+    helper_spec, top_map = ode_canon.build_helper_spec(full_spec_text, export_orig_sym, helper_rename, canon)
+    # Validate disjointness via `ode.with_proof` immediately.
+    if helper_rename:
+        ode.with_proof(bound_spec, helper_spec)
+    combined_spec = bound_spec + ("\n" + helper_spec if helper_spec else "")
+
+    os.makedirs(os.path.dirname(os.path.abspath(out_proof)), exist_ok=True)
+    if existing_proof_path is not None:
+        with open(existing_proof_path, "r", encoding="utf-8") as pf:
+            orig_proof = pf.read()
+        export_param_map = {
+            orig: can for can, orig in canon["glossary"].items()
+            if can != "contract" and "." not in can and can[0] == "a"
+        }
+        raw_proof = ode_canon.remap_proof_text(
+            orig_proof, rename_map, top_map, export_orig_sym, hash_sym, export_param_map,
+        )
+    else:
+        places_by_sym = places_by_sym or {}
+        prove_items = []
+        for orig in orig_order:
+            new_nm = rename_map[orig]
+            pl = _map_places_text(
+                places_by_sym.get(orig, ""), canon["glossary"], orig, new_nm, orig == export_orig_sym,
+            )
+            prove_items.append((out_obj, new_nm, pl))
+        with tempfile.TemporaryDirectory(prefix="ode_bundle_") as tmp:
+            stmt_path = os.path.join(tmp, "bundle.statement")
+            raw_path = os.path.join(tmp, "bundle.raw.proof")
+            prove.prove(combined_spec, prove_items, stmt_path, raw_path)
+            with open(raw_path, "r", encoding="utf-8") as rf:
+                raw_proof = rf.read()
+
+    bundle_proof = format_proof_bundle(new_order, helper_spec, raw_proof)
+    with open(out_proof, "w", encoding="utf-8") as pf:
+        pf.write(bundle_proof)
+
+    if glossary_out:
+        os.makedirs(os.path.dirname(os.path.abspath(glossary_out)), exist_ok=True)
+        with open(glossary_out, "w", encoding="utf-8") as f:
+            json.dump({"contract_id": cid, "glossary": canon["glossary"]}, f, indent=2, sort_keys=True)
+            f.write("\n")
+
+    audit_res = audit_binary(out_obj, out_proof, expect_contract=cid, verify_bin=verify_bin)
+    audit_res["proof"] = out_proof
+    audit_res["proof_bytes"] = os.path.getsize(out_proof)
+    audit_res["glossary"] = canon["glossary"]
+    audit_res["helper_map"] = helper_rename
+    return audit_res
+
 
 def pack_verified(
     source_path,
@@ -598,8 +1110,9 @@ def pack_verified(
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
-    Accepts either a unified `.ode` file (with contract right on `fn`, `spec_path=None`) or a
-    legacy `(source_path, spec_path)` pair. Refuses contractless functions loudly.
+    Accepts either a unified `.ode` file (single-function or multi-function with local callees
+    and custom `calling { ... }`, `spec_path=None`) or a legacy `(source_path, spec_path)` pair.
+    Refuses contractless functions loudly.
     """
     import ode_unified
     src_text = odec.read_source(source_path)
@@ -614,15 +1127,66 @@ def pack_verified(
         fn_rec = parsed["fns_by_name"].get(chosen_fn)
         if fn_rec is None:
             raise ValueError(f"{source_path}: function `{chosen_fn}` not found")
-        impl = ode_unified._select_impl(fn_rec, target or arch, source_path)
+        use_target = target or arch
+        impl = ode_unified._select_impl(fn_rec, use_target, source_path)
         if impl is not None and impl["calling_text"] is not None:
             raise ValueError(
                 f"{source_path}: exported C-ABI function `{chosen_fn}` cannot declare custom `calling {{ ... }}`"
             )
-        info = odec.compile_info(source_path, chosen_fn, target=target)
+
+        # Build symbol -> unified fn_name map and compile reachable local callees in topological order.
+        sym_to_fn = {f["symbol"]: f["name"] for f in parsed["fns"]}
+        compiled = {}
+        topo_fns = []
+        visiting = set()
+        visited = set()
+
+        def visit(name):
+            if name in visited or name in visiting:
+                return
+            visiting.add(name)
+            inf = odec.compile_info(source_path, name, target=use_target)
+            compiled[name] = inf
+            for csym in _called_symbols(inf["elf"]):
+                if csym == inf["symbol"]:
+                    continue  # direct self-recursion
+                if csym not in sym_to_fn:
+                    raise ValueError(
+                        f"{source_path}: `{name}` calls `{csym}`, which is not defined in this `.ode` file"
+                    )
+                visit(sym_to_fn[csym])
+            visiting.remove(name)
+            visited.add(name)
+            topo_fns.append(name)
+
+        visit(chosen_fn)
+
+        if len(topo_fns) > 1:
+            full_spec_text, _ = ode_unified.extract_spec(
+                parsed, target_key=use_target, fn_name=None, include_calling=True, src=source_path
+            )
+            unit_elfs = [compiled[n]["elf"] for n in topo_fns]
+            orig_order = [compiled[n]["symbol"] for n in topo_fns]
+            places_by_sym = {
+                compiled[n]["symbol"]: compiled[n].get("places", {}).get(compiled[n]["symbol"], "")
+                for n in topo_fns
+            }
+            return pack_bundle(
+                unit_elfs,
+                orig_order,
+                compiled[chosen_fn]["symbol"],
+                full_spec_text,
+                out_obj,
+                out_proof,
+                places_by_sym=places_by_sym,
+                glossary_out=glossary_out,
+                verify_bin=verify_bin,
+            )
+
+        info = compiled[chosen_fn]
         orig_sym = info["symbol"]
         spec_text, cname = ode_unified.extract_spec(
-            parsed, target_key=target or arch, fn_name=chosen_fn, include_calling=False, src=source_path
+            parsed, target_key=use_target, fn_name=chosen_fn, include_calling=False, src=source_path
         )
         canon = ode_canon.canonicalize(spec_text, contract_name=cname)
     else:
@@ -670,14 +1234,7 @@ def pack_verified(
 
     # Generate `.statement` and separate `.proof` via `proof-core/prove.py`.
     bound_spec = ode_canon.bind_symbol(canon["canonical"], hash_sym)
-    pl_text = info.get("places", {}).get(orig_sym, "")
-    if pl_text:
-        # Map author argument/function names inside loop place hints to canonical names.
-        import re as _re
-        inv_map = {orig: can for can, orig in canon["glossary"].items() if can != "contract" and "." not in can}
-        inv_map[orig_sym] = hash_sym
-        pat = _re.compile(r"\b(" + "|".join(_re.escape(k) for k in sorted(inv_map, key=len, reverse=True)) + r")\b")
-        pl_text = pat.sub(lambda m: inv_map[m.group(1)], pl_text)
+    pl_text = _map_places_text(info.get("places", {}).get(orig_sym, ""), canon["glossary"], orig_sym, hash_sym, True)
     with tempfile.TemporaryDirectory(prefix="ode_pack_") as tmp:
         stmt_path = os.path.join(tmp, "pack.statement")
         os.makedirs(os.path.dirname(os.path.abspath(out_proof)), exist_ok=True)

@@ -119,7 +119,7 @@ def read(obj, symbol, tab=None):
             kind, number, add = rel
             if kind != R_AARCH64_CALL26 or add != 0 or bind[placeholder] != 0: raise Stop(f"{symbol}+{at:#x}: a relocation that is no plain call of a function")
             name, sbind, skind, _, _, _ = symbols[number]
-            if not name or sbind not in (1, 2) or skind not in (0, 2): raise Stop(f"{symbol}+{at:#x}: a call of what is no named function")
+            if not name or sbind not in (0, 1, 2) or skind not in (0, 2) or (sbind == 0 and skind != 2): raise Stop(f"{symbol}+{at:#x}: a call of what is no named function")
             bind = dict(bind); bind[placeholder] = name
         elif way.late is not None and way.late[0] == "pc":
             if rel is not None: raise Stop(f"{symbol}+{at:#x}: a relocation at an internal branch")
