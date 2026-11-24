@@ -1,52 +1,71 @@
 # Ode for Security Auditors
 
-> **Documentation-Driven Design note:** This pocket guide describes the minimal auditor workflow we
-> are building toward (using `.ocl` — Ode Contract Language — and `ode audit`). Because Ode is an
-> active research prototype, [Appendix D](#appendix-d-prototype-status-todays-commands-vs-this-guide)
-> maps each step to the exact commands that already run in this repository today.
+> **Documentation-Driven Design note:** This pocket guide describes the minimal auditor workflow
+> using `.ocl` (Ode Contract Language) contracts and `ode audit`. [Appendix D](#appendix-d-prototype-status-todays-commands-vs-this-guide)
+> maps each step to the exact commands that run in this repository today and notes the pieces still
+> on our roadmap.
 
 So you are auditing a codebase, and it contains Ode code. You have come to the right place.
 
 Ode code ships with a complete formal proof that the compiled binary matches a short formal
-specification—called a **contract**—written in a `.ocl` (Ode Contract Language) file. Because the
-verifier checks the compiled machine-code bytes directly against that contract, you can ignore the
-`.ode` source files and `.proof` files, run `ode audit` on the binary, and focus your audit on the
+specification—called a **contract**—written in `.ocl` (Ode Contract Language). Because the verifier
+checks the compiled machine-code bytes directly against that contract, you can ignore the `.ode`
+source files and `.proof` files, run `ode audit` on the binary, and focus your audit on the
 contract.
 
 ---
 
 ## 1. Start From the Binary
 
-Begin with the compiled binary artifact (object file, library, or executable) that will actually run,
-and run:
+Begin with the compiled binary artifact that will actually run, and run:
 
 ```sh
-ode audit path/to/binary
+ode audit path/to/binary --proof path/to/binary.proof
 ```
 
-Each Ode binary carries its `.ocl` contract in a non-executable metadata section (while the proof
-lives in a separate `.proof` file, or is regenerated on demand). Running `ode audit` does four
-things:
+Each Ode binary carries its canonical `.ocl` contract in a non-executable `.ode.ocl` metadata
+section (while the proof lives in a separate `.proof` file, or is regenerated on demand). Running
+`ode audit` does four things:
 
-1. Extracts the single `.ocl` contract bound to the binary (or checks an external `--contract
-   FILE.ocl` you supply).
+1. Extracts the single canonical `.ocl` contract bound to the binary (and confirms it has no
+   comments, unused definitions, or author-chosen names).
 2. Verifies the proof directly against the binary's actual machine-code bytes.
 3. Confirms that the contract covers 100% of the binary's executable code and exported symbols, with
-   no extra code or startup initializers.
-4. Prints the full 64-character BLAKE3 hashes of both the binary and the canonical contract:
+   no extra code, extra exported symbols, or startup hooks (such as `.init_array`).
+4. Prints the full **52-character lowercase base-32 BLAKE3 hashes** (RFC 4648 base-32 without
+   padding: letters `a–z` and digits `2–7`) of both the binary and its canonical contract:
 
 ```text
-BINARY:   libblake3_ode.a
-  BLAKE3(binary):    9f3c...a812  (exact 64-hex digest)
-  BLAKE3(contract):  4a71...c09e  (canonical .ocl, 7 lines)
-  COVERAGE:          100% of executable code (14 functions, 3,761 instructions, 1 exported symbol)
+BINARY:   utf8_decode_2byte_x86_64.o
+  BLAKE3(binary):    wc4msdb3bowibu5e2resxtx7hahku4byjec4isfro737ikjiulda
+  BLAKE3(contract):  jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa  (embedded .ode.ocl)
+  SYMBOL:            ode_jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa
+  COVERAGE:          100% of executable code (1 function, 24 instructions, 92 B, 1 exported symbol, 0 hooks)
   VERDICT:           shown
 ```
 
-To inspect the exact contract text that was verified, run:
+### Contracts Have No Names
+
+An Ode contract has **no name**; its sole identifier is the 52-character base-32 BLAKE3 hash of its
+canonical `.ocl` form. Every exported linker symbol is derived directly from that hash
+(`ode_<52-character-hash>`), so swapping in a binary with a different contract fails at link time as
+well as during `ode audit`.
+
+When you already know the expected contract hash (for example, from a prior review or specification
+registry), pass it to the tool instead of comparing hashes by eye—full tool comparison defeats
+vanity look-alike hashes that match at the start and end:
 
 ```sh
-ode audit --show-contract path/to/binary
+ode audit path/to/binary --proof path/to/binary.proof \
+    --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa
+```
+
+To inspect the exact canonical contract text that was verified—or render it with your own local
+glossary of human-readable names—run:
+
+```sh
+ode audit --show-contract path/to/binary --proof path/to/binary.proof
+ode audit --show-contract --glossary my_names.json path/to/binary --proof path/to/binary.proof
 ```
 
 You do not need to read any `.ode` source files or `.proof` files. The verifier checks the binary
@@ -60,21 +79,26 @@ the prover.
 A security flaw or backdoor cannot exist in the binary code covered by this contract unless there is
 a mistake, a backdoor, or excess looseness in the contract itself.
 
-### A complete contract example (`utf8_decode_2byte.ocl`)
+### A complete canonical contract example
+
+Below is the exact canonical `.ocl` contract whose 52-character base-32 BLAKE3 hash is
+`jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa`. Notice that every helper and parameter uses a
+neutral slot (`f0`, `a0`, `a1`, `p0`): author-chosen names live only in an optional glossary file,
+never inside the contract hash.
 
 ```ocl
-def utf8_cp2(a) {
-    if len(a) == 0 then 4294967295
-    else if a[0] < 128 then a[0]
-    else if a[0] >= 194 && a[0] <= 223 then
-        if len(a) >= 2 && a[1] >= 128 && a[1] <= 191 then
-            (a[0] - 192) * 64 + (a[1] - 128)
+def f0(p0) {
+    if len(p0) == 0 then 4294967295
+    else if p0[0] < 128 then p0[0]
+    else if p0[0] >= 194 && p0[0] <= 223 then
+        if len(p0) >= 2 && p0[1] >= 128 && p0[1] <= 191 then (p0[0] - 192) * 64 + (p0[1] - 128)
         else 4294967295
     else 4294967295
 }
 
-contract ode_utf8_decode_2byte(input: n bytes, n: number) {
-    returns utf8_cp2(input)
+contract (a0: a1 bytes, a1: number) {
+    returns f0(a0)
+    trace depends on a0, a1
     stack 0
 }
 ```
@@ -83,48 +107,47 @@ contract ode_utf8_decode_2byte(input: n bytes, n: number) {
 
 Every Ode contract is a **closed world**: anything the contract does not explicitly permit, the
 binary is forbidden to do. On the example above, `shown` establishes for every valid input of every
-length `n` that the binary reads only `input[0 .. n]`, writes no caller memory, returns
-`utf8_cp2(input)` (rejecting empty inputs, truncated sequences, and overlong `0xC0`/`0xC1` encodings
-such as CVE-2008-2938), uses at most `0` bytes of stack, terminates, and returns cleanly.
+length `a1` that the binary reads only `a0[0 .. a1]`, writes no caller memory, returns `f0(a0)`
+(rejecting empty inputs, truncated sequences, and overlong `0xC0`/`0xC1` encodings such as
+CVE-2008-2938), uses at most `0` bytes of stack, terminates, and returns cleanly. Both our x86-64
+and AArch64 implementations share this exact same 52-character contract hash.
 
 ### Contract Clauses at a Glance
 
 The table below lists each clause that can appear inside a `contract` block, what it establishes,
-and what to verify while reading it.
+and what to check while reading it.
 
 | Clause | What it establishes | What to check in the contract |
 |---|---|---|
-| `arg: n bytes` / `64 bytes` / `cv` | Memory buffer passed by pointer (`cv` = 32 B, `block` = 64 B). Read-only unless written by `ensures`. | Size and layout match the protocol or API. |
-| `arg: number` | 64-bit unsigned integer argument. | No wraparound or sentinel-value ambiguity. |
-| `requires COND` | Precondition callers must satisfy (e.g. `no_overlap(out, inp)`, `n <= 64`). | Not contradictory, and no stronger than what callers guarantee. |
+| `a0: a1 bytes` / `64 bytes` / `cv` | Memory buffer passed by pointer (`cv` = 32 B, `block` = 64 B). Read-only unless written by `ensures`. | Size and layout match the protocol or API. |
+| `a1: number` | 64-bit unsigned integer argument. | No wraparound or sentinel-value ambiguity. |
+| `requires COND` | Precondition callers must satisfy (e.g. `no_overlap(a0, a1)`, `a1 <= 64`). | Not contradictory, and no stronger than what callers guarantee. |
 | `returns EXPR` | Exact value returned by the function. | Edge cases: empty input, maximum length, malformed input, error sentinel. |
-| `ensures out = EXPR` | Exact bytes written into output buffer `out`. | Every byte of `out` is specified and matches the standard. |
+| `ensures a0 = EXPR` | Exact bytes written into output buffer `a0`. | Every byte of `a0` is specified and matches the standard. |
 | `stack N` (or formula) | Upper bound on stack bytes used (including callees). | Fits safely inside the caller's stack budget. |
 | `decreases EXPR` | Non-negative measure that strictly drops on every recursive call. | Guarantees termination (no infinite loops). |
 | `needs avx` / `avx512` | CPU instruction set used by the binary. | Callers gate on CPU feature detection before invoking the function. |
 
 ### Testing the contract on concrete vectors
 
-To evaluate any `.ocl` definition on RFC vectors, boundary inputs, or regression cases:
+To evaluate any definition inside a `.ocl` contract on RFC vectors, boundary inputs, or regression
+cases:
 
 ```sh
-ode spec-test utf8_decode_2byte.ocl --call utf8_cp2 --input "[0x41]"          # -> 65 ('A')
-ode spec-test utf8_decode_2byte.ocl --call utf8_cp2 --input "[0xC0, 0xAF]"    # -> 4294967295
+ode spec-test utf8.ocl --call f0 --arg "[65]"          # -> 65 ('A')
+ode spec-test utf8.ocl --call f0 --arg "[192, 175]"    # -> 4294967295 (overlong rejected)
 ```
-
-If your team or community has already reviewed a standard contract (for example, RFC 8439 ChaCha20
-or BLAKE3), you can compare `BLAKE3(contract)` directly against that known 64-character hash.
 
 ---
 
 ## 3. Recording Your Audit Result
 
-When reporting your conclusion to your client, record **both** full 64-character BLAKE3 hashes from
-`ode audit`:
+When reporting your conclusion to your client, record **both** full 52-character base-32 BLAKE3
+hashes from `ode audit`:
 
 - **`BLAKE3(binary)`** binds your audit to the exact binary bytes you inspected and tested.
 - **`BLAKE3(contract)`** binds your audit to the exact canonical contract text that the binary was
-  proved to satisfy, so your client can verify that the contract matches their requirements.
+  proved to satisfy, so your client can check it automatically with `--expect-contract`.
 
 ---
 
@@ -137,20 +160,20 @@ Ode contracts support an optional `trace depends on` clause governing which inpu
 **instructions executed** and **memory addresses read or written**:
 
 - **Default (no `trace depends on` line):** No argument may influence control flow or memory
-  addresses. For example, our 20-round RFC 8439 ChaCha20 contract omits `trace depends on`:
+  addresses. For example, our 20-round RFC 8439 ChaCha20 block contract omits `trace depends on`:
   ```ocl
-  contract ode_chacha20_block(out: 64 bytes, state: 64 bytes) {
-      requires no_overlap(out, state)
-      ensures out = bytes_of(chacha20_block(words(state)))
+  contract (a0: 64 bytes, a1: 64 bytes) {
+      requires no_overlap(a0, a1)
+      ensures a0 = bytes_of(f0(words(a1)))
       stack 0
   }
   ```
   A `shown` verdict proves that neither the key, the nonce, nor the block counter affects which
   instructions run or which memory addresses are touched.
-- **Explicit `trace depends on X, Y`:** Branches and memory addresses may depend only on `X` and `Y`
-  (which may be inputs such as `len`, or computed values such as `same(want, tag)` for a tag check).
-  Every input omitted from that line is kept out of the timing trace.
-- **Optional `result depends on X`:** For contracts that return a named result without an explicit
+- **Explicit `trace depends on a0, a1`:** Branches and memory addresses may depend only on the
+  listed arguments or computed values (for example, `f1(a0, a1)` for a tag comparison). Every input
+  omitted from that line is kept out of the timing trace.
+- **Optional `result depends on a0`:** For contracts that return a named result without an explicit
   formula, restricts which inputs the returned integer may depend on.
 
 **Scope of the trace theorem:** `Ode.verify_all_trace` guarantees identical instruction streams and
@@ -162,13 +185,16 @@ execution (Spectre/Meltdown).
 
 ## Advanced Chapter B: Mixed-Language Binaries (Ode Linked With Rust or C)
 
-When a final executable combines verified Ode objects with Rust or C code, `ode audit final_binary`
-splits 100% of the executable code in `final_binary` into two lists:
+When a final executable combines verified Ode objects with Rust or C code, the audit splits 100% of
+the executable code in the final binary into two lists:
 
-1. **Verified by Ode:** each Ode code unit (with its `BLAKE3(binary)` slice, `BLAKE3(contract)`,
-   and mechanical FFI boundary check against the Rust/C call site).
-2. **Not verified by Ode:** all remaining objects and functions in `final_binary`, which you audit
+1. **Verified by Ode:** each Ode code unit (with its `BLAKE3(binary)`, `BLAKE3(contract)`, and
+   `ode_<52-character-hash>` link symbol checked against the Rust or C call site).
+2. **Not verified by Ode:** all remaining objects and functions in the binary, which you audit
    using your normal process.
+
+Where legacy C or Rust callers expect a fixed legacy name, keep that alias as a one-line wrapper
+outside Ode pointing to `ode_<52-character-hash>`, so the link still fails if the contract changes.
 
 ---
 
@@ -197,7 +223,8 @@ size, and how it is checked.
 |---|---|---|
 | **Lean 4 verifier (`proof-core/*.lean`)** | 8,673 lines across 8 core files | Formally proved sound in Lean 4 (zero `sorry`, standard axioms only). |
 | **Instruction tables (`core/x86.tab`, `arm64/arm64.tab`)** | 94 x86-64 rows; 54 AArch64 rows | Cross-checked against real x86-64 and Apple M6 hardware (`0` diffs); all `54/54` AArch64 rows formally proved against Google DeepMind's `arm64-semantics` (`arm64/agree/`). |
-| **Statement builder (`proof-core/statement.py`)** | 791 lines of Python | Tested and audited, not yet formally proved. Translates ELF `.o` + contract file into `.statement`. |
+| **Statement builder (`proof-core/statement.py`)** | 791 lines of Python | Tested and audited, not yet formally proved. Translates ELF `.o` + canonical `.ocl` into `.statement`. |
+| **Auditor front-end (`lang/ode_canon.py`, `lang/ode_audit.py`)** | 1,490 lines of Python | Tested with positive and adversarial controls (`lang/test_ode_canon.py`, `proof-core/test_ode_audit.py`); checks ELF structure, `.ode.ocl`, hashes, and invokes `odeverify`. |
 | **Lean 4 kernel / runtime** | External | Standard Lean 4 toolchain (independent verifiers for the same `.proof` format are a future goal). |
 
 *(Where a specification was translated from an existing Lean 4 specification using `lean2ode/`, see
@@ -213,11 +240,13 @@ still on our roadmap.
 
 | Target workflow in this guide | Status today (November 2026) | Exact command that runs today |
 |---|---|---|
-| File extension `.ocl` | Repository files currently use `.spec` | Replace `.ocl` with `.spec` (e.g. `factory/verified/utf8_decode_2byte_x86_64.spec`) |
-| Embedded `.ode.ocl` section + `ode audit BINARY` (100% coverage, BLAKE3 hashes) | **Planned** — today you pass ELF `.o` + `.spec` + `.proof` explicitly | `python3 proof-core/statement.py FILE.spec /tmp/s.statement FILE.o:SYM` then `./proof-core/.lake/build/bin/odeverify core/x86.tab /tmp/s.statement FILE.proof` (or `python3 -m unittest proof-core/test_hashr.py proof-core/test_hashr_arm64.py proof-core/test_chacha20.py factory/test_factory_native.py`) |
-| Mechanical FFI boundary & symbol-export check (mixed binaries) | **Planned** — inspect `extern "C"`, `requires`, CPU feature guards, and `.globl` exports manually for now | Inspect `src/ffi_ode.rs` and `nm`/`objdump`; see `paper/CALL-CONV-PROPOSAL.md` for the AArch64 `v8..v15` ABI fix currently enforced by tests and queued for the Lean model |
-| Cross-platform binary decoding (ELF, Mach-O, COFF) | `statement.py` decodes **ELF `.o`** today (both x86-64 and AArch64) | On macOS Mach-O / Windows COFF builds, compare linked `.text` instruction bytes against the verified ELF `.o` |
-| `ode spec-test FILE.ocl --call FN --input ...` | Works via Python `kcheck/ode.py` | `python3 -c 'import sys; sys.path.insert(0,"kcheck"); import ode; sp=ode.Spec(open("factory/verified/utf8_decode_2byte_x86_64.spec").read()); print(sp.call(ode.Numbers(),"utf8_cp2",[0xC0,0xAF]))'` |
+| Canonical `.ocl` + 52-char base-32 BLAKE3 ID + glossary split | **Working today** (`lang/ode_canon.py`) | `python3 lang/ode_tool.py canon factory/verified/utf8_decode_2byte_x86_64.spec` |
+| Hash-bound ELF `.o` (`ode_<52>` symbol + embedded `.ode.ocl` + separate `.proof`) | **Working today** for single-function ELF `.o` on x86-64 & AArch64 (`lang/ode_audit.py`) | `python3 lang/ode_tool.py pack factory/verified/utf8_decode_2byte_x86_64.ode factory/verified/utf8_decode_2byte_x86_64.spec --out /tmp/u.o --proof /tmp/u.proof` |
+| Binary-first `ode audit` (100% `.text` & symbol coverage, rejects `.init_array`, extra sections/symbols, trailing bytes, truncated hashes, runs `odeverify`) | **Working today** for ELF `.o` objects (`lang/ode_tool.py audit`; adversarial suite in `proof-core/test_ode_audit.py`) | `python3 lang/ode_tool.py audit /tmp/u.o --proof /tmp/u.proof --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa --show-contract` |
+| Concrete `.ocl` vector tests (`ode spec-test`) | **Working today** (`lang/ode_tool.py spec-test`) | `python3 lang/ode_tool.py spec-test /tmp/u.ocl --call f0 --arg "[192, 175]"` |
+| Multi-function linked archives / mixed-language executables (splitting Ode vs Rust/C code) | **Planned** — today audit each Ode ELF `.o` directly and inspect Rust/C `extern "C"` call sites | Run `ode_tool.py audit` on each `.o`; see `paper/CALL-CONV-PROPOSAL.md` for the AArch64 `v8..v15` ABI work |
+| Cross-platform binary decoding (Mach-O, COFF) | `ode_audit.py` and `statement.py` decode **ELF `.o`** today (x86-64 & AArch64) | On macOS Mach-O / Windows COFF builds, compare linked `.text` instruction bytes against the verified ELF `.o` |
+| Repository file extension migration (`.spec` -> `.ocl`) | Existing library files still use `.spec` while `ode_tool.py` accepts both `.ocl` and `.spec` | Pass any `.spec` or `.ocl` file directly to `ode_tool.py canon`, `pack`, `audit`, or `spec-test` |
 
 ### Where to go next
 

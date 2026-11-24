@@ -10,6 +10,12 @@ Commands:
                                      [--trace] [--align N] [--arg REG=VAL ...] [--max-* N]
     python3 lang/ode_tool.py compare A.ode B.ode [--fn NAME] [--spec SPEC.spec] [--arch ARCH]
                                      [--trace] [--align N] [--arg REG=VAL ...]
+    python3 lang/ode_tool.py canon   SPEC.ocl [--contract NAME] [--glossary-out FILE.json] [--json]
+    python3 lang/ode_tool.py pack    SOURCE.ode SPEC.ocl --out BIN.o --proof BIN.proof
+                                     [--fn NAME] [--glossary-out FILE.json] [--json]
+    python3 lang/ode_tool.py audit   BINARY --proof FILE.proof [--expect-contract B32]
+                                     [--contract FILE.ocl] [--glossary FILE.json] [--show-contract] [--json]
+    python3 lang/ode_tool.py spec-test FILE.ocl --call FN [--arg JSON ...] [--glossary FILE.json]
 """
 import argparse, json, os, re, shutil, subprocess, sys, tempfile, time
 
@@ -635,6 +641,37 @@ def main(argv=None):
 
     sub.add_parser("serve", help="persistent JSON-lines worker on stdin/stdout (keeps tables and Python warm)")
 
+    p_can = sub.add_parser("canon", help="canonicalize an .ocl/.spec contract and print its 52-char base-32 BLAKE3 ID")
+    p_can.add_argument("spec", help=".ocl or .spec contract file")
+    p_can.add_argument("--contract", default=None, help="contract name (required only if file defines multiple)")
+    p_can.add_argument("--glossary-out", default=None, help="write author-name glossary JSON to this path")
+    p_can.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
+
+    p_pck = sub.add_parser("pack", help="compile .ode, bind symbol to ode_<52-char-b32>, embed .ode.ocl, prove, and audit")
+    p_pck.add_argument("source", help=".ode source file")
+    p_pck.add_argument("spec", help=".ocl or .spec contract file")
+    p_pck.add_argument("--out", required=True, help="output ELF .o path (carries embedded .ode.ocl)")
+    p_pck.add_argument("--proof", required=True, help="output separate .proof file path")
+    p_pck.add_argument("--fn", default=None, help="function name in source (default: last in source)")
+    p_pck.add_argument("--glossary-out", default=None, help="write separate author glossary JSON")
+    p_pck.add_argument("--include", action="append", default=[], help="additional .ocl/.spec file(s) prepended before spec")
+    p_pck.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
+
+    p_aud = sub.add_parser("audit", help="binary-first auditor: check coverage, .ode.ocl, BLAKE3 hashes, and odeverify")
+    p_aud.add_argument("binary", help="compiled ELF binary (.o) to audit")
+    p_aud.add_argument("--proof", required=True, help="separate .proof file")
+    p_aud.add_argument("--expect-contract", default=None, help="full 52-char lowercase base-32 BLAKE3 contract ID")
+    p_aud.add_argument("--contract", default=None, help="optional external .ocl/.spec file (must match embedded .ode.ocl if present)")
+    p_aud.add_argument("--glossary", default=None, help="optional local glossary JSON for --show-contract rendering")
+    p_aud.add_argument("--show-contract", action="store_true", help="print the verified canonical contract")
+    p_aud.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
+
+    p_st = sub.add_parser("spec-test", help="evaluate a definition in a .ocl/.spec contract on concrete JSON inputs")
+    p_st.add_argument("spec", help=".ocl or .spec contract file")
+    p_st.add_argument("--call", required=True, help="definition name (canonical e.g. f0, or glossary name with --glossary)")
+    p_st.add_argument("--arg", action="append", default=[], help="JSON-encoded argument (repeat for each parameter)")
+    p_st.add_argument("--glossary", default=None, help="optional glossary JSON mapping canonical names to human names")
+
     args = ap.parse_args(argv)
     if args.cmd == "serve":
         for line in sys.stdin:
@@ -651,7 +688,7 @@ def main(argv=None):
             sys.stdout.flush()
         return 0
 
-    overrides = parse_arg_overrides(getattr(args, "arg", None))
+    overrides = parse_arg_overrides(getattr(args, "arg", None)) if args.cmd in ("check", "advise", "compare") else {}
     budgets = parse_budgets(args) if args.cmd in ("check", "advise", "compare") else {}
 
     if args.cmd == "check":
@@ -727,6 +764,59 @@ def main(argv=None):
         for sym, res in results.items():
             print(refute_conc.format_refutation(res, sym))
         return 1 if any_false else 0
+
+    if args.cmd == "canon":
+        import ode_canon
+        with open(args.spec, "r", encoding="utf-8") as f:
+            res = ode_canon.canonicalize(f.read(), contract_name=args.contract)
+        if args.glossary_out:
+            with open(args.glossary_out, "w", encoding="utf-8") as gf:
+                json.dump({"contract_id": res["contract_id"], "glossary": res["glossary"]}, gf, indent=2, sort_keys=True)
+                gf.write("\n")
+        if args.json:
+            print(json.dumps(res, indent=2, sort_keys=True))
+            return 0
+        print(f"BLAKE3(contract): {res['contract_id']}")
+        print(f"SYMBOL:           {res['symbol']}")
+        print("")
+        print(res["canonical"].rstrip())
+        return 0
+
+    if args.cmd == "pack":
+        import ode_audit
+        res = ode_audit.pack_verified(
+            args.source, args.spec, args.out, args.proof,
+            fn_name=args.fn, glossary_out=args.glossary_out, includes=args.include,
+        )
+        if args.json:
+            print(json.dumps(_json_safe(res), indent=2, sort_keys=True))
+            return 0 if res["verdict"] == "shown" else 1
+        print(ode_audit.format_audit_report(res))
+        return 0 if res["verdict"] == "shown" else 1
+
+    if args.cmd == "audit":
+        import ode_audit
+        res = ode_audit.audit_binary(
+            args.binary, args.proof,
+            expect_contract=args.expect_contract,
+            contract_path=args.contract,
+        )
+        glossary = None
+        if args.glossary:
+            with open(args.glossary, "r", encoding="utf-8") as gf:
+                gdata = json.load(gf)
+            glossary = gdata.get("glossary", gdata)
+        if args.json:
+            print(json.dumps(_json_safe(res), indent=2, sort_keys=True))
+            return 0 if res["verdict"] == "shown" else 1
+        print(ode_audit.format_audit_report(res, show_contract=args.show_contract, glossary=glossary))
+        return 0 if res["verdict"] == "shown" else 1
+
+    if args.cmd == "spec-test":
+        import ode_audit
+        val = ode_audit.run_spec_test(args.spec, args.call, args.arg, glossary_path=args.glossary)
+        print(json.dumps(val))
+        return 0
 
 
 if __name__ == "__main__":
