@@ -4,7 +4,7 @@
 2. Every one of the 8 locked tasks has a planted negative control that is refused (`verdict != "shown"`).
 3. The evaluation harness (`run_experiment.py --mode mock`) runs end to end through `ode_tool.py serve`,
    produces valid JSONL records, enforces Arm A vs Arm C behavior, and computes summary statistics."""
-import json, os, sys, tempfile, unittest
+import contextlib, io, json, os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -48,15 +48,18 @@ class CoderExperimentSelfTest(unittest.TestCase):
     def test_mock_harness_end_to_end(self):
         with tempfile.TemporaryDirectory() as td:
             out_path = os.path.join(td, "mock.jsonl")
-            rc = run_experiment.main([
-                "--mode", "mock",
-                "--models", "mock/tiny-coder",
-                "--arms", "arm_a", "arm_c",
-                "--tasks", "T1_x86_mix_step", "T4_arm_lead_zeros",
-                "--max-turns", "2",
-                "--out", out_path,
-            ])
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = run_experiment.main([
+                    "--mode", "mock",
+                    "--models", "mock/tiny-coder",
+                    "--arms", "arm_a", "arm_c",
+                    "--tasks", "T1_x86_mix_step", "T4_arm_lead_zeros",
+                    "--max-turns", "2",
+                    "--out", out_path,
+                ])
             self.assertEqual(rc, 0)
+            self.assertIn("mock/tiny-coder", buf.getvalue())
             with open(out_path) as f:
                 recs = [json.loads(l) for l in f if l.strip()]
             self.assertEqual(len(recs), 4)
