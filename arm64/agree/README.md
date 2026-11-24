@@ -1,6 +1,6 @@
 # Proving rows of `arm64.tab` against Google DeepMind's `arm64-semantics`
 
-This folder is a standalone Lean 4 package. It proves that **all 49 of the 49 rows** of `../arm64.tab`
+This folder is a standalone Lean 4 package. It proves that **all 54 of the 54 rows** of `../arm64.tab`
 agree with Google DeepMind's `arm64-semantics` (package `arm64` in `google-deepmind/code-verification` at
 commit `b0f729accbc21a0413e7ca4e1da43fa45b5f2e1b`, under Lean 4.34.0).
 
@@ -9,9 +9,9 @@ and Google DeepMind's `Arm64.Trusted.ISA` (`Decode` and `Eval`).
 
 ## What is proved
 
-The table below lists all 51 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
-misaligned-stack fault theorems for `ldr64_sp` and `str64_sp`), the row each theorem covers, and what it
-states for every valid choice of operands and matching starting states.
+The table below lists all 58 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
+misaligned-stack fault theorems for `ldr64_sp`, `str64_sp`, `ldr128_sp`, and `str128_sp`), the row each
+theorem covers, and what it states for every valid choice of operands and matching starting states.
 
 | Theorem | Row in `arm64.tab` | What it shows |
 |---|---|---|
@@ -66,8 +66,15 @@ states for every valid choice of operands and matching starting states.
 | `ArmAgree.agree_ext_12` | `ext_12` (`X = lanes(Y.3, Z.0, Z.1, Z.2)`) | For all `v0`..`v31` operands `x, y, z`, `EXT Vx.16B, Vy.16B, Vz.16B, #12` extracts 32-bit lanes `(Y.3, Z.0, Z.1, Z.2)`. |
 | `ArmAgree.agree_lsr_ri` | `lsr_ri` (`D = shr64(S, I)`) | For all `x0`..`x30` operands `d, s` and shift `I = 0..63` (`UBFM Xd, Xs, #I, #63`), both models write `s >>> I` into `d`. |
 | `ArmAgree.agree_orr_rrr` | `orr_rrr` (`D = or64(S, P)`) | For all `x0`..`x30` operands `d, s, p`, `ORR Xd, Xs, Xp` writes the 64-bit bitwise OR of `s` and `p` into `d`. |
+| `ArmAgree.agree_and_rrr` | `and_rrr` (`D = and64(S, P)`) | For all `x0`..`x30` operands `d, s, p`, `AND Xd, Xs, Xp` writes the 64-bit bitwise AND of `s` and `p` into `d`. |
+| `ArmAgree.agree_ldr128` | `ldr128` (`X = mem128(B, N)`) | For all `v0`..`v31` destination `x`, `x0`..`x30` base `b`, and 12-bit scaled offset `16*n`, when `b + 16*n + 16 <= 2^64` and readable, both models load the same four 32-bit little-endian lanes into `x`. |
+| `ArmAgree.agree_str128` | `str128` (`mem128(B, N) = X`) | For all `v0`..`v31` source `x`, `x0`..`x30` base `b`, and 12-bit scaled offset `16*n`, when `b + 16*n + 16 <= 2^64` and writable, both models store the same 16 little-endian bytes from `x`. |
+| `ArmAgree.agree_ldr128_sp_fault` | `ldr128_sp` (`X = mem128(on16(sp), N)`) | Whenever `sp` is not a multiple of 16, `Ode.exec` returns `none` and Google DeepMind's model raises `.Exception "SP alignment fault"`. |
+| `ArmAgree.agree_ldr128_sp` | `ldr128_sp` (`X = mem128(on16(sp), N)`) | Whenever `sp` is a multiple of 16 and the 16 bytes at `sp + 16*n` are readable without wrapping past `2^64`, both models load the same four 32-bit little-endian lanes into `x`. |
+| `ArmAgree.agree_str128_sp_fault` | `str128_sp` (`mem128(on16(sp), N) = X`) | Whenever `sp` is not a multiple of 16, `Ode.exec` returns `none` and Google DeepMind's model raises `.Exception "SP alignment fault"`. |
+| `ArmAgree.agree_str128_sp` | `str128_sp` (`mem128(on16(sp), N) = X`) | Whenever `sp` is a multiple of 16 and the 16 bytes at `sp + 16*n` are writable without wrapping past `2^64`, both models store the same 16 little-endian bytes from `x`. |
 
-All 51 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
+All 58 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
 with no `sorry`, no `admit`, and no `bv_decide` axioms.
 
 ## What else is checked
@@ -78,12 +85,12 @@ the register-name lookup results as hypotheses. Two executable tests close that 
 files:
 
 - `CheckMain.lean` (`agree-check`) reads `../arm64.tab` through `Ode.readTable`, checks that the table
-  has 49 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
+  has 54 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
   `Ode.findRow`, `Ode.regOf`, `Ode.vecOf`, and `Ode.readInt` across all 31 general registers, all 32
   vector registers, sample displacements, immediates, shifts, and signed branch offsets.
-- `test_agree.py` runs `agree-check`, compares encoded 32-bit words for all 49 rows against `../word.py`
+- `test_agree.py` runs `agree-check`, compares encoded 32-bit words for all 54 rows against `../word.py`
   (both `word.decode` and `word.encode`, verifying the proved set equals the full set of rows in
-  `arm64.tab`), and checks `#print axioms` on all 51 theorems.
+  `arm64.tab`), and checks `#print axioms` on all 58 theorems.
 
 ## Known differences between the two models
 

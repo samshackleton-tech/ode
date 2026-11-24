@@ -70,16 +70,18 @@ run (~26 s, 457 kB combined proof file): the two one-block compression kernels (
 stronger trace contract whose `trace depends on` line names only `len` and `plat` (neither `key`,
 `input`, nor `flags`).
 
-On **AArch64**, the standalone package `arm64/` defines a 49-row instruction table (`arm64/arm64.tab`)
-cross-checked on real Apple M6 and Ampere-1a hardware, with **all 49 of 49 rows (51 theorems)** formally
-proved in Lean 4 (`arm64/agree/`) to agree with Google DeepMind's `arm64-semantics`. Under the same
-soundness theorems, `proof-core` now verifies a **complete arbitrary-length single-threaded AArch64 BLAKE3
-hash** in one `odeverify` run (`0.41 s`, `79 kB` combined proof in `proof-core/proofs/b3hashr_arm64.proof`):
-all six functions (`blake3_servil_compress_in_place_arm64`, `b3l_pad_arm64`, `b3l_node_out_arm64`,
-`b3l_chunk_node_arm64`, `b3l_subtree_arm64`, and `b3l_hashr_arm64` — 368 machine instructions, 1,472 bytes),
+On **AArch64**, the standalone package `arm64/` defines a 54-row instruction table (`arm64/arm64.tab`)
+cross-checked on real Apple M6 hardware (9,400 instances, 0 differences), with **all 54 of 54 rows (58
+theorems)** formally proved in Lean 4 (`arm64/agree/`) to agree with Google DeepMind's `arm64-semantics`.
+Under the same soundness theorems, `proof-core` now verifies a **complete arbitrary-length single-threaded
+AArch64 BLAKE3 hash** in one `odeverify` run (`3.3 s`, `79 kB` combined proof in
+`proof-core/proofs/b3hashr_arm64.proof`): all seven functions (`blake3_servil_compress_in_place_arm64`,
+`b3l_pad_arm64`, `b3l_node_out_arm64`, `b3l_chunk_node_arm64`, the 4-way NEON 4-KiB subtree kernel
+`b3l_wide4_arm64`, `b3l_subtree_arm64`, and `b3l_hashr_arm64` — 1,832 machine instructions, 7,328 bytes),
 with `trace depends on len` only (neither `input`, `key`, nor `flags`), matching 226 official BLAKE3 test
 vectors and boundary lengths up to 102,400 bytes in both standard and keyed modes natively on Apple M6
-hardware (`proof-core/test_hashr_arm64.py`).
+hardware (`proof-core/test_hashr_arm64.py`, reaching `2.194 GiB/s` at 16 KiB on Apple M6 — 84.4% of
+official hand-written NEON `blake3 1.8.7`).
 
 Two companion soundness theorems (`Ode.verify_all_trace` and `Ode.verify_all_result`) cover timing-trace
 and return-value independence. For a function the verifier accepts, take two runs from inputs that agree
@@ -140,7 +142,7 @@ on a real processor and compared with a reference implementation. It takes hours
 | `AGENTS.md` | how the team works, and how to work here |
 | `kcheck/` | the tools and the examples (table below); `README.md` there is the dated record of evidence |
 | `core/` | the machine, written once as a table: `x86.tab` (one row an instruction form: how it is written, what it does, and under it the ways it is written in bytes) and what reads it (second table below) |
-| `proof-core/` | a small verifier in Lean 4, with soundness theorems proved from Lean's three standard axioms alone (`verify_all_sound`, `verify_all_trace`, `verify_all_result`); it verifies five shipped small functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, `ode_varint`), **all fourteen of the fourteen functions (3,761 of 3,761 instructions) of the single-threaded x86-64 BLAKE3 hash `kcheck/b3hashr.o` in one run**, and **all six of the six functions (368 instructions, 1,472 bytes) of the complete single-threaded AArch64 BLAKE3 hash `b3l_hashr_arm64` in one run** (`0.41 s`). Its `README.md` says what those theorems assume. No other folder needs Lean |
+| `proof-core/` | a small verifier in Lean 4, with soundness theorems proved from Lean's three standard axioms alone (`verify_all_sound`, `verify_all_trace`, `verify_all_result`); it verifies five shipped small functions (`ode_common`, `ode_adler32`, `ode_adler32_blocks`, `ode_adler32_blocks4`, `ode_varint`), **all fourteen of the fourteen functions (3,761 of 3,761 instructions) of the single-threaded x86-64 BLAKE3 hash `kcheck/b3hashr.o` in one run**, and **all seven of the seven functions (1,832 instructions, 7,328 bytes, including the 4-way NEON `b3l_wide4_arm64` kernel) of the complete single-threaded AArch64 BLAKE3 hash `b3l_hashr_arm64` in one run** (`3.3 s`). Its `README.md` says what those theorems assume. No other folder needs Lean |
 | `wide/` | BLAKE3's five kernels in Ode (`one.ode`, `k32.ode`, `p16.ode`), with tests that they assemble to the reference kernels' bytes |
 | `lang/` | `odec.py`: Ode source to an object. A function is the instructions its coder chose; `odec.py` expands the source's few fixed forms (a use of an inline function, a `for`, a name for a register, `:=`, a slot of the frame), chooses nothing, and has `core/asm.py` write each instruction's bytes by the table (`test_asm.py`: the same bytes as clang gives, for every function of the sources; an instruction is laid down as the instruction it names or refused, asked of every instruction of the sources changed in many ways and compared with clang; a refusal names the source line; `test_inline.py`: a use of an inline function is its instructions and nothing else, and a use that breaks what the function says of its registers is refused at its line; `test_places.py`: a loop's invariant is written at the loop, and the count of bytes that the prover needs with it is worked out; `test_forms.py`: a name for a register, `:=` and a frame of named fields give the instructions that the function has written out; a slot outside its field, and a store whose two sides have different sizes, are refused at their lines) |
 | `reference/blake3-servil/` | BLAKE3-Servil's own kernels and the official test vectors, for comparison |

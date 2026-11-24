@@ -1,20 +1,22 @@
 #!/usr/bin/env pypy3
-"""Verify the complete single-threaded AArch64 BLAKE3 hash (all 6 functions, 368 machine
-instructions = 1,472 bytes) in ONE `odeverify` call under the Lean 4 soundness theorem,
-check false-contract and mutated-code controls, and (on an AArch64 processor with `clang`)
-run the verified machine code on real hardware against official BLAKE3 test vectors up to
-102,400 bytes plus 150 boundary lengths in both plain and keyed modes.
+"""Verify the complete single-threaded AArch64 BLAKE3 hash (all 7 functions, 1,832 machine
+instructions = 7,328 bytes, including the 4-way NEON 4-KiB subtree kernel `b3l_wide4_arm64`)
+in ONE `odeverify` call under the Lean 4 soundness theorem, check false-contract and
+mutated-code controls, and (on an AArch64 processor with `clang`) run the verified machine
+code on real hardware against official BLAKE3 test vectors up to 102,400 bytes plus 150
+boundary lengths in both plain and keyed modes.
 
     pypy3 test_hashr_arm64.py        (Lean tests skipped without `lake`; hardware run on AArch64)
 
-The six AArch64 functions verified together in topological order:
-  1. blake3_servil_compress_in_place_arm64   (116 insns, NEON one-block kernel)
-  2. b3l_pad_arm64                           ( 15 insns, chunk-tail padding)
-  3. b3l_node_out_arm64                      ( 17 insns, node compression)
-  4. b3l_chunk_node_arm64                    ( 45 insns, chunk block loop + pad)
-  5. b3l_subtree_arm64                       ( 84 insns, recursive Merkle subtree)
-  6. b3l_hashr_arm64                         ( 91 insns, top-level hash + keyed hash)
-Total: 6 of 6 functions, 368 instructions (1,472 bytes), `trace depends on len` only.
+The seven AArch64 functions verified together in topological order:
+  1. blake3_servil_compress_in_place_arm64   ( 116 insns, NEON one-block kernel)
+  2. b3l_pad_arm64                           (  15 insns, chunk-tail padding)
+  3. b3l_node_out_arm64                      (  17 insns, node compression)
+  4. b3l_chunk_node_arm64                    (  45 insns, chunk block loop + pad)
+  5. b3l_wide4_arm64                         (1455 insns, 4-way NEON 4-KiB subtree kernel)
+  6. b3l_subtree_arm64                       (  93 insns, recursive Merkle subtree)
+  7. b3l_hashr_arm64                         (  91 insns, top-level hash + keyed hash)
+Total: 7 of 7 functions, 1,832 instructions (7,328 bytes), `trace depends on len` only.
 """
 import os, platform, shutil, subprocess, sys, tempfile, unittest
 
@@ -33,7 +35,8 @@ FUNCTIONS = [
     ("pad_arm64.ode",      "pad",             "b3l_pad_arm64",                          15),
     ("hash_arm64.ode",     "node_out_arm64",  "b3l_node_out_arm64",                     17),
     ("hash_arm64.ode",     "chunk_node_arm64","b3l_chunk_node_arm64",                   45),
-    ("hash_arm64.ode",     "subtree_arm64",   "b3l_subtree_arm64",                      84),
+    ("wide4_arm64.ode",    "wide4_arm64",     "b3l_wide4_arm64",                      1455),
+    ("hash_arm64.ode",     "subtree_arm64",   "b3l_subtree_arm64",                      93),
     ("hash_arm64.ode",     "hashr_arm64",     "b3l_hashr_arm64",                        91),
 ]
 KEPT_PROOF = os.path.join(HERE, "proofs", "b3hashr_arm64.proof")
@@ -42,7 +45,7 @@ KEPT_PROOF = os.path.join(HERE, "proofs", "b3hashr_arm64.proof")
 def full_spec_text(change=lambda t: t):
     with open(os.path.join(KCHECK, "blake3.spec")) as f:
         text = f.read()
-    for name in ("compress_arm64.spec", "pad_arm64.spec", "hash_arm64.spec"):
+    for name in ("compress_arm64.spec", "pad_arm64.spec", "hash_arm64.spec", "wide4_arm64.spec"):
         with open(os.path.join(ARM, name)) as f:
             text += "\n" + f.read()
     return change(text)
@@ -326,9 +329,9 @@ class FullAArch64Hash(unittest.TestCase):
     def tearDownClass(cls):
         cls.tmp.cleanup()
 
-    def test_all_6_functions_368_instructions_shown_in_one_call(self):
+    def test_all_7_functions_1832_instructions_shown_in_one_call(self):
         lines = statement.statement(self.spec, self.fns)
-        self.assertEqual(lines.count("machine arm64"), 6)
+        self.assertEqual(lines.count("machine arm64"), 7)
         cur, counts = None, {}
         for line in lines:
             if line.startswith("fn "):
@@ -338,7 +341,7 @@ class FullAArch64Hash(unittest.TestCase):
                 counts[cur] += 1
         expected = {sym: n for _, _, sym, n in FUNCTIONS}
         self.assertEqual(counts, expected)
-        self.assertEqual(sum(counts.values()), 368)
+        self.assertEqual(sum(counts.values()), 1832)
         ok, said = verify_all(self.spec, self.fns)
         self.assertTrue(ok, said)
         self.assertEqual(said, "shown")
@@ -346,19 +349,21 @@ class FullAArch64Hash(unittest.TestCase):
     def test_false_contracts_are_refused(self):
         cases = [
             ("b3l_hashr_arm64", "drop trace depends on len",
-             once("    trace depends on len\n    stack 656 + 272 * bits(len / 1024)",
-                  "    stack 656 + 272 * bits(len / 1024)")),
+             once("    trace depends on len\n    stack 1120 + 272 * bits(len / 1024)",
+                  "    stack 1120 + 272 * bits(len / 1024)")),
             ("b3l_hashr_arm64", "too-small stack base",
-             once("stack 656 + 272 * bits(len / 1024)",
-                  "stack 640 + 272 * bits(len / 1024)")),
+             once("stack 1120 + 272 * bits(len / 1024)",
+                  "stack 1104 + 272 * bits(len / 1024)")),
             ("b3l_hashr_arm64", "drop no_overlap",
              once("contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {\n    requires no_overlap(out, input, key)\n",
                   "contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {\n")),
             ("b3l_subtree_arm64", "drop decreases len",
              once("    decreases len\n", "")),
+            ("b3l_wide4_arm64", "too-small wide4 stack",
+             once("    stack 544\n", "    stack 528\n")),
             ("b3l_subtree_arm64", "too-small recursive stack step",
-             once("stack 352 + 272 * bits((len - 1) / 1024)",
-                  "stack 352 + 256 * bits((len - 1) / 1024)")),
+             once("stack 816 + 272 * bits((len - 1) / 1024)",
+                  "stack 816 + 256 * bits((len - 1) / 1024)")),
             ("b3l_node_out_arm64", "drop no_overlap",
              once("    requires no_overlap(out, nd)\n", "")),
         ]
@@ -373,8 +378,8 @@ class FullAArch64Hash(unittest.TestCase):
              once("    x2 := 8\n    bl b3l_node_out_arm64",
                   "    x2 := 0\n    bl b3l_node_out_arm64")),
             ("b3l_subtree_arm64", "parent flag 4 -> 0",
-             once("    x9 := 4\n    orr x4, flags, x9\n    bl blake3_servil_compress_in_place_arm64",
-                  "    x9 := 0\n    orr x4, flags, x9\n    bl blake3_servil_compress_in_place_arm64")),
+             once("      x9 := 4\n      orr x4, flags, x9\n      bl blake3_servil_compress_in_place_arm64",
+                  "      x9 := 0\n      orr x4, flags, x9\n      bl blake3_servil_compress_in_place_arm64")),
             ("b3l_chunk_node_arm64", "CHUNK_END flag 2 -> 0",
              once("  x10 := 2\n  orr x9, x9, x10",
                   "  x10 := 0\n  orr x9, x9, x10")),

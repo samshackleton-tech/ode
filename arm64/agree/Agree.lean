@@ -5878,4 +5878,533 @@ theorem agree_and_rrr (d s p : Fin 31)
     exact (Nat.mod_eq_of_lt hlt).symm
   exact agreeState_writeGpr hA d _ val hgv _ _ hnext hpc
 
+/-! ## Rows 51–54: `ldr128`, `str128`, `ldr128_sp`, `str128_sp` (128-bit vector load/store with scaled immediate offset) -/
+
+def guardsBeforeSimdLdStImm : List (BitVec 32 × BitVec 32) :=
+  guardsBeforeSimdThreeSame.take 48
+
+private theorem decode_at_simdLdStImm {w base fixed : BitVec 32}
+    (hw : w &&& fixed = base &&& fixed)
+    (hnop : ((base &&& fixed) == (0xd503201f#32 &&& fixed)) = false)
+    (hskip : skipsAll base fixed guardsBeforeSimdLdStImm = true)
+    (hmatch : (0x3f000000#32 &&& fixed = 0x3f000000#32) ∧ (base &&& 0x3f000000#32 = 0x3d000000#32)) :
+    Arm64.decode w =
+      match Arm64.decodeSimdLoadStoreType (w.extractLsb' 30 2).toNat (w.extractLsb' 22 2).toNat with
+      | some (isLoad, sz, scale) =>
+        let offset : BitVec 64 := ((w.extractLsb' 10 12).zeroExtend 64) <<< scale
+        let addr := Arm64.AddrMode.Offset (Arm64.Reg.fromSPBits (w.extractLsb' 5 5)) offset
+        if isLoad then some (.ldrSimd sz (w.extractLsb' 0 5) addr)
+        else some (.strSimd sz (w.extractLsb' 0 5) addr)
+      | none => none := by
+  have sk : ∀ m c, (m, c) ∈ guardsBeforeSimdLdStImm → ((w &&& m) == c) = false :=
+    fun m c hm => skipsAll_mem hw hskip hm
+  have hhit : w &&& 0x3f000000#32 = 0x3d000000#32 := by rw [mask_of_fixed hw hmatch.1, hmatch.2]
+  unfold Arm64.decode
+  simp only [word_ne_of_fixed hw hnop,
+             sk 0xffe0001f#32 0xd4000001#32 (by decide), sk 0xffe0001f#32 0xd4200000#32 (by decide),
+             sk 0xfffff01f#32 0xd503201f#32 (by decide), sk 0xffff0000#32 0x00000000#32 (by decide),
+             sk 0xffffffe0#32 0xd50b7420#32 (by decide), sk 0x1f000000#32 0x10000000#32 (by decide),
+             sk 0x1f800000#32 0x11000000#32 (by decide), sk 0x1f800000#32 0x12000000#32 (by decide),
+             sk 0x1f800000#32 0x12800000#32 (by decide), sk 0x1f800000#32 0x13000000#32 (by decide),
+             sk 0x7f800000#32 0x13800000#32 (by decide), sk 0x7c000000#32 0x14000000#32 (by decide),
+             sk 0x7e000000#32 0x34000000#32 (by decide), sk 0x7e000000#32 0x36000000#32 (by decide),
+             sk 0xff000010#32 0x54000000#32 (by decide), sk 0xff9ffc1f#32 0xd61f0000#32 (by decide),
+             sk 0x1f000000#32 0x0a000000#32 (by decide), sk 0x1f200000#32 0x0b000000#32 (by decide),
+             sk 0x1fe00000#32 0x0b200000#32 (by decide), sk 0x1fe0fc00#32 0x1a000000#32 (by decide),
+             sk 0x3fe00410#32 0x3a400000#32 (by decide), sk 0x3fe00800#32 0x1a800000#32 (by decide),
+             sk 0x7fff0000#32 0x5ac00000#32 (by decide), sk 0x7fe0e000#32 0x1ac04000#32 (by decide),
+             sk 0x7fe00000#32 0x1ac00000#32 (by decide), sk 0x7f000000#32 0x1b000000#32 (by decide),
+             sk 0x7f800000#32 0x28000000#32 (by decide), sk 0x3e000000#32 0x28000000#32 (by decide),
+             sk 0xffc00000#32 0xf9800000#32 (by decide), sk 0xffe00c00#32 0xf8800000#32 (by decide),
+             sk 0xffe00c00#32 0xf8a00800#32 (by decide), sk 0x3f200c00#32 0x38200000#32 (by decide),
+             sk 0x3f200c00#32 0x19000000#32 (by decide), sk 0x3f000000#32 0x39000000#32 (by decide),
+             sk 0x3f000000#32 0x38000000#32 (by decide), sk 0x3f000000#32 0x18000000#32 (by decide),
+             sk 0x3f000000#32 0x1c000000#32 (by decide), sk 0x3fbffc00#32 0x089ffc00#32 (by decide),
+             sk 0x3fff7c00#32 0x085f7c00#32 (by decide), sk 0x3fe07c00#32 0x08007c00#32 (by decide),
+             sk 0xbfff0000#32 0x887f0000#32 (by decide), sk 0xbfe00000#32 0x88200000#32 (by decide),
+             sk 0x3fa07c00#32 0x08a07c00#32 (by decide), sk 0xbfa07c00#32 0x08207c00#32 (by decide),
+             sk 0xffd00000#32 0xd5100000#32 (by decide), sk 0xfffff01f#32 0xd503301f#32 (by decide),
+             sk 0x3f800000#32 0x2c000000#32 (by decide), sk 0x3e000000#32 0x2c000000#32 (by decide),
+             Bool.false_eq_true, ↓reduceIte]
+  rw [hhit]
+  simp only [beq_self_eq_true, ↓reduceIte]
+  rfl
+
+private theorem write128_eq_store16 {st : Ode.State} {gs : Arm64.State} {a : Nat}
+    (hA : AgreeState st gs) (x : Fin 32) (hfit : a + 16 ≤ Ode.M64) {addr : Nat} (haddr : addr < Ode.M64) :
+    let vx := gs.readVReg128 (BitVec.ofNat 5 x.val)
+    let mem' := Ode.store (Ode.store (Ode.store (Ode.store st.mem a (st.vec x.val 0) 4)
+                  (a + 4) (st.vec x.val 1) 4) (a + 8) (st.vec x.val 2) 4) (a + 12) (st.vec x.val 3) 4
+    ((gs.mem.write128 (BitVec.ofNat 64 a) vx).read8 (BitVec.ofNat 64 addr)).toNat = (mem' addr).val := by
+  intro vx mem'
+  have hadd8 : BitVec.ofNat 64 a + 8#64 = BitVec.ofNat 64 (a + 8) := by
+    apply BitVec.eq_of_toNat_eq; simp only [BitVec.toNat_add, BitVec.toNat_ofNat]
+    unfold Ode.M64 at hfit
+    rw [Nat.mod_eq_of_lt (by omega), show 8 % 2 ^ 64 = 8 by decide, Nat.mod_eq_of_lt (by omega), Nat.mod_eq_of_lt (by omega)]
+  have hlo64 : (vx.extractLsb' 0 64).toNat = st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1 := by
+    have h0 := hA.vec x ⟨0, by decide⟩; have h1 := hA.vec x ⟨1, by decide⟩
+    have hv0 : (vx.extractLsb' 0 64).extractLsb' 0 32 = vx.extractLsb' 0 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk]
+    have hv1 : (vx.extractLsb' 0 64).extractLsb' 32 32 = vx.extractLsb' 32 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk]
+    have hloLt : (vx.extractLsb' 0 64).toNat < 2 ^ 64 := (vx.extractLsb' 0 64).isLt
+    have e0 := congrArg BitVec.toNat hv0; have e1 := congrArg BitVec.toNat hv1
+    rw [BitVec.extractLsb'_toNat] at e0 e1; simp only [Nat.shiftRight_eq_div_pow] at e0 e1
+    change (vx.extractLsb' 0 32).toNat = st.vec x.val 0 at h0
+    change (vx.extractLsb' 32 32).toNat = st.vec x.val 1 at h1
+    omega
+  have hhi64 : (vx.extractLsb' 64 64).toNat = st.vec x.val 2 + 2 ^ 32 * st.vec x.val 3 := by
+    have h2 := hA.vec x ⟨2, by decide⟩; have h3 := hA.vec x ⟨3, by decide⟩
+    have hv2 : (vx.extractLsb' 64 64).extractLsb' 0 32 = vx.extractLsb' 64 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk, show k < 64 by omega]
+    have hv3 : (vx.extractLsb' 64 64).extractLsb' 32 32 = vx.extractLsb' 96 32 := by
+      apply BitVec.eq_of_getLsbD_eq; intro k hk; simp [hk, show 32 + k < 64 by omega, show 64 + (32 + k) = 96 + k by omega]
+    have hhiLt : (vx.extractLsb' 64 64).toNat < 2 ^ 64 := (vx.extractLsb' 64 64).isLt
+    have e2 := congrArg BitVec.toNat hv2; have e3 := congrArg BitVec.toNat hv3
+    rw [BitVec.extractLsb'_toNat] at e2 e3; simp only [Nat.shiftRight_eq_div_pow] at e2 e3
+    change (vx.extractLsb' 64 32).toNat = st.vec x.val 2 at h2
+    change (vx.extractLsb' 96 32).toNat = st.vec x.val 3 at h3
+    omega
+  have hstore8 : ∀ m p w0 w1 (hw0 : w0 < 2 ^ 32) addr,
+      (Ode.store (Ode.store m p w0 4) (p + 4) w1 4 addr).val =
+      (Ode.store m p (w0 + 2 ^ 32 * w1) 8 addr).val := by
+    intro m p w0 w1 hw0 addr
+    rw [store_at, store_at, store_at]
+    by_cases hhi : p + 4 ≤ addr ∧ addr < p + 4 + 4
+    · simp only [hhi, show p ≤ addr ∧ addr < p + 8 by omega, and_self, ↓reduceIte]
+      have hk : addr - p = 4 + (addr - (p + 4)) := by omega
+      rw [hk, Nat.pow_add, show (256 : Nat) ^ 4 = 2 ^ 32 by decide, ← Nat.div_div_eq_div_mul]
+      rw [Nat.add_mul_div_left _ _ (by decide : 0 < 2 ^ 32), Nat.div_eq_of_lt hw0, Nat.zero_add]
+    · simp only [hhi, ↓reduceIte]
+      by_cases hlo : p ≤ addr ∧ addr < p + 4
+      · simp only [hlo, show p ≤ addr ∧ addr < p + 8 by omega, and_self, ↓reduceIte]
+        have hd : 256 ^ (addr - p) * 256 ∣ 2 ^ 32 := by
+          have : addr - p + 1 ≤ 4 := by omega
+          have := Nat.pow_dvd_pow 256 this
+          simpa [Nat.pow_succ] using this
+        obtain ⟨q, hq⟩ := hd
+        have hq2 : 2 ^ 32 * w1 = 256 ^ (addr - p) * (256 * (q * w1)) := by
+          rw [hq, Nat.mul_assoc, Nat.mul_assoc]
+        have hpos : 0 < 256 ^ (addr - p) := Nat.pow_pos (by decide)
+        rw [hq2, Nat.add_mul_div_left _ _ hpos, Nat.add_mul_mod_self_left]
+      · simp only [hlo, show ¬(p ≤ addr ∧ addr < p + 8) by omega, ↓reduceIte]
+  have hw0 : st.vec x.val 0 < 2 ^ 32 := by rw [← hA.vec x ⟨0, by decide⟩]; exact (vx.extractLsb' 0 32).isLt
+  have hw2 : st.vec x.val 2 < 2 ^ 32 := by rw [← hA.vec x ⟨2, by decide⟩]; exact (vx.extractLsb' 64 32).isLt
+  let stMid : Ode.State := { st with mem := Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8 }
+  let gsMid : Arm64.State := gs.setMem (gs.mem.write64 (BitVec.ofNat 64 a) (vx.extractLsb' 0 64))
+  have hMid : AgreeState stMid gsMid :=
+    ⟨hA.running, hA.gpr, hA.sp, hA.vec,
+     fun p hp => write64_eq_store hA (by omega) (vx.extractLsb' 0 64) _ hlo64 hp,
+     hA.pc, hA.zf, hA.cf⟩
+  have hstep2 := write64_eq_store hMid (a := a + 8) (by omega) (vx.extractLsb' 64 64) _ hhi64 haddr
+  unfold Arm64.Memory.write128
+  rw [hadd8]
+  change ((gsMid.mem.write64 (BitVec.ofNat 64 (a + 8)) (vx.extractLsb' 64 64)).read8 (BitVec.ofNat 64 addr)).toNat = _
+  rw [hstep2]
+  change (Ode.store (Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8) (a + 8) (st.vec x.val 2 + 2 ^ 32 * st.vec x.val 3) 8 addr).val = (mem' addr).val
+  have h1 := hstore8 st.mem a (st.vec x.val 0) (st.vec x.val 1) hw0
+  have heqm : Ode.store (Ode.store st.mem a (st.vec x.val 0) 4) (a + 4) (st.vec x.val 1) 4 =
+              Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8 := by
+    funext p; exact Fin.ext (h1 p)
+  have h2 := hstore8 (Ode.store st.mem a (st.vec x.val 0 + 2 ^ 32 * st.vec x.val 1) 8) (a + 8) (st.vec x.val 2) (st.vec x.val 3) hw2 addr
+  simpa [mem', heqm, show a + 8 + 4 = a + 12 by omega] using h2.symm
+
+def encodeLdr128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0x3dc00000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def encodeStr128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) : BitVec 32 :=
+  0x3d800000#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| (BitVec.ofNat 32 b.val <<< 5) ||| BitVec.ofNat 32 x.val
+
+def encodeLdr128Sp (x : Fin 32) (n : Fin 4096) : BitVec 32 :=
+  0x3dc003e0#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| BitVec.ofNat 32 x.val
+
+def encodeStr128Sp (x : Fin 32) (n : Fin 4096) : BitVec 32 :=
+  0x3d8003e0#32 ||| (BitVec.ofNat 32 n.val <<< 10) ||| BitVec.ofNat 32 x.val
+
+def effectLdr128 : List Ode.Stmt :=
+  [.vset (.name "X") (.call "mem128" [.name "B", .name "N"])]
+
+def effectStr128 : List Ode.Stmt :=
+  [.vset (.call "mem128" [.name "B", .name "N"]) (.name "X")]
+
+def effectLdr128Sp : List Ode.Stmt :=
+  [.vset (.name "X") (.call "mem128" [.call "on16" [.name "sp"], .name "N"])]
+
+def effectStr128Sp : List Ode.Stmt :=
+  [.vset (.call "mem128" [.call "on16" [.name "sp"], .name "N"]) (.name "X")]
+
+private theorem shift4_imm12 (n : Fin 4096) :
+    (BitVec.ofNat 12 n.val).zeroExtend 64 <<< 4 = BitVec.ofNat 64 (n.val * 16) := by
+  apply BitVec.eq_of_toNat_eq
+  simp only [BitVec.toNat_shiftLeft, BitVec.toNat_setWidth, BitVec.toNat_ofNat, Nat.shiftLeft_eq]
+  have := n.isLt; omega
+
+theorem decode_ldr128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeLdr128 x b n) =
+      some (.ldrSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 16)))) := by
+  have hx : x.val < 2 ^ 5 := x.isLt
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeLdr128 x b n &&& 0xffc00000#32 = 0x3dc00000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeLdr128; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdLdStImm hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeLdr128 x b n).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeLdr128; simp only [extract_or]
+    have h0 : (0x3dc00000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeLdr128 x b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeLdr128; simp only [extract_or]
+    have h0 : (0x3dc00000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeLdr128 x b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeLdr128; simp only [extract_or]
+    have h0 : (0x3dc00000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeLdr128 x b n).extractLsb' 30 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeLdr128 x b n).extractLsb' 22 2 = 3#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  simp only [ex_sz, ex_opc, ex_n, ex_b, ex_x, fromSPBits_fin31, BitVec.toNat_ofNat, Arm64.decodeSimdLoadStoreType]
+  rw [shift4_imm12 n]; rfl
+
+theorem decode_str128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) :
+    Arm64.decode (encodeStr128 x b n) =
+      some (.strSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 16)))) := by
+  have hx : x.val < 2 ^ 5 := x.isLt
+  have hb : b.val < 2 ^ 5 := by omega
+  have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeStr128 x b n &&& 0xffc00000#32 = 0x3d800000#32 &&& 0xffc00000#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hb (by decide)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffc00000#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h3
+    unfold encodeStr128; simp only [BitVec.and_or_distrib_right, h1, h2, h3, BitVec.or_zero]
+  rw [decode_at_simdLdStImm hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeStr128 x b n).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeStr128; simp only [extract_or]
+    have h0 : (0x3d800000#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 0 5 = 0#5 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_b : (encodeStr128 x b n).extractLsb' 5 5 = BitVec.ofNat 5 b.val := by
+    unfold encodeStr128; simp only [extract_or]
+    have h0 : (0x3d800000#32).extractLsb' 5 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 5 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 5 5 = BitVec.ofNat 5 b.val := extract_field_hit (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 5 5 = 0#5 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_n : (encodeStr128 x b n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeStr128; simp only [extract_or]
+    have h0 : (0x3d800000#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 b.val <<< 5).extractLsb' 10 12 = 0#12 := extract_field_miss hb (by omega)
+    have h3 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h3; rw [h0, h1, h2, h3]; simp
+  have ex_sz : (encodeStr128 x b n).extractLsb' 30 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeStr128 x b n).extractLsb' 22 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  simp only [ex_sz, ex_opc, ex_n, ex_b, ex_x, fromSPBits_fin31, BitVec.toNat_ofNat, Arm64.decodeSimdLoadStoreType]
+  rw [shift4_imm12 n]; rfl
+
+theorem decode_ldr128_sp (x : Fin 32) (n : Fin 4096) :
+    Arm64.decode (encodeLdr128Sp x n) =
+      some (.ldrSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset .sp (BitVec.ofNat 64 (n.val * 16)))) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeLdr128Sp x n &&& 0xffc003e0#32 = 0x3dc003e0#32 &&& 0xffc003e0#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h2
+    unfold encodeLdr128Sp; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+  rw [decode_at_simdLdStImm hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeLdr128Sp x n).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeLdr128Sp; simp only [extract_or]
+    have h0 : (0x3dc003e0#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_n : (encodeLdr128Sp x n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeLdr128Sp; simp only [extract_or]
+    have h0 : (0x3dc003e0#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_b : (encodeLdr128Sp x n).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_sz : (encodeLdr128Sp x n).extractLsb' 30 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeLdr128Sp x n).extractLsb' 22 2 = 3#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  simp only [ex_sz, ex_opc, ex_n, ex_b, ex_x, BitVec.toNat_ofNat, Arm64.decodeSimdLoadStoreType]
+  rw [shift4_imm12 n]; rfl
+
+theorem decode_str128_sp (x : Fin 32) (n : Fin 4096) :
+    Arm64.decode (encodeStr128Sp x n) =
+      some (.strSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset .sp (BitVec.ofNat 64 (n.val * 16)))) := by
+  have hx : x.val < 2 ^ 5 := x.isLt; have hn : n.val < 2 ^ 12 := n.isLt
+  have hf : encodeStr128Sp x n &&& 0xffc003e0#32 = 0x3d8003e0#32 &&& 0xffc003e0#32 := by
+    have h1 : (BitVec.ofNat 32 n.val <<< 10) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hn (by decide)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0) &&& 0xffc003e0#32 = 0#32 := field_and_eq_zero hx (by decide)
+    simp only [BitVec.shiftLeft_zero] at h2
+    unfold encodeStr128Sp; simp only [BitVec.and_or_distrib_right, h1, h2, BitVec.or_zero]
+  rw [decode_at_simdLdStImm hf (by decide) (by decide) ⟨by decide, by decide⟩]
+  have ex_x : (encodeStr128Sp x n).extractLsb' 0 5 = BitVec.ofNat 5 x.val := by
+    unfold encodeStr128Sp; simp only [extract_or]
+    have h0 : (0x3d8003e0#32).extractLsb' 0 5 = 0#5 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 0 5 = 0#5 := extract_field_miss hn (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 0 5 = BitVec.ofNat 5 x.val := extract_field_hit (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_n : (encodeStr128Sp x n).extractLsb' 10 12 = BitVec.ofNat 12 n.val := by
+    unfold encodeStr128Sp; simp only [extract_or]
+    have h0 : (0x3d8003e0#32).extractLsb' 10 12 = 0#12 := by decide
+    have h1 : (BitVec.ofNat 32 n.val <<< 10).extractLsb' 10 12 = BitVec.ofNat 12 n.val := extract_field_hit (by omega)
+    have h2 : (BitVec.ofNat 32 x.val <<< 0).extractLsb' 10 12 = 0#12 := extract_field_miss hx (by omega)
+    simp only [BitVec.shiftLeft_zero] at h2; rw [h0, h1, h2]; simp
+  have ex_b : (encodeStr128Sp x n).extractLsb' 5 5 = 31#5 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_sz : (encodeStr128Sp x n).extractLsb' 30 2 = 0#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  have ex_opc : (encodeStr128Sp x n).extractLsb' 22 2 = 2#2 := by rw [extract_of_fixed hf (by decide)]; decide
+  simp only [ex_sz, ex_opc, ex_n, ex_b, ex_x, BitVec.toNat_ofNat, Arm64.decodeSimdLoadStoreType]
+  rw [shift4_imm12 n]; rfl
+
+private theorem bind_lookup_N {bind : Ode.Bind} {n : Fin 4096}
+    (hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int)) :
+    (bind.lookup "N").bind ((Option.map fun i => (i % (Ode.M64 : Int)).toNat) ∘ Ode.readInt) = some (n.val * 16) := by
+  have hmodN : ((n.val * 16 : Int) % (Ode.M64 : Int)).toNat = n.val * 16 := by unfold Ode.M64; have := n.isLt; omega
+  cases hlu : bind.lookup "N" with
+  | none => simp [hlu] at hbn
+  | some s =>
+    simp only [hlu, Option.bind_some] at hbn ⊢
+    simp [Function.comp, hbn, hmodN]
+
+theorem agree_ldr128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hbb : Ode.regOf bind "B" = some (armSlot b.val))
+    (hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 16 + 16 ≤ Ode.M64)
+    (hread : gs.mem.canRead (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 16)) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeLdr128 x b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLdr128, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 16 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  let a := st.reg (armSlot b.val) + n.val * 16
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 16) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let lanes : List Nat := [Ode.load st.mem a 4, Ode.load st.mem (a + 4) 4,
+                           Ode.load st.mem (a + 8) 4, Ode.load st.mem (a + 12) 4]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "mem128" [.name "B", .name "N"])) st1
+  have hvalN := bind_lookup_N hbn
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectLdr128, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.read a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectLdr128, Ode.execStmt, Ode.lanesOf, Ode.values, Ode.sumList,
+          hbx, hvalN, Ode.value, Ode.isNumberLetter, hbb, ha_mod, hall,
+          List.range, List.range.loop, lanes, a, st', st1, st0]
+  have hread' : gs.mem.canRead (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.ldrSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 16)))) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) (gs.mem.read128 (BitVec.ofNat 64 a))).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.SimdMemSize.bytes,
+          Arm64.Memory.readSimdSized, hea_bv, hread']
+  refine ⟨_, st', decode_ldr128 x b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x (gs.mem.read128 (BitVec.ofNat 64 a)) lanes (u 0) ?_ _ _ hnext hpc
+  intro j
+  rw [read128_lane_eq_load hA hfit j]
+  match j with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
+  | ⟨2, _⟩ => rfl
+  | ⟨3, _⟩ => rfl
+
+theorem agree_str128 (x : Fin 32) (b : Fin 31) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hbx : Ode.vecOf bind "X" = some x.val) (hbb : Ode.regOf bind "B" = some (armSlot b.val))
+    (hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hfit : st.reg (armSlot b.val) + n.val * 16 + 16 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 16)) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeStr128 x b n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr128, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hnlt : n.val * 16 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  let a := st.reg (armSlot b.val) + n.val * 16
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.readReg64 (.gpr (BitVec.ofNat 5 b.val)) + BitVec.ofNat 64 (n.val * 16) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.gpr b]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let mem' := Ode.store (Ode.store (Ode.store (Ode.store st.mem a (st.vec x.val 0) 4)
+                (a + 4) (st.vec x.val 1) 4) (a + 8) (st.vec x.val 2) 4) (a + 12) (st.vec x.val 3) 4
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := mem' }
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.call "mem128" [.name "B", .name "N"]) (.name "X")) st1
+  have hvalN := bind_lookup_N hbn
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectStr128, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectStr128, Ode.execStmt, Ode.vecArg, Ode.values, Ode.sumList,
+          hbx, hvalN, Ode.value, Ode.isNumberLetter, hbb, ha_mod, hall,
+          List.range, List.range.loop, mem', a, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  let vx := gs.readVReg128 (BitVec.ofNat 5 x.val)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.strSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset (.gpr (BitVec.ofNat 5 b.val)) (BitVec.ofNat 64 (n.val * 16)))) gs =
+      (gs.setMem (gs.mem.write128 (BitVec.ofNat 64 a) vx)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.SimdMemSize.bytes,
+          Arm64.Memory.writeSimdSized, hea_bv, hwrite', vx]
+  refine ⟨_, st', decode_str128 x b n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  exact agreeState_setMem hA mem' (gs.mem.write128 (BitVec.ofNat 64 a) vx)
+    (fun addr haddr => write128_eq_store16 hA x hfit haddr) _ _ hnext hpc
+
+theorem agree_ldr128_sp_fault (x : Fin 32) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hbx : Ode.vecOf bind "X" = some x.val)
+    (_hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hmis : st.reg Ode.RSP % 16 ≠ 0) :
+    ∃ ginst,
+      Arm64.decode (encodeLdr128Sp x n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLdr128Sp, bind, next⟩ u st = none ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).status = .Exception "SP alignment fault" := by
+  have hsp : gs.spAligned = false := by rw [spAligned_iff hA]; exact decide_eq_false hmis
+  refine ⟨_, decode_ldr128_sp x n, ?_, ?_⟩
+  · simp [Ode.exec, Ode.execAll, effectLdr128Sp, Ode.execStmt, Ode.lanesOf, Ode.values,
+          Ode.value, Ode.memSize, Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, Ode.prim, regIndex_sp, hbx, hmis]
+  · simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.State.setStatus, hsp]
+
+theorem agree_ldr128_sp (x : Fin 32) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hbx : Ode.vecOf bind "X" = some x.val)
+    (hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hal : st.reg Ode.RSP % 16 = 0)
+    (hfit : st.reg Ode.RSP + n.val * 16 + 16 ≤ Ode.M64)
+    (hread : gs.mem.canRead (gs.sp + BitVec.ofNat 64 (n.val * 16)) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeLdr128Sp x n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectLdr128Sp, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hsp : gs.spAligned = true := by rw [spAligned_iff hA]; exact decide_eq_true hal
+  have hnlt : n.val * 16 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  let a := st.reg Ode.RSP + n.val * 16
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.sp + BitVec.ofNat 64 (n.val * 16) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.sp]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let lanes : List Nat := [Ode.load st.mem a 4, Ode.load st.mem (a + 4) 4,
+                           Ode.load st.mem (a + 8) 4, Ode.load st.mem (a + 12) 4]
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := Ode.setVec st0 x.val lanes (u 0)
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.name "X") (.call "mem128" [.call "on16" [.name "sp"], .name "N"])) st1
+  have hvalN := bind_lookup_N hbn
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectLdr128Sp, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.read a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectLdr128Sp, Ode.execStmt, Ode.lanesOf, Ode.values, Ode.sumList,
+          hbx, hvalN, Ode.value, Ode.memSize, Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, Ode.prim, regIndex_sp,
+          hal, ha_mod, hall, List.range, List.range.loop, lanes, a, st', st1, st0]
+  have hread' : gs.mem.canRead (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.ldrSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset .sp (BitVec.ofNat 64 (n.val * 16)))) gs =
+      (gs.writeVReg128 (BitVec.ofNat 5 x.val) (gs.mem.read128 (BitVec.ofNat 64 a))).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.State.readReg64, Arm64.SimdMemSize.bytes,
+          Arm64.Memory.readSimdSized, hsp, hea_bv, hread']
+  refine ⟨_, st', decode_ldr128_sp x n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  apply agreeState_writeVec hA x (gs.mem.read128 (BitVec.ofNat 64 a)) lanes (u 0) ?_ _ _ hnext hpc
+  intro j
+  rw [read128_lane_eq_load hA hfit j]
+  match j with
+  | ⟨0, _⟩ => rfl
+  | ⟨1, _⟩ => rfl
+  | ⟨2, _⟩ => rfl
+  | ⟨3, _⟩ => rfl
+
+theorem agree_str128_sp_fault (x : Fin 32) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hbx : Ode.vecOf bind "X" = some x.val)
+    (_hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hmis : st.reg Ode.RSP % 16 ≠ 0) :
+    ∃ ginst,
+      Arm64.decode (encodeStr128Sp x n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr128Sp, bind, next⟩ u st = none ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).status = .Exception "SP alignment fault" := by
+  have hsp : gs.spAligned = false := by rw [spAligned_iff hA]; exact decide_eq_false hmis
+  refine ⟨_, decode_str128_sp x n, ?_, ?_⟩
+  · simp [Ode.exec, Ode.execAll, effectStr128Sp, Ode.execStmt, Ode.vecArg, Ode.values,
+          Ode.value, Ode.memSize, Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, Ode.prim, regIndex_sp, hbx, hmis]
+  · simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.State.setStatus, hsp]
+
+theorem agree_str128_sp (x : Fin 32) (n : Fin 4096) (bind : Ode.Bind)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs) (hbx : Ode.vecOf bind "X" = some x.val)
+    (hbn : (bind.lookup "N").bind Ode.readInt = some (n.val * 16 : Int))
+    (hal : st.reg Ode.RSP % 16 = 0)
+    (hfit : st.reg Ode.RSP + n.val * 16 + 16 ≤ Ode.M64)
+    (hwrite : gs.mem.canWrite (gs.sp + BitVec.ofNat 64 (n.val * 16)) 16 = true)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeStr128Sp x n) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectStr128Sp, bind, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hsp : gs.spAligned = true := by rw [spAligned_iff hA]; exact decide_eq_true hal
+  have hnlt : n.val * 16 < Ode.M64 := by unfold Ode.M64; have := n.isLt; omega
+  let a := st.reg Ode.RSP + n.val * 16
+  have ha_mod : a % Ode.M64 = a := Nat.mod_eq_of_lt (by omega)
+  have hea_bv : gs.sp + BitVec.ofNat 64 (n.val * 16) = BitVec.ofNat 64 a := by
+    apply BitVec.eq_of_toNat_eq
+    simp only [BitVec.toNat_add, BitVec.toNat_ofNat, hA.sp]
+    unfold Ode.M64 at hfit hnlt
+    rw [Nat.mod_eq_of_lt hnlt, Nat.mod_eq_of_lt (by omega)]
+  let mem' := Ode.store (Ode.store (Ode.store (Ode.store st.mem a (st.vec x.val 0) 4)
+                (a + 4) (st.vec x.val 1) 4) (a + 8) (st.vec x.val 2) 4) (a + 12) (st.vec x.val 3) 4
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let st1 : Ode.State := { st0 with mem := mem' }
+  let st' : Ode.State := Ode.noted bind st0 (.vset (.call "mem128" [.call "on16" [.name "sp"], .name "N"]) (.name "X")) st1
+  have hvalN := bind_lookup_N hbn
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectStr128Sp, bind, next⟩ u st = some (.next st') := by
+    have hall : Ode.allowed Ode.Perm.all.write a 16 = true := by simp [Ode.allowed, Ode.Perm.all]
+    simp [Ode.exec, Ode.execAll, effectStr128Sp, Ode.execStmt, Ode.vecArg, Ode.values, Ode.sumList,
+          hbx, hvalN, Ode.value, Ode.memSize, Ode.isNumberLetter, Ode.isRegisterLetter, Ode.regOf, Ode.prim, regIndex_sp,
+          hal, ha_mod, hall, List.range, List.range.loop, mem', a, st', st1, st0]
+  have hwrite' : gs.mem.canWrite (BitVec.ofNat 64 a) 16 = true := by rwa [← hea_bv]
+  let vx := gs.readVReg128 (BitVec.ofNat 5 x.val)
+  have hgs : Arm64.execInstWithSvc Arm64.noSyscalls
+      (.strSimd .Q128 (BitVec.ofNat 5 x.val) (.Offset .sp (BitVec.ofNat 64 (n.val * 16)))) gs =
+      (gs.setMem (gs.mem.write128 (BitVec.ofNat 64 a) vx)).advancePC := by
+    simp [Arm64.execInstWithSvc, Arm64.checkAddrSPAligned, Arm64.AddrMode.baseReg,
+          Arm64.checkRegSPAligned, Arm64.evalAddrMode, Arm64.State.readReg64, Arm64.SimdMemSize.bytes,
+          Arm64.Memory.writeSimdSized, hsp, hea_bv, hwrite', vx]
+  refine ⟨_, st', decode_str128_sp x n, hexec, ?_, by rw [hgs]; rfl⟩
+  rw [hgs]
+  exact agreeState_setMem hA mem' (gs.mem.write128 (BitVec.ofNat 64 a) vx)
+    (fun addr haddr => write128_eq_store16 hA x hfit haddr) _ _ hnext hpc
+
 end ArmAgree

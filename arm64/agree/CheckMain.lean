@@ -45,9 +45,9 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that ALL 50 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
-  if table.size != 50 then
-    throw (IO.userError s!"expected 50 rows in arm64.tab, found {table.size}")
+  -- 1. Check that ALL 54 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
+  if table.size != 54 then
+    throw (IO.userError s!"expected 54 rows in arm64.tab, found {table.size}")
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -84,6 +84,10 @@ def main (args : List String) : IO Unit := do
   checkRow table "shl_4s" ArmAgree.effectShl4s
   checkRow table "ld1_4s" ArmAgree.effectLd1_4s
   checkRow table "st1_4s" ArmAgree.effectSt1_4s
+  checkRow table "ldr128" ArmAgree.effectLdr128
+  checkRow table "str128" ArmAgree.effectStr128
+  checkRow table "ldr128_sp" ArmAgree.effectLdr128Sp
+  checkRow table "str128_sp" ArmAgree.effectStr128Sp
   checkRow table "lsl_ri" ArmAgree.effectLslRi
   checkRow table "lsr_ri" ArmAgree.effectLsrRi
   checkRow table "orr_rrr" ArmAgree.effectOrrRrr
@@ -504,5 +508,33 @@ def main (args : List String) : IO Unit := do
           if wordsOnly then
             IO.println s!"lsr_ri {hex32 (ArmAgree.encodeLsrRi ⟨i, hi⟩ ⟨s, Nat.mod_lt _ (by decide)⟩ ⟨sh, hsh⟩)} {insLsr}"
 
+  for x in List.range 32 do
+    let b := (x + 5) % 31
+    for n in [0, 1, 3, 15, 255, 4095] do
+      if x == 0 || x == 7 || x == 31 || n == 3 then
+        let insL := s!"(.ldr128 {x} .x{b} {n * 16})"
+        let insS := s!"(.str128 {x} .x{b} {n * 16})"
+        let insLS := s!"(.ldr128_sp {x} {n * 16})"
+        let insSS := s!"(.str128_sp {x} {n * 16})"
+        checkInstance table "ldr128" insL (fun bd =>
+          Ode.vecOf bd "X" == some x && Ode.regOf bd "B" == some (ArmAgree.armSlot b) &&
+          (bd.lookup "N").bind Ode.readInt == some ((n * 16 : Nat) : Int))
+        checkInstance table "str128" insS (fun bd =>
+          Ode.vecOf bd "X" == some x && Ode.regOf bd "B" == some (ArmAgree.armSlot b) &&
+          (bd.lookup "N").bind Ode.readInt == some ((n * 16 : Nat) : Int))
+        checkInstance table "ldr128_sp" insLS (fun bd =>
+          Ode.vecOf bd "X" == some x &&
+          (bd.lookup "N").bind Ode.readInt == some ((n * 16 : Nat) : Int))
+        checkInstance table "str128_sp" insSS (fun bd =>
+          Ode.vecOf bd "X" == some x &&
+          (bd.lookup "N").bind Ode.readInt == some ((n * 16 : Nat) : Int))
+        if hx : x < 32 then
+          if hn : n < 4096 then
+            if wordsOnly then
+              IO.println s!"ldr128 {hex32 (ArmAgree.encodeLdr128 ⟨x, hx⟩ ⟨b, Nat.mod_lt _ (by decide)⟩ ⟨n, hn⟩)} {insL}"
+              IO.println s!"str128 {hex32 (ArmAgree.encodeStr128 ⟨x, hx⟩ ⟨b, Nat.mod_lt _ (by decide)⟩ ⟨n, hn⟩)} {insS}"
+              IO.println s!"ldr128_sp {hex32 (ArmAgree.encodeLdr128Sp ⟨x, hx⟩ ⟨n, hn⟩)} {insLS}"
+              IO.println s!"str128_sp {hex32 (ArmAgree.encodeStr128Sp ⟨x, hx⟩ ⟨n, hn⟩)} {insSS}"
+
   if !wordsOnly then
-    IO.println "agree-check: all 50 rows match arm64.tab"
+    IO.println "agree-check: all 54 rows match arm64.tab"

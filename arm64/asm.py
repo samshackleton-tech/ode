@@ -59,9 +59,9 @@ def _compile_template(asm_text):
             m = re.fullmatch(r"v([XYZ])\.(4s|16b|8h|2d)", p)
             groups.append((m.group(1), "vec"))
             pat.append(r"v(\d+)\." + re.escape(m.group(2)))
-        elif re.fullmatch(r"d([XYZ])", p):
+        elif re.fullmatch(r"[dq]([XYZ])", p):
             groups.append((p[1], "vec"))
-            pat.append(r"d(\d+)")
+            pat.append(re.escape(p[0]) + r"(\d+)")
         elif p in ("I", "N"):
             groups.append((p, "imm"))
             pat.append(r"(#?-?(?:0[xX][0-9a-fA-F_]+|\d[\d_]*))")

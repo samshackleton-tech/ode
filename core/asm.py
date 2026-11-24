@@ -349,7 +349,9 @@ def write(line, mn, ops):
         row_name, k = VEC128[mn]
         x = int(ops[0][3:])
         if k == "L": return ("fixed", pick(row_name, {"X": x, "Y": x, "Z": int(ops[1][3:])}, lambda w: w.kind == "L"))
-        return ("fixed", pick(row_name, {"X": x, "Y": int(ops[1][3:]), "Z": int(ops[2][3:])}, lambda w: w.kind == k))
+        y, z = int(ops[1][3:]), int(ops[2][3:])
+        if k == "V" and mn in ("vpaddd", "vpxor", "vpor") and y < 8 <= z: y, z = z, y
+        return ("fixed", pick(row_name, {"X": x, "Y": y, "Z": z}, lambda w: w.kind == k))
     if ops[0].startswith("zmm"):
         mk = re.fullmatch(r"zmm(\d+)\s*\{k(\d+)\}", ops[0])
         if mk:

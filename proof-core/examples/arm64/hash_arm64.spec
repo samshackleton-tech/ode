@@ -34,12 +34,12 @@ contract b3l_subtree_arm64(out: cv, input: len bytes, len: number, kf: keyed, t:
     ensures out = subtree(kf.key, kf.flags, t, input)
     trace depends on len
     decreases len
-    stack 352 + 272 * bits((len - 1) / 1024)
+    stack 816 + 272 * bits((len - 1) / 1024)
 }
 
 contract b3l_hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {
     requires no_overlap(out, input, key)
     ensures out = bytes_of(hash_words(words(key), flags, input))
     trace depends on len
-    stack 656 + 272 * bits(len / 1024)
+    stack 1120 + 272 * bits(len / 1024)
 }

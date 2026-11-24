@@ -148,62 +148,72 @@ fn subtree_arm64 as "b3l_subtree_arm64" {
   counter := x4
   ldr flags, [kf, 32]
 
-  cmp length, 1025
-  if uge {
-    // Largest power of two k with 1024 * k < length
-    sub x9, length, 1
-    lsr x9, x9, 10
-    add x9, x9, 1
-    k := 1
-    x10 := 2
-    loop {
-      cmp x10, x9
-      break if uge
-      k := x10
-      lsl x10, x10, 1
-    }
-    lsl n, k, 10
-
-    // Left subtree into blk[0..32]
-    x0 := &blk
-    x1 := inp
-    x2 := n
-    x3 := kf
-    x4 := counter
-    bl b3l_subtree_arm64
-
-    // Right subtree into blk[32..64]
-    x0 := &blk
-    add x0, x0, 32
-    add x1, inp, n
-    sub x2, length, n
-    x3 := kf
-    add x4, counter, k
-    bl b3l_subtree_arm64
-
-    // Parent compression into out[0..32]
-    copy_cv(out, kf, x9, x10, v0, v1)
+  x9 := 4096
+  cmp length, x9
+  if eq {
     x0 := out
-    x1 := &blk
-    x2 := 64
-    x3 := 0
-    x9 := 4
-    orr x4, flags, x9
-    bl blake3_servil_compress_in_place_arm64
-  } else {
-    x9 := &nd
-    copy_cv(x9, kf, x10, x11, v0, v1)
-    x0 := &nd
     x1 := inp
-    x2 := length
+    x2 := kf
     x3 := counter
-    x4 := flags
-    bl b3l_chunk_node_arm64
+    bl b3l_wide4_arm64
+  } else {
+    cmp length, 1025
+    if uge {
+      // Largest power of two k with 1024 * k < length
+      sub x9, length, 1
+      lsr x9, x9, 10
+      add x9, x9, 1
+      k := 1
+      x10 := 2
+      loop {
+        cmp x10, x9
+        break if uge
+        k := x10
+        lsl x10, x10, 1
+      }
+      lsl n, k, 10
 
-    x0 := out
-    x1 := &nd
-    x2 := 0
-    bl b3l_node_out_arm64
+      // Left subtree into blk[0..32]
+      x0 := &blk
+      x1 := inp
+      x2 := n
+      x3 := kf
+      x4 := counter
+      bl b3l_subtree_arm64
+
+      // Right subtree into blk[32..64]
+      x0 := &blk
+      add x0, x0, 32
+      add x1, inp, n
+      sub x2, length, n
+      x3 := kf
+      add x4, counter, k
+      bl b3l_subtree_arm64
+
+      // Parent compression into out[0..32]
+      copy_cv(out, kf, x9, x10, v0, v1)
+      x0 := out
+      x1 := &blk
+      x2 := 64
+      x3 := 0
+      x9 := 4
+      orr x4, flags, x9
+      bl blake3_servil_compress_in_place_arm64
+    } else {
+      x9 := &nd
+      copy_cv(x9, kf, x10, x11, v0, v1)
+      x0 := &nd
+      x1 := inp
+      x2 := length
+      x3 := counter
+      x4 := flags
+      bl b3l_chunk_node_arm64
+
+      x0 := out
+      x1 := &nd
+      x2 := 0
+      bl b3l_node_out_arm64
+    }
   }
 
   x26 := saved[8]

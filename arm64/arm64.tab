@@ -119,6 +119,14 @@ ld1_4s       | ld1 {vX.4s}, [B64]           | .ld1 X .B            | X = mem128(
              = 0 1 001100 0 1 0 00000 0111 10 BBBBB XXXXX
 st1_4s       | st1 {vX.4s}, [B64]           | .st1 X .B            | mem128(B, 0) = X
              = 0 1 001100 0 0 0 00000 0111 10 BBBBB XXXXX
+ldr128       | ldr qX, [B64, N]             | .ldr128 X .B N       | X = mem128(B, N)
+             = 00 111 1 01 11 nnnnnnnnnnnn BBBBB XXXXX ; N=n*16
+str128       | str qX, [B64, N]             | .str128 X .B N       | mem128(B, N) = X
+             = 00 111 1 01 10 nnnnnnnnnnnn BBBBB XXXXX ; N=n*16
+ldr128_sp    | ldr qX, [sp, N]              | .ldr128_sp X N       | X = mem128(on16(sp), N)
+             = 00 111 1 01 11 nnnnnnnnnnnn 11111 XXXXX ; N=n*16
+str128_sp    | str qX, [sp, N]              | .str128_sp X N       | mem128(on16(sp), N) = X
+             = 00 111 1 01 10 nnnnnnnnnnnn 11111 XXXXX ; N=n*16
 eor_v        | eor vX.16b, vY.16b, vZ.16b   | .eor X Y Z           | X = each32(xor32, Y, Z)
              = 0 1 1 01110 00 1 ZZZZZ 00011 1 YYYYY XXXXX
 orr_v        | orr vX.16b, vY.16b, vZ.16b   | .orr X Y Z           | X = each32(or32, Y, Z)

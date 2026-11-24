@@ -64,8 +64,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 50)
-        self.assertEqual(len(self.ways), 50)
+        self.assertEqual(len(self.rows), 54)
+        self.assertEqual(len(self.ways), 54)
 
     def test_standalone_package_has_no_ode_verifier_dependencies(self):
         """`arm64/` is an independent AArch64 ISA package: no code file here may import
@@ -200,7 +200,7 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("43 rows, each as the assembler writes it and as the table writes it, 8600 instances: 0 differ from this processor", last)
+        self.assertIn("47 rows, each as the assembler writes it and as the table writes it, 9400 instances: 0 differ from this processor", last)
         self.assertIn("0 of the assembler's words are not the table's; 7 rows are not run: b, b_eq, b_ne, b_hs, b_lo, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)
