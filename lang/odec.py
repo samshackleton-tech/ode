@@ -249,10 +249,38 @@ def inline_of(src, n, name, params, clauses, body, target="x86_64"):
     return Inline(name, n, ps, distinct, changes, body)
 
 
-def source(text, src="the source"):
+def source(text, src="the source", target=None):
     """A source read: (its target, its data, its inline functions, its functions), as
-    (name, [(name, [words])], {name: Inline}, [(name, symbol, lines, the number of the first of them)])."""
-    target, data, inlines, fns, lines, i = None, [], {}, [], text.split("\n"), 0
+    (name, [(name, [words])], {name: Inline}, [(name, symbol, lines, the number of the first of them)]).
+    Supports both unified `.ode` files (with contracts on `fn` and multi-arch `for <arch>` blocks)
+    and legacy `.ode` files (`fn name as "sym" { ... }`)."""
+    import ode_unified
+    if ode_unified.is_unified(text):
+        parsed = ode_unified.parse_unified(text, src)
+        arch, u_data, u_inlines, u_fns = ode_unified.target_source_view(parsed, target, src)
+        inlines = {}
+        for raw_inl, lno in u_inlines:
+            ilines = raw_inl.split("\n")
+            head, h = ilines[0].split("//")[0].rstrip(), 0
+            while not head.endswith("{"):
+                h += 1
+                if h >= len(ilines):
+                    stop(src, lno, "the head of an inline fn ends with `{`")
+                head += " " + ilines[h].split("//")[0].strip()
+            m = re.match(r"^inline\s+fn\s+(\w+)\s*\((.*?)\)(.*)\{$", head)
+            if not m:
+                stop(src, lno, "the head of an inline fn is `inline fn NAME(P: CLASS, ...) distinct(P, Q) changes P, ... {`")
+            if m.group(1) in inlines:
+                stop(src, lno, f"a second inline fn {m.group(1)}")
+            body = [(lno + k, ilines[k]) for k in range(h + 1, len(ilines) - 1)]
+            inlines[m.group(1)] = inline_of(src, lno, m.group(1), m.group(2), m.group(3), body, arch)
+        for f in inlines.values():
+            for p, _ in f.params:
+                if p in inlines:
+                    stop(src, f.line, f"inline fn {f.name}: the parameter `{p}` has an inline function's name")
+        return arch, u_data, inlines, u_fns
+
+    parsed_target, data, inlines, fns, lines, i = None, [], {}, [], text.split("\n"), 0
     def closing(i):                     # the `}` that stands alone at the start of a line, after line i
         j = i + 1
         while j < len(lines) and lines[j] != "}": j += 1
@@ -262,9 +290,9 @@ def source(text, src="the source"):
         line = lines[i]
         m = re.match(r"^target\s+(\w+)\s*$", line.split("//")[0])
         if m:
-            if target is not None or inlines or fns: stop(src, i + 1, "`target` stands once, before the functions")
+            if parsed_target is not None or inlines or fns: stop(src, i + 1, "`target` stands once, before the functions")
             if m.group(1) not in TARGETS: stop(src, i + 1, f"odec.py makes code for {', '.join(TARGETS)} only, not for {m.group(1)}")
-            target = m.group(1); i += 1; continue
+            parsed_target = m.group(1); i += 1; continue
         m = re.match(r"^data\s+(\w+)\s*=\s*(.*)$", line)
         if m:
             data.append((m.group(1), [int(w.strip().replace("_", ""), 0) for w in m.group(2).split("//")[0].split(",")])); i += 1; continue
@@ -278,7 +306,7 @@ def source(text, src="the source"):
             if not m: stop(src, i + 1, "the head of an inline fn is `inline fn NAME(P: CLASS, ...) distinct(P, Q) changes P, ... {`")
             j = closing(h)
             if m.group(1) in inlines: stop(src, i + 1, f"a second inline fn {m.group(1)}")
-            inlines[m.group(1)] = inline_of(src, i + 1, m.group(1), m.group(2), m.group(3), [(k + 1, lines[k]) for k in range(h + 1, j)], target or TARGETS[0])
+            inlines[m.group(1)] = inline_of(src, i + 1, m.group(1), m.group(2), m.group(3), [(k + 1, lines[k]) for k in range(h + 1, j)], parsed_target or TARGETS[0])
             i = j + 1; continue
         m = re.match(r'^fn\s+(\w+)\s+as\s+"(\w+)"\s*\{\s*$', line)
         if m:
@@ -289,7 +317,7 @@ def source(text, src="the source"):
     for f in inlines.values():
         for p, _ in f.params:
             if p in inlines: stop(src, f.line, f"inline fn {f.name}: the parameter `{p}` has an inline function's name")
-    return target or TARGETS[0], data, inlines, fns
+    return parsed_target or TARGETS[0], data, inlines, fns
 
 
 def functions(text, src="the source"):
@@ -689,30 +717,30 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     return out
 
 
-def found(src, name, with_target=False):
+def found(src, name, with_target=False, target=None):
     """(the data, the symbol, the numbered lines, the source's inline functions) of the function NAME of a source."""
-    target, data, inlines, fns = source(read_source(src), src)
+    arch, data, inlines, fns = source(read_source(src), src, target=target)
     got = [(symbol, [(first + k, line) for k, line in enumerate(lines)]) for n, symbol, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
     res = (data, got[0][0], got[0][1], inlines)
-    return (target, *res) if with_target else res
+    return (arch, *res) if with_target else res
 
 
-def instructions(text, name, src="the source", notes=None):
+def instructions(text, name, src="the source", notes=None, target=None):
     """The instructions of the function NAME of a source's text, as expand() gives them."""
-    target, _, inlines, fns = source(text, src)
+    arch, _, inlines, fns = source(text, src, target=target)
     got = [[(first + k, line) for k, line in enumerate(lines)] for n, _, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
-    return expand(src, name, got[0], inlines, notes, target=target)
+    return expand(src, name, got[0], inlines, notes, target=arch)
 
 
-def assembly(src, name, symbol=None):
+def assembly(src, name, symbol=None, target=None):
     """The assembly of a function of the source, with the data it names: its lines, the uses of inline
     functions and the fors expanded, under its symbol (or `symbol`, for a test's copy). No instruction is
     added or changed. Its other entries (`entry "NAME"`) are names of their own; and where the source has a
     `place`, how many bytes into the function it is, as four bytes in a section `.ode.place` that is not
     loaded (the assembler knows the number; place_of() gives the rest of the place's proof)."""
-    target, data, own, lines, inlines = found(src, name, with_target=True)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     symbol = symbol or own
     notes = []
     ins = expand(src, name, lines, inlines, notes, target=target)
@@ -774,10 +802,10 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 
-def compile_info(src, name, symbol=None):
+def compile_info(src, name, symbol=None, target=None):
     """Compile one function to ELF bytes and return its full metadata (target, symbol, ELF bytes, exact
     pc-to-source line_map, user register names, frame layout, label offsets, and per-entry places text)."""
-    target, data, own, lines, inlines = found(src, name, with_target=True)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     sym = symbol or own
     notes, typed, meta = [], [], {}
     expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta)
@@ -839,22 +867,22 @@ def compile_info(src, name, symbol=None):
     }
 
 
-def build(src, name, obj, symbol=None):
+def build(src, name, obj, symbol=None, target=None):
     """Write a function's ELF object using the instruction table."""
-    target, data, own, lines, inlines = found(src, name, with_target=True)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     notes, typed = [], []
     expanded = expand(src, name, lines, inlines, notes, typed, target=target)
     blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] != "at"], data, target=target)
     with open(obj, "wb") as f: f.write(blob)
 
 
-def places(src, name, entry=None):
+def places(src, name, entry=None, target=None):
     """What a function's source says holds at its places, as the prover of proof-core reads it (prove.prove):
     for each `place { LINES }` of the function, `place +0xN { LINES }`, N being the count of bytes from the
     function's first byte to the instruction the place stands before. With `entry` (the symbol of an
     `entry "SYMBOL"` of the function): the places written `place "SYMBOL" { LINES }`, counted from that
     entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
-    target, data, own, lines, inlines = found(src, name, with_target=True)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     notes, typed = [], []
     expanded = expand(src, name, lines, inlines, notes, typed, target=target)
     entries = {own} | {note[2] for note in notes if note[0] == "entry"}

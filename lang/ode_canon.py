@@ -12,6 +12,7 @@ names are split out into a separate glossary dict so they never enter the contra
 import base64
 import os
 import re
+import hmac
 import struct
 import sys
 
@@ -24,6 +25,25 @@ if KCHECK not in sys.path:
 import ode
 
 B32_RE = re.compile(r"^[a-z2-7]{52}$")
+HASH_OCL_RE = re.compile(r"^([a-z2-7]{52})\.ocl$")
+
+
+def check_ocl_filename(path, contract_id):
+    """If `path` uses a 52-char base-32 hash filename (`<52>.ocl`), verify its contents match."""
+    base = os.path.basename(path)
+    m = HASH_OCL_RE.fullmatch(base)
+    if m and not hmac.compare_digest(m.group(1), contract_id):
+        raise ValueError(
+            f"contract filename mismatch: `{base}` names {m.group(1)}, "
+            f"but BLAKE3(contents) is {contract_id}"
+        )
+
+
+def ocl_filename(contract_id):
+    """Standard hash-named `.ocl` filename for a 52-char base-32 contract ID."""
+    if not B32_RE.fullmatch(contract_id):
+        raise ValueError(f"contract ID must be a full 52-char lowercase base-32 BLAKE3 digest, got {contract_id!r}")
+    return f"{contract_id}.ocl"
 
 # Built-in functions and constants of OdeSpecL / Ode Contract Language (never alpha-renamed).
 BUILTINS = frozenset({
@@ -773,6 +793,37 @@ def canonicalize(spec_text, contract_name=None):
         "symbol": ode_symbol(cid),
         "glossary": glossary,
     }
+
+
+def canonicalize_ode(ode_text, fn_name=None, target=None, src="<ode>"):
+    """Extract and canonicalize one function's semantic `.ocl` contract from a unified `.ode` file.
+
+    Custom `calling { ... }` blocks stay strictly in `.ode` and never enter the `.ocl` contract.
+    """
+    import ode_unified
+    parsed = ode_unified.parse_unified(ode_text, src=src)
+    if fn_name is None:
+        if len(parsed["fns"]) != 1:
+            raise ValueError(
+                f"{src}: expected 1 `fn` when fn_name is omitted, found {len(parsed['fns'])}: "
+                f"{', '.join(f['name'] for f in parsed['fns'])}"
+            )
+        fn_name = parsed["fns"][0]["name"]
+    spec_text, sym = ode_unified.extract_spec(parsed, target_key=target, fn_name=fn_name, include_calling=False, src=src)
+    return canonicalize(spec_text, contract_name=sym)
+
+
+def canonicalize_file(path, contract_name=None, target=None):
+    """Canonicalize either a unified `.ode` file or an `.ocl`/`.spec` file, checking hash filenames."""
+    import ode_unified
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    if ode_unified.is_unified(text):
+        res = canonicalize_ode(text, fn_name=contract_name, target=target, src=path)
+    else:
+        res = canonicalize(text, contract_name=contract_name)
+        check_ocl_filename(path, res["contract_id"])
+    return res
 
 
 def is_canonical(ocl_text):

@@ -404,6 +404,7 @@ def audit_binary(
             raw_ext = f.read()
         try:
             ext_info = ode_canon.canonicalize(raw_ext)
+            ode_canon.check_ocl_filename(contract_path, ext_info["contract_id"])
         except Exception as exc:
             errors.append(f"failed to canonicalize `--contract {contract_path}`: {exc}")
             return res
@@ -586,36 +587,70 @@ def format_audit_report(res, show_contract=False, glossary=None):
 
 def pack_verified(
     source_path,
-    spec_path,
-    out_obj,
-    out_proof,
+    spec_path=None,
+    out_obj=None,
+    out_proof=None,
     fn_name=None,
+    target=None,
     glossary_out=None,
     includes=None,
     verify_bin=None,
 ):
-    """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit."""
-    parts = []
-    for inc in (includes or ()):
-        with open(inc, "r", encoding="utf-8") as f:
-            parts.append(f.read())
-    with open(spec_path, "r", encoding="utf-8") as f:
-        parts.append(f.read())
-    spec_text = "\n".join(parts)
+    """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
-    # Compile `.ode` source to get its original symbol and raw ELF `.o`.
+    Accepts either a unified `.ode` file (with contract right on `fn`, `spec_path=None`) or a
+    legacy `(source_path, spec_path)` pair. Refuses contractless functions loudly.
+    """
+    import ode_unified
     src_text = odec.read_source(source_path)
-    target, _, _, fns = odec.source(src_text, source_path)
-    if not fns:
-        raise ValueError(f"{source_path}: no `fn` found")
-    chosen_fn = fn_name or fns[-1][0]
-    info = odec.compile_info(source_path, chosen_fn)
-    orig_sym = info["symbol"]
+    unified = ode_unified.is_unified(src_text)
 
-    # Canonicalize the contract and derive the sole 52-char base-32 BLAKE3 ID and symbol.
-    sp, is_nameless = ode_canon._parse_any(spec_text)
-    cname = None if is_nameless or len(sp.contracts) == 1 else orig_sym
-    canon = ode_canon.canonicalize(spec_text, contract_name=cname)
+    if unified:
+        parsed = ode_unified.parse_unified(src_text, source_path)
+        arch, _, _, fns = odec.source(src_text, source_path, target=target)
+        if not fns:
+            raise ValueError(f"{source_path}: no `fn` found for target {target!r}")
+        chosen_fn = fn_name or fns[-1][0]
+        fn_rec = parsed["fns_by_name"].get(chosen_fn)
+        if fn_rec is None:
+            raise ValueError(f"{source_path}: function `{chosen_fn}` not found")
+        impl = ode_unified._select_impl(fn_rec, target or arch, source_path)
+        if impl is not None and impl["calling_text"] is not None:
+            raise ValueError(
+                f"{source_path}: exported C-ABI function `{chosen_fn}` cannot declare custom `calling {{ ... }}`"
+            )
+        info = odec.compile_info(source_path, chosen_fn, target=target)
+        orig_sym = info["symbol"]
+        spec_text, cname = ode_unified.extract_spec(
+            parsed, target_key=target or arch, fn_name=chosen_fn, include_calling=False, src=source_path
+        )
+        canon = ode_canon.canonicalize(spec_text, contract_name=cname)
+    else:
+        if spec_path is None:
+            raise ValueError(
+                f"{source_path}: every Ode function must have a contract "
+                f"(use unified `.ode` syntax with contract clauses on `fn`, or supply a contract file)"
+            )
+        parts = []
+        for inc in (includes or ()):
+            with open(inc, "r", encoding="utf-8") as f:
+                parts.append(f.read())
+        with open(spec_path, "r", encoding="utf-8") as f:
+            parts.append(f.read())
+        spec_text = "\n".join(parts)
+
+        _, _, _, fns = odec.source(src_text, source_path)
+        if not fns:
+            raise ValueError(f"{source_path}: no `fn` found")
+        chosen_fn = fn_name or fns[-1][0]
+        info = odec.compile_info(source_path, chosen_fn)
+        orig_sym = info["symbol"]
+
+        sp, is_nameless = ode_canon._parse_any(spec_text)
+        cname = None if is_nameless or len(sp.contracts) == 1 else orig_sym
+        canon = ode_canon.canonicalize(spec_text, contract_name=cname)
+        if not includes:
+            ode_canon.check_ocl_filename(spec_path, canon["contract_id"])
     cid = canon["contract_id"]
     hash_sym = canon["symbol"]
 
@@ -667,10 +702,19 @@ def pack_verified(
 # ---------------------------------------------------------------------------
 
 def run_spec_test(ocl_path, fn_name, raw_args, glossary_path=None):
-    """Evaluate a definition inside a `.ocl` or `.spec` file on concrete JSON inputs."""
+    """Evaluate a definition inside a `.ocl` or unified `.ode` file on concrete JSON inputs."""
+    import ode_unified
     with open(ocl_path, "r", encoding="utf-8") as f:
         text = f.read()
-    sp, _ = ode_canon._parse_any(text)
+    if ode_unified.is_unified(text):
+        parsed = ode_unified.parse_unified(text, ocl_path)
+        text = "\n\n".join(parsed["spec_defs"]) + "\n"
+        sp = ode.Spec(text)
+    else:
+        if ode_canon.HASH_OCL_RE.fullmatch(os.path.basename(ocl_path)):
+            info = ode_canon.canonicalize(text)
+            ode_canon.check_ocl_filename(ocl_path, info["contract_id"])
+        sp, _ = ode_canon._parse_any(text)
     target_fn = fn_name
     if target_fn not in sp.fns and target_fn not in sp.machines and glossary_path:
         with open(glossary_path, "r", encoding="utf-8") as f:

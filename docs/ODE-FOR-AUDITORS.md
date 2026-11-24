@@ -59,6 +59,11 @@ ode audit path/to/binary --proof path/to/binary.proof \
     --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa
 ```
 
+Standalone `.ocl` files produced by `ode canon --out-dir` are named by their 52-character hash
+(`<52-character-hash>.ocl`). Whenever `ode audit --contract` or `ode spec-test` reads a
+hash-named `.ocl` file, it hashes the file's contents and refuses if the contents do not match the
+filename.
+
 To inspect the exact canonical contract text that was verified—or render it with your own local
 glossary of human-readable names—run:
 
@@ -238,13 +243,13 @@ still on our roadmap.
 
 | Target workflow in this guide | Status today (November 2026) | Exact command that runs today |
 |---|---|---|
-| Canonical `.ocl` + 52-char base-32 BLAKE3 ID + glossary split | **Working today** (`lang/ode_canon.py`) | `python3 lang/ode_tool.py canon factory/verified/utf8_decode_2byte_x86_64.spec` |
-| Hash-bound ELF `.o` (`ode_<52>` symbol + embedded `.ode.ocl` + separate `.proof`) | **Working today** for single-function ELF `.o` on x86-64 & AArch64 (`lang/ode_audit.py`) | `python3 lang/ode_tool.py pack factory/verified/utf8_decode_2byte_x86_64.ode factory/verified/utf8_decode_2byte_x86_64.spec --out /tmp/u.o --proof /tmp/u.proof` |
-| Binary-first `ode audit` (100% `.text` & symbol coverage, rejects `.init_array`, extra sections/symbols, trailing bytes, truncated hashes, runs `odeverify`) | **Working today** for ELF `.o` objects (`lang/ode_tool.py audit`; adversarial suite in `proof-core/test_ode_audit.py`) | `python3 lang/ode_tool.py audit /tmp/u.o --proof /tmp/u.proof --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa --show-contract` |
-| Concrete `.ocl` vector tests (`ode spec-test`) | **Working today** (`lang/ode_tool.py spec-test`) | `python3 lang/ode_tool.py spec-test /tmp/u.ocl --call f0 --arg "[192, 175]"` |
-| Multi-function linked archives / mixed-language executables (splitting Ode vs Rust/C code) | **Planned** — today audit each Ode ELF `.o` directly and inspect Rust/C `extern "C"` call sites | Run `ode_tool.py audit` on each `.o`; see `paper/CALL-CONV-PROPOSAL.md` for the AArch64 `v8..v15` ABI work |
+| Canonical `<52-char-hash>.ocl` extraction + glossary split + hash-filename check | **Working today** (`lang/ode_canon.py`, `lang/ode_unified.py`) | `python3 lang/ode_tool.py canon program.ode --fn name --target x86_64 --out-dir /tmp` |
+| Hash-bound ELF `.o` (`ode_<52>` symbol + embedded `.ode.ocl` + separate `.proof`) | **Working today** for single-function ELF `.o` (unified `.ode` or legacy `.ode`+`.spec`) on x86-64 & AArch64 (`lang/ode_audit.py`) | `python3 lang/ode_tool.py pack program.ode --fn name --target x86_64 --out /tmp/u.o --proof /tmp/u.proof` |
+| Binary-first `ode audit` (100% `.text` & symbol coverage, rejects `.init_array`, extra sections/symbols, trailing bytes, truncated hashes, mismatched `<hash>.ocl` filenames, runs `odeverify`) | **Working today** for ELF `.o` objects (`lang/ode_tool.py audit`; adversarial suite in `proof-core/test_ode_audit.py` & `test_unified_ode.py`) | `python3 lang/ode_tool.py audit /tmp/u.o --proof /tmp/u.proof --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa --show-contract` |
+| Concrete `.ocl` vector tests (`ode spec-test`) | **Working today** (`lang/ode_tool.py spec-test`) | `python3 lang/ode_tool.py spec-test /tmp/<52-char-hash>.ocl --call f0 --arg "[192, 175]"` |
+| Multi-function `.o` bundles with local Ode callees & custom calling conventions | **Next milestone** — Lean 4 verifier + soundness proofs for custom calling conventions and AArch64 `v8..v15` ABI are live (`proof-core/test_call_conv.py`); multi-function `ode pack`/`ode audit` is next | `python3 proof-core/test_call_conv.py` |
 | Cross-platform binary decoding (Mach-O, COFF) | `ode_audit.py` and `statement.py` decode **ELF `.o`** today (x86-64 & AArch64) | On macOS Mach-O / Windows COFF builds, compare linked `.text` instruction bytes against the verified ELF `.o` |
-| Repository file extension migration (`.spec` -> `.ocl`) | Existing library files still use `.spec` while `ode_tool.py` accepts both `.ocl` and `.spec` | Pass any `.spec` or `.ocl` file directly to `ode_tool.py canon`, `pack`, `audit`, or `spec-test` |
+| Source format (`unified .ode` vs legacy `.ode` + `.spec`) | Unified `.ode` (contracts on `fn`, multi-arch `for <arch>`, `calling` on `fn`, closed per-file namespace) is live (`lang/ode_unified.py`); existing library `.spec` files remain supported during migration | Pass a unified `.ode` directly to `ode_tool.py canon`, `check`, or `pack` |
 
 ### Where to go next
 

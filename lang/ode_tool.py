@@ -39,17 +39,17 @@ CALLEE_SAVED_ARM = {f"x{i}" for i in range(19, 31)}
 M64 = 1 << 64
 
 
-def compile_source(src_path, fn_names=None):
+def compile_source(src_path, fn_names=None, target=None):
     """Compile selected (or all) functions of an Ode source file via odec.compile_info."""
     text = odec.read_source(src_path)
-    target, _, _, fns = odec.source(text, src_path)
+    arch, _, _, fns = odec.source(text, src_path, target=target)
     want = fn_names if fn_names else [name for name, _, _, _ in fns]
     if not want:
         raise ValueError(f"{src_path}: source contains no `fn` definitions")
     compiled = []
     for name in want:
-        compiled.append(odec.compile_info(src_path, name))
-    return target, compiled
+        compiled.append(odec.compile_info(src_path, name, target=target))
+    return arch, compiled
 
 
 def load_spec_text(spec_path, includes=None):
@@ -330,18 +330,30 @@ def _contracts_map(spec_text):
         return {}
 
 
-def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
-              do_trace=False, align=0, arg_overrides=None, budgets=None, includes=None):
+def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
+              do_trace=False, align=0, arg_overrides=None, budgets=None, includes=None, target=None):
     """Compile -> prove -> verify via `odeverify` -> optional performance & memory advice.
     Returns a structured dict with verdict (`shown`, `refused`, `no proof found`, or `FALSE`),
     timings, diagnostics mapped to source lines, decoded arithmetic goals, and advice."""
-    import built, prove, statement
+    import built, ode_unified, prove, statement
     t0 = time.time()
-    target, compiled = compile_source(src_path, fn_names)
+    src_text = odec.read_source(src_path)
+    unified = ode_unified.is_unified(src_text)
+    resolved_target, compiled = compile_source(src_path, fn_names, target=target)
     t_compile = time.time() - t0
     by_sym = {info["symbol"]: info for info in compiled}
 
-    spec_text = load_spec_text(spec_path, includes)
+    if unified and spec_path is None:
+        parsed = ode_unified.parse_unified(src_text, src_path)
+        spec_text, _ = ode_unified.extract_spec(parsed, target_key=target or resolved_target, include_calling=True, src=src_path)
+    elif spec_path is None:
+        raise SystemExit(
+            f"ode_tool: {src_path}: every Ode function must have a contract "
+            f"(use unified `.ode` syntax with contract clauses on `fn`, or pass a contract file)"
+        )
+    else:
+        spec_text = load_spec_text(spec_path, includes)
+    target = resolved_target
     contracts = _contracts_map(spec_text)
 
     tmp_obj = None
@@ -611,9 +623,10 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     p_chk = sub.add_parser("check", help="compile, prove, verify via odeverify, and print advice")
-    p_chk.add_argument("source", help=".ode source file")
-    p_chk.add_argument("spec", help=".spec contract file")
+    p_chk.add_argument("source", help=".ode source file (unified or legacy)")
+    p_chk.add_argument("spec", nargs="?", default=None, help="optional legacy .spec contract file (omit for unified .ode)")
     p_chk.add_argument("--fn", action="append", default=None, help="function name(s) in source (default: all)")
+    p_chk.add_argument("--target", default=None, help="target architecture (e.g. x86_64, arm64) for multi-target .ode")
     p_chk.add_argument("--out", default=None, help="directory to write .o, .statement, and .proof")
     _add_common_flags(p_chk)
 
@@ -641,18 +654,21 @@ def main(argv=None):
 
     sub.add_parser("serve", help="persistent JSON-lines worker on stdin/stdout (keeps tables and Python warm)")
 
-    p_can = sub.add_parser("canon", help="canonicalize an .ocl/.spec contract and print its 52-char base-32 BLAKE3 ID")
-    p_can.add_argument("spec", help=".ocl or .spec contract file")
-    p_can.add_argument("--contract", default=None, help="contract name (required only if file defines multiple)")
+    p_can = sub.add_parser("canon", help="extract/canonicalize a contract to nameless .ocl and print its 52-char BLAKE3 ID")
+    p_can.add_argument("spec", help="unified .ode source file, or .ocl/.spec contract file")
+    p_can.add_argument("--contract", "--fn", dest="contract", default=None, help="function/contract name (required if file defines multiple)")
+    p_can.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
+    p_can.add_argument("--out-dir", default=None, help="write hash-named <52-char-b32>.ocl file into this directory")
     p_can.add_argument("--glossary-out", default=None, help="write author-name glossary JSON to this path")
     p_can.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
 
     p_pck = sub.add_parser("pack", help="compile .ode, bind symbol to ode_<52-char-b32>, embed .ode.ocl, prove, and audit")
-    p_pck.add_argument("source", help=".ode source file")
-    p_pck.add_argument("spec", help=".ocl or .spec contract file")
+    p_pck.add_argument("source", help=".ode source file (unified or legacy)")
+    p_pck.add_argument("spec", nargs="?", default=None, help="optional legacy .ocl/.spec contract file (omit for unified .ode)")
     p_pck.add_argument("--out", required=True, help="output ELF .o path (carries embedded .ode.ocl)")
     p_pck.add_argument("--proof", required=True, help="output separate .proof file path")
     p_pck.add_argument("--fn", default=None, help="function name in source (default: last in source)")
+    p_pck.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
     p_pck.add_argument("--glossary-out", default=None, help="write separate author glossary JSON")
     p_pck.add_argument("--include", action="append", default=[], help="additional .ocl/.spec file(s) prepended before spec")
     p_pck.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
@@ -694,7 +710,7 @@ def main(argv=None):
     if args.cmd == "check":
         res = run_check(args.source, args.spec, fn_names=args.fn, out_dir=args.out, arch=args.arch,
                         do_trace=args.trace, align=args.align, arg_overrides=overrides,
-                        budgets=budgets, includes=args.include)
+                        budgets=budgets, includes=args.include, target=args.target)
         if args.json:
             print(json.dumps(_json_safe(res)))
             if res["verdict"] != "shown": return 1
@@ -767,17 +783,27 @@ def main(argv=None):
 
     if args.cmd == "canon":
         import ode_canon
-        with open(args.spec, "r", encoding="utf-8") as f:
-            res = ode_canon.canonicalize(f.read(), contract_name=args.contract)
+        res = ode_canon.canonicalize_file(args.spec, contract_name=args.contract, target=args.target)
+        out_path = None
+        if args.out_dir:
+            os.makedirs(args.out_dir, exist_ok=True)
+            out_path = os.path.join(args.out_dir, ode_canon.ocl_filename(res["contract_id"]))
+            with open(out_path, "w", encoding="utf-8") as of:
+                of.write(res["canonical"])
         if args.glossary_out:
             with open(args.glossary_out, "w", encoding="utf-8") as gf:
                 json.dump({"contract_id": res["contract_id"], "glossary": res["glossary"]}, gf, indent=2, sort_keys=True)
                 gf.write("\n")
         if args.json:
-            print(json.dumps(res, indent=2, sort_keys=True))
+            payload = dict(res)
+            if out_path is not None:
+                payload["ocl_path"] = out_path
+            print(json.dumps(payload, indent=2, sort_keys=True))
             return 0
         print(f"BLAKE3(contract): {res['contract_id']}")
         print(f"SYMBOL:           {res['symbol']}")
+        if out_path is not None:
+            print(f"WROTE:            {out_path}")
         print("")
         print(res["canonical"].rstrip())
         return 0
@@ -786,7 +812,7 @@ def main(argv=None):
         import ode_audit
         res = ode_audit.pack_verified(
             args.source, args.spec, args.out, args.proof,
-            fn_name=args.fn, glossary_out=args.glossary_out, includes=args.include,
+            fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
         )
         if args.json:
             print(json.dumps(_json_safe(res), indent=2, sort_keys=True))
