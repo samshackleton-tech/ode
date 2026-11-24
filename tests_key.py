@@ -36,7 +36,8 @@ def files(group):
             dirs[:] = sorted(d for d in dirs if d not in WRITTEN)
             for n in sorted(names):
                 rel = os.path.relpath(os.path.join(where, n), HERE)
-                if n.endswith((".pyc", ".md")): continue
+                if n.endswith(".pyc"): continue
+                if n.endswith(".md") and not (group == "proof-core" and rel == os.path.join("docs", "ODE-CARD.md")): continue
                 yield rel
 
 

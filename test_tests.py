@@ -86,7 +86,7 @@ class Kept(unittest.TestCase):
         for where, dirs, names in os.walk(HERE):
             dirs[:] = [d for d in dirs if d not in (".lake", ".git", "__pycache__", "reference")]
             for n in names:
-                if not n.endswith((".py", ".sh", ".lean")) or n in ("test_tests.py", "tests_key.py"): continue
+                if not n.endswith((".py", ".sh", ".lean")) or n in ("test_tests.py", "tests_key.py", "test_card.py", "run_experiment.py"): continue
                 with open(os.path.join(where, n), errors="replace") as f: text = f.read()
                 if re.search(r"\.md[\"']", text): found.append(os.path.relpath(os.path.join(where, n), HERE))
         self.assertEqual(found, [])

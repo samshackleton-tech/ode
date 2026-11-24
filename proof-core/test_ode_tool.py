@@ -2,7 +2,7 @@
 """End-to-end tests for lang/ode_tool.py `check`: compiles Ode source on both AArch64 and x86-64,
 proves, verifies with the Lean `odeverify` binary, checks exact source-line refusal diagnostics
 (including fast termination on loops with no place and trace refusals), and checks budget enforcement."""
-import os, re, subprocess, sys, tempfile, time, unittest
+import json, os, re, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -166,6 +166,58 @@ class EndToEndToolTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("verdicts: A=shown, B=shown", r.stdout)
             self.assertIn("code bytes", r.stdout)
+
+    def test_include_json_serve_and_surgical_arithmetic_diagnostics(self):
+        b3spec = os.path.join(ROOT, "kcheck", "blake3.spec")
+        comp_ode = os.path.join(HERE, "examples", "arm64", "compress_arm64.ode")
+        comp_spec = os.path.join(HERE, "examples", "arm64", "compress_arm64.spec")
+        pad_ode = os.path.join(HERE, "examples", "arm64", "pad_arm64.ode")
+        pad_spec = os.path.join(HERE, "examples", "arm64", "pad_arm64.spec")
+        z_ode = os.path.join(HERE, "examples", "verifier", "zero_x86.ode")
+        z_spec = os.path.join(HERE, "examples", "verifier", "zero_x86.spec")
+
+        # 1. --include + --json verifies AArch64 BLAKE3 compress kernel directly
+        r = _run_tool(["check", comp_ode, comp_spec, "--include", b3spec, "--json"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        d = json.loads(r.stdout)
+        self.assertEqual(d["verdict"], "shown")
+        self.assertEqual(d["target"], "arm64")
+        self.assertEqual(d["proof_bytes"], 137)
+
+        # 2. Persistent `serve` JSON-lines worker handles multiple check/advise/refute requests
+        p = subprocess.Popen([sys.executable, TOOL, "serve"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            reqs = [
+                {"cmd": "check", "source": pad_ode, "spec": pad_spec, "include": [b3spec]},
+                {"cmd": "check", "source": z_ode, "spec": z_spec},
+                {"cmd": "advise", "source": comp_ode},
+            ]
+            for req in reqs:
+                p.stdin.write(json.dumps(req) + "\n")
+                p.stdin.flush()
+                resp = json.loads(p.stdout.readline())
+                self.assertTrue(resp["ok"], resp)
+        finally:
+            p.stdin.close()
+            p.stdout.close()
+            p.wait()
+
+        # 3. Surgical arithmetic diagnostics decode `need entail` into readable parameter/register names + hint
+        with open(z_ode) as f:
+            z_src = f.read()
+        with tempfile.TemporaryDirectory() as td:
+            bp = os.path.join(td, "bad_inv.ode")
+            with open(bp, "w") as f:
+                f.write(z_src.replace("i <= n", "i <= n + 1"))
+            rb = _run_tool(["check", bp, z_spec, "--json"])
+            self.assertEqual(rb.returncode, 1)
+            db = json.loads(rb.stdout)
+            self.assertEqual(db["verdict"], "no proof found")
+            self.assertIsNotNone(db["arithmetic"])
+            self.assertEqual(db["arithmetic"]["kind"], "entail")
+            self.assertIn("cannot show: rsi(n) >=", db["diagnostic"])
+            self.assertIn("relevant facts:", db["diagnostic"])
+            self.assertIn("hint:", db["diagnostic"])
 
 
 if __name__ == "__main__":

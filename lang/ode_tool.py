@@ -11,7 +11,7 @@ Commands:
     python3 lang/ode_tool.py compare A.ode B.ode [--fn NAME] [--spec SPEC.spec] [--arch ARCH]
                                      [--trace] [--align N] [--arg REG=VAL ...]
 """
-import argparse, os, re, shutil, subprocess, sys, tempfile, time
+import argparse, json, os, re, shutil, subprocess, sys, tempfile, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -23,6 +23,14 @@ import estimate, odec, refute_conc
 
 ARG_REGS_X86 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 ARG_REGS_ARM = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
+# Exact variable numbering matching proof-core/Machine.lean (note AArch64: sp is 4, x4 is 31).
+REG_NAMES_X86 = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+                 "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
+REG_NAMES_ARM = ["x0", "x1", "x2", "x3", "sp", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
+                 "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "x30", "x4"]
+CALLEE_SAVED_X86 = {"rbx", "rbp", "r12", "r13", "r14", "r15"}
+CALLEE_SAVED_ARM = {f"x{i}" for i in range(19, 31)}
+M64 = 1 << 64
 
 
 def compile_source(src_path, fn_names=None):
@@ -36,14 +44,160 @@ def compile_source(src_path, fn_names=None):
     return target, compiled
 
 
-def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason):
-    """Translate a verifier refusal `(fn_sym, pc, reason)` into source file, line, reg names, and frame fields."""
+def load_spec_text(spec_path, includes=None):
+    """Read optional included .spec files followed by the main .spec file."""
+    parts = []
+    for p in (includes or ()):
+        with open(p) as f:
+            parts.append(f.read())
+    with open(spec_path) as f:
+        parts.append(f.read())
+    return "\n".join(parts)
+
+
+def _fmt_const(n):
+    """Format large 2^64-adjacent integers cleanly for human/AI readers."""
+    if n == M64: return "2^64"
+    if n == M64 - 1: return "2^64 - 1"
+    if n == -M64: return "-2^64"
+    if n == -(M64 - 1): return "-(2^64 - 1)"
+    if abs(n - M64) <= 65536: return f"2^64 {'+' if n > M64 else '-'} {abs(n - M64)}"
+    if abs(n + M64) <= 65536: return f"-2^64 {'+' if n > -M64 else '-'} {abs(n + M64)}"
+    return str(n)
+
+
+def _var_labels(target, info=None, contract=None):
+    """Map variable index i -> readable label like `rdx(len)` or `v17`."""
+    base = REG_NAMES_ARM if target == "arm64" else REG_NAMES_X86
+    arg_regs = ARG_REGS_ARM if target == "arm64" else ARG_REGS_X86
+    param_by_reg = {}
+    if contract is not None:
+        params = contract["args"] if isinstance(contract, dict) else getattr(contract, "args", [])
+        for idx, (pname, _) in enumerate(params):
+            if idx < len(arg_regs):
+                param_by_reg[arg_regs[idx]] = pname
+    alias_by_reg = {}
+    if info and info.get("regs"):
+        for alias, reg in info["regs"].items():
+            alias_by_reg.setdefault(reg, alias)
+    labels = []
+    for r in base:
+        tag = param_by_reg.get(r) or alias_by_reg.get(r)
+        labels.append(f"{r}({tag})" if tag and tag != r else r)
+    labels.append("rodata")
+    return labels
+
+
+def format_inequality(nums, labels):
+    """Format a verifier row `[c, a0, a1, ...]` representing `c + sum a_i*v_i >= 0` cleanly."""
+    if not nums:
+        return "0 >= 0"
+    c = nums[0]
+    pos, neg = [], []
+    for i, a in enumerate(nums[1:]):
+        if a == 0:
+            continue
+        name = labels[i] if i < len(labels) else f"v{i}"
+        term = name if abs(a) == 1 else f"{abs(a)}*{name}"
+        (pos if a > 0 else neg).append(term)
+    if not pos and not neg:
+        return f"{_fmt_const(c)} >= 0"
+    if pos and neg and c == 0:
+        return f"{' + '.join(pos)} >= {' + '.join(neg)}"
+    if neg and not pos:
+        return f"{' + '.join(neg)} <= {_fmt_const(c)}"
+    if pos and not neg:
+        return f"{' + '.join(pos)} >= {_fmt_const(-c)}"
+    lhs = " + ".join(pos)
+    rhs_terms = list(neg)
+    if c > 0:
+        lhs = f"{lhs} + {_fmt_const(c)}"
+    elif c < 0:
+        rhs_terms.append(_fmt_const(-c))
+    return f"{lhs} >= {' + '.join(rhs_terms)}"
+
+
+def parse_arithmetic_need(reason, target, info=None, contract=None):
+    """Parse `need entail` / `need know` rows into structured readable goals and relevant facts."""
+    raw_lines = reason.strip().splitlines()
+    if not raw_lines or not raw_lines[0].startswith("need "):
+        return None
+    kind = raw_lines[0][5:].strip()
+    facts, goals = [], []
+    for l in raw_lines[1:]:
+        parts = l.split()
+        if len(parts) >= 2 and parts[0] in ("f", "g"):
+            try:
+                nums = [int(x) for x in parts[1:]]
+            except ValueError:
+                continue
+            (facts if parts[0] == "f" else goals).append(nums)
+    if not facts and not goals:
+        return None
+    labels = _var_labels(target, info, contract)
+    goal_vars = set()
+    for g in goals:
+        for i, a in enumerate(g[1:]):
+            if a != 0:
+                goal_vars.add(i)
+    fmt_goals = [format_inequality(g, labels) for g in goals[:4]]
+    scored = []
+    for f in facts:
+        fvars = {i for i, a in enumerate(f[1:]) if a != 0}
+        overlap = len(fvars & goal_vars) if goal_vars else 1
+        if overlap > 0:
+            scored.append((-overlap, len(fvars), format_inequality(f, labels)))
+    scored.sort()
+    seen, rel_facts = set(), []
+    for _, _, txt in scored:
+        if txt not in seen:
+            seen.add(txt)
+            rel_facts.append(txt)
+        if len(rel_facts) >= 6:
+            break
+    return {"kind": kind, "goals": fmt_goals, "relevant_facts": rel_facts, "total_facts": len(facts)}
+
+
+def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
+    """Produce one concrete, actionable hint tailored to the refusal reason."""
+    if "with no place" in reason:
+        line_note = f" (right above line {row['line']})" if row else ""
+        return f"hint: add a `place {{ ... }}` loop invariant at the loop head{line_note} stating bounds on loop counters and pointers"
+    if "values kept out of the trace" in reason:
+        td = []
+        if contract is not None:
+            td = contract.get("trace", []) if isinstance(contract, dict) else getattr(contract, "trace", [])
+        listed = ", ".join(str(x) for x in td) if td else "(none)"
+        return f"hint: contract `trace depends on` lists {listed}; avoid branching/indexing on other inputs or use branchless instructions"
+    if "register a callee keeps" in reason:
+        saved = CALLEE_SAVED_ARM if target == "arm64" else CALLEE_SAVED_X86
+        touched = []
+        if info and info.get("line_map"):
+            asm_all = "\n".join(r["asm"] for r in info["line_map"])
+            touched = sorted(r for r in saved if re.search(rf"\b{r}\b", asm_all))
+        if touched:
+            return f"hint: check save/restore symmetry for callee-saved register(s) referenced in function: {', '.join(touched)}"
+        return "hint: save every modified callee-saved register on entry and restore it before `ret`"
+    if "more stack than this function's contract allows" in reason:
+        fsz = info["frame"]["size"] if info and info.get("frame") else None
+        if fsz is not None:
+            return f"hint: local frame is {fsz} B; check `stack N` in contract (must cover local frame + call slot + callee stack)"
+    if "need entail" in reason:
+        return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
+    if "need know" in reason:
+        return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
+    return None
+
+
+def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64", contract=None):
+    """Translate a verifier refusal `(fn_sym, pc, reason)` into source file, line, reg names, frame fields,
+    decoded arithmetic inequalities, and an actionable hint."""
     out = []
     info = compiled_by_sym.get(fn_sym) if fn_sym else None
+    row = None
     if info is not None and pc is not None:
         row = next((r for r in info["line_map"] if r["pc"] == pc), None)
         if row is None:
-            # Closest instruction at or before pc
             before = [r for r in info["line_map"] if r["pc"] <= pc]
             row = before[-1] if before else None
         if row is not None:
@@ -64,14 +218,23 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason):
         out.append(f"refused in {fn_sym}:")
     else:
         out.append("refused:")
+    arith = parse_arithmetic_need(reason, target, info, contract)
     raw_lines = reason.strip().splitlines()
-    f_count = sum(1 for l in raw_lines if l.startswith("f "))
-    if f_count >= 4 and raw_lines and raw_lines[0].startswith("need "):
-        out.append(f"  {raw_lines[0]} (arithmetic fact not shown from {f_count} inequalities in context)")
+    if arith is not None:
+        out.append(f"  need {arith['kind']} (arithmetic fact not shown from {arith['total_facts']} inequalities in context)")
+        for g in arith["goals"]:
+            out.append(f"  cannot show: {g}")
+        if arith["relevant_facts"]:
+            out.append("  relevant facts:")
+            for f in arith["relevant_facts"]:
+                out.append(f"    {f}")
     else:
         for line in raw_lines:
             out.append(f"  {line}")
-    return "\n".join(out)
+    hint = _diagnostic_hint(reason, target, info, contract, row)
+    if hint:
+        out.append(f"  {hint}")
+    return "\n".join(out), arith
 
 
 def default_args_from_spec(spec_text, symbol, target, align=0):
@@ -125,19 +288,27 @@ def parse_budgets(args):
     return out
 
 
+def _contracts_map(spec_text):
+    try:
+        import ode as kspec_ode
+        return kspec_ode.Spec(spec_text).contracts
+    except Exception:
+        return {}
+
+
 def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
-              do_trace=False, align=0, arg_overrides=None, budgets=None):
+              do_trace=False, align=0, arg_overrides=None, budgets=None, includes=None):
     """Compile -> prove -> verify via `odeverify` -> optional performance & memory advice.
-    Returns a structured dict with verdict (`shown`, `refused`, or `no proof found`), timings,
-    diagnostics mapped to source lines, and advice."""
+    Returns a structured dict with verdict (`shown`, `refused`, `no proof found`, or `FALSE`),
+    timings, diagnostics mapped to source lines, decoded arithmetic goals, and advice."""
     import built, prove, statement
     t0 = time.time()
     target, compiled = compile_source(src_path, fn_names)
     t_compile = time.time() - t0
     by_sym = {info["symbol"]: info for info in compiled}
 
-    with open(spec_path) as f:
-        spec_text = f.read()
+    spec_text = load_spec_text(spec_path, includes)
+    contracts = _contracts_map(spec_text)
 
     tmp_obj = None
     work_dir = out_dir
@@ -184,7 +355,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
             if pc is None:
                 m = re.search(r"at \+(\d+)", str(exc))
                 if m: pc = int(m.group(1))
-            diag = format_source_diagnostic(by_sym, pc, fn_sym, raw)
+            diag, arith = format_source_diagnostic(by_sym, pc, fn_sym, raw, target=target, contract=contracts.get(fn_sym))
             ref = None
             probe_sym = fn_sym if fn_sym in progs else compiled[-1]["symbol"]
             if probe_sym in progs:
@@ -199,6 +370,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
                 "verify_s": 0.0,
                 "pc": pc,
                 "fn": fn_sym,
+                "arithmetic": arith,
                 "refutation": ref,
                 "diagnostic": diag,
                 "raw": str(exc),
@@ -211,7 +383,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
         t_verify = time.time() - t2
         if vr.returncode != 0 or not vr.stdout.startswith("shown"):
             pc, fn_sym, loc_msg = prove.locate(st_path, pf_path)
-            diag = format_source_diagnostic(by_sym, pc, fn_sym, loc_msg or vr.stdout)
+            diag, arith = format_source_diagnostic(by_sym, pc, fn_sym, loc_msg or vr.stdout, target=target, contract=contracts.get(fn_sym))
             probe_sym = fn_sym if fn_sym in progs else compiled[-1]["symbol"]
             ref = refute_conc.refute_function(progs, probe_sym, spec_text, target) if probe_sym in progs else None
             if ref is not None:
@@ -225,6 +397,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
                 "verify_s": round(t_verify, 3),
                 "pc": pc,
                 "fn": fn_sym,
+                "arithmetic": arith,
                 "refutation": ref,
                 "diagnostic": diag,
                 "raw": vr.stdout,
@@ -269,7 +442,7 @@ def run_check(src_path, spec_path, fn_names=None, out_dir=None, arch=None,
 
 
 def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False,
-               align=0, arg_overrides=None, budgets=None):
+               align=0, arg_overrides=None, budgets=None, includes=None):
     """Compile and run static + optional memory advice without invoking Lean."""
     target, compiled = compile_source(src_path, None)
     by_name = {info["name"]: info for info in compiled}
@@ -283,10 +456,7 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
     else:
         raise SystemExit(f"ode_tool: {src_path}: no function {fn_name}")
     top_sym = top["symbol"]
-    spec_text = None
-    if spec_path:
-        with open(spec_path) as f:
-            spec_text = f.read()
+    spec_text = load_spec_text(spec_path, includes) if spec_path else None
     with tempfile.TemporaryDirectory() as td:
         progs, lmaps = {}, {}
         for info in compiled:
@@ -320,11 +490,10 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
         }
 
 
-def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1):
+def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1, includes=None):
     """Compile and run table-driven concrete counterexample probes (no Lean needed)."""
     target, compiled = compile_source(src_path, fn_names)
-    with open(spec_path) as f:
-        spec_text = f.read()
+    spec_text = load_spec_text(spec_path, includes)
     with tempfile.TemporaryDirectory() as td:
         progs = {}
         for info in compiled:
@@ -342,6 +511,8 @@ def run_refute(src_path, spec_path, fn_names=None, cases=16, seed=1):
 
 
 def _add_common_flags(p):
+    p.add_argument("--include", action="append", default=[], help="additional .spec file(s) prepended before spec (repeatable)")
+    p.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
     p.add_argument("--arch", choices=sorted(estimate.ARCHS), default=None, help="microarchitecture profile")
     p.add_argument("--trace", action="store_true", help="run concrete memory-access trace via core/conc.py")
     p.add_argument("--align", type=int, default=0, help="byte misalignment added to default buffer addresses")
@@ -353,6 +524,47 @@ def _add_common_flags(p):
     p.add_argument("--max-page-crossings", type=int, default=None)
     p.add_argument("--max-stlf-partial", type=int, default=None)
     p.add_argument("--max-alias-4k", type=int, default=None)
+
+
+def _json_safe(obj):
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, bytes):
+        return obj.hex()
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    return str(obj)
+
+
+def handle_request(req):
+    """Handle one JSON-lines request for `ode_tool.py serve`; returns a JSON-safe response dict."""
+    cmd = req.get("cmd")
+    try:
+        if cmd == "check":
+            res = run_check(req["source"], req["spec"], fn_names=req.get("fn"), out_dir=req.get("out"),
+                            arch=req.get("arch"), do_trace=bool(req.get("trace", False)),
+                            align=int(req.get("align", 0)), arg_overrides=req.get("args") or None,
+                            budgets=req.get("budgets") or None, includes=req.get("include") or None)
+            return {"ok": res["verdict"] == "shown" and not res.get("budget_errors"), "result": _json_safe(res)}
+        if cmd == "advise":
+            res = run_advise(req["source"], fn_name=req.get("fn"), spec_path=req.get("spec"),
+                             arch=req.get("arch"), do_trace=bool(req.get("trace", False)),
+                             align=int(req.get("align", 0)), arg_overrides=req.get("args") or None,
+                             budgets=req.get("budgets") or None, includes=req.get("include") or None)
+            return {"ok": not res.get("budget_errors"), "result": _json_safe(res)}
+        if cmd == "refute":
+            target, res = run_refute(req["source"], req["spec"], fn_names=req.get("fn"),
+                                     cases=int(req.get("cases", 16)), seed=int(req.get("seed", 1)),
+                                     includes=req.get("include") or None)
+            any_false = any(v["status"] == "FALSE" for v in res.values())
+            return {"ok": not any_false, "target": target, "results": _json_safe(res)}
+        return {"ok": False, "error": f"unknown cmd: {cmd!r}"}
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return {"ok": False, "error": str(exc)}
 
 
 def main(argv=None):
@@ -382,17 +594,41 @@ def main(argv=None):
     p_ref = sub.add_parser("refute", help="run concrete counterexample probes via core/conc.py (no Lean)")
     p_ref.add_argument("source", help=".ode source file")
     p_ref.add_argument("spec", help=".spec contract file")
+    p_ref.add_argument("--include", action="append", default=[], help="additional .spec file(s) prepended before spec")
+    p_ref.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
     p_ref.add_argument("--fn", action="append", default=None, help="function name(s) in source (default: all)")
     p_ref.add_argument("--cases", type=int, default=16, help="number of concrete probe cases per function")
     p_ref.add_argument("--seed", type=int, default=1)
 
+    sub.add_parser("serve", help="persistent JSON-lines worker on stdin/stdout (keeps tables and Python warm)")
+
     args = ap.parse_args(argv)
+    if args.cmd == "serve":
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError as exc:
+                resp = {"ok": False, "error": f"bad json: {exc}"}
+            else:
+                resp = handle_request(req)
+            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+        return 0
+
     overrides = parse_arg_overrides(getattr(args, "arg", None))
     budgets = parse_budgets(args) if args.cmd in ("check", "advise", "compare") else {}
 
     if args.cmd == "check":
         res = run_check(args.source, args.spec, fn_names=args.fn, out_dir=args.out, arch=args.arch,
-                        do_trace=args.trace, align=args.align, arg_overrides=overrides, budgets=budgets)
+                        do_trace=args.trace, align=args.align, arg_overrides=overrides,
+                        budgets=budgets, includes=args.include)
+        if args.json:
+            print(json.dumps(_json_safe(res)))
+            if res["verdict"] != "shown": return 1
+            return 2 if res["budget_errors"] else 0
         if res["verdict"] != "shown":
             print(res["diagnostic"])
             return 1
@@ -408,7 +644,11 @@ def main(argv=None):
 
     if args.cmd == "advise":
         res = run_advise(args.source, fn_name=args.fn, spec_path=args.spec, arch=args.arch,
-                         do_trace=args.trace, align=args.align, arg_overrides=overrides, budgets=budgets)
+                         do_trace=args.trace, align=args.align, arg_overrides=overrides,
+                         budgets=budgets, includes=args.include)
+        if args.json:
+            print(json.dumps(_json_safe(res)))
+            return 2 if res["budget_errors"] else 0
         print(res["advice_text"])
         if res["budget_errors"]:
             for e in res["budget_errors"]:
@@ -419,9 +659,12 @@ def main(argv=None):
     if args.cmd == "compare":
         if args.spec:
             ra = run_check(args.source_a, args.spec, fn_names=[args.fn] if args.fn else None, arch=args.arch,
-                           do_trace=args.trace, align=args.align, arg_overrides=overrides)
+                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include)
             rb = run_check(args.source_b, args.spec, fn_names=[args.fn] if args.fn else None, arch=args.arch,
-                           do_trace=args.trace, align=args.align, arg_overrides=overrides)
+                           do_trace=args.trace, align=args.align, arg_overrides=overrides, includes=args.include)
+            if args.json:
+                print(json.dumps(_json_safe({"a": ra, "b": rb})))
+                return 0 if (ra["verdict"] == "shown" and rb["verdict"] == "shown") else 1
             print(f"verdicts: A={ra['verdict']}, B={rb['verdict']}")
             if ra["verdict"] != "shown": print("A:\n" + ra["diagnostic"])
             if rb["verdict"] != "shown": print("B:\n" + rb["diagnostic"])
@@ -431,20 +674,25 @@ def main(argv=None):
                                            os.path.basename(args.source_b), rb["static"], rb["memory"]))
             return 0
         ra = run_advise(args.source_a, fn_name=args.fn, arch=args.arch, do_trace=args.trace,
-                        align=args.align, arg_overrides=overrides)
+                        align=args.align, arg_overrides=overrides, includes=args.include)
         rb = run_advise(args.source_b, fn_name=args.fn, arch=args.arch, do_trace=args.trace,
-                        align=args.align, arg_overrides=overrides)
+                        align=args.align, arg_overrides=overrides, includes=args.include)
+        if args.json:
+            print(json.dumps(_json_safe({"a": ra, "b": rb})))
+            return 0
         print(estimate.compare_reports(os.path.basename(args.source_a), ra["static"], ra["memory"],
                                        os.path.basename(args.source_b), rb["static"], rb["memory"]))
         return 0
 
     if args.cmd == "refute":
-        target, results = run_refute(args.source, args.spec, fn_names=args.fn, cases=args.cases, seed=args.seed)
-        any_false = False
+        target, results = run_refute(args.source, args.spec, fn_names=args.fn, cases=args.cases,
+                                     seed=args.seed, includes=args.include)
+        any_false = any(res["status"] == "FALSE" for res in results.values())
+        if args.json:
+            print(json.dumps(_json_safe({"target": target, "results": results})))
+            return 1 if any_false else 0
         for sym, res in results.items():
             print(refute_conc.format_refutation(res, sym))
-            if res["status"] == "FALSE":
-                any_false = True
         return 1 if any_false else 0
 
 

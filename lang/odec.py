@@ -98,7 +98,11 @@ ARM_WHOLE.update({f"v{i}": f"v{i}" for i in range(32)})
 ARM_GENERAL = {r: 8 for r in ARM_G64}
 ARM_GENERAL.update({r: 4 for r in ARM_G32})
 
-RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame", "budget"}       # words of operands: no name is one
+RESERVED = {"byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword", "ptr", "rip", "frame", "budget",
+            "if", "else", "loop", "while", "break", "continue"}       # words of operands and control forms: no name is one
+BRANCH_X86 = {"eq": "je", "ne": "jne", "ult": "jb", "uge": "jae"}
+BRANCH_ARM = {"eq": "b.eq", "ne": "b.ne", "ult": "b.lo", "uge": "b.hs"}
+INVERT_COND = {"eq": "ne", "ne": "eq", "ult": "uge", "uge": "ult"}
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
 KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
 BUDGET_KEYS = {
@@ -335,7 +339,19 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     instruction given back, (the number of its line, the line as it was typed, with a for's number put in).
     Where `meta` is a dict, it receives `regs` ({name: register}) and `frame` ((size, fields) or None)."""
     classes, whole, general, g64_addr, sp_name = target_spec(target)
-    out, uses, names, frame, budget = [], [0], {}, [None], [None]          # (names: the registers' names; frame: (size, fields); budget: {key: int})
+    branch_map = BRANCH_ARM if target == "arm64" else BRANCH_X86
+    jmp_op = "b" if target == "arm64" else "jmp"
+    out, uses, ctrl_seq, names, frame, budget = [], [0], [0], {}, [None], [None]          # (names: the registers' names; frame: (size, fields); budget: {key: int})
+
+    def branch_op(cond, n, invert=False):
+        if cond not in INVERT_COND:
+            stop(src, n, f"unknown condition `{cond}` (supported: eq, ne, ult, uge)")
+        return branch_map[INVERT_COND[cond] if invert else cond]
+
+    def emit(n, asm_line, typed_line, inside):
+        if inside: kept(asm_line, n, inside)
+        out.append(asm_line)
+        if typed_lines is not None: typed_lines.append((n, typed_line))
 
     def rewrite_place_line(ln, line):
         """Replace declared `reg` names and `frame` fields in the register/cell positions of a `place { ... }`
@@ -442,13 +458,27 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
         if (a, b) in (("register", "register"), ("register", "number"), ("register", "memory"), ("memory", "register"), ("memory", "number")): return f"mov {dst}, {src_}"
         stop(src, n, f"`:=` is one `mov`: into a register from a register, a number or memory, or into memory from a register or a number; not `{s}`")
 
-    def block(lines, start):
+    def block_end(lines, start):
         depth, j = 1, start
         while depth:
             if j == len(lines): stop(src, lines[start - 1][0], "the `}` that ends this is missing")
             s = lines[j][1].split("//")[0].strip()
-            depth += s.endswith("{"); depth -= s == "}"; j += 1
-        return lines[start:j - 1], j
+            if s.startswith("}"):
+                depth -= 1
+                if depth == 0:
+                    return lines[start:j], j + 1, s, lines[j][0]
+                if s.endswith("{"):
+                    depth += 1
+            elif s.endswith("{"):
+                depth += 1
+            j += 1
+        return lines[start:j - 1], j, "}", lines[j - 1][0]
+
+    def block(lines, start):
+        body, nxt, close_s, close_n = block_end(lines, start)
+        if close_s != "}":
+            stop(src, close_n, f"expected `}}`, not `{close_s}`")
+        return body, nxt
 
     def use(f, args, n, inside):
         if any(f is g for g, _, _ in inside): stop(src, n, f"the inline function {f.name} uses itself")
@@ -463,7 +493,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                     same = f"both are given {bind[a]}" if bind[a] == bind[b] else f"{bind[a]} and {bind[b]} are parts of one register"
                     stop(src, n, f"{f.name}: `{a}` and `{b}` must differ, and {same}")
         uses[0] += 1
-        run(f.body, {}, {l: f".Lode_{fn}_{f.name}{uses[0]}_{l}" for l in f.labels}, inside + [(f, n, bind)])
+        run(f.body, {}, {l: f".Lode_{fn}_{f.name}{uses[0]}_{l}" for l in f.labels}, inside + [(f, n, bind)], [])
 
     def kept(s, n, inside):
         """An instruction of an inline function changes only what `changes` lists: of that function, and of
@@ -476,10 +506,11 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 if r not in {whole[bind[p]] for p in f.changes}:
                     stop(src, n, f"{f.name}, used at line {at}: `{s}` changes {r}, which `changes` of {f.name} does not list")
 
-    def run(lines, env, labels, inside):
+    def run(lines, env, labels, inside, loops):
         """`env`: what each `$x` of a for stands for. `labels`: the names in the object of the labels that
         are a use's own. `inside`: the uses of inline functions these lines stand in, the outermost first,
-        each as (the inline function, the number of the use's line, {parameter: register})."""
+        each as (the inline function, the number of the use's line, {parameter: register}).
+        `loops`: stack of `(head_label, end_label)` for enclosing `loop { ... }` blocks."""
         i = 0
         while i < len(lines):
             n, s = lines[i][0], lines[i][1].split("//")[0].strip(); i += 1
@@ -488,8 +519,81 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
             m = re.fullmatch(r"for\s+(\w+)\s+in\s+(\d+)\.\.(\d+)\s*\{", s)
             if m:
                 body, i = block(lines, i)
-                for k in range(int(m.group(2)), int(m.group(3))): run(body, {**env, m.group(1): str(k)}, labels, inside)
+                for k in range(int(m.group(2)), int(m.group(3))): run(body, {**env, m.group(1): str(k)}, labels, inside, loops)
                 continue
+            m = re.fullmatch(r"if\s+(\w+)\s*\{", s)
+            if m:
+                cond = m.group(1)
+                inv = branch_op(cond, n, invert=True)
+                then_body, i, close_s, close_n = block_end(lines, i)
+                ctrl_seq[0] += 1
+                cid = ctrl_seq[0]
+                else_lbl = f".Lode_{fn}__if{cid}_else"
+                end_lbl = f".Lode_{fn}__if{cid}_end"
+                else_body = None
+                else_n = close_n
+                if re.fullmatch(r"\}\s*else\s*\{", close_s):
+                    else_body, i = block(lines, i)
+                elif close_s == "}":
+                    # Also accept `else {` on the next non-blank line
+                    k = i
+                    while k < len(lines) and not lines[k][1].split("//")[0].strip():
+                        k += 1
+                    if k < len(lines) and re.fullmatch(r"else\s*\{", lines[k][1].split("//")[0].strip()):
+                        else_n = lines[k][0]
+                        else_body, i = block(lines, k + 1)
+                else:
+                    stop(src, close_n, f"after `if {cond}` expected `}}` or `}} else {{`, not `{close_s}`")
+                if else_body is None:
+                    emit(n, f"{inv} {end_lbl}", s, inside)
+                    run(then_body, env, labels, inside, loops)
+                    emit(close_n, f"{end_lbl}:", f"{end_lbl}:", inside)
+                else:
+                    emit(n, f"{inv} {else_lbl}", s, inside)
+                    run(then_body, env, labels, inside, loops)
+                    emit(else_n, f"{jmp_op} {end_lbl}", "else", inside)
+                    emit(else_n, f"{else_lbl}:", f"{else_lbl}:", inside)
+                    run(else_body, env, labels, inside, loops)
+                    emit(close_n, f"{end_lbl}:", f"{end_lbl}:", inside)
+                continue
+            if re.fullmatch(r"else\s*\{", s) or re.fullmatch(r"\}\s*else\s*\{", s):
+                stop(src, n, "`else` without a preceding `if`")
+            if re.fullmatch(r"loop\s*\{", s):
+                body, i, close_s, close_n = block_end(lines, i)
+                ctrl_seq[0] += 1
+                cid = ctrl_seq[0]
+                head_lbl = f".Lode_{fn}__loop{cid}_head"
+                end_lbl = f".Lode_{fn}__loop{cid}_end"
+                emit(n, f"{head_lbl}:", f"{head_lbl}:", inside)
+                run(body, env, labels, inside, loops + [(head_lbl, end_lbl)])
+                if close_s == "}":
+                    emit(close_n, f"{jmp_op} {head_lbl}", "}", inside)
+                else:
+                    mw = re.fullmatch(r"\}\s*while\s+(\w+)", close_s)
+                    if not mw:
+                        stop(src, close_n, f"after `loop` expected `}}` or `}} while COND`, not `{close_s}`")
+                    br = branch_op(mw.group(1), close_n, invert=False)
+                    emit(close_n, f"{br} {head_lbl}", close_s, inside)
+                emit(close_n, f"{end_lbl}:", f"{end_lbl}:", inside)
+                continue
+            if s == "break":
+                if not loops: stop(src, n, "`break` outside a `loop`")
+                emit(n, f"{jmp_op} {loops[-1][1]}", s, inside); continue
+            m = re.fullmatch(r"break\s+if\s+(\w+)", s)
+            if m:
+                if not loops: stop(src, n, "`break if` outside a `loop`")
+                br = branch_op(m.group(1), n, invert=False)
+                emit(n, f"{br} {loops[-1][1]}", s, inside); continue
+            if s == "continue":
+                if not loops: stop(src, n, "`continue` outside a `loop`")
+                emit(n, f"{jmp_op} {loops[-1][0]}", s, inside); continue
+            m = re.fullmatch(r"continue\s+if\s+(\w+)", s)
+            if m:
+                if not loops: stop(src, n, "`continue if` outside a `loop`")
+                br = branch_op(m.group(1), n, invert=False)
+                emit(n, f"{br} {loops[-1][0]}", s, inside); continue
+            if re.match(r"(if|loop|break|continue)\b", s):
+                stop(src, n, f"malformed control form `{s}` (use `if COND {{`, `loop {{`, `break [if COND]`, `continue [if COND]`)")
             m = re.fullmatch(r'place\s*(?:"(\w+)"\s*)?\{', s) or re.fullmatch(r"place\s+(\w+)\s*\{", s)
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
@@ -555,7 +659,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
             out.append(s)
             if typed_lines is not None: typed_lines.append((n, typed))
 
-    run(numbered, {}, {}, [])
+    run(numbered, {}, {}, [], [])
     if meta is not None:
         meta["regs"] = dict(names)
         meta["frame"] = frame[0]

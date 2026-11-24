@@ -123,9 +123,18 @@ def expression(t):
     return e
 
 
+_READ_CACHE = {}
+
+
 def read(path=os.path.join(HERE, "x86.tab")):
+    ap = os.path.abspath(path)
+    st = os.stat(ap)
+    key = (ap, st.st_mtime_ns, st.st_size)
+    cached = _READ_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
     rows = []
-    with open(path) as f:
+    with open(ap) as f:
         for line in f:
             line = line.split("#")[0].strip()
             if not line: continue
@@ -133,6 +142,7 @@ def read(path=os.path.join(HERE, "x86.tab")):
             parts = [p.strip() for p in line.split("|")]
             if len(parts) != 4: raise ValueError(f"a row that is not NAME | ASM | ROW | EFFECT: {line}")
             rows.append(Row(*parts))
+    _READ_CACHE[key] = tuple(rows)
     return rows
 
 

@@ -103,8 +103,17 @@ def encode(way, bind):
     return word.to_bytes(4, "little")
 
 
+_WAYS_CACHE = {}
+
+
 def ways(rows):
-    return [Way(row, text) for row in rows for text in row.bytes]
+    key = tuple(id(r) for r in rows)
+    cached = _WAYS_CACHE.get(key)
+    if cached is not None:
+        return list(cached)
+    out = tuple(Way(row, text) for row in rows for text in row.bytes)
+    _WAYS_CACHE[key] = out
+    return list(out)
 
 
 def decode(all_ways, word):
