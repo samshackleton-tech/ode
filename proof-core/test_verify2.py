@@ -363,6 +363,172 @@ fn cmp3_fn(a: number, b: number)
                     self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                     self.assertIn(f"shown ({expect_fns} function{'s' if expect_fns != 1 else ''}, verify2)", r2.stdout)
 
+    def test_06_mid_function_join_places(self):
+        """Acyclic mid-function `place` join points (without `decreases`) compress 2^20 paths to linear
+        time and work inside loops on both x86-64 and AArch64 in both Lean `odeverify` and `verify2.py`."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        sys.path.insert(0, os.path.join(ROOT, "lang"))
+        import ode_audit
+
+        # (1) 20 sequential diamonds: 2^20 = 1,048,576 paths -> 40 linear paths.
+        n_diam = 20
+        defs = ["def step(x, k) { if x >= k then 1 else 2 }", "def acc0(x) { step(x, 0) }"]
+        for k in range(1, n_diam):
+            defs.append(f"def acc{k}(x) {{ acc{k-1}(x) + step(x, {k}) }}")
+        x86, arm = ["mov rax, 0"], ["mov x9, 0"]
+        for k in range(n_diam):
+            x86 += [f"cmp rdi, {k}", f"jb @lt{k}", "add rax, 1", f"jmp @j{k}", f"@lt{k}:", "add rax, 2",
+                    "place {", "    name acc = rax", "    fact 0 <= acc", f"    fact acc <= {2*(k+1)}",
+                    f"    fact acc == acc{k}(x)", "}", f"@j{k}:"]
+            arm += [f"cmp x0, {k}", f"b.lo @lt{k}", "add x9, x9, 1", f"b @j{k}", f"@lt{k}:", "add x9, x9, 2",
+                    "place {", "    name acc = x9", "    fact 0 <= acc", f"    fact acc <= {2*(k+1)}",
+                    f"    fact acc == acc{k}(x)", "}", f"@j{k}:"]
+        x86.append("ret")
+        arm += ["mov x0, x9", "ret"]
+        chain_src = "\n".join(defs) + (
+            f"\nfn chain20(x: number)\n    requires x < 1000\n    returns acc{n_diam-1}(x)\n"
+            f"    trace depends on x\n    stack 0\n{{\n    for x86_64 {{\n        "
+            + "\n        ".join(x86) + "\n    }\n    for arm64 {\n        "
+            + "\n        ".join(arm) + "\n    }\n}\n"
+        )
+
+        # (2) 3-way diamond merged by a join `place` inside a byte loop.
+        loop_join_src = """
+def step_v(b) { if b == 0 then 1 else if b == 1 then 3 else 5 }
+def sum_from(buf, i, acc) {
+    if i >= len(buf) then acc
+    else sum_from(buf, i + 1, acc + step_v(buf[i]))
+}
+def total(buf) { sum_from(buf, 0, 0) }
+
+fn sum_steps(buf: n bytes, n: number)
+    requires n < 100000
+    returns total(buf)
+    trace depends on buf, n
+    stack 0
+{
+    for x86_64 {
+        mov rcx, 0
+        mov r10, 0
+        place {
+            name i = rcx
+            name acc = r10
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= acc
+            fact acc <= 5 * i
+            fact total(buf) == sum_from(buf, i, acc)
+            decreases n - i
+        }
+    @loop:
+        cmp rcx, rsi
+        jae @done
+        mov r8, rdi
+        add r8, rcx
+        movzx eax, byte ptr [r8]
+        cmp rax, 0
+        je @z
+        cmp rax, 1
+        je @one
+        mov r9, 5
+        jmp @merged
+    @z:
+        mov r9, 1
+        jmp @merged
+    @one:
+        mov r9, 3
+        place {
+            name i = rcx
+            name dv = r9
+            fact i < n
+            fact 0 <= dv
+            fact dv <= 5
+            fact dv == step_v(buf[i])
+        }
+    @merged:
+        add r10, r9
+        add rcx, 1
+        jmp @loop
+    @done:
+        mov rax, r10
+        ret
+    }
+    for arm64 {
+        mov x3, 0
+        mov x4, 0
+        place {
+            name i = x3
+            name acc = x4
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= acc
+            fact acc <= 5 * i
+            fact total(buf) == sum_from(buf, i, acc)
+            decreases n - i
+        }
+    @loop:
+        cmp x3, x1
+        b.hs @done
+        add x5, x0, x3
+        ldrb w6, [x5, 0]
+        cmp x6, 0
+        b.eq @z
+        cmp x6, 1
+        b.eq @one
+        mov x9, 5
+        b @merged
+    @z:
+        mov x9, 1
+        b @merged
+    @one:
+        mov x9, 3
+        place {
+            name i = x3
+            name dv = x9
+            fact i < n
+            fact 0 <= dv
+            fact dv <= 5
+            fact dv == step_v(buf[i])
+        }
+    @merged:
+        add x4, x4, x9
+        add x3, x3, 1
+        b @loop
+    @done:
+        mov x0, x4
+        ret
+    }
+}
+"""
+        for nm, src in (("chain20", chain_src), ("sum_steps", loop_join_src)):
+            for target in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    p = os.path.join(d, f"{nm}.ode")
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(src)
+                    out_o = os.path.join(d, "out.o")
+                    out_p = os.path.join(d, "out.proof")
+                    res = ode_audit.pack_verified(p, None, out_o, out_p, fn_name=nm, target=target)
+                    self.assertEqual(res["verdict"], "shown", res)
+                    dump = os.path.join(d, "dump.sh")
+                    st_p = os.path.join(d, "st.txt")
+                    pf_p = os.path.join(d, "pf.txt")
+                    with open(dump, "w", encoding="utf-8") as f:
+                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                    os.chmod(dump, 0o755)
+                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                    with open(pf_p, "r", encoding="utf-8") as f:
+                        self.assertIn("\njoin ", f.read())
+                    tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                    r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                    self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                    r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                        capture_output=True, text=True)
+                    self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                    self.assertIn("shown (1 function, verify2)", r2.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

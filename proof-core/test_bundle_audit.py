@@ -670,6 +670,115 @@ contract bump(v: number) {
         self.assertNotEqual(r_x.returncode, 0)
         self.assertIn("return address (x30)", r_x.stdout + r_x.stderr)
 
+    def test_11_join_places_negative_controls(self):
+        """Acyclic mid-function `place` join points refuse cycles without `decreases`,
+        refuse branch-1 assumption leakage onto branch 2, and refuse dropped trace marks."""
+        ode_tool_py = os.path.join(ROOT, "lang", "ode_tool.py")
+
+        # (1) Cycle through a join place (no `decreases`) must be refused with clear message.
+        neg_cycle = textwrap.dedent("""
+            fn inf_loop(x: number)
+                returns 0
+                trace depends on x
+                stack 0
+            {
+                for x86_64 {
+                    mov rax, 0
+                    place {
+                        name a = rax
+                        fact a == 0
+                    }
+                @loop:
+                    cmp rdi, 0
+                    je @done
+                    jmp @loop
+                @done:
+                    ret
+                }
+            }
+        """)
+        p1 = os.path.join(self.tmp, "neg_cycle.ode")
+        with open(p1, "w", encoding="utf-8") as f:
+            f.write(neg_cycle)
+        r1 = subprocess.run([sys.executable, ode_tool_py, "check", p1, "--target", "x86_64"],
+                            capture_output=True, text=True)
+        self.assertNotEqual(r1.returncode, 0)
+        self.assertIn("a path returns to it", r1.stdout + r1.stderr)
+        self.assertIn("decreases", r1.stdout + r1.stderr)
+
+        # (2) Branch-1 assumption (`x == 0`) must NOT leak across join onto branch 2 (`x != 0`).
+        neg_leak = textwrap.dedent("""
+            fn bad_leak(x: number)
+                requires x < 100
+                returns 0
+                trace depends on x
+                stack 0
+            {
+                for x86_64 {
+                    cmp rdi, 0
+                    je @b1
+                    mov rax, 1
+                    jmp @j
+                @b1:
+                    mov rax, 0
+                    place {
+                        name a = rax
+                        fact 0 <= a
+                        fact a <= 1
+                    }
+                @j:
+                    mov rax, rdi
+                    ret
+                }
+            }
+        """)
+        p2 = os.path.join(self.tmp, "neg_leak.ode")
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write(neg_leak)
+        r2 = subprocess.run([sys.executable, ode_tool_py, "check", p2, "--target", "x86_64"],
+                            capture_output=True, text=True)
+        self.assertNotEqual(r2.returncode, 0)
+
+        # (3) Hidden trace mark on branch 2 (`rax := y`) must be caught when branching after join.
+        neg_trace = textwrap.dedent("""
+            fn bad_trace(x: number, y: number)
+                requires x < 100
+                requires y < 100
+                returns 0
+                trace depends on x
+                stack 0
+            {
+                for x86_64 {
+                    cmp rdi, 0
+                    je @b1
+                    mov rax, rsi
+                    jmp @j
+                @b1:
+                    mov rax, 0
+                    place {
+                        name a = rax
+                        fact 0 <= a
+                        fact a <= 100
+                    }
+                @j:
+                    cmp rax, 0
+                    je @z
+                    mov rax, 0
+                    ret
+                @z:
+                    mov rax, 0
+                    ret
+                }
+            }
+        """)
+        p3 = os.path.join(self.tmp, "neg_trace.ode")
+        with open(p3, "w", encoding="utf-8") as f:
+            f.write(neg_trace)
+        r3 = subprocess.run([sys.executable, ode_tool_py, "check", p3, "--target", "x86_64"],
+                            capture_output=True, text=True)
+        self.assertNotEqual(r3.returncode, 0)
+        self.assertIn("kept out of the trace", r3.stdout + r3.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

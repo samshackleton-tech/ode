@@ -244,6 +244,11 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
       if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
       else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0 }] }
     | none => throw s!"cannot read {line}"
+  | ["join", pc] => onCur fun g => match pc.toNat? with
+    | some pc =>
+      if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
+      else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0, isJoin := true }] }
+    | none => throw s!"cannot read {line}"
   | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
   | "marked" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with marked := p.marked ++ rs }

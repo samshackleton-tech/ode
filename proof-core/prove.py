@@ -98,12 +98,29 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
     `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
     reg_list = REGISTERS if regs is None else regs
-    out, named, also, lanes, at = [], [], [], [], None
+    out, named, also, lanes, at, hdr_idx, saw_dec = [], [], [], [], None, None, False
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
-        if not line or line == "}": continue
+        if not line: continue
+        if line == "}":
+            if at is not None and not saw_dec:
+                # A `place { ... }` without `decreases` is an acyclic mid-function join point.
+                # Unlike loop places, named registers unchanged since the enclosing scope (e.g. a loop counter
+                # referenced in `fact`) can stay kept; `Unkept` automatically removes any that changed across branches.
+                out[hdr_idx] = f"join {at}"
+                out.append("keep " + " ".join(r for r in reg_list if r in keep.get(at, reg_list)))
+                if marked.get(at): out.append("marked " + " ".join(marked[at]))
+                if marked_result.get(at): out.append("marked_result " + " ".join(marked_result[at]))
+                out += lanes
+            at, hdr_idx, saw_dec = None, None, False
+            continue
         m = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", line)
-        if m: at = int(m.group(1), 16); out.append(f"place {at}"); named, also, lanes = [], [], []; continue
+        if m:
+            at = int(m.group(1), 16)
+            hdr_idx = len(out)
+            out.append(f"place {at}")
+            named, also, lanes, saw_dec = [], [], [], False
+            continue
         m = re.fullmatch(r"keep ((?:\w+ ?)+)", line)              # registers a place names and keeps all the same
         if m: also += m.group(1).split(); continue
         m = re.fullmatch(r"name (\w+) = (\w+)", line)
@@ -118,6 +135,7 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
         m = re.fullmatch(r"cell \[rsp \+ (\d+)\]: word (\w+) = (.+)", line)
         if m: lanes.append(cell_line(*m.groups(), seqs, kinds, name)); continue
         if line.startswith("decreases "):
+            saw_dec = True
             out.append("keep " + " ".join(r for r in reg_list if (r not in named or r in also) and r in keep.get(at, reg_list)))
             if marked.get(at): out.append("marked " + " ".join(marked[at]))      # registers that may depend on values kept out of the trace on a later coming there
             if marked_result.get(at): out.append("marked_result " + " ".join(marked_result[at]))
@@ -454,12 +472,15 @@ class Prover:
         while True:
             said = self.ask(proof)
             if self.finished(said): return proof
-            m = re.search(r"at the place (\d+) register (\d+) does not hold", said)
+            m = re.search(r"at the (?:join )?place (\d+) register (\d+) (?:does not hold|depends on a value not in scope)", said)
             if m: raise Unkept(int(m.group(1)), int(m.group(2)))
-            m = re.search(r"for `result depends on`:.*at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
+            m = re.search(r"for `result depends on`:.*at the (?:join )?place (\d+) register (\d+) may depend on values kept out of the trace", said)
             if m: raise MarkedResult(int(m.group(1)), int(m.group(2)))
-            m = re.search(r"at the place (\d+) register (\d+) may depend on values kept out of the trace", said)
+            m = re.search(r"at the (?:join )?place (\d+) register (\d+) may depend on values kept out of the trace", said)
             if m: raise Marked(int(m.group(1)), int(m.group(2)))
+            if "a path returns to it" in said:
+                self.last = said; self.last_proof = proof
+                raise NoPlace(self.last)
             if not said.startswith("need "):
                 if "kept out of the trace" in said and self.trace_exprs and "trace-clear" not in said:
                     with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
@@ -596,14 +617,21 @@ def prove(spec_text, targets, statement_out, out):
         later = [s for _, s in functions[at + 1:]]
         keep, marked, marked_result, runs = {}, {}, {}, 0
         trace_exprs, instrs, raw_ins = fn_statement_info(statement_out, symbol, reg_list)
-        # Pre-seed `keep` for each `place` by excluding registers written in its loop body, avoiding O(R) retries.
+        # Pre-seed `keep` for loop `place`s (those with `decreases`) by excluding registers written in the loop body.
         preseeded = False
+        cur_pat, cur_has_dec = None, False
         for pline in places_of[symbol].splitlines():
-            pm = re.fullmatch(r"\s*place \+(0x[0-9a-fA-F]+) \{", pline)
+            sline = pline.split("//")[0].strip()
+            pm = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", sline)
             if pm:
-                pat = int(pm.group(1), 16)
-                keep[pat] = loop_written_regs(raw_ins, pat, reg_list)
-                preseeded = True
+                cur_pat, cur_has_dec = int(pm.group(1), 16), False
+            elif sline.startswith("decreases "):
+                cur_has_dec = True
+            elif sline == "}" and cur_pat is not None:
+                if cur_has_dec:
+                    keep[cur_pat] = loop_written_regs(raw_ins, cur_pat, reg_list)
+                    preseeded = True
+                cur_pat, cur_has_dec = None, False
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
             p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,

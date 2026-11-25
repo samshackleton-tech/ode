@@ -1200,4 +1200,214 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
           rw [ev_agree hd (c1.then c2).agree]
           omega
 
+/-! ## Acyclic mid-function join places -/
+
+theorem joinFirst_props {ctx : Ctx} {base s first : Sym} {pl : Place}
+    (hj : joinFirst ctx base s pl = some first) (wfb : WF ctx base) :
+    first.nvars = base.nvars ∧ (∀ nr ∈ pl.names, nr.2 < ctx.nreg) ∧ WF ctx first ∧
+    (pl.cells ≠ [] → ∀ s0, ctx.contract.preVals ctx.defs s0) ∧
+    first.facts = base.facts ∧ first.bytes = base.bytes ∧ first.spec = base.spec ∧
+    first.tab = base.tab ∧ first.known = base.known ∧ first.terms = base.terms := by
+  unfold joinFirst at hj
+  dsimp only at hj
+  split at hj
+  · cases hj
+  · next hguard =>
+    injection hj with hf
+    have hkept : ∀ r, pl.keep.contains r = true → r < ctx.nreg ∧ bounded base.nvars (s.reg r) := by
+      intro r hr
+      have hall : (pl.keep.all fun r => decide (r < ctx.nreg) && decide ((s.reg r).coeff.length ≤ base.nvars)) = true := by
+        cases hx : (pl.keep.all fun r => decide (r < ctx.nreg) && decide ((s.reg r).coeff.length ≤ base.nvars)) with
+        | true => rfl
+        | false => exfalso; apply hguard; simp [hx]
+      have h1 := List.all_eq_true.mp hall r (List.contains_iff_mem.mp hr)
+      simp only [Bool.and_eq_true, decide_eq_true_eq] at h1
+      exact h1
+    have hnames : ∀ nr ∈ pl.names, nr.2 < ctx.nreg := by
+      intro ⟨n, r⟩ m
+      by_cases c : r < ctx.nreg
+      · exact c
+      · exfalso; apply hguard
+        have hany : (pl.names.any fun x => decide (ctx.nreg ≤ x.2)) = true :=
+          List.any_eq_true.mpr ⟨(n, r), m, by simp only [decide_eq_true_eq]; omega⟩
+        simp [hany]
+    have hcells_pv : pl.cells ≠ [] → ∀ s0, ctx.contract.preVals ctx.defs s0 := by
+      intro hne s0 x r l ch el mva
+      exfalso; apply hguard
+      have h1 : (!pl.cells.isEmpty) = true := by cases h : pl.cells with | nil => exact (hne h).elim | cons _ _ => rfl
+      have h2 : (!ctx.contract.valArrays.isEmpty) = true := by cases h : ctx.contract.valArrays with | nil => rw [h] at mva; cases mva | cons _ _ => rfl
+      simp [h1, h2]
+    subst hf
+    refine ⟨rfl, hnames, ?_, hcells_pv, rfl, rfl, rfl, rfl, rfl, rfl⟩
+    refine ⟨wfb.base, ?_, wfb.zf, wfb.cf, ?_, wfb.frameW, wfb.facts, wfb.bytes, wfb.spec, wfb.wrote,
+      ⟨wfb.words.table, wfb.words.atoms, wfb.words.vec, wfb.words.rotrs, wfb.words.wrote, wfb.words.spill⟩,
+      wfb.known, wfb.range⟩
+    · intro r hr
+      show bounded base.nvars (if pl.keep.contains r = true then s.reg r else base.reg r)
+      split
+      · next hk => exact (hkept r hk).2
+      · exact wfb.reg r hr
+    · intro o v m
+      have h1 := (List.mem_filter.mp m).2
+      simpa [bounded] using h1
+
+theorem general_holds_join {ctx : Ctx} {s0 : State} (pl : Place) {base first : Sym}
+    (wfb : WF ctx base) (wff : WF ctx first)
+    (hnv : first.nvars = base.nvars) (hfa : first.facts = base.facts) (hby : first.bytes = base.bytes)
+    (hsp : first.spec = base.spec) (htab : first.tab = base.tab) (hkn : first.known = base.known)
+    {ρb ρ : Nat → Int} {stb st : State} (Hb : Holds ctx s0 ρb base stb)
+    (A : AtPlace ctx pl s0 first ρb ρ st) :
+    Holds ctx s0 (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k)
+      (first.general ctx.nreg pl) st := by
+  have ag : Agree first.nvars ρ (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) := by
+    intro k hk
+    show ρ k = if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k
+    rw [if_neg (by omega)]
+  have hbase := wff.base
+  have hentry : ∀ r, r < ctx.nreg → (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) r = s0.reg r := by
+    intro r hr
+    show (if first.nvars ≤ r ∧ r < first.nvars + ctx.nreg then (st.reg (r - first.nvars) : Int) else ρ r) = s0.reg r
+    rw [if_neg (by omega)]
+    exact A.entry r hr
+  have hdata : (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) (dataVar ctx) = ctx.own s0 := by
+    show (if first.nvars ≤ ctx.nreg ∧ ctx.nreg < first.nvars + ctx.nreg then (st.reg (ctx.nreg - first.nvars) : Int) else ρ ctx.nreg) = ctx.own s0
+    rw [if_neg (by omega)]
+    exact A.data.1
+  have agb : Agree base.nvars ρb (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st.reg (k - first.nvars) : Int) else ρ k) := by
+    rw [← hnv]; exact Agree.trans (Nat.le_refl _) A.outer ag
+  have Hg := Hb.agree wfb agb
+  refine ⟨hentry, ⟨hdata, A.data.2⟩, ?_, A.small, trivial, trivial, ?_, (fun _ _ m => nomatch m), ?_,
+    (by simp only [Sym.general, hby]; exact Hg.bytes), (by simp only [Sym.general, hsp]; exact Hg.spec),
+    A.mem, (fun _ _ _ m => nomatch m),
+    ⟨(fun x ids h => by simp [Sym.general] at h), (fun w m => by simp [Sym.general] at m),
+     (fun w j i m => by simp [Sym.general] at m), fun _ _ h => nomatch h⟩,
+    (by simp only [Sym.general, Sym.terms, htab, hkn]; exact Hg.known), (fun _ h => nomatch h), A.vecIntact⟩
+  · intro r hr
+    show (st.reg r : Int) = ev _ (if pl.keep.contains r = true then first.reg r else Lin.var (first.nvars + r))
+    by_cases hk : pl.keep.contains r = true
+    · rw [if_pos hk, ← ev_agree (wff.reg r hr) ag]
+      exact A.kept r hr hk
+    · rw [if_neg hk, ev_var]
+      show (st.reg r : Int) = if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + ctx.nreg then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)
+      rw [if_pos (by omega), Nat.add_sub_cancel_left]
+  · intro o v m
+    obtain ⟨h1, h2, h3⟩ := A.frame o v m
+    exact ⟨h1, h2, by rw [← ev_agree (wff.frame o v m) ag]; exact h3⟩
+  · intro f m
+    simp only [Sym.general, List.mem_append] at m
+    rcases m with m | m
+    · obtain ⟨l, hl, hf⟩ := List.mem_flatten.mp m
+      obtain ⟨r, hr, rfl⟩ := List.mem_map.mp hl
+      have hr := List.mem_range.mp (List.mem_filter.mp hr).1
+      have sm := A.small r
+      unfold M64 at sm
+      have val : (if first.nvars ≤ first.nvars + r ∧ first.nvars + r < first.nvars + ctx.nreg then (st.reg (first.nvars + r - first.nvars) : Int) else ρ (first.nvars + r)) = st.reg r := by
+        rw [if_pos (by omega), Nat.add_sub_cancel_left]
+      simp only [ranged, List.mem_cons, List.mem_nil_iff, or_false] at hf
+      rcases hf with rfl | rfl
+      · rw [holds_iff, ev_var, val]; omega
+      · rw [holds_iff, ev_sub, ev_const, ev_var, val]; simp only [top]; omega
+    · rw [hfa] at m; exact Hg.facts f m
+
+theorem generalizeJoin_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place)
+    {base s first g : Sym} {items rest : Items} {ρb : Nat → Int} {stb : State}
+    (hj : joinFirst ctx base s pl = some first)
+    (h : generalizeJoin ctx pl first items = .ok (g, rest))
+    (Hb : Holds ctx s0 ρb base stb) (wfb : WF ctx base) :
+    (∀ nr ∈ pl.names, nr.2 < ctx.nreg) ∧ first.nvars = base.nvars ∧
+    ∀ ρ' st', AtPlace ctx pl s0 first ρb ρ' st' →
+      ∃ ρ'', Holds ctx s0 ρ'' g st' ∧ WF ctx g ∧ base.nvars ≤ g.nvars ∧ Agree base.nvars ρ' ρ'' := by
+  obtain ⟨hnv, hnames, wff, hcells_pv, hfa, hby, hsp, htab, hkn, _⟩ := joinFirst_props hj wfb
+  unfold generalizeJoin at h
+  obtain ⟨g1, r2, e2, h⟩ := V.bind_ok h
+  obtain ⟨gl, rl, el, h⟩ := V.bind_ok h
+  obtain ⟨gc, rc, ec, er⟩ := V.bind_ok h
+  refine ⟨hnames, hnv, ?_⟩
+  intro ρ' st' A
+  have H0 := general_holds_join pl wfb wff hnv hfa hby hsp htab hkn Hb A
+  have ag0 : Agree first.nvars ρ' (fun k => if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st'.reg (k - first.nvars) : Int) else ρ' k) := by
+    intro k hk
+    show ρ' k = if first.nvars ≤ k ∧ k < first.nvars + ctx.nreg then (st'.reg (k - first.nvars) : Int) else ρ' k
+    rw [if_neg (by omega)]
+  have w0 := general_wf pl wff
+  have envb0 : EnvB (first.general ctx.nreg pl).nvars (placeEnv ctx pl (first.general ctx.nreg pl).reg) := placeEnv_bounded pl w0 hnames
+  have env0 := semEnv_placeEnv (ctx := ctx) pl H0.entry H0.reg hnames
+  obtain ⟨ρa, ca⟩ := suppose_all E _ pl.facts e2 H0 w0 envb0 (fun e m => by rw [env0]; exact A.facts e m)
+  obtain ⟨ρl, cl0⟩ := supposeLanes_all E pl hnames pl.lanes el ca.holds ca.wf A.lanes
+  have cl' := cl0.then (supposeCells_all E pl hnames pl.cells ec cl0.holds cl0.wf (fun hne => hcells_pv hne s0) A.cells)
+  obtain ⟨ρr, cr⟩ := supposeRange_sound E pl hnames er cl'.holds cl'.wf A.wrote
+  have cl := (ca.then cl').then cr
+  refine ⟨ρr, cl.holds, cl.wf, ?_, ?_⟩
+  · rw [← hnv]; exact Nat.le_trans (Nat.le_add_right _ ctx.nreg) cl.mono
+  · rw [← hnv]; exact Agree.trans (Nat.le_add_right _ ctx.nreg) ag0 cl.agree
+
+theorem arriveJoin_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (pl : Place)
+    (hn : ∀ nr ∈ pl.names, nr.2 < ctx.nreg)
+    {first s : Sym} {items : Items} {r : Unit × Items} {ρb ρ : Nat → Int} {st : State}
+    (h : arriveJoin ctx pl first s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (ha : Agree first.nvars ρb ρ) :
+    AtPlace ctx pl s0 first ρb ρ st := by
+  cases hfind : pl.keep.find? (fun r => s.reg r != first.reg r) with
+  | some _ => simp only [arriveJoin, hfind] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [arriveJoin, hfind] at h
+    split at h
+    next => exact (refuse_ok h).elim
+    next =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next hframe =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next hvec =>
+      have hkeep : ∀ r, pl.keep.contains r = true → s.reg r = first.reg r := by
+        intro r hr
+        have hm : r ∈ pl.keep := List.contains_iff_mem.mp hr
+        have := List.find?_eq_none.mp hfind r hm
+        by_cases c : s.reg r = first.reg r
+        · exact c
+        · exact absurd (bne_iff_ne.mpr c) this
+      have hall : (first.frame.all fun cell => s.frame.contains cell) = true := by
+        cases hx : (first.frame.all fun cell => s.frame.contains cell) with
+        | true => rfl
+        | false => rw [hx] at hframe; exact (hframe rfl).elim
+      have hfr : ∀ o v, (o, v) ∈ first.frame → (o, v) ∈ s.frame := fun o v m =>
+        List.contains_iff_mem.mp (List.all_eq_true.mp hall (o, v) m)
+      have hvall : (first.vecIntact.all s.vecIntact.contains) = true := by
+        cases hx : (first.vecIntact.all s.vecIntact.contains) with
+        | true => rfl
+        | false => rw [hx] at hvec; exact (hvec rfl).elim
+      have hvi : ∀ r ∈ first.vecIntact, r ∈ s.vecIntact := fun r m =>
+        List.contains_iff_mem.mp (List.all_eq_true.mp hvall r m)
+      obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
+      split at h
+      next => exact (refuse_ok h).elim
+      next hshown =>
+      have shown : ∀ L ∈ pl.lanes, lanesShown ctx pl s1 L = true := by
+        intro L mL
+        have all : pl.lanes.all (lanesShown ctx pl s1) = true := by simpa using hshown
+        exact List.all_eq_true.mp all L mL
+      split at h
+      next => exact (refuse_ok h).elim
+      next hcells =>
+      have cshown : ∀ C ∈ pl.cells, cellShown ctx pl s1 C = true := by
+        intro C mC
+        have all : pl.cells.all (cellShown ctx pl s1) = true := by simpa using hcells
+        exact List.all_eq_true.mp all C mC
+      obtain ⟨⟨got, s1b⟩, rb, eb, _⟩ := V.bind_ok h
+      have envb : EnvB s.nvars (placeEnv ctx pl s.reg) := placeEnv_bounded pl wf hn
+      have env0 := semEnv_placeEnv (ctx := ctx) pl H.entry H.reg hn
+      obtain ⟨ρ1, c1', a1⟩ := establish_all E _ pl.facts e1 H wf envb
+      obtain ⟨_, _, says⟩ := rangeShown_sound E pl hn eb c1'.holds c1'.wf
+      have env1 : semEnv ctx s0 ρ1 (placeEnv ctx pl s.reg) = placeVals ctx pl s0 st := by
+        rw [← semEnv_agree envb c1'.agree]; exact env0
+      exact ⟨ha, H.entry, H.data, (fun r hr hk => by rw [← hkeep r hk]; exact H.reg r hr), H.small,
+             (fun o v m => H.frame o v (hfr o v m)), H.mem, (fun e m => by rw [← env1]; exact a1 e m),
+             fun L mL => lanesShown_sound E pl c1'.holds c1'.wf hn (shown L mL),
+             fun C mC => cellShown_sound E pl c1'.holds c1'.wf hn (cshown C mC), says,
+             fun r hr => H.vecIntact r (hvi r hr)⟩
+
 end Ode

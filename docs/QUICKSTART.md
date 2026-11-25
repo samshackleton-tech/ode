@@ -128,17 +128,38 @@ The auditor obtains `--expect-contract` independently from the published specifi
 
 ---
 
-## 3. Loop Invariants (`place`)
+## 3. Loop Invariants and Join Points (`place`)
 
-The verifier never guesses loop invariants: state what holds at each loop head in a `place { ... }` block immediately before the loop label. Writing loop specifications in direct tail-recursive form (passing running accumulators as parameters) lets the prover close each iteration in a single step.
+The verifier never guesses invariants: state what holds at a loop head or a branch merge point in a `place { ... }` block immediately before its label. Writing loop specifications in direct tail-recursive form (passing running accumulators as parameters) lets the prover close each iteration in a single step.
 
 | Directive in `place { ... }` | Meaning or obligation |
 |---|---|
-| `name x = reg` | Binds loop-varying register `reg` to a fresh symbolic variable `x` at the loop head. |
-| `fact E` | Inequality (`0 <= i`, `i <= n`) or specification equality proved on entry and on every back-edge. |
-| `decreases E` | Whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (termination). |
+| `name x = reg` | Binds a register `reg` to a symbolic name `x` at the label so `fact` lines can constrain it. |
+| `fact E` | Inequality (`0 <= i`, `i <= n`) or specification equality proved on every path reaching the label. |
+| `decreases E` | Whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (proves loop termination). |
 | `wrote buf[.. k] = E` | For count-up loops writing `buf`: promises bytes `[0, k)` already match `E`. For count-down loops, write `wrote buf[k ..] = E` for `[k, len(buf))`. |
 | `keep r1 r2` | Promises that registers `r1`, `r2` retain their pre-loop values across every iteration. |
+
+**Merging branches without a loop (mid-function join points):** A `place { ... }` block *without* a `decreases` line acts as an acyclic join point. Every incoming branch proves the stated `fact` lines, and the verifier checks the code after the label only once — turning a chain of `k` sequential `if/else` diamonds from `2^k` paths into `2k` linear steps. Join points work both at top level and inside loops; if a path ever returns to a join point without a `decreases` measure, the verifier refuses it.
+
+```ode
+        cmp rax, 0
+        je @case_zero
+        mov r9, 5
+        jmp @merged
+    @case_zero:
+        mov r9, 1
+        place {
+            name i = rcx
+            name dv = r9
+            fact i < n
+            fact 0 <= dv
+            fact dv <= 5
+            fact dv == step_v(buf[i])
+        }
+    @merged:
+        add r10, r9
+```
 
 ---
 

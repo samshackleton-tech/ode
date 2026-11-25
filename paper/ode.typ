@@ -410,7 +410,7 @@ Every line inside a target block is either a processor instruction from `core/x8
 - `inline fn g for arm64 (a: vec, b: vec, t: vec) distinct(a, b, t) changes a, t { ... }` — expands straight-line instruction blocks inline with compile-time checks on register disjointness (`distinct`) and modified registers (`changes`).
 - `for i in 0..8 { ... }` — compile-time unrolling substituting `$i` with `0..7` (not a runtime machine loop).
 - `loop { ... break if ult ... }` and `if eq { ... } else { ... }` — structured branches over flags set by an explicit comparison instruction.
-- `@label:` and `place { ... }` (`name x = reg`, `fact E`, `decreases M`, `wrote ...`, `keep ...`, one per line) — branch labels and loop invariants read by the prover and verifier (never emitted as machine bytes).
+- `@label:` and `place { ... }` (`name x = reg`, `fact E`, optional `decreases M`, `wrote ...`, `keep ...`, one per line) — branch labels and proof annotations (never emitted as machine bytes). With `decreases M`, a `place` states a loop invariant and termination measure; without `decreases`, it forms an acyclic mid-function join point whose shared tail is verified once across all incoming branches (cycles without `decreases` are refused).
 
 Figure 4 shows both target blocks of `all_zero`. Whenever control reaches `@loop`, every byte at indices `[0, idx)` has already tested zero, so checking the suffix from `idx` equals `zeros(a)` and `n - idx` strictly decreases each iteration. On both targets, `cur` and `cur64` (`edx`/`rdx`, `w4`/`x4`) alias the 32-bit and 64-bit views of one register so the byte load zero-extends cleanly into the 64-bit comparison.
 

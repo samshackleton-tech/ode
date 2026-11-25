@@ -1094,86 +1094,221 @@ theorem Relied.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : St
   rw [ev_agree hd a]
   exact lt
 
+/-- What the verifier relies on of each join place already verified in the current scope `base` (whose
+unknowns are `n = base.nvars` with values `ρb`): from every state matching `e.first`, the machine runs to the
+function's return and leaves what the contract promises. -/
+def ReliedJoin (world : List Program) (ctx : Ctx) (p : Program) (s0 : State)
+    (jdone : List JoinEntry) (n : Nat) (ρb : Nat → Int) : Prop :=
+  ∀ e ∈ jdone, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars = n ∧
+    ∀ ρ' st', AtPlace ctx e.place s0 e.first ρb ρ' st' → st'.rip = p.base + e.place.pc →
+      MarksOk ctx s0 { regq := e.first.q.regq, fq := e.first.q.fq } st' →
+      RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) st'
+
+theorem eachState_prop {α β : Type} {P : β → Prop} {f : β → α → V β} :
+    ∀ {xs : List α} {acc acc' : β} {items rest : Items},
+    eachState f acc xs items = .ok (acc', rest) → P acc →
+    (∀ x ∈ xs, ∀ b b' it it', P b → f b x it = .ok (b', it') → P b') →
+    P acc' ∧ (∀ x ∈ xs, ∃ b b' it it', P b ∧ f b x it = .ok (b', it'))
+  | [], _, _, _, _, h, hp, _ => by
+    have := V.pure_ok h; injection this with h1 _; subst h1
+    exact ⟨hp, fun _ m => nomatch m⟩
+  | x :: more, acc, acc', items, rest, h, hp, hstep => by
+    simp only [eachState] at h
+    obtain ⟨mid, r1, h1, h2⟩ := V.bind_ok h
+    have hpm : P mid := hstep x (List.mem_cons_self ..) acc mid items r1 hp h1
+    obtain ⟨hpa, hmem⟩ := eachState_prop h2 hpm (fun y my => hstep y (List.mem_cons_of_mem _ my))
+    refine ⟨hpa, fun y my => ?_⟩
+    cases my with
+    | head => exact ⟨acc, mid, items, r1, hp, h1⟩
+    | tail _ m => exact hmem y m
+
 /-- The paths from a state of which what the verifier holds is so: the machine runs to the function's
-return and leaves what the contract promises. Where a path first comes to a place, by induction on the
-place's number, which every way round to it makes less and which is never below zero. -/
+return and leaves what the contract promises, and every join place added to `jdone'` in the scope `base`
+is sound for every concrete state arriving there. -/
 theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (W : CalleesMeetAt world ctx s0)
     (Kc : ctx.contract.clear world ctx.pieces s0) :
-    ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State},
-    explore ctx fuel seen s pc items = .ok r → Holds ctx s0 ρ s st → WF ctx s → st.rip = p.base + pc →
-    MarksOk ctx s0 s.q st → Relied world ctx p s0 seen s.nvars ρ →
-    RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) st
-  | 0, seen, s, pc, items, r, ρ, st, h, H, wf, hrip, M, T => by
+    ∀ (fuel : Nat) {base : Sym} {seen : List Seen} {jstack : List Nat} {jdone jdone' : List JoinEntry}
+      {s : Sym} {pc : Nat} {items rest : Items} {ρb : Nat → Int} {stb : State},
+    explore ctx fuel base seen jstack jdone s pc items = .ok (jdone', rest) →
+    Holds ctx s0 ρb base stb → WF ctx base →
+    Relied world ctx p s0 seen base.nvars ρb →
+    ReliedJoin world ctx p s0 jdone base.nvars ρb →
+    ReliedJoin world ctx p s0 jdone' base.nvars ρb ∧
+    (∀ ρ st, base.nvars ≤ s.nvars → Agree base.nvars ρb ρ →
+      Holds ctx s0 ρ s st → WF ctx s → st.rip = p.base + pc → MarksOk ctx s0 s.q st →
+      RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) st)
+  | 0, _, _, _, _, _, _, _, _, _, _, _, h, _, _, _, _ => by
     simp only [explore] at h
     exact (refuse_ok h).elim
-  | fuel + 1, seen, s, pc, items, r, ρ, st, h, H, wf, hrip, M, T => by
+  | fuel + 1, base, seen, jstack, jdone, jdone', s, pc, items, rest, ρb, stb, h, Hb, wfb, Tb, Jb => by
     cases hl : ctx.code.lookup pc with
     | none => simp only [explore, hl] at h; exact (refuse_ok h).elim
     | some i =>
       simp only [explore, hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
-      obtain ⟨stc, hplc, Hc, wfc, Mc, hnv, _, _, _, _⟩ := symClears_sound E CLEARS hc H wf M
-      have hripc : stc.rip = p.base + pc := by
-        have := congrArg State.rip hplc; exact this.trans hrip
-      have Tc : Relied world ctx p s0 seen sc.nvars ρ := hnv ▸ T
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
+      have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
+          ReliedJoin world ctx p s0 jd base.nvars ρb →
+          onward ctx base seen jstack (explore ctx fuel) jd nx it = .ok (jd', it') →
+          ReliedJoin world ctx p s0 jd' base.nvars ρb := by
+        intro nx _ jd jd' it it' Jcur hbody
+        rcases nx with ⟨snx, nxt⟩
+        cases nxt with
+        | returned =>
+          simp only [onward] at hbody
+          have := V.pure_ok hbody; injection this with h1 _; subst h1; exact Jcur
+        | «at» pc' =>
+          simp only [onward] at hbody
+          cases hp : ctx.places.find? (fun p => p.pc == pc') with
+          | none =>
+            simp only [hp] at hbody
+            exact (explore_sound E W Kc fuel hbody Hb wfb Tb Jcur).1
+          | some pl =>
+            simp only [hp] at hbody
+            have epc : pl.pc = pc' := by simpa using List.find?_some hp
+            cases hj : pl.isJoin with
+            | false =>
+              simp only [hj, Bool.false_eq_true, ↓reduceIte] at hbody
+              cases hs : seen.find? (fun e => e.place.pc == pc') with
+              | some e =>
+                simp only [hs] at hbody
+                obtain ⟨_, _, _, hpur⟩ := V.bind_ok hbody
+                have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+              | none =>
+                simp only [hs] at hbody
+                obtain ⟨⟨_, _, _⟩, _, _, h2⟩ := V.bind_ok hbody
+                obtain ⟨_, _, _, hpur⟩ := V.bind_ok h2
+                have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+            | true =>
+              simp only [hj, ↓reduceIte] at hbody
+              split at hbody
+              · exact (refuse_ok hbody).elim
+              · cases hjd : jd.find? (fun e => e.place.pc == pc') with
+                | some e =>
+                  simp only [hjd] at hbody
+                  obtain ⟨_, _, _, hpur⟩ := V.bind_ok hbody
+                  have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+                | none =>
+                  simp only [hjd] at hbody
+                  cases hfirst : joinFirst ctx base snx pl with
+                  | none => simp only [hfirst] at hbody; exact (refuse_ok hbody).elim
+                  | some first =>
+                    simp only [hfirst] at hbody
+                    obtain ⟨_, _, _, h2⟩ := V.bind_ok hbody
+                    obtain ⟨g, _, eg, h3⟩ := V.bind_ok h2
+                    obtain ⟨jmid, _, hgo, hpur⟩ := V.bind_ok h3
+                    have := V.pure_ok hpur; injection this with h1 _; subst h1
+                    obtain ⟨hnames, hnv, G⟩ := generalizeJoin_sound E pl hfirst eg Hb wfb
+                    obtain ⟨Jmid, runG⟩ := explore_sound E W Kc fuel hgo Hb wfb Tb Jcur
+                    intro je mje
+                    cases mje with
+                    | head =>
+                      refine ⟨hnames, hnv, ?_⟩
+                      intro ρx stx Ax hripx Mx
+                      obtain ⟨ρ'', Hg, wg, leg, agx⟩ := G ρx stx Ax
+                      have agb : Agree base.nvars ρb ρ'' := Agree.trans (Nat.le_refl _) (hnv ▸ Ax.outer) agx
+                      exact runG ρ'' stx leg agb (Hg.q _) (wg.q _) (by rw [← epc]; exact hripx) Mx
+                    | tail _ mt => exact Jmid je mt
+      obtain ⟨Jout, hmem⟩ := eachState_prop (P := fun jd => ReliedJoin world ctx p s0 jd base.nvars ρb) h Jb honward_J
+      refine ⟨Jout, ?_⟩
+      intro ρ st hle hag H wf hrip M
+      obtain ⟨stc, hplc, Hc, wfc, Mc, hnv, _, _, _, _⟩ := symClears_sound E CLEARS hc H wf M
+      have hripc : stc.rip = p.base + pc := (congrArg State.rip hplc).trans hrip
+      have hlec : base.nvars ≤ sc.nvars := hnv ▸ hle
       refine runsPlain_of_plain (fun _ _ => post_plain) ?_ _ hplc
       apply step_runs E W Kc hl e1 Hc wfc hripc Mc
       intro s' pc' ρ' st' m hrip' c' M'
-      obtain ⟨items', r', hbody⟩ := each_mem h (s', Next.at pc') m
-      have T' := Tc.carried c'.mono c'.agree
+      obtain ⟨jd, jd', items', r', Jcur, hbody⟩ := hmem (s', Next.at pc') m
+      have hle' : base.nvars ≤ s'.nvars := Nat.le_trans hlec c'.mono
+      have hag' : Agree base.nvars ρb ρ' := Agree.trans hlec hag c'.agree
+      have T' : Relied world ctx p s0 seen s'.nvars ρ' := Tb.carried hle' hag'
       simp only [onward] at hbody
       cases hp : ctx.places.find? (fun p => p.pc == pc') with
       | none =>
         simp only [hp] at hbody
-        exact explore_sound E W Kc fuel hbody c'.holds c'.wf hrip' M' T'
+        exact (explore_sound E W Kc fuel hbody Hb wfb Tb Jcur).2 ρ' st' hle' hag' c'.holds c'.wf hrip' M'
       | some pl =>
         simp only [hp] at hbody
         have epc : pl.pc = pc' := by simpa using List.find?_some hp
-        cases hs : seen.find? (fun e => e.place.pc == pc') with
-        | some e =>
-          simp only [hs] at hbody
-          have em : e ∈ seen := List.mem_of_find?_eq_some hs
-          have eq : e.place.pc = pc' := by simpa using List.find?_some hs
-          obtain ⟨hn, hf, hd, run⟩ := T' e em
-          obtain ⟨A, k, val, lt⟩ := arrive_sound E e.place hn hbody c'.holds c'.wf hd
-          exact run ρ' st' A (by rw [eq]; exact hrip') (M'.fewer (arrive_q hbody).1 (arrive_q hbody).2) ⟨k, val, lt⟩
-        | none =>
-          simp only [hs] at hbody
-          obtain ⟨⟨g, d, first⟩, r2, e2, hgo⟩ := V.bind_ok hbody
-          obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
-          have T1 : Relied world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
-          have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
-              MarksOk ctx s0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stx →
-              Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
-              RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) stx := by
-            intro n
-            induction n using Nat.strongRecOn with
-            | ind n ih =>
-              intro ρx stx A hripx Mx val
-              obtain ⟨ρ'', Hg, agx, pos, val'⟩ := G ρx stx A
-              have same := Value.unique val val'
-              injection same with same
-              have a1 : Agree first.nvars ρ1 ρ'' := Agree.trans (Nat.le_refl _) A.outer agx
-              apply explore_sound E W Kc fuel hgo (Hg.q _) (wg.q _) (by rw [← epc]; exact hripx) Mx
-              intro e me
-              cases me with
-              | head =>
-                refine ⟨hn, leg, hd, ?_⟩
-                intro ρy sty Ay hripy My ⟨k, valy, lty⟩
-                have Ay1 : AtPlace ctx pl s0 first ρ1 ρy sty :=
-                  ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.data, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes, Ay.cells, Ay.wrote, Ay.vecIntact⟩
-                obtain ⟨ρz, _, _, posz, valz⟩ := G ρy sty Ay1
-                have samez := Value.unique valy valz
-                injection samez with samez
-                have lty : k + 1 ≤ ev ρ'' d := lty
-                have small : k.toNat < n := by omega
-                exact ih k.toNat small ρy sty Ay1 hripy My (by rw [Int.toNat_of_nonneg (by omega)]; exact valy)
-              | tail _ me => exact (T1.carried leg a1) e me
-          obtain ⟨ρ'', _, _, pos, val⟩ := G ρ1 st' A1
-          exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip')
-            (M'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
-            (by rw [Int.toNat_of_nonneg pos]; exact val)
+        cases hj : pl.isJoin with
+        | true =>
+          simp only [hj, ↓reduceIte] at hbody
+          split at hbody
+          · exact (refuse_ok hbody).elim
+          · cases hjd : jd.find? (fun e => e.place.pc == pc') with
+            | some e =>
+              simp only [hjd] at hbody
+              have em : e ∈ jd := List.mem_of_find?_eq_some hjd
+              have eq : e.place.pc = pc' := by simpa using List.find?_some hjd
+              obtain ⟨_, _, harr, _⟩ := V.bind_ok hbody
+              obtain ⟨hn, hnv, run⟩ := Jcur e em
+              have A := arriveJoin_sound E e.place hn harr c'.holds c'.wf (hnv.symm ▸ hag')
+              exact run ρ' st' A (by rw [eq]; exact hrip') (M'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2)
+            | none =>
+              simp only [hjd] at hbody
+              cases hfirst : joinFirst ctx base s' pl with
+              | none => simp only [hfirst] at hbody; exact (refuse_ok hbody).elim
+              | some first =>
+                simp only [hfirst] at hbody
+                obtain ⟨_, _, harr, h2⟩ := V.bind_ok hbody
+                obtain ⟨g, _, eg, h3⟩ := V.bind_ok h2
+                obtain ⟨_, _, hgo, _⟩ := V.bind_ok h3
+                obtain ⟨hnames, hnv, G⟩ := generalizeJoin_sound E pl hfirst eg Hb wfb
+                have runG := (explore_sound E W Kc fuel hgo Hb wfb Tb Jcur).2
+                have A := arriveJoin_sound E pl hnames harr c'.holds c'.wf (hnv.symm ▸ hag')
+                obtain ⟨ρ'', Hg, wg, leg, agx⟩ := G ρ' st' A
+                have agb : Agree base.nvars ρb ρ'' := Agree.trans (Nat.le_refl _) (hnv ▸ A.outer) agx
+                exact runG ρ'' st' leg agb (Hg.q _) (wg.q _) hrip' (M'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2)
+        | false =>
+          simp only [hj, Bool.false_eq_true, ↓reduceIte] at hbody
+          cases hs : seen.find? (fun e => e.place.pc == pc') with
+          | some e =>
+            simp only [hs] at hbody
+            have em : e ∈ seen := List.mem_of_find?_eq_some hs
+            have eq : e.place.pc = pc' := by simpa using List.find?_some hs
+            obtain ⟨_, _, harr, _⟩ := V.bind_ok hbody
+            obtain ⟨hn, hf, hd, run⟩ := T' e em
+            obtain ⟨A, k, val, lt⟩ := arrive_sound E e.place hn harr c'.holds c'.wf hd
+            exact run ρ' st' A (by rw [eq]; exact hrip') (M'.fewer (arrive_q harr).1 (arrive_q harr).2) ⟨k, val, lt⟩
+          | none =>
+            simp only [hs] at hbody
+            obtain ⟨⟨g, d, first⟩, r2, e2, h2⟩ := V.bind_ok hbody
+            obtain ⟨_, _, hgo, _⟩ := V.bind_ok h2
+            obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
+            have T1 : Relied world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
+            have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
+                MarksOk ctx s0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stx →
+                Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
+                RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) stx := by
+              intro n
+              induction n using Nat.strongRecOn with
+              | ind n ih =>
+                intro ρx stx A hripx Mx val
+                obtain ⟨ρ'', Hg, agx, pos, val'⟩ := G ρx stx A
+                have same := Value.unique val val'
+                injection same with same
+                have a1 : Agree first.nvars ρ1 ρ'' := Agree.trans (Nat.le_refl _) A.outer agx
+                have Tinner : Relied world ctx p s0 (⟨pl, d, { first with q := { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } }⟩ :: seen) g.nvars ρ'' := by
+                  intro e me
+                  cases me with
+                  | head =>
+                    refine ⟨hn, leg, hd, ?_⟩
+                    intro ρy sty Ay hripy My ⟨k, valy, lty⟩
+                    have Ay1 : AtPlace ctx pl s0 first ρ1 ρy sty :=
+                      ⟨Agree.trans (Nat.le_refl _) a1 Ay.outer, Ay.entry, Ay.data, Ay.kept, Ay.small, Ay.frame, Ay.mem, Ay.facts, Ay.lanes, Ay.cells, Ay.wrote, Ay.vecIntact⟩
+                    obtain ⟨ρz, _, _, posz, valz⟩ := G ρy sty Ay1
+                    have samez := Value.unique valy valz
+                    injection samez with samez
+                    have lty : k + 1 ≤ ev ρ'' d := lty
+                    have small : k.toNat < n := by omega
+                    exact ih k.toNat small ρy sty Ay1 hripy My (by rw [Int.toNat_of_nonneg (by omega)]; exact valy)
+                  | tail _ me => exact (T1.carried leg a1) e me
+                exact (explore_sound E W Kc fuel hgo (Hg.q _) (wg.q _) Tinner (fun _ m => nomatch m)).2
+                  ρ'' stx (Nat.le_refl _) (Agree.refl _ _) (Hg.q _) (wg.q _) (by rw [← epc]; exact hripx) Mx
+            obtain ⟨ρ'', _, _, pos, val⟩ := G ρ1 st' A1
+            exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip')
+              (M'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
+              (by rw [Int.toNat_of_nonneg pos]; exact val)
 
 /-! ## The entry, and the theorem -/
 
@@ -1504,9 +1639,9 @@ theorem verifyOne_sound_at (world : List Program) (ctx : Ctx) (p : Program) (pro
   obtain ⟨_, r1, e1, _⟩ := V.bind_ok hv
   obtain ⟨ρ0, H, wf⟩ := entry_holds E
   have W' : CalleesMeetAt world ctx s0' := W
-  have hr := explore_sound E W' clear PATH e1 H wf (by rw [E.rip]; rfl)
+  have hr := (explore_sound E W' clear PATH e1 H wf (fun e m => nomatch m) (fun e m => nomatch m)).2
+    ρ0 s0' (Nat.le_refl _) (Agree.refl _ _) H wf (by rw [E.rip]; rfl)
     (by rw [entrySym_q]; exact ⟨(fun _ _ => rfl), (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, (fun _ m => nomatch m)⟩)
-    (fun e m => nomatch m)
   rw [perm_with_marks] at hr
   have hr' := runsPlain_mono (fun t ht => (post_entry_with_marks ctx.contract ctx.defs s0 t {}).mp ht) hr
   exact runsPlain_of_plain (fun _ _ => post_plain) hr' s0 rfl
@@ -3241,107 +3376,241 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
         Aback ⟨(fun h => by cases h), (fun h => by cases h)⟩
         a' b' (hpla2 ▸ Eouta) (hplb2 ▸ Eoutb)
 
+def ReliedJoinTrace (world : List Program) (ctx : Ctx) (p : Program) (a0 b0 : State)
+    (jdone : List JoinEntry) (n : Nat) (ρab ρbb : Nat → Int) : Prop :=
+  ∀ e ∈ jdone, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars = n ∧
+    ∀ ρa' ρb' sta' stb', AtPlace ctx e.place a0 e.first ρab ρa' sta' → AtPlace ctx e.place b0 e.first ρbb ρb' stb' →
+      sta'.rip = p.base + e.place.pc → stb'.rip = p.base + e.place.pc →
+      MarksOk ctx a0 { regq := e.first.q.regq, fq := e.first.q.fq } sta' →
+      MarksOk ctx b0 { regq := e.first.q.regq, fq := e.first.q.fq } stb' →
+      Alike sta' stb' →
+      ∀ a' b', EndsP world p sta'.plain a' → EndsP world p stb'.plain b' →
+        a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0)
+
 theorem explore_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : State}
     (Ea : Setting ctx p a0) (Eb : Setting ctx p b0) (W : CalleesTrace world ctx a0)
     (hdok : ctx.contract.decreasesOk = true)
     (Ka : ctx.contract.clear world ctx.pieces a0) (Kb : ctx.contract.clear world ctx.pieces b0)
     (ta : ctx.contract.traceAgree ctx.defs a0 b0) :
-    ∀ (fuel : Nat) {seen : List Seen} {s : Sym} {pc : Nat} {items : Items} {r : Unit × Items}
-      {ρa ρb : Nat → Int} {sta stb : State},
-    explore ctx fuel seen s pc items = .ok r →
-    Holds ctx a0 ρa s sta → Holds ctx b0 ρb s stb → WF ctx s →
-    sta.rip = p.base + pc → stb.rip = p.base + pc →
-    MarksOk ctx a0 s.q sta → MarksOk ctx b0 s.q stb →
-    Alike sta stb → FlagEq ρa ρb s →
-    ReliedTrace world ctx p a0 b0 seen s.nvars ρa ρb →
-    ∀ a' b', EndsP world p sta.plain a' → EndsP world p stb.plain b' →
-      a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0)
-  | 0, _, _, _, _, _, _, _, _, _, h, _, _, _, _, _, _, _, _, _, _ => by
+    ∀ (fuel : Nat) {base : Sym} {seen : List Seen} {jstack : List Nat} {jdone jdone' : List JoinEntry}
+      {s : Sym} {pc : Nat} {items rest : Items} {ρab ρbb : Nat → Int} {stab stbb : State},
+    explore ctx fuel base seen jstack jdone s pc items = .ok (jdone', rest) →
+    Holds ctx a0 ρab base stab → Holds ctx b0 ρbb base stbb → WF ctx base →
+    ReliedTrace world ctx p a0 b0 seen base.nvars ρab ρbb →
+    ReliedJoinTrace world ctx p a0 b0 jdone base.nvars ρab ρbb →
+    ReliedJoinTrace world ctx p a0 b0 jdone' base.nvars ρab ρbb ∧
+    (∀ ρa ρb sta stb, base.nvars ≤ s.nvars → Agree base.nvars ρab ρa → Agree base.nvars ρbb ρb →
+      Holds ctx a0 ρa s sta → Holds ctx b0 ρb s stb → WF ctx s →
+      sta.rip = p.base + pc → stb.rip = p.base + pc →
+      MarksOk ctx a0 s.q sta → MarksOk ctx b0 s.q stb →
+      Alike sta stb → FlagEq ρa ρb s →
+      ∀ a' b', EndsP world p sta.plain a' → EndsP world p stb.plain b' →
+        a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0))
+  | 0, _, _, _, _, _, _, _, _, _, _, _, _, _, h, _, _, _, _, _ => by
     simp only [explore] at h; exact (refuse_ok h).elim
-  | fuel + 1, seen, s, pc, items, r, ρa, ρb, sta, stb, h, Ha, Hb, wf, hripa, hripb, Ma, Mb, A, FE, T => by
+  | fuel + 1, base, seen, jstack, jdone, jdone', s, pc, items, rest, ρab, ρbb, stab, stbb, h, Hab, Hbb, wfb, Tb, Jb => by
     cases hl : ctx.code.lookup pc with
     | none => simp only [explore, hl] at h; exact (refuse_ok h).elim
     | some i =>
       simp only [explore, hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
+      obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
+      have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
+          ReliedJoinTrace world ctx p a0 b0 jd base.nvars ρab ρbb →
+          onward ctx base seen jstack (explore ctx fuel) jd nx it = .ok (jd', it') →
+          ReliedJoinTrace world ctx p a0 b0 jd' base.nvars ρab ρbb := by
+        intro nx _ jd jd' it it' Jcur hbody
+        rcases nx with ⟨snx, nxt⟩
+        cases nxt with
+        | returned =>
+          simp only [onward] at hbody
+          have := V.pure_ok hbody; injection this with h1 _; subst h1; exact Jcur
+        | «at» pc' =>
+          simp only [onward] at hbody
+          cases hp : ctx.places.find? (fun p => p.pc == pc') with
+          | none =>
+            simp only [hp] at hbody
+            exact (explore_trace Ea Eb W hdok Ka Kb ta fuel hbody Hab Hbb wfb Tb Jcur).1
+          | some pl =>
+            simp only [hp] at hbody
+            have epc : pl.pc = pc' := by simpa using List.find?_some hp
+            cases hj : pl.isJoin with
+            | false =>
+              simp only [hj, Bool.false_eq_true, ↓reduceIte] at hbody
+              cases hs : seen.find? (fun e => e.place.pc == pc') with
+              | some e =>
+                simp only [hs] at hbody
+                obtain ⟨_, _, _, hpur⟩ := V.bind_ok hbody
+                have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+              | none =>
+                simp only [hs] at hbody
+                obtain ⟨⟨_, _, _⟩, _, _, h2⟩ := V.bind_ok hbody
+                obtain ⟨_, _, _, hpur⟩ := V.bind_ok h2
+                have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+            | true =>
+              simp only [hj, ↓reduceIte] at hbody
+              split at hbody
+              · exact (refuse_ok hbody).elim
+              · cases hjd : jd.find? (fun e => e.place.pc == pc') with
+                | some e =>
+                  simp only [hjd] at hbody
+                  obtain ⟨_, _, _, hpur⟩ := V.bind_ok hbody
+                  have := V.pure_ok hpur; injection this with h1 _; subst h1; exact Jcur
+                | none =>
+                  simp only [hjd] at hbody
+                  cases hfirst : joinFirst ctx base snx pl with
+                  | none => simp only [hfirst] at hbody; exact (refuse_ok hbody).elim
+                  | some first =>
+                    simp only [hfirst] at hbody
+                    obtain ⟨_, _, _, h2⟩ := V.bind_ok hbody
+                    obtain ⟨g, _, eg, h3⟩ := V.bind_ok h2
+                    obtain ⟨jmid, _, hgo, hpur⟩ := V.bind_ok h3
+                    have := V.pure_ok hpur; injection this with h1 _; subst h1
+                    obtain ⟨hnames, hnv, Ga⟩ := generalizeJoin_sound Ea pl hfirst eg Hab wfb
+                    obtain ⟨_, _, Gb⟩ := generalizeJoin_sound Eb pl hfirst eg Hbb wfb
+                    obtain ⟨Jmid, runG⟩ := explore_trace Ea Eb W hdok Ka Kb ta fuel hgo Hab Hbb wfb Tb Jcur
+                    intro je mje
+                    cases mje with
+                    | head =>
+                      refine ⟨hnames, hnv, ?_⟩
+                      intro ρax ρbx stax stbx Aax Abx hripax hripbx Max Mbx Ax
+                      obtain ⟨ρa'', Hga, wg, leg, agax⟩ := Ga ρax stax Aax
+                      obtain ⟨ρb'', Hgb, _, _, agbx⟩ := Gb ρbx stbx Abx
+                      have agab : Agree base.nvars ρab ρa'' := Agree.trans (Nat.le_refl _) (hnv ▸ Aax.outer) agax
+                      have agbb : Agree base.nvars ρbb ρb'' := Agree.trans (Nat.le_refl _) (hnv ▸ Abx.outer) agbx
+                      exact runG ρa'' ρb'' stax stbx leg agab agbb (Hga.q _) (Hgb.q _) (wg.q _)
+                        (by rw [← epc]; exact hripax) (by rw [← epc]; exact hripbx) Max Mbx Ax
+                        ⟨(fun h => by cases h), (fun h => by cases h)⟩
+                    | tail _ mt => exact Jmid je mt
+      obtain ⟨Jout, hmem⟩ := eachState_prop (P := fun jd => ReliedJoinTrace world ctx p a0 b0 jd base.nvars ρab ρbb) h Jb honward_J
+      refine ⟨Jout, ?_⟩
+      intro ρa ρb sta stb hle haga hagb Ha Hb wf hripa hripb Ma Mb A FE a' b' Epa Epb
       obtain ⟨stca, stcb, hpla, hplb, Hca, Hcb, wfc, Mca, Mcb, Ac, FEc, hnv⟩ :=
         symClears_two Ea Eb ta CLEARS hc Ha Hb wf Ma Mb A FE
       have hripca : stca.rip = p.base + pc := (congrArg State.rip hpla).trans hripa
       have hripcb : stcb.rip = p.base + pc := (congrArg State.rip hplb).trans hripb
-      have Tc : ReliedTrace world ctx p a0 b0 seen sc.nvars ρa ρb := hnv ▸ T
-      obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
-      intro a' b' Epa Epb
+      have hlec : base.nvars ≤ sc.nvars := hnv ▸ hle
       refine step_trace Ea Eb W hdok Ka Kb ta hl e1 Hca Hcb wfc hripca hripcb Mca Mcb Ac FEc ?_ a' b' (hpla.symm ▸ Epa) (hplb.symm ▸ Epb)
       intro s' pc' ρa' ρb' sta' stb' m hripa' hripb' ca' cb' Ma' Mb' A' FE'
-      obtain ⟨items', r', hbody⟩ := each_mem h (s', Next.at pc') m
-      have T' := Tc.carried ca'.mono ca'.agree cb'.agree
+      obtain ⟨jd, jd', items', r', Jcur, hbody⟩ := hmem (s', Next.at pc') m
+      have hle' : base.nvars ≤ s'.nvars := Nat.le_trans hlec ca'.mono
+      have haga' : Agree base.nvars ρab ρa' := Agree.trans hlec haga ca'.agree
+      have hagb' : Agree base.nvars ρbb ρb' := Agree.trans hlec hagb cb'.agree
+      have T' : ReliedTrace world ctx p a0 b0 seen s'.nvars ρa' ρb' := Tb.carried hle' haga' hagb'
       simp only [onward] at hbody
       cases hp : ctx.places.find? (fun p => p.pc == pc') with
       | none =>
         simp only [hp] at hbody
-        exact explore_trace Ea Eb W hdok Ka Kb ta fuel hbody ca'.holds cb'.holds ca'.wf hripa' hripb' Ma' Mb' A' FE' T'
+        exact (explore_trace Ea Eb W hdok Ka Kb ta fuel hbody Hab Hbb wfb Tb Jcur).2
+          ρa' ρb' sta' stb' hle' haga' hagb' ca'.holds cb'.holds ca'.wf hripa' hripb' Ma' Mb' A' FE'
       | some pl =>
         simp only [hp] at hbody
         have epc : pl.pc = pc' := by simpa using List.find?_some hp
-        cases hs : seen.find? (fun e => e.place.pc == pc') with
-        | some e =>
-          simp only [hs] at hbody
-          have em : e ∈ seen := List.mem_of_find?_eq_some hs
-          have eq : e.place.pc = pc' := by simpa using List.find?_some hs
-          obtain ⟨hn, hf, hd, run⟩ := T' e em
-          obtain ⟨Aa, k, vala, lta⟩ := arrive_sound Ea e.place hn hbody ca'.holds ca'.wf hd
-          obtain ⟨Ab, _, _, _⟩ := arrive_sound Eb e.place hn hbody cb'.holds cb'.wf hd
-          exact run ρa' ρb' sta' stb' Aa Ab (by rw [eq]; exact hripa') (by rw [eq]; exact hripb')
-            (Ma'.fewer (arrive_q hbody).1 (arrive_q hbody).2) (Mb'.fewer (arrive_q hbody).1 (arrive_q hbody).2) A' ⟨k, vala, lta⟩
-        | none =>
-          simp only [hs] at hbody
-          obtain ⟨⟨g, d, first⟩, r2, e2, hgo⟩ := V.bind_ok hbody
-          obtain ⟨hn, ρa1, aga1, lea1, Aa1, wg, leg, hd, Ga⟩ := generalize_sound Ea pl e2 ca'.holds ca'.wf
-          obtain ⟨_, ρb1, agb1, _, Ab1, _, _, _, Gb⟩ := generalize_sound Eb pl e2 cb'.holds cb'.wf
-          have T1 : ReliedTrace world ctx p a0 b0 seen first.nvars ρa1 ρb1 := T'.carried lea1 aga1 agb1
-          have all : ∀ (n : Nat) (ρax ρbx : Nat → Int) (stax stbx : State),
-              AtPlace ctx pl a0 first ρa1 ρax stax → AtPlace ctx pl b0 first ρb1 ρbx stbx →
-              stax.rip = p.base + pl.pc → stbx.rip = p.base + pl.pc →
-              MarksOk ctx a0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stax →
-              MarksOk ctx b0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stbx →
-              Alike stax stbx →
-              Value ctx.defs (placeVals ctx pl a0 stax) pl.decreases (.int (n : Int)) →
-              ∀ a' b', EndsP world p stax.plain a' → EndsP world p stbx.plain b' →
-                a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0) := by
-            intro n
-            induction n using Nat.strongRecOn with
-            | ind n ih =>
-              intro ρax ρbx stax stbx Aax Abx hripax hripbx Max Mbx Ax vala
-              obtain ⟨ρa'', Hga, agax, posa, vala'⟩ := Ga ρax stax Aax
-              obtain ⟨ρb'', Hgb, agbx, _, _⟩ := Gb ρbx stbx Abx
-              have same := Value.unique vala vala'; injection same with same
-              have aa1 : Agree first.nvars ρa1 ρa'' := Agree.trans (Nat.le_refl _) Aax.outer agax
-              have ab1 : Agree first.nvars ρb1 ρb'' := Agree.trans (Nat.le_refl _) Abx.outer agbx
-              apply explore_trace Ea Eb W hdok Ka Kb ta fuel hgo (Hga.q _) (Hgb.q _) (wg.q _)
-                (by rw [← epc]; exact hripax) (by rw [← epc]; exact hripbx) Max Mbx Ax
-                ⟨(fun h => by cases h), (fun h => by cases h)⟩
-              intro e me
-              cases me with
-              | head =>
-                refine ⟨hn, leg, hd, ?_⟩
-                intro ρay ρby stay stby Aay Aby hripay hripby May Mby Ay ⟨k, valay, ltay⟩
-                have Aay1 : AtPlace ctx pl a0 first ρa1 ρay stay :=
-                  ⟨Agree.trans (Nat.le_refl _) aa1 Aay.outer, Aay.entry, Aay.data, Aay.kept, Aay.small, Aay.frame, Aay.mem, Aay.facts, Aay.lanes, Aay.cells, Aay.wrote, Aay.vecIntact⟩
-                have Aby1 : AtPlace ctx pl b0 first ρb1 ρby stby :=
-                  ⟨Agree.trans (Nat.le_refl _) ab1 Aby.outer, Aby.entry, Aby.data, Aby.kept, Aby.small, Aby.frame, Aby.mem, Aby.facts, Aby.lanes, Aby.cells, Aby.wrote, Aby.vecIntact⟩
-                obtain ⟨ρaz, _, _, posz, valz⟩ := Ga ρay stay Aay1
-                have samez := Value.unique valay valz; injection samez with samez
-                have ltay : k + 1 ≤ ev ρa'' d := ltay
-                have small : k.toNat < n := by omega
-                exact ih k.toNat small ρay ρby stay stby Aay1 Aby1 hripay hripby May Mby Ay
-                  (by rw [Int.toNat_of_nonneg (by omega)]; exact valay)
-              | tail _ me => exact (T1.carried leg aa1 ab1) e me
-          obtain ⟨ρa'', _, _, posa, vala⟩ := Ga ρa1 sta' Aa1
-          exact all (ev ρa'' d).toNat ρa1 ρb1 sta' stb' Aa1 Ab1
-            (by rw [epc]; exact hripa') (by rw [epc]; exact hripb')
-            (Ma'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
-            (Mb'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
-            A' (by rw [Int.toNat_of_nonneg posa]; exact vala)
+        cases hj : pl.isJoin with
+        | true =>
+          simp only [hj, ↓reduceIte] at hbody
+          split at hbody
+          · exact (refuse_ok hbody).elim
+          · cases hjd : jd.find? (fun e => e.place.pc == pc') with
+            | some e =>
+              simp only [hjd] at hbody
+              have em : e ∈ jd := List.mem_of_find?_eq_some hjd
+              have eq : e.place.pc = pc' := by simpa using List.find?_some hjd
+              obtain ⟨_, _, harr, _⟩ := V.bind_ok hbody
+              obtain ⟨hn, hnv, run⟩ := Jcur e em
+              have Aa := arriveJoin_sound Ea e.place hn harr ca'.holds ca'.wf (hnv.symm ▸ haga')
+              have Ab := arriveJoin_sound Eb e.place hn harr cb'.holds cb'.wf (hnv.symm ▸ hagb')
+              exact run ρa' ρb' sta' stb' Aa Ab (by rw [eq]; exact hripa') (by rw [eq]; exact hripb')
+                (Ma'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2)
+                (Mb'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2) A'
+            | none =>
+              simp only [hjd] at hbody
+              cases hfirst : joinFirst ctx base s' pl with
+              | none => simp only [hfirst] at hbody; exact (refuse_ok hbody).elim
+              | some first =>
+                simp only [hfirst] at hbody
+                obtain ⟨_, _, harr, h2⟩ := V.bind_ok hbody
+                obtain ⟨g, _, eg, h3⟩ := V.bind_ok h2
+                obtain ⟨_, _, hgo, _⟩ := V.bind_ok h3
+                obtain ⟨hnames, hnv, Ga⟩ := generalizeJoin_sound Ea pl hfirst eg Hab wfb
+                obtain ⟨_, _, Gb⟩ := generalizeJoin_sound Eb pl hfirst eg Hbb wfb
+                have runG := (explore_trace Ea Eb W hdok Ka Kb ta fuel hgo Hab Hbb wfb Tb Jcur).2
+                have Aa := arriveJoin_sound Ea pl hnames harr ca'.holds ca'.wf (hnv.symm ▸ haga')
+                have Ab := arriveJoin_sound Eb pl hnames harr cb'.holds cb'.wf (hnv.symm ▸ hagb')
+                obtain ⟨ρa'', Hga, wg, leg, agax⟩ := Ga ρa' sta' Aa
+                obtain ⟨ρb'', Hgb, _, _, agbx⟩ := Gb ρb' stb' Ab
+                have agab : Agree base.nvars ρab ρa'' := Agree.trans (Nat.le_refl _) (hnv ▸ Aa.outer) agax
+                have agbb : Agree base.nvars ρbb ρb'' := Agree.trans (Nat.le_refl _) (hnv ▸ Ab.outer) agbx
+                exact runG ρa'' ρb'' sta' stb' leg agab agbb (Hga.q _) (Hgb.q _) (wg.q _)
+                  hripa' hripb'
+                  (Ma'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2)
+                  (Mb'.fewer (arriveJoin_q harr).1 (arriveJoin_q harr).2) A'
+                  ⟨(fun h => by cases h), (fun h => by cases h)⟩
+        | false =>
+          simp only [hj, Bool.false_eq_true, ↓reduceIte] at hbody
+          cases hs : seen.find? (fun e => e.place.pc == pc') with
+          | some e =>
+            simp only [hs] at hbody
+            have em : e ∈ seen := List.mem_of_find?_eq_some hs
+            have eq : e.place.pc = pc' := by simpa using List.find?_some hs
+            obtain ⟨_, _, harr, _⟩ := V.bind_ok hbody
+            obtain ⟨hn, hf, hd, run⟩ := T' e em
+            obtain ⟨Aa, k, vala, lta⟩ := arrive_sound Ea e.place hn harr ca'.holds ca'.wf hd
+            obtain ⟨Ab, _, _, _⟩ := arrive_sound Eb e.place hn harr cb'.holds cb'.wf hd
+            exact run ρa' ρb' sta' stb' Aa Ab (by rw [eq]; exact hripa') (by rw [eq]; exact hripb')
+              (Ma'.fewer (arrive_q harr).1 (arrive_q harr).2) (Mb'.fewer (arrive_q harr).1 (arrive_q harr).2) A' ⟨k, vala, lta⟩
+          | none =>
+            simp only [hs] at hbody
+            obtain ⟨⟨g, d, first⟩, r2, e2, h2⟩ := V.bind_ok hbody
+            obtain ⟨_, _, hgo, _⟩ := V.bind_ok h2
+            obtain ⟨hn, ρa1, aga1, lea1, Aa1, wg, leg, hd, Ga⟩ := generalize_sound Ea pl e2 ca'.holds ca'.wf
+            obtain ⟨_, ρb1, agb1, _, Ab1, _, _, _, Gb⟩ := generalize_sound Eb pl e2 cb'.holds cb'.wf
+            have T1 : ReliedTrace world ctx p a0 b0 seen first.nvars ρa1 ρb1 := T'.carried lea1 aga1 agb1
+            have all : ∀ (n : Nat) (ρax ρbx : Nat → Int) (stax stbx : State),
+                AtPlace ctx pl a0 first ρa1 ρax stax → AtPlace ctx pl b0 first ρb1 ρbx stbx →
+                stax.rip = p.base + pl.pc → stbx.rip = p.base + pl.pc →
+                MarksOk ctx a0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stax →
+                MarksOk ctx b0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stbx →
+                Alike stax stbx →
+                Value ctx.defs (placeVals ctx pl a0 stax) pl.decreases (.int (n : Int)) →
+                ∀ a' b', EndsP world p stax.plain a' → EndsP world p stbx.plain b' →
+                  a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0) := by
+              intro n
+              induction n using Nat.strongRecOn with
+              | ind n ih =>
+                intro ρax ρbx stax stbx Aax Abx hripax hripbx Max Mbx Ax vala
+                obtain ⟨ρa'', Hga, agax, posa, vala'⟩ := Ga ρax stax Aax
+                obtain ⟨ρb'', Hgb, agbx, _, _⟩ := Gb ρbx stbx Abx
+                have same := Value.unique vala vala'; injection same with same
+                have aa1 : Agree first.nvars ρa1 ρa'' := Agree.trans (Nat.le_refl _) Aax.outer agax
+                have ab1 : Agree first.nvars ρb1 ρb'' := Agree.trans (Nat.le_refl _) Abx.outer agbx
+                have Tinner : ReliedTrace world ctx p a0 b0 (⟨pl, d, { first with q := { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } }⟩ :: seen) g.nvars ρa'' ρb'' := by
+                  intro e me
+                  cases me with
+                  | head =>
+                    refine ⟨hn, leg, hd, ?_⟩
+                    intro ρay ρby stay stby Aay Aby hripay hripby May Mby Ay ⟨k, valay, ltay⟩
+                    have Aay1 : AtPlace ctx pl a0 first ρa1 ρay stay :=
+                      ⟨Agree.trans (Nat.le_refl _) aa1 Aay.outer, Aay.entry, Aay.data, Aay.kept, Aay.small, Aay.frame, Aay.mem, Aay.facts, Aay.lanes, Aay.cells, Aay.wrote, Aay.vecIntact⟩
+                    have Aby1 : AtPlace ctx pl b0 first ρb1 ρby stby :=
+                      ⟨Agree.trans (Nat.le_refl _) ab1 Aby.outer, Aby.entry, Aby.data, Aby.kept, Aby.small, Aby.frame, Aby.mem, Aby.facts, Aby.lanes, Aby.cells, Aby.wrote, Aby.vecIntact⟩
+                    obtain ⟨ρaz, _, _, posz, valz⟩ := Ga ρay stay Aay1
+                    have samez := Value.unique valay valz; injection samez with samez
+                    have ltay : k + 1 ≤ ev ρa'' d := ltay
+                    have small : k.toNat < n := by omega
+                    exact ih k.toNat small ρay ρby stay stby Aay1 Aby1 hripay hripby May Mby Ay
+                      (by rw [Int.toNat_of_nonneg (by omega)]; exact valay)
+                  | tail _ me => exact (T1.carried leg aa1 ab1) e me
+                exact (explore_trace Ea Eb W hdok Ka Kb ta fuel hgo (Hga.q _) (Hgb.q _) (wg.q _) Tinner (fun _ m => nomatch m)).2
+                  ρa'' ρb'' stax stbx (Nat.le_refl _) (Agree.refl _ _) (Agree.refl _ _) (Hga.q _) (Hgb.q _) (wg.q _)
+                  (by rw [← epc]; exact hripax) (by rw [← epc]; exact hripbx) Max Mbx Ax
+                  ⟨(fun h => by cases h), (fun h => by cases h)⟩
+            obtain ⟨ρa'', _, _, posa, vala⟩ := Ga ρa1 sta' Aa1
+            exact all (ev ρa'' d).toNat ρa1 ρb1 sta' stb' Aa1 Ab1
+              (by rw [epc]; exact hripa') (by rw [epc]; exact hripb')
+              (Ma'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
+              (Mb'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
+              A' (by rw [Int.toNat_of_nonneg posa]; exact vala)
 
 theorem verifyOne_trace_sound_at (world : List Program) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
     (h : verdictOne ctx proof = none) (a0 b0 : State) (W : CalleesTrace world ctx a0)
@@ -3387,12 +3656,13 @@ theorem verifyOne_trace_sound_at (world : List Program) (ctx : Ctx) (p : Program
   have Mregb : ∀ r ∈ ctx.contract.cleanAtEntry ++ ctx.contract.link.toList, b0m.marks.reg r = false := by
     intro r hr; exact Mrega r hr
   have Wm : CalleesTrace world ctx a0m := W
-  exact explore_trace Ea Eb Wm hdok ka kb tam PATH e1 Ha Hb wf (by rw [Ea.rip]; rfl) (by rw [Eb.rip]; rfl)
+  exact (explore_trace Ea Eb Wm hdok ka kb tam PATH e1 Ha Hb wf (fun e m => nomatch m) (fun e m => nomatch m)).2
+    ρa0 ρb0 a0m b0m (Nat.le_refl _) (Agree.refl _ _) (Agree.refl _ _) Ha Hb wf (by rw [Ea.rip]; rfl) (by rw [Eb.rip]; rfl)
     (by rw [entrySym_q]; exact ⟨Mrega, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, (fun _ m => nomatch m)⟩)
     (by rw [entrySym_q]; exact ⟨Mregb, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, (fun _ m => nomatch m)⟩)
     A0 (by constructor
            · rw [entrySym_q, (entrySym_flags ctx).1]; intro x; cases x
-           · rw [entrySym_q, (entrySym_flags ctx).2]; intro x; cases x) (fun e m => nomatch m) a' b' Epa Epb
+           · rw [entrySym_q, (entrySym_flags ctx).2]; intro x; cases x) a' b' Epa Epb
 
 theorem verdictFrom_trace_sound (world : List Program) (pieces : List Piece) (defs : List Def) :
     ∀ (fns : List Fn) (done : List (String × Contract)),

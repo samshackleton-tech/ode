@@ -212,10 +212,12 @@ private def tagPc (pc : Nat) (m : V α) : V α := fun st =>
 as soon as a path returns to an instruction it already visited without passing a `place`.
 `visited` records `(pc, liveCountAtEntry)` along the current active path so completed sibling
 branches never count toward a later loop's budget. -/
-def onwardAt (ctx : Ctx) (livePrefix : Array Nat) (seen : List Seen) (visited : List (Nat × Nat))
-    (go : List Seen → List (Nat × Nat) → Sym → Nat → V Unit) (next : Sym × Next) : V Unit :=
+def onwardAt (ctx : Ctx) (livePrefix : Array Nat) (base : Sym) (seen : List Seen) (jstack : List Nat)
+    (visited : List (Nat × Nat))
+    (go : Sym → List Seen → List Nat → List JoinEntry → List (Nat × Nat) → Sym → Nat → V (List JoinEntry))
+    (jdone : List JoinEntry) (next : Sym × Next) : V (List JoinEntry) :=
   match next.2 with
-  | .returned => pure ()
+  | .returned => pure jdone
   | .at pc' =>
     match ctx.places.find? (fun p => p.pc == pc') with
     | none => fun st =>
@@ -226,24 +228,45 @@ def onwardAt (ctx : Ctx) (livePrefix : Array Nat) (seen : List Seen) (visited : 
       let loopLives := curLives - firstLives
       if vc ≥ 65 ∨ (vc ≥ 4 ∧ loopLives ≥ 150) then
         .error s!"at +{pc'}\nrefused: path returned to +{pc'} with no place"
-      else go seen ((pc', curLives) :: visited) next.1 pc' st
+      else go base seen jstack jdone ((pc', curLives) :: visited) next.1 pc' st
     | some p =>
-      match seen.find? (fun e => e.place.pc == pc') with
-      | some e => tagPc pc' (arrive ctx e.place e.first e.d next.1)
-      | none => do
-        let (g, d, first) ← tagPc pc' (generalize ctx p next.1)
-        go (⟨p, d, { first with q := { regq := placeQuiet ctx p next.1.q.regq } }⟩ :: seen) [(pc', 0)]
-           { g with q := { regq := placeQuiet ctx p next.1.q.regq } } pc'
+      if p.isJoin then
+        if jstack.contains pc' then
+          tagPc pc' (refuse s!"at the join place {pc'} a path returns to it (add `decreases` for a loop)")
+        else
+          match jdone.find? (fun e => e.place.pc == pc') with
+          | some e => do tagPc pc' (arriveJoin ctx e.place e.first next.1); pure jdone
+          | none =>
+            match joinFirst ctx base next.1 p with
+            | none =>
+              match p.keep.find? fun r => !(decide (r < ctx.nreg) && decide ((next.1.reg r).coeff.length ≤ base.nvars)) with
+              | some r => tagPc pc' (refuse s!"at the join place {pc'} register {r} depends on a value not in scope")
+              | none => tagPc pc' (refuse s!"at the join place {pc'} a kept register depends on a value not in scope")
+            | some first => do
+              tagPc pc' (arriveJoin ctx p first next.1)
+              let g ← tagPc pc' (generalizeJoin ctx p first)
+              let jdone' ← go base seen (pc' :: jstack) jdone [(pc', 0)] { g with q := { regq := first.q.regq, fq := first.q.fq } } pc'
+              pure (⟨p, first⟩ :: jdone')
+      else
+        match seen.find? (fun e => e.place.pc == pc') with
+        | some e => do tagPc pc' (arrive ctx e.place e.first e.d next.1); pure jdone
+        | none => do
+          let (g, d, first) ← tagPc pc' (generalize ctx p next.1)
+          let q0 : SMarks := { regq := placeQuiet ctx p next.1.q.regq, fq := next.1.q.fq }
+          let g' := { g with q := q0 }
+          let _ ← go g' (⟨p, d, { first with q := q0 }⟩ :: seen)
+                       [] [] [(pc', 0)] g' pc'
+          pure jdone
 
-def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → List Seen → List (Nat × Nat) → Sym → Nat → V Unit
-  | 0, _, _, _, pc => fun _ => .error s!"at +{pc}\nrefused: a path longer than the verifier goes"
-  | fuel + 1, seen, visited, s, pc =>
+def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → Sym → List Seen → List Nat → List JoinEntry → List (Nat × Nat) → Sym → Nat → V (List JoinEntry)
+  | 0, _, _, _, _, _, _, pc => fun _ => .error s!"at +{pc}\nrefused: a path longer than the verifier goes"
+  | fuel + 1, base, seen, jstack, jdone, visited, s, pc =>
     match ctx.code.lookup pc with
     | none => fun _ => .error s!"at +{pc}\nrefused: no instruction at {pc}"
     | some i => do
       let s ← tagPc pc (symClears ctx pc CLEARS s)
       let nexts ← tagPc pc (symNext ctx s i)
-      each (onwardAt ctx livePrefix seen visited (exploreAt ctx livePrefix fuel)) nexts
+      eachState (onwardAt ctx livePrefix base seen jstack visited (exploreAt ctx livePrefix fuel)) jdone nexts
 
 /-- Diagnostic run of `verify` on one function: `none` if shown, else `at +PC\nWHY`. -/
 def locateRefusal (ctx : Ctx) (proof : List Item) : Option String :=
@@ -256,8 +279,9 @@ def locateRefusal (ctx : Ctx) (proof : List Item) : Option String :=
       arr := arr.push acc
     pure arr
   let run (c : Ctx) : Option String :=
+    let s0 := entrySym c
     let act : V Unit := do
-      exploreAt c livePrefix PATH [] [(0, 0)] (entrySym c) 0
+      let _ ← exploreAt c livePrefix PATH s0 [] [] [] [(0, 0)] s0 0
       if ← finished then pure () else refuse "the proof says more than is asked of it"
     match act (Items.ofList proof) with
     | .ok _ => none

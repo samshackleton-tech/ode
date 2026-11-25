@@ -274,9 +274,9 @@ def parse_proof(path):
                 cur = {"places": {}, "items": []}
                 proofs[parts[1]] = cur
                 cur_place = None
-            elif kw == "place":
+            elif kw in ("place", "join"):
                 pc = int(parts[1])
-                cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(), "decreases": None}
+                cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(), "decreases": None, "is_join": (kw == "join")}
                 cur["places"][pc] = cur_place
             elif kw == "name" and cur_place is not None:
                 cur_place["names"].append((parts[1], parts[2]))
@@ -984,10 +984,72 @@ class Verifier:
                 raise Refuse(f"unsupported table op `{op}` in verify2")
             raise Refuse(f"unsupported table expr {ex} in verify2")
 
-        def run_path(pc, st, origin_place=None, origin_dec=None, visited_places=frozenset()):
+        def run_path(pc, st, origin_place=None, origin_dec=None, visited_places=frozenset(),
+                     base_st=None, jstack=frozenset(), jdone=None):
+            if jdone is None:
+                jdone = {}
+            if base_st is None:
+                base_st = clone(st)
             while True:
                 if pc in places and pc not in visited_places:
                     pl = places[pc]
+                    if pl["is_join"]:
+                        if pc in jstack:
+                            raise Refuse(f"at join place {pc} a path returns to it (add `decreases` for a loop)")
+                        def _check_arrive_join(first_j, arr_st):
+                            for kr in pl["keep"]:
+                                if arr_st["regs"][kr] != first_j["regs"][kr]:
+                                    raise Refuse(f"at join place {pc} register {kr} does not match first arrival")
+                            for r in reg_names:
+                                if not first_j["marks"][r] and arr_st["marks"][r]:
+                                    raise Refuse(f"at join place {pc} register {r} may depend on values kept out of the trace")
+                            for o, (fv, fmk) in first_j["stack_mem"].items():
+                                if o not in arr_st["stack_mem"] or arr_st["stack_mem"][o][0] != fv:
+                                    raise Refuse(f"at join place {pc} stack slot {o} does not match first arrival")
+                                if (not fmk) and arr_st["stack_mem"][o][1]:
+                                    raise Refuse(f"at join place {pc} stack slot {o} may depend on values kept out of the trace")
+                            penv = dict(env)
+                            for nm, rn in pl["names"]:
+                                penv[nm] = arr_st["regs"][rn]
+                            for fct in pl["facts"]:
+                                self.check_fact(fct, penv, arr_st, stream)
+                        if pc in jdone:
+                            _check_arrive_join(jdone[pc], st)
+                            return
+                        bn = base_st["nvars"]
+                        for kr in pl["keep"]:
+                            if len(st["regs"][kr][1]) > bn:
+                                raise Refuse(f"at join place {pc} kept register {kr} depends on a value not in scope")
+                        first_j = clone(base_st)
+                        for kr in pl["keep"]:
+                            first_j["regs"][kr] = st["regs"][kr]
+                        first_j["stack_mem"] = {
+                            o: (v, mk) for o, (v, mk) in st["stack_mem"].items() if len(v[1]) <= bn
+                        }
+                        for r in reg_names:
+                            first_j["marks"][r] = st["marks"][r] or (r in pl["marked"])
+                        _check_arrive_join(first_j, st)
+                        # Build generalized join state from scope-bounded `first_j`
+                        gj = clone(first_j)
+                        gj["neq"] = []
+                        base_v = gj["nvars"]
+                        gj["nvars"] += len(reg_names)
+                        for r_idx, r in enumerate(reg_names):
+                            if r not in pl["keep"]:
+                                v = r_var(base_v + r_idx)
+                                gj["facts"].append(v)
+                                gj["facts"].append(r_sub(r_const(M64), v))
+                                gj["regs"][r] = v
+                        gj["flags"] = {"zf": None, "cf": None}
+                        gj["flag_marks"] = {"zf": True, "cf": True}
+                        penv2 = dict(env)
+                        for nm, rn in pl["names"]:
+                            penv2[nm] = gj["regs"][rn]
+                        for fct in pl["facts"]:
+                            self.assume_fact(fct, penv2, gj)
+                        run_path(pc, gj, origin_place, origin_dec, visited_places | {pc}, base_st, jstack | {pc}, jdone)
+                        jdone[pc] = first_j
+                        return
                     penv = dict(env)
                     for nm, rn in pl["names"]:
                         penv[nm] = st["regs"][rn]
@@ -1027,7 +1089,8 @@ class Verifier:
                     for fct in pl["facts"]:
                         self.assume_fact(fct, penv2, pst)
                     dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, None) if pl["decreases"] is not None else None
-                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=visited_places | {pc})
+                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=visited_places | {pc},
+                             base_st=clone(pst), jstack=frozenset(), jdone={})
                     return
 
                 if pc not in fn["instrs"]:
@@ -1137,7 +1200,8 @@ class Verifier:
                         else:
                             raise Refuse(f"unknown flag relation {frel}")
                         for dest, st_w in live_ways:
-                            run_path(dest, st_w, origin_place, origin_dec, visited_places if dest != origin_place else frozenset())
+                            next_v = visited_places if (dest != origin_place and dest not in jstack) else (visited_places - {dest})
+                            run_path(dest, st_w, origin_place, origin_dec, next_v, base_st, jstack, jdone)
                         return
                     elif kind == "call":
                         tgt_expr = stmt[1]

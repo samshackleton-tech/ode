@@ -517,6 +517,7 @@ structure Place where
   markedResult : List Nat := []   -- the same, for the `result depends on` pass (empty by default)
   wrote : Option (String × SExpr × String × SExpr × Bool) := none
                                   -- (run, bound, f, args, fromStart): suffix [bound..hi) or prefix [0..bound) of `run` holds `f(args)`
+  isJoin : Bool := false          -- true for an acyclic mid-function join place (no `decreases`, shared across sibling paths)
   deriving Inhabited
 
 /-- What a prover's helper may say where a proof that is still being written has run out: the rows it
@@ -5047,11 +5048,70 @@ structure Seen where
   d : Row
   first : Sym
 
+/-- A join place already verified in the current scope, with the scope-bounded snapshot `first` shared by all
+paths arriving there. -/
+structure JoinEntry where
+  place : Place
+  first : Sym
+
 /-- Of the registers known not to be marked on first coming to a place, those the place does not say may be
 marked on a later coming (using `markedResult` during the second pass for `result depends on`). -/
 def placeQuiet (ctx : Ctx) (p : Place) (regq : List Nat) : List Nat :=
   let m := if ctx.resultPass then p.markedResult else p.marked
   regq.filter fun r => !m.contains r
+
+/-- Build the scope-bounded snapshot `first` for a join place `p` from the enclosing scope's `base` state and
+the first arriving path state `s`. All kept registers and retained frame cells are checked to refer solely to
+unknowns already in `base` (`< base.nvars`), so `first` never leaks branch-specific facts or variables from
+the first arriving path to sibling paths. -/
+def joinFirst (ctx : Ctx) (base s : Sym) (p : Place) : Option Sym :=
+  let keptOk := p.keep.all fun r => decide (r < ctx.nreg) && decide ((s.reg r).coeff.length ≤ base.nvars)
+  if !keptOk || !p.keep.contains RSP || p.names.any (fun (_, r) => decide (ctx.nreg ≤ r)) ||
+     (!p.cells.isEmpty && !ctx.contract.valArrays.isEmpty) then none
+  else
+    let fr := s.frame.filter fun (_, v) => decide (v.coeff.length ≤ base.nvars)
+    let regq := placeQuiet ctx p s.q.regq
+    let fq := s.q.fq.filter fun o => fr.any fun c => c.1 == o
+    some { base with
+      reg := fun r => if p.keep.contains r then s.reg r else base.reg r,
+      frame := fr,
+      vecIntact := base.vecIntact.filter s.vecIntact.contains,
+      q := { regq := regq, fq := fq } }
+
+/-- Check that an arriving state `s` at join place `p` satisfies the shared snapshot `first` and every
+assertion of `p` (no `decreases` check: join places are acyclic). -/
+def arriveJoin (ctx : Ctx) (p : Place) (first : Sym) (s : Sym) : V Unit :=
+  match p.keep.find? fun r => s.reg r != first.reg r with
+  | some r => refuse s!"at the join place {p.pc} register {r} does not hold what it held on first coming there"
+  | none =>
+  if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the join place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
+  else
+  if !(first.q.fq.all s.q.fq.contains) then refuse s!"at the join place {p.pc} stack slot {(first.q.fq.find? fun c => !s.q.fq.contains c).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
+  else
+  if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the join place the frame does not hold what it held on first coming there"
+  else if !(first.vecIntact.all s.vecIntact.contains) then refuse "at the join place a callee-saved vector register was modified"
+  else do
+    let s1 ← fold (establish ctx (placeEnv ctx p s.reg)) s p.facts
+    if !(p.lanes.all (lanesShown ctx p s1)) then refuse s!"at the join place {p.pc} the vector registers are not shown to hold what the place says"
+    else if !(p.cells.all (cellShown ctx p s1)) then refuse s!"at the join place {p.pc} a cell of the frame is not shown to hold what the place says"
+    else do
+      let (_, _) ← rangeShown ctx p s1
+      pure ()
+
+/-- Generalize a join place `p` directly from its scope-bounded snapshot `first` (independent of any
+particular arriving path). -/
+def generalizeJoin (ctx : Ctx) (p : Place) (first : Sym) : V Sym := do
+  let g ← fold (suppose ctx (placeEnv ctx p (first.general ctx.nreg p).reg)) (first.general ctx.nreg p) p.facts
+  let g ← fold (supposeLanes ctx p) g p.lanes
+  let g ← fold (supposeCell ctx p) g p.cells
+  supposeRange ctx p g
+
+/-- Thread state `acc` across every element of a list. -/
+def eachState {α β : Type} (f : β → α → V β) : β → List α → V β
+  | acc, [] => pure acc
+  | acc, x :: more => do
+    let acc' ← f acc x
+    eachState f acc' more
 
 /-- Peek for a `clear` item for the current `pc` sitting next in the proof stream. -/
 def popClear (pc : Nat) : V (Option (Nat × SExpr)) := fun items =>
@@ -5091,43 +5151,70 @@ def symClears (ctx : Ctx) (pc : Nat) : Nat → Sym → V Sym
       let s' ← symRevealReg ctx s r e
       symClears ctx pc fuel s'
 
-/-- Where a path goes on after an instruction. At the function's return it ends. At a place this path has
-come to before, the coming there is shown to be one that place's general state stands for, with a number
-less than the general state's: there the path ends. At a place it has not come to before, the place's
-general state is made and the path goes on from that, the place remembered. Anywhere else the path is
-gone on with. -/
-def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V Unit) (next : Sym × Next) : V Unit :=
+/-- Where a path goes on after an instruction. At the function's return it ends. At an acyclic join place,
+first arrival verifies the shared tail once from the scope-bounded generalized state and records the join in
+`jdone`; every subsequent sibling path only checks `arriveJoin` and stops. At a loop place, first arrival
+inducts on `decreases` with a fresh inner join scope, and a back-edge checks `arrive`. -/
+def onward (ctx : Ctx) (base : Sym) (seen : List Seen) (jstack : List Nat)
+    (go : Sym → List Seen → List Nat → List JoinEntry → Sym → Nat → V (List JoinEntry))
+    (jdone : List JoinEntry) (next : Sym × Next) : V (List JoinEntry) :=
   match next.2 with
-  | .returned => pure ()
+  | .returned => pure jdone
   | .at pc' =>
     match ctx.places.find? (fun p => p.pc == pc') with
-    | none => go seen next.1 pc'
+    | none => go base seen jstack jdone next.1 pc'
     | some p =>
-      match seen.find? (fun e => e.place.pc == pc') with
-      | some e => arrive ctx e.place e.first e.d next.1
-      | none => do
-        let (g, d, first) ← generalize ctx p next.1
-        -- (what is known not to be marked at the place: the registers that are not on this first coming,
-        -- minus those the place says may be on a later one, plus the clean frame slots kept across the loop)
-        let q0 : SMarks := { regq := placeQuiet ctx p next.1.q.regq, fq := next.1.q.fq }
-        go (⟨p, d, { first with q := q0 }⟩ :: seen) { g with q := q0 } pc'
+      if p.isJoin then
+        if jstack.contains pc' then
+          refuse s!"at the join place {pc'} a path returns to it (add `decreases` for a loop)"
+        else
+          match jdone.find? (fun e => e.place.pc == pc') with
+          | some e => do
+            arriveJoin ctx e.place e.first next.1
+            pure jdone
+          | none =>
+            match joinFirst ctx base next.1 p with
+            | none =>
+              refuse (match p.keep.find? fun r => !(decide (r < ctx.nreg) && decide ((next.1.reg r).coeff.length ≤ base.nvars)) with
+                | some r => s!"at the join place {pc'} register {r} depends on a value not in scope"
+                | none => s!"at the join place {pc'} a kept register depends on a value not in scope")
+            | some first => do
+              arriveJoin ctx p first next.1
+              let g ← generalizeJoin ctx p first
+              let jdone' ← go base seen (pc' :: jstack) jdone { g with q := { regq := first.q.regq, fq := first.q.fq } } pc'
+              pure (⟨p, first⟩ :: jdone')
+      else
+        match seen.find? (fun e => e.place.pc == pc') with
+        | some e => do
+          arrive ctx e.place e.first e.d next.1
+          pure jdone
+        | none => do
+          let (g, d, first) ← generalize ctx p next.1
+          -- (what is known not to be marked at the place: the registers that are not on this first coming,
+          -- minus those the place says may be on a later one, plus the clean frame slots kept across the loop)
+          let q0 : SMarks := { regq := placeQuiet ctx p next.1.q.regq, fq := next.1.q.fq }
+          let g0 := { g with q := q0 }
+          let _ ← go g0 (⟨p, d, { first with q := q0 }⟩ :: seen) [] [] g0 pc'
+          pure jdone
 
-/-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
-def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit
-  | 0, _, _, _ => refuse "a path longer than the verifier goes"
-  | fuel + 1, seen, s, pc =>
+/-- Every path from `pc`: each to the function's return, a previously verified join place, or an enclosing
+loop place. Returns the updated list of join places verified in the current scope `base`. -/
+def explore (ctx : Ctx) : Nat → Sym → List Seen → List Nat → List JoinEntry → Sym → Nat → V (List JoinEntry)
+  | 0, _, _, _, _, _, _ => refuse "a path longer than the verifier goes"
+  | fuel + 1, base, seen, jstack, jdone, s, pc =>
     match ctx.code.lookup pc with
     | none => refuse s!"no instruction at {pc}"
     | some i => do
       let s ← symClears ctx pc CLEARS s
       let nexts ← symNext ctx s i
-      each (onward ctx seen (explore ctx fuel)) nexts
+      eachState (onward ctx base seen jstack (explore ctx fuel)) jdone nexts
 
 def PATH : Nat := 100000
 
 /-- The verifier. -/
 def verify (ctx : Ctx) : V Unit := do
-  explore ctx PATH [] (entrySym ctx) 0
+  let s0 := entrySym ctx
+  let _ ← explore ctx PATH s0 [] [] [] s0 0
   if ← finished then pure () else refuse "the proof says more than is asked of it"
 
 /-- Does the contract's `stackBits` (if any) have a positive divisor and an argument listed in `trace depends on`? -/

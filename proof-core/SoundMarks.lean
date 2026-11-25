@@ -986,6 +986,20 @@ theorem return_quiet {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
 
 /-! ## A place -/
 
+theorem arriveJoin_q {ctx : Ctx} {pl : Place} {first s : Sym} {items : Items} {r : Unit × Items}
+    (h : arriveJoin ctx pl first s items = .ok r) :
+    first.q.regq.all s.q.regq.contains = true ∧ first.q.fq.all s.q.fq.contains = true := by
+  cases hfind : pl.keep.find? (fun r => s.reg r != first.reg r) with
+  | some _ => simp only [arriveJoin, hfind] at h; exact (refuse_ok h).elim
+  | none =>
+    simp only [arriveJoin, hfind] at h
+    split at h
+    next => exact (refuse_ok h).elim
+    next h1 =>
+      split at h
+      next => exact (refuse_ok h).elim
+      next h2 => exact ⟨by simpa using h1, by simpa using h2⟩
+
 theorem arrive_q {ctx : Ctx} {pl : Place} {first s : Sym} {d : Row} {items : Items} {r : Unit × Items}
     (h : arrive ctx pl first d s items = .ok r) :
     first.q.regq.all s.q.regq.contains = true ∧ first.q.fq.all s.q.fq.contains = true := by

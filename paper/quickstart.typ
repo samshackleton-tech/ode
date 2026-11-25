@@ -196,9 +196,9 @@ Run all commands below from the repository root (`python3 lang/ode_tool.py ...`,
   )
 ]
 
-= Loop Invariants
+= Loop Invariants and Join Points
 
-The verifier never guesses loop invariants: you state what holds at each loop head in a `place { ... }` block immediately before the loop label. Writing loop specifications in direct tail-recursive form (passing running accumulators as arguments) lets the prover close each iteration in a single step.
+The verifier never guesses invariants: you state what holds at a loop head or a branch merge point in a `place { ... }` block immediately before its label. Writing loop specifications in direct tail-recursive form (passing running accumulators as arguments) lets the prover close each iteration in a single step.
 
 #fullwidth[
   #set text(size: 8.6pt)
@@ -209,13 +209,15 @@ The verifier never guesses loop invariants: you state what holds at each loop he
     stroke: (x: none, y: 0.4pt + rulecol),
     fill: (x, y) => if y == 0 { sand } else if calc.rem(y, 2) == 0 { ivory } else { white },
     [*Directive in `place { ... }`*], [*Meaning or obligation*],
-    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[name x = reg]], [Binds loop-varying register `reg` to a fresh symbolic variable `x` at the loop head.],
-    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[fact E]], [States an inequality (`0 <= i`, `i <= n`) or specification equality proved on entry and on every back-edge.],
+    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[name x = reg]], [Binds a register `reg` to a symbolic name `x` at the label so `fact` lines can constrain it.],
+    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[fact E]], [States an inequality (`0 <= i`, `i <= n`) or specification equality proved on every path reaching the label.],
     [#text(font: "Menlo", size: 8.1pt, weight: "bold")[decreases E]], [States a whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (proves termination).],
     [#text(font: "Menlo", size: 8.1pt, weight: "bold")[wrote buf[.. k] = E]], [For count-up loops writing `buf`: promises bytes `[0, k)` already match `E`. For count-down loops, write `wrote buf[k ..] = E` for `[k, len(buf))`.],
     [#text(font: "Menlo", size: 8.1pt, weight: "bold")[keep r1 r2]], [Promises that registers `r1`, `r2` retain their pre-loop values across every iteration.],
   )
 ]
+
+Omitting `decreases` turns `place { ... }` into an acyclic *join point* (at top level or inside a loop): every incoming branch proves the stated `fact` lines, and the verifier checks the shared code after the label once, avoiding exponential `2^k` path splitting across sequential branches. If any path loops back to a join point without `decreases`, the verifier refuses it.
 
 = Multi-File Namespaces and Trace Policies
 
