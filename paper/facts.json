@@ -4,11 +4,11 @@
     "id": "jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika"
   },
   "lean": {
-    "core_lines": 5191,
+    "core_lines": 5211,
     "model_files": 8,
-    "model_lines": 9737,
+    "model_lines": 9757,
     "sound_files": 20,
-    "sound_lines": 32996
+    "sound_lines": 33010
   },
   "tables": {
     "arm64_rows": 56,

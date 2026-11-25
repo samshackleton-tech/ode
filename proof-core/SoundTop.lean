@@ -1080,7 +1080,7 @@ to the function's return and leaves what the contract promises. -/
 def Relied (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
   ∀ e ∈ seen, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars ≤ n ∧ bounded n e.d ∧
     ∀ ρ' st', AtPlace ctx e.place s0 e.first ρ ρ' st' → st'.rip = p.base + e.place.pc →
-      MarksOk ctx s0 { regq := e.first.q.regq } st' →
+      MarksOk ctx s0 { regq := e.first.q.regq, fq := e.first.q.fq } st' →
       (∃ m : Int, Value ctx.defs (placeVals ctx e.place s0 st') e.place.decreases (.int m) ∧ m + 1 ≤ ev ρ e.d) →
       RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) st'
 
@@ -1137,14 +1137,14 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
           have eq : e.place.pc = pc' := by simpa using List.find?_some hs
           obtain ⟨hn, hf, hd, run⟩ := T' e em
           obtain ⟨A, k, val, lt⟩ := arrive_sound E e.place hn hbody c'.holds c'.wf hd
-          exact run ρ' st' A (by rw [eq]; exact hrip') (M'.fewer (arrive_q hbody)) ⟨k, val, lt⟩
+          exact run ρ' st' A (by rw [eq]; exact hrip') (M'.fewer (arrive_q hbody).1 (arrive_q hbody).2) ⟨k, val, lt⟩
         | none =>
           simp only [hs] at hbody
           obtain ⟨⟨g, d, first⟩, r2, e2, hgo⟩ := V.bind_ok hbody
           obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
           have T1 : Relied world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
           have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
-              MarksOk ctx s0 { regq := placeQuiet ctx pl s'.q.regq } stx →
+              MarksOk ctx s0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stx →
               Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
               RunsPlain world (ctx.contract.perm ctx.pieces s0) p (ctx.contract.post ctx.defs s0) stx := by
             intro n
@@ -1171,7 +1171,9 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
                 exact ih k.toNat small ρy sty Ay1 hripy My (by rw [Int.toNat_of_nonneg (by omega)]; exact valy)
               | tail _ me => exact (T1.carried leg a1) e me
           obtain ⟨ρ'', _, _, pos, val⟩ := G ρ1 st' A1
-          exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip') (M'.fewer (placeQuiet_all ctx pl s'.q.regq)) (by rw [Int.toNat_of_nonneg pos]; exact val)
+          exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip')
+            (M'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
+            (by rw [Int.toNat_of_nonneg pos]; exact val)
 
 /-! ## The entry, and the theorem -/
 
@@ -2611,8 +2613,8 @@ def ReliedTrace (world : List Program) (ctx : Ctx) (p : Program) (a0 b0 : State)
       AtPlace ctx e.place a0 e.first ρa ρa' sta' →
       AtPlace ctx e.place b0 e.first ρb ρb' stb' →
       sta'.rip = p.base + e.place.pc → stb'.rip = p.base + e.place.pc →
-      MarksOk ctx a0 { regq := e.first.q.regq } sta' →
-      MarksOk ctx b0 { regq := e.first.q.regq } stb' →
+      MarksOk ctx a0 { regq := e.first.q.regq, fq := e.first.q.fq } sta' →
+      MarksOk ctx b0 { regq := e.first.q.regq, fq := e.first.q.fq } stb' →
       Alike sta' stb' →
       (∃ m : Int, Value ctx.defs (placeVals ctx e.place a0 sta') e.place.decreases (.int m) ∧ m + 1 ≤ ev ρa e.d) →
       ∀ a' b', EndsP world p sta'.plain a' → EndsP world p stb'.plain b' →
@@ -3290,7 +3292,7 @@ theorem explore_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : 
           obtain ⟨Aa, k, vala, lta⟩ := arrive_sound Ea e.place hn hbody ca'.holds ca'.wf hd
           obtain ⟨Ab, _, _, _⟩ := arrive_sound Eb e.place hn hbody cb'.holds cb'.wf hd
           exact run ρa' ρb' sta' stb' Aa Ab (by rw [eq]; exact hripa') (by rw [eq]; exact hripb')
-            (Ma'.fewer (arrive_q hbody)) (Mb'.fewer (arrive_q hbody)) A' ⟨k, vala, lta⟩
+            (Ma'.fewer (arrive_q hbody).1 (arrive_q hbody).2) (Mb'.fewer (arrive_q hbody).1 (arrive_q hbody).2) A' ⟨k, vala, lta⟩
         | none =>
           simp only [hs] at hbody
           obtain ⟨⟨g, d, first⟩, r2, e2, hgo⟩ := V.bind_ok hbody
@@ -3300,8 +3302,8 @@ theorem explore_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : 
           have all : ∀ (n : Nat) (ρax ρbx : Nat → Int) (stax stbx : State),
               AtPlace ctx pl a0 first ρa1 ρax stax → AtPlace ctx pl b0 first ρb1 ρbx stbx →
               stax.rip = p.base + pl.pc → stbx.rip = p.base + pl.pc →
-              MarksOk ctx a0 { regq := placeQuiet ctx pl s'.q.regq } stax →
-              MarksOk ctx b0 { regq := placeQuiet ctx pl s'.q.regq } stbx →
+              MarksOk ctx a0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stax →
+              MarksOk ctx b0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stbx →
               Alike stax stbx →
               Value ctx.defs (placeVals ctx pl a0 stax) pl.decreases (.int (n : Int)) →
               ∀ a' b', EndsP world p stax.plain a' → EndsP world p stbx.plain b' →
@@ -3337,7 +3339,8 @@ theorem explore_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : 
           obtain ⟨ρa'', _, _, posa, vala⟩ := Ga ρa1 sta' Aa1
           exact all (ev ρa'' d).toNat ρa1 ρb1 sta' stb' Aa1 Ab1
             (by rw [epc]; exact hripa') (by rw [epc]; exact hripb')
-            (Ma'.fewer (placeQuiet_all ctx pl s'.q.regq)) (Mb'.fewer (placeQuiet_all ctx pl s'.q.regq))
+            (Ma'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
+            (Mb'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
             A' (by rw [Int.toNat_of_nonneg posa]; exact vala)
 
 theorem verifyOne_trace_sound_at (world : List Program) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)

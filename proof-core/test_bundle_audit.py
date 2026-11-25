@@ -564,6 +564,112 @@ contract bump(v: number) {
 """)
         self.assertIn("Ode does not use semicolons", str(ctx.exception))
 
+    def test_10_arm64_x30_stack_save_across_place_and_exact_ret_diagnostics(self):
+        """AArch64 x30 saved on stack survives a loop place; ret diagnostics name x30 / kept register."""
+        # (1) Positive: x30 saved on stack across a loop place that calls a helper (`bl`).
+        pos = textwrap.dedent("""
+            fn bump(v: number)
+                requires v < 1000000
+                returns v + 1
+                stack 0
+            {
+                for arm64 calling {
+                    in v = x9
+                    out = x9
+                    preserves x0, x1, x2, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+                } {
+                    add x9, x9, 1
+                    ret
+                }
+            }
+
+            fn count_up(x: number, n: number)
+                requires x < 100000
+                requires n < 100000
+                returns x + n
+                trace depends on n
+                stack 16
+            {
+                for arm64 {
+                    sub sp, sp, 16
+                    str x30, [sp, 0]
+                    mov x9, x0
+                    mov x2, x1
+                    place {
+                        name v = x9
+                        name rem = x2
+                        fact 0 <= rem
+                        fact rem <= n
+                        fact v + rem == x + n
+                        decreases rem
+                    }
+                @loop:
+                    cmp x2, 0
+                    b.eq @done
+                    bl bump
+                    sub x2, x2, 1
+                    b @loop
+                @done:
+                    mov x0, x9
+                    ldr x30, [sp, 0]
+                    add sp, sp, 16
+                    ret
+                }
+            }
+        """)
+        p_pos = os.path.join(self.tmp, "x30_loop.ode")
+        with open(p_pos, "w", encoding="utf-8") as f:
+            f.write(pos)
+        o_pos = os.path.join(self.tmp, "x30_loop.o")
+        pf_pos = os.path.join(self.tmp, "x30_loop.proof")
+        r_pos = ode_audit.pack_verified(p_pos, None, o_pos, pf_pos, fn_name="count_up", target="arm64")
+        self.assertEqual(r_pos["verdict"], "shown", r_pos)
+        self.assertEqual(ode_audit.audit_binary(o_pos, pf_pos, expect_contract=r_pos["contract_b32"])["verdict"], "shown")
+
+        # (2) Negative: clobbering callee-saved register x19 names `(x19)` in refusal.
+        neg_kept = textwrap.dedent("""
+            fn bad_kept(x: number)
+                returns x
+                trace depends on x
+                stack 0
+            {
+                for arm64 {
+                    mov x19, 1
+                    ret
+                }
+            }
+        """)
+        p_k = os.path.join(self.tmp, "bad_kept.ode")
+        with open(p_k, "w", encoding="utf-8") as f:
+            f.write(neg_kept)
+        r_k = subprocess.run([sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"), "check", p_k, "--target", "arm64"],
+                             capture_output=True, text=True)
+        self.assertNotEqual(r_k.returncode, 0)
+        self.assertIn("(x19)", r_k.stdout + r_k.stderr)
+
+        # (3) Negative: leaking a hidden value into x30 via `sub x0, x0, x0; add x30, x30, x0` names `link register (x30)`.
+        neg_x30 = textwrap.dedent("""
+            fn bad_x30(x: number)
+                requires x < 10
+                returns 0
+                stack 0
+            {
+                for arm64 {
+                    sub x0, x0, x0
+                    add x30, x30, x0
+                    mov x0, 0
+                    ret
+                }
+            }
+        """)
+        p_x = os.path.join(self.tmp, "bad_x30.ode")
+        with open(p_x, "w", encoding="utf-8") as f:
+            f.write(neg_x30)
+        r_x = subprocess.run([sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"), "check", p_x, "--target", "arm64"],
+                             capture_output=True, text=True)
+        self.assertNotEqual(r_x.returncode, 0)
+        self.assertIn("return address (x30)", r_x.stdout + r_x.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

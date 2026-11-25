@@ -202,6 +202,10 @@ def parse_statement(path):
                     "returns": None,
                     "stack": 0,
                     "hidden": set(),
+                    "argregs": None,
+                    "keeps": None,
+                    "retreg": None,
+                    "keeps_vec": None,
                 }
                 fns.append(cur)
             elif kw == "machine":
@@ -228,6 +232,14 @@ def parse_statement(path):
                 cur["stack"] = int(parts[1])
             elif kw == "hidden":
                 cur["hidden"].update(parts[1:])
+            elif kw == "argregs":
+                cur["argregs"] = parts[1:]
+            elif kw == "keeps":
+                cur["keeps"] = parts[1:]
+            elif kw == "retreg":
+                cur["retreg"] = parts[1]
+            elif kw == "keeps_vec":
+                cur["keeps_vec"] = parts[1:]
             elif kw == "def":
                 eq = line.index(" = ")
                 hdr = line[:eq].split()
@@ -360,6 +372,56 @@ class Verifier:
         self.entail(facts, r_sub(a, b), stream)
         self.entail(facts, r_sub(b, a), stream)
 
+    def is_row(self, v):
+        return isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], int) and isinstance(v[1], tuple)
+
+    def held_values(self, state):
+        out = []
+        for a, b in state["eqs"]:
+            if isinstance(a, tuple) and len(a) == 3 and a[0] == "call" and self.is_row(b):
+                out.append((a, b))
+            elif isinstance(b, tuple) and len(b) == 3 and b[0] == "call" and self.is_row(a):
+                out.append((b, a))
+        return out
+
+    def same_call(self, c1, c2, state, stream):
+        if c1[1] != c2[1] or len(c1[2]) != len(c2[2]):
+            raise Refuse(f"mismatched call `{c1[1]}` vs `{c2[1]}`")
+        for a1, a2 in zip(c1[2], c2[2]):
+            if a1 == a2:
+                continue
+            if self.is_row(a1) and self.is_row(a2):
+                self.entail_eq(state["facts"], a1, a2, stream)
+            else:
+                raise Refuse(f"mismatched non-scalar call arg `{a1}` vs `{a2}`")
+
+    def as_num(self, v, env, state, stream):
+        if self.is_row(v):
+            return v
+        if isinstance(v, tuple) and len(v) == 3 and v[0] == "call":
+            for c0, r0 in self.held_values(state):
+                if c0 == v:
+                    return r0
+            if stream is None:
+                raise Refuse(f"expected scalar number, got `{v}`")
+            tag, idx = stream.pop_tag()
+            if tag == "held":
+                hv = self.held_values(state)
+                if idx >= len(hv):
+                    raise Refuse(f"`t held {idx}` out of range for {len(hv)} held value(s)")
+                c0, r0 = hv[idx]
+                self.same_call(v, c0, state, stream)
+                return r0
+            if tag == "open":
+                _, fn_nm, args = v
+                params, body = self.defs[fn_nm]
+                val = self.eval_sexpr(body, dict(zip(params, args)), state, stream)
+                res = self.as_num(val, env, state, stream)
+                state["eqs"].insert(0, (v, res))
+                return res
+            raise Refuse(f"expected `held` or `open` for `{v}`, got `{tag}`")
+        raise Refuse(f"expected scalar number, got `{v}`")
+
     def eval_sexpr(self, e, env, state, stream):
         """Evaluate a spec S-expression to a linear Row, buffer tag, or symbolic call."""
         op = e[0]
@@ -372,22 +434,36 @@ class Verifier:
             raise Refuse(f"unknown spec name `{nm}`")
         if op == "bin":
             bop, l, r = e[1], e[2], e[3]
-            lv = self.eval_sexpr(l, env, state, stream)
-            rv = self.eval_sexpr(r, env, state, stream)
+            lv = self.as_num(self.eval_sexpr(l, env, state, stream), env, state, stream)
+            rv = self.as_num(self.eval_sexpr(r, env, state, stream), env, state, stream)
             if bop == "+":
                 return r_add(lv, rv)
             if bop == "-":
-                return r_sub(lv, rv)
+                res = r_sub(lv, rv)
+                if stream is not None:
+                    self.entail(state["facts"], res, stream)
+                return res
             if bop == "*":
-                if isinstance(lv, tuple) and len(lv) == 2 and not lv[1]:
+                if not lv[1]:
                     return r_scale(lv[0], rv)
-                if isinstance(rv, tuple) and len(rv) == 2 and not rv[1]:
+                if not rv[1]:
                     return r_scale(rv[0], lv)
                 raise Refuse(f"nonlinear multiply in spec: {e}")
+            if bop in ("%", "/"):
+                if rv[1] or rv[0] <= 0:
+                    raise Refuse(f"unsupported divisor in `{bop}`: {rv}")
+                q, rem = state["quot_rem"](lv, rv[0], state)
+                return rem if bop == "%" else q
             raise Refuse(f"unsupported binary spec op `{bop}`")
         if op == "call":
             fn_nm = e[1]
-            args = [self.eval_sexpr(a, env, state, stream) for a in e[2:]]
+            raw_args = [self.eval_sexpr(a, env, state, stream) for a in e[2:]]
+            args = []
+            for a in raw_args:
+                if isinstance(a, tuple) and len(a) == 3 and a[0] == "call":
+                    args.append(self.as_num(a, env, state, stream))
+                else:
+                    args.append(a)
             if fn_nm == "len":
                 if len(args) == 1 and isinstance(args[0], tuple) and len(args[0]) == 2 and args[0][0] == "buf":
                     return state["buf_len"][args[0][1]]
@@ -404,15 +480,18 @@ class Verifier:
                 buf = e[1][1]
             else:
                 raise Refuse(f"index on non-buffer {e[1]}")
-            idx = self.eval_sexpr(e[2], env, state, stream)
-            return state["get_byte"](buf, idx, state["facts"])
+            idx = self.as_num(self.eval_sexpr(e[2], env, state, stream), env, state, stream)
+            if stream is not None:
+                self.entail(state["facts"], idx, stream)
+                self.entail(state["facts"], r_sub(r_sub(state["buf_len"][buf], idx), r_const(1)), stream)
+            return state["get_byte"](buf, idx, state)
         if op == "ifx":
             cond, thn, els = e[1], e[2], e[3]
             if cond[0] != "bin":
                 raise Refuse(f"unsupported ifx condition {cond}")
             cop, cl, cr = cond[1], cond[2], cond[3]
-            lv = self.eval_sexpr(cl, env, state, stream)
-            rv = self.eval_sexpr(cr, env, state, stream)
+            lv = self.as_num(self.eval_sexpr(cl, env, state, stream), env, state, stream)
+            rv = self.as_num(self.eval_sexpr(cr, env, state, stream), env, state, stream)
             facts = state["facts"]
             diff = r_sub(lv, rv)
             if cop in ("==", "!=") and (diff in state["neq"] or r_sub(rv, lv) in state["neq"]):
@@ -464,7 +543,7 @@ class Verifier:
 
     def expand_eq(self, lhs, rhs, env, state, stream):
         """Unfold `def` calls as directed by `t open K`, closing over held equalities in `state['eqs']`."""
-        eqs = list(state["eqs"])
+        eqs = state["eqs"]
 
         def equiv_rows(v):
             """All values reachable from `v` through `eqs`."""
@@ -494,34 +573,56 @@ class Verifier:
             if any(x in r_eq for x in l_eq):
                 state["eqs"] = eqs
                 return
-            l_rows = [x for x in l_eq if is_row(x)]
-            r_rows = [x for x in r_eq if is_row(x)]
-            if l_rows and r_rows:
-                # Check if plainly equal first, else prove via arithmetic
-                for lr in l_rows:
-                    for rr in r_rows:
-                        if r_plain(state["facts"], r_sub(lr, rr)) and r_plain(state["facts"], r_sub(rr, lr)):
-                            state["eqs"] = eqs
-                            return
-                self.entail_eq(state["facts"], l_rows[0], r_rows[0], stream)
+            if is_row(lhs) and is_row(rhs):
+                self.entail_eq(state["facts"], lhs, rhs, stream)
                 state["eqs"] = eqs
                 return
+            nxt_item = stream.items[stream.pos] if stream.pos < len(stream.items) else None
+            if nxt_item is None or nxt_item[0] != "t" or nxt_item[1] not in ("open", "carry"):
+                l_rows = [x for x in l_eq if is_row(x)]
+                r_rows = [x for x in r_eq if is_row(x)]
+                if l_rows and r_rows:
+                    for lr in l_rows:
+                        for rr in r_rows:
+                            if r_plain(state["facts"], r_sub(lr, rr)) and r_plain(state["facts"], r_sub(rr, lr)):
+                                state["eqs"] = eqs
+                                return
+                    self.entail_eq(state["facts"], l_rows[0], r_rows[0], stream)
+                    state["eqs"] = eqs
+                    return
             calls = []
-            for a, b in eqs:
+            for a, b in reversed(eqs):
                 calls_in(a, calls)
                 calls_in(b, calls)
             calls_in(lhs, calls)
             calls_in(rhs, calls)
+            tag, idx = stream.pop_tag()
+            if tag == "carry":
+                hv = self.held_values({"eqs": eqs})
+                if idx >= len(hv):
+                    raise Refuse(f"`t carry {idx}` out of range for {len(hv)} held value(s)")
+                c0, r0 = hv[idx]
+                goal_call = rhs if (isinstance(rhs, tuple) and len(rhs) == 3 and rhs[0] == "call") else (
+                    lhs if (isinstance(lhs, tuple) and len(lhs) == 3 and lhs[0] == "call") else None
+                )
+                goal_val = lhs if goal_call == rhs else rhs
+                if goal_call is None or not is_row(goal_val):
+                    raise Refuse("`t carry` requires one call and one scalar value")
+                self.same_call(goal_call, c0, state, stream)
+                self.entail_eq(state["facts"], goal_val, r0, stream)
+                state["eqs"] = eqs
+                return
+            if tag != "open":
+                raise Refuse(f"expected `open` or `carry`, got `{tag}`")
             if not calls:
                 raise Refuse("cannot prove spec equality: no call to open")
-            tag, idx = stream.pop_tag("open")
             if idx >= len(calls):
                 raise Refuse(f"`t open {idx}` out of range for {len(calls)} call(s)")
             c = calls[idx]
             _, fn_nm, args = c
             params, body = self.defs[fn_nm]
             val = self.eval_sexpr(body, dict(zip(params, args)), state, stream)
-            eqs.append((c, val))
+            eqs.insert(0, (c, val))
         raise Refuse("spec equality exceeded open limit")
 
     def check_fact(self, fact, env, state, stream):
@@ -551,7 +652,7 @@ class Verifier:
             # Record symbolic call equality `lhs == rhs` for later substitution
             lv = self.eval_sexpr(l, env, state, None)
             rv = self.eval_sexpr(r, env, state, None)
-            state["eqs"].append((lv, rv))
+            state["eqs"].insert(0, (lv, rv))
             return
         lv = self.eval_sexpr(l, env, state, None)
         rv = self.eval_sexpr(r, env, state, None)
@@ -570,34 +671,44 @@ class Verifier:
     def verify_fn(self, fn, proof):
         is_arm = fn["machine"] == "arm64"
         reg_names = ARM_REGS if is_arm else X86_REGS
-        arg_regs = ARM_ARGS if is_arm else X86_ARGS
-        callee_saved = ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED
+        arg_regs = fn["argregs"] if fn["argregs"] is not None else (ARM_ARGS if is_arm else X86_ARGS)
+        callee_saved = set(fn["keeps"]) if fn["keeps"] is not None else (ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED)
         sp_reg = "sp" if is_arm else "rsp"
-        ret_reg = "x0" if is_arm else "rax"
+        ret_reg = fn["retreg"] if fn["retreg"] is not None else ("x0" if is_arm else "rax")
 
-        var_count = [0]
+        init_nvars = 0
 
-        def fresh_var(lo=0, hi=M64, facts=None):
-            idx = var_count[0]
-            var_count[0] += 1
+        def init_fresh_var(lo=0, hi=M64, target_facts=None):
+            nonlocal init_nvars
+            idx = init_nvars
+            init_nvars += 1
             v = r_var(idx)
-            if facts is not None:
-                facts.append(r_sub(v, r_const(lo)))
-                facts.append(r_sub(r_const(hi), v))
+            if target_facts is not None:
+                target_facts.append(r_sub(v, r_const(lo)))
+                target_facts.append(r_sub(r_const(hi), v))
+            return v
+
+        def fresh_var(st, lo=0, hi=M64, target_facts=None):
+            idx = st["nvars"]
+            st["nvars"] += 1
+            v = r_var(idx)
+            f = st["facts"] if target_facts is None else target_facts
+            f.append(r_sub(v, r_const(lo)))
+            f.append(r_sub(r_const(hi), v))
             return v
 
         facts = []
         regs = {}
         entry_regs = {}
         for r in reg_names:
-            v = fresh_var(0, M64, facts)
+            v = init_fresh_var(0, M64, facts)
             regs[r] = v
             entry_regs[r] = v
         facts.append(r_sub(regs[sp_reg], r_const(fn["stack"])))
         if not is_arm:
             facts.append(r_sub(r_const(M64 - 8), regs[sp_reg]))
-        # Reserve one slot after registers (matching the proof's variable numbering for places)
-        fresh_var(0, M64, facts)
+        # Reserve one slot after registers (dataVar, matching Core.lean Sym.init)
+        init_fresh_var(0, M64, facts)
 
         # Trace marks: True = marked (kept out of trace), False = clean (may show in trace)
         marks = {r: True for r in reg_names}
@@ -630,20 +741,57 @@ class Verifier:
         if fn["stack"] > 0:
             facts.append(r_sub(regs[sp_reg], r_const(fn["stack"])))
 
-        byte_cache = {}
-
-        def get_byte(buf, idx_row, cur_facts):
+        def get_byte(buf, idx_row, cur_st):
             key = (buf, idx_row)
-            if key not in byte_cache:
-                byte_cache[key] = fresh_var(0, 255, cur_facts)
+            bc = cur_st["byte_cache"]
+            if key not in bc:
+                bc[key] = fresh_var(cur_st, 0, 255)
             else:
-                v = byte_cache[key]
-                if v not in cur_facts:
-                    cur_facts.append(v)
-                    cur_facts.append(r_sub(r_const(255), v))
-            return byte_cache[key]
+                v = bc[key]
+                if v not in cur_st["facts"]:
+                    cur_st["facts"].append(v)
+                    cur_st["facts"].append(r_sub(r_const(255), v))
+            return bc[key]
+
+        def quot_rem(x, m, cur_st, nonneg=False):
+            if not x[1]:
+                return r_const(x[0] // m), r_const(x[0] % m)
+            key = (x, m)
+            if key in cur_st["div_cache"]:
+                return cur_st["div_cache"][key]
+            q_idx = cur_st["nvars"]
+            r_idx = q_idx + 1
+            cur_st["nvars"] += 2
+            q = r_var(q_idx)
+            rem = r_var(r_idx)
+            f = cur_st["facts"]
+            f.append(rem)
+            f.append(r_sub(r_const(m - 1), rem))
+            f.append(r_sub(x, r_add(r_scale(m, q), rem)))
+            f.append(r_sub(r_add(r_scale(m, q), rem), x))
+            if nonneg or (not x[1] and x[0] >= 0) or (x in f):
+                f.append(q)
+                best = None
+                for fact in f:
+                    s = r_add(fact, x)
+                    if not s[1]:
+                        if best is None or s[0] < best:
+                            best = s[0]
+                if best is not None:
+                    f.append(r_sub(r_const(best // m), q))
+            cur_st["div_cache"][key] = (q, rem)
+            return q, rem
+
+        def sym_low(x, m, cur_st):
+            if not x[1]:
+                return r_const(x[0] % m)
+            f = cur_st["facts"]
+            if (x in f) and r_plain(f, r_sub(r_const(m - 1), x)):
+                return x
+            return quot_rem(x, m, cur_st, nonneg=True)[1]
 
         state = {
+            "nvars": init_nvars,
             "regs": regs,
             "marks": marks,
             "flags": {"zf": None, "cf": None},
@@ -655,6 +803,9 @@ class Verifier:
             "buf_len": buf_len,
             "buf_clean": buf_clean,
             "get_byte": get_byte,
+            "byte_cache": {},
+            "quot_rem": quot_rem,
+            "div_cache": {},
             "stack_mem": {},  # sp_offset -> (val, mark)
             "min_sp": 0,
         }
@@ -673,6 +824,7 @@ class Verifier:
 
         def clone(st):
             return {
+                "nvars": st["nvars"],
                 "regs": dict(st["regs"]),
                 "marks": dict(st["marks"]),
                 "flags": dict(st["flags"]),
@@ -684,8 +836,13 @@ class Verifier:
                 "buf_len": st["buf_len"],
                 "buf_clean": st["buf_clean"],
                 "get_byte": st["get_byte"],
+                "byte_cache": dict(st["byte_cache"]),
+                "quot_rem": st["quot_rem"],
+                "div_cache": dict(st["div_cache"]),
                 "stack_mem": dict(st["stack_mem"]),
                 "min_sp": st["min_sp"],
+                "place_entry_regs": st.get("place_entry_regs", {}),
+                "place_entry_fq": st.get("place_entry_fq", frozenset()),
             }
 
         def eval_table_expr(ex, bind, st):
@@ -724,9 +881,20 @@ class Verifier:
                     if b[1]:
                         raise Refuse("non-constant shift in shl64")
                     k = b[0] % 64
-                    res = r_scale(1 << k, a)
-                    self.entail(st["facts"], r_sub(r_const(M64), res), stream)
-                    return res, (ma or mb)
+                    if not a[1]:
+                        return r_const(((a[0] & M64) << k) & M64), (ma or mb)
+                    lim = 1 << (64 - k)
+                    bound_goal = r_sub(r_const(lim - 1), a)
+                    if r_plain(st["facts"], bound_goal):
+                        return r_scale(1 << k, a), (ma or mb)
+                    tag_s, _ = stream.pop_tag()
+                    if tag_s == "exact":
+                        self.entail(st["facts"], bound_goal, stream)
+                        return r_scale(1 << k, a), (ma or mb)
+                    if tag_s == "wrap":
+                        low_a = sym_low(a, lim, st)
+                        return r_scale(1 << k, low_a), (ma or mb)
+                    raise Refuse(f"expected `exact` or `wrap` for shl64, got `{tag_s}`")
                 if op == "shr64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
@@ -735,23 +903,24 @@ class Verifier:
                     k = b[0] % 64
                     if not a[1]:
                         return r_const((a[0] & M64) >> k), (ma or mb)
-                    d = 1 << k
-                    q = fresh_var(0, M64 // d, st["facts"])
-                    rem = r_sub(a, r_scale(d, q))
-                    st["facts"].append(rem)
-                    st["facts"].append(r_sub(r_const(d - 1), rem))
+                    q, _ = quot_rem(a, 1 << k, st, nonneg=True)
                     return q, (ma or mb)
                 if op == "and64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if not b[1] and b[0] > 0 and ((b[0] + 1) & b[0]) == 0:
+                    if not b[1] and b[0] >= 0 and ((b[0] + 1) & b[0]) == 0:
                         d = b[0] + 1
-                        q = fresh_var(0, M64 // d, st["facts"])
-                        rem = r_sub(a, r_scale(d, q))
-                        st["facts"].append(rem)
-                        st["facts"].append(r_sub(r_const(d - 1), rem))
-                        return rem, (ma or mb)
+                        return sym_low(a, d, st), (ma or mb)
+                    if not b[1] and b[0] == (1 << 64) - 64:
+                        q, _ = quot_rem(a, 64, st, nonneg=True)
+                        return r_scale(64, q), (ma or mb)
                     raise Refuse(f"unsupported and64 mask {b}")
+                if op == "low32":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    return sym_low(a, 1 << 32, st), ma
+                if op == "low8":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    return sym_low(a, 256, st), ma
                 if op == "equal":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
@@ -771,7 +940,7 @@ class Verifier:
                         idx = r_sub(addr, bbase)
                         self.entail(st["facts"], idx, stream)
                         self.entail(st["facts"], r_sub(r_sub(st["buf_len"][bnm], idx), r_const(1)), stream)
-                        return st["get_byte"](bnm, idx, st["facts"]), (not st["buf_clean"][bnm])
+                        return st["get_byte"](bnm, idx, st), (not st["buf_clean"][bnm])
                     raise Refuse("mem8 address does not fall in any contract buffer")
                 if op == "mem64":
                     base, mb = eval_table_expr(args[0], bind, st)
@@ -804,14 +973,18 @@ class Verifier:
                         for kr in pl["keep"]:
                             if st["regs"][kr] != entry_regs.get(kr, st["regs"][kr]) and kr in st["place_entry_regs"]:
                                 self.entail_eq(st["facts"], st["regs"][kr], st["place_entry_regs"][kr], stream)
+                        for o in st.get("place_entry_fq", frozenset()):
+                            if o not in st["stack_mem"] or st["stack_mem"][o][1]:
+                                raise Refuse(f"at loop place clean frame slot {o} may depend on values kept out of the trace")
                         return
                     # Enter place once as fresh symbolic state, keeping `eqs` (spec facts)
                     pst = clone(st)
                     pst["facts"] = list(facts)
                     pst["eqs"] = list(st["eqs"])
                     pst["neq"] = []
-                    base_v = var_count[0]
-                    var_count[0] += len(reg_names)
+                    pst["place_entry_fq"] = frozenset(o for o, (_, mk) in st["stack_mem"].items() if not mk)
+                    base_v = pst["nvars"]
+                    pst["nvars"] += len(reg_names)
                     for r_idx, r in enumerate(reg_names):
                         if r not in pl["keep"]:
                             v = r_var(base_v + r_idx)
@@ -944,34 +1117,84 @@ class Verifier:
                         if callee_nm not in self.proven:
                             raise Refuse(f"callee `{callee_nm}` has not been verified")
                         c = self.proven[callee_nm]
+                        c_is_arm = c["machine"] == "arm64"
+                        if c_is_arm != is_arm:
+                            raise Refuse(f"callee `{callee_nm}` targets a different machine")
+                        c_arg_regs = c["argregs"] if c["argregs"] is not None else (ARM_ARGS if is_arm else X86_ARGS)
+                        c_keeps = set(c["keeps"]) if c["keeps"] is not None else (ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED)
+                        c_ret_reg = c["retreg"] if c["retreg"] is not None else ("x0" if is_arm else "rax")
                         need_stk = c["stack"] + (0 if is_arm else 8)
                         sp_off = r_sub(st["regs"][sp_reg], entry_regs[sp_reg])
                         if sp_off[1]:
                             raise Refuse("non-constant stack pointer at call")
                         if -sp_off[0] + need_stk > fn["stack"]:
                             raise Refuse(f"call to `{callee_nm}` exceeds stack budget {fn['stack']}")
-                        # Return value from callee contract
+                        if is_arm and (sp_off[0] % 16 != 0):
+                            raise Refuse("stack pointer is not 16-byte aligned at AArch64 call")
+                        # Build callee argument environment and check trace cleanliness of non-hidden args
                         cenv = {}
-                        for idx, (anm, _, _) in enumerate(c["args"]):
-                            cenv[anm] = st["regs"][arg_regs[idx]]
-                        for r in reg_names:
-                            if r != sp_reg and r not in callee_saved:
-                                st["regs"][r] = fresh_var(0, M64, st["facts"])
+                        for idx, (anm, akind, alen) in enumerate(c["args"]):
+                            areg = c_arg_regs[idx]
+                            if akind == "bytes":
+                                found_buf = None
+                                for bnm, bbase in st["buf_base"].items():
+                                    if st["regs"][areg] == bbase:
+                                        found_buf = bnm
+                                        break
+                                if found_buf is None:
+                                    raise Refuse(f"callee `{callee_nm}` bytes arg `{anm}` does not match a caller buffer")
+                                cenv[anm] = ("buf", found_buf)
+                                if anm not in c["hidden"] and not st["buf_clean"][found_buf]:
+                                    raise Refuse(f"callee `{callee_nm}` exposes buffer `{found_buf}` kept out of caller trace")
+                            else:
+                                cenv[anm] = st["regs"][areg]
+                                if anm not in c["hidden"] and st["marks"][areg]:
+                                    raise Refuse(f"callee `{callee_nm}` trace arg `{anm}` may depend on values kept out of trace")
+                        # Check callee entry preconditions (`below`, `atleast`, `requires`)
+                        for anm, bnd in c["below"]:
+                            if anm in cenv:
+                                self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)
+                        for anm, bnd in c["atleast"]:
+                            if anm in cenv:
+                                self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
+                        for req in c["requires"]:
+                            self.check_fact(req, cenv, st, stream)
+                        # Drop stack slots below current sp; clobber non-preserved registers (matching Lean nvars + r numbering)
+                        cur_sp_off = sp_off[0]
+                        st["stack_mem"] = {o: v for o, v in st["stack_mem"].items() if o >= cur_sp_off}
+                        base_v = st["nvars"]
+                        st["nvars"] += len(reg_names)
+                        for r_idx, r in enumerate(reg_names):
+                            if r != sp_reg and r not in c_keeps:
+                                rv_i = r_var(base_v + r_idx)
+                                st["regs"][r] = rv_i
+                                st["facts"].append(rv_i)
+                                st["facts"].append(r_sub(r_const(M64), rv_i))
                                 st["marks"][r] = True
+                        st["flags"] = {"zf": None, "cf": None}
+                        st["flag_marks"] = {"zf": True, "cf": True}
                         if c["returns"] is not None:
-                            st["regs"][ret_reg] = self.eval_sexpr(c["returns"], cenv, st, stream)
-                            st["marks"][ret_reg] = False
+                            ret_val = self.eval_sexpr(c["returns"], cenv, st, stream)
+                            rv = st["regs"][c_ret_reg]
+                            if self.is_row(ret_val):
+                                st["facts"].append(r_sub(rv, ret_val))
+                                st["facts"].append(r_sub(ret_val, rv))
+                            else:
+                                st["eqs"].insert(0, (ret_val, rv))
+                            st["marks"][c_ret_reg] = False
                     elif kind == "return":
-                        # Check sp restored and callee-saved registers intact
+                        # Check sp restored, x30 intact (AArch64), callee-saved registers intact, and trace marks clean
                         self.entail_eq(st["facts"], st["regs"][sp_reg], entry_regs[sp_reg], stream)
+                        if st["marks"][sp_reg]:
+                            raise Refuse("at return stack pointer may depend on values kept out of the trace")
+                        if is_arm:
+                            self.entail_eq(st["facts"], st["regs"]["x30"], entry_regs["x30"], stream)
+                            if st["marks"]["x30"]:
+                                raise Refuse("at return link register x30 may depend on values kept out of the trace")
                         for r in callee_saved:
                             self.entail_eq(st["facts"], st["regs"][r], entry_regs[r], stream)
                         if fn["returns"] is not None:
                             want = self.eval_sexpr(fn["returns"], env, st, stream)
-                            # Apply any recorded call equalities from the loop place
-                            for eq_l, eq_r in st["eqs"]:
-                                if want == eq_l:
-                                    want = eq_r
                             self.expand_eq(st["regs"][ret_reg], want, env, st, stream)
                         return
                     else:

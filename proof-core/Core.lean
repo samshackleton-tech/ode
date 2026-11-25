@@ -917,7 +917,7 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
         -- A mask of low bits takes the remainder by a power of two.
         match (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
         | some k => pure (.lin (symDivide s x (2 ^ k)).2.1, (symDivide s x (2 ^ k)).2.2)
-        | none => refuse "no proof rule for this AND mask"
+        | none => refuse "no proof rule for this AND mask (supported: low-bit masks 2^k - 1 and 2^64 - 64; for upper nibbles/fields use lsr/shr then and)"
     | none => refuse "an and with what is no number of the table: not here yet"
   else if f == "sub8" then
     -- a byte less a byte, wrapping: the remainder by 256 of the one, and 256, less the other's low byte
@@ -2950,9 +2950,16 @@ def symEnsureKnown (ctx : Ctx) (s : Sym) (e : EnsureW) : V Unit := do
 
 /-- At the return: the stack pointer is where it was, the registers a callee keeps hold what they held at
 entry, the runs given to write hold what each `ensures` says, and rax holds what the contract says. -/
+def keptRegRefusal (c : Contract) (s : Sym) : String :=
+  match c.keeps.find? fun r => s.reg r != Lin.var r with
+  | some r =>
+    let nm := (if c.arm64 then regNamesArm else regNames).getD r s!"r{r}"
+    s!"at the return a register a callee keeps ({nm}) does not hold what it held at entry"
+  | none => "at the return a register a callee keeps does not hold what it held at entry"
+
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
-  else if !(ctx.contract.keeps.all fun r => s.reg r == Lin.var r) then refuse "at the return a register a callee keeps does not hold what it held at entry"
+  else if !(ctx.contract.keeps.all fun r => s.reg r == Lin.var r) then refuse (keptRegRefusal ctx.contract s)
   else if !(ctx.contract.keepsVec.all fun r => s.vecIntact.contains r) then refuse "at the return a callee-saved vector register was modified"
   else do
     each (symEnsureKnown ctx s) ctx.contract.ensuresW
@@ -3241,6 +3248,16 @@ def shape : List Stmt → Shape
   | [.retLink r] => .retLink r
   | _ => .plain
 
+def retMarkRefusal (arm64 : Bool) (resultFollowsTrace : Bool) (regq : List Nat) : String :=
+  if !regq.contains RSP then
+    "at the return the stack pointer (sp) may depend on values kept out of the trace"
+  else if arm64 && !regq.contains LINK then
+    "at the return the return address (x30) may depend on values kept out of the trace"
+  else if resultFollowsTrace && !regq.contains 0 then
+    "at the return the returned value may depend on values kept out of the trace"
+  else
+    "at the return a register may depend on values kept out of the trace"
+
 def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
   match shape i.effect with
   | .ret =>
@@ -3248,7 +3265,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     else do
       symReturn ctx s
       if !(s.q.regq.contains RSP && (!ctx.contract.resultFollowsTrace || s.q.regq.contains 0)) then
-        refuse "at the return the stack pointer, or the number returned, may depend on values kept out of the trace"
+        refuse (retMarkRefusal false ctx.contract.resultFollowsTrace s.q.regq)
       else pure [(s, .returned)]
   | .retLink r =>
     -- a return to the address a register holds: the register is the one the contract's machine returns by, it
@@ -3258,7 +3275,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     else do
       symReturn ctx s
       if !(s.q.regq.contains RSP && (s.q.regq.contains LINK && (!ctx.contract.resultFollowsTrace || s.q.regq.contains 0))) then
-        refuse "at the return the stack pointer, the address to return to, or the number returned may depend on values kept out of the trace"
+        refuse (retMarkRefusal true ctx.contract.resultFollowsTrace s.q.regq)
       else pure [(s, .returned)]
   | .jump target cond =>
     match jumpTarget i.bind target with
@@ -5008,6 +5025,8 @@ def arrive (ctx : Ctx) (p : Place) (first : Sym) (d : Row) (s : Sym) : V Unit :=
   | none =>
   if !(first.q.regq.all s.q.regq.contains) then refuse s!"at the place {p.pc} register {(first.q.regq.find? fun r => !s.q.regq.contains r).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
   else
+  if !(first.q.fq.all s.q.fq.contains) then refuse s!"at the place {p.pc} stack slot {(first.q.fq.find? fun c => !s.q.fq.contains c).getD 0} may depend on values kept out of the trace, which it did not on first coming there"
+  else
   if !(first.frame.all fun cell => s.frame.contains cell) then refuse "at the place the frame does not hold what it held on first coming there"
   else if !(first.vecIntact.all s.vecIntact.contains) then refuse "at the place a callee-saved vector register was modified in the loop"
   else do
@@ -5089,8 +5108,9 @@ def onward (ctx : Ctx) (seen : List Seen) (go : List Seen → Sym → Nat → V 
       | none => do
         let (g, d, first) ← generalize ctx p next.1
         -- (what is known not to be marked at the place: the registers that are not on this first coming,
-        -- but for those the place says may be on a later one)
-        go (⟨p, d, { first with q := { regq := placeQuiet ctx p next.1.q.regq } }⟩ :: seen) { g with q := { regq := placeQuiet ctx p next.1.q.regq } } pc'
+        -- minus those the place says may be on a later one, plus the clean frame slots kept across the loop)
+        let q0 : SMarks := { regq := placeQuiet ctx p next.1.q.regq, fq := next.1.q.fq }
+        go (⟨p, d, { first with q := q0 }⟩ :: seen) { g with q := q0 } pc'
 
 /-- Every path from `pc`: each to the function's return, or to a place it has come to before. -/
 def explore (ctx : Ctx) : Nat → List Seen → Sym → Nat → V Unit

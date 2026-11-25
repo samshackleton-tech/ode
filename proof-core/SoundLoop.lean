@@ -1126,6 +1126,9 @@ theorem arrive_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
     next =>
     split at h
     next => exact (refuse_ok h).elim
+    next =>
+    split at h
+    next => exact (refuse_ok h).elim
     next hframe =>
     split at h
     next => exact (refuse_ok h).elim

@@ -5,6 +5,7 @@ x86-64 and AArch64, including shuffled-facts order-independence and 4 negative c
 """
 import os
 import random
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -320,6 +321,44 @@ fn cmp3_fn(a: number, b: number)
                                     capture_output=True, text=True)
                 self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                 self.assertTrue(r2.stdout.startswith("shown"))
+
+    def test_05_multi_fn_custom_calling_and_ebpf_dual_verify(self):
+        """Multi-function custom-calling programs (`quad.ode` and full 6-fn `ebpf_unified.ode`) pass both verifiers."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        sys.path.insert(0, os.path.join(ROOT, "lang"))
+        import ode_audit
+        cases = [
+            (os.path.join(ROOT, "paper", "examples", "quad.ode"), None, "quad", 2),
+            (os.path.join(HERE, "examples", "ebpf", "ebpf_unified.ode"),
+             os.path.join(HERE, "examples", "ebpf", "ebpf_spec.ode"), "ebpf_run", 6),
+        ]
+        for src, spec, fn, expect_fns in cases:
+            for target in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    if spec:
+                        shutil.copy2(spec, os.path.join(d, os.path.basename(spec)))
+                    cand = os.path.join(d, os.path.basename(src))
+                    shutil.copy2(src, cand)
+                    out_o = os.path.join(d, "out.o")
+                    out_p = os.path.join(d, "out.proof")
+                    res = ode_audit.pack_verified(cand, None, out_o, out_p, fn_name=fn, target=target)
+                    self.assertEqual(res["verdict"], "shown", res)
+                    dump = os.path.join(d, "dump.sh")
+                    st_p = os.path.join(d, "st.txt")
+                    pf_p = os.path.join(d, "pf.txt")
+                    with open(dump, "w", encoding="utf-8") as f:
+                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                    os.chmod(dump, 0o755)
+                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                    tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                    r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                    self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                    r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                        capture_output=True, text=True)
+                    self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                    self.assertIn(f"shown ({expect_fns} functions, verify2)", r2.stdout)
 
 
 if __name__ == "__main__":

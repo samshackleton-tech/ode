@@ -987,14 +987,18 @@ theorem return_quiet {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s
 /-! ## A place -/
 
 theorem arrive_q {ctx : Ctx} {pl : Place} {first s : Sym} {d : Row} {items : Items} {r : Unit × Items}
-    (h : arrive ctx pl first d s items = .ok r) : first.q.regq.all s.q.regq.contains = true := by
+    (h : arrive ctx pl first d s items = .ok r) :
+    first.q.regq.all s.q.regq.contains = true ∧ first.q.fq.all s.q.fq.contains = true := by
   cases hfind : pl.keep.find? (fun r => s.reg r != first.reg r) with
   | some _ => simp only [arrive, hfind] at h; exact (refuse_ok h).elim
   | none =>
     simp only [arrive, hfind] at h
     split at h
     next => exact (refuse_ok h).elim
-    next hq => simpa using hq
+    next hq =>
+    split at h
+    next => exact (refuse_ok h).elim
+    next hfq => exact ⟨by simpa using hq, by simpa using hfq⟩
 
 /-- The registers a place's general state takes as not marked are among those not marked on first coming. -/
 theorem placeQuiet_all (ctx : Ctx) (pl : Place) (regq : List Nat) : (placeQuiet ctx pl regq).all regq.contains = true :=
@@ -1016,10 +1020,14 @@ theorem MarksOk.unmarkReg {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M 
     · rfl
     · exact M.low k hk
 
-/-- What is so of the marks where more registers are known not to be marked is so where fewer are. -/
-theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) {regs : List Nat}
-    (h : regs.all q.regq.contains = true) : MarksOk ctx s0 { regq := regs } st :=
-  ⟨fun r hr => M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp h r hr)), (fun x => by cases x), (fun x => by cases x), M.stable, CellsOk.nil, fun _ m => nomatch m⟩
+/-- What is so of the marks where more registers and frame slots are known not to be marked is so where fewer are. -/
+theorem MarksOk.fewer {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st) {regs : List Nat} {fqs : List Int}
+    (hr : regs.all q.regq.contains = true) (hf : fqs.all q.fq.contains = true) :
+    MarksOk ctx s0 { regq := regs, fq := fqs } st :=
+  ⟨fun r hr' => M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hr r hr')),
+   (fun x => by cases x), (fun x => by cases x), M.stable,
+   fun c hc => M.frame c (List.contains_iff_mem.mp (List.all_eq_true.mp hf c hc)),
+   fun _ m => nomatch m⟩
 
 /-! ## A call -/
 

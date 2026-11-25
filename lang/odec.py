@@ -803,6 +803,11 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
             if x.endswith(":") or x.startswith("."): continue
             try: item = asm_mod.instruction(x)
             except ValueError as why:
+                low = was.strip()
+                if low == "calling" or low.startswith("calling ") or low.startswith("calling{"):
+                    stop(src, n, f"`{was}`: `calling {{ ... }}` goes before the body brace (write `for {target} calling {{ ... }} {{ ... }}`)")
+                if low.startswith("place ") and "{" in low:
+                    stop(src, n, f"`{was}`: `place` takes no label name — write `place {{ ... }}` directly before the `@label:` line")
                 said = str(why)
                 stop(src, n, f"`{was}`: " + (said[:-len(x) - 2] if said.endswith(": " + x) else said))
             if item[0] == "jump" and item[2] not in labels:
