@@ -9,16 +9,10 @@ import Arm64.Trusted.ISA.Eval
 Standalone proof package. Depends only on the instruction-table definitions (`Table.lean`,
 `Machine.lean`) and Google DeepMind's `Arm64.Trusted.ISA` (`Decode`, `Eval`).
 
-Eight rows of `arm64/arm64.tab`, spanning every instruction class, are proved to agree with Google's
-decoder (`Arm64.decode`) and evaluator (`Arm64.execInstWithSvc Arm64.noSyscalls`):
-1. `add_rrr`  — 64-bit general-purpose register arithmetic (`D = add64(S, P)`)
-2. `ldr64_sp` — 64-bit load through `sp`, including the 16-byte SP-alignment fault (`D = mem64(on16(sp), N)`)
-3. `eor_v`    — 128-bit NEON three-register bitwise XOR (`X = each32(xor32, Y, Z)`)
-4. `rev32_8h` — 128-bit NEON halfword reverse = 16-bit rotate per 32-bit lane (`X = each32(ror32, Y, 16)`)
-5. `ldrb`     — 8-bit zero-extending load through a general register (`D = mem8(B, N)`)
-6. `cmp_rr`   — 64-bit unsigned comparison setting `zf` and borrow `cf = !PSTATE.C` (`zf = equal(S, P); cf = below(S, P)`)
-7. `b_hs`     — conditional branch on unsigned `>=` (`jump I if not cf` ↔ `B.HS` / `PSTATE.C = 1`)
-8. `b_lo`     — conditional branch on unsigned `<` (`jump I if cf` ↔ `B.LO` / `PSTATE.C = 0`)
+All 54 rows of `arm64/arm64.tab` are proved in this file (58 `agree_` theorems) to agree with
+Google's decoder (`Arm64.decode`) and evaluator (`Arm64.execInstWithSvc Arm64.noSyscalls`),
+spanning integer arithmetic, memory loads and stores (including the 16-byte SP-alignment fault),
+comparisons, conditional and unconditional branches, calls, returns, and 128-bit NEON operations.
 -/
 
 namespace ArmAgree

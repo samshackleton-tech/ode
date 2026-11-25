@@ -22,7 +22,7 @@ and current verification status on x86-64 and AArch64.
 
 | Target | Category | Existing Ode Spec | Open-Source Lean 4 Spec | x86-64 | AArch64 |
 |---|---|---|---|---|---|
-| **BLAKE3 (full single-threaded hash)** | Crypto | `kcheck/blake3.spec` + `proof-core/examples/arm64/{hash,wide4}_arm64.spec` | `c2sp/BLAKE3` (in-repo) | **`shown`** (14/14 fns, 3,761 insns; 16.37 GiB/s Zen 5) | **`shown`** (7/7 fns, 1,832 insns, 4-way NEON; 2.19 GiB/s Apple M6) |
+| **BLAKE3 (full single-threaded hash)** | Crypto | `kcheck/blake3.spec` + `proof-core/examples/hashr_fast/` + `proof-core/examples/hashr_arm64_fast/` | `c2sp/BLAKE3` (in-repo) | **`shown`** (17 fns, 3,202 insns; 1.29 GiB/s @ 64 B, 16.34 GiB/s @ 256 KiB Zen 5) | **`shown`** (8 fns, 1,891 insns, 100% Ode + 4-way NEON; 1.18 GiB/s @ 64 B, 2.28 GiB/s @ 4 KiB M6, build machine without timing lock) |
 | **Base64 (RFC 4648 strict encode + decode)** | Encoding | `kcheck/programs/base64/base64.spec`, `factory/verified/base64_*` | `predictable-machines/lean4-base64` (MIT: `Encode.lean`, `Decode.lean`) | **`shown`** (`char_val` 1.62x opt, `encode_char`, `valid_quad`) | **`shown`** (`char_val` 1.55x opt, `encode_char`, `valid_quad`) |
 | **UTF-8 (RFC 3629 strict validator + decoder)** | Encoding | `kcheck/programs/utf8/utf8.spec` (61 lines), `factory/verified/utf8_*` | `Proven-Commons/utf` (Apache-2.0: `Utf/Proofs/{Decode,Encode}.lean`) | **`shown`** (`is_ascii`, `decode_2byte`) / `legacy-kcheck` (full) | **`shown`** (`is_ascii`, `decode_2byte`) |
 | **Varint / LEB128 (encode + strict decode)** | Wire codec | `kcheck/programs/varint/varint.spec`, `factory/verified/varint_decode_u32_*` | `Lean-zh/protobuf` (MIT) | **`shown`** (encode + canonical `decode_u32`) | **`shown`** (canonical `decode_u32`) |
@@ -53,6 +53,18 @@ the Lean 4 reference repository and license, and current Ode status.
 | **Zstandard (RFC 8878) decompressor** | Compression | Major production compression format (FSE, Huffman, sequences) | `kim-em/lean-zstd` (Apache-2.0: `Zstd/Spec/{Base,BlockLoop,Complete}.lean`) | `planned` |
 | **CBOR framing & canonical ints** | Binary wire | Strict binary serialization for WebAuthn / COSE | `paulbutcher/lean-cbor` (Apache-2.0) | `planned` |
 | **DNS wire-name decoder (RFC 1035)** | Network parser | Compression-pointer loop and bounds safety | `BasisResearch/VeriDNS` | `planned` |
+| **SHA-256 (FIPS 180-4) & RSA** | Crypto | Pure `Nat` + `List Nat` spec (immediate `lean2ode` fit); plus `UInt32` reference | `keithadler/lean-x509` (`X509/Sha256.lean`, `Rsa.lean`, MIT); `SentinelOps-CI/lean-toolchain` (`SHA256.lean`, `HMAC.lean`, MIT) | **`shown`** (`sha256_big_sigma_4x` AVX & NEON) |
+| **CRC-32, LZ77, Huffman & DEFLATE** | Compression / checksum | Hardware `pclmulqdq`/`crc32x` SIMD target scaling up to full DEFLATE | `kim-em/lean-zip` (Apache-2.0: `Zip/Spec/Crc32.lean`, `LZ77.lean`, DEFLATE); `cla7aye15I4nd/zlib-lean` (`ZlibF/Spec/`) | `planned` |
+| **HPACK prefix integers & Huffman (HTTP/2 RFC 7541)** | Network codec | Hot path in HTTP/2 proxies and servers | `Proven-Commons/hpack` (Apache-2.0: `Spec/Defs.lean`) | `planned` |
+| **Bech32 / Bech32m checksum (BIP 173/350)** | Encoding / checksum | Pure `polymod` / `hrpExpand` for keys and addresses | `Proven-Commons/bech32` (Apache-2.0: `Spec/Defs.lean`) | `planned` |
+| **AES S-Box & GF(2^m) bit-sliced circuits** | Crypto / erasure coding | Constant-time bitsliced AES and GF(2^8) Reed-Solomon | `Swapnil-jain/gf2m-circuits` (Apache-2.0: `sbox/lean/Sbox106.lean`) | `planned` |
+| **BLAKE2b/2s, SHA-2, Keccak-p[1600]/SHA-3, Poseidon/Poseidon2** | Crypto / ZK | Zero-monad `Reference.lean` hash suite | `Verified-zkEVM/hash-specs` (Apache-2.0, 108 files); `NethermindEth/poseidon2-fv` (BabyBear width-16) | `planned` |
+| **Brotli decompressor (RFC 7932)** | Compression | Prefix codes and sliding-window decompression | `therealmarrakesh/formal-brotli` (`Brotli/Spec/`) | `planned` |
+| **Additional wire & text codecs (`Proven-Commons`)** | Parsers / codecs | SQLite page/record reader, MessagePack, tar, protobuf, Punycode, TLS 1.3 ClientHello, WebSocket, JSON, CSV, UUID, IP, bencode | `Proven-Commons/*` (Apache-2.0, standalone spec repos) | `planned` |
+
+**Lean 4 spec watch-outs:**
+- Several strong Lean 4 crypto/algorithm repos use imperative `Id.run do` / `let mut` / `for` loops or Aeneas `Result` monads (`CrocSwap/FIPS203-lean` ML-KEM, `leanprover/hex-poly-fast` NTT/Karatsuba, `zksecurity/just-lean` driftsort, `ayhon/sha3.lean`, `Beneficial-AI-Foundation/curve25519-dalek-lean-verify`, `pandaman64/lean-regex`). Extending `lean2ode` to lower bounded `Id.run do` loops would open this whole group.
+- Skip `proofbundle/lean-*` (`lean-sha-256`, `lean-blake2b-512`, etc.): those repositories are 13-line empty string-stub scaffolds, not specifications.
 
 ---
 
@@ -69,6 +81,35 @@ Ode specification once Wave 1 and Wave 2 patterns are proven in the Spec-First A
 | **HTTP/1.1 chunk-size & header-line parser** | Network parser | Request-smuggling defense | `planned` |
 | **TLS record header & bounds validator** | Network parser | Heartbleed-class bounds guarantee | `planned` |
 | **SHA-256 / SHA-512 compression** | Crypto | Primitives left hooked in prior whole-library verifications | **`shown`** (`sha256_big_sigma_4x` AVX & NEON) |
+| **bzip2 decompressor (`mibz2`)** | Compression | BWT, move-to-front, Huffman, and RLE decompression ([`mibz2` blog](https://lmmx.github.io/mibz2/blog/)) | `planned` |
+| **Non-crypto SIMD showcases** | Hashing / bitsets / text | `xxHash3` / `XXH64`, Roaring Bitmaps (popcnt/intersection), Reed-Solomon GF(2^8)/GF(2^16), UTF-8 <-> UTF-16 (`simdutf`), `simdjson` Stage 1 bitmask indexing | `planned` |
+
+### Non-Lean Declarative Spec Sources
+
+Each row below names an external specification corpus written in a declarative language other than Lean 4 that maps cleanly to Ode contracts.
+
+| Corpus | Language | Notable Targets |
+|---|---|---|
+| [`GaloisInc/cryptol-specs`](https://github.com/GaloisInc/cryptol-specs) (BSD-3-Clause) | Cryptol | AES-128/192/256 + GCM/GHASH (CLMUL), SHA-2/3, BLAKE2b/2s, Threefish, HMAC/HKDF |
+| [`hacl-star/hacl-star`](https://github.com/hacl-star/hacl-star) `specs/` (Apache-2.0) | F* | Curve25519, Ed25519, P-256, Poly1305, ChaCha20, AES-GCM, SHA-2/3, BLAKE2, HPKE |
+| [`hacspec/hacspec`](https://github.com/hacspec/hacspec) / [`celabshq/libcrux`](https://github.com/celabshq/libcrux) | Hacspec (pure Rust subset) | ML-KEM (FIPS 203), ML-DSA (FIPS 204), Curve25519, BLS12-381, AES-GCM, HPKE |
+| [`mit-plv/fiat-crypto`](https://github.com/mit-plv/fiat-crypto) | Coq / Rocq | Finite-field and modular arithmetic (Curve25519, P-256, secp256k1, BLS12-381, Poly1305) |
+| [`formosa-crypto/formosa-libjade`](https://github.com/formosa-crypto/formosa-libjade) | Jasmin / EasyCrypt | ML-KEM, SHA-3/Keccak, ChaCha20-Poly1305, X25519, BLAKE2, Ascon |
+| [`project-everest/everparse`](https://github.com/project-everest/everparse) (Apache-2.0) | 3D / EverParse | Zero-copy binary validators for TLS 1.3, QUIC, ELF, ASN.1, IPv4/TCP, Bitcoin, PNG |
+| Standard executable specs | Python / Isabelle | Ethereum `consensus-specs` (SSZ, KZG), NIST SP 800-232 Ascon, `C2SP/C2SP`, Isabelle/HOL AFP |
+
+---
+
+## Wave 4 — Pure-Computation Interpreters & Virtual Machines
+
+Each row below lists a pure-computation interpreter or virtual machine: a function that takes a bytecode program, an input buffer, a caller-supplied workspace, and a step budget, and runs without system calls, threads, or heap allocation. Bounds safety, termination under the step budget, and exact opcode semantics all fit Ode's contract model.
+
+| Target | Category | Why It Matters | Status |
+|---|---|---|---|
+| **eBPF / cBPF interpreter & bytecode verifier** | Systems VM | Fixed-width register VM with bounded jumps and explicit memory-region checks; high-value attack surface in kernels and sandboxes | `planned` |
+| **WebAssembly (Wasm) core interpreter** | Portable VM | Pure numeric and linear-memory execution step over a caller-supplied memory slice, with no host imports | `planned` |
+| **Regex VM (Thompson NFA / PikeVM)** | Text engine | Linear-time regular-expression matching with proved buffer bounds and no catastrophic backtracking | `planned` |
+| **Small stack & register VMs** | Scripting / query | Bitcoin Script, Forth inner interpreter, SQLite VDBE expression evaluator, or a small Scheme bytecode VM | `planned` |
 
 ---
 
@@ -83,8 +124,8 @@ AArch64 silicon in `factory/test_factory_native.py`.
 
 | Artifact | Target | Producer | API Cost | Instructions | Code Bytes | Proof Size | `odeverify` |
 |---|---|---|---:|---:|---:|---:|---:|
-| `b3hashr.o` (14/14 fns, full BLAKE3) | x86-64 | Hand / Ode | — | 3,761 | 23,820 | 1.07 MB | 26.1 s |
-| `b3hashr_arm64.o` (7/7 fns, full BLAKE3 + 4-way NEON) | AArch64 | Hand / Ode | — | 1,832 | 7,328 | 79.2 KB | 3.30 s |
+| `b3hashr_fast.o` (17 fns, full BLAKE3 + tail calls) | x86-64 | Hand / Ode | — | 3,202 | — | 455 KB | — |
+| `b3hashr_arm64_fast.o` (8 fns, full BLAKE3, 100% Ode + 4-way NEON) | AArch64 | Hand / Ode | — | 1,891 | 7,564 | — | — |
 | `ode_chacha20_blocks16` (16-block AVX-512, 1,024 B/call, 9.41 GiB/s Zen 5) | x86-64 | Hand / Ode | — | 1,090 | 6,921 | 26 B | 0.042 s |
 | `ode_chacha20_blocks4_arm64` (4-block NEON, 256 B/call, 1.70 GiB/s M6) | AArch64 | Hand / Ode | — | 1,759 | 7,036 | 31 B | 0.035 s |
 | `v_row_contradicts`, `v_row_sum16`, `v_bytes_eq` (6 fns) | x86-64 & AArch64 | Hand / Ode | — | 110 | 440 | 4.8 KB | < 0.2 s |
