@@ -1,0 +1,245 @@
+{
+  "run_id": "ebpf-v2b",
+  "prereg_commit": "fa68451a8e4fa53807acd866cbb6a408da5aae9a",
+  "finished_utc": "2026-11-25T20:57:42Z",
+  "tasks": [
+    "ebpf"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 5,
+  "total_cells": 8,
+  "verify2_passes": 4,
+  "native_passes": 5,
+  "total_rounds": 46,
+  "total_cost_usd": 13.7954,
+  "failure_categories": {
+    "arith_need_entail": 13,
+    "compile_or_parse_error": 11,
+    "prover_timeout_120s": 8,
+    "spec_need_open": 6,
+    "kept_reg_refusal": 2,
+    "other": 1
+  },
+  "cells": [
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 7,
+      "total_cost_usd": 3.9556,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 199,
+        "code_bytes": 844,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.188,
+        "pack_s": 7.357,
+        "proof_bytes": 85744
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "kept_reg_refusal",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 3,
+      "rounds_to_pass": 3,
+      "total_cost_usd": 1.988,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 5,
+        "instructions": 189,
+        "code_bytes": 677,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.238,
+        "pack_s": 17.254,
+        "proof_bytes": 68381
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 1.0105,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "spec_need_open",
+        "spec_need_open",
+        "spec_need_open",
+        "spec_need_open",
+        "kept_reg_refusal",
+        "prover_timeout_120s",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 0.9072,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "compile_or_parse_error",
+        "arith_need_entail",
+        "arith_need_entail"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 2.0116,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "spec_need_open",
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 3,
+      "rounds_to_pass": 3,
+      "total_cost_usd": 0.7391,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 198,
+        "code_bytes": 736,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.291,
+        "pack_s": 7.855,
+        "proof_bytes": 150132
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 2,
+      "rounds_to_pass": 2,
+      "total_cost_usd": 0.7229,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 174,
+        "code_bytes": 728,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.187,
+        "pack_s": 5.327,
+        "proof_bytes": 78458
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 7,
+      "total_cost_usd": 2.4605,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 7,
+        "instructions": 201,
+        "code_bytes": 738,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.358,
+        "pack_s": 20.213,
+        "proof_bytes": 427131
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "other",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "spec_need_open",
+        "passed"
+      ]
+    }
+  ]
+}
