@@ -7,10 +7,11 @@ Visual vocabulary (shared with paper/ode.typ):
   - Palette:
       ink      #1C1E21  warm charcoal (primary text & strokes)
       slate    #5B6470  quiet slate (hairlines, annotations, secondary curves)
-      rule     #C8C3B8  warm hairline rule
-      accent   #9E2A2B  Venetian terracotta (Bob's boundary, contract hashes, verified Ode)
-      ivory    #F7F5F0  soft paper tint (workshop / neutral code ground)
-      blush    #FBF2F1  ultra-soft blush (Bob's reliance set / verified highlight)
+      rule     #CFC9BC  warm hairline rule
+      accent   #9E2A2B  Venetian terracotta (quiet typographic micro-accents, arrows, data series)
+      ivory    #F7F5F0  soft paper tint (neutral ground)
+      sand     #EEEBE2  warm sandstone tint (highlighted architectural panels — never red/blush boxes)
+      charcoal #2E343D  authoritative dark border for emphasized zones
       white    #FFFFFF  clean card ground
 """
 from pathlib import Path
@@ -19,14 +20,13 @@ OUT = Path(__file__).resolve().parent / "figures"
 OUT.mkdir(parents=True, exist_ok=True)
 
 INK = "#1C1E21"
+CHARCOAL = "#2E343D"
 SLATE = "#5B6470"
 MUTED = "#7D8590"
 RULE = "#CFC9BC"
 ACCENT = "#9E2A2B"
 IVORY = "#F7F5F0"
-BLUSH = "#FBF2F1"
-SAGE_BG = "#F2F5F2"
-SAGE = "#3D6150"
+SAND = "#EEEBE2"
 WHITE = "#FFFFFF"
 
 SERIF = "Palatino"
@@ -100,191 +100,198 @@ def make_fig1():
         line(112, 78, 130, 78, stroke=SLATE, sw=0.8, marker="arr-slate"),
 
         rect(20, 124, 204, 72, fill=WHITE, stroke=RULE, sw=0.65, dash="2.5,2.5"),
-        text(32, 141, "What may go wrong here:", size=8.4, fill=SLATE, style="italic"),
-        text(32, 156, "• Bugs in the compiler or prover", size=8.3, fill=SLATE),
-        text(32, 170, "• Clever optimizations or proof search", size=8.3, fill=SLATE),
-        text(32, 184, "• A hostile or mistaken author", size=8.3, fill=SLATE),
+        text(30, 141, "What may go wrong here:", size=8.5, fill=SLATE, style="italic"),
+        text(30, 156, "• Bugs in the compiler or prover", size=8.4, fill=SLATE),
+        text(30, 170, "• Optimizing rewrites or search bugs", size=8.4, fill=SLATE),
+        text(30, 184, "• A hostile or mistaken author", size=8.4, fill=SLATE),
 
         # Center boundary & crossing artifacts
-        line(258, 8, 258, 214, stroke=ACCENT, sw=0.75, dash="3,3"),
-        text(322, 23, "ARTIFACT BOUNDARY", size=7.6, fill=ACCENT, anchor="middle", weight="bold", spacing="1.1"),
+        line(256, 8, 256, 214, stroke=SLATE, sw=0.8, dash="3,3"),
+        text(322, 23, "ARTIFACT BOUNDARY", size=7.8, fill=SLATE, anchor="middle", weight="bold", spacing="1.0"),
 
         # Three crossing pills
-        rect(272, 46, 100, 34, fill=WHITE, stroke=ACCENT, sw=0.8),
-        text(322, 60, "Binary  (.o)", font=MONO, size=7.8, fill=INK, anchor="middle"),
-        text(322, 72, "bytes + .ode.ocl", size=7.6, fill=SLATE, anchor="middle"),
-        line(224, 68, 270, 63, stroke=INK, sw=0.8, marker="arr-ink"),
-        line(372, 63, 402, 68, stroke=ACCENT, sw=0.85, marker="arr-accent"),
+        rect(270, 46, 102, 36, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(321, 61, "Binary (.o)", font=MONO, size=8.0, fill=INK, anchor="middle"),
+        text(321, 74, "bytes + .ode.ocl", size=7.9, fill=SLATE, anchor="middle"),
+        line(224, 68, 268, 64, stroke=INK, sw=0.85, marker="arr-ink"),
+        line(372, 64, 390, 64, stroke=ACCENT, sw=0.9, marker="arr-accent"),
 
-        rect(272, 98, 100, 34, fill=WHITE, stroke=SLATE, sw=0.75),
-        text(322, 112, "Proof  (.proof)", font=MONO, size=7.8, fill=INK, anchor="middle"),
-        text(322, 124, "separate certificate", size=7.6, fill=SLATE, anchor="middle"),
-        line(224, 86, 270, 115, stroke=SLATE, sw=0.75, marker="arr-slate"),
-        line(372, 115, 402, 105, stroke=SLATE, sw=0.8, marker="arr-slate"),
+        rect(270, 98, 102, 36, fill=WHITE, stroke=SLATE, sw=0.8),
+        text(321, 113, "Proof (.proof)", font=MONO, size=8.0, fill=INK, anchor="middle"),
+        text(321, 126, "separate file", size=7.9, fill=SLATE, anchor="middle"),
+        line(224, 86, 268, 116, stroke=SLATE, sw=0.8, marker="arr-slate"),
+        line(372, 116, 390, 116, stroke=SLATE, sw=0.85, marker="arr-slate"),
 
-        rect(272, 152, 100, 34, fill=IVORY, stroke=RULE, sw=0.75, dash="2.5,2.5"),
-        text(322, 166, "Glossary (.json)", font=MONO, size=7.5, fill=SLATE, anchor="middle"),
-        text(322, 178, "optional; not hashed", size=7.4, fill=MUTED, anchor="middle", style="italic"),
-        line(224, 93, 270, 168, stroke=RULE, sw=0.7, dash="2.5,2.5", marker="arr-slate"),
-        path("M 372 178 L 384 178 L 384 205 L 603 205 L 603 198", stroke=SLATE, sw=0.7, dash="2.5,2.5", marker="arr-slate"),
+        rect(270, 152, 102, 36, fill=IVORY, stroke=SLATE, sw=0.75, dash="3,2.5"),
+        text(321, 167, "Glossary (.json)", font=MONO, size=7.7, fill=SLATE, anchor="middle"),
+        text(321, 180, "optional; never hashed", size=7.8, fill=SLATE, anchor="middle", style="italic"),
+        line(224, 93, 268, 170, stroke=SLATE, sw=0.75, dash="3,2.5", marker="arr-slate"),
+        path("M 372 178 L 382 178 L 382 206 L 603 206 L 603 198", stroke=SLATE, sw=0.8, dash="3,2.5", marker="arr-slate"),
 
-        # Right zone: Bob's Reliance Set
-        rect(392, 12, 282, 202, fill=BLUSH, stroke=ACCENT, sw=0.95),
-        text(406, 31, "BOB'S AUDIT  —  THE RELIANCE SET", size=8.0, fill=ACCENT, weight="bold", spacing="1.1"),
+        # Right zone: Bob's Reliance Set (calm sandstone ground + dark charcoal frame)
+        rect(392, 12, 282, 202, fill=SAND, stroke=CHARCOAL, sw=1.0),
+        text(406, 31, "BOB'S AUDIT  —  THE RELIANCE SET", size=8.1, fill=INK, weight="bold", spacing="1.0"),
         text(406, 44, "Every piece Bob relies on for his verdict", size=8.5, fill=SLATE, style="italic"),
 
-        rect(406, 58, 116, 62, fill=WHITE, stroke=ACCENT, sw=0.85),
-        text(464, 75, "Small Verifier", size=9.2, fill=ACCENT, anchor="middle", weight="bold"),
-        text(464, 90, "odeverify", font=MONO, size=8.0, fill=INK, anchor="middle"),
-        text(464, 104, "checks machine bytes", size=7.8, fill=SLATE, anchor="middle"),
-        text(464, 114, "against x86/arm64.tab", font=MONO, size=6.9, fill=SLATE, anchor="middle"),
+        rect(406, 58, 116, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(464, 75, "Small Verifier", size=9.2, fill=INK, anchor="middle", weight="bold"),
+        text(464, 90, "odeverify", font=MONO, size=8.2, fill=INK, anchor="middle"),
+        text(464, 104, "checks machine bytes", size=8.0, fill=SLATE, anchor="middle"),
+        text(464, 115, "via x86/arm64.tab", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
 
-        line(522, 89, 544, 89, stroke=ACCENT, sw=0.9, marker="arr-accent"),
+        line(522, 89, 544, 89, stroke=ACCENT, sw=0.95, marker="arr-accent"),
 
-        rect(546, 58, 114, 62, fill=WHITE, stroke=ACCENT, sw=0.85),
+        rect(546, 58, 114, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
         text(603, 75, "Verdict & Digest", size=9.0, fill=INK, anchor="middle", weight="bold"),
-        text(603, 91, "shown", font=MONO, size=8.8, fill=ACCENT, anchor="middle", weight="bold"),
-        text(603, 106, "ode_<52-char-b32>", font=MONO, size=7.1, fill=SLATE, anchor="middle"),
+        text(603, 91, "shown", font=MONO, size=9.0, fill=INK, anchor="middle", weight="bold"),
+        text(603, 107, "ode_<52-char-b32>", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
 
-        rect(406, 134, 116, 62, fill=WHITE, stroke=RULE, sw=0.75),
-        text(464, 151, "Instruction Table", size=8.8, anchor="middle"),
-        text(464, 165, "x86.tab (94 rows)", font=MONO, size=7.1, fill=SLATE, anchor="middle"),
-        text(464, 177, "arm64.tab (54 rows)", font=MONO, size=7.1, fill=SLATE, anchor="middle"),
-        text(464, 190, "silicon cross-checked", size=7.5, fill=SLATE, anchor="middle", style="italic"),
-        line(464, 134, 464, 122, stroke=SLATE, sw=0.75, marker="arr-slate"),
+        rect(406, 134, 116, 62, fill=WHITE, stroke=SLATE, sw=0.75),
+        text(464, 151, "Instruction Tables", size=8.8, anchor="middle"),
+        text(464, 165, "x86.tab (94 rows)", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
+        text(464, 177, "arm64.tab (54 rows)", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
+        text(464, 190, "silicon cross-checked", size=7.8, fill=SLATE, anchor="middle", style="italic"),
+        line(464, 134, 464, 122, stroke=SLATE, sw=0.8, marker="arr-slate"),
 
-        rect(546, 134, 114, 62, fill=WHITE, stroke=ACCENT, sw=0.85),
-        text(603, 151, "Bob Reads Only", size=8.8, fill=ACCENT, anchor="middle", weight="bold"),
-        text(603, 166, "<hash>.ocl", font=MONO, size=8.0, fill=INK, anchor="middle"),
-        text(603, 180, "nameless contract;", size=7.8, fill=SLATE, anchor="middle"),
-        text(603, 191, "0 register names", size=7.8, fill=SLATE, anchor="middle"),
-        line(603, 120, 603, 132, stroke=ACCENT, sw=0.8, marker="arr-accent"),
+        rect(546, 134, 114, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(603, 151, "Contract Audited", size=8.8, fill=INK, anchor="middle", weight="bold"),
+        text(603, 166, "<hash>.ocl", font=MONO, size=8.2, fill=INK, anchor="middle"),
+        text(603, 180, "nameless contract;", size=8.0, fill=SLATE, anchor="middle"),
+        text(603, 191, "0 register names", size=8.0, fill=SLATE, anchor="middle"),
+        line(603, 120, 603, 132, stroke=SLATE, sw=0.85, marker="arr-slate"),
     ]
     (OUT / "fig1-boundary.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
 
+def all_zero_example():
+    """The report's running example, read from the file the tests pack, and its canonical contract as
+    `ode canon` makes it (so that no figure shows a contract or a digest typed in by hand)."""
+    import sys
+    root = Path(__file__).resolve().parent.parent
+    for d in ("lang", "kcheck"):
+        if str(root / d) not in sys.path:
+            sys.path.insert(0, str(root / d))
+    import ode_canon
+    src = (Path(__file__).resolve().parent / "examples" / "all_zero.ode").read_text()
+    lines = src.split("\n")
+    end = next(i for i, l in enumerate(lines) if l.strip() == "{")
+    canon = ode_canon.canonicalize_ode(src, fn_name="all_zero", target="x86_64")
+    other = ode_canon.canonicalize_ode(src, fn_name="all_zero", target="arm64")
+    assert canon["contract_id"] == other["contract_id"] and canon["canonical"] == other["canonical"]
+    return lines[:end], canon
+
+
 def make_fig2():
-    """Figure 2: From Author's Names to Content Identity (ode canon)."""
-    w, h = 680, 196
+    """Figure 2: from the author's text to the canonical contract and its digest (`ode canon`)."""
+    authored, canon = all_zero_example()
+    cid = canon["contract_id"]
+    assert len(cid) == 52
+    w, h = 680, 232
+    pitch = 10.8
     parts = [
-        # Left box: Author's contract
-        rect(6, 14, 214, 168, fill=IVORY, stroke=RULE, sw=0.75),
-        text(18, 32, "AUTHORED CONTRACT  (.ode)", size=7.8, fill=SLATE, weight="bold", spacing="1.0"),
-        text(18, 52, "// 1 if all bytes are zero", font=MONO, size=7.4, fill=MUTED),
-        text(18, 66, "def zero_from(a, i) {", font=MONO, size=7.6, fill=INK),
-        text(18, 78, "  if i == len(a) then 1", font=MONO, size=7.4, fill=INK),
-        text(18, 90, "  else if a[i] != 0 then 0", font=MONO, size=7.4, fill=INK),
-        text(18, 102, "  else zero_from(a, i + 1)", font=MONO, size=7.4, fill=INK),
-        text(18, 114, "}", font=MONO, size=7.6, fill=INK),
-        text(18, 130, "fn all_zero(a: n bytes, n: number)", font=MONO, size=7.3, fill=INK),
-        text(18, 143, "  returns zero_from(a, 0)", font=MONO, size=7.4, fill=INK),
-        text(18, 156, "  trace depends on a, n", font=MONO, size=7.4, fill=INK),
-        text(18, 169, "  stack 0  { for x86_64 ... }", font=MONO, size=7.3, fill=SLATE),
-
-        # Center transform
-        line(220, 96, 286, 96, stroke=ACCENT, sw=0.95, marker="arr-accent"),
-        text(253, 86, "ode canon", font=MONO, size=8.0, fill=ACCENT, anchor="middle", weight="bold"),
-        text(253, 110, "strip comments", size=7.6, fill=SLATE, anchor="middle", style="italic"),
-        text(253, 121, "drop unused defs", size=7.6, fill=SLATE, anchor="middle", style="italic"),
-        text(253, 132, "number all slots", size=7.6, fill=SLATE, anchor="middle", style="italic"),
-
-        # Right upper: Canonical .ocl
-        rect(286, 14, 222, 116, fill=BLUSH, stroke=ACCENT, sw=0.9),
-        text(298, 31, "CANONICAL CONTRACT  (.ocl)", size=7.8, fill=ACCENT, weight="bold", spacing="1.0"),
-        text(298, 48, "def f1(p0, p1) {", font=MONO, size=7.4, fill=INK),
-        text(298, 60, "  if p1 == len(p0) then 1 ...", font=MONO, size=7.3, fill=INK),
-        text(298, 72, "}", font=MONO, size=7.4, fill=INK),
-        text(298, 86, "contract (a0: a1 bytes, a1: number) {", font=MONO, size=7.0, fill=INK),
-        text(298, 98, "  returns f0(a0)", font=MONO, size=7.3, fill=INK),
-        text(298, 110, "  trace depends on a0, a1", font=MONO, size=7.3, fill=INK),
-        text(298, 122, "  stack 0 }", font=MONO, size=7.3, fill=INK),
-
-        # Right lower: Glossary
-        rect(286, 140, 222, 42, fill=WHITE, stroke=RULE, sw=0.75, dash="2.5,2.5"),
-        text(298, 155, "PERSONAL GLOSSARY  (never hashed)", size=7.3, fill=SLATE, weight="bold", spacing="0.8"),
-        text(298, 171, '{ a0: "a", a1: "n", f0: "all_zero" }', font=MONO, size=7.2, fill=SLATE),
-
-        # Far right: BLAKE3 identity
-        line(508, 72, 532, 72, stroke=ACCENT, sw=0.95, marker="arr-accent"),
-        rect(536, 14, 138, 116, fill=WHITE, stroke=ACCENT, sw=0.9),
-        text(604, 32, "BLAKE3-256", size=8.0, fill=ACCENT, anchor="middle", weight="bold", spacing="1.0"),
-        text(604, 46, "52-char base-32 digest", size=7.8, fill=SLATE, anchor="middle", style="italic"),
-        text(604, 65, "jbqyjqpese4s4cq35q", font=MONO, size=7.2, fill=ACCENT, anchor="middle", weight="bold"),
-        text(604, 76, "xlhaevjvzuaqznquqw", font=MONO, size=7.2, fill=ACCENT, anchor="middle", weight="bold"),
-        text(604, 87, "6mtlaqleluc25ika", font=MONO, size=7.2, fill=ACCENT, anchor="middle", weight="bold"),
-        line(548, 97, 660, 97, stroke=RULE, sw=0.6),
-        text(604, 111, "Symbol: ode_<52>", font=MONO, size=7.3, fill=INK, anchor="middle"),
-        text(604, 123, "File:   <52>.ocl", font=MONO, size=7.3, fill=INK, anchor="middle"),
-
-        # Note under far right
-        text(604, 156, "Same contract on x86-64", size=8.0, fill=SLATE, anchor="middle", style="italic"),
-        text(604, 168, "and AArch64 → same hash", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        rect(6, 12, 204, 208, fill=IVORY, stroke=RULE, sw=0.75),
+        text(16, 30, "AS THE AUTHOR WROTE IT  (.ode)", size=8.0, fill=SLATE, weight="bold", spacing="0.7"),
     ]
+    for i, l in enumerate(authored):
+        if l.strip():
+            indent = (len(l) - len(l.lstrip(" "))) * 0.602 * 7.5
+            parts.append(text(16 + indent, 48 + i * pitch, l.strip(), font=MONO, size=7.5, fill=MUTED if l.lstrip().startswith("//") else INK))
+
+    parts += [
+        line(210, 110, 268, 110, stroke=ACCENT, sw=1.0, marker="arr-accent"),
+        text(239, 100, "ode canon", font=MONO, size=8.4, fill=ACCENT, anchor="middle", weight="bold"),
+        text(239, 126, "leaves out", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(239, 137, "comments;", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(239, 152, "numbers", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(239, 163, "every name", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+
+        rect(270, 12, 214, 208, fill=SAND, stroke=CHARCOAL, sw=0.95),
+        text(280, 30, "THE CANONICAL CONTRACT  (.ocl)", size=8.0, fill=INK, weight="bold", spacing="0.7"),
+    ]
+    for i, l in enumerate(canon["canonical"].rstrip("\n").split("\n")):
+        if l.strip():
+            indent = (len(l) - len(l.lstrip(" "))) * 0.602 * 7.5
+            parts.append(text(280 + indent, 48 + i * pitch, l.strip(), font=MONO, size=7.5, fill=INK))
+
+    parts += [
+        line(484, 62, 502, 62, stroke=ACCENT, sw=1.0, marker="arr-accent"),
+        rect(504, 12, 170, 114, fill=WHITE, stroke=CHARCOAL, sw=0.95),
+        text(589, 30, "BLAKE3 OF THAT TEXT", size=8.0, fill=INK, anchor="middle", weight="bold", spacing="0.7"),
+        text(589, 43, "256 bits as 52 characters", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(589, 61, cid[:18], font=MONO, size=7.7, fill=INK, anchor="middle", weight="bold"),
+        text(589, 73, cid[18:36], font=MONO, size=7.7, fill=INK, anchor="middle", weight="bold"),
+        text(589, 85, cid[36:], font=MONO, size=7.7, fill=INK, anchor="middle", weight="bold"),
+        line(516, 94, 662, 94, stroke=RULE, sw=0.6),
+        text(589, 107, "symbol  ode_<these 52>", font=MONO, size=7.4, fill=INK, anchor="middle"),
+        text(589, 119, "file    <these 52>.ocl", font=MONO, size=7.4, fill=INK, anchor="middle"),
+
+        rect(504, 136, 170, 84, fill=WHITE, stroke=SLATE, sw=0.75, dash="3,2.5"),
+        text(516, 152, "A READER'S GLOSSARY  (not hashed)", size=7.5, fill=SLATE, weight="bold", spacing="0.4"),
+    ]
+    entries = [(k, v) for k, v in canon["glossary"].items() if k != "contract"]
+    for i, (k, v) in enumerate(entries):
+        parts.append(text(516, 168 + i * 11.5, f"{k}  =  {v}", font=MONO, size=7.5, fill=SLATE))
     (OUT / "fig2-canon.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
 
 def make_fig3():
     """Figure 3: Closed-World Memory Pieces, Disjointness, and Lending."""
-    w, h = 680, 214
+    w, h = 680, 224
     parts = [
-        text(10, 16, "CALLER'S MEMORY PIECES  (pairwise disjoint: no_overlap)", size=8.0, fill=SLATE, weight="bold", spacing="0.9"),
+        text(10, 16, "THE CALLER'S PIECES OF MEMORY  (no two of them overlap)", size=8.2, fill=SLATE, weight="bold", spacing="0.7"),
 
         # Piece 1: input (read-only)
-        rect(10, 44, 132, 46, fill=IVORY, stroke=SLATE, sw=0.8),
-        text(76, 63, "input", font=MONO, size=8.6, fill=INK, anchor="middle", weight="bold"),
-        text(76, 77, "len bytes · read-only", size=7.8, fill=SLATE, anchor="middle"),
+        rect(10, 46, 126, 48, fill=IVORY, stroke=SLATE, sw=0.85),
+        text(73, 66, "input", font=MONO, size=8.8, fill=INK, anchor="middle", weight="bold"),
+        text(73, 81, "len bytes · read-only", size=8.0, fill=SLATE, anchor="middle"),
 
-        # Disjointness gap marker
-        text(158, 70, "⊥", size=11, fill=MUTED, anchor="middle"),
+        text(154, 72, "disjoint", size=7.2, fill=MUTED, anchor="middle", style="italic"),
 
-        # Piece 2: nd (node120 record, subdivided)
-        text(312, 36, "nd : node120  (120 bytes · read/write)", font=MONO, size=7.5, fill=INK, anchor="middle"),
-        rect(174, 44, 276, 46, fill=WHITE, stroke=INK, sw=0.9),
-        rect(174, 44, 62, 46, fill=IVORY, stroke=INK, sw=0.65),
-        text(205, 63, "nd.h", font=MONO, size=8.0, anchor="middle"),
-        text(205, 77, "0..32", font=MONO, size=7.0, fill=SLATE, anchor="middle"),
+        # Piece 2: nd (node120 record, subdivided into 3 adjacent fields)
+        text(312, 36, "nd : node120  (one record of 120 bytes)", font=MONO, size=7.8, fill=INK, anchor="middle"),
+        rect(172, 46, 280, 48, fill=WHITE, stroke=CHARCOAL, sw=1.0),
+        rect(174, 48, 54, 44, fill=IVORY, stroke=RULE, sw=0.65),
+        text(201, 67, "nd.h", font=MONO, size=8.2, anchor="middle"),
+        text(201, 81, "0..32", font=MONO, size=7.3, fill=SLATE, anchor="middle"),
 
-        rect(236, 44, 134, 46, fill=BLUSH, stroke=ACCENT, sw=1.0),
-        text(303, 63, "nd.block  (64 B)", font=MONO, size=8.0, fill=ACCENT, anchor="middle", weight="bold"),
-        text(303, 77, "32..96 · lent read/write", size=7.6, fill=ACCENT, anchor="middle"),
+        rect(231, 48, 122, 44, fill=SAND, stroke=CHARCOAL, sw=0.95),
+        text(292, 67, "nd.block", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
+        text(292, 81, "bytes 32..96 · lent", size=7.8, fill=ACCENT, anchor="middle"),
 
-        rect(370, 44, 80, 46, fill=IVORY, stroke=INK, sw=0.65),
-        text(410, 63, "t, blen, flg", font=MONO, size=7.6, anchor="middle"),
-        text(410, 77, "96..120", font=MONO, size=7.0, fill=SLATE, anchor="middle"),
+        rect(356, 48, 94, 44, fill=IVORY, stroke=RULE, sw=0.65),
+        text(403, 67, "counter, length,", font=MONO, size=7.3, anchor="middle"),
+        text(403, 81, "flags · 96..120", font=MONO, size=7.3, fill=SLATE, anchor="middle"),
 
-        # Gap marker
-        text(466, 70, "⊥", size=11, fill=MUTED, anchor="middle"),
+        text(468, 72, "disjoint", size=7.2, fill=MUTED, anchor="middle", style="italic"),
 
         # Piece 3: stack
-        rect(482, 44, 92, 46, fill=IVORY, stroke=SLATE, sw=0.8, dash="3,2"),
-        text(528, 63, "stack", font=MONO, size=8.3, anchor="middle"),
-        text(528, 77, "call-local only", size=7.6, fill=SLATE, anchor="middle"),
-
-        text(586, 70, "⊥", size=11, fill=MUTED, anchor="middle"),
+        rect(484, 46, 90, 48, fill=IVORY, stroke=SLATE, sw=0.85, dash="3,2"),
+        text(529, 66, "stack", font=MONO, size=8.5, anchor="middle"),
+        text(529, 81, "call-local", size=7.9, fill=SLATE, anchor="middle"),
 
         # Piece 4: rodata
-        rect(598, 44, 74, 46, fill=IVORY, stroke=RULE, sw=0.75),
-        text(635, 63, ".rodata", font=MONO, size=8.0, fill=SLATE, anchor="middle"),
-        text(635, 77, "program const", size=7.2, fill=MUTED, anchor="middle"),
+        rect(596, 46, 76, 48, fill=IVORY, stroke=RULE, sw=0.8),
+        text(634, 66, ".rodata", font=MONO, size=8.2, fill=SLATE, anchor="middle"),
+        text(634, 81, "const data", size=7.7, fill=SLATE, anchor="middle"),
 
-        # Lending arrows down to callee (clean non-overlapping labels)
-        path("M 76 90 C 76 122, 165 116, 185 138", stroke=SLATE, sw=0.85, marker="arr-slate"),
-        text(18, 128, "lent read-only as src", size=7.8, fill=SLATE, style="italic"),
+        # Lending arrows down to callee
+        path("M 73 94 C 73 126, 165 120, 185 144", stroke=SLATE, sw=0.9, marker="arr-slate"),
+        text(14, 132, "lent read-only as src", size=8.1, fill=SLATE, style="italic"),
 
-        path("M 303 90 L 303 136", stroke=ACCENT, sw=0.95, marker="arr-accent"),
-        text(311, 118, "sub-span lent read/write as block", size=7.8, fill=ACCENT, style="italic"),
+        path("M 292 94 L 292 142", stroke=ACCENT, sw=1.0, marker="arr-accent"),
+        text(300, 124, "a part of nd, lent to read and write, as block", size=8.1, fill=ACCENT, style="italic"),
 
         # Callee box
-        rect(144, 140, 260, 58, fill=WHITE, stroke=ACCENT, sw=0.9),
-        text(274, 158, "Callee:  b3l_pad_fast(block, src, n)", font=MONO, size=8.1, fill=INK, anchor="middle", weight="bold"),
-        text(274, 173, "ensures block = padded(src)  ·  stack 0", font=MONO, size=7.5, fill=ACCENT, anchor="middle"),
-        text(274, 188, "Cannot read or touch nd.h, t, blen, flags, or caller stack", size=7.9, fill=SLATE, anchor="middle", style="italic"),
+        rect(142, 146, 266, 62, fill=WHITE, stroke=CHARCOAL, sw=0.95),
+        text(275, 164, "Callee:  b3l_pad_arm64(block, src, n)", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
+        text(275, 180, "ensures block = padded(src)  ·  stack 0", font=MONO, size=7.8, fill=ACCENT, anchor="middle"),
+        text(275, 196, "It can touch nothing else of nd, nor the caller's stack", size=8.0, fill=SLATE, anchor="middle", style="italic"),
 
         # Preservation callout on the right
-        rect(430, 140, 242, 58, fill=IVORY, stroke=RULE, sw=0.75),
-        text(442, 158, "What stays proven on return:", size=8.4, fill=INK, weight="bold"),
-        text(442, 173, "• nd.block now satisfies padded(src)", size=8.1, fill=ACCENT),
-        text(442, 187, "• Other pieces (nd.h, t, blen, flags) keep entry values", size=8.0, fill=SLATE),
+        rect(424, 146, 248, 62, fill=IVORY, stroke=RULE, sw=0.8),
+        text(436, 164, "What the caller knows after the call:", size=8.5, fill=INK, weight="bold"),
+        text(436, 180, "• nd.block is padded(src)", size=8.2, fill=ACCENT),
+        text(436, 196, "• nd.h, counter, length, flags are as they were", size=8.2, fill=SLATE),
     ]
     (OUT / "fig3-memory.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
@@ -300,57 +307,57 @@ def make_fig4():
     x = xs[0]
     parts += [
         rect(x, 12, pw, 200, fill=IVORY, stroke=RULE, sw=0.75),
-        text(x + 12, 30, "A.  C-ABI CALL  (BOUNDARY)", size=7.6, fill=SLATE, weight="bold", spacing="0.8"),
-        text(x + 12, 43, "Required at FFI exports (STB_GLOBAL)", size=7.8, fill=SLATE, style="italic"),
+        text(x + 12, 30, "A.  THE C CONVENTION", size=7.6, fill=SLATE, weight="bold", spacing="0.8"),
+        text(x + 12, 43, "where other code calls in", size=7.8, fill=SLATE, style="italic"),
         rect(x + 14, 54, 184, 34, fill=WHITE, stroke=RULE, sw=0.75),
         text(x + 22, 68, "push rbx..r15 / stp x19..x30", font=MONO, size=7.0, fill=INK),
-        text(x + 22, 81, "shuffle args into rdi..r9 / x0..x7", size=7.4, fill=SLATE),
+        text(x + 22, 81, "move arguments into rdi..r9 / x0..x7", size=7.4, fill=SLATE),
         line(x + 106, 88, x + 106, 104, stroke=SLATE, sw=0.8, marker="arr-slate"),
         rect(x + 24, 106, 164, 32, fill=WHITE, stroke=SLATE, sw=0.8),
         text(x + 106, 120, "call / bl  helper", font=MONO, size=7.7, anchor="middle"),
-        text(x + 106, 132, "saves & restores own frame", size=7.4, fill=SLATE, anchor="middle"),
+        text(x + 106, 132, "saves and restores its own frame", size=7.4, fill=SLATE, anchor="middle"),
         line(x + 106, 138, x + 106, 154, stroke=SLATE, sw=0.8, marker="arr-slate"),
         rect(x + 14, 156, 184, 28, fill=WHITE, stroke=RULE, sw=0.75),
         text(x + 106, 173, "pop rbx..r15  ·  ret", font=MONO, size=7.4, fill=INK, anchor="middle"),
-        text(x + 106, 200, "Stack frame: 48–64+ bytes", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(x + 106, 200, "a stack frame of 16 bytes or more", size=8.0, fill=SLATE, anchor="middle", style="italic"),
     ]
 
     # Panel B: Custom Ode Calling + Zero-Stack AArch64
     x = xs[1]
     parts += [
         rect(x, 12, pw, 200, fill=WHITE, stroke=SLATE, sw=0.8),
-        text(x + 12, 30, "B.  CUSTOM CALLING + x30 IN x15", size=7.6, fill=INK, weight="bold", spacing="0.6"),
-        text(x + 12, 43, "Internal STB_LOCAL non-leaf caller", size=7.8, fill=SLATE, style="italic"),
+        text(x + 12, 30, "B.  A CONVENTION OF ITS OWN", size=7.6, fill=INK, weight="bold", spacing="0.6"),
+        text(x + 12, 43, "the return address kept in x15", size=7.8, fill=SLATE, style="italic"),
         rect(x + 14, 54, 184, 34, fill=IVORY, stroke=RULE, sw=0.75),
-        text(x + 22, 68, "mov x15, x30   // save link", font=MONO, size=7.2, fill=ACCENT),
-        text(x + 22, 81, "keep live vars in preserved regs", size=7.4, fill=SLATE),
+        text(x + 22, 68, "mov x15, x30   // save link", font=MONO, size=7.2, fill=INK),
+        text(x + 22, 81, "values in use stay in registers", size=7.4, fill=SLATE),
         line(x + 106, 88, x + 106, 104, stroke=INK, sw=0.8, marker="arr-ink"),
-        rect(x + 20, 106, 172, 34, fill=BLUSH, stroke=ACCENT, sw=0.85),
-        text(x + 106, 120, "bl  helper   (preserves x15)", font=MONO, size=7.3, fill=ACCENT, anchor="middle", weight="bold"),
-        text(x + 106, 133, "in a=x10, b=x11  ·  out=x10", font=MONO, size=7.0, fill=INK, anchor="middle"),
+        rect(x + 20, 106, 172, 34, fill=SAND, stroke=CHARCOAL, sw=0.85),
+        text(x + 106, 120, "bl  helper   (preserves x15)", font=MONO, size=7.3, fill=INK, anchor="middle", weight="bold"),
+        text(x + 106, 133, "in a=x9, b=x10  ·  out=x11", font=MONO, size=7.0, fill=SLATE, anchor="middle"),
         line(x + 106, 140, x + 106, 154, stroke=INK, sw=0.8, marker="arr-ink"),
         rect(x + 14, 156, 184, 28, fill=IVORY, stroke=RULE, sw=0.75),
         text(x + 106, 173, "mov x30, x15  ·  ret", font=MONO, size=7.4, fill=INK, anchor="middle"),
-        text(x + 106, 200, "Stack frame: 0 bytes on AArch64", size=8.0, fill=ACCENT, anchor="middle", weight="bold"),
+        text(x + 106, 200, "no stack frame", size=8.0, fill=INK, anchor="middle", weight="bold"),
     ]
 
-    # Panel C: Verified Tail Call
+    # Panel C: Verified Tail Call (calm sandstone ground + dark charcoal border)
     x = xs[2]
     parts += [
-        rect(x, 12, pw, 200, fill=BLUSH, stroke=ACCENT, sw=0.95),
-        text(x + 12, 30, "C.  VERIFIED TAIL CALL  (jmp / b)", size=7.6, fill=ACCENT, weight="bold", spacing="0.6"),
-        text(x + 12, 43, "Zero call/ret round-trip, zero new rows", size=7.8, fill=SLATE, style="italic"),
-        rect(x + 14, 54, 184, 34, fill=WHITE, stroke=ACCENT, sw=0.75),
-        text(x + 22, 68, "sp == 0  &  x30 intact", font=MONO, size=7.3, fill=INK),
+        rect(x, 12, pw, 200, fill=SAND, stroke=CHARCOAL, sw=1.0),
+        text(x + 12, 30, "C.  A TAIL CALL  (jmp / b)", size=7.6, fill=INK, weight="bold", spacing="0.6"),
+        text(x + 12, 43, "no call and no return of its own", size=7.8, fill=SLATE, style="italic"),
+        rect(x + 14, 54, 184, 34, fill=WHITE, stroke=SLATE, sw=0.75),
+        text(x + 22, 68, "sp == entry sp  &  x30 intact", font=MONO, size=7.2, fill=INK),
         text(x + 22, 81, "caller keeps ⊆ callee preserves", font=MONO, size=7.0, fill=SLATE),
         line(x + 106, 88, x + 106, 108, stroke=ACCENT, sw=0.95, marker="arr-accent"),
         text(x + 114, 102, "jmp / b", font=MONO, size=7.6, fill=ACCENT, weight="bold"),
-        rect(x + 20, 110, 172, 40, fill=WHITE, stroke=ACCENT, sw=0.9),
-        text(x + 106, 126, "callee entry point", font=MONO, size=7.8, fill=ACCENT, anchor="middle", weight="bold"),
+        rect(x + 20, 110, 172, 40, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(x + 106, 126, "callee entry point", font=MONO, size=7.8, fill=INK, anchor="middle", weight="bold"),
         text(x + 106, 141, "returns directly to outer caller", size=7.7, fill=SLATE, anchor="middle"),
         line(x + 106, 150, x + 106, 174, stroke=ACCENT, sw=0.9, marker="arr-accent"),
-        text(x + 106, 186, "outer caller receives result directly", size=7.6, fill=INK, anchor="middle", style="italic"),
-        text(x + 106, 202, "12 insns total on 64 B BLAKE3", size=8.0, fill=ACCENT, anchor="middle", weight="bold"),
+        text(x + 106, 186, "outer caller receives result directly", size=7.7, fill=INK, anchor="middle", style="italic"),
+        text(x + 106, 202, "no stack frame, one return in all", size=8.0, fill=INK, anchor="middle", weight="bold"),
     ]
     (OUT / "fig4-calling.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
@@ -360,57 +367,56 @@ def make_fig5():
     w, h = 680, 194
     parts = [
         # Left: ELF .o file cutaway
-        rect(8, 12, 408, 170, fill=WHITE, stroke=INK, sw=0.9),
-        text(20, 30, "ELF RELOCATABLE OBJECT  (bundle.o)", size=8.0, fill=INK, weight="bold", spacing="1.0"),
-        text(404, 30, "100% checked by ode audit", size=7.8, fill=ACCENT, anchor="end", style="italic"),
+        rect(8, 12, 408, 170, fill=WHITE, stroke=CHARCOAL, sw=0.95),
+        text(20, 30, "THE OBJECT FILE  (bundle.o)", size=8.0, fill=INK, weight="bold", spacing="1.0"),
+        text(404, 30, "all of it checked by ode audit", size=7.8, fill=SLATE, anchor="end", style="italic"),
 
         # .text band
-        rect(20, 42, 384, 52, fill=BLUSH, stroke=ACCENT, sw=0.9),
-        text(30, 57, ".text", font=MONO, size=8.3, fill=ACCENT, weight="bold"),
-        text(70, 57, "100% of executable bytes covered by verified functions", size=8.0, fill=INK),
-        rect(30, 64, 122, 22, fill=WHITE, stroke=ACCENT, sw=0.8),
-        text(91, 78, "STB_GLOBAL  ode_<52>", font=MONO, size=7.2, fill=ACCENT, anchor="middle", weight="bold"),
+        rect(20, 42, 384, 52, fill=SAND, stroke=CHARCOAL, sw=0.9),
+        text(30, 57, ".text", font=MONO, size=8.3, fill=INK, weight="bold"),
+        text(70, 57, "every byte of code is in a function the verifier checked", size=8.0, fill=SLATE),
+        rect(30, 64, 122, 22, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(91, 78, "visible:  ode_<52>", font=MONO, size=7.2, fill=INK, anchor="middle", weight="bold"),
         rect(162, 64, 108, 22, fill=IVORY, stroke=SLATE, sw=0.7),
-        text(216, 78, "STB_LOCAL  helper_1", font=MONO, size=7.0, fill=INK, anchor="middle"),
+        text(216, 78, "local:  helper 1", font=MONO, size=7.0, fill=INK, anchor="middle"),
         rect(278, 64, 116, 22, fill=IVORY, stroke=SLATE, sw=0.7),
-        text(336, 78, "STB_LOCAL  helper_k", font=MONO, size=7.0, fill=INK, anchor="middle"),
+        text(336, 78, "local:  helper k", font=MONO, size=7.0, fill=INK, anchor="middle"),
         line(152, 75, 160, 75, stroke=ACCENT, sw=0.75, marker="arr-accent"),
         line(270, 75, 276, 75, stroke=SLATE, sw=0.75, marker="arr-slate"),
 
         # .rodata + .ode.ocl row
         rect(20, 102, 136, 36, fill=IVORY, stroke=RULE, sw=0.75),
         text(30, 117, ".rodata", font=MONO, size=8.0, fill=INK, weight="bold"),
-        text(30, 130, "read-only constants", size=7.6, fill=SLATE),
+        text(30, 130, "read-only data", size=7.6, fill=SLATE),
 
-        rect(166, 102, 238, 36, fill=BLUSH, stroke=ACCENT, sw=0.85),
-        text(176, 117, ".ode.ocl", font=MONO, size=8.0, fill=ACCENT, weight="bold"),
-        text(238, 117, "(non-executable metadata)", size=7.6, fill=SLATE, style="italic"),
-        text(176, 130, "BLAKE3(.ode.ocl) == exported ode_<52>", font=MONO, size=7.0, fill=INK),
+        rect(166, 102, 238, 36, fill=SAND, stroke=CHARCOAL, sw=0.85),
+        text(176, 117, ".ode.ocl", font=MONO, size=8.0, fill=INK, weight="bold"),
+        text(238, 117, "the canonical contract (not code)", size=7.6, fill=SLATE, style="italic"),
+        text(176, 130, "its BLAKE3 hash is the symbol's <52>", font=MONO, size=7.0, fill=INK),
 
         # Forbidden sections bar
         rect(20, 146, 384, 24, fill=IVORY, stroke=RULE, sw=0.65, dash="2.5,2.5"),
-        text(30, 162, "Refused if present:  .init_array · .fini_array · extra globals · undefined symbols", size=7.8, fill=SLATE),
+        text(30, 162, "Refused if present:  code run at start or end · other visible symbols · symbols defined elsewhere", size=7.8, fill=SLATE),
 
         # Connecting arrow from .proof -> .o ("verifies")
         line(448, 98, 419, 98, stroke=ACCENT, sw=0.95, marker="arr-accent"),
-        text(433, 91, "certifies", size=7.2, fill=ACCENT, anchor="middle", style="italic"),
 
         # Right: Separate .proof file
         rect(448, 12, 224, 170, fill=IVORY, stroke=SLATE, sw=0.8),
-        text(460, 30, "SEPARATE PROOF  (bundle.proof)", size=7.8, fill=INK, weight="bold", spacing="0.9"),
-        text(460, 43, "Relied on for nothing — checked line by line", size=7.6, fill=SLATE, style="italic"),
+        text(460, 30, "THE PROOF FILE  (bundle.proof)", size=7.8, fill=INK, weight="bold", spacing="0.9"),
+        text(460, 43, "checked step by step; relied on for nothing", size=7.6, fill=SLATE, style="italic"),
 
         rect(460, 54, 200, 36, fill=WHITE, stroke=RULE, sw=0.75),
-        text(470, 68, "order:  helper_1, ..., ode_<52>", font=MONO, size=7.1, fill=INK),
-        text(470, 81, "topological (no hidden cycles)", size=7.4, fill=SLATE, style="italic"),
+        text(470, 68, "order:  helper 1, ..., ode_<52>", font=MONO, size=7.1, fill=INK),
+        text(470, 81, "each function after those it calls", size=7.4, fill=SLATE, style="italic"),
 
         rect(460, 98, 200, 34, fill=WHITE, stroke=RULE, sw=0.75),
-        text(470, 112, "helper contracts + calling { ... }", font=MONO, size=7.0, fill=INK),
-        text(470, 124, "internal only; never in .ode.ocl", size=7.4, fill=SLATE, style="italic"),
+        text(470, 112, "contracts of the local functions", font=MONO, size=7.0, fill=INK),
+        text(470, 124, "and how each takes its arguments", size=7.4, fill=SLATE, style="italic"),
 
         rect(460, 140, 200, 32, fill=WHITE, stroke=RULE, sw=0.75),
-        text(470, 154, "linear facts, places, clear steps", font=MONO, size=7.0, fill=INK),
-        text(470, 166, "verified directly against .text bytes", size=7.4, fill=ACCENT, style="italic"),
+        text(470, 154, "the steps of each proof", font=MONO, size=7.0, fill=INK),
+        text(470, 166, "checked against the bytes of code", size=7.4, fill=SLATE, style="italic"),
     ]
     (OUT / "fig5-bundle.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
@@ -431,7 +437,7 @@ def make_fig6():
 
     parts += [
         text(lx0, 20, "SHORT INPUTS  (64 B – 1 KiB)", size=8.0, fill=INK, weight="bold", spacing="0.9"),
-        text(lx0, 32, "Custom calling + zero-copy + tail calls close the C-ABI gap", size=7.9, fill=SLATE, style="italic"),
+        text(lx0, 32, "Calls of Ode's own and tail calls count most at 64 bytes", size=7.9, fill=SLATE, style="italic"),
     ]
     # Subtle horizontal reference gridlines (Tufte minimal)
     for tick in (0.0, 0.5, 1.0, 1.5):
@@ -465,20 +471,20 @@ def make_fig6():
             parts.append(text(cx - 1.5 * bw - 2, ly(base) - 4, f"{base:.2f}", font=SERIF, size=7.2, fill=SLATE, anchor="middle"))
         parts.append(text(cx, ly1 + 14, lbl, font=SERIF, size=8.2, fill=INK, anchor="middle"))
 
-    # Tiny clean horizontal key under left panel (inline, no box)
-    ky = 232
+    # Clean horizontal key under left panel (high contrast, legible at print size)
+    ky = 234
     items_l = [
-        (44, "#D6D1C6", SLATE, "Ode baseline"),
-        (114, ACCENT, ACCENT, "Ode verified"),
-        (182, "#3A3F47", "#3A3F47", "next (hand)"),
-        (246, WHITE, SLATE, "official"),
+        (14,  "#CFC9BC", SLATE,    "Ode, C calls inside"),
+        (112, ACCENT,    ACCENT,   "Ode"),
+        (146, "#3A3F47", "#3A3F47","BLAKE3-Servil"),
+        (222, WHITE,     CHARCOAL, "blake3 1.8.7"),
     ]
     for ix, fl, st, lab in items_l:
-        parts.append(rect(ix, ky - 6.5, 7, 7, fill=fl, stroke=st, sw=0.75, rx=0.5))
-        parts.append(text(ix + 10, ky, lab, size=7.4, fill=ACCENT if fl == ACCENT else SLATE, weight="bold" if fl == ACCENT else "normal"))
+        parts.append(rect(ix, ky - 7, 7.5, 7.5, fill=fl, stroke=st, sw=0.85, rx=0.5))
+        parts.append(text(ix + 10.5, ky, lab, size=7.8, fill=ACCENT if fl == ACCENT else INK, weight="bold" if fl == ACCENT else "normal"))
 
     # ---- RIGHT PANEL: Full Sweep (4 KiB – 1 MiB) ----
-    rx0, rx1 = 334, 608
+    rx0, rx1 = 336, 594
     ry0, ry1 = 44, 202
     ymax_r = 18.0
 
@@ -486,15 +492,15 @@ def make_fig6():
         return ry1 - (v / ymax_r) * (ry1 - ry0)
 
     parts += [
-        text(rx0, 20, "LARGE INPUTS  (4 KiB – 1 MiB)", size=8.0, fill=INK, weight="bold", spacing="0.9"),
-        text(rx0, 32, "Verified AVX-512 32-way tree reaches 98.4% of next, 131.7% of official", size=7.9, fill=SLATE, style="italic"),
+        text(rx0, 20, "LARGE INPUTS  (4 KiB – 1 MiB)", size=8.2, fill=INK, weight="bold", spacing="0.8"),
+        text(rx0, 33, "From 256 KiB on, Ode runs at 98 to 99% of BLAKE3-Servil's speed", size=7.9, fill=SLATE, style="italic"),
     ]
     for tick in (0, 4, 8, 12, 16):
         y = ry(tick)
         parts.append(line(rx0, y, rx1, y, stroke=RULE if tick > 0 else INK, sw=0.45 if tick > 0 else 0.7))
-        parts.append(text(rx0 - 6, y + 3, f"{tick}", font=SERIF, size=7.8, fill=SLATE, anchor="end"))
+        parts.append(text(rx0 - 6, y + 3, f"{tick}", font=SERIF, size=8.0, fill=SLATE, anchor="end"))
 
-    # Exact verified Zen 5 Step D medians (4 KiB .. 1 MiB)
+    # Exact verified Zen 5 medians (4 KiB .. 1 MiB)
     sweep = [
         ("4K",   2.162,  3.336,  3.413),
         ("16K",  6.299, 10.713, 10.734),
@@ -511,32 +517,32 @@ def make_fig6():
         return path(pts, stroke=stroke, sw=sw, dash=dash)
 
     # Curves: official (dashed slate), next (thin charcoal), Ode verified (bold Venetian red)
-    parts.append(poly(3, MUTED, 1.0, dash="3,2.5"))
-    parts.append(poly(2, "#3A3F47", 1.15))
-    parts.append(poly(1, ACCENT, 1.75))
+    parts.append(poly(3, SLATE, 1.05, dash="3.5,2.5"))
+    parts.append(poly(2, "#3A3F47", 1.2))
+    parts.append(poly(1, ACCENT, 1.85))
 
     for i, (lbl, ode_v, nxt, off) in enumerate(sweep):
         cx = xs_r[i]
-        parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(ode_v):.1f}" r="2.3" fill="{ACCENT}" stroke="{WHITE}" stroke-width="0.6"/>')
-        parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(nxt):.1f}" r="1.7" fill="#3A3F47"/>')
-        parts.append(text(f"{cx:.1f}", ry1 + 14, lbl, font=SERIF, size=7.8, fill=INK, anchor="middle"))
+        parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(ode_v):.1f}" r="2.4" fill="{ACCENT}" stroke="{WHITE}" stroke-width="0.6"/>')
+        parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(nxt):.1f}" r="1.8" fill="#3A3F47"/>')
+        parts.append(text(f"{cx:.1f}", ry1 + 14, lbl, font=SERIF, size=8.0, fill=INK, anchor="middle"))
 
-    # Direct end-of-line labels (Tufte signature!)
-    parts.append(text(rx1 + 6, ry(16.032) - 4, "next  16.0", size=7.7, fill="#3A3F47"))
-    parts.append(text(rx1 + 6, ry(15.851) + 7, "Ode  15.9", size=7.9, fill=ACCENT, weight="bold"))
-    parts.append(text(rx1 + 6, ry(12.356) + 3, "official  12.4", size=7.6, fill=MUTED))
+    # Clean non-colliding direct end-of-line labels
+    parts.append(text(rx1 + 8, ry(16.032) - 5, "BLAKE3-Servil 16.0", size=7.8, fill="#3A3F47"))
+    parts.append(text(rx1 + 8, ry(15.851) + 9, "Ode  15.9", size=8.2, fill=ACCENT, weight="bold"))
+    parts.append(text(rx1 + 8, ry(12.356) + 3, "blake3 1.8.7  12.4", size=7.8, fill=SLATE))
 
-    # Honest mid-size callout
-    parts.append(line(xs_r[1] + 2, ry(6.299) + 3, xs_r[1] + 22, ry(3.2), stroke=SLATE, sw=0.6))
-    parts.append(text(xs_r[1] + 25, ry(3.0), "4–32 KiB gap: 4/8/16-way", size=7.4, fill=SLATE, style="italic"))
-    parts.append(text(xs_r[1] + 25, ry(1.8), "tiers not yet added", size=7.4, fill=SLATE, style="italic"))
+    # Pure architectural callout for mid sizes
+    parts.append(line(xs_r[1] + 2, ry(6.299) + 3, xs_r[1] + 22, ry(3.3), stroke=SLATE, sw=0.65))
+    parts.append(text(xs_r[1] + 25, ry(3.1), "4 to 32 KiB: BLAKE3-Servil has", size=7.8, fill=SLATE, style="italic"))
+    parts.append(text(xs_r[1] + 25, ry(1.8), "kernels the Ode code does not", size=7.8, fill=SLATE, style="italic"))
 
     # Peak highlight at 256 KiB
-    parts.append(text(f"{xs_r[5]:.1f}", ry(16.601) - 8, "16.34", size=7.6, fill=ACCENT, anchor="middle", weight="bold"))
-    parts.append(text(rx0 - 6, ry(17.7), "GiB/s", size=7.2, fill=SLATE, anchor="end", style="italic"))
+    parts.append(text(f"{xs_r[5]:.1f}", ry(16.601) - 8, "16.34", size=8.0, fill=ACCENT, anchor="middle", weight="bold"))
+    parts.append(text(rx0 - 6, ry(17.9), "GiB/s", size=7.8, fill=SLATE, anchor="end", style="italic"))
 
     # Bottom caption note
-    parts.append(text(rx0, 232, "Zen 5 Linux · verified pinned-run · 45 interleaved trials/size · median GiB/s", size=7.4, fill=SLATE, style="italic"))
+    parts.append(text(rx0, 234, "One Zen 5 core · medians of 45 interleaved trials a size", size=7.8, fill=SLATE, style="italic"))
 
     (OUT / "fig6-blake3-perf.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 

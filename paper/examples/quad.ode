@@ -1,0 +1,70 @@
+// Single source file for both x86-64 and AArch64: definitions, contracts, calling, and code.
+def step_fn(a, b) { a + b + 3 }
+def quad_fn(x, y) { step_fn(x, y) + step_fn(y, x) + x + y }
+
+fn step(a: number, b: number)
+    requires a < 1000000
+    requires b < 1000000
+    returns a + b + 3
+    trace depends on a, b
+    stack 0
+{
+    for x86_64 calling {
+        in a = r10, b = r11
+        out = r9
+        preserves rdi, rsi, rdx, rcx, r8, rbx, rbp, r12, r13, r14, r15
+    } {
+        mov r9, r10
+        add r9, r11
+        add r9, 3
+        ret
+    }
+    for arm64 calling {
+        in a = x9, b = x10
+        out = x11
+        preserves x0, x1, x2, x3, x5, x6, x7, x8, x12, x13, x14, x15, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        add x11, x9, x10
+        add x11, x11, 3
+        ret
+    }
+}
+
+fn quad(x: number, y: number)
+    requires x < 100000
+    requires y < 100000
+    returns quad_fn(x, y)
+    trace depends on x, y
+{
+    for x86_64 stack 8 {
+        mov r10, rdi
+        mov r11, rsi
+        call step
+        mov r8, r9
+        mov r10, rsi
+        mov r11, rdi
+        call step
+        mov rax, r8
+        add rax, r9
+        add rax, rdi
+        add rax, rsi
+        ret
+    }
+    for arm64 stack 16 {
+        sub sp, sp, 16
+        str x30, [sp, 0]
+        mov x9, x0
+        mov x10, x1
+        bl step
+        mov x8, x11
+        mov x9, x1
+        mov x10, x0
+        bl step
+        add x8, x8, x11
+        add x8, x8, x0
+        add x0, x8, x1
+        ldr x30, [sp, 0]
+        add sp, sp, 16
+        ret
+    }
+}

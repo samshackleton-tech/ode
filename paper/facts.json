@@ -1,0 +1,19 @@
+{
+  "all_zero": {
+    "canonical_lines": 15,
+    "id": "jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika"
+  },
+  "lean": {
+    "core_lines": 5123,
+    "model_files": 8,
+    "model_lines": 9651,
+    "sound_files": 20,
+    "sound_lines": 32684
+  },
+  "tables": {
+    "arm64_rows": 54,
+    "arm64_rows_run_on_a_processor": 47,
+    "x86_rows": 94,
+    "x86_rows_run_on_a_processor": 91
+  }
+}

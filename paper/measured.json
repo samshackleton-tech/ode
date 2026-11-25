@@ -1,0 +1,7 @@
+{
+  "all_zero": {
+    "note": "what `ode audit` reports for paper/examples/all_zero.ode; paper/test_paper.py checks it where the verifier is built",
+    "x86_64": {"instructions": 14, "bytes": 50},
+    "arm64": {"instructions": 13, "bytes": 52}
+  }
+}

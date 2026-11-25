@@ -10,41 +10,40 @@
       <path d="M1,1.3 L7,4 L1,6.7" fill="none" stroke="#9E2A2B" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
-  <rect x="8" y="12" width="408" height="170" rx="1.5" fill="#FFFFFF" stroke="#1C1E21" stroke-width="0.9"/>
-  <text x="20" y="30" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="1.0">ELF RELOCATABLE OBJECT  (bundle.o)</text>
-  <text x="404" y="30" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#9E2A2B">100% checked by ode audit</text>
-  <rect x="20" y="42" width="384" height="52" rx="1.5" fill="#FBF2F1" stroke="#9E2A2B" stroke-width="0.9"/>
-  <text x="30" y="57" text-anchor="start" font-family="Menlo" font-size="8.3" font-weight="bold" font-style="normal" fill="#9E2A2B">.text</text>
-  <text x="70" y="57" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">100% of executable bytes covered by verified functions</text>
-  <rect x="30" y="64" width="122" height="22" rx="1.5" fill="#FFFFFF" stroke="#9E2A2B" stroke-width="0.8"/>
-  <text x="91" y="78" text-anchor="middle" font-family="Menlo" font-size="7.2" font-weight="bold" font-style="normal" fill="#9E2A2B">STB_GLOBAL  ode_&lt;52&gt;</text>
+  <rect x="8" y="12" width="408" height="170" rx="1.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.95"/>
+  <text x="20" y="30" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="1.0">THE OBJECT FILE  (bundle.o)</text>
+  <text x="404" y="30" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">all of it checked by ode audit</text>
+  <rect x="20" y="42" width="384" height="52" rx="1.5" fill="#EEEBE2" stroke="#2E343D" stroke-width="0.9"/>
+  <text x="30" y="57" text-anchor="start" font-family="Menlo" font-size="8.3" font-weight="bold" font-style="normal" fill="#1C1E21">.text</text>
+  <text x="70" y="57" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#5B6470">every byte of code is in a function the verifier checked</text>
+  <rect x="30" y="64" width="122" height="22" rx="1.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.85"/>
+  <text x="91" y="78" text-anchor="middle" font-family="Menlo" font-size="7.2" font-weight="bold" font-style="normal" fill="#1C1E21">visible:  ode_&lt;52&gt;</text>
   <rect x="162" y="64" width="108" height="22" rx="1.5" fill="#F7F5F0" stroke="#5B6470" stroke-width="0.7"/>
-  <text x="216" y="78" text-anchor="middle" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">STB_LOCAL  helper_1</text>
+  <text x="216" y="78" text-anchor="middle" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">local:  helper 1</text>
   <rect x="278" y="64" width="116" height="22" rx="1.5" fill="#F7F5F0" stroke="#5B6470" stroke-width="0.7"/>
-  <text x="336" y="78" text-anchor="middle" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">STB_LOCAL  helper_k</text>
+  <text x="336" y="78" text-anchor="middle" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">local:  helper k</text>
   <line x1="152" y1="75" x2="160" y2="75" stroke="#9E2A2B" stroke-width="0.75" marker-end="url(#arr-accent)"/>
   <line x1="270" y1="75" x2="276" y2="75" stroke="#5B6470" stroke-width="0.75" marker-end="url(#arr-slate)"/>
   <rect x="20" y="102" width="136" height="36" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.75"/>
   <text x="30" y="117" text-anchor="start" font-family="Menlo" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21">.rodata</text>
-  <text x="30" y="130" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#5B6470">read-only constants</text>
-  <rect x="166" y="102" width="238" height="36" rx="1.5" fill="#FBF2F1" stroke="#9E2A2B" stroke-width="0.85"/>
-  <text x="176" y="117" text-anchor="start" font-family="Menlo" font-size="8.0" font-weight="bold" font-style="normal" fill="#9E2A2B">.ode.ocl</text>
-  <text x="238" y="117" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">(non-executable metadata)</text>
-  <text x="176" y="130" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">BLAKE3(.ode.ocl) == exported ode_&lt;52&gt;</text>
+  <text x="30" y="130" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#5B6470">read-only data</text>
+  <rect x="166" y="102" width="238" height="36" rx="1.5" fill="#EEEBE2" stroke="#2E343D" stroke-width="0.85"/>
+  <text x="176" y="117" text-anchor="start" font-family="Menlo" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21">.ode.ocl</text>
+  <text x="238" y="117" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">the canonical contract (not code)</text>
+  <text x="176" y="130" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">its BLAKE3 hash is the symbol's &lt;52&gt;</text>
   <rect x="20" y="146" width="384" height="24" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.65" stroke-dasharray="2.5,2.5"/>
-  <text x="30" y="162" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">Refused if present:  .init_array · .fini_array · extra globals · undefined symbols</text>
+  <text x="30" y="162" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">Refused if present:  code run at start or end · other visible symbols · symbols defined elsewhere</text>
   <line x1="448" y1="98" x2="419" y2="98" stroke="#9E2A2B" stroke-width="0.95" marker-end="url(#arr-accent)"/>
-  <text x="433" y="91" text-anchor="middle" font-family="Palatino" font-size="7.2" font-weight="normal" font-style="italic" fill="#9E2A2B">certifies</text>
   <rect x="448" y="12" width="224" height="170" rx="1.5" fill="#F7F5F0" stroke="#5B6470" stroke-width="0.8"/>
-  <text x="460" y="30" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">SEPARATE PROOF  (bundle.proof)</text>
-  <text x="460" y="43" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">Relied on for nothing — checked line by line</text>
+  <text x="460" y="30" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">THE PROOF FILE  (bundle.proof)</text>
+  <text x="460" y="43" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">checked step by step; relied on for nothing</text>
   <rect x="460" y="54" width="200" height="36" rx="1.5" fill="#FFFFFF" stroke="#CFC9BC" stroke-width="0.75"/>
-  <text x="470" y="68" text-anchor="start" font-family="Menlo" font-size="7.1" font-weight="normal" font-style="normal" fill="#1C1E21">order:  helper_1, ..., ode_&lt;52&gt;</text>
-  <text x="470" y="81" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">topological (no hidden cycles)</text>
+  <text x="470" y="68" text-anchor="start" font-family="Menlo" font-size="7.1" font-weight="normal" font-style="normal" fill="#1C1E21">order:  helper 1, ..., ode_&lt;52&gt;</text>
+  <text x="470" y="81" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">each function after those it calls</text>
   <rect x="460" y="98" width="200" height="34" rx="1.5" fill="#FFFFFF" stroke="#CFC9BC" stroke-width="0.75"/>
-  <text x="470" y="112" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">helper contracts + calling { ... }</text>
-  <text x="470" y="124" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">internal only; never in .ode.ocl</text>
+  <text x="470" y="112" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">contracts of the local functions</text>
+  <text x="470" y="124" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">and how each takes its arguments</text>
   <rect x="460" y="140" width="200" height="32" rx="1.5" fill="#FFFFFF" stroke="#CFC9BC" stroke-width="0.75"/>
-  <text x="470" y="154" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">linear facts, places, clear steps</text>
-  <text x="470" y="166" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#9E2A2B">verified directly against .text bytes</text>
+  <text x="470" y="154" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">the steps of each proof</text>
+  <text x="470" y="166" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">checked against the bytes of code</text>
 </svg>

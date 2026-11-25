@@ -1,0 +1,81 @@
+// 1 if every byte of a is zero, else 0.
+
+def zero_from(a, at) {
+    if at == len(a) then 1
+    else if a[at] != 0 then 0
+    else zero_from(a, at + 1)
+}
+
+def zeros(a) { zero_from(a, 0) }
+
+fn all_zero(a: n bytes, n: number)
+    returns zeros(a)
+    trace depends on a, n
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi
+        reg count = rsi
+        reg idx = rcx
+        reg res = rax
+
+        idx := 0
+        place {
+            name i = idx
+            fact 0 <= i
+            fact i <= n
+            fact zeros(a) == zero_from(a, i)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, count
+        jae @yes
+        mov rdx, base
+        add rdx, idx
+        movzx edx, byte ptr [rdx]
+        cmp rdx, 0
+        jne @no
+        add idx, 1
+        jmp @loop
+    @yes:
+        res := 1
+        jmp @done
+    @no:
+        res := 0
+    @done:
+        ret
+    }
+    for arm64 {
+        reg base = x0
+        reg count = x1
+        reg idx = x2
+        reg addr = x3
+        reg cur = w4
+        reg cur64 = x4
+
+        idx := 0
+        place {
+            name i = idx
+            fact 0 <= i
+            fact i <= n
+            fact zeros(a) == zero_from(a, i)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, count
+        b.hs @yes
+        add addr, base, idx
+        ldrb cur, [addr, 0]
+        cmp cur64, 0
+        b.ne @no
+        add idx, idx, 1
+        b @loop
+    @yes:
+        x0 := 1
+        b @done
+    @no:
+        x0 := 0
+    @done:
+        ret
+    }
+}
