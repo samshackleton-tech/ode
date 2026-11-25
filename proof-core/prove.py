@@ -566,7 +566,7 @@ class Prover:
                             found = trial
                             break
                     break
-                if found is None: self.last = said; self.note(proof, said + ' (none of the rows has a proof)'); return None
+                if found is None: self.last = said; self.last_proof = proof; self.note(proof, said + ' (none of the rows has a proof)'); return None
                 proof = found
             elif what == "shift":                              # a shift to the left: is the number shown to lose no bit, or is only its low part kept
                 proof = proof + (["t exact"] if refutation(facts + [negation(goals[0])]) else ["t wrap"])
@@ -575,7 +575,7 @@ class Prover:
                 if refutation(facts + [negation(d)]) and refutation(facts + [negation(-d)]): proof = proof + ["t eq"]
                 elif refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [-d]): proof = proof + ["t gt"]
-                else: self.last = said; self.note(proof, said + ' (undecided)'); return None
+                else: self.last = said; self.last_proof = proof; self.note(proof, said + ' (undecided)'); return None
             elif what == "spec":
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])

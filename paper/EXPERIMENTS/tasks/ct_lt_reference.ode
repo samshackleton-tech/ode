@@ -1,0 +1,91 @@
+use spec = "ct_lt_spec.ode"
+
+fn ct_bytes_lt(a: n bytes, b: n bytes, n: number)
+    requires n < 1000000000
+    returns spec.bytes_lt(a, b)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        reg idx = rcx
+        reg lt = rax
+        reg pa = r8
+        reg pb = r9
+        reg va = r10
+        reg va32 = r10d
+        reg vb = r11
+        reg vb32 = r11d
+        idx := rdx
+        lt := 0
+        place {
+            name i = rcx
+            name r = rax
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= r
+            fact r <= 1
+            fact spec.bytes_lt(a, b) == spec.lt_from(a, b, i, r)
+            decreases i
+        }
+    @loop:
+        cmp idx, 0
+        je @done
+        sub idx, 1
+        pa := rdi
+        add pa, idx
+        movzx va32, byte ptr [pa]
+        pb := rsi
+        add pb, idx
+        movzx vb32, byte ptr [pb]
+        add vb, vb
+        add vb, lt
+        add vb, 511
+        sub vb, va
+        sub vb, va
+        shr vb, 9
+        lt := vb
+        jmp @loop
+    @done:
+        ret
+    }
+    for arm64 {
+        reg idx = x3
+        reg lt = x4
+        reg pa = x5
+        reg pb = x6
+        reg va = x7
+        reg va32 = w7
+        reg vb = x9
+        reg vb32 = w9
+        idx := x2
+        lt := 0
+        place {
+            name i = x3
+            name r = x4
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= r
+            fact r <= 1
+            fact spec.bytes_lt(a, b) == spec.lt_from(a, b, i, r)
+            decreases i
+        }
+    @loop:
+        cmp idx, 0
+        b.eq @done
+        sub idx, idx, 1
+        add pa, x0, idx
+        ldrb va32, [pa, 0]
+        add pb, x1, idx
+        ldrb vb32, [pb, 0]
+        add vb, vb, vb
+        add vb, vb, lt
+        add vb, vb, 511
+        sub vb, vb, va
+        sub vb, vb, va
+        lsr lt, vb, 9
+        b @loop
+    @done:
+        x0 := lt
+        ret
+    }
+}

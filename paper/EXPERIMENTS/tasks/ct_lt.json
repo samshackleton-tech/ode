@@ -1,0 +1,12 @@
+{
+  "contract_header": "use spec = \"ct_lt_spec.ode\"\n\nfn ct_bytes_lt(a: n bytes, b: n bytes, n: number)\n    requires n < 1000000000\n    returns spec.bytes_lt(a, b)\n    trace depends on n\n    stack 0\n",
+  "entry_fn": "ct_bytes_lt",
+  "expected_contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+  "id": "ct_lt",
+  "native_harness": "paper/EXPERIMENTS/tasks/ct_lt_native.c",
+  "reference_solution": "paper/EXPERIMENTS/tasks/ct_lt_reference.ode",
+  "spec_basename": "ct_lt_spec.ode",
+  "spec_file": "paper/EXPERIMENTS/tasks/ct_lt_spec.ode",
+  "task_summary": "Implement and verify `ct_bytes_lt`: big-endian lexicographic comparison `a < b` returning 1 if `a < b` and 0 otherwise, with an execution trace depending on the length `n` alone (never on the bytes of `a` or `b`).",
+  "title": "Big-endian lexicographic `<` whose trace depends on the length alone"
+}

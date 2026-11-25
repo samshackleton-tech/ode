@@ -1053,6 +1053,46 @@ def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
     return "\n".join(out_lines) + ("\n" if pl_text.endswith("\n") else "")
 
 
+class PackProofError(SystemExit):
+    """Structured prover refusal raised by `pack_verified` / `pack_bundle`, preserving exact
+    original function name, bytecode offset, compile `line_map`, contract, and spec text."""
+
+    def __init__(self, message, *, fn_sym=None, pc=None, reason="", info=None,
+                 contract=None, spec_text=None, target="x86_64"):
+        super().__init__(message)
+        self.fn_sym = fn_sym
+        self.pc = pc
+        self.reason = reason
+        self.info = info
+        self.contract = contract
+        self.spec_text = spec_text
+        self.target = target
+
+
+def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_sym, full_spec_text, target):
+    """Locate the exact failing function & PC while `stmt_path` is still on disk and raise `PackProofError`."""
+    pc, can_sym, loc_msg = prove.locate(stmt_path, proof_path)
+    orig_sym = inv_rename.get(can_sym, can_sym)
+    msg = str(exc)
+    if orig_sym is None:
+        m = re.search(r"no proof of (\S+) found", msg)
+        if m:
+            orig_sym = inv_rename.get(m.group(1), m.group(1))
+    reason = loc_msg or msg
+    info = compiled_by_sym.get(orig_sym) if (compiled_by_sym and orig_sym) else None
+    contract = None
+    if full_spec_text and orig_sym:
+        try:
+            sp = ode.parse(full_spec_text)
+            contract = sp.contracts.get(orig_sym)
+        except Exception:
+            contract = None
+    raise PackProofError(
+        msg, fn_sym=orig_sym, pc=pc, reason=reason, info=info,
+        contract=contract, spec_text=full_spec_text, target=target,
+    ) from exc
+
+
 def pack_bundle(
     unit_elfs,
     orig_order,
@@ -1064,6 +1104,7 @@ def pack_bundle(
     existing_proof_path=None,
     glossary_out=None,
     verify_bin=None,
+    compiled_by_sym=None,
 ):
     """Pack a pre-compiled multi-function set of relocatable ELF64 `.o` blobs into one hash-bound
     `.o` + self-contained `.proof`, and run Bob's full `audit_binary`.
@@ -1126,7 +1167,11 @@ def pack_bundle(
         with tempfile.TemporaryDirectory(prefix="ode_bundle_") as tmp:
             stmt_path = os.path.join(tmp, "bundle.statement")
             raw_path = os.path.join(tmp, "bundle.raw.proof")
-            prove.prove(combined_spec, prove_items, stmt_path, raw_path)
+            try:
+                prove.prove(combined_spec, prove_items, stmt_path, raw_path)
+            except SystemExit as exc:
+                inv_rename = {v: k for k, v in rename_map.items()}
+                _raise_pack_proof_error(exc, stmt_path, raw_path, inv_rename, compiled_by_sym, full_spec_text, target)
             with open(raw_path, "r", encoding="utf-8") as rf:
                 raw_proof = rf.read()
 
@@ -1241,6 +1286,7 @@ def pack_verified(
                 compiled[n]["symbol"]: compiled[n].get("places", {}).get(compiled[n]["symbol"], "")
                 for n in topo_fns
             }
+            compiled_by_sym = {compiled[n]["symbol"]: compiled[n] for n in topo_fns}
             return pack_bundle(
                 unit_elfs,
                 orig_order,
@@ -1251,6 +1297,7 @@ def pack_verified(
                 places_by_sym=places_by_sym,
                 glossary_out=glossary_out,
                 verify_bin=verify_bin,
+                compiled_by_sym=compiled_by_sym,
             )
 
         info = compiled[chosen_fn]
@@ -1308,7 +1355,13 @@ def pack_verified(
     with tempfile.TemporaryDirectory(prefix="ode_pack_") as tmp:
         stmt_path = os.path.join(tmp, "pack.statement")
         os.makedirs(os.path.dirname(os.path.abspath(out_proof)), exist_ok=True)
-        prove.prove(bound_spec, [(out_obj, hash_sym, pl_text)], stmt_path, out_proof)
+        try:
+            prove.prove(bound_spec, [(out_obj, hash_sym, pl_text)], stmt_path, out_proof)
+        except SystemExit as exc:
+            tgt = parse_elf64(obj_bytes)["target"]
+            _raise_pack_proof_error(
+                exc, stmt_path, out_proof, {hash_sym: orig_sym}, {orig_sym: info}, spec_text, tgt,
+            )
 
     if glossary_out:
         os.makedirs(os.path.dirname(os.path.abspath(glossary_out)), exist_ok=True)

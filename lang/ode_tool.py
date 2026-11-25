@@ -80,10 +80,15 @@ def _var_labels(target, info=None, contract=None):
     arg_regs = ARG_REGS_ARM if target == "arm64" else ARG_REGS_X86
     param_by_reg = {}
     if contract is not None:
-        params = contract["args"] if isinstance(contract, dict) else getattr(contract, "args", [])
-        for idx, (pname, _) in enumerate(params):
-            if idx < len(arg_regs):
-                param_by_reg[arg_regs[idx]] = pname
+        calling = contract.get("calling") if isinstance(contract, dict) else getattr(contract, "calling", None)
+        if calling and calling.get("in"):
+            for pname, rname in calling["in"].items():
+                param_by_reg[rname] = pname
+        else:
+            params = contract["args"] if isinstance(contract, dict) else getattr(contract, "args", [])
+            for idx, (pname, _) in enumerate(params):
+                if idx < len(arg_regs):
+                    param_by_reg[arg_regs[idx]] = pname
     alias_by_reg = {}
     if info and info.get("regs"):
         for alias, reg in info["regs"].items():
@@ -94,6 +99,74 @@ def _var_labels(target, info=None, contract=None):
         labels.append(f"{r}({tag})" if tag and tag != r else r)
     labels.append("rodata")
     return labels
+
+
+def _infer_anon_var_bounds(facts, base_len):
+    """Infer readable bounds tags like `v69 (byte 0..255)` for anonymous symbolic variables from `facts`."""
+    lo, hi = {}, {}
+    for row in facts:
+        if not row:
+            continue
+        c = row[0]
+        nz = [(i, a) for i, a in enumerate(row[1:]) if a != 0]
+        if len(nz) != 1:
+            continue
+        idx, a = nz[0]
+        if idx < base_len:
+            continue
+        if a == 1:
+            lo[idx] = max(lo.get(idx, -10**30), -c)
+        elif a == -1:
+            hi[idx] = min(hi.get(idx, 10**30), c)
+    tags = {}
+    for idx in set(lo) & set(hi):
+        l, h = lo[idx], hi[idx]
+        if l == 0 and h == 1:
+            tags[idx] = f"v{idx} (bit 0..1)"
+        elif l == 0 and h == 255:
+            tags[idx] = f"v{idx} (byte 0..255)"
+        elif l == 0 and h == 65535:
+            tags[idx] = f"v{idx} (u16 0..65535)"
+        elif l == 0 and h == (1 << 32) - 1:
+            tags[idx] = f"v{idx} (u32 0..2^32-1)"
+        elif 0 <= l <= h <= 1000000:
+            tags[idx] = f"v{idx} ({l}..{h})"
+    return tags
+
+
+def _matching_spec_comparisons(spec_text, raw_goals):
+    """Find up to 3 `def` comparisons in `spec_text` testing the same integer constant as a `need compare` goal."""
+    if not spec_text or not raw_goals:
+        return []
+    consts = set()
+    for row in raw_goals:
+        if not row:
+            continue
+        nz = [a for a in row[1:] if a != 0]
+        if len(nz) == 1 and abs(nz[0]) == 1:
+            consts.add(abs(row[0]))
+    if not consts:
+        return []
+    matches = []
+    cur_def = None
+    for raw_line in spec_text.splitlines():
+        s = raw_line.split("//")[0].strip()
+        if not s:
+            continue
+        dm = re.match(r"def\s+(\w+)\s*\(", s)
+        if dm:
+            cur_def = dm.group(1)
+        if cur_def is None:
+            continue
+        for k in sorted(consts):
+            if re.search(rf"(?:==|!=|<=|>=|<|>)\s*{k}\b|\b{k}\s*(?:==|!=|<=|>=|<|>)", s):
+                entry = f"def {cur_def}: {s}"
+                if entry not in matches:
+                    matches.append(entry)
+                if len(matches) >= 3:
+                    return matches
+                break
+    return matches
 
 
 def format_inequality(nums, labels):
@@ -143,12 +216,18 @@ def parse_arithmetic_need(reason, target, info=None, contract=None):
     if not facts and not goals:
         return None
     labels = _var_labels(target, info, contract)
+    anon_tags = _infer_anon_var_bounds(facts, len(labels))
+    max_idx = max([len(labels) - 1] + list(anon_tags.keys()))
+    goal_labels = [
+        labels[i] if i < len(labels) else anon_tags.get(i, f"v{i}")
+        for i in range(max_idx + 1)
+    ]
     goal_vars = set()
     for g in goals:
         for i, a in enumerate(g[1:]):
             if a != 0:
                 goal_vars.add(i)
-    fmt_goals = [format_inequality(g, labels) for g in goals[:4]]
+    fmt_goals = [format_inequality(g, goal_labels) for g in goals[:4]]
     scored = []
     for f in facts:
         fvars = {i for i, a in enumerate(f[1:]) if a != 0}
@@ -163,7 +242,7 @@ def parse_arithmetic_need(reason, target, info=None, contract=None):
             rel_facts.append(txt)
         if len(rel_facts) >= 6:
             break
-    return {"kind": kind, "goals": fmt_goals, "relevant_facts": rel_facts, "total_facts": len(facts)}
+    return {"kind": kind, "goals": fmt_goals, "raw_goals": goals[:4], "relevant_facts": rel_facts, "total_facts": len(facts)}
 
 
 def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
@@ -195,7 +274,7 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
-        return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), or state the relation in the `place { ... }` before this point"
+        return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), merge branches with a `place { ... }` join point, or state the relation in `place { ... }`"
     if "need spec" in reason:
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
@@ -212,6 +291,13 @@ def _compile_error_hint(err):
     if "is not one expression" in err:
         return "hint: in `place { ... }`, write `wrote out[.. i] = spec_expr` or `wrote out[i ..] = spec_expr` (e.g. `wrote out[.. i] = pad16(src)`)"
     # Live table lookup directly from x86.tab / arm64.tab whenever an instruction fails to match.
+    if "no way in x86.tab writes" in err:
+        mi = re.search(r"'I':\s*(-?\d+)", err)
+        if mi:
+            ival = int(mi.group(1))
+            if ival < -(1 << 31) or ival >= (1 << 31):
+                return (f"hint: x86-64 immediate {ival} exceeds signed 32-bit range (-2^31..2^31-1); "
+                        f"load large 64-bit constants into a register with `mov r, K` (or shift + add) before comparing/adding")
     target = "arm64" if "arm64.tab" in err else ("x86_64" if "x86.tab" in err else None)
     if target is not None:
         m = re.search(r"`([A-Za-z][A-Za-z0-9.]*)\b[^`]*`:", err)
@@ -227,7 +313,7 @@ def _compile_error_hint(err):
     return None
 
 
-def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64", contract=None):
+def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64", contract=None, spec_text=None):
     """Translate a verifier refusal `(fn_sym, pc, reason)` into source file, line, reg names, frame fields,
     decoded arithmetic inequalities, and an actionable hint."""
     out = []
@@ -267,6 +353,11 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
                 m = re.match(r"^(.*?) (>=|<=) (.*)$", g)
                 a, b = (m.group(1), m.group(3)) if m else (g, "0")
                 out.append(f"  cannot decide: is {a} equal to {b}, below it, or above it? (the proof needs one of the three to follow from the facts)")
+            spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"))
+            if spec_hits:
+                out.append("  matching spec comparison(s):")
+                for sh in spec_hits:
+                    out.append(f"    {sh}")
         else:
             out.append(f"  need {arith['kind']} (arithmetic fact not shown from {arith['total_facts']} inequalities in context)")
             for g in arith["goals"]:
@@ -414,7 +505,9 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
             if pc is None:
                 m = re.search(r"at \+(\d+)", str(exc))
                 if m: pc = int(m.group(1))
-            diag, arith = format_source_diagnostic(by_sym, pc, fn_sym, raw, target=target, contract=contracts.get(fn_sym))
+            diag, arith = format_source_diagnostic(
+                by_sym, pc, fn_sym, raw, target=target, contract=contracts.get(fn_sym), spec_text=spec_text,
+            )
             ref = None
             probe_sym = fn_sym if fn_sym in progs else compiled[-1]["symbol"]
             if probe_sym in progs:
@@ -828,6 +921,14 @@ def main(argv=None):
                 args.source, args.spec, args.out, args.proof,
                 fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
             )
+        except ode_audit.PackProofError as exc:
+            by_sym = {exc.fn_sym: exc.info} if (exc.fn_sym and exc.info) else {}
+            diag, _ = format_source_diagnostic(
+                by_sym, exc.pc, exc.fn_sym, exc.reason,
+                target=exc.target, contract=exc.contract, spec_text=exc.spec_text,
+            )
+            print(diag)
+            return 1
         except SystemExit as exc:
             msg = str(exc)
             marker = "The verifier's last word:\n"
@@ -836,7 +937,6 @@ def main(argv=None):
                 tgt = args.target or "x86_64"
                 diag, _ = format_source_diagnostic({}, None, None, body, target=tgt)
                 print(diag)
-                print("hint: run `ode check` on this file for source-line attribution and concrete counterexample testing")
                 return 1
             raise
         if args.json:
@@ -875,9 +975,20 @@ def _cli():
     Any other exception is a fault of the tool and keeps its traceback."""
     try:
         return main()
+    except SystemExit as exc:
+        if isinstance(exc.code, str) and exc.code:
+            print(exc.code, file=sys.stderr)
+            hint = _compile_error_hint(exc.code)
+            if hint:
+                print(f"  {hint}", file=sys.stderr)
+            return 2
+        raise
     except Exception as exc:
         if type(exc).__name__ in ("UnifiedErr", "Err", "ValueError"):
             print(f"ode: {exc}", file=sys.stderr)
+            hint = _compile_error_hint(str(exc))
+            if hint:
+                print(f"  {hint}", file=sys.stderr)
             return 2
         raise
 

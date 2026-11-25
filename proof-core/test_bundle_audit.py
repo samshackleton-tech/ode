@@ -779,6 +779,88 @@ contract bump(v: number) {
         self.assertNotEqual(r3.returncode, 0)
         self.assertIn("kept out of the trace", r3.stdout + r3.stderr)
 
+    def test_12_pack_source_line_and_compare_diagnostics(self):
+        """`ode pack` reports original helper name, source line, byte range of anonymous vars,
+        matching spec `def` comparison on `need compare`, and x86-64 32-bit immediate hint."""
+        ode_tool_py = os.path.join(ROOT, "lang", "ode_tool.py")
+        src_cmp = textwrap.dedent("""
+            def step_op(op) {
+                if op == 149 then 7
+                else if op == 5 then 3
+                else 1
+            }
+            fn decode(buf: n bytes, n: number)
+                requires n >= 1
+                requires n < 100
+                returns step_op(buf[0])
+                trace depends on buf, n
+                stack 0
+            {
+                for arm64 calling {
+                    in buf = x5
+                    in n = x6
+                    out = x0
+                } {
+                    ldrb w9, [x5, 0]
+                    mov x0, 1
+                    ret
+                }
+            }
+            fn entry(buf: n bytes, n: number)
+                requires n >= 1
+                requires n < 100
+                returns step_op(buf[0])
+                trace depends on buf, n
+                stack 16
+            {
+                for arm64 {
+                    sub sp, sp, 16
+                    str x30, [sp, 0]
+                    mov x5, x0
+                    mov x6, x1
+                    bl decode
+                    ldr x30, [sp, 0]
+                    add sp, sp, 16
+                    ret
+                }
+            }
+        """)
+        p1 = os.path.join(self.tmp, "diag_cmp.ode")
+        with open(p1, "w", encoding="utf-8") as f:
+            f.write(src_cmp)
+        r1 = subprocess.run([sys.executable, ode_tool_py, "pack", p1, "--fn", "entry", "--target", "arm64",
+                             "--out", os.path.join(self.tmp, "d1.o"), "--proof", os.path.join(self.tmp, "d1.proof")],
+                            capture_output=True, text=True)
+        out1 = r1.stdout + r1.stderr
+        self.assertNotEqual(r1.returncode, 0)
+        self.assertIn("refused in decode (", out1)
+        self.assertIn("byte 0..255", out1)
+        self.assertIn("def step_op: if op == 149", out1)
+
+        src_imm = textwrap.dedent("""
+            fn big_imm(x: number)
+                requires x < 100
+                returns 0
+                trace depends on x
+                stack 0
+            {
+                for x86_64 {
+                    cmp rdi, 4294967296
+                    mov rax, 0
+                    ret
+                }
+            }
+        """)
+        p2 = os.path.join(self.tmp, "diag_imm.ode")
+        with open(p2, "w", encoding="utf-8") as f:
+            f.write(src_imm)
+        r2 = subprocess.run([sys.executable, ode_tool_py, "pack", p2, "--target", "x86_64",
+                             "--out", os.path.join(self.tmp, "d2.o"), "--proof", os.path.join(self.tmp, "d2.proof")],
+                            capture_output=True, text=True)
+        out2 = r2.stdout + r2.stderr
+        self.assertNotEqual(r2.returncode, 0)
+        self.assertIn("exceeds signed 32-bit range", out2)
+
 
 if __name__ == "__main__":
     unittest.main()

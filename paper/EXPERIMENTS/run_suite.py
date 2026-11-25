@@ -201,7 +201,7 @@ def classify_failure(stage: str, out: str, rc: int) -> str:
         return "kept_reg_refusal"
     if "contract_id_mismatch" in low or "expected contract" in low:
         return "contract_id_mismatch"
-    if "need entail" in low or "need compare" in low:
+    if "need entail" in low or "need compare" in low or "need below" in low or "need know" in low:
         return "arith_need_entail"
     if "need spec" in low or "need held" in low:
         return "spec_need_open"

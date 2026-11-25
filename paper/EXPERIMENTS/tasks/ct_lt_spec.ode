@@ -1,0 +1,16 @@
+// Big-endian lexicographic comparison `a < b` of two equal-length byte slices:
+// returns 1 if at the first index where they differ `a[i] < b[i]`, else 0.
+//
+// Scanning backward from i = len(a) - 1 down to 0 with carry bit `lt` in {0, 1}:
+//   2 * b[i] + lt + 511 - 2 * a[i]
+// stays within [1, 1022] and equals:
+//   - >= 512 (quotient 1) when a[i] < b[i], or when a[i] == b[i] and lt == 1;
+//   - <= 511 (quotient 0) when a[i] > b[i], or when a[i] == b[i] and lt == 0.
+// Dividing by 512 updates `lt` without branching on any byte.
+
+def lt_from(a, b, i, lt) {
+    if i == 0 then lt
+    else lt_from(a, b, i - 1, (2 * b[i - 1] + lt + 511 - 2 * a[i - 1]) / 512)
+}
+
+def bytes_lt(a, b) { lt_from(a, b, len(a), 0) }
