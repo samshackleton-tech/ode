@@ -410,8 +410,23 @@ theorem cmp_facts {ρ : Nat → Int} {x y : Row} {c : Cmp}
   | eq => have := h2 rfl; simp [Cmp.isEq, Cmp.isLt, Cmp.isGt]; omega
   | gt => have := h3 rfl; simp [Cmp.isEq, Cmp.isLt, Cmp.isGt]; omega
 
+theorem hasNeq_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {facts : List SFact} {a b : Row}
+    (h : hasNeq facts a b = true) (hf : ∀ f ∈ facts, f.holds ctx s0 ρ) : ev ρ a ≠ ev ρ b := by
+  unfold hasNeq at h
+  obtain ⟨f, mf, hf'⟩ := List.any_eq_true.mp h
+  cases f with
+  | same _ _ => simp at hf'
+  | value _ _ => simp at hf'
+  | neq r =>
+    have hne : ev ρ r ≠ 0 := hf _ mf
+    simp only [Bool.or_eq_true] at hf'
+    rcases hf' with h1 | h2
+    · rw [Lin.same_iff.mp h1, ev_sub] at hne; omega
+    · rw [Lin.same_iff.mp h2, ev_sub] at hne; omega
+
 theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Row} {res : SRes} {items rest : Items} {ρ : Nat → Int} {n : Nat}
-    (h : sbin op s x y items = .ok ((res, s'), rest)) (hf : ∀ g ∈ s.facts, g.holds ρ) (hx : bounded n x) (hy : bounded n y) :
+    (h : sbin op s x y items = .ok ((res, s'), rest)) (hf : ∀ g ∈ s.facts, g.holds ρ)
+    (hs : ∀ f ∈ s.spec, f.holds ctx s0 ρ) (hx : bounded n x) (hy : bounded n y) :
     s' = s ∧ ∃ v, res = .val v ∧ v.bounded n ∧ binop op (.int (ev ρ x)) (.int (ev ρ y)) = some (semv ctx s0 ρ v) := by
   unfold sbin at h
   split at h
@@ -458,23 +473,41 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
       next h3 =>
         split at h
         next h4 =>
-          obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
-          obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
-          have := V.pure_ok h
-          injection this with hp _
-          injection hp with e1 e2
-          subst e1 e2
-          exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, semv, ← c1]⟩
-        next h4 =>
           split at h
-          next h5 =>
+          next hneq =>
+            have hne := hasNeq_sound hneq hs
+            have := V.pure_ok h
+            injection this with hp _
+            injection hp with e1 e2
+            subst e1 e2
+            exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, semv, hne]⟩
+          next =>
             obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
             obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
             have := V.pure_ok h
             injection this with hp _
             injection hp with e1 e2
             subst e1 e2
-            exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, semv, ← c2]⟩
+            exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, semv, ← c1]⟩
+        next h4 =>
+          split at h
+          next h5 =>
+            split at h
+            next hneq =>
+              have hne := hasNeq_sound hneq hs
+              have := V.pure_ok h
+              injection this with hp _
+              injection hp with e1 e2
+              subst e1 e2
+              exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, semv, hne]⟩
+            next =>
+              obtain ⟨c, r1, e1, h⟩ := V.bind_ok h
+              obtain ⟨c1, c2, c3, c4, c5, c6⟩ := cmp_facts (compare_sound e1 ρ hf)
+              have := V.pure_ok h
+              injection this with hp _
+              injection hp with e1 e2
+              subst e1 e2
+              exact ⟨rfl, _, rfl, trivial, by simp [binop, h1, h2, h3, h4, h5, semv, ← c2]⟩
           next h5 =>
             split at h
             next h6 =>
@@ -611,6 +644,7 @@ theorem reachStep_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} (a : SCall) 
     (hf : f.holds ctx s0 ρ) (hs : ∀ c ∈ seen, Eqv ctx s0 ρ a c) : ∀ c ∈ reachStep seen f, Eqv ctx s0 ρ a c := by
   cases f with
   | value _ _ => exact hs
+  | neq _ => exact hs
   | same x y =>
     intro c m
     simp only [reachStep] at m
@@ -690,6 +724,9 @@ theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownVa
   | .same _ _ :: more, c, v, h => by
     simp only [knownValue] at h
     exact List.mem_cons_of_mem _ (knownValue_mem h)
+  | .neq _ :: more, c, v, h => by
+    simp only [knownValue] at h
+    exact List.mem_cons_of_mem _ (knownValue_mem h)
   | .value c' v' :: more, c, v, h => by
     simp only [knownValue] at h
     split at h
@@ -703,6 +740,9 @@ theorem knownValue_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, knownVa
 theorem heldValues_mem : ∀ {facts : List SFact} {c : SCall} {v : Row}, (c, v) ∈ heldValues facts → SFact.value c v ∈ facts
   | [], _, _, h => by simp [heldValues] at h
   | .same _ _ :: more, c, v, h => by
+    simp only [heldValues] at h
+    exact List.mem_cons_of_mem _ (heldValues_mem h)
+  | .neq _ :: more, c, v, h => by
     simp only [heldValues] at h
     exact List.mem_cons_of_mem _ (heldValues_mem h)
   | .value c' v' :: more, c, v, h => by
@@ -1007,7 +1047,7 @@ theorem sevalWith_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         rw [← semEnv_agree hb4 c5.agree, eop]
         exact Value.bin vx4 vy4 hz
       next =>
-        obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c4.holds.facts bx4 by'
+        obtain ⟨hs, v, hres, bv, hz⟩ := sbin_sound ctx s0 h c4.holds.facts c4.holds.spec bx4 by'
         subst hs hres
         exact ⟨ρ4, ((c1.then c2).then c3).then c4, Value.bin vx4 vy4 hz, bv⟩
   | index a i iha ihi =>
@@ -1218,6 +1258,7 @@ theorem holdsSpec_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {facts : Lis
     have hv' : SFact.value c' v ∈ facts := by simpa using hv
     have e := reach_sound c facts hf _ [c] (fun x mx => by simp only [List.mem_singleton] at mx; subst mx; exact fun _ => Iff.rfl) c' m
     exact (e _).mpr (hf _ hv')
+  | neq _ => simp [holdsSpec] at h
 
 theorem mem_foldl_insert {c : SCall} : ∀ (xs acc : List SCall), c ∈ xs.foldl (fun l c => insert c l) acc → c ∈ acc ∨ c ∈ xs
   | [], _, h => Or.inl h
@@ -1242,6 +1283,7 @@ theorem callsIn_bounded {n : Nat} {f : SFact} (hb : f.bounded n) : ∀ c ∈ cal
     simp only [callsIn, List.mem_cons, List.mem_nil_iff, or_false] at m
     subst m
     exact hb.1
+  | neq _ => intro c m; cases m
 
 theorem callsOf_bounded {n : Nat} {facts : List SFact} {goal : SFact} (hf : ∀ f ∈ facts, f.bounded n) (hg : goal.bounded n) :
     ∀ c ∈ callsOf facts goal, c.bounded n := by
@@ -1263,6 +1305,7 @@ theorem carry_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
   unfold carry at h
   cases goal with
   | same a b => simp only at h; exact (refuse_ok h).elim
+  | neq _ => simp only at h; exact (refuse_ok h).elim
   | value c v =>
     cases hv : (heldValues s.spec)[k]? with
     | none => simp only [hv] at h; exact (refuse_ok h).elim

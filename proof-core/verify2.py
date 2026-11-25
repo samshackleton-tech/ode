@@ -415,6 +415,9 @@ class Verifier:
             rv = self.eval_sexpr(cr, env, state, stream)
             facts = state["facts"]
             diff = r_sub(lv, rv)
+            if cop in ("==", "!=") and (diff in state["neq"] or r_sub(rv, lv) in state["neq"]):
+                taken = (cop == "!=")
+                return self.eval_sexpr(thn if taken else els, env, state, stream)
             if not diff[1]:
                 k = diff[0]
                 if cop == "==": taken = (k == 0)
@@ -628,6 +631,7 @@ class Verifier:
             "flag_marks": {"zf": True, "cf": True},
             "facts": facts,
             "eqs": [],
+            "neq": [],
             "buf_base": buf_base,
             "buf_len": buf_len,
             "buf_clean": buf_clean,
@@ -656,6 +660,7 @@ class Verifier:
                 "flag_marks": dict(st["flag_marks"]),
                 "facts": list(st["facts"]),
                 "eqs": list(st["eqs"]),
+                "neq": list(st["neq"]),
                 "buf_base": st["buf_base"],
                 "buf_len": st["buf_len"],
                 "buf_clean": st["buf_clean"],
@@ -785,6 +790,7 @@ class Verifier:
                     pst = clone(st)
                     pst["facts"] = list(facts)
                     pst["eqs"] = list(st["eqs"])
+                    pst["neq"] = []
                     base_v = var_count[0]
                     var_count[0] += len(reg_names)
                     for r_idx, r in enumerate(reg_names):
@@ -858,27 +864,14 @@ class Verifier:
                         if frel is None:
                             raise Refuse(f"jump on unset flag `{cond_flag}`")
                         op_f, a, b = frel
-                        if op_f == "eq":
-                            way_specs = [
-                                (True, [r_sub(a, b), r_sub(b, a)]),
-                                (False, [r_sub(r_sub(a, b), r_const(1))]),
-                                (False, [r_sub(r_sub(b, a), r_const(1))]),
-                            ]
-                        elif op_f == "lt":
-                            way_specs = [
-                                (True, [r_sub(r_sub(b, a), r_const(1))]),
-                                (False, [r_sub(a, b)]),
-                            ]
-                        else:
-                            raise Refuse(f"unknown flag relation {frel}")
                         live_ways = []
-                        for f_is_true, w_facts in way_specs:
+                        def _assume_way(f_is_true, w_facts):
                             dest = target if (f_is_true == want) else nxt
                             if any((not r[1]) and r[0] < 0 for r in w_facts):
-                                continue
+                                return
                             if all(not r[1] for r in w_facts):
                                 live_ways.append((dest, clone(st)))
-                                continue
+                                return
                             tag_w, _ = stream.pop_tag()
                             if tag_w == "live":
                                 st_w = clone(st)
@@ -888,6 +881,30 @@ class Verifier:
                                 self.refute_dead(st["facts"] + w_facts, stream)
                             else:
                                 raise Refuse(f"expected `live`/`dead`, got `{tag_w}`")
+
+                        if op_f == "eq":
+                            diff_ab = r_sub(a, b)
+                            diff_ba = r_sub(b, a)
+                            if diff_ab not in st["neq"] and diff_ba not in st["neq"]:
+                                _assume_way(True, [diff_ab, diff_ba])
+                            if not diff_ab[1]:
+                                if diff_ab[0] != 0:
+                                    live_ways.append((target if (False == want) else nxt, clone(st)))
+                            else:
+                                nxt_item = stream.items[stream.pos] if stream.pos < len(stream.items) else None
+                                if nxt_item is not None and nxt_item[0] == "t" and nxt_item[1] == "neq":
+                                    stream.pos += 1
+                                    st_w = clone(st)
+                                    st_w["neq"].append(diff_ab)
+                                    live_ways.append((target if (False == want) else nxt, st_w))
+                                else:
+                                    _assume_way(False, [r_sub(diff_ab, r_const(1))])
+                                    _assume_way(False, [r_sub(diff_ba, r_const(1))])
+                        elif op_f == "lt":
+                            _assume_way(True, [r_sub(r_sub(b, a), r_const(1))])
+                            _assume_way(False, [r_sub(a, b)])
+                        else:
+                            raise Refuse(f"unknown flag relation {frel}")
                         for dest, st_w in live_ways:
                             run_path(dest, st_w, origin_place, origin_dec, visited_places if dest != origin_place else frozenset())
                         return

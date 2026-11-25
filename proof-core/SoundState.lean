@@ -82,6 +82,7 @@ def SCall.bounded (n : Nat) (c : SCall) : Prop := ∀ v ∈ c.args, v.bounded n
 def SFact.bounded (n : Nat) : SFact → Prop
   | .same a b => a.bounded n ∧ b.bounded n
   | .value c v => c.bounded n ∧ Ode.bounded n v
+  | .neq r => Ode.bounded n r
 
 def Key.wf (n t : Nat) : Key → Prop
   | .num r => bounded n r
@@ -350,6 +351,7 @@ def CallValue (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (c : SCall) (x : Val) 
 def SFact.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) : SFact → Prop
   | .same a b => ∀ x, CallValue ctx s0 ρ a x ↔ CallValue ctx s0 ρ b x
   | .value c v => CallValue ctx s0 ρ c (.int (ev ρ v))
+  | .neq r => ev ρ r ≠ 0
 
 def Flag.holds (ρ : Nat → Int) (set : Bool) : Flag → Prop
   | .unknown => True
@@ -450,6 +452,10 @@ theorem SFact.holds_agree {ctx : Ctx} {s0 : State} {n : Nat} {ρ ρ' : Nat → I
   | value c v =>
     simp only [SFact.holds] at h ⊢
     rw [← CallValue_agree hb.1 a, ← ev_agree hb.2 a]
+    exact h
+  | neq r =>
+    simp only [SFact.holds] at h ⊢
+    rw [← ev_agree hb a]
     exact h
 
 theorem Flag.holds_agree {n : Nat} {ρ ρ' : Nat → Int} {f : Flag} {set : Bool} (hb : f.bounded n) (a : Agree n ρ ρ')
@@ -668,6 +674,7 @@ theorem SFact.bounded_mono {n m : Nat} {f : SFact} (h : n ≤ m) (hb : f.bounded
   cases f with
   | same a b => exact ⟨SCall.bounded_mono h hb.1, SCall.bounded_mono h hb.2⟩
   | value c v => exact ⟨SCall.bounded_mono h hb.1, Ode.bounded_mono h hb.2⟩
+  | neq r => exact Ode.bounded_mono h hb
 
 /-! ## Memory -/
 

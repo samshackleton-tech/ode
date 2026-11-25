@@ -242,6 +242,7 @@ structure SCall where
 inductive SFact where
   | same (a b : SCall)          -- the two have the same value, or neither has one
   | value (c : SCall) (v : Row) -- the use has this value
+  | neq (r : Row)               -- this linear expression is not zero (`ev ρ r ≠ 0`)
   deriving DecidableEq, Repr, Inhabited
 
 /-! ## Words
@@ -1744,6 +1745,14 @@ inductive SRes where
   | tail (c : SCall)      -- the value is that of this use of a definition, which is not opened here
   | list (vs : List SVal) -- the things a definition is used with
 
+/-- True when the specification facts already record `a ≠ b` (i.e. `a - b ≠ 0` or `b - a ≠ 0`). -/
+def hasNeq (facts : List SFact) (a b : Row) : Bool :=
+  let d := Lin.sub a b
+  let d' := Lin.sub b a
+  facts.any fun
+    | .neq r => Lin.same r d || Lin.same r d'
+    | _ => false
+
 def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
   if op == "+" then pure (.val (.lin (Lin.add x y)), s)
   else if op == "-" then do
@@ -1754,8 +1763,12 @@ def sbin (op : String) (s : Sym) (x y : Row) : V (SRes × Sym) :=
     | some k, _ => pure (.val (.lin (Lin.scale k y)), s)
     | _, some k => pure (.val (.lin (Lin.scale k x)), s)
     | _, _ => refuse "a product of two unknowns: not here yet"
-  else if op == "==" then do let c ← compare s.facts x y; pure (.val (.bool c.isEq), s)
-  else if op == "!=" then do let c ← compare s.facts x y; pure (.val (.bool (!c.isEq)), s)
+  else if op == "==" then
+    if hasNeq s.spec x y then pure (.val (.bool false), s)
+    else do let c ← compare s.facts x y; pure (.val (.bool c.isEq), s)
+  else if op == "!=" then
+    if hasNeq s.spec x y then pure (.val (.bool true), s)
+    else do let c ← compare s.facts x y; pure (.val (.bool (!c.isEq)), s)
   -- an order is asked two ways: below or not (where the facts say `x >= y`, they need not say which of the two)
   else if op == "<" then do let t ← isBelow s.facts x y; pure (.val (.bool t), s)
   else if op == "<=" then do let t ← isBelow s.facts y x; pure (.val (.bool (!t)), s)
@@ -1785,6 +1798,7 @@ def insert (c : SCall) (l : List SCall) : List SCall := if l.contains c then l e
 def reachStep (seen : List SCall) : SFact → List SCall
   | .same a b => if seen.contains a then insert b seen else if seen.contains b then insert a seen else seen
   | .value .. => seen
+  | .neq _ => seen
 
 /-- The uses that the facts say are the same as one of `seen`. -/
 def reach (facts : List SFact) : Nat → List SCall → List SCall
@@ -1796,12 +1810,14 @@ def knownValue : List SFact → SCall → Option Row
   | [], _ => none
   | .value c' v :: more, c => if c' == c then some v else knownValue more c
   | .same _ _ :: more, c => knownValue more c
+  | .neq _ :: more, c => knownValue more c
 
 /-- The values held, each with the use it is of. -/
 def heldValues : List SFact → List (SCall × Row)
   | [] => []
   | .value c v :: more => (c, v) :: heldValues more
   | .same _ _ :: more => heldValues more
+  | .neq _ :: more => heldValues more
 
 /-- The things two uses of a definition are used with are the same: the same run of bytes, the same truth,
 or numbers shown equal. -/
@@ -1953,10 +1969,12 @@ def openCall (ctx : Ctx) (s : Sym) (c : SCall) : V Sym := openCallWith ctx (open
 def holdsSpec (facts : List SFact) : SFact → Bool
   | .same a b => (reach facts (facts.length + 1) [a]).contains b
   | .value c v => (reach facts (facts.length + 1) [c]).any fun c' => facts.contains (.value c' v)
+  | .neq _ => false
 
 def callsIn : SFact → List SCall
   | .same a b => [a, b]
   | .value c _ => [c]
+  | .neq _ => []
 
 def callsOf (facts : List SFact) (goal : SFact) : List SCall :=
   ((facts.reverse ++ [goal]).map callsIn).flatten.foldl (fun l c => insert c l) []
@@ -3153,6 +3171,44 @@ def jumpTarget (bind : Bind) : Expr → Option Nat
   | .name n => if isNumberLetter n then ((bind.lookup n).bind readInt).map fun i => (i % (M64 : Int)).toNat else none
   | _ => none
 
+/-- The false branch of an equality jump: `t neq` keeps one state recording `a - b ≠ 0` in `s.spec`,
+avoiding exponential `<` / `>` splitting on chained equality dispatches; otherwise falls back to the
+classic `<` / `>` split. -/
+def assumeNeq (s : Sym) (a b : Row) (want : Bool) (target next : Nat) : V (List (Sym × Next)) :=
+  match Lin.isConst (Lin.sub a b) with
+  | some k => if k == 0 then pure [] else pure [(s, Next.at (if want == false then target else next))]
+  | none => fun items =>
+    match items.line items.next with
+    | none => need "branch_neq" s.facts [Lin.sub a b] items
+    | some (.tag nm _) =>
+      if nm == "neq" then
+        .ok ([({ s with spec := .neq (Lin.sub a b) :: s.spec }, Next.at (if want == false then target else next))],
+          { items with next := items.next + 1 })
+      else
+        ways s want target next
+          [(false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
+          items
+    | some _ =>
+      ways s want target next
+        [(false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
+        items
+
+def assumeEq (s : Sym) (a b : Row) (want : Bool) (target next : Nat) : V (List (Sym × Next)) :=
+  if hasNeq s.spec a b then pure []
+  else do
+    match ← assume s [Lin.sub a b, Lin.sub b a] with
+    | some s' => pure [(s', Next.at (if want then target else next))]
+    | none => pure []
+
+/-- All reachable successors of a conditional jump on a symbolic flag. -/
+def jumpWays (s : Sym) (want : Bool) (target next : Nat) : Flag → V (List (Sym × Next))
+  | .unknown => refuse "a jump on a flag of which nothing is known"
+  | .below a b => ways s want target next [(true, [Lin.sub (Lin.sub b a) (Lin.const 1)]), (false, [Lin.sub a b])]
+  | .equal a b => do
+    let yes ← assumeEq s a b want target next
+    let no ← assumeNeq s a b want target next
+    pure (yes ++ no)
+
 def flagWays : Flag → Option (List (Bool × List Row))
   | .unknown => none
   | .equal a b => some [(true, [Lin.sub a b, Lin.sub b a]), (false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
@@ -3201,9 +3257,7 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
         if !(if flag == "zf" then s.q.zq else s.q.cq) then
           refuse "a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
         else
-        match flagWays (if flag == "zf" then s.zf else s.cf) with
-        | none => refuse "a jump on a flag of which nothing is known"
-        | some w => ways s want t i.next w
+        jumpWays s want t i.next (if flag == "zf" then s.zf else s.cf)
   | .plain => do
     let s1 ← fold (symStmtQ ctx i.bind) s i.effect
     let s2 ← settle ctx s1

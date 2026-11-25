@@ -260,6 +260,103 @@ theorem flagWays_spec {f : Flag} {w : List (Bool × List Row)} {ρ : Nat → Int
         subst hr
         rw [holds_iff, ev_sub]; omega
 
+
+theorem jumpWays_sound {ctx : Ctx} {s0 : State} {s : Sym} {want : Bool} {target next : Nat}
+    {ρ : Nat → Int} {st : State} {f : Flag} {nexts : List (Sym × Next)} {items rest : Items}
+    (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (b : Bool)
+    (h : jumpWays s want target next f items = .ok (nexts, rest))
+    (hf : f.holds ρ b) (hb : f.bounded s.nvars) :
+    ∃ s', (s', Next.at (if b == want then target else next)) ∈ nexts ∧ Carried ctx s0 ρ s ρ s' st ∧ s'.q = s.q := by
+  cases f with
+  | unknown => simp only [jumpWays] at h; exact (refuse_ok h).elim
+  | below x y =>
+    simp only [jumpWays] at h
+    obtain ⟨bd, ex⟩ := flagWays_spec (f := .below x y) rfl hf hb
+    exact ways_sound H wf b _ h bd ex
+  | equal x y =>
+    simp only [jumpWays] at h
+    obtain ⟨yes, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨no, r2, e2, h⟩ := V.bind_ok h
+    have hp := V.pure_ok h; injection hp with h1 _; subst h1
+    simp only [Flag.holds] at hf
+    by_cases he : ev ρ x = ev ρ y
+    · have hbtrue : b = true := by simp [hf, he]
+      subst hbtrue
+      unfold assumeEq at e1
+      have hnotneq : hasNeq s.spec x y = false := by
+        cases hn : hasNeq s.spec x y with
+        | false => rfl
+        | true => exact (hasNeq_sound hn H.spec he).elim
+      simp only [hnotneq, Bool.false_eq_true, ↓reduceIte] at e1
+      obtain ⟨now, r1', ea, e1⟩ := V.bind_ok e1
+      have ha := assume_sound ea ρ H.facts
+      have hrows : ∀ r ∈ [Lin.sub x y, Lin.sub y x], r.holds ρ := by
+        intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
+        rcases hr with rfl | rfl <;> rw [holds_iff, ev_sub] <;> omega
+      cases now with
+      | none => exact (ha hrows).elim
+      | some s1 =>
+        have hpy := V.pure_ok e1; injection hpy with hy _; subst hy
+        have hbd : ∀ r ∈ [Lin.sub x y, Lin.sub y x], bounded s.nvars r := by
+          intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
+          rcases hr with rfl | rfl
+          · exact bounded_sub hb.1 hb.2
+          · exact bounded_sub hb.2 hb.1
+        refine ⟨s1, List.mem_append_left _ (by simp), ?_⟩
+        rcases ha with rfl | rfl
+        · exact ⟨Carried.here H wf, rfl⟩
+        · exact ⟨⟨Agree.refl _ _, Nat.le_refl _, H.more _ hrows, wf.more _ hbd⟩, rfl⟩
+    · have hbfalse : b = false := by simp [hf, he]
+      subst hbfalse
+      unfold assumeNeq at e2
+      cases hc : Lin.isConst (Lin.sub x y) with
+      | some k =>
+        by_cases hk : k = 0
+        · subst hk
+          have ev0 := ev_isConst hc (ρ := ρ)
+          rw [ev_sub] at ev0; omega
+        · have hk' : (k == 0) = false := beq_false_of_ne hk
+          simp only [hc, hk', Bool.false_eq_true, ↓reduceIte] at e2
+          have hp2 := V.pure_ok e2; injection hp2 with hno _; subst hno
+          exact ⟨s, List.mem_append_right _ (by simp), Carried.here H wf, rfl⟩
+      | none =>
+      simp only [hc] at e2
+      have hbd : ∀ sr ∈ [(false, [Lin.sub (Lin.sub x y) (Lin.const 1)]), (false, [Lin.sub (Lin.sub y x) (Lin.const 1)])], ∀ r ∈ sr.2, bounded s.nvars r := by
+        intro sr m r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+        rcases m with rfl | rfl <;> (simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr)
+        · exact bounded_sub (bounded_sub hb.1 hb.2) (bounded_const _ _)
+        · exact bounded_sub (bounded_sub hb.2 hb.1) (bounded_const _ _)
+      have hex : ∃ sr ∈ [(false, [Lin.sub (Lin.sub x y) (Lin.const 1)]), (false, [Lin.sub (Lin.sub y x) (Lin.const 1)])], sr.1 = false ∧ ∀ r ∈ sr.2, r.holds ρ := by
+        by_cases l : ev ρ y < ev ρ x
+        · refine ⟨_, List.mem_cons_self .., rfl, ?_⟩
+          intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr
+          rw [holds_iff]; simp only [ev_sub, ev_const]; omega
+        · refine ⟨_, List.mem_cons_of_mem _ (List.mem_cons_self ..), rfl, ?_⟩
+          intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr
+          rw [holds_iff]; simp only [ev_sub, ev_const]; omega
+      cases hl : r1.line r1.next with
+      | none => simp only [hl] at e2; exact (need_ok e2).elim
+      | some it =>
+        simp only [hl] at e2
+        cases it with
+        | tag nm k =>
+          simp only at e2
+          split at e2
+          · injection e2 with hno
+            injection hno with hno _
+            subst hno
+            have hne : SFact.holds ctx s0 ρ (.neq (Lin.sub x y)) := by
+              simp only [SFact.holds, ev_sub]; omega
+            refine ⟨{ s with spec := .neq (Lin.sub x y) :: s.spec },
+              List.mem_append_right _ (by simp),
+              ⟨Agree.refl _ _, Nat.le_refl _, H.withSpec _ hne, wf.withSpec _ (bounded_sub hb.1 hb.2)⟩, rfl⟩
+          · obtain ⟨s', m', c', q'⟩ := ways_sound H wf false _ e2 hbd hex
+            exact ⟨s', List.mem_append_right _ m', c', q'⟩
+        | _ =>
+          simp only at e2
+          obtain ⟨s', m', c', q'⟩ := ways_sound H wf false _ e2 hbd hex
+          exact ⟨s', List.mem_append_right _ m', c', q'⟩
+
 theorem jumpTarget_value {bind : Bind} {target : Expr} {t : Nat} (h : jumpTarget bind target = some t) (perm : Perm) (st : State) :
     value perm bind st target = some t := by
   cases target with
@@ -575,21 +672,16 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           have hqs : quietStmt i.bind (started p i st) (.jump target (some (flag, want))) = true := by
             simp only [quietStmt, qa, qb, hz, if_true, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
             exact M.zf zq
-          cases hw : flagWays s.zf with
-          | none => simp only [hw] at h; exact (refuse_ok h).elim
-          | some w =>
-            simp only [hw] at h
-            obtain ⟨bd, ex⟩ := flagWays_spec hw H.zf wf.zf
-            obtain ⟨s', m, c', q'⟩ := ways_sound H wf st.zf w h bd ex
-            by_cases taken : (st.zf == want) = true
-            · rw [if_pos taken] at m
-              exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
-                by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
-                c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
-            · rw [if_neg taken] at m
-              exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
-                by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
-                c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
+          obtain ⟨s', m, c', q'⟩ := jumpWays_sound H wf st.zf h H.zf wf.zf
+          by_cases taken : (st.zf == want) = true
+          · rw [if_pos taken] at m
+            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
+              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
+              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
+          · rw [if_neg taken] at m
+            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
+              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
+              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
         | false =>
           simp only [hz, Bool.false_eq_true, if_false] at h
           cases cq : s.q.cq with
@@ -599,21 +691,16 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
           have hqs : quietStmt i.bind (started p i st) (.jump target (some (flag, want))) = true := by
             simp only [quietStmt, qa, qb, hz, if_false, Bool.false_eq_true, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
             exact M.cf cq
-          cases hw : flagWays s.cf with
-          | none => simp only [hw] at h; exact (refuse_ok h).elim
-          | some w =>
-            simp only [hw] at h
-            obtain ⟨bd, ex⟩ := flagWays_spec hw H.cf wf.cf
-            obtain ⟨s', m, c', q'⟩ := ways_sound H wf st.cf w h bd ex
-            by_cases taken : (st.cf == want) = true
-            · rw [if_pos taken] at m
-              exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
-                by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
-                c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
-            · rw [if_neg taken] at m
-              exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
-                by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
-                c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
+          obtain ⟨s', m, c', q'⟩ := jumpWays_sound H wf st.cf h H.cf wf.cf
+          by_cases taken : (st.cf == want) = true
+          · rw [if_pos taken] at m
+            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
+              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
+              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
+          · rw [if_neg taken] at m
+            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
+              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
+              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
   | plain =>
     simp only [symInstr, hs] at h
     obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
@@ -2080,6 +2167,113 @@ theorem flagWays_two_spec {f : Flag} {w : List (Bool × List Row)} {ρa ρb : Na
         (intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr
          rw [holds_iff, ev_sub]; omega)
 
+
+theorem jumpWays_two_sound {ctx : Ctx} {a0 b0 : State} {s : Sym} {want : Bool} {target next : Nat}
+    {ρa ρb : Nat → Int} {sta stb : State} {f : Flag} {nexts : List (Sym × Next)} {items rest : Items}
+    (Ha : Holds ctx a0 ρa s sta) (Hb : Holds ctx b0 ρb s stb) (wf : WF ctx s) (b : Bool)
+    (h : jumpWays s want target next f items = .ok (nexts, rest))
+    (hfa : f.holds ρa b) (hfb : f.holds ρb b) (hb : f.bounded s.nvars) (fe : FlagValEq ρa ρb f) :
+    ∃ s', (s', Next.at (if b == want then target else next)) ∈ nexts ∧
+      Carried ctx a0 ρa s ρa s' sta ∧ Carried ctx b0 ρb s ρb s' stb ∧
+      s'.q = s.q ∧ s'.zf = s.zf ∧ s'.cf = s.cf := by
+  cases f with
+  | unknown => simp only [jumpWays] at h; exact (refuse_ok h).elim
+  | below x y =>
+    simp only [jumpWays] at h
+    obtain ⟨bd, ex⟩ := flagWays_two_spec (f := .below x y) rfl hfa hfb hb fe
+    exact ways_two_sound Ha Hb wf b _ h bd ex
+  | equal x y =>
+    simp only [jumpWays] at h
+    obtain ⟨yes, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨no, r2, e2, h⟩ := V.bind_ok h
+    have hp := V.pure_ok h; injection hp with h1 _; subst h1
+    obtain ⟨hx, hy⟩ := fe
+    simp only [Flag.holds] at hfa hfb
+    by_cases he : ev ρa x = ev ρa y
+    · have hbtrue : b = true := by simp [hfa, he]
+      subst hbtrue
+      unfold assumeEq at e1
+      have hnotneq : hasNeq s.spec x y = false := by
+        cases hn : hasNeq s.spec x y with
+        | false => rfl
+        | true => exact (hasNeq_sound hn Ha.spec he).elim
+      simp only [hnotneq, Bool.false_eq_true, ↓reduceIte] at e1
+      obtain ⟨now, r1', ea, e1⟩ := V.bind_ok e1
+      have ha := assume_sound ea ρa Ha.facts
+      have hrowsa : ∀ r ∈ [Lin.sub x y, Lin.sub y x], r.holds ρa := by
+        intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
+        rcases hr with rfl | rfl <;> rw [holds_iff, ev_sub] <;> omega
+      have hrowsb : ∀ r ∈ [Lin.sub x y, Lin.sub y x], r.holds ρb := by
+        intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
+        rcases hr with rfl | rfl <;> rw [holds_iff, ev_sub] <;> omega
+      cases now with
+      | none => exact (ha hrowsa).elim
+      | some s1 =>
+        have hpy := V.pure_ok e1; injection hpy with hy' _; subst hy'
+        have hbd : ∀ r ∈ [Lin.sub x y, Lin.sub y x], bounded s.nvars r := by
+          intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr
+          rcases hr with rfl | rfl
+          · exact bounded_sub hb.1 hb.2
+          · exact bounded_sub hb.2 hb.1
+        refine ⟨s1, List.mem_append_left _ (by simp), ?_⟩
+        rcases ha with rfl | rfl
+        · exact ⟨Carried.here Ha wf, Carried.here Hb wf, rfl, rfl, rfl⟩
+        · exact ⟨⟨Agree.refl _ _, Nat.le_refl _, Ha.more _ hrowsa, wf.more _ hbd⟩,
+                 ⟨Agree.refl _ _, Nat.le_refl _, Hb.more _ hrowsb, wf.more _ hbd⟩, rfl, rfl, rfl⟩
+    · have hbfalse : b = false := by simp [hfa, he]
+      subst hbfalse
+      unfold assumeNeq at e2
+      cases hc : Lin.isConst (Lin.sub x y) with
+      | some k =>
+        by_cases hk : k = 0
+        · subst hk
+          have ev0 := ev_isConst hc (ρ := ρa)
+          rw [ev_sub] at ev0; omega
+        · have hk' : (k == 0) = false := beq_false_of_ne hk
+          simp only [hc, hk', Bool.false_eq_true, ↓reduceIte] at e2
+          have hp2 := V.pure_ok e2; injection hp2 with hno _; subst hno
+          exact ⟨s, List.mem_append_right _ (by simp), Carried.here Ha wf, Carried.here Hb wf, rfl, rfl, rfl⟩
+      | none =>
+      simp only [hc] at e2
+      have hbd : ∀ sr ∈ [(false, [Lin.sub (Lin.sub x y) (Lin.const 1)]), (false, [Lin.sub (Lin.sub y x) (Lin.const 1)])], ∀ r ∈ sr.2, bounded s.nvars r := by
+        intro sr m r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at m
+        rcases m with rfl | rfl <;> (simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr)
+        · exact bounded_sub (bounded_sub hb.1 hb.2) (bounded_const _ _)
+        · exact bounded_sub (bounded_sub hb.2 hb.1) (bounded_const _ _)
+      have hex : ∃ sr ∈ [(false, [Lin.sub (Lin.sub x y) (Lin.const 1)]), (false, [Lin.sub (Lin.sub y x) (Lin.const 1)])],
+          sr.1 = false ∧ (∀ r ∈ sr.2, r.holds ρa) ∧ (∀ r ∈ sr.2, r.holds ρb) := by
+        by_cases l : ev ρa y < ev ρa x
+        · refine ⟨_, List.mem_cons_self .., rfl, ?_, ?_⟩ <;>
+            (intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr
+             rw [holds_iff]; simp only [ev_sub, ev_const]; omega)
+        · refine ⟨_, List.mem_cons_of_mem _ (List.mem_cons_self ..), rfl, ?_, ?_⟩ <;>
+            (intro r hr; simp only [List.mem_cons, List.mem_nil_iff, or_false] at hr; subst hr
+             rw [holds_iff]; simp only [ev_sub, ev_const]; omega)
+      cases hl : r1.line r1.next with
+      | none => simp only [hl] at e2; exact (need_ok e2).elim
+      | some it =>
+        simp only [hl] at e2
+        cases it with
+        | tag nm k =>
+          simp only at e2
+          split at e2
+          · injection e2 with hno
+            injection hno with hno _
+            subst hno
+            have hnea : SFact.holds ctx a0 ρa (.neq (Lin.sub x y)) := by simp only [SFact.holds, ev_sub]; omega
+            have hneb : SFact.holds ctx b0 ρb (.neq (Lin.sub x y)) := by simp only [SFact.holds, ev_sub]; omega
+            refine ⟨{ s with spec := .neq (Lin.sub x y) :: s.spec },
+              List.mem_append_right _ (by simp),
+              ⟨Agree.refl _ _, Nat.le_refl _, Ha.withSpec _ hnea, wf.withSpec _ (bounded_sub hb.1 hb.2)⟩,
+              ⟨Agree.refl _ _, Nat.le_refl _, Hb.withSpec _ hneb, wf.withSpec _ (bounded_sub hb.1 hb.2)⟩,
+              rfl, rfl, rfl⟩
+          · obtain ⟨s', m', ca', cb', q', zf', cf'⟩ := ways_two_sound Ha Hb wf false _ e2 hbd hex
+            exact ⟨s', List.mem_append_right _ m', ca', cb', q', zf', cf'⟩
+        | _ =>
+          simp only at e2
+          obtain ⟨s', m', ca', cb', q', zf', cf'⟩ := ways_two_sound Ha Hb wf false _ e2 hbd hex
+          exact ⟨s', List.mem_append_right _ m', ca', cb', q', zf', cf'⟩
+
 theorem symInstr_two_sound {ctx : Ctx} {p : Program} {a0 b0 : State} (Ea : Setting ctx p a0) (Eb : Setting ctx p b0)
     {s : Sym} {i : Instr} {nexts : List (Sym × Next)} {items rest : Items}
     {ρa ρb : Nat → Int} {sta stb : State}
@@ -2169,10 +2363,7 @@ theorem symInstr_two_sound {ctx : Ctx} {p : Program} {a0 b0 : State} (Ea : Setti
         | false => simp only [hq, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
         | true =>
           simp only [hq, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
-          cases hfw : flagWays (if flag == "zf" then s.zf else s.cf) with
-          | none => simp only [hfw] at h; exact (refuse_ok h).elim
-          | some w =>
-            simp only [hfw] at h
+          ·
             have hmka : (if flag == "zf" then sta.marks.zf else sta.marks.cf) = false := by
               cases hf : (flag == "zf") with
               | true => simp only [hf, ↓reduceIte] at hq ⊢; exact Ma.zf hq
@@ -2202,9 +2393,8 @@ theorem symInstr_two_sound {ctx : Ctx} {p : Program} {a0 b0 : State} (Ea : Setti
               cases hf : (flag == "zf") with
               | true => simp only [hf, ↓reduceIte] at hq ⊢; exact FE.1 hq
               | false => simp only [hf, Bool.false_eq_true, ↓reduceIte] at hq ⊢; exact FE.2 hq
-            obtain ⟨hb, hex⟩ := flagWays_two_spec hfw hfa hfb hbd hfe
             obtain ⟨s', ms', ca', cb', hsq', hszf', hscf'⟩ :=
-              ways_two_sound Hsa Hsb wf (if flag == "zf" then sta.zf else sta.cf) w h hb hex
+              jumpWays_two_sound Hsa Hsb wf (if flag == "zf" then sta.zf else sta.cf) h hfa hfb hbd hfe
             have hqsa : quietStmt i.bind (started p i sta) (.jump target (some (flag, want))) = true := by
               simp only [quietStmt, qaa, qba, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
               exact hmka

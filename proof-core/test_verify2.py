@@ -141,6 +141,114 @@ class TestVerify2(unittest.TestCase):
     def test_02_dual_verify_arm64(self):
         self._run_dual("arm64")
 
+    def test_03_neq_dispatch_both_targets(self):
+        """Chained unsorted equality dispatch uses `t neq 0` (linear paths) and passes both verifiers."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        import odec, prove
+        src = """
+def op_code(x) {
+    if x == 149 then 1
+    else if x == 5 then 2
+    else if x == 183 then 3
+    else if x == 7 then 4
+    else if x == 23 then 5
+    else if x == 85 then 6
+    else 0
+}
+
+fn dispatch6(x: number)
+    requires x < 256
+    returns op_code(x)
+    trace depends on x
+    stack 0
+{
+    for x86_64 {
+        cmp rdi, 149
+        je @c1
+        cmp rdi, 5
+        je @c2
+        cmp rdi, 183
+        je @c3
+        cmp rdi, 7
+        je @c4
+        cmp rdi, 23
+        je @c5
+        cmp rdi, 85
+        je @c6
+        mov rax, 0
+        ret
+    @c1:
+        mov rax, 1
+        ret
+    @c2:
+        mov rax, 2
+        ret
+    @c3:
+        mov rax, 3
+        ret
+    @c4:
+        mov rax, 4
+        ret
+    @c5:
+        mov rax, 5
+        ret
+    @c6:
+        mov rax, 6
+        ret
+    }
+    for arm64 {
+        cmp x0, 149
+        b.eq @c1
+        cmp x0, 5
+        b.eq @c2
+        cmp x0, 183
+        b.eq @c3
+        cmp x0, 7
+        b.eq @c4
+        cmp x0, 23
+        b.eq @c5
+        cmp x0, 85
+        b.eq @c6
+        mov x0, 0
+        ret
+    @c1:
+        mov x0, 1
+        ret
+    @c2:
+        mov x0, 2
+        ret
+    @c3:
+        mov x0, 3
+        ret
+    @c4:
+        mov x0, 4
+        ret
+    @c5:
+        mov x0, 5
+        ret
+    @c6:
+        mov x0, 6
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "disp.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                tab, st_p, pf_p, st_txt, pf_txt = _extract_stmt_and_proof(src_p, target, d)
+                self.assertIn("t neq 0", pf_txt)
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                self.assertTrue(r1.stdout.startswith("shown"))
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertTrue(r2.stdout.startswith("shown"))
+
 
 if __name__ == "__main__":
     unittest.main()

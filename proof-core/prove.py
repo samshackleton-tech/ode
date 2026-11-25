@@ -320,9 +320,10 @@ class NoPlace(Exception): pass          # a path looped back to the same instruc
 
 
 def fn_statement_info(statement_path, symbol, reg_list):
-    """Extract (trace_exprs, instrs) for `symbol` from a statement file.
-    `instrs`: list of (pc, next_pc, op, regs_used) in statement order."""
-    trace_exprs, instrs, cur = [], [], None
+    """Extract (trace_exprs, instrs, written_at) for `symbol` from a statement file.
+    `instrs`: list of (pc, next_pc, op, regs_used) in statement order.
+    `written_at`: list of (pc, next_pc, op, target_or_none, dest_regs) for loop keep pre-seeding."""
+    trace_exprs, instrs, raw_ins, cur = [], [], [], None
     reg_set = set(reg_list)
     with open(statement_path) as f:
         for raw in f:
@@ -336,12 +337,47 @@ def fn_statement_info(statement_path, symbol, reg_list):
                 trace_exprs.append(line[len("traceexpr "):].strip())
             elif parts[0] == "i" and len(parts) >= 4:
                 pc, nxt, op = int(parts[1]), int(parts[2]), parts[3]
-                regs = []
+                regs, dests, target = [], set(), None
                 for tok in parts[4:]:
-                    v = (tok.split("=", 1)[1] if "=" in tok else tok).strip("().")
+                    if "=" in tok:
+                        k, v = tok.split("=", 1)
+                        v = v.strip("().")
+                        if k == "D" and v in reg_set: dests.add(v)
+                        elif k == "I":
+                            try: target = int(v)
+                            except ValueError: pass
+                    else:
+                        v = tok.strip("().")
                     if v in reg_set and v not in regs: regs.append(v)
+                if op == "bl" and "x30" in reg_set: dests.add("x30")
                 instrs.append((pc, nxt, op, regs))
-    return trace_exprs, instrs
+                raw_ins.append((pc, nxt, op, target, dests))
+    return trace_exprs, instrs, raw_ins
+
+
+def loop_written_regs(raw_ins, at, reg_list):
+    """Registers modified on instructions that can reach `at` via a back-edge (excluding stack pointer)."""
+    preds = {}
+    for pc, nxt, op, target, _ in raw_ins:
+        if op not in ("ret", "jmp", "b", "tail_call"):
+            preds.setdefault(nxt, []).append(pc)
+        if target is not None:
+            preds.setdefault(target, []).append(pc)
+    # Backward BFS from `at` restricted to pc >= at (loop body)
+    seen, stack = set(), [p for p in preds.get(at, ()) if p >= at]
+    while stack:
+        u = stack.pop()
+        if u in seen or u < at: continue
+        seen.add(u)
+        for p in preds.get(u, ()):
+            if p >= at and p not in seen:
+                stack.append(p)
+    written = set()
+    for pc, _, _, _, dests in raw_ins:
+        if pc in seen:
+            written |= dests
+    written.discard("rsp"); written.discard("sp")
+    return [r for r in reg_list if r not in written]
 
 
 class Prover:
@@ -465,6 +501,29 @@ class Prover:
                     proof = proof + ["t live"]
                 else:
                     proof = proof + ["t dead"] + proof_text(p, facts, raw_facts)
+            elif what == "branch_neq":
+                # False branch of `equal a b`: `goals[0]` is `a - b`.
+                # If `a > b` or `a < b` is already impossible (e.g. `i <= n` or `x >= 0`), take the
+                # stronger inequality branch (`a < b` or `a > b`); otherwise emit `t neq 0` to keep
+                # ONE symbolic state recording `a != b` instead of splitting into 2^N paths!
+                d_nums = [int(x) for x in raw_goals[0].split()]
+                gt_nums = [d_nums[0] - 1] + d_nums[1:]
+                lt_nums = [-d_nums[0] - 1] + [-x for x in d_nums[1:]]
+                gt_lin, lt_lin = lin(gt_nums), lin(lt_nums)
+                gt_raw = " ".join(str(x) for x in gt_nums)
+                lt_raw = " ".join(str(x) for x in lt_nums)
+                p_gt = refutation([gt_lin] + facts, 0) if gt_lin.c else None
+                if p_gt is not None:
+                    proof = proof + ["t dead"] + proof_text(p_gt, [gt_lin] + facts, [gt_raw] + raw_facts)
+                elif lt_lin.c and refutation([lt_lin] + facts, 0) is not None:
+                    proof = proof + ["t live"]
+                elif not gt_lin.c or not lt_lin.c:
+                    proof = proof + ["t neq 0"]
+                else:
+                    done = self.solve(proof + ["t neq 0"])
+                    if done is not None:
+                        return done
+                    proof = proof + ["t live"]
             elif what == "below":                              # is a - b below zero: `lt`, or not: `ge`
                 d = goals[0]
                 if refutation(facts + [d]): proof = proof + ["t lt"]
@@ -536,7 +595,15 @@ def prove(spec_text, targets, statement_out, out):
     for at, (obj, symbol) in enumerate(functions):
         later = [s for _, s in functions[at + 1:]]
         keep, marked, marked_result, runs = {}, {}, {}, 0
-        trace_exprs, instrs = fn_statement_info(statement_out, symbol, reg_list)
+        trace_exprs, instrs, raw_ins = fn_statement_info(statement_out, symbol, reg_list)
+        # Pre-seed `keep` for each `place` by excluding registers written in its loop body, avoiding O(R) retries.
+        preseeded = False
+        for pline in places_of[symbol].splitlines():
+            pm = re.fullmatch(r"\s*place \+(0x[0-9a-fA-F]+) \{", pline)
+            if pm:
+                pat = int(pm.group(1), 16)
+                keep[pat] = loop_written_regs(raw_ins, pat, reg_list)
+                preseeded = True
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
             p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
@@ -566,13 +633,20 @@ def prove(spec_text, targets, statement_out, out):
                 with open(out, "w") as f: f.write("\n".join(p.lines + p.last_proof) + "\n")
                 raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
             if proof is None:
+                if preseeded:
+                    # Fallback in case a loop saved and restored a register across the loop body.
+                    keep, preseeded = {}, False
+                    runs += p.runs
+                    p.close()
+                    continue
                 # Preserve partial proof so callers can run `locate()` on the exact point of failure.
                 with open(out, "w") as f: f.write("\n".join(p.lines + p.last_proof) + "\n")
                 raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
-            k = len(proof) - 1
-            while k >= 0:                              # a use of a definition opened to no purpose is taken out
-                if proof[k].startswith("t open") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]
-                k -= 1
+            if len(proof) < 200:
+                k = len(proof) - 1
+                while k >= 0:                              # a use of a definition opened to no purpose is taken out
+                    if proof[k].startswith("t open") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]
+                    k -= 1
             done = p.lines + proof
             numbers[symbol] = (runs + p.runs, len(proof))
             p.close()
