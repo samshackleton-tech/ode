@@ -1,0 +1,92 @@
+// Full RFC 1950 Adler-32 checksum for x86-64 and AArch64 (unified `.ode`, `stack 0`).
+use a32 = "adler32_spec.ode"
+
+fn adler32(input: len bytes, len: number)
+    returns a32.adler32(input)
+    trace depends on input, len
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi, n = rsi, idx = rcx, sa = r8, sb = r9, tmp = rdx, res = rax
+
+        idx := 0
+        sa := 1
+        sb := 0
+        place {
+            name i = idx
+            name a = sa
+            name b = sb
+            fact 0 <= i
+            fact i <= len
+            fact a == a32.s1(input)[i]
+            fact b == a32.s2(input)[i]
+            fact a < 65521
+            fact b < 65521
+            decreases len - i
+        }
+    @loop:
+        cmp idx, n
+        jae @done
+        mov tmp, base
+        add tmp, idx
+        movzx edx, byte ptr [tmp]
+        add sa, tmp
+        cmp sa, 65521
+        jb @s1_ok
+        sub sa, 65521
+    @s1_ok:
+        add sb, sa
+        cmp sb, 65521
+        jb @s2_ok
+        sub sb, 65521
+    @s2_ok:
+        add idx, 1
+        jmp @loop
+    @done:
+        mov res, sb
+        shl res, 16
+        add res, sa
+        ret
+    }
+    for arm64 {
+        reg base = x0, n = x1, idx = x2, sa = x3, sb = x4, modv = x5, addr = x6, bw = w7, bx = x7
+
+        idx := 0
+        sa := 1
+        sb := 0
+        modv := 65521
+        place {
+            name i = idx
+            name a = sa
+            name b = sb
+            fact 0 <= i
+            fact i <= len
+            fact a == a32.s1(input)[i]
+            fact b == a32.s2(input)[i]
+            fact a < 65521
+            fact b < 65521
+            decreases len - i
+        }
+    @loop:
+        cmp idx, n
+        b.hs @done
+        add addr, base, idx
+        ldrb bw, [addr, 0]
+        add sa, sa, bx
+        cmp sa, modv
+        b.lo @s1_ok
+        sub sa, sa, modv
+    @s1_ok:
+        add sb, sb, sa
+        cmp sb, modv
+        b.lo @s2_ok
+        sub sb, sb, modv
+    @s2_ok:
+        add idx, idx, 1
+        b @loop
+    @done:
+        lsl x0, sb, 16
+        add x0, x0, sa
+        ret
+    }
+}

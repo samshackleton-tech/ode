@@ -1,0 +1,5 @@
+// RFC 1950 section 8.2: Adler-32 checksum specification.
+sequence s1(bytes) { s[0] = 1   s[i + 1] = (s[i] + bytes[i]) % 65521 }
+sequence s2(bytes) { s[0] = 0   s[i + 1] = (s[i] + s1(bytes)[i + 1]) % 65521 }
+
+def adler32(bytes) { 65536 * s2(bytes)[len(bytes)] + s1(bytes)[len(bytes)] }
