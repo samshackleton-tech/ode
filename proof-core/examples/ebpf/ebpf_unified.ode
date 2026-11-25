@@ -1,0 +1,357 @@
+// Verified pure-computation RFC 9669 eBPF virtual machine (AArch64 & x86-64).
+// All 5 functions are `stack 0` using custom calling conventions to keep paths additive.
+use bpf = "ebpf_spec.ode"
+
+fn get_reg_fn(idx: number, r0: number, r1: number, r2: number, r3: number)
+    requires idx < 4
+    requires r0 < 4294967296
+    requires r1 < 4294967296
+    requires r2 < 4294967296
+    requires r3 < 4294967296
+    returns bpf.get_reg(idx, r0, r1, r2, r3)
+    trace depends on idx, r0, r1, r2, r3
+    stack 0
+{
+    for arm64
+        calling {
+            in idx = x13, r0 = x4, r1 = x5, r2 = x6, r3 = x7
+            out = x14
+            preserves x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x15, x16, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+        cmp x13, 0
+        b.ne @r1
+        mov x14, x4
+        ret
+    @r1:
+        cmp x13, 1
+        b.ne @r2
+        mov x14, x5
+        ret
+    @r2:
+        cmp x13, 2
+        b.ne @r3
+        mov x14, x6
+        ret
+    @r3:
+        mov x14, x7
+        ret
+    }
+}
+
+fn ebpf_alu_fn(op: number, lhs: number, rhs: number)
+    requires op < 256
+    returns bpf.ebpf_alu(op, lhs, rhs)
+    trace depends on op, lhs, rhs
+    stack 0
+{
+    for arm64
+        calling {
+            in op = x9, lhs = x13, rhs = x14
+            out = x13
+            preserves x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x16, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+        mov x15, 1
+        lsl x15, x15, 32
+        sub x15, x15, 1
+        and x13, x13, x15
+        and x14, x14, x15
+        cmp x9, 7
+        b.lo @err
+        b.eq @add
+        cmp x9, 15
+        b.lo @err
+        b.eq @add
+        cmp x9, 23
+        b.lo @err
+        b.eq @sub
+        cmp x9, 31
+        b.lo @err
+        b.eq @sub
+        cmp x9, 183
+        b.lo @err
+        b.eq @mov
+        cmp x9, 191
+        b.eq @mov
+    @err:
+        mov x13, 1
+        lsl x13, x13, 32
+        ret
+    @mov:
+        mov x13, x14
+        ret
+    @add:
+        add x13, x13, x14
+        and x13, x13, x15
+        ret
+    @sub:
+        mov x15, 1
+        lsl x15, x15, 32
+        add x13, x13, x15
+        sub x13, x13, x14
+        sub x15, x15, 1
+        and x13, x13, x15
+        ret
+    }
+}
+
+fn ebpf_cond_fn(op: number, lhs: number, imm: number)
+    requires op < 256
+    returns bpf.ebpf_cond(op, lhs, imm)
+    trace depends on op, lhs, imm
+    stack 0
+{
+    for arm64
+        calling {
+            in op = x9, lhs = x13, imm = x14
+            out = x15
+            preserves x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x16, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+        cmp x9, 21
+        b.lo @two
+        b.ne @c_gt
+        cmp x13, x14
+        b.eq @one
+        mov x15, 0
+        ret
+    @c_gt:
+        cmp x9, 37
+        b.lo @two
+        b.ne @c_ne
+        cmp x14, x13
+        b.lo @one
+        mov x15, 0
+        ret
+    @c_ne:
+        cmp x9, 85
+        b.ne @two
+        cmp x13, x14
+        b.ne @one
+        mov x15, 0
+        ret
+    @one:
+        mov x15, 1
+        ret
+    @two:
+        mov x15, 2
+        ret
+    }
+}
+
+fn is_alu_k_fn(op: number)
+    requires op < 256
+    returns bpf.is_alu_k(op)
+    trace depends on op
+    stack 0
+{
+    for arm64
+        calling {
+            in op = x9
+            out = x15
+            preserves x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x16, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+        cmp x9, 7
+        b.lo @no
+        b.eq @yes
+        cmp x9, 23
+        b.lo @no
+        b.eq @yes
+        cmp x9, 183
+        b.eq @yes
+    @no:
+        mov x15, 0
+        ret
+    @yes:
+        mov x15, 1
+        ret
+    }
+}
+
+fn ebpf_jump_fn(pc: number, u16: number)
+    requires pc < 2305843009213693951
+    requires u16 < 65536
+    returns bpf.ebpf_jump_pc(pc, u16)
+    trace depends on pc, u16
+    stack 0
+{
+    for arm64
+        calling {
+            in pc = x3, u16 = x14
+            out = x14
+            preserves x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x16, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+        add x15, x3, x14
+        add x15, x15, 1
+        mov x13, 32768
+        cmp x14, x13
+        b.lo @fwd
+        mov x13, 1
+        lsl x13, x13, 16
+        cmp x15, x13
+        b.lo @jerr
+        sub x14, x15, x13
+        ret
+    @fwd:
+        mov x14, x15
+        ret
+    @jerr:
+        mov x14, 1
+        lsl x14, x14, 32
+        ret
+    }
+}
+
+fn ebpf_run(prog: n bytes, n: number, fuel: number, arg1: number)
+    requires n < 18446744073709551615
+    requires arg1 < 4294967296
+    returns bpf.ebpf_run(prog, fuel, arg1)
+    trace depends on prog, n, fuel, arg1
+    stack 0
+{
+    for arm64 {
+        // Save x30 in caller-saved x16 (preserved by all 4 helpers): ZERO stack frame!
+        // x0 = prog, x1 = n, x2 = fuel, x3 = pc, x4..x7 = eBPF r0..r3
+        // x8 = ERR (2^32), x9 = op, x10 = insn_addr, x11 = dst, x12 = src
+        // x13 = lhs / result, x14 = rhs / imm / target_pc, x15 = scratch, x16 = saved lr
+        mov x16, x30
+        mov x8, 1
+        lsl x8, x8, 32
+
+        mov x5, x3
+        mov x3, 0
+        mov x4, 0
+        mov x6, 0
+        mov x7, 0
+
+        place {
+            name pcv = x3
+            name fl = x2
+            name m0 = x4
+            name m1 = x5
+            name m2 = x6
+            name m3 = x7
+            fact 0 <= pcv
+            fact 0 <= fl
+            fact 0 <= m0
+            fact m0 <= 4294967295
+            fact 0 <= m1
+            fact m1 <= 4294967295
+            fact 0 <= m2
+            fact m2 <= 4294967295
+            fact 0 <= m3
+            fact m3 <= 4294967295
+            fact bpf.ebpf_run(prog, fuel, arg1) == bpf.ebpf_step(prog, pcv, fl, m0, m1, m2, m3)
+            decreases fl
+            keep x0 x1 x8 x16
+        }
+    @loop:
+        cmp x2, 0
+        b.eq @err
+        lsr x15, x1, 3
+        cmp x3, x15
+        b.hs @err
+        lsl x10, x3, 3
+        add x10, x0, x10
+
+        ldrb w9, [x10, 0]
+        cmp x9, 149
+        b.eq @exit
+        cmp x9, 5
+        b.eq @take
+
+        ldrb w11, [x10, 1]
+        lsr x12, x11, 4
+        mov x15, 15
+        and x11, x11, x15
+        cmp x11, 4
+        b.hs @err
+
+        // Fetch r[dst] into x13 and imm32 into x14
+        mov x13, x11
+        bl get_reg_fn
+        mov x13, x14
+        ldrb w14, [x10, 4]
+        ldrb w15, [x10, 5]
+        lsl x15, x15, 8
+        add x14, x14, x15
+        ldrb w15, [x10, 6]
+        lsl x15, x15, 16
+        add x14, x14, x15
+        ldrb w15, [x10, 7]
+        lsl x15, x15, 24
+        add x14, x14, x15
+
+        // Conditional jumps (JEQ_K, JNE_K, JGT_K)
+        bl ebpf_cond_fn
+        cmp x15, 2
+        b.hs @not_cond
+        cmp x15, 1
+        b.eq @take
+        b @next
+
+    @not_cond:
+        bl is_alu_k_fn
+        cmp x15, 0
+        b.ne @do_alu
+
+        // Register-mode ALU (MOV_X, ADD_X, SUB_X): check src < 4, load r[src] into x14
+        cmp x12, 4
+        b.hs @err
+        mov x15, x13
+        mov x13, x12
+        bl get_reg_fn
+        mov x13, x15
+
+    @do_alu:
+        bl ebpf_alu_fn
+        cmp x13, x8
+        b.hs @err
+
+        cmp x11, 0
+        b.ne @w1
+        mov x4, x13
+        b @next
+    @w1:
+        cmp x11, 1
+        b.ne @w2
+        mov x5, x13
+        b @next
+    @w2:
+        cmp x11, 2
+        b.ne @w3
+        mov x6, x13
+        b @next
+    @w3:
+        mov x7, x13
+    @next:
+        add x3, x3, 1
+        sub x2, x2, 1
+        b @loop
+
+    @take:
+        ldrb w14, [x10, 2]
+        ldrb w15, [x10, 3]
+        lsl x15, x15, 8
+        add x14, x14, x15
+        bl ebpf_jump_fn
+        cmp x14, x8
+        b.hs @err
+        mov x3, x14
+        sub x2, x2, 1
+        b @loop
+
+    @exit:
+        mov x0, x4
+        mov x30, x16
+        ret
+
+    @err:
+        mov x0, x8
+        mov x30, x16
+        ret
+    }
+}

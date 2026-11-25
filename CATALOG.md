@@ -76,7 +76,7 @@ Ode specification once Wave 1 and Wave 2 patterns are proven in the Spec-First A
 | Target | Category | Why It Matters | Status |
 |---|---|---|---|
 | **Strict Hex encoder & decoder** | Encoding | Canonical RFC 4648 two-char hex decode & zero-branch encode | **`shown`** (`hex_decode_byte` x86-64 & AArch64) |
-| **Constant-time byte equality & conditional select** | Crypto utility | Core building blocks (`trace depends on len` / nothing) | `planned` |
+| **Constant-time byte equality & conditional select** | Crypto utility | Core building blocks (`trace depends on len` / nothing) | **`shown`** (`ct_bytes_eq` x86-64 & AArch64, `stack 0`, `trace depends on n`) |
 | **URL percent-decoder & JSON string unescaper** | Text parser | Frequent parser-differential and smuggling vulnerabilities | `planned` |
 | **HTTP/1.1 chunk-size & header-line parser** | Network parser | Request-smuggling defense | `planned` |
 | **TLS record header & bounds validator** | Network parser | Heartbleed-class bounds guarantee | `planned` |
@@ -106,7 +106,7 @@ Each row below lists a pure-computation interpreter or virtual machine: a functi
 
 | Target | Category | Why It Matters | Status |
 |---|---|---|---|
-| **eBPF / cBPF interpreter & bytecode verifier** | Systems VM | Fixed-width register VM with bounded jumps and explicit memory-region checks; high-value attack surface in kernels and sandboxes | `planned` |
+| **eBPF / cBPF interpreter & bytecode verifier** | Systems VM | Fixed-width register VM with bounded jumps and explicit memory-region checks; high-value attack surface in kernels and sandboxes | **`shown`** (RFC 9669 eBPF core VM on AArch64: 11 opcodes, 6 `stack 0` fns, 192 insns, `s2or2kdio5y5yqajr23uiowr7ycsb5qklcamvqflm3bejfojiczq`; `examples/ebpf/`) |
 | **WebAssembly (Wasm) core interpreter** | Portable VM | Pure numeric and linear-memory execution step over a caller-supplied memory slice, with no host imports | `planned` |
 | **Regex VM (Thompson NFA / PikeVM)** | Text engine | Linear-time regular-expression matching with proved buffer bounds and no catastrophic backtracking | `planned` |
 | **Small stack & register VMs** | Scripting / query | Bitcoin Script, Forth inner interpreter, SQLite VDBE expression evaluator, or a small Scheme bytecode VM | `planned` |

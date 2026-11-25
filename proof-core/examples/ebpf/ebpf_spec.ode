@@ -1,0 +1,114 @@
+// Pure-computation RFC 9669 eBPF bytecode interpreter specification.
+//
+// Each instruction is 8 bytes (little-endian), exact IETF RFC 9669 encoding:
+//   byte 0:    opcode
+//   byte 1:    (src << 4) | dst   (registers 0..3)
+//   bytes 2-3: 16-bit signed jump offset (two's complement; relative to pc + 1)
+//   bytes 4-7: 32-bit unsigned immediate (little-endian; values < 2^32)
+//
+// Supported RFC 9669 opcodes:
+//   0xB7  MOV64_K   r[dst] = imm
+//   0xBF  MOV64_X   r[dst] = r[src]
+//   0x07  ADD64_K   r[dst] = (r[dst] + imm) % 4294967296
+//   0x0F  ADD64_X   r[dst] = (r[dst] + r[src]) % 4294967296
+//   0x17  SUB64_K   r[dst] = (r[dst] + 4294967296 - imm) % 4294967296
+//   0x1F  SUB64_X   r[dst] = (r[dst] + 4294967296 - r[src]) % 4294967296
+//   0x05  JA        pc = pc + 1 + off
+//   0x15  JEQ_K     if r[dst] == imm then pc = pc + 1 + off else pc = pc + 1
+//   0x55  JNE_K     if r[dst] != imm then pc = pc + 1 + off else pc = pc + 1
+//   0x25  JGT_K     if r[dst] >  imm then pc = pc + 1 + off else pc = pc + 1
+//   0x95  EXIT      return r0
+//
+// Returns r0 on EXIT; returns ERR (4294967296) on out-of-fuel, out-of-bounds pc,
+// invalid register (>= 4), or unsupported opcode.
+
+const ERR = 4294967296
+
+def get_reg(idx, r0, r1, r2, r3) {
+    if idx == 0 then r0
+    else if idx == 1 then r1
+    else if idx == 2 then r2
+    else r3
+}
+
+def u16_le(prog, off) {
+    prog[off] + 256 * prog[off + 1]
+}
+
+def u32_le(prog, off) {
+    prog[off] + 256 * prog[off + 1] + 65536 * prog[off + 2] + 16777216 * prog[off + 3]
+}
+
+// Pure 32-bit ALU result for MOV (183/191), ADD (7/15), SUB (23/31); returns ERR otherwise.
+def ebpf_alu(op, lhs, rhs) {
+    if op == 183 then rhs % 4294967296
+    else if op == 191 then rhs % 4294967296
+    else if op == 7 then ((lhs % 4294967296) + (rhs % 4294967296)) % 4294967296
+    else if op == 15 then ((lhs % 4294967296) + (rhs % 4294967296)) % 4294967296
+    else if op == 23 then ((lhs % 4294967296) + 4294967296 - (rhs % 4294967296)) % 4294967296
+    else if op == 31 then ((lhs % 4294967296) + 4294967296 - (rhs % 4294967296)) % 4294967296
+    else ERR
+}
+
+// Branch predicate for JEQ_K (21), JNE_K (85), JGT_K (37): returns 1 (taken), 0 (not taken), 2 (invalid).
+def ebpf_cond(op, lhs, imm) {
+    if op == 21 then (if lhs == imm then 1 else 0)
+    else if op == 85 then (if lhs != imm then 1 else 0)
+    else if op == 37 then (if lhs > imm then 1 else 0)
+    else 2
+}
+
+// Returns 1 for immediate-mode ALU opcodes (ADD_K=7, SUB_K=23, MOV_K=183), 0 otherwise.
+def is_alu_k(op) {
+    if op == 7 then 1
+    else if op == 23 then 1
+    else if op == 183 then 1
+    else 0
+}
+
+// Compute next pc for a taken relative jump (16-bit signed offset in u16), or ERR on underflow.
+def ebpf_jump_pc(pc, u16) {
+    if u16 >= 32768 then
+        if pc + 1 + u16 < 65536 then ERR
+        else pc + 1 + u16 - 65536
+    else pc + 1 + u16
+}
+
+def ebpf_step(prog, pc, fuel, r0, r1, r2, r3) {
+    if fuel == 0 then ERR
+    else if 8 * pc + 8 > len(prog) then ERR
+    else if prog[8 * pc] == 149 then r0
+    else if prog[8 * pc] == 5 then
+        if ebpf_jump_pc(pc, prog[8 * pc + 2] + 256 * prog[8 * pc + 3]) >= ERR then ERR
+        else ebpf_step(prog, ebpf_jump_pc(pc, prog[8 * pc + 2] + 256 * prog[8 * pc + 3]), fuel - 1, r0, r1, r2, r3)
+    else if prog[8 * pc + 1] % 16 >= 4 then ERR
+    else if ebpf_cond(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]) < 2 then
+        if ebpf_cond(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]) == 1 then
+            if ebpf_jump_pc(pc, prog[8 * pc + 2] + 256 * prog[8 * pc + 3]) >= ERR then ERR
+            else ebpf_step(prog, ebpf_jump_pc(pc, prog[8 * pc + 2] + 256 * prog[8 * pc + 3]), fuel - 1, r0, r1, r2, r3)
+        else ebpf_step(prog, pc + 1, fuel - 1, r0, r1, r2, r3)
+    else if is_alu_k(prog[8 * pc]) != 0 then
+        if ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]) >= ERR then ERR
+        else if prog[8 * pc + 1] % 16 == 0 then
+            ebpf_step(prog, pc + 1, fuel - 1, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]), r1, r2, r3)
+        else if prog[8 * pc + 1] % 16 == 1 then
+            ebpf_step(prog, pc + 1, fuel - 1, r0, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]), r2, r3)
+        else if prog[8 * pc + 1] % 16 == 2 then
+            ebpf_step(prog, pc + 1, fuel - 1, r0, r1, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]), r3)
+        else
+            ebpf_step(prog, pc + 1, fuel - 1, r0, r1, r2, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), prog[8 * pc + 4] + 256 * prog[8 * pc + 5] + 65536 * prog[8 * pc + 6] + 16777216 * prog[8 * pc + 7]))
+    else if prog[8 * pc + 1] / 16 >= 4 then ERR
+    else if ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), get_reg(prog[8 * pc + 1] / 16, r0, r1, r2, r3)) >= ERR then ERR
+    else if prog[8 * pc + 1] % 16 == 0 then
+        ebpf_step(prog, pc + 1, fuel - 1, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), get_reg(prog[8 * pc + 1] / 16, r0, r1, r2, r3)), r1, r2, r3)
+    else if prog[8 * pc + 1] % 16 == 1 then
+        ebpf_step(prog, pc + 1, fuel - 1, r0, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), get_reg(prog[8 * pc + 1] / 16, r0, r1, r2, r3)), r2, r3)
+    else if prog[8 * pc + 1] % 16 == 2 then
+        ebpf_step(prog, pc + 1, fuel - 1, r0, r1, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), get_reg(prog[8 * pc + 1] / 16, r0, r1, r2, r3)), r3)
+    else
+        ebpf_step(prog, pc + 1, fuel - 1, r0, r1, r2, ebpf_alu(prog[8 * pc], get_reg(prog[8 * pc + 1] % 16, r0, r1, r2, r3), get_reg(prog[8 * pc + 1] / 16, r0, r1, r2, r3)))
+}
+
+def ebpf_run(prog, fuel, arg1) {
+    ebpf_step(prog, 0, fuel, 0, arg1, 0, 0)
+}
