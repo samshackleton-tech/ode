@@ -1,0 +1,433 @@
+{
+  "run_id": "suite-v3",
+  "prereg_commit": "bca36172332a0c9a2ffcee4009fba475a27a7c2e",
+  "finished_utc": "2026-11-25T22:21:08Z",
+  "tasks": [
+    "ebpf",
+    "ct_eq"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 13,
+  "total_cells": 16,
+  "verify2_passes": 9,
+  "native_passes": 13,
+  "total_rounds": 42,
+  "total_cost_usd": 12.4115,
+  "failure_categories": {
+    "arith_need_compare": 10,
+    "compile_or_parse_error": 6,
+    "output_token_limit": 6,
+    "prover_timeout_120s": 6,
+    "kept_reg_refusal": 1
+  },
+  "cells": [
+    {
+      "task": "ct_eq",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.1333,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 80,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.091,
+        "pack_s": 0.363,
+        "proof_bytes": 5560
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.1921,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 21,
+        "code_bytes": 87,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.094,
+        "pack_s": 0.293,
+        "proof_bytes": 3451
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.032,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 80,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.09,
+        "pack_s": 0.358,
+        "proof_bytes": 5560
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0454,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 21,
+        "code_bytes": 85,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.092,
+        "pack_s": 0.337,
+        "proof_bytes": 3451
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0676,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 80,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.091,
+        "pack_s": 0.361,
+        "proof_bytes": 5560
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.084,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 21,
+        "code_bytes": 87,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.093,
+        "pack_s": 0.335,
+        "proof_bytes": 3451
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.2136,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 80,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.091,
+        "pack_s": 0.347,
+        "proof_bytes": 5560
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_eq",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.2698,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 5/5",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 21,
+        "code_bytes": 87,
+        "contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
+        "verdict": "shown",
+        "audit_s": 0.093,
+        "pack_s": 0.297,
+        "proof_bytes": 3451
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.9944,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 5,
+        "instructions": 203,
+        "code_bytes": 848,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.264,
+        "pack_s": 32.459,
+        "proof_bytes": 115898
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.9388,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 246,
+        "code_bytes": 918,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.318,
+        "pack_s": 9.94,
+        "proof_bytes": 169249
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 0.9827,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "arith_need_compare"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 1.0166,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "arith_need_compare",
+        "arith_need_compare",
+        "compile_or_parse_error",
+        "arith_need_compare",
+        "arith_need_compare",
+        "compile_or_parse_error"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "total_cost_usd": 3.9624,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "prover_timeout_120s",
+        "output_token_limit",
+        "output_token_limit",
+        "output_token_limit",
+        "output_token_limit"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 5,
+      "total_cost_usd": 2.13,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 198,
+        "code_bytes": 718,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.221,
+        "pack_s": 5.856,
+        "proof_bytes": 163811
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "arith_need_compare",
+        "output_token_limit",
+        "output_token_limit",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 2,
+      "rounds_to_pass": 2,
+      "total_cost_usd": 0.7834,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 178,
+        "code_bytes": 740,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.237,
+        "pack_s": 9.983,
+        "proof_bytes": 247542
+      },
+      "round_categories": [
+        "kept_reg_refusal",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.5654,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 188,
+        "code_bytes": 677,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.197,
+        "pack_s": 4.903,
+        "proof_bytes": 144616
+      },
+      "round_categories": [
+        "passed"
+      ]
+    }
+  ]
+}
