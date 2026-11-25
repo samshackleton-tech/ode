@@ -1,0 +1,83 @@
+// Constant-time byte-slice equality (`stack 0`, `trace depends on n` only).
+use eq = "hash_eq_ct_spec.ode"
+
+fn ct_bytes_eq(a: n bytes, b: n bytes, n: number)
+    returns eq.ct_bytes_eq(a, b)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        reg pa = rdi, pb = rsi, len_r = rdx, idx = rcx, diff = r10, va = rax, vb = r9, addr = r8
+
+        idx := 0
+        diff := 0
+        place {
+            name i = idx
+            name d = diff
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= d
+            fact d <= 1
+            fact eq.ct_bytes_eq(a, b) == eq.eq_from(a, b, i, d)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        jae @done
+        mov addr, pa
+        add addr, idx
+        movzx eax, byte ptr [addr]
+        mov addr, pb
+        add addr, idx
+        movzx r9d, byte ptr [addr]
+        add va, 256
+        sub va, vb
+        and va, 255
+        add diff, va
+        add diff, 255
+        shr diff, 8
+        add idx, 1
+        jmp @loop
+    @done:
+        mov va, 1
+        sub va, diff
+        ret
+    }
+    for arm64 {
+        reg pa = x0, pb = x1, len_r = x2, idx = x3, diff = x4, addr = x5
+        reg vaw = w6, va = x6, vbw = w7, vb = x7, mask = x8
+
+        idx := 0
+        diff := 0
+        mask := 255
+        place {
+            name i = idx
+            name d = diff
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= d
+            fact d <= 1
+            fact eq.ct_bytes_eq(a, b) == eq.eq_from(a, b, i, d)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        b.hs @done
+        add addr, pa, idx
+        ldrb vaw, [addr, 0]
+        add addr, pb, idx
+        ldrb vbw, [addr, 0]
+        add va, va, 256
+        sub va, va, vb
+        and va, va, mask
+        add diff, diff, va
+        add diff, diff, 255
+        lsr diff, diff, 8
+        add idx, idx, 1
+        b @loop
+    @done:
+        mov x0, 1
+        sub x0, x0, diff
+        ret
+    }
+}

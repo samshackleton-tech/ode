@@ -1,0 +1,10 @@
+// Constant-time byte-slice equality (e.g. BLAKE3 `Hash == Hash` at n = 32).
+// Returns 1 iff every byte of a[0..len(a)] equals b[0..len(a)], else 0.
+// Trace depends only on n (zero branches on bytes of a or b).
+
+def eq_from(a, b, i, diff) {
+    if i >= len(a) then 1 - diff
+    else eq_from(a, b, i + 1, (diff + ((a[i] + 256 - b[i]) % 256) + 255) / 256)
+}
+
+def ct_bytes_eq(a, b) { eq_from(a, b, 0, 0) }
