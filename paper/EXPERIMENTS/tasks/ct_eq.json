@@ -1,0 +1,11 @@
+{
+  "id": "ct_eq",
+  "title": "Constant-Time Byte-Slice Equality (branchless trace depends on n)",
+  "spec_file": "paper/EXPERIMENTS/tasks/ct_eq_spec.ode",
+  "spec_basename": "ct_eq_spec.ode",
+  "entry_fn": "ct_bytes_eq",
+  "expected_contract_id": "err2gjjxoxbyqfsazoufn7easfzao5uqgual5wuhslqlqmymkhma",
+  "native_harness": "paper/EXPERIMENTS/tasks/ct_eq_native.c",
+  "contract_header": "use eq = \"ct_eq_spec.ode\"\n\nfn ct_bytes_eq(a: n bytes, b: n bytes, n: number)\n    requires n < 18446744073709551615\n    returns eq.bytes_eq(a, b)\n    trace depends on n\n    stack 0\n",
+  "task_summary": "Implement and verify constant-time byte-slice equality `ct_bytes_eq` whose execution trace depends only on the length `n` (never on the contents of `a` or `b`)."
+}
