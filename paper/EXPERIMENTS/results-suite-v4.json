@@ -1,0 +1,445 @@
+{
+  "run_id": "suite-v4",
+  "prereg_commit": "fa967904b8959fe1621bbecaf1f0d3293a379fa4",
+  "status": "complete",
+  "completed_cells": 16,
+  "finished_utc": "2026-11-25T23:53:39Z",
+  "tasks": [
+    "ebpf",
+    "ct_lt"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 11,
+  "total_cells": 16,
+  "verify2_passes": 11,
+  "native_passes": 11,
+  "total_rounds": 52,
+  "total_cost_usd": 15.3742,
+  "failure_categories": {
+    "prover_timeout_120s": 15,
+    "arith_need_compare": 8,
+    "output_token_limit": 7,
+    "arith_need_entail": 4,
+    "compile_or_parse_error": 3,
+    "kept_reg_refusal": 2,
+    "spec_need_open": 2
+  },
+  "cells": [
+    {
+      "task": "ct_lt",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1622,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 18,
+        "code_bytes": 72,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.044,
+        "pack_s": 0.275,
+        "proof_bytes": 7873
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.2034,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 65,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.044,
+        "pack_s": 0.242,
+        "proof_bytes": 4649
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 2,
+      "rounds_to_pass": 2,
+      "stopped_reason": null,
+      "total_cost_usd": 0.0756,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 76,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.044,
+        "pack_s": 0.247,
+        "proof_bytes": 6068
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.0527,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 69,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.045,
+        "pack_s": 0.241,
+        "proof_bytes": 4255
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1004,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 17,
+        "code_bytes": 68,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.053,
+        "pack_s": 0.271,
+        "proof_bytes": 6857
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1113,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 65,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.05,
+        "pack_s": 0.212,
+        "proof_bytes": 3569
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1982,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 17,
+        "code_bytes": 68,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.044,
+        "pack_s": 0.261,
+        "proof_bytes": 5659
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_lt",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.2748,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 9/9",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 20,
+        "code_bytes": 69,
+        "contract_id": "z5mi7h56f2qwr2uqti72jtovd26jpjh3e2ue7vw2l5v5vwxudzna",
+        "verdict": "shown",
+        "audit_s": 0.047,
+        "pack_s": 0.202,
+        "proof_bytes": 3569
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 5,
+      "stopped_reason": null,
+      "total_cost_usd": 3.0791,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 198,
+        "code_bytes": 832,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.124,
+        "pack_s": 7.387,
+        "proof_bytes": 113876
+      },
+      "round_categories": [
+        "output_token_limit",
+        "prover_timeout_120s",
+        "kept_reg_refusal",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "stopped_reason": null,
+      "total_cost_usd": 5.0034,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "output_token_limit",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_entail",
+        "output_token_limit",
+        "arith_need_entail",
+        "arith_need_entail"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.8582,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "arith_need_compare",
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "spec_need_open",
+        "arith_need_entail",
+        "kept_reg_refusal"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 7,
+      "rounds_to_pass": null,
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 0.839,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "compile_or_parse_error",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 6,
+      "rounds_to_pass": null,
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 1.1618,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "output_token_limit",
+        "arith_need_compare",
+        "prover_timeout_120s",
+        "spec_need_open",
+        "arith_need_compare",
+        "arith_need_compare"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 4,
+      "rounds_to_pass": null,
+      "stopped_reason": "consecutive_truncations_2",
+      "total_cost_usd": 1.1166,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "output_token_limit",
+        "prover_timeout_120s",
+        "output_token_limit",
+        "output_token_limit"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 3,
+      "rounds_to_pass": 3,
+      "stopped_reason": null,
+      "total_cost_usd": 1.2254,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 175,
+        "code_bytes": 728,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.142,
+        "pack_s": 9.444,
+        "proof_bytes": 78418
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "arith_need_compare",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 2,
+      "rounds_to_pass": 2,
+      "stopped_reason": null,
+      "total_cost_usd": 0.9121,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 184,
+        "code_bytes": 688,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.087,
+        "pack_s": 3.379,
+        "proof_bytes": 47476
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "passed"
+      ]
+    }
+  ]
+}

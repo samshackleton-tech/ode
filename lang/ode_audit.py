@@ -15,6 +15,7 @@ Implements the auditor workflow documented in `docs/ODE-FOR-AUDITORS.md`:
 import hmac
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -1083,7 +1084,7 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
     contract = None
     if full_spec_text and orig_sym:
         try:
-            sp = ode.parse(full_spec_text)
+            sp = ode.Spec(full_spec_text)
             contract = sp.contracts.get(orig_sym)
         except Exception:
             contract = None

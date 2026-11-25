@@ -1,0 +1,29 @@
+// Incremental BLAKE3 CvStack finalization specification.
+use b3 = "../hashr_arm64_fast/blake3_spec.ode"
+
+layout parent104 104 {
+    h: cv at 0,
+    left: 32 bytes at 32,
+    right: cv at 64,
+    flags: byte at 96
+}
+
+def id_bytes(a) { [if k < len(a) then a[k] else 0 for k in 0..32] }
+
+def parent_nd(key, flags, left, right) {
+    { h: key, left: id_bytes(left), right: right, flags: flags | b3.PARENT }
+}
+
+def parent_val(nd, extra) {
+    b3.compress(nd.h, words(nd.left) ++ nd.right, counter(0), 64, nd.flags | extra)
+}
+
+def finalize_cv(key, flags, stack, top, cur, budget) {
+    if top <= 1 then parent_val(parent_nd(key, flags, stack[0 .. 32], cur), b3.ROOT)
+    else if budget < 4 then parent_val(parent_nd(key, flags, stack[0 .. 32], cur), b3.ROOT)
+    else finalize_cv(
+        key, flags, stack, top - 1,
+        parent_val(parent_nd(key, flags, stack[32 * (top - 1) .. 32 * top], cur), 0),
+        budget / 2
+    )
+}
