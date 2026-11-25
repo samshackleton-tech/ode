@@ -28,7 +28,7 @@ and current verification status on x86-64 and AArch64.
 | **Varint / LEB128 (encode + strict decode)** | Wire codec | `kcheck/programs/varint/varint.spec`, `factory/verified/varint_decode_u32_*` | `Lean-zh/protobuf` (MIT) | **`shown`** (encode + canonical `decode_u32`) | **`shown`** (canonical `decode_u32`) |
 | **ASCII Decimal integer parser** | Parser | `kcheck/programs/decimal/decimal.spec` (34 lines) | — | `legacy-kcheck` | `spec-ready` |
 | **Adler-32 (RFC 1950)** | Checksum | `proof-core/examples/adler32/adler32_unified.ode`, `kcheck/programs/adler32/adler32.spec` | — | **`shown`** (full, `stack 0`, 22 insns) | **`shown`** (full, `stack 0`, 21 insns) |
-| **Internet checksum (RFC 1071)** | Checksum | `kcheck/programs/inet/inet.spec`, `factory/verified/inet_sum16_*` | — | **`shown`** (`inet_sum16`) / `legacy-kcheck` (full) | **`shown`** (`inet_sum16`) |
+| **Internet checksum (RFC 1071)** | Checksum | `proof-core/examples/inet/inet_unified.ode`, `kcheck/programs/inet/inet.spec` | — | **`shown`** (full, `stack 0`, `trace depends on n`, 39 insns) | **`shown`** (full, `stack 0`, `trace depends on n`, 31 insns) |
 | **Common byte prefix / byte equality** | Utility | `kcheck/programs/common/common.spec`, `proof-core/examples/equal/equal.spec` | — | **`shown`** | **`shown`** (`v_bytes_eq`) |
 | **LZ4 block decompressor + LZ4/Adler frame** | Compression | `kcheck/programs/lz4/lz4.spec` (109 lines), `factory/verified/lz4_*` | — | **`shown`** (`ext_len`, `pad_lit32`) / `legacy-kcheck` (full) | **`shown`** (`ext_len`, `pad_lit32`) |
 | **Sigil (byte-to-glyph codec)** | Encoding | `kcheck/programs/sigil/sigil.spec` (175 lines) | `johnservil/sigil` (Apache-2.0: `lean/Sigil/Spec.lean`) | `spec-ready` | `spec-ready` |

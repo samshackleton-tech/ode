@@ -1,0 +1,134 @@
+// Full RFC 1071 Internet Checksum for x86-64 and AArch64 (`stack 0`, `trace depends on n` only).
+use rfc = "inet_spec.ode"
+
+inline fn fold_x86 for x86_64 (acc: gpr, tmp: gpr) distinct(acc, tmp) changes acc, tmp {
+    mov tmp, acc
+    and acc, 65535
+    shr tmp, 16
+    add acc, tmp
+}
+
+inline fn fold_arm for arm64 (acc: gpr, tmp: gpr, mask: gpr) distinct(acc, tmp, mask) changes acc, tmp {
+    lsr tmp, acc, 16
+    and acc, acc, mask
+    add acc, acc, tmp
+}
+
+fn fold2(s: number)
+    requires s < 4294967296
+    returns rfc.fold_n(s, 2)
+    trace depends on nothing
+    stack 0
+{
+    for x86_64 {
+        mov rax, rdi
+        fold_x86(rax, rdx)
+        fold_x86(rax, rdx)
+        and rax, 65535
+        mov rdx, 65535
+        sub rdx, rax
+        mov rax, rdx
+        ret
+    }
+    for arm64 {
+        mov x9, 65535
+        fold_arm(x0, x8, x9)
+        fold_arm(x0, x8, x9)
+        and x0, x0, x9
+        sub x0, x9, x0
+        ret
+    }
+}
+
+fn inet_checksum(input: n bytes, n: number)
+    requires n < 131072
+    returns rfc.inet_checksum(input)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi, len_r = rsi, idx = rcx, acc = rax, rem = r8, addr = r9, b0 = rdx, b1 = r10
+
+        idx := 0
+        acc := 0
+        place {
+            name i = idx
+            name s = acc
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= s
+            fact s <= 32768 * i
+            fact rfc.inet_checksum(input) == rfc.sum_pairs(input, i, s)
+            decreases n - i
+        }
+    @loop:
+        mov rem, len_r
+        sub rem, idx
+        cmp rem, 2
+        jb @tail
+        mov addr, base
+        add addr, idx
+        movzx edx, byte ptr [addr]
+        shl b0, 8
+        add acc, b0
+        add addr, 1
+        movzx r10d, byte ptr [addr]
+        add acc, b1
+        add idx, 2
+        jmp @loop
+
+    @tail:
+        cmp idx, len_r
+        jae @fold
+        mov addr, base
+        add addr, idx
+        movzx edx, byte ptr [addr]
+        shl b0, 8
+        add acc, b0
+
+    @fold:
+        mov rdi, acc
+        jmp fold2
+    }
+    for arm64 {
+        reg base = x0, len_r = x1, idx = x2, acc = x3, rem = x4, addr = x5
+        reg b0w = w6, b0 = x6, b1w = w7, b1 = x7
+
+        idx := 0
+        acc := 0
+        place {
+            name i = idx
+            name s = acc
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= s
+            fact s <= 32768 * i
+            fact rfc.inet_checksum(input) == rfc.sum_pairs(input, i, s)
+            decreases n - i
+        }
+    @loop:
+        sub rem, len_r, idx
+        cmp rem, 2
+        b.lo @tail
+        add addr, base, idx
+        ldrb b0w, [addr, 0]
+        lsl b0, b0, 8
+        add acc, acc, b0
+        ldrb b1w, [addr, 1]
+        add acc, acc, b1
+        add idx, idx, 2
+        b @loop
+
+    @tail:
+        cmp idx, len_r
+        b.hs @fold
+        add addr, base, idx
+        ldrb b0w, [addr, 0]
+        lsl b0, b0, 8
+        add acc, acc, b0
+
+    @fold:
+        mov x0, acc
+        b fold2
+    }
+}

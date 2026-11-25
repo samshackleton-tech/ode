@@ -1,0 +1,15 @@
+// RFC 1071 Internet Checksum specification (IP, UDP, TCP).
+def sum_pairs(a, i, acc) {
+    if i + 2 <= len(a) then sum_pairs(a, i + 2, acc + 256 * a[i] + a[i + 1])
+    else if i < len(a) then fold_n(acc + 256 * a[i], 2)
+    else fold_n(acc, 2)
+}
+
+def fold_n(s, d) {
+    if d == 0 then 65535 - (s % 65536)
+    else fold_n((s % 65536) + (s / 65536), d - 1)
+}
+
+def inet_checksum(bytes) {
+    sum_pairs(bytes, 0, 0)
+}
