@@ -217,7 +217,53 @@ In `eq_from`, `diff` stays `0` while all bytes match and becomes `1` once any pa
 
 ## 5. Custom Calling Conventions and Tail Calls
 
-Exported entry points follow System V AMD64 (`rdi, rsi, rdx, rcx, r8, r9`; return `rax`) on x86-64 and AAPCS64 (`x0..x7`; return `x0`) on AArch64. Between private helper functions inside one program, saving and restoring C-convention registers wastes instructions. A private helper may declare a `for <target> calling { in ...; out ...; preserves ... }` block choosing exact argument, return, and preserved registers (see `paper/examples/quad.ode`, where `step` preserves `rdi`, `rsi`, and `r8` so `quad` calls `step` twice with zero stack spills).
+Exported entry points follow System V AMD64 (`rdi, rsi, rdx, rcx, r8, r9`; return `rax`) on x86-64 and AAPCS64 (`x0..x7`; return `x0`) on AArch64. Between private helper functions inside one program, saving and restoring C-convention registers wastes instructions. A private helper (placed above its caller in the `.ode` file) may declare a `for <target> calling { ... }` block naming exact argument bindings (`in param = reg, ...`), return register (`out = reg`), and preserved registers (`preserves ...`). Separating clauses by newlines or semicolons (`;`) both work:
+
+```ode
+// paper/examples/quad.ode (x86-64 excerpt)
+fn step(a: number, b: number)
+    requires a < 1000000
+    requires b < 1000000
+    returns a + b + 3
+    trace depends on nothing
+    stack 0
+{
+    for x86_64 calling {
+        in a = r10, b = r11
+        out = r9
+        preserves rdi, rsi, rdx, rcx, r8, rbx, rbp, r12, r13, r14, r15
+    } {
+        mov r9, r10
+        add r9, r11
+        add r9, 3
+        ret
+    }
+}
+
+fn quad(x: number, y: number)
+    requires x < 100000
+    requires y < 100000
+    returns quad_fn(x, y)
+    trace depends on nothing
+{
+    for x86_64 stack 8 {
+        mov r10, rdi
+        mov r11, rsi
+        call step
+        mov r8, r9
+        mov r10, rsi
+        mov r11, rdi
+        call step
+        mov rax, r8
+        add rax, r9
+        add rax, rdi
+        add rax, rsi
+        ret
+    }
+}
+```
+
+Here `step` preserves `rdi`, `rsi`, and `r8`, so `quad` calls `step` twice with zero stack spills. Factoring complex multi-way dispatch (such as a bytecode interpreter loop) into small `calling` helpers matching specification sub-definitions also keeps symbolic proof paths additive rather than multiplicative.
 
 A leaf helper with `stack 0` can also be tail-called with `jmp helper` (x86-64) or `b helper` (AArch64) once the caller has restored its own stack frame and callee-saved registers. Repeated short straight-line sequences can be factored into an `inline fn` with explicit `distinct(...)` and `changes` clauses (see `paper/ODE.pdf`, sections 4 and 5).
 

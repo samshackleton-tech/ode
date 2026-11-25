@@ -35,7 +35,7 @@ class Err(Exception):
 
 # ---------------------------------------------------------------------------------------------------------
 # Text to tree.
-TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.]))")
+TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.;]))")
 KEYWORDS = {"const", "def", "sequence", "the", "machine", "contract", "layout", "kind", "on", "while", "for", "in", "turn", "if", "then", "else", "let", "fails", "lemma"}
 LEVELS = [["||"], ["&&"], ["==", "!=", "<", "<=", ">", ">="], ["++"], ["|"], ["^"], ["&"], ["+", "-"], ["*", "/", "%"], [">>>"]]
 
@@ -323,25 +323,37 @@ class Parser:
         clause_starts = ("out", "preserves", "preserves_vec")
         def at_clause_boundary():
             k, v, _ = self.t[self.i]
-            return (k == "sym" and v == "}") or (k == "key" and v == "in") or (k == "name" and v in clause_starts)
+            return (k == "sym" and v in ("}", ";")) or (k == "key" and v == "in") or (k == "name" and v in clause_starts)
         while not self.maybe("}"):
+            while self.maybe(";"):
+                pass
+            if self.maybe("}"):
+                break
             if self.maybe("in"):
                 if cc["in"] is None: cc["in"] = {}
                 while True:
                     pname = self.take(kind="name")
-                    self.take("=")
+                    line = self.t[self.i - 1][2]
+                    if not self.maybe("="):
+                        got = self.t[self.i][1]
+                        raise Err(
+                            f"line {line}: inside `calling`, bind each parameter by name: "
+                            f"`in {pname} = REG, ...` (e.g. `in a = r10, b = r11; out = r9; preserves rdi, rsi`), got {got!r}"
+                        )
                     rname = self.take(kind="name")
                     if pname in cc["in"]:
                         raise Err(f"line {self.t[self.i - 1][2]}: `calling` assigns parameter `{pname}` more than once")
                     cc["in"][pname] = rname
                     if not self.maybe(","): break
+                self.maybe(";")
             else:
                 sub = self.take(kind="name")
                 line = self.t[self.i - 1][2]
                 if sub == "out":
                     if cc["out"] is not None: raise Err(f"line {line}: `calling` says `out` once")
-                    self.take("=")
+                    self.maybe("=")
                     cc["out"] = self.take(kind="name")
+                    self.maybe(";")
                 elif sub in ("preserves", "preserves_vec"):
                     if cc[sub] is not None: raise Err(f"line {line}: `calling` says `{sub}` once")
                     regs = []
@@ -352,6 +364,7 @@ class Parser:
                             while self.maybe(","):
                                 regs.append(self.take(kind="name"))
                     cc[sub] = regs
+                    self.maybe(";")
                 else:
                     raise Err(f"line {line}: inside `calling`, expected `in`, `out`, `preserves` or `preserves_vec`, not {sub!r}")
         return cc

@@ -986,7 +986,11 @@ def format_audit_report(res, show_contract=False, glossary=None):
 # ---------------------------------------------------------------------------
 
 def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
-    """Remap specification definition (and, for export, parameter) names inside loop place hints."""
+    """Remap specification definition (and, for export, parameter) names inside loop place hints.
+
+    Avoids alpha-capture when a loop's local `name X = REG` variable has the same name as a
+    canonical target name (such as `a0..a3`, `f0..`, `C0..`) or an original mapped identifier.
+    """
     if not pl_text:
         return ""
     import re as _re
@@ -999,8 +1003,54 @@ def _map_places_text(pl_text, canon_glossary, orig_sym, new_sym, is_export):
     inv_map[orig_sym] = new_sym
     if not inv_map:
         return pl_text
-    pat = _re.compile(r"\b(" + "|".join(_re.escape(k) for k in sorted(inv_map, key=len, reverse=True)) + r")\b")
-    return pat.sub(lambda m: inv_map[m.group(1)], pl_text)
+
+    # Collect local `place` binder names (`name VAR = REG`).
+    name_line_re = _re.compile(r"^(\s*name\s+)([A-Za-z_][A-Za-z_0-9]*)(\s*=\s*.*)$")
+    local_names = []
+    for line in pl_text.splitlines():
+        m = name_line_re.match(line)
+        if m and m.group(2) not in local_names:
+            local_names.append(m.group(2))
+
+    # Alpha-rename any local binder that collides with a canonical output name or mapped key.
+    reserved = set(local_names) | set(inv_map.keys()) | set(inv_map.values())
+    local_rename = {}
+    fresh_idx = 0
+    for v in local_names:
+        if v in inv_map or v in inv_map.values():
+            while f"ode_p{fresh_idx}" in reserved:
+                fresh_idx += 1
+            fresh = f"ode_p{fresh_idx}"
+            fresh_idx += 1
+            local_rename[v] = fresh
+            reserved.add(fresh)
+
+    # Single-pass simultaneous substitution per line (leaving register names on `name VAR = REG` untouched).
+    local_set = set(local_names)
+    all_keys = sorted(set(inv_map.keys()) | set(local_rename.keys()) | local_set, key=len, reverse=True)
+    pat = _re.compile(r"\b(" + "|".join(_re.escape(k) for k in all_keys) + r")\b")
+
+    def subst_expr(s):
+        def repl(m):
+            tok = m.group(1)
+            if tok in local_rename:
+                return local_rename[tok]
+            if tok in local_set:
+                return tok
+            return inv_map.get(tok, tok)
+        return pat.sub(repl, s)
+
+    out_lines = []
+    for line in pl_text.splitlines():
+        m = name_line_re.match(line)
+        if m:
+            v = m.group(2)
+            out_lines.append(f"{m.group(1)}{local_rename.get(v, v)}{m.group(3)}")
+        elif line.lstrip().startswith(("keep ", "at ")):
+            out_lines.append(line)
+        else:
+            out_lines.append(subst_expr(line))
+    return "\n".join(out_lines) + ("\n" if pl_text.endswith("\n") else "")
 
 
 def pack_bundle(
