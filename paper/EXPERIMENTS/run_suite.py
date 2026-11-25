@@ -372,9 +372,11 @@ def slug(s: str) -> str:
 
 
 def run_cell(task: dict, model: str, target: str, args, api_key: str,
-             budget: BudgetGuard, out_dir: Path) -> dict:
+             budget: BudgetGuard, out_dir: Path, prover_sem: threading.BoundedSemaphore) -> dict:
     cell_id = f"{task['id']}__{slug(model.split('/')[-1])}__{target}"
     print(f"[start] {cell_id}", flush=True)
+    t_cell_start = time.monotonic()
+    consec_trunc = 0
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_initial_user_prompt(task, target)},
@@ -414,6 +416,10 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 cell["stopped_reason"] = f"budget_cap_{args.max_usd}"
                 print(f"[stop]  {cell_id}: cumulative budget cap ${args.max_usd:.2f} reached", flush=True)
                 break
+            if args.cell_timeout > 0 and (time.monotonic() - t_cell_start) >= args.cell_timeout:
+                cell["stopped_reason"] = f"cell_timeout_{args.cell_timeout}s"
+                print(f"[stop]  {cell_id}: cell wall-clock cap {args.cell_timeout}s reached before R{rnum}", flush=True)
+                break
             try:
                 reply, usage, api_s = call_openrouter(
                     model, messages, api_key,
@@ -435,6 +441,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
             # A reply cut off by the token limit before it holds the function is no candidate: say so to
             # the model and count it apart from compile errors (no tool is run on it).
             if usage.get("finish_reason") == "length" and f"fn {task['entry_fn']}" not in reply:
+                consec_trunc += 1
                 cell["rounds"].append({
                     "round": rnum, "api_s": round(api_s, 2), "tool_s": 0.0, "cost_usd": round(cost, 4),
                     "prompt_tokens": usage.get("prompt_tokens"),
@@ -442,7 +449,11 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     "finish_reason": "length", "source_lines": 0,
                     "stage": "no_candidate", "category": "output_token_limit",
                 })
-                print(f"[fail]  {cell_id} R{rnum} (output_token_limit, ${cost:.2f}, suite=${total_spent:.2f})", flush=True)
+                print(f"[fail]  {cell_id} R{rnum} (output_token_limit #{consec_trunc}, ${cost:.2f}, suite=${total_spent:.2f})", flush=True)
+                if args.max_truncations > 0 and consec_trunc >= args.max_truncations:
+                    cell["stopped_reason"] = f"consecutive_truncations_{consec_trunc}"
+                    print(f"[stop]  {cell_id}: {consec_trunc} consecutive output_token_limit replies", flush=True)
+                    break
                 messages.append({"role": "assistant", "content": reply or "(no visible output)"})
                 messages.append({"role": "user", "content": (
                     f"Round {rnum}: your reply reached the output limit of {args.max_tokens} tokens before it "
@@ -450,6 +461,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     f"complete `.ode` file in a single ```ode ... ``` block.")})
                 continue
 
+            consec_trunc = 0
             ode_src = extract_ode_source(reply, task["entry_fn"])
             last_ode = ode_src
             cand.write_text(ode_src, encoding="utf-8")
@@ -457,13 +469,14 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 if p.exists():
                     p.unlink()
 
-            # Step A: `ode pack` (compiles, proves, packages, and audits)
+            # Step A: `ode pack` (bounded local prover concurrency so parallel API cells do not starve each other)
             pack_cmd = [
                 sys.executable, str(ODE_TOOL), "pack", str(cand),
                 "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
-            rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, timeout=args.tool_timeout)
+            with prover_sem:
+                rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, timeout=args.tool_timeout)
             cell["total_tool_s"] += dt_p
 
             rec = {
@@ -485,7 +498,8 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     "--proof", str(out_p),
                     "--expect-contract", task["expected_contract_id"],
                 ]
-                rc_a, out_a_txt, dt_a = run_tool(audit_cmd, work, timeout=args.tool_timeout)
+                with prover_sem:
+                    rc_a, out_a_txt, dt_a = run_tool(audit_cmd, work, timeout=args.tool_timeout)
                 cell["total_tool_s"] += dt_a
                 rec["audit_rc"] = rc_a
                 rec["audit_s"] = round(dt_a, 3)
@@ -582,6 +596,8 @@ def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: lis
         f"- **Targets ({len(targets)}):** {', '.join(f'`{t}`' for t in targets)}",
         f"- **Total cells:** {len(tasks) * len(models) * len(targets)}",
         f"- **Budget cap:** max `{args.max_rounds}` rounds per cell, `{args.tool_timeout}s` tool timeout, "
+        f"`{args.cell_timeout}s` wall-clock cap per cell, early stop after `{args.max_truncations}` consecutive "
+        f"`output_token_limit` replies, `{args.prover_slots}` concurrent local prover slots, "
         f"temperature `{args.temperature}`, reasoning effort `{args.effort}`, max_tokens `{args.max_tokens}`, "
         f"cumulative suite cap `${args.max_usd:.2f}`.",
         "",
@@ -630,8 +646,11 @@ def summarize_categories(cells: list[dict]) -> dict[str, int]:
 
 
 def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: list[str],
-                  targets: list[str], cells: list[dict], baseline_path: Path | None) -> tuple[Path, Path]:
+                  targets: list[str], cells: list[dict], baseline_path: Path | None,
+                  expected_total: int | None = None) -> tuple[Path, Path]:
     cells_sorted = sorted(cells, key=lambda c: (c["task"], c["model"], c["target"]))
+    total_expected = expected_total if expected_total is not None else len(cells_sorted)
+    in_progress = len(cells_sorted) < total_expected
     strict_passes = sum(1 for c in cells_sorted if c["strict_pass"])
     v2_passes = sum(1 for c in cells_sorted if c["verify2_pass"] is True)
     nat_passes = sum(1 for c in cells_sorted if c["native_status"] == "pass")
@@ -642,12 +661,14 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
     summary = {
         "run_id": run_id,
         "prereg_commit": prereg_commit,
+        "status": "in_progress" if in_progress else "complete",
+        "completed_cells": len(cells_sorted),
         "finished_utc": utc_now(),
         "tasks": [t["id"] for t in tasks],
         "models": models,
         "targets": targets,
         "strict_passes": strict_passes,
-        "total_cells": len(cells_sorted),
+        "total_cells": total_expected,
         "verify2_passes": v2_passes,
         "native_passes": nat_passes,
         "total_rounds": total_rounds,
@@ -661,6 +682,7 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
                 "strict_pass": c["strict_pass"],
                 "rounds_used": len(c["rounds"]),
                 "rounds_to_pass": c["rounds_to_pass"],
+                "stopped_reason": c.get("stopped_reason"),
                 "total_cost_usd": c["total_cost_usd"],
                 "verify2_pass": c["verify2_pass"],
                 "native_status": c["native_status"],
@@ -673,15 +695,18 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
     }
 
     json_path = EXP_DIR / f"results-{run_id}.json"
-    with json_path.open("w", encoding="utf-8") as f:
+    tmp_json = EXP_DIR / f".results-{run_id}.json.tmp"
+    with tmp_json.open("w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
+    os.replace(tmp_json, json_path)
 
+    status_tag = f" (in progress: {len(cells_sorted)}/{total_expected} cells finished)" if in_progress else ""
     md_lines = [
-        f"# Results: Pre-Registered Cold-Room Suite `{run_id}`",
+        f"# Results: Pre-Registered Cold-Room Suite `{run_id}`{status_tag}",
         "",
         f"- **Pre-registration commit:** `{prereg_commit}`",
-        f"- **Finished (UTC):** `{summary['finished_utc']}`",
-        f"- **Strict pass rate:** **{strict_passes}/{len(cells_sorted)}** cells",
+        f"- **Updated (UTC):** `{summary['finished_utc']}`" if in_progress else f"- **Finished (UTC):** `{summary['finished_utc']}`",
+        f"- **Strict pass rate:** **{strict_passes}/{len(cells_sorted)}** finished cells" + (f" ({total_expected} scheduled)" if in_progress else ""),
         f"- **Independent second verifier (`verify2.py`):** **{v2_passes}/{strict_passes}** passing cells dual-verified",
         f"- **Real-silicon native harness:** **{nat_passes}/{strict_passes}** passing cells executed and passed on matching hardware",
         f"- **Total rounds / API spend:** {total_rounds} rounds, **${total_cost:.2f}** USD",
@@ -770,7 +795,9 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
             md_lines.append(f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | {b_str} | {n_str} |")
 
     md_path = EXP_DIR / f"results-{run_id}.md"
-    md_path.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    tmp_md = EXP_DIR / f".results-{run_id}.md.tmp"
+    tmp_md.write_text("\n".join(md_lines) + "\n", encoding="utf-8")
+    os.replace(tmp_md, md_path)
     return json_path, md_path
 
 
@@ -855,6 +882,25 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
                 print(f"[reference] {task['id']} {tgt}: pack+audit shown; verify2: {v2_msg}; native: {nat_st} ({nat_det})", flush=True)
 
 
+def check_quickstart_leakage(tasks: list[dict]) -> None:
+    """Refuse a task whose specification file or entry function appears verbatim in docs/QUICKSTART.md."""
+    qs = QUICKSTART_PATH.read_text(encoding="utf-8")
+    for task in tasks:
+        if task.get("allow_quickstart_overlap"):
+            continue
+        hits = []
+        if task["spec_basename"] in qs:
+            hits.append(f"spec_basename `{task['spec_basename']}`")
+        if re.search(rf"\bfn\s+{re.escape(task['entry_fn'])}\b", qs):
+            hits.append(f"fn `{task['entry_fn']}`")
+        if hits:
+            raise SystemExit(
+                f"Task `{task['id']}` overlaps docs/QUICKSTART.md ({', '.join(hits)}); "
+                f"models receive the Quickstart verbatim, so this would test copying rather than coding. "
+                f"Choose an unseen task (or set `allow_quickstart_overlap: true` in the task JSON to override)."
+            )
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Push-button pre-registered cold-room experiment runner for Ode.")
     ap.add_argument("--run-id", required=True, help="Short run identifier, e.g. ebpf-v2")
@@ -863,6 +909,9 @@ def main(argv=None) -> int:
     ap.add_argument("--targets", default="x86_64,arm64")
     ap.add_argument("--max-rounds", type=int, default=8)
     ap.add_argument("--tool-timeout", type=int, default=120)
+    ap.add_argument("--cell-timeout", type=int, default=900, help="Per-cell wall-clock cap in seconds (0 = off)")
+    ap.add_argument("--max-truncations", type=int, default=2, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
+    ap.add_argument("--prover-slots", type=int, default=6, help="Max simultaneous local ode pack/audit runs")
     ap.add_argument("--api-timeout", type=int, default=240)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
@@ -906,6 +955,7 @@ def main(argv=None) -> int:
         if t.get("native_harness"):
             hashes[t["native_harness"]] = blake3_hex(ROOT / t["native_harness"])
 
+    check_quickstart_leakage(tasks)
     self_test_cli(targets)
     check_references(tasks, targets, args.x86_exec_script or None)
 
@@ -940,18 +990,22 @@ def main(argv=None) -> int:
     out_dir = Path(args.out_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     budget = BudgetGuard(args.max_usd)
-
-    jobs = [(t, m, tgt) for t in tasks for m in models for tgt in targets]
-    cells = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as ex:
-        futs = [ex.submit(run_cell, t, m, tgt, args, api_key, budget, out_dir) for (t, m, tgt) in jobs]
-        for fut in concurrent.futures.as_completed(futs):
-            cells.append(fut.result())
+    prover_sem = threading.BoundedSemaphore(max(1, args.prover_slots))
 
     baseline_p = Path(args.baseline) if args.baseline else None
     if baseline_p and not baseline_p.is_absolute():
         baseline_p = ROOT / baseline_p
-    j_path, m_path = write_results(args.run_id, prereg_sha, tasks, models, targets, cells, baseline_p)
+
+    jobs = [(t, m, tgt) for t in tasks for m in models for tgt in targets]
+    cells = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as ex:
+        futs = [ex.submit(run_cell, t, m, tgt, args, api_key, budget, out_dir, prover_sem) for (t, m, tgt) in jobs]
+        for fut in concurrent.futures.as_completed(futs):
+            cells.append(fut.result())
+            # Progressive atomic summary update so finished cells are readable immediately without waiting for stragglers.
+            write_results(args.run_id, prereg_sha, tasks, models, targets, cells, baseline_p, expected_total=len(jobs))
+
+    j_path, m_path = write_results(args.run_id, prereg_sha, tasks, models, targets, cells, baseline_p, expected_total=len(jobs))
     print(f"[done] wrote {j_path.relative_to(ROOT)} and {m_path.relative_to(ROOT)}", flush=True)
     return 0
 
