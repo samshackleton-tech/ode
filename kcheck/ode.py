@@ -35,7 +35,7 @@ class Err(Exception):
 
 # ---------------------------------------------------------------------------------------------------------
 # Text to tree.
-TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.;]))")
+TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.]))")
 KEYWORDS = {"const", "def", "sequence", "the", "machine", "contract", "layout", "kind", "on", "while", "for", "in", "turn", "if", "then", "else", "let", "fails", "lemma"}
 LEVELS = [["||"], ["&&"], ["==", "!=", "<", "<=", ">", ">="], ["++"], ["|"], ["^"], ["&"], ["+", "-"], ["*", "/", "%"], [">>>"]]
 
@@ -46,7 +46,10 @@ def lex(text):
         m = TOKEN.match(text, at)
         if not m:
             if text[at:].strip() == "": break
-            raise Err(f"line {text.count(chr(10), 0, at) + 1}: not a word of the language: {text[at:at + 20]!r}")
+            line_no = text.count(chr(10), 0, at) + 1
+            if text[at] == ";":
+                raise Err(f"line {line_no}: Ode does not use semicolons; put each clause on its own line (e.g. `in a = r10, b = r11` / `out = r9` / `preserves ...`)")
+            raise Err(f"line {line_no}: not a word of the language: {text[at:at + 20]!r}")
         at = m.end()
         if m.group(1): continue
         line = text.count("\n", 0, m.start(m.lastindex)) + 1
@@ -323,12 +326,8 @@ class Parser:
         clause_starts = ("out", "preserves", "preserves_vec")
         def at_clause_boundary():
             k, v, _ = self.t[self.i]
-            return (k == "sym" and v in ("}", ";")) or (k == "key" and v == "in") or (k == "name" and v in clause_starts)
+            return (k == "sym" and v == "}") or (k == "key" and v == "in") or (k == "name" and v in clause_starts)
         while not self.maybe("}"):
-            while self.maybe(";"):
-                pass
-            if self.maybe("}"):
-                break
             if self.maybe("in"):
                 if cc["in"] is None: cc["in"] = {}
                 while True:
@@ -337,23 +336,23 @@ class Parser:
                     if not self.maybe("="):
                         got = self.t[self.i][1]
                         raise Err(
-                            f"line {line}: inside `calling`, bind each parameter by name: "
-                            f"`in {pname} = REG, ...` (e.g. `in a = r10, b = r11; out = r9; preserves rdi, rsi`), got {got!r}"
+                            f"line {line}: inside `calling`, bind each parameter by name on its own line: "
+                            f"`in {pname} = REG, ...` / `out = REG` / `preserves REG, ...`, got {got!r}"
                         )
                     rname = self.take(kind="name")
                     if pname in cc["in"]:
                         raise Err(f"line {self.t[self.i - 1][2]}: `calling` assigns parameter `{pname}` more than once")
                     cc["in"][pname] = rname
                     if not self.maybe(","): break
-                self.maybe(";")
             else:
                 sub = self.take(kind="name")
                 line = self.t[self.i - 1][2]
                 if sub == "out":
                     if cc["out"] is not None: raise Err(f"line {line}: `calling` says `out` once")
-                    self.maybe("=")
+                    if not self.maybe("="):
+                        got = self.t[self.i][1]
+                        raise Err(f"line {line}: inside `calling`, write `out = REG` (got {got!r})")
                     cc["out"] = self.take(kind="name")
-                    self.maybe(";")
                 elif sub in ("preserves", "preserves_vec"):
                     if cc[sub] is not None: raise Err(f"line {line}: `calling` says `{sub}` once")
                     regs = []
@@ -364,7 +363,6 @@ class Parser:
                             while self.maybe(","):
                                 regs.append(self.take(kind="name"))
                     cc[sub] = regs
-                    self.maybe(";")
                 else:
                     raise Err(f"line {line}: inside `calling`, expected `in`, `out`, `preserves` or `preserves_vec`, not {sub!r}")
         return cc

@@ -494,12 +494,12 @@ class BundleAuditTests(unittest.TestCase):
             run = subprocess.run([exe_path], capture_output=True, text=True, check=True)
             self.assertIn("B3_BUNDLE_NATIVE_OK", run.stdout)
 
-    def test_09_place_alpha_capture_and_calling_semicolons(self):
+    def test_09_place_alpha_capture_and_calling_syntax_errors(self):
         """Regression test for two defects uncovered by prereg-ebpf-v1:
-        (1) Loop `place` binding local variables named `a0`/`a1` must not collide with
-            canonical contract argument names `a0`/`a1` during `ode pack`.
-        (2) `calling { in a = r10, b = r11; out r9; preserves ... }` accepts `;` separators
-            and optional `=` after `out`."""
+        (1) Loop `place` binding local variables named `a0` must not collide with
+            canonical contract argument names `a0` during `ode pack`.
+        (2) Semicolons inside `calling { ... }` are cleanly refused (TOOWTDI: one clause
+            per line, with an actionable error message)."""
         # (1) Alpha-capture regression: loop `place` binds `name a0 = rcx` while contract
         # parameters `(buf, n)` canonicalize to `(a0, a1)`.
         src1 = textwrap.dedent("""\
@@ -551,44 +551,18 @@ class BundleAuditTests(unittest.TestCase):
         self.assertEqual(r1["verdict"], "shown", r1)
         self.assertEqual(ode_audit.audit_binary(o1, pf1, expect_contract=r1["contract_b32"])["verdict"], "shown")
 
-        # (2) Semicolon-separated `calling` block + optional `=` after `out`.
-        src2 = textwrap.dedent("""\
-            fn bump(v: number)
-                requires v < 1000000
-                returns v + 3
-                trace depends on nothing
-                stack 0
-            {
-                for x86_64 calling { in v = r10; out r9; preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15 } {
-                    mov r9, r10
-                    add r9, 3
-                    ret
-                }
-            }
-
-            fn double_bump(x: number)
-                requires x < 100000
-                returns x + 6
-                trace depends on nothing
-                stack 8
-            {
-                for x86_64 {
-                    mov r10, rdi
-                    call bump
-                    mov r10, r9
-                    call bump
-                    mov rax, r9
-                    ret
-                }
-            }
-        """)
-        p2 = os.path.join(self.tmp, "calling_semi.ode")
-        with open(p2, "w", encoding="utf-8") as f:
-            f.write(src2)
-        o2, pf2 = os.path.join(self.tmp, "calling_semi.o"), os.path.join(self.tmp, "calling_semi.proof")
-        r2 = ode_audit.pack_verified(p2, None, o2, pf2, fn_name="double_bump", target="x86_64")
-        self.assertEqual(r2["verdict"], "shown", r2)
-        self.assertEqual(ode_audit.audit_binary(o2, pf2, expect_contract=r2["contract_b32"])["verdict"], "shown")
+        # (2) Semicolon inside `calling` must be refused with a clear one-per-line hint.
+        import ode as kspec_ode
+        with self.assertRaises(kspec_ode.Err) as ctx:
+            kspec_ode.Spec("""
+contract bump(v: number) {
+    requires v < 1000000
+    returns v + 3
+    stack 0
+    calling { in v = r10; out = r9; preserves rdi }
+}
+""")
+        self.assertIn("Ode does not use semicolons", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -217,7 +217,7 @@ In `eq_from`, `diff` stays `0` while all bytes match and becomes `1` once any pa
 
 ## 5. Custom Calling Conventions and Tail Calls
 
-Exported entry points follow System V AMD64 (`rdi, rsi, rdx, rcx, r8, r9`; return `rax`) on x86-64 and AAPCS64 (`x0..x7`; return `x0`) on AArch64. Between private helper functions inside one program, saving and restoring C-convention registers wastes instructions. A private helper (placed above its caller in the `.ode` file) may declare a `for <target> calling { ... }` block naming exact argument bindings (`in param = reg, ...`), return register (`out = reg`), and preserved registers (`preserves ...`). Separating clauses by newlines or semicolons (`;`) both work:
+Exported entry points follow System V AMD64 (`rdi, rsi, rdx, rcx, r8, r9`; return `rax`) on x86-64 and AAPCS64 (`x0..x7`; return `x0`) on AArch64. Between private helper functions inside one program, saving and restoring C-convention registers wastes instructions. A private helper (placed above its caller in the `.ode` file) may declare a `for <target> calling { ... }` block with one clause per line: argument bindings (`in param = reg, ...`), return register (`out = reg`), and preserved registers (`preserves ...`):
 
 ```ode
 // paper/examples/quad.ode (x86-64 excerpt)

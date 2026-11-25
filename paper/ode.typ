@@ -410,7 +410,7 @@ Every line inside a target block is either a processor instruction from `core/x8
 - `inline fn g for arm64 (a: vec, b: vec, t: vec) distinct(a, b, t) changes a, t { ... }` — expands straight-line instruction blocks inline with compile-time checks on register disjointness (`distinct`) and modified registers (`changes`).
 - `for i in 0..8 { ... }` — compile-time unrolling substituting `$i` with `0..7` (not a runtime machine loop).
 - `loop { ... break if ult ... }` and `if eq { ... } else { ... }` — structured branches over flags set by an explicit comparison instruction.
-- `@label:` and `place { name x = reg; fact E; decreases M; wrote ...; keep ... }` — branch labels and loop invariants read by the prover and verifier (never emitted as machine bytes).
+- `@label:` and `place { ... }` (`name x = reg`, `fact E`, `decreases M`, `wrote ...`, `keep ...`, one per line) — branch labels and loop invariants read by the prover and verifier (never emitted as machine bytes).
 
 Figure 4 shows both target blocks of `all_zero`. Whenever control reaches `@loop`, every byte at indices `[0, idx)` has already tested zero, so checking the suffix from `idx` equals `zeros(a)` and `n - idx` strictly decreases each iteration. On both targets, `cur` and `cur64` (`edx`/`rdx`, `w4`/`x4`) alias the 32-bit and 64-bit views of one register so the byte load zero-extends cleanly into the 64-bit comparison.
 
@@ -448,7 +448,7 @@ Between private Ode helpers inside a single object file, C calling conventions o
 
 == Private Calling Conventions
 
-A private helper (local to its packed object file, never exported to C) may declare a `for <arch> calling { in ...; out ...; preserves ... }` block choosing exact argument, return, and preserved registers. Below, `step` preserves `rdi`, `rsi`, and `r8`, allowing `quad` to call `step` twice without spilling a single register to the stack:
+A private helper (local to its packed object file, never exported to C) may declare a `for <arch> calling { ... }` block with one clause per line (`in param = reg, ...`, `out = reg`, and `preserves ...`). Below, `step` preserves `rdi`, `rsi`, and `r8`, allowing `quad` to call `step` twice without spilling a single register to the stack:
 
 #fullwidth[
   #grid(

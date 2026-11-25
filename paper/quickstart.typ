@@ -246,7 +246,7 @@ To keep a pure specification separate from its implementations, import another `
 
 = Custom Calling Conventions and Tail Calls
 
-Exported entry points follow the platform C calling convention (System V AMD64 on x86-64; AAPCS64 on AArch64). Between Ode functions inside one program, saving and restoring C-convention registers on every helper call wastes instructions. A private helper may therefore declare a `for <target> calling { in ...; out ...; preserves ... }` block naming exact argument, return, and preserved registers. Below, `step` preserves `rdi`, `rsi`, and `r8`, so `quad` calls `step` twice with zero stack spills (`requires a < 1000000` prevents 64-bit wraparound).
+Exported entry points follow the platform C calling convention (System V AMD64 on x86-64; AAPCS64 on AArch64). Between Ode functions inside one program, saving and restoring C-convention registers on every helper call wastes instructions. A private helper may therefore declare a `for <target> calling { ... }` block (one clause per line: `in param = reg, ...`, `out = reg`, and `preserves ...`). Below, `step` preserves `rdi`, `rsi`, and `r8`, so `quad` calls `step` twice with zero stack spills (`requires a < 1000000` prevents 64-bit wraparound).
 
 #fullwidth[
   #grid(
