@@ -4,16 +4,16 @@
     "id": "jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika"
   },
   "lean": {
-    "core_lines": 5124,
+    "core_lines": 5191,
     "model_files": 8,
-    "model_lines": 9657,
+    "model_lines": 9737,
     "sound_files": 20,
-    "sound_lines": 32710
+    "sound_lines": 32996
   },
   "tables": {
-    "arm64_rows": 54,
+    "arm64_rows": 56,
     "arm64_rows_run_on_a_processor": 47,
-    "x86_rows": 94,
-    "x86_rows_run_on_a_processor": 91
+    "x86_rows": 96,
+    "x86_rows_run_on_a_processor": 93
   }
 }

@@ -1,6 +1,6 @@
-# Ode: A Language for Native Machine Code That Carries Its Proof
+# Ode: Native Machine Code Checked Against a Canonical Contract
 
-The language report is [`ODE.pdf`](ODE.pdf) (Revision 10, November 2026).
+The language report is [`ODE.pdf`](ODE.pdf) (Revision 11, November 2026).
 
 This page is only a pointer. The report has one source, [`ode.typ`](ode.typ), so that no second copy of
 its text can drift from the first.

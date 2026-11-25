@@ -14,10 +14,8 @@ fn all_zero(a: n bytes, n: number)
     stack 0
 {
     for x86_64 {
-        reg base = rdi
-        reg count = rsi
-        reg idx = rcx
-        reg res = rax
+        reg base = rdi, count = rsi, idx = rcx, res = rax
+        reg addr = rdx, cur = edx, cur64 = rdx
 
         idx := 0
         place {
@@ -30,10 +28,10 @@ fn all_zero(a: n bytes, n: number)
     @loop:
         cmp idx, count
         jae @yes
-        mov rdx, base
-        add rdx, idx
-        movzx edx, byte ptr [rdx]
-        cmp rdx, 0
+        mov addr, base
+        add addr, idx
+        movzx cur, byte ptr [addr]
+        cmp cur64, 0
         jne @no
         add idx, 1
         jmp @loop
@@ -46,12 +44,8 @@ fn all_zero(a: n bytes, n: number)
         ret
     }
     for arm64 {
-        reg base = x0
-        reg count = x1
-        reg idx = x2
-        reg addr = x3
-        reg cur = w4
-        reg cur64 = x4
+        reg base = x0, count = x1, idx = x2, res = x0
+        reg addr = x3, cur = w4, cur64 = x4
 
         idx := 0
         place {
@@ -71,10 +65,10 @@ fn all_zero(a: n bytes, n: number)
         add idx, idx, 1
         b @loop
     @yes:
-        x0 := 1
+        res := 1
         b @done
     @no:
-        x0 := 0
+        res := 0
     @done:
         ret
     }

@@ -81,84 +81,97 @@ def path(d_str, stroke=INK, sw=0.75, fill="none", dash=None, marker=None):
     return f'  <path d="{d_str}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}" stroke-linecap="round" stroke-linejoin="round"{d}{m}/>'
 
 
+def _table_row_counts():
+    import json
+    fp = Path(__file__).resolve().parent / "facts.json"
+    if fp.exists():
+        d = json.loads(fp.read_text(encoding="utf-8"))
+        t = d.get("tables", {})
+        if "x86_rows" in t and "arm64_rows" in t:
+            return int(t["x86_rows"]), int(t["arm64_rows"])
+    return 96, 56
+
+
 def make_fig1():
     """Figure 1: The Boundary Between Maker and Auditor (Reliance Sets)."""
-    w, h = 680, 224
+    x86_n, arm_n = _table_row_counts()
+    w, h = 680, 236
     parts = [
         # Left zone: Alice's workshop
-        rect(6, 12, 232, 198, fill=IVORY, stroke=RULE, sw=0.75),
-        text(20, 31, "ALICE'S WORKSHOP", size=8.0, fill=SLATE, weight="bold", spacing="1.2"),
-        text(20, 44, "Relied on for nothing in Bob's verdict", size=8.5, fill=SLATE, style="italic"),
+        rect(6, 12, 224, 210, fill=IVORY, stroke=RULE, sw=0.75),
+        text(18, 31, "ALICE'S WORKSHOP", size=8.4, fill=SLATE, weight="bold", spacing="1.0"),
+        text(18, 45, "Errors here cannot forge a valid proof", size=8.3, fill=SLATE, style="italic"),
 
-        rect(20, 58, 92, 40, fill=WHITE, stroke=RULE, sw=0.75),
-        text(66, 75, "Unified source", size=8.8, anchor="middle"),
-        text(66, 89, "program.ode", font=MONO, size=7.6, fill=SLATE, anchor="middle"),
+        rect(18, 60, 90, 42, fill=WHITE, stroke=RULE, sw=0.75),
+        text(63, 78, "Source", size=8.8, anchor="middle", weight="bold"),
+        text(63, 93, "program.ode", font=MONO, size=7.8, fill=SLATE, anchor="middle"),
 
-        rect(132, 58, 92, 40, fill=WHITE, stroke=RULE, sw=0.75),
-        text(178, 75, "Compiler & prover", size=8.8, anchor="middle"),
-        text(178, 89, "ode pack", font=MONO, size=7.6, fill=SLATE, anchor="middle"),
-        line(112, 78, 130, 78, stroke=SLATE, sw=0.8, marker="arr-slate"),
+        rect(126, 60, 92, 42, fill=WHITE, stroke=RULE, sw=0.75),
+        text(172, 78, "Compile & prove", size=8.5, anchor="middle", weight="bold"),
+        text(172, 93, "ode pack", font=MONO, size=7.8, fill=SLATE, anchor="middle"),
+        line(108, 81, 124, 81, stroke=SLATE, sw=0.85, marker="arr-slate"),
 
-        rect(20, 124, 204, 72, fill=WHITE, stroke=RULE, sw=0.65, dash="2.5,2.5"),
-        text(30, 141, "What may go wrong here:", size=8.5, fill=SLATE, style="italic"),
-        text(30, 156, "• Bugs in the compiler or prover", size=8.4, fill=SLATE),
-        text(30, 170, "• Optimizing rewrites or search bugs", size=8.4, fill=SLATE),
-        text(30, 184, "• A hostile or mistaken author", size=8.4, fill=SLATE),
+        rect(18, 122, 200, 86, fill=WHITE, stroke=RULE, sw=0.65, dash="2.5,2.5"),
+        text(28, 140, "Not in Bob's reliance set:", size=8.4, fill=INK, weight="bold"),
+        text(28, 156, "• Compiler & assembler bugs", size=8.3, fill=SLATE),
+        text(28, 171, "• Prover heuristics or search bugs", size=8.3, fill=SLATE),
+        text(28, 186, "• Hostile or mistaken author", size=8.3, fill=SLATE),
+        text(28, 201, "(cannot make verifier accept false code)", size=7.7, fill=MUTED, style="italic"),
 
-        # Center boundary & crossing artifacts
-        line(256, 8, 256, 214, stroke=SLATE, sw=0.8, dash="3,3"),
-        text(322, 23, "ARTIFACT BOUNDARY", size=7.8, fill=SLATE, anchor="middle", weight="bold", spacing="1.0"),
+        # Center boundary & delivered artifacts
+        line(248, 8, 248, 226, stroke=SLATE, sw=0.8, dash="3,3"),
+        text(314, 24, "DELIVERED TO BOB", size=8.0, fill=SLATE, anchor="middle", weight="bold", spacing="0.8"),
 
-        # Three crossing pills
-        rect(270, 46, 102, 36, fill=WHITE, stroke=CHARCOAL, sw=0.85),
-        text(321, 61, "Binary (.o)", font=MONO, size=8.0, fill=INK, anchor="middle"),
-        text(321, 74, "bytes + .ode.ocl", size=7.9, fill=SLATE, anchor="middle"),
-        line(224, 68, 268, 64, stroke=INK, sw=0.85, marker="arr-ink"),
-        line(372, 64, 390, 64, stroke=ACCENT, sw=0.9, marker="arr-accent"),
+        rect(260, 42, 108, 40, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(314, 59, "Object (.o)", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
+        text(314, 73, "bytes + .ode.ocl", size=7.9, fill=SLATE, anchor="middle"),
+        line(218, 70, 258, 62, stroke=INK, sw=0.85, marker="arr-ink"),
+        line(368, 62, 390, 62, stroke=INK, sw=0.9, marker="arr-ink"),
 
-        rect(270, 98, 102, 36, fill=WHITE, stroke=SLATE, sw=0.8),
-        text(321, 113, "Proof (.proof)", font=MONO, size=8.0, fill=INK, anchor="middle"),
-        text(321, 126, "separate file", size=7.9, fill=SLATE, anchor="middle"),
-        line(224, 86, 268, 116, stroke=SLATE, sw=0.8, marker="arr-slate"),
-        line(372, 116, 390, 116, stroke=SLATE, sw=0.85, marker="arr-slate"),
+        rect(260, 96, 108, 40, fill=WHITE, stroke=CHARCOAL, sw=0.8),
+        text(314, 113, "Proof (.proof)", font=MONO, size=8.2, fill=INK, anchor="middle"),
+        text(314, 127, "separate file", size=7.9, fill=SLATE, anchor="middle"),
+        line(218, 90, 258, 116, stroke=INK, sw=0.85, marker="arr-ink"),
+        line(368, 116, 390, 116, stroke=INK, sw=0.9, marker="arr-ink"),
 
-        rect(270, 152, 102, 36, fill=IVORY, stroke=SLATE, sw=0.75, dash="3,2.5"),
-        text(321, 167, "Glossary (.json)", font=MONO, size=7.7, fill=SLATE, anchor="middle"),
-        text(321, 180, "optional; never hashed", size=7.8, fill=SLATE, anchor="middle", style="italic"),
-        line(224, 93, 268, 170, stroke=SLATE, sw=0.75, dash="3,2.5", marker="arr-slate"),
-        path("M 372 178 L 382 178 L 382 206 L 603 206 L 603 198", stroke=SLATE, sw=0.8, dash="3,2.5", marker="arr-slate"),
+        rect(260, 152, 108, 40, fill=IVORY, stroke=SLATE, sw=0.75, dash="3,2.5"),
+        text(314, 169, "Glossary (.json)", font=MONO, size=7.8, fill=SLATE, anchor="middle"),
+        text(314, 183, "optional display", size=7.8, fill=SLATE, anchor="middle", style="italic"),
+        line(218, 98, 258, 172, stroke=SLATE, sw=0.75, dash="3,2.5", marker="arr-slate"),
+        path("M 368 172 L 380 172 L 380 212 L 605 212 L 605 204", stroke=SLATE, sw=0.8, dash="3,2.5", marker="arr-slate"),
 
-        # Right zone: Bob's Reliance Set (calm sandstone ground + dark charcoal frame)
-        rect(392, 12, 282, 202, fill=SAND, stroke=CHARCOAL, sw=1.0),
-        text(406, 31, "BOB'S AUDIT  —  THE RELIANCE SET", size=8.1, fill=INK, weight="bold", spacing="1.0"),
-        text(406, 44, "Every piece Bob relies on for his verdict", size=8.5, fill=SLATE, style="italic"),
+        # Right zone: Bob's Reliance Set
+        rect(392, 12, 282, 210, fill=SAND, stroke=CHARCOAL, sw=1.0),
+        text(406, 31, "BOB'S AUDIT  —  THE RELIANCE SET", size=8.3, fill=INK, weight="bold", spacing="0.8"),
+        text(406, 45, "What Bob relies on for a valid verdict", size=8.3, fill=SLATE, style="italic"),
 
-        rect(406, 58, 116, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
-        text(464, 75, "Small Verifier", size=9.2, fill=INK, anchor="middle", weight="bold"),
-        text(464, 90, "odeverify", font=MONO, size=8.2, fill=INK, anchor="middle"),
-        text(464, 104, "checks machine bytes", size=8.0, fill=SLATE, anchor="middle"),
-        text(464, 115, "via x86/arm64.tab", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
+        rect(406, 58, 120, 66, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(466, 75, "Audit & Verifier", size=9.0, fill=INK, anchor="middle", weight="bold"),
+        text(466, 90, "ode audit / odeverify", font=MONO, size=7.4, fill=INK, anchor="middle"),
+        text(466, 104, "checks bytes, proof,", size=7.9, fill=SLATE, anchor="middle"),
+        text(466, 116, "and expected ID", size=7.9, fill=SLATE, anchor="middle"),
 
-        line(522, 89, 544, 89, stroke=ACCENT, sw=0.95, marker="arr-accent"),
+        line(526, 91, 546, 91, stroke=ACCENT, sw=1.0, marker="arr-accent"),
 
-        rect(546, 58, 114, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
-        text(603, 75, "Verdict & Digest", size=9.0, fill=INK, anchor="middle", weight="bold"),
-        text(603, 91, "shown", font=MONO, size=9.0, fill=INK, anchor="middle", weight="bold"),
-        text(603, 107, "ode_<52-char-b32>", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
+        rect(548, 58, 114, 66, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(605, 75, "Verdict", size=9.0, fill=INK, anchor="middle", weight="bold"),
+        text(605, 92, "shown", font=MONO, size=9.2, fill=ACCENT, anchor="middle", weight="bold"),
+        text(605, 106, "for symbol", size=7.8, fill=SLATE, anchor="middle"),
+        text(605, 117, "ode_<52-char-ID>", font=MONO, size=7.4, fill=INK, anchor="middle"),
 
-        rect(406, 134, 116, 62, fill=WHITE, stroke=SLATE, sw=0.75),
-        text(464, 151, "Instruction Tables", size=8.8, anchor="middle"),
-        text(464, 165, "x86.tab (94 rows)", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
-        text(464, 177, "arm64.tab (54 rows)", font=MONO, size=7.4, fill=SLATE, anchor="middle"),
-        text(464, 190, "silicon cross-checked", size=7.8, fill=SLATE, anchor="middle", style="italic"),
-        line(464, 134, 464, 122, stroke=SLATE, sw=0.8, marker="arr-slate"),
+        rect(406, 138, 120, 66, fill=WHITE, stroke=SLATE, sw=0.8),
+        text(466, 155, "Instruction Tables", size=8.8, anchor="middle", weight="bold"),
+        text(466, 170, f"x86.tab ({x86_n} rows)", font=MONO, size=7.6, fill=INK, anchor="middle"),
+        text(466, 183, f"arm64.tab ({arm_n} rows)", font=MONO, size=7.6, fill=INK, anchor="middle"),
+        text(466, 197, "CPU + model checked", size=7.6, fill=SLATE, anchor="middle", style="italic"),
+        line(466, 138, 466, 126, stroke=INK, sw=0.85, marker="arr-ink"),
 
-        rect(546, 134, 114, 62, fill=WHITE, stroke=CHARCOAL, sw=0.85),
-        text(603, 151, "Contract Audited", size=8.8, fill=INK, anchor="middle", weight="bold"),
-        text(603, 166, "<hash>.ocl", font=MONO, size=8.2, fill=INK, anchor="middle"),
-        text(603, 180, "nameless contract;", size=8.0, fill=SLATE, anchor="middle"),
-        text(603, 191, "0 register names", size=8.0, fill=SLATE, anchor="middle"),
-        line(603, 120, 603, 132, stroke=SLATE, sw=0.85, marker="arr-slate"),
+        rect(548, 138, 114, 66, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(605, 155, "Expected Contract", size=8.8, fill=INK, anchor="middle", weight="bold"),
+        text(605, 170, "<52-char-ID>.ocl", font=MONO, size=7.5, fill=INK, anchor="middle"),
+        text(605, 184, "read by Bob;", size=7.9, fill=SLATE, anchor="middle"),
+        text(605, 196, "hash checked", size=7.9, fill=SLATE, anchor="middle"),
+        line(605, 138, 605, 126, stroke=INK, sw=0.85, marker="arr-ink"),
     ]
     (OUT / "fig1-boundary.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
@@ -226,7 +239,7 @@ def make_fig2():
         text(589, 119, "file    <these 52>.ocl", font=MONO, size=7.4, fill=INK, anchor="middle"),
 
         rect(504, 136, 170, 84, fill=WHITE, stroke=SLATE, sw=0.75, dash="3,2.5"),
-        text(516, 152, "A READER'S GLOSSARY  (not hashed)", size=7.5, fill=SLATE, weight="bold", spacing="0.4"),
+        text(516, 152, "OPTIONAL DISPLAY GLOSSARY", size=7.5, fill=SLATE, weight="bold", spacing="0.4"),
     ]
     entries = [(k, v) for k, v in canon["glossary"].items() if k != "contract"]
     for i, (k, v) in enumerate(entries):
@@ -252,15 +265,15 @@ def make_fig3():
         rect(172, 46, 280, 48, fill=WHITE, stroke=CHARCOAL, sw=1.0),
         rect(174, 48, 54, 44, fill=IVORY, stroke=RULE, sw=0.65),
         text(201, 67, "nd.h", font=MONO, size=8.2, anchor="middle"),
-        text(201, 81, "0..32", font=MONO, size=7.3, fill=SLATE, anchor="middle"),
+        text(201, 81, "[0, 32)", font=MONO, size=7.5, fill=SLATE, anchor="middle"),
 
         rect(231, 48, 122, 44, fill=SAND, stroke=CHARCOAL, sw=0.95),
         text(292, 67, "nd.block", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
-        text(292, 81, "bytes 32..96 · lent", size=7.8, fill=ACCENT, anchor="middle"),
+        text(292, 81, "[32, 96) · lent", font=MONO, size=7.8, fill=ACCENT, anchor="middle"),
 
         rect(356, 48, 94, 44, fill=IVORY, stroke=RULE, sw=0.65),
         text(403, 67, "counter, length,", font=MONO, size=7.3, anchor="middle"),
-        text(403, 81, "flags · 96..120", font=MONO, size=7.3, fill=SLATE, anchor="middle"),
+        text(403, 81, "flags · [96, 120)", font=MONO, size=7.3, fill=SLATE, anchor="middle"),
 
         text(468, 72, "disjoint", size=7.2, fill=MUTED, anchor="middle", style="italic"),
 
@@ -283,9 +296,9 @@ def make_fig3():
 
         # Callee box
         rect(142, 146, 266, 62, fill=WHITE, stroke=CHARCOAL, sw=0.95),
-        text(275, 164, "Callee:  b3l_pad_arm64(block, src, n)", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
+        text(275, 164, "Callee:  pad_block(block, src, n)", font=MONO, size=8.2, fill=INK, anchor="middle", weight="bold"),
         text(275, 180, "ensures block = padded(src)  ·  stack 0", font=MONO, size=7.8, fill=ACCENT, anchor="middle"),
-        text(275, 196, "It can touch nothing else of nd, nor the caller's stack", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        text(275, 196, "This call touches nothing else of nd or the stack", size=8.0, fill=SLATE, anchor="middle", style="italic"),
 
         # Preservation callout on the right
         rect(424, 146, 248, 62, fill=IVORY, stroke=RULE, sw=0.8),
@@ -306,58 +319,58 @@ def make_fig4():
     # Panel A: Standard C ABI
     x = xs[0]
     parts += [
-        rect(x, 12, pw, 200, fill=IVORY, stroke=RULE, sw=0.75),
-        text(x + 12, 30, "A.  THE C CONVENTION", size=7.6, fill=SLATE, weight="bold", spacing="0.8"),
-        text(x + 12, 43, "where other code calls in", size=7.8, fill=SLATE, style="italic"),
-        rect(x + 14, 54, 184, 34, fill=WHITE, stroke=RULE, sw=0.75),
-        text(x + 22, 68, "push rbx..r15 / stp x19..x30", font=MONO, size=7.0, fill=INK),
-        text(x + 22, 81, "move arguments into rdi..r9 / x0..x7", size=7.4, fill=SLATE),
-        line(x + 106, 88, x + 106, 104, stroke=SLATE, sw=0.8, marker="arr-slate"),
-        rect(x + 24, 106, 164, 32, fill=WHITE, stroke=SLATE, sw=0.8),
-        text(x + 106, 120, "call / bl  helper", font=MONO, size=7.7, anchor="middle"),
-        text(x + 106, 132, "saves and restores its own frame", size=7.4, fill=SLATE, anchor="middle"),
-        line(x + 106, 138, x + 106, 154, stroke=SLATE, sw=0.8, marker="arr-slate"),
-        rect(x + 14, 156, 184, 28, fill=WHITE, stroke=RULE, sw=0.75),
-        text(x + 106, 173, "pop rbx..r15  ·  ret", font=MONO, size=7.4, fill=INK, anchor="middle"),
-        text(x + 106, 200, "a stack frame of 16 bytes or more", size=8.0, fill=SLATE, anchor="middle", style="italic"),
+        rect(x, 12, pw, 200, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(x + 12, 30, "A.  THE C CONVENTION", size=7.9, fill=INK, weight="bold", spacing="0.7"),
+        text(x + 12, 43, "where external code calls in", size=8.0, fill=SLATE, style="italic"),
+        rect(x + 14, 54, 184, 34, fill=IVORY, stroke=RULE, sw=0.75),
+        text(x + 22, 68, "save callee-saved regs (schematic)", size=7.5, fill=INK),
+        text(x + 22, 81, "move args to rdi..r9 / x0..x7", font=MONO, size=7.2, fill=SLATE),
+        line(x + 106, 88, x + 106, 104, stroke=SLATE, sw=0.85, marker="arr-slate"),
+        rect(x + 24, 106, 164, 34, fill=SAND, stroke=CHARCOAL, sw=0.8),
+        text(x + 106, 120, "call / bl  helper", font=MONO, size=7.8, anchor="middle", weight="bold"),
+        text(x + 106, 133, "callee saves its own used regs", size=7.6, fill=SLATE, anchor="middle"),
+        line(x + 106, 140, x + 106, 154, stroke=SLATE, sw=0.85, marker="arr-slate"),
+        rect(x + 14, 156, 184, 28, fill=IVORY, stroke=RULE, sw=0.75),
+        text(x + 106, 173, "restore saved regs  ·  ret", font=MONO, size=7.5, fill=INK, anchor="middle"),
+        text(x + 106, 201, "stack frame when saving link/regs", size=7.9, fill=SLATE, anchor="middle", style="italic"),
     ]
 
-    # Panel B: Custom Ode Calling + Zero-Stack AArch64
+    # Panel B: Custom Ode Calling + Zero-Stack Arm
     x = xs[1]
     parts += [
-        rect(x, 12, pw, 200, fill=WHITE, stroke=SLATE, sw=0.8),
-        text(x + 12, 30, "B.  A CONVENTION OF ITS OWN", size=7.6, fill=INK, weight="bold", spacing="0.6"),
-        text(x + 12, 43, "the return address kept in x15", size=7.8, fill=SLATE, style="italic"),
+        rect(x, 12, pw, 200, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(x + 12, 30, "B.  PRIVATE CONVENTION", size=7.9, fill=INK, weight="bold", spacing="0.7"),
+        text(x + 12, 43, "return address kept in x15 (AArch64)", size=7.9, fill=SLATE, style="italic"),
         rect(x + 14, 54, 184, 34, fill=IVORY, stroke=RULE, sw=0.75),
-        text(x + 22, 68, "mov x15, x30   // save link", font=MONO, size=7.2, fill=INK),
-        text(x + 22, 81, "values in use stay in registers", size=7.4, fill=SLATE),
-        line(x + 106, 88, x + 106, 104, stroke=INK, sw=0.8, marker="arr-ink"),
+        text(x + 22, 68, "mov x15, x30   // keep link", font=MONO, size=7.4, fill=INK),
+        text(x + 22, 81, "live values stay in registers", size=7.6, fill=SLATE),
+        line(x + 106, 88, x + 106, 104, stroke=INK, sw=0.85, marker="arr-ink"),
         rect(x + 20, 106, 172, 34, fill=SAND, stroke=CHARCOAL, sw=0.85),
-        text(x + 106, 120, "bl  helper   (preserves x15)", font=MONO, size=7.3, fill=INK, anchor="middle", weight="bold"),
-        text(x + 106, 133, "in a=x9, b=x10  ·  out=x11", font=MONO, size=7.0, fill=SLATE, anchor="middle"),
-        line(x + 106, 140, x + 106, 154, stroke=INK, sw=0.8, marker="arr-ink"),
+        text(x + 106, 120, "bl  helper   (preserves x15)", font=MONO, size=7.4, fill=INK, anchor="middle", weight="bold"),
+        text(x + 106, 133, "in a=x9, b=x10  ·  out=x11", font=MONO, size=7.2, fill=SLATE, anchor="middle"),
+        line(x + 106, 140, x + 106, 154, stroke=INK, sw=0.85, marker="arr-ink"),
         rect(x + 14, 156, 184, 28, fill=IVORY, stroke=RULE, sw=0.75),
-        text(x + 106, 173, "mov x30, x15  ·  ret", font=MONO, size=7.4, fill=INK, anchor="middle"),
-        text(x + 106, 200, "no stack frame", size=8.0, fill=INK, anchor="middle", weight="bold"),
+        text(x + 106, 173, "mov x30, x15  ·  ret", font=MONO, size=7.5, fill=INK, anchor="middle"),
+        text(x + 106, 201, "zero stack frame", size=8.0, fill=INK, anchor="middle", weight="bold"),
     ]
 
-    # Panel C: Verified Tail Call (calm sandstone ground + dark charcoal border)
+    # Panel C: Verified Tail Call (equal visual weight to A and B)
     x = xs[2]
     parts += [
-        rect(x, 12, pw, 200, fill=SAND, stroke=CHARCOAL, sw=1.0),
-        text(x + 12, 30, "C.  A TAIL CALL  (jmp / b)", size=7.6, fill=INK, weight="bold", spacing="0.6"),
-        text(x + 12, 43, "no call and no return of its own", size=7.8, fill=SLATE, style="italic"),
-        rect(x + 14, 54, 184, 34, fill=WHITE, stroke=SLATE, sw=0.75),
-        text(x + 22, 68, "sp == entry sp  &  x30 intact", font=MONO, size=7.2, fill=INK),
-        text(x + 22, 81, "caller keeps ⊆ callee preserves", font=MONO, size=7.0, fill=SLATE),
+        rect(x, 12, pw, 200, fill=WHITE, stroke=CHARCOAL, sw=0.85),
+        text(x + 12, 30, "C.  A TAIL CALL  (jmp / b)", size=7.9, fill=INK, weight="bold", spacing="0.7"),
+        text(x + 12, 43, "reuses the caller's return frame", size=8.0, fill=SLATE, style="italic"),
+        rect(x + 14, 54, 184, 34, fill=IVORY, stroke=RULE, sw=0.75),
+        text(x + 22, 68, "sp == entry sp  &  x30 intact", font=MONO, size=7.3, fill=INK),
+        text(x + 22, 81, "caller keeps ⊆ callee preserves", font=MONO, size=7.1, fill=SLATE),
         line(x + 106, 88, x + 106, 108, stroke=ACCENT, sw=0.95, marker="arr-accent"),
-        text(x + 114, 102, "jmp / b", font=MONO, size=7.6, fill=ACCENT, weight="bold"),
-        rect(x + 20, 110, 172, 40, fill=WHITE, stroke=CHARCOAL, sw=0.9),
+        text(x + 114, 102, "jmp / b", font=MONO, size=7.8, fill=ACCENT, weight="bold"),
+        rect(x + 20, 110, 172, 40, fill=SAND, stroke=CHARCOAL, sw=0.85),
         text(x + 106, 126, "callee entry point", font=MONO, size=7.8, fill=INK, anchor="middle", weight="bold"),
         text(x + 106, 141, "returns directly to outer caller", size=7.7, fill=SLATE, anchor="middle"),
         line(x + 106, 150, x + 106, 174, stroke=ACCENT, sw=0.9, marker="arr-accent"),
-        text(x + 106, 186, "outer caller receives result directly", size=7.7, fill=INK, anchor="middle", style="italic"),
-        text(x + 106, 202, "no stack frame, one return in all", size=8.0, fill=INK, anchor="middle", weight="bold"),
+        text(x + 106, 186, "outer caller receives result directly", size=7.8, fill=INK, anchor="middle", style="italic"),
+        text(x + 106, 201, "no second call or return", size=8.0, fill=INK, anchor="middle", weight="bold"),
     ]
     (OUT / "fig4-calling.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 
@@ -391,20 +404,21 @@ def make_fig5():
 
         rect(166, 102, 238, 36, fill=SAND, stroke=CHARCOAL, sw=0.85),
         text(176, 117, ".ode.ocl", font=MONO, size=8.0, fill=INK, weight="bold"),
-        text(238, 117, "the canonical contract (not code)", size=7.6, fill=SLATE, style="italic"),
-        text(176, 130, "its BLAKE3 hash is the symbol's <52>", font=MONO, size=7.0, fill=INK),
+        text(238, 117, "embedded canonical contract", size=7.8, fill=SLATE, style="italic"),
+        text(176, 130, "its BLAKE3 hash is the symbol's <52>", font=MONO, size=7.2, fill=INK),
 
         # Forbidden sections bar
         rect(20, 146, 384, 24, fill=IVORY, stroke=RULE, sw=0.65, dash="2.5,2.5"),
-        text(30, 162, "Refused if present:  code run at start or end · other visible symbols · symbols defined elsewhere", size=7.8, fill=SLATE),
+        text(30, 162, "Refused if present:  init/fini hooks · extra exported symbols · unresolved external calls", size=7.8, fill=SLATE),
 
         # Connecting arrow from .proof -> .o ("verifies")
-        line(448, 98, 419, 98, stroke=ACCENT, sw=0.95, marker="arr-accent"),
+        line(448, 98, 419, 98, stroke=ACCENT, sw=1.0, marker="arr-accent"),
+        text(433, 91, "checks", size=7.6, fill=ACCENT, anchor="middle", style="italic"),
 
         # Right: Separate .proof file
         rect(448, 12, 224, 170, fill=IVORY, stroke=SLATE, sw=0.8),
-        text(460, 30, "THE PROOF FILE  (bundle.proof)", size=7.8, fill=INK, weight="bold", spacing="0.9"),
-        text(460, 43, "checked step by step; relied on for nothing", size=7.6, fill=SLATE, style="italic"),
+        text(460, 30, "THE PROOF FILE  (bundle.proof)", size=7.9, fill=INK, weight="bold", spacing="0.8"),
+        text(460, 43, "required input; every step checked", size=7.8, fill=SLATE, style="italic"),
 
         rect(460, 54, 200, 36, fill=WHITE, stroke=RULE, sw=0.75),
         text(470, 68, "order:  helper 1, ..., ode_<52>", font=MONO, size=7.1, fill=INK),
@@ -436,8 +450,8 @@ def make_fig6():
         return ly1 - (v / ymax_l) * (ly1 - ly0)
 
     parts += [
-        text(lx0, 20, "SHORT INPUTS  (64 B – 1 KiB)", size=8.0, fill=INK, weight="bold", spacing="0.9"),
-        text(lx0, 32, "Calls of Ode's own and tail calls count most at 64 bytes", size=7.9, fill=SLATE, style="italic"),
+        text(lx0, 20, "SHORT INPUTS  (64 B – 1 KiB)", size=8.2, fill=INK, weight="bold", spacing="0.8"),
+        text(lx0, 33, "Combined gain of private calls, tail calls, and zero block copy", size=7.8, fill=SLATE, style="italic"),
     ]
     # Subtle horizontal reference gridlines (Tufte minimal)
     for tick in (0.0, 0.5, 1.0, 1.5):
@@ -474,10 +488,10 @@ def make_fig6():
     # Clean horizontal key under left panel (high contrast, legible at print size)
     ky = 234
     items_l = [
-        (14,  "#CFC9BC", SLATE,    "Ode, C calls inside"),
-        (112, ACCENT,    ACCENT,   "Ode"),
-        (146, "#3A3F47", "#3A3F47","BLAKE3-Servil"),
-        (222, WHITE,     CHARCOAL, "blake3 1.8.7"),
+        (10,  "#CFC9BC", SLATE,    "Ode (C calls + copy)"),
+        (116, ACCENT,    ACCENT,   "Ode"),
+        (150, "#3A3F47", "#3A3F47","BLAKE3-Servil"),
+        (224, WHITE,     CHARCOAL, "blake3 1.8.7"),
     ]
     for ix, fl, st, lab in items_l:
         parts.append(rect(ix, ky - 7, 7.5, 7.5, fill=fl, stroke=st, sw=0.85, rx=0.5))
@@ -492,7 +506,7 @@ def make_fig6():
         return ry1 - (v / ymax_r) * (ry1 - ry0)
 
     parts += [
-        text(rx0, 20, "LARGE INPUTS  (4 KiB – 1 MiB)", size=8.2, fill=INK, weight="bold", spacing="0.8"),
+        text(rx0, 20, "LARGE INPUTS  (4 KiB – 1 MiB, selected sizes)", size=8.2, fill=INK, weight="bold", spacing="0.7"),
         text(rx0, 33, "From 256 KiB on, Ode runs at 98 to 99% of BLAKE3-Servil's speed", size=7.9, fill=SLATE, style="italic"),
     ]
     for tick in (0, 4, 8, 12, 16):
@@ -502,15 +516,15 @@ def make_fig6():
 
     # Exact verified Zen 5 Step 4A k16 medians (4 KiB .. 1 MiB)
     sweep = [
-        ("4K",   2.928,  3.327,  3.407),
-        ("16K",  7.797, 10.576, 10.724),
-        ("32K",  9.221, 15.223, 11.569),
-        ("64K", 14.781, 15.907, 12.004),
-        ("128K",14.636, 16.299, 12.248),
-        ("256K",16.301, 16.500, 12.381),
-        ("1M",  15.761, 16.026, 12.221),
+        ("4 KiB",   2.928,  3.327,  3.407),
+        ("16 KiB",  7.797, 10.576, 10.724),
+        ("32 KiB",  9.221, 15.223, 11.569),
+        ("64 KiB", 14.781, 15.907, 12.004),
+        ("128 KiB",14.636, 16.299, 12.248),
+        ("256 KiB",16.301, 16.500, 12.381),
+        ("1 MiB",  15.761, 16.026, 12.221),
     ]
-    xs_r = [rx0 + 12 + i * ((rx1 - rx0 - 24) / (len(sweep) - 1)) for i in range(len(sweep))]
+    xs_r = [rx0 + 14 + i * ((rx1 - rx0 - 28) / (len(sweep) - 1)) for i in range(len(sweep))]
 
     def poly(idx, stroke, sw, dash=None):
         pts = " ".join(f"{'M' if i == 0 else 'L'} {xs_r[i]:.1f} {ry(row[idx]):.1f}" for i, row in enumerate(sweep))
@@ -525,7 +539,7 @@ def make_fig6():
         cx = xs_r[i]
         parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(ode_v):.1f}" r="2.4" fill="{ACCENT}" stroke="{WHITE}" stroke-width="0.6"/>')
         parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(nxt):.1f}" r="1.8" fill="#3A3F47"/>')
-        parts.append(text(f"{cx:.1f}", ry1 + 14, lbl, font=SERIF, size=8.0, fill=INK, anchor="middle"))
+        parts.append(text(f"{cx:.1f}", ry1 + 14, lbl, font=SERIF, size=7.6, fill=INK, anchor="middle"))
 
     # Clean non-colliding direct end-of-line labels (ample right margin)
     parts.append(text(rx1 + 8, ry(16.026) - 5, "BLAKE3-Servil 16.0", size=7.8, fill="#3A3F47"))
@@ -533,17 +547,17 @@ def make_fig6():
     parts.append(text(rx1 + 8, ry(12.221) + 3, "blake3 1.8.7  12.2", size=7.8, fill=SLATE))
 
     # Pure architectural callout for 32 KiB dip
-    parts.append(line(xs_r[2] + 2, ry(9.221) + 3, xs_r[2] + 18, ry(4.2), stroke=SLATE, sw=0.65))
-    parts.append(text(xs_r[2] + 21, ry(4.0), "32 KiB: 16-lane kernel", size=7.8, fill=SLATE, style="italic"))
-    parts.append(text(xs_r[2] + 21, ry(2.6), "runs twice; 64 KiB+", size=7.8, fill=SLATE, style="italic"))
-    parts.append(text(xs_r[2] + 21, ry(1.2), "uses 32-lane kernel", size=7.8, fill=SLATE, style="italic"))
+    parts.append(line(xs_r[2] + 2, ry(9.221) + 3, xs_r[2] + 18, ry(4.4), stroke=SLATE, sw=0.65))
+    parts.append(text(xs_r[2] + 21, ry(4.2), "32 KiB: 16-way kernel", size=7.8, fill=SLATE, style="italic"))
+    parts.append(text(xs_r[2] + 21, ry(2.8), "runs twice; 64 KiB+", size=7.8, fill=SLATE, style="italic"))
+    parts.append(text(xs_r[2] + 21, ry(1.4), "uses 32-way kernel", size=7.8, fill=SLATE, style="italic"))
 
     # Peak highlight at 256 KiB (clear of curve)
     parts.append(text(f"{xs_r[5]:.1f}", ry(16.500) - 10, "16.30", size=8.0, fill=ACCENT, anchor="middle", weight="bold"))
     parts.append(text(rx0 - 6, ry(17.9), "GiB/s", size=7.8, fill=SLATE, anchor="end", style="italic"))
 
-    # Bottom caption note
-    parts.append(text(rx0, 234, "One Zen 5 core · medians of 45 interleaved trials a size", size=7.8, fill=SLATE, style="italic"))
+    # Bottom caption note (single clean line)
+    parts.append(text(rx0, 234, "Categorical sizes · Zen 5 single core, medians of 45 interleaved trials", size=7.7, fill=SLATE, style="italic"))
 
     (OUT / "fig6-blake3-perf.svg").write_text(svg_wrap(w, h, "\n".join(parts)))
 

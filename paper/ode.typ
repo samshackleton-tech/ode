@@ -1,11 +1,11 @@
-// The Ode Language Report, Revision 10 (November 2026).
+// The Ode Language Report, Revision 11 (November 2026).
 //
 // Every listing in this report is read from a file that the repository's tests compile and verify, and
-// the numbers that can be worked out from the repository are read from facts.json (make_facts.py).
-// Build (from the repository's root):
+// repository counts are read from facts.json (make_facts.py).
+// Build (from the repository root):
 //   pypy3 paper/render-paper.py
 
-#let rev      = 10
+#let rev      = 11
 #let ink      = rgb("#1C1E21")
 #let charcoal = rgb("#2E343D")
 #let slate    = rgb("#5B6470")
@@ -29,7 +29,7 @@
   out
 }
 
-// --- Text read from the files that are tested ---
+// --- Text read from tested repository files ---
 
 #let excerpt(path, start, stop) = {
   let s = read(path)
@@ -45,7 +45,8 @@
 
 #let quad = read("examples/quad.ode")
 #let quad_from_step = quad.slice(quad.position("fn step("))
-#let step_x86 = quad_from_step.slice(0, quad_from_step.position("    for arm64 calling {")).trim(at: end)
+#let step_x86 = quad_from_step.slice(0, quad_from_step.position("    for arm64 calling {")).trim(at: end) + "\n    // ... for arm64 calling { ... }\n}"
+#let quad_x86 = quad.slice(quad.position("fn quad("), quad.position("    for arm64 stack 16 {")).trim(at: end) + "\n    // ... for arm64 stack 16 { ... }\n}"
 
 #let pad_contract = excerpt("/proof-core/examples/arm64/pad_arm64.spec", "contract b3l_pad_arm64(", "\n}")
 #let equal_ct_contract = excerpt("/proof-core/test_trace_proposal.py", "contract t_equal_ct(", "\n}")
@@ -56,21 +57,25 @@
 #set page(
   width: 8.5in,
   height: 11in,
-  margin: (top: 0.88in, bottom: 0.88in, left: 0.85in, right: 3.15in),
+  margin: (top: 0.78in, bottom: 0.76in, left: 0.85in, right: 3.15in),
   header: context {
     let pg = counter(page).get().first()
     if pg > 1 {
-      let on_page = query(heading.where(level: 1)).filter(h => h.location().page() == pg)
-      let prev = query(selector(heading.where(level: 1)).before(here()))
-      let title = if on_page.len() > 0 {
-        on_page.first().body
+      let top_on_page = query(heading.where(level: 1)).filter(h =>
+        h.location().page() == pg and h.location().position().y < 1.6in
+      )
+      let prev = query(selector(heading.where(level: 1)).before(here())).filter(h =>
+        h.location().page() < pg
+      )
+      let title = if top_on_page.len() > 0 {
+        top_on_page.first().body
       } else if prev.len() > 0 {
         prev.last().body
       } else {
         [Ode]
       }
       block(width: 6.80in, below: 0pt)[
-        #set text(font: "Palatino", size: 7.9pt, fill: slate, tracking: 0.08em)
+        #set text(font: "Palatino", size: 7.9pt, fill: slate, tracking: 0.06em)
         #grid(
           columns: (1fr, auto),
           [#upper[Ode · Language Report]],
@@ -89,7 +94,7 @@
         #set text(font: "Palatino", size: 8.1pt, fill: slate)
         #grid(
           columns: (1fr, auto),
-          [#text(size: 7.6pt, fill: muted)[Revision #rev · November 2026]],
+          [#text(size: 7.6pt, fill: muted)[Object-code Direct Evidence · Revision #rev]],
           [#counter(page).display()],
         )
       ]
@@ -97,60 +102,59 @@
   },
 )
 
-#set text(font: "Palatino", size: 9.9pt, fill: ink, lang: "en")
-#set par(justify: true, leading: 0.66em, spacing: 0.90em, first-line-indent: 0pt)
+#set text(font: "Palatino", size: 9.8pt, fill: ink, lang: "en")
+#set par(justify: true, leading: 0.64em, spacing: 0.84em, first-line-indent: 0pt)
 #set heading(numbering: "1.1")
 
 #show heading.where(level: 1): it => {
-  block(breakable: false, sticky: true, above: 1.75em, below: 0.85em, width: 6.80in)[
+  block(breakable: false, sticky: true, above: 1.55em, below: 0.72em, width: 6.80in)[
     #set par(justify: false)
     #if it.numbering != none [
-      #text(fill: accent, size: 12.0pt, weight: "bold")[§ #counter(heading).display()]
+      #text(fill: accent, size: 11.8pt, weight: "bold")[§ #counter(heading).display()]
       #h(0.45em)
     ]
-    #text(fill: ink, size: 12.8pt, weight: "bold")[#it.body]
-    #block(above: 6pt, below: 0pt, line(length: 100%, stroke: 0.55pt + rulecol))
+    #text(fill: ink, size: 12.6pt, weight: "bold")[#it.body]
+    #block(above: 5pt, below: 0pt, line(length: 100%, stroke: 0.55pt + rulecol))
   ]
 }
 
 #show heading.where(level: 2): it => {
-  block(breakable: false, sticky: true, above: 1.45em, below: 0.70em)[
+  block(breakable: false, sticky: true, above: 1.25em, below: 0.58em)[
     #set par(justify: false)
     #if it.numbering != none [
-      #text(fill: accent, size: 10.0pt, weight: "semibold")[#counter(heading).display()]
+      #text(fill: accent, size: 9.8pt, weight: "semibold")[#counter(heading).display()]
       #h(0.42em)
     ]
-    #text(fill: ink, size: 10.4pt, weight: "bold")[#it.body]
+    #text(fill: ink, size: 10.3pt, weight: "bold")[#it.body]
   ]
 }
 
-// Code in the text and in listings: one typeface, the figures' own.
-#show raw.where(block: false): it => text(font: "Menlo", size: 0.9em)[#it.text]
-#show raw.where(block: true): set text(font: "Menlo", size: 7.5pt)
+// Code in prose and listings: keep short literals unbroken across line ends.
+#show raw.where(block: false): it => box(text(font: "Menlo", size: 0.89em, fill: charcoal)[#it.text])
+#show raw.where(block: true): set text(font: "Menlo", size: 7.4pt, fill: ink)
 
 // --- Building blocks ---
 
 #let figs = counter("figures")
 #let tabs = counter("tables")
 
-#let fullwidth(body) = block(width: 6.80in, breakable: false, above: 0.95em, below: 0.95em)[#body]
+#let fullwidth(body) = block(width: 6.80in, breakable: false, above: 0.90em, below: 0.95em)[#body]
 
-// A paragraph with a note beside it in the margin.
-#let with_note(note, above: 0.90em, body) = block(width: 6.80in, breakable: false, above: above, below: 0.90em)[
+#let with_note(note, above: 0.80em, body) = block(width: 6.80in, breakable: false, above: above, below: 0.80em)[
   #grid(
     columns: (4.50in, 0.35in, 1.95in),
     align: (top, top, top),
     [#body],
     [],
     [
-      #set par(justify: false, leading: 0.54em, spacing: 0.45em)
+      #set par(justify: false, leading: 0.53em, spacing: 0.42em)
       #set text(font: "Palatino", size: 7.9pt, fill: slate)
       #note
     ],
   )
 ]
 
-#let with_rubric(title, note, above: 0.90em, body) = with_note(
+#let with_rubric(title, note, above: 0.80em, body) = with_note(
   [
     #text(fill: accent, weight: "bold", size: 7.4pt, tracking: 0.07em)[#upper(title)]
     #v(2pt)
@@ -161,17 +165,17 @@
 )
 
 // A listing: a quiet ground and a hairline at its left.
-#let listing(label: none, strong: false, width: 100%, size: 7.5pt, body) = block(
+#let listing(label: none, strong: false, width: 100%, size: 7.4pt, body) = block(
   width: width,
   breakable: false,
   fill: if strong { sand } else { ivory },
   stroke: (left: 1.4pt + (if strong { charcoal } else { slate })),
-  inset: (left: 10pt, right: 8pt, top: 6.5pt, bottom: 6.5pt),
-  above: 0.65em,
-  below: 0.80em,
+  inset: (left: 10pt, right: 8pt, top: 6pt, bottom: 6pt),
+  above: 0.55em,
+  below: 0.72em,
 )[
   #if label != none [
-    #text(font: "Palatino", size: 7.1pt, fill: if strong { ink } else { slate }, weight: "bold", tracking: 0.08em)[#upper(label)]
+    #text(font: "Palatino", size: 7.3pt, fill: if strong { ink } else { slate }, weight: "bold", tracking: 0.07em)[#upper(label)]
     #v(2pt)
   ]
   #set par(justify: false, leading: 0.46em)
@@ -179,28 +183,30 @@
   #body
 ]
 
-#let caption(kind, num, title, body) = {
-  set par(justify: false, leading: 0.53em)
-  text(size: 8.2pt, fill: accent, weight: "bold")[#kind #num.]
-  h(0.35em)
-  text(size: 8.2pt, fill: ink, weight: "bold")[#title.]
-  h(0.25em)
-  text(size: 8.1pt, fill: slate)[#body]
-}
+#let caption(kind, num, title, body) = block(width: 5.95in)[
+  #set par(justify: false, leading: 0.52em)
+  #text(size: 8.3pt, fill: accent, weight: "bold")[#kind #num.]
+  #h(0.35em)
+  #text(size: 8.3pt, fill: ink, weight: "bold")[#title.]
+  #if body != [] [
+    #h(0.25em)
+    #text(size: 8.2pt, fill: charcoal)[#body]
+  ]
+]
 
 #let fig(num, img_path, title, body) = fullwidth[
   #figs.step()
   #image(img_path, width: 6.80in)
-  #v(4pt)
+  #v(5pt)
   #caption("Figure", num, title, body)
 ]
 
-// A table with rules above and below only, and its caption above it.
-#let booktable(num, title, columns: auto, align: left, header, ..rows) = block(width: 6.80in, breakable: true, above: 0.95em, below: 0.95em)[
+// A table with rules above and below only, generous vertical breathing room, and its caption above it.
+#let booktable(num, title, columns: auto, align: left, header, ..rows) = block(width: 6.80in, breakable: true, above: 1.15em, below: 1.05em)[
   #tabs.step()
-  #block(sticky: true, below: 5pt)[#caption("Table", num, title, [])]
-  #set text(size: 8.5pt)
-  #set par(justify: false, leading: 0.51em)
+  #block(sticky: true, below: 6pt)[#caption("Table", num, title, [])]
+  #set text(size: 8.4pt)
+  #set par(justify: false, leading: 0.50em)
   #show table.cell: set block(breakable: false)
   #table(
     columns: columns,
@@ -226,31 +232,31 @@
   #v(4pt)
   #text(size: 26pt, weight: "bold", fill: ink)[Ode]
   #v(2pt)
-  #text(size: 12.6pt, style: "italic", fill: slate)[A Language for Native Machine Code That Carries Its Proof]
+  #text(size: 12.2pt, style: "italic", fill: slate)[Native Machine Code Checked Against a Canonical Contract]
   #v(8pt)
   #line(length: 100%, stroke: 0.9pt + ink)
   #v(5pt)
   #grid(
     columns: (1fr, auto),
-    [#text(size: 8.6pt, style: "italic", fill: slate)[Make the promise small, keep the machine in view, and let the reader check the bytes.]],
+    [#text(size: 8.5pt, style: "italic", fill: slate)[Object-code Direct Evidence — exact instructions, separate proof files, independent audit.]],
     [#text(size: 8.3pt, fill: slate)[November 2026]],
   )
 ]
 
-#v(1.3em)
+#v(0.65em)
 
-Suppose you need a fast cryptographic hash, parser, or memory routine compiled to native x86-64 or AArch64 machine code. You did not write it, and you do not wish to read three thousand lines of assembly or to rely on a compiler you cannot inspect. Running a hundred test vectors confirms that the binary gives the right answers on those hundred inputs. It tells you nothing about the next input, nothing about reads outside a buffer, and nothing about whether a branch inside the binary depends on a key.
+Suppose you need a fast cryptographic hash, parser, or memory routine compiled to native x86-64 or AArch64 machine code. You did not write it, and you do not wish to read three thousand lines of assembly or rely on a compiler you cannot inspect. Test vectors confirm the binary on chosen inputs; they tell you nothing about the next input, reads past a buffer end, or branches depending on key material.
 
-Ode separates what a routine _promises_ from how it is _built_. The promise is a short text called a _contract_. The maker, whom we call _Alice_, writes the machine instructions for each processor and hands over two files: the compiled object file, and a proof file beside it. The auditor, whom we call _Bob_, reads the contract and runs a small program, the _verifier_, on the object file's bytes, the contract, and the proof file. If the verifier answers `shown`, those bytes keep the promise for every input the contract allows. Bob need not read the source, and his conclusion does not rely on Alice, on her compiler or assembler, or on the program that found the proof. It relies on the verifier, and on tables that say what each processor instruction does (section 8).
+Ode separates what a routine _promises_ from how it is _built_. The promise is a short mathematical _contract_, embedded in the `.ode.ocl` section of the compiled ELF64 object file (`.o`) and identified by its 52-character BLAKE3 hash. The maker (_Alice_) writes the machine instructions for each target and delivers two files: the `.o` object file and a separate `.proof` file. The auditor (_Bob_) obtains the expected contract independently (from a published specification or release record, or by inspecting the extracted contract text), then runs `ode audit`—which invokes a Lean 4 verifier (`odeverify`)—on the machine bytes, contract, and proof. If a sound verifier answers `shown`, those bytes satisfy the contract for every input meeting its preconditions. Errors in Alice's compiler, assembler, or proof finder cannot forge a valid proof; Bob relies instead on the verifier, the object-to-statement reader, and the instruction tables (section 8).
 
 #fig(
   1,
   "figures/fig1-boundary.svg",
   "What crosses from the maker to the auditor",
-  [Alice's tools (left) compile the source and search for a proof; Bob's conclusion relies on none of them. What it does rely on is in the frame at the right: the contract he reads, the verifier, and the tables that say what each processor instruction does.],
+  [Alice compiles `.ode` source into an ELF64 object file (carrying its canonical contract in `.ode.ocl`) and a separate `.proof` file. Bob checks those two files against his independently expected contract identifier using the audit tool, the verifier, and the instruction tables.],
 )
 
-Sections 2 and 3 say what a contract can promise. Section 4 shows how code is written, for two processors in one file, and section 5 how one Ode function calls another cheaply. Section 6 is Bob's side: the files he is given, and what the verifier's answers mean. Section 7 reports the programs verified so far and their speed. Section 8 says what Bob's conclusion relies on, and what this revision leaves out.
+Sections 1–3 set out the design principles, contract language, memory framing, and trace policies. Sections 4–5 cover writing code, `use` modules, and cheap internal calls. Sections 6–8 present Bob's audit workflow, verified programs and benchmarks, and Bob's reliance set.
 
 // ============================================================================
 // 1. Design principles
@@ -260,24 +266,24 @@ Sections 2 and 3 say what a contract can promise. Section 4 shows how code is wr
 
 = Design Principles
 
-Four decisions govern the rest. Where a feature would conflict with one of them, the feature gives way.
+Four engineering decisions govern Ode's design.
 
 #with_rubric(
   "Reliance sets",
-  [A _reliance set_ is everything one party depends on for one conclusion; the term is Mark S. Miller's. Bob's set, for the conclusion `shown`, is drawn in Figure 1 and listed in section 8.],
+  [A _reliance set_ is the set of components one party depends on for one conclusion (Miller, 2006). Bob's set for the verdict `shown` is drawn in Figure 1 and audited in section 8.],
 )[
   *1. Keep what Bob relies on small.*
-  Alice wants a fast search for proofs and convenient notation. Bob wants as little as possible between the contract he reads and the bytes that run. Ode serves both by splitting _finding_ a proof from _checking_ one. Everything clever (the search, the arithmetic, advice about speed, the source notation) is on Alice's side. On Bob's side is one small program that reads the object file's bytes, checks each step of the proof file, and confirms that every instruction in the file belongs to a function it has checked.
+  Alice wants fast proof search and convenient notation; Bob wants as little as possible between the contract he reads and the machine bytes that execute. Ode separates _finding_ a proof (the prover, on Alice's side) from _checking_ a proof (the verifier, on Bob's side). Proof search, linear-inequality elimination, speed advice, and source shorthand stay on Alice's side; Bob runs the verifier on the compiled object bytes and proof steps.
 ]
 
-*2. Never hide the processor.*
-Compilers for systems languages add stack frames, move registers, and rewrite code in ways the source does not show. That defeats both tuning for speed and auditing for timing. In Ode a processor instruction is a source statement, and every higher-level form stands for instructions that are fixed by what the coder wrote. Where a form cannot be encoded with the registers named, the compiler reports the line. It does not add a move, save a register on the stack, or pick a slower instruction to make the line compile.
+*2. Keep the processor visible.*
+Optimizing compilers insert stack frames, spill registers, and reorder operations in ways that defeat both hand-tuned performance and side-channel inspection. In Ode, every processor instruction is written explicitly, and higher-level shorthand expands deterministically to fixed instructions. When an operand combination cannot be encoded on the target processor, the compiler reports the source line rather than inserting hidden moves or stack spills.
 
-*3. A contract is a closed world.*
-A contract says everything a function may assume and everything it may do: which memory it may read and write, how much stack it and the functions it calls may use, which processor extensions it needs, why its loops end, and what its sequence of instructions and addresses may depend on. A function that does anything its contract does not allow is refused. Memory it was not given to write holds, when it returns, what it held when it was called.
+*3. A contract is a closed specification.*
+A contract declares everything a function may assume and everything it may do: which memory regions it may read and write, how much stack it and its callees may use, which processor extensions it needs, why its loops terminate, and what its instruction and memory-address trace may depend on. A sound verifier accepts no proof for code that touches undeclared memory, leaves callee-saved registers altered, or exceeds its stack bound.
 
-*4. Two processors.*
-A language designed on one processor takes that processor's habits for laws. Ode targets x86-64 and AArch64 under one verifier. A contract names no register and no instruction, so the x86-64 code and the AArch64 code of one function answer to the same contract text, under the same identifier.
+*4. Two processors under one verifier.*
+Building on a single architecture bakes that architecture's habits into the contract model. Ode targets x86-64 and AArch64 under one verifier and one contract language. Because a canonical contract names no register and no instruction, the x86-64 and AArch64 implementations of one function verify against the exact same canonical contract text and identifier.
 
 // ============================================================================
 // 2. Specifications and contracts
@@ -285,47 +291,47 @@ A language designed on one processor takes that processor's habits for laws. Ode
 
 = Specifications and Contracts
 
-To audit a binary without reading its code, Bob needs a text that says what the code must compute, and that cannot be mistaken for a description of how. Machine arithmetic wraps at 32 or 64 bits, and a read past the end of a buffer returns whatever lies there; a specification written in those terms inherits their surprises. Ode's specifications are written in exact numbers and lists, by equations. The listing that follows is one, together with the contract of a function that must compute it.
+To audit a binary without reading its instructions, Bob needs a mathematical specification that cannot be confused with machine behavior. Machine arithmetic wraps at 32 or 64 bits, and a read past the end of a buffer accesses memory outside the permitted region (faulting or reading unrelated data). Ode specifications use exact whole numbers and finite lists defined by equations.
 
-#listing(label: "A specification and a contract")[#raw(az_contract, block: true)]
+Consider a concrete example: `all_zero` checks whether every byte of an `n`-byte buffer is zero (`[0, 0]` returns `1`; `[0, 7]` returns `0`; `[]` returns `1`), and may stop early on the first nonzero byte.
 
-The two definitions are mathematics. `zero_from(a, at)` is 1 when every byte of `a` from place `at` on is zero, and 0 otherwise; `zeros(a)` asks the same of the whole of `a`. The last four lines are the contract of a function `all_zero`. It is given the address of `n` bytes, called `a`, and the number `n`. It returns `zeros(a)`. Which instructions it runs and which addresses it touches may depend on the bytes of `a` and on `n`: a scan that stops at the first nonzero byte shows where that byte is. It uses no stack. Bob can try a definition on inputs of his own (`ode spec-test`); the verifier's answer is about every input.
+#listing(label: "paper/examples/all_zero.ode — specification and contract")[#raw(az_contract, block: true)]
+
+The two `def` blocks are mathematics. For `0 <= at <= len(a)`, `zero_from(a, at)` returns `1` when every byte of `a` from index `at` onward is zero and `0` otherwise; `zeros(a)` starts at `0`. What decreases on each recursive call is the remaining suffix length `len(a) - at`, guaranteeing termination. The `fn` block is the contract of `all_zero`: given `a` (an address of `n` readable bytes) and `n` (an unsigned 64-bit integer), the function returns `zeros(a)`. Because an early-exit scan reveals the position of the first nonzero byte, the contract declares `trace depends on a, n`. `stack 0` promises zero local stack workspace beyond the calling convention's return mechanism. Bob can evaluate definitions on concrete inputs (`ode spec-test`), while the verifier's `shown` verdict covers every input that satisfies the contract's preconditions.
 
 == Kinds of Values
 
-A specification speaks of six kinds of values. Table 1 gives, for each kind, the values it has and what can be done with them.
+Specifications speak of seven kinds of values (Table 1). Definitions are pure equations (`const`, `def`, and `sequence`, which defines a list from a starting element and recurrence). Every recursive definition must decrease a well-founded measure; there is no mutation and no imperative loop inside a specification.
 
 #booktable(
-  1, "The kinds of values in a specification",
-  columns: (1.05in, 1.95in, 3.80in),
-  ([Kind], [Its values], [What can be done with them]),
-  [`number`], [Whole numbers from 0 up, of any size], [`+` and `*` are exact; `/` and `%` give the whole quotient and the remainder. `a - b` where `b` is above `a` has no value: it is an error, never a wrapped result.],
-  [`byte`], [0 to 255], [One byte of memory; `a[i]` of some bytes is a byte.],
-  [`word`], [32 bits], [`+` wraps at $2^32$; `&`, `|`, `^` work on the bits; `x >>> k` turns the bits right by `k`.],
-  [`counter`], [64 bits], [A number is added with `+`; `lo(c)` and `hi(c)` are its two words.],
-  [`list`], [Finitely many values in order, counted from 0], [`len(xs)`, `xs[i]`, `xs[a .. b]` (from place `a` up to, not including, `b`), `xs ++ ys`, `[e for i in a..b]`.],
-  [`bytes`], [A list of bytes (`0..255`)], [`words(bs)` reads every four bytes as a word, lowest byte first; `bytes_of(ws)` converts back.],
-  [`record`], [Named fields], [`{h: a, length: b}` and `r.h`. A `layout` says where each field of a record lies in memory.],
+  1, "The seven kinds of values in a specification",
+  columns: (0.95in, 1.95in, 3.90in),
+  ([Kind], [Values], [Operations]),
+  [`number`], [Exact non-negative integers ($0, 1, 2, ...$)], [`+` and `*` are exact; `/` and `%` give integer quotient and remainder. `a - b` is defined only when `a >= b` (never wraps).],
+  [`byte`], [Integers `0` to `255`], [One byte of memory; indexing a byte list `a[i]` yields a `byte`.],
+  [`word`], [32-bit unsigned values], [`+` wraps modulo $2^32$; bitwise `&`, `|`, `^`; `x >>> k` is 32-bit right rotation by `k` bits.],
+  [`counter`], [64-bit unsigned values], [Wraps modulo $2^64$ under `+`; `lo(c)` and `hi(c)` extract low and high 32-bit words.],
+  [`list`], [Finite ordered sequences, 0-indexed], [`len(xs)`, `xs[i]`, half-open slice `xs[a .. b]` (indices `a` through `b - 1`), `xs ++ ys`, `[e for i in a..b]`.],
+  [`bytes`], [A `list` of `byte` values], [`words(bs)` decodes every four bytes as a little-endian `word`; `bytes_of(ws)` encodes back.],
+  [`record`], [Named fields], [`{h: a, length: b}` and `r.h`. A `layout` maps each field to a byte offset in memory.],
 )
 
-Definitions are equations: `const`, `def`, and `sequence` (a list given by its first value and by each next value from the one before). A definition may use itself on something smaller, as `zero_from` does. Nothing is assigned twice, and nothing loops.
+Three operator signs keep distinct roles across Ode files: `==` tests mathematical equality, `:=` (in code blocks) stores a value into a register or stack slot, and `=` binds a name or postcondition (`const ROOT = 8`, `reg idx = rcx`, `ensures out = E`).
 
-Three signs have three meanings. `==` asks whether two values are equal. `:=`, in code, stores a value into a register or into memory. `=` says what a name stands for, or what a place holds: `const ROOT = 8`, `reg idx = rcx`, `ensures out = E`.
+== Canonical Contracts Without Author Names
 
-== Contracts Have No Names
-
-Names are chosen by authors. A function called `check_signature`, or a comment saying that a check is made, can lead an auditor's eye past a condition that is missing. So the text Bob audits has no name that an author chose, and no comment. Figure 2 shows what the tool `ode canon` makes of the example above.
+Identifiers chosen by an author—such as a function named `check_signature` or a reassuring comment—can mislead an auditor past a missing condition. The text Bob audits therefore strips comments and author-chosen names. Figure 2 shows how `ode canon` transforms `all_zero` into its canonical contract.
 
 #fig(
   2,
   "figures/fig2-canon.svg",
-  "From the author's text to the contract's identifier",
-  [The left box is the example as written. `ode canon` makes the text in the middle from it, and the identifier at the right is the BLAKE3 hash of that text. The figure is drawn from the tool's own output.],
+  "From authored source to canonical contract and BLAKE3 identifier",
+  [Left: the authored contract from `all_zero.ode`. Center: canonical `.ocl` output of `ode canon` (comments stripped; definitions, parameters, and arguments numbered by first mention, e.g., `zero_from` → `f1`). Right: the 52-character base-32 BLAKE3 digest and an optional display glossary.],
 )
 
-`ode canon` does the same three things every time. It leaves out comments, and every definition the contract does not use. It replaces each name by a letter and a number, in the order in which names are first met starting from the contract: `a0`, `a1` for the contract's arguments, `f0`, `f1` for definitions, `p0`, `p1` for a definition's parameters. And it leaves out how arguments are passed (section 5), which names registers. The result is the _canonical contract_, kept in files of the type `.ocl` (and embedded in the `.ode.ocl` section of a packed object file). The example's canonical contract has #F.all_zero.canonical_lines lines.
+`ode canon` performs three deterministic steps: it removes comments and unreachable definitions; it replaces every remaining identifier by a numbered placeholder in order of first appearance from the contract (`a0`, `a1` for arguments; `f0`, `f1` for definitions; `p0`, `p1` for parameters); and it omits target-specific `calling` clauses (section 5), which name hardware registers. Consistently renaming an argument or helper never changes the resulting canonical `.ocl` text or its digest (though algebraically distinct formulas produce distinct canonical texts).
 
-The contract's only identifier is the BLAKE3 hash of that text: 256 bits, written as 52 characters (base 32: the letters `a` to `z` and the digits `2` to `7`). The function's symbol in the object file is `ode_` followed by those characters, and a canonical contract kept in a file is named by them. A tool that reads such a file hashes it first, and refuses it if its name is not its hash. A reader who wants words back keeps a _glossary_ (`a0` is `a`, `f1` is `zero_from`). A glossary is its reader's own, and is never hashed.
+The contract's sole identifier is the 256-bit BLAKE3 hash (O'Connor et al., 2020) of the canonical text, encoded in 52 lowercase RFC 4648 base-32 characters (`a`–`z`, `2`–`7`). In a packed object file, the exported linker symbol is `ode_` followed by those 52 characters, and a standalone `.ocl` file is named `<52-char-ID>.ocl`. Tools hash `.ocl` files before reading them and refuse any mismatch. An optional glossary maps numbered names back to human labels (`a0 = a`, `f1 = zero_from`); glossaries are non-authoritative display metadata that never enter the hash, so Bob verifies the canonical contract text (and its expected identifier obtained independently from a specification or release record) rather than relying on Alice's labels.
 
 // ============================================================================
 // 3. What a contract promises
@@ -333,51 +339,56 @@ The contract's only identifier is the BLAKE3 hash of that text: 256 bits, writte
 
 = What a Contract Promises
 
-If the caller makes every `requires` line true, a function that the verifier has checked against its contract returns, and when it returns every `ensures` and `returns` line holds. It has used no more stack than its `stack` line says, and no processor extension that a `needs` line does not name. Its trace (section 3.2) depends only on what its `trace depends on` line names. Of a call that does not meet `requires`, the contract promises nothing.
+A verified contract establishes an if–then guarantee:
 
-== Memory: Pieces, Overlap, and Lending
+- *If the caller* satisfies every `requires` precondition, passes valid non-overlapping memory regions, and runs on a processor supporting every declared `needs` extension,
+- *then the function* terminates, satisfies every `ensures` and `returns` postcondition, writes only to declared output regions and up to its declared `stack` bytes, restores callee-saved registers and the stack pointer, and exhibits an instruction-and-address trace depending only on what `trace depends on` names.
 
-A machine address carries no length and no owner. If nothing said which bytes a called function may touch, a caller could keep no fact about its memory across a call. A contract therefore speaks of _pieces_ of memory: an argument that is an address comes with a length, such as `64 bytes`, or `n bytes` where `n` is another argument. Here is the contract of the function that fills the last block of a BLAKE3 chunk:
+On inputs that violate `requires`, the contract promises nothing.
 
-#listing(label: "A contract with two pieces of memory")[#raw(pad_contract, block: true)]
+== Memory: Pieces, Disjointness, and Lending
+
+A machine address carries no length and no owner. Without explicit bounds, a caller could retain no fact about memory across a call. Contracts therefore describe _pieces_ of memory—each pointer argument paired with a length (`64 bytes`, or `n bytes` where `n` is another argument). Below is an internal helper contract from our verified AArch64 BLAKE3 implementation that copies `n` bytes from `src` into a 64-byte `block` and zero-pads the remainder (`padded(src)`):
+
+#listing(label: "Internal helper contract with two pieces of memory (BLAKE3 padding)")[#raw(pad_contract, block: true)]
 
 #with_note([
-  Two pieces that lie end to end do not overlap: they have no byte in common.
+  Adjacent pieces whose byte intervals touch at an endpoint (such as `[0, 32)` and `[32, 96)`) have no byte in common and satisfy `no_overlap`.
 ])[
-  `block` and `src` are pieces. A function may read the pieces it is given. It may write only a piece that an `ensures` line names (here `block`) or a `writes` line names. `requires no_overlap(block, src)` asks the caller to see that the two have no byte in common.
+  A function may read any piece passed to it, and may write only pieces named in `ensures` (which states the final value) or `writes` (which grants write permission without fixing a single final formula). `requires no_overlap(block, src)` obliges the caller to pass disjoint memory intervals.
 ]
 
-A caller _lends_ pieces to the functions it calls. It may lend a whole piece or a part of one: the caller of this function lends bytes 32 to 96 of a 120-byte record as `block` (Figure 3). It can lend no more than it holds: no bytes it was not given, and nothing to write that it may only read. After the call it knows what the function's `ensures` says of the part it lent, and everything it knew before of the rest.
+A caller _lends_ whole pieces or sub-slices to its callees—for example, lending bytes `[32, 96)` of a 120-byte `node120` record as `block` (Figure 3). A caller can lend no bytes it does not hold, and cannot lend a read-only piece as writable. After the call returns, the caller knows `ensures` for the lent slice and retains every prior fact about the untouched bytes.
 
 #fig(
   3,
   "figures/fig3-memory.svg",
-  "A caller lends a part of a record",
-  [The caller's pieces do not overlap one another. It lends `input` to be read and one field of the record `nd` to be written. What it knew of the other fields of `nd` still holds after the call.],
+  "A caller lends a sub-slice of a record",
+  [The caller's pieces are pairwise disjoint. It lends `input` read-only as `src` and the `[32, 96)` field `nd.block` read-write as `block`. Every other field of `nd` is preserved across this call.],
 )
 
-The stack is a function's own for the length of the call. It may use the bytes its `stack` line counts: a number, or a formula such as `18688 + 384 * bits(len / 1024)` where the depth of calls grows with the input. It may lend parts of them to the functions it calls, and it must put the stack pointer back. A program's read-only data may be read and is never written.
+Each function owns up to `stack N` bytes of local stack space for the duration of the call (or a formula such as `18688 + 384 * bits(len / 1024)` for BLAKE3's recursive tree depth, where `bits(k)` is the bit-length of `k`, with `bits(0) = 0`), may lend stack slices to callees, and must restore the stack pointer on return. Read-only program data (`.rodata`) is readable and never writable.
 
-== The Trace
+#pagebreak()
 
-A routine can compute the right answer and still give away a key, by taking longer on some keys than on others. What can be seen from outside (the time taken, the state of the cache) follows from which instructions ran and which addresses were touched. That sequence is the function's _trace_.
+== Trace Policies and Constant-Time Execution
+
+A routine can return the right answer while leaking a key through timing or cache behavior. Ode models the architectural _trace_ of an execution: the sequence of instruction addresses executed and memory addresses accessed as defined by the instruction tables.
 
 #with_rubric(
-  "What the trace covers",
-  [The trace is the sequence of instructions and addresses that the processor's manual defines. Speculation inside the processor, the power it draws, and other physical effects are outside it.],
+  "Model boundary",
+  [Equal architectural traces rule out branches and cache-line addresses depending on inputs kept out of the trace, but do not model microarchitectural speculation, power draw, or data-dependent instruction latency.],
 )[
-  A contract's `trace depends on` line names what the trace may depend on. Its meaning is a statement about two runs: _if two calls agree on the addresses given and on every value the line names, they run the same instructions and touch the same addresses, whatever else differs._
+  A contract's `trace depends on` clause states a two-run property: _given the same starting buffer addresses and lengths, if two valid calls agree on every value named in `trace depends on`, then both runs execute the exact same sequence of instructions and touch the exact same memory addresses, regardless of how unlisted inputs differ._
 ]
 
-Take two functions that tell whether two runs of `n` bytes are the same. One stops at the first byte that differs. Its trace shows where that byte is, and the verifier accepts it only with `trace depends on a, b, n`. The other gathers the differences without a branch on any byte, and the verifier accepts this contract for it:
+Consider comparing two `n`-byte buffers for equality. An early-exit loop stops at the first differing byte and verifies only with `trace depends on a, b, n`. A branchless loop accumulates byte differences across all `n` positions and verifies against this contract (where `same_ct(a, b)` is the pure mathematical equality predicate returning `1` when all bytes match and `0` otherwise):
 
-#listing(label: "The trace depends on the length alone")[#raw(equal_ct_contract, block: true)]
+#listing(label: "Constant-time equality contract (trace depends on length alone)")[#raw(equal_ct_contract, block: true)]
 
-Its trace depends on the length alone, though the number it returns is computed from every byte.
+Omitting `trace depends on` (or writing `trace depends on nothing`) is strictest by default: no input scalar or buffer byte may influence any branch or memory address. A contract may also name a computed expression: a tag-checking caller that branches once to accept or reject writes `trace depends on n, same_ct(want, tag)`, allowing its trace to depend on the single boolean match outcome and nothing else about the tag bytes. When a function returns an abstract result (`returns r` constrained by `ensures`), a `result depends on` clause may declare which inputs can affect `r`.
 
-The line can also name a computed value. A function that calls the second one and then branches once, to accept or to reject, says `trace depends on n, same_ct(want, tag)`: its trace may depend on whether the two runs of bytes agree, and on nothing else about them. A function that names its result without saying what it is (`returns r`) can say what the result is computed from, with a `result depends on` line.
-
-The rule the verifier applies inside a function is short. Whatever a branch tests, and whatever an address is computed from, must be computed only from the addresses given and from what the function's own `trace depends on` line names.
+Inside a function, the verifier enforces one rule: every branch condition and every computed memory address must depend only on entry buffer addresses and values listed in that function's `trace depends on` clause.
 
 // ============================================================================
 // 4. Writing code
@@ -385,35 +396,45 @@ The rule the verifier applies inside a function is short. Whatever a branch test
 
 = Writing Code
 
-Assembly gives its writer every choice and no help: two operands that must differ are given the same register, a slot of the stack frame is miscounted, and the x86-64 and AArch64 versions of one function drift apart. A compiler helps, and takes the choices away. Ode leaves the choices with the coder and checks the bookkeeping.
+Hand-written assembly leaves register-alias collisions, miscounted stack offsets, and x86-64/AArch64 contract drift to human review. Ode keeps exact instruction selection with the programmer while checking that bookkeeping mechanically.
 
-A source file (of the type `.ode`) holds definitions and functions. A function is its contract followed by its code for each processor: `for x86_64 { ... }` and `for arm64 { ... }`. Every function has a contract. A file is a closed world of names: nothing outside it is in scope.
+An `.ode` file contains pure specifications (`const`, `def`, `layout`, `sequence`) and functions (`fn`), each holding its contract followed by target blocks `for x86_64 { ... }` and `for arm64 { ... }`. A file is a closed namespace: nothing outside it is in scope unless explicitly imported with `use` (section 4.2).
 
-== Notation That Chooses Nothing
+== Register Aliases, Frames, and Structured Shorthand
 
-In a function's code, a line is one processor instruction, written as an assembler takes it, or one of the forms below. Each form stands for instructions that are fixed by what is written.
+Every line inside a target block is either a processor instruction from `core/x86.tab` or `arm64/arm64.tab` or one of the fixed-expansion forms below:
 
-- `reg idx = rcx`: from there on, `idx` is that register.
-- `dst := src`: one `mov`, or one `lea` for the address of a field of the frame. `idx := 0` is `mov rcx, 0`. It moves as many bytes as both sides say; it never widens and never cuts.
-- `frame { ... }`, with a line for each field such as `saved: 7 * u64`: the fields of the function's stack frame, in order. `saved[1] := x19` stores into the second slot of `saved`, and `frame.size` is the bytes of all the fields. A slot outside its field is refused at its line.
-- `inline fn g for arm64 (a: vec, b: vec, t: vec) distinct(a, b, t) changes a, t { ... }`: a named group of instructions, put wherever `g(v0, v1, v16)` is written, with no call and no return. A use that gives one register for two that must differ is refused, and so is a line of the group that changes a register which `changes` does not list.
-- `for i in 0..8 { ... }`: the lines eight times, with `$i` replaced by 0 to 7.
-- `loop { ... break if ult ... }` and `if eq { ... } else { ... }`: jumps on the condition named, after a comparison that the coder wrote.
-- `place { ... }`: what holds each time the code comes to the next instruction. A proof about a loop needs a statement that is true every time round; this is where the coder writes it, beside the loop. It is no part of the object file; the program that finds the proof reads it.
+- `reg idx = rcx` — declares a readable register alias (preventing accidental reuse of raw register names).
+- `dst := src` — expands to one `mov` (or `lea` for a stack-frame field address). Source and destination widths must match; Ode never silently widens or truncates.
+- `frame { saved: 7 * u64, ... }` — names stack-frame fields and byte offsets (`frame.size`). Out-of-bounds slot indices are reported at the source line.
+- `inline fn g for arm64 (a: vec, b: vec, t: vec) distinct(a, b, t) changes a, t { ... }` — expands straight-line instruction blocks inline with compile-time checks on register disjointness (`distinct`) and modified registers (`changes`).
+- `for i in 0..8 { ... }` — compile-time unrolling substituting `$i` with `0..7` (not a runtime machine loop).
+- `loop { ... break if ult ... }` and `if eq { ... } else { ... }` — structured branches over flags set by an explicit comparison instruction.
+- `@label:` and `place { name x = reg; fact E; decreases M; wrote ...; keep ... }` — branch labels and loop invariants read by the prover and verifier (never emitted as machine bytes).
 
-Figure 4 is the code of the example of section 2, for both processors.
+Figure 4 shows both target blocks of `all_zero`. Whenever control reaches `@loop`, every byte at indices `[0, idx)` has already tested zero, so checking the suffix from `idx` equals `zeros(a)` and `n - idx` strictly decreases each iteration. On both targets, `cur` and `cur64` (`edx`/`rdx`, `w4`/`x4`) alias the 32-bit and 64-bit views of one register so the byte load zero-extends cleanly into the 64-bit comparison.
 
 #fullwidth[
   #figs.step()
   #grid(
     columns: (1fr, 10pt, 1fr),
-    [#listing(label: "For x86-64", size: 7.2pt)[#raw(az_x86, block: true)]],
+    [#listing(label: "For x86-64 (" + str(M.all_zero.x86_64.instructions) + " insns, " + str(M.all_zero.x86_64.bytes) + " B)", size: 6.95pt)[#raw(az_x86, block: true)]],
     [],
-    [#listing(label: "For AArch64", size: 7.2pt)[#raw(az_arm, block: true)]],
+    [#listing(label: "For AArch64 (" + str(M.all_zero.arm64.instructions) + " insns, " + str(M.all_zero.arm64.bytes) + " B)", size: 6.95pt)[#raw(az_arm, block: true)]],
   )
   #v(2pt)
-  #caption("Figure", 4, "One contract, two processors", [The two blocks of the function `all_zero` in the example's source file: #M.all_zero.x86_64.instructions instructions (#M.all_zero.x86_64.bytes bytes) for x86-64, #M.all_zero.arm64.instructions instructions (#M.all_zero.arm64.bytes bytes) for AArch64. Both answer to the contract of section 2, whose identifier is #raw(F.all_zero.id), and the verifier's answer for both is `shown`.])
+  #caption("Figure", 4, "One contract, two processors", [Both target blocks of `all_zero` from `paper/examples/all_zero.ode` (instruction and byte counts are emitted machine code, excluding `place` annotations). Both verify `shown` against the same canonical contract from Figure 2.])
 ]
+
+== Multi-File Programs (`use`)
+
+Larger programs split pure specifications from target implementations, or share helper libraries across files, via explicit linked local namespaces:
+
+```
+use eq = "hash_eq_ct_spec.ode"
+```
+
+Imported definitions and functions are referenced only through their local alias (`eq.ct_bytes_eq`). Imports are non-transitive (importing `B` does not expose `B`'s imports), and shared diamond dependencies are deduplicated. Reorganizing identical definitions across `use`-linked files produces the exact same canonical `.ocl` contract and 52-character BLAKE3 identifier as a single file.
 
 // ============================================================================
 // 5. Calls
@@ -421,177 +442,222 @@ Figure 4 is the code of the example of section 2, for both processors.
 
 = Calls Between Ode Functions
 
-Code written in C or Rust calls an Ode function by the platform's C convention. On x86-64 the arguments are passed in `rdi`, `rsi`, `rdx`, `rcx`, `r8`, `r9`, and six callee-saved registers (`rbx`, `rbp`, `r12` to `r15`) must come back as they were. On AArch64 the arguments are in `x0` to `x7`, and `x19` to `x29` and `v8` to `v15` must come back as they were. A function that other code may call keeps to that convention, and the verifier checks that it does.
+External C or Rust callers enter exported Ode functions via the platform C calling convention: System V AMD64 on x86-64 (arguments in `rdi, rsi, rdx, rcx, r8, r9`; return in `rax`; callee-saved `rbx, rbp, r12..r15`) and AAPCS64 on AArch64 (arguments in `x0..x7`; return in `x0`; callee-saved `x19..x29` and the low 64 bits of `v8..v15`).
 
-Between two Ode functions of one program, the convention is a cost with no purpose: registers are saved that the caller does not use, and arguments are moved to where the convention wants them. When BLAKE3 hashes 64 bytes, the instructions around the one compression (calls, saved registers, a copy of the block) can take as long as the compression itself (section 7). Ode has three ways to cut that cost. The verifier checks each.
+Between private Ode helpers inside a single object file, C calling conventions often force needless argument shuffles and callee-saved register spills. At 64-byte BLAKE3 inputs, call overhead and an extra block copy can take nearly as long as the compression itself (section 7). Ode provides three verified ways to eliminate that overhead.
 
-== A Calling Convention of the Function's Own
+== Private Calling Conventions
 
-A function that only Ode code calls may state its own convention: which register holds each argument, which holds the result, and which registers it leaves as they were.
+A private helper (local to its packed object file, never exported to C) may declare a `for <arch> calling { in ...; out ...; preserves ... }` block choosing exact argument, return, and preserved registers. Below, `step` preserves `rdi`, `rsi`, and `r8`, allowing `quad` to call `step` twice without spilling a single register to the stack:
 
 #fullwidth[
-  #listing(label: "A function with its own convention (its x86-64 block)", width: 6.80in)[
-    #raw(step_x86, block: true)
-    #text(font: "Menlo", size: 7.5pt, fill: muted)[#h(2.1em)…]
-  ]
+  #grid(
+    columns: (3.62in, 0.16in, 3.02in),
+    [#listing(label: "Helper with private calling (quad.ode)", size: 6.45pt)[#raw(step_x86, block: true)]],
+    [],
+    [#listing(label: "Caller keeping rdi, rsi, r8 live", size: 6.45pt)[#raw(quad_x86, block: true)]],
+  )
 ]
 
 #with_rubric(
-  "What is refused",
-  [An argument or a result in the stack pointer, or on AArch64 in the register that holds the return address; two arguments in one register; a result register that `preserves` also lists.],
+  "Calling restrictions",
+  [To prevent conflicting bindings or losing the return address, `calling` forbids placing arguments or results in the stack pointer (or AArch64 `x30`), mapping two arguments to one register, or listing the return register in `preserves`.],
 )[
-  The caller keeps what it still needs in registers that `preserves` lists, and saves nothing. Such a function is local to its object file, and the tool refuses to make it visible to C code.
+  Any live caller value placed in a register listed in `preserves` survives the call without stack spills. Exported entry points cannot declare custom `calling` blocks; `ode pack` enforces the platform C convention at the external boundary.
 ]
 
-== A Caller With No Stack on AArch64
+== Zero-Stack Non-Leaf Callers on AArch64
 
-On AArch64 a call (`bl`) puts the return address in the register `x30`. A function that calls another must first save its own `x30`, and under the C convention that takes a stack frame. A helper with a convention of its own can promise to preserve some register that the caller is free to use, say `x15`. The caller then moves `x30` there, calls, moves it back, and returns, with `stack 0`.
+On AArch64, `bl` overwrites the link register `x30`, so a function calling a helper must save its incoming `x30` somewhere safe. When the helper declares a private convention preserving a caller-saved register such as `x15`, the caller can save `x30` in `x15` across `bl helper`, restore `x30` from `x15`, and return with `stack 0`—avoiding a 16-byte stack frame altogether.
 
-== Tail Calls
+== Tail Calls (`jmp` / `b`)
 
-Where the last thing a function does is to call another and return its result, it can jump there instead (`jmp` on x86-64, `b` on AArch64). The other function then returns straight to the first one's caller, and the first needs no stack frame and no return of its own. At such a jump the verifier checks six things.
+When a function's final action is to delegate to another function, it may jump directly to the callee (`jmp` on x86-64, `b` on AArch64) so the callee returns straight to the outer caller without an extra call frame or second return. At a tail jump, the verifier checks three groups of conditions:
 
-+ The stack pointer is where it was at entry, and on AArch64 `x30` holds what it held at entry.
-+ The stack the other function may use is within the first one's `stack` line.
-+ Every register the first function must preserve holds its entry value, and the other function preserves it too.
-+ The other function was verified before this one, so no chain of such jumps can go round in a circle.
-+ Everything the other function `requires` holds at the jump.
-+ What the other function promises at its return is what the first one promised its caller, and its trace depends on nothing that the first one's contract does not allow.
++ *Machine state:* the stack pointer equals its entry value (and on AArch64 `x30` holds its entry value), and every register the caller must preserve holds its entry value and is preserved by the callee.
++ *Resources and acyclicity:* the callee's stack bound fits inside the caller's `stack` clause, and the callee appears earlier in the proof's acyclic verification order (preventing infinite tail-call cycles).
++ *Contract compatibility:* the callee's `requires` hold at the jump, its postconditions imply the caller's promised `returns`/`ensures`, and its `trace depends on` clause is permitted by the caller's.
 
 #fig(
   5,
   "figures/fig4-calling.svg",
   "Three ways to pass control",
-  [The C convention at the boundary with other code (left); a convention of the function's own, with the return address kept in a register (middle); a jump in place of a call and a return (right).],
+  [Left: standard C ABI at external boundaries (schematic callee-saved spills). Middle: private Ode calling convention preserving `x15` for `x30` on AArch64 (`stack 0`). Right: verified tail call (`jmp`/`b`) reusing the caller's return frame.],
 )
 
 // ============================================================================
 // 6. Bob's side
 // ============================================================================
 
-= What Bob Is Given, and What the Answers Mean
+= Auditing Delivered Artifacts
 
-Bob's question is about a file that will run. Two things could spoil an answer about it: code in the file that the answer does not cover (a helper nobody checked, a routine that runs when the program starts), and a contract other than the one he read. What Alice hands over is made so as to rule out both.
+Before linking an object file into an executable, Bob needs assurance against two failure modes: code hidden in the object file without a proof (such as extra helpers or startup constructors) and substitution of a different contract from the one he reviewed. (After `ode audit`, the linker and build pipeline must preserve the audited object bytes without introducing hooks that were not checked.)
 
-== One Object File, One Proof File
+== Packing and Auditing an Object File
 
-`ode pack` makes two files from a source file. The _object file_ holds the function named, every function it calls, and the canonical contract in a section of its own. Only the function named is visible to a linker, under the symbol `ode_` followed by its contract's 52 characters; the functions it calls are local to the file. The _proof file_ holds the contracts and calling conventions of those local functions, and the steps of each function's proof. It stays outside the object file: it is needed to check the code, and not to run it.
+`ode pack` compiles a source file into two artifacts: a relocatable 64-bit ELF object file (`.o`) containing the exported function, all local Ode callees, and the canonical contract in `.ode.ocl`; and a separate `.proof` file containing local helper contracts, private calling declarations, and step-by-step proof items. Only the selected exported function is externally visible, under the symbol `ode_<52-char-ID>`.
 
-`ode audit` is Bob's command. It hashes the contract in the object file and checks that the symbol is that hash. It checks that every byte of code in the file belongs to a function the verifier has checked. It refuses a file that has a routine to run at the program's start or end, or that uses a symbol defined elsewhere. And it runs the verifier on each function's bytes. Given `--expect-contract` and 52 characters, it also refuses any contract but that one.
+Bob runs `ode audit` on those two files together with his independently obtained expected contract identifier:
+
+#listing(label: "Bob's audit invocation", width: 6.80in)[
+  #raw(block: true, "python3 lang/ode_tool.py audit bundle.o --proof bundle.proof \\\n  --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika")
+]
+
+`ode audit` checks five properties: (1) `.ode.ocl` hashes to the 52-character identifier and matches `--expect-contract`; (2) the sole global text symbol is `ode_<52-char-ID>`; (3) 100% of executable bytes in `.text` belong to verified functions; (4) no `.init_array`/`.fini_array` hooks or unresolved external symbol relocations exist; and (5) `odeverify` returns `shown` for every function in bottom-up dependency order.
 
 #fig(
   6,
   "figures/fig5-bundle.svg",
-  "The object file and the proof file",
-  [The audit ties the one visible symbol to the hash of the contract inside the object file, and accounts for every byte of code in it.],
+  "Anatomy of a packed object file and proof file",
+  [`ode audit` binds the single exported symbol to the BLAKE3 digest of `.ode.ocl`, accounts for 100% of `.text`, rejects init/fini hooks and external calls, and checks `.proof` step by step against the object bytes.],
 )
 
-== Four Words, Used Exactly
+== Outcomes and What Each Means
 
-A proof is not a test, and a missing proof is not a fault found. Reports about Ode code use four words, each for one thing. Table 2 says what each means, and what it does not.
+Reports and tools in Ode distinguish four outcomes cleanly (Table 2). In particular, `no proof found` is inconclusive rather than a defect found, whereas `refused with a proof` presents a concrete counterexample input refuting the contract.
 
 #booktable(
-  2, "The four words",
-  columns: (1.35in, 2.75in, 2.70in),
-  ([Word], [What happened], [What it does not tell]),
-  [`shown`], [The verifier read the object file's bytes, the contract and the proof file, and accepted. For every input that meets `requires`, the code keeps every line of the contract.], [Anything the contract does not say; that the processor does what its manual says.],
-  [`refused with a proof`], [The verifier was given a proof file and did not accept it.], [That the code is wrong: another proof file might be accepted. (A sound verifier refuses every proof file for code that breaks its contract.)],
-  [`no proof found`], [The program that searches for proofs gave up. The verifier has said nothing.], [Anything about the code.],
-  [`run`], [The code, or a definition, was executed on particular inputs and gave what was expected.], [Anything about other inputs. A run is a test, not a proof.],
+  2, "Outcomes reported by Ode's tools",
+  columns: (1.50in, 1.10in, 2.25in, 1.95in),
+  ([Outcome], [Reported by], [What happened], [What it does not show]),
+  [#text(font: "Menlo", size: 8.0pt, weight: "bold")[shown]], [`odeverify`, `ode audit`, `ode check`], [Every path of the compiled bytes was checked against the contract and proof file and accepted.], [Properties absent from the contract, or hardware bugs outside the instruction table.],
+  [#text(font: "Menlo", size: 8.0pt, weight: "bold", fill: accent)[refused with a proof]], [`ode check`, `ode refute`], [A concrete counterexample input demonstrates that the machine code violates the contract. (`odeverify` itself prints `refused` + reason for any rejected proof.)], [Whether another implementation meets the contract.],
+  [#text(font: "Menlo", size: 8.0pt, weight: "bold")[no proof found]], [`ode check`, `ode pack`], [No counterexample was found, and the prover could not close a proof obligation.], [That the code is wrong (or right).],
+  [#text(font: "Menlo", size: 8.0pt, weight: "bold")[run]], [`ode spec-test`, benchmarks], [Code or specification executed on concrete test inputs.], [Anything about inputs not tested.],
 )
 
-The verifier itself prints two of them: `shown`, or `refused` with its reason.
-
-== Advice About Speed
-
-The verifier judges what code computes, not how fast. Whether a loop is fast depends on things no contract mentions: how many cache lines its instructions span, or whether a load reads bytes that a store has just written in parts. `ode advise` reports such counts for a function, and a function may state limits for them in a `budget` block, with lines such as `max_bytes 64` and `max_icache_lines 1`. These are advice. No limit changes the bytes produced, or the verifier's answer.
-
 // ============================================================================
-// 7. Programs
+// 7. Verified programs and speed
 // ============================================================================
 
-= Verified Programs
+#pagebreak()
 
-The test of a language like this one is a program worth using. BLAKE3 is a cryptographic hash function. The function verified here takes a message of any length and a key, and gives the 32-byte hash, on one thread. Its contract is BLAKE3's definition written as a specification: 95 lines in canonical form. The speeds below are measured in an experimental branch of BLAKE3-Servil, a hand-tuned BLAKE3 library in Rust and assembly, where this code stands in for the library's own.
+= Verified Programs and Performance
+
+To test Ode on substantial, performance-critical code, we wrote and verified single-threaded BLAKE3 (default 32-byte hash mode) from scratch in `.ode` source on both x86-64 and AArch64. The canonical BLAKE3 contract is 95 lines long and agrees with all 105 official BLAKE3 test vectors via `ode spec-test`. All benchmarks below integrate the verified Ode object file into an experimental branch of BLAKE3-Servil (a hand-tuned Rust/assembly BLAKE3 implementation) and compare against BLAKE3-Servil and the official `blake3` Rust package (version 1.8.7). Throughout, `GiB/s` denotes $2^30$ bytes per second.
 
 == BLAKE3 on x86-64
 
-The x86-64 code is 19 functions, 3,837 instructions, all compiled from `.ode` source (one-block SSE4.1 and AVX-512 kernels, 16-lane and 32-lane AVX-512 wide kernels, and the tree and short-input glue). One `ode audit` of the object file answers `shown` for all 19 functions against the 95-line canonical BLAKE3 contract.
+The x86-64 bundle contains 19 functions (1 exported entry point + 18 local helpers with local contracts), totaling 3,837 instructions across one-block SSE4.1/AVX-512 kernels, 16-way and 32-way AVX-512 SIMD multi-chunk kernels, and tree/short-input glue. One `ode audit` call checks all 19 functions and prints `shown`.
 
-Figure 7 compares this 19-function Ode bundle against BLAKE3-Servil and the official `blake3` crate (version 1.8.7) on one core of an AMD Ryzen 7 9700X (Zen 5). The Ode bundle hashes at 1.28 GiB/s at 64 bytes (99% of BLAKE3-Servil, 160% of the official crate), 2.93 GiB/s at 4 KiB (88% of BLAKE3-Servil), 7.80 GiB/s at 16 KiB (74%), and 16.30 GiB/s at 256 KiB (99% of BLAKE3-Servil, 132% of the official crate).
+Figure 7 shows medians of 45 interleaved trials on one quiet, reserved core of an AMD Ryzen 7 9700X (Zen 5, Linux). At 64 bytes, the Ode bundle reaches 1.28 GiB/s (99% of BLAKE3-Servil, 160% of `blake3` 1.8.7), up from 0.67 GiB/s for an earlier Ode build that used C calls internally and copied the input block—a combined gain from private calling conventions, tail calls, and removing the extra copy. On larger inputs, Ode reaches 2.93 GiB/s at 4 KiB (88% of BLAKE3-Servil), 7.80 GiB/s at 16 KiB (74%), 9.22 GiB/s at 32 KiB (61%, where the 16-way kernel runs twice before switching to the 32-way kernel at 64 KiB), 14.78 GiB/s at 64 KiB (93%), 16.30 GiB/s at 256 KiB (99%, 132% of `blake3` 1.8.7), and 15.76 GiB/s at 1 MiB (98%).
 
 #fig(
   7,
   "figures/fig6-blake3-perf.svg",
-  "BLAKE3 on one core of an AMD Ryzen 7 9700X (Zen 5)",
-  [Medians of 45 interleaved trials at each size, with nothing else running on the machine. The grey bars at the left are a baseline Ode build that uses the C calling convention between its own functions and copies the input block (0.67 GiB/s at 64 bytes); section 5 explains the custom-calling and tail-call difference.],
+  "Single-threaded BLAKE3 throughput on AMD Ryzen 7 9700X (Zen 5)",
+  [Medians of 45 interleaved trials on a dedicated core. Left: short inputs comparing an earlier C-calling + block-copying Ode baseline against the current Ode bundle, BLAKE3-Servil, and `blake3` 1.8.7. Right: categorical throughput sweep from 4 KiB to 1 MiB.],
 )
 
-== BLAKE3 on AArch64, and Other Programs
+== BLAKE3 on AArch64 and Other Verified Programs
 
-The AArch64 code is 8 functions, 1,891 instructions, all written in Ode, with a kernel that hashes four chunks side by side with NEON. On an Apple M6 it hashes 1.18 GiB a second at 64 bytes and 2.28 at 4 KiB (83% and 90% of the official crate's speed), and 2.2 from 16 KiB to 1 MiB (83 to 85% of the official crate's). At 256 bytes and at 1 KiB it reaches about half the official crate's speed (55% and 49%). BLAKE3-Servil is up to 3.2 times as fast as the Ode code there, on large inputs. These figures are medians of 45 trials on a machine that was not reserved for the measurement, so they are less certain than those of Figure 7.
-
-Table 3 lists the verified programs: for each, the processor, how much code the verifier's answer covers, and what the code is.
+The AArch64 BLAKE3 bundle contains 8 functions (1,891 instructions across 4 `use`-linked `.ode` files), using a 4-way NEON SIMD kernel. On Apple M6 (medians of 45 interleaved trials on a build machine _not reserved for timing_, without a timing lock), throughput is:
 
 #booktable(
-  3, "Programs for which the verifier answers shown",
-  columns: (1.75in, 1.05in, 1.55in, 2.45in),
-  ([Program], [Processor], [Code covered], [What it is]),
-  [BLAKE3, one thread], [x86-64], [19 functions, 3,837 instructions], [All in `.ode` source; one-block, 16-way, and 32-way AVX-512 kernels.],
-  [BLAKE3, one thread], [AArch64], [8 functions, 1,891 instructions], [4 unified `.ode` files with `use`; 4-way NEON kernel.],
-  [BLAKE3 64-byte XOF block], [x86-64, AArch64], [115 and 125 instructions], [Baseline SSE2 and NEON, `stack 0`, `trace depends on nothing`, same contract ID.],
-  [ChaCha20 block function], [x86-64, AArch64], [1,090 and 1,759 instructions], [16 blocks a call with AVX-512; 4 blocks a call with NEON.],
-  [RFC 9669 eBPF virtual machine], [x86-64, AArch64], [209 and 192 instructions], [11 opcodes, 4 registers, signed relative jumps, bounded fuel; 6 functions, same contract ID.],
-  [Full two-target routines], [each for both], [10 unified `.ode` builds], [RFC 1950 Adler-32, strict RFC 3629 UTF-8 validator/counter, RFC 1071 Internet Checksum, ASCII decimal parser, and constant-time `ct_bytes_eq` — all `stack 0`, same contract ID on both processors.],
-  [19 smaller routines], [each for both], [38 object files], [Pieces of Base64, DER, LZ4, SHA-256 and ChaCha20; hex and varint decoders; pieces of a verifier.],
+  3, "AArch64 BLAKE3 throughput on Apple M6 (machine not reserved for timing; medians of 45 trials)",
+  columns: (0.85in, 1.15in, 1.35in, 1.45in, 2.00in),
+  align: (left, right, right, right, left),
+  ([Size], [Ode (GiB/s)], [vs `blake3` 1.8.7], [vs BLAKE3-Servil], [Notes]),
+  [64 B], [1.18], [83%], [—], [Single-block NEON; zero-stack helpers],
+  [256 B / 1 KiB], [0.9–1.0], [55% / 49%], [—], [Short-input glue overhead],
+  [4 KiB], [2.28], [90%], [approx. 44%], [4-way NEON kernel active],
+  [16 KiB–1 MiB], [2.2], [83%–85%], [approx. 31%], [BLAKE3-Servil uses wider unrolling],
 )
 
-The verifier's answer depends only on the compiled bytes and the proof, never on who wrote the source: 36 of the 38 object files in the last row were generated from specifications by language models.
+Table 4 summarizes all verified programs currently in the repository.
+
+#booktable(
+  4, "Programs verified shown on x86-64 and AArch64",
+  columns: (1.65in, 0.90in, 1.65in, 2.60in),
+  ([Program], [Targets], [Code verified], [Scope and properties]),
+  [BLAKE3 (one thread)], [x86-64], [19 fns, 3,837 insns], [One-block, 16-way, and 32-way AVX-512 kernels.],
+  [BLAKE3 (one thread)], [AArch64], [8 fns, 1,891 insns], [4 `use`-linked `.ode` files; 4-way NEON kernel.],
+  [BLAKE3 64 B XOF block], [both], [115 (x86), 125 (arm) insns], [Extendable-output compression; SSE2 & NEON, `stack 0`, `trace depends on nothing`, same ID.],
+  [ChaCha20 block], [both], [1,090 (x86), 1,759 (arm)], [16-block AVX-512 / 4-block NEON kernels.],
+  [RFC 9669 eBPF subset], [both], [209 (x86), 192 (arm) insns], [11 opcodes, 4 registers, signed relative jumps, bounded step fuel; 6 fns; audits in 0.16 s / 0.20 s.],
+  [Two-target routines (5)], [both], [10 `.o` bundles], [RFC 1950 Adler-32, strict RFC 3629 UTF-8, RFC 1071 checksum, ASCII decimal, constant-time `ct_bytes_eq` (`stack 0`, identical ID across targets).],
+  [Smaller routines (19)], [both], [38 `.o` bundles], [Base64, ASN.1 DER, LZ4, SHA-256, ChaCha20, hex, varint, and verifier building blocks.],
+)
+
+Audit verdicts depend solely on the compiled bytes, contract, and proof—never on source authorship (36 of the 38 `.ode` sources in the last row were generated from specifications by language models).
+
+== Static Advice About Speed (`ode advise`)
+
+Contracts govern correctness and trace policy, not microarchitectural latency. For Alice's tuning loop, `ode advise` reports static code-size, instruction-cache-line, and store-forwarding counts, and checks optional `budget` annotations (such as `max_bytes 64`, `max_icache_lines 1`). Budgets are advisory diagnostics for Alice; they never alter emitted bytes or Bob's verification verdict.
 
 // ============================================================================
 // 8. What Bob relies on
 // ============================================================================
 
+#pagebreak()
+
 = What Bob Relies On
 
-Bob's conclusion from `shown` relies on the verifier being sound: on its never answering `shown` for code that breaks its contract. Nobody should have to accept that on one party's word, or in one way only. Table 4 lists four ways to come to confidence in the verifier: what each rests on, and where each stands.
+Bob's confidence in a `shown` verdict rests on three distinct layers: (1) soundness of the verifier relative to the instruction model, (2) fidelity of the instruction tables to real processors, and (3) integrity of the front-end reader that extracts ELF bytes and hashes `.ode.ocl`. Table 5 summarizes the evidence supporting each layer.
 
-#booktable(
-  4, "Four ways to confidence in the verifier",
-  columns: (1.50in, 2.90in, 2.40in),
-  ([Way], [What it rests on], [Where it stands]),
-  [*A proof of soundness*], [The verifier is written in Lean 4, and Lean checks a proof that whenever the verifier answers `shown`, the code keeps its contract, its trace line included, on the model of the processor that the instruction tables give. This rests on Lean's own checker and on three standard axioms (`propext`, `Classical.choice`, `Quot.sound`).], [Done for both processors, for conventions of a function's own, and for tail calls: 11 theorems.],
-  [*The tables match the processors*], [A row of a table says what one instruction does. A row is compared with a real processor on random instances. The AArch64 rows are also proved in Lean to agree with Google DeepMind's model of that instruction set.], [x86-64: #F.tables.x86_rows rows, #F.tables.x86_rows_run_on_a_processor of them compared with processors. AArch64: #F.tables.arm64_rows rows, all proved to agree with the model, #F.tables.arm64_rows_run_on_a_processor compared with an Apple M6. The rows not compared are those for calls, returns and jumps, and one for the address of data.],
-  [*Reading it, or a second verifier*], [Bob reads the verifier himself, or checks the same proof files with a second verifier written apart from the first.], [Proof arithmetic steps carry explicit starting rows (`r ...`), independent of any verifier's internal fact order. An independent pure-Python verifier (`verify2.py`, ~940 lines, zero code shared with Lean) verifies the same `.statement` and `.proof` files on both processors for the scalar, byte, and loop fragment.],
-  [*A verifier written in Ode*], [The verifier's own machine code, verified against its specification once another method above anchors the base.], [Small verifier building blocks are verified; the `all_zero` routine of section 2 is one pattern.],
-)
-
-== Multi-File Programs
-
-Multi-file programs connect files through explicit linked local namespaces (`use alias = "file.ode"`), qualifying imported definitions and functions as `alias.name`. Imports are non-transitive, diamond imports are deduplicated, and splitting a program across files produces the exact same canonical `.ocl` contract and 52-character BLAKE3 identifier as a single file.
+#block(width: 6.80in, breakable: true, above: 0.70em, below: 0.70em)[
+  #tabs.step()
+  #block(sticky: true, below: 4pt)[#caption("Table", 5, "Assurance layers for Bob's reliance set", [])]
+  #set text(size: 8.15pt)
+  #set par(justify: false, leading: 0.46em)
+  #show table.cell: set block(breakable: false)
+  #table(
+    columns: (1.42in, 2.83in, 2.55in),
+    align: left,
+    stroke: (x, y) => (
+      top: if y == 0 { 0.9pt + ink } else if y == 1 { 0.55pt + slate } else { none },
+      bottom: 0.4pt + rulecol.transparentize(40%),
+      left: none,
+      right: none,
+    ),
+    inset: (x: 5.5pt, y: 3.4pt),
+    table.header(
+      text(weight: "bold", size: 8.0pt, fill: ink)[Layer],
+      text(weight: "bold", size: 8.0pt, fill: ink)[What it establishes and relies on],
+      text(weight: "bold", size: 8.0pt, fill: ink)[Current status],
+    ),
+    [*Lean 4 soundness proof*], [The primary verifier (`odeverify`) is written in Lean 4 (de Moura & Ullrich, 2021). Eleven machine-checked theorems prove that whenever `odeverify` returns `shown`, the program meets its contract—including two-run trace equality—on the operational model defined by the instruction tables. Relies on Lean's kernel and three standard axioms (`propext`, `Classical.choice`, `Quot.sound`), with zero `sorry`.], [Complete for x86-64 and AArch64, private calling conventions, and tail calls (`test_sound.py`).],
+    [*Instruction-table fidelity*], [Two separate checks test whether `core/x86.tab` and `arm64/arm64.tab` match real CPUs: (a) a Lean proof that every AArch64 row agrees with Google DeepMind's `arm64-semantics` formal model; (b) random hardware cross-tests comparing table execution against real processors (sampled tests, not exhaustive proofs).], [x86-64: #F.tables.x86_rows rows (#F.tables.x86_rows_run_on_a_processor sampled on CPU). AArch64: #F.tables.arm64_rows rows (#F.tables.arm64_rows/#F.tables.arm64_rows proved against `arm64-semantics`; #F.tables.arm64_rows_run_on_a_processor sampled on Apple M6). Omitted from CPU sampling: calls, returns, jumps, data-address load.],
+    [*Independent second verifier*], [Proof arithmetic steps carry explicit premise rows rather than relying on one verifier's internal fact numbering. An independent pure-Python verifier (`verify2.py`, about 940 lines, zero shared verification code with Lean) checks the same intermediate statement and `.proof` files.], [Dual-verifies scalar, byte, loop, custom-calling, and branch-dispatch proofs on both targets; vector and record-layout instructions are not yet covered in `verify2.py`.],
+    [*Front-end reader & ELF audit*], [Before calling `odeverify`, the Python audit wrapper (`ode_tool.py`, `statement.py`, ELF decoders) checks ELF sections/symbols, hashes `.ode.ocl`, and decodes instruction bytes into the verifier's input text. This wrapper is currently in Bob's reliance set.], [Tested across negative controls (tampered bytes, rogue hooks, wrong hashes); not yet proved in Lean.],
+    [*Ode-written verifier parts*], [Long-term goal: compile the verifier itself from verified Ode code once an external check anchors the bootstrap.], [Early building blocks only (e.g. `all_zero`, byte scanners); not yet a full verifier.],
+  )
+]
 
 == Scope and Limits
 
-Ode verifies pure-computation functions: they are given memory and numbers, and they return. It does not cover:
+Ode verifies pure computational functions taking numbers and memory regions and returning to their caller. Its current scope excludes operating-system calls, I/O, concurrency, and dynamic memory allocation; microarchitectural side channels beyond the architectural trace (speculation, power, data-dependent latency); vector and record-layout coverage in `verify2.py`; and a machine-checked parser proof for `Main.lean`, `Reader.lean`, and the Python ELF-to-statement decoder.
 
-- system calls, input and output, threads, or dynamic memory allocation;
-- full vector and record-layout coverage in the standalone Python second verifier (`verify2.py`);
-- a complete, machine-checked grammar covering every optional clause (Appendix B summarizes the core surface syntax).
+== Complexity and Size Inventory
 
-== Sizes
+#block(width: 6.80in, breakable: false, above: 0.45em, below: 0.45em)[
+  #tabs.step()
+  #block(sticky: true, below: 4pt)[#caption("Table", 6, "Sizes of the report, Lean verifier, soundness proofs, and instruction tables", [])]
+  #set text(size: 8.2pt)
+  #set par(justify: false, leading: 0.45em)
+  #table(
+    columns: (2.20in, 1.35in, 3.25in),
+    align: (left, right, left),
+    stroke: (x, y) => (
+      top: if y == 0 { 0.9pt + ink } else if y == 1 { 0.55pt + slate } else { none },
+      bottom: 0.4pt + rulecol.transparentize(40%),
+      left: none,
+      right: none,
+    ),
+    inset: (x: 5.5pt, y: 3.4pt),
+    table.header(
+      text(weight: "bold", size: 8.0pt, fill: ink)[Component],
+      text(weight: "bold", size: 8.0pt, fill: ink)[Size],
+      text(weight: "bold", size: 8.0pt, fill: ink)[Notes],
+    ),
+    [Language report], [#context counter(page).final().first() pages], [#context figs.final().first() figures and #context tabs.final().first() tables.],
+    [Lean verifier & machine model], [#commas(F.lean.model_lines) lines], [#F.lean.model_files Lean files defining machine semantics, contracts, and `odeverify` (`Core.lean`: #commas(F.lean.core_lines) lines).],
+    [Lean soundness proofs], [#commas(F.lean.sound_lines) lines], [#F.lean.sound_files Lean files checked by Lean's kernel; Bob need not read them.],
+    [Instruction tables], [#F.tables.x86_rows / #F.tables.arm64_rows rows], [`core/x86.tab` (x86-64) and `arm64/arm64.tab` (AArch64).],
+  )
+]
 
-Two sizes are recorded with each revision, as measures of how complicated Ode is: the length of this report, and the size of what Bob relies on. Table 5 gives them.
-
-#booktable(
-  5, "Sizes at this revision",
-  columns: (2.10in, 1.50in, 3.20in),
-  align: (left, right, left),
-  ([What], [Size], [What is counted]),
-  [This report], [#context counter(page).final().first() pages], [With #context figs.final().first() figures and #context tabs.final().first() tables.],
-  [The verifier and its model], [#commas(F.lean.model_lines) lines], [#F.lean.model_files Lean files: what the machine does, what a contract means, and what the verifier accepts. The largest, `Core.lean`, has #commas(F.lean.core_lines) lines.],
-  [The proof of soundness], [#commas(F.lean.sound_lines) lines], [#F.lean.sound_files Lean files. Lean checks them; Bob need not read them.],
-  [The instruction tables], [#F.tables.x86_rows and #F.tables.arm64_rows rows], [x86-64 and AArch64.],
-)
+#pagebreak()
 
 // ============================================================================
 // Appendix A: commands
@@ -599,35 +665,53 @@ Two sizes are recorded with each revision, as measures of how complicated Ode is
 
 #heading(level: 1, numbering: none)[Appendix A · Commands]
 
-Table 6 lists the commands of the tool (`lang/ode_tool.py`), each with its main arguments and what it does. Bob needs only `audit`, and `spec-test` if he wishes to try a contract's definitions on inputs of his own.
+Every command below is invoked from the repository root as `python3 lang/ode_tool.py <cmd> ...` (written `ode <cmd>` in the text). Auditor commands appear first; Bob needs only `audit` (and optionally `spec-test`).
 
-#booktable(
-  6, "The commands",
-  columns: (3.60in, 3.20in),
-  ([Command], [What it does]),
-  [`canon SRC [--fn NAME] [--out-dir DIR]`], [Prints the canonical contract's 52 characters; with `--out-dir`, writes the contract into a file named by them.],
-  [`pack SRC --fn NAME --target T --out OBJ --proof PROOF`], [Compiles, finds the proof, makes the object file and the proof file, and audits them.],
-  [`audit OBJ --proof PROOF [--expect-contract ID]`], [Bob's check (section 6). `--show-contract` prints the contract that was verified.],
-  [`spec-test OCL --call NAME --arg JSON`], [Evaluates a definition on the inputs given.],
-  [`check SRC [--fn NAME] [--target T]`], [Compiles, finds the proof, and runs the verifier.],
-  [`advise SRC --fn NAME`], [Reports the counts that bear on speed (section 6).],
-  [`compare A B --fn NAME`], [Sets two variants of a function side by side.],
-  [`refute SRC SPEC [--cases N]`], [Runs the code on particular cases, looking for one that breaks the contract.],
-  [`serve`], [Takes the same requests over a pipe, keeping the tables loaded.],
-)
-
-#heading(level: 1, numbering: none)[Appendix B · Core Surface Syntax]
-
-The core surface syntax of a `.ode` file consists of six top-level forms:
-
-#block(width: 6.80in, fill: ivory, stroke: 0.5pt + rulecol, radius: 2.5pt, inset: (x: 10pt, y: 8pt))[
-  #set par(justify: false, leading: 0.48em)
-  #raw(block: true, "file         ::= ( use_decl | const_decl | layout_decl | def_decl | inline_fn | fn_decl )*\nuse_decl     ::= 'use' IDENT '=' STRING\nconst_decl   ::= 'const' IDENT '=' expr\nlayout_decl  ::= 'layout' IDENT INT '{' field (',' field)* '}'\ndef_decl     ::= 'def' IDENT '(' params ')' '{' expr '}'\ninline_fn    ::= 'inline' 'fn' IDENT 'for' arch '(' params ')' inline_clauses '{' stmt* '}'\nfn_decl      ::= 'fn' IDENT '(' typed_params ')' clause* '{' target_block+ '}'\nclause       ::= 'requires' expr | 'ensures' target '=' expr | 'returns' expr\n               | 'trace depends on' ('nothing' | expr_list) | 'decreases' expr | 'stack' expr\ntarget_block ::= 'for' ('x86_64' | 'arm64') calling_opt '{' stmt* '}'")
+#block(width: 6.80in, breakable: true, above: 0.70em, below: 0.70em)[
+  #tabs.step()
+  #block(sticky: true, below: 4pt)[#caption("Table", 7, "CLI commands of lang/ode_tool.py", [])]
+  #set text(size: 8.2pt)
+  #set par(justify: false, leading: 0.45em)
+  #show table.cell: set block(breakable: false)
+  #table(
+    columns: (3.65in, 3.15in),
+    align: left,
+    stroke: (x, y) => (
+      top: if y == 0 { 0.9pt + ink } else if y == 1 { 0.55pt + slate } else { none },
+      bottom: 0.4pt + rulecol.transparentize(40%),
+      left: none,
+      right: none,
+    ),
+    inset: (x: 5.5pt, y: 3.4pt),
+    table.header(text(weight: "bold", size: 8.0pt, fill: ink)[Command], text(weight: "bold", size: 8.0pt, fill: ink)[Purpose]),
+    [`audit OBJ --proof PROOF [--expect-contract ID] [--show-contract]`], [Bob's check (section 6): verifies 100% of `.text`, checks `.ode.ocl` against `ID`, and prints the verified contract with `--show-contract`.],
+    [`spec-test OCL --call NAME --arg JSON [--glossary G]`], [Evaluates a contract definition on JSON inputs (`NAME` is a canonical name like `f0`, or an authored name when `--glossary` is given).],
+    [`canon SRC [--fn NAME] [--out-dir DIR]`], [Prints the 52-character BLAKE3 identifier; with `--out-dir`, writes `<ID>.ocl`.],
+    [`pack SRC --fn NAME --target T --out OBJ --proof PROOF`], [Compiles (`T` = `x86_64` or `arm64`), proves, packs `.o` + `.proof`, and audits them.],
+    [`check SRC [--fn NAME] [--target T]`], [Development loop: compiles, proves, verifies, and reports counterexamples on failure.],
+    [`advise SRC --fn NAME`], [Reports static code-size, cache-line, and `budget` diagnostics (section 7.3).],
+    [`compare A B --fn NAME`], [Compares static advice and verification verdicts of two `.ode` variants.],
+    [`refute SRC SPEC [--cases N]`], [Runs concrete fuzz cases looking for a counterexample that violates the contract.],
+    [`serve`], [Line-delimited JSON stdin/stdout server reusing loaded instruction tables.],
+  )
 ]
 
-#v(0.8em)
-#align(center)[
-  #text(font: "Palatino", size: 8.2pt, fill: slate, style: "italic")[
-    Ode — informally, Object-code Direct Evidence. Revision #rev · November 2026.
-  ]
+#heading(level: 1, numbering: none)[Appendix B · Core Surface Grammar]
+
+This summary covers the core surface syntax of `.ode` source files (`arch` is `x86_64` or `arm64`; `stmt` and `expr` follow sections 2 and 4; optional clauses `writes`, `needs`, `result depends on`, `frame`, and `place` are shown in the productions below):
+
+#listing(label: "Core surface grammar (summary)", width: 6.80in, size: 7.25pt)[
+  #raw(block: true, "file         ::= ( use_decl | const_decl | layout_decl | sequence_decl | def_decl | inline_fn | fn_decl )*\nuse_decl     ::= 'use' IDENT '=' STRING\nconst_decl   ::= 'const' IDENT '=' expr\nlayout_decl  ::= 'layout' IDENT INT '{' field (',' field)* '}'\nsequence_decl::= 'sequence' IDENT '(' params ')' '{' expr ';' expr '}'\ndef_decl     ::= 'def' IDENT '(' params ')' '{' expr '}'\ninline_fn    ::= 'inline' 'fn' IDENT 'for' arch '(' params ')' inline_clauses '{' stmt* '}'\nfn_decl      ::= 'fn' IDENT '(' typed_params ')' clause* '{' target_block+ '}'\nclause       ::= 'requires' expr | 'ensures' target '=' expr | 'writes' IDENT | 'returns' expr\n               | 'needs' IDENT | 'trace depends on' ('nothing' | expr_list)\n               | 'result depends on' ('nothing' | expr_list) | 'decreases' expr | 'stack' expr\ntarget_block ::= 'for' arch ('calling' '{' calling_clause* '}')? ('stack' expr)? '{' frame_opt stmt* '}'\nstmt         ::= reg_decl | place_block | label | assign | loop_stmt | if_stmt | for_unroll | asm_insn")
+]
+
+#heading(level: 1, numbering: none)[References]
+
+#block(width: 6.80in)[
+  #set text(size: 8.6pt, fill: charcoal)
+  #set par(justify: false, leading: 0.54em, spacing: 0.42em)
+  - M. S. Miller (2006). _Robust Composition: Towards a Unified Approach to Access Control and Concurrency Control._ PhD thesis, Johns Hopkins University (Section 5.1, reliance sets).
+  - J. O'Connor, J.-P. Aumasson, S. Neves, and Z. Wilcox-O'Hearn (2020). _BLAKE3: one function, fast everywhere._ Specification and reference `blake3` crate.
+  - L. de Moura and S. Ullrich (2021). _The Lean 4 Theorem Prover and Programming Language._ CADE-28.
+  - Google DeepMind (2025). _arm64-semantics_ (Lean 4 formal AArch64 ISA specification in `google-deepmind/code-verification`).
+  - D. Thaler, ed. (2024). _BPF Instruction Set Architecture (ISA)._ IETF RFC 9669.
 ]

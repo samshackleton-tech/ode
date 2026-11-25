@@ -6,7 +6,7 @@ fn step(a: number, b: number)
     requires a < 1000000
     requires b < 1000000
     returns a + b + 3
-    trace depends on a, b
+    trace depends on nothing
     stack 0
 {
     for x86_64 calling {
@@ -34,7 +34,7 @@ fn quad(x: number, y: number)
     requires x < 100000
     requires y < 100000
     returns quad_fn(x, y)
-    trace depends on x, y
+    trace depends on nothing
 {
     for x86_64 stack 8 {
         mov r10, rdi

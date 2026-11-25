@@ -19,13 +19,13 @@
   <rect x="172" y="46" width="280" height="48" rx="1.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="1.0"/>
   <rect x="174" y="48" width="54" height="44" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.65"/>
   <text x="201" y="67" text-anchor="middle" font-family="Menlo" font-size="8.2" font-weight="normal" font-style="normal" fill="#1C1E21">nd.h</text>
-  <text x="201" y="81" text-anchor="middle" font-family="Menlo" font-size="7.3" font-weight="normal" font-style="normal" fill="#5B6470">0..32</text>
+  <text x="201" y="81" text-anchor="middle" font-family="Menlo" font-size="7.5" font-weight="normal" font-style="normal" fill="#5B6470">[0, 32)</text>
   <rect x="231" y="48" width="122" height="44" rx="1.5" fill="#EEEBE2" stroke="#2E343D" stroke-width="0.95"/>
   <text x="292" y="67" text-anchor="middle" font-family="Menlo" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21">nd.block</text>
-  <text x="292" y="81" text-anchor="middle" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#9E2A2B">bytes 32..96 · lent</text>
+  <text x="292" y="81" text-anchor="middle" font-family="Menlo" font-size="7.8" font-weight="normal" font-style="normal" fill="#9E2A2B">[32, 96) · lent</text>
   <rect x="356" y="48" width="94" height="44" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.65"/>
   <text x="403" y="67" text-anchor="middle" font-family="Menlo" font-size="7.3" font-weight="normal" font-style="normal" fill="#1C1E21">counter, length,</text>
-  <text x="403" y="81" text-anchor="middle" font-family="Menlo" font-size="7.3" font-weight="normal" font-style="normal" fill="#5B6470">flags · 96..120</text>
+  <text x="403" y="81" text-anchor="middle" font-family="Menlo" font-size="7.3" font-weight="normal" font-style="normal" fill="#5B6470">flags · [96, 120)</text>
   <text x="468" y="72" text-anchor="middle" font-family="Palatino" font-size="7.2" font-weight="normal" font-style="italic" fill="#7D8590">disjoint</text>
   <rect x="484" y="46" width="90" height="48" rx="1.5" fill="#F7F5F0" stroke="#5B6470" stroke-width="0.85" stroke-dasharray="3,2"/>
   <text x="529" y="66" text-anchor="middle" font-family="Menlo" font-size="8.5" font-weight="normal" font-style="normal" fill="#1C1E21">stack</text>
@@ -38,9 +38,9 @@
   <path d="M 292 94 L 292 142" fill="none" stroke="#9E2A2B" stroke-width="1.0" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-accent)"/>
   <text x="300" y="124" text-anchor="start" font-family="Palatino" font-size="8.1" font-weight="normal" font-style="italic" fill="#9E2A2B">a part of nd, lent to read and write, as block</text>
   <rect x="142" y="146" width="266" height="62" rx="1.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.95"/>
-  <text x="275" y="164" text-anchor="middle" font-family="Menlo" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21">Callee:  b3l_pad_arm64(block, src, n)</text>
+  <text x="275" y="164" text-anchor="middle" font-family="Menlo" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21">Callee:  pad_block(block, src, n)</text>
   <text x="275" y="180" text-anchor="middle" font-family="Menlo" font-size="7.8" font-weight="normal" font-style="normal" fill="#9E2A2B">ensures block = padded(src)  ·  stack 0</text>
-  <text x="275" y="196" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="italic" fill="#5B6470">It can touch nothing else of nd, nor the caller's stack</text>
+  <text x="275" y="196" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="italic" fill="#5B6470">This call touches nothing else of nd or the stack</text>
   <rect x="424" y="146" width="248" height="62" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.8"/>
   <text x="436" y="164" text-anchor="start" font-family="Palatino" font-size="8.5" font-weight="bold" font-style="normal" fill="#1C1E21">What the caller knows after the call:</text>
   <text x="436" y="180" text-anchor="start" font-family="Palatino" font-size="8.2" font-weight="normal" font-style="normal" fill="#9E2A2B">• nd.block is padded(src)</text>

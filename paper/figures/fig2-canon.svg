@@ -55,7 +55,7 @@
   <text x="589" y="107" text-anchor="middle" font-family="Menlo" font-size="7.4" font-weight="normal" font-style="normal" fill="#1C1E21">symbol  ode_&lt;these 52&gt;</text>
   <text x="589" y="119" text-anchor="middle" font-family="Menlo" font-size="7.4" font-weight="normal" font-style="normal" fill="#1C1E21">file    &lt;these 52&gt;.ocl</text>
   <rect x="504" y="136" width="170" height="84" rx="1.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75" stroke-dasharray="3,2.5"/>
-  <text x="516" y="152" text-anchor="start" font-family="Palatino" font-size="7.5" font-weight="bold" font-style="normal" fill="#5B6470" letter-spacing="0.4">A READER'S GLOSSARY  (not hashed)</text>
+  <text x="516" y="152" text-anchor="start" font-family="Palatino" font-size="7.5" font-weight="bold" font-style="normal" fill="#5B6470" letter-spacing="0.4">OPTIONAL DISPLAY GLOSSARY</text>
   <text x="516" y="168.0" text-anchor="start" font-family="Menlo" font-size="7.5" font-weight="normal" font-style="normal" fill="#5B6470">a0  =  a</text>
   <text x="516" y="179.5" text-anchor="start" font-family="Menlo" font-size="7.5" font-weight="normal" font-style="normal" fill="#5B6470">a1  =  n</text>
   <text x="516" y="191.0" text-anchor="start" font-family="Menlo" font-size="7.5" font-weight="normal" font-style="normal" fill="#5B6470">f0  =  zeros</text>

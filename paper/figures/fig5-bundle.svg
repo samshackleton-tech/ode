@@ -29,14 +29,15 @@
   <text x="30" y="130" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#5B6470">read-only data</text>
   <rect x="166" y="102" width="238" height="36" rx="1.5" fill="#EEEBE2" stroke="#2E343D" stroke-width="0.85"/>
   <text x="176" y="117" text-anchor="start" font-family="Menlo" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21">.ode.ocl</text>
-  <text x="238" y="117" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">the canonical contract (not code)</text>
-  <text x="176" y="130" text-anchor="start" font-family="Menlo" font-size="7.0" font-weight="normal" font-style="normal" fill="#1C1E21">its BLAKE3 hash is the symbol's &lt;52&gt;</text>
+  <text x="238" y="117" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">embedded canonical contract</text>
+  <text x="176" y="130" text-anchor="start" font-family="Menlo" font-size="7.2" font-weight="normal" font-style="normal" fill="#1C1E21">its BLAKE3 hash is the symbol's &lt;52&gt;</text>
   <rect x="20" y="146" width="384" height="24" rx="1.5" fill="#F7F5F0" stroke="#CFC9BC" stroke-width="0.65" stroke-dasharray="2.5,2.5"/>
-  <text x="30" y="162" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">Refused if present:  code run at start or end · other visible symbols · symbols defined elsewhere</text>
-  <line x1="448" y1="98" x2="419" y2="98" stroke="#9E2A2B" stroke-width="0.95" marker-end="url(#arr-accent)"/>
+  <text x="30" y="162" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">Refused if present:  init/fini hooks · extra exported symbols · unresolved external calls</text>
+  <line x1="448" y1="98" x2="419" y2="98" stroke="#9E2A2B" stroke-width="1.0" marker-end="url(#arr-accent)"/>
+  <text x="433" y="91" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#9E2A2B">checks</text>
   <rect x="448" y="12" width="224" height="170" rx="1.5" fill="#F7F5F0" stroke="#5B6470" stroke-width="0.8"/>
-  <text x="460" y="30" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">THE PROOF FILE  (bundle.proof)</text>
-  <text x="460" y="43" text-anchor="start" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="italic" fill="#5B6470">checked step by step; relied on for nothing</text>
+  <text x="460" y="30" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.8">THE PROOF FILE  (bundle.proof)</text>
+  <text x="460" y="43" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">required input; every step checked</text>
   <rect x="460" y="54" width="200" height="36" rx="1.5" fill="#FFFFFF" stroke="#CFC9BC" stroke-width="0.75"/>
   <text x="470" y="68" text-anchor="start" font-family="Menlo" font-size="7.1" font-weight="normal" font-style="normal" fill="#1C1E21">order:  helper 1, ..., ode_&lt;52&gt;</text>
   <text x="470" y="81" text-anchor="start" font-family="Palatino" font-size="7.4" font-weight="normal" font-style="italic" fill="#5B6470">each function after those it calls</text>

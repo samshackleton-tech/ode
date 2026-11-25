@@ -10,8 +10,8 @@
       <path d="M1,1.3 L7,4 L1,6.7" fill="none" stroke="#9E2A2B" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
-  <text x="44" y="20" text-anchor="start" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.9">SHORT INPUTS  (64 B – 1 KiB)</text>
-  <text x="44" y="32" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="normal" font-style="italic" fill="#5B6470">Calls of Ode's own and tail calls count most at 64 bytes</text>
+  <text x="44" y="20" text-anchor="start" font-family="Palatino" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.8">SHORT INPUTS  (64 B – 1 KiB)</text>
+  <text x="44" y="33" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">Combined gain of private calls, tail calls, and zero block copy</text>
   <line x1="44" y1="202.0" x2="272" y2="202.0" stroke="#1C1E21" stroke-width="0.7"/>
   <text x="38" y="205.0" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">0.0</text>
   <line x1="44" y1="149.33333333333334" x2="272" y2="149.33333333333334" stroke="#CFC9BC" stroke-width="0.45"/>
@@ -40,15 +40,15 @@
   <rect x="249" y="104.04" width="11.5" height="97.96" rx="0.5" fill="#FFFFFF" stroke="#5B6470" stroke-width="0.75"/>
   <text x="225.5" y="93.984" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="bold" font-style="normal" fill="#9E2A2B">0.95</text>
   <text x="234" y="216" text-anchor="middle" font-family="Palatino" font-size="8.2" font-weight="normal" font-style="normal" fill="#1C1E21">1 KiB</text>
-  <rect x="14" y="227" width="7.5" height="7.5" rx="0.5" fill="#CFC9BC" stroke="#5B6470" stroke-width="0.85"/>
-  <text x="24.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">Ode, C calls inside</text>
-  <rect x="112" y="227" width="7.5" height="7.5" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.85"/>
-  <text x="122.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="bold" font-style="normal" fill="#9E2A2B">Ode</text>
-  <rect x="146" y="227" width="7.5" height="7.5" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.85"/>
-  <text x="156.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">BLAKE3-Servil</text>
-  <rect x="222" y="227" width="7.5" height="7.5" rx="0.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.85"/>
-  <text x="232.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">blake3 1.8.7</text>
-  <text x="336" y="20" text-anchor="start" font-family="Palatino" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.8">LARGE INPUTS  (4 KiB – 1 MiB)</text>
+  <rect x="10" y="227" width="7.5" height="7.5" rx="0.5" fill="#CFC9BC" stroke="#5B6470" stroke-width="0.85"/>
+  <text x="20.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">Ode (C calls + copy)</text>
+  <rect x="116" y="227" width="7.5" height="7.5" rx="0.5" fill="#9E2A2B" stroke="#9E2A2B" stroke-width="0.85"/>
+  <text x="126.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="bold" font-style="normal" fill="#9E2A2B">Ode</text>
+  <rect x="150" y="227" width="7.5" height="7.5" rx="0.5" fill="#3A3F47" stroke="#3A3F47" stroke-width="0.85"/>
+  <text x="160.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">BLAKE3-Servil</text>
+  <rect x="224" y="227" width="7.5" height="7.5" rx="0.5" fill="#FFFFFF" stroke="#2E343D" stroke-width="0.85"/>
+  <text x="234.5" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#1C1E21">blake3 1.8.7</text>
+  <text x="336" y="20" text-anchor="start" font-family="Palatino" font-size="8.2" font-weight="bold" font-style="normal" fill="#1C1E21" letter-spacing="0.7">LARGE INPUTS  (4 KiB – 1 MiB, selected sizes)</text>
   <text x="336" y="33" text-anchor="start" font-family="Palatino" font-size="7.9" font-weight="normal" font-style="italic" fill="#5B6470">From 256 KiB on, Ode runs at 98 to 99% of BLAKE3-Servil's speed</text>
   <line x1="336" y1="202.0" x2="574" y2="202.0" stroke="#1C1E21" stroke-width="0.7"/>
   <text x="330" y="205.0" text-anchor="end" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#5B6470">0</text>
@@ -60,38 +60,38 @@
   <text x="330" y="99.66666666666667" text-anchor="end" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#5B6470">12</text>
   <line x1="336" y1="61.55555555555557" x2="574" y2="61.55555555555557" stroke="#CFC9BC" stroke-width="0.45"/>
   <text x="330" y="64.55555555555557" text-anchor="end" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#5B6470">16</text>
-  <path d="M 348.0 172.1 L 383.7 107.9 L 419.3 100.4 L 455.0 96.6 L 490.7 94.5 L 526.3 93.3 L 562.0 94.7" fill="none" stroke="#5B6470" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3.5,2.5"/>
-  <path d="M 348.0 172.8 L 383.7 109.2 L 419.3 68.4 L 455.0 62.4 L 490.7 58.9 L 526.3 57.2 L 562.0 61.3" fill="none" stroke="#3A3F47" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M 348.0 176.3 L 383.7 133.6 L 419.3 121.1 L 455.0 72.3 L 490.7 73.5 L 526.3 58.9 L 562.0 63.7" fill="none" stroke="#9E2A2B" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="348.0" cy="176.3" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="348.0" cy="172.8" r="1.8" fill="#3A3F47"/>
-  <text x="348.0" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">4K</text>
-  <circle cx="383.7" cy="133.6" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="383.7" cy="109.2" r="1.8" fill="#3A3F47"/>
-  <text x="383.7" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">16K</text>
-  <circle cx="419.3" cy="121.1" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="419.3" cy="68.4" r="1.8" fill="#3A3F47"/>
-  <text x="419.3" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">32K</text>
+  <path d="M 350.0 172.1 L 385.0 107.9 L 420.0 100.4 L 455.0 96.6 L 490.0 94.5 L 525.0 93.3 L 560.0 94.7" fill="none" stroke="#5B6470" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="3.5,2.5"/>
+  <path d="M 350.0 172.8 L 385.0 109.2 L 420.0 68.4 L 455.0 62.4 L 490.0 58.9 L 525.0 57.2 L 560.0 61.3" fill="none" stroke="#3A3F47" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 350.0 176.3 L 385.0 133.6 L 420.0 121.1 L 455.0 72.3 L 490.0 73.5 L 525.0 58.9 L 560.0 63.7" fill="none" stroke="#9E2A2B" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="350.0" cy="176.3" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="350.0" cy="172.8" r="1.8" fill="#3A3F47"/>
+  <text x="350.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">4 KiB</text>
+  <circle cx="385.0" cy="133.6" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="385.0" cy="109.2" r="1.8" fill="#3A3F47"/>
+  <text x="385.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">16 KiB</text>
+  <circle cx="420.0" cy="121.1" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="420.0" cy="68.4" r="1.8" fill="#3A3F47"/>
+  <text x="420.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">32 KiB</text>
   <circle cx="455.0" cy="72.3" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
   <circle cx="455.0" cy="62.4" r="1.8" fill="#3A3F47"/>
-  <text x="455.0" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">64K</text>
-  <circle cx="490.7" cy="73.5" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="490.7" cy="58.9" r="1.8" fill="#3A3F47"/>
-  <text x="490.7" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">128K</text>
-  <circle cx="526.3" cy="58.9" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="526.3" cy="57.2" r="1.8" fill="#3A3F47"/>
-  <text x="526.3" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">256K</text>
-  <circle cx="562.0" cy="63.7" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
-  <circle cx="562.0" cy="61.3" r="1.8" fill="#3A3F47"/>
-  <text x="562.0" y="216" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="normal" font-style="normal" fill="#1C1E21">1M</text>
+  <text x="455.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">64 KiB</text>
+  <circle cx="490.0" cy="73.5" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="490.0" cy="58.9" r="1.8" fill="#3A3F47"/>
+  <text x="490.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">128 KiB</text>
+  <circle cx="525.0" cy="58.9" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="525.0" cy="57.2" r="1.8" fill="#3A3F47"/>
+  <text x="525.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">256 KiB</text>
+  <circle cx="560.0" cy="63.7" r="2.4" fill="#9E2A2B" stroke="#FFFFFF" stroke-width="0.6"/>
+  <circle cx="560.0" cy="61.3" r="1.8" fill="#3A3F47"/>
+  <text x="560.0" y="216" text-anchor="middle" font-family="Palatino" font-size="7.6" font-weight="normal" font-style="normal" fill="#1C1E21">1 MiB</text>
   <text x="582" y="56.32733333333334" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#3A3F47">BLAKE3-Servil 16.0</text>
   <text x="582" y="72.65344444444443" text-anchor="start" font-family="Palatino" font-size="8.2" font-weight="bold" font-style="normal" fill="#9E2A2B">Ode  15.8</text>
   <text x="582" y="97.72677777777777" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="normal" fill="#5B6470">blake3 1.8.7  12.2</text>
-  <line x1="421.3333333333333" y1="124.0601111111111" x2="437.3333333333333" y2="165.13333333333333" stroke="#5B6470" stroke-width="0.65"/>
-  <text x="440.3333333333333" y="166.88888888888889" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">32 KiB: 16-lane kernel</text>
-  <text x="440.3333333333333" y="179.17777777777778" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">runs twice; 64 KiB+</text>
-  <text x="440.3333333333333" y="191.46666666666667" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">uses 32-lane kernel</text>
-  <text x="526.3" y="47.166666666666686" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#9E2A2B">16.30</text>
+  <line x1="422.0" y1="124.0601111111111" x2="438.0" y2="163.37777777777777" stroke="#5B6470" stroke-width="0.65"/>
+  <text x="441.0" y="165.13333333333333" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">32 KiB: 16-way kernel</text>
+  <text x="441.0" y="177.42222222222222" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">runs twice; 64 KiB+</text>
+  <text x="441.0" y="189.7111111111111" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">uses 32-way kernel</text>
+  <text x="525.0" y="47.166666666666686" text-anchor="middle" font-family="Palatino" font-size="8.0" font-weight="bold" font-style="normal" fill="#9E2A2B">16.30</text>
   <text x="330" y="44.877777777777794" text-anchor="end" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">GiB/s</text>
-  <text x="336" y="234" text-anchor="start" font-family="Palatino" font-size="7.8" font-weight="normal" font-style="italic" fill="#5B6470">One Zen 5 core · medians of 45 interleaved trials a size</text>
+  <text x="336" y="234" text-anchor="start" font-family="Palatino" font-size="7.7" font-weight="normal" font-style="italic" fill="#5B6470">Categorical sizes · Zen 5 single core, medians of 45 interleaved trials</text>
 </svg>

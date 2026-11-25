@@ -78,7 +78,7 @@ def render_pdf_to_pngs(pdf_path: Path, out_dir: Path, dpi: int = 120) -> list[Pa
     return sorted(out_dir.glob("page-*.png"))
 
 
-def call_cold_editor(png_paths: list[Path], model: str, api_key: str) -> tuple[str, dict]:
+def call_cold_editor(png_paths: list[Path], model: str, api_key: str, max_tokens: int = 24000, effort: str = "medium") -> tuple[str, dict]:
     content = [
         {
             "type": "text",
@@ -97,8 +97,8 @@ def call_cold_editor(png_paths: list[Path], model: str, api_key: str) -> tuple[s
     payload = {
         "model": model,
         "temperature": 0.2,
-        "max_tokens": 14000,
-        "reasoning": {"effort": "medium"},
+        "max_tokens": max_tokens,
+        "reasoning": {"effort": effort},
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
@@ -130,6 +130,8 @@ def main() -> None:
     ap.add_argument("pdf", type=Path, help="Path to rendered PDF file")
     ap.add_argument("--model", default="anthropic/claude-sonnet-5.5", help="OpenRouter multimodal model")
     ap.add_argument("--dpi", type=int, default=120, help="PNG render DPI (default 120)")
+    ap.add_argument("--max-tokens", type=int, default=24000, help="Completion + reasoning token cap (default 24000)")
+    ap.add_argument("--effort", default="medium", help="Reasoning effort (low/medium/high)")
     ap.add_argument("--out", type=Path, default=None, help="Optional output markdown report path")
     args = ap.parse_args()
 
@@ -138,7 +140,7 @@ def main() -> None:
         pngs = render_pdf_to_pngs(args.pdf, Path(td), dpi=args.dpi)
         assert pngs, f"No PNGs rendered from {args.pdf}"
         print(f"Sending {len(pngs)} rendered pages ({args.dpi} DPI) to cold-room editor ({args.model})...", flush=True)
-        reply, usage = call_cold_editor(pngs, args.model, api_key)
+        reply, usage = call_cold_editor(pngs, args.model, api_key, max_tokens=args.max_tokens, effort=args.effort)
     print(f"Usage: {json.dumps(usage)}", flush=True)
     if args.out is not None:
         with args.out.open("w", encoding="utf-8") as f:
