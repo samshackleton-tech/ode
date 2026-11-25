@@ -1,11 +1,11 @@
-"""End-to-end test for the verified RFC 9669 eBPF virtual machine (`examples/ebpf/ebpf_unified.ode`).
+"""End-to-end test for the two-target verified RFC 9669 eBPF VM (`examples/ebpf/ebpf_unified.ode`).
 
 Verifies:
   1. Spec evaluation on 5 real RFC 9669 eBPF bytecode programs (sum 1..10, fib(10), fib(15), OOF, bad op).
-  2. Multi-function `ode pack` + `ode audit` on AArch64 (all 6 `stack 0` functions, 100% coverage,
-     exact canonical 52-char BLAKE3 contract ID) + 1-byte tamper negative control.
-  3. On native Apple Silicon (macOS arm64), links the exact verified AArch64 machine code and executes
-     all 5 real RFC 9669 eBPF bytecode programs on hardware.
+  2. Multi-function `ode pack` + `ode audit` on BOTH x86-64 and AArch64 (all 6 functions, 100% coverage,
+     identical 52-char BLAKE3 canonical contract ID) + 1-byte tamper negative controls.
+  3. Native hardware execution of the verified machine code on x86-64 Linux and Apple Silicon (macOS arm64)
+     running all 5 real RFC 9669 eBPF bytecode programs.
 """
 import os, platform, struct, subprocess, sys, tempfile, unittest
 
@@ -18,7 +18,7 @@ import ode, odec, ode_tool, obj as aobj
 
 SRC = os.path.join(HERE, "examples", "ebpf", "ebpf_unified.ode")
 SPEC = os.path.join(HERE, "examples", "ebpf", "ebpf_spec.ode")
-EXPECTED_ID = "s2or2kdio5y5yqajr23uiowr7ycsb5qklcamvqflm3bejfojiczq"
+EXPECTED_ID = "qlwaeo77ybph4b6zqshpx2k4hheyorgdhcmieq2tljuowzsjfwva"
 ERR = 4294967296
 
 
@@ -51,6 +51,29 @@ PROG_FIB = (
 PROG_BAD = insn(0xFF)
 
 
+def _c_harness(sym_name):
+    def arr(bs):
+        return ", ".join(str(b) for b in bs)
+    return f"""
+#include <inttypes.h>
+#include <stdint.h>
+#include <stdio.h>
+uint64_t {sym_name}(const uint8_t *p, uint64_t n, uint64_t fuel, uint64_t arg1);
+int main(void) {{
+    uint8_t p_sum[] = {{{arr(PROG_SUM)}}};
+    uint8_t p_fib[] = {{{arr(PROG_FIB)}}};
+    uint8_t p_bad[] = {{{arr(PROG_BAD)}}};
+    uint64_t r1 = {sym_name}(p_sum, sizeof(p_sum), 100, 10);
+    uint64_t r2 = {sym_name}(p_sum, sizeof(p_sum), 10, 10);
+    uint64_t r3 = {sym_name}(p_fib, sizeof(p_fib), 200, 10);
+    uint64_t r4 = {sym_name}(p_fib, sizeof(p_fib), 200, 15);
+    uint64_t r5 = {sym_name}(p_bad, sizeof(p_bad), 10, 0);
+    printf("%" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 " %" PRIu64 "\\n", r1, r2, r3, r4, r5);
+    return (r1 == 55 && r2 == 4294967296ULL && r3 == 55 && r4 == 610 && r5 == 4294967296ULL) ? 0 : 1;
+}}
+"""
+
+
 class TestEbpfUnified(unittest.TestCase):
     def test_spec_vectors(self):
         with open(SPEC, encoding="utf-8") as f:
@@ -61,6 +84,31 @@ class TestEbpfUnified(unittest.TestCase):
         self.assertEqual(sp.call(ev, "ebpf_run", PROG_FIB, 200, 10), 55)
         self.assertEqual(sp.call(ev, "ebpf_run", PROG_FIB, 200, 15), 610)
         self.assertEqual(sp.call(ev, "ebpf_run", PROG_BAD, 10, 0), ERR)
+
+    def test_pack_audit_x86_64(self):
+        with tempfile.TemporaryDirectory() as d:
+            obj_p = os.path.join(d, "ebpf_x86.o")
+            prf_p = os.path.join(d, "ebpf_x86.proof")
+            rc = ode_tool.main(["pack", SRC, "--fn", "ebpf_run", "--target", "x86_64",
+                                "--out", obj_p, "--proof", prf_p])
+            self.assertEqual(rc, 0)
+            out = subprocess.check_output(
+                [sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"),
+                 "audit", obj_p, "--proof", prf_p],
+                text=True,
+            )
+            self.assertIn(EXPECTED_ID, out)
+            self.assertIn("VERDICT:           shown", out)
+            self.assertIn("6 functions (1 exported, 5 local)", out)
+
+            if platform.system() == "Linux" and platform.machine() == "x86_64":
+                c_p = os.path.join(d, "run.c")
+                with open(c_p, "w") as f:
+                    f.write(_c_harness(f"ode_{EXPECTED_ID}"))
+                bin_p = os.path.join(d, "run")
+                subprocess.run(["cc", "-O2", c_p, obj_p, "-o", bin_p], check=True)
+                res = subprocess.check_output([bin_p], text=True).strip()
+                self.assertEqual(res, "55 4294967296 55 610 4294967296")
 
     def test_pack_audit_arm64(self):
         with tempfile.TemporaryDirectory() as d:
@@ -78,7 +126,6 @@ class TestEbpfUnified(unittest.TestCase):
             self.assertIn("VERDICT:           shown", out)
             self.assertIn("6 functions (1 exported, 5 local)", out)
 
-            # Negative control: flip one byte in .text -> audit must refuse
             bad_p = os.path.join(d, "ebpf_bad.o")
             with open(obj_p, "rb") as f:
                 raw = bytearray(f.read())
@@ -123,29 +170,9 @@ class TestEbpfUnified(unittest.TestCase):
             asm_p = os.path.join(d, "ebpf.S")
             with open(asm_p, "w") as f:
                 f.write("\n".join(asm) + "\n")
-
-            def arr(bs):
-                return ", ".join(str(b) for b in bs)
-
             c_p = os.path.join(d, "run.c")
             with open(c_p, "w") as f:
-                f.write(f"""
-#include <stdint.h>
-#include <stdio.h>
-uint64_t ebpf_run(const uint8_t *p, uint64_t n, uint64_t fuel, uint64_t arg1);
-int main(void) {{
-    uint8_t p_sum[] = {{{arr(PROG_SUM)}}};
-    uint8_t p_fib[] = {{{arr(PROG_FIB)}}};
-    uint8_t p_bad[] = {{{arr(PROG_BAD)}}};
-    uint64_t r1 = ebpf_run(p_sum, sizeof(p_sum), 100, 10);
-    uint64_t r2 = ebpf_run(p_sum, sizeof(p_sum), 10, 10);
-    uint64_t r3 = ebpf_run(p_fib, sizeof(p_fib), 200, 10);
-    uint64_t r4 = ebpf_run(p_fib, sizeof(p_fib), 200, 15);
-    uint64_t r5 = ebpf_run(p_bad, sizeof(p_bad), 10, 0);
-    printf("%llu %llu %llu %llu %llu\\n", r1, r2, r3, r4, r5);
-    return (r1 == 55 && r2 == 4294967296ULL && r3 == 55 && r4 == 610 && r5 == 4294967296ULL) ? 0 : 1;
-}}
-""")
+                f.write(_c_harness("ebpf_run"))
             bin_p = os.path.join(d, "run")
             subprocess.run(["clang", "-O2", c_p, asm_p, "-o", bin_p], check=True)
             out = subprocess.check_output([bin_p], text=True).strip()

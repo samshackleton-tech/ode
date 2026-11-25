@@ -541,7 +541,7 @@ Table 3 lists the verified programs: for each, the processor, how much code the 
   [BLAKE3, one thread], [AArch64], [8 functions, 1,891 instructions], [4 unified `.ode` files with `use`; 4-way NEON kernel.],
   [BLAKE3 64-byte XOF block], [x86-64, AArch64], [115 and 125 instructions], [Baseline SSE2 and NEON, `stack 0`, `trace depends on nothing`, same contract ID.],
   [ChaCha20 block function], [x86-64, AArch64], [1,090 and 1,759 instructions], [16 blocks a call with AVX-512; 4 blocks a call with NEON.],
-  [RFC 9669 eBPF virtual machine], [AArch64], [6 functions, 192 instructions], [11 opcodes, 4 registers, signed relative jumps, bounded fuel, all `stack 0`; audited in 0.43 s.],
+  [RFC 9669 eBPF virtual machine], [x86-64, AArch64], [209 and 192 instructions], [11 opcodes, 4 registers, signed relative jumps, bounded fuel; 6 functions, same contract ID.],
   [Full two-target routines], [each for both], [10 unified `.ode` builds], [RFC 1950 Adler-32, strict RFC 3629 UTF-8 validator/counter, RFC 1071 Internet Checksum, ASCII decimal parser, and constant-time `ct_bytes_eq` — all `stack 0`, same contract ID on both processors.],
   [19 smaller routines], [each for both], [38 object files], [Pieces of Base64, DER, LZ4, SHA-256 and ChaCha20; hex and varint decoders; pieces of a verifier.],
 )

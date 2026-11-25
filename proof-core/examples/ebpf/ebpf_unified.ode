@@ -1,5 +1,5 @@
-// Verified pure-computation RFC 9669 eBPF virtual machine (AArch64 & x86-64).
-// All 5 functions are `stack 0` using custom calling conventions to keep paths additive.
+// Verified pure-computation RFC 9669 eBPF virtual machine (x86-64 & AArch64).
+// Uses custom-calling `stack 0` helpers to keep symbolic paths additive on both targets.
 use bpf = "ebpf_spec.ode"
 
 fn get_reg_fn(idx: number, r0: number, r1: number, r2: number, r3: number)
@@ -12,6 +12,32 @@ fn get_reg_fn(idx: number, r0: number, r1: number, r2: number, r3: number)
     trace depends on idx, r0, r1, r2, r3
     stack 0
 {
+    for x86_64
+        calling {
+            in idx = rcx, r0 = r8, r1 = r9, r2 = r10, r3 = r11
+            out = rcx
+            preserves rax, rbx, rdx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
+        }
+    {
+        cmp rcx, 0
+        jne @r1
+        mov rcx, r8
+        ret
+    @r1:
+        cmp rcx, 1
+        jne @r2
+        mov rcx, r9
+        ret
+    @r2:
+        cmp rcx, 2
+        jne @r3
+        mov rcx, r10
+        ret
+    @r3:
+        mov rcx, r11
+        ret
+    }
+
     for arm64
         calling {
             in idx = x13, r0 = x4, r1 = x5, r2 = x6, r3 = x7
@@ -45,6 +71,56 @@ fn ebpf_alu_fn(op: number, lhs: number, rhs: number)
     trace depends on op, lhs, rhs
     stack 0
 {
+    for x86_64
+        calling {
+            in op = rdi, lhs = rax, rhs = rcx
+            out = rax
+            preserves rbx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
+        }
+    {
+        mov rdx, 1
+        shl rdx, 32
+        sub rdx, 1
+        and rax, rdx
+        and rcx, rdx
+        cmp rdi, 7
+        jb @err
+        je @add
+        cmp rdi, 15
+        jb @err
+        je @add
+        cmp rdi, 23
+        jb @err
+        je @sub
+        cmp rdi, 31
+        jb @err
+        je @sub
+        cmp rdi, 183
+        jb @err
+        je @mov
+        cmp rdi, 191
+        je @mov
+    @err:
+        mov rax, 1
+        shl rax, 32
+        ret
+    @mov:
+        mov rax, rcx
+        ret
+    @add:
+        add rax, rcx
+        and rax, rdx
+        ret
+    @sub:
+        mov rdx, 1
+        shl rdx, 32
+        add rax, rdx
+        sub rax, rcx
+        sub rdx, 1
+        and rax, rdx
+        ret
+    }
+
     for arm64
         calling {
             in op = x9, lhs = x13, rhs = x14
@@ -102,6 +178,43 @@ fn ebpf_cond_fn(op: number, lhs: number, imm: number)
     trace depends on op, lhs, imm
     stack 0
 {
+    for x86_64
+        calling {
+            in op = rdi, lhs = rax, imm = rcx
+            out = rdx
+            preserves rax, rbx, rcx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
+        }
+    {
+        cmp rdi, 21
+        jb @two
+        jne @c_gt
+        cmp rax, rcx
+        je @one
+        mov rdx, 0
+        ret
+    @c_gt:
+        cmp rdi, 37
+        jb @two
+        jne @c_ne
+        cmp rcx, rax
+        jb @one
+        mov rdx, 0
+        ret
+    @c_ne:
+        cmp rdi, 85
+        jne @two
+        cmp rax, rcx
+        jne @one
+        mov rdx, 0
+        ret
+    @one:
+        mov rdx, 1
+        ret
+    @two:
+        mov rdx, 2
+        ret
+    }
+
     for arm64
         calling {
             in op = x9, lhs = x13, imm = x14
@@ -146,6 +259,29 @@ fn is_alu_k_fn(op: number)
     trace depends on op
     stack 0
 {
+    for x86_64
+        calling {
+            in op = rdi
+            out = rdx
+            preserves rax, rbx, rcx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
+        }
+    {
+        cmp rdi, 7
+        jb @no
+        je @yes
+        cmp rdi, 23
+        jb @no
+        je @yes
+        cmp rdi, 183
+        je @yes
+    @no:
+        mov rdx, 0
+        ret
+    @yes:
+        mov rdx, 1
+        ret
+    }
+
     for arm64
         calling {
             in op = x9
@@ -177,6 +313,30 @@ fn ebpf_jump_fn(pc: number, u16: number)
     trace depends on pc, u16
     stack 0
 {
+    for x86_64
+        calling {
+            in pc = r15, u16 = rcx
+            out = rcx
+            preserves rax, rbx, rsi, rdi, rbp, r8, r9, r10, r11, r12, r13, r14, r15
+        }
+    {
+        mov rdx, r15
+        add rdx, rcx
+        add rdx, 1
+        cmp rcx, 32768
+        jb @fwd
+        cmp rdx, 65536
+        jb @jerr
+        sub rdx, 65536
+    @fwd:
+        mov rcx, rdx
+        ret
+    @jerr:
+        mov rcx, 1
+        shl rcx, 32
+        ret
+    }
+
     for arm64
         calling {
             in pc = x3, u16 = x14
@@ -210,10 +370,174 @@ fn ebpf_run(prog: n bytes, n: number, fuel: number, arg1: number)
     requires arg1 < 4294967296
     returns bpf.ebpf_run(prog, fuel, arg1)
     trace depends on prog, n, fuel, arg1
-    stack 0
+    stack 56
 {
+    for x86_64 {
+        // Save 6 callee-saved regs (48 B + 8 B call return = 56 B stack).
+        // r12 = prog, r13 = n, r14 = fuel, r15 = pc, r8..r11 = eBPF r0..r3
+        // rbx = ERR (2^32), rbp = insn_addr, rdi = op, rsi = dst, rdx = src/scratch
+        // rax = lhs/result, rcx = rhs/imm/helper out
+        push rbx
+        push rbp
+        push r12
+        push r13
+        push r14
+        push r15
+
+        mov r12, rdi
+        mov r13, rsi
+        mov r14, rdx
+        mov r9, rcx
+        mov r15, 0
+        mov r8, 0
+        mov r10, 0
+        mov r11, 0
+        mov rbx, 1
+        shl rbx, 32
+
+        place {
+            name pcv = r15
+            name fl = r14
+            name m0 = r8
+            name m1 = r9
+            name m2 = r10
+            name m3 = r11
+            fact 0 <= pcv
+            fact 0 <= fl
+            fact 0 <= m0
+            fact m0 <= 4294967295
+            fact 0 <= m1
+            fact m1 <= 4294967295
+            fact 0 <= m2
+            fact m2 <= 4294967295
+            fact 0 <= m3
+            fact m3 <= 4294967295
+            fact bpf.ebpf_run(prog, fuel, arg1) == bpf.ebpf_step(prog, pcv, fl, m0, m1, m2, m3)
+            decreases fl
+            keep r12 r13 rbx rsp
+        }
+    @loop:
+        cmp r14, 0
+        je @err
+        mov rdx, r13
+        shr rdx, 3
+        cmp r15, rdx
+        jae @err
+        mov rbp, r15
+        shl rbp, 3
+        add rbp, r12
+
+        movzx edi, byte ptr [rbp + 0]
+        cmp rdi, 149
+        je @exit
+        cmp rdi, 5
+        je @take
+
+        movzx esi, byte ptr [rbp + 1]
+        mov rdx, rsi
+        shr rdx, 4
+        and rsi, 15
+        cmp rsi, 4
+        jae @err
+
+        // Fetch r[dst] into rax and imm32 into rcx
+        mov rcx, rsi
+        call get_reg_fn
+        mov rax, rcx
+
+        movzx ecx, byte ptr [rbp + 4]
+        movzx edx, byte ptr [rbp + 5]
+        shl rdx, 8
+        add rcx, rdx
+        movzx edx, byte ptr [rbp + 6]
+        shl rdx, 16
+        add rcx, rdx
+        movzx edx, byte ptr [rbp + 7]
+        shl rdx, 24
+        add rcx, rdx
+
+        // Conditional jumps (JEQ_K, JNE_K, JGT_K)
+        call ebpf_cond_fn
+        cmp rdx, 2
+        jae @not_cond
+        cmp rdx, 1
+        je @take
+        jmp @next
+
+    @not_cond:
+        call is_alu_k_fn
+        cmp rdx, 0
+        jne @do_alu
+
+        // Register-mode ALU (MOV_X, ADD_X, SUB_X): load src = byte1 >> 4, check src < 4
+        movzx edx, byte ptr [rbp + 1]
+        shr rdx, 4
+        cmp rdx, 4
+        jae @err
+        mov rcx, rdx
+        call get_reg_fn
+
+    @do_alu:
+        call ebpf_alu_fn
+        cmp rax, rbx
+        jae @err
+
+        cmp rsi, 0
+        jne @w1
+        mov r8, rax
+        jmp @next
+    @w1:
+        cmp rsi, 1
+        jne @w2
+        mov r9, rax
+        jmp @next
+    @w2:
+        cmp rsi, 2
+        jne @w3
+        mov r10, rax
+        jmp @next
+    @w3:
+        mov r11, rax
+    @next:
+        add r15, 1
+        sub r14, 1
+        jmp @loop
+
+    @take:
+        movzx ecx, byte ptr [rbp + 2]
+        movzx edx, byte ptr [rbp + 3]
+        shl rdx, 8
+        add rcx, rdx
+        call ebpf_jump_fn
+        cmp rcx, rbx
+        jae @err
+        mov r15, rcx
+        sub r14, 1
+        jmp @loop
+
+    @exit:
+        mov rax, r8
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        ret
+
+    @err:
+        mov rax, rbx
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        ret
+    }
+
     for arm64 {
-        // Save x30 in caller-saved x16 (preserved by all 4 helpers): ZERO stack frame!
+        // Save x30 in caller-saved x16 (preserved by all 5 helpers): ZERO stack frame!
         // x0 = prog, x1 = n, x2 = fuel, x3 = pc, x4..x7 = eBPF r0..r3
         // x8 = ERR (2^32), x9 = op, x10 = insn_addr, x11 = dst, x12 = src
         // x13 = lhs / result, x14 = rhs / imm / target_pc, x15 = scratch, x16 = saved lr
