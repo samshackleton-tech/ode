@@ -657,14 +657,22 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 if notes is not None: notes.append(("entry", len(out), m.group(1)))
                 continue
             if re.fullmatch(r"def\s+\w+\s*\(.*\)\s*\{", s): stop(src, n, "`def` is not a form of Ode any more: write an `inline fn`, outside the function")
-            m = re.fullmatch(r"reg\s+(\w+)\s*=\s*(\w+)", s)
-            if m:
-                name, register = m.groups()
+            if re.match(r"reg\b", s):
                 if env or inside: stop(src, n, f"fn {fn}: a name for a register inside a for or an inline function")
-                if register not in whole: stop(src, n, f"`{register}` is no register")
-                if name in whole or name in _reserved_for(target): stop(src, n, _reserved_err("a register", name, target))
-                if name in names or name in inlines or (frame[0] is not None and name in frame[0][1]): stop(src, n, f"`{name}` is a name already")
-                names[name] = register; continue
+                rest = s[3:].strip()
+                parts = [p.strip() for p in rest.split(",") if p.strip()]
+                if not parts:
+                    stop(src, n, "expected `reg NAME = REGISTER`")
+                for part in parts:
+                    m = re.fullmatch(r"(\w+)\s*=\s*(\w+)", part)
+                    if not m:
+                        stop(src, n, f"malformed `reg` declaration `{part}` (expected `reg NAME = REGISTER`)")
+                    name, register = m.groups()
+                    if register not in whole: stop(src, n, f"`{register}` is no register")
+                    if name in whole or name in _reserved_for(target): stop(src, n, _reserved_err("a register", name, target))
+                    if name in names or name in inlines or (frame[0] is not None and name in frame[0][1]): stop(src, n, f"`{name}` is a name already")
+                    names[name] = register
+                continue
             if re.fullmatch(r"frame\s*\{", s):
                 if env or inside: stop(src, n, f"fn {fn}: a frame inside a for or an inline function")
                 if frame[0] is not None: stop(src, n, f"fn {fn}: a second frame")

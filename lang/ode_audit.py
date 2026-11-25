@@ -1108,6 +1108,7 @@ def pack_verified(
     glossary_out=None,
     includes=None,
     verify_bin=None,
+    existing_bundle_proof=None,
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
@@ -1168,6 +1169,24 @@ def pack_verified(
             )
             unit_elfs = [compiled[n]["elf"] for n in topo_fns]
             orig_order = [compiled[n]["symbol"] for n in topo_fns]
+            if existing_bundle_proof is not None:
+                canon = ode_canon.canonicalize(full_spec_text, contract_name=orig_order[-1])
+                cid = canon["contract_id"]
+                hash_sym = canon["symbol"]
+                rename_map = {orig: f"h{idx}" for idx, orig in enumerate(orig_order[:-1])}
+                rename_map[orig_order[-1]] = hash_sym
+                obj_bytes = merge_elf_objects(
+                    unit_elfs, parse_elf64(unit_elfs[0])["target"], rename_map, hash_sym,
+                    embedded_ocl_bytes=canon["canonical"].encode("utf-8"),
+                )
+                os.makedirs(os.path.dirname(os.path.abspath(out_obj)), exist_ok=True)
+                with open(out_obj, "wb") as f:
+                    f.write(obj_bytes)
+                audit_res = audit_binary(out_obj, existing_bundle_proof, expect_contract=cid, verify_bin=verify_bin)
+                audit_res["proof"] = existing_bundle_proof
+                audit_res["proof_bytes"] = os.path.getsize(existing_bundle_proof)
+                audit_res["glossary"] = canon["glossary"]
+                return audit_res
             places_by_sym = {
                 compiled[n]["symbol"]: compiled[n].get("places", {}).get(compiled[n]["symbol"], "")
                 for n in topo_fns

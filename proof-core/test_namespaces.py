@@ -380,6 +380,43 @@ fn f(x: word)
             with self.assertRaises(Exception):
                 ode_canon.canonicalize_file(flat, target="arm64")
 
+    def test_trace_nothing_and_comma_reg(self):
+        """`trace depends on nothing` canonicalizes identically to omitting `trace depends on`,
+        and comma-separated `reg a = x0, b = x1` works on one line."""
+        with tempfile.TemporaryDirectory(prefix="ode_wirth_") as td:
+            p1 = _write(td, "a.ode", """\
+fn inc(x: number)
+    requires x < 100
+    returns x + 1
+    trace depends on nothing
+    stack 0
+{
+    for arm64 {
+        reg v = x0, out = x0
+        add out, v, 1
+        ret
+    }
+}
+""")
+            p2 = _write(td, "b.ode", """\
+fn inc(x: number)
+    requires x < 100
+    returns x + 1
+    stack 0
+{
+    for arm64 {
+        add x0, x0, 1
+        ret
+    }
+}
+""")
+            c1 = ode_canon.canonicalize_file(p1, target="arm64")
+            c2 = ode_canon.canonicalize_file(p2, target="arm64")
+            self.assertEqual(c1["contract_id"], c2["contract_id"])
+            if HAVE_VERIFIER:
+                res = ode_audit.pack_verified(p1, None, os.path.join(td, "inc.o"), os.path.join(td, "inc.proof"), target="arm64")
+                self.assertEqual(res["verdict"], "shown", res)
+
 
 if __name__ == "__main__":
     unittest.main()

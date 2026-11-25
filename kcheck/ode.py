@@ -285,11 +285,14 @@ class Parser:
                 # trace depends on EXPR, ...: which instructions run and which addresses are touched may depend on those arguments or computed values
                 if self.take(kind="name") != "depends": raise Err("`trace depends on EXPR, ...` expected")
                 self.take("on")
-                while True:
-                    e = self.expr()
-                    if e[0] == "name": c["trace"].append(e[1])
-                    else: c["trace_exprs"].append(e)
-                    if not self.maybe(","): break
+                if self.t[self.i][0] == "name" and self.t[self.i][1] == "nothing" and not any(a[0] == "nothing" for a in args):
+                    self.take(kind="name")
+                else:
+                    while True:
+                        e = self.expr()
+                        if e[0] == "name": c["trace"].append(e[1])
+                        else: c["trace_exprs"].append(e)
+                        if not self.maybe(","): break
             elif clause == "result":
                 # result depends on NAME, ...: for `returns r`, what the returned number may depend on beyond `trace depends on`
                 once("result depends on", "result_dep")

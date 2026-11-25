@@ -1,508 +1,523 @@
-// Fast single-threaded AArch64 BLAKE3 hash using Step D custom calling conventions,
-// verified tail calls (`b`), zero-copy 64-byte fast path, and direct 4-KiB 4-way NEON dispatch.
-//
-// Meets the EXACT SAME canonical `.ocl` contract (`b3l_hashr_arm64`, `trace depends on len` only)
-// as `examples/arm64/hash_arm64.spec`.
-target arm64
+// Fast single-threaded BLAKE3 for AArch64 (100% unified `.ode` with linked local namespaces).
+use b3 = "blake3_spec.ode"
+use comp = "compress_arm64.ode"
+use w4 = "wide4_fast_arm64.ode"
 
-// Copy a 32-byte chaining value (`src` -> `dst`) using two indexed 128-bit NEON transfers.
-inline fn copy_cv(dst: gpr, src: gpr, va: vec, vb: vec)
-  distinct(dst, src) distinct(va, vb) changes va, vb {
-  ldr q0, [src, 0]
-  ldr q1, [src, 16]
-  str q0, [dst, 0]
-  str q1, [dst, 16]
-}
+fn pad_fast(block: 64 bytes, src: n bytes, n: number)
+    requires no_overlap(block, src)
+    requires n <= 64
+    ensures block = b3.padded(src)
+    trace depends on n
+    stack 0
+{
+    for arm64
+        calling {
+            in block = x0, src = x1, n = x2
+            preserves x15, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+    {
+          reg block = x0
+          reg src = x1
+          reg len = x2
+          reg idx = x3
+          reg k = x4
+          reg saddr = x5
+          reg daddr = x6
+          reg bw = w7
+          reg bx = x7
 
-// Fast leaf `pad` with custom Ode calling convention:
-//   in:        block = x0, src = x1, n = x2
-//   preserves: x15, x19..x28 (and default AAPCS64 v8..v15)
-//   stack:     0 bytes
-//
-// - Fast path (`n == 64`): 8-byte-step loop (8 iterations, 0 inner branches).
-// - General path (`n < 64`): two branch-free loops (zero `[n..64)`, then copy `[0..n)`).
-fn pad_fast_arm64 as "b3l_pad_fast_arm64" {
-  reg block = x0
-  reg src = x1
-  reg len = x2
-  reg idx = x3
-  reg k = x4
-  reg saddr = x5
-  reg daddr = x6
-  reg bw = w7
-  reg bx = x7
+          cmp len, 64
+          b.ne @lt64
 
-  cmp len, 64
-  b.ne @lt64
+          idx := 64
+          k := 8
+        @l64:
+          place {
+            name i = idx
+            name k = k
+            fact k <= 8
+            fact i == 8 * k
+            wrote block[i ..] = b3.padded(src)
+            decreases k
+          }
+          cmp k, 0
+          b.eq @done
+          sub k, k, 1
+          sub idx, idx, 8
+          add saddr, src, idx
+          add daddr, block, idx
+          ldrb bw, [saddr, 7]
+          strb bw, [daddr, 7]
+          ldrb bw, [saddr, 6]
+          strb bw, [daddr, 6]
+          ldrb bw, [saddr, 5]
+          strb bw, [daddr, 5]
+          ldrb bw, [saddr, 4]
+          strb bw, [daddr, 4]
+          ldrb bw, [saddr, 3]
+          strb bw, [daddr, 3]
+          ldrb bw, [saddr, 2]
+          strb bw, [daddr, 2]
+          ldrb bw, [saddr, 1]
+          strb bw, [daddr, 1]
+          ldrb bw, [saddr, 0]
+          strb bw, [daddr, 0]
+          b @l64
 
-  idx := 64
-  k := 8
-@l64:
-  place {
-    name i = idx
-    name k = k
-    fact k <= 8
-    fact i == 8 * k
-    wrote block[i ..] = padded(src)
-    decreases k
-  }
-  cmp k, 0
-  b.eq @done
-  sub k, k, 1
-  sub idx, idx, 8
-  add saddr, src, idx
-  add daddr, block, idx
-  ldrb bw, [saddr, 7]
-  strb bw, [daddr, 7]
-  ldrb bw, [saddr, 6]
-  strb bw, [daddr, 6]
-  ldrb bw, [saddr, 5]
-  strb bw, [daddr, 5]
-  ldrb bw, [saddr, 4]
-  strb bw, [daddr, 4]
-  ldrb bw, [saddr, 3]
-  strb bw, [daddr, 3]
-  ldrb bw, [saddr, 2]
-  strb bw, [daddr, 2]
-  ldrb bw, [saddr, 1]
-  strb bw, [daddr, 1]
-  ldrb bw, [saddr, 0]
-  strb bw, [daddr, 0]
-  b @l64
+        @lt64:
+          idx := 64
+          bx := 0
+        @zloop:
+          place {
+            name i = idx
+            fact i <= 64
+            fact n <= i
+            wrote block[i ..] = b3.padded(src)
+            decreases i
+          }
+          cmp idx, len
+          b.eq @cloop
+          sub idx, idx, 1
+          add daddr, block, idx
+          bx := 0
+          strb bw, [daddr, 0]
+          b @zloop
 
-@lt64:
-  idx := 64
-  bx := 0
-@zloop:
-  place {
-    name i = idx
-    fact i <= 64
-    fact n <= i
-    wrote block[i ..] = padded(src)
-    decreases i
-  }
-  cmp idx, len
-  b.eq @cloop
-  sub idx, idx, 1
-  add daddr, block, idx
-  bx := 0
-  strb bw, [daddr, 0]
-  b @zloop
+        @cloop:
+          place {
+            name i = idx
+            fact i <= n
+            wrote block[i ..] = b3.padded(src)
+            decreases i
+          }
+          cmp idx, 0
+          b.eq @done
+          sub idx, idx, 1
+          add saddr, src, idx
+          ldrb bw, [saddr, 0]
+          add daddr, block, idx
+          strb bw, [daddr, 0]
+          b @cloop
 
-@cloop:
-  place {
-    name i = idx
-    fact i <= n
-    wrote block[i ..] = padded(src)
-    decreases i
-  }
-  cmp idx, 0
-  b.eq @done
-  sub idx, idx, 1
-  add saddr, src, idx
-  ldrb bw, [saddr, 0]
-  add daddr, block, idx
-  strb bw, [daddr, 0]
-  b @cloop
-
-@done:
-  ret
-}
-
-// Zero-stack `node_out` via verified tail jump (`b`) into `blake3_servil_compress_in_place_arm64`.
-// Arguments: (out, nd, root) in (x0, x1, x2). Uses 10 instructions and 0 stack bytes!
-fn node_out_fast_arm64 as "b3l_node_out_fast_arm64" {
-  ldr q0, [x1, 0]
-  ldr q1, [x1, 16]
-  str q0, [x0, 0]
-  str q1, [x0, 16]
-  ldr x4, [x1, 112]
-  orr x4, x4, x2
-  ldr x2, [x1, 104]
-  ldr x3, [x1, 96]
-  add x1, x1, 32
-  b blake3_servil_compress_in_place_arm64
-}
-
-// Fast `chunk_node`:
-//   - Single-block chunks (`len <= 64`): ZERO stack allocation, ZERO callee-saved spills,
-//     tail-jumps directly into custom-calling `b3l_pad_fast_arm64`!
-//   - Multi-block chunks (`64 < len <= 1024`): loops full blocks, then calls `b3l_pad_fast_arm64`.
-// Arguments: (nd, input, len, t, flags) in (x0, x1, x2, x3, x4).
-fn chunk_node_fast_arm64 as "b3l_chunk_node_fast_arm64" {
-  cmp x2, 65
-  b.hs @multi
-  str x3, [x0, 96]
-  str x2, [x0, 104]
-  x9 := 1
-  orr x4, x4, x9
-  x9 := 2
-  orr x4, x4, x9
-  str x4, [x0, 112]
-  add x0, x0, 32
-  b b3l_pad_fast_arm64
-
-@multi:
-  frame {
-    saved: 7 * u64
-    pad: 8
-  }
-  reg nd = x19
-  reg p = x20
-  reg rem = x21
-  reg counter = x22
-  reg flags = x23
-  reg first = x24
-
-  sub sp, sp, frame.size
-  saved[0] := x30
-  saved[1] := x19
-  saved[2] := x20
-  saved[3] := x21
-  saved[4] := x22
-  saved[5] := x23
-  saved[6] := x24
-
-  nd := x0
-  p := x1
-  rem := x2
-  counter := x3
-  flags := x4
-  first := 1
-
-  loop {
-    cmp rem, 65
-    break if ult
-    x0 := nd
-    x1 := p
-    x2 := 64
-    x3 := counter
-    orr x4, flags, first
-    bl blake3_servil_compress_in_place_arm64
-    first := 0
-    add p, p, 64
-    sub rem, rem, 64
-  }
-
-  add x0, nd, 32
-  x1 := p
-  x2 := rem
-  bl b3l_pad_fast_arm64
-
-  str counter, [nd, 96]
-  str rem, [nd, 104]
-  orr x9, flags, first
-  x10 := 2
-  orr x9, x9, x10
-  str x9, [nd, 112]
-
-  x24 := saved[6]
-  x23 := saved[5]
-  x22 := saved[4]
-  x21 := saved[3]
-  x20 := saved[2]
-  x19 := saved[1]
-  x30 := saved[0]
-  add sp, sp, frame.size
-  ret
-}
-
-// Compute the chaining value of the BLAKE3 Merkle subtree covering `input[0..len]` (`len >= 1`).
-// Uses 4-way NEON `b3l_wide4_fast_arm64` whenever `len == 4096`.
-// Arguments: (out, input, len, kf, t) in (x0, x1, x2, x3, x4).
-fn subtree_fast_arm64 as "b3l_subtree_fast_arm64" {
-  frame {
-    nd: 16 * u64
-    blk: 1 * block
-    saved: 9 * u64
-    pad: 8
-  }
-  reg out = x19
-  reg inp = x20
-  reg length = x21
-  reg kf = x22
-  reg counter = x23
-  reg k = x24
-  reg n = x25
-  reg flags = x26
-
-  sub sp, sp, frame.size
-  saved[0] := x30
-  saved[1] := x19
-  saved[2] := x20
-  saved[3] := x21
-  saved[4] := x22
-  saved[5] := x23
-  saved[6] := x24
-  saved[7] := x25
-  saved[8] := x26
-
-  out := x0
-  inp := x1
-  length := x2
-  kf := x3
-  counter := x4
-  ldr flags, [kf, 32]
-
-  x9 := 4096
-  cmp length, x9
-  if eq {
-    x0 := &blk
-    x1 := inp
-    x2 := kf
-    x3 := counter
-    bl b3l_wide4_fast_arm64
-
-    ldr q0, [kf, 0]
-    ldr q1, [kf, 16]
-    str q0, [out, 0]
-    str q1, [out, 16]
-    x0 := out
-    x1 := &blk
-    x2 := 64
-    x3 := 0
-    x9 := 4
-    orr x4, flags, x9
-    bl blake3_servil_compress_in_place_arm64
-  } else {
-    cmp length, 1025
-    if uge {
-      sub x9, length, 1
-      lsr x9, x9, 10
-      add x9, x9, 1
-      k := 1
-      x10 := 2
-      loop {
-        cmp x10, x9
-        break if uge
-        k := x10
-        lsl x10, x10, 1
-      }
-      lsl n, k, 10
-
-      x0 := &blk
-      x1 := inp
-      x2 := n
-      x3 := kf
-      x4 := counter
-      bl b3l_subtree_fast_arm64
-
-      x0 := &blk
-      add x0, x0, 32
-      add x1, inp, n
-      sub x2, length, n
-      x3 := kf
-      add x4, counter, k
-      bl b3l_subtree_fast_arm64
-
-      ldr q0, [kf, 0]
-      ldr q1, [kf, 16]
-      str q0, [out, 0]
-      str q1, [out, 16]
-      x0 := out
-      x1 := &blk
-      x2 := 64
-      x3 := 0
-      x9 := 4
-      orr x4, flags, x9
-      bl blake3_servil_compress_in_place_arm64
-    } else {
-      x9 := &nd
-      ldr q0, [kf, 0]
-      ldr q1, [kf, 16]
-      str q0, [x9, 0]
-      str q1, [x9, 16]
-      x0 := &nd
-      x1 := inp
-      x2 := length
-      x3 := counter
-      x4 := flags
-      bl b3l_chunk_node_fast_arm64
-
-      x0 := out
-      x1 := &nd
-      x2 := 0
-      bl b3l_node_out_fast_arm64
+        @done:
+          ret
     }
-  }
-
-  x26 := saved[8]
-  x25 := saved[7]
-  x24 := saved[6]
-  x23 := saved[5]
-  x22 := saved[4]
-  x21 := saved[3]
-  x20 := saved[2]
-  x19 := saved[1]
-  x30 := saved[0]
-  add sp, sp, frame.size
-  ret
 }
 
-// Long-input BLAKE3 path (`len >= 1025`) with direct 4-KiB 4-way NEON dispatch!
-// Arguments: (out, input, len, key, flags) in (x0, x1, x2, x3, x4).
-fn hashr_long_arm64 as "b3l_hashr_long_arm64" {
-  frame {
-    kf: 6 * u64
-    nd: 16 * u64
-    blk: 1 * block
-    saved: 8 * u64
-  }
-  reg out = x19
-  reg inp = x20
-  reg length = x21
-  reg key = x22
-  reg flags = x23
-  reg k = x24
-  reg n = x25
-
-  sub sp, sp, frame.size
-  saved[0] := x30
-  saved[1] := x19
-  saved[2] := x20
-  saved[3] := x21
-  saved[4] := x22
-  saved[5] := x23
-  saved[6] := x24
-  saved[7] := x25
-
-  out := x0
-  inp := x1
-  length := x2
-  key := x3
-  flags := x4
-
-  // Pack keyed record (key[0..32], flags) into kf
-  x9 := &kf
-  ldr q0, [key, 0]
-  ldr q1, [key, 16]
-  str q0, [x9, 0]
-  str q1, [x9, 16]
-  str flags, [x9, 32]
-
-  x9 := 4096
-  cmp length, x9
-  if eq {
-    // Direct 4-KiB 4-way NEON path!
-    x0 := &blk
-    x1 := inp
-    x2 := &kf
-    x3 := 0
-    bl b3l_wide4_fast_arm64
-  } else {
-    sub x9, length, 1
-    lsr x9, x9, 10
-    add x9, x9, 1
-    k := 1
-    x10 := 2
-    loop {
-      cmp x10, x9
-      break if uge
-      k := x10
-      lsl x10, x10, 1
+fn node_out_fast(out: cv, nd: b3.node120, root: byte)
+    requires no_overlap(out, nd)
+    ensures out = b3.node_value(nd, root)
+    stack 0
+{
+    for arm64 {
+        ldr q0, [x1, 0]
+        ldr q1, [x1, 16]
+        str q0, [x0, 0]
+        str q1, [x0, 16]
+        ldr x4, [x1, 112]
+        orr x4, x4, x2
+        ldr x2, [x1, 104]
+        ldr x3, [x1, 96]
+        add x1, x1, 32
+        b comp.compress1
     }
-    lsl n, k, 10
-
-    x0 := &blk
-    x1 := inp
-    x2 := n
-    x3 := &kf
-    x4 := 0
-    bl b3l_subtree_fast_arm64
-
-    x0 := &blk
-    add x0, x0, 32
-    add x1, inp, n
-    sub x2, length, n
-    x3 := &kf
-    x4 := k
-    bl b3l_subtree_fast_arm64
-  }
-
-  // Shared root parent compression: flags = (flags | PARENT) | ROOT
-  ldr q0, [key, 0]
-  ldr q1, [key, 16]
-  str q0, [out, 0]
-  str q1, [out, 16]
-  x0 := out
-  x1 := &blk
-  x2 := 64
-  x3 := 0
-  x9 := 4
-  orr x4, flags, x9
-  x9 := 8
-  orr x4, x4, x9
-  bl blake3_servil_compress_in_place_arm64
-
-  x25 := saved[7]
-  x24 := saved[6]
-  x23 := saved[5]
-  x22 := saved[4]
-  x21 := saved[3]
-  x20 := saved[2]
-  x19 := saved[1]
-  x30 := saved[0]
-  add sp, sp, frame.size
-  ret
 }
 
-// Fast top-level AArch64 BLAKE3 entry point:
-//   - `len == 64`:   14-instruction ZERO-COPY, ZERO-STACK tail jump directly into
-//                    `blake3_servil_compress_in_place_arm64`.
-//   - `len > 1024`:  1-instruction ZERO-STACK tail jump into `b3l_hashr_long_arm64`
-//                    (which hits 4-way NEON directly at `len == 4096`!).
-//   - `len <= 1024` (other than 64): ZERO callee-saved GPR spills, 144-byte frame,
-//                    calls `b3l_chunk_node_fast_arm64` + `b3l_node_out_fast_arm64`.
-fn hashr_fast_arm64 as "b3l_hashr_arm64" {
-  cmp x2, 64
-  b.ne @not64
-  ldr q0, [x3, 0]
-  ldr q1, [x3, 16]
-  str q0, [x0, 0]
-  str q1, [x0, 16]
-  x3 := 0
-  x9 := 1
-  orr x4, x4, x9
-  x9 := 2
-  orr x4, x4, x9
-  x9 := 8
-  orr x4, x4, x9
-  b blake3_servil_compress_in_place_arm64
+fn chunk_node_fast(nd: b3.node120, input: len bytes, len: number, t: number, flags: byte)
+    requires no_overlap(nd, input)
+    requires len <= 1024
+    ensures nd = b3.chunk_node(nd.h, t, flags, input)
+    trace depends on len
+    stack 64
+{
+    for arm64 {
+          cmp x2, 65
+          b.hs @multi
+          str x3, [x0, 96]
+          str x2, [x0, 104]
+          x9 := 1
+          orr x4, x4, x9
+          x9 := 2
+          orr x4, x4, x9
+          str x4, [x0, 112]
+          add x0, x0, 32
+          b pad_fast
 
-@not64:
-  cmp x2, 1025
-  b.hs @over1024
+        @multi:
+          frame {
+            saved: 7 * u64
+            pad: 8
+          }
+          reg nd = x19
+          reg p = x20
+          reg rem = x21
+          reg counter = x22
+          reg flags = x23
+          reg first = x24
 
-  frame {
-    nd: 16 * u64
-    saved_out: 1 * u64
-    saved_lr: 1 * u64
-  }
-  sub sp, sp, frame.size
-  saved_lr[0] := x30
-  saved_out[0] := x0
+          sub sp, sp, frame.size
+          saved[0] := x30
+          saved[1] := x19
+          saved[2] := x20
+          saved[3] := x21
+          saved[4] := x22
+          saved[5] := x23
+          saved[6] := x24
 
-  x9 := &nd
-  ldr q0, [x3, 0]
-  ldr q1, [x3, 16]
-  str q0, [x9, 0]
-  str q1, [x9, 16]
+          nd := x0
+          p := x1
+          rem := x2
+          counter := x3
+          flags := x4
+          first := 1
 
-  x0 := &nd
-  // x1 = input, x2 = len already in place!
-  x3 := 0
-  // x4 = flags already in place!
-  bl b3l_chunk_node_fast_arm64
+          loop {
+            cmp rem, 65
+            break if ult
+            x0 := nd
+            x1 := p
+            x2 := 64
+            x3 := counter
+            orr x4, flags, first
+            bl comp.compress1
+            first := 0
+            add p, p, 64
+            sub rem, rem, 64
+          }
 
-  x0 := saved_out[0]
-  x1 := &nd
-  x2 := 8
-  bl b3l_node_out_fast_arm64
+          add x0, nd, 32
+          x1 := p
+          x2 := rem
+          bl pad_fast
 
-  x30 := saved_lr[0]
-  add sp, sp, frame.size
-  ret
+          str counter, [nd, 96]
+          str rem, [nd, 104]
+          orr x9, flags, first
+          x10 := 2
+          orr x9, x9, x10
+          str x9, [nd, 112]
 
-@over1024:
-  b b3l_hashr_long_arm64
+          x24 := saved[6]
+          x23 := saved[5]
+          x22 := saved[4]
+          x21 := saved[3]
+          x20 := saved[2]
+          x19 := saved[1]
+          x30 := saved[0]
+          add sp, sp, frame.size
+          ret
+    }
+}
+
+fn subtree_fast(out: cv, input: len bytes, len: number, kf: b3.keyed, t: number)
+    requires no_overlap(out, input, kf)
+    requires len >= 1
+    requires 1024 * t + len <= 18446744073709551615
+    ensures out = b3.subtree(kf.key, kf.flags, t, input)
+    trace depends on len
+    decreases len
+    stack 816 + 272 * bits((len - 1) / 1024)
+{
+    for arm64 {
+        frame {
+          nd: 16 * u64
+          blk: 1 * block
+          saved: 9 * u64
+          pad: 8
+        }
+        reg out = x19
+        reg inp = x20
+        reg length = x21
+        reg kf = x22
+        reg counter = x23
+        reg k = x24
+        reg n = x25
+        reg flags = x26
+
+        sub sp, sp, frame.size
+        saved[0] := x30
+        saved[1] := x19
+        saved[2] := x20
+        saved[3] := x21
+        saved[4] := x22
+        saved[5] := x23
+        saved[6] := x24
+        saved[7] := x25
+        saved[8] := x26
+
+        out := x0
+        inp := x1
+        length := x2
+        kf := x3
+        counter := x4
+        ldr flags, [kf, 32]
+
+        x9 := 4096
+        cmp length, x9
+        if eq {
+          x0 := &blk
+          x1 := inp
+          x2 := kf
+          x3 := counter
+          bl w4.wide4_fast
+
+          ldr q0, [kf, 0]
+          ldr q1, [kf, 16]
+          str q0, [out, 0]
+          str q1, [out, 16]
+          x0 := out
+          x1 := &blk
+          x2 := 64
+          x3 := 0
+          x9 := 4
+          orr x4, flags, x9
+          bl comp.compress1
+        } else {
+          cmp length, 1025
+          if uge {
+            sub x9, length, 1
+            lsr x9, x9, 10
+            add x9, x9, 1
+            k := 1
+            x10 := 2
+            loop {
+              cmp x10, x9
+              break if uge
+              k := x10
+              lsl x10, x10, 1
+            }
+            lsl n, k, 10
+
+            x0 := &blk
+            x1 := inp
+            x2 := n
+            x3 := kf
+            x4 := counter
+            bl subtree_fast
+
+            x0 := &blk
+            add x0, x0, 32
+            add x1, inp, n
+            sub x2, length, n
+            x3 := kf
+            add x4, counter, k
+            bl subtree_fast
+
+            ldr q0, [kf, 0]
+            ldr q1, [kf, 16]
+            str q0, [out, 0]
+            str q1, [out, 16]
+            x0 := out
+            x1 := &blk
+            x2 := 64
+            x3 := 0
+            x9 := 4
+            orr x4, flags, x9
+            bl comp.compress1
+          } else {
+            x9 := &nd
+            ldr q0, [kf, 0]
+            ldr q1, [kf, 16]
+            str q0, [x9, 0]
+            str q1, [x9, 16]
+            x0 := &nd
+            x1 := inp
+            x2 := length
+            x3 := counter
+            x4 := flags
+            bl chunk_node_fast
+
+            x0 := out
+            x1 := &nd
+            x2 := 0
+            bl node_out_fast
+          }
+        }
+
+        x26 := saved[8]
+        x25 := saved[7]
+        x24 := saved[6]
+        x23 := saved[5]
+        x22 := saved[4]
+        x21 := saved[3]
+        x20 := saved[2]
+        x19 := saved[1]
+        x30 := saved[0]
+        add sp, sp, frame.size
+        ret
+    }
+}
+
+fn hashr_long(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte)
+    requires no_overlap(out, input, key)
+    requires len >= 1025
+    ensures out = bytes_of(b3.hash_words(words(key), flags, input))
+    trace depends on len
+    stack 1120 + 272 * bits(len / 1024)
+{
+    for arm64 {
+        frame {
+          kf: 6 * u64
+          nd: 16 * u64
+          blk: 1 * block
+          saved: 8 * u64
+        }
+        reg out = x19
+        reg inp = x20
+        reg length = x21
+        reg key = x22
+        reg flags = x23
+        reg k = x24
+        reg n = x25
+
+        sub sp, sp, frame.size
+        saved[0] := x30
+        saved[1] := x19
+        saved[2] := x20
+        saved[3] := x21
+        saved[4] := x22
+        saved[5] := x23
+        saved[6] := x24
+        saved[7] := x25
+
+        out := x0
+        inp := x1
+        length := x2
+        key := x3
+        flags := x4
+
+        // Pack keyed record (key[0..32], flags) into kf
+        x9 := &kf
+        ldr q0, [key, 0]
+        ldr q1, [key, 16]
+        str q0, [x9, 0]
+        str q1, [x9, 16]
+        str flags, [x9, 32]
+
+        x9 := 4096
+        cmp length, x9
+        if eq {
+          // Direct 4-KiB 4-way NEON path!
+          x0 := &blk
+          x1 := inp
+          x2 := &kf
+          x3 := 0
+          bl w4.wide4_fast
+        } else {
+          sub x9, length, 1
+          lsr x9, x9, 10
+          add x9, x9, 1
+          k := 1
+          x10 := 2
+          loop {
+            cmp x10, x9
+            break if uge
+            k := x10
+            lsl x10, x10, 1
+          }
+          lsl n, k, 10
+
+          x0 := &blk
+          x1 := inp
+          x2 := n
+          x3 := &kf
+          x4 := 0
+          bl subtree_fast
+
+          x0 := &blk
+          add x0, x0, 32
+          add x1, inp, n
+          sub x2, length, n
+          x3 := &kf
+          x4 := k
+          bl subtree_fast
+        }
+
+        // Shared root parent compression: flags = (flags | PARENT) | ROOT
+        ldr q0, [key, 0]
+        ldr q1, [key, 16]
+        str q0, [out, 0]
+        str q1, [out, 16]
+        x0 := out
+        x1 := &blk
+        x2 := 64
+        x3 := 0
+        x9 := 4
+        orr x4, flags, x9
+        x9 := 8
+        orr x4, x4, x9
+        bl comp.compress1
+
+        x25 := saved[7]
+        x24 := saved[6]
+        x23 := saved[5]
+        x22 := saved[4]
+        x21 := saved[3]
+        x20 := saved[2]
+        x19 := saved[1]
+        x30 := saved[0]
+        add sp, sp, frame.size
+        ret
+    }
+}
+
+fn hashr_arm64(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte)
+    requires no_overlap(out, input, key)
+    ensures out = bytes_of(b3.hash_words(words(key), flags, input))
+    trace depends on len
+    stack 1120 + 272 * bits(len / 1024)
+{
+    for arm64 {
+          cmp x2, 64
+          b.ne @not64
+          ldr q0, [x3, 0]
+          ldr q1, [x3, 16]
+          str q0, [x0, 0]
+          str q1, [x0, 16]
+          x3 := 0
+          x9 := 1
+          orr x4, x4, x9
+          x9 := 2
+          orr x4, x4, x9
+          x9 := 8
+          orr x4, x4, x9
+          b comp.compress1
+
+        @not64:
+          cmp x2, 1025
+          b.hs @over1024
+
+          frame {
+            nd: 16 * u64
+            saved_out: 1 * u64
+            saved_lr: 1 * u64
+          }
+          sub sp, sp, frame.size
+          saved_lr[0] := x30
+          saved_out[0] := x0
+
+          x9 := &nd
+          ldr q0, [x3, 0]
+          ldr q1, [x3, 16]
+          str q0, [x9, 0]
+          str q1, [x9, 16]
+
+          x0 := &nd
+          // x1 = input, x2 = len already in place!
+          x3 := 0
+          // x4 = flags already in place!
+          bl chunk_node_fast
+
+          x0 := saved_out[0]
+          x1 := &nd
+          x2 := 8
+          bl node_out_fast
+
+          x30 := saved_lr[0]
+          add sp, sp, frame.size
+          ret
+
+        @over1024:
+          b hashr_long
+    }
 }

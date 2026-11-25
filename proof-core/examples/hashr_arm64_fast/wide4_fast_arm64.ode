@@ -1,11 +1,13 @@
+// 4-way NEON BLAKE3 kernel for AArch64 (unified `.ode` with linked local namespace).
+use b3 = "blake3_spec.ode"
+use comp = "compress_arm64.ode"
+
 // 4-way NEON 4-KiB BLAKE3 subtree kernel for AArch64 (`ldr q`/`str q` indexed loads/stores,
 // resident v0..v7 CVs across all 16 blocks, resident v28..v31 for m[0..3]).
 // Zero callee-saved vector registers (v8..v15) touched; constant-time (no `trace` clause).
 // Verified in Lean 4 directly against `blake3.spec` (`subtree`).
 // Arguments (x0..x3): (out: cv, input: 4096 bytes, kf: keyed, t: number).
-target arm64
-
-inline fn g_neon(a: vec, b: vec, c: vec, d: vec, mx: vec, my: vec, t: vec) distinct(a, b, c, d, mx, my, t) changes a, b, c, d, t {
+inline fn g_neon for arm64 (a: vec, b: vec, c: vec, d: vec, mx: vec, my: vec, t: vec) distinct(a, b, c, d, mx, my, t) changes a, b, c, d, t {
   add a.4s, a.4s, mx.4s
   add a.4s, a.4s, b.4s
   eor d.16b, d.16b, a.16b
@@ -28,7 +30,7 @@ inline fn g_neon(a: vec, b: vec, c: vec, d: vec, mx: vec, my: vec, t: vec) disti
   orr b.16b, b.16b, t.16b
 }
 
-inline fn transpose4(r0: vec, r1: vec, r2: vec, r3: vec, t0: vec, t1: vec, t2: vec, t3: vec) distinct(r0, r1, r2, r3, t0, t1, t2, t3) changes r0, r1, r2, r3, t0, t1, t2, t3 {
+inline fn transpose4 for arm64 (r0: vec, r1: vec, r2: vec, r3: vec, t0: vec, t1: vec, t2: vec, t3: vec) distinct(r0, r1, r2, r3, t0, t1, t2, t3) changes r0, r1, r2, r3, t0, t1, t2, t3 {
   zip1 t0.4s, r0.4s, r1.4s
   zip2 t1.4s, r0.4s, r1.4s
   zip1 t2.4s, r2.4s, r3.4s
@@ -39,402 +41,409 @@ inline fn transpose4(r0: vec, r1: vec, r2: vec, r3: vec, t0: vec, t1: vec, t2: v
   zip2 r3.2d, t1.2d, t3.2d
 }
 
-fn wide4_fast_arm64 as "b3l_wide4_fast_arm64" {
-  frame {
-    mhi: 192
-    ivt: 112
-    cvs: 128
-    pblk: 64
-    saved: 6 * u64
-  }
-  reg out = x19
-  reg inp = x20
-  reg kf = x21
-  reg ctr = x22
-  reg flg = x23
-  reg p0 = x9
-  reg p1 = x10
-  reg p2 = x11
-  reg p3 = x12
-  reg blk = x13
-  reg addr = x14
-  reg tmp = x15
-  reg tmp2 = x16
-  reg fp = x17
+fn wide4_fast(out: block, input: 4096 bytes, kf: b3.keyed, t: number)
+    requires no_overlap(out, input, kf)
+    requires 1024 * t + 4096 <= 18446744073709551615
+    ensures out = b3.children(kf.key, kf.flags, t, input)
+    stack 544
+{
+    for arm64 {
+          frame {
+            mhi: 192
+            ivt: 112
+            cvs: 128
+            pblk: 64
+            saved: 6 * u64
+          }
+          reg out = x19
+          reg inp = x20
+          reg kf = x21
+          reg ctr = x22
+          reg flg = x23
+          reg p0 = x9
+          reg p1 = x10
+          reg p2 = x11
+          reg p3 = x12
+          reg blk = x13
+          reg addr = x14
+          reg tmp = x15
+          reg tmp2 = x16
+          reg fp = x17
 
-  sub sp, sp, frame.size
-  saved[0] := x30
-  saved[1] := x19
-  saved[2] := x20
-  saved[3] := x21
-  saved[4] := x22
-  saved[5] := x23
-  add fp, sp, 0
+          sub sp, sp, frame.size
+          saved[0] := x30
+          saved[1] := x19
+          saved[2] := x20
+          saved[3] := x21
+          saved[4] := x22
+          saved[5] := x23
+          add fp, sp, 0
 
-  out := x0
-  inp := x1
-  kf := x2
-  ctr := x3
-  ldr flg, [kf, 32]
+          out := x0
+          inp := x1
+          kf := x2
+          ctr := x3
+          ldr flg, [kf, 32]
 
-  p0 := inp
-  add p1, inp, 1024
-  add p2, inp, 2048
-  add p3, inp, 3072
+          p0 := inp
+          add p1, inp, 1024
+          add p2, inp, 2048
+          add p3, inp, 3072
 
-  // 1. Broadcast kf.key[0..7] into resident chaining-value vectors v0..v7.
-  ldr q24, [kf, 0]
-  ldr q25, [kf, 16]
-  zip1 v26.4s, v24.4s, v24.4s
-  zip2 v27.4s, v24.4s, v24.4s
-  zip1 v0.2d, v26.2d, v26.2d
-  zip2 v1.2d, v26.2d, v26.2d
-  zip1 v2.2d, v27.2d, v27.2d
-  zip2 v3.2d, v27.2d, v27.2d
-  zip1 v26.4s, v25.4s, v25.4s
-  zip2 v27.4s, v25.4s, v25.4s
-  zip1 v4.2d, v26.2d, v26.2d
-  zip2 v5.2d, v26.2d, v26.2d
-  zip1 v6.2d, v27.2d, v27.2d
-  zip2 v7.2d, v27.2d, v27.2d
+          // 1. Broadcast kf.key[0..7] into resident chaining-value vectors v0..v7.
+          ldr q24, [kf, 0]
+          ldr q25, [kf, 16]
+          zip1 v26.4s, v24.4s, v24.4s
+          zip2 v27.4s, v24.4s, v24.4s
+          zip1 v0.2d, v26.2d, v26.2d
+          zip2 v1.2d, v26.2d, v26.2d
+          zip1 v2.2d, v27.2d, v27.2d
+          zip2 v3.2d, v27.2d, v27.2d
+          zip1 v26.4s, v25.4s, v25.4s
+          zip2 v27.4s, v25.4s, v25.4s
+          zip1 v4.2d, v26.2d, v26.2d
+          zip2 v5.2d, v26.2d, v26.2d
+          zip1 v6.2d, v27.2d, v27.2d
+          zip2 v7.2d, v27.2d, v27.2d
 
-  // 2. Precompute IV[0..3], lo(t..t+3), hi(t..t+3), and 64 into ivt (fp+192..304).
-  addr := 0x6A09
-  lsl addr, addr, 16
-  tmp := 0xE667
-  add addr, addr, tmp
-  lsl tmp, addr, 32
-  add addr, addr, tmp
-  fmov d24, addr
-  zip1 v24.2d, v24.2d, v24.2d
-  str q24, [fp, 192]
-  addr := 0xBB67
-  lsl addr, addr, 16
-  tmp := 0xAE85
-  add addr, addr, tmp
-  lsl tmp, addr, 32
-  add addr, addr, tmp
-  fmov d24, addr
-  zip1 v24.2d, v24.2d, v24.2d
-  str q24, [fp, 208]
-  addr := 0x3C6E
-  lsl addr, addr, 16
-  tmp := 0xF372
-  add addr, addr, tmp
-  lsl tmp, addr, 32
-  add addr, addr, tmp
-  fmov d24, addr
-  zip1 v24.2d, v24.2d, v24.2d
-  str q24, [fp, 224]
-  addr := 0xA54F
-  lsl addr, addr, 16
-  tmp := 0xF53A
-  add addr, addr, tmp
-  lsl tmp, addr, 32
-  add addr, addr, tmp
-  fmov d24, addr
-  zip1 v24.2d, v24.2d, v24.2d
-  str q24, [fp, 240]
-  add addr, ctr, 1
-  add tmp, ctr, 2
-  add tmp2, ctr, 3
-  fmov d24, ctr
-  fmov d25, addr
-  fmov d26, tmp
-  fmov d27, tmp2
-  zip1 v28.4s, v24.4s, v25.4s
-  zip1 v29.4s, v26.4s, v27.4s
-  zip1 v30.2d, v28.2d, v29.2d
-  zip2 v31.2d, v28.2d, v29.2d
-  str q30, [fp, 256]
-  str q31, [fp, 272]
-  addr := 64
-  lsl tmp, addr, 32
-  add addr, addr, tmp
-  fmov d24, addr
-  zip1 v24.2d, v24.2d, v24.2d
-  str q24, [fp, 288]
+          // 2. Precompute b3.IV[0..3], lo(t..t+3), hi(t..t+3), and 64 into ivt (fp+192..304).
+          addr := 0x6A09
+          lsl addr, addr, 16
+          tmp := 0xE667
+          add addr, addr, tmp
+          lsl tmp, addr, 32
+          add addr, addr, tmp
+          fmov d24, addr
+          zip1 v24.2d, v24.2d, v24.2d
+          str q24, [fp, 192]
+          addr := 0xBB67
+          lsl addr, addr, 16
+          tmp := 0xAE85
+          add addr, addr, tmp
+          lsl tmp, addr, 32
+          add addr, addr, tmp
+          fmov d24, addr
+          zip1 v24.2d, v24.2d, v24.2d
+          str q24, [fp, 208]
+          addr := 0x3C6E
+          lsl addr, addr, 16
+          tmp := 0xF372
+          add addr, addr, tmp
+          lsl tmp, addr, 32
+          add addr, addr, tmp
+          fmov d24, addr
+          zip1 v24.2d, v24.2d, v24.2d
+          str q24, [fp, 224]
+          addr := 0xA54F
+          lsl addr, addr, 16
+          tmp := 0xF53A
+          add addr, addr, tmp
+          lsl tmp, addr, 32
+          add addr, addr, tmp
+          fmov d24, addr
+          zip1 v24.2d, v24.2d, v24.2d
+          str q24, [fp, 240]
+          add addr, ctr, 1
+          add tmp, ctr, 2
+          add tmp2, ctr, 3
+          fmov d24, ctr
+          fmov d25, addr
+          fmov d26, tmp
+          fmov d27, tmp2
+          zip1 v28.4s, v24.4s, v25.4s
+          zip1 v29.4s, v26.4s, v27.4s
+          zip1 v30.2d, v28.2d, v29.2d
+          zip2 v31.2d, v28.2d, v29.2d
+          str q30, [fp, 256]
+          str q31, [fp, 272]
+          addr := 64
+          lsl tmp, addr, 32
+          add addr, addr, tmp
+          fmov d24, addr
+          zip1 v24.2d, v24.2d, v24.2d
+          str q24, [fp, 288]
 
-  // 3. 16-block 4-way NEON loop (v0..v7 = CV, v28..v31 = m[0..3], fp+0..192 = m[4..15]).
-  blk := 0
-@block_loop:
-  // Transpose m[4..7], m[8..11], m[12..15] into fp+0..176 first (uses v24..v31).
-  ldr q24, [p0, 16]
-  ldr q25, [p1, 16]
-  ldr q26, [p2, 16]
-  ldr q27, [p3, 16]
-  transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
-  str q24, [fp, 0]
-  str q25, [fp, 16]
-  str q26, [fp, 32]
-  str q27, [fp, 48]
-  ldr q24, [p0, 32]
-  ldr q25, [p1, 32]
-  ldr q26, [p2, 32]
-  ldr q27, [p3, 32]
-  transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
-  str q24, [fp, 64]
-  str q25, [fp, 80]
-  str q26, [fp, 96]
-  str q27, [fp, 112]
-  ldr q24, [p0, 48]
-  ldr q25, [p1, 48]
-  ldr q26, [p2, 48]
-  ldr q27, [p3, 48]
-  transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
-  str q24, [fp, 128]
-  str q25, [fp, 144]
-  str q26, [fp, 160]
-  str q27, [fp, 176]
-  // Transpose m[0..3] straight into resident v28..v31 (zero stack spill!).
-  ldr q28, [p0, 0]
-  ldr q29, [p1, 0]
-  ldr q30, [p2, 0]
-  ldr q31, [p3, 0]
-  transpose4(v28, v29, v30, v31, v24, v25, v26, v27)
-  ldr q16, [fp, 192]
-  ldr q17, [fp, 208]
-  ldr q18, [fp, 224]
-  ldr q19, [fp, 240]
-  ldr q20, [fp, 256]
-  ldr q21, [fp, 272]
-  ldr q22, [fp, 288]
-  tmp2 := flg
-  cmp blk, 0
-  if eq {
-    tmp := 1
-    orr tmp2, tmp2, tmp
-  }
-  cmp blk, 15
-  if eq {
-    tmp := 2
-    orr tmp2, tmp2, tmp
-  }
-  lsl tmp, tmp2, 32
-  add addr, tmp2, tmp
-  fmov d23, addr
-  zip1 v23.2d, v23.2d, v23.2d
-  // Round 0
-  g_neon(v0, v4, v16, v20, v28, v29, v26)
-  g_neon(v1, v5, v17, v21, v30, v31, v26)
-  ldr q24, [fp, 0]
-  ldr q25, [fp, 16]
-  g_neon(v2, v6, v18, v22, v24, v25, v26)
-  ldr q24, [fp, 32]
-  ldr q25, [fp, 48]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q24, [fp, 64]
-  ldr q25, [fp, 80]
-  g_neon(v0, v5, v18, v23, v24, v25, v26)
-  ldr q24, [fp, 96]
-  ldr q25, [fp, 112]
-  g_neon(v1, v6, v19, v20, v24, v25, v26)
-  ldr q24, [fp, 128]
-  ldr q25, [fp, 144]
-  g_neon(v2, v7, v16, v21, v24, v25, v26)
-  ldr q24, [fp, 160]
-  ldr q25, [fp, 176]
-  g_neon(v3, v4, v17, v22, v24, v25, v26)
-  // Round 1
-  ldr q25, [fp, 32]
-  g_neon(v0, v4, v16, v20, v30, v25, v26)
-  ldr q25, [fp, 96]
-  g_neon(v1, v5, v17, v21, v31, v25, v26)
-  ldr q24, [fp, 48]
-  g_neon(v2, v6, v18, v22, v24, v28, v26)
-  ldr q24, [fp, 0]
-  ldr q25, [fp, 144]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q25, [fp, 112]
-  g_neon(v0, v5, v18, v23, v29, v25, v26)
-  ldr q24, [fp, 128]
-  ldr q25, [fp, 16]
-  g_neon(v1, v6, v19, v20, v24, v25, v26)
-  ldr q24, [fp, 80]
-  ldr q25, [fp, 160]
-  g_neon(v2, v7, v16, v21, v24, v25, v26)
-  ldr q24, [fp, 176]
-  ldr q25, [fp, 64]
-  g_neon(v3, v4, v17, v22, v24, v25, v26)
-  // Round 2
-  ldr q25, [fp, 0]
-  g_neon(v0, v4, v16, v20, v31, v25, v26)
-  ldr q24, [fp, 96]
-  ldr q25, [fp, 128]
-  g_neon(v1, v5, v17, v21, v24, v25, v26)
-  ldr q24, [fp, 144]
-  g_neon(v2, v6, v18, v22, v24, v30, v26)
-  ldr q24, [fp, 48]
-  ldr q25, [fp, 160]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q24, [fp, 32]
-  ldr q25, [fp, 16]
-  g_neon(v0, v5, v18, v23, v24, v25, v26)
-  ldr q24, [fp, 80]
-  g_neon(v1, v6, v19, v20, v24, v28, v26)
-  ldr q24, [fp, 112]
-  ldr q25, [fp, 176]
-  g_neon(v2, v7, v16, v21, v24, v25, v26)
-  ldr q24, [fp, 64]
-  g_neon(v3, v4, v17, v22, v24, v29, v26)
-  // Round 3
-  ldr q24, [fp, 96]
-  ldr q25, [fp, 48]
-  g_neon(v0, v4, v16, v20, v24, v25, v26)
-  ldr q24, [fp, 128]
-  ldr q25, [fp, 80]
-  g_neon(v1, v5, v17, v21, v24, v25, v26)
-  ldr q24, [fp, 160]
-  g_neon(v2, v6, v18, v22, v24, v31, v26)
-  ldr q24, [fp, 144]
-  ldr q25, [fp, 176]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q24, [fp, 0]
-  g_neon(v0, v5, v18, v23, v24, v28, v26)
-  ldr q24, [fp, 112]
-  g_neon(v1, v6, v19, v20, v24, v30, v26)
-  ldr q24, [fp, 16]
-  ldr q25, [fp, 64]
-  g_neon(v2, v7, v16, v21, v24, v25, v26)
-  ldr q25, [fp, 32]
-  g_neon(v3, v4, v17, v22, v29, v25, v26)
-  // Round 4
-  ldr q24, [fp, 128]
-  ldr q25, [fp, 144]
-  g_neon(v0, v4, v16, v20, v24, v25, v26)
-  ldr q24, [fp, 80]
-  ldr q25, [fp, 112]
-  g_neon(v1, v5, v17, v21, v24, v25, v26)
-  ldr q24, [fp, 176]
-  ldr q25, [fp, 96]
-  g_neon(v2, v6, v18, v22, v24, v25, v26)
-  ldr q24, [fp, 160]
-  ldr q25, [fp, 64]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q24, [fp, 48]
-  g_neon(v0, v5, v18, v23, v24, v30, v26)
-  ldr q24, [fp, 16]
-  g_neon(v1, v6, v19, v20, v24, v31, v26)
-  g_neon(v2, v7, v16, v21, v28, v29, v26)
-  ldr q24, [fp, 32]
-  ldr q25, [fp, 0]
-  g_neon(v3, v4, v17, v22, v24, v25, v26)
-  // Round 5
-  ldr q24, [fp, 80]
-  ldr q25, [fp, 160]
-  g_neon(v0, v4, v16, v20, v24, v25, v26)
-  ldr q24, [fp, 112]
-  ldr q25, [fp, 16]
-  g_neon(v1, v5, v17, v21, v24, v25, v26)
-  ldr q24, [fp, 64]
-  ldr q25, [fp, 128]
-  g_neon(v2, v6, v18, v22, v24, v25, v26)
-  ldr q24, [fp, 176]
-  g_neon(v3, v7, v19, v23, v24, v29, v26)
-  ldr q24, [fp, 144]
-  g_neon(v0, v5, v18, v23, v24, v31, v26)
-  ldr q25, [fp, 96]
-  g_neon(v1, v6, v19, v20, v28, v25, v26)
-  ldr q25, [fp, 32]
-  g_neon(v2, v7, v16, v21, v30, v25, v26)
-  ldr q24, [fp, 0]
-  ldr q25, [fp, 48]
-  g_neon(v3, v4, v17, v22, v24, v25, v26)
-  // Round 6
-  ldr q24, [fp, 112]
-  ldr q25, [fp, 176]
-  g_neon(v0, v4, v16, v20, v24, v25, v26)
-  ldr q24, [fp, 16]
-  g_neon(v1, v5, v17, v21, v24, v28, v26)
-  ldr q25, [fp, 80]
-  g_neon(v2, v6, v18, v22, v29, v25, v26)
-  ldr q24, [fp, 64]
-  ldr q25, [fp, 32]
-  g_neon(v3, v7, v19, v23, v24, v25, v26)
-  ldr q24, [fp, 160]
-  ldr q25, [fp, 96]
-  g_neon(v0, v5, v18, v23, v24, v25, v26)
-  ldr q25, [fp, 128]
-  g_neon(v1, v6, v19, v20, v30, v25, v26)
-  ldr q25, [fp, 0]
-  g_neon(v2, v7, v16, v21, v31, v25, v26)
-  ldr q24, [fp, 48]
-  ldr q25, [fp, 144]
-  g_neon(v3, v4, v17, v22, v24, v25, v26)
-  eor v0.16b, v0.16b, v16.16b
-  eor v1.16b, v1.16b, v17.16b
-  eor v2.16b, v2.16b, v18.16b
-  eor v3.16b, v3.16b, v19.16b
-  eor v4.16b, v4.16b, v20.16b
-  eor v5.16b, v5.16b, v21.16b
-  eor v6.16b, v6.16b, v22.16b
-  eor v7.16b, v7.16b, v23.16b
-  add blk, blk, 1
-  cmp blk, 16
-  b.hs @done_blocks
-  add p0, p0, 64
-  add p1, p1, 64
-  add p2, p2, 64
-  add p3, p3, 64
-  b @block_loop
-@done_blocks:
+          // 3. 16-block 4-way NEON loop (v0..v7 = CV, v28..v31 = m[0..3], fp+0..192 = m[4..15]).
+          blk := 0
+        @block_loop:
+          // Transpose m[4..7], m[8..11], m[12..15] into fp+0..176 first (uses v24..v31).
+          ldr q24, [p0, 16]
+          ldr q25, [p1, 16]
+          ldr q26, [p2, 16]
+          ldr q27, [p3, 16]
+          transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
+          str q24, [fp, 0]
+          str q25, [fp, 16]
+          str q26, [fp, 32]
+          str q27, [fp, 48]
+          ldr q24, [p0, 32]
+          ldr q25, [p1, 32]
+          ldr q26, [p2, 32]
+          ldr q27, [p3, 32]
+          transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
+          str q24, [fp, 64]
+          str q25, [fp, 80]
+          str q26, [fp, 96]
+          str q27, [fp, 112]
+          ldr q24, [p0, 48]
+          ldr q25, [p1, 48]
+          ldr q26, [p2, 48]
+          ldr q27, [p3, 48]
+          transpose4(v24, v25, v26, v27, v28, v29, v30, v31)
+          str q24, [fp, 128]
+          str q25, [fp, 144]
+          str q26, [fp, 160]
+          str q27, [fp, 176]
+          // Transpose m[0..3] straight into resident v28..v31 (zero stack spill!).
+          ldr q28, [p0, 0]
+          ldr q29, [p1, 0]
+          ldr q30, [p2, 0]
+          ldr q31, [p3, 0]
+          transpose4(v28, v29, v30, v31, v24, v25, v26, v27)
+          ldr q16, [fp, 192]
+          ldr q17, [fp, 208]
+          ldr q18, [fp, 224]
+          ldr q19, [fp, 240]
+          ldr q20, [fp, 256]
+          ldr q21, [fp, 272]
+          ldr q22, [fp, 288]
+          tmp2 := flg
+          cmp blk, 0
+          if eq {
+            tmp := 1
+            orr tmp2, tmp2, tmp
+          }
+          cmp blk, 15
+          if eq {
+            tmp := 2
+            orr tmp2, tmp2, tmp
+          }
+          lsl tmp, tmp2, 32
+          add addr, tmp2, tmp
+          fmov d23, addr
+          zip1 v23.2d, v23.2d, v23.2d
+          // Round 0
+          g_neon(v0, v4, v16, v20, v28, v29, v26)
+          g_neon(v1, v5, v17, v21, v30, v31, v26)
+          ldr q24, [fp, 0]
+          ldr q25, [fp, 16]
+          g_neon(v2, v6, v18, v22, v24, v25, v26)
+          ldr q24, [fp, 32]
+          ldr q25, [fp, 48]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q24, [fp, 64]
+          ldr q25, [fp, 80]
+          g_neon(v0, v5, v18, v23, v24, v25, v26)
+          ldr q24, [fp, 96]
+          ldr q25, [fp, 112]
+          g_neon(v1, v6, v19, v20, v24, v25, v26)
+          ldr q24, [fp, 128]
+          ldr q25, [fp, 144]
+          g_neon(v2, v7, v16, v21, v24, v25, v26)
+          ldr q24, [fp, 160]
+          ldr q25, [fp, 176]
+          g_neon(v3, v4, v17, v22, v24, v25, v26)
+          // Round 1
+          ldr q25, [fp, 32]
+          g_neon(v0, v4, v16, v20, v30, v25, v26)
+          ldr q25, [fp, 96]
+          g_neon(v1, v5, v17, v21, v31, v25, v26)
+          ldr q24, [fp, 48]
+          g_neon(v2, v6, v18, v22, v24, v28, v26)
+          ldr q24, [fp, 0]
+          ldr q25, [fp, 144]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q25, [fp, 112]
+          g_neon(v0, v5, v18, v23, v29, v25, v26)
+          ldr q24, [fp, 128]
+          ldr q25, [fp, 16]
+          g_neon(v1, v6, v19, v20, v24, v25, v26)
+          ldr q24, [fp, 80]
+          ldr q25, [fp, 160]
+          g_neon(v2, v7, v16, v21, v24, v25, v26)
+          ldr q24, [fp, 176]
+          ldr q25, [fp, 64]
+          g_neon(v3, v4, v17, v22, v24, v25, v26)
+          // Round 2
+          ldr q25, [fp, 0]
+          g_neon(v0, v4, v16, v20, v31, v25, v26)
+          ldr q24, [fp, 96]
+          ldr q25, [fp, 128]
+          g_neon(v1, v5, v17, v21, v24, v25, v26)
+          ldr q24, [fp, 144]
+          g_neon(v2, v6, v18, v22, v24, v30, v26)
+          ldr q24, [fp, 48]
+          ldr q25, [fp, 160]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q24, [fp, 32]
+          ldr q25, [fp, 16]
+          g_neon(v0, v5, v18, v23, v24, v25, v26)
+          ldr q24, [fp, 80]
+          g_neon(v1, v6, v19, v20, v24, v28, v26)
+          ldr q24, [fp, 112]
+          ldr q25, [fp, 176]
+          g_neon(v2, v7, v16, v21, v24, v25, v26)
+          ldr q24, [fp, 64]
+          g_neon(v3, v4, v17, v22, v24, v29, v26)
+          // Round 3
+          ldr q24, [fp, 96]
+          ldr q25, [fp, 48]
+          g_neon(v0, v4, v16, v20, v24, v25, v26)
+          ldr q24, [fp, 128]
+          ldr q25, [fp, 80]
+          g_neon(v1, v5, v17, v21, v24, v25, v26)
+          ldr q24, [fp, 160]
+          g_neon(v2, v6, v18, v22, v24, v31, v26)
+          ldr q24, [fp, 144]
+          ldr q25, [fp, 176]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q24, [fp, 0]
+          g_neon(v0, v5, v18, v23, v24, v28, v26)
+          ldr q24, [fp, 112]
+          g_neon(v1, v6, v19, v20, v24, v30, v26)
+          ldr q24, [fp, 16]
+          ldr q25, [fp, 64]
+          g_neon(v2, v7, v16, v21, v24, v25, v26)
+          ldr q25, [fp, 32]
+          g_neon(v3, v4, v17, v22, v29, v25, v26)
+          // Round 4
+          ldr q24, [fp, 128]
+          ldr q25, [fp, 144]
+          g_neon(v0, v4, v16, v20, v24, v25, v26)
+          ldr q24, [fp, 80]
+          ldr q25, [fp, 112]
+          g_neon(v1, v5, v17, v21, v24, v25, v26)
+          ldr q24, [fp, 176]
+          ldr q25, [fp, 96]
+          g_neon(v2, v6, v18, v22, v24, v25, v26)
+          ldr q24, [fp, 160]
+          ldr q25, [fp, 64]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q24, [fp, 48]
+          g_neon(v0, v5, v18, v23, v24, v30, v26)
+          ldr q24, [fp, 16]
+          g_neon(v1, v6, v19, v20, v24, v31, v26)
+          g_neon(v2, v7, v16, v21, v28, v29, v26)
+          ldr q24, [fp, 32]
+          ldr q25, [fp, 0]
+          g_neon(v3, v4, v17, v22, v24, v25, v26)
+          // Round 5
+          ldr q24, [fp, 80]
+          ldr q25, [fp, 160]
+          g_neon(v0, v4, v16, v20, v24, v25, v26)
+          ldr q24, [fp, 112]
+          ldr q25, [fp, 16]
+          g_neon(v1, v5, v17, v21, v24, v25, v26)
+          ldr q24, [fp, 64]
+          ldr q25, [fp, 128]
+          g_neon(v2, v6, v18, v22, v24, v25, v26)
+          ldr q24, [fp, 176]
+          g_neon(v3, v7, v19, v23, v24, v29, v26)
+          ldr q24, [fp, 144]
+          g_neon(v0, v5, v18, v23, v24, v31, v26)
+          ldr q25, [fp, 96]
+          g_neon(v1, v6, v19, v20, v28, v25, v26)
+          ldr q25, [fp, 32]
+          g_neon(v2, v7, v16, v21, v30, v25, v26)
+          ldr q24, [fp, 0]
+          ldr q25, [fp, 48]
+          g_neon(v3, v4, v17, v22, v24, v25, v26)
+          // Round 6
+          ldr q24, [fp, 112]
+          ldr q25, [fp, 176]
+          g_neon(v0, v4, v16, v20, v24, v25, v26)
+          ldr q24, [fp, 16]
+          g_neon(v1, v5, v17, v21, v24, v28, v26)
+          ldr q25, [fp, 80]
+          g_neon(v2, v6, v18, v22, v29, v25, v26)
+          ldr q24, [fp, 64]
+          ldr q25, [fp, 32]
+          g_neon(v3, v7, v19, v23, v24, v25, v26)
+          ldr q24, [fp, 160]
+          ldr q25, [fp, 96]
+          g_neon(v0, v5, v18, v23, v24, v25, v26)
+          ldr q25, [fp, 128]
+          g_neon(v1, v6, v19, v20, v30, v25, v26)
+          ldr q25, [fp, 0]
+          g_neon(v2, v7, v16, v21, v31, v25, v26)
+          ldr q24, [fp, 48]
+          ldr q25, [fp, 144]
+          g_neon(v3, v4, v17, v22, v24, v25, v26)
+          eor v0.16b, v0.16b, v16.16b
+          eor v1.16b, v1.16b, v17.16b
+          eor v2.16b, v2.16b, v18.16b
+          eor v3.16b, v3.16b, v19.16b
+          eor v4.16b, v4.16b, v20.16b
+          eor v5.16b, v5.16b, v21.16b
+          eor v6.16b, v6.16b, v22.16b
+          eor v7.16b, v7.16b, v23.16b
+          add blk, blk, 1
+          cmp blk, 16
+          b.hs @done_blocks
+          add p0, p0, 64
+          add p1, p1, 64
+          add p2, p2, 64
+          add p3, p3, 64
+          b @block_loop
+        @done_blocks:
 
-  // 4. Untranspose resident v0..v7 into cvs[0..128] (fp+304..432).
-  transpose4(v0, v1, v2, v3, v24, v25, v26, v27)
-  str q0, [fp, 304]
-  str q1, [fp, 336]
-  str q2, [fp, 368]
-  str q3, [fp, 400]
-  transpose4(v4, v5, v6, v7, v24, v25, v26, v27)
-  str q4, [fp, 320]
-  str q5, [fp, 352]
-  str q6, [fp, 384]
-  str q7, [fp, 416]
+          // 4. Untranspose resident v0..v7 into cvs[0..128] (fp+304..432).
+          transpose4(v0, v1, v2, v3, v24, v25, v26, v27)
+          str q0, [fp, 304]
+          str q1, [fp, 336]
+          str q2, [fp, 368]
+          str q3, [fp, 400]
+          transpose4(v4, v5, v6, v7, v24, v25, v26, v27)
+          str q4, [fp, 320]
+          str q5, [fp, 352]
+          str q6, [fp, 384]
+          str q7, [fp, 416]
 
-  // 5. Three parent compressions: p01, p23, and subtree root into out.
-  ldr q0, [kf, 0]
-  ldr q1, [kf, 16]
-  str q0, [fp, 432]
-  str q1, [fp, 448]
-  x0 := &pblk
-  x1 := &cvs
-  x2 := 64
-  x3 := 0
-  x9 := 4
-  orr x4, flg, x9
-  bl blake3_servil_compress_in_place_arm64
+          // 5. Three b3.parent compressions: p01, p23, and b3.subtree root into out.
+          ldr q0, [kf, 0]
+          ldr q1, [kf, 16]
+          str q0, [fp, 432]
+          str q1, [fp, 448]
+          x0 := &pblk
+          x1 := &cvs
+          x2 := 64
+          x3 := 0
+          x9 := 4
+          orr x4, flg, x9
+          bl comp.compress1
 
-  ldr q0, [kf, 0]
-  ldr q1, [kf, 16]
-  add fp, sp, 0
-  str q0, [fp, 464]
-  str q1, [fp, 480]
-  x0 := &pblk
-  add x0, x0, 32
-  x1 := &cvs
-  add x1, x1, 64
-  x2 := 64
-  x3 := 0
-  x9 := 4
-  orr x4, flg, x9
-  bl blake3_servil_compress_in_place_arm64
+          ldr q0, [kf, 0]
+          ldr q1, [kf, 16]
+          add fp, sp, 0
+          str q0, [fp, 464]
+          str q1, [fp, 480]
+          x0 := &pblk
+          add x0, x0, 32
+          x1 := &cvs
+          add x1, x1, 64
+          x2 := 64
+          x3 := 0
+          x9 := 4
+          orr x4, flg, x9
+          bl comp.compress1
 
-  add fp, sp, 0
-  ldr q0, [fp, 432]
-  ldr q1, [fp, 448]
-  ldr q2, [fp, 464]
-  ldr q3, [fp, 480]
-  str q0, [out, 0]
-  str q1, [out, 16]
-  str q2, [out, 32]
-  str q3, [out, 48]
+          add fp, sp, 0
+          ldr q0, [fp, 432]
+          ldr q1, [fp, 448]
+          ldr q2, [fp, 464]
+          ldr q3, [fp, 480]
+          str q0, [out, 0]
+          str q1, [out, 16]
+          str q2, [out, 32]
+          str q3, [out, 48]
 
-  x23 := saved[5]
-  x22 := saved[4]
-  x21 := saved[3]
-  x20 := saved[2]
-  x19 := saved[1]
-  x30 := saved[0]
-  add sp, sp, frame.size
-  ret
+          x23 := saved[5]
+          x22 := saved[4]
+          x21 := saved[3]
+          x20 := saved[2]
+          x19 := saved[1]
+          x30 := saved[0]
+          add sp, sp, frame.size
+          ret
+    }
 }

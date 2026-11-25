@@ -1,4 +1,67 @@
-for blake3_servil_compress_in_place_arm64
+=== ode-helpers ===
+order: h0 h1 h2 h3 h4 h5 h6 ode_ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra
+layout m1__node120 120 { r0: cv at 0, r1: 64 bytes at 32, r2: number at 96, r3: number at 104 below 65, r4: byte at 112 }
+
+layout m1__keyed 40 { key: cv at 0, r4: byte at 32 }
+
+contract h0(h: cv, m: block, length: word, t: counter, flags: low word) {
+    requires no_overlap(h, m)
+    ensures h = f2(h, m, t, length, flags)
+    stack 0
+}
+
+contract h4(out: block, input: 4096 bytes, kf: m1__keyed, t: number) {
+    requires no_overlap(out, input, kf)
+    requires 1024 * t + 4096 <= 18446744073709551615
+    ensures out = f8(kf.key, kf.r4, t, input)
+    stack 544
+}
+
+contract h1(block: 64 bytes, src: n bytes, n: number) {
+    requires no_overlap(block, src)
+    requires n <= 64
+    ensures block = f7(src)
+    trace depends on n
+    stack 0
+    calling {
+            in block = x0, src = x1, n = x2
+            preserves x15, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+        }
+}
+
+contract h3(out: cv, nd: m1__node120, root: byte) {
+    requires no_overlap(out, nd)
+    ensures out = f1(nd, root)
+    stack 0
+}
+
+contract h2(nd: m1__node120, input: len bytes, len: number, t: number, flags: byte) {
+    requires no_overlap(nd, input)
+    requires len <= 1024
+    ensures nd = f5(nd.r0, t, flags, input)
+    trace depends on len
+    stack 64
+}
+
+contract h5(out: cv, input: len bytes, len: number, kf: m1__keyed, t: number) {
+    requires no_overlap(out, input, kf)
+    requires len >= 1
+    requires 1024 * t + len <= 18446744073709551615
+    ensures out = f10(kf.key, kf.r4, t, input)
+    trace depends on len
+    decreases len
+    stack 816 + 272 * bits((len - 1) / 1024)
+}
+
+contract h6(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {
+    requires no_overlap(out, input, key)
+    requires len >= 1025
+    ensures out = bytes_of(f0(words(key), flags, input))
+    trace depends on len
+    stack 1120 + 272 * bits(len / 1024)
+}
+=== ode-proof ===
+for h0
 t wrap
 p 5 11 0
 s 1 1 2 1 4294967296
@@ -8,7 +71,7 @@ p 74 6 0
 s 2 1 0 1 4294967296
 s 3 1 1 1 1
 q
-for b3l_pad_fast_arm64
+for h1
 place 16
 name i x3
 name k x4
@@ -16,21 +79,21 @@ fact (bin <= (name k) (num 8))
 fact (bin == (name i) (bin * (num 8) (name k)))
 keep x0 x1 x2 sp x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30
 decreases (name k)
-wrote block (index (call padded (name src)) (name i))
+wrote block (index (call f7 (name src)) (name i))
 place 116
 name i x3
 fact (bin <= (name i) (num 64))
 fact (bin <= (name n) (name i))
 keep x0 x1 x2 sp x5 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30 x4
 decreases (name i)
-wrote block (index (call padded (name src)) (name i))
+wrote block (index (call f7 (name src)) (name i))
 place 144
 name i x3
 fact (bin <= (name i) (name n))
 keep x0 x1 x2 sp x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30 x4
 marked x7
 decreases (name i)
-wrote block (index (call padded (name src)) (name i))
+wrote block (index (call f7 (name src)) (name i))
 t live
 t dead
 p 0 69
@@ -388,8 +451,7 @@ s 0 1 1 1 1
 s 3 1 2 1 1
 q
 t ge
-for b3l_node_out_fast_arm64
-for b3l_chunk_node_fast_arm64
+for h2
 t live
 t live
 t dead
@@ -490,7 +552,8 @@ t dead
 p 0 931
 s 0 1 1 1 1
 q
-for b3l_wide4_fast_arm64
+for h3
+for h4
 p 1 0
 s 0 4294967297 1 1 1
 q
@@ -587,7 +650,7 @@ q
 p 5 0
 s 1 1 0 4294967297 1
 q
-for b3l_subtree_fast_arm64
+for h5
 t live
 t live
 t live
@@ -4568,7 +4631,7 @@ s 0 1 1 1 1
 s 4 1 2 1024 1
 s 3 1 5 1 1
 q
-for b3l_hashr_long_arm64
+for h6
 t live
 t live
 t live
@@ -7078,7 +7141,7 @@ s 0 1 1 1 1
 s 4 1 2 1024 1
 s 3 1 5 1 1
 q
-for b3l_hashr_arm64
+for ode_ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra
 t live
 t live
 t live
