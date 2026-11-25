@@ -35,7 +35,10 @@ X86_REGS = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
 X86_ARGS = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 X86_CALLEE_SAVED = ["rbx", "rbp", "r12", "r13", "r14", "r15"]
 
-ARM_REGS = [f"x{i}" for i in range(31)] + ["sp"]
+# (the numbering of the proof format: the stack pointer has the number x86-64's has, 4, and x4 the last;
+# a proof names an unknown by its register's number, so a program that keeps a changing value in x4 or
+# speaks of sp in a row needs this order)
+ARM_REGS = ["x0", "x1", "x2", "x3", "sp"] + [f"x{i}" for i in range(5, 31)] + ["x4"]
 ARM_ARGS = [f"x{i}" for i in range(8)]
 ARM_CALLEE_SAVED = [f"x{i}" for i in range(19, 30)]
 

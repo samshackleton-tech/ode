@@ -338,8 +338,7 @@ fn cmp3_fn(a: number, b: number)
              os.path.join(HERE, "examples", "hasher", "hash_eq_ct_spec.ode"), "ct_bytes_eq", 1),
         ]
         for src, spec, fn, expect_fns in cases:
-            # (verify2.py refuses the AArch64 proof of `hash_eq_ct.ode` today; Lean's verifier shows it)
-            for target in (("x86_64",) if fn == "ct_bytes_eq" else ("x86_64", "arm64")):
+            for target in ("x86_64", "arm64"):
                 with tempfile.TemporaryDirectory() as d:
                     if spec:
                         shutil.copy2(spec, os.path.join(d, os.path.basename(spec)))
