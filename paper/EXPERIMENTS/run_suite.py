@@ -187,6 +187,8 @@ def classify_failure(stage: str, out: str, rc: int) -> str:
     low = out.lower()
     if rc == 124 or "timeout after" in low:
         return "prover_timeout_120s"
+    if "cannot decide: is " in low:
+        return "arith_need_compare"
     if ("ode does not use semicolons" in low or "calling {" in low or "calling `" in low
             or "in `calling`" in low or "expected `=`" in low or "expected '='" in low
             or "unexpected `;`" in low or "unexpected ';'" in low or "calling" in low and "unexpected" in low):
@@ -429,6 +431,24 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
             cell["total_cost_usd"] += cost
             cell["total_api_s"] += api_s
             total_spent = budget.add(cost)
+
+            # A reply cut off by the token limit before it holds the function is no candidate: say so to
+            # the model and count it apart from compile errors (no tool is run on it).
+            if usage.get("finish_reason") == "length" and f"fn {task['entry_fn']}" not in reply:
+                cell["rounds"].append({
+                    "round": rnum, "api_s": round(api_s, 2), "tool_s": 0.0, "cost_usd": round(cost, 4),
+                    "prompt_tokens": usage.get("prompt_tokens"),
+                    "completion_tokens": usage.get("completion_tokens"),
+                    "finish_reason": "length", "source_lines": 0,
+                    "stage": "no_candidate", "category": "output_token_limit",
+                })
+                print(f"[fail]  {cell_id} R{rnum} (output_token_limit, ${cost:.2f}, suite=${total_spent:.2f})", flush=True)
+                messages.append({"role": "assistant", "content": reply or "(no visible output)"})
+                messages.append({"role": "user", "content": (
+                    f"Round {rnum}: your reply reached the output limit of {args.max_tokens} tokens before it "
+                    f"contained the `.ode` file, so nothing was compiled. Reason more briefly and return the "
+                    f"complete `.ode` file in a single ```ode ... ``` block.")})
+                continue
 
             ode_src = extract_ode_source(reply, task["entry_fn"])
             last_ode = ode_src
@@ -703,24 +723,36 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
         with baseline_path.open("r", encoding="utf-8") as f:
             base = json.load(f)
         b_id = base.get("run_id", baseline_path.stem)
+        # Totals are compared over the cells both runs have (same task, model and target), so that a run
+        # with more tasks is not set against a run with fewer.
+        b_all = {(c["task"], c["model"], c["target"]): c for c in base.get("cells", [])}
+        both = [(b_all[k], c) for c in summary["cells"] for k in [(c["task"], c["model"], c["target"])] if k in b_all]
+        def tot(cs):
+            fc = {}
+            for c in cs:
+                for cat in c["round_categories"]:
+                    if cat != "passed":
+                        fc[cat] = fc.get(cat, 0) + 1
+            return (sum(1 for c in cs if c["strict_pass"]), sum(c["rounds_used"] for c in cs),
+                    round(sum(c["total_cost_usd"] for c in cs), 2), fc)
+        bp, br, bc, bf = tot([b for b, _ in both])
+        np_, nr, nc, nf = tot([c for _, c in both])
         md_lines += [
             "",
             f"## Before vs. After Comparison (`{b_id}` -> `{run_id}`)",
             "",
-            "The first table compares aggregate suite metrics; the second compares each matching `(task, model, target)` cell.",
+            f"The first table compares totals over the {len(both)} cells that both runs have (the same task, model and target); "
+            "each cell was run once in each run, so a difference in one cell may be chance. "
+            "The second table sets each such cell of the two runs side by side.",
             "",
-            f"| Metric | `{b_id}` | `{run_id}` | Delta |",
+            f"| Metric (over the {len(both)} shared cells) | `{b_id}` | `{run_id}` | Delta |",
             "| --- | --- | --- | --- |",
-            f"| Strict passes | {base['strict_passes']}/{base['total_cells']} | {strict_passes}/{len(cells_sorted)} | {strict_passes - base['strict_passes']:+d} |",
-            f"| Total rounds | {base['total_rounds']} | {total_rounds} | {total_rounds - base['total_rounds']:+d} |",
-            f"| Total API spend (USD) | ${base['total_cost_usd']:.2f} | ${total_cost:.2f} | ${total_cost - base['total_cost_usd']:+.2f} |",
+            f"| Strict passes | {bp}/{len(both)} | {np_}/{len(both)} | {np_ - bp:+d} |",
+            f"| Total rounds | {br} | {nr} | {nr - br:+d} |",
+            f"| Total API spend (USD) | ${bc:.2f} | ${nc:.2f} | ${nc - bc:+.2f} |",
         ]
-        all_cats = sorted(set(base.get("failure_categories", {}).keys()) | set(cats.keys()))
-        for ck in all_cats:
-            bv = base.get("failure_categories", {}).get(ck, 0)
-            nv = cats.get(ck, 0)
-            if bv or nv:
-                md_lines.append(f"| Failing rounds: `{ck}` | {bv} | {nv} | {nv - bv:+d} |")
+        for ck in sorted(set(bf) | set(nf)):
+            md_lines.append(f"| Failing rounds: `{ck}` | {bf.get(ck, 0)} | {nf.get(ck, 0)} | {nf.get(ck, 0) - bf.get(ck, 0):+d} |")
 
         b_map = {(c["task"], c["model"], c["target"]): c for c in base.get("cells", [])}
         md_lines += [
@@ -787,6 +819,42 @@ def self_test_cli(targets: list[str]) -> None:
                 raise SystemExit(f"CLI self-test failed on `verify2.py` ({tgt}): {v2_msg}")
 
 
+def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str | None) -> None:
+    """Before any model is asked: a task that names a reference solution must be solvable as posed.
+
+    The reference is put through the very steps a candidate is (`ode pack`, `ode audit` with the task's
+    expected contract ID, `verify2.py`, the native harness). A task whose reference fails any of them is a
+    fault of the task, the tools or the harness, and would otherwise be read as a failure of the models.
+    A task with no reference is named, so the report can say its solvability was not shown beforehand."""
+    for task in tasks:
+        ref = task.get("reference_solution")
+        if not ref:
+            print(f"[reference] {task['id']}: no reference solution named (solvability not shown beforehand)", flush=True)
+            continue
+        for tgt in targets:
+            with tempfile.TemporaryDirectory(prefix="ode_ref_") as td:
+                td_p = Path(td)
+                shutil.copy2(ROOT / task["spec_file"], td_p / task["spec_basename"])
+                cand = td_p / f"{task['id']}.ode"
+                shutil.copy2(ROOT / ref, cand)
+                out_o, out_p = td_p / "out.o", td_p / "out.proof"
+                rc_p, txt_p, _ = run_tool([
+                    sys.executable, str(ODE_TOOL), "pack", str(cand), "--fn", task["entry_fn"],
+                    "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p, timeout=120)
+                if rc_p != 0 or not out_o.exists():
+                    raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
+                rc_a, txt_a, _ = run_tool([
+                    sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
+                    "--expect-contract", task["expected_contract_id"]], td_p, timeout=120)
+                if rc_a != 0 or "VERDICT:           shown" not in txt_a:
+                    raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")
+                v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
+                nat_st, nat_det = run_native_test(out_o, task, tgt, x86_exec_script)
+                if nat_st == "fail":
+                    raise SystemExit(f"reference of task `{task['id']}` fails the native harness ({tgt}): {nat_det}")
+                print(f"[reference] {task['id']} {tgt}: pack+audit shown; verify2: {v2_msg}; native: {nat_st} ({nat_det})", flush=True)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Push-button pre-registered cold-room experiment runner for Ode.")
     ap.add_argument("--run-id", required=True, help="Short run identifier, e.g. ebpf-v2")
@@ -796,7 +864,7 @@ def main(argv=None) -> int:
     ap.add_argument("--max-rounds", type=int, default=8)
     ap.add_argument("--tool-timeout", type=int, default=120)
     ap.add_argument("--api-timeout", type=int, default=240)
-    ap.add_argument("--max-tokens", type=int, default=16000)
+    ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
     ap.add_argument("--max-usd", type=float, default=40.0, help="Cumulative API spend circuit breaker")
@@ -839,6 +907,7 @@ def main(argv=None) -> int:
             hashes[t["native_harness"]] = blake3_hex(ROOT / t["native_harness"])
 
     self_test_cli(targets)
+    check_references(tasks, targets, args.x86_exec_script or None)
 
     if args.dry_run:
         print(f"DRY-RUN OK (CLI self-test passed on {targets}): run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} cells={len(tasks)*len(models)*len(targets)}")

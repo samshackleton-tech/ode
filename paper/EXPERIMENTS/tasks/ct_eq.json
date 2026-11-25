@@ -1,11 +1,12 @@
 {
   "id": "ct_eq",
-  "title": "Constant-Time Byte-Slice Equality (branchless trace depends on n)",
-  "spec_file": "paper/EXPERIMENTS/tasks/ct_eq_spec.ode",
-  "spec_basename": "ct_eq_spec.ode",
+  "title": "Byte-slice equality whose trace depends on the length alone",
+  "spec_file": "proof-core/examples/hasher/hash_eq_ct_spec.ode",
+  "spec_basename": "hash_eq_ct_spec.ode",
   "entry_fn": "ct_bytes_eq",
-  "expected_contract_id": "err2gjjxoxbyqfsazoufn7easfzao5uqgual5wuhslqlqmymkhma",
+  "expected_contract_id": "rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq",
   "native_harness": "paper/EXPERIMENTS/tasks/ct_eq_native.c",
-  "contract_header": "use eq = \"ct_eq_spec.ode\"\n\nfn ct_bytes_eq(a: n bytes, b: n bytes, n: number)\n    requires n < 18446744073709551615\n    returns eq.bytes_eq(a, b)\n    trace depends on n\n    stack 0\n",
-  "task_summary": "Implement and verify constant-time byte-slice equality `ct_bytes_eq` whose execution trace depends only on the length `n` (never on the contents of `a` or `b`)."
+  "reference_solution": "proof-core/examples/hasher/hash_eq_ct.ode",
+  "contract_header": "use eq = \"hash_eq_ct_spec.ode\"\n\nfn ct_bytes_eq(a: n bytes, b: n bytes, n: number)\n    returns eq.ct_bytes_eq(a, b)\n    trace depends on n\n    stack 0\n",
+  "task_summary": "Implement and verify byte-slice equality `ct_bytes_eq`: it returns 1 when the two runs of `n` bytes are the same and 0 otherwise, and its execution trace may depend on the length `n` alone (never on the bytes of `a` or `b`)."
 }

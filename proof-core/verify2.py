@@ -199,6 +199,7 @@ def parse_statement(path):
                     "requires": [],
                     "below": [],
                     "atleast": [],
+                    "linpre": [],
                     "returns": None,
                     "stack": 0,
                     "hidden": set(),
@@ -226,6 +227,11 @@ def parse_statement(path):
                 cur["below"].append((parts[1], int(parts[2])))
             elif kw == "atleast":
                 cur["atleast"].append((parts[1], int(parts[2])))
+            elif kw == "linpre":
+                # `linpre K a1 c1 a2 c2 ...`: the entry condition 0 <= K + c1*a1 + c2*a2 + ...
+                if len(parts) % 2 != 0:
+                    raise Refuse(f"malformed linpre line in verify2: {line}")
+                cur["linpre"].append((int(parts[1]), [(parts[i], int(parts[i + 1])) for i in range(2, len(parts), 2)]))
             elif kw == "returns":
                 cur["returns"] = parse_sexpr(line[len("returns "):])
             elif kw == "stack":
@@ -371,6 +377,15 @@ class Verifier:
     def entail_eq(self, facts, a, b, stream):
         self.entail(facts, r_sub(a, b), stream)
         self.entail(facts, r_sub(b, a), stream)
+
+    def linpre_row(self, k, terms, env):
+        row = r_const(k)
+        for anm, coeff in terms:
+            v = env.get(anm)
+            if not self.is_row(v):
+                raise Refuse(f"linear entry condition names `{anm}`, which is no number here")
+            row = r_add(row, r_scale(coeff, v))
+        return row
 
     def is_row(self, v):
         return isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], int) and isinstance(v[1], tuple)
@@ -816,6 +831,8 @@ class Verifier:
         for aname, bound in fn["atleast"]:
             if aname in env:
                 facts.append(r_sub(env[aname], r_const(bound)))
+        for k, terms in fn["linpre"]:
+            facts.append(self.linpre_row(k, terms, env))
         for req in fn["requires"]:
             self.assume_fact(req, env, state)
 
@@ -936,7 +953,15 @@ class Verifier:
                     if mb or md:
                         raise Refuse("memory read address depends on values kept out of the trace")
                     # Match `addr = buf_base[b] + idx` with `0 <= idx < buf_len[b]`
+                    # (the run is the one whose base address, a single unknown of the entry, the address
+                    # is counted from once; that the address lies within it is then shown, not assumed)
+                    def counted_from(bbase):
+                        vs = [i for i, cf in enumerate(bbase[1]) if cf != 0]
+                        return (bbase[0] == 0 and len(vs) == 1 and bbase[1][vs[0]] == 1
+                                and vs[0] < len(addr[1]) and addr[1][vs[0]] == 1)
                     for bnm, bbase in st["buf_base"].items():
+                        if not counted_from(bbase):
+                            continue
                         idx = r_sub(addr, bbase)
                         self.entail(st["facts"], idx, stream)
                         self.entail(st["facts"], r_sub(r_sub(st["buf_len"][bnm], idx), r_const(1)), stream)
@@ -1151,12 +1176,15 @@ class Verifier:
                                 if anm not in c["hidden"] and st["marks"][areg]:
                                     raise Refuse(f"callee `{callee_nm}` trace arg `{anm}` may depend on values kept out of trace")
                         # Check callee entry preconditions (`below`, `atleast`, `requires`)
-                        for anm, bnd in c["below"]:
-                            if anm in cenv:
-                                self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)
+                        # (the order the proof file's items are read in: at-least, linear conditions, bounds)
                         for anm, bnd in c["atleast"]:
                             if anm in cenv:
                                 self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
+                        for k, terms in c["linpre"]:
+                            self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                        for anm, bnd in c["below"]:
+                            if anm in cenv:
+                                self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)
                         for req in c["requires"]:
                             self.check_fact(req, cenv, st, stream)
                         # Drop stack slots below current sp; clobber non-preserved registers (matching Lean nvars + r numbering)

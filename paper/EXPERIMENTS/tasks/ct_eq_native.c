@@ -1,4 +1,4 @@
-/* Native hardware test harness for verified constant-time byte equality. */
+/* Native hardware test harness for verified byte-slice equality (trace depends on the length alone). */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,7 +32,7 @@ static ct_eq_fn_t load_jit_fn(const char *path, size_t entry_off, void **out_buf
     return (ct_eq_fn_t)((uint8_t *)mem + entry_off);
 }
 #else
-extern uint64_t ode_err2gjjxoxbyqfsazoufn7easfzao5uqgual5wuhslqlqmymkhma(
+extern uint64_t ode_rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq(
     const uint8_t *a, const uint8_t *b, uint64_t n);
 #endif
 
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     fn = load_jit_fn(argv[1], (size_t)strtoull(argv[2], NULL, 0), &buf, &map_sz);
 #else
     (void)argc; (void)argv;
-    fn = ode_err2gjjxoxbyqfsazoufn7easfzao5uqgual5wuhslqlqmymkhma;
+    fn = ode_rpxfmeixumkaoep4wemhcysirkt7uciujxzihzc4m6obijc7bvmq;
 #endif
     uint8_t a[32], b[32];
     for (int i = 0; i < 32; i++) { a[i] = (uint8_t)(i * 7 + 3); b[i] = a[i]; }

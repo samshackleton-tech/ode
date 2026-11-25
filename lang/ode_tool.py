@@ -195,7 +195,7 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
-        return "hint: the spec tests equality (`==`/`!=`) here; branch on the comparison or establish the relation in `place { ... }` before this point"
+        return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), or state the relation in the `place { ... }` before this point"
     if "need spec" in reason:
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
@@ -259,9 +259,18 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
     arith = parse_arithmetic_need(reason, target, info, contract)
     raw_lines = reason.strip().splitlines()
     if arith is not None:
-        out.append(f"  need {arith['kind']} (arithmetic fact not shown from {arith['total_facts']} inequalities in context)")
-        for g in arith["goals"]:
-            out.append(f"  cannot show: {g}")
+        if arith["kind"] == "compare":
+            # The row is a difference A - B that the specification tests for equality: what is missing is
+            # which of the three cases holds, not the inequality the row happens to print as.
+            out.append(f"  need compare (the facts in context, {arith['total_facts']} inequalities, do not settle a comparison the specification makes)")
+            for g in arith["goals"]:
+                m = re.match(r"^(.*?) (>=|<=) (.*)$", g)
+                a, b = (m.group(1), m.group(3)) if m else (g, "0")
+                out.append(f"  cannot decide: is {a} equal to {b}, below it, or above it? (the proof needs one of the three to follow from the facts)")
+        else:
+            out.append(f"  need {arith['kind']} (arithmetic fact not shown from {arith['total_facts']} inequalities in context)")
+            for g in arith["goals"]:
+                out.append(f"  cannot show: {g}")
         if arith["relevant_facts"]:
             out.append("  relevant facts:")
             for f in arith["relevant_facts"]:
@@ -861,5 +870,17 @@ def main(argv=None):
         return 0
 
 
+def _cli():
+    """`main`, with what the source or the command line got wrong said in one line (exit 2), no traceback.
+    Any other exception is a fault of the tool and keeps its traceback."""
+    try:
+        return main()
+    except Exception as exc:
+        if type(exc).__name__ in ("UnifiedErr", "Err", "ValueError"):
+            print(f"ode: {exc}", file=sys.stderr)
+            return 2
+        raise
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_cli())
