@@ -1,0 +1,16 @@
+// ASCII decimal integer parser (value 0..999,999,999; returns INVALID = 1,000,000,000 on empty,
+// non-digit, or overflow >= 1,000,000,000).
+const INVALID = 1000000000
+
+def digits_from(a, i, acc) {
+    if i >= len(a) then acc
+    else if a[i] < 48 then INVALID
+    else if a[i] > 57 then INVALID
+    else if acc >= 100000000 then INVALID
+    else digits_from(a, i + 1, 10 * acc + (a[i] - 48))
+}
+
+def parse_decimal(a) {
+    if len(a) == 0 then INVALID
+    else digits_from(a, 0, 0)
+}

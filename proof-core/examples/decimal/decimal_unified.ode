@@ -1,0 +1,104 @@
+// ASCII decimal integer parser (0..999,999,999) for x86-64 and AArch64 (`stack 0`).
+use dec = "decimal_spec.ode"
+
+fn parse_decimal(a: n bytes, n: number)
+    returns dec.parse_decimal(a)
+    trace depends on a, n
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi, len_r = rsi, idx = rcx, val = rax, t8 = r8, addr = r9, dig = rdx
+
+        cmp len_r, 0
+        je @bad
+        idx := 0
+        val := 0
+        place {
+            name i = idx
+            name v = val
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= v
+            fact v < 1000000000
+            fact dec.parse_decimal(a) == dec.digits_from(a, i, v)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        jae @done
+        mov addr, base
+        add addr, idx
+        movzx edx, byte ptr [addr]
+        cmp dig, 48
+        jb @bad
+        cmp dig, 58
+        jae @bad
+        cmp val, 100000000
+        jae @bad
+        sub dig, 48
+        mov t8, val
+        shl t8, 3
+        shl val, 1
+        add val, t8
+        add val, dig
+        add idx, 1
+        jmp @loop
+    @done:
+        ret
+    @bad:
+        mov val, 1000000000
+        ret
+    }
+    for arm64 {
+        reg base = x0, len_r = x1, idx = x2, val = x3, t8 = x4, addr = x5
+        reg dig = x6, digw = w6, t2 = x7, lim = x8
+
+        cmp len_r, 0
+        b.eq @bad
+        idx := 0
+        val := 0
+        // lim = 100,000,000 = 1525 * 65536 + 57600
+        mov lim, 1525
+        lsl lim, lim, 16
+        mov t2, 57600
+        add lim, lim, t2
+        place {
+            name i = idx
+            name v = val
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= v
+            fact v < 1000000000
+            fact dec.parse_decimal(a) == dec.digits_from(a, i, v)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        b.hs @done
+        add addr, base, idx
+        ldrb digw, [addr, 0]
+        cmp dig, 48
+        b.lo @bad
+        cmp dig, 58
+        b.hs @bad
+        cmp val, lim
+        b.hs @bad
+        sub dig, dig, 48
+        lsl t8, val, 3
+        lsl t2, val, 1
+        add val, t8, t2
+        add val, val, dig
+        add idx, idx, 1
+        b @loop
+    @done:
+        mov x0, val
+        ret
+    @bad:
+        // 1,000,000,000 = 15258 * 65536 + 51712
+        mov x0, 15258
+        lsl x0, x0, 16
+        mov x9, 51712
+        add x0, x0, x9
+        ret
+    }
+}
