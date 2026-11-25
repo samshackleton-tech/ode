@@ -194,6 +194,10 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
+    if "need compare" in reason:
+        return "hint: the spec tests equality (`==`/`!=`) here; branch on the comparison or establish the relation in `place { ... }` before this point"
+    if "need spec" in reason:
+        return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
         return "hint: `wrote` syntax is `wrote out[.. i] = expr` (forward) or `wrote out[i ..] = expr` (countdown), naming the full output value"
     return None
@@ -202,7 +206,7 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
 def _compile_error_hint(err):
     """Produce a concise, table-driven fix hint for Ode compile / place-syntax errors (zero drift)."""
     if "no `fn` definitions" in err:
-        return "hint: return a complete `.ode` file starting with `target x86_64` or `target arm64` and `fn NAME as \"SYMBOL\" { ... }`"
+        return "hint: return a complete `.ode` file containing `fn NAME(...) ... { for x86_64 { ... } }` or `{ for arm64 { ... } }`"
     if "not a number: &" in err:
         return "hint: use `REG := &field` (or `frame.<field>` for the byte offset) to reference a stack-frame field"
     if "is not one expression" in err:
@@ -810,10 +814,22 @@ def main(argv=None):
 
     if args.cmd == "pack":
         import ode_audit
-        res = ode_audit.pack_verified(
-            args.source, args.spec, args.out, args.proof,
-            fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
-        )
+        try:
+            res = ode_audit.pack_verified(
+                args.source, args.spec, args.out, args.proof,
+                fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
+            )
+        except SystemExit as exc:
+            msg = str(exc)
+            marker = "The verifier's last word:\n"
+            body = msg.split(marker, 1)[1] if marker in msg else msg
+            if body.lstrip().startswith("need "):
+                tgt = args.target or "x86_64"
+                diag, _ = format_source_diagnostic({}, None, None, body, target=tgt)
+                print(diag)
+                print("hint: run `ode check` on this file for source-line attribution and concrete counterexample testing")
+                return 1
+            raise
         if args.json:
             print(json.dumps(_json_safe(res), indent=2, sort_keys=True))
             return 0 if res["verdict"] == "shown" else 1
