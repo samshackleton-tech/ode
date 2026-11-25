@@ -1,9 +1,8 @@
 # A table of AArch64 instruction forms
 
-Step 1 of option C of [`../paper/ARM-PROPOSAL.md`](../paper/ARM-PROPOSAL.md): a small table of AArch64
-instructions in the same format as Ode's x86-64 table, compared against real AArch64 processors and
-paired with a separate Lean 4 proof of agreement with Google DeepMind's `arm64-semantics`. Nothing in
-this folder depends on Ode's verifier or its contracts.
+A standalone, table-driven model of AArch64 instruction encodings and semantics, compared against real
+AArch64 processors and paired with a separate Lean 4 proof of agreement with Google DeepMind's
+`arm64-semantics`. Nothing in this folder depends on Ode's verifier, compiler, or contracts.
 
 ## What is here
 

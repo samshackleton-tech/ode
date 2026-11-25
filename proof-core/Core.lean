@@ -428,7 +428,7 @@ inductive Known where
   | record (h : Nat) (fields : List RecField) (ids : List Nat) -- the value decoded from `h` is a record with exact `fields`, whose serialized 32-bit words are `ids`
   deriving DecidableEq, Repr, Inhabited
 
-/-- What is known NOT to be marked (not to depend on a secret): general registers, the two flags, and
+/-- What is known NOT to be marked (not to depend on values kept out of the trace): general registers, the two flags, and
 cells of the frame (eight bytes each, by how far they are from where the stack pointer was at entry).
 Of anything not named here nothing is known: it may be marked. `lowq`: the general registers whose lowest
 byte is known not to be marked, whatever the rest of the register is. -/
@@ -2946,9 +2946,9 @@ def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
         pure ()
       | _ => refuse "a function returns a number"
 
-/-! ## Marks: what may depend on a secret
+/-! ## Marks: what may depend on values kept out of the trace
 
-The machine marks what may depend on a secret, and stops where something marked is used in an address,
+The machine marks what may depend on values kept out of the trace, and stops where something marked is used in an address,
 decides a jump, or is the address a return goes to. The verifier follows which registers and flags are
 known not to be marked (`Sym.q`), a statement at a time, and refuses where the machine could stop. -/
 
@@ -3203,12 +3203,6 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     pure [({ s2 with q := s1.q }, .at i.next)]
 
 /-! ## A call, by the called function's contract -/
-
-/-- The registers a called function may leave anything in, on x86-64: rax, rcx, rdx, rsi, rdi, r8 to r11. -/
-def callerSavedX86 : List Nat := [0, 1, 2, 6, 7, 8, 9, 10, 11]
-
-/-- The same on AArch64: x0 to x18 and x30 (every general register but the stack pointer and x19 to x29). -/
-def callerSavedArm : List Nat := [0, 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 30, 31]
 
 /-- The registers a function with this contract may leave anything in: every general register of the
 machine except `RSP` and those listed in `c.keeps`. -/

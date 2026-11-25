@@ -596,7 +596,7 @@ def inPieces (pieces : List Piece) (s : State) (a : Nat) : Bool :=
 
 /-- **The program is loaded.** The read-only data of each of its object files lies in memory, whole, at the
 address the state holds for that file, which is a multiple of the file's boundary; it ends below 2^64; each
-byte there is the file's, and none is marked (the program's own bytes are no secret). The addresses
+byte there is the file's, and none is marked (the program's own bytes may show in the trace). The addresses
 themselves are any: a linker and a loader decide them. -/
 def Loaded (pieces : List Piece) (s : State) : Prop :=
   ∀ k pc, pieces[k]? = some pc →
