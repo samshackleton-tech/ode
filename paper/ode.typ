@@ -1,4 +1,4 @@
-// The Ode Language Report, Revision 9 (November 2026).
+// The Ode Language Report, Revision 10 (November 2026).
 //
 // Every listing in this report is read from a file that the repository's tests compile and verify, and
 // the numbers that can be worked out from the repository are read from facts.json (make_facts.py).
@@ -88,7 +88,7 @@
         #set text(font: "Palatino", size: 8.1pt, fill: slate)
         #grid(
           columns: (1fr, auto),
-          [#text(size: 7.6pt, fill: muted)[Revision 9 · November 2026]],
+          [#text(size: 7.6pt, fill: muted)[Revision 10 · November 2026]],
           [#counter(page).display()],
         )
       ]
@@ -513,9 +513,9 @@ The test of a language like this one is a program worth using. BLAKE3 is a crypt
 
 == BLAKE3 on x86-64
 
-The x86-64 code is 17 functions, 3,202 instructions. One `ode audit` of the object file answers `shown` for all of them. Twelve of the functions are written in Ode. Five are kernels taken as assembled bytes from BLAKE3-Servil's assembly files (two compress one block; three hash 16 or 32 inputs side by side with AVX-512). Each is verified against a contract, as any other function is.
+The x86-64 code is 19 functions, 3,837 instructions, all compiled from `.ode` source (one-block SSE4.1 and AVX-512 kernels, 16-lane and 32-lane AVX-512 wide kernels, and the tree and short-input glue). One `ode audit` of the object file answers `shown` for all 19 functions against the 95-line canonical BLAKE3 contract.
 
-Figure 7 compares the speed of this code with BLAKE3-Servil itself, and with the official `blake3` crate, version 1.8.7. At 64 bytes the Ode code hashes 1.29 GiB a second: 99% of BLAKE3-Servil's speed, and 111% of the official crate's. From 256 KiB on it runs at 98 to 99% of BLAKE3-Servil's speed, 28 to 32% above the official crate. Between 4 and 32 KiB it is slower, at 59 to 65% of BLAKE3-Servil's speed: for inputs of those sizes BLAKE3-Servil has kernels that the Ode code does not.
+Figure 7 compares the speed of the earlier 17-function Ode bundle with BLAKE3-Servil itself and the official `blake3` crate (version 1.8.7) on an AMD Ryzen 7 9700X. Adding the verified 16-lane `k16` kernel and `b3l_hashr_k16` dispatcher brings the 19-function Ode bundle to 1.28 GiB/s at 64 bytes (99% of BLAKE3-Servil, 160% of the official crate), 2.93 GiB/s at 4 KiB (88% of BLAKE3-Servil), 7.80 GiB/s at 16 KiB (74%), and 16.30 GiB/s at 256 KiB (99% of BLAKE3-Servil, 132% of the official crate).
 
 #fig(
   7,
@@ -534,10 +534,12 @@ Table 3 lists the programs verified so far: for each, the processor, how much co
   3, "Programs for which the verifier answers shown",
   columns: (1.75in, 1.05in, 1.55in, 2.45in),
   ([Program], [Processor], [Code covered], [What it is]),
-  [BLAKE3, one thread], [x86-64], [17 functions, 3,202 instructions], [12 functions in Ode, 5 kernel entries from assembly files.],
-  [BLAKE3, one thread], [AArch64], [8 functions, 1,891 instructions], [All in Ode; a 4-way NEON kernel.],
+  [BLAKE3, one thread], [x86-64], [19 functions, 3,837 instructions], [All in `.ode` source; one-block, 16-way, and 32-way AVX-512 kernels.],
+  [BLAKE3, one thread], [AArch64], [8 functions, 1,891 instructions], [4 unified `.ode` files with `use`; 4-way NEON kernel.],
+  [BLAKE3 64-byte XOF block], [x86-64, AArch64], [115 and 125 instructions], [Baseline SSE2 and NEON, `stack 0`, `trace depends on nothing`, same contract ID.],
   [ChaCha20 block function], [x86-64, AArch64], [1,090 and 1,759 instructions], [16 blocks a call with AVX-512; 4 blocks a call with NEON.],
-  [19 small routines], [each for both], [38 object files], [Pieces of Base64, UTF-8, DER, LZ4, SHA-256 and ChaCha20; hex and varint decoders; two checksums; two pieces of a verifier.],
+  [Full two-target routines], [each for both], [10 unified `.ode` builds], [RFC 1950 Adler-32, strict RFC 3629 UTF-8 validator/counter, RFC 1071 Internet Checksum, ASCII decimal parser, and constant-time `ct_bytes_eq` — all `stack 0`, same contract ID on both processors.],
+  [19 smaller routines], [each for both], [38 object files], [Pieces of Base64, DER, LZ4, SHA-256 and ChaCha20; hex and varint decoders; pieces of a verifier.],
 )
 
 The last row bears on the first principle. Language models wrote the source of 36 of those 38 object files from the specifications. The verifier's answer does not depend on who, or what, wrote the code.
@@ -556,18 +558,19 @@ Bob's conclusion from `shown` relies on the verifier being sound: on its never a
   ([Way], [What it rests on], [Where it stands]),
   [*A proof of soundness*], [The verifier is written in Lean 4, and Lean checks a proof that whenever the verifier answers `shown`, the code keeps its contract, its trace line included, on the model of the processor that the instruction tables give. This rests on Lean's own checker and on three standard axioms (`propext`, `Classical.choice`, `Quot.sound`).], [Done for both processors, for conventions of a function's own, and for tail calls: 11 theorems.],
   [*The tables match the processors*], [A row of a table says what one instruction does. A row is compared with a real processor on random instances. The AArch64 rows are also proved in Lean to agree with Google DeepMind's model of that instruction set.], [x86-64: #F.tables.x86_rows rows, #F.tables.x86_rows_run_on_a_processor of them compared with processors. AArch64: #F.tables.arm64_rows rows, all proved to agree with the model, #F.tables.arm64_rows_run_on_a_processor compared with an Apple M6. The rows not compared are those for calls, returns and jumps, and one for the address of data.],
-  [*Reading it, or a second verifier*], [Bob reads the verifier himself, or checks the same proof files with a second verifier written apart from the first.], [Not yet practical. The verifier and the model it speaks of are #commas(F.lean.model_lines) lines of Lean in #F.lean.model_files files. No second verifier exists.],
+  [*Reading it, or a second verifier*], [Bob reads the verifier himself, or checks the same proof files with a second verifier written apart from the first.], [Proof arithmetic steps now carry explicit starting rows (`r ...`), independent of any verifier's internal fact order. An independent pure-Python verifier (`proof-core/verify2.py`, ~940 lines, zero code shared with Lean) verifies the same `.statement` and `.proof` files on both processors for the scalar/byte/loop fragment. Full vector/record coverage in `verify2.py` and shrinking the #commas(F.lean.model_lines)-line Lean core remain in progress.],
   [*A verifier written in Ode*], [The verifier's own machine code, verified against a specification of it. This goes in a circle unless one of the other ways breaks the circle.], [A few small pieces exist; the example of section 2 is one.],
 )
 
-== What This Revision Leaves Out
+== Multi-File Programs and What This Revision Leaves Out
 
-Ode at this revision verifies functions that compute: they are given memory and numbers, and they return. It does not cover:
+Multi-file programs connect files through explicit linked local namespaces (`use alias = "file.ode"`), qualifying imported definitions and functions as `alias.name`. Imports are non-transitive, diamond imports are deduplicated, and splitting a program across files produces the exact same canonical `.ocl` contract and 52-character BLAKE3 identifier as a single file (demonstrated on the 4-file AArch64 BLAKE3 bundle and the two-target routines of Table 3).
 
-- system calls, input and output, threads, or the allocation of memory;
-- programs of several source files: a file is a closed world of names, and there is as yet no form by which one file uses another's functions (the larger programs of section 7 are put together by scripts);
-- a formal grammar: this report gives the forms by example;
-- BLAKE3 for x86-64 wholly in Ode source: five of its kernels are assembled from assembly files (section 7).
+Ode at this revision verifies functions that compute: they are given memory and numbers, and they return. It does not yet cover:
+
+- system calls, input and output, threads, or dynamic memory allocation;
+- full vector and record-layout coverage in the independent second verifier `proof-core/verify2.py`;
+- a complete, machine-checked formal grammar covering every optional clause (Appendix B summarizes the core surface syntax).
 
 == Sizes
 
@@ -606,3 +609,19 @@ Table 6 lists the commands of the tool (`lang/ode_tool.py`), each with its main 
   [`refute SRC SPEC [--cases N]`], [Runs the code on particular cases, looking for one that breaks the contract.],
   [`serve`], [Takes the same requests over a pipe, keeping the tables loaded.],
 )
+
+#heading(level: 1, numbering: none)[Appendix B · Core Surface Syntax]
+
+The core surface syntax of a `.ode` file (parsed by `lang/ode_unified.py` and `kcheck/ode.py`) consists of six top-level forms:
+
+#block(width: 6.80in, fill: ivory, stroke: 0.5pt + rulecol, radius: 2.5pt, inset: (x: 10pt, y: 8pt))[
+  #set par(justify: false, leading: 0.48em)
+  #raw(block: true, "file      ::= ( use_decl | const_decl | layout_decl | def_decl | inline_fn | fn_decl )*\nuse_decl  ::= 'use' IDENT '=' STRING\nconst_decl::= 'const' IDENT '=' expr\nlayout    ::= 'layout' IDENT INT '{' field (',' field)* '}'\ndef_decl  ::= 'def' IDENT '(' params ')' '{' expr '}'\nfn_decl   ::= 'fn' IDENT '(' typed_params ')' clause* '{' target_block+ '}'\nclause    ::= 'requires' expr | 'ensures' target '=' expr | 'returns' expr\n            | 'trace depends on' ('nothing' | expr_list) | 'decreases' expr | 'stack' expr\ntarget    ::= 'for' ('x86_64' | 'arm64') calling_opt '{' stmt* '}'")
+]
+
+#v(0.8em)
+#align(center)[
+  #text(font: "Palatino", size: 8.2pt, fill: slate, style: "italic")[
+    Ode — informally, Object-code Direct Evidence. Revision 10 · November 2026.
+  ]
+]
