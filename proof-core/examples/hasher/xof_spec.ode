@@ -1,0 +1,15 @@
+// BLAKE3 64-byte XOF root output block (both 32-byte halves of the 16-word compression output).
+use b3 = "../hashr_arm64_fast/blake3_spec.ode"
+
+def compress_xof_hi(h, m, t, length, flags) {
+    let s[0] = h ++ [word(b3.IV[0]), word(b3.IV[1]), word(b3.IV[2]), word(b3.IV[3]), lo(t), hi(t), word(length), word(flags)]
+    let w[0] = m
+    let s[r + 1] = b3.round(s[r], w[r])
+    let w[r + 1] = [w[r][b3.PERMUTATION[i]] for i in 0..16]
+    [s[7][i + 8] ^ h[i] for i in 0..8]
+}
+
+def compress_xof_half(h, m, t, length, flags, half) {
+    if half == 0 then b3.compress(h, m, t, length, flags)
+    else compress_xof_hi(h, m, t, length, flags)
+}
