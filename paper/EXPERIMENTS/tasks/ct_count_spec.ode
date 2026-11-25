@@ -1,0 +1,10 @@
+// The number of places at which two runs of bytes of one length differ.
+// (a[i] + 256 - b[i]) % 256 is 0 where the two bytes are the same and 1..255 where they differ;
+// adding 255 and dividing by 256 makes that 0 or 1.
+
+def count_from(a, b, i, acc) {
+    if i >= len(a) then acc
+    else count_from(a, b, i + 1, acc + (((a[i] + 256 - b[i]) % 256) + 255) / 256)
+}
+
+def count_diff(a, b) { count_from(a, b, 0, 0) }

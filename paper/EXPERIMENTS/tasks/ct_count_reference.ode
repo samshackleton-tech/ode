@@ -1,0 +1,82 @@
+// How many bytes of two runs differ; the trace depends on the length alone.
+use cd = "ct_count_spec.ode"
+
+fn ct_count_diff(a: n bytes, b: n bytes, n: number)
+    requires n < 4294967296
+    returns cd.count_diff(a, b)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        reg pa = rdi, pb = rsi, len_r = rdx, idx = rcx, cnt = r10, va = rax, vb = r9, addr = r8
+
+        idx := 0
+        cnt := 0
+        place {
+            name i = idx
+            name c = cnt
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= c
+            fact c <= i
+            fact cd.count_diff(a, b) == cd.count_from(a, b, i, c)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        jae @done
+        mov addr, pa
+        add addr, idx
+        movzx eax, byte ptr [addr]
+        mov addr, pb
+        add addr, idx
+        movzx r9d, byte ptr [addr]
+        add va, 256
+        sub va, vb
+        and va, 255
+        add va, 255
+        shr va, 8
+        add cnt, va
+        add idx, 1
+        jmp @loop
+    @done:
+        mov va, cnt
+        ret
+    }
+    for arm64 {
+        reg pa = x0, pb = x1, len_r = x2, idx = x3, cnt = x4, addr = x5
+        reg vaw = w6, va = x6, vbw = w7, vb = x7, mask = x8
+
+        idx := 0
+        cnt := 0
+        mask := 255
+        place {
+            name i = idx
+            name c = cnt
+            fact 0 <= i
+            fact i <= n
+            fact 0 <= c
+            fact c <= i
+            fact cd.count_diff(a, b) == cd.count_from(a, b, i, c)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        b.hs @done
+        add addr, pa, idx
+        ldrb vaw, [addr, 0]
+        add addr, pb, idx
+        ldrb vbw, [addr, 0]
+        add va, va, 256
+        sub va, va, vb
+        and va, va, mask
+        add va, va, 255
+        lsr va, va, 8
+        add cnt, cnt, va
+        add idx, idx, 1
+        b @loop
+    @done:
+        mov x0, cnt
+        ret
+    }
+}
