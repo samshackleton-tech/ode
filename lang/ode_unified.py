@@ -166,7 +166,7 @@ def is_unified(text):
             has_unified_fn = True
         elif re.match(r"^fn\s+[A-Za-z_]\w*\s*\{", line):
             has_unified_fn = True
-        elif re.match(r"^(const|def|sequence|layout|kind|lemma)\b", line):
+        elif re.match(r"^(use|const|def|sequence|layout|kind|lemma)\b", line):
             has_spec_def = True
         elif re.match(r"^contract\b", line):
             has_contract = True
@@ -278,37 +278,50 @@ def _parse_for_blocks(body_text, fn_name, body_start_line, src):
     return impls
 
 
-def parse_unified(text, src="<ode>"):
-    """Parse a unified `.ode` source file (closed local namespace).
-
-    Returns a dict:
-      - `spec_defs`: list of raw top-level `const`/`def`/`sequence`/`layout`/`kind`/`lemma` blocks
-      - `data`: list of `(arch_or_None, name, [words])`
-      - `inlines`: list of `(arch_or_None, raw_inline_text, start_line)`
-      - `fns`: list of function dicts in source order:
-          {name, symbol, params_text, clauses_text, line, impls: {key: impl_dict}}
-      - `fns_by_name`: {name: fn_dict}
-    """
+def _parse_single_unified(text, src="<ode>"):
+    """Parse one unified `.ode` source file without resolving `use` links."""
+    uses = []
     spec_defs = []
     data = []
     inlines = []
     fns = []
     fns_by_name = {}
     declared_names = {}
+    exports = {}
 
-    def claim(kind_lbl, name, line_no):
+    def claim(kind_lbl, name, line_no, allow_multi_kind=None, symbol=None):
         if name in declared_names:
             prev_kind, prev_line = declared_names[name]
-            raise UnifiedErr(
-                f"{src}: line {line_no}: duplicate name `{name}` ({kind_lbl}); already declared as {prev_kind} on line {prev_line}"
-            )
-        declared_names[name] = (kind_lbl, line_no)
+            if allow_multi_kind is None or prev_kind != allow_multi_kind:
+                raise UnifiedErr(
+                    f"{src}: line {line_no}: duplicate name `{name}` ({kind_lbl}); already declared as {prev_kind} on line {prev_line}"
+                )
+        else:
+            declared_names[name] = (kind_lbl, line_no)
+        if kind_lbl != "use":
+            exports[name] = {"kind": kind_lbl, "symbol": symbol or name}
 
     pos = _skip_ws_and_comments(text, 0)
     n = len(text)
     while pos < n:
         line_no = text.count("\n", 0, pos) + 1
         rest = text[pos:]
+
+        # 0. `use ALIAS = "relative/path.ode"` (explicit linked local namespace)
+        m = re.match(r'^use\s+([A-Za-z_]\w*)\s*=\s*"([^"]+)"\s*(?://[^\n]*)?(?:\n|$)', rest)
+        if m:
+            alias, rel_path = m.group(1), m.group(2)
+            if alias in ("frame", "budget", "reg", "place", "for", "if", "loop", "else", "let"):
+                raise UnifiedErr(f"{src}: line {line_no}: `{alias}` cannot be used as a module alias")
+            claim("use", alias, line_no)
+            uses.append((alias, rel_path, line_no))
+            pos = _skip_ws_and_comments(text, pos + m.end())
+            continue
+        if re.match(r"^use\b", rest):
+            snippet = rest[:50].splitlines()[0]
+            raise UnifiedErr(
+                f'{src}: line {line_no}: expected `use ALIAS = "path.ode"`, got {snippet!r}'
+            )
 
         # 1. `def`, `sequence`, `layout` (brace-delimited spec blocks)
         m = re.match(r"^(def|sequence|layout)\s+([A-Za-z_]\w*)\b", rest)
@@ -318,7 +331,7 @@ def parse_unified(text, src="<ode>"):
             if bopen == -1 or "=" in text[pos + m.end():bopen]:
                 raise UnifiedErr(f"{src}: line {line_no}: `{m.group(1)} {m.group(2)}` body must be enclosed in `{{ ... }}`")
             bclose = _find_matching_brace(text, bopen, src)
-            spec_defs.append(text[pos:bclose + 1])
+            spec_defs.append((m.group(1), m.group(2), text[pos:bclose + 1], line_no))
             pos = _skip_ws_and_comments(text, bclose + 1)
             continue
 
@@ -344,7 +357,7 @@ def parse_unified(text, src="<ode>"):
                 elif ch == "\n" and depth == 0:
                     break
                 i += 1
-            spec_defs.append(text[pos:i].strip())
+            spec_defs.append(("const", m.group(1), text[pos:i].strip(), line_no))
             pos = _skip_ws_and_comments(text, i)
             continue
 
@@ -353,7 +366,9 @@ def parse_unified(text, src="<ode>"):
         if m:
             nl = text.find("\n", pos)
             end = n if nl == -1 else nl
-            spec_defs.append(_strip_line_comment(text[pos:end]).strip())
+            if m.group(1) == "kind":
+                claim("kind", m.group(2), line_no)
+            spec_defs.append((m.group(1), m.group(2), _strip_line_comment(text[pos:end]).strip(), line_no))
             pos = _skip_ws_and_comments(text, end)
             continue
 
@@ -363,6 +378,7 @@ def parse_unified(text, src="<ode>"):
             darch = m.group(1)
             if darch is not None and darch not in TARGETS:
                 raise UnifiedErr(f"{src}: line {line_no}: unsupported `data for {darch}`")
+            claim("data", m.group(2), line_no, allow_multi_kind="data")
             words = [int(w.strip().replace("_", ""), 0) for w in _strip_line_comment(m.group(3)).split(",") if w.strip()]
             data.append((darch, m.group(2), words))
             pos = _skip_ws_and_comments(text, pos + m.end())
@@ -374,6 +390,7 @@ def parse_unified(text, src="<ode>"):
             iarch = m.group(2)
             if iarch is not None and iarch not in TARGETS:
                 raise UnifiedErr(f"{src}: line {line_no}: unsupported `inline fn ... for {iarch}`")
+            claim("inline", m.group(1), line_no, allow_multi_kind="inline")
             bopen = _find_open_brace(text, pos + m.end())
             if bopen == -1:
                 raise UnifiedErr(f"{src}: line {line_no}: `inline fn {m.group(1)}` missing `{{`")
@@ -382,7 +399,7 @@ def parse_unified(text, src="<ode>"):
             raw_hdr = text[pos:bopen]
             if iarch is not None:
                 raw_hdr = re.sub(r"^(inline\s+fn\s+[A-Za-z_]\w*)\s+for\s+\w+", r"\1", raw_hdr, count=1)
-            inlines.append((iarch, raw_hdr + text[bopen:bclose + 1], line_no))
+            inlines.append((iarch, m.group(1), raw_hdr + text[bopen:bclose + 1], line_no))
             pos = _skip_ws_and_comments(text, bclose + 1)
             continue
 
@@ -391,7 +408,7 @@ def parse_unified(text, src="<ode>"):
         if m:
             fname = m.group(1)
             fsym = m.group(2) or fname
-            claim("fn", fname, line_no)
+            claim("fn", fname, line_no, symbol=fsym)
             after_name = _skip_ws_and_comments(text, pos + m.end())
             if after_name >= n or text[after_name] != "(":
                 raise UnifiedErr(
@@ -440,11 +457,431 @@ def parse_unified(text, src="<ode>"):
         raise UnifiedErr(f"{src}: line {line_no}: unexpected top-level item in `.ode`: {snippet!r}")
 
     return {
+        "uses": uses,
         "spec_defs": spec_defs,
         "data": data,
         "inlines": inlines,
         "fns": fns,
         "fns_by_name": fns_by_name,
+        "exports": exports,
+    }
+
+
+def _collect_param_names(params_text):
+    """Extract parameter names from `a: bytes, n: number` or `a, at`."""
+    names = set()
+    if not params_text:
+        return names
+    # Split on top-level commas
+    depth = 0
+    cur = []
+    for ch in params_text:
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            part = "".join(cur).strip()
+            m = re.match(r"^([A-Za-z_]\w*)\b", part)
+            if m:
+                names.add(m.group(1))
+            cur = []
+            continue
+        cur.append(ch)
+    part = "".join(cur).strip()
+    m = re.match(r"^([A-Za-z_]\w*)\b", part)
+    if m:
+        names.add(m.group(1))
+    return names
+
+
+def _collect_local_binders(spec_text, initial=()):
+    """Collect local binder names (`let x =`, `for i in`, `the least/greatest ... k`)."""
+    binders = set(initial)
+    for m in re.finditer(r"\b(?:let|for)\s+([A-Za-z_]\w*)\b", spec_text):
+        binders.add(m.group(1))
+    for m in re.finditer(r"\bthe\s+(?:least|greatest)\s+(?:number|power\s+of\s+two)\s+([A-Za-z_]\w*)\b", spec_text):
+        binders.add(m.group(1))
+    return binders
+
+
+def _rewrite_spec_text(text, mod_prefix, mod_exports, uses_map, local_binders, src, base_line):
+    """Token-aware rewriter for specification / contract / `place { ... }` text.
+
+    - Rewrites `alias.member` (where `alias` is in `uses_map` and not shadowed by a local binder)
+      to the target module's mangled identifier, refusing unknown members loudly.
+    - Refuses bare `alias` (without `.member`) when not shadowed by a local binder.
+    - For non-root modules (`mod_prefix != ""`), rewrites bare references to `mod_exports`
+      (when not preceded by `.` and not in `local_binders`) to `mod_prefix + name`.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    prev_was_dot = False
+    while i < n:
+        ch = text[i]
+        if ch == "/" and i + 1 < n and text[i + 1] == "/":
+            nl = text.find("\n", i)
+            end = n if nl == -1 else nl + 1
+            out.append(text[i:end])
+            i = end
+            prev_was_dot = False
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(text[i:j])
+            i = j
+            prev_was_dot = False
+            continue
+        if ch.isalpha() or ch == "_":
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            ident = text[i:j]
+            line_no = base_line + text.count("\n", 0, i)
+            if not prev_was_dot and ident in uses_map and ident not in local_binders:
+                if j < n and text[j] == "." and j + 1 < n and (text[j + 1].isalpha() or text[j + 1] == "_"):
+                    k = j + 2
+                    while k < n and (text[k].isalnum() or text[k] == "_"):
+                        k += 1
+                    member = text[j + 1:k]
+                    dep = uses_map[ident]
+                    if member not in dep["exports"]:
+                        avail = ", ".join(sorted(dep["exports"])) or "(none)"
+                        raise UnifiedErr(
+                            f"{src}: line {line_no}: `{ident}.{member}` not found in `{dep['rel']}` (exports: {avail})"
+                        )
+                    out.append(dep["prefix"] + member)
+                    i = k
+                    prev_was_dot = False
+                    continue
+                raise UnifiedErr(
+                    f"{src}: line {line_no}: module alias `{ident}` must be qualified as `{ident}.<name>`"
+                )
+            # Do not mangle record-literal field keys (`{ field: ... }`) or typed param names (`x: bytes`).
+            k_ws = j
+            while k_ws < n and text[k_ws] in " \t":
+                k_ws += 1
+            followed_by_colon = k_ws < n and text[k_ws] == ":" and (k_ws + 1 >= n or text[k_ws + 1] != "=")
+            if not prev_was_dot and not followed_by_colon and mod_prefix and ident in mod_exports and ident not in local_binders:
+                out.append(mod_prefix + ident)
+            else:
+                out.append(ident)
+            i = j
+            prev_was_dot = False
+            continue
+        out.append(ch)
+        if ch == ".":
+            prev_was_dot = True
+        elif not ch.isspace():
+            prev_was_dot = False
+        i += 1
+    return "".join(out)
+
+
+def _rewrite_spec_decl(kind, name, raw_text, mod_prefix, mod_exports, uses_map, src, base_line):
+    """Rewrite one top-level `const`/`def`/`sequence`/`layout`/`kind`/`lemma` declaration."""
+    if kind in ("def", "sequence"):
+        popen = raw_text.find("(")
+        bopen = _find_open_brace(raw_text, 0)
+        params = set()
+        if popen != -1 and (bopen == -1 or popen < bopen):
+            pclose = _find_matching_paren(raw_text, popen, src)
+            params = _collect_param_names(raw_text[popen + 1:pclose])
+            # For `sequence NAME(args) { h[0] = ... }`, also keep the sequence state name local.
+            hdr = raw_text[:pclose + 1]
+            body = raw_text[pclose + 1:]
+            if mod_prefix:
+                hdr = re.sub(
+                    rf"^({kind}\s+){re.escape(name)}\b",
+                    rf"\g<1>{mod_prefix}{name}",
+                    hdr,
+                    count=1,
+                )
+            binders = _collect_local_binders(body, params)
+            if kind == "sequence":
+                m_st = re.search(r"\{\s*([A-Za-z_]\w*)\s*\[", body)
+                if m_st:
+                    binders.add(m_st.group(1))
+            return hdr + _rewrite_spec_text(body, mod_prefix, mod_exports, uses_map, binders, src, base_line)
+    if kind == "layout":
+        bopen = _find_open_brace(raw_text, 0)
+        hdr = raw_text[:bopen + 1]
+        body = raw_text[bopen + 1:]
+        if mod_prefix:
+            hdr = re.sub(rf"^(layout\s+){re.escape(name)}\b", rf"\g<1>{mod_prefix}{name}", hdr, count=1)
+        # Inside layout `{ field: TYPE, ... }`, rewrite only type/size expressions after `:`.
+        lines = body.split("\n")
+        rewritten = []
+        for idx, ln in enumerate(lines):
+            if ":" in ln:
+                left, right = ln.split(":", 1)
+                right = _rewrite_spec_text(right, mod_prefix, mod_exports, uses_map, set(), src, base_line + idx)
+                rewritten.append(left + ":" + right)
+            else:
+                rewritten.append(ln)
+        return hdr + "\n".join(rewritten)
+    if kind == "const":
+        eq = raw_text.find("=")
+        hdr = raw_text[:eq + 1]
+        rhs = raw_text[eq + 1:]
+        if mod_prefix:
+            hdr = re.sub(rf"^(const\s+){re.escape(name)}\b", rf"\g<1>{mod_prefix}{name}", hdr, count=1)
+        binders = _collect_local_binders(rhs)
+        return hdr + _rewrite_spec_text(rhs, mod_prefix, mod_exports, uses_map, binders, src, base_line)
+    # `kind` / `lemma`
+    binders = _collect_local_binders(raw_text)
+    return _rewrite_spec_text(raw_text, mod_prefix, mod_exports, uses_map, binders, src, base_line)
+
+
+def _rewrite_asm_line(line, mod_prefix, mod_exports, uses_map, src, line_no):
+    """Rewrite one non-place assembly / inline-body line for linked local namespaces."""
+    # Split off trailing `// ...` comment so comments are untouched.
+    code = _strip_line_comment(line)
+    comment = line[len(code):]
+
+    # 1. Replace every `alias.member` where `alias in uses_map`.
+    def repl_qual(m):
+        alias, member = m.group(1), m.group(2)
+        if alias not in uses_map:
+            return m.group(0)
+        dep = uses_map[alias]
+        if member not in dep["exports"]:
+            avail = ", ".join(sorted(dep["exports"])) or "(none)"
+            raise UnifiedErr(
+                f"{src}: line {line_no}: `{alias}.{member}` not found in `{dep['rel']}` (exports: {avail})"
+            )
+        exp = dep["exports"][member]
+        if exp["kind"] == "fn":
+            return dep["prefix"] + exp["symbol"]
+        return dep["prefix"] + member
+
+    code = re.sub(r"(?<!\.)\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", repl_qual, code)
+
+    # 2. For non-root modules, mangle local `fn` call/tail-call targets, local `inline fn` calls,
+    #    and local `data` symbol references without ever touching mnemonics or registers.
+    if mod_prefix:
+        # `call target` / `bl target` / `jmp target` / `b target`
+        m = re.match(r"^(\s*(?:call|bl|jmp|b)\s+)([A-Za-z_]\w*)(\s*)$", code)
+        if m and m.group(2) in mod_exports and mod_exports[m.group(2)]["kind"] == "fn":
+            code = m.group(1) + mod_prefix + mod_exports[m.group(2)]["symbol"] + m.group(3)
+        else:
+            # Local `inline fn` call `NAME(...)`
+            m_inl = re.match(r"^(\s*)([A-Za-z_]\w*)(\s*\(.*\)\s*)$", code)
+            if m_inl and m_inl.group(2) in mod_exports and mod_exports[m_inl.group(2)]["kind"] == "inline":
+                code = m_inl.group(1) + mod_prefix + m_inl.group(2) + m_inl.group(3)
+            else:
+                # Local `data` references in operand positions (after whitespace/punctuation, not mnemonic at start)
+                local_data = {k for k, v in mod_exports.items() if v["kind"] == "data"}
+                if local_data:
+                    m_op = re.match(r"^(\s*[A-Za-z_][\w.]*\s+)(.*)$", code)
+                    if m_op:
+                        head, ops = m_op.group(1), m_op.group(2)
+                        pat = r"(?<!\.)\b(" + "|".join(re.escape(k) for k in sorted(local_data, key=len, reverse=True)) + r")\b"
+                        ops = re.sub(pat, lambda mm: mod_prefix + mm.group(1), ops)
+                        code = head + ops
+    return code + comment
+
+
+def _rewrite_asm_lines(lines, first_line, fn_params, mod_prefix, mod_exports, uses_map, src):
+    """Rewrite assembly lines of a `for <arch>` block, routing `place { ... }` through spec rewriting."""
+    out = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        ln = lines[i]
+        stripped = _strip_line_comment(ln).strip()
+        if re.match(r"^place\s*\{", stripped):
+            # Gather multi-line `place { ... }` block
+            block_lines = [ln]
+            depth = stripped.count("{") - stripped.count("}")
+            j = i + 1
+            while depth > 0 and j < n:
+                s2 = _strip_line_comment(lines[j])
+                depth += s2.count("{") - s2.count("}")
+                block_lines.append(lines[j])
+                j += 1
+            joined = "\n".join(block_lines)
+            bopen = joined.find("{")
+            hdr = joined[:bopen + 1]
+            rest = joined[bopen + 1:]
+            binders = _collect_local_binders(rest, fn_params)
+            rew = hdr + _rewrite_spec_text(rest, mod_prefix, mod_exports, uses_map, binders, src, first_line + i)
+            out.extend(rew.split("\n"))
+            i = j
+            continue
+        out.append(_rewrite_asm_line(ln, mod_prefix, mod_exports, uses_map, src, first_line + i))
+        i += 1
+    return out
+
+
+def parse_unified(text, src="<ode>", resolve_uses=True):
+    """Parse a unified `.ode` source file (closed local namespace) and resolve any `use` links.
+
+    Returns a dict:
+      - `spec_defs`: list of raw top-level `const`/`def`/`sequence`/`layout`/`kind`/`lemma` blocks
+      - `data`: list of `(arch_or_None, name, [words])`
+      - `inlines`: list of `(arch_or_None, raw_inline_text, start_line)`
+      - `fns`: list of function dicts in topological source order (dependencies before root):
+          {name, symbol, params_text, clauses_text, line, impls: {key: impl_dict}}
+      - `fns_by_name`: {name: fn_dict}
+      - `root_fns`: list of function dicts declared directly in the root file
+      - `pretty_names`: {mangled_name: "alias.name"} for human-readable glossaries
+    """
+    root_parsed = _parse_single_unified(text, src)
+    if not resolve_uses or not root_parsed["uses"]:
+        return {
+            "spec_defs": [raw for _, _, raw, _ in root_parsed["spec_defs"]],
+            "data": root_parsed["data"],
+            "inlines": [(arch, raw, lno) for arch, _, raw, lno in root_parsed["inlines"]],
+            "fns": root_parsed["fns"],
+            "fns_by_name": root_parsed["fns_by_name"],
+            "root_fns": list(root_parsed["fns"]),
+            "pretty_names": {},
+        }
+
+    if not os.path.isfile(src):
+        raise UnifiedErr(f"{src}: `use` requires a source file path on disk")
+
+    root_real = os.path.realpath(src)
+    mods = {}      # realpath -> module record
+    order = []     # realpaths in post-order (dependencies before dependents, root last)
+    visiting = []  # stack of realpaths for cycle detection
+
+    def load_mod(path, raw_text=None):
+        real = os.path.realpath(path)
+        if real in visiting:
+            cyc = " -> ".join(os.path.basename(p) for p in visiting[visiting.index(real):] + [real])
+            raise UnifiedErr(f"{path}: circular `use` dependency: {cyc}")
+        if real in mods:
+            return mods[real]
+        visiting.append(real)
+        if raw_text is None:
+            if not os.path.isfile(path):
+                raise UnifiedErr(f"cannot open `use`d file `{path}`")
+            with open(path, "r", encoding="utf-8") as f:
+                raw_text = f.read()
+        parsed = _parse_single_unified(raw_text, path)
+        base_dir = os.path.dirname(os.path.abspath(path))
+        dep_map = {}
+        for alias, rel, lno in parsed["uses"]:
+            dep_path = os.path.normpath(os.path.join(base_dir, rel))
+            if not os.path.isfile(dep_path):
+                raise UnifiedErr(f'{path}: line {lno}: `use {alias} = "{rel}"`: file not found ({dep_path})')
+            dep_mod = load_mod(dep_path)
+            dep_map[alias] = dep_mod
+        visiting.pop()
+        rec = {
+            "path": path,
+            "real": real,
+            "rel": os.path.basename(path),
+            "parsed": parsed,
+            "exports": parsed["exports"],
+            "dep_map": dep_map,
+            "prefix": "",
+        }
+        mods[real] = rec
+        order.append(real)
+        return rec
+
+    load_mod(src, raw_text=text)
+
+    # Assign deterministic prefixes: imported modules get `m1__`, `m2__`, ...; root gets `""`.
+    idx = 1
+    for real in order:
+        if real != root_real:
+            mods[real]["prefix"] = f"m{idx}__"
+            idx += 1
+
+    # Record readable glossary names (`m1__foo` -> `alias.foo`) for root's direct uses.
+    pretty_names = {}
+    root_mod = mods[root_real]
+    for alias, dep in root_mod["dep_map"].items():
+        for exp_name in dep["exports"]:
+            pretty_names[dep["prefix"] + exp_name] = f"{alias}.{exp_name}"
+
+    merged_spec_defs = []
+    merged_data = []
+    merged_inlines = []
+    merged_fns = []
+    merged_fns_by_name = {}
+    root_fns = []
+
+    for real in order:
+        mod = mods[real]
+        p = mod["parsed"]
+        pref = mod["prefix"]
+        exps = mod["exports"]
+        umap = mod["dep_map"]
+        msrc = mod["path"]
+
+        for kind, name, raw_blk, lno in p["spec_defs"]:
+            merged_spec_defs.append(
+                _rewrite_spec_decl(kind, name, raw_blk, pref, exps, umap, msrc, lno)
+            )
+
+        for darch, dname, words in p["data"]:
+            merged_data.append((darch, pref + dname, words))
+
+        for iarch, iname, raw_inl, lno in p["inlines"]:
+            ilines = raw_inl.split("\n")
+            if pref:
+                ilines[0] = re.sub(
+                    rf"^(inline\s+fn\s+){re.escape(iname)}\b",
+                    rf"\g<1>{pref}{iname}",
+                    ilines[0],
+                    count=1,
+                )
+            rew_body = [ilines[0]] + [
+                _rewrite_asm_line(ln, pref, exps, umap, msrc, lno + k)
+                for k, ln in enumerate(ilines[1:], start=1)
+            ]
+            merged_inlines.append((iarch, "\n".join(rew_body), lno))
+
+        for fn_rec in p["fns"]:
+            fn_params = _collect_param_names(fn_rec["params_text"])
+            new_name = pref + fn_rec["name"]
+            new_sym = pref + fn_rec["symbol"]
+            rew_params = _rewrite_spec_text(fn_rec["params_text"], pref, exps, umap, fn_params, msrc, fn_rec["line"])
+            cl_binders = _collect_local_binders(fn_rec["clauses_text"], fn_params)
+            rew_clauses = _rewrite_spec_text(fn_rec["clauses_text"], pref, exps, umap, cl_binders, msrc, fn_rec["line"])
+            new_impls = {}
+            for k, im in fn_rec["impls"].items():
+                rew_extra = [
+                    _rewrite_spec_text(ec, pref, exps, umap, _collect_local_binders(ec, fn_params), msrc, im["first_line"])
+                    for ec in im["extra_clauses"]
+                ]
+                rew_lines = _rewrite_asm_lines(im["lines"], im["first_line"], fn_params, pref, exps, umap, msrc)
+                new_impls[k] = dict(im, extra_clauses=rew_extra, lines=rew_lines)
+            new_fn = {
+                "name": new_name,
+                "symbol": new_sym,
+                "params_text": rew_params,
+                "clauses_text": rew_clauses,
+                "line": fn_rec["line"],
+                "impls": new_impls,
+            }
+            merged_fns.append(new_fn)
+            merged_fns_by_name[new_name] = new_fn
+            if real == root_real:
+                root_fns.append(new_fn)
+
+    return {
+        "spec_defs": merged_spec_defs,
+        "data": merged_data,
+        "inlines": merged_inlines,
+        "fns": merged_fns,
+        "fns_by_name": merged_fns_by_name,
+        "root_fns": root_fns,
+        "pretty_names": pretty_names,
     }
 
 

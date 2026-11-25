@@ -803,14 +803,19 @@ def canonicalize_ode(ode_text, fn_name=None, target=None, src="<ode>"):
     import ode_unified
     parsed = ode_unified.parse_unified(ode_text, src=src)
     if fn_name is None:
-        if len(parsed["fns"]) != 1:
+        root_fns = parsed.get("root_fns", parsed["fns"])
+        if len(root_fns) != 1:
             raise ValueError(
-                f"{src}: expected 1 `fn` when fn_name is omitted, found {len(parsed['fns'])}: "
-                f"{', '.join(f['name'] for f in parsed['fns'])}"
+                f"{src}: expected 1 `fn` when fn_name is omitted, found {len(root_fns)}: "
+                f"{', '.join(f['name'] for f in root_fns)}"
             )
-        fn_name = parsed["fns"][0]["name"]
+        fn_name = root_fns[0]["name"]
     spec_text, sym = ode_unified.extract_spec(parsed, target_key=target, fn_name=fn_name, include_calling=False, src=src)
-    return canonicalize(spec_text, contract_name=sym)
+    res = canonicalize(spec_text, contract_name=sym)
+    pretty = parsed.get("pretty_names") or {}
+    if pretty:
+        res["glossary"] = {k: pretty.get(v, v) for k, v in res["glossary"].items()}
+    return res
 
 
 def canonicalize_file(path, contract_name=None, target=None):
