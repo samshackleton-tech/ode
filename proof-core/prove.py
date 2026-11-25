@@ -138,13 +138,16 @@ def row_text(c, k):
     return " ".join([str(k)] + [str(c.get(f"v{i:05d}", 0)) for i in range(top + 1)])
 
 
-def proof_text(proof, given):
-    """A proof of arithmetic as the verifier reads it: the rows it starts from by their numbers among the rows
-    the verifier holds (`given`, in its order), then the steps."""
+def proof_text(proof, given, raw_given=None):
+    """A proof of arithmetic as the verifier reads it: the starting rows (emitted explicitly as `r ...`
+    lines so the proof does not depend on any verifier's internal fact-list order), then the steps."""
     starts, steps = proof
     at = {}
     for number, f in enumerate(given): at.setdefault((frozenset(dict(f.c).items()), f.k), number)
-    out = ["p " + " ".join(str(at[(frozenset((n, v) for n, v in c.items() if v), k)]) for c, k in starts)]
+    if os.environ.get("ODE_INDEX_PROOF") == "1" or raw_given is None:
+        out = ["p " + " ".join(str(at[(frozenset((n, v) for n, v in c.items() if v), k)]) for c, k in starts)]
+    else:
+        out = ["r " + raw_given[at[(frozenset((n, v) for n, v in c.items() if v), k)]] for c, k in starts]
     rows = [(dict(c), k) for c, k in starts]
     for i, a, j, b in steps:
         g = 0
@@ -438,12 +441,16 @@ class Prover:
                 self.last = said; self.last_proof = proof; self.note(proof, said); return None
             lines = said.split("\n")
             what = lines[0][5:]
-            facts = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("f ")]
-            goals = [lin([int(x) for x in l.split()[1:]]) for l in lines if l.startswith("g ")]
+            raw_facts = [l[2:].strip() for l in lines if l.startswith("f ")]
+            raw_goals = [l[2:].strip() for l in lines if l.startswith("g ")]
+            facts = [lin([int(x) for x in s.split()]) for s in raw_facts]
+            goals = [lin([int(x) for x in s.split()]) for s in raw_goals]
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
                 if p is None: self.last = said; self.last_proof = proof; self.note(proof, said + ' (no proof found)'); return None
-                proof = proof + proof_text(p, [negation(goals[0])] + facts)
+                g_nums = [int(x) for x in raw_goals[0].split()]
+                neg_raw = " ".join([str(-1 - g_nums[0])] + [str(-x) for x in g_nums[1:]])
+                proof = proof + proof_text(p, [negation(goals[0])] + facts, [neg_raw] + raw_facts)
             elif what == "branch":
                 p = refutation(facts, 0)                       # (the newest fact is first)
                 if p is None:
@@ -457,7 +464,7 @@ class Prover:
                             raise NoPlace(self.last)
                     proof = proof + ["t live"]
                 else:
-                    proof = proof + ["t dead"] + proof_text(p, facts)
+                    proof = proof + ["t dead"] + proof_text(p, facts, raw_facts)
             elif what == "below":                              # is a - b below zero: `lt`, or not: `ge`
                 d = goals[0]
                 if refutation(facts + [d]): proof = proof + ["t lt"]

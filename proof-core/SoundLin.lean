@@ -226,6 +226,17 @@ theorem entailAs_sound {what : String} {facts : List Row} {g : Row} {items : Ite
         | head => rw [holds_iff]; simp only [negation, ev_sub, ev_const]; omega
         | tail _ hm => exact hf row hm
       next => exact (refuse_ok h2).elim
+    next starts steps =>
+      split at h2
+      next hr =>
+        apply Classical.byContradiction
+        intro hn
+        apply refutes_sound _ _ _ hr ρ
+        intro row hrow
+        cases hrow with
+        | head => rw [holds_iff]; simp only [negation, ev_sub, ev_const]; omega
+        | tail _ hm => exact hf row hm
+      next => exact (refuse_ok h2).elim
     next => exact (refuse_ok h2).elim
     next => exact (need_ok h2).elim
 
@@ -413,6 +424,19 @@ theorem assume_sound {s : Sym} {rows : List Row} {items : Items} {res : Option S
           next =>
             obtain ⟨item2, rest2, _, h3⟩ := V.bind_ok h2
             split at h3
+            next starts steps =>
+              split at h3
+              next hr =>
+                have := V.pure_ok h3
+                injection this with hc _
+                subst hc
+                intro all
+                apply refutes_sound _ _ _ hr ρ
+                intro row hrow
+                cases List.mem_append.mp hrow with
+                | inl m => exact all row m
+                | inr m => exact hf row m
+              next => exact (refuse_ok h3).elim
             next starts steps =>
               split at h3
               next hr =>

@@ -82,6 +82,7 @@ def among (facts : List Row) (g : Row) : Bool := facts.any fun f => Lin.same f g
 inductive Item where
   | tag (name : String) (n : Nat)
   | proof (starts : List Nat) (steps : List Step)   -- of arithmetic: the rows it starts from, by their numbers among those the verifier holds
+  | proofRows (starts : List Row) (steps : List Step) -- of arithmetic: the rows it starts from, given explicitly (independent of fact order)
   | know (g : Row)                                  -- a row for the verifier to show from the facts, and then to keep among them
   | clear (pc : Nat) (reg : Nat) (e : SExpr)        -- at `pc`, prove register `reg` equals `e` (allowed by `traceClean`) and clear its mark
   deriving Inhabited
@@ -154,6 +155,9 @@ def entailAs (what : String) (facts : List Row) (g : Row) : V Unit :=
     match ← pop with
     | some (.proof starts steps) =>
       if Arithmetic.refutes (negation g :: facts) (pick (negation g :: facts) starts) steps then pure ()
+      else refuse "a proof of arithmetic does not show what is to be shown"
+    | some (.proofRows starts steps) =>
+      if Arithmetic.refutes (negation g :: facts) starts steps then pure ()
       else refuse "a proof of arithmetic does not show what is to be shown"
     | some _ => refuse "a proof of arithmetic is expected"
     | none => need what facts [g]
@@ -1724,6 +1728,9 @@ def assume (s : Sym) (rows : List Row) : V (Option Sym) :=
         match ← pop with
         | some (.proof starts steps) =>
           if Arithmetic.refutes (rows ++ s.facts) (pick (rows ++ s.facts) starts) steps then pure none
+          else refuse "a proof of arithmetic does not show that no input goes this way"
+        | some (.proofRows starts steps) =>
+          if Arithmetic.refutes (rows ++ s.facts) starts steps then pure none
           else refuse "a proof of arithmetic does not show that no input goes this way"
         | _ => refuse "a proof of arithmetic is expected"
       else refuse "live or dead is expected"

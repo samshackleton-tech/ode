@@ -45,6 +45,7 @@ structure Job where
   defs : List Def := []
   cur : Option String := none       -- in the proof: the function the lines are for
   starts : List Nat := []
+  startRows : List Row := []
   steps : List Step := []
 
 def words (line : String) : List String := (line.splitOn " ").filter (· ≠ "")
@@ -281,6 +282,9 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | "p" :: numbers => match numbers.mapM String.toNat? with
     | some ns => pure { t with starts := t.starts ++ ns }
     | none => throw s!"cannot read {line}"
+  | "r" :: constant :: coefficients => match readInt constant, coefficients.mapM readInt with
+    | some c, some cs => pure { t with startRows := t.startRows ++ [⟨cs, c⟩] }
+    | _, _ => throw s!"cannot read {line}"
   | "s" :: numbers => match numbers.mapM String.toNat? with
     | some [i, a, j, b, d] => pure { t with steps := t.steps ++ [⟨i, a, j, b, d⟩] }
     | _ => throw s!"cannot read {line}"
@@ -290,6 +294,7 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     let e ← readSExpr (rest line 3)
     onCur fun g => pure { g with proof := g.proof ++ [.clear pc r e] }
   | ["q"] => do
-    let t' ← onCur fun g => pure { g with proof := g.proof ++ [.proof t.starts t.steps] }
-    pure { t' with starts := [], steps := [] }
+    let item : Item := if t.startRows.isEmpty then .proof t.starts t.steps else .proofRows t.startRows t.steps
+    let t' ← onCur fun g => pure { g with proof := g.proof ++ [item] }
+    pure { t' with starts := [], startRows := [], steps := [] }
   | _ => throw s!"cannot read {line}"
