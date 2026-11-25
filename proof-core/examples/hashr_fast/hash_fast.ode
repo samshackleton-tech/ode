@@ -167,10 +167,202 @@ fn chunk_node_fast as "b3l_chunk_node_fast" {
 //   - `len == 64`:   12-instruction ZERO-COPY tail-call fast path! Tail-jumps directly into
 //                    `compress_in_place` on `input` (zero stack adjustment, zero pushes/pops,
 //                    zero stack block copy, zero `call`/`ret` round-trip!).
+// Fast 16-way AVX-512 path for 2..16 chunks (1,025 .. 16,384 bytes): calls `blake3_servil_avx512_k16`
+// (16 lanes instead of 32), cutting 4 KiB..16 KiB work in half.
+fn hashr_k16 as "b3l_hashr_k16" {
+  push rbx
+  push rbp
+  push r12
+  push r13
+  push r14
+  push r15
+  sub rsp, 792
+  mov rbx, rdi
+  mov rbp, rsi
+  mov r12, rdx
+  mov r13, rcx
+  mov r14, r8
+
+  // kf.key = key[0..32], kf.flags = flags
+  movups xmm0, xmmword ptr [r13 + 0]
+  movups xmmword ptr [rsp + 0], xmm0
+  movups xmm0, xmmword ptr [r13 + 16]
+  movups xmmword ptr [rsp + 16], xmm0
+  mov qword ptr [rsp + 32], r14
+
+  // whole = len >> 10
+  mov r15, r12
+  shr r15, 10
+
+  // Fill ptrs[0..16] at [rsp + 112]: pre-fill all 16 with `input`, then overwrite
+  // 1..whole with `input + i*1024` (early exit at `whole`: linear paths, zero loop overhead).
+  mov qword ptr [rsp + 112], rbp
+  mov qword ptr [rsp + 120], rbp
+  mov qword ptr [rsp + 128], rbp
+  mov qword ptr [rsp + 136], rbp
+  mov qword ptr [rsp + 144], rbp
+  mov qword ptr [rsp + 152], rbp
+  mov qword ptr [rsp + 160], rbp
+  mov qword ptr [rsp + 168], rbp
+  mov qword ptr [rsp + 176], rbp
+  mov qword ptr [rsp + 184], rbp
+  mov qword ptr [rsp + 192], rbp
+  mov qword ptr [rsp + 200], rbp
+  mov qword ptr [rsp + 208], rbp
+  mov qword ptr [rsp + 216], rbp
+  mov qword ptr [rsp + 224], rbp
+  mov qword ptr [rsp + 232], rbp
+  mov rax, rbp
+  cmp r15, 2
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 120], rax
+  cmp r15, 3
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 128], rax
+  cmp r15, 4
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 136], rax
+  cmp r15, 5
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 144], rax
+  cmp r15, 6
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 152], rax
+  cmp r15, 7
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 160], rax
+  cmp r15, 8
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 168], rax
+  cmp r15, 9
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 176], rax
+  cmp r15, 10
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 184], rax
+  cmp r15, 11
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 192], rax
+  cmp r15, 12
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 200], rax
+  cmp r15, 13
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 208], rax
+  cmp r15, 14
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 216], rax
+  cmp r15, 15
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 224], rax
+  cmp r15, 16
+  jb @p16_done
+  add rax, 1024
+  mov qword ptr [rsp + 232], rax
+@p16_done:
+
+  // kp = flags | 0x40020100 (CHUNK_START=1, CHUNK_END=2, len=64)
+  mov r8, r14
+  or r8, 1073873152
+  lea rdi, [rsp + 112]
+  mov rsi, 16
+  lea rdx, [rsp + 0]
+  mov rcx, 0
+  lea r9, [rsp + 240]
+  call blake3_servil_avx512_k16
+
+  // c = ((len - 1) >> 10) + 1 (2 <= c <= 16); greatest power of two k < c (k in {1, 2, 4, 8})
+  mov r10, r12
+  sub r10, 1
+  shr r10, 10
+  add r10, 1
+  mov rax, 1
+  cmp r10, 3
+  jb @k_done
+  mov rax, 2
+  cmp r10, 5
+  jb @k_done
+  mov rax, 4
+  cmp r10, 9
+  jb @k_done
+  mov rax, 8
+@k_done:
+  mov qword ptr [rsp + 752], rax
+  mov rdx, rax
+  shl rdx, 10
+  mov qword ptr [rsp + 760], rdx
+
+  // b3l_take(blk, input, wn, kf, 0, cvs)
+  lea rdi, [rsp + 48]
+  mov rsi, rbp
+  lea rcx, [rsp + 0]
+  mov r8, 0
+  lea r9, [rsp + 240]
+  call b3l_take
+
+  // b3l_take(blk + 32, input + wn, len - wn, kf, k, cvs + (k << 5))
+  lea rdi, [rsp + 80]
+  mov rdx, qword ptr [rsp + 760]
+  mov rsi, rbp
+  add rsi, rdx
+  mov rax, r12
+  sub rax, rdx
+  mov rdx, rax
+  lea rcx, [rsp + 0]
+  mov r8, qword ptr [rsp + 752]
+  lea r9, [rsp + 240]
+  mov rax, r8
+  shl rax, 5
+  add r9, rax
+  call b3l_take
+
+  // copy key -> out, then compress(out, blk, 64, 0, flags | PARENT | ROOT)
+  movups xmm0, xmmword ptr [r13 + 0]
+  movups xmmword ptr [rbx + 0], xmm0
+  movups xmm0, xmmword ptr [r13 + 16]
+  movups xmmword ptr [rbx + 16], xmm0
+  mov r8, r14
+  or r8, 4
+  or r8, 8
+  mov rdi, rbx
+  lea rsi, [rsp + 48]
+  mov rdx, 64
+  mov rcx, 0
+  call blake3_servil_compress_in_place_avx512
+
+  add rsp, 792
+  pop r15
+  pop r14
+  pop r13
+  pop r12
+  pop rbp
+  pop rbx
+  ret
+}
+
+// Fast top-level `b3l_hashr`:
+//   - `len == 64`:  ZERO stack frame, ZERO callee-saved pushes/pops, ZERO block copy: copies the
+//                   32-byte key into `out`, sets `flags |= 1|2|8`, sets `t = 0`, and tail-jumps
+//                   straight into `blake3_servil_compress_in_place_{avx512,sse41}` (`jmp`).
 //   - `len <= 1024` (other than 64): ZERO callee-saved pushes/pops in `hashr`, 136-byte stack
 //                    (vs 1,672 B!), calls `b3l_chunk_node_fast` (which tail-jumps into
 //                    `b3l_pad_fast` with `stack 0` for `len <= 64`) + `b3l_node_out`.
-//   - `len > 1024`:  1-instruction tail jump to `b3l_hashr_long` (full AVX-512 32-way / 128-KiB tree).
+//   - `1025..16384` (AVX-512): tail-jump `jmp b3l_hashr_k16` (16-lane AVX-512 `k16`).
+//   - `len > 16384` (or non-AVX-512 `len > 1024`): tail-jump `jmp b3l_hashr_long`.
 fn hashr_fast as "b3l_hashr" {
   cmp rdx, 64
   jne @not64
@@ -210,5 +402,11 @@ fn hashr_fast as "b3l_hashr" {
   ret
 
 @over1024:
+  cmp r9, 5
+  jne @go_long
+  cmp rdx, 16385
+  jae @go_long
+  jmp b3l_hashr_k16
+@go_long:
   jmp b3l_hashr_long
 }

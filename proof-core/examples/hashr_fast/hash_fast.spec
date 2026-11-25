@@ -23,6 +23,26 @@ contract b3l_chunk_node_fast(nd: node120, input: len bytes, len: number, t: numb
     needs avx512 if plat == 5
 }
 
+contract blake3_servil_avx512_k16(inputs: 16 inputs, n: number, key: cv, t: counter, packed: bytes flags start end length, out: 16 cvs) {
+    requires n >= 1
+    requires no_overlap(inputs, key, out)
+    ensures out[i] = chunk(key, t + i, flags, start, end, length, n, inputs[i]) for i in 0..16
+    trace depends on n
+    stack 4096
+    needs avx512
+}
+
+contract b3l_hashr_k16(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte) {
+    requires no_overlap(out, input, key)
+    requires len >= 1025
+    requires len <= 16384
+    ensures out = bytes_of(hash_words(words(key), flags, input))
+    trace depends on len, flags
+    stack 6000
+    needs sse41
+    needs avx512
+}
+
 contract b3l_hashr_long(out: 32 bytes, input: len bytes, len: number, key: 32 bytes, flags: byte, plat: any) {
     requires no_overlap(out, input, key)
     ensures out = bytes_of(hash_words(words(key), flags, input))

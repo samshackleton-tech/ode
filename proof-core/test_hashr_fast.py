@@ -58,11 +58,17 @@ class HashrFastTests(unittest.TestCase):
             with open(long_o, "wb") as f:
                 f.write(long_elf)
 
+            k16_o = os.path.join(d, "k16.o"); odec.build(os.path.join(FAST, "k16.ode"), "k16", k16_o)
             pad_o = os.path.join(d, "pad_fast.o"); odec.build(src, "pad_fast", pad_o)
             chk_o = os.path.join(d, "chunk_node_fast.o"); odec.build(src, "chunk_node_fast", chk_o)
+            hk16_o = os.path.join(d, "hashr_k16.o"); odec.build(src, "hashr_k16", hk16_o)
             hsh_o = os.path.join(d, "hashr_fast.o"); odec.build(src, "hashr_fast", hsh_o)
 
-            order17 = prove_fast.KEPT_INNER + ["b3l_hashr_long", "b3l_pad_fast", "b3l_chunk_node_fast", "b3l_hashr"]
+            order19 = (
+                prove_fast.KEPT_INNER
+                + ["blake3_servil_avx512_k16", "b3l_hashr_long", "b3l_pad_fast",
+                   "b3l_chunk_node_fast", "b3l_hashr_k16", "b3l_hashr"]
+            )
             unit_files = [
                 os.path.join(bdir, "one_sse41.o"),
                 os.path.join(bdir, "one.o"),
@@ -76,9 +82,11 @@ class HashrFastTests(unittest.TestCase):
                 os.path.join(bdir, "take.o"),
                 os.path.join(bdir, "part32.o"),
                 os.path.join(bdir, "subtree.o"),
+                k16_o,
                 long_o,
                 pad_o,
                 chk_o,
+                hk16_o,
                 hsh_o,
             ]
             unit_elfs = []
@@ -86,27 +94,29 @@ class HashrFastTests(unittest.TestCase):
                 with open(uf, "rb") as f:
                     unit_elfs.append(f.read())
 
-            comb_prf = os.path.join(d, "all17.prf")
+            comb_prf = os.path.join(d, "all19.prf")
             with open(comb_prf, "w", encoding="utf-8") as out:
                 for nm in prove_fast.KEPT_INNER:
                     with open(os.path.join(HERE, "proofs", nm + ".proof"), "r", encoding="utf-8") as f:
                         out.write(f.read())
+                with open(os.path.join(FAST, "b3l_k16.proof"), "r", encoding="utf-8") as f:
+                    out.write(f.read())
                 with open(os.path.join(HERE, "proofs", "b3l_hashr.proof"), "r", encoding="utf-8") as f:
                     out.write(f.read().replace("for b3l_hashr\n", "for b3l_hashr_long\n", 1))
-                for nm in ("b3l_pad_fast.proof", "b3l_chunk_node_fast.proof", "b3l_hashr_fast.proof"):
+                for nm in ("b3l_pad_fast.proof", "b3l_chunk_node_fast.proof", "b3l_hashr_k16.proof", "b3l_hashr_fast.proof"):
                     with open(os.path.join(FAST, nm), "r", encoding="utf-8") as f:
                         out.write(f.read())
 
             out_o = os.path.join(d, "b3hashr_fast.o")
             out_p = os.path.join(d, "b3hashr_fast.proof")
             res = ode_audit.pack_bundle(
-                unit_elfs, order17, "b3l_hashr", full_spec, out_o, out_p,
+                unit_elfs, order19, "b3l_hashr", full_spec, out_o, out_p,
                 existing_proof_path=comb_prf,
             )
             self.assertEqual(res["verdict"], "shown", res)
             self.assertEqual(res["contract_b32"], "7jb2pyzuwz6tqd3qmjsra3mk36tl4547sfpy3at5scbk772lbila")
-            self.assertEqual(res["coverage"]["functions"], 17)
-            self.assertEqual(res["coverage"]["local_helpers"], 16)
+            self.assertEqual(res["coverage"]["functions"], 19)
+            self.assertEqual(res["coverage"]["local_helpers"], 18)
             self.assertEqual(res["coverage"]["exported_symbols"], 1)
             self.assertEqual(res["coverage"]["hooks"], 0)
 
