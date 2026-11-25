@@ -64,8 +64,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 54)
-        self.assertEqual(len(self.ways), 54)
+        self.assertEqual(len(self.rows), 56)
+        self.assertEqual(len(self.ways), 56)
 
     def test_standalone_package_has_no_ode_verifier_dependencies(self):
         """`arm64/` is an independent AArch64 ISA package: no code file here may import
@@ -152,7 +152,7 @@ class Words(unittest.TestCase):
         """On any machine: clang assembles for AArch64 whatever it runs on."""
         rng = random.Random(3)
         lines, want = [], []
-        br_op = {"b": "b", "b_eq": "b.eq", "b_ne": "b.ne", "b_hs": "b.hs", "b_lo": "b.lo"}
+        br_op = {"b": "b", "b_eq": "b.eq", "b_ne": "b.ne", "b_hs": "b.hs", "b_lo": "b.lo", "b_hi": "b.hi", "b_ls": "b.ls"}
         for row in self.rows:
             way = next(w for w in self.ways if w.row is row)
             for k_i in range(50):
@@ -201,7 +201,7 @@ class Processor(unittest.TestCase):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
         self.assertIn("47 rows, each as the assembler writes it and as the table writes it, 9400 instances: 0 differ from this processor", last)
-        self.assertIn("0 of the assembler's words are not the table's; 7 rows are not run: b, b_eq, b_ne, b_hs, b_lo, bl, ret", last)
+        self.assertIn("0 of the assembler's words are not the table's; 9 rows are not run: b, b_eq, b_ne, b_hs, b_lo, b_hi, b_ls, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)
 

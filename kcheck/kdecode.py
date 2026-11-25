@@ -289,7 +289,7 @@ def read(obj, symbol, base, rodata_at):
         nxt = pc + n
         rows.append((pc, nxt, ins))
         parts = ins.split()
-        if len(parts) == 2 and parts[0] in (".jmp", ".je", ".jne", ".jae", ".jb") and parts[1].startswith("0x"):
+        if len(parts) == 2 and parts[0] in (".jmp", ".je", ".jne", ".jae", ".jb", ".ja", ".jbe") and parts[1].startswith("0x"):
             tgt = int(parts[1], 16)
             if tgt > farthest: farthest = tgt
         at += n

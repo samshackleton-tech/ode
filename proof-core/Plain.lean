@@ -103,10 +103,11 @@ theorem execStmt_plain (perm : Perm) (bind : Bind) (base u : Nat) (s : State) (s
       rw [hv]; cases value perm bind s target <;> rfl
     | some fw =>
       obtain ⟨flag, want⟩ := fw
-      show (if ((if flag == "zf" then s.zf else s.cf) == want) = true then (value perm bind s.plain target).map _ else some s.plain)
-        = (if ((if flag == "zf" then s.zf else s.cf) == want) = true then (value perm bind s target).map _ else some s).map State.plain
-      rw [hv]
-      generalize ((if flag == "zf" then s.zf else s.cf) == want) = c
+      show (if (condFlag s.plain flag == want) = true then (value perm bind s.plain target).map _ else some s.plain)
+        = (if (condFlag s flag == want) = true then (value perm bind s target).map _ else some s).map State.plain
+      have hcf : condFlag s.plain flag = condFlag s flag := by unfold condFlag; rfl
+      rw [hv, hcf]
+      generalize (condFlag s flag == want) = c
       cases c
       · rfl
       · cases value perm bind s target <;> rfl
@@ -528,7 +529,7 @@ theorem execStmt_all {perm : Perm} {bind : Bind} {base u : Nat} {s : State} : �
     | some fw =>
       obtain ⟨flag, want⟩ := fw
       simp only [execStmt] at h ⊢
-      by_cases ht : ((if (flag == "zf") = true then s.zf else s.cf) == want) = true
+      by_cases ht : (condFlag s flag == want) = true
       · rw [if_pos ht] at h ⊢; exact hv h
       · rw [if_neg ht] at h ⊢; exact h
   | .set place v, s', h => by

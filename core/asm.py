@@ -27,7 +27,7 @@ G16 = "ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w ah ch dh bh
 
 ROWS = {r.name: (r, [encode.Way(r, t) for t in r.bytes]) for r in table.read()}
 NOPS = {len(w.literal): w.literal for w in ROWS["nop"][1] if w.literal is not None and w.literal != b"\xf3\x0f\x1e\xfa"}
-JUMPS = {"jmp": "jmp", "je": "je", "jz": "je", "jne": "jne", "jnz": "jne", "jae": "jae", "jb": "jb"}
+JUMPS = {"jmp": "jmp", "je": "je", "jz": "je", "jne": "jne", "jnz": "jne", "jae": "jae", "jb": "jb", "ja": "ja", "jnbe": "ja", "jbe": "jbe", "jna": "jbe"}
 BIN64 = {"add": "add64", "sub": "sub64", "and": "and64", "or": "or64", "cmp": "cmp64"}
 VEC128 = {
     "paddd": ("paddd128", "L"), "vpaddd": ("paddd128", "V"),

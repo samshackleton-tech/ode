@@ -578,6 +578,94 @@ theorem symReturn_sp {ctx : Ctx} {s : Sym} {items : Items} {r : Unit × Items} (
 whatever the unknowns turn out to be it does not fault and does not stop; if it returns, what the contract
 says the function leaves is so; if it goes on, it goes on at one of the places the verifier went on at, in
 a state of which what the verifier holds there is so, the marks too. -/
+theorem symCondClean_sound {ctx : Ctx} {s0 : State} {q : SMarks} {st : State} (M : MarksOk ctx s0 q st)
+    (flag : String) (h : symCondClean q flag = true) : condMark st.marks flag = false := by
+  unfold symCondClean at h; unfold condMark
+  by_cases hz : (flag == "zf") = true
+  · simp only [hz, ↓reduceIte] at h ⊢; exact M.zf h
+  · simp only [hz, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    by_cases hh : (flag == "hi") = true
+    · simp only [hh, ↓reduceIte, Bool.and_eq_true] at h ⊢
+      simp [M.cf h.1, M.zf h.2]
+    · simp only [hh, Bool.false_eq_true, ↓reduceIte] at h ⊢; exact M.cf h
+
+theorem symCondFlag_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
+    (H : Holds ctx s0 ρ s st) (flag : String) : (symCondFlag s flag).holds ρ (condFlag st flag) := by
+  unfold symCondFlag condFlag
+  by_cases hz : (flag == "zf") = true
+  · simp only [hz, ↓reduceIte]; exact H.zf
+  · simp only [hz, Bool.false_eq_true, ↓reduceIte]
+    by_cases hh : (flag == "hi") = true
+    · simp only [hh, ↓reduceIte]
+      cases hzf : s.zf with
+      | unknown | below _ _ => simp [Flag.holds]
+      | equal a b =>
+        cases hcf : s.cf with
+        | unknown | equal _ _ => simp [Flag.holds]
+        | below a' b' =>
+          simp only
+          split
+          next hsame =>
+            simp only [Bool.and_eq_true, Lin.same_iff] at hsame
+            obtain ⟨rfl, rfl⟩ := hsame
+            have h1 := H.zf; rw [hzf] at h1; simp only [Flag.holds] at h1
+            have h2 := H.cf; rw [hcf] at h2; simp only [Flag.holds] at h2
+            simp only [Flag.holds, h1, h2]
+            by_cases hlt : ev ρ b < ev ρ a <;> by_cases heq : ev ρ a = ev ρ b <;> by_cases hlt2 : ev ρ a < ev ρ b <;> simp_all <;> omega
+          next => simp [Flag.holds]
+    · simp only [hh, Bool.false_eq_true, ↓reduceIte]; exact H.cf
+
+theorem symCondFlag_bounded {ctx : Ctx} {s : Sym} (wf : WF ctx s) (flag : String) :
+    (symCondFlag s flag).bounded s.nvars := by
+  unfold symCondFlag
+  by_cases hz : (flag == "zf") = true
+  · simp only [hz, ↓reduceIte]; exact wf.zf
+  · simp only [hz, Bool.false_eq_true, ↓reduceIte]
+    by_cases hh : (flag == "hi") = true
+    · simp only [hh, ↓reduceIte]
+      cases hzf : s.zf with
+      | unknown | below _ _ => simp [Flag.bounded]
+      | equal a b =>
+        cases hcf : s.cf with
+        | unknown | equal _ _ => simp [Flag.bounded]
+        | below a' b' =>
+          simp only
+          split
+          · have h1 := wf.zf; rw [hzf] at h1; exact ⟨h1.2, h1.1⟩
+          · simp [Flag.bounded]
+    · simp only [hh, Bool.false_eq_true, ↓reduceIte]; exact wf.cf
+
+theorem condFlag_alike {a b : State} (A : Alike a b) (flag : String) (h : condMark a.marks flag = false) :
+    condFlag a flag = condFlag b flag := by
+  unfold condMark at h; unfold condFlag
+  by_cases hz : (flag == "zf") = true
+  · simp only [hz, ↓reduceIte] at h ⊢; exact A.zf h
+  · simp only [hz, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    by_cases hh : (flag == "hi") = true
+    · simp only [hh, ↓reduceIte, Bool.or_eq_false_iff] at h ⊢
+      rw [A.cf h.1, A.zf h.2]
+    · simp only [hh, Bool.false_eq_true, ↓reduceIte] at h ⊢; exact A.cf h
+
+theorem symCondFlag_valEq {ρa ρb : Nat → Int} {s : Sym} (FE : FlagEq ρa ρb s) (flag : String)
+    (h : symCondClean s.q flag = true) : FlagValEq ρa ρb (symCondFlag s flag) := by
+  unfold symCondClean at h; unfold symCondFlag
+  by_cases hz : (flag == "zf") = true
+  · simp only [hz, ↓reduceIte] at h ⊢; exact FE.1 h
+  · simp only [hz, Bool.false_eq_true, ↓reduceIte] at h ⊢
+    by_cases hh : (flag == "hi") = true
+    · simp only [hh, ↓reduceIte, Bool.and_eq_true] at h ⊢
+      cases hzf : s.zf with
+      | unknown | below _ _ => simp [FlagValEq]
+      | equal a b =>
+        cases hcf : s.cf with
+        | unknown | equal _ _ => simp [FlagValEq]
+        | below a' b' =>
+          simp only
+          split
+          · have h1 := FE.1 h.2; rw [hzf] at h1; exact ⟨h1.2, h1.1⟩
+          · simp [FlagValEq]
+    · simp only [hh, Bool.false_eq_true, ↓reduceIte] at h ⊢; exact FE.2 h
+
 theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {i : Instr}
     {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symInstr ctx s i items = .ok (nexts, rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (M : MarksOk ctx s0 s.q st) (u : Nat → Nat) :
@@ -662,44 +750,24 @@ theorem symInstr_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       | some fw =>
         obtain ⟨flag, want⟩ := fw
         simp only at h
-        cases hz : (flag == "zf") with
+        cases hcl : symCondClean s.q flag with
+        | false => simp only [hcl, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
         | true =>
-          simp only [hz, if_true] at h
-          cases zq : s.q.zq with
-          | false => simp only [zq, Bool.not_false, if_true] at h; exact (refuse_ok h).elim
-          | true =>
-          simp only [zq, Bool.not_true, Bool.false_eq_true, if_false] at h
+          simp only [hcl, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+          have hmk : condMark st.marks flag = false := symCondClean_sound M flag hcl
           have hqs : quietStmt i.bind (started p i st) (.jump target (some (flag, want))) = true := by
-            simp only [quietStmt, qa, qb, hz, if_true, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
-            exact M.zf zq
-          obtain ⟨s', m, c', q'⟩ := jumpWays_sound H wf st.zf h H.zf wf.zf
-          by_cases taken : (st.zf == want) = true
+            simp only [quietStmt, qa, qb, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
+            exact hmk
+          obtain ⟨s', m, c', q'⟩ := jumpWays_sound H wf (condFlag st flag) h (symCondFlag_holds H flag) (symCondFlag_bounded wf flag)
+          have hstf : condFlag (started p i st) flag = condFlag st flag := rfl
+          by_cases taken : (condFlag st flag == want) = true
           · rw [if_pos taken] at m
             exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
-              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
+              by simp only [execQ, heff, execAllQ, hqs, ↓reduceIte, execStmt, hstf, taken, hv, Option.map], s', t, ρ, m, rfl,
               c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
           · rw [if_neg taken] at m
             exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
-              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
-              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
-        | false =>
-          simp only [hz, Bool.false_eq_true, if_false] at h
-          cases cq : s.q.cq with
-          | false => simp only [cq, Bool.not_false, if_true] at h; exact (refuse_ok h).elim
-          | true =>
-          simp only [cq, Bool.not_true, Bool.false_eq_true, if_false] at h
-          have hqs : quietStmt i.bind (started p i st) (.jump target (some (flag, want))) = true := by
-            simp only [quietStmt, qa, qb, hz, if_false, Bool.false_eq_true, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
-            exact M.cf cq
-          obtain ⟨s', m, c', q'⟩ := jumpWays_sound H wf st.cf h H.cf wf.cf
-          by_cases taken : (st.cf == want) = true
-          · rw [if_pos taken] at m
-            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) { started p i st with rip := p.base + t }),
-              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken, hv, Option.map], s', t, ρ, m, rfl,
-              c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
-          · rw [if_neg taken] at m
-            exact ⟨.next (noted i.bind (started p i st) (.jump target (some (flag, want))) (started p i st)),
-              by simp only [execQ, heff, execAllQ, hqs, if_true, execStmt, hz, Bool.false_eq_true, if_false, taken], s', i.next, ρ, m, rfl,
+              by simp only [execQ, heff, execAllQ, hqs, ↓reduceIte, execStmt, hstf, taken, Bool.false_eq_true], s', i.next, ρ, m, rfl,
               c'.fields rfl rfl rfl rfl rfl rfl, by rw [q']; exact M.fields rfl⟩
   | plain =>
     simp only [symInstr, hs] at h
@@ -2359,42 +2427,20 @@ theorem symInstr_two_sound {ctx : Ctx} {p : Program} {a0 b0 : State} (Ea : Setti
       | some fw =>
         obtain ⟨flag, want⟩ := fw
         simp only at h
-        cases hq : (if flag == "zf" then s.q.zq else s.q.cq) with
+        cases hq : symCondClean s.q flag with
         | false => simp only [hq, Bool.not_false, ↓reduceIte] at h; exact (refuse_ok h).elim
         | true =>
           simp only [hq, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
           ·
-            have hmka : (if flag == "zf" then sta.marks.zf else sta.marks.cf) = false := by
-              cases hf : (flag == "zf") with
-              | true => simp only [hf, ↓reduceIte] at hq ⊢; exact Ma.zf hq
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte] at hq ⊢; exact Ma.cf hq
-            have hmkb : (if flag == "zf" then stb.marks.zf else stb.marks.cf) = false := by
-              cases hf : (flag == "zf") with
-              | true => simp only [hf, ↓reduceIte] at hq ⊢; exact Mb.zf hq
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte] at hq ⊢; exact Mb.cf hq
-            have heqb : (if flag == "zf" then sta.zf else sta.cf) = (if flag == "zf" then stb.zf else stb.cf) := by
-              cases hf : (flag == "zf") with
-              | true => simp only [hf, ↓reduceIte] at hmka ⊢; exact A.zf hmka
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte] at hmka ⊢; exact A.cf hmka
-            have hfa : (if flag == "zf" then s.zf else s.cf).holds ρa (if flag == "zf" then sta.zf else sta.cf) := by
-              cases hf : (flag == "zf") with
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte]; exact Ha.cf
-              | true => simp only [hf, ↓reduceIte]; exact Ha.zf
-            have hfb : (if flag == "zf" then s.zf else s.cf).holds ρb (if flag == "zf" then sta.zf else sta.cf) := by
-              rw [heqb]
-              cases hf : (flag == "zf") with
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte]; exact Hb.cf
-              | true => simp only [hf, ↓reduceIte]; exact Hb.zf
-            have hbd : (if flag == "zf" then s.zf else s.cf).bounded s.nvars := by
-              cases hf : (flag == "zf") with
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte]; exact wf.cf
-              | true => simp only [hf, ↓reduceIte]; exact wf.zf
-            have hfe : FlagValEq ρa ρb (if flag == "zf" then s.zf else s.cf) := by
-              cases hf : (flag == "zf") with
-              | true => simp only [hf, ↓reduceIte] at hq ⊢; exact FE.1 hq
-              | false => simp only [hf, Bool.false_eq_true, ↓reduceIte] at hq ⊢; exact FE.2 hq
+            have hmka : condMark sta.marks flag = false := symCondClean_sound Ma flag hq
+            have hmkb : condMark stb.marks flag = false := symCondClean_sound Mb flag hq
+            have heqb : condFlag sta flag = condFlag stb flag := condFlag_alike A flag hmka
+            have hfa : (symCondFlag s flag).holds ρa (condFlag sta flag) := symCondFlag_holds Ha flag
+            have hfb : (symCondFlag s flag).holds ρb (condFlag sta flag) := by rw [heqb]; exact symCondFlag_holds Hb flag
+            have hbd : (symCondFlag s flag).bounded s.nvars := symCondFlag_bounded wf flag
+            have hfe : FlagValEq ρa ρb (symCondFlag s flag) := symCondFlag_valEq FE flag hq
             obtain ⟨s', ms', ca', cb', hsq', hszf', hscf'⟩ :=
-              jumpWays_two_sound Hsa Hsb wf (if flag == "zf" then sta.zf else sta.cf) h hfa hfb hbd hfe
+              jumpWays_two_sound Hsa Hsb wf (condFlag sta flag) h hfa hfb hbd hfe
             have hqsa : quietStmt i.bind (started p i sta) (.jump target (some (flag, want))) = true := by
               simp only [quietStmt, qaa, qba, Bool.not_false, Bool.and_true, Bool.true_and, Bool.not_eq_true']
               exact hmka
@@ -2403,44 +2449,44 @@ theorem symInstr_two_sound {ctx : Ctx} {p : Program} {a0 b0 : State} (Ea : Setti
               exact hmkb
             have hta : execQ (ctx.contract.perm ctx.pieces a0) p i ua sta =
                 some (.next (noted i.bind (started p i sta) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i sta with rip := p.base + t } else started p i sta))) := by
+                  (if (condFlag sta flag == want) = true then { started p i sta with rip := p.base + t } else started p i sta))) := by
               simp only [execQ, heff, execAllQ, hqsa, ↓reduceIte, execStmt, hva]
-              have hstf : (if flag == "zf" then (started p i sta).zf else (started p i sta).cf) = (if flag == "zf" then sta.zf else sta.cf) := rfl
+              have hstf : condFlag (started p i sta) flag = condFlag sta flag := rfl
               rw [hstf]
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;> simp [hcond]
+              cases hcond : (condFlag sta flag == want) <;> simp
             have htb : execQ (ctx.contract.perm ctx.pieces b0) p i ub stb =
                 some (.next (noted i.bind (started p i stb) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i stb with rip := p.base + t } else started p i stb))) := by
+                  (if (condFlag sta flag == want) = true then { started p i stb with rip := p.base + t } else started p i stb))) := by
               simp only [execQ, heff, execAllQ, hqsb, ↓reduceIte, execStmt, hvb]
-              have hcond_eq : (if flag == "zf" then (started p i stb).zf else (started p i stb).cf) = (if flag == "zf" then sta.zf else sta.cf) := heqb.symm
+              have hcond_eq : condFlag (started p i stb) flag = condFlag sta flag := heqb.symm
               rw [hcond_eq]
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;> simp [hcond]
+              cases hcond : (condFlag sta flag == want) <;> simp
             have hlike := execQ_alike A hta htb
             have hripa : (noted i.bind (started p i sta) (.jump target (some (flag, want)))
-                (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i sta with rip := p.base + t } else started p i sta)).rip =
-                p.base + (if (if flag == "zf" then sta.zf else sta.cf) == want then t else i.next) := by
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;> simp [hcond, noted, started]
+                (if (condFlag sta flag == want) = true then { started p i sta with rip := p.base + t } else started p i sta)).rip =
+                p.base + (if condFlag sta flag == want then t else i.next) := by
+              cases (condFlag sta flag == want) <;> simp [noted, started]
             have hripb : (noted i.bind (started p i stb) (.jump target (some (flag, want)))
-                (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i stb with rip := p.base + t } else started p i stb)).rip =
-                p.base + (if (if flag == "zf" then sta.zf else sta.cf) == want then t else i.next) := by
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;> simp [hcond, noted, started]
+                (if (condFlag sta flag == want) = true then { started p i stb with rip := p.base + t } else started p i stb)).rip =
+                p.base + (if condFlag sta flag == want then t else i.next) := by
+              cases (condFlag sta flag == want) <;> simp [noted, started]
             have hca'' : Carried ctx a0 ρa s ρa s'
                 (noted i.bind (started p i sta) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i sta with rip := p.base + t } else started p i sta)) := by
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;>
-                simp only [hcond, Bool.false_eq_true, ↓reduceIte] <;> exact ca'.fields rfl rfl rfl rfl rfl rfl
+                  (if (condFlag sta flag == want) = true then { started p i sta with rip := p.base + t } else started p i sta)) := by
+              cases (condFlag sta flag == want) <;>
+                simp only [Bool.false_eq_true, ↓reduceIte] <;> exact ca'.fields rfl rfl rfl rfl rfl rfl
             have hcb'' : Carried ctx b0 ρb s ρb s'
                 (noted i.bind (started p i stb) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i stb with rip := p.base + t } else started p i stb)) := by
-              cases hcond : ((if flag == "zf" then sta.zf else sta.cf) == want) <;>
-                simp only [hcond, Bool.false_eq_true, ↓reduceIte] <;> exact cb'.fields rfl rfl rfl rfl rfl rfl
+                  (if (condFlag sta flag == want) = true then { started p i stb with rip := p.base + t } else started p i stb)) := by
+              cases (condFlag sta flag == want) <;>
+                simp only [Bool.false_eq_true, ↓reduceIte] <;> exact cb'.fields rfl rfl rfl rfl rfl rfl
             have hma' : MarksOk ctx a0 s'.q
                 (noted i.bind (started p i sta) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i sta with rip := p.base + t } else started p i sta)) := by
+                  (if (condFlag sta flag == want) = true then { started p i sta with rip := p.base + t } else started p i sta)) := by
               rw [hsq']; exact Msa.fields rfl
             have hmb' : MarksOk ctx b0 s'.q
                 (noted i.bind (started p i stb) (.jump target (some (flag, want)))
-                  (if ((if flag == "zf" then sta.zf else sta.cf) == want) = true then { started p i stb with rip := p.base + t } else started p i stb)) := by
+                  (if (condFlag sta flag == want) = true then { started p i stb with rip := p.base + t } else started p i stb)) := by
               rw [hsq']; exact Msb.fields rfl
             have hfe' : FlagEq ρa ρb s' := ⟨(fun h1 => by rw [hszf']; exact FE.1 (hsq'.symm ▸ h1)),
                                              (fun h2 => by rw [hscf']; exact FE.2 (hsq'.symm ▸ h2))⟩

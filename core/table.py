@@ -94,7 +94,7 @@ def statement(text):
         if "if" not in t: return ("jump", expression(t[1:]), None)
         at = t.index("if"); want = t[at + 1] != "not"
         flag = t[at + 1] if want else t[at + 2]
-        if flag not in ("zf", "cf") or len(t) != at + (2 if want else 3): raise ValueError(f"cannot read {text}")
+        if flag not in ("zf", "cf", "hi") or len(t) != at + (2 if want else 3): raise ValueError(f"cannot read {text}")
         return ("jump", expression(t[1:at]), (flag, want))
     if t[0] == "call":
         if "link" not in t: return ("call", expression(t[1:]))

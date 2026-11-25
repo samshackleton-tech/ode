@@ -179,6 +179,12 @@ jae          | jae I                   | .jae I                        | jump I 
 jb           | jb I                    | .jb I                         | jump I if cf
              = 72 rel8 ; rel=I
              = 0F 82 rel32 ; rel=I
+ja           | ja I                    | .ja I                         | jump I if hi
+             = 77 rel8 ; rel=I
+             = 0F 87 rel32 ; rel=I
+jbe          | jbe I                   | .jbe I                        | jump I if not hi
+             = 76 rel8 ; rel=I
+             = 0F 86 rel32 ; rel=I
 nop          | nop                     | .nop                          | nothing
              = 90
              = 66 90

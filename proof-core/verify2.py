@@ -429,20 +429,36 @@ class Verifier:
                 else: raise Refuse(f"unsupported ifx op `{cop}`")
                 return self.eval_sexpr(thn if taken else els, env, state, stream)
             tag, _ = stream.pop_tag()
-            if tag == "eq":
-                self.entail_eq(facts, lv, rv, stream)
-                taken = cop in ("==", "<=", ">=")
-            elif tag == "lt":
-                self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
-                taken = cop in ("<", "<=", "!=")
-            elif tag == "gt":
-                self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
-                taken = cop in (">", ">=", "!=")
-            elif tag == "ge":
-                self.entail(facts, r_sub(lv, rv), stream)
-                taken = cop in (">=", ">", "!=")
+            if cop in ("<", ">="):
+                if tag == "lt":
+                    self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
+                    taken = (cop == "<")
+                elif tag == "ge":
+                    self.entail(facts, r_sub(lv, rv), stream)
+                    taken = (cop == ">=")
+                else:
+                    raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
+            elif cop in (">", "<="):
+                if tag == "lt":
+                    self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
+                    taken = (cop == ">")
+                elif tag == "ge":
+                    self.entail(facts, r_sub(rv, lv), stream)
+                    taken = (cop == "<=")
+                else:
+                    raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
             else:
-                raise Refuse(f"expected `eq`/`lt`/`gt`/`ge` for ifx, got `{tag}`")
+                if tag == "eq":
+                    self.entail_eq(facts, lv, rv, stream)
+                    taken = (cop == "==")
+                elif tag == "lt":
+                    self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
+                    taken = (cop == "!=")
+                elif tag == "gt":
+                    self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
+                    taken = (cop == "!=")
+                else:
+                    raise Refuse(f"expected `eq`/`lt`/`gt` for `{cop}`, got `{tag}`")
             return self.eval_sexpr(thn if taken else els, env, state, stream)
         raise Refuse(f"unsupported spec expr {e}")
 
@@ -577,6 +593,9 @@ class Verifier:
             v = fresh_var(0, M64, facts)
             regs[r] = v
             entry_regs[r] = v
+        facts.append(r_sub(regs[sp_reg], r_const(fn["stack"])))
+        if not is_arm:
+            facts.append(r_sub(r_const(M64 - 8), regs[sp_reg]))
         # Reserve one slot after registers (matching the proof's variable numbering for places)
         fresh_var(0, M64, facts)
 
@@ -858,11 +877,22 @@ class Verifier:
                             break
                         cond_flag, want = cond
                         negated = not want
-                        if st["flag_marks"][cond_flag]:
-                            raise Refuse("jump on a flag that may depend on values kept out of the trace")
-                        frel = st["flags"][cond_flag]
-                        if frel is None:
-                            raise Refuse(f"jump on unset flag `{cond_flag}`")
+                        if cond_flag == "hi":
+                            if st["flag_marks"]["zf"] or st["flag_marks"]["cf"]:
+                                raise Refuse("jump on a flag that may depend on values kept out of the trace")
+                            zf_rel, cf_rel = st["flags"]["zf"], st["flags"]["cf"]
+                            if (zf_rel is not None and cf_rel is not None
+                                    and zf_rel[0] == "eq" and cf_rel[0] == "lt"
+                                    and zf_rel[1] == cf_rel[1] and zf_rel[2] == cf_rel[2]):
+                                frel = ("lt", zf_rel[2], zf_rel[1])
+                            else:
+                                raise Refuse("jump on `hi` without matching cmp flags")
+                        else:
+                            if st["flag_marks"][cond_flag]:
+                                raise Refuse("jump on a flag that may depend on values kept out of the trace")
+                            frel = st["flags"][cond_flag]
+                            if frel is None:
+                                raise Refuse(f"jump on unset flag `{cond_flag}`")
                         op_f, a, b = frel
                         live_ways = []
                         def _assume_way(f_is_true, w_facts):

@@ -249,6 +249,78 @@ fn dispatch6(x: number)
                 self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                 self.assertTrue(r2.stdout.startswith("shown"))
 
+    def test_04_hi_ls_ja_jbe_both_targets(self):
+        """Unsigned `ja`/`jbe` (x86-64) and `b.hi`/`b.ls` (AArch64) verify in both Lean and verify2.py."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        src = """
+def cmp3(a, b) {
+    if a > b then 2
+    else if a <= b then
+        if a == b then 1 else 0
+    else 0
+}
+
+fn cmp3_fn(a: number, b: number)
+    returns cmp3(a, b)
+    trace depends on a, b
+    stack 0
+{
+    for x86_64 {
+        cmp rdi, rsi
+        ja @gt
+        cmp rdi, rsi
+        jbe @le
+        mov rax, 99
+        ret
+    @gt:
+        mov rax, 2
+        ret
+    @le:
+        cmp rdi, rsi
+        je @eq
+        mov rax, 0
+        ret
+    @eq:
+        mov rax, 1
+        ret
+    }
+    for arm64 {
+        cmp x0, x1
+        b.hi @gt
+        cmp x0, x1
+        b.ls @le
+        mov x0, 99
+        ret
+    @gt:
+        mov x0, 2
+        ret
+    @le:
+        cmp x0, x1
+        b.eq @eq
+        mov x0, 0
+        ret
+    @eq:
+        mov x0, 1
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "hi.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                tab, st_p, pf_p, st_txt, pf_txt = _extract_stmt_and_proof(src_p, target, d)
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                self.assertTrue(r1.stdout.startswith("shown"))
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertTrue(r2.stdout.startswith("shown"))
+
 
 if __name__ == "__main__":
     unittest.main()

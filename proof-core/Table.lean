@@ -142,8 +142,8 @@ def parseStmt (text : String) : Option Stmt :=
     | "jump" :: rest =>
       match splitAt "if" rest with
       | none => (wholeExpr rest).map (.jump · none)
-      | some (target, ["not", flag]) => if flag == "zf" || flag == "cf" then (wholeExpr target).map (.jump · (some (flag, false))) else none
-      | some (target, [flag]) => if flag == "zf" || flag == "cf" then (wholeExpr target).map (.jump · (some (flag, true))) else none
+      | some (target, ["not", flag]) => if flag == "zf" || flag == "cf" || flag == "hi" then (wholeExpr target).map (.jump · (some (flag, false))) else none
+      | some (target, [flag]) => if flag == "zf" || flag == "cf" || flag == "hi" then (wholeExpr target).map (.jump · (some (flag, true))) else none
       | _ => none
     | _ => none
 

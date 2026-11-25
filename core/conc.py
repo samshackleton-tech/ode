@@ -93,7 +93,8 @@ def run(row, bind, s, trace=None):
         return CONC[name](*args)
     for st in row.effect:
         if st[0] == "jump":
-            if st[2] is None or bool(getattr(s, st[2][0])) == st[2][1]: s.to = value(st[1])
+            if st[2] is None or (((not bool(s.cf)) and (not bool(s.zf))) if st[2][0] == "hi" else bool(getattr(s, st[2][0]))) == st[2][1]:
+                s.to = value(st[1])
             continue
         if st[0] == "call":
             s.called = value(st[1])

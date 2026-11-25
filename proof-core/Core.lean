@@ -3200,6 +3200,19 @@ def assumeEq (s : Sym) (a b : Row) (want : Bool) (target next : Nat) : V (List (
     | some s' => pure [(s', Next.at (if want then target else next))]
     | none => pure []
 
+/-- Whether the symbolic flag(s) read by a jump condition are known clean of trace-hidden values. -/
+def symCondClean (q : SMarks) (flag : String) : Bool :=
+  if flag == "zf" then q.zq else if flag == "hi" then q.cq && q.zq else q.cq
+
+/-- Symbolic condition relation for a jump (`"hi"` = `!cf && !zf` = `below b a` when `zf = equal a b` and `cf = below a b`). -/
+def symCondFlag (s : Sym) (flag : String) : Flag :=
+  if flag == "zf" then s.zf
+  else if flag == "hi" then
+    match s.zf, s.cf with
+    | .equal a b, .below a' b' => if Lin.same a a' && Lin.same b b' then .below b a else .unknown
+    | _, _ => .unknown
+  else s.cf
+
 /-- All reachable successors of a conditional jump on a symbolic flag. -/
 def jumpWays (s : Sym) (want : Bool) (target next : Nat) : Flag → V (List (Sym × Next))
   | .unknown => refuse "a jump on a flag of which nothing is known"
@@ -3254,10 +3267,10 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
       match cond with
       | none => pure [(s, .at t)]
       | some (flag, want) =>
-        if !(if flag == "zf" then s.q.zq else s.q.cq) then
+        if !symCondClean s.q flag then
           refuse "a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
         else
-        jumpWays s want t i.next (if flag == "zf" then s.zf else s.cf)
+        jumpWays s want t i.next (symCondFlag s flag)
   | .plain => do
     let s1 ← fold (symStmtQ ctx i.bind) s i.effect
     let s2 ← settle ctx s1

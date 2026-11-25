@@ -506,6 +506,14 @@ def stmtParts : Stmt → Option (Expr × Expr)
   | .vset512 place v => some (place, v)
   | _ => none
 
+/-- Value of a jump condition flag (`"zf"`, `"cf"`, or `"hi"` = `!cf && !zf` for unsigned `>`). -/
+def condFlag (s : State) (flag : String) : Bool :=
+  if flag == "zf" then s.zf else if flag == "hi" then !s.cf && !s.zf else s.cf
+
+/-- Whether a jump condition flag is marked (may depend on values kept out of the trace). -/
+def condMark (m : Marks) (flag : String) : Bool :=
+  if flag == "zf" then m.zf else if flag == "hi" then m.cf || m.zf else m.cf
+
 /-- A statement uses nothing marked in a way that shows: no address it touches is made of anything
 marked; a jump is to a target not marked, and, where it is on a flag, on a flag not marked. -/
 def quietStmt (bind : Bind) (s : State) (st : Stmt) : Bool :=
@@ -514,7 +522,7 @@ def quietStmt (bind : Bind) (s : State) (st : Stmt) : Bool :=
     addrsQuiet bind s target && !exprMark bind s target &&
       match cond with
       | none => true
-      | some (flag, _) => !(if flag == "zf" then s.marks.zf else s.marks.cf)
+      | some (flag, _) => !condMark s.marks flag
   | _ =>
     match stmtParts st with
     | some (place, v) =>
@@ -603,7 +611,7 @@ def execStmt (perm : Perm) (bind : Bind) (base u : Nat) (s : State) : Stmt → O
   | .jump target cond =>
     let taken := match cond with
       | none => true
-      | some (flag, want) => (if flag == "zf" then s.zf else s.cf) == want
+      | some (flag, want) => condFlag s flag == want
     if taken then (value perm bind s target).map fun t => { s with rip := base + t } else some s
   | .set place v =>
     match (if isUnknown v then some u else value perm bind s v), place with

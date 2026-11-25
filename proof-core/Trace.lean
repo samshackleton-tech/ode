@@ -457,7 +457,7 @@ theorem vec_alike {bind : Bind} {w : Nat} {place : Expr} {a b a' b' : State} {mk
 /-- Is a jump taken? -/
 def jumps (s : State) : Option (String × Bool) → Bool
   | none => true
-  | some (flag, want) => (if flag == "zf" then s.zf else s.cf) == want
+  | some (flag, want) => condFlag s flag == want
 
 theorem execStmt_jump (perm : Perm) (bind : Bind) (base u : Nat) (s : State) (target : Expr) (cond : Option (String × Bool)) :
     execStmt perm bind base u s (.jump target cond) =
@@ -503,15 +503,19 @@ theorem execStmt_data {perm : Perm} {bind : Bind} {base u : Nat} {s s' : State} 
 theorem jumps_alike {a b : State} (A : Alike a b) {cond : Option (String × Bool)}
     (h : (match cond with
       | none => true
-      | some (flag, _) => !(if flag == "zf" then a.marks.zf else a.marks.cf)) = true) : jumps a cond = jumps b cond := by
+      | some (flag, _) => !condMark a.marks flag) = true) : jumps a cond = jumps b cond := by
   cases cond with
   | none => rfl
   | some fw =>
     obtain ⟨flag, want⟩ := fw
-    simp only [jumps] at h ⊢
+    simp only [jumps, condFlag, condMark] at h ⊢
     by_cases hz : (flag == "zf") = true
     · simp only [hz, if_true, Bool.not_eq_true'] at h ⊢; rw [A.zf h]
-    · simp only [hz, if_false, Bool.false_eq_true, Bool.not_eq_true'] at h ⊢; rw [A.cf h]
+    · simp only [hz, if_false, Bool.false_eq_true] at h ⊢
+      by_cases hh : (flag == "hi") = true
+      · simp only [hh, if_true, Bool.not_eq_true', Bool.or_eq_false_iff] at h ⊢
+        rw [A.cf h.1, A.zf h.2]
+      · simp only [hh, if_false, Bool.false_eq_true, Bool.not_eq_true'] at h ⊢; rw [A.cf h]
 
 /-- The lowest byte of what a register is set to is the same in both, where `lowMark` has it as not marked. -/
 theorem low_same {bind : Bind} {a b : State} (A : Alike a b) {v : Expr} (hqv : addrsQuiet bind a v = true)

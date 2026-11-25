@@ -112,8 +112,8 @@ def _reserved_err(what, name, target):
         return (f"{what} cannot be named `{name}` on x86-64 "
                 f"(reserved for memory operands like `byte ptr [...]`; use `p` or `buf` instead)")
     return f"{what} cannot be named `{name}`"
-BRANCH_X86 = {"eq": "je", "ne": "jne", "ult": "jb", "uge": "jae"}
-BRANCH_ARM = {"eq": "b.eq", "ne": "b.ne", "ult": "b.lo", "uge": "b.hs"}
+BRANCH_X86 = {"eq": "je", "ne": "jne", "ult": "jb", "uge": "jae", "ugt": "ja", "ule": "jbe"}
+BRANCH_ARM = {"eq": "b.eq", "ne": "b.ne", "ult": "b.lo", "uge": "b.hs", "ugt": "b.hi", "ule": "b.ls"}
 INVERT_COND = {"eq": "ne", "ne": "eq", "ult": "uge", "uge": "ult"}
 COND_ALIAS = {"lo": "ult", "cc": "ult", "hs": "uge", "cs": "uge"}
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand

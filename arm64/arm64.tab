@@ -107,6 +107,10 @@ b_hs         | -                            | .bhs I               | jump I if n
              = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0010 ; pc=I
 b_lo         | -                            | .blo I               | jump I if cf
              = 0101010 0 iiiiiiiiiiiiiiiiiii 0 0011 ; pc=I
+b_hi         | -                            | .bhi I               | jump I if hi
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 1000 ; pc=I
+b_ls         | -                            | .bls I               | jump I if not hi
+             = 0101010 0 iiiiiiiiiiiiiiiiiii 0 1001 ; pc=I
 bl           | -                            | .bl I                | call I link x30
              = 1 00101 IIIIIIIIIIIIIIIIIIIIIIIIII ; call=I
 ret          | -                            | .ret                 | return x30

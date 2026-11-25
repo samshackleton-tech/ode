@@ -45,9 +45,9 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that ALL 54 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
-  if table.size != 54 then
-    throw (IO.userError s!"expected 54 rows in arm64.tab, found {table.size}")
+  -- 1. Check that ALL 56 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
+  if table.size != 56 then
+    throw (IO.userError s!"expected 56 rows in arm64.tab, found {table.size}")
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -56,6 +56,8 @@ def main (args : List String) : IO Unit := do
   checkRow table "cmp_rr" ArmAgree.effectCmpRr
   checkRow table "b_hs" ArmAgree.effectBHs
   checkRow table "b_lo" ArmAgree.effectBLo
+  checkRow table "b_hi" ArmAgree.effectBHi
+  checkRow table "b_ls" ArmAgree.effectBLs
   checkRow table "nop" ArmAgree.effectNop
   checkRow table "mov_ri" ArmAgree.effectMovRi
   checkRow table "mov32_ri" ArmAgree.effectMovRi
@@ -190,12 +192,24 @@ def main (args : List String) : IO Unit := do
       match bd.find? (fun kv => kv.1 == "I") with
       | some (_, v) => Ode.readInt v == some delta
       | none => false)
+    let insHi := s!"(.bhi {delta})"
+    checkInstance table "b_hi" insHi (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
+    let insLs := s!"(.bls {delta})"
+    checkInstance table "b_ls" insLs (fun bd =>
+      match bd.find? (fun kv => kv.1 == "I") with
+      | some (_, v) => Ode.readInt v == some delta
+      | none => false)
     if wordsOnly then
       let q : Int := delta / 4
       let imm19 : BitVec 19 := BitVec.ofInt 19 q
       let imm26 : BitVec 26 := BitVec.ofInt 26 q
       IO.println s!"b_hs {hex32 (ArmAgree.encodeBHs imm19)} {insHs}"
       IO.println s!"b_lo {hex32 (ArmAgree.encodeBLo imm19)} {insLo}"
+      IO.println s!"b_hi {hex32 (ArmAgree.encodeBHi imm19)} {insHi}"
+      IO.println s!"b_ls {hex32 (ArmAgree.encodeBLs imm19)} {insLs}"
       IO.println s!"b {hex32 (ArmAgree.encodeB imm26)} (.b {delta})"
       IO.println s!"b_eq {hex32 (ArmAgree.encodeBEq imm19)} (.beq {delta})"
       IO.println s!"b_ne {hex32 (ArmAgree.encodeBNe imm19)} (.bne {delta})"
@@ -537,4 +551,4 @@ def main (args : List String) : IO Unit := do
               IO.println s!"str128_sp {hex32 (ArmAgree.encodeStr128Sp ⟨x, hx⟩ ⟨n, hn⟩)} {insSS}"
 
   if !wordsOnly then
-    IO.println "agree-check: all 54 rows match arm64.tab"
+    IO.println "agree-check: all 56 rows match arm64.tab"

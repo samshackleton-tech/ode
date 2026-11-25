@@ -1399,9 +1399,13 @@ def encodeBCond (cond4 : BitVec 4) (imm19 : BitVec 19) : BitVec 32 :=
 
 def encodeBHs (imm19 : BitVec 19) : BitVec 32 := encodeBCond 2#4 imm19
 def encodeBLo (imm19 : BitVec 19) : BitVec 32 := encodeBCond 3#4 imm19
+def encodeBHi (imm19 : BitVec 19) : BitVec 32 := encodeBCond 8#4 imm19
+def encodeBLs (imm19 : BitVec 19) : BitVec 32 := encodeBCond 9#4 imm19
 
 def effectBHs : List Ode.Stmt := [.jump (.name "I") (some ("cf", false))]
 def effectBLo : List Ode.Stmt := [.jump (.name "I") (some ("cf", true))]
+def effectBHi : List Ode.Stmt := [.jump (.name "I") (some ("hi", true))]
+def effectBLs : List Ode.Stmt := [.jump (.name "I") (some ("hi", false))]
 
 def bindJump (numStr : String) : Ode.Bind := [("I", numStr)]
 
@@ -1482,9 +1486,9 @@ theorem agree_b_hs (imm19 : BitVec 19) (target : Nat) (numStr : String)
   let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("cf", false))) stBody
   have hexec : Ode.exec Ode.Perm.all prog ⟨effectBHs, bindJump numStr, next⟩ u st = some (.next st') := by
     cases hcf : st.cf
-    · simp [Ode.exec, Ode.execAll, effectBHs, Ode.execStmt, Ode.value, Ode.isNumberLetter,
+    · simp [Ode.exec, Ode.execAll, effectBHs, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
             bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hcf]
-    · simp [Ode.exec, Ode.execAll, effectBHs, Ode.execStmt, st', stBody, st0, hcf]
+    · simp [Ode.exec, Ode.execAll, effectBHs, Ode.execStmt, Ode.condFlag, st', stBody, st0, hcf]
   have hdec : Arm64.decode (encodeBHs imm19) = some (.bCond .CS ((imm19.signExtend 64) <<< 2)) := by
     simpa [encodeBHs, Arm64.CondCode.ofBits] using decode_b_cond 2#4 imm19
   refine ⟨.bCond .CS ((imm19.signExtend 64) <<< 2), st', hdec, hexec, ?_, ?_⟩
@@ -1543,8 +1547,8 @@ theorem agree_b_lo (imm19 : BitVec 19) (target : Nat) (numStr : String)
   let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("cf", true))) stBody
   have hexec : Ode.exec Ode.Perm.all prog ⟨effectBLo, bindJump numStr, next⟩ u st = some (.next st') := by
     cases hcf : st.cf
-    · simp [Ode.exec, Ode.execAll, effectBLo, Ode.execStmt, st', stBody, st0, hcf]
-    · simp [Ode.exec, Ode.execAll, effectBLo, Ode.execStmt, Ode.value, Ode.isNumberLetter,
+    · simp [Ode.exec, Ode.execAll, effectBLo, Ode.execStmt, Ode.condFlag, st', stBody, st0, hcf]
+    · simp [Ode.exec, Ode.execAll, effectBLo, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
             bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hcf]
   have hdec : Arm64.decode (encodeBLo imm19) = some (.bCond .CC ((imm19.signExtend 64) <<< 2)) := by
     simpa [encodeBLo, Arm64.CondCode.ofBits] using decode_b_cond 3#4 imm19
@@ -1582,6 +1586,126 @@ theorem agree_b_lo (imm19 : BitVec 19) (target : Nat) (numStr : String)
       simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, Arm64.State.advancePC]
     · have hc : gs.pstate.c = false := by rw [hA.cf, hcf]; rfl
       simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, Arm64.State.setPC]
+
+/-- `b_hi` (`b.hi I | jump I if hi`) agrees with Google's `B.HI` (`ConditionHolds .HI = pstate.c && !pstate.z = !cf && !zf`)
+on both the taken and fall-through paths. -/
+theorem agree_b_hi (imm19 : BitVec 19) (target : Nat) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hnum : Ode.readInt numStr = some (target : Int))
+    (htlt : target < Ode.M64)
+    (htarget : prog.base + target = (gs.pc + ((imm19.signExtend 64) <<< 2)).toNat)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeBHi imm19) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectBHi, bindJump numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hmodT : ((target : Int) % (Ode.M64 : Int)).toNat = target := by
+    rw [Int.emod_eq_of_lt (Int.natCast_nonneg _) (Int.ofNat_lt.mpr htlt)]; rfl
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let stBody : Ode.State := if (!st.cf && !st.zf) == true then { st0 with rip := prog.base + target } else st0
+  let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("hi", true))) stBody
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectBHi, bindJump numStr, next⟩ u st = some (.next st') := by
+    cases hcf : st.cf <;> cases hzf : st.zf <;>
+      simp [Ode.exec, Ode.execAll, effectBHi, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
+            bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hcf, hzf]
+  have hdec : Arm64.decode (encodeBHi imm19) = some (.bCond .HI ((imm19.signExtend 64) <<< 2)) := by
+    simpa [encodeBHi, Arm64.CondCode.ofBits] using decode_b_cond 8#4 imm19
+  refine ⟨.bCond .HI ((imm19.signExtend 64) <<< 2), st', hdec, hexec, ?_, ?_⟩
+  · cases hcf : st.cf <;> cases hzf : st.zf
+    · have hc : gs.pstate.c = true := by rw [hA.cf, hcf]; rfl
+      have hz : gs.pstate.z = false := by rw [hA.zf, hzf]
+      have hgs : Arm64.execInstWithSvc Arm64.noSyscalls (.bCond .HI ((imm19.signExtend 64) <<< 2)) gs =
+          gs.setPC (gs.pc + ((imm19.signExtend 64) <<< 2)) := by
+        simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz]
+      rw [hgs]
+      refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · intro k; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Arm64.State.readReg64, Ode.noted] using hA.gpr k
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.sp
+      · intro v j; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Arm64.State.readVReg128, Ode.noted] using hA.vec v j
+      · intro a ha; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.mem a ha
+      · simp [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted, htarget]
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.zf
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.cf
+    all_goals
+      (have hgs : Arm64.execInstWithSvc Arm64.noSyscalls (.bCond .HI ((imm19.signExtend 64) <<< 2)) gs = gs.advancePC := by
+         have hc := hA.cf; have hz := hA.zf; rw [hcf] at hc; rw [hzf] at hz
+         simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz]
+       rw [hgs]
+       refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+       · intro k; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Arm64.State.readReg64, Ode.noted] using hA.gpr k
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.sp
+       · intro v j; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Arm64.State.readVReg128, Ode.noted] using hA.vec v j
+       · intro a ha; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.mem a ha
+       · simp only [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted, BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext, Bool.not_true, Bool.not_false, Bool.and_false, Bool.false_and, beq_iff_eq, Bool.false_eq_true, ↓reduceIte]
+         have : 4 % 2 ^ 64 = 4 := by decide
+         unfold Ode.M64 at hpc; rw [this, Nat.mod_eq_of_lt hpc]
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.zf
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.cf)
+  · cases hcf : st.cf <;> cases hzf : st.zf <;>
+      (have hc := hA.cf; have hz := hA.zf; rw [hcf] at hc; rw [hzf] at hz
+       simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz, Arm64.State.setPC, Arm64.State.advancePC])
+
+/-- `b_ls` (`b.ls I | jump I if not hi`) agrees with Google's `B.LS` (`ConditionHolds .LS = !(pstate.c && !pstate.z) = cf || zf`)
+on both the taken and fall-through paths. -/
+theorem agree_b_ls (imm19 : BitVec 19) (target : Nat) (numStr : String)
+    (prog : Ode.Program) (u : Nat → Nat) (st : Ode.State) (gs : Arm64.State) (next : Nat)
+    (hA : AgreeState st gs)
+    (hnum : Ode.readInt numStr = some (target : Int))
+    (htlt : target < Ode.M64)
+    (htarget : prog.base + target = (gs.pc + ((imm19.signExtend 64) <<< 2)).toNat)
+    (hnext : prog.base + next = st.rip + 4) (hpc : st.rip + 4 < Ode.M64) :
+    ∃ ginst st',
+      Arm64.decode (encodeBLs imm19) = some ginst ∧
+      Ode.exec Ode.Perm.all prog ⟨effectBLs, bindJump numStr, next⟩ u st = some (.next st') ∧
+      AgreeState st' (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs) ∧
+      (Arm64.execInstWithSvc Arm64.noSyscalls ginst gs).pstate = gs.pstate := by
+  have hmodT : ((target : Int) % (Ode.M64 : Int)).toNat = target := by
+    rw [Int.emod_eq_of_lt (Int.natCast_nonneg _) (Int.ofNat_lt.mpr htlt)]; rfl
+  let st0 : Ode.State := { st with rip := prog.base + next, trace := st.trace ++ [(st.rip, 0)] }
+  let stBody : Ode.State := if (!st.cf && !st.zf) == false then { st0 with rip := prog.base + target } else st0
+  let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("hi", false))) stBody
+  have hexec : Ode.exec Ode.Perm.all prog ⟨effectBLs, bindJump numStr, next⟩ u st = some (.next st') := by
+    cases hcf : st.cf <;> cases hzf : st.zf <;>
+      simp [Ode.exec, Ode.execAll, effectBLs, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
+            bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hcf, hzf]
+  have hdec : Arm64.decode (encodeBLs imm19) = some (.bCond .LS ((imm19.signExtend 64) <<< 2)) := by
+    simpa [encodeBLs, Arm64.CondCode.ofBits] using decode_b_cond 9#4 imm19
+  refine ⟨.bCond .LS ((imm19.signExtend 64) <<< 2), st', hdec, hexec, ?_, ?_⟩
+  · cases hcf : st.cf <;> cases hzf : st.zf
+    · have hc : gs.pstate.c = true := by rw [hA.cf, hcf]; rfl
+      have hz : gs.pstate.z = false := by rw [hA.zf, hzf]
+      have hgs : Arm64.execInstWithSvc Arm64.noSyscalls (.bCond .LS ((imm19.signExtend 64) <<< 2)) gs = gs.advancePC := by
+        simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz]
+      rw [hgs]
+      refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      · intro k; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Arm64.State.readReg64, Ode.noted] using hA.gpr k
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.sp
+      · intro v j; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Arm64.State.readVReg128, Ode.noted] using hA.vec v j
+      · intro a ha; simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.mem a ha
+      · simp only [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted, BitVec.toNat_add, BitVec.toNat_ofNat, hA.pc, hnext, Bool.not_false, Bool.and_true, beq_iff_eq, Bool.true_eq_false, ↓reduceIte]
+        have : 4 % 2 ^ 64 = 4 := by decide
+        unfold Ode.M64 at hpc; rw [this, Nat.mod_eq_of_lt hpc]
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.zf
+      · simpa [st', stBody, st0, hcf, hzf, Arm64.State.advancePC, Ode.noted] using hA.cf
+    all_goals
+      (have hgs : Arm64.execInstWithSvc Arm64.noSyscalls (.bCond .LS ((imm19.signExtend 64) <<< 2)) gs =
+           gs.setPC (gs.pc + ((imm19.signExtend 64) <<< 2)) := by
+         have hc := hA.cf; have hz := hA.zf; rw [hcf] at hc; rw [hzf] at hz
+         simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz]
+       rw [hgs]
+       refine ⟨hA.running, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+       · intro k; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Arm64.State.readReg64, Ode.noted] using hA.gpr k
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.sp
+       · intro v j; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Arm64.State.readVReg128, Ode.noted] using hA.vec v j
+       · intro a ha; simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.mem a ha
+       · simp [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted, htarget]
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.zf
+       · simpa [st', stBody, st0, hcf, hzf, Arm64.State.setPC, Ode.noted] using hA.cf)
+  · cases hcf : st.cf <;> cases hzf : st.zf <;>
+      (have hc := hA.cf; have hz := hA.zf; rw [hcf] at hc; rw [hzf] at hz
+       simp [Arm64.execInstWithSvc, Arm64.ConditionHolds, hc, hz, Arm64.State.setPC, Arm64.State.advancePC])
 
 /-! ## Shared helpers for rows 9–20 -/
 
@@ -2415,8 +2539,8 @@ theorem agree_b_eq (imm19 : BitVec 19) (target : Nat) (numStr : String)
   let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("zf", true))) stBody
   have hexec : Ode.exec Ode.Perm.all prog ⟨effectBEq, bindJump numStr, next⟩ u st = some (.next st') := by
     cases hzf : st.zf
-    · simp [Ode.exec, Ode.execAll, effectBEq, Ode.execStmt, st', stBody, st0, hzf]
-    · simp [Ode.exec, Ode.execAll, effectBEq, Ode.execStmt, Ode.value, Ode.isNumberLetter,
+    · simp [Ode.exec, Ode.execAll, effectBEq, Ode.execStmt, Ode.condFlag, st', stBody, st0, hzf]
+    · simp [Ode.exec, Ode.execAll, effectBEq, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
             bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hzf]
   have hdec : Arm64.decode (encodeBEq imm19) = some (.bCond .EQ ((imm19.signExtend 64) <<< 2)) := by
     simpa [encodeBEq, Arm64.CondCode.ofBits] using decode_b_cond 0#4 imm19
@@ -2471,9 +2595,9 @@ theorem agree_b_ne (imm19 : BitVec 19) (target : Nat) (numStr : String)
   let st' : Ode.State := Ode.noted (bindJump numStr) st0 (.jump (.name "I") (some ("zf", false))) stBody
   have hexec : Ode.exec Ode.Perm.all prog ⟨effectBNe, bindJump numStr, next⟩ u st = some (.next st') := by
     cases hzf : st.zf
-    · simp [Ode.exec, Ode.execAll, effectBNe, Ode.execStmt, Ode.value, Ode.isNumberLetter,
+    · simp [Ode.exec, Ode.execAll, effectBNe, Ode.execStmt, Ode.condFlag, Ode.value, Ode.isNumberLetter,
             bindJump, List.lookup, hnum, hmodT, st', stBody, st0, hzf]
-    · simp [Ode.exec, Ode.execAll, effectBNe, Ode.execStmt, st', stBody, st0, hzf]
+    · simp [Ode.exec, Ode.execAll, effectBNe, Ode.execStmt, Ode.condFlag, st', stBody, st0, hzf]
   have hdec : Arm64.decode (encodeBNe imm19) = some (.bCond .NE ((imm19.signExtend 64) <<< 2)) := by
     simpa [encodeBNe, Arm64.CondCode.ofBits] using decode_b_cond 1#4 imm19
   refine ⟨.bCond .NE ((imm19.signExtend 64) <<< 2), st', hdec, hexec, ?_, ?_⟩

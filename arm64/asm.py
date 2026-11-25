@@ -91,7 +91,7 @@ def _load():
 
 ROWS, ALL_WAYS, BY_NAME, MATCHERS = _load()
 NOP_WORD = word.encode(BY_NAME["nop"][0], {})
-BRANCH_ROWS = {"b": "b", "b.eq": "b_eq", "b.ne": "b_ne", "b.hs": "b_hs", "b.cs": "b_hs", "b.lo": "b_lo", "b.cc": "b_lo"}
+BRANCH_ROWS = {"b": "b", "b.eq": "b_eq", "b.ne": "b_ne", "b.hs": "b_hs", "b.cs": "b_hs", "b.lo": "b_lo", "b.cc": "b_lo", "b.hi": "b_hi", "b.ls": "b_ls"}
 
 
 def forms_for(mn):
@@ -124,7 +124,7 @@ def instruction(line):
         w = BY_NAME["bl"][0]
         sym = m.group(1)
         return ("reloc", word.encode(w, {"I": 0}), 0, R_AARCH64_CALL26, sym, 0, w.row, {"I": sym})
-    m = re.fullmatch(r"(b(?:\.(?:eq|ne|hs|cs|lo|cc))?)\s+([A-Za-z_.$][\w.$]*)", s)
+    m = re.fullmatch(r"(b(?:\.(?:eq|ne|hs|cs|lo|cc|hi|ls))?)\s+([A-Za-z_.$][\w.$]*)", s)
     if m:
         w = BY_NAME[BRANCH_ROWS[m.group(1)]][0]
         lbl = m.group(2)
