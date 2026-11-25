@@ -42,3 +42,7 @@ A cell counts as a **strict pass** if and only if, within the round limit and wi
 1. `ode pack` produces an ELF64 object file and `.proof` file matching the task's exact expected contract ID.
 2. `ode audit --expect-contract <ID>` returns `VERDICT: shown` with 100% executable coverage and 0 hooks.
 3. Secondary automated checks recorded on every passing cell: independent pure-Python second verifier (`proof-core/verify2.py`) and real-silicon native execution against the task harness.
+
+## Status Note
+
+Aborted ~90 seconds after launch ($1.60 spent) due to a harness CLI bug (`run_suite.py` passed `-o` instead of `--out` to `ode_tool.py pack`, so no candidate source reached the compiler or verifier). Fixed `run_suite.py` with a local pre-API CLI self-test (`self_test_cli`) and superseded by `ebpf-v2b`.

@@ -313,12 +313,12 @@ def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str |
 
 def parse_audit_metrics(audit_out: str) -> dict:
     m = {}
-    cov = re.search(r"COVERAGE:\s+.*?\((\d+) functions.*?, (\d+) instructions, (\d+) B", audit_out)
+    cov = re.search(r"COVERAGE:\s+.*?\((\d+) functions?.*?, (\d+) instructions?, (\d+) B", audit_out)
     if cov:
         m["functions"] = int(cov.group(1))
         m["instructions"] = int(cov.group(2))
         m["code_bytes"] = int(cov.group(3))
-    cid = re.search(r"CONTRACT ID:\s+([a-z2-7]{52})", audit_out)
+    cid = re.search(r"BLAKE3\(contract\):\s+([a-z2-7]{52})", audit_out)
     if cid:
         m["contract_id"] = cid.group(1)
     ver = re.search(r"VERDICT:\s+(\S+)", audit_out)
@@ -441,7 +441,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
             pack_cmd = [
                 sys.executable, str(ODE_TOOL), "pack", str(cand),
                 "--fn", task["entry_fn"], "--target", target,
-                "-o", str(out_o), "--proof", str(out_p),
+                "--out", str(out_o), "--proof", str(out_p),
             ]
             rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, timeout=args.tool_timeout)
             cell["total_tool_s"] += dt_p
@@ -742,6 +742,51 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
     return json_path, md_path
 
 
+def self_test_cli(targets: list[str]) -> None:
+    """Verify `ode pack`, `ode audit`, and `verify2.py` CLI wiring locally in <2s before any API call."""
+    trivial = (
+        "fn id_fn(x: number)\n"
+        "    returns x\n"
+        "    trace depends on x\n"
+        "    stack 0\n"
+        "{\n"
+        "    for x86_64 {\n"
+        "        mov rax, rdi\n"
+        "        ret\n"
+        "    }\n"
+        "    for arm64 {\n"
+        "        ret\n"
+        "    }\n"
+        "}\n"
+    )
+    with tempfile.TemporaryDirectory(prefix="ode_selftest_") as td:
+        td_p = Path(td)
+        src = td_p / "id.ode"
+        src.write_text(trivial, encoding="utf-8")
+        for tgt in targets:
+            out_o = td_p / f"id_{tgt}.o"
+            out_p = td_p / f"id_{tgt}.proof"
+            rc_p, out_p_txt, _ = run_tool([
+                sys.executable, str(ODE_TOOL), "pack", str(src),
+                "--fn", "id_fn", "--target", tgt,
+                "--out", str(out_o), "--proof", str(out_p),
+            ], td_p, timeout=30)
+            if rc_p != 0 or not out_o.exists() or not out_p.exists():
+                raise SystemExit(f"CLI self-test failed on `ode pack` ({tgt}): {out_p_txt}")
+            cid_m = re.search(r"BLAKE3\(contract\):\s+([a-z2-7]{52})", out_p_txt)
+            if not cid_m:
+                raise SystemExit(f"CLI self-test failed: no BLAKE3(contract) in pack output ({tgt}): {out_p_txt}")
+            rc_a, out_a_txt, _ = run_tool([
+                sys.executable, str(ODE_TOOL), "audit", str(out_o),
+                "--proof", str(out_p), "--expect-contract", cid_m.group(1),
+            ], td_p, timeout=30)
+            if rc_a != 0 or "VERDICT:           shown" not in out_a_txt:
+                raise SystemExit(f"CLI self-test failed on `ode audit` ({tgt}): {out_a_txt}")
+            v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
+            if not v2_ok:
+                raise SystemExit(f"CLI self-test failed on `verify2.py` ({tgt}): {v2_msg}")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Push-button pre-registered cold-room experiment runner for Ode.")
     ap.add_argument("--run-id", required=True, help="Short run identifier, e.g. ebpf-v2")
@@ -793,8 +838,10 @@ def main(argv=None) -> int:
         if t.get("native_harness"):
             hashes[t["native_harness"]] = blake3_hex(ROOT / t["native_harness"])
 
+    self_test_cli(targets)
+
     if args.dry_run:
-        print(f"DRY-RUN OK: run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} cells={len(tasks)*len(models)*len(targets)}")
+        print(f"DRY-RUN OK (CLI self-test passed on {targets}): run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} cells={len(tasks)*len(models)*len(targets)}")
         for k, v in sorted(hashes.items()):
             print(f"  {v[:16]}...  {k}")
         return 0
