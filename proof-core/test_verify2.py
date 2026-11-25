@@ -1,0 +1,146 @@
+#!/usr/bin/env pypy3
+"""Test the independent second verifier (`proof-core/verify2.py`) against Lean's `odeverify`
+on the exact same `.statement` and order-independent (`r ...`) `.proof` files across both
+x86-64 and AArch64, including shuffled-facts order-independence and 4 negative controls each.
+"""
+import os
+import random
+import subprocess
+import sys
+import tempfile
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path[:0] = [
+    HERE,
+    os.path.join(ROOT, "lang"),
+    os.path.join(ROOT, "core"),
+    os.path.join(ROOT, "kcheck"),
+]
+
+import ode_audit
+import statement
+import verify2
+
+HAVE_LEAN = os.path.isfile(os.path.join(HERE, ".lake", "build", "bin", "odeverify"))
+ALL_ZERO = os.path.join(ROOT, "paper", "examples", "all_zero.ode")
+
+
+def _extract_stmt_and_proof(src, target, tmp_dir):
+    out_o = os.path.join(tmp_dir, f"a_{target}.o")
+    out_p = os.path.join(tmp_dir, f"a_{target}.proof")
+    res = ode_audit.pack_verified(src, None, out_o, out_p, target=target)
+    assert res["verdict"] == "shown", res
+    with open(out_o, "rb") as f:
+        elf = ode_audit.parse_elf64(f.read())
+    ocl = elf["by_name"][".ode.ocl"][0]["body"].decode("utf-8")
+    sym = res["symbol"]
+    bound = ocl.replace("contract (", f"contract {sym}(", 1)
+    with open(out_p, "r", encoding="utf-8") as f:
+        txt = f.read()
+    idx = txt.find("\nfor ")
+    pf_txt = txt[idx + 1:] if idx >= 0 else txt
+    st_txt = "\n".join(statement.statement(bound, [(out_o, sym)])) + "\n"
+    st_p = os.path.join(tmp_dir, f"a_{target}.statement")
+    pf_p = os.path.join(tmp_dir, f"a_{target}.rawproof")
+    with open(st_p, "w", encoding="utf-8") as f:
+        f.write(st_txt)
+    with open(pf_p, "w", encoding="utf-8") as f:
+        f.write(pf_txt)
+    tab = os.path.join(ROOT, "core", "x86.tab") if target == "x86_64" else os.path.join(ROOT, "arm64", "arm64.tab")
+    return tab, st_p, pf_p, st_txt, pf_txt
+
+
+@unittest.skipUnless(HAVE_LEAN, "requires built proof-core odeverify binary")
+class TestVerify2(unittest.TestCase):
+    def _run_dual(self, target):
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        with tempfile.TemporaryDirectory() as d:
+            tab, st_p, pf_p, st_txt, pf_txt = _extract_stmt_and_proof(ALL_ZERO, target, d)
+            # Proof must use order-independent `r ...` rows (no index-coupled `p ...` lines)
+            self.assertTrue(any(l.startswith("r ") for l in pf_txt.splitlines()))
+            self.assertFalse(any(l.startswith("p ") for l in pf_txt.splitlines()))
+
+            # Positive: both independent verifiers approve the exact same statement + proof
+            r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+            r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                capture_output=True, text=True)
+            self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+            self.assertEqual(r1.stdout.strip(), "shown")
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+            self.assertIn("shown", r2.stdout)
+
+            # Order-independence check: shuffle `given` facts inside verify2 before every check
+            orig_ref = verify2.r_refutes_rows
+            rng = random.Random(42)
+
+            def shuffled_ref(given, starts, steps):
+                g2 = list(given)
+                rng.shuffle(g2)
+                return orig_ref(g2, starts, steps)
+
+            verify2.r_refutes_rows = shuffled_ref
+            try:
+                verify2.verify_files(tab, st_p, pf_p)
+            finally:
+                verify2.r_refutes_rows = orig_ref
+
+            # Negative 1: corrupted arithmetic step
+            pf_bad1 = os.path.join(d, "bad1.pf")
+            self.assertIn("s 0 1 3 1 1", pf_txt)
+            with open(pf_bad1, "w", encoding="utf-8") as f:
+                f.write(pf_txt.replace("s 0 1 3 1 1", "s 0 1 2 1 1", 1))
+            b1a = subprocess.run([odeverify, tab, st_p, pf_bad1], capture_output=True, text=True)
+            b1b = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_bad1],
+                                 capture_output=True, text=True)
+            self.assertNotEqual(b1a.returncode, 0)
+            self.assertNotEqual(b1b.returncode, 0)
+
+            # Negative 2: forged starting row not in given facts
+            pf_bad2 = os.path.join(d, "bad2.pf")
+            lines = pf_txt.splitlines()
+            idx_r = next(i for i, l in enumerate(lines) if l.startswith("r "))
+            lines[idx_r] = "r -999 0 0 1"
+            with open(pf_bad2, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+            b2a = subprocess.run([odeverify, tab, st_p, pf_bad2], capture_output=True, text=True)
+            b2b = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_bad2],
+                                 capture_output=True, text=True)
+            self.assertNotEqual(b2a.returncode, 0)
+            self.assertNotEqual(b2b.returncode, 0)
+
+            # Negative 3: trace violation (buffer kept out of trace, yet function branches on its byte)
+            st_bad3 = os.path.join(d, "bad3.st")
+            with open(st_bad3, "w", encoding="utf-8") as f:
+                f.write(st_txt.replace("\nreturns ", "\nhidden a0\nreturns ", 1))
+            b3a = subprocess.run([odeverify, tab, st_bad3, pf_p], capture_output=True, text=True)
+            b3b = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_bad3, pf_p],
+                                 capture_output=True, text=True)
+            self.assertNotEqual(b3a.returncode, 0)
+            self.assertNotEqual(b3b.returncode, 0)
+
+            # Negative 4: mutated return instruction (`1` -> `0`)
+            st_bad4 = os.path.join(d, "bad4.st")
+            if target == "x86_64":
+                mut = st_txt.replace(".mov 64 (.reg .rax) (.imm 0x1)", ".mov 64 (.reg .rax) (.imm 0x0)")
+            else:
+                mut = st_txt.replace(".movi .x0 0x1", ".movi .x0 0x0")
+            self.assertNotEqual(mut, st_txt)
+            with open(st_bad4, "w", encoding="utf-8") as f:
+                f.write(mut)
+            b4a = subprocess.run([odeverify, tab, st_bad4, pf_p], capture_output=True, text=True)
+            b4b = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_bad4, pf_p],
+                                 capture_output=True, text=True)
+            self.assertNotEqual(b4a.returncode, 0)
+            self.assertNotEqual(b4b.returncode, 0)
+
+    def test_01_dual_verify_x86_64(self):
+        self._run_dual("x86_64")
+
+    def test_02_dual_verify_arm64(self):
+        self._run_dual("arm64")
+
+
+if __name__ == "__main__":
+    unittest.main()
