@@ -228,7 +228,7 @@ size, and how it is checked.
 | **Instruction tables (`core/x86.tab`, `arm64/arm64.tab`)** | 94 x86-64 rows; 54 AArch64 rows | Cross-checked against real x86-64 and Apple M6 hardware (`0` diffs); all `54/54` AArch64 rows formally proved against Google DeepMind's `arm64-semantics` (`arm64/agree/`). |
 | **Statement builder (`proof-core/statement.py`)** | 791 lines of Python | Tested and audited, not yet formally proved. Translates ELF `.o` + canonical `.ocl` into `.statement`. |
 | **Auditor front-end (`lang/ode_canon.py`, `lang/ode_audit.py`)** | 1,490 lines of Python | Tested with positive and adversarial controls (`lang/test_ode_canon.py`, `proof-core/test_ode_audit.py`); checks ELF structure, `.ode.ocl`, hashes, and invokes `odeverify`. |
-| **Lean 4 kernel / runtime** | External | Standard Lean 4 toolchain (independent verifiers for the same `.proof` format are a future goal). |
+| **Lean 4 kernel / runtime** | External | Standard Lean 4 toolchain. For the scalar/byte/loop fragment, Bob can also cross-check the exact same `.statement` and order-independent (`r ...`) `.proof` files with the standalone pure-Python second verifier `proof-core/verify2.py` (~940 lines, zero verification code shared with Lean). |
 
 *(Where a specification was translated from an existing Lean 4 specification using `lean2ode/`, see
 `lean2ode/agree/` for machine-checked Lean 4 theorems proving the Ode specification agrees with the
@@ -253,6 +253,6 @@ still on our roadmap.
 
 ### Where to go next
 
-- Full design and reliance-set analysis: [`DESIGN.md`](../DESIGN.md)
-- Verified catalog of 38+ routines across x86-64 and AArch64: [`CATALOG.md`](../CATALOG.md)
-- Companion pocket reference for people writing Ode code: [`docs/ODE-CARD.md`](ODE-CARD.md)
+- The Ode Language Report: [`paper/ODE.pdf`](../paper/ODE.pdf)
+- Practitioner's Quickstart: [`paper/quickstart.pdf`](../paper/quickstart.pdf) / [`docs/QUICKSTART.md`](QUICKSTART.md)
+- Verified catalog across x86-64 and AArch64: [`CATALOG.md`](../CATALOG.md)
