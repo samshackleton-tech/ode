@@ -1,0 +1,227 @@
+{
+  "run_id": "ct-count-v1",
+  "prereg_commit": "d30277258155ee0596437463c5e4887b340f0154",
+  "finished_utc": "2026-11-25T22:00:01Z",
+  "tasks": [
+    "ct_count"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 8,
+  "total_cells": 8,
+  "verify2_passes": 4,
+  "native_passes": 8,
+  "total_rounds": 8,
+  "total_cost_usd": 1.0451,
+  "failure_categories": {},
+  "cells": [
+    {
+      "task": "ct_count",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.1538,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 76,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.091,
+        "pack_s": 0.327,
+        "proof_bytes": 4912
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.1922,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 77,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.093,
+        "pack_s": 0.338,
+        "proof_bytes": 3043
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0361,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 76,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.09,
+        "pack_s": 0.349,
+        "proof_bytes": 4912
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0498,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 77,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.094,
+        "pack_s": 0.318,
+        "proof_bytes": 3043
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0699,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 76,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.092,
+        "pack_s": 0.338,
+        "proof_bytes": 4912
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.0922,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 77,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.093,
+        "pack_s": 0.336,
+        "proof_bytes": 3043
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.1945,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 76,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.093,
+        "pack_s": 0.349,
+        "proof_bytes": 4928
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ct_count",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "total_cost_usd": 0.2566,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 6/6",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 19,
+        "code_bytes": 77,
+        "contract_id": "hbdtlkirrxt4sxhwsvqn3rmrrqxxfx3rpu4iebfgdgb3my2cr7ma",
+        "verdict": "shown",
+        "audit_s": 0.099,
+        "pack_s": 0.323,
+        "proof_bytes": 3051
+      },
+      "round_categories": [
+        "passed"
+      ]
+    }
+  ]
+}
