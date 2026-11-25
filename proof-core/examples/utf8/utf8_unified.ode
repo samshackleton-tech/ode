@@ -1,0 +1,275 @@
+// Strict RFC 3629 UTF-8 validator and code-point counter for x86-64 and AArch64 (`stack 0`).
+use u8 = "utf8_spec.ode"
+
+fn utf8_validate(a: n bytes, n: number)
+    requires n < 18446744073709551615
+    returns u8.utf8_count_plus1(a)
+    trace depends on a, n
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi, len_r = rsi, idx = rcx, cnt = r8, rem = r9, b0 = rdx, b1 = r10, b2 = r11, res = rax
+
+        idx := 0
+        cnt := 1
+        place {
+            name i = idx
+            name c = cnt
+            fact 0 <= i
+            fact i <= n
+            fact 1 <= c
+            fact c <= i + 1
+            fact u8.utf8_count_plus1(a) == u8.utf8_step(a, i, c)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        jae @done
+        mov rem, len_r
+        sub rem, idx
+        mov res, base
+        add res, idx
+        movzx edx, byte ptr [res]
+        cmp b0, 128
+        jae @multi
+        add idx, 1
+        add cnt, 1
+        jmp @loop
+
+    @multi:
+        cmp b0, 194
+        jb @bad
+        cmp b0, 224
+        jae @try3
+
+        // 2-byte: C2..DF, 80..BF
+        cmp rem, 2
+        jb @bad
+        mov res, base
+        add res, idx
+        add res, 1
+        movzx r10d, byte ptr [res]
+        cmp b1, 128
+        jb @bad
+        cmp b1, 192
+        jae @bad
+        add idx, 2
+        add cnt, 1
+        jmp @loop
+
+    @try3:
+        cmp b0, 240
+        jae @try4
+
+        // 3-byte: E0..EF
+        cmp rem, 3
+        jb @bad
+        mov res, base
+        add res, idx
+        add res, 1
+        movzx r10d, byte ptr [res]
+        cmp b1, 128
+        jb @bad
+        cmp b1, 192
+        jae @bad
+        mov res, base
+        add res, idx
+        add res, 2
+        movzx r11d, byte ptr [res]
+        cmp b2, 128
+        jb @bad
+        cmp b2, 192
+        jae @bad
+        cmp b0, 224
+        jne @chk_ed
+        cmp b1, 160
+        jb @bad
+        jmp @ok3
+    @chk_ed:
+        cmp b0, 237
+        jne @ok3
+        cmp b1, 160
+        jae @bad
+    @ok3:
+        add idx, 3
+        add cnt, 1
+        jmp @loop
+
+    @try4:
+        cmp b0, 245
+        jae @bad
+
+        // 4-byte: F0..F4
+        cmp rem, 4
+        jb @bad
+        mov res, base
+        add res, idx
+        add res, 1
+        movzx r10d, byte ptr [res]
+        cmp b1, 128
+        jb @bad
+        cmp b1, 192
+        jae @bad
+        mov res, base
+        add res, idx
+        add res, 2
+        movzx r11d, byte ptr [res]
+        cmp b2, 128
+        jb @bad
+        cmp b2, 192
+        jae @bad
+        mov res, base
+        add res, idx
+        add res, 3
+        movzx eax, byte ptr [res]
+        cmp res, 128
+        jb @bad
+        cmp res, 192
+        jae @bad
+        cmp b0, 240
+        jne @chk_f4
+        cmp b1, 144
+        jb @bad
+        jmp @ok4
+    @chk_f4:
+        cmp b0, 244
+        jne @ok4
+        cmp b1, 144
+        jae @bad
+    @ok4:
+        add idx, 4
+        add cnt, 1
+        jmp @loop
+
+    @done:
+        mov res, cnt
+        ret
+
+    @bad:
+        res := 0
+        ret
+    }
+    for arm64 {
+        reg base = x0, len_r = x1, idx = x2, cnt = x3, rem = x4, addr = x5
+        reg b0w = w6, b0 = x6, b1w = w7, b1 = x7, b2w = w8, b2 = x8, b3w = w9, b3 = x9
+
+        idx := 0
+        cnt := 1
+        place {
+            name i = idx
+            name c = cnt
+            fact 0 <= i
+            fact i <= n
+            fact 1 <= c
+            fact c <= i + 1
+            fact u8.utf8_count_plus1(a) == u8.utf8_step(a, i, c)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, len_r
+        b.hs @done
+        sub rem, len_r, idx
+        add addr, base, idx
+        ldrb b0w, [addr, 0]
+        cmp b0, 128
+        b.hs @multi
+        add idx, idx, 1
+        add cnt, cnt, 1
+        b @loop
+
+    @multi:
+        cmp b0, 194
+        b.lo @bad
+        cmp b0, 224
+        b.hs @try3
+
+        // 2-byte
+        cmp rem, 2
+        b.lo @bad
+        ldrb b1w, [addr, 1]
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 192
+        b.hs @bad
+        add idx, idx, 2
+        add cnt, cnt, 1
+        b @loop
+
+    @try3:
+        cmp b0, 240
+        b.hs @try4
+
+        // 3-byte
+        cmp rem, 3
+        b.lo @bad
+        ldrb b1w, [addr, 1]
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 192
+        b.hs @bad
+        ldrb b2w, [addr, 2]
+        cmp b2, 128
+        b.lo @bad
+        cmp b2, 192
+        b.hs @bad
+        cmp b0, 224
+        b.ne @chk_ed
+        cmp b1, 160
+        b.lo @bad
+        b @ok3
+    @chk_ed:
+        cmp b0, 237
+        b.ne @ok3
+        cmp b1, 160
+        b.hs @bad
+    @ok3:
+        add idx, idx, 3
+        add cnt, cnt, 1
+        b @loop
+
+    @try4:
+        cmp b0, 245
+        b.hs @bad
+
+        // 4-byte
+        cmp rem, 4
+        b.lo @bad
+        ldrb b1w, [addr, 1]
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 192
+        b.hs @bad
+        ldrb b2w, [addr, 2]
+        cmp b2, 128
+        b.lo @bad
+        cmp b2, 192
+        b.hs @bad
+        ldrb b3w, [addr, 3]
+        cmp b3, 128
+        b.lo @bad
+        cmp b3, 192
+        b.hs @bad
+        cmp b0, 240
+        b.ne @chk_f4
+        cmp b1, 144
+        b.lo @bad
+        b @ok4
+    @chk_f4:
+        cmp b0, 244
+        b.ne @ok4
+        cmp b1, 144
+        b.hs @bad
+    @ok4:
+        add idx, idx, 4
+        add cnt, cnt, 1
+        b @loop
+
+    @done:
+        mov x0, cnt
+        ret
+
+    @bad:
+        x0 := 0
+        ret
+    }
+}

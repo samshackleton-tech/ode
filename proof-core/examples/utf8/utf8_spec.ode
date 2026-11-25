@@ -1,0 +1,60 @@
+// RFC 3629 / Unicode Standard D92 Table 3-7: strict UTF-8 validator and code-point counter.
+// Returns `code_point_count + 1` if well-formed, or `0` (INVALID) otherwise.
+
+const INVALID = 0
+
+def utf8_step(a, i, count) {
+    if i >= len(a) then count
+    else if a[i] < 128 then utf8_step(a, i + 1, count + 1)
+    else if a[i] < 194 then INVALID
+    else if a[i] < 224 then
+        if i + 2 <= len(a) then
+            if a[i + 1] >= 128 then
+                if a[i + 1] < 192 then utf8_step(a, i + 2, count + 1)
+                else INVALID
+            else INVALID
+        else INVALID
+    else if a[i] < 240 then
+        if i + 3 <= len(a) then
+            if a[i + 1] >= 128 then
+                if a[i + 1] < 192 then
+                    if a[i + 2] >= 128 then
+                        if a[i + 2] < 192 then
+                            if a[i] == 224 then
+                                if a[i + 1] >= 160 then utf8_step(a, i + 3, count + 1)
+                                else INVALID
+                            else if a[i] == 237 then
+                                if a[i + 1] < 160 then utf8_step(a, i + 3, count + 1)
+                                else INVALID
+                            else utf8_step(a, i + 3, count + 1)
+                        else INVALID
+                    else INVALID
+                else INVALID
+            else INVALID
+        else INVALID
+    else if a[i] < 245 then
+        if i + 4 <= len(a) then
+            if a[i + 1] >= 128 then
+                if a[i + 1] < 192 then
+                    if a[i + 2] >= 128 then
+                        if a[i + 2] < 192 then
+                            if a[i + 3] >= 128 then
+                                if a[i + 3] < 192 then
+                                    if a[i] == 240 then
+                                        if a[i + 1] >= 144 then utf8_step(a, i + 4, count + 1)
+                                        else INVALID
+                                    else if a[i] == 244 then
+                                        if a[i + 1] < 144 then utf8_step(a, i + 4, count + 1)
+                                        else INVALID
+                                    else utf8_step(a, i + 4, count + 1)
+                                else INVALID
+                            else INVALID
+                        else INVALID
+                    else INVALID
+                else INVALID
+            else INVALID
+        else INVALID
+    else INVALID
+}
+
+def utf8_count_plus1(a) { utf8_step(a, 0, 1) }
