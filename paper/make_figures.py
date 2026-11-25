@@ -447,9 +447,9 @@ def make_fig6():
     parts.append(text(12, (ly0 + ly1) / 2, "GiB/s", size=8.0, fill=SLATE, anchor="middle"))
 
     short_sizes = [
-        ("64 B", 0.670, 1.286, 1.300, 1.161),
-        ("256 B", 0.931, 0.978, 1.033, 0.904),
-        ("1 KiB", 0.940, 0.951, 0.981, 0.933),
+        ("64 B", 0.670, 1.282, 1.298, 0.803),
+        ("256 B", 0.931, 0.975, 1.030, 0.900),
+        ("1 KiB", 0.940, 0.949, 0.978, 0.930),
     ]
     centers = [82, 158, 234]
     bw = 13
@@ -484,7 +484,7 @@ def make_fig6():
         parts.append(text(ix + 10.5, ky, lab, size=7.8, fill=ACCENT if fl == ACCENT else INK, weight="bold" if fl == ACCENT else "normal"))
 
     # ---- RIGHT PANEL: Full Sweep (4 KiB – 1 MiB) ----
-    rx0, rx1 = 336, 594
+    rx0, rx1 = 336, 574
     ry0, ry1 = 44, 202
     ymax_r = 18.0
 
@@ -500,15 +500,15 @@ def make_fig6():
         parts.append(line(rx0, y, rx1, y, stroke=RULE if tick > 0 else INK, sw=0.45 if tick > 0 else 0.7))
         parts.append(text(rx0 - 6, y + 3, f"{tick}", font=SERIF, size=8.0, fill=SLATE, anchor="end"))
 
-    # Exact verified Zen 5 medians (4 KiB .. 1 MiB)
+    # Exact verified Zen 5 Step 4A k16 medians (4 KiB .. 1 MiB)
     sweep = [
-        ("4K",   2.162,  3.336,  3.413),
-        ("16K",  6.299, 10.713, 10.734),
-        ("32K",  9.221, 15.333, 11.582),
-        ("64K", 14.795, 15.999, 12.023),
-        ("128K",14.658, 16.357, 12.275),
-        ("256K",16.336, 16.601, 12.405),
-        ("1M",  15.851, 16.032, 12.356),
+        ("4K",   2.928,  3.327,  3.407),
+        ("16K",  7.797, 10.576, 10.724),
+        ("32K",  9.221, 15.223, 11.569),
+        ("64K", 14.781, 15.907, 12.004),
+        ("128K",14.636, 16.299, 12.248),
+        ("256K",16.301, 16.500, 12.381),
+        ("1M",  15.761, 16.026, 12.221),
     ]
     xs_r = [rx0 + 12 + i * ((rx1 - rx0 - 24) / (len(sweep) - 1)) for i in range(len(sweep))]
 
@@ -527,18 +527,19 @@ def make_fig6():
         parts.append(f'  <circle cx="{cx:.1f}" cy="{ry(nxt):.1f}" r="1.8" fill="#3A3F47"/>')
         parts.append(text(f"{cx:.1f}", ry1 + 14, lbl, font=SERIF, size=8.0, fill=INK, anchor="middle"))
 
-    # Clean non-colliding direct end-of-line labels
-    parts.append(text(rx1 + 8, ry(16.032) - 5, "BLAKE3-Servil 16.0", size=7.8, fill="#3A3F47"))
-    parts.append(text(rx1 + 8, ry(15.851) + 9, "Ode  15.9", size=8.2, fill=ACCENT, weight="bold"))
-    parts.append(text(rx1 + 8, ry(12.356) + 3, "blake3 1.8.7  12.4", size=7.8, fill=SLATE))
+    # Clean non-colliding direct end-of-line labels (ample right margin)
+    parts.append(text(rx1 + 8, ry(16.026) - 5, "BLAKE3-Servil 16.0", size=7.8, fill="#3A3F47"))
+    parts.append(text(rx1 + 8, ry(15.761) + 9, "Ode  15.8", size=8.2, fill=ACCENT, weight="bold"))
+    parts.append(text(rx1 + 8, ry(12.221) + 3, "blake3 1.8.7  12.2", size=7.8, fill=SLATE))
 
-    # Pure architectural callout for mid sizes
-    parts.append(line(xs_r[1] + 2, ry(6.299) + 3, xs_r[1] + 22, ry(3.3), stroke=SLATE, sw=0.65))
-    parts.append(text(xs_r[1] + 25, ry(3.1), "4 to 32 KiB: BLAKE3-Servil has", size=7.8, fill=SLATE, style="italic"))
-    parts.append(text(xs_r[1] + 25, ry(1.8), "kernels the Ode code does not", size=7.8, fill=SLATE, style="italic"))
+    # Pure architectural callout for 32 KiB dip
+    parts.append(line(xs_r[2] + 2, ry(9.221) + 3, xs_r[2] + 18, ry(4.2), stroke=SLATE, sw=0.65))
+    parts.append(text(xs_r[2] + 21, ry(4.0), "32 KiB: 16-lane kernel", size=7.8, fill=SLATE, style="italic"))
+    parts.append(text(xs_r[2] + 21, ry(2.6), "runs twice; 64 KiB+", size=7.8, fill=SLATE, style="italic"))
+    parts.append(text(xs_r[2] + 21, ry(1.2), "uses 32-lane kernel", size=7.8, fill=SLATE, style="italic"))
 
-    # Peak highlight at 256 KiB
-    parts.append(text(f"{xs_r[5]:.1f}", ry(16.601) - 8, "16.34", size=8.0, fill=ACCENT, anchor="middle", weight="bold"))
+    # Peak highlight at 256 KiB (clear of curve)
+    parts.append(text(f"{xs_r[5]:.1f}", ry(16.500) - 10, "16.30", size=8.0, fill=ACCENT, anchor="middle", weight="bold"))
     parts.append(text(rx0 - 6, ry(17.9), "GiB/s", size=7.8, fill=SLATE, anchor="end", style="italic"))
 
     # Bottom caption note

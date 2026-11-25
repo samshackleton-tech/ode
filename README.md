@@ -38,7 +38,7 @@ python3 lang/ode_tool.py pack paper/examples/all_zero.ode --target arm64 \
     --out /tmp/all_zero.o --proof /tmp/all_zero.proof
 
 # Audit an object file and proof bundle against an expected contract ID
-python3 lang/ode_tool.py audit /tmp/all_zero.o /tmp/all_zero.proof \
+python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
     --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika
 ```
 

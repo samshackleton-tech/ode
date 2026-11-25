@@ -125,7 +125,7 @@
   #text(font: "Palatino", size: 21.5pt, fill: ink, weight: "bold")[Writing Verified Machine Code in Ode]
   #v(4pt)
   #text(font: "Palatino", size: 10.6pt, fill: slate, style: "italic")[
-    A hands-on guide to writing contracts, machine-code bodies, and loop invariants that verify on x86-64 and AArch64.
+    A hands-on guide to writing contracts and machine-code bodies that verify on x86-64 and AArch64.
   ]
   #v(9pt)
   #line(length: 100%, stroke: 0.9pt + charcoal)
@@ -164,7 +164,7 @@ Inside each target block, `reg name = r` declares a readable alias for a hardwar
 
 During development, run `ode check` on a `.ode` file to compile it, search for a proof, and verify the compiled bytes. When ready to ship, run `ode pack` to produce a standard ELF64 object file (`.o`) with the canonical contract embedded in `.ode.ocl`, plus a separate `.proof` file. An auditor runs `ode audit` on the `.o` and `.proof` files against the expected 52-character lowercase base-32 BLAKE3 contract identifier.
 
-#codebox("Development, release, and audit commands", "python3 lang/ode_tool.py check paper/examples/all_zero.ode --target arm64\n\npython3 lang/ode_tool.py pack paper/examples/all_zero.ode --target arm64 \\\n  --out /tmp/all_zero.o --proof /tmp/all_zero.proof\n\npython3 lang/ode_tool.py audit /tmp/all_zero.o /tmp/all_zero.proof \\\n  --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika", span: 6.80in)
+#codebox("Development, release, and audit commands", "python3 lang/ode_tool.py check paper/examples/all_zero.ode --target arm64\n\npython3 lang/ode_tool.py pack paper/examples/all_zero.ode --target arm64 \\\n  --out /tmp/all_zero.o --proof /tmp/all_zero.proof\n\npython3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \\\n  --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika", span: 6.80in)
 
 The table below lists the four outcomes printed by Ode's tools and what each means.
 
