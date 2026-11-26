@@ -1,0 +1,448 @@
+{
+  "run_id": "suite-v5",
+  "prereg_commit": "bc366f10bdd109a3ba9a57150b075b42d0acefa9",
+  "status": "complete",
+  "completed_cells": 16,
+  "finished_utc": "2026-11-26T02:52:22Z",
+  "tasks": [
+    "header_score",
+    "ebpf"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 11,
+  "total_cells": 16,
+  "verify2_passes": 11,
+  "native_passes": 11,
+  "total_rounds": 54,
+  "total_cost_usd": 13.8338,
+  "failure_categories": {
+    "arith_need_entail": 15,
+    "arith_need_compare": 13,
+    "prover_timeout_120s": 10,
+    "compile_or_parse_error": 1,
+    "kept_reg_refusal": 1,
+    "other": 1,
+    "spec_need_open": 1,
+    "trace_refusal": 1
+  },
+  "cells": [
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 4,
+      "rounds_to_pass": 4,
+      "stopped_reason": null,
+      "total_cost_usd": 2.7286,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 220,
+        "code_bytes": 932,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.25,
+        "pack_s": 9.508,
+        "proof_bytes": 85416
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "arith_need_compare",
+        "arith_need_entail",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 1.0929,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 245,
+        "code_bytes": 912,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.251,
+        "pack_s": 5.399,
+        "proof_bytes": 50125
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "stopped_reason": null,
+      "total_cost_usd": 1.0392,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 7,
+      "rounds_to_pass": null,
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 0.9643,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "trace_refusal",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 4,
+      "rounds_to_pass": 4,
+      "stopped_reason": null,
+      "total_cost_usd": 1.2478,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 8,
+        "instructions": 219,
+        "code_bytes": 924,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.233,
+        "pack_s": 8.569,
+        "proof_bytes": 197204
+      },
+      "round_categories": [
+        "arith_need_compare",
+        "spec_need_open",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 4,
+      "rounds_to_pass": null,
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 1.8228,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "prover_timeout_120s",
+        "arith_need_compare",
+        "arith_need_compare",
+        "arith_need_compare"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 3,
+      "rounds_to_pass": 3,
+      "stopped_reason": null,
+      "total_cost_usd": 1.161,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 172,
+        "code_bytes": 720,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.251,
+        "pack_s": 7.62,
+        "proof_bytes": 107881
+      },
+      "round_categories": [
+        "kept_reg_refusal",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "ebpf",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.5247,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 7/7",
+      "final_metrics": {
+        "functions": 6,
+        "instructions": 187,
+        "code_bytes": 673,
+        "contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
+        "verdict": "shown",
+        "audit_s": 0.219,
+        "pack_s": 6.001,
+        "proof_bytes": 161774
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.2374,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 67,
+        "code_bytes": 268,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.104,
+        "pack_s": 3.791,
+        "proof_bytes": 5575
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.2823,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 66,
+        "code_bytes": 249,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.141,
+        "pack_s": 3.612,
+        "proof_bytes": 4314
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.8787,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.8543,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "compile_or_parse_error",
+        "other"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1528,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 67,
+        "code_bytes": 268,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.115,
+        "pack_s": 3.749,
+        "proof_bytes": 5447
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.1652,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 66,
+        "code_bytes": 249,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.134,
+        "pack_s": 3.177,
+        "proof_bytes": 4221
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.3134,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 67,
+        "code_bytes": 268,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.134,
+        "pack_s": 4.218,
+        "proof_bytes": 5703
+      },
+      "round_categories": [
+        "passed"
+      ]
+    },
+    {
+      "task": "header_score",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "strict_pass": true,
+      "rounds_used": 1,
+      "rounds_to_pass": 1,
+      "stopped_reason": null,
+      "total_cost_usd": 0.3684,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 1021/1021",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 66,
+        "code_bytes": 249,
+        "contract_id": "hrslejxv4lnql6e53janwkl7tjtgn7oydsuja33hgvgktnbwwehq",
+        "verdict": "shown",
+        "audit_s": 0.13,
+        "pack_s": 3.7,
+        "proof_bytes": 4498
+      },
+      "round_categories": [
+        "passed"
+      ]
+    }
+  ]
+}
