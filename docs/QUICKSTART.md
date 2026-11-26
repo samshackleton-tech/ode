@@ -182,7 +182,7 @@ Portable functions use a single `{ ... }` body. When you want architecture-speci
 | 32-bit lane add / xor / and / or | `a +% b` (or `a +%= b`), `a ^ b`, `a & b`, `a \| b` | `vpaddd`, `vpxord`, `vpand`, `vpor` / `add.4s`, `eor.16b`, `and.16b`, `orr.16b` |
 | 32-bit lane rotate | `rotl32(a, k)`, `rotr32(a, k)` | `vprord` (`avx512` / `u32x16`) or `vpslld+vpsrld+vpor`; `rev32.8h` (`k=16`) or `shl+ushr+orr` (`arm64`) |
 | 128-bit lane rotate / align | `ext4(a, b)`, `ext8(a, b)`, `ext12(a, b)` | `vpalignr` (`x86_64`) / `ext.16b` (`arm64`) |
-| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32(a, b)`, `unpackhi32(a, b)`, `unpacklo64(a, b)`, `unpackhi64(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`, `vpunpckhdq`, `vpunpcklqdq`, `vpunpckhqdq`, `vshufi32x4` |
+| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32(a, b)`, `unpackhi32(a, b)`, `unpacklo64(a, b)`, `unpackhi64(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`, `vpunpckhdq`, `vpunpcklqdq`, `vpunpckhqdq`, `vshufi32x4` / `zip1.4s`, `zip2.4s`, `zip1.2d`, `zip2.2d` (`arm64`) |
 
 On AArch64, `u32x4` uses up to 23 caller-saved NEON registers (`v0..v7, v16..v30`) with zero stack pushes (and automatically saves/restores `v8..v15` if more than 23 vectors are live at once). On x86-64, `u32x4` uses `xmm1..xmm15` and `u32x16` uses `zmm1..zmm31` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 
