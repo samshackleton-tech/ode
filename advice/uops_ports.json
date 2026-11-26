@@ -960,6 +960,502 @@
         "uops_name": "CALL_NEAR (Rel32)"
       }
     },
+    "cmova64_rr": {
+      "ICL": {
+        "uops": 2,
+        "lat": 2,
+        "mem_lat": null,
+        "tp": 1.0,
+        "ports": [
+          [
+            2,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "2*p06",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06B",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06B",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      }
+    },
+    "cmovae64_rr": {
+      "ICL": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      }
+    },
+    "cmovb64_rr": {
+      "ICL": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      }
+    },
+    "cmovbe64_rr": {
+      "ICL": {
+        "uops": 2,
+        "lat": 2,
+        "mem_lat": null,
+        "tp": 1.0,
+        "ports": [
+          [
+            2,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "2*p06",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06B",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06B",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVA/BE (R64, R64)"
+      }
+    },
+    "cmove64_rr": {
+      "ICL": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      }
+    },
+    "cmovne64_rr": {
+      "ICL": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.5,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p6"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p06",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ADL-P": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "EMR": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5",
+              "p6B"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0156B",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN3": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN4": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      },
+      "ZEN5": {
+        "uops": 1,
+        "lat": 1,
+        "mem_lat": null,
+        "tp": 0.25,
+        "ports": [],
+        "ports_raw": "",
+        "uops_name": "CMOVcc (R64, R64)"
+      }
+    },
     "cmp64_ri": {
       "ADL-P": {
         "lat": 1.0,

@@ -17,10 +17,11 @@ import asm, kdecode, obj as aobj, odec
 
 # The names that asm.py has a branch for, and some that it has none for (those are refused whatever follows).
 NAMES = ("""nop endbr64 ret vzeroupper prefetcht0 jmp je jz jne jnz jae jb ja jbe call push pop dec test xor shl shr add sub and or cmp lea movzx mov
+            cmove cmovz cmovne cmovnz cmovb cmovc cmovae cmovnc cmova cmovnbe cmovbe cmovna
             movq vmovq movups vmovups vmovdqu movaps vmovaps movdqa vmovdqa vmovdqa32 vmovdqu32 pslld vpslld psrld vpsrld pshufb pblendw pshufd vpshufd shufps
             vshufps vpblendd vpalignr sha256rnds2 sha256msg1 sha256msg2 vprord vpbroadcastd vpcmpud vshufi32x4 paddd vpaddd pxor vpxor vpxord pand vpand por vpor punpckldq vpunpckldq punpckhdq
             vpunpckhdq punpcklqdq vpunpcklqdq vpunpckhqdq""".split())
-STRANGERS = "imul neg not adc sbb inc xchg bswap cmovb setb movsx movsxd movdqu vmovdqu8 vmovdqu64 vmovdqa64 vpxorq vpord".split()
+STRANGERS = "imul neg not adc sbb inc xchg bswap setb movsx movsxd movdqu vmovdqu8 vmovdqu64 vmovdqa64 vpxorq vpord".split()
 # An operand of each kind, to stand where another stood.
 OTHERS = (["rcx", "ecx", "cx", "cl", "al", "xmm5", "ymm5", "zmm5", "zmm5 {k2}", "k2", "7", "[rdi + 8]", "[rdi + rsi + 8]"]
           + [f"{word} ptr [rdi + 8]" for word in ("byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword")])

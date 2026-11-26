@@ -1,0 +1,361 @@
+use spec = "ct_base64_decode_spec.ode"
+
+// Constant-time helper: decode one Base64 byte `c` into packed `(ok * 64 + val)`.
+// Uses only monotone `cmov*` (x86-64) / `csel` (AArch64): zero branches, zero memory loads.
+fn b64_char(c: number)
+    requires c < 256
+    returns spec.b64_dec(c)
+    stack 0
+{
+    for x86_64 {
+        reg res = rax, zero7 = rcx, tmp = rdx, inp = rdi
+        res := 7
+        zero7 := 7
+
+        // '+' (43) -> (64 + 62) + 7 = 133
+        tmp := 133
+        cmp inp, 43
+        cmove res, tmp
+
+        // '/' (47) -> (64 + 63) + 7 = 134
+        tmp := 134
+        cmp inp, 47
+        cmove res, tmp
+
+        // '0'..'9' (48..57) -> (c + 68) + 7 = c + 75
+        mov tmp, inp
+        add tmp, 75
+        cmp inp, 48
+        cmovae res, tmp
+        cmp inp, 57
+        cmova res, zero7
+
+        // 'A'..'Z' (65..90) -> (c - 1) + 7 = c + 6
+        mov tmp, inp
+        add tmp, 6
+        cmp inp, 65
+        cmovae res, tmp
+        cmp inp, 90
+        cmova res, zero7
+
+        // 'a'..'z' (97..122) -> (c - 7) + 7 = c
+        cmp inp, 97
+        cmovae res, inp
+        cmp inp, 122
+        cmova res, zero7
+
+        sub res, 7
+        ret
+    }
+    for arm64 {
+        reg inp = x0, res = x1, zero7 = x2, tmp = x3
+        res := 7
+        zero7 := 7
+
+        // '+' (43) -> 133
+        tmp := 133
+        cmp inp, 43
+        csel res, tmp, res, eq
+
+        // '/' (47) -> 134
+        tmp := 134
+        cmp inp, 47
+        csel res, tmp, res, eq
+
+        // '0'..'9' (48..57) -> c + 75
+        add tmp, inp, 75
+        cmp inp, 48
+        csel res, tmp, res, hs
+        cmp inp, 57
+        csel res, zero7, res, hi
+
+        // 'A'..'Z' (65..90) -> c + 6
+        add tmp, inp, 6
+        cmp inp, 65
+        csel res, tmp, res, hs
+        cmp inp, 90
+        csel res, zero7, res, hi
+
+        // 'a'..'z' (97..122) -> c
+        cmp inp, 97
+        csel res, inp, res, hs
+        cmp inp, 122
+        csel res, zero7, res, hi
+
+        sub x0, res, 7
+        ret
+    }
+}
+
+// Constant-time RFC 4648 Base64 block decoder (256 chars -> 192 bytes).
+fn ct_base64_decode(out: 192 bytes, src: n bytes, n: number)
+    requires no_overlap(out, src)
+    requires n >= 256
+    requires n <= 256
+    ensures out = spec.b64_decode(src)
+    returns spec.b64_valid(src)
+    trace depends on n
+    stack 64
+{
+    for x86_64 {
+        // Save callee-saved registers (6 pushes = 48 B -> +8 ret addr = 56 B; sub rsp, 8 -> 64 B, rsp % 16 == 0)
+        push rbx
+        push rbp
+        push r12
+        push r13
+        push r14
+        push r15
+        sub rsp, 8
+
+        mov rbx, rdi        // out
+        mov rbp, rsi        // src
+        r12 := 0            // in_idx = 4 * q
+        r13 := 0            // out_idx = 3 * q
+        r14 := 1            // ok accumulator (0 or 1)
+
+        place {
+            fact 0 <= r12
+            fact r12 <= 256
+            fact 0 <= r13
+            fact r13 <= 192
+            fact r12 == 4 * (r12 / 4)
+            fact r13 == 3 * (r12 / 4)
+            fact 0 <= r14
+            fact r14 <= 1
+            keep rbx, rbp
+            fact spec.b64_valid(src) == spec.b64_valid_from(src, r12, r14)
+            wrote out[.. r13] = spec.b64_decode(src)
+            decreases 256 - r12
+        }
+    @loop:
+        cmp r12, 256
+        jae @done
+
+        // Char 0: src[r12]
+        mov rax, rbp
+        add rax, r12
+        movzx edi, byte ptr [rax]
+        call b64_char
+        // rax = ok0 * 64 + v0
+        mov r15, rax
+        and r15, 63         // v0
+        shr rax, 6          // ok0
+        xor rcx, rcx
+        cmp rax, 0
+        cmove r14, rcx
+
+        // Char 1: src[r12 + 1]
+        mov rax, rbp
+        add rax, r12
+        add rax, 1
+        movzx edi, byte ptr [rax]
+        call b64_char
+        mov r8, rax
+        and r8, 63          // v1
+        shr rax, 6          // ok1
+        xor rcx, rcx
+        cmp rax, 0
+        cmove r14, rcx
+
+        // Byte 0 = (v0 << 2) + (v1 >> 4)
+        mov rax, r15
+        shl rax, 2
+        mov rdx, r8
+        shr rdx, 4
+        add rax, rdx
+        mov r9, rbx
+        add r9, r13
+        mov byte ptr [r9], al
+
+        // Save v1 in r15 across next call
+        mov r15, r8
+
+        // Char 2: src[r12 + 2]
+        mov rax, rbp
+        add rax, r12
+        add rax, 2
+        movzx edi, byte ptr [rax]
+        call b64_char
+        mov r8, rax
+        and r8, 63          // v2
+        shr rax, 6          // ok2
+        xor rcx, rcx
+        cmp rax, 0
+        cmove r14, rcx
+
+        // Byte 1 = ((v1 & 15) << 4) + (v2 >> 2)
+        mov rax, r15
+        and rax, 15
+        shl rax, 4
+        mov rdx, r8
+        shr rdx, 2
+        add rax, rdx
+        mov r9, rbx
+        add r9, r13
+        add r9, 1
+        mov byte ptr [r9], al
+
+        // Save v2 in r15 across next call
+        mov r15, r8
+
+        // Char 3: src[r12 + 3]
+        mov rax, rbp
+        add rax, r12
+        add rax, 3
+        movzx edi, byte ptr [rax]
+        call b64_char
+        mov r8, rax
+        and r8, 63          // v3
+        shr rax, 6          // ok3
+        xor rcx, rcx
+        cmp rax, 0
+        cmove r14, rcx
+
+        // Byte 2 = ((v2 & 3) << 6) + v3
+        mov rax, r15
+        and rax, 3
+        shl rax, 6
+        add rax, r8
+        mov r9, rbx
+        add r9, r13
+        add r9, 2
+        mov byte ptr [r9], al
+
+        add r12, 4
+        add r13, 3
+        jmp @loop
+
+    @done:
+        mov rax, r14
+        add rsp, 8
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbp
+        pop rbx
+        ret
+    }
+    for arm64 {
+        sub sp, sp, 64
+        str x30, [sp, 0]
+        str x19, [sp, 8]
+        str x20, [sp, 16]
+        str x21, [sp, 24]
+        str x22, [sp, 32]
+        str x23, [sp, 40]
+        str x24, [sp, 48]
+
+        mov x19, x0         // out
+        mov x20, x1         // src
+        x21 := 0            // in_idx = 4 * q
+        x22 := 0            // out_idx = 3 * q
+        x23 := 1            // ok accumulator
+
+        place {
+            fact 0 <= x21
+            fact x21 <= 256
+            fact 0 <= x22
+            fact x22 <= 192
+            fact x21 == 4 * (x21 / 4)
+            fact x22 == 3 * (x21 / 4)
+            fact 0 <= x23
+            fact x23 <= 1
+            keep x19, x20
+            fact spec.b64_valid(src) == spec.b64_valid_from(src, x21, x23)
+            wrote out[.. x22] = spec.b64_decode(src)
+            decreases 256 - x21
+        }
+    @loop:
+        cmp x21, 256
+        b.hs @done
+
+        // Char 0
+        add x1, x20, x21
+        ldrb w0, [x1, 0]
+        bl b64_char
+        x2 := 63
+        and x24, x0, x2     // v0
+        lsr x3, x0, 6       // ok0
+        x4 := 0
+        cmp x3, 0
+        csel x23, x4, x23, eq
+
+        // Char 1
+        add x1, x20, x21
+        ldrb w0, [x1, 1]
+        bl b64_char
+        x2 := 63
+        and x5, x0, x2      // v1
+        lsr x3, x0, 6       // ok1
+        x4 := 0
+        cmp x3, 0
+        csel x23, x4, x23, eq
+
+        // Byte 0 = (v0 << 2) + (v1 >> 4)
+        lsl x6, x24, 2
+        lsr x7, x5, 4
+        add x6, x6, x7
+        add x8, x19, x22
+        strb w6, [x8, 0]
+
+        mov x24, x5         // save v1
+
+        // Char 2
+        add x1, x20, x21
+        ldrb w0, [x1, 2]
+        bl b64_char
+        x2 := 63
+        and x5, x0, x2      // v2
+        lsr x3, x0, 6       // ok2
+        x4 := 0
+        cmp x3, 0
+        csel x23, x4, x23, eq
+
+        // Byte 1 = ((v1 & 15) << 4) + (v2 >> 2)
+        x2 := 15
+        and x6, x24, x2
+        lsl x6, x6, 4
+        lsr x7, x5, 2
+        add x6, x6, x7
+        add x8, x19, x22
+        strb w6, [x8, 1]
+
+        mov x24, x5         // save v2
+
+        // Char 3
+        add x1, x20, x21
+        ldrb w0, [x1, 3]
+        bl b64_char
+        x2 := 63
+        and x5, x0, x2      // v3
+        lsr x3, x0, 6       // ok3
+        x4 := 0
+        cmp x3, 0
+        csel x23, x4, x23, eq
+
+        // Byte 2 = ((v2 & 3) << 6) + v3
+        x2 := 3
+        and x6, x24, x2
+        lsl x6, x6, 6
+        add x6, x6, x5
+        add x8, x19, x22
+        strb w6, [x8, 2]
+
+        add x21, x21, 4
+        add x22, x22, 3
+        b @loop
+
+    @done:
+        mov x0, x23
+        ldr x24, [sp, 48]
+        ldr x23, [sp, 40]
+        ldr x22, [sp, 32]
+        ldr x21, [sp, 24]
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 64
+        ret
+    }
+}

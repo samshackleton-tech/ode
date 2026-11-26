@@ -197,7 +197,7 @@ def main():
             gv = {i: struct.unpack("<4I", got[264 + 16 * i:280 + 16 * i]) for i in range(32)}
             gm = got[776:776 + ROOM]
             signal = got[776 + ROOM]
-            try: s = conc.run(row, bind, conc.State(g, {i: v[i] + (0,) * 12 for i in range(32)}, {SCRATCH + i: b for i, b in enumerate(mem)}, 0, 0))
+            try: s = conc.run(row, bind, conc.State(g, {i: v[i] + (0,) * 12 for i in range(32)}, {SCRATCH + i: b for i, b in enumerate(mem)}, (flags >> 30) & 1, 1 - ((flags >> 29) & 1)))
             except conc.Fault: s = None
             skip = {f"x{home}"} | ({"x18"} if MAC else set())
             if s is None or signal:

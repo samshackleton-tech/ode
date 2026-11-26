@@ -140,6 +140,8 @@ def prim (f : String) (args : List Nat) : Option Nat :=
     else if f == "sub8" then some ((a + (256 - b % 256)) % 256)
     else if f == "setlow8" then some (a % M64 / 256 * 256 + b % 256)
     else none
+  | [c, a, b] =>
+    if f == "select" then some (if c != 0 then a else b) else none
   | _ => none
 
 def W32 : Nat := 2 ^ 32
@@ -199,6 +201,23 @@ def isNumberLetter (n : String) : Bool := n == "I" || n == "J" || n == "K" || n 
 def regOf (bind : Bind) (n : String) : Option Nat :=
   if isRegisterLetter n then (bind.lookup n).bind regIndex else regIndex n
 
+/-- Flag condition predicates read by conditional select (`cmov*`, `csel`). -/
+def flagVal (s : State) (n : String) : Option Nat :=
+  if n == "zf" then some (if s.zf then 1 else 0)
+  else if n == "nzf" then some (if !s.zf then 1 else 0)
+  else if n == "cf" then some (if s.cf then 1 else 0)
+  else if n == "ncf" then some (if !s.cf then 1 else 0)
+  else if n == "hi" then some (if !s.zf && !s.cf then 1 else 0)
+  else if n == "nhi" then some (if s.zf || s.cf then 1 else 0)
+  else none
+
+/-- Whether a flag condition predicate may depend on values kept out of the trace. -/
+def flagMark (m : Marks) (n : String) : Option Bool :=
+  if n == "zf" || n == "nzf" then some m.zf
+  else if n == "cf" || n == "ncf" then some m.cf
+  else if n == "hi" || n == "nhi" then some (m.zf || m.cf)
+  else none
+
 def sumList : List Nat → Nat
   | [] => 0
   | v :: vs => v + sumList vs
@@ -213,7 +232,9 @@ mutual
     | .lane _ _ => none
     | .name n =>
       if isNumberLetter n then ((bind.lookup n).bind readInt).map fun i => (i % (M64 : Int)).toNat
-      else (regOf bind n).map s.reg
+      else match flagVal s n with
+        | some v => some v
+        | none => (regOf bind n).map s.reg
     | .call f args =>
       match values perm bind s args with
       | none => none
@@ -525,9 +546,11 @@ mutual
     | .lane _ _ => true
     | .name n =>
       if isNumberLetter n then false
-      else match regOf bind n with
-        | some r => s.marks.reg r
-        | none => true
+      else match flagMark s.marks n with
+        | some b => b
+        | none => match regOf bind n with
+          | some r => s.marks.reg r
+          | none => true
     | .call f args =>
       match lowOnly bind f args with
       | some r => s.marks.reg r && s.marks.low r

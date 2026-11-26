@@ -536,6 +536,7 @@ gives none. Nothing is concluded from these rows: they are only printed (`popKno
 structure Advice where
   ensures : Sym → EnsureW → List Row := fun _ _ => []
   call : Sym → Contract → List Row := fun _ _ => []
+  sameByte : Sym → Nat → Row → Bool := fun _ _ _ => false
   deriving Inhabited
 
 structure Ctx where
@@ -550,7 +551,19 @@ structure Ctx where
   piece : Option Nat := none                    -- the file this function is of, where it takes an address in
                                                 -- that file's read-only data
   resultPass : Bool := false                    -- true during the second pass for `result depends on`
+  runsCallees : List String := []               -- callees verified under `Runs` (for functions using `cmov`/`csel`)
   deriving Inhabited
+
+/-- Does this function contain any conditional select (`cmov*` / `csel`) instruction? -/
+def hasSelect (code : List (Nat × Instr)) : Bool :=
+  code.any fun p =>
+    match p.2.effect with
+    | [.set (.name _) (.call "select" [.name _, _, _])] => true
+    | _ => false
+
+/-- Does this function contain any call or tail-call instruction? -/
+def hasCallOrTail (code : List (Nat × Instr)) : Bool :=
+  code.any fun p => (callTarget p.2).isSome || (tailTarget p.2).isSome
 
 /-- The bytes of the read-only data of the function's own file, where the function takes an address there. -/
 def Ctx.data (ctx : Ctx) : List Nat :=
@@ -662,6 +675,27 @@ def lookupByte (r : Nat) (o : Row) : List (Nat × Nat × Row) → Option Nat
   | [] => none
   | (v, r', o') :: rest => if r' = r ∧ o' = o then some v else lookupByte r o rest
 
+def lookupByteVar (v r : Nat) : List (Nat × Nat × Row) → Option Row
+  | [] => none
+  | (v', r', o') :: rest => if v' = v ∧ r' = r then some o' else lookupByteVar v r rest
+
+/-- Optional proof-file hint unifying a byte read at offset `o` with a previously read byte `(v, r, o')`
+whose offset `o'` is provably equal to `o` by linear arithmetic (e.g. `4 * (j / 3) == in_idx`). -/
+def popSameByte (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : V (Option Nat) := fun items =>
+  match items.line items.next with
+  | some (.tag name v) =>
+    if name == "samebyte" then .ok (some v, { items with next := items.next + 1 })
+    else if name == "newbyte" then .ok (none, { items with next := items.next + 1 })
+    else .ok (none, items)
+  | some _ => .ok (none, items)
+  | none =>
+    if ctx.advice.sameByte s r o then
+      let pairs := (s.bytes.filterMap fun (v, r', o') =>
+        if r' == r && !Lin.sameCoeff o.coeff o'.coeff then some [Lin.const (v : Int), Lin.sub o o'] else none).flatten
+      if pairs.isEmpty then .ok (none, items)
+      else need "samebyte" s.facts pairs items
+    else .ok (none, items)
+
 /-- The byte at place `o` of run `r`: shown to be within the run; one unknown for one place. -/
 def readByte (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : V (Row × Sym) :=
   match ctx.contract.regions[r]? with
@@ -671,9 +705,18 @@ def readByte (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : V (Row × Sym) :=
     entail s.facts (Lin.sub (Lin.sub (Lin.var len) o) (Lin.const 1))
     match lookupByte r o s.bytes with
     | some v => pure (Lin.var v, s)
-    | none =>
-      pure (Lin.var s.nvars, { s with nvars := s.nvars + 1, bytes := (s.nvars, r, o) :: s.bytes,
-                                      facts := Lin.var s.nvars :: Lin.sub (Lin.const 255) (Lin.var s.nvars) :: s.facts })
+    | none => do
+      match ← popSameByte ctx s r o with
+      | some v =>
+        match lookupByteVar v r s.bytes with
+        | some o' => do
+          entail s.facts (Lin.sub o o')
+          entail s.facts (Lin.sub o' o)
+          pure (Lin.var v, s)
+        | none => refuse "a same-byte step names an unknown that is not a byte of this run"
+      | none =>
+        pure (Lin.var s.nvars, { s with nvars := s.nvars + 1, bytes := (s.nvars, r, o) :: s.bytes,
+                                        facts := Lin.var s.nvars :: Lin.sub (Lin.const 255) (Lin.var s.nvars) :: s.facts })
 
 inductive Where where
   | frame (off : Int)
@@ -3262,7 +3305,7 @@ may be marked (`m`) or may not. A store at a place of the frame that is a number
 bytes stored to stay, and where eight bytes are stored and what is stored is not marked, they are a cell
 known not to be marked. A store within a run given to write, at a place that is a number: every cell stays
 (the run is no part of the frame). Any other store: nothing is known of any cell after it. -/
-def cellsAfterSize (ctx : Ctx) (bind : Bind) (s : Sym) (size : Nat) (args : List Expr) (m : Bool) : List Int :=
+def cellsAfterSize (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (args : List Expr) (m : Bool) : List Int :=
   match args with
   | [a, b] =>
     match plainRow ctx bind s a, plainRow ctx bind s b with
@@ -3273,17 +3316,23 @@ def cellsAfterSize (ctx : Ctx) (bind : Bind) (s : Sym) (size : Nat) (args : List
           (if size == 8 && !m then [c] else []) ++ s.q.fq.filter fun o => decide (o + 8 ≤ c) || decide (c + size ≤ o)
         else []
       | some (.out w o) =>
-        -- a store within a run given to write, at a place that is a number: no cell of the frame is stored to
-        match Lin.isConst o, ctx.contract.outs[w]? with
-        | some c, some (_, _, n) => if decide (0 ≤ c) && decide (c + size ≤ n) then s.q.fq else []
-        | _, _ => []
+        -- a store within a run given to write (constant offset, or 1-byte store recorded in `s1.wrote`):
+        -- no cell of the frame is stored to
+        match ctx.contract.outs[w]? with
+        | some (_, _, n) =>
+          let constOk := match Lin.isConst o with
+            | some c => decide (0 ≤ c) && decide (c + size ≤ n)
+            | none => false
+          let wroteOk := size == 1 && s1.wrote.any (fun e => e.1 == w && Lin.same e.2.1 o)
+          if constOk || wroteOk then s.q.fq else []
+        | none => []
       | _ => []
     | _, _ => []
   | _ => []
 
-def cellsAfter (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) : List Int :=
+def cellsAfter (ctx : Ctx) (bind : Bind) (s s1 : Sym) (f : String) (args : List Expr) (m : Bool) : List Int :=
   match memSize f with
-  | some size => cellsAfterSize ctx bind s size args m
+  | some size => cellsAfterSize ctx bind s s1 size args m
   | none => []
 
 /-- Is the lowest byte of what the expression stands for known not to be marked? Only of `setlow8(x, w)`,
@@ -3308,12 +3357,12 @@ def stmtMarks (ctx : Ctx) (bind : Bind) (s s1 : Sym) : Stmt → Option SMarks
           | some r => some { s.q with regq := if m then s.q.regq.filter (· != r) else r :: s.q.regq.filter (· != r),     -- (once in the list)
                                       lowq := if lowClean ctx bind s s1 v then r :: s.q.lowq.filter (· != r) else s.q.lowq.filter (· != r) }
           | none => none
-      | .call f args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfter ctx bind s f args m } else none
+      | .call f args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfter ctx bind s s1 f args m } else none
       | _ => none
   | .vset place v =>
     if quietExprS bind s.q.regq v then
       match place with
-      | .call _ args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfterSize ctx bind s 16 args true } else none
+      | .call _ args => if cleanAll bind s.q.regq args then some { s.q with fq := cellsAfterSize ctx bind s s1 16 args true } else none
       | _ => some s.q
     else none
   | .vset512 place v =>
@@ -3412,11 +3461,33 @@ def flagWays : Flag → Option (List (Bool × List Row))
   | .equal a b => some [(true, [Lin.sub a b, Lin.sub b a]), (false, [Lin.sub (Lin.sub a b) (Lin.const 1)]), (false, [Lin.sub (Lin.sub b a) (Lin.const 1)])]
   | .below a b => some [(true, [Lin.sub (Lin.sub b a) (Lin.const 1)]), (false, [Lin.sub a b])]
 
+/-- Parse the condition predicate name used in `select(cond, a, b)`. -/
+def selectCond (cond : String) : Option (String × Bool) :=
+  if cond == "zf" then some ("zf", true)
+  else if cond == "nzf" then some ("zf", false)
+  else if cond == "cf" then some ("cf", true)
+  else if cond == "ncf" then some ("cf", false)
+  else if cond == "hi" then some ("hi", true)
+  else if cond == "nhi" then some ("hi", false)
+  else none
+
+def setSelectReg (s : Sym) (d : Nat) (v : Row) (q : SMarks) : Sym :=
+  { s with reg := fun r => if r == d then v else s.reg r, q := q }
+
+/-- All reachable successors of a conditional select `d := if cond then va else vb` (constant-time: no trace event). -/
+def selectWays (s : Sym) (want : Bool) (d : Nat) (va vb : Row) (q' : SMarks) (next : Nat) (f : Flag) : V (List (Sym × Next)) := do
+  let w ← jumpWays s want 1 0 f
+  pure (w.map fun (s', nxt) =>
+    match nxt with
+    | .at 1 => (setSelectReg s' d va q', .at next)
+    | _ => (setSelectReg s' d vb q', .at next))
+
 /-- An effect is a return (to the address at the stack pointer, or to the address a register holds), a
-jump, or statements that set registers, flags and memory. -/
+jump, a conditional select, or statements that set registers, flags and memory. -/
 inductive Shape where
   | ret
   | jump (target : Expr) (cond : Option (String × Bool))
+  | select (dst cond : String) (a b : Expr)
   | plain
   | retLink (link : String)
 
@@ -3424,6 +3495,7 @@ def shape : List Stmt → Shape
   | [.ret] => .ret
   | [.jump target cond] => .jump target cond
   | [.retLink r] => .retLink r
+  | [.set (.name dst) (.call "select" [.name cond, a, b])] => .select dst cond a b
   | _ => .plain
 
 def retMarkRefusal (arm64 : Bool) (resultFollowsTrace : Bool) (regq : List Nat) : String :=
@@ -3466,6 +3538,23 @@ def symInstr (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
           refuse "a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
         else
         jumpWays s want t i.next (symCondFlag s flag)
+  | .select dst cond a b =>
+    match selectCond cond, ctx.regOf i.bind dst, a, b with
+    | some (flag, want), some d, .name na, .name nb =>
+      if isNumberLetter na || isNumberLetter nb then refuse "conditional select requires general registers"
+      else match ctx.regOf i.bind na, ctx.regOf i.bind nb with
+      | some ra, some rb =>
+        if d == RSP then refuse "conditional select into the stack pointer is not supported"
+        else if !ctx.contract.traceExprs.isEmpty then
+          refuse "conditional select cannot be combined with computed `trace depends on` values"
+        else
+          let m := !(symCondClean s.q flag && s.q.regq.contains ra && s.q.regq.contains rb)
+          let q' : SMarks := { s.q with
+            regq := if m then s.q.regq.filter (· != d) else d :: s.q.regq.filter (· != d),
+            lowq := if m then s.q.lowq.filter (· != d) else d :: s.q.lowq.filter (· != d) }
+          selectWays s want d (s.reg ra) (s.reg rb) q' i.next (symCondFlag s flag)
+      | _, _ => refuse "conditional select requires general registers"
+    | _, _, _, _ => refuse "conditional select of a form not supported"
   | .plain => do
     let s1 ← fold (symStmtQ ctx i.bind) s i.effect
     let s2 ← settle ctx s1
@@ -3514,7 +3603,7 @@ def Sym.afterCall (c : Contract) (s : Sym) (sp : Int) : Sym :=
     bytes := s.bytes, spec := s.spec, nvars := s.nvars + c.regs, wrote := s.wrote,
     tab := s.tab,         -- (and nothing is known of a vector register after a call, nor of the words of a run given to write)
     vecIntact := s.vecIntact.filter c.keepsVec.contains,
-    known := s.known }
+    known := s.known, range := s.range }
 
 /-- The linear row for an entry precondition `(k, ts)` evaluated under register rows `val`. -/
 def preLineRow (c : Contract) (val : Nat → Row) (k : Int) (ts : List (String × Int)) : Row :=
@@ -4926,8 +5015,14 @@ def symTail (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
     if !callQuiet ctx (quietAtCall s c) c then
       refuse "at a tail call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
     else
-      let q' := afterCallQ (callReturnsClean ctx (quietAtCall s c) c) c (quietAtCall s c)
-      if ctx.contract.resultFollowsTrace && !q'.regq.contains ctx.contract.retReg then
+      let cleanRet := if hasSelect ctx.code then c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
+                      else callReturnsClean ctx (quietAtCall s c) c
+      let q' := afterCallQ cleanRet c (quietAtCall s c)
+      if hasSelect ctx.code && !(ctx.runsCallees.contains name || ctx.selfName == some name) then
+        refuse "a function using conditional select can only tail-call helpers without computed `trace depends on` values"
+      else if hasSelect ctx.code && ctx.contract.resultFollowsTrace && !cleanRet then
+        refuse "at a tail call from a function using conditional select, the called function's result must depend only on values allowed in the trace"
+      else if ctx.contract.resultFollowsTrace && !q'.regq.contains ctx.contract.retReg then
         refuse "at a tail call, the returned value may depend on data kept out of the trace"
       else
         symReturn ctx { s' with q := q' }
@@ -4940,12 +5035,17 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c =>
       if !callFits ctx s i c then refuse "a call that is not one this function's machine makes of a function for that machine, or a stack pointer that is not shown to be a multiple of 16 at a call"
+      else if hasSelect ctx.code && (!(ctx.runsCallees.contains name || ctx.selfName == some name) || !(c.keeps == keptAt i)) then
+        refuse "a function using conditional select can only call standard-ABI helpers without computed `trace depends on` values"
       else do
       needsOf ctx s c
       let s' ← symCall ctx s name c
       if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
-      else pure [({ s' with q := afterCallQ (callReturnsClean ctx (quietAtCall s c) c) c (quietAtCall s c) }, .at i.next)]
+      else
+        let cleanRet := if hasSelect ctx.code then c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
+                        else callReturnsClean ctx (quietAtCall s c) c
+        pure [({ s' with q := afterCallQ cleanRet c (quietAtCall s c) }, .at i.next)]
   | none =>
     match tailTarget i with
     | some name =>
@@ -5302,6 +5402,8 @@ def popClear (pc : Nat) : V (Option (Nat × SExpr)) := fun items =>
 that `e` is computed only from what `ctx.contract`'s `trace depends on` line lists; then mark `r` clean. -/
 def symRevealReg (ctx : Ctx) (s : Sym) (r : Nat) (e : SExpr) : V Sym :=
   if !(r < ctx.nreg) then refuse "a trace-clear step names a register out of range"
+  else if ctx.contract.traceExprs.isEmpty then
+    refuse "a trace-clear step requires a computed value listed in `trace depends on`"
   else if !ctx.contract.traceClean e then
     refuse "a trace-clear step names an expression that may depend on values kept out of the trace"
   else do
@@ -5420,6 +5522,8 @@ def verdictOne (ctx : Ctx) (proof : List Item) : Option String :=
     some "refused: stack bits argument must be a parameter listed in `trace depends on` with a positive divisor"
   else if !ctx.contract.decreasesOk then
     some "refused: `decreases` argument must be a parameter listed in `trace depends on`"
+  else if hasSelect ctx.code && !ctx.contract.traceExprs.isEmpty then
+    some "refused: conditional select cannot be combined with computed `trace depends on` values"
   else match verify ctx (Items.ofList proof) with
   | .ok _ => none
   | .error why => some why
@@ -5453,10 +5557,17 @@ structure Fn where
   places : List Place := []
   proof : List Item := []
 
+/-- Does this function qualify for single-run `Runs` tracking (and thus as a callee of functions using `cmov`/`csel`)? -/
+def fnRunsCapable (f : Fn) : Bool :=
+  f.contract.traceExprs.isEmpty && (hasSelect f.code || !hasCallOrTail f.code)
+
 /-- The functions one after another, `done` being those already shown, each with its contract. A call is
 taken by the contract of a function already shown, and by nothing else: so no function calls itself, or
 one that calls it, or one that is not in the statement. -/
-def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contract) → List Fn → Option String
+def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contract) → List Fn → Option String :=
+  go []
+where
+  go (runsOk : List String) : List (String × Contract) → List Fn → Option String
   | _, [] => none
   | done, f :: more =>
     if done.any (fun d => d.1 == f.name) then some s!"refused: two functions are named {f.name}"
@@ -5464,9 +5575,11 @@ def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contra
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
       match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := callees,
-                      selfName := selfName, pieces := pieces, piece := f.piece } f.proof with
+                      selfName := selfName, pieces := pieces, piece := f.piece, runsCallees := runsOk } f.proof with
       | some why => some s!"{why}\nin {f.name}"
-      | none => verdictFrom pieces defs ((f.name, f.contract) :: done) more
+      | none =>
+        let runsOk' := if fnRunsCapable f then f.name :: runsOk else runsOk
+        go runsOk' ((f.name, f.contract) :: done) more
 
 /-- Do the functions of a statement meet their contracts, by these proofs? `none`: yes, every one. (`pieces`:
 the read-only data of the object files the functions are of.) -/

@@ -1,0 +1,1627 @@
+{
+  "run_id": "sha256-v1",
+  "prereg_commit": "1c722390051318a5a14f22887dd23d81e7604d7e",
+  "status": "complete",
+  "completed_cells": 28,
+  "finished_utc": "2026-11-26T09:41:14Z",
+  "tasks": [
+    "sha256_4way"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-haiku-5.5",
+    "qwen/qwen3.8-2.4t-a95b",
+    "moonshotai/kimi-k3.1-pro"
+  ],
+  "targets": [
+    "arm64",
+    "x86_64"
+  ],
+  "strict_passes": 21,
+  "total_cells": 28,
+  "verify2_passes": 0,
+  "native_passes": 21,
+  "total_rounds": 186,
+  "total_cost_usd": 55.5521,
+  "failure_categories": {
+    "other": 55,
+    "compile_or_parse_error": 24,
+    "arith_need_entail": 9,
+    "isa_table_error": 8,
+    "calling_syntax_error": 1,
+    "kept_reg_refusal": 1,
+    "output_token_limit": 1
+  },
+  "cells": [
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 3,
+      "passing_rounds": 5,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0145,
+        "cycles_per_iter": 259.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0145,
+          "ampere1": 1.0156
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 6.0438,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.14,
+        "pack_s": 0.316,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "other",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 3,
+      "passing_rounds": 3,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 6.1466,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 465,
+        "code_bytes": 1860,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.159,
+        "pack_s": 0.312,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "other",
+        "passed",
+        "other",
+        "passed",
+        "other",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 1,
+      "passing_rounds": 3,
+      "best_round": 1,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9777,
+        "cycles_per_iter": 250.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9777,
+          "zen4": 0.9129,
+          "zen3": 0.9113,
+          "icelake": 1.4688
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9777,
+        "cycles_per_iter": 250.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9777,
+          "zen4": 0.9129,
+          "zen3": 0.9113,
+          "icelake": 1.4688
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 5.9686,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 545,
+        "code_bytes": 2679,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.199,
+        "pack_s": 0.379,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "other",
+        "passed",
+        "other",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 4,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 2,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9844,
+        "cycles_per_iter": 252.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9844,
+          "zen4": 0.9152,
+          "zen3": 0.9141,
+          "icelake": 1.4715
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9102,
+        "cycles_per_iter": 233.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9102,
+          "zen4": 0.9062,
+          "zen3": 0.9074,
+          "icelake": 1.4102
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 5.286,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 779,
+        "code_bytes": 4327,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.211,
+        "pack_s": 0.425,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-haiku-5.5",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 5,
+      "passing_rounds": 3,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0535,
+        "cycles_per_iter": 269.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0535,
+          "ampere1": 1.0691
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0535,
+        "cycles_per_iter": 269.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0535,
+          "ampere1": 1.0691
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.0724,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 478,
+        "code_bytes": 1912,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.14,
+        "pack_s": 0.338,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "other",
+        "arith_need_entail",
+        "kept_reg_refusal",
+        "passed",
+        "passed",
+        "other",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-haiku-5.5",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 1,
+      "passing_rounds": 5,
+      "best_round": 1,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0207,
+        "cycles_per_iter": 261.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0207,
+          "ampere1": 1.0246
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0207,
+        "cycles_per_iter": 261.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0207,
+          "ampere1": 1.0246
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.0551,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 436,
+        "code_bytes": 1744,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.141,
+        "pack_s": 0.305,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-haiku-5.5",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": false,
+      "rounds_used": 7,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 0.1461,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "compile_or_parse_error",
+        "output_token_limit",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-haiku-5.5",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.2584,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "other",
+        "compile_or_parse_error",
+        "other",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 5,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0535,
+        "cycles_per_iter": 269.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0535,
+          "ampere1": 1.0652
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.0542,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.138,
+        "pack_s": 0.319,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "other",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 5,
+      "best_round": 2,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0535,
+        "cycles_per_iter": 269.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0535,
+          "ampere1": 1.0703
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.096,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.138,
+        "pack_s": 0.317,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "passed",
+        "other",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 1,
+      "passing_rounds": 5,
+      "best_round": 2,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.1562,
+        "cycles_per_iter": 296.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.1562,
+          "zen4": 1.2422,
+          "zen3": 1.2199,
+          "icelake": 1.5742
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9844,
+        "cycles_per_iter": 252.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9844,
+          "zen4": 0.9258,
+          "zen3": 0.9246,
+          "icelake": 1.4531
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.2429,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 613,
+        "code_bytes": 3057,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.203,
+        "pack_s": 0.393,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 2,
+      "passing_rounds": 5,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.1691,
+        "cycles_per_iter": 299.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.1691,
+          "zen4": 1.2629,
+          "zen3": 1.2488,
+          "icelake": 1.5793
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9855,
+        "cycles_per_iter": 252.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9855,
+          "zen4": 0.9102,
+          "zen3": 0.9102,
+          "icelake": 1.4688
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.3494,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 597,
+        "code_bytes": 2963,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.2,
+        "pack_s": 0.394,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 3,
+      "passing_rounds": 3,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0145,
+        "cycles_per_iter": 259.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0145,
+          "ampere1": 1.0156
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 1.545,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.14,
+        "pack_s": 0.315,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "other",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 3,
+      "passing_rounds": 3,
+      "best_round": 7,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0156,
+        "cycles_per_iter": 260.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0156,
+          "ampere1": 1.0156
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 1.932,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 467,
+        "code_bytes": 1868,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.14,
+        "pack_s": 0.361,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "isa_table_error",
+        "other",
+        "passed",
+        "isa_table_error",
+        "other",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 3,
+      "passing_rounds": 3,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.0379,
+        "cycles_per_iter": 265.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.0379,
+          "zen4": 0.923,
+          "zen3": 0.9207,
+          "icelake": 1.4543
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9102,
+        "cycles_per_iter": 233.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9102,
+          "zen4": 0.9074,
+          "zen3": 0.9062,
+          "icelake": 1.4102
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 1.5766,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 822,
+        "code_bytes": 4443,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.215,
+        "pack_s": 0.428,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 4,
+      "rounds_to_pass": 2,
+      "passing_rounds": 3,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9777,
+        "cycles_per_iter": 250.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9777,
+          "zen4": 0.9441,
+          "zen3": 0.918,
+          "icelake": 1.4426
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9766,
+        "cycles_per_iter": 250.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9766,
+          "zen4": 0.948,
+          "zen3": 0.9219,
+          "icelake": 1.4414
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 1.6889,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 545,
+        "code_bytes": 2675,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.198,
+        "pack_s": 0.347,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 5,
+      "passing_rounds": 3,
+      "best_round": 8,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0168,
+        "cycles_per_iter": 260.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0168,
+          "ampere1": 1.0184
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.7626,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.138,
+        "pack_s": 0.319,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "other",
+        "other",
+        "other",
+        "passed",
+        "other",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.7641,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "isa_table_error",
+        "other",
+        "other",
+        "other",
+        "other",
+        "other",
+        "other",
+        "calling_syntax_error"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.7887,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "other",
+        "other",
+        "compile_or_parse_error",
+        "other",
+        "other",
+        "other",
+        "other",
+        "other"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "moonshotai/kimi-k3.1-pro",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 3,
+      "passing_rounds": 5,
+      "best_round": 6,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.1602,
+        "cycles_per_iter": 297.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.1602,
+          "zen4": 1.2238,
+          "zen3": 1.2148,
+          "icelake": 1.6027
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9844,
+        "cycles_per_iter": 252.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9844,
+          "zen4": 0.923,
+          "zen3": 0.9246,
+          "icelake": 1.457
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.2104,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 690,
+        "code_bytes": 3262,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.205,
+        "pack_s": 0.388,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "compile_or_parse_error",
+        "arith_need_entail",
+        "passed",
+        "other",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 7,
+      "rounds_to_pass": 3,
+      "passing_rounds": 5,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0246
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0156,
+        "cycles_per_iter": 260.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0156,
+          "ampere1": 1.0207
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 2.6812,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 446,
+        "code_bytes": 1784,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.138,
+        "pack_s": 0.311,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 3,
+      "passing_rounds": 5,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0246
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0246
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 4.4953,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 450,
+        "code_bytes": 1800,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.138,
+        "pack_s": 0.319,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "other",
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "other",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 2,
+      "passing_rounds": 5,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.0441,
+        "cycles_per_iter": 267.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.0441,
+          "zen4": 1.0391,
+          "zen3": 0.9285,
+          "icelake": 1.4559
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9062,
+        "cycles_per_iter": 232.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9062,
+          "zen4": 0.9023,
+          "zen3": 0.9023,
+          "icelake": 1.4051
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 3.4065,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 869,
+        "code_bytes": 4310,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.238,
+        "pack_s": 0.435,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "other",
+        "passed",
+        "other",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 2,
+      "passing_rounds": 5,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.0441,
+        "cycles_per_iter": 267.3,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.0441,
+          "zen4": 1.0391,
+          "zen3": 0.9285,
+          "icelake": 1.4492
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.9062,
+        "cycles_per_iter": 232.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:FP0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.9062,
+          "zen4": 0.9062,
+          "zen3": 0.9062,
+          "icelake": 1.4402
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 2.8387,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 857,
+        "code_bytes": 4319,
+        "contract_id": "2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda",
+        "verdict": "shown",
+        "audit_s": 0.246,
+        "pack_s": 0.439,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "qwen/qwen3.8-2.4t-a95b",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.6392,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "isa_table_error",
+        "other",
+        "other",
+        "other",
+        "isa_table_error",
+        "isa_table_error",
+        "isa_table_error",
+        "compile_or_parse_error"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "qwen/qwen3.8-2.4t-a95b",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 8,
+      "rounds_to_pass": 4,
+      "passing_rounds": 4,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0535,
+        "cycles_per_iter": 269.7,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0535,
+          "ampere1": 1.0703
+        },
+        "loop_count": 0
+      },
+      "best_perf": {
+        "hot_loop": "straight",
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0195,
+        "cycles_per_iter": 261.0,
+        "load_bytes": 256,
+        "load_count": 0,
+        "bottleneck": "ports:V0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0195,
+          "ampere1": 1.0223
+        },
+        "loop_count": 0
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.0589,
+      "verify2_pass": null,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 264/264",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 433,
+        "code_bytes": 1732,
+        "contract_id": "o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa",
+        "verdict": "shown",
+        "audit_s": 0.14,
+        "pack_s": 0.321,
+        "proof_bytes": 61
+      },
+      "round_categories": [
+        "isa_table_error",
+        "other",
+        "other",
+        "passed",
+        "passed",
+        "passed",
+        "passed",
+        "other"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "qwen/qwen3.8-2.4t-a95b",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": false,
+      "rounds_used": 8,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 0.5665,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "other",
+        "other",
+        "other",
+        "other"
+      ]
+    },
+    {
+      "task": "sha256_4way",
+      "model": "qwen/qwen3.8-2.4t-a95b",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": false,
+      "rounds_used": 6,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": "cell_timeout_720s",
+      "total_cost_usd": 0.878,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "compile_or_parse_error",
+        "other",
+        "compile_or_parse_error",
+        "other"
+      ]
+    }
+  ]
+}

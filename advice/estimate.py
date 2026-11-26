@@ -127,6 +127,9 @@ def _expr_reads(e, bind, out):
         elif n in table.WIDE: out.add(f"v{bind[table.WIDE[n]]}")
         elif n in table.MASKS: out.add(f"k{bind[n]}")
         elif n in ("zf", "cf"): out.add(n)
+        elif n == "nzf": out.add("zf")
+        elif n == "ncf": out.add("cf")
+        elif n in ("hi", "nhi"): out.add("zf"); out.add("cf")
         elif n not in table.NUMBERS and n != table.UNKNOWN and n not in conc.CONC:
             out.add(n)
         return
@@ -274,6 +277,13 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
     classes = arch["classes"]
 
     parsed = []
+    # Track static x86-64 stack pointer alignment relative to System V ABI entry (rsp % 16 == 8).
+    # A prologue `sub rsp, N` with N % 16 == 0 leaves rsp % 16 == 8, causing 16B/64B stack ops
+    # to straddle 64B cache lines and hit ~16-20 cyc split-line STLF replay stalls on Zen 4/5.
+    rsp_mod16 = 8 if target == "x86_64" else 0
+    rsp_known = (target == "x86_64")
+    first_sub_rsp = None
+    misaligned_vec_stack = 0
     for pc, end_pc, text in decoded:
         row, raw_bind = table.find(heads, table.parse_row(text))
         bind = _conc_bind(raw_bind)
@@ -283,11 +293,46 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         is_uncond = row.name in ("jmp", "b")
         is_cond = cls == "branch" and not is_uncond
         is_ret = cls == "ret"
+        if target == "x86_64" and rsp_known:
+            if row.name == "sub64_ri" and bind.get("D") == "rsp" and isinstance(bind.get("I"), int):
+                rsp_mod16 = (rsp_mod16 - bind["I"]) % 16
+                if first_sub_rsp is None:
+                    first_sub_rsp = bind["I"]
+            elif row.name == "add64_ri" and bind.get("D") == "rsp" and isinstance(bind.get("I"), int):
+                rsp_mod16 = (rsp_mod16 + bind["I"]) % 16
+            elif row.name == "push":
+                rsp_mod16 = (rsp_mod16 - 8) % 16
+            elif row.name == "pop":
+                rsp_mod16 = (rsp_mod16 + 8) % 16
+            elif "rsp" in writes and row.name != "ret":
+                rsp_known = False
+            if cls in ("vec_load", "vec_store", "wide_load", "wide_store"):
+                for op in (reads | writes):
+                    if op.startswith("frame:"):
+                        try:
+                            off = int(op.split(":")[1])
+                        except (ValueError, IndexError):
+                            continue
+                        if (rsp_mod16 + off) % 16 != 0:
+                            misaligned_vec_stack += 1
         parsed.append({
             "pc": pc, "end": end_pc, "len": end_pc - pc, "text": text,
             "row": row.name, "class": cls, "cost": cost,
             "reads": reads, "writes": writes, "jump": jtgt, "call": is_call,
             "uncond": is_uncond, "cond": is_cond, "ret": is_ret,
+        })
+    whole_hints = []
+    if target == "x86_64" and misaligned_vec_stack > 0:
+        fix_ex = f" (e.g. `sub rsp, {first_sub_rsp + 8}` instead of `{first_sub_rsp}`)" if (first_sub_rsp is not None and first_sub_rsp % 16 == 0) else ""
+        whole_hints.append({
+            "kind": "stack-align",
+            "count": misaligned_vec_stack,
+            "message": (
+                f"{misaligned_vec_stack} 16B/64B stack load/store(s) execute with rsp % 16 == 8 "
+                f"(x86-64 System V entry pushes an 8B return address). 1-in-4 stack slots will split "
+                f"a 64B cache line, triggering ~16-20 cyc split-line STLF replay stalls on Zen 4/5 "
+                f"(measured up to 1.8x slower). Align rsp to 16B before vector spills{fix_ex}."
+            ),
         })
 
     code_bytes = parsed[-1]["end"] if parsed else 0
@@ -349,7 +394,16 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
             src_start = _source_lookup(line_map, start_pc)
             src_end = _source_lookup(line_map, body[-1]["pc"])
             sim_rep = uica_sim.simulate_loop(body, arch_key, iterations=12) if arch_key in uica_sim.PIPELINES else None
-            lints = uica_sim.static_lint_loop(body, arch_key, line_map=line_map, sim_rep=sim_rep) if arch_key in uica_sim.PIPELINES else []
+            lints = list(uica_sim.static_lint_loop(body, arch_key, line_map=line_map, sim_rep=sim_rep)) if arch_key in uica_sim.PIPELINES else []
+            call_count = sum(1 for x in body if x["row"].startswith("call") or x["row"] == "bl")
+            if call_count > 0:
+                lints.append({
+                    "kind": "loop-calls",
+                    "message": (
+                        f"{call_count} call(s) inside loop body — pipeline sim excludes callee instructions; "
+                        f"inlining the callee removes call/ret overhead and exposes cross-op ILP"
+                    ),
+                })
             crit_chain = uica_sim.critical_path_chain(body, arch_key, line_map=line_map) if arch_key in uica_sim.PIPELINES else None
             arch_table = uica_sim.compare_all_archs(body, target, line_map=line_map) if all_archs else None
             load_widths = [_insn_load_bytes(x) for x in body]
@@ -365,6 +419,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 "source_lines": [src_start["line"], src_end["line"]] if (src_start and src_end) else None,
                 "load_count": load_count,
                 "load_bytes": load_bytes,
+                "call_count": call_count,
                 "body": analyze_seq(body),
                 "pipeline_sim": sim_rep,
                 "critical_chain": crit_chain,
@@ -461,6 +516,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         "whole": whole,
         "whole_sim": whole_sim,
         "whole_all_archs": whole_all_archs,
+        "hints": whole_hints,
         "paths": paths_summary,
         "loops": loops,
     }
@@ -878,6 +934,8 @@ def format_report(symbol, static_rep, mem_rep=None):
             lines.append("  all-archs pipeline estimate (no execution):")
             for row in waa:
                 lines.append(f"    {row['arch']:8s}: ~{row['cycles_per_iter']:6.1f} cyc/call [{row['bottleneck']}]")
+    for ht in static_rep.get("hints") or []:
+        lines.append(f"  hint [{ht['kind']}]: {ht['message']}")
     ps = static_rep.get("paths")
     if ps and ps["count"] > 1:
         lines.append(
@@ -893,9 +951,10 @@ def format_report(symbol, static_rep, mem_rep=None):
         lb_bytes = lp.get("load_bytes") or 0
         lb_cnt = lp.get("load_count") or 0
         tp_note = f", {sim_rep['cycles_per_iter'] / lb_bytes:.2f} cyc/B across {lb_cnt} load(s)/{lb_bytes} B" if (sim_rep is not None and lb_bytes > 0) else ""
+        call_note = f", excludes {lp['call_count']} callee(s)" if lp.get("call_count") else ""
         sim_note = (
             f" | pipeline sim ~{sim_rep['cycles_per_iter']:.2f} cyc/iter"
-            f" ({sim_rep['bottleneck']}, {sim_rep['fused_pairs']} fused{tp_note})"
+            f" ({sim_rep['bottleneck']}, {sim_rep['fused_pairs']} fused{tp_note}{call_note})"
             if sim_rep is not None else ""
         )
         lines.append(

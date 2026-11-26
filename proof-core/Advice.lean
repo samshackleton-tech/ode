@@ -199,7 +199,11 @@ def callRows (ctx : Ctx) (s : Sym) (c : Contract) : List Row :=
     decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
 
 /-- The advice `odeprove` gives the verifier's rules to print. -/
-def adviceFor (ctx : Ctx) : Advice := { ensures := ensureRows ctx, call := callRows ctx }
+def adviceFor (ctx : Ctx) : Advice :=
+  { ensures := ensureRows ctx, call := callRows ctx,
+    sameByte := fun s r o =>
+      !o.coeff.isEmpty && s.bytes.any fun (_, r', o') =>
+        r' == r && !o'.coeff.isEmpty && !Lin.sameCoeff o.coeff o'.coeff }
 
 private def tagPc (pc : Nat) (m : V α) : V α := fun st =>
   match m st with

@@ -102,16 +102,19 @@ def main (args : List String) : IO UInt32 := do
       | .error e => IO.println e; return 2
       | .ok job => pure job
     let mut done : List (String × Contract) := []
+    let mut runsOk : List String := []
     for f in job.fns do
       if done.any (fun d => d.1 == f.name) then
         IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
       let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
-                         selfName := selfName, pieces := job.pieces, piece := f.piece }
+                         selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
       match locateRefusal ctx f.proof with
       | some why => IO.println s!"{why}\nin {f.name}"; return 1
-      | none => done := (f.name, f.contract) :: done
+      | none =>
+        if fnRunsCapable f then runsOk := f.name :: runsOk
+        done := (f.name, f.contract) :: done
     IO.println "shown"
     return 0
   | ["--only", tablePath, statementPath, headPath, name]
@@ -140,6 +143,7 @@ def main (args : List String) : IO UInt32 := do
       | none => pure []
     -- as verdictFrom (Core.lean) goes: the functions in the statement's order, each by the contracts of those before
     let mut done : List (String × Contract) := []
+    let mut runsOk : List String := []
     let mut said : Option String := none
     for f in job.fns do
       if said.isSome then break
@@ -148,7 +152,7 @@ def main (args : List String) : IO UInt32 := do
         let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
         let selfName := if f.contract.decreases.isSome then some f.name else none
         let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
-                           selfName := selfName, pieces := job.pieces, piece := f.piece }
+                           selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
         let why ←
           if f.name == name then do
             -- (with the advice: where the lines have run out before an `ensures` of words or a call, the rows to try are printed)
@@ -174,6 +178,7 @@ def main (args : List String) : IO UInt32 := do
         match why with
         | some why => said := some s!"{why}\nin {f.name}"
         | none =>
+          if fnRunsCapable f then runsOk := f.name :: runsOk
           done := (f.name, f.contract) :: done
           if onlyTarget && f.name == name then break
     say ((said.getD "shown") ++ "\n" ++ (if ← ended.get then ".more\n" else ".end\n"))

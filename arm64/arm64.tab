@@ -97,6 +97,18 @@ cmp_rr       | cmp S64, P64                 | .cmp .S .P           | zf = equal(
              = 1 1 1 01011 00 0 PPPPP 000000 SSSSS 11111
 cmp_ri       | cmp S64, I                   | .cmpi .S I           | zf = equal(S, I); cf = below(S, I)
              = 1 1 1 100010 0 IIIIIIIIIIII SSSSS 11111
+csel_eq      | csel D64, S64, P64, eq       | .csel_eq .D .S .P    | D = select(zf, S, P)
+             = 1 0 0 11010100 PPPPP 0000 00 SSSSS DDDDD
+csel_ne      | csel D64, S64, P64, ne       | .csel_ne .D .S .P    | D = select(nzf, S, P)
+             = 1 0 0 11010100 PPPPP 0001 00 SSSSS DDDDD
+csel_hs      | csel D64, S64, P64, hs       | .csel_hs .D .S .P    | D = select(ncf, S, P)
+             = 1 0 0 11010100 PPPPP 0010 00 SSSSS DDDDD
+csel_lo      | csel D64, S64, P64, lo       | .csel_lo .D .S .P    | D = select(cf, S, P)
+             = 1 0 0 11010100 PPPPP 0011 00 SSSSS DDDDD
+csel_hi      | csel D64, S64, P64, hi       | .csel_hi .D .S .P    | D = select(hi, S, P)
+             = 1 0 0 11010100 PPPPP 1000 00 SSSSS DDDDD
+csel_ls      | csel D64, S64, P64, ls       | .csel_ls .D .S .P    | D = select(nhi, S, P)
+             = 1 0 0 11010100 PPPPP 1001 00 SSSSS DDDDD
 b            | -                            | .b I                 | jump I
              = 0 00101 iiiiiiiiiiiiiiiiiiiiiiiiii ; pc=I
 b_eq         | -                            | .beq I               | jump I if zf

@@ -520,7 +520,7 @@ class Verifier:
             if stream is not None:
                 self.entail(state["facts"], idx, stream)
                 self.entail(state["facts"], r_sub(r_sub(state["buf_len"][buf], idx), r_const(1)), stream)
-            return state["get_byte"](buf, idx, state)
+            return state["get_byte"](buf, idx, state, stream)
         if op == "ifx":
             taken = self.eval_cond(e[1], env, state, stream)
             return self.eval_sexpr(e[2] if taken else e[3], env, state, stream)
@@ -777,10 +777,31 @@ class Verifier:
         if fn["stack"] > 0:
             facts.append(r_sub(regs[sp_reg], r_const(fn["stack"])))
 
-        def get_byte(buf, idx_row, cur_st):
+        def get_byte(buf, idx_row, cur_st, strm=None):
             key = (buf, idx_row)
             bc = cur_st["byte_cache"]
             if key not in bc:
+                if strm is not None and strm.pos < len(strm.items):
+                    nxt = strm.items[strm.pos]
+                    if nxt[0] == "t" and nxt[1] == "newbyte":
+                        strm.pos += 1
+                    elif nxt[0] == "t" and nxt[1] == "samebyte":
+                        strm.pos += 1
+                        want_v = nxt[2]
+                        found = None
+                        for (b2, o2), v2 in bc.items():
+                            if b2 == buf and v2 == r_var(want_v):
+                                found = (o2, v2)
+                                break
+                        if found is None:
+                            raise Refuse(f"samebyte names unknown var v{want_v} not in buffer {buf}")
+                        o2, v2 = found
+                        self.entail(cur_st["facts"], r_sub(idx_row, o2), strm)
+                        self.entail(cur_st["facts"], r_sub(o2, idx_row), strm)
+                        if v2 not in cur_st["facts"]:
+                            cur_st["facts"].append(v2)
+                            cur_st["facts"].append(r_sub(r_const(255), v2))
+                        return v2
                 bc[key] = fresh_var(cur_st, 0, 255)
             else:
                 v = bc[key]
@@ -986,7 +1007,7 @@ class Verifier:
                         idx = r_sub(addr, bbase)
                         self.entail(st["facts"], idx, stream)
                         self.entail(st["facts"], r_sub(r_sub(st["buf_len"][bnm], idx), r_const(1)), stream)
-                        return st["get_byte"](bnm, idx, st), (not st["buf_clean"][bnm])
+                        return st["get_byte"](bnm, idx, st, stream), (not st["buf_clean"][bnm])
                     raise Refuse("mem8 address does not fall in any contract buffer")
                 if op == "mem64":
                     base, mb = eval_table_expr(args[0], bind, st)
@@ -1129,6 +1150,94 @@ class Verifier:
                         continue
                     if kind == "set":
                         lhs, rhs = stmt[1], stmt[2]
+                        if (len(row.effect) == 1 and lhs[0] == "name"
+                                and rhs[0] == "call" and rhs[1] == "select" and len(rhs[2]) == 3
+                                and rhs[2][0][0] == "name" and rhs[2][1][0] == "name" and rhs[2][2][0] == "name"):
+                            if fn.get("trace_exprs"):
+                                raise Refuse("conditional select cannot be used with computed `trace depends on` values")
+                            cond_nm = rhs[2][0][1]
+                            sel_map = {"zf": ("zf", True), "nzf": ("zf", False),
+                                       "cf": ("cf", True), "ncf": ("cf", False),
+                                       "hi": ("hi", True), "nhi": ("hi", False)}
+                            if cond_nm not in sel_map:
+                                raise Refuse(f"unknown select condition `{cond_nm}`")
+                            cond_flag, want = sel_map[cond_nm]
+                            def _reg_of_tok(tok):
+                                v = bind.get(tok, tok)
+                                return v[1:] if isinstance(v, str) and v.startswith(".") else v
+                            dst = _reg_of_tok(lhs[1])
+                            ra = _reg_of_tok(rhs[2][1][1])
+                            rb = _reg_of_tok(rhs[2][2][1])
+                            if cond_flag == "hi":
+                                mk_flag = st["flag_marks"]["zf"] or st["flag_marks"]["cf"]
+                                zf_rel, cf_rel = st["flags"]["zf"], st["flags"]["cf"]
+                                if (zf_rel is not None and cf_rel is not None
+                                        and zf_rel[0] == "eq" and cf_rel[0] == "lt"
+                                        and zf_rel[1] == cf_rel[1] and zf_rel[2] == cf_rel[2]):
+                                    frel = ("lt", zf_rel[2], zf_rel[1])
+                                else:
+                                    raise Refuse("select on `hi`/`nhi` without matching cmp flags")
+                            else:
+                                mk_flag = st["flag_marks"][cond_flag]
+                                frel = st["flags"][cond_flag]
+                                if frel is None:
+                                    raise Refuse(f"select on unset flag `{cond_flag}`")
+                            mk_out = bool(mk_flag or st["marks"][ra] or st["marks"][rb])
+                            op_f, a_row, b_row = frel
+                            live_sel = []
+                            def _assume_sel(f_is_true, w_facts):
+                                chosen_val = st["regs"][ra] if (f_is_true == want) else st["regs"][rb]
+                                if any((not r[1]) and r[0] < 0 for r in w_facts):
+                                    return
+                                if all(not r[1] for r in w_facts):
+                                    st_w = clone(st)
+                                    st_w["regs"][dst] = chosen_val
+                                    st_w["marks"][dst] = mk_out
+                                    live_sel.append(st_w)
+                                    return
+                                tag_w, _ = stream.pop_tag()
+                                if tag_w == "live":
+                                    st_w = clone(st)
+                                    st_w["facts"].extend(w_facts)
+                                    st_w["regs"][dst] = chosen_val
+                                    st_w["marks"][dst] = mk_out
+                                    live_sel.append(st_w)
+                                elif tag_w == "dead":
+                                    self.refute_dead(st["facts"] + w_facts, stream)
+                                else:
+                                    raise Refuse(f"expected `live`/`dead`, got `{tag_w}`")
+                            if op_f == "eq":
+                                diff_ab = r_sub(a_row, b_row)
+                                diff_ba = r_sub(b_row, a_row)
+                                if diff_ab not in st["neq"] and diff_ba not in st["neq"]:
+                                    _assume_sel(True, [diff_ab, diff_ba])
+                                if not diff_ab[1]:
+                                    if diff_ab[0] != 0:
+                                        st_w = clone(st)
+                                        st_w["regs"][dst] = st["regs"][ra] if (False == want) else st["regs"][rb]
+                                        st_w["marks"][dst] = mk_out
+                                        live_sel.append(st_w)
+                                else:
+                                    nxt_item = stream.items[stream.pos] if stream.pos < len(stream.items) else None
+                                    if nxt_item is not None and nxt_item[0] == "t" and nxt_item[1] == "neq":
+                                        stream.pos += 1
+                                        st_w = clone(st)
+                                        st_w["neq"].append(diff_ab)
+                                        st_w["regs"][dst] = st["regs"][ra] if (False == want) else st["regs"][rb]
+                                        st_w["marks"][dst] = mk_out
+                                        live_sel.append(st_w)
+                                    else:
+                                        _assume_sel(False, [r_sub(diff_ab, r_const(1))])
+                                        _assume_sel(False, [r_sub(diff_ba, r_const(1))])
+                            elif op_f == "lt":
+                                _assume_sel(True, [r_sub(r_sub(b_row, a_row), r_const(1))])
+                                _assume_sel(False, [r_sub(a_row, b_row)])
+                            else:
+                                raise Refuse(f"unknown flag relation {frel}")
+                            for st_w in live_sel:
+                                next_v = visited_places if (nxt != origin_place and nxt not in jstack) else (visited_places - {nxt})
+                                run_path(nxt, st_w, origin_place, origin_dec, next_v, base_st, jstack, jdone)
+                            return
                         val, mk = eval_table_expr(rhs, bind, st)
                         if lhs[0] == "name":
                             v = bind.get(lhs[1], lhs[1])

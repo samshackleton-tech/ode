@@ -715,6 +715,94 @@ fn fast_sum(a: n bytes, n: number)
                 self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                 self.assertIn("shown (8 functions, verify2)", r2.stdout)
 
+    def test_09_cmov_csel_constant_time_and_refusal(self):
+        """Constant-time `cmov*` (x86-64) and `csel` (AArch64) pass both verifiers; branching on their result is refused."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        pos_src = """
+def max2(a, b) { if a < b then b else a }
+
+fn ct_max(a: number, b: number)
+    requires a < 1000000
+    requires b < 1000000
+    returns max2(a, b)
+    stack 0
+{
+    for x86_64 {
+        mov rax, rdi
+        cmp rdi, rsi
+        cmovb rax, rsi
+        ret
+    }
+    for arm64 {
+        cmp x0, x1
+        csel x0, x1, x0, lo
+        ret
+    }
+}
+"""
+        neg_src = """
+def max2(a, b) { if a < b then b else a }
+
+fn bad_branch(a: number, b: number)
+    requires a < 1000000
+    requires b < 1000000
+    returns max2(a, b)
+    stack 0
+{
+    for x86_64 {
+        mov rax, rdi
+        cmp rdi, rsi
+        cmovb rax, rsi
+        cmp rax, 0
+        je @done
+    @done:
+        ret
+    }
+    for arm64 {
+        cmp x0, x1
+        csel x0, x1, x0, lo
+        cmp x0, 0
+        b.eq @done
+    @done:
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                pos_p = os.path.join(d, "ct_max.ode")
+                with open(pos_p, "w", encoding="utf-8") as f:
+                    f.write(pos_src)
+                out_o = os.path.join(d, "ct_max.o")
+                out_p = os.path.join(d, "ct_max.proof")
+                res = ode_audit.pack_verified(pos_p, None, out_o, out_p, fn_name="ct_max", target=target)
+                self.assertEqual(res["verdict"], "shown", res)
+                dump = os.path.join(d, "dump.sh")
+                st_p = os.path.join(d, "st.txt")
+                pf_p = os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertIn("shown (1 function, verify2)", r2.stdout)
+
+                neg_p = os.path.join(d, "bad.ode")
+                with open(neg_p, "w", encoding="utf-8") as f:
+                    f.write(neg_src)
+                bad_o = os.path.join(d, "bad.o")
+                bad_p = os.path.join(d, "bad.proof")
+                with self.assertRaises((Exception, SystemExit)) as cm:
+                    ode_audit.pack_verified(neg_p, None, bad_o, bad_p, fn_name="bad_branch", target=target)
+                self.assertIn("kept out of the trace", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -66,7 +66,7 @@ mutual
         · cases hr : regOf bind n with
           | none => simp [hr] at h
           | some r =>
-            simp only [hr] at h ⊢
+            simp only [hr, flagMark_none_of_regOf hr] at h ⊢
             exact hq r (List.contains_iff_mem.mp h)
     | .call f args, h => by
       simp only [cleanExpr, Bool.and_eq_true, Option.isNone_iff_eq_none] at h
@@ -78,7 +78,7 @@ mutual
         -- the lowest byte of a register that is not marked
         obtain ⟨_, n, ha, hn, hr⟩ := lowOnly_some hl
         subst ha
-        simp only [exprMarks, exprMark, hn, hr, Bool.or_false, Bool.false_eq_true, if_false] at e1
+        simp only [exprMarks, exprMark, hn, hr, flagMark_none_of_regOf hr, Bool.or_false, Bool.false_eq_true, if_false] at e1
         simp only [exprMark, hl, e1, Bool.false_and]
   theorem cleanAll_sound {bind : Bind} {q : List Nat} {st : State} (hq : ∀ r ∈ q, st.marks.reg r = false) :
       ∀ (es : List Expr), cleanAll bind q es = true → exprMarks bind st es = false ∧ addrsQuietAll bind st es = true
@@ -149,7 +149,7 @@ theorem plainRow_value {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         simp only [hr, Option.map] at h
         injection h with h; subst h
         obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
-        exact ⟨st.reg r, by simp only [value, hn, hr', Option.map]; rfl, H.reg r lt, H.small r, wf.reg r lt⟩
+        exact ⟨st.reg r, by simp only [value, hn, hr', flagVal_none_regOf hr', Option.map]; rfl, H.reg r lt, H.small r, wf.reg r lt⟩
   next f n =>
     split at h
     next hc =>
@@ -176,7 +176,7 @@ theorem plainRow_value {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             have hz : st.reg r % 16 = 0 := by omega
             have hm : memSize "on16" = none := by decide
             refine ⟨st.reg r, ?_, hv, H.small r, wf.reg r lt⟩
-            simp [value, values, hn, hr', hm, prim, hz]
+            simp [value, values, hn, hr', flagVal_none_regOf hr', hm, prim, hz]
           next => cases h
     next => cases h
   next => cases h
@@ -559,12 +559,12 @@ theorem marksAfter_same {bind : Bind} {st : State} {stmt : Stmt} {place v : Expr
     | call f args => simp only [marksAfter, stmtParts]; split <;> exact ⟨rfl, rfl, rfl, rfl⟩
 
 /-- A store to memory of `size` bytes: the cells of the frame the verifier has as not marked after it are not marked. -/
-theorem cellsAfterSize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {bind : Bind} {stmt : Stmt} {f : String}
+theorem cellsAfterSize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int} {s s1 : Sym} {st st1 : State}
+    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} {stmt : Stmt} {f : String}
     {args : List Expr} {v : Expr} {size : Nat} {m b : Bool}
     (hpos : 0 < size) (hmemEq : ∀ ad, addrOf bind st args = some ad → (marksAfter bind st stmt).mem = markBytes st.marks.mem ad size b)
     (mv : m = false → b = false) :
-    CellsOk ctx s0 (cellsAfterSize ctx bind s size args m) (marksAfter bind st stmt).mem := by
+    CellsOk ctx s0 (cellsAfterSize ctx bind s s1 size args m) (marksAfter bind st stmt).mem := by
   unfold cellsAfterSize
   match args with
   | [] => exact CellsOk.nil
@@ -588,35 +588,60 @@ theorem cellsAfterSize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
             simp only
             obtain ⟨name, base, n, hw, ho⟩ := locate_out hl
             simp only [hw]
-            cases hc : Lin.isConst o with
-            | none => exact CellsOk.nil
-            | some c =>
-              simp only
-              split
-              next hb =>
-                simp only [Bool.and_eq_true, decide_eq_true_eq] at hb
-                obtain ⟨va, ea, xa, la, ba⟩ := plainRow_value E H wf hx
-                obtain ⟨vb, eb, xb, lb, bb⟩ := plainRow_value E H wf hy
-                have sx := signed_ev ρ x
-                have sy := signed_ev ρ y
-                have hm := List.mem_of_getElem? hw
-                have hbase : ρ base = s0.reg base := H.entry base (outs_lt hm)
-                have hfit := (E.out hm).1
-                have hfr := (E.out hm).2
-                have hcv := ev_isConst (ρ := ρ) hc
-                rw [ho, ev_sub, ev_add, ev_var, hbase] at hcv
-                have hs := E.stack
-                have had : (va + (vb + 0)) % M64 = s0.reg base + c.toNat := by unfold M64 at *; omega
-                have e1 : addrOf bind st [a, b0] = some ((va + (vb + 0)) % M64) := by
-                  simp only [addrOf, values, ea, eb, Option.map, sumList]
-                rw [hmemEq _ e1, had]
-                intro o' ho'
-                obtain ⟨o1, o2, o3⟩ := M.frame o' ho'
-                refine ⟨o1, o2, fun k hk => ?_⟩
-                unfold markBytes
-                rw [if_neg (by omega)]
-                exact o3 k hk
-              next => exact CellsOk.nil
+            change CellsOk ctx s0 (if ((match Lin.isConst o with
+              | some c => decide (0 ≤ c) && decide (c + size ≤ n)
+              | none => false) || (size == 1 && s1.wrote.any (fun e => e.1 == w && Lin.same e.2.1 o))) = true then s.q.fq else []) _
+            by_cases hok : ((match Lin.isConst o with
+              | some c => decide (0 ≤ c) && decide (c + size ≤ n)
+              | none => false) || (size == 1 && s1.wrote.any (fun e => e.1 == w && Lin.same e.2.1 o))) = true
+            · rw [if_pos hok]
+              obtain ⟨va, ea, xa, la, ba⟩ := plainRow_value E H wf hx
+              obtain ⟨vb, eb, xb, lb, bb⟩ := plainRow_value E H wf hy
+              have sx := signed_ev ρ x
+              have sy := signed_ev ρ y
+              have hm := List.mem_of_getElem? hw
+              have hbase : ρ base = s0.reg base := H.entry base (outs_lt hm)
+              have hfit := (E.out hm).1
+              have hfr := (E.out hm).2
+              have hbounds : 0 ≤ ev ρ o ∧ ev ρ o + (size : Int) ≤ n := by
+                rcases Bool.or_eq_true _ _ |>.mp hok with hconst | hwrote
+                · cases hc : Lin.isConst o with
+                  | none => simp [hc] at hconst
+                  | some c =>
+                    simp only [hc, Bool.and_eq_true, decide_eq_true_eq] at hconst
+                    have hcv := ev_isConst (ρ := ρ) hc
+                    omega
+                · simp only [Bool.and_eq_true, beq_iff_eq, List.any_eq_true] at hwrote
+                  obtain ⟨hsz1, ⟨w', o', x'⟩, hmemw, hweq⟩ := hwrote
+                  simp only [Bool.and_eq_true, beq_iff_eq, Lin.same_iff] at hweq
+                  obtain ⟨hw_eq, ho_eq⟩ := hweq
+                  obtain ⟨name', base', n', hw', hlo', hhi', _⟩ := C.holds.wrote w' o' x' hmemw
+                  rw [hw_eq, hw] at hw'; injection hw' with hw'; injection hw' with _ hw'; injection hw' with _ rfl
+                  have hbo' : bounded s.nvars o' := by
+                    have bs : ∀ r, bounded s.nvars r → bounded s.nvars (signed r) := fun r hr => by
+                      unfold signed; split; split; exact bounded_const _ _; exact hr; exact hr
+                    rw [ho_eq, ho]
+                    exact bounded_sub (bounded_add (bs x ba) (bs y bb))
+                      (bounded_var (Nat.lt_of_lt_of_le (outs_lt hm) (Nat.le_trans (Nat.le_succ _) wf.base)))
+                  have hev_eq : ev ρ1 o' = ev ρ o' := (ev_agree hbo' C.agree).symm
+                  rw [hev_eq, ho_eq] at hlo' hhi'
+                  omega
+              obtain ⟨hlo, hhi⟩ := hbounds
+              have hov : ev ρ o = ev ρ (signed x) + ev ρ (signed y) - (s0.reg base : Int) := by
+                rw [ho, ev_sub, ev_add, ev_var, hbase]
+              have hs := E.stack
+              have had : (va + (vb + 0)) % M64 = s0.reg base + (ev ρ o).toNat := by unfold M64 at *; omega
+              have e1 : addrOf bind st [a, b0] = some ((va + (vb + 0)) % M64) := by
+                simp only [addrOf, values, ea, eb, Option.map, sumList]
+              rw [hmemEq _ e1, had]
+              intro o' ho'
+              obtain ⟨o1, o2, o3⟩ := M.frame o' ho'
+              refine ⟨o1, o2, fun k hk => ?_⟩
+              unfold markBytes
+              rw [if_neg (by omega)]
+              exact o3 k hk
+            · rw [if_neg hok]
+              exact CellsOk.nil
           | data _ => exact CellsOk.nil
           | frame c =>
             simp only
@@ -649,10 +674,10 @@ theorem cellsAfterSize_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
             next => exact CellsOk.nil
 
 /-- A store to memory: the cells of the frame the verifier has as not marked after it are not marked. -/
-theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
-    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {bind : Bind} {f : String} {args : List Expr} {v : Expr}
+theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int} {s s1 : Sym} {st st1 : State}
+    (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} {f : String} {args : List Expr} {v : Expr}
     {m : Bool} (mv : m = false → exprMark bind st v = false) :
-    CellsOk ctx s0 (cellsAfter ctx bind s f args m) (marksAfter bind st (.set (.call f args) v)).mem := by
+    CellsOk ctx s0 (cellsAfter ctx bind s s1 f args m) (marksAfter bind st (.set (.call f args) v)).mem := by
   unfold cellsAfter
   cases hsz : memSize f with
   | none => exact CellsOk.nil
@@ -666,7 +691,7 @@ theorem cellsAfter_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         · split at hsz
           · injection hsz with hsz; omega
           · cases hsz
-    exact cellsAfterSize_sound E M H wf (f := f) (v := v) hpos
+    exact cellsAfterSize_sound E M H wf C (f := f) (v := v) hpos
       (fun ad e1 => by simp only [marksAfter, stmtParts, placeWidth, hsz, e1]) mv
 
 /-! The marks of a statement are worked out from the registers of the state before and from what is known
@@ -675,8 +700,8 @@ not to be marked there, and from nothing else of it. -/
 theorem plainRow_light (bind : Bind) (s : Sym) (e : Expr) : plainRow ctx bind s.light e = plainRow ctx bind s e := by
   cases e <;> rfl
 
-theorem cellsAfterSize_light (ctx : Ctx) (bind : Bind) (s : Sym) (size : Nat) (args : List Expr) (m : Bool) :
-    cellsAfterSize ctx bind s.light size args m = cellsAfterSize ctx bind s size args m := by
+theorem cellsAfterSize_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (args : List Expr) (m : Bool) :
+    cellsAfterSize ctx bind s.light s1 size args m = cellsAfterSize ctx bind s s1 size args m := by
   unfold cellsAfterSize
   cases args with
   | nil => rfl
@@ -688,8 +713,8 @@ theorem cellsAfterSize_light (ctx : Ctx) (bind : Bind) (s : Sym) (size : Nat) (a
       | cons _ _ => rfl
       | nil => simp only [plainRow_light]; rfl
 
-theorem cellsAfter_light (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr) (m : Bool) :
-    cellsAfter ctx bind s.light f args m = cellsAfter ctx bind s f args m := by
+theorem cellsAfter_light (ctx : Ctx) (bind : Bind) (s s1 : Sym) (f : String) (args : List Expr) (m : Bool) :
+    cellsAfter ctx bind s.light s1 f args m = cellsAfter ctx bind s s1 f args m := by
   unfold cellsAfter
   cases memSize f <;> simp [cellsAfterSize_light]
 
@@ -790,7 +815,7 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         next hc =>
           injection hm with hm; subst hm
           obtain ⟨c1, c2⟩ := cleanAll_sound M.reg args hc
-          have hcs := cellsAfterSize_sound E M H wf (bind := bind) (stmt := .vset (.call f args) v) (f := f) (args := args) (v := v) (size := 16) (m := true) (b := true)
+          have hcs := cellsAfterSize_sound E M H wf C (bind := bind) (stmt := .vset (.call f args) v) (f := f) (args := args) (v := v) (size := 16) (m := true) (b := true)
             (by omega) (fun ad e1 => by simp [marksAfter, stmtParts, placeWidth, e1]) (fun h => by cases h)
           exact ⟨by simp only [quietStmt, stmtParts, qv, c1, c2, Bool.not_false, Bool.and_true], keep rfl trivial hcs⟩
         next => cases hm
@@ -832,7 +857,7 @@ theorem stmtMarks_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         next hc =>
           injection hm with hm; subst hm
           obtain ⟨c1, c2⟩ := cleanAll_sound M.reg args hc
-          exact ⟨by simp only [quietStmt, stmtParts, qv, c1, c2, Bool.not_false, Bool.and_true], keep rfl trivial (cellsAfter_sound E M H wf mv)⟩
+          exact ⟨by simp only [quietStmt, stmtParts, qv, c1, c2, Bool.not_false, Bool.and_true], keep rfl trivial (cellsAfter_sound E M H wf C mv)⟩
         next => cases hm
       | name n =>
         simp only at hm

@@ -1904,7 +1904,20 @@ theorem readByte_flags {ctx : Ctx} {s s1 : Sym} {r : Nat} {o v : Row} {items res
     obtain ⟨_, _, _, h⟩ := V.bind_ok h
     cases hl : lookupByte r o s.bytes with
     | some _ => simp only [hl] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-    | none => simp only [hl] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+    | none =>
+      simp only [hl] at h
+      obtain ⟨opt, _, _, h⟩ := V.bind_ok h
+      cases opt with
+      | some v0 =>
+        cases hlv : lookupByteVar v0 r s.bytes with
+        | none => simp only [hlv] at h; exact (refuse_ok h).elim
+        | some o' =>
+          simp only [hlv] at h
+          obtain ⟨_, _, _, h⟩ := V.bind_ok h
+          obtain ⟨_, _, _, h⟩ := V.bind_ok h
+          have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+      | none =>
+        have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
 
 theorem symData_lin {ctx : Ctx} {bind : Bind} {s s1 : Sym} {x : Row} {val : EV} {items rest : Items}
     (h : symData ctx bind s x items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by

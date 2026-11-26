@@ -111,6 +111,18 @@ mov64_rm     | mov D64, [B64 + N]      | .mov 64 (.reg .D) (.mem .B N) | D = mem
              = REX.W 8B /r ; reg=D mem=B+N
 mov64_mr     | mov [B64 + N], S64      | .mov 64 (.mem .B N) (.reg .S) | mem64(B, N) = S
              = REX.W 89 /r ; reg=S mem=B+N
+cmove64_rr   | cmove D64, S64          | .cmove .D .S                  | D = select(zf, S, D)
+             = REX.W 0F 44 /r ; reg=D rm=S
+cmovne64_rr  | cmovne D64, S64         | .cmovne .D .S                 | D = select(nzf, S, D)
+             = REX.W 0F 45 /r ; reg=D rm=S
+cmovb64_rr   | cmovb D64, S64          | .cmovb .D .S                  | D = select(cf, S, D)
+             = REX.W 0F 42 /r ; reg=D rm=S
+cmovae64_rr  | cmovae D64, S64         | .cmovae .D .S                 | D = select(ncf, S, D)
+             = REX.W 0F 43 /r ; reg=D rm=S
+cmova64_rr   | cmova D64, S64          | .cmova .D .S                  | D = select(hi, S, D)
+             = REX.W 0F 47 /r ; reg=D rm=S
+cmovbe64_rr  | cmovbe D64, S64         | .cmovbe .D .S                 | D = select(nhi, S, D)
+             = REX.W 0F 46 /r ; reg=D rm=S
 lea          | lea D64, [B64 + N]      | .lea .D .B N                  | D = at(B, N)
              = REX.W 8D /r ; reg=D mem=B+N
 lea_idx      | lea D64, [B64 + S64 + N] | .lea_idx .D .B .S N          | D = add64(add64(B, S), N)

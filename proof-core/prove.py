@@ -646,6 +646,15 @@ class Prover:
                     break
                 if found is None: self.fail(proof, said); return None
                 proof = found
+            elif what == "samebyte":                           # pairs (v_k, o - o'_k): unify readByte with an already-read byte at equal offset
+                chosen = None
+                for k in range(0, len(goals) - 1, 2):
+                    v_id = goals[k].k
+                    diff = goals[k + 1]
+                    if refutation(facts + [negation(diff)]) and refutation(facts + [negation(-diff)]):
+                        chosen = v_id
+                        break
+                proof = proof + ([f"t samebyte {chosen}"] if chosen is not None else ["t newbyte 0"])
             elif what == "shift":                              # a shift to the left: is the number shown to lose no bit, or is only its low part kept
                 proof = proof + (["t exact"] if refutation(facts + [negation(goals[0])]) else ["t wrap"])
             elif what == "compare":

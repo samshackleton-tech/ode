@@ -141,6 +141,69 @@ theorem lowOnly_some {bind : Bind} {f : String} {args : List Expr} {r : Nat} (h 
     next => cases h
   next => cases h
 
+theorem flagVal_alike {a b : State} (A : Alike a b) {n : String} {m : Bool}
+    (hf : flagMark a.marks n = some m) (hm : m = false) :
+    flagVal a n = flagVal b n := by
+  subst hm
+  unfold flagMark at hf
+  by_cases h1 : n = "zf"
+  · subst h1; simp at hf; simp [flagVal, A.zf hf]
+  · by_cases h2 : n = "nzf"
+    · subst h2; simp at hf; simp [flagVal, A.zf hf]
+    · by_cases h3 : n = "cf"
+      · subst h3; simp at hf; simp [flagVal, A.cf hf]
+      · by_cases h4 : n = "ncf"
+        · subst h4; simp at hf; simp [flagVal, A.cf hf]
+        · by_cases h5 : n = "hi"
+          · subst h5; simp at hf; simp [flagVal, A.zf hf.1, A.cf hf.2]
+          · by_cases h6 : n = "nhi"
+            · subst h6; simp at hf; simp [flagVal, A.zf hf.1, A.cf hf.2]
+            · simp [h1, h2, h3, h4, h5, h6] at hf
+
+theorem regOf_none_of_flagMark {bind : Bind} {m : Marks} {n : String} {b : Bool} (hf : flagMark m n = some b) :
+    regOf bind n = none := by
+  simp only [flagMark] at hf
+  by_cases h1 : n = "zf"
+  · subst h1; rfl
+  · by_cases h2 : n = "nzf"
+    · subst h2; rfl
+    · by_cases h3 : n = "cf"
+      · subst h3; rfl
+      · by_cases h4 : n = "ncf"
+        · subst h4; rfl
+        · by_cases h5 : n = "hi"
+          · subst h5; rfl
+          · by_cases h6 : n = "nhi"
+            · subst h6; rfl
+            · simp [beq_iff_eq, h1, h2, h3, h4, h5, h6] at hf
+
+theorem flagVal_none_of_flagMark_none {s : State} {n : String} (hf : flagMark s.marks n = none) :
+    flagVal s n = none := by
+  unfold flagMark at hf
+  by_cases h1 : n = "zf"
+  · subst h1; simp at hf
+  · by_cases h2 : n = "nzf"
+    · subst h2; simp at hf
+    · by_cases h3 : n = "cf"
+      · subst h3; simp at hf
+      · by_cases h4 : n = "ncf"
+        · subst h4; simp at hf
+        · by_cases h5 : n = "hi"
+          · subst h5; simp at hf
+          · by_cases h6 : n = "nhi"
+            · subst h6; simp at hf
+            · simp [flagVal, h1, h2, h3, h4, h5, h6]
+
+theorem flagMark_none_of_regOf {bind : Bind} {m : Marks} {n : String} {r : Nat} (hr : regOf bind n = some r) :
+    flagMark m n = none := by
+  cases hf : flagMark m n with
+  | none => rfl
+  | some b => rw [regOf_none_of_flagMark hf] at hr; cases hr
+
+theorem flagVal_none_of_regOf {bind : Bind} {s : State} {n : String} {r : Nat} (hr : regOf bind n = some r) :
+    flagVal s n = none :=
+  flagVal_none_of_flagMark_none (flagMark_none_of_regOf (m := s.marks) hr)
+
 mutual
   /-- Of an expression whose addresses are made of nothing marked, in two states alike: it is marked in
   both or in neither; it reads the same memory; and where it is not marked it is worth the same. -/
@@ -158,9 +221,20 @@ mutual
       · rfl
       next hn =>
         rw [if_neg hn] at hm
-        cases hr : regOf bind n with
-        | none => simp only [hr] at hm; cases hm
-        | some r => simp only [hr] at hm; simp only [Option.map, A.reg r hm]
+        cases hf : flagMark a.marks n with
+        | some m =>
+          simp only [hf] at hm
+          have hfv := flagVal_alike A hf hm
+          have hrg := regOf_none_of_flagMark (bind := bind) hf
+          rw [hfv, hrg]; rfl
+        | none =>
+          simp only [hf] at hm
+          have hfa := flagVal_none_of_flagMark_none hf
+          have hfb : flagVal b n = none := flagVal_none_of_flagMark_none (A.marks ▸ hf)
+          rw [hfa, hfb]
+          cases hr : regOf bind n with
+          | none => simp only [hr] at hm; cases hm
+          | some r => simp only [hr] at hm; simp only [Option.map, A.reg r hm]
     | .call f args, h => by
       cases hl : lowOnly bind f args with
       | some r =>
@@ -174,7 +248,7 @@ mutual
           cases hm with
           | inl h1 => rw [A.reg r h1]
           | inr h2 => exact A.low r h2
-        simp only [value, values, hn, hr, Option.map, memSize, prim]
+        simp only [value, values, hn, hr, flagVal_none_of_regOf hr, Option.map, memSize, prim]
         simp [e]
       | none =>
       simp only [addrsQuiet, Bool.and_eq_true] at h

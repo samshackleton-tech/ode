@@ -1,0 +1,40 @@
+// RFC 4648 Standard Base64 constant-time block decoder specification (256 chars -> 192 bytes).
+//
+// Alphabet: 'A'..'Z' (65..90) -> 0..25, 'a'..'z' (97..122) -> 26..51,
+//           '0'..'9' (48..57) -> 52..61, '+' (43) -> 62, '/' (47) -> 63.
+// `b64_dec(c)` returns `64 + val` (in 64..127) for a valid Base64 character, or `0` if invalid.
+// Every byte of `src` is kept out of the execution trace (no data-dependent branches or loads).
+
+def b64_dec(c) {
+    if 65 <= c && c <= 90 then c - 1
+    else if 97 <= c && c <= 122 then c - 7
+    else if 48 <= c && c <= 57 then c + 68
+    else if c == 43 then 126
+    else if c == 47 then 127
+    else 0
+}
+
+def b64_val(c) { b64_dec(c) % 64 }
+
+def b64_ok(c) { if b64_dec(c) >= 64 then 1 else 0 }
+
+def b64_decode(src) {
+    [
+        if j % 3 == 0 then
+            b64_val(src[4 * (j / 3)]) * 4 + b64_val(src[4 * (j / 3) + 1]) / 16
+        else if j % 3 == 1 then
+            (b64_val(src[4 * (j / 3) + 1]) % 16) * 16 + b64_val(src[4 * (j / 3) + 2]) / 4
+        else
+            (b64_val(src[4 * (j / 3) + 2]) % 4) * 64 + b64_val(src[4 * (j / 3) + 3])
+        for j in 0..192
+    ]
+}
+
+def b64_valid_from(src, i, ok) {
+    if i >= 256 then ok
+    else b64_valid_from(src, i + 1, if b64_ok(src[i]) == 0 then 0 else ok)
+}
+
+def b64_valid(src) {
+    b64_valid_from(src, 0, 1)
+}

@@ -349,6 +349,16 @@ theorem tableAt_lt {c : Contract} {j : Nat} {x : String} {r count l : Nat} (h : 
         obtain ⟨_, _, _, rfl⟩ := h
         exact argRegs_lt (regOfIn_mem y c.args c.argRegs l' hr)
 
+theorem lookupByteVar_mem {v r : Nat} {o : Row} : ∀ {l : List (Nat × Nat × Row)}, lookupByteVar v r l = some o → (v, r, o) ∈ l
+  | [], h => by simp [lookupByteVar] at h
+  | (v', r', o') :: rest, h => by
+    unfold lookupByteVar at h
+    split at h
+    next he =>
+      injection h with h; subst h; obtain ⟨rfl, rfl⟩ := he
+      exact List.mem_cons_self ..
+    next => exact List.mem_cons_of_mem _ (lookupByteVar_mem h)
+
 theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {r : Nat} {o v : Row}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : readByte ctx s r o items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : bounded s.nvars o) :
@@ -384,6 +394,26 @@ theorem readByte_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
       rw [ev_var]; exact h4
     | none =>
       simp only [hv] at h
+      obtain ⟨opt, r3, _, h⟩ := V.bind_ok h
+      cases opt with
+      | some v0 =>
+        cases hlv : lookupByteVar v0 r s.bytes with
+        | none => simp only [hlv] at h; exact (refuse_ok h).elim
+        | some o' =>
+          simp only [hlv] at h
+          obtain ⟨_, r4, e3, h⟩ := V.bind_ok h
+          obtain ⟨_, r5, e4, h⟩ := V.bind_ok h
+          have hp := V.pure_ok h; injection hp with hp _; injection hp with h1 h2; subst h1 h2
+          have m := lookupByteVar_mem hlv
+          obtain ⟨base', len', hr', _, _, h4⟩ := H.bytes v0 r o' m
+          rw [hreg] at hr'; injection hr' with hr'; injection hr' with hb1 hb2; subst hb1 hb2
+          have g3 := entail_sound e3 ρ H.facts
+          have g4 := entail_sound e4 ρ H.facts
+          simp only [ev_sub] at g3 g4
+          have heq : ev ρ o = ev ρ o' := by omega
+          refine ⟨ρ, Carried.here H wf, bounded_var (wf.bytes v0 r o' m).1, base, len, rfl, g1, by omega, ?_⟩
+          rw [ev_var, heq]; exact h4
+      | none =>
       have := V.pure_ok h
       injection this with hp _
       injection hp with h1 h2
@@ -1894,6 +1924,25 @@ theorem symPrim1_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x : R
       rw [hr, ← hx2]; omega
     next => exact (refuse_ok h).elim
 
+theorem flagVal_none_regOf {bind : Bind} {n : String} {r : Nat} {s : State} (h : regOf bind n = some r) :
+    flagVal s n = none := by
+  have no : ∀ s, isRegisterLetter s = false → regIndex s = none → regOf bind s ≠ some r := by
+    intro s h1 h2 he; unfold regOf at he; rw [h1] at he; simp [h2] at he
+  unfold flagVal
+  by_cases h1 : n = "zf"
+  · subst h1; exact absurd h (no "zf" (by decide) (by decide))
+  by_cases h2 : n = "nzf"
+  · subst h2; exact absurd h (no "nzf" (by decide) (by decide))
+  by_cases h3 : n = "cf"
+  · subst h3; exact absurd h (no "cf" (by decide) (by decide))
+  by_cases h4 : n = "ncf"
+  · subst h4; exact absurd h (no "ncf" (by decide) (by decide))
+  by_cases h5 : n = "hi"
+  · subst h5; exact absurd h (no "hi" (by decide) (by decide))
+  by_cases h6 : n = "nhi"
+  · subst h6; exact absurd h (no "nhi" (by decide) (by decide))
+  simp [h1, h2, h3, h4, h5, h6]
+
 theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) :
     ∀ (e : Expr) {s s' : Sym} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State},
     symValue ctx bind s e items = .ok ((v, s'), rest) → Holds ctx s0 ρ s st → WF ctx s →
@@ -1936,7 +1985,7 @@ theorem symValue_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
         injection hp with h1 h2
         subst h1 h2
         obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
-        exact ⟨ρ, st.reg r, Carried.here H wf, by simp [value, hletter, hr'], H.small r, H.reg r lt, wf.reg r lt⟩
+        exact ⟨ρ, st.reg r, Carried.here H wf, by simp [value, hletter, hr', flagVal_none_regOf hr'], H.small r, H.reg r lt, wf.reg r lt⟩
   | .call f [a, b], s, s', v, items, rest, ρ, st, h, H, wf => by
     simp only [symValue] at h
     obtain ⟨⟨x, s1⟩, r1, e1, h⟩ := V.bind_ok h

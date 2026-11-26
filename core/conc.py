@@ -93,6 +93,7 @@ CONC = {
     "shl64": lambda a, n: (a << n) & M64, "shr64": lambda a, n: (a & M64) >> n,
     "low32": lambda a: a & M32, "at": lambda a, n: (a + n) & M64,
     "equal": lambda a, b: int(a & M64 == b & M64), "below": lambda a, b: int(a & M64 < b & M64),
+    "select": lambda c, a, b: a if c else b,
     "low8": lambda a: a & 0xFF, "sub8": lambda a, b: (a - b) & 0xFF, "on16": on16,
     "setlow8": lambda a, b: (a & ~0xFF & M64) | (b & 0xFF),
     "add32": lambda a, b: (a + b) & M32, "xor32": lambda a, b: a ^ b, "and32": lambda a, b: a & b, "ror32": ror32,
@@ -138,6 +139,10 @@ def run(row, bind, s, trace=None):
             if n in MASKS: return s.k[bind[n]]
             if n in NUMBERS: return bind[n] if not isinstance(bind[n], int) or bind[n] > M64 else bind[n] & M64         # (a number of sixteen words is whole)
             if n in ("zf", "cf"): return getattr(s, n)
+            if n == "nzf": return int(not bool(s.zf))
+            if n == "ncf": return int(not bool(s.cf))
+            if n == "hi": return int((not bool(s.cf)) and (not bool(s.zf)))
+            if n == "nhi": return int(bool(s.cf) or bool(s.zf))
             if n == "xmm0": return s.x[0][:4]
             return s.g[n]
         name, args = e[1], [value(a) for a in e[2]]

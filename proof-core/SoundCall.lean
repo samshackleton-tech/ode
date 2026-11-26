@@ -498,7 +498,8 @@ theorem afterCall_wf {ctx : Ctx} {s : Sym} (wf : WF ctx s) (c : Contract) (hm : 
   refine ⟨Nat.le_trans wf.base (Nat.le_add_right _ _), ?_, trivial, trivial, ?_, ?_, ?_, ?_, ?_, ?_,
     ⟨wf.words.table, fun j r h => bounded_mono (Nat.le_add_right _ _) (wf.words.atoms j r h), fun x ids h => by simp [Sym.afterCall] at h,
      wf.words.rotrs, (fun _ _ _ h => by simp [Sym.afterCall] at h), fun _ _ h => nomatch h⟩,
-    fun k m => Known.wf_mono (Nat.le_add_right _ _) (Nat.le_refl _) (wf.known k m), fun _ h => nomatch h⟩
+    fun k m => Known.wf_mono (Nat.le_add_right _ _) (Nat.le_refl _) (wf.known k m),
+    fun rg h => let ⟨b1, b2⟩ := wf.range rg h; ⟨bounded_mono (Nat.le_add_right _ _) b1, fun v mv => SVal.bounded_mono (Nat.le_add_right _ _) (b2 v mv)⟩⟩
   · intro r hr
     show bounded (s.nvars + c.regs) (if c.scratch.contains r = true then Lin.var (s.nvars + r) else s.reg r)
     split
@@ -1191,7 +1192,13 @@ theorem afterCall_holds {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {s
   refine ⟨H'.entry, ⟨H'.data.1, hdata.trans H.data.2⟩, ?_, hsmall, trivial, trivial, ?_, ?_, ?_, H'.bytes, H'.spec, ?_, ?_,
     ⟨(fun x ids h => by simp [Sym.afterCall] at h), (fun w m => by simp [Sym.afterCall] at m),
      (fun w j i m => by simp [Sym.afterCall] at m), fun _ _ h => nomatch h⟩,
-    H'.known, (fun _ h => nomatch h),
+    H'.known,
+    (fun rg hrg => by
+      obtain ⟨name, r, n, params, x, b, hi, g1, g2, g3, g4, g5⟩ := H'.range rg hrg
+      refine ⟨name, r, n, params, x, b, hi, g1, g2, g3, g4, fun j hj1 hj2 => ?_⟩
+      have ho := hout name r n (List.mem_of_getElem? g1)
+      rw [hmem _ (by omega)]
+      exact g5 j hj1 hj2),
     fun r hr => by
       obtain ⟨hr1, hr2⟩ := List.mem_filter.mp hr
       rw [hvec r (List.contains_iff_mem.mp hr2)]

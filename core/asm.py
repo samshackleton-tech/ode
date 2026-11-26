@@ -28,6 +28,9 @@ G16 = "ax cx dx bx sp bp si di r8w r9w r10w r11w r12w r13w r14w r15w ah ch dh bh
 ROWS = {r.name: (r, [encode.Way(r, t) for t in r.bytes]) for r in table.read()}
 NOPS = {len(w.literal): w.literal for w in ROWS["nop"][1] if w.literal is not None and w.literal != b"\xf3\x0f\x1e\xfa"}
 JUMPS = {"jmp": "jmp", "je": "je", "jz": "je", "jne": "jne", "jnz": "jne", "jae": "jae", "jb": "jb", "ja": "ja", "jnbe": "ja", "jbe": "jbe", "jna": "jbe"}
+CMOVS = {"cmove": "cmove64_rr", "cmovz": "cmove64_rr", "cmovne": "cmovne64_rr", "cmovnz": "cmovne64_rr",
+         "cmovb": "cmovb64_rr", "cmovc": "cmovb64_rr", "cmovae": "cmovae64_rr", "cmovnc": "cmovae64_rr",
+         "cmova": "cmova64_rr", "cmovnbe": "cmova64_rr", "cmovbe": "cmovbe64_rr", "cmovna": "cmovbe64_rr"}
 BIN64 = {"add": "add64", "sub": "sub64", "and": "and64", "or": "or64", "cmp": "cmp64"}
 VEC128 = {
     "paddd": ("paddd128", "L"), "vpaddd": ("paddd128", "V"),
@@ -258,6 +261,10 @@ def write(line, mn, ops):
         _, b, idx, disp = parse_mem(ops[1])
         if idx is not None: raise ValueError(f"indexed movzx not in x86.tab: {line}")
         return ("fixed", pick("movzx8_rm", {"D": d, "B": b, "N": disp}))
+    if mn in CMOVS:
+        if len(ops) != 2 or ops[0] not in G64 or ops[1] not in G64:
+            raise ValueError(f"{mn} takes two 64-bit registers: {line}")
+        return ("fixed", pick(CMOVS[mn], {"D": G64.index(ops[0]), "S": G64.index(ops[1])}))
     if mn == "mov":
         if ops[0] == "al":
             if operand(ops[1])[0] != "number": raise ValueError(f"x86.tab has `mov al, I` alone into al (a byte is loaded by `movzx`): not from {ops[1]}")

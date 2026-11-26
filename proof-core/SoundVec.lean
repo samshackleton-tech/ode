@@ -345,7 +345,7 @@ theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
         simp only [hr, Option.map_some] at h
         injection h with h; subst h
         obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
-        exact ⟨st.reg r, by simp [value, hl, hr'], H.small r, H.reg r lt, wf.reg r lt⟩
+        exact ⟨st.reg r, by simp [value, hl, hr', flagVal_none_regOf hr'], H.small r, H.reg r lt, wf.reg r lt⟩
   | number _ => simp [symReg] at h
   | lane _ _ => simp [symReg] at h
   | call _ _ => simp [symReg] at h
