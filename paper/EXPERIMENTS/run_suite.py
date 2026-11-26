@@ -82,8 +82,11 @@ def utc_now() -> str:
 
 
 def blake3_hex(path: Path) -> str:
-    r = subprocess.run(["b3sum", "--no-names", str(path)], capture_output=True, text=True, check=True)
-    return r.stdout.strip().split()[0]
+    if shutil.which("b3sum"):
+        r = subprocess.run(["b3sum", "--no-names", str(path)], capture_output=True, text=True, check=True)
+        return r.stdout.strip().split()[0]
+    import ode_canon
+    return ode_canon.blake3_256(path.read_bytes()).hex()
 
 
 def git_head() -> str:
