@@ -1,0 +1,263 @@
+use spec = "utf8_valid_spec.ode"
+
+fn utf8_valid(src: n bytes, n: number)
+    requires n <= 4096
+    returns spec.utf8_valid(src)
+    trace depends on src, n
+    stack 0
+{
+    for x86_64 {
+        reg base = rdi, size = rsi, idx = rcx
+        reg addr = r8, b0 = r9, b0d = r9d, b1 = r10, b1d = r10d, b2 = r11, b2d = r11d, b3 = rdx, b3d = edx
+
+        idx := 0
+        place {
+            name i = idx
+            fact 0 <= i
+            fact i <= n
+            fact spec.utf8_from(src, 0) == spec.utf8_from(src, i)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, size
+        je @ok
+        lea addr, [base + idx]
+        movzx b0d, byte ptr [addr]
+        cmp b0, 128
+        jae @multi
+        add idx, 1
+        jmp @loop
+
+    @multi:
+        cmp b0, 194
+        jb @bad
+        cmp b0, 223
+        ja @try3
+        // 2-byte sequence: [C2..DF] [80..BF]
+        b3 := idx
+        add b3, 2
+        cmp b3, size
+        ja @bad
+        movzx b1d, byte ptr [addr + 1]
+        cmp b1, 128
+        jb @bad
+        cmp b1, 191
+        ja @bad
+        add idx, 2
+        jmp @loop
+
+    @try3:
+        cmp b0, 239
+        ja @try4
+        // 3-byte sequence: [E0..EF] b1 b2
+        b3 := idx
+        add b3, 3
+        cmp b3, size
+        ja @bad
+        movzx b1d, byte ptr [addr + 1]
+        movzx b2d, byte ptr [addr + 2]
+        cmp b2, 128
+        jb @bad
+        cmp b2, 191
+        ja @bad
+        cmp b0, 224
+        je @e0
+        cmp b0, 237
+        je @ed
+        cmp b1, 128
+        jb @bad
+        cmp b1, 191
+        ja @bad
+        add idx, 3
+        jmp @loop
+    @e0:
+        cmp b1, 160
+        jb @bad
+        cmp b1, 191
+        ja @bad
+        add idx, 3
+        jmp @loop
+    @ed:
+        cmp b1, 128
+        jb @bad
+        cmp b1, 159
+        ja @bad
+        add idx, 3
+        jmp @loop
+
+    @try4:
+        cmp b0, 244
+        ja @bad
+        // 4-byte sequence: [F0..F4] b1 b2 b3
+        b3 := idx
+        add b3, 4
+        cmp b3, size
+        ja @bad
+        movzx b1d, byte ptr [addr + 1]
+        movzx b2d, byte ptr [addr + 2]
+        movzx b3d, byte ptr [addr + 3]
+        cmp b2, 128
+        jb @bad
+        cmp b2, 191
+        ja @bad
+        cmp b3, 128
+        jb @bad
+        cmp b3, 191
+        ja @bad
+        cmp b0, 240
+        je @f0
+        cmp b0, 244
+        je @f4
+        cmp b1, 128
+        jb @bad
+        cmp b1, 191
+        ja @bad
+        add idx, 4
+        jmp @loop
+    @f0:
+        cmp b1, 144
+        jb @bad
+        cmp b1, 191
+        ja @bad
+        add idx, 4
+        jmp @loop
+    @f4:
+        cmp b1, 128
+        jb @bad
+        cmp b1, 143
+        ja @bad
+        add idx, 4
+        jmp @loop
+
+    @ok:
+        rax := 1
+        ret
+    @bad:
+        rax := 0
+        ret
+    }
+    for arm64 {
+        reg base = x0, size = x1, idx = x2
+        reg addr = x3, b0 = x4, b0w = w4, b1 = x5, b1w = w5, b2 = x6, b2w = w6, b3 = x7, b3w = w7
+
+        idx := 0
+        place {
+            name i = idx
+            fact 0 <= i
+            fact i <= n
+            fact spec.utf8_from(src, 0) == spec.utf8_from(src, i)
+            decreases n - i
+        }
+    @loop:
+        cmp idx, size
+        b.eq @ok
+        add addr, base, idx
+        ldrb b0w, [addr, 0]
+        cmp b0, 128
+        b.hs @multi
+        add idx, idx, 1
+        b @loop
+
+    @multi:
+        cmp b0, 194
+        b.lo @bad
+        cmp b0, 223
+        b.hi @try3
+        add b3, idx, 2
+        cmp b3, size
+        b.hi @bad
+        ldrb b1w, [addr, 1]
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 191
+        b.hi @bad
+        add idx, idx, 2
+        b @loop
+
+    @try3:
+        cmp b0, 239
+        b.hi @try4
+        add b3, idx, 3
+        cmp b3, size
+        b.hi @bad
+        ldrb b1w, [addr, 1]
+        ldrb b2w, [addr, 2]
+        cmp b2, 128
+        b.lo @bad
+        cmp b2, 191
+        b.hi @bad
+        cmp b0, 224
+        b.eq @e0
+        cmp b0, 237
+        b.eq @ed
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 191
+        b.hi @bad
+        add idx, idx, 3
+        b @loop
+    @e0:
+        cmp b1, 160
+        b.lo @bad
+        cmp b1, 191
+        b.hi @bad
+        add idx, idx, 3
+        b @loop
+    @ed:
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 159
+        b.hi @bad
+        add idx, idx, 3
+        b @loop
+
+    @try4:
+        cmp b0, 244
+        b.hi @bad
+        add b3, idx, 4
+        cmp b3, size
+        b.hi @bad
+        ldrb b1w, [addr, 1]
+        ldrb b2w, [addr, 2]
+        ldrb b3w, [addr, 3]
+        cmp b2, 128
+        b.lo @bad
+        cmp b2, 191
+        b.hi @bad
+        cmp b3, 128
+        b.lo @bad
+        cmp b3, 191
+        b.hi @bad
+        cmp b0, 240
+        b.eq @f0
+        cmp b0, 244
+        b.eq @f4
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 191
+        b.hi @bad
+        add idx, idx, 4
+        b @loop
+    @f0:
+        cmp b1, 144
+        b.lo @bad
+        cmp b1, 191
+        b.hi @bad
+        add idx, idx, 4
+        b @loop
+    @f4:
+        cmp b1, 128
+        b.lo @bad
+        cmp b1, 143
+        b.hi @bad
+        add idx, idx, 4
+        b @loop
+
+    @ok:
+        x0 := 1
+        ret
+    @bad:
+        x0 := 0
+        ret
+    }
+}

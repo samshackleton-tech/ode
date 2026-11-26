@@ -295,8 +295,9 @@ Both the compiler and the verifiers read `core/x86.tab` and `arm64/arm64.tab`. O
 | Register move | `mov d, a` | `mov d, a` |
 | Constant load (shorthand) | `d := k` | `d := k` (`0..65535`) |
 | Add / subtract | `add d, a`, `sub d, a` | `add d, a, b`, `sub d, a, b` |
-| Shift / mask | `shl d, k`, `shr d, k`, `and d, k` | `lsl d, a, k`, `lsr d, a, k`, `and d, a, b` |
+| Shift / mask | `shl d, k`, `shr d, k`, `and d, k` (any contiguous bitfield `(2^w-1)<<k`) | `lsl d, a, k`, `lsr d, a, k`, `and d, a, b` (hoisted mask regs supported) |
 | Byte load / store | `movzx r32, byte ptr [a]`, `mov byte ptr [a], breg` | `ldrb w, [a, off]`, `strb w, [a, off]` |
+| Multi-byte `bytes` load | `mov r32, dword ptr [a + off]`, `mov d, qword ptr [a + off]` | `ldr w, [a, off]`, `ldr d, [a, off]` |
 | 64-bit stack slot | `mov d, qword ptr [rsp + off]`, `mov qword ptr [rsp + off], a` | `ldr d, [sp, off]`, `str a, [sp, off]` |
 | Stack push / pop | `push a`, `pop d` | `sub sp, sp, 16`, `add sp, sp, 16` |
 | Compare | `cmp a, b` | `cmp a, b` |

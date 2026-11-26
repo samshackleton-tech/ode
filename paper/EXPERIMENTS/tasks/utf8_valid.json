@@ -1,0 +1,13 @@
+{
+  "id": "utf8_valid",
+  "title": "RFC 3629 UTF-8 byte-sequence validator (multi-stride + ASCII fast path)",
+  "spec_file": "paper/EXPERIMENTS/tasks/utf8_valid_spec.ode",
+  "spec_basename": "utf8_valid_spec.ode",
+  "entry_fn": "utf8_valid",
+  "expected_contract_id": "ykps3cug73fjveiyq2i3t55756kxodpe5l6x4gexcdnvjmyhcrna",
+  "reference_solution": "paper/EXPERIMENTS/tasks/utf8_valid_reference.ode",
+  "native_harness": "paper/EXPERIMENTS/tasks/utf8_valid_native.c",
+  "contract_header": "use spec = \"utf8_valid_spec.ode\"\n\nfn utf8_valid(src: n bytes, n: number)\n    requires n <= 4096\n    returns spec.utf8_valid(src)\n    trace depends on src, n\n    stack 0\n",
+  "task_summary": "Implement `utf8_valid(src, n)`, which validates whether `src[0 .. n - 1]` (`n <= 4096`) is a well-formed RFC 3629 UTF-8 byte sequence (returning `1` if valid, `0` otherwise). Must enforce all RFC 3629 Table 3-7 rules including ASCII (`0x00..0x7F`), 2-byte (`0xC2..0xDF`), 3-byte (`0xE0..0xEF`, rejecting overlong `0xE0 [0x80..0x9F]` and UTF-16 surrogates `0xED [0xA0..0xBF]`), and 4-byte (`0xF0..0xF4`, rejecting overlong `0xF0 [0x80..0x8F]` and `> U+10FFFF` `0xF4 [0x90..0xBF]`), plus truncation and lone continuation rejection.",
+  "opt_goal": "minimize `cyc/B` on the hot ASCII fast-path loop (e.g., by unrolling 4x or 8x ASCII byte checks or using multi-byte 32-bit/64-bit loads from `src` with shift/mask extraction) while keeping multi-byte UTF-8 handling compact and dual verification (`odeverify` + `verify2.py`) fast"
+}
