@@ -712,14 +712,17 @@ class Prover:
                         self.furthest_root = start_len
                     self.spec_fuel_hit = False
                 before, before_proof = self.last, self.last_proof
-                # First try exact congruence (`t same (i * 256 + j)`) on any same-function call pair
+                # First try exact congruence (`t same (i * 256 + j)`) on same-function call pairs
                 # reported by `p ...` whose arguments are provably equal (e.g. `words == 2 * ihl`)!
-                # Use `quick=True` and cap at `opened <= 2` so non-equal pairs reject in <0.1 ms!
+                # At `opened == 0` check all pairs; at `opened == 1` check only pairs involving a
+                # newly added call (tail index) so earlier unrelated calls are never re-probed.
                 plines = [l[2:].strip() for l in lines if l.startswith("p ")]
-                if opened <= 2 and plines and plines[0]:
+                if opened <= 1 and plines and plines[0]:
                     nums = [int(x) for x in plines[0].split()]
                     for pi in range(0, len(nums) - 1, 2):
                         ci_k, cj_k = nums[pi], nums[pi + 1]
+                        if opened == 1 and cj_k != count - 1:
+                            continue
                         p_same = proof + [f"t same {ci_k * 256 + cj_k}"]
                         sa = self.ask(p_same)
                         ok_same = True
@@ -744,10 +747,18 @@ class Prover:
                         p_same = None
                     if p_same is not None and proof is p_same:
                         continue
-                for k in reversed(range(held)):                # a value held, carried over to the fact asked for
+                ylines = [l for l in lines if l.startswith("y")]
+                if ylines:
+                    carry_ks = [int(x) for x in ylines[0][1:].split()]
+                else:
+                    carry_ks = list(range(held))
+                for k in reversed(carry_ks):                   # a value held, carried over to the fact asked for
                     if self.hard_refusal or self.furthest_root > start_len: return None
                     trial = proof + [f"t carry {k}"]
-                    if self.ask(trial).startswith("refused: the value held is of another use"):
+                    ans_c = self.ask(trial)
+                    if ans_c.startswith("refused: no such value is held"):
+                        break
+                    if ans_c.startswith("refused:"):
                         continue
                     done = self.solve(trial, allow_split=allow_split)
                     if done is not None: return done
@@ -780,8 +791,10 @@ class Prover:
                             if nw == "spec": break
                             if nw == "held":
                                 hc = int([l for l in nl if l.startswith("c ")][0].split()[1])
+                                mls = [l for l in nl if l.startswith("m")]
+                                hks = [int(x) for x in mls[0][1:].split()] if mls else list(range(hc))
                                 picked = None
-                                for hk in reversed(range(hc)):
+                                for hk in reversed(hks):
                                     ht = p_try + [f"t held {hk}"]
                                     ha = self.ask(ht)
                                     if ha.startswith("refused: the value held is of another use"):
@@ -876,10 +889,12 @@ class Prover:
                 return None
             elif what == "held":                               # which value held is of a use with the same things
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
+                mls = [l for l in lines if l.startswith("m")]
+                held_ks = [int(x) for x in mls[0][1:].split()] if mls else list(range(count))
                 start_len = len(proof)
                 before, before_proof = self.last, self.last_proof
                 matched_any = False
-                for k in reversed(range(count)):
+                for k in reversed(held_ks):
                     if self.hard_refusal or self.furthest_root > start_len:
                         return None
                     trial = proof + [f"t held {k}"]
@@ -893,12 +908,11 @@ class Prover:
                         hf = [lin([int(x) for x in s.split()]) for s in hf_raw]
                         hg = [lin([int(x) for x in s.split()]) for s in hg_raw]
                         rp = refutation(hf + [negation(hg[0])], quick=True)
-                        if rp is not None:
-                            gn = [int(x) for x in hg_raw[0].split()]
-                            nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
-                            trial = trial + proof_text(rp, [negation(hg[0])] + hf, [nr] + hf_raw)
-                        elif refutation(hf + [negation(hg[0])]) is None:
+                        if rp is None:
                             continue
+                        gn = [int(x) for x in hg_raw[0].split()]
+                        nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
+                        trial = trial + proof_text(rp, [negation(hg[0])] + hf, [nr] + hf_raw)
                     matched_any = True
                     done = self.solve(trial, allow_split=allow_split)
                     if done is not None: return done
@@ -965,7 +979,7 @@ def prove(spec_text, targets, statement_out, out):
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
         max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "15000"))
-        timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "30"))
+        timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "60"))
         fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}

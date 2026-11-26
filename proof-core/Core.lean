@@ -2193,7 +2193,10 @@ def heldFor (deeper : Sym → SCall → V Sym) (s : Sym) (c : SCall) : V (Row ×
         | none => refuse "a use of a definition opened where a number is needed, and its value is still no number"
       else refuse "a number is expected (or a use of a definition whose value is held)"
     | some _ => refuse "a number is expected (or a use of a definition whose value is held)"
-    | none => fun _ => .error s!"need held\nc {(heldValues s.spec).length}\n"
+    | none =>
+      let ms := (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
+        if c'.f == c.f then some (toString k) else none
+      fun _ => .error s!"need held\nc {(heldValues s.spec).length}\nm {String.intercalate " " ms}\n"
 
 /-- A result where a number is needed: a number, or a use of a definition whose value is held or found. -/
 def numberV (deeper : Sym → SCall → V Sym) (s : Sym) : SRes → V (Row × Sym)
@@ -2364,7 +2367,11 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
         let calls := callsOf s.spec goal
         let ps := samePairs s.spec calls
         let pline := if ps.isEmpty then "" else s!"p {ps}\n"
-        fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\n{pline}"
+        let ys := match goal with
+          | .value c _ => (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
+              if c'.f == c.f then some (toString k) else none
+          | _ => []
+        fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}"
 
 /-- What a line `fact …` of a place says: rows, and facts of the specification. -/
 def assertion (ctx : Ctx) (env : List (String × SVal)) (s : Sym) : SExpr → V (List Row × List SFact × Sym)
