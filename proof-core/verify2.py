@@ -1057,7 +1057,6 @@ class Verifier:
                         self.check_fact(fct, penv, st, stream)
                     if origin_place == pc and pl["decreases"] is not None:
                         new_dec = self.eval_sexpr(pl["decreases"], penv, st, stream)
-                        self.entail(st["facts"], origin_dec, stream)
                         self.entail(st["facts"], r_sub(r_sub(origin_dec, new_dec), r_const(1)), stream)
                     if origin_place == pc:
                         for kr in pl["keep"]:
@@ -1088,7 +1087,9 @@ class Verifier:
                         penv2[nm] = pst["regs"][rn]
                     for fct in pl["facts"]:
                         self.assume_fact(fct, penv2, pst)
-                    dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, None) if pl["decreases"] is not None else None
+                    dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, stream) if pl["decreases"] is not None else None
+                    if dec_val is not None:
+                        self.entail(pst["facts"], dec_val, stream)
                     run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=visited_places | {pc},
                              base_st=clone(pst), jstack=frozenset(), jdone={})
                     return

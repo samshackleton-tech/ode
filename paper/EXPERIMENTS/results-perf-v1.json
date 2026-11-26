@@ -1,0 +1,1007 @@
+{
+  "run_id": "perf-v1",
+  "prereg_commit": "dd3b823970ca46b26a68f13a44f96a0e3191e964",
+  "status": "complete",
+  "completed_cells": 16,
+  "finished_utc": "2026-11-26T04:31:08Z",
+  "tasks": [
+    "byte_sum"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "strict_passes": 14,
+  "total_cells": 16,
+  "verify2_passes": 7,
+  "native_passes": 14,
+  "total_rounds": 91,
+  "total_cost_usd": 20.4029,
+  "failure_categories": {
+    "prover_timeout_120s": 28,
+    "arith_need_entail": 19,
+    "other": 3,
+    "compile_or_parse_error": 1
+  },
+  "cells": [
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 4,
+      "passing_rounds": 1,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0,
+        "cycles_per_iter": 1.0,
+        "load_bytes": 1,
+        "load_count": 1,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0,
+          "ampere1": 1.5
+        },
+        "loop_count": 1
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0,
+        "cycles_per_iter": 1.0,
+        "load_bytes": 1,
+        "load_count": 1,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0,
+          "ampere1": 1.5
+        },
+        "loop_count": 1
+      },
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 3.2158,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 11,
+        "code_bytes": 44,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.121,
+        "pack_s": 0.466,
+        "proof_bytes": 2825
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "passed",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 1,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.69
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.69
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.9761,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 33,
+        "code_bytes": 132,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.117,
+        "pack_s": 3.128,
+        "proof_bytes": 21343
+      },
+      "round_categories": [
+        "passed",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 3,
+      "best_round": 1,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.47,
+          "zen3": 0.5,
+          "icelake": 0.59
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.47,
+          "zen3": 0.5,
+          "icelake": 0.59
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.9399,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 35,
+        "code_bytes": 126,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.104,
+        "pack_s": 1.859,
+        "proof_bytes": 12527
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-fable-5.2",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.41,
+          "zen3": 0.5,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.44,
+        "cycles_per_iter": 7.0,
+        "load_bytes": 16,
+        "load_count": 16,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.44,
+          "zen4": 0.41,
+          "zen3": 0.44,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 2.4047,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 55,
+        "code_bytes": 211,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.171,
+        "pack_s": 40.225,
+        "proof_bytes": 33266
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.44,
+        "cycles_per_iter": 1.75,
+        "load_bytes": 4,
+        "load_count": 4,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.44,
+          "ampere1": 0.88
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.72
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.2743,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 33,
+        "code_bytes": 132,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.113,
+        "pack_s": 3.403,
+        "proof_bytes": 21115
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 2,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 1.0,
+        "cycles_per_iter": 1.0,
+        "load_bytes": 1,
+        "load_count": 1,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 1.0,
+          "ampere1": 1.5
+        },
+        "loop_count": 1
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.72
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.2399,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 33,
+        "code_bytes": 132,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.129,
+        "pack_s": 3.528,
+        "proof_bytes": 21115
+      },
+      "round_categories": [
+        "passed",
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 2,
+      "passing_rounds": 4,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.0,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 4,
+        "load_count": 4,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.0,
+          "zen4": 1.0,
+          "zen3": 1.0,
+          "icelake": 1.0
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.47,
+          "zen3": 0.56,
+          "icelake": 0.56
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.3671,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 33,
+        "code_bytes": 122,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.105,
+        "pack_s": 1.983,
+        "proof_bytes": 12780
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "passed",
+        "passed",
+        "passed",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "anthropic/claude-sonnet-5.5",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 5,
+      "passing_rounds": 2,
+      "best_round": 6,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 1.0,
+        "cycles_per_iter": 2.0,
+        "load_bytes": 2,
+        "load_count": 2,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 1.0,
+          "zen4": 1.0,
+          "zen3": 1.0,
+          "icelake": 1.12
+        },
+        "loop_count": 1
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.75,
+        "cycles_per_iter": 3.0,
+        "load_bytes": 4,
+        "load_count": 4,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.75,
+          "zen4": 0.62,
+          "zen3": 0.75,
+          "icelake": 0.75
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.3778,
+      "verify2_pass": true,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 27,
+        "code_bytes": 94,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.134,
+        "pack_s": 1.423,
+        "proof_bytes": 6749
+      },
+      "round_categories": [
+        "other",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "passed",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 5,
+      "rounds_to_pass": 5,
+      "passing_rounds": 1,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.62
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.62
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 0.8943,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 40,
+        "code_bytes": 160,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.107,
+        "pack_s": 12.205,
+        "proof_bytes": 35006
+      },
+      "round_categories": [
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "arith_need_entail",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "google/gemini-4-neon",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": false,
+      "rounds_used": 5,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": "cell_timeout_900s",
+      "total_cost_usd": 1.7047,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "arith_need_entail"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": false,
+      "rounds_used": 6,
+      "rounds_to_pass": null,
+      "passing_rounds": 0,
+      "best_round": null,
+      "initial_perf": null,
+      "best_perf": null,
+      "stopped_reason": null,
+      "total_cost_usd": 1.5948,
+      "verify2_pass": null,
+      "native_status": "not_run",
+      "native_detail": null,
+      "final_metrics": {},
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "arith_need_entail",
+        "other",
+        "arith_need_entail",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "google/gemini-4-neon",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 5,
+      "passing_rounds": 1,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.38,
+          "zen3": 0.5,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "dependency",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.38,
+          "zen3": 0.5,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.4922,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 40,
+        "code_bytes": 157,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.114,
+        "pack_s": 13.045,
+        "proof_bytes": 36252
+      },
+      "round_categories": [
+        "arith_need_entail",
+        "arith_need_entail",
+        "other",
+        "prover_timeout_120s",
+        "passed",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 3,
+      "best_round": 5,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.66
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.33,
+        "cycles_per_iter": 5.25,
+        "load_bytes": 16,
+        "load_count": 16,
+        "bottleneck": "ports:L0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.33,
+          "ampere1": 0.58
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.936,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 51,
+        "code_bytes": 204,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.158,
+        "pack_s": 79.135,
+        "proof_bytes": 53590
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "prover_timeout_120s",
+        "passed",
+        "passed",
+        "prover_timeout_120s"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "arm64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 3,
+      "best_round": 3,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.34,
+        "cycles_per_iter": 2.75,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.34,
+          "ampere1": 0.66
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "apple_m",
+        "cyc_per_b": 0.33,
+        "cycles_per_iter": 5.25,
+        "load_bytes": 16,
+        "load_count": 16,
+        "bottleneck": "ports:L0",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "apple_m": 0.33,
+          "ampere1": 0.58
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.9556,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 51,
+        "code_bytes": 204,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.151,
+        "pack_s": 85.849,
+        "proof_bytes": 53782
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "arm": "advised",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 4,
+      "best_round": 4,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.5,
+        "cycles_per_iter": 4.0,
+        "load_bytes": 8,
+        "load_count": 8,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.5,
+          "zen4": 0.44,
+          "zen3": 0.5,
+          "icelake": 0.53
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.38,
+        "cycles_per_iter": 6.0,
+        "load_bytes": 16,
+        "load_count": 16,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.38,
+          "zen4": 0.38,
+          "zen3": 0.38,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 0.9526,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 57,
+        "code_bytes": 212,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.177,
+        "pack_s": 70.918,
+        "proof_bytes": 62515
+      },
+      "round_categories": [
+        "passed",
+        "prover_timeout_120s",
+        "passed",
+        "passed",
+        "prover_timeout_120s",
+        "passed"
+      ]
+    },
+    {
+      "task": "byte_sum",
+      "model": "openai/gpt-6.2-astra-pro",
+      "target": "x86_64",
+      "arm": "blind",
+      "strict_pass": true,
+      "rounds_used": 6,
+      "rounds_to_pass": 1,
+      "passing_rounds": 2,
+      "best_round": 1,
+      "initial_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.42,
+        "cycles_per_iter": 5.0,
+        "load_bytes": 12,
+        "load_count": 12,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.42,
+          "zen4": 0.42,
+          "zen3": 0.42,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "best_perf": {
+        "hot_loop": 0,
+        "primary_arch": "zen5",
+        "cyc_per_b": 0.42,
+        "cycles_per_iter": 5.0,
+        "load_bytes": 12,
+        "load_count": 12,
+        "bottleneck": "frontend",
+        "lints": 0,
+        "all_archs_cyc_per_b": {
+          "zen5": 0.42,
+          "zen4": 0.42,
+          "zen3": 0.42,
+          "icelake": 0.5
+        },
+        "loop_count": 2
+      },
+      "stopped_reason": null,
+      "total_cost_usd": 1.0771,
+      "verify2_pass": false,
+      "native_status": "pass",
+      "native_detail": "NATIVE_PASS 112/112",
+      "final_metrics": {
+        "functions": 1,
+        "instructions": 48,
+        "code_bytes": 186,
+        "contract_id": "4lzcji2jrhepmln3ah4chochys4klbj2cvugbw665estynenutja",
+        "verdict": "shown",
+        "audit_s": 0.119,
+        "pack_s": 17.796,
+        "proof_bytes": 44367
+      },
+      "round_categories": [
+        "passed",
+        "compile_or_parse_error",
+        "arith_need_entail",
+        "prover_timeout_120s",
+        "passed",
+        "arith_need_entail"
+      ]
+    }
+  ]
+}
