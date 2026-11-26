@@ -258,7 +258,7 @@ def W32i : Int := 4294967296
 inductive Node where
   | atom (r : Row)              -- a number the verifier holds as a row: as a word, its remainder by 2^32
   | input (run k : Nat)         -- word `k` of a run of words given to read, as it was at entry
-  | add (xs : List Nat)         -- the terms of these numbers summed, wrapping
+  | add (xs : List (Nat × Nat)) -- linear combination of terms (sorted unique ids, nonzero coeffs mod 2^32), wrapping
   | xor (a b : Nat)
   | band (a b : Nat)
   | rotr (a n : Nat)            -- the term turned right by `n` bits
@@ -272,7 +272,7 @@ inductive Node where
 def Node.parts : Node → List Nat
   | .atom _ => []
   | .input _ _ => []
-  | .add xs => xs
+  | .add xs => xs.map Prod.fst
   | .xor a b => [a, b]
   | .band a b => [a, b]
   | .rotr a _ => [a]
@@ -309,9 +309,15 @@ proof opens it only by asking to: what is reasoned of it is `intern_list` in Sou
     else (t.arr.size, { arr := t.arr.push n, idx := t.idx.insert n t.arr.size })
   | none => (t.arr.size, { arr := t.arr.push n, idx := t.idx.insert n t.arr.size })
 
-def insertSorted (a : Nat) : List Nat → List Nat
-  | [] => [a]
-  | b :: l => if a ≤ b then a :: b :: l else b :: insertSorted a l
+def mergeAdd : List (Nat × Nat) → List (Nat × Nat) → List (Nat × Nat)
+  | [], ys => ys
+  | xs, [] => xs
+  | (a, ca) :: xs, (b, cb) :: ys =>
+    if a < b then (a, ca) :: mergeAdd xs ((b, cb) :: ys)
+    else if b < a then (b, cb) :: mergeAdd ((a, ca) :: xs) ys
+    else
+      let c := (ca + cb) % W32
+      if c = 0 then mergeAdd xs ys else (a, c) :: mergeAdd xs ys
 
 /-- A row with each of its numbers reduced to the remainder by 2^32: as a word it is the same word. -/
 def Lin.word (r : Row) : Row := ⟨Lin.strip (r.coeff.map (· % W32i)), r.constant % W32i⟩
@@ -324,14 +330,14 @@ def Lin.hasHigh (r : Row) : Bool := r.coeff.any fun c => c != 0 && c % W32i == 0
 
 def wAtom (r : Row) (t : Tab) : Nat × Tab := intern (.atom (Lin.word r)) t
 
-/-- What a term is a sum of: itself, or the terms it sums. -/
-def addends (t : Tab) (a : Nat) : List Nat :=
+/-- What a term is a sum of: itself (with coeff 1), or the terms it sums. -/
+def addends (t : Tab) (a : Nat) : List (Nat × Nat) :=
   match t.arr[a]? with
   | some (.add xs) => xs
-  | _ => [a]
+  | _ => [(a, 1)]
 
 def wAdd (a b : Nat) (t : Tab) : Nat × Tab :=
-  intern (.add ((addends t a ++ addends t b).foldr insertSorted [])) t
+  intern (.add (mergeAdd (addends t a) (addends t b))) t
 
 def wXor (a b : Nat) (t : Tab) : Nat × Tab := intern (.xor (min a b) (max a b)) t
 
@@ -1177,6 +1183,8 @@ def symEach32 (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :
               let made := termsOf (fun (p : Nat × Nat) => wAnd p.1 p.2) (x.zip y) s.tab
               pure (made.1, { s with tab := made.2 })
             else if op == "or32" then
+              if x == y then pure (x, s)
+              else
               -- the or of a word shifted left and the same word shifted right: the word turned
               match orTurns s.terms (x.zip y) with
               | some turns =>
@@ -1235,6 +1243,154 @@ def symMoved (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List N
     | _, _, _ => refuse "a vector register whose words are not known"
   | _ => refuse s!"no rule for {f}: not here yet"
 
+/-- Symbolic SHA-256 32-bit word combinators matching `Machine.lean`'s `sha256*` and `sha256_4way_spec.ode`. -/
+def wAdd2 (a b : Nat) (t : Tab) : Nat × Tab := wAdd a b t
+
+def wSha256Ch (e f g : Nat) (t : Tab) : Nat × Tab :=
+  let (fg, t) := wXor f g t
+  let (efg, t) := wAnd e fg t
+  wXor g efg t
+
+def wSha256Maj (a b c : Nat) (t : Tab) : Nat × Tab :=
+  let (ab, t) := wAnd a b t
+  let (axb, t) := wXor a b t
+  let (axbc, t) := wAnd axb c t
+  wXor ab axbc t
+
+def wSha256S0 (a : Nat) (t : Tab) : Nat × Tab :=
+  let (r2, t) := wRotr a 2 t
+  let (r13, t) := wRotr a 13 t
+  let (r22, t) := wRotr a 22 t
+  let (x1, t) := wXor r2 r13 t
+  wXor x1 r22 t
+
+def wSha256S1 (e : Nat) (t : Tab) : Nat × Tab :=
+  let (r6, t) := wRotr e 6 t
+  let (r11, t) := wRotr e 11 t
+  let (r25, t) := wRotr e 25 t
+  let (x1, t) := wXor r6 r11 t
+  wXor x1 r25 t
+
+def wSha256s0 (x : Nat) (t : Tab) : Nat × Tab :=
+  let (r7, t) := wRotr x 7 t
+  let (r18, t) := wRotr x 18 t
+  let (s3, t) := wShr x 3 t
+  let (x1, t) := wXor r7 r18 t
+  wXor x1 s3 t
+
+def wSha256s1 (x : Nat) (t : Tab) : Nat × Tab :=
+  let (r17, t) := wRotr x 17 t
+  let (r19, t) := wRotr x 19 t
+  let (s10, t) := wShr x 10 t
+  let (x1, t) := wXor r17 r19 t
+  wXor x1 s10 t
+
+def wSha256Round (a b c d e f g h wk : Nat) (t : Tab) :
+    (Nat × Nat × Nat × Nat × Nat × Nat × Nat × Nat) × Tab :=
+  let (s1, t) := wSha256S1 e t
+  let (ch, t) := wSha256Ch e f g t
+  let (u0, t) := wAdd2 h s1 t
+  let (u1, t) := wAdd2 u0 ch t
+  let (t1, t) := wAdd2 u1 wk t
+  let (s0, t) := wSha256S0 a t
+  let (mj, t) := wSha256Maj a b c t
+  let (t2, t) := wAdd2 s0 mj t
+  let (a', t) := wAdd2 t1 t2 t
+  let (e', t) := wAdd2 d t1 t
+  ((a', a, b, c, e', e, f, g), t)
+
+def wSha256Msg1 (x y : List Nat) (t : Tab) : List Nat × Tab :=
+  let (s0, t) := wSha256s0 (x.getD 1 0) t
+  let (r0, t) := wAdd2 (x.getD 0 0) s0 t
+  let (s1, t) := wSha256s0 (x.getD 2 0) t
+  let (r1, t) := wAdd2 (x.getD 1 0) s1 t
+  let (s2, t) := wSha256s0 (x.getD 3 0) t
+  let (r2, t) := wAdd2 (x.getD 2 0) s2 t
+  let (s3, t) := wSha256s0 (y.getD 0 0) t
+  let (r3, t) := wAdd2 (x.getD 3 0) s3 t
+  ([r0, r1, r2, r3], t)
+
+def wSha256Msg2 (x z : List Nat) (t : Tab) : List Nat × Tab :=
+  let (s0, t) := wSha256s1 (z.getD 2 0) t
+  let (r0, t) := wAdd2 (x.getD 0 0) s0 t
+  let (s1, t) := wSha256s1 (z.getD 3 0) t
+  let (r1, t) := wAdd2 (x.getD 1 0) s1 t
+  let (s2, t) := wSha256s1 r0 t
+  let (r2, t) := wAdd2 (x.getD 2 0) s2 t
+  let (s3, t) := wSha256s1 r1 t
+  let (r3, t) := wAdd2 (x.getD 3 0) s3 t
+  ([r0, r1, r2, r3], t)
+
+def wSha256Su1 (x y z : List Nat) (t : Tab) : List Nat × Tab :=
+  let (t0, t) := wAdd2 (x.getD 0 0) (y.getD 1 0) t
+  let (t1, t) := wAdd2 (x.getD 1 0) (y.getD 2 0) t
+  let (t2, t) := wAdd2 (x.getD 2 0) (y.getD 3 0) t
+  let (t3, t) := wAdd2 (x.getD 3 0) (z.getD 0 0) t
+  wSha256Msg2 [t0, t1, t2, t3] z t
+
+def wSha256Rnds2 (x z wk : List Nat) (t : Tab) : List Nat × Tab :=
+  let ((a1, b1, c1, d1, e1, f1, g1, h1), t) :=
+    wSha256Round (z.getD 3 0) (z.getD 2 0) (x.getD 3 0) (x.getD 2 0)
+                 (z.getD 1 0) (z.getD 0 0) (x.getD 1 0) (x.getD 0 0) (wk.getD 0 0) t
+  let ((a2, b2, _, _, e2, f2, _, _), t) :=
+    wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t
+  ([f2, e2, b2, a2], t)
+
+def wSha256H (x y wk : List Nat) (t : Tab) : List Nat × Tab :=
+  let ((a1, b1, c1, d1, e1, f1, g1, h1), t) :=
+    wSha256Round (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0)
+                 (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0) (wk.getD 0 0) t
+  let ((a2, b2, c2, d2, e2, f2, g2, h2), t) := wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t
+  let ((a3, b3, c3, d3, e3, f3, g3, h3), t) := wSha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0) t
+  let ((a4, b4, c4, d4, _, _, _, _), t) := wSha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0) t
+  ([a4, b4, c4, d4], t)
+
+def wSha256H2 (x y wk : List Nat) (t : Tab) : List Nat × Tab :=
+  let ((a1, b1, c1, d1, e1, f1, g1, h1), t) :=
+    wSha256Round (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0)
+                 (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0) (wk.getD 0 0) t
+  let ((a2, b2, c2, d2, e2, f2, g2, h2), t) := wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t
+  let ((a3, b3, c3, d3, e3, f3, g3, h3), t) := wSha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0) t
+  let ((_, _, _, _, e4, f4, g4, h4), t) := wSha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0) t
+  ([e4, f4, g4, h4], t)
+
+def isSha256Op (f : String) : Bool :=
+  f == "sha256msg1" || f == "sha256msg2" || f == "sha256su1" ||
+  f == "sha256rnds2" || f == "sha256h" || f == "sha256h2"
+
+/-- Hardware SHA-256 vector instructions (`sha256msg1/2`, `sha256rnds2`, `sha256su0/1`, `sha256h/h2`). -/
+def symSha256 (bind : Bind) (s : Sym) (f : String) (args : List Expr) : V (List Nat × Sym) :=
+  match args with
+  | [a, b] =>
+    match symVec bind s a, symVec bind s b with
+    | some x, some y =>
+      if f == "sha256msg1" then
+        let made := wSha256Msg1 x y s.tab
+        pure (made.1, { s with tab := made.2 })
+      else if f == "sha256msg2" then
+        let made := wSha256Msg2 x y s.tab
+        pure (made.1, { s with tab := made.2 })
+      else refuse s!"no rule for {f}: not here yet"
+    | _, _ => refuse "a vector register whose words are not known"
+  | [a, b, c] =>
+    match symVec bind s a, symVec bind s b, symVec bind s c with
+    | some x, some y, some z =>
+      if f == "sha256su1" then
+        let made := wSha256Su1 x y z s.tab
+        pure (made.1, { s with tab := made.2 })
+      else if f == "sha256rnds2" then
+        let made := wSha256Rnds2 x y z s.tab
+        pure (made.1, { s with tab := made.2 })
+      else if f == "sha256h" then
+        let made := wSha256H x y z s.tab
+        pure (made.1, { s with tab := made.2 })
+      else if f == "sha256h2" then
+        let made := wSha256H2 x y z s.tab
+        pure (made.1, { s with tab := made.2 })
+      else refuse s!"no rule for {f}: not here yet"
+    | _, _, _ => refuse "a vector register whose words are not known"
+  | _ => refuse s!"no rule for {f}: not here yet"
+
 /-- The four words an EFFECT sets a vector register to (as `lanesOf` of the machine has them), as terms. -/
 def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
   | .name n =>
@@ -1269,6 +1425,7 @@ def symLanes (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → V (List Nat × Sym)
       | _ => refuse "four lanes are not four"
     else if f == "each32" then symEach32 bind s args
     else if f == "shuffle_bytes" then symShuffle bind s args
+    else if isSha256Op f then symSha256 bind s f args
     else symMoved bind s f args
   | _ => refuse "a row over a vector register of a form that is not read"
 
@@ -2219,7 +2376,7 @@ inductive WVal where
   | int (n : Int)                 -- a number the specification's text gives
   | bool (b : Bool)
   | num (r : Row)                 -- a number the verifier holds as a row
-  | word (xs : List Nat)          -- a word: the terms of these numbers summed, wrapping (one number: that term)
+  | word (xs : List (Nat × Nat)) -- a word: linear combination of terms, wrapping (`[(a, 1)]`: that term)
   | counter (r : Row)             -- the counter of a number that is no less than zero
   | list (l : List WVal)
   | run (r n : Nat)               -- the `n` bytes at the address register `r` held at entry, as they were at entry
@@ -2237,8 +2394,8 @@ inductive WVal where
 
 /-- The term a word is: the one term, or the sum, which must be in the table. (`look`: where a term is in
 the table, if it is there. Here and below the table is only looked up in, through this.) -/
-def idOf (look : Node → Option Nat) : List Nat → Option Nat
-  | [a] => some a
+def idOf (look : Node → Option Nat) : List (Nat × Nat) → Option Nat
+  | [(a, 1)] => some a
   | xs => look (.add xs)
 
 /-- A row with the remainder by `m` of its number of the table in that number's place: the row is this and
@@ -2343,24 +2500,24 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
     | some (.bool c) => some (.bool c)
     | _ => none
   | .word xs, .word ys =>
-    if op == "+" then some (.word ((xs ++ ys).foldr insertSorted []))
+    if op == "+" then some (.word (mergeAdd xs ys))
     else if op == "^" then
       match idOf look xs, idOf look ys with
-      | some a, some b => (look (.xor (min a b) (max a b))).map fun i => .word [i]
+      | some a, some b => (look (.xor (min a b) (max a b))).map fun i => .word [(i, 1)]
       | _, _ => none
     else if op == "&" then
       match idOf look xs, idOf look ys with
-      | some a, some b => (look (.band (min a b) (max a b))).map fun i => .word [i]
+      | some a, some b => (look (.band (min a b) (max a b))).map fun i => .word [(i, 1)]
       | _, _ => none
     else none
   | .word xs, .int n =>
     if op == ">>>" ∧ 0 ≤ n ∧ n ≤ 32 then
       match idOf look xs with
-      | some a => (look (.rotr a n.toNat)).map fun i => .word [i]
+      | some a => (look (.rotr a n.toNat)).map fun i => .word [(i, 1)]
       | none => none
     else if op == ">>" ∧ 0 ≤ n ∧ n < 32 then
       match idOf look xs with
-      | some a => (look (.shr a n.toNat)).map fun i => .word [i]
+      | some a => (look (.shr a n.toNat)).map fun i => .word [(i, 1)]
       | none => none
     else none
   | .num r, .int m =>
@@ -2396,7 +2553,7 @@ def hiPlus (look : Node → Option Nat) (s : Sym) (r : Row) : Option Nat :=
     match look (.atom (Lin.word r)), look (.atom (Lin.word ⟨r.coeff, 0⟩)),
           (highOf s ⟨r.coeff, 0⟩).bind (fun q => look (.atom (Lin.word q))), look (.atom (Lin.word (Lin.const 1))) with
     | some a, some l, some h, some one =>
-      (look (.ult a l)).bind fun m => (look (.add (insertSorted h (insertSorted one [])))).bind fun h1 => look (.sel m h1 h)
+      (look (.ult a l)).bind fun m => (look (.add (mergeAdd [(h, 1)] [(one, 1)]))).bind fun h1 => look (.sel m h1 h)
     | _, _, _, _ => none
   else none
 
@@ -2405,7 +2562,7 @@ def inputWords (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (
   | 0, _ => some []
   | count + 1, k =>
     match look (.input j k), inputWords look j count (k + 1) with
-    | some i, some rest => some (.word [i] :: rest)
+    | some i, some rest => some (.word [(i, 1)] :: rest)
     | _, _ => none
 
 /-- Whether a list of `WVal` is the consecutive bytes `off, off+1, ...` of run `r`. -/
@@ -2417,22 +2574,22 @@ def pbytesSpan (r off : Nat) : List WVal → Bool
 /-- The language's own names (`builtin` of the account), on words. -/
 def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List WVal → Option WVal
   | [.int n] =>
-    if f == "word" then (if 0 ≤ n then (look (.atom (Lin.word (Lin.const n)))).map fun i => .word [i] else none)
+    if f == "word" then (if 0 ≤ n then (look (.atom (Lin.word (Lin.const n)))).map fun i => .word [(i, 1)] else none)
     else if f == "counter" then (if 0 ≤ n then some (.counter (Lin.const n)) else none)
     else none
   | [.num r] =>
     if !plain s.facts r then none
-    else if f == "word" then (look (.atom (Lin.word r))).map fun i => .word [i]
+    else if f == "word" then (look (.atom (Lin.word r))).map fun i => .word [(i, 1)]
     else if f == "counter" then some (.counter r)
     else none
   | [.word xs] => if f == "word" then some (.word xs) else none
   | [.counter r] =>
     if f == "counter" then some (.counter r)
-    else if f == "lo" then (look (.atom (Lin.word r))).map fun i => .word [i]
+    else if f == "lo" then (look (.atom (Lin.word r))).map fun i => .word [(i, 1)]
     else if f == "hi" then
-      match (highOf s r).bind fun q => (look (.atom (Lin.word q))).map fun i => WVal.word [i] with
+      match (highOf s r).bind fun q => (look (.atom (Lin.word q))).map fun i => WVal.word [(i, 1)] with
       | some v => some v
-      | none => (hiPlus look s r).map fun i => .word [i]
+      | none => (hiPlus look s r).map fun i => .word [(i, 1)]
     else none
   | [.run r n] =>
     if f == "words" ∧ n % 4 = 0 then
@@ -2447,7 +2604,7 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
       (runAt r ctx.contract.fixeds 0).bind fun j => (knownLoad j off s.known).map fun v => .num (Lin.var v)
     else none
   | [.wbytes ids] =>
-    if f == "words" then some (.list (ids.map fun i => WVal.word [i]))
+    if f == "words" then some (.list (ids.map fun i => WVal.word [(i, 1)]))
     else if f == "number.le" then
       match ids with
       | [a, b] =>
@@ -2580,7 +2737,7 @@ def knowsOf (f : String) : List Known → Bool
 
 def isWordIds : List WVal → List Nat → Bool
   | [], [] => true
-  | .word [i] :: ws, j :: js => i == j && isWordIds ws js
+  | .word [(i, 1)] :: ws, j :: js => i == j && isWordIds ws js
   | _, _ => false
 
 /-- Does a reconstructed record `(names.zip vs)` match a `Known.record h fields ids` entry? -/
@@ -2620,7 +2777,7 @@ def atomWords (look : Node → Option Nat) : List Nat → Option (List WVal)
   | [] => some []
   | v :: more =>
     match look (.atom (Lin.word (Lin.var v))), atomWords look more with
-    | some i, some rest => some (.word [i] :: rest)
+    | some i, some rest => some (.word [(i, 1)] :: rest)
     | _, _ => none
 
 /-- The block at byte `off` of a lane, where the function has read it: its sixteen words. -/
@@ -2680,7 +2837,7 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
           | none => none
         else
           match (flatKeys look vs).bind fun keys => heldIds s.facts f keys s.known with
-          | some ids => some (.list (ids.map fun i => WVal.word [i]))
+          | some ids => some (.list (ids.map fun i => WVal.word [(i, 1)]))
           | none =>
             match (flatKeys look vs).bind fun keys => heldBytes s.facts f keys s.known with
             | some ids => some (.wbytes ids)
@@ -2738,6 +2895,10 @@ def weval (ctx : Ctx) (look : Node → Option Nat) (s : Sym) : Nat → List (Str
       | some (.wbytes ids), some (.int i), some (.int j) =>
         if 0 ≤ i ∧ i ≤ j ∧ i % 4 = 0 ∧ j % 4 = 0 ∧ j.toNat / 4 ≤ ids.length then
           some (.wbytes ((ids.drop (i.toNat / 4)).take ((j - i).toNat / 4)))
+        else none
+      | some (.list l), some (.int i), some (.int j) =>
+        if 0 ≤ i ∧ i ≤ j ∧ j.toNat ≤ l.length then
+          some (.list ((l.drop i.toNat).take (j - i).toNat))
         else none
       | _, _, _ => none
     | .record names items =>
@@ -4130,7 +4291,7 @@ def WVal.ok (n t : Nat) : WVal → Bool
   | .bool _ => true
   | .num r => decide (r.coeff.length ≤ n)
   | .counter r => decide (r.coeff.length ≤ n)
-  | .word xs => xs.all (· < t)
+  | .word xs => xs.all (fun p => p.1 < t)
   | .list l => WVal.okAll n t l
   | .use h => decide (h < n)
   | .run _ _ => true
@@ -4232,7 +4393,7 @@ def nameval (ctx : Ctx) : Nat → Sym → List (String × WVal) → SExpr → Op
               | none => nameval ctx fuel s (d.params.zip vs) d.body
               | some keys =>
                 match heldIds s.facts f keys s.known with
-                | some ids => if ids.all (· < s.tab.size) then some (.list (ids.map fun i => WVal.word [i]), s) else none
+                | some ids => if ids.all (· < s.tab.size) then some (.list (ids.map fun i => WVal.word [(i, 1)]), s) else none
                 | none =>
                   match usedAs s.facts f keys s.known with
                   | some h => if h < s.nvars then some (.use h, s) else none
@@ -4298,7 +4459,7 @@ def tableLanes (ctx : Ctx) (s : Sym) (ct : Int) (nb : Nat) (cw : Int) (nout : Na
       match laneWords ctx { s with tab := T } a nb cw nout with
       | some (ids, T) =>
         match tableLanes ctx s ct nb cw nout count (i + 1) T with
-        | some (rest, T) => some (.list (blocksOf nb (ids.map fun i => WVal.word [i])) :: rest, T)
+        | some (rest, T) => some (.list (blocksOf nb (ids.map fun i => WVal.word [(i, 1)])) :: rest, T)
         | none => none
       | none => none
     | none => none

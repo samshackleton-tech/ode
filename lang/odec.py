@@ -94,7 +94,7 @@ ARM_CLASSES = {"gpr": set(ARM_G64), "gpr32": set(ARM_G32), "vec": set(ARM_VEC)}
 ARM_WHOLE = {f"x{i}": f"x{i}" for i in range(31)}
 ARM_WHOLE.update({f"w{i}": f"x{i}" for i in range(31)})
 ARM_WHOLE.update({"sp": "sp", "wsp": "sp", "xzr": "xzr", "wzr": "xzr"})
-ARM_WHOLE.update({f"v{i}": f"v{i}" for i in range(32)})
+ARM_WHOLE.update({f"{p}{i}": f"v{i}" for p in "vq" for i in range(32)})
 ARM_GENERAL = {r: 8 for r in ARM_G64}
 ARM_GENERAL.update({r: 4 for r in ARM_G32})
 
@@ -841,7 +841,7 @@ def assembly(src, name, symbol=None, target=None):
 
 def assemble(s_path, o_path, target="x86_64"):
     if target == "arm64":
-        for cc in (["clang", "--target=aarch64-unknown-linux-gnu"], ["clang", "-target", "aarch64-linux-gnu"]):
+        for cc in (["clang", "--target=aarch64-unknown-linux-gnu", "-march=armv8-a+crypto"], ["clang", "-target", "aarch64-linux-gnu", "-march=armv8-a+crypto"]):
             if shutil.which(cc[0]) and subprocess.run(cc + ["-c", "-o", o_path, s_path], capture_output=True).returncode == 0: return
         raise SystemExit(f"odec: no assembler here makes an AArch64 ELF object of {s_path}")
     for cc in (["clang", "--target=x86_64-unknown-linux-gnu"], ["cc"]):

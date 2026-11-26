@@ -175,6 +175,12 @@
         "lat": 1.0,
         "rtp": 1.0,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   },
@@ -353,6 +359,12 @@
         "lat": 1.0,
         "rtp": 2.0,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   },
@@ -531,6 +543,12 @@
         "lat": 1.0,
         "rtp": 1.0,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   },
@@ -637,6 +655,12 @@
         "lat": 1.0,
         "rtp": 0.5,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   },
@@ -743,6 +767,12 @@
         "lat": 1.0,
         "rtp": 1.0,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   },
@@ -921,6 +951,12 @@
         "lat": 1.0,
         "rtp": 2.0,
         "unit": "store"
+      },
+      "vec_crypto": {
+        "lat": 4,
+        "rtp": 1.0,
+        "unit": "vec",
+        "uops": 1
       }
     }
   }

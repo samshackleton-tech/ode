@@ -9,12 +9,23 @@ it is when the table grows, and what the terms the verifier makes (`wAtom`, `wAd
 namespace Ode
 open Arithmetic
 
+def sumTerms (g : Nat → Nat) : List (Nat × Nat) → Nat
+  | [] => 0
+  | (a, c) :: l => c * g a + sumTerms g l
+
+theorem sumTerms_congr {g g' : Nat → Nat} : ∀ {xs : List (Nat × Nat)},
+    (∀ j ∈ xs.map Prod.fst, g' j = g j) → sumTerms g' xs = sumTerms g xs
+  | [], _ => rfl
+  | (a, c) :: l, h => by
+    simp only [sumTerms]
+    rw [h a (by simp), sumTerms_congr (fun j mj => h j (by simp [mj]))]
+
 /-- What a term is, the terms it is made of being what `g` says: `inp` is what the words of the runs given
 to read were at entry, `ρ` the unknowns. -/
 def Node.value (inp : Nat → Nat → Nat) (ρ : Nat → Int) (g : Nat → Nat) : Node → Nat
   | .atom r => (ev ρ r % W32i).toNat
   | .input j k => inp j k
-  | .add xs => sumList (xs.map g) % W32
+  | .add xs => sumTerms g xs % W32
   | .xor a b => g a ^^^ g b
   | .band a b => g a &&& g b
   | .rotr a n => Ode.rotr (g a) n
@@ -44,8 +55,7 @@ theorem Node.value_congr {inp : Nat → Nat → Nat} {ρ ρ' : Nat → Int} {g g
   | input j k => rfl
   | add xs =>
     simp only [Node.value]
-    have : xs.map g' = xs.map g := List.map_congr_left (fun j m => hg j m)
-    rw [this]
+    rw [sumTerms_congr (fun j m => hg j m)]
   | xor a b =>
     simp only [Node.value]
     rw [hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
@@ -218,53 +228,72 @@ theorem intern_den {inp : Nat → Nat → Nat} {ρ : Nat → Int} {n : Node} {t 
 
 /-! ## What the verifier's terms are -/
 
-theorem sumList_insertSorted (g : Nat → Nat) (a : Nat) : ∀ (l : List Nat), sumList ((insertSorted a l).map g) = g a + sumList (l.map g)
-  | [] => rfl
-  | b :: l => by
-    unfold insertSorted
+theorem sumTerms_mergeAdd (g : Nat → Nat) :
+    ∀ (xs ys : List (Nat × Nat)), sumTerms g (mergeAdd xs ys) % W32 = (sumTerms g xs + sumTerms g ys) % W32
+  | [], ys => by simp [mergeAdd, sumTerms]
+  | (a, ca) :: xs, [] => by simp [mergeAdd, sumTerms]
+  | (a, ca) :: xs, (b, cb) :: ys => by
+    unfold mergeAdd
     split
-    · rfl
-    · simp only [List.map_cons, sumList]
-      rw [sumList_insertSorted g a l]
-      omega
+    · simp only [sumTerms]
+      rw [Nat.add_mod, sumTerms_mergeAdd g xs ((b, cb) :: ys), ← Nat.add_mod]
+      simp only [sumTerms]; congr 1; omega
+    · split
+      · simp only [sumTerms]
+        rw [Nat.add_mod, sumTerms_mergeAdd g ((a, ca) :: xs) ys, ← Nat.add_mod]
+        simp only [sumTerms]; congr 1; omega
+      · have hab : a = b := by omega
+        subst hab
+        have hmul : ((ca + cb) % W32 * g a) % W32 = (ca * g a + cb * g a) % W32 := by
+          rw [Nat.mul_mod, Nat.mod_mod, ← Nat.mul_mod, Nat.add_mul]
+        dsimp only
+        split
+        next hc0 =>
+          rw [sumTerms_mergeAdd g xs ys]
+          simp only [sumTerms]
+          have hz : (ca * g a + cb * g a) % W32 = 0 := by rw [← hmul, hc0, Nat.zero_mul, Nat.zero_mod]
+          have hre : ca * g a + sumTerms g xs + (cb * g a + sumTerms g ys) = (ca * g a + cb * g a) + (sumTerms g xs + sumTerms g ys) := by omega
+          rw [hre, Nat.add_mod (ca * g a + cb * g a), hz, Nat.zero_add, Nat.mod_mod]
+        next hcne =>
+          simp only [sumTerms]
+          rw [Nat.add_mod, hmul, sumTerms_mergeAdd g xs ys, ← Nat.add_mod]
+          congr 1; omega
 
-theorem sumList_sorted (g : Nat → Nat) : ∀ (l : List Nat), sumList ((l.foldr insertSorted []).map g) = sumList (l.map g)
-  | [] => rfl
-  | a :: l => by
-    simp only [List.foldr_cons, List.map_cons, sumList]
-    rw [sumList_insertSorted, sumList_sorted g l]
-
-theorem sumList_append (g : Nat → Nat) : ∀ (l l' : List Nat), sumList ((l ++ l').map g) = sumList (l.map g) + sumList (l'.map g)
-  | [], l' => by simp [sumList]
-  | a :: l, l' => by
-    simp only [List.cons_append, List.map_cons, sumList]
-    rw [sumList_append g l l']
-    omega
-
-theorem mem_insertSorted {j a : Nat} : ∀ {l : List Nat}, j ∈ insertSorted a l → j = a ∨ j ∈ l
-  | [], h => by simp [insertSorted] at h; exact Or.inl h
-  | b :: l, h => by
-    unfold insertSorted at h
+theorem mem_mergeAdd {j : Nat} : ∀ {xs ys : List (Nat × Nat)},
+    j ∈ (mergeAdd xs ys).map Prod.fst → j ∈ xs.map Prod.fst ∨ j ∈ ys.map Prod.fst
+  | [], ys, h => by simp only [mergeAdd] at h; exact Or.inr h
+  | (a, ca) :: xs, [], h => by simp only [mergeAdd] at h; exact Or.inl h
+  | (a, ca) :: xs, (b, cb) :: ys, h => by
+    unfold mergeAdd at h
     split at h
-    · simp only [List.mem_cons] at h ⊢; exact h
-    · simp only [List.mem_cons] at h ⊢
-      rcases h with h | h
-      · exact Or.inr (Or.inl h)
-      · rcases mem_insertSorted h with h | h
-        · exact Or.inl h
-        · exact Or.inr (Or.inr h)
-
-theorem mem_sorted {j : Nat} : ∀ {l : List Nat}, j ∈ l.foldr insertSorted [] → j ∈ l
-  | [], h => by simp at h
-  | a :: l, h => by
-    simp only [List.foldr_cons] at h
-    rcases mem_insertSorted h with h | h
-    · exact h ▸ List.mem_cons_self ..
-    · exact List.mem_cons_of_mem _ (mem_sorted h)
+    · simp only [List.map_cons, List.mem_cons] at h ⊢
+      rcases h with rfl | h
+      · exact Or.inl (Or.inl rfl)
+      · rcases mem_mergeAdd h with h | h
+        · exact Or.inl (Or.inr h)
+        · exact Or.inr (by simpa [List.map_cons, List.mem_cons] using h)
+    · split at h
+      · simp only [List.map_cons, List.mem_cons] at h ⊢
+        rcases h with rfl | h
+        · exact Or.inr (Or.inl rfl)
+        · rcases mem_mergeAdd h with h | h
+          · exact Or.inl (by simpa [List.map_cons, List.mem_cons] using h)
+          · exact Or.inr (Or.inr h)
+      · dsimp only at h
+        split at h
+        · rcases mem_mergeAdd h with h | h
+          · exact Or.inl (by simp [h])
+          · exact Or.inr (by simp [h])
+        · simp only [List.map_cons, List.mem_cons] at h ⊢
+          rcases h with rfl | h
+          · exact Or.inl (Or.inl rfl)
+          · rcases mem_mergeAdd h with h | h
+            · exact Or.inl (Or.inr h)
+            · exact Or.inr (Or.inr h)
 
 /-- What a term is a sum of: summed and wrapped they are the term, wrapped; and they are terms of the table. -/
 theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t : Tab} (hw : WFT t.list) {a : Nat} (ha : a < t.list.length) :
-    sumList ((addends t a).map (den inp ρ t.list)) % W32 = den inp ρ t.list a % W32 ∧ ∀ j ∈ addends t a, j < t.list.length := by
+    sumTerms (den inp ρ t.list) (addends t a) % W32 = den inp ρ t.list a % W32 ∧ ∀ j ∈ (addends t a).map Prod.fst, j < t.list.length := by
   unfold addends
   have at_list : t.arr[a]? = t.list[a]? := by simp [Tab.list]
   rw [at_list]
@@ -277,15 +306,15 @@ theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t : Tab} (h
       refine ⟨?_, fun j m => Nat.lt_trans (hw a _ h j m) ha⟩
       rw [den_node hw h]
       simp only [Node.value, Nat.mod_mod]
-    | atom r => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | input r k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | xor x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | band x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | rotr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | shl x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | shr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | ult x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
-    | sel c x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | atom r => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | input r k => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | xor x y => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | band x y => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | rotr x k => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | shl x k => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | shr x k => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | ult x y => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
+    | sel c x y => exact ⟨by simp [sumTerms], fun j m => by simp at m; omega⟩
 
 /-- What each term the verifier makes is, the table having grown by it at most. -/
 structure Made (inp : Nat → Nat → Nat) (ρ : Nat → Int) (T T' : List Node) (i : Nat) (v : Nat) : Prop where
@@ -306,13 +335,13 @@ theorem wAdd_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a
   have m := made (inp := inp) (ρ := ρ) h hw (by
     intro j mj
     simp only [Node.parts] at mj
-    rcases List.mem_append.mp (mem_sorted mj) with mj | mj
+    rcases mem_mergeAdd mj with mj | mj
     · exact la j mj
     · exact lb j mj)
   refine ⟨m.ext, m.wf, m.lt, ?_⟩
   rw [m.den]
   simp only [Node.value]
-  rw [sumList_sorted, sumList_append, Nat.add_mod, sa, sb, ← Nat.add_mod]
+  rw [sumTerms_mergeAdd, Nat.add_mod, sa, sb, ← Nat.add_mod]
 
 theorem wXor_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a b i : Nat} (h : wXor a b t = (i, t'))
     (hw : WFT t.list) (ha : a < t.list.length) (hb : b < t.list.length) :

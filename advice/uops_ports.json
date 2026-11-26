@@ -4743,6 +4743,309 @@
         "uops_name": "VPADDD (ZMM, ZMM, M512)"
       }
     },
+    "palignr12": {
+      "ADL-P": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "EMR": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ICL": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN3": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN4": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN5": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      }
+    },
+    "palignr4": {
+      "ADL-P": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "EMR": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ICL": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN3": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN4": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN5": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      }
+    },
+    "palignr8": {
+      "ADL-P": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "EMR": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ICL": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p5",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN3": {
+        "lat": 1,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN4": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      },
+      "ZEN5": {
+        "lat": 2,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP1",
+              "FP2"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP12",
+        "tp": 0.5,
+        "uops": 1,
+        "uops_name": "VPALIGNR (XMM, XMM, XMM, I8)"
+      }
+    },
     "pand128": {
       "ADL-P": {
         "lat": 1.0,
@@ -6446,6 +6749,339 @@
         "tp": 23.67,
         "uops": 1,
         "uops_name": "RET_NEAR"
+      }
+    },
+    "sha256msg1": {
+      "ADL-P": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      },
+      "EMR": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      },
+      "ICL": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      },
+      "ZEN3": {
+        "lat": 3,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP01",
+        "tp": 0.65,
+        "uops": 1,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      },
+      "ZEN4": {
+        "lat": 3,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP01",
+        "tp": 0.65,
+        "uops": 1,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      },
+      "ZEN5": {
+        "lat": 3,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP01",
+        "tp": 0.65,
+        "uops": 1,
+        "uops_name": "SHA256MSG1 (XMM, XMM)"
+      }
+    },
+    "sha256msg2": {
+      "ADL-P": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      },
+      "EMR": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      },
+      "ICL": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0"
+            ]
+          ],
+          [
+            1,
+            [
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p0+1*p5",
+        "tp": 1.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      },
+      "ZEN3": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*FP0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      },
+      "ZEN4": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*FP0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      },
+      "ZEN5": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*FP0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256MSG2 (XMM, XMM)"
+      }
+    },
+    "sha256rnds2": {
+      "ADL-P": {
+        "lat": 6,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "p0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*p0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
+      },
+      "EMR": {
+        "lat": 6,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "p0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*p0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
+      },
+      "ICL": {
+        "lat": 6,
+        "mem_lat": null,
+        "ports": [
+          [
+            2,
+            [
+              "p0"
+            ]
+          ]
+        ],
+        "ports_raw": "2*p0",
+        "tp": 2.0,
+        "uops": 2,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
+      },
+      "ZEN3": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
+      },
+      "ZEN4": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
+      },
+      "ZEN5": {
+        "lat": 4,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0",
+        "tp": 1.0,
+        "uops": 1,
+        "uops_name": "SHA256RNDS2 (XMM, XMM, XMM0)"
       }
     },
     "shl64_ri": {

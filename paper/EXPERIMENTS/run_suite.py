@@ -224,6 +224,13 @@ def run_tool(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str, f
         return 124, f"TIMEOUT after {timeout}s\n{out}\n{err}".strip(), time.monotonic() - t0
 
 
+def expected_contract_id_for(task: dict, target: str) -> str:
+    by_t = task.get("expected_contract_ids")
+    if isinstance(by_t, dict) and target in by_t:
+        return by_t[target]
+    return task["expected_contract_id"]
+
+
 def run_verify2_on_bundle(out_o: Path, out_p: Path, target: str) -> tuple[bool, str, float]:
     """Run independent second verifier `proof-core/verify2.py` on a packed `.o` + `.proof`."""
     import ode_audit
@@ -272,7 +279,7 @@ def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str |
                         word = struct.unpack_from("<I", text_bytes, r_offset)[0]
                         word = (word & 0xFC000000) | (disp & 0x03FFFFFF)
                         struct.pack_into("<I", text_bytes, r_offset, word)
-            sym_name = f"ode_{task['expected_contract_id']}"
+            sym_name = f"ode_{expected_contract_id_for(task, target)}"
             entry_off = None
             for s in elf["symbols"]:
                 if s["name"] == sym_name:
@@ -335,13 +342,15 @@ def build_initial_user_prompt(task: dict, target: str) -> str:
     tab_rel = "arm64/arm64.tab" if target == "arm64" else "core/x86.tab"
     tab_text = (ROOT / tab_rel).read_text(encoding="utf-8")
     spec_text = (ROOT / task["spec_file"]).read_text(encoding="utf-8")
+    exp_cid = expected_contract_id_for(task, target)
+    blk_hdr = (task.get("target_block_header") or {}).get(target, f"for {target} {{ ... }}")
     return (
         f"## Task\n\n"
         f"{task['task_summary']} Target architecture: `{target}`.\n\n"
         f"Use this EXACT import and exported contract header for `{task['entry_fn']}` "
-        f"(expected canonical contract ID: `{task['expected_contract_id']}`):\n\n"
+        f"(expected canonical contract ID: `{exp_cid}`):\n\n"
         f"```ode\n{task['contract_header']}```\n\n"
-        f"Return a single complete `.ode` file implementing `for {target} {{ ... }}` "
+        f"Return a single complete `.ode` file implementing `{blk_hdr}` "
         f"(and any optional private `for {target} calling {{ ... }} {{ ... }}` helpers you choose to define).\n\n"
         f"---\n\n"
         f"## Complete Ode Quickstart (`docs/QUICKSTART.md`)\n\n{quickstart}\n\n"
@@ -372,12 +381,29 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", s).strip("_")
 
 
-def parse_advise_metrics(advise_txt: str, target: str) -> dict:
-    """Extract hot-loop static `cyc/B`, `cyc/iter`, `load_bytes`, and cross-CPU `cyc/B` from `ode advise --all-archs`."""
+def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int | None = None) -> dict:
+    """Extract hot-loop or straight-line static `cyc/B`, `cyc/iter`, `load_bytes`, and cross-CPU `cyc/B`."""
     default_arch = "apple_m" if target == "arm64" else "zen5"
     loops = []
     cur = None
+    whole_sim = None
+    whole_all_archs = {}
+    in_whole_aa = False
     for line in advise_txt.splitlines():
+        m_ws = re.search(r"^\s*sim:\s+pipeline sim ~([0-9.]+) cyc/call \(bottleneck:\s*([^,)]+)", line)
+        if m_ws:
+            whole_sim = {"cycles_per_call": float(m_ws.group(1)), "bottleneck": m_ws.group(2).strip()}
+            in_whole_aa = False
+            continue
+        if "all-archs pipeline estimate (no execution):" in line and cur is None:
+            in_whole_aa = True
+            continue
+        if in_whole_aa and cur is None:
+            m_wa = re.match(r"^\s+(\w+)\s*:\s*~\s*([0-9.]+) cyc/call", line)
+            if m_wa:
+                whole_all_archs[m_wa.group(1)] = float(m_wa.group(2))
+                continue
+            in_whole_aa = False
         m_lp = re.search(
             r"loop\s+(\d+):.*pipeline sim ~([0-9.]+) cyc/iter \(([^,]+),\s*(\d+) fused(?:,\s*([0-9.]+) cyc/B across (\d+) load\(s\)/(\d+) B)?\)",
             line,
@@ -407,6 +433,21 @@ def parse_advise_metrics(advise_txt: str, target: str) -> dict:
                     cur["all_archs_cyc_per_b"][m_aa.group(1)] = float(m_aa.group(3))
     load_loops = [lp for lp in loops if lp["load_bytes"] > 0 and lp["cyc_per_b"] is not None]
     if not load_loops:
+        if whole_sim is not None and input_bytes_per_call:
+            cpb = whole_sim["cycles_per_call"] / float(input_bytes_per_call)
+            aa_cpb = {k: round(v / float(input_bytes_per_call), 4) for k, v in whole_all_archs.items()}
+            return {
+                "hot_loop": "straight",
+                "primary_arch": default_arch,
+                "cyc_per_b": round(cpb, 4),
+                "cycles_per_iter": round(whole_sim["cycles_per_call"], 2),
+                "load_bytes": int(input_bytes_per_call),
+                "load_count": 0,
+                "bottleneck": whole_sim["bottleneck"],
+                "lints": 0,
+                "all_archs_cyc_per_b": aa_cpb,
+                "loop_count": 0,
+            }
         return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops}
     # Main hot loop for large buffers is the one loading the most bytes per iteration (tie-break: lowest cyc/B)
     hot = min(load_loops, key=lambda lp: (-lp["load_bytes"], lp["cyc_per_b"]))
@@ -424,12 +465,12 @@ def parse_advise_metrics(advise_txt: str, target: str) -> dict:
     }
 
 
-def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path) -> tuple[str, dict]:
+def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None) -> tuple[str, dict]:
     cmd = [sys.executable, str(ODE_TOOL), "advise", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
     rc, out, _ = run_tool(cmd, work, timeout=30)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
-    return out, parse_advise_metrics(out, target)
+    return out, parse_advise_metrics(out, target, input_bytes_per_call=input_bytes_per_call)
 
 
 def run_cell(task: dict, model: str, target: str, args, api_key: str,
@@ -450,7 +491,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         "model": model,
         "target": target,
         "arm": arm,
-        "expected_contract_id": task["expected_contract_id"],
+        "expected_contract_id": expected_contract_id_for(task, target),
         "started_utc": utc_now(),
         "strict_pass": False,
         "rounds_to_pass": None,
@@ -566,7 +607,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 audit_cmd = [
                     sys.executable, str(ODE_TOOL), "audit", str(out_o),
                     "--proof", str(out_p),
-                    "--expect-contract", task["expected_contract_id"],
+                    "--expect-contract", expected_contract_id_for(task, target),
                 ]
                 with prover_sem:
                     rc_a, out_a_txt, dt_a = run_tool(audit_cmd, work, timeout=args.tool_timeout)
@@ -582,12 +623,18 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     rec["category"] = "passed"
 
                     # Step C: independent pure-Python second verifier (`verify2.py`)
-                    v2_ok, v2_msg, v2_s = run_verify2_on_bundle(out_o, out_p, target)
+                    if task.get("skip_verify2"):
+                        v2_ok, v2_msg, v2_s = None, "n/a (word-vector contract outside verify2 scalar fragment)", 0.0
+                    else:
+                        v2_ok, v2_msg, v2_s = run_verify2_on_bundle(out_o, out_p, target)
                     # Step D: real-silicon native tests + optional static `ode advise --all-archs`
                     nat_st, nat_det = run_native_test(out_o, task, target, args.x86_exec_script)
                     adv_txt, perf = ("", None)
                     if arm is not None:
-                        adv_txt, perf = run_static_advise(cand, task["entry_fn"], target, work)
+                        adv_txt, perf = run_static_advise(
+                            cand, task["entry_fn"], target, work,
+                            input_bytes_per_call=task.get("input_bytes_per_call"),
+                        )
                         rec["perf"] = perf
 
                     cpb = perf.get("cyc_per_b") if perf else None
@@ -629,6 +676,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                         break
                     opt_rounds_left -= 1
                     messages.append({"role": "assistant", "content": reply})
+                    opt_goal = task.get("opt_goal", "reduce loop cycles per byte (`cyc/B`) further for large `n`")
                     if arm == "advised":
                         messages.append({
                             "role": "user",
@@ -639,8 +687,8 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                                 f"Here is the static `ode advise --all-archs` report on your verified code (no execution):\n"
                                 f"```\n{adv_txt}\n```\n\n"
                                 f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
-                                f"Use this static pipeline report (cycles/iter, `cyc/B`, bottlenecks, critical path, "
-                                f"i-cache alignment, and lints) to reduce loop cycles per byte (`cyc/B`) further for large `n` "
+                                f"Use this static pipeline report (cycles, `cyc/B`, bottlenecks, critical path, "
+                                f"port utilization, i-cache alignment, and lints) to {opt_goal} "
                                 f"while keeping `ode pack`, `ode audit`, and native tests passing. "
                                 f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
                             ),
@@ -653,7 +701,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                                 f"{metrics.get('instructions')} instructions, {metrics.get('code_bytes')} B, "
                                 f"verify2={v2_ok}, native={nat_st}).\n\n"
                                 f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
-                                f"Try to make the hot loop significantly faster (lower cycles per byte for large `n`, e.g. `n = 4096`) "
+                                f"Try to make the code significantly faster ({opt_goal}) "
                                 f"while keeping `ode pack`, `ode audit`, and native tests passing. "
                                 f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
                             ),
@@ -746,7 +794,11 @@ def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: lis
         "| --- | --- | --- |",
     ]
     for t in tasks:
-        lines.append(f"| `{t['id']}` | `{t['entry_fn']}` | `{t['expected_contract_id']}` |")
+        if isinstance(t.get("expected_contract_ids"), dict):
+            cids = ", ".join(f"{k}: `{v}`" for k, v in sorted(t["expected_contract_ids"].items()))
+            lines.append(f"| `{t['id']}` | `{t['entry_fn']}` | {cids} |")
+        else:
+            lines.append(f"| `{t['id']}` | `{t['entry_fn']}` | `{t['expected_contract_id']}` |")
     lines += [
         "",
         "## Strict Pass Criteria",
@@ -1032,10 +1084,13 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
                     raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
                 rc_a, txt_a, _ = run_tool([
                     sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
-                    "--expect-contract", task["expected_contract_id"]], td_p, timeout=120)
+                    "--expect-contract", expected_contract_id_for(task, tgt)], td_p, timeout=120)
                 if rc_a != 0 or "VERDICT:           shown" not in txt_a:
                     raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")
-                v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
+                if task.get("skip_verify2"):
+                    v2_ok, v2_msg = None, "n/a (word-vector)"
+                else:
+                    v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
                 nat_st, nat_det = run_native_test(out_o, task, tgt, x86_exec_script)
                 if nat_st == "fail":
                     raise SystemExit(f"reference of task `{task['id']}` fails the native harness ({tgt}): {nat_det}")

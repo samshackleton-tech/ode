@@ -268,6 +268,18 @@ pblendd128   | vpblendd xmmX, xmmY, xmmZ, I | .xpblendd X Y Z I        | X = ble
              = VEX.128.66.0F3A.W0 02 /r cb ; reg=X vvvv=Y rm=Z imm=I
 pblendw128   | pblendw xmmX, xmmZ, I   | .xpblendw X X Z I             | X = blend_halves(X, Z, I)
              = 66 0F 3A 0E /r cb ; reg=X rm=Z imm=I
+palignr4     | vpalignr xmmX, xmmY, xmmZ, 4 | .xpalignr4 X Y Z         | X = lanes(Z.1, Z.2, Z.3, Y.0)
+             = VEX.128.66.0F3A.W0 0F /r cb ; reg=X vvvv=Y rm=Z imm=4
+palignr8     | vpalignr xmmX, xmmY, xmmZ, 8 | .xpalignr8 X Y Z         | X = lanes(Z.2, Z.3, Y.0, Y.1)
+             = VEX.128.66.0F3A.W0 0F /r cb ; reg=X vvvv=Y rm=Z imm=8
+palignr12    | vpalignr xmmX, xmmY, xmmZ, 12 | .xpalignr12 X Y Z       | X = lanes(Z.3, Y.0, Y.1, Y.2)
+             = VEX.128.66.0F3A.W0 0F /r cb ; reg=X vvvv=Y rm=Z imm=12
+sha256rnds2  | sha256rnds2 xmmX, xmmZ, xmm0 | .sha256rnds2 X Z         | X = sha256rnds2(X, Z, xmm0)
+             = 0F 38 CB /r ; reg=X rm=Z
+sha256msg1   | sha256msg1 xmmX, xmmZ   | .sha256msg1 X Z               | X = sha256msg1(X, Z)
+             = 0F 38 CC /r ; reg=X rm=Z
+sha256msg2   | sha256msg2 xmmX, xmmZ   | .sha256msg2 X Z               | X = sha256msg2(X, Z)
+             = 0F 38 CD /r ; reg=X rm=Z
 vzeroupper   | vzeroupper              | .vzeroupper                   | above128 = unknown
              = VEX.128.0F.W0 77
 

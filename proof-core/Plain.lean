@@ -392,9 +392,12 @@ theorem lanesOf_all {perm : Perm} {bind : Bind} {s : State} : ∀ (e : Expr) {l 
               | [a, b], h => exact h
               | [a, b, i], h =>
                 simp only at h ⊢
-                cases hi : value perm bind s i with
-                | none => rw [hi] at h; cases hx : vecArg bind s a <;> cases hy : vecArg bind s b <;> simp [hx, hy] at h
-                | some iv => rw [hi] at h; rw [value_all i hi]; exact h
+                by_cases hs : (f == "sha256su1" || f == "sha256rnds2" || f == "sha256h" || f == "sha256h2") = true
+                · simp only [hs, ite_true] at h ⊢; exact h
+                · simp only [hs, ite_false] at h ⊢
+                  cases hi : value perm bind s i with
+                  | none => rw [hi] at h; cases hx : vecArg bind s a <;> cases hy : vecArg bind s b <;> simp [hx, hy] at h
+                  | some iv => rw [hi] at h; rw [value_all i hi]; exact h
 
 
 theorem addr512_all {perm : Perm} {bind : Bind} {s : State} {f : String} {args : List Expr} {a : Nat}

@@ -64,9 +64,11 @@ theorem WDen.mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' : List N
     rw [ev_agree hb a]; exact WDen.num r
   | word xs =>
     intro ok
-    have hx : ∀ i ∈ xs, i < T.length := by simpa [WVal.ok] using ok
-    have em : xs.map (den (inpOf ctx s0) ρ T) = xs.map (den (inpOf ctx s0) ρ' T') :=
-      List.map_congr_left fun i hi => (den_mono hw ha a e (hx i hi)).symm
+    have hx : ∀ p ∈ xs, p.1 < T.length := by simpa [WVal.ok] using ok
+    have em : sumTerms (den (inpOf ctx s0) ρ T) xs = sumTerms (den (inpOf ctx s0) ρ' T') xs :=
+      sumTerms_congr (fun j mj => by
+        rcases List.mem_map.mp mj with ⟨p, hp, rfl⟩
+        exact (den_mono hw ha a e (hx p hp)).symm)
     rw [em]; exact WDen.word xs
   | counter r h0 =>
     intro ok
@@ -224,7 +226,7 @@ theorem weval_value {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : 
   injection e2 with e2
   rw [← e2]; exact da
 
-theorem okAll_words {n t : Nat} : ∀ (ids : List Nat), ids.all (· < t) = true → WVal.okAll n t (ids.map fun i => WVal.word [i]) = true
+theorem okAll_words {n t : Nat} : ∀ (ids : List Nat), ids.all (· < t) = true → WVal.okAll n t (ids.map fun i => WVal.word [(i, 1)]) = true
   | [], _ => by simp [WVal.okAll]
   | i :: rest, h => by
     simp only [List.all_cons, Bool.and_eq_true, decide_eq_true_eq] at h
@@ -973,7 +975,7 @@ term is the word memory holds at its place. -/
 theorem lane_den {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (wf : WF ctx s) (mem : Nat → Byte) (P : Nat) :
     ∀ (nb : Nat) (ids : List Nat) (off : Nat), ids.length = 16 * nb →
       (∀ k, k < 16 * nb → den (inpOf ctx s0) ρ s.terms (ids.getD k 0) = load mem (P + 64 * off + 4 * k) 4) →
-      WDen ctx s0 ρ s.terms (.list (blocksOf nb (ids.map fun i => WVal.word [i])))
+      WDen ctx s0 ρ s.terms (.list (blocksOf nb (ids.map fun i => WVal.word [(i, 1)])))
         (.list ((List.range nb).map fun b => blockWords mem (P + 64 * (off + b))))
   | 0, _, _, _, _ => by simp only [blocksOf, List.range_zero, List.map_nil]; exact WDen.nil
   | nb + 1, ids, off, hlen, hden => by

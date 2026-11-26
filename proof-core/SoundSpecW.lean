@@ -19,7 +19,7 @@ inductive WDen (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : WVa
   | int (n : Int) : WDen ctx s0 ρ T (.int n) (.int n)
   | bool (b : Bool) : WDen ctx s0 ρ T (.bool b) (.bool b)
   | num (r : Row) : WDen ctx s0 ρ T (.num r) (.int (ev ρ r))
-  | word (xs : List Nat) : WDen ctx s0 ρ T (.word xs) (.word (sumList (xs.map (den (inpOf ctx s0) ρ T)) % W32))
+  | word (xs : List (Nat × Nat)) : WDen ctx s0 ρ T (.word xs) (.word (sumTerms (den (inpOf ctx s0) ρ T) xs % W32))
   | counter (r : Row) (h : 0 ≤ ev ρ r) : WDen ctx s0 ρ T (.counter r) (.counter ((ev ρ r).toNat % 2 ^ 64))
   | nil : WDen ctx s0 ρ T (.list []) (.list [])
   | cons {v : WVal} {a : Val} {vs : List WVal} {as : List Val} :
@@ -431,21 +431,23 @@ theorem Holds.den_lt (wf : WF ctx s) (i : Nat) : den (inpOf ctx s0) ρ s.terms i
   Ode.den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
 
 /-- The term a word is, where it is one: the sum of the word's terms, wrapping. -/
-theorem idOf_den (wf : WF ctx s) {xs : List Nat} {a : Nat} (h : idOf look xs = some a) :
-    den (inpOf ctx s0) ρ s.terms a = sumList (xs.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
+theorem idOf_den (wf : WF ctx s) {xs : List (Nat × Nat)} {a : Nat} (h : idOf look xs = some a) :
+    den (inpOf ctx s0) ρ s.terms a = sumTerms (den (inpOf ctx s0) ρ s.terms) xs % W32 := by
   have key : ∀ ys, look (.add ys) = some a →
-      den (inpOf ctx s0) ρ s.terms a = sumList (ys.map (den (inpOf ctx s0) ρ s.terms)) % W32 := by
+      den (inpOf ctx s0) ρ s.terms a = sumTerms (den (inpOf ctx s0) ρ s.terms) ys % W32 := by
     intro ys hf
     rw [den_node wf.words.table (Looks.found hf)]
     rfl
   match xs, h with
-  | [], h => exact key [] h
-  | [b], h =>
+  | [(b, 1)], h =>
     simp only [idOf] at h
     injection h with h; subst h
-    simp only [List.map, sumList, Nat.add_zero]
+    simp only [sumTerms, Nat.one_mul, Nat.add_zero]
     exact (Nat.mod_eq_of_lt (Holds.den_lt wf b)).symm
-  | b :: c :: more, h => exact key _ h
+  | [], h => exact key [] h
+  | [(b, 0)], h => simp only [idOf] at h; exact key [(b, 0)] h
+  | [(b, c + 2)], h => simp only [idOf] at h; exact key [(b, c + 2)] h
+  | b :: c :: more, h => simp only [idOf] at h; exact key _ h
 
 /-- A term found in the table: it is what its node says. -/
 theorem found_den (wf : WF ctx s) {n : Node} {i : Nat} (h : look n = some i) :
@@ -454,14 +456,14 @@ theorem found_den (wf : WF ctx s) {n : Node} {i : Nat} (h : look n = some i) :
 
 /-- One term as a word. -/
 theorem WDen.one (wf : WF ctx s) (i : Nat) :
-    WDen ctx s0 ρ s.terms (.word [i]) (.word (den (inpOf ctx s0) ρ s.terms i)) := by
-  have h := WDen.word (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) [i]
-  simp only [List.map, sumList, Nat.add_zero, Nat.mod_eq_of_lt (Holds.den_lt (ctx := ctx) (s0 := s0) (ρ := ρ) wf i)] at h
+    WDen ctx s0 ρ s.terms (.word [(i, 1)]) (.word (den (inpOf ctx s0) ρ s.terms i)) := by
+  have h := WDen.word (ctx := ctx) (s0 := s0) (ρ := ρ) (T := s.terms) [(i, 1)]
+  simp only [sumTerms, Nat.one_mul, Nat.add_zero, Nat.mod_eq_of_lt (Holds.den_lt (ctx := ctx) (s0 := s0) (ρ := ρ) wf i)] at h
   exact h
 
 /-- The terms of a list, each as a word. -/
 theorem WDen.wordsOf (wf : WF ctx s) : ∀ (ids : List Nat),
-    WDen ctx s0 ρ s.terms (.list (ids.map fun i => WVal.word [i])) (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)))
+    WDen ctx s0 ρ s.terms (.list (ids.map fun i => WVal.word [(i, 1)])) (.list (ids.map fun i => Val.word (den (inpOf ctx s0) ρ s.terms i)))
   | [] => WDen.nil
   | i :: rest => WDen.cons (WDen.one wf i) (WDen.wordsOf wf rest)
 
@@ -879,10 +881,10 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
         have oe : op = "+" := by simpa using hop
         subst oe
         simp only [Option.some.injEq] at h; subst h
-        refine ⟨.word ((sumList (xs.map 𝔻) % W32 + sumList (ys.map 𝔻) % W32) % W32), by simp [binop, wordop], ?_⟩
-        have e : (sumList (xs.map 𝔻) % W32 + sumList (ys.map 𝔻) % W32) % W32 =
-            sumList (((xs ++ ys).foldr insertSorted []).map 𝔻) % W32 := by
-          rw [sumList_sorted, sumList_append]; exact (Nat.add_mod _ _ _).symm
+        refine ⟨.word ((sumTerms 𝔻 xs % W32 + sumTerms 𝔻 ys % W32) % W32), by simp [binop, wordop], ?_⟩
+        have e : (sumTerms 𝔻 xs % W32 + sumTerms 𝔻 ys % W32) % W32 =
+            sumTerms 𝔻 (mergeAdd xs ys) % W32 := by
+          rw [sumTerms_mergeAdd]; exact (Nat.add_mod _ _ _).symm
         rw [e]; exact WDen.word _
       next hop =>
         split at h
@@ -898,8 +900,8 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
             have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
             have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
             have db := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hb
-            refine ⟨.word (sumList (xs.map 𝔻) % W32 ^^^ sumList (ys.map 𝔻) % W32), by simp [binop, wordop], ?_⟩
-            have e : sumList (xs.map 𝔻) % W32 ^^^ sumList (ys.map 𝔻) % W32 = 𝔻 i := by
+            refine ⟨.word (sumTerms 𝔻 xs % W32 ^^^ sumTerms 𝔻 ys % W32), by simp [binop, wordop], ?_⟩
+            have e : sumTerms 𝔻 xs % W32 ^^^ sumTerms 𝔻 ys % W32 = 𝔻 i := by
               rw [di, ← da, ← db]
               simp only [Node.value]
               cases Nat.le_total a b with
@@ -920,8 +922,8 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
               have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
               have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
               have db := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hb
-              refine ⟨.word (sumList (xs.map 𝔻) % W32 &&& sumList (ys.map 𝔻) % W32), by simp [binop, wordop], ?_⟩
-              have e : sumList (xs.map 𝔻) % W32 &&& sumList (ys.map 𝔻) % W32 = 𝔻 i := by
+              refine ⟨.word (sumTerms 𝔻 xs % W32 &&& sumTerms 𝔻 ys % W32), by simp [binop, wordop], ?_⟩
+              have e : sumTerms 𝔻 xs % W32 &&& sumTerms 𝔻 ys % W32 = 𝔻 i := by
                 rw [di, ← da, ← db]
                 simp only [Node.value]
                 cases Nat.le_total a b with
@@ -947,8 +949,8 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
             simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
             have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
             have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
-            refine ⟨.word (rotr (sumList (xs.map 𝔻) % W32) n.toNat), by simp [binop, n0, n32], ?_⟩
-            have e : rotr (sumList (xs.map 𝔻) % W32) n.toNat = 𝔻 i := by rw [di, ← da]; rfl
+            refine ⟨.word (rotr (sumTerms 𝔻 xs % W32) n.toNat), by simp [binop, n0, n32], ?_⟩
+            have e : rotr (sumTerms 𝔻 xs % W32) n.toNat = 𝔻 i := by rw [di, ← da]; rfl
             rw [e]; exact WDen.one wf i
       next hc =>
         split at h
@@ -966,8 +968,8 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
               simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
               have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
               have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
-              refine ⟨.word ((sumList (xs.map 𝔻) % W32) >>> n.toNat), by simp [binop, n0, n32], ?_⟩
-              have e : (sumList (xs.map 𝔻) % W32) >>> n.toNat = 𝔻 i := by rw [di, ← da]; rfl
+              refine ⟨.word ((sumTerms 𝔻 xs % W32) >>> n.toNat), by simp [binop, n0, n32], ?_⟩
+              have e : (sumTerms 𝔻 xs % W32) >>> n.toNat = 𝔻 i := by rw [di, ← da]; rfl
               rw [e]; exact WDen.one wf i
         next => simp at h
     | _ => simp [wbin] at h
@@ -1128,7 +1130,7 @@ theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : N
       cases hm : look (.ult a l) with
       | none => simp [hm] at h
       | some m =>
-        cases hs : look (.add (insertSorted hh (insertSorted one []))) with
+        cases hs : look (.add (mergeAdd [(hh, 1)] [(one, 1)])) with
         | none => simp [hm, hs] at h
         | some h1 =>
           simp only [hm, hs, Option.bind_some] at h
@@ -1147,9 +1149,8 @@ theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : N
             have b0 := knownNonneg_sound (ρ := ρ) H hn
             have er : ev ρ r = ev ρ ⟨r.coeff, 0⟩ + r.constant := by simp [ev]
             simp only [Node.value] at di dm d1 da dl dh d0
-            have fs : insertSorted hh (insertSorted one []) = [hh, one].foldr insertSorted [] := rfl
-            rw [fs, sumList_sorted] at d1
-            simp only [List.map, sumList, Nat.add_zero] at d1
+            rw [sumTerms_mergeAdd] at d1
+            simp only [sumTerms, Nat.one_mul, Nat.add_zero] at d1
             rw [ev_word] at da dl dh d0
             rw [ev_const] at d0
             rw [di, dm, d1, da, dl, dh, d0, eq, er]
@@ -1809,18 +1810,28 @@ theorem isWordIds_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} (w
     | word xs =>
       cases xs with
       | nil => simp [isWordIds] at hm
-      | cons i xs2 =>
-        cases xs2 with
-        | cons _ _ => simp [isWordIds] at hm
-        | nil =>
-          simp only [isWordIds, Bool.and_eq_true, beq_iff_eq] at hm
-          obtain ⟨rfl, hm'⟩ := hm
-          cases hd with
-          | cons h1 hrest =>
-            cases h1
-            have hlt := Holds.den_lt (s0 := s0) (ρ := ρ) wf i
-            simp only [List.map_cons, List.map_nil, sumList, Nat.add_zero, Nat.mod_eq_of_lt hlt]
-            rw [isWordIds_sound wf hm' hrest]
+      | cons p xs2 =>
+        cases p with
+        | mk i c =>
+          cases c with
+          | zero => cases hm
+          | succ c' =>
+            cases c' with
+            | succ _ => cases hm
+            | zero =>
+              cases xs2 with
+              | cons _ _ => cases hm
+              | nil =>
+                change isWordIds (.word [(i, 1)] :: ws) (j :: js) = true at hm
+                simp only [isWordIds, Bool.and_eq_true, beq_iff_eq] at hm
+                obtain ⟨rfl, hm'⟩ := hm
+                cases hd with
+                | cons h1 hrest =>
+                  cases h1
+                  have hlt := Holds.den_lt (s0 := s0) (ρ := ρ) wf i
+                  change Val.word (sumTerms (den (inpOf ctx s0) ρ s.terms) [(i, 1)] % W32) :: _ = _
+                  simp only [sumTerms, Nat.one_mul, Nat.add_zero, Nat.mod_eq_of_lt hlt, List.map_cons]
+                  rw [isWordIds_sound wf hm' hrest]
     | _ => simp [isWordIds] at hm
 
 theorem recMatches_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
@@ -2578,6 +2589,52 @@ theorem weval_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hpv : ctx.contra
               rw [if_pos ⟨i0, ij, by rw [wordBytes_length, List.length_map]; omega⟩]
               simp only [Option.some.injEq, Val.list.injEq]
               rw [List.map_take, List.map_drop, ← wordBytes_take, ← wordBytes_drop, ← ei, ← ed]
+            next => simp at h
+          | _ => simp at h
+        | _ => cases hv <;> simp at h
+      | list l =>
+        cases lv with
+        | int i =>
+          cases hv with
+          | int j =>
+            cases dlo; cases dhi
+            simp only at h
+            split at h
+            next hc =>
+              simp only [Option.some.injEq] at h; subst h
+              obtain ⟨i0, ij, jle⟩ := hc
+              cases da with
+              | nil =>
+                have h0 : i.toNat = 0 ∧ (j - i).toNat = 0 := by simp at jle; omega
+                refine ⟨.list [], ?_, by simpa using WDen.nil⟩
+                simp only [evalSpec, ea, elo, ehi]
+                rw [if_pos ⟨i0, ij, by simp at jle; omega⟩]
+                simp [h0.1, h0.2]
+              | cons d1 drest =>
+                rename_i w1 a1 wr ar
+                have dlist : WDen ctx s0 ρ s.terms (.list (w1 :: wr)) (.list (a1 :: ar)) := WDen.cons d1 drest
+                have hlen := WDen.length dlist
+                have hdrop : ∀ (n : Nat) (ws : List WVal) (as : List Val),
+                    WDen ctx s0 ρ s.terms (.list ws) (.list as) → WDen ctx s0 ρ s.terms (.list (ws.drop n)) (.list (as.drop n)) := by
+                  intro n; induction n with
+                  | zero => intro ws as d; simpa using d
+                  | succ n ihn =>
+                    intro ws as d
+                    cases d with
+                    | nil => exact WDen.nil
+                    | cons _ dr => simpa using ihn _ _ dr
+                have htake : ∀ (n : Nat) (ws : List WVal) (as : List Val),
+                    WDen ctx s0 ρ s.terms (.list ws) (.list as) → WDen ctx s0 ρ s.terms (.list (ws.take n)) (.list (as.take n)) := by
+                  intro n; induction n with
+                  | zero => intro ws as _; exact WDen.nil
+                  | succ n ihn =>
+                    intro ws as d
+                    cases d with
+                    | nil => exact WDen.nil
+                    | cons d1' dr => exact WDen.cons d1' (ihn _ _ dr)
+                refine ⟨.list (((a1 :: ar).drop i.toNat).take (j - i).toNat), ?_, htake _ _ _ (hdrop _ _ _ dlist)⟩
+                simp only [evalSpec, ea, elo, ehi]
+                rw [if_pos ⟨i0, ij, by rw [← hlen]; omega⟩]
             next => simp at h
           | _ => simp at h
         | _ => cases hv <;> simp at h

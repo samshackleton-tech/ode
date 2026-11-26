@@ -309,6 +309,7 @@ Both the compiler and the verifiers read `core/x86.tab` and `arm64/arm64.tab`. O
 - Register aliases (`reg idx = rcx`) cannot shadow hardware register names (such as `v0..v31` on AArch64 or `al..dl` on x86-64).
 - On AArch64, constants from `65,536` up to `2^32 - 1` are built from two 16-bit halves (`d := hi; lsl d, d, 16; t := lo; add d, d, t`).
 - Leaf functions (those making no calls) with `stack 0` keep all state in caller-saved registers (`rax, rcx, rdx, rsi, rdi, r8..r11` on x86-64; `x0..x15` on AArch64).
+- **128-bit vector and hardware crypto instructions:** Both target tables include 128-bit vector operations (`xmm0..xmm15` on x86-64; `v0..v31`/`q0..q31` on AArch64, with `mov vD.16b, vS.16b` as the canonical NEON register move) as well as hardware SHA-256 instructions (`sha256rnds2`, `sha256msg1`, `sha256msg2`, `vpalignr` on x86-64; `sha256h`, `sha256h2`, `sha256su0`, `sha256su1` on AArch64). On x86-64, functions using VEX/AVX or SHA-NI instructions declare `for x86_64 needs avx { ... }` on the target block. Repeated straight-line rounds can be expanded at compile time with `for i in 0..N { ... }` or `inline fn`.
 
 ---
 

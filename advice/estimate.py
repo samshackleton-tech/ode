@@ -61,6 +61,7 @@ def classify_row(row_name, target):
         if row_name in ("eor_v", "orr_v", "and_v", "add_4s"): return "vec_alu"
         if row_name in ("ushr_4s", "shl_4s"): return "vec_shift"
         if row_name in ("rev32_8h", "uzp1_4s", "uzp2_4s", "zip1_4s", "zip2_4s", "zip1_2d", "zip2_2d", "ext_4", "ext_8", "ext_12"): return "vec_shuf"
+        if row_name in ("sha256h", "sha256h2", "sha256su0", "sha256su1"): return "vec_crypto"
         return "alu"
     # x86_64
     if row_name == "nop": return "nop"
@@ -78,7 +79,8 @@ def classify_row(row_name, target):
     if row_name == "storeu128": return "vec_store"
     if row_name in ("mov128", "movq128", "paddd128", "pxor128", "pand128", "por128"): return "vec_alu"
     if row_name in ("prord128", "pslld128", "psrld128"): return "vec_shift"
-    if row_name in ("pshufb128", "pshufd128", "shufps128", "unpckldq", "unpckhdq", "unpcklqdq", "pblendd128", "pblendw128"): return "vec_shuf"
+    if row_name in ("pshufb128", "pshufd128", "shufps128", "unpckldq", "unpckhdq", "unpcklqdq", "pblendd128", "pblendw128", "palignr4", "palignr8", "palignr12"): return "vec_shuf"
+    if row_name in ("sha256rnds2", "sha256msg1", "sha256msg2"): return "vec_crypto"
     if row_name == "mov512": return "wide_mov"
     if row_name in ("load512a", "load512", "load512i"): return "wide_load"
     if row_name in ("store512a", "store512"): return "wide_store"
@@ -119,6 +121,7 @@ def _expr_reads(e, bind, out):
         return
     if e[0] == "name":
         n = e[1]
+        if n == "xmm0": out.add("v0"); return
         if n in table.REGISTERS: out.add(bind[n])
         elif n in table.VECTORS: out.add(f"v{bind[n]}")
         elif n in table.WIDE: out.add(f"v{bind[table.WIDE[n]]}")
@@ -440,6 +443,12 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         }
     else:
         whole = flat
+    whole_sim = None
+    whole_all_archs = None
+    if not loops and len(dag_paths) <= 1 and parsed and arch_key in uica_sim.PIPELINES:
+        whole_sim = uica_sim.simulate_loop(parsed, arch_key, iterations=3)
+        if all_archs:
+            whole_all_archs = uica_sim.compare_all_archs(parsed, target, line_map=line_map, iterations=3)
     return {
         "target": target,
         "arch": arch_key,
@@ -450,6 +459,8 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
         "icache_lines": icache_lines,
         "frame_bytes": frame["size"] if frame else 0,
         "whole": whole,
+        "whole_sim": whole_sim,
+        "whole_all_archs": whole_all_archs,
         "paths": paths_summary,
         "loops": loops,
     }
@@ -852,6 +863,21 @@ def format_report(symbol, static_rep, mem_rep=None):
         f"(limiting: {w['limiting']}; crit={w['critical_path']:.1f}, fe={w['frontend_issue']:.1f}, "
         f"uops={w['uops']:.1f}, gpr={w['distinct_gpr']}, vec={w['distinct_vec']})"
     )
+    wsim = static_rep.get("whole_sim")
+    if wsim is not None:
+        pu = sorted((wsim.get("port_utilization") or {}).items(), key=lambda kv: -kv[1])[:4]
+        pu_s = ", ".join(f"{p}={u*100:.0f}%" for p, u in pu)
+        pu_note = f"; top ports: {pu_s}" if pu_s else ""
+        lines.append(
+            f"  sim:    pipeline sim ~{wsim['cycles_per_iter']:.1f} cyc/call "
+            f"(bottleneck: {wsim['bottleneck']}, {wsim['fe_uops']} fe uops, "
+            f"{wsim['eliminated_moves']} elim{pu_note})"
+        )
+        waa = static_rep.get("whole_all_archs")
+        if waa:
+            lines.append("  all-archs pipeline estimate (no execution):")
+            for row in waa:
+                lines.append(f"    {row['arch']:8s}: ~{row['cycles_per_iter']:6.1f} cyc/call [{row['bottleneck']}]")
     ps = static_rep.get("paths")
     if ps and ps["count"] > 1:
         lines.append(

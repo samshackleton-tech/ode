@@ -318,7 +318,13 @@ theorem symNumber_sound {perm : Perm} {bind : Bind} {st : State} {e : Expr} {k :
         have h1 := Int.emod_nonneg i (show (M64 : Int) ≠ 0 by decide)
         have h2 := Int.emod_lt_of_pos i (show (0 : Int) < (M64 : Int) by decide)
         refine ⟨h1, by rw [M64_cast] at h2; exact h2, by simp [value, hl, hb], ?_⟩
-        simp [vecArg, vecOf, number_not_vector hl]
+        have hne : (n == "xmm0") = false := by
+          unfold isNumberLetter at hl
+          cases h0 : (n == "xmm0")
+          · rfl
+          · have : n = "xmm0" := by simpa using h0
+            subst this; simp at hl
+        simp [vecArg, vecOf, hne, number_not_vector hl]
     next => cases h
   | lane _ _ => simp [symNumber] at h
   | call _ _ => simp [symNumber] at h
@@ -1203,9 +1209,27 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
               next hop2a =>
                 split at h
                 next hop3 =>
-                  -- the or of a word shifted left and the same word shifted right: the word turned
+                  -- the or of a vector with itself (`mov vD.16b, vS.16b` = `orr vD.16b, vS.16b, vS.16b`)
+                  -- or of a word shifted left and the same word shifted right: the word turned
                   have oe : op = "or32" := by simpa using hop3
                   subst oe
+                  split at h
+                  next hxy =>
+                    have heq : [x0, x1, x2, x3] = [y0, y1, y2, y3] := by simpa using hxy
+                    obtain ⟨rfl, rfl⟩ := pure_pair h
+                    have hsame : ∀ k, k < 4 → st.vec rx k = st.vec ry k := fun k hk => by
+                      rw [hdx k hk, hdy k hk, heq]
+                    refine ⟨ρ, Carried.terms H wf (Ext.refl _) wf.words.ok,
+                      [st.vec rx 0 ||| st.vec ry 0, st.vec rx 1 ||| st.vec ry 1,
+                       st.vec rx 2 ||| st.vec ry 2, st.vec rx 3 ||| st.vec ry 3], ?_, ltx, ?_⟩
+                    · simp [lanesOf, hvx, hvy, prim32]
+                    · intro k hk
+                      rcases lt4 hk with rfl | rfl | rfl | rfl
+                      · rw [← hsame 0 (by omega), Nat.or_self, hdx 0 (by omega)]; rfl
+                      · rw [← hsame 1 (by omega), Nat.or_self, hdx 1 (by omega)]; rfl
+                      · rw [← hsame 2 (by omega), Nat.or_self, hdx 2 (by omega)]; rfl
+                      · rw [← hsame 3 (by omega), Nat.or_self, hdx 3 (by omega)]; rfl
+                  next hxy =>
                   cases ht : orTurns s.terms ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) with
                   | none => simp only [ht] at h; exact (refuse_ok h).elim
                   | some turns =>
@@ -1533,6 +1557,660 @@ theorem symMoved_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {f : 
         next => exact (refuse_ok h).elim
   · exact (refuse_ok h).elim
 
+/-- Soundness of symbolic SHA-256 combinators (`sha256msg1/2`, `sha256su1`, `sha256rnds2`, `sha256h/h2`). -/
+theorem wAdd2_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wAdd2 a b t).2.list (wAdd2 a b t).1 ((den inp ρ t.list a + den inp ρ t.list b) % W32) :=
+  wAdd_step ok ha hb
+
+theorem wSha256Ch_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {e f g : Nat}
+    (ok : TableOk nv t.list) (he : e < t.list.length) (hf : f < t.list.length) (hg : g < t.list.length) :
+    Step inp ρ nv t.list (wSha256Ch e f g t).2.list (wSha256Ch e f g t).1
+      (sha256Ch (den inp ρ t.list e) (den inp ρ t.list f) (den inp ρ t.list g)) := by
+  unfold wSha256Ch sha256Ch
+  have s1 := wXor_step (inp := inp) (ρ := ρ) ok hf hg
+  have s2 := wAnd_step (inp := inp) (ρ := ρ) s1.ok (Nat.lt_of_lt_of_le he s1.ext.le) s1.lt
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wXor_step (inp := inp) (ρ := ρ) s2.ok (Nat.lt_of_lt_of_le hg e12.le) s2.lt
+  refine ⟨e12.trans s3.ext, s3.ok, s3.lt, ?_⟩
+  rw [s3.den, den_ext ok.wf e12 hg, s2.den, den_ext ok.wf s1.ext he, s1.den]
+
+theorem wSha256Maj_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b c : Nat}
+    (ok : TableOk nv t.list) (ha : a < t.list.length) (hb : b < t.list.length) (hc : c < t.list.length) :
+    Step inp ρ nv t.list (wSha256Maj a b c t).2.list (wSha256Maj a b c t).1
+      (sha256Maj (den inp ρ t.list a) (den inp ρ t.list b) (den inp ρ t.list c)) := by
+  unfold wSha256Maj sha256Maj
+  have s1 := wAnd_step (inp := inp) (ρ := ρ) ok ha hb
+  have s2 := wXor_step (inp := inp) (ρ := ρ) s1.ok (Nat.lt_of_lt_of_le ha s1.ext.le) (Nat.lt_of_lt_of_le hb s1.ext.le)
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wAnd_step (inp := inp) (ρ := ρ) s2.ok s2.lt (Nat.lt_of_lt_of_le hc e12.le)
+  have e23 := s2.ext.trans s3.ext
+  have e13 := s1.ext.trans e23
+  have s4 := wXor_step (inp := inp) (ρ := ρ) s3.ok (Nat.lt_of_lt_of_le s1.lt e23.le) s3.lt
+  refine ⟨e13.trans s4.ext, s4.ok, s4.lt, ?_⟩
+  rw [s4.den, den_ext s1.ok.wf e23 s1.lt, s1.den, s3.den, s2.den,
+      den_ext ok.wf s1.ext ha, den_ext ok.wf s1.ext hb, den_ext ok.wf e12 hc]
+
+theorem wSha256S0_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a : Nat}
+    (ok : TableOk nv t.list) (ha : a < t.list.length) :
+    Step inp ρ nv t.list (wSha256S0 a t).2.list (wSha256S0 a t).1 (sha256S0 (den inp ρ t.list a)) := by
+  unfold wSha256S0 sha256S0
+  have s1 := wRotr_step (inp := inp) (ρ := ρ) (n := 2) ok ha (by decide)
+  have s2 := wRotr_step (inp := inp) (ρ := ρ) (n := 13) s1.ok (Nat.lt_of_lt_of_le ha s1.ext.le) (by decide)
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wRotr_step (inp := inp) (ρ := ρ) (n := 22) s2.ok (Nat.lt_of_lt_of_le ha e12.le) (by decide)
+  have e23 := s2.ext.trans s3.ext
+  have e13 := s1.ext.trans e23
+  have s4 := wXor_step (inp := inp) (ρ := ρ) s3.ok (Nat.lt_of_lt_of_le s1.lt e23.le) (Nat.lt_of_lt_of_le s2.lt s3.ext.le)
+  have s5 := wXor_step (inp := inp) (ρ := ρ) s4.ok s4.lt (Nat.lt_of_lt_of_le s3.lt s4.ext.le)
+  refine ⟨(e13.trans s4.ext).trans s5.ext, s5.ok, s5.lt, ?_⟩
+  rw [s5.den, s4.den, den_ext s1.ok.wf e23 s1.lt, s1.den, den_ext s2.ok.wf s3.ext s2.lt, s2.den,
+      den_ext ok.wf s1.ext ha, den_ext s3.ok.wf s4.ext s3.lt, s3.den, den_ext ok.wf e12 ha]
+
+theorem wSha256S1_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {e : Nat}
+    (ok : TableOk nv t.list) (he : e < t.list.length) :
+    Step inp ρ nv t.list (wSha256S1 e t).2.list (wSha256S1 e t).1 (sha256S1 (den inp ρ t.list e)) := by
+  unfold wSha256S1 sha256S1
+  have s1 := wRotr_step (inp := inp) (ρ := ρ) (n := 6) ok he (by decide)
+  have s2 := wRotr_step (inp := inp) (ρ := ρ) (n := 11) s1.ok (Nat.lt_of_lt_of_le he s1.ext.le) (by decide)
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wRotr_step (inp := inp) (ρ := ρ) (n := 25) s2.ok (Nat.lt_of_lt_of_le he e12.le) (by decide)
+  have e23 := s2.ext.trans s3.ext
+  have e13 := s1.ext.trans e23
+  have s4 := wXor_step (inp := inp) (ρ := ρ) s3.ok (Nat.lt_of_lt_of_le s1.lt e23.le) (Nat.lt_of_lt_of_le s2.lt s3.ext.le)
+  have s5 := wXor_step (inp := inp) (ρ := ρ) s4.ok s4.lt (Nat.lt_of_lt_of_le s3.lt s4.ext.le)
+  refine ⟨(e13.trans s4.ext).trans s5.ext, s5.ok, s5.lt, ?_⟩
+  rw [s5.den, s4.den, den_ext s1.ok.wf e23 s1.lt, s1.den, den_ext s2.ok.wf s3.ext s2.lt, s2.den,
+      den_ext ok.wf s1.ext he, den_ext s3.ok.wf s4.ext s3.lt, s3.den, den_ext ok.wf e12 he]
+
+theorem wSha256s0_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x : Nat}
+    (ok : TableOk nv t.list) (hx : x < t.list.length) :
+    Step inp ρ nv t.list (wSha256s0 x t).2.list (wSha256s0 x t).1 (sha256s0 (den inp ρ t.list x)) := by
+  unfold wSha256s0 sha256s0
+  have s1 := wRotr_step (inp := inp) (ρ := ρ) (n := 7) ok hx (by decide)
+  have s2 := wRotr_step (inp := inp) (ρ := ρ) (n := 18) s1.ok (Nat.lt_of_lt_of_le hx s1.ext.le) (by decide)
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wShr_step (inp := inp) (ρ := ρ) (n := 3) s2.ok (Nat.lt_of_lt_of_le hx e12.le)
+  have e23 := s2.ext.trans s3.ext
+  have e13 := s1.ext.trans e23
+  have s4 := wXor_step (inp := inp) (ρ := ρ) s3.ok (Nat.lt_of_lt_of_le s1.lt e23.le) (Nat.lt_of_lt_of_le s2.lt s3.ext.le)
+  have s5 := wXor_step (inp := inp) (ρ := ρ) s4.ok s4.lt (Nat.lt_of_lt_of_le s3.lt s4.ext.le)
+  refine ⟨(e13.trans s4.ext).trans s5.ext, s5.ok, s5.lt, ?_⟩
+  rw [s5.den, s4.den, den_ext s1.ok.wf e23 s1.lt, s1.den, den_ext s2.ok.wf s3.ext s2.lt, s2.den,
+      den_ext ok.wf s1.ext hx, den_ext s3.ok.wf s4.ext s3.lt, s3.den, den_ext ok.wf e12 hx]
+
+theorem wSha256s1_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x : Nat}
+    (ok : TableOk nv t.list) (hx : x < t.list.length) :
+    Step inp ρ nv t.list (wSha256s1 x t).2.list (wSha256s1 x t).1 (sha256s1 (den inp ρ t.list x)) := by
+  unfold wSha256s1 sha256s1
+  have s1 := wRotr_step (inp := inp) (ρ := ρ) (n := 17) ok hx (by decide)
+  have s2 := wRotr_step (inp := inp) (ρ := ρ) (n := 19) s1.ok (Nat.lt_of_lt_of_le hx s1.ext.le) (by decide)
+  have e12 := s1.ext.trans s2.ext
+  have s3 := wShr_step (inp := inp) (ρ := ρ) (n := 10) s2.ok (Nat.lt_of_lt_of_le hx e12.le)
+  have e23 := s2.ext.trans s3.ext
+  have e13 := s1.ext.trans e23
+  have s4 := wXor_step (inp := inp) (ρ := ρ) s3.ok (Nat.lt_of_lt_of_le s1.lt e23.le) (Nat.lt_of_lt_of_le s2.lt s3.ext.le)
+  have s5 := wXor_step (inp := inp) (ρ := ρ) s4.ok s4.lt (Nat.lt_of_lt_of_le s3.lt s4.ext.le)
+  refine ⟨(e13.trans s4.ext).trans s5.ext, s5.ok, s5.lt, ?_⟩
+  rw [s5.den, s4.den, den_ext s1.ok.wf e23 s1.lt, s1.den, den_ext s2.ok.wf s3.ext s2.lt, s2.den,
+      den_ext ok.wf s1.ext hx, den_ext s3.ok.wf s4.ext s3.lt, s3.den, den_ext ok.wf e12 hx]
+
+structure RoundStep (inp : Nat → Nat → Nat) (ρ : Nat → Int) (nv : Nat) (T T' : List Node)
+    (ids : Nat × Nat × Nat × Nat × Nat × Nat × Nat × Nat)
+    (vals : Nat × Nat × Nat × Nat × Nat × Nat × Nat × Nat) : Prop where
+  ext : Ext T T'
+  ok : TableOk nv T'
+  la : ids.1 < T'.length
+  lb : ids.2.1 < T'.length
+  lc : ids.2.2.1 < T'.length
+  ld : ids.2.2.2.1 < T'.length
+  le_ : ids.2.2.2.2.1 < T'.length
+  lf : ids.2.2.2.2.2.1 < T'.length
+  lg : ids.2.2.2.2.2.2.1 < T'.length
+  lh : ids.2.2.2.2.2.2.2 < T'.length
+  da : den inp ρ T' ids.1 = vals.1
+  db : den inp ρ T' ids.2.1 = vals.2.1
+  dc : den inp ρ T' ids.2.2.1 = vals.2.2.1
+  dd : den inp ρ T' ids.2.2.2.1 = vals.2.2.2.1
+  de : den inp ρ T' ids.2.2.2.2.1 = vals.2.2.2.2.1
+  df : den inp ρ T' ids.2.2.2.2.2.1 = vals.2.2.2.2.2.1
+  dg : den inp ρ T' ids.2.2.2.2.2.2.1 = vals.2.2.2.2.2.2.1
+  dh : den inp ρ T' ids.2.2.2.2.2.2.2 = vals.2.2.2.2.2.2.2
+
+theorem wSha256Round_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab}
+    {a b c d e f g h wk : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) (hc : c < t.list.length) (hd : d < t.list.length)
+    (he : e < t.list.length) (hf : f < t.list.length) (hg : g < t.list.length) (hh : h < t.list.length)
+    (hwk : wk < t.list.length) :
+    RoundStep inp ρ nv t.list (wSha256Round a b c d e f g h wk t).2.list
+      (wSha256Round a b c d e f g h wk t).1
+      (sha256Round (den inp ρ t.list a) (den inp ρ t.list b) (den inp ρ t.list c) (den inp ρ t.list d)
+                   (den inp ρ t.list e) (den inp ρ t.list f) (den inp ρ t.list g) (den inp ρ t.list h)
+                   (den inp ρ t.list wk)) := by
+  unfold wSha256Round sha256Round
+  have st1 := wSha256S1_step (inp := inp) (ρ := ρ) ok he
+  have st2 := wSha256Ch_step (inp := inp) (ρ := ρ) st1.ok
+    (Nat.lt_of_lt_of_le he st1.ext.le) (Nat.lt_of_lt_of_le hf st1.ext.le) (Nat.lt_of_lt_of_le hg st1.ext.le)
+  have e12 := st1.ext.trans st2.ext
+  have st3 := wAdd2_step (inp := inp) (ρ := ρ) st2.ok
+    (Nat.lt_of_lt_of_le hh e12.le) (Nat.lt_of_lt_of_le st1.lt st2.ext.le)
+  have e13 := e12.trans st3.ext
+  have st4 := wAdd2_step (inp := inp) (ρ := ρ) st3.ok st3.lt (Nat.lt_of_lt_of_le st2.lt st3.ext.le)
+  have e14 := e13.trans st4.ext
+  have st5 := wAdd2_step (inp := inp) (ρ := ρ) st4.ok st4.lt (Nat.lt_of_lt_of_le hwk e14.le)
+  have e15 := e14.trans st5.ext
+  have st6 := wSha256S0_step (inp := inp) (ρ := ρ) st5.ok (Nat.lt_of_lt_of_le ha e15.le)
+  have e16 := e15.trans st6.ext
+  have st7 := wSha256Maj_step (inp := inp) (ρ := ρ) st6.ok
+    (Nat.lt_of_lt_of_le ha e16.le) (Nat.lt_of_lt_of_le hb e16.le) (Nat.lt_of_lt_of_le hc e16.le)
+  have e17 := e16.trans st7.ext
+  have st8 := wAdd2_step (inp := inp) (ρ := ρ) st7.ok (Nat.lt_of_lt_of_le st6.lt st7.ext.le) st7.lt
+  have e58 := (st6.ext.trans st7.ext).trans st8.ext
+  have e18 := e17.trans st8.ext
+  have st9 := wAdd2_step (inp := inp) (ρ := ρ) st8.ok (Nat.lt_of_lt_of_le st5.lt e58.le) st8.lt
+  have e59 := e58.trans st9.ext
+  have e19 := e18.trans st9.ext
+  have st10 := wAdd2_step (inp := inp) (ρ := ρ) st9.ok (Nat.lt_of_lt_of_le hd e19.le) (Nat.lt_of_lt_of_le st5.lt e59.le)
+  have e110 := e19.trans st10.ext
+  exact ⟨e110, st10.ok,
+    Nat.lt_of_lt_of_le st9.lt st10.ext.le,
+    Nat.lt_of_lt_of_le ha e110.le, Nat.lt_of_lt_of_le hb e110.le, Nat.lt_of_lt_of_le hc e110.le,
+    st10.lt,
+    Nat.lt_of_lt_of_le he e110.le, Nat.lt_of_lt_of_le hf e110.le, Nat.lt_of_lt_of_le hg e110.le,
+    by
+      dsimp only
+      rw [den_ext st9.ok.wf st10.ext st9.lt, st9.den, den_ext st5.ok.wf e58 st5.lt,
+          st5.den, st4.den, st3.den, den_ext ok.wf e12 hh, den_ext st1.ok.wf st2.ext st1.lt, st1.den,
+          den_ext st2.ok.wf st3.ext st2.lt, st2.den,
+          den_ext ok.wf st1.ext he, den_ext ok.wf st1.ext hf, den_ext ok.wf st1.ext hg,
+          den_ext ok.wf e14 hwk,
+          st8.den, den_ext st6.ok.wf st7.ext st6.lt, st6.den, den_ext ok.wf e15 ha,
+          st7.den, den_ext ok.wf e16 ha, den_ext ok.wf e16 hb, den_ext ok.wf e16 hc],
+    den_ext ok.wf e110 ha, den_ext ok.wf e110 hb, den_ext ok.wf e110 hc,
+    by
+      dsimp only
+      rw [st10.den, den_ext ok.wf e19 hd, den_ext st5.ok.wf e59 st5.lt,
+          st5.den, st4.den, st3.den, den_ext ok.wf e12 hh, den_ext st1.ok.wf st2.ext st1.lt, st1.den,
+          den_ext st2.ok.wf st3.ext st2.lt, st2.den,
+          den_ext ok.wf st1.ext he, den_ext ok.wf st1.ext hf, den_ext ok.wf st1.ext hg,
+          den_ext ok.wf e14 hwk],
+    den_ext ok.wf e110 he, den_ext ok.wf e110 hf, den_ext ok.wf e110 hg⟩
+
+theorem list4_lt {l : List Nat} {T : List Node} {a b c d : Nat}
+    (hl : l = [a, b, c, d]) (ha : a < T.length) (hb : b < T.length) (hc : c < T.length) (hd : d < T.length) :
+    ∀ i ∈ l, i < T.length := by
+  subst hl; intro i mi
+  simp only [List.mem_cons, List.mem_nil_iff, or_false] at mi
+  rcases mi with rfl | rfl | rfl | rfl <;> assumption
+
+theorem vec_lt_getD {l : List Nat} {n : Nat} (hlt : ∀ i ∈ l, i < n) (hlen : l.length = 4) {k : Nat} (hk : k < 4) :
+    l.getD k 0 < n := by
+  have hk' : k < l.length := by omega
+  have heq : l.getD k 0 = l[k] := by simp [List.getD, List.getElem?_eq_getElem hk']
+  rw [heq]; exact hlt _ (List.getElem_mem hk')
+
+theorem getD4_0 {α : Type} (a b c d z : α) : [a, b, c, d].getD 0 z = a := rfl
+theorem getD4_1 {α : Type} (a b c d z : α) : [a, b, c, d].getD 1 z = b := rfl
+theorem getD4_2 {α : Type} (a b c d z : α) : [a, b, c, d].getD 2 z = c := rfl
+theorem getD4_3 {α : Type} (a b c d z : α) : [a, b, c, d].getD 3 z = d := rfl
+theorem range4_map {α : Type} (f : Nat → α) : (List.range 4).map f = [f 0, f 1, f 2, f 3] := rfl
+
+theorem wSha256s0_step_eq {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t t' : Tab} {a r : Nat}
+    (h : wSha256s0 a t = (r, t')) (ok : TableOk nv t.list) (ha : a < t.list.length) :
+    Step inp ρ nv t.list t'.list r (sha256s0 (den inp ρ t.list a)) := by
+  have s := wSha256s0_step (inp := inp) (ρ := ρ) ok ha; rw [h] at s; exact s
+
+theorem wSha256s1_step_eq {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t t' : Tab} {a r : Nat}
+    (h : wSha256s1 a t = (r, t')) (ok : TableOk nv t.list) (ha : a < t.list.length) :
+    Step inp ρ nv t.list t'.list r (sha256s1 (den inp ρ t.list a)) := by
+  have s := wSha256s1_step (inp := inp) (ρ := ρ) ok ha; rw [h] at s; exact s
+
+theorem wAdd2_step_eq {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t t' : Tab} {a b r : Nat}
+    (h : wAdd2 a b t = (r, t')) (ok : TableOk nv t.list) (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list t'.list r ((den inp ρ t.list a + den inp ρ t.list b) % W32) := by
+  have s := wAdd2_step (inp := inp) (ρ := ρ) ok ha hb; rw [h] at s; exact s
+
+theorem wSha256Round_step_eq {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t t' : Tab}
+    {a b c d e f g h wk a' b' c' d' e' f' g' h' : Nat}
+    (hr : wSha256Round a b c d e f g h wk t = ((a', b', c', d', e', f', g', h'), t'))
+    (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) (hc : c < t.list.length) (hd : d < t.list.length)
+    (he : e < t.list.length) (hf : f < t.list.length) (hg : g < t.list.length) (hh : h < t.list.length)
+    (hwk : wk < t.list.length) :
+    RoundStep inp ρ nv t.list t'.list (a', b', c', d', e', f', g', h')
+      (sha256Round (den inp ρ t.list a) (den inp ρ t.list b) (den inp ρ t.list c) (den inp ρ t.list d)
+                   (den inp ρ t.list e) (den inp ρ t.list f) (den inp ρ t.list g) (den inp ρ t.list h)
+                   (den inp ρ t.list wk)) := by
+  have st := wSha256Round_step (inp := inp) (ρ := ρ) ok ha hb hc hd he hf hg hh hwk
+  rw [hr] at st; exact st
+
+private theorem wSha256Msg1_gen {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat}
+    (fs : Nat → Tab → Nat × Tab) (cs : Nat → Nat)
+    (hfs : ∀ {t : Tab} {a : Nat}, TableOk nv t.list → a < t.list.length →
+      Step inp ρ nv t.list (fs a t).2.list (fs a t).1 (cs (den inp ρ t.list a)))
+    (fa : Nat → Nat → Tab → Nat × Tab)
+    (hfa : ∀ {t : Tab} {a b : Nat}, TableOk nv t.list → a < t.list.length → b < t.list.length →
+      Step inp ρ nv t.list (fa a b t).2.list (fa a b t).1 ((den inp ρ t.list a + den inp ρ t.list b) % W32))
+    {t : Tab} {x y : List Nat}
+    (ok : TableOk nv t.list) (hx : ∀ i ∈ x, i < t.list.length) (hy : ∀ i ∈ y, i < t.list.length)
+    (lx : x.length = 4) (ly : y.length = 4) :
+    let res :=
+      let (s0, t) := fs (x.getD 1 0) t
+      let (r0, t) := fa (x.getD 0 0) s0 t
+      let (s1, t) := fs (x.getD 2 0) t
+      let (r1, t) := fa (x.getD 1 0) s1 t
+      let (s2, t) := fs (x.getD 3 0) t
+      let (r2, t) := fa (x.getD 2 0) s2 t
+      let (s3, t) := fs (y.getD 0 0) t
+      let (r3, t) := fa (x.getD 3 0) s3 t
+      ([r0, r1, r2, r3], t)
+    Ext t.list res.2.list ∧ TableOk nv res.2.list ∧
+    (∀ i ∈ res.1, i < res.2.list.length) ∧
+    ∀ k, k < 4 → ([(den inp ρ t.list (x.getD 0 0) + cs (den inp ρ t.list (x.getD 1 0))) % W32,
+                   (den inp ρ t.list (x.getD 1 0) + cs (den inp ρ t.list (x.getD 2 0))) % W32,
+                   (den inp ρ t.list (x.getD 2 0) + cs (den inp ρ t.list (x.getD 3 0))) % W32,
+                   (den inp ρ t.list (x.getD 3 0) + cs (den inp ρ t.list (y.getD 0 0))) % W32]).getD k 0 =
+                 den inp ρ res.2.list (res.1.getD k 0) := by
+  dsimp only
+  have x0 := vec_lt_getD hx lx (k := 0) (by decide)
+  have x1 := vec_lt_getD hx lx (k := 1) (by decide)
+  have x2 := vec_lt_getD hx lx (k := 2) (by decide)
+  have x3 := vec_lt_getD hx lx (k := 3) (by decide)
+  have y0 := vec_lt_getD hy ly (k := 0) (by decide)
+  have s0 := hfs ok x1
+  have r0 := hfa s0.ok (Nat.lt_of_lt_of_le x0 s0.ext.le) s0.lt
+  have e0 := s0.ext.trans r0.ext
+  have s1 := hfs r0.ok (Nat.lt_of_lt_of_le x2 e0.le)
+  have r1 := hfa s1.ok (Nat.lt_of_lt_of_le x1 (e0.trans s1.ext).le) s1.lt
+  have e1 := s1.ext.trans r1.ext; have e01 := e0.trans e1
+  have s2 := hfs r1.ok (Nat.lt_of_lt_of_le x3 e01.le)
+  have r2 := hfa s2.ok (Nat.lt_of_lt_of_le x2 (e01.trans s2.ext).le) s2.lt
+  have e2 := s2.ext.trans r2.ext; have e02 := e01.trans e2
+  have s3 := hfs r2.ok (Nat.lt_of_lt_of_le y0 e02.le)
+  have r3 := hfa s3.ok (Nat.lt_of_lt_of_le x3 (e02.trans s3.ext).le) s3.lt
+  have e3 := s3.ext.trans r3.ext; have e03 := e02.trans e3
+  refine ⟨e03, r3.ok, list4_lt rfl (Nat.lt_of_lt_of_le r0.lt (e1.trans (e2.trans e3)).le)
+    (Nat.lt_of_lt_of_le r1.lt (e2.trans e3).le) (Nat.lt_of_lt_of_le r2.lt e3.le) r3.lt, ?_⟩
+  intro k hk
+  rcases lt4 hk with rfl | rfl | rfl | rfl
+  · simp only [getD4_0]
+    rw [den_ext r0.ok.wf (e1.trans (e2.trans e3)) r0.lt, r0.den, den_ext ok.wf s0.ext x0, s0.den]
+  · simp only [getD4_1]
+    rw [den_ext r1.ok.wf (e2.trans e3) r1.lt, r1.den, den_ext ok.wf (e0.trans s1.ext) x1, s1.den, den_ext ok.wf e0 x2]
+  · simp only [getD4_2]
+    rw [den_ext r2.ok.wf e3 r2.lt, r2.den, den_ext ok.wf (e01.trans s2.ext) x2, s2.den, den_ext ok.wf e01 x3]
+  · simp only [getD4_3]
+    rw [r3.den, den_ext ok.wf (e02.trans s3.ext) x3, s3.den, den_ext ok.wf e02 y0]
+
+theorem wSha256Msg1_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x y : List Nat}
+    (ok : TableOk nv t.list) (hx : ∀ i ∈ x, i < t.list.length) (hy : ∀ i ∈ y, i < t.list.length)
+    (lx : x.length = 4) (ly : y.length = 4) :
+    Ext t.list (wSha256Msg1 x y t).2.list ∧ TableOk nv (wSha256Msg1 x y t).2.list ∧
+    (∀ i ∈ (wSha256Msg1 x y t).1, i < (wSha256Msg1 x y t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256Msg1 ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                             ((List.range 4).map fun j => den inp ρ t.list (y.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256Msg1 x y t).2.list ((wSha256Msg1 x y t).1.getD k 0) := by
+  unfold wSha256Msg1 sha256Msg1
+  simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+  exact wSha256Msg1_gen wSha256s0 sha256s0
+    (fun ok' ha => wSha256s0_step (inp := inp) (ρ := ρ) ok' ha)
+    wAdd2 (fun ok' ha hb => wAdd2_step (inp := inp) (ρ := ρ) ok' ha hb)
+    ok hx hy lx ly
+
+theorem wSha256Msg2_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x z : List Nat}
+    (ok : TableOk nv t.list) (hx : ∀ i ∈ x, i < t.list.length) (hz : ∀ i ∈ z, i < t.list.length)
+    (lx : x.length = 4) (lz : z.length = 4) :
+    Ext t.list (wSha256Msg2 x z t).2.list ∧ TableOk nv (wSha256Msg2 x z t).2.list ∧
+    (∀ i ∈ (wSha256Msg2 x z t).1, i < (wSha256Msg2 x z t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256Msg2 ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                             ((List.range 4).map fun j => den inp ρ t.list (z.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256Msg2 x z t).2.list ((wSha256Msg2 x z t).1.getD k 0) := by
+  unfold wSha256Msg2 sha256Msg2
+  simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+  have x0 := vec_lt_getD hx lx (k := 0) (by decide)
+  have x1 := vec_lt_getD hx lx (k := 1) (by decide)
+  have x2 := vec_lt_getD hx lx (k := 2) (by decide)
+  have x3 := vec_lt_getD hx lx (k := 3) (by decide)
+  have z2 := vec_lt_getD hz lz (k := 2) (by decide)
+  have z3 := vec_lt_getD hz lz (k := 3) (by decide)
+  rcases hs0 : wSha256s1 (z.getD 2 0) t with ⟨v0, ts0⟩
+  have s0 := wSha256s1_step_eq (inp := inp) (ρ := ρ) hs0 ok z2
+  rcases hr0 : wAdd2 (x.getD 0 0) v0 ts0 with ⟨u0, t0⟩
+  have r0 := wAdd2_step_eq (inp := inp) (ρ := ρ) hr0 s0.ok (Nat.lt_of_lt_of_le x0 s0.ext.le) s0.lt
+  have e0 := s0.ext.trans r0.ext
+  rcases hs1 : wSha256s1 (z.getD 3 0) t0 with ⟨v1, ts1⟩
+  have s1 := wSha256s1_step_eq (inp := inp) (ρ := ρ) hs1 r0.ok (Nat.lt_of_lt_of_le z3 e0.le)
+  rcases hr1 : wAdd2 (x.getD 1 0) v1 ts1 with ⟨u1, t1⟩
+  have r1 := wAdd2_step_eq (inp := inp) (ρ := ρ) hr1 s1.ok (Nat.lt_of_lt_of_le x1 (e0.trans s1.ext).le) s1.lt
+  have e1 := s1.ext.trans r1.ext; have e01 := e0.trans e1
+  rcases hs2 : wSha256s1 u0 t1 with ⟨v2, ts2⟩
+  have s2 := wSha256s1_step_eq (inp := inp) (ρ := ρ) hs2 r1.ok (Nat.lt_of_lt_of_le r0.lt e1.le)
+  rcases hr2 : wAdd2 (x.getD 2 0) v2 ts2 with ⟨u2, t2⟩
+  have r2 := wAdd2_step_eq (inp := inp) (ρ := ρ) hr2 s2.ok (Nat.lt_of_lt_of_le x2 (e01.trans s2.ext).le) s2.lt
+  have e2 := s2.ext.trans r2.ext; have e02 := e01.trans e2
+  rcases hs3 : wSha256s1 u1 t2 with ⟨v3, ts3⟩
+  have s3 := wSha256s1_step_eq (inp := inp) (ρ := ρ) hs3 r2.ok (Nat.lt_of_lt_of_le r1.lt e2.le)
+  rcases hr3 : wAdd2 (x.getD 3 0) v3 ts3 with ⟨u3, t3⟩
+  have r3 := wAdd2_step_eq (inp := inp) (ρ := ρ) hr3 s3.ok (Nat.lt_of_lt_of_le x3 (e02.trans s3.ext).le) s3.lt
+  have e3 := s3.ext.trans r3.ext; have e03 := e02.trans e3
+  refine ⟨e03, r3.ok, list4_lt rfl (Nat.lt_of_lt_of_le r0.lt (e1.trans (e2.trans e3)).le)
+    (Nat.lt_of_lt_of_le r1.lt (e2.trans e3).le) (Nat.lt_of_lt_of_le r2.lt e3.le) r3.lt, ?_⟩
+  intro k hk
+  rcases lt4 hk with rfl | rfl | rfl | rfl
+  · simp only [getD4_0]
+    rw [den_ext r0.ok.wf (e1.trans (e2.trans e3)) r0.lt, r0.den, den_ext ok.wf s0.ext x0, s0.den]
+  · simp only [getD4_1]
+    rw [den_ext r1.ok.wf (e2.trans e3) r1.lt, r1.den, den_ext ok.wf (e0.trans s1.ext) x1, s1.den, den_ext ok.wf e0 z3]
+  · simp only [getD4_2]
+    rw [den_ext r2.ok.wf e3 r2.lt, r2.den, den_ext ok.wf (e01.trans s2.ext) x2, s2.den, den_ext r0.ok.wf e1 r0.lt, r0.den, den_ext ok.wf s0.ext x0, s0.den]
+  · simp only [getD4_3]
+    rw [r3.den, den_ext ok.wf (e02.trans s3.ext) x3, s3.den, den_ext r1.ok.wf e2 r1.lt, r1.den, den_ext ok.wf (e0.trans s1.ext) x1, s1.den, den_ext ok.wf e0 z3]
+
+theorem wSha256Su1_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x y z : List Nat}
+    (ok : TableOk nv t.list)
+    (hx : ∀ i ∈ x, i < t.list.length) (hy : ∀ i ∈ y, i < t.list.length) (hz : ∀ i ∈ z, i < t.list.length)
+    (lx : x.length = 4) (ly : y.length = 4) (lz : z.length = 4) :
+    Ext t.list (wSha256Su1 x y z t).2.list ∧ TableOk nv (wSha256Su1 x y z t).2.list ∧
+    (∀ i ∈ (wSha256Su1 x y z t).1, i < (wSha256Su1 x y z t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256Su1 ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                            ((List.range 4).map fun j => den inp ρ t.list (y.getD j 0))
+                            ((List.range 4).map fun j => den inp ρ t.list (z.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256Su1 x y z t).2.list ((wSha256Su1 x y z t).1.getD k 0) := by
+  unfold wSha256Su1 sha256Su1
+  have x0 := vec_lt_getD hx lx (k := 0) (by decide)
+  have x1 := vec_lt_getD hx lx (k := 1) (by decide)
+  have x2 := vec_lt_getD hx lx (k := 2) (by decide)
+  have x3 := vec_lt_getD hx lx (k := 3) (by decide)
+  have y1 := vec_lt_getD hy ly (k := 1) (by decide)
+  have y2 := vec_lt_getD hy ly (k := 2) (by decide)
+  have y3 := vec_lt_getD hy ly (k := 3) (by decide)
+  have z0 := vec_lt_getD hz lz (k := 0) (by decide)
+  rcases hp0 : wAdd2 (x.getD 0 0) (y.getD 1 0) t with ⟨u0, t0⟩; dsimp
+  have st0 := wAdd2_step_eq (inp := inp) (ρ := ρ) hp0 ok x0 y1
+  rcases hp1 : wAdd2 (x.getD 1 0) (y.getD 2 0) t0 with ⟨u1, t1⟩; dsimp
+  have st1 := wAdd2_step_eq (inp := inp) (ρ := ρ) hp1 st0.ok (Nat.lt_of_lt_of_le x1 st0.ext.le) (Nat.lt_of_lt_of_le y2 st0.ext.le)
+  have e01 := st0.ext.trans st1.ext
+  rcases hp2 : wAdd2 (x.getD 2 0) (y.getD 3 0) t1 with ⟨u2, t2⟩; dsimp
+  have st2 := wAdd2_step_eq (inp := inp) (ρ := ρ) hp2 st1.ok (Nat.lt_of_lt_of_le x2 e01.le) (Nat.lt_of_lt_of_le y3 e01.le)
+  have e02 := e01.trans st2.ext
+  rcases hp3 : wAdd2 (x.getD 3 0) (z.getD 0 0) t2 with ⟨u3, t3⟩; dsimp
+  have st3 := wAdd2_step_eq (inp := inp) (ρ := ρ) hp3 st2.ok (Nat.lt_of_lt_of_le x3 e02.le) (Nat.lt_of_lt_of_le z0 e02.le)
+  have e03 := e02.trans st3.ext
+  have hts : ∀ i ∈ [u0, u1, u2, u3], i < t3.list.length :=
+    list4_lt rfl (Nat.lt_of_lt_of_le st0.lt (st1.ext.trans (st2.ext.trans st3.ext)).le)
+      (Nat.lt_of_lt_of_le st1.lt (st2.ext.trans st3.ext).le) (Nat.lt_of_lt_of_le st2.lt st3.ext.le) st3.lt
+  have hz' : ∀ i ∈ z, i < t3.list.length := fun i mi => Nat.lt_of_lt_of_le (hz i mi) e03.le
+  obtain ⟨em, okm, ltm, dnm⟩ := wSha256Msg2_step (inp := inp) (ρ := ρ) st3.ok hts hz' rfl lz
+  refine ⟨e03.trans em, okm, ltm, ?_⟩
+  intro k hk
+  have eqL : ((List.range 4).map fun j => den inp ρ t3.list ([u0, u1, u2, u3].getD j 0)) =
+      [(den inp ρ t.list (x.getD 0 0) + den inp ρ t.list (y.getD 1 0)) % W32,
+       (den inp ρ t.list (x.getD 1 0) + den inp ρ t.list (y.getD 2 0)) % W32,
+       (den inp ρ t.list (x.getD 2 0) + den inp ρ t.list (y.getD 3 0)) % W32,
+       (den inp ρ t.list (x.getD 3 0) + den inp ρ t.list (z.getD 0 0)) % W32] := by
+    simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+    rw [den_ext st0.ok.wf (st1.ext.trans (st2.ext.trans st3.ext)) st0.lt, st0.den,
+        den_ext st1.ok.wf (st2.ext.trans st3.ext) st1.lt, st1.den, den_ext ok.wf st0.ext x1, den_ext ok.wf st0.ext y2,
+        den_ext st2.ok.wf st3.ext st2.lt, st2.den, den_ext ok.wf e01 x2, den_ext ok.wf e01 y3,
+        st3.den, den_ext ok.wf e02 x3, den_ext ok.wf e02 z0]
+  have eqZ : ((List.range 4).map fun j => den inp ρ t3.list (z.getD j 0)) =
+      ((List.range 4).map fun j => den inp ρ t.list (z.getD j 0)) := by
+    apply List.map_congr_left; intro j hj
+    exact den_ext ok.wf e03 (vec_lt_getD hz lz (List.mem_range.mp hj))
+  have d := dnm k hk
+  rw [eqL, eqZ] at d
+  simpa only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3] using d
+
+theorem wSha256Rnds2_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x z wk : List Nat}
+    (ok : TableOk nv t.list)
+    (hx : ∀ i ∈ x, i < t.list.length) (hz : ∀ i ∈ z, i < t.list.length) (hwk : ∀ i ∈ wk, i < t.list.length)
+    (lx : x.length = 4) (lz : z.length = 4) (lwk : wk.length = 4) :
+    Ext t.list (wSha256Rnds2 x z wk t).2.list ∧ TableOk nv (wSha256Rnds2 x z wk t).2.list ∧
+    (∀ i ∈ (wSha256Rnds2 x z wk t).1, i < (wSha256Rnds2 x z wk t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256Rnds2 ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                              ((List.range 4).map fun j => den inp ρ t.list (z.getD j 0))
+                              ((List.range 4).map fun j => den inp ρ t.list (wk.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256Rnds2 x z wk t).2.list ((wSha256Rnds2 x z wk t).1.getD k 0) := by
+  unfold wSha256Rnds2 sha256Rnds2
+  simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+  rcases hr1 : wSha256Round (z.getD 3 0) (z.getD 2 0) (x.getD 3 0) (x.getD 2 0)
+      (z.getD 1 0) (z.getD 0 0) (x.getD 1 0) (x.getD 0 0) (wk.getD 0 0) t with ⟨⟨a1, b1, c1, d1, e1, f1, g1, h1⟩, t1⟩
+  have r1 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr1 ok
+    (vec_lt_getD hz lz (k := 3) (by decide)) (vec_lt_getD hz lz (k := 2) (by decide))
+    (vec_lt_getD hx lx (k := 3) (by decide)) (vec_lt_getD hx lx (k := 2) (by decide))
+    (vec_lt_getD hz lz (k := 1) (by decide)) (vec_lt_getD hz lz (k := 0) (by decide))
+    (vec_lt_getD hx lx (k := 1) (by decide)) (vec_lt_getD hx lx (k := 0) (by decide))
+    (vec_lt_getD hwk lwk (k := 0) (by decide))
+  rcases hc1 : sha256Round (den inp ρ t.list (z.getD 3 0)) (den inp ρ t.list (z.getD 2 0))
+      (den inp ρ t.list (x.getD 3 0)) (den inp ρ t.list (x.getD 2 0))
+      (den inp ρ t.list (z.getD 1 0)) (den inp ρ t.list (z.getD 0 0))
+      (den inp ρ t.list (x.getD 1 0)) (den inp ρ t.list (x.getD 0 0))
+      (den inp ρ t.list (wk.getD 0 0)) with ⟨A1, B1, C1, D1, E1, F1, G1, H1⟩
+  rw [hc1] at r1
+  rcases hr2 : wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t1 with ⟨⟨a2, b2, c2, d2, e2, f2, g2, h2⟩, t2⟩
+  have r2 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr2 r1.ok
+    r1.la r1.lb r1.lc r1.ld r1.le_ r1.lf r1.lg r1.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 1) (by decide)) r1.ext.le)
+  have w1 := den_ext (inp := inp) (ρ := ρ) ok.wf r1.ext (vec_lt_getD hwk lwk (k := 1) (by decide))
+  rw [r1.da, r1.db, r1.dc, r1.dd, r1.de, r1.df, r1.dg, r1.dh, w1] at r2
+  rcases hc2 : sha256Round A1 B1 C1 D1 E1 F1 G1 H1 (den inp ρ t.list (wk.getD 1 0)) with ⟨A2, B2, C2, D2, E2, F2, G2, H2⟩
+  rw [hc2] at r2
+  refine ⟨r1.ext.trans r2.ext, r2.ok, list4_lt rfl r2.lf r2.le_ r2.lb r2.la, ?_⟩
+  intro k hk
+  rcases lt4 hk with rfl | rfl | rfl | rfl
+  · simp only [getD4_0]; exact r2.df.symm
+  · simp only [getD4_1]; exact r2.de.symm
+  · simp only [getD4_2]; exact r2.db.symm
+  · simp only [getD4_3]; exact r2.da.symm
+
+theorem wSha256H_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x y wk : List Nat}
+    (ok : TableOk nv t.list)
+    (hx : ∀ i ∈ x, i < t.list.length) (hy : ∀ i ∈ y, i < t.list.length) (hwk : ∀ i ∈ wk, i < t.list.length)
+    (lx : x.length = 4) (ly : y.length = 4) (lwk : wk.length = 4) :
+    Ext t.list (wSha256H x y wk t).2.list ∧ TableOk nv (wSha256H x y wk t).2.list ∧
+    (∀ i ∈ (wSha256H x y wk t).1, i < (wSha256H x y wk t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256H ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                          ((List.range 4).map fun j => den inp ρ t.list (y.getD j 0))
+                          ((List.range 4).map fun j => den inp ρ t.list (wk.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256H x y wk t).2.list ((wSha256H x y wk t).1.getD k 0) := by
+  unfold wSha256H sha256H
+  simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+  rcases hr1 : wSha256Round (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0)
+      (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0) (wk.getD 0 0) t with ⟨⟨a1, b1, c1, d1, e1, f1, g1, h1⟩, t1⟩
+  have r1 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr1 ok
+    (vec_lt_getD hx lx (k := 0) (by decide)) (vec_lt_getD hx lx (k := 1) (by decide))
+    (vec_lt_getD hx lx (k := 2) (by decide)) (vec_lt_getD hx lx (k := 3) (by decide))
+    (vec_lt_getD hy ly (k := 0) (by decide)) (vec_lt_getD hy ly (k := 1) (by decide))
+    (vec_lt_getD hy ly (k := 2) (by decide)) (vec_lt_getD hy ly (k := 3) (by decide))
+    (vec_lt_getD hwk lwk (k := 0) (by decide))
+  rcases hc1 : sha256Round (den inp ρ t.list (x.getD 0 0)) (den inp ρ t.list (x.getD 1 0))
+      (den inp ρ t.list (x.getD 2 0)) (den inp ρ t.list (x.getD 3 0))
+      (den inp ρ t.list (y.getD 0 0)) (den inp ρ t.list (y.getD 1 0))
+      (den inp ρ t.list (y.getD 2 0)) (den inp ρ t.list (y.getD 3 0))
+      (den inp ρ t.list (wk.getD 0 0)) with ⟨A1, B1, C1, D1, E1, F1, G1, H1⟩
+  rw [hc1] at r1
+  rcases hr2 : wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t1 with ⟨⟨a2, b2, c2, d2, e2, f2, g2, h2⟩, t2⟩
+  have r2 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr2 r1.ok
+    r1.la r1.lb r1.lc r1.ld r1.le_ r1.lf r1.lg r1.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 1) (by decide)) r1.ext.le)
+  have w1 := den_ext (inp := inp) (ρ := ρ) ok.wf r1.ext (vec_lt_getD hwk lwk (k := 1) (by decide))
+  rw [r1.da, r1.db, r1.dc, r1.dd, r1.de, r1.df, r1.dg, r1.dh, w1] at r2
+  rcases hc2 : sha256Round A1 B1 C1 D1 E1 F1 G1 H1 (den inp ρ t.list (wk.getD 1 0)) with ⟨A2, B2, C2, D2, E2, F2, G2, H2⟩
+  rw [hc2] at r2
+  have e12 := r1.ext.trans r2.ext
+  rcases hr3 : wSha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0) t2 with ⟨⟨a3, b3, c3, d3, e3, f3, g3, h3⟩, t3⟩
+  have r3 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr3 r2.ok
+    r2.la r2.lb r2.lc r2.ld r2.le_ r2.lf r2.lg r2.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 2) (by decide)) e12.le)
+  have w2 := den_ext (inp := inp) (ρ := ρ) ok.wf e12 (vec_lt_getD hwk lwk (k := 2) (by decide))
+  rw [r2.da, r2.db, r2.dc, r2.dd, r2.de, r2.df, r2.dg, r2.dh, w2] at r3
+  rcases hc3 : sha256Round A2 B2 C2 D2 E2 F2 G2 H2 (den inp ρ t.list (wk.getD 2 0)) with ⟨A3, B3, C3, D3, E3, F3, G3, H3⟩
+  rw [hc3] at r3
+  have e13 := e12.trans r3.ext
+  rcases hr4 : wSha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0) t3 with ⟨⟨a4, b4, c4, d4, e4, f4, g4, h4⟩, t4⟩
+  have r4 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr4 r3.ok
+    r3.la r3.lb r3.lc r3.ld r3.le_ r3.lf r3.lg r3.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 3) (by decide)) e13.le)
+  have w3 := den_ext (inp := inp) (ρ := ρ) ok.wf e13 (vec_lt_getD hwk lwk (k := 3) (by decide))
+  rw [r3.da, r3.db, r3.dc, r3.dd, r3.de, r3.df, r3.dg, r3.dh, w3] at r4
+  rcases hc4 : sha256Round A3 B3 C3 D3 E3 F3 G3 H3 (den inp ρ t.list (wk.getD 3 0)) with ⟨A4, B4, C4, D4, E4, F4, G4, H4⟩
+  rw [hc4] at r4
+  refine ⟨e13.trans r4.ext, r4.ok, list4_lt rfl r4.la r4.lb r4.lc r4.ld, ?_⟩
+  intro k hk
+  rcases lt4 hk with rfl | rfl | rfl | rfl
+  · simp only [getD4_0]; exact r4.da.symm
+  · simp only [getD4_1]; exact r4.db.symm
+  · simp only [getD4_2]; exact r4.dc.symm
+  · simp only [getD4_3]; exact r4.dd.symm
+
+theorem wSha256H2_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {x y wk : List Nat}
+    (ok : TableOk nv t.list)
+    (hx : ∀ i ∈ x, i < t.list.length) (hy : ∀ i ∈ y, i < t.list.length) (hwk : ∀ i ∈ wk, i < t.list.length)
+    (lx : x.length = 4) (ly : y.length = 4) (lwk : wk.length = 4) :
+    Ext t.list (wSha256H2 x y wk t).2.list ∧ TableOk nv (wSha256H2 x y wk t).2.list ∧
+    (∀ i ∈ (wSha256H2 x y wk t).1, i < (wSha256H2 x y wk t).2.list.length) ∧
+    ∀ k, k < 4 → (sha256H2 ((List.range 4).map fun j => den inp ρ t.list (x.getD j 0))
+                           ((List.range 4).map fun j => den inp ρ t.list (y.getD j 0))
+                           ((List.range 4).map fun j => den inp ρ t.list (wk.getD j 0))).getD k 0 =
+                 den inp ρ (wSha256H2 x y wk t).2.list ((wSha256H2 x y wk t).1.getD k 0) := by
+  unfold wSha256H2 sha256H2
+  simp only [range4_map, getD4_0, getD4_1, getD4_2, getD4_3]
+  rcases hr1 : wSha256Round (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0)
+      (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0) (wk.getD 0 0) t with ⟨⟨a1, b1, c1, d1, e1, f1, g1, h1⟩, t1⟩
+  have r1 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr1 ok
+    (vec_lt_getD hy ly (k := 0) (by decide)) (vec_lt_getD hy ly (k := 1) (by decide))
+    (vec_lt_getD hy ly (k := 2) (by decide)) (vec_lt_getD hy ly (k := 3) (by decide))
+    (vec_lt_getD hx lx (k := 0) (by decide)) (vec_lt_getD hx lx (k := 1) (by decide))
+    (vec_lt_getD hx lx (k := 2) (by decide)) (vec_lt_getD hx lx (k := 3) (by decide))
+    (vec_lt_getD hwk lwk (k := 0) (by decide))
+  rcases hc1 : sha256Round (den inp ρ t.list (y.getD 0 0)) (den inp ρ t.list (y.getD 1 0))
+      (den inp ρ t.list (y.getD 2 0)) (den inp ρ t.list (y.getD 3 0))
+      (den inp ρ t.list (x.getD 0 0)) (den inp ρ t.list (x.getD 1 0))
+      (den inp ρ t.list (x.getD 2 0)) (den inp ρ t.list (x.getD 3 0))
+      (den inp ρ t.list (wk.getD 0 0)) with ⟨A1, B1, C1, D1, E1, F1, G1, H1⟩
+  rw [hc1] at r1
+  rcases hr2 : wSha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0) t1 with ⟨⟨a2, b2, c2, d2, e2, f2, g2, h2⟩, t2⟩
+  have r2 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr2 r1.ok
+    r1.la r1.lb r1.lc r1.ld r1.le_ r1.lf r1.lg r1.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 1) (by decide)) r1.ext.le)
+  have w1 := den_ext (inp := inp) (ρ := ρ) ok.wf r1.ext (vec_lt_getD hwk lwk (k := 1) (by decide))
+  rw [r1.da, r1.db, r1.dc, r1.dd, r1.de, r1.df, r1.dg, r1.dh, w1] at r2
+  rcases hc2 : sha256Round A1 B1 C1 D1 E1 F1 G1 H1 (den inp ρ t.list (wk.getD 1 0)) with ⟨A2, B2, C2, D2, E2, F2, G2, H2⟩
+  rw [hc2] at r2
+  have e12 := r1.ext.trans r2.ext
+  rcases hr3 : wSha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0) t2 with ⟨⟨a3, b3, c3, d3, e3, f3, g3, h3⟩, t3⟩
+  have r3 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr3 r2.ok
+    r2.la r2.lb r2.lc r2.ld r2.le_ r2.lf r2.lg r2.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 2) (by decide)) e12.le)
+  have w2 := den_ext (inp := inp) (ρ := ρ) ok.wf e12 (vec_lt_getD hwk lwk (k := 2) (by decide))
+  rw [r2.da, r2.db, r2.dc, r2.dd, r2.de, r2.df, r2.dg, r2.dh, w2] at r3
+  rcases hc3 : sha256Round A2 B2 C2 D2 E2 F2 G2 H2 (den inp ρ t.list (wk.getD 2 0)) with ⟨A3, B3, C3, D3, E3, F3, G3, H3⟩
+  rw [hc3] at r3
+  have e13 := e12.trans r3.ext
+  rcases hr4 : wSha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0) t3 with ⟨⟨a4, b4, c4, d4, e4, f4, g4, h4⟩, t4⟩
+  have r4 := wSha256Round_step_eq (inp := inp) (ρ := ρ) hr4 r3.ok
+    r3.la r3.lb r3.lc r3.ld r3.le_ r3.lf r3.lg r3.lh
+    (Nat.lt_of_lt_of_le (vec_lt_getD hwk lwk (k := 3) (by decide)) e13.le)
+  have w3 := den_ext (inp := inp) (ρ := ρ) ok.wf e13 (vec_lt_getD hwk lwk (k := 3) (by decide))
+  rw [r3.da, r3.db, r3.dc, r3.dd, r3.de, r3.df, r3.dg, r3.dh, w3] at r4
+  rcases hc4 : sha256Round A3 B3 C3 D3 E3 F3 G3 H3 (den inp ρ t.list (wk.getD 3 0)) with ⟨A4, B4, C4, D4, E4, F4, G4, H4⟩
+  rw [hc4] at r4
+  refine ⟨e13.trans r4.ext, r4.ok, list4_lt rfl r4.le_ r4.lf r4.lg r4.lh, ?_⟩
+  intro k hk
+  rcases lt4 hk with rfl | rfl | rfl | rfl
+  · simp only [getD4_0]; exact r4.de.symm
+  · simp only [getD4_1]; exact r4.df.symm
+  · simp only [getD4_2]; exact r4.dg.symm
+  · simp only [getD4_3]; exact r4.dh.symm
+
+theorem vec4_eq_den {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {r : Nat} {x : List Nat}
+    (hd : ∀ k, k < 4 → st.vec r k = den (inpOf ctx s0) ρ s.terms (x.getD k 0)) :
+    (List.range 4).map (st.vec r) = (List.range 4).map fun j => den (inpOf ctx s0) ρ s.terms (x.getD j 0) :=
+  List.map_congr_left fun j hj => hd j (List.mem_range.mp hj)
+
+/-- Hardware SHA-256 vector instructions (`sha256msg1/2`, `sha256su1`, `sha256rnds2`, `sha256h/h2`). -/
+theorem symSha256_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym} {f : String} {args : List Expr} {l : List Nat}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symSha256 bind s f args items = .ok ((l, s1), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s1 st ∧ ∃ lanes, lanesOf (ctx.contract.perm ctx.pieces s0) bind st (.call f args) = some lanes ∧
+      (∀ i ∈ l, i < s1.terms.length) ∧ ∀ k, k < 4 → lanes.getD k 0 = den (inpOf ctx s0) ρ' s1.terms (l.getD k 0) := by
+  unfold symSha256 at h
+  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | ⟨d, more⟩⟩⟩⟩
+  · exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+  · cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> simp only [hx, hy] at h
+    all_goals try exact (refuse_ok h).elim
+    rename_i x y
+    obtain ⟨rx, lx, ltx, vax, hdx⟩ := symVec_sound H wf hx
+    obtain ⟨ry, ly, lty, vay, hdy⟩ := symVec_sound H wf hy
+    split at h
+    next hf1 =>
+      have fe : f = "sha256msg1" := by simpa using hf1
+      subst fe
+      obtain ⟨rfl, rfl⟩ := pure_pair h
+      obtain ⟨e, ok, lt, dn⟩ := wSha256Msg1_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty lx ly
+      refine ⟨ρ, Carried.terms H wf e ok, sha256Msg1 ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)), ?_, lt, ?_⟩
+      · simp only [lanesOf, vax, vay, Option.bind_some, Option.map_some]; rfl
+      · rw [vec4_eq_den hdx, vec4_eq_den hdy]; exact dn
+    next hf1 =>
+      split at h
+      next hf2 =>
+        have fe : f = "sha256msg2" := by simpa using hf2
+        subst fe
+        obtain ⟨rfl, rfl⟩ := pure_pair h
+        obtain ⟨e, ok, lt, dn⟩ := wSha256Msg2_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty lx ly
+        refine ⟨ρ, Carried.terms H wf e ok, sha256Msg2 ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)), ?_, lt, ?_⟩
+        · simp only [lanesOf, vax, vay, Option.bind_some, Option.map_some]; rfl
+        · rw [vec4_eq_den hdx, vec4_eq_den hdy]; exact dn
+      next => exact (refuse_ok h).elim
+  · cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hz : symVec bind s c <;> simp only [hx, hy, hz] at h
+    all_goals try exact (refuse_ok h).elim
+    rename_i x y z
+    obtain ⟨rx, lx, ltx, vax, hdx⟩ := symVec_sound H wf hx
+    obtain ⟨ry, ly, lty, vay, hdy⟩ := symVec_sound H wf hy
+    obtain ⟨rz, lz, ltz, vaz, hdz⟩ := symVec_sound H wf hz
+    split at h
+    next hf1 =>
+      have fe : f = "sha256su1" := by simpa using hf1
+      subst fe
+      obtain ⟨rfl, rfl⟩ := pure_pair h
+      obtain ⟨e, ok, lt, dn⟩ := wSha256Su1_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty ltz lx ly lz
+      refine ⟨ρ, Carried.terms H wf e ok, sha256Su1 ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)) ((List.range 4).map (st.vec rz)), ?_, lt, ?_⟩
+      · simp only [lanesOf, vax, vay, vaz]; rfl
+      · rw [vec4_eq_den hdx, vec4_eq_den hdy, vec4_eq_den hdz]; exact dn
+    next hf1 =>
+      split at h
+      next hf2 =>
+        have fe : f = "sha256rnds2" := by simpa using hf2
+        subst fe
+        obtain ⟨rfl, rfl⟩ := pure_pair h
+        obtain ⟨e, ok, lt, dn⟩ := wSha256Rnds2_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty ltz lx ly lz
+        refine ⟨ρ, Carried.terms H wf e ok, sha256Rnds2 ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)) ((List.range 4).map (st.vec rz)), ?_, lt, ?_⟩
+        · simp only [lanesOf, vax, vay, vaz]; rfl
+        · rw [vec4_eq_den hdx, vec4_eq_den hdy, vec4_eq_den hdz]; exact dn
+      next hf2 =>
+        split at h
+        next hf3 =>
+          have fe : f = "sha256h" := by simpa using hf3
+          subst fe
+          obtain ⟨rfl, rfl⟩ := pure_pair h
+          obtain ⟨e, ok, lt, dn⟩ := wSha256H_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty ltz lx ly lz
+          refine ⟨ρ, Carried.terms H wf e ok, sha256H ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)) ((List.range 4).map (st.vec rz)), ?_, lt, ?_⟩
+          · simp only [lanesOf, vax, vay, vaz]; rfl
+          · rw [vec4_eq_den hdx, vec4_eq_den hdy, vec4_eq_den hdz]; exact dn
+        next hf3 =>
+          split at h
+          next hf4 =>
+            have fe : f = "sha256h2" := by simpa using hf4
+            subst fe
+            obtain ⟨rfl, rfl⟩ := pure_pair h
+            obtain ⟨e, ok, lt, dn⟩ := wSha256H2_step (inp := inpOf ctx s0) (ρ := ρ) wf.words.ok ltx lty ltz lx ly lz
+            refine ⟨ρ, Carried.terms H wf e ok, sha256H2 ((List.range 4).map (st.vec rx)) ((List.range 4).map (st.vec ry)) ((List.range 4).map (st.vec rz)), ?_, lt, ?_⟩
+            · simp only [lanesOf, vax, vay, vaz]; rfl
+            · rw [vec4_eq_den hdx, vec4_eq_den hdy, vec4_eq_den hdz]; exact dn
+          next => exact (refuse_ok h).elim
+  · exact (refuse_ok h).elim
+
 /-- What the verifier takes the four words to be that a row sets a vector register to: the machine sets
 those lanes. -/
 theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (bind : Bind) {s s1 : Sym} {v : Expr} {l : List Nat}
@@ -1661,7 +2339,10 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
                 have fe : f = "shuffle_bytes" := by simpa using hf6
                 subst fe
                 exact symShuffle_sound bind h H wf
-              next hf6 => exact symMoved_sound bind h H wf
+              next hf6 =>
+                split at h
+                next hf7 => exact symSha256_sound bind h H wf
+                next hf7 => exact symMoved_sound bind h H wf
 
 /-! ## Store a run of words -/
 

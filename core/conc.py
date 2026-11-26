@@ -33,6 +33,59 @@ def blend_halves(a, b, i):
     return tuple(pick(2 * k) | pick(2 * k + 1) << 16 for k in range(4))
 
 
+def _sha_s0(x): return ror32(x, 7) ^ ror32(x, 18) ^ (x >> 3)
+def _sha_s1(x): return ror32(x, 17) ^ ror32(x, 19) ^ (x >> 10)
+def _sha_S0(a): return ror32(a, 2) ^ ror32(a, 13) ^ ror32(a, 22)
+def _sha_S1(e): return ror32(e, 6) ^ ror32(e, 11) ^ ror32(e, 25)
+def _sha_ch(e, f, g): return g ^ (e & (f ^ g))
+def _sha_maj(a, b, c): return (a & b) ^ ((a ^ b) & c)
+
+
+def _sha_round(a, b, c, d, e, f, g, h, wk):
+    t1 = (h + _sha_S1(e) + _sha_ch(e, f, g) + wk) & M32
+    t2 = (_sha_S0(a) + _sha_maj(a, b, c)) & M32
+    return (t1 + t2) & M32, a, b, c, (d + t1) & M32, e, f, g
+
+
+def sha256msg1(x, y):
+    return ((x[0] + _sha_s0(x[1])) & M32, (x[1] + _sha_s0(x[2])) & M32,
+            (x[2] + _sha_s0(x[3])) & M32, (x[3] + _sha_s0(y[0])) & M32)
+
+
+def sha256msg2(x, z):
+    r0 = (x[0] + _sha_s1(z[2])) & M32
+    r1 = (x[1] + _sha_s1(z[3])) & M32
+    r2 = (x[2] + _sha_s1(r0)) & M32
+    r3 = (x[3] + _sha_s1(r1)) & M32
+    return (r0, r1, r2, r3)
+
+
+def sha256su1(x, y, z):
+    t = ((x[0] + y[1]) & M32, (x[1] + y[2]) & M32, (x[2] + y[3]) & M32, (x[3] + z[0]) & M32)
+    return sha256msg2(t, z)
+
+
+def sha256rnds2(x, z, wk):
+    a, b, c, d, e, f, g, h = z[3], z[2], x[3], x[2], z[1], z[0], x[1], x[0]
+    a, b, c, d, e, f, g, h = _sha_round(a, b, c, d, e, f, g, h, wk[0])
+    a, b, c, d, e, f, g, h = _sha_round(a, b, c, d, e, f, g, h, wk[1])
+    return (f, e, b, a)
+
+
+def sha256h(x, y, wk):
+    a, b, c, d, e, f, g, h = x[0], x[1], x[2], x[3], y[0], y[1], y[2], y[3]
+    for w in wk:
+        a, b, c, d, e, f, g, h = _sha_round(a, b, c, d, e, f, g, h, w)
+    return (a, b, c, d)
+
+
+def sha256h2(x, y, wk):
+    a, b, c, d, e, f, g, h = y[0], y[1], y[2], y[3], x[0], x[1], x[2], x[3]
+    for w in wk:
+        a, b, c, d, e, f, g, h = _sha_round(a, b, c, d, e, f, g, h, w)
+    return (e, f, g, h)
+
+
 # The primitives: what each means on numbers. Lanes are tuples of 32-bit numbers, lane 0 the lowest.
 CONC = {
     "add64": lambda a, b: (a + b) & M64, "sub64": lambda a, b: (a - b) & M64,
@@ -48,6 +101,8 @@ CONC = {
     "lanes": lambda a, b, c, d: (a, b, c, d), "words": lambda *numbers: tuple(n & M32 for n in numbers),
     "lanes_of64": lambda a: (a & M32, (a >> 32) & M32, 0, 0),
     "shuffle_bytes": shuffle_bytes, "blend_halves": blend_halves,
+    "sha256msg1": sha256msg1, "sha256msg2": sha256msg2, "sha256su1": sha256su1,
+    "sha256rnds2": sha256rnds2, "sha256h": sha256h, "sha256h2": sha256h2,
     # sixteen lanes
     "lane32": lambda a: a & M32, "spread16": lambda a: (a,) * 16, "zeros16": lambda: (0,) * 16,
     "words16": lambda n: tuple((n >> (32 * k)) & M32 for k in range(16)),
@@ -83,6 +138,7 @@ def run(row, bind, s, trace=None):
             if n in MASKS: return s.k[bind[n]]
             if n in NUMBERS: return bind[n] if not isinstance(bind[n], int) or bind[n] > M64 else bind[n] & M64         # (a number of sixteen words is whole)
             if n in ("zf", "cf"): return getattr(s, n)
+            if n == "xmm0": return s.x[0][:4]
             return s.g[n]
         name, args = e[1], [value(a) for a in e[2]]
         if name in SIZES:

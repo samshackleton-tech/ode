@@ -1,33 +1,15 @@
 // FIPS 180-4 SHA-256 compression function, 4-way parallel batch (`sha256_4way`).
 //
-// Each block takes 8 state words `h[0..7]` and 16 message words `m[0..15]` (32-bit
-// unsigned words) and produces the 8 updated state words after all 64 FIPS 180-4
-// rounds plus Davies-Meyer feed-forward addition.
+// Each block takes 8 state words `h[0..7]`, 16 message words `m[0..15]`, and the
+// 64 round constants `k[0..63]` (32-bit unsigned words, little-endian in memory)
+// and produces the 8 updated state words after all 64 FIPS 180-4 rounds plus
+// Davies-Meyer feed-forward addition.
 //
-// `sha256_4way(hs, ms)` compresses 4 independent blocks laid out contiguously:
+// `sha256_4way(hs, ms, k)` compresses 4 independent blocks laid out contiguously:
 //   hs[0..7],   ms[0..15]  -> out[0..7]
 //   hs[8..15],  ms[16..31] -> out[8..15]
 //   hs[16..23], ms[32..47] -> out[16..23]
 //   hs[24..31], ms[48..63] -> out[24..31]
-
-const SHA256_K = [
-    word(0x428a2f98), word(0x71374491), word(0xb5c0fbcf), word(0xe9b5dba5),
-    word(0x3956c25b), word(0x59f111f1), word(0x923f82a4), word(0xab1c5ed5),
-    word(0xd807aa98), word(0x12835b01), word(0x243185be), word(0x550c7dc3),
-    word(0x72be5d74), word(0x80deb1fe), word(0x9bdc06a7), word(0xc19bf174),
-    word(0xe49b69c1), word(0xefbe4786), word(0x0fc19dc6), word(0x240ca1cc),
-    word(0x2de92c6f), word(0x4a7484aa), word(0x5cb0a9dc), word(0x76f988da),
-    word(0x983e5152), word(0xa831c66d), word(0xb00327c8), word(0xbf597fc7),
-    word(0xc6e00bf3), word(0xd5a79147), word(0x06ca6351), word(0x14292967),
-    word(0x27b70a85), word(0x2e1b2138), word(0x4d2c6dfc), word(0x53380d13),
-    word(0x650a7354), word(0x766a0abb), word(0x81c2c92e), word(0x92722c85),
-    word(0xa2bfe8a1), word(0xa81a664b), word(0xc24b8b70), word(0xc76c51a3),
-    word(0xd192e819), word(0xd6990624), word(0xf40e3585), word(0x106aa070),
-    word(0x19a4c116), word(0x1e376c08), word(0x2748774c), word(0x34b0bcb5),
-    word(0x391c0cb3), word(0x4ed8aa4a), word(0x5b9cca4f), word(0x682e6ff3),
-    word(0x748f82ee), word(0x78a5636f), word(0x84c87814), word(0x8cc70208),
-    word(0x90befffa), word(0xa4506ceb), word(0xbef9a3f7), word(0xc67178f2)
-]
 
 def ch(e, f, g)  { g ^ (e & (f ^ g)) }
 def maj(a, b, c) { (a & b) ^ ((a ^ b) & c) }
@@ -54,17 +36,17 @@ def sha256_round(s, wt, kt) {
     [t1 + t2, s[0], s[1], s[2], s[3] + t1, s[4], s[5], s[6]]
 }
 
-def sha256_compress(h, m) {
+def sha256_compress(h, m, k) {
     let w = sha256_sched(m)
     let r[0] = h
-    let r[t + 1] = sha256_round(r[t], w[t], SHA256_K[t])
+    let r[t + 1] = sha256_round(r[t], w[t], k[t])
     let f = r[64]
     [h[i] + f[i] for i in 0..8]
 }
 
-def sha256_4way(hs, ms) {
-    sha256_compress(hs[0..8], ms[0..16])
-    ++ sha256_compress(hs[8..16], ms[16..32])
-    ++ sha256_compress(hs[16..24], ms[32..48])
-    ++ sha256_compress(hs[24..32], ms[48..64])
+def sha256_4way(hs, ms, k) {
+    sha256_compress(hs[0..8], ms[0..16], k)
+    ++ sha256_compress(hs[8..16], ms[16..32], k)
+    ++ sha256_compress(hs[16..24], ms[32..48], k)
+    ++ sha256_compress(hs[24..32], ms[48..64], k)
 }

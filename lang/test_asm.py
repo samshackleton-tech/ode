@@ -16,11 +16,11 @@ sys.path[:0] = [str(ROOT / "kcheck"), str(ROOT / "core"), str(ROOT / "arm64")]
 import asm, kdecode, obj as aobj, odec
 
 # The names that asm.py has a branch for, and some that it has none for (those are refused whatever follows).
-NAMES = ("""nop endbr64 ret vzeroupper prefetcht0 jmp je jz jne jnz jae jb call push pop dec test xor shl shr add sub and or cmp lea movzx mov
+NAMES = ("""nop endbr64 ret vzeroupper prefetcht0 jmp je jz jne jnz jae jb ja jbe call push pop dec test xor shl shr add sub and or cmp lea movzx mov
             movq vmovq movups vmovups vmovdqu movaps vmovaps movdqa vmovdqa vmovdqa32 vmovdqu32 pslld vpslld psrld vpsrld pshufb pblendw pshufd vpshufd shufps
-            vshufps vpblendd vprord vpbroadcastd vpcmpud vshufi32x4 paddd vpaddd pxor vpxor vpxord por vpor punpckldq vpunpckldq punpckhdq
+            vshufps vpblendd vpalignr sha256rnds2 sha256msg1 sha256msg2 vprord vpbroadcastd vpcmpud vshufi32x4 paddd vpaddd pxor vpxor vpxord pand vpand por vpor punpckldq vpunpckldq punpckhdq
             vpunpckhdq punpcklqdq vpunpcklqdq vpunpckhqdq""".split())
-STRANGERS = "imul neg not adc sbb inc xchg bswap cmovb setb movsx movsxd movdqu vmovdqu8 vmovdqu64 vmovdqa64 vpxorq vpord pand".split()
+STRANGERS = "imul neg not adc sbb inc xchg bswap cmovb setb movsx movsxd movdqu vmovdqu8 vmovdqu64 vmovdqa64 vpxorq vpord".split()
 # An operand of each kind, to stand where another stood.
 OTHERS = (["rcx", "ecx", "cx", "cl", "al", "xmm5", "ymm5", "zmm5", "zmm5 {k2}", "k2", "7", "[rdi + 8]", "[rdi + rsi + 8]"]
           + [f"{word} ptr [rdi + 8]" for word in ("byte", "word", "dword", "qword", "xmmword", "ymmword", "zmmword")])
@@ -31,19 +31,40 @@ def parts(line):
     return mn, [o.strip() for o in rest.split(",")] if rest.strip() else []
 
 
+def iter_ode_targets(path):
+    """Yield `(target, fns)` for every architecture implemented in `path` (skips spec-only `.ode` files)."""
+    text = path.read_text()
+    try:
+        target, _, _, fns = odec.source(text, str(path))
+        if fns:
+            yield target, fns
+        return
+    except Exception as e:
+        msg = str(e)
+        if "multiple architectures" not in msg:
+            return
+    for tgt in ("arm64", "x86_64"):
+        try:
+            target, _, _, fns = odec.source(text, str(path), target=tgt)
+            if fns:
+                yield target, fns
+        except Exception:
+            pass
+
+
 def shapes():
     """One instruction of each shape that the x86-64 sources have (its name; each operand's class and size word; whether
     memory is the file's data, and whether it has an index): the first one met."""
     seen = {}
     for path in sorted(ROOT.glob("**/*.ode")):
         text = path.read_text()
-        target, _, _, fns = odec.source(text, str(path))
-        if target != "x86_64": continue
-        for name, _, _, _ in fns:
-            for x in odec.instructions(text, name, str(path)):
-                if x.endswith(":") or x.startswith("."): continue
-                mn, ops = parts(x)
-                seen.setdefault((mn,) + tuple(asm.operand(o) + ("rip" in o, o.count("+") > 1) for o in ops), x)
+        for target, fns in iter_ode_targets(path):
+            if target != "x86_64": continue
+            for name, _, _, _ in fns:
+                for x in odec.instructions(text, name, str(path), target=target):
+                    if x.endswith(":") or x.startswith("."): continue
+                    mn, ops = parts(x)
+                    seen.setdefault((mn,) + tuple(asm.operand(o) + ("rip" in o, o.count("+") > 1) for o in ops), x)
     return list(seen.values())
 
 
@@ -108,27 +129,27 @@ class Assembler(unittest.TestCase):
             source, clang, own = (Path(d) / f for f in ("ref.S", "ref.o", "ode.o"))
             count = 0
             for path in sorted(ROOT.glob("**/*.ode")):
-                target, _, _, fns = odec.source(path.read_text(), str(path))
-                for name, sym, _, _ in fns:
-                    count += 1
-                    with self.subTest(source=path.relative_to(ROOT), function=name):
-                        source.write_text(odec.assembly(str(path), name))
-                        odec.assemble(str(source), str(clang), target=target)
-                        odec.build(str(path), name, str(own))
-                        if target == "arm64":
-                            self.assertEqual(aobj.words(str(own), sym)[0], aobj.words(str(clang), sym)[0])
-                            self.assertEqual(aobj.read(str(own), sym), aobj.read(str(clang), sym))
-                            continue
-                        got, want = kdecode.Elf(own), kdecode.Elf(clang)
-                        for section in (".text", ".rodata", ".ode.place", ".note.GNU-stack"):
-                            self.assertEqual(got.bytes_of(section), want.bytes_of(section), section)
-                            self.assertEqual(section in got.index, section in want.index, section)
-                            if section in got.index:
-                                self.assertEqual(got.sections[got.index[section]]["align"], want.sections[want.index[section]]["align"], section)
-                        self.assertEqual(got.relocations(".text"), want.relocations(".text"))
-                        for entry in got.symbols:
-                            if entry["bind"] != 1 or entry["shndx"] != got.index[".text"]: continue
-                            self.assertEqual(entry["value"], kdecode.address(want.b, entry["name"]))
+                for target, fns in iter_ode_targets(path):
+                    for name, sym, _, _ in fns:
+                        count += 1
+                        with self.subTest(source=path.relative_to(ROOT), target=target, function=name):
+                            source.write_text(odec.assembly(str(path), name, target=target))
+                            odec.assemble(str(source), str(clang), target=target)
+                            odec.build(str(path), name, str(own), target=target)
+                            if target == "arm64":
+                                self.assertEqual(aobj.words(str(own), sym)[0], aobj.words(str(clang), sym)[0])
+                                self.assertEqual(aobj.read(str(own), sym), aobj.read(str(clang), sym))
+                                continue
+                            got, want = kdecode.Elf(own), kdecode.Elf(clang)
+                            for section in (".text", ".rodata", ".ode.place", ".note.GNU-stack"):
+                                self.assertEqual(got.bytes_of(section), want.bytes_of(section), section)
+                                self.assertEqual(section in got.index, section in want.index, section)
+                                if section in got.index:
+                                    self.assertEqual(got.sections[got.index[section]]["align"], want.sections[want.index[section]]["align"], section)
+                            self.assertEqual(got.relocations(".text"), want.relocations(".text"))
+                            for entry in got.symbols:
+                                if entry["bind"] != 1 or entry["shndx"] != got.index[".text"]: continue
+                                self.assertEqual(entry["value"], kdecode.address(want.b, entry["name"]))
             self.assertGreaterEqual(count, 26)
 
     @unittest.skipUnless(shutil.which("objdump"), "objdump reads back the bytes that differ from clang's")

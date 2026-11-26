@@ -2496,9 +2496,12 @@ theorem symEach32_flags {bind : Bind} {s s1 : Sym} {args : List Expr} {l : List 
               · simp only [h2a, ite_false] at h
                 by_cases h3 : (op == "or32") = true
                 · simp only [h3, ite_true] at h
-                  cases ho : orTurns s.terms (xv.zip yv) <;> simp only [ho] at h
-                  · exact (refuse_ok (items := items) h).elim
-                  · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                  by_cases hxy : (xv == yv) = true
+                  · simp only [hxy, ite_true] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                  · simp only [hxy, ite_false] at h
+                    cases ho : orTurns s.terms (xv.zip yv) <;> simp only [ho] at h
+                    · exact (refuse_ok (items := items) h).elim
+                    · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
                 · simp only [h3, ite_false] at h; exact (refuse_ok (items := items) h).elim
   · exact (refuse_ok (items := items) h).elim
 
@@ -2521,6 +2524,25 @@ theorem symShuffle_flags {bind : Bind} {s s1 : Sym} {args : List Expr} {l : List
         · exact (refuse_ok (items := items) h).elim
         · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
   · exact (refuse_ok (items := items) h).elim
+
+theorem symSha256_flags {bind : Bind} {s s1 : Sym} {f : String} {args : List Expr} {l : List Nat} {items rest : Items}
+    (h : symSha256 bind s f args items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
+  unfold symSha256 at h
+  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨c, _ | _⟩⟩⟩
+  all_goals try (simp only at h; exact (refuse_ok (items := items) h).elim)
+  · dsimp only at h
+    cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> simp only [hx, hy] at h
+    all_goals try exact (refuse_ok (items := items) h).elim
+    split at h
+    · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+    · split at h
+      · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+      · exact (refuse_ok (items := items) h).elim
+  · dsimp only at h
+    cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hz : symVec bind s c <;> simp only [hx, hy, hz] at h
+    all_goals try exact (refuse_ok (items := items) h).elim
+    repeat (split at h; · (have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩))
+    exact (refuse_ok (items := items) h).elim
 
 theorem symLanes_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {v : Expr} {l : List Nat} {items rest : Items}
     (h : symLanes ctx bind s v items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
@@ -2545,24 +2567,27 @@ theorem symLanes_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {v : Expr} {l : Li
             · simp only [h5, Bool.false_eq_true, ↓reduceIte] at h
               cases h6 : (f == "shuffle_bytes")
               · simp only [h6, Bool.false_eq_true, ↓reduceIte] at h
-                unfold symMoved at h
-                rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨i, _ | _⟩⟩⟩
-                all_goals try (simp only at h; exact (refuse_ok (items := items) h).elim)
-                dsimp only at h
-                cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hi : symNumber bind i <;> simp only [hx, hy, hi] at h
-                all_goals try exact (refuse_ok (items := items) h).elim
-                cases hp : (f == "pick4")
-                · simp only [hp, Bool.false_eq_true, ↓reduceIte] at h
-                  cases hb : (f == "blend4")
-                  · simp only [hb, Bool.false_eq_true, ↓reduceIte] at h
-                    cases hh : (f == "blend_halves")
-                    · simp only [hh, Bool.false_eq_true, ↓reduceIte] at h; exact (refuse_ok (items := items) h).elim
-                    · simp only [hh, ↓reduceIte] at h
-                      split at h
-                      · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-                      · exact (refuse_ok (items := items) h).elim
-                  · simp only [hb, ↓reduceIte] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-                · simp only [hp, ↓reduceIte] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                cases h7 : isSha256Op f
+                · simp only [h7, Bool.false_eq_true, ↓reduceIte] at h
+                  unfold symMoved at h
+                  rcases args with _ | ⟨a, _ | ⟨b, _ | ⟨i, _ | _⟩⟩⟩
+                  all_goals try (simp only at h; exact (refuse_ok (items := items) h).elim)
+                  dsimp only at h
+                  cases hx : symVec bind s a <;> cases hy : symVec bind s b <;> cases hi : symNumber bind i <;> simp only [hx, hy, hi] at h
+                  all_goals try exact (refuse_ok (items := items) h).elim
+                  cases hp : (f == "pick4")
+                  · simp only [hp, Bool.false_eq_true, ↓reduceIte] at h
+                    cases hb : (f == "blend4")
+                    · simp only [hb, Bool.false_eq_true, ↓reduceIte] at h
+                      cases hh : (f == "blend_halves")
+                      · simp only [hh, Bool.false_eq_true, ↓reduceIte] at h; exact (refuse_ok (items := items) h).elim
+                      · simp only [hh, ↓reduceIte] at h
+                        split at h
+                        · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                        · exact (refuse_ok (items := items) h).elim
+                    · simp only [hb, ↓reduceIte] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                  · simp only [hp, ↓reduceIte] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                · simp only [h7, ↓reduceIte] at h; exact symSha256_flags h
               · simp only [h6, ↓reduceIte] at h; exact symShuffle_flags h
             · simp only [h5, ↓reduceIte] at h; exact symEach32_flags h
           · simp only [h4, ↓reduceIte] at h

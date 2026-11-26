@@ -68,5 +68,43 @@ Every experiment below runs in an isolated git worktree with a pre-registered co
 ## Iteration 4: `der-v2` — Re-Running `der_valid` Across All 7 Models With Full Diagnostics, Fixed Prover, and Qwen Reasoning Cap
 
 - **Hypothesis (pre-registered):** Restoring `odeprove` source-located diagnostics + `prove.py` `hard_refusal`/`best_last` + Qwen `reasoning.max_tokens = 8192` + `720 s` cell cap should substantially lift strict pass rate on `der_valid` above `der-v1`'s `3/14`, bring `qwen/qwen3.8-2.4t-a95b` from 0% code emission to active multi-round verification, eliminate `verify2.py` refusals on passing cells, and sharply cut `prover_timeout` rounds.
-- **Status:** Launching now (`14` cells = 7 models × 2 targets, baseline `results-der-v1.json`). While `der-v2` runs in the background, work proceeds in parallel on the `sha256_4way` dual-arch reference + native NIST benchmark harness and hardware SHA-NI / ARMv8.2 SHA2 instructions.
+- **Pre-registration / Results:** [`prereg-der-v2.md`](prereg-der-v2.md), [`results-der-v2.md`](results-der-v2.md) (pre-reg commit `04cb59aa`, baseline `results-der-v1.json`).
+- **Headline results (12 min wall clock, 77 rounds, `$18.55` USD — `$2.61` cheaper than `der-v1`):**
+  - **Strict pass rate more than doubled:** `3/14` → **`7/14` (`+4`)**, reaching **7/8 (87.5%)** on the four frontier models:
+    - `google/gemini-4-neon`: **2/2** (`arm64` Round 2, `$0.58`, 9 fns / 350 insns; `x86_64` Round 3, `$0.77`, 5 fns / 365 insns) — `$1.35` combined.
+    - `openai/gpt-6.2-astra-pro`: **2/2** (`arm64` Round 3, `$1.71`, 7 fns / 347 insns; `x86_64` Round 6, `$3.19`, 5 fns / 338 insns).
+    - `anthropic/claude-fable-5.2`: **2/2** (`arm64` Round 3, `$2.49`, 9 fns / 358 insns; `x86_64` Round 6, `$4.58`, 9 fns / 421 insns).
+    - `anthropic/claude-sonnet-5.5`: **1/2** (`arm64` Round 8, `$1.52`, 9 fns / 428 insns; `x86_64` ran 8 rounds for `$1.29`, ending at `arith_need_entail` on `lea r8, [rdx + 2]` inside `seq0`).
+  - **Independent second verifier (`verify2.py`):** `1/3` → **`7/7` (100% dual-verified)**.
+  - **Real-silicon native harness:** **`7/7` (`NATIVE_PASS 257/257`)**.
+  - **Targeted failure reductions:** `prover_timeout` dropped `9` → **`1` (`-8`)**; `spec_need_open` (`need held c 0`) dropped `15` → **`0` (`-15`)**.
+  - **Fast/cheap & open-weights models (`0/6`, `$2.41` combined):** `claude-haiku-5.5` (`$0.12` across 16 rounds), `kimi-k3.1-pro` (`$1.21` across 16 rounds), and `qwen3.8-2.4t-a95b` (`$1.08` across 6 rounds; `x86_64` emitted real `.ode` for 4 rounds before hitting the `720 s` cell cap, while `arm64` hit `output_token_limit` twice) all parsed into Ode and reached real proof obligations (`arith_need_entail`, `kept_reg_refusal`). `der_valid` separates frontier reasoning (87.5%) from small/open-weights models (0%) without saturating.
+
+---
+
+## Iteration 5: Hardware SHA-NI & ARMv8.2 SHA2, 397× Verifier Speedup, and `sha256-v1` Performance A/B
+
+- **Goal:** Build a wide-dynamic-range cryptographic benchmark (`sha256_4way`: four independent 64-byte SHA-256 block compressions against NIST FIPS 180-4) with a 6×–8× performance span between scalar/SIMD software (`~1,500–2,000+` cycles), single-block hardware crypto (`~512–560` cycles, latency-bound on the 4-cycle crypto chain), and 2-way+ interleaved hardware crypto (`~259–283` cycles, saturating the physical execution-port floor).
+- **Hardware instructions added, silicon-tested, and proved sound in Lean 4:**
+  - **x86-64 (`core/x86.tab`, `core/asm.py`, `core/conc.py`):** `palignr4`, `palignr8`, `palignr12` (`vpalignr`), `sha256rnds2`, `sha256msg1`, `sha256msg2`. Real AMD Zen 4 hardware cross-check (`core/cross.py`): 100 rows, 2,000 assembler + 3,240 table instances, **0 differ**; decoder 970/970, **0 differ**.
+  - **AArch64 (`arm64/arm64.tab`, `core/conc.py`):** `sha256h`, `sha256h2`, `sha256su0`, `sha256su1`, plus self-OR register copy (`mov vD.16b, vS.16b` via `or32 x x = x`). Real Apple M6 hardware cross-check (`arm64/cross.py`): 52 rows, 2,080 instances, **0 differ**.
+  - **Lean 4 soundness (`proof-core/*.lean`):** Full `lake build && python3 test_sound.py -v` passed (**55/55 jobs, 2/2 soundness checks OK in `0.656 s`**), zero `sorry`, zero `maxHeartbeats`, standard axioms only (`[propext, Classical.choice, Quot.sound]`), all 11 top-level theorem statements unchanged. `lang/test_asm.py` (8/8 OK) byte-for-byte cross-checked every `.ode` file in the repository—including dual-arch `sha256_4way_reference.ode`—against `clang`.
+- **Major Ode verifier breakthrough (397× speedup on SHA-256):**
+  - First-contact verification of full 256-round 4-way SHA-256 exposed a Fibonacci duplicate-term blowup in `proof-core/Core.lean`'s `Node.add (xs : List Nat)`: SHA-256's coupled `e' = d + t1`, `a' = t1 + t2` sums duplicated shared sub-terms across rounds into 65,536-entry lists (`117.43 s` on ARM64, `80.74 s` on x86-64).
+  - Replaced `Node.add` with a sparse modular linear combination `List (Nat × Nat)` merged in O(N) via `mergeAdd` (mod $2^{32}$, dropping zero coefficients), and added O(1) word-list slicing (`hs[0..8]`) in `Core.lean` + `SoundWord.lean` + `SoundSpecW.lean` + `SoundCallL.lean` (all Lean-proved).
+  - Result: full 4-way 256-round hardware SHA-256 (`sha256_4way_reference.ode`) verification dropped from **`117.43 s` → `0.296 s` (397× faster)** on ARM64 (433 insns, 1,732 B) and from **`80.74 s` → `0.347 s` (233× faster)** on x86-64 (625 insns, 3,083 B).
+- **Real-silicon micro-probes and static performance model calibration (`advice/`):**
+  - **Apple M6 (`4.786 GHz`, local Mac, not reserved and under no timing lock):** `and_v` lat 2.00 / rTP 0.25; `sha256h`/`sha256h2` lat 4.00 / rTP 2.00; `sha256su0` lat 2.00 / rTP 1.00 (confirmed 0.00-cycle contention with `sha256h`, independent crypto pipe); `sha256su1` lat 3.00 / rTP 1.00.
+  - **AMD Zen 4 (`5.054 GHz`, `taskset -c 2`):** `vpalignr` lat 1.99 / rTP 0.50; `sha256rnds2` lat 3.98 / rTP 1.00; `sha256msg1` lat 2.99 / rTP 0.65; `sha256msg2` lat 4.13 / rTP 2.00.
+  - **Straight-line simulation validation vs. real silicon (`sha256_4way_reference.ode`, `NATIVE_PASS 264/264` NIST FIPS 180-4):**
+    - **Apple M6** *(local Mac, not reserved and under no timing lock)*: **`54.11 ns`** per 4 blocks (`256 B`) = **`4.406 GiB/s`** (`259.0 cyc` measured, **98.8%** of the `128 × 2.0 = 256.0 cyc` physical port floor) vs. `ode advise` **`261.0 cyc`** (**`+0.8%` error**, bottleneck `ports:V0` at `98%`).
+    - **AMD Zen 4 (`taskset -c 2`):** **`56.04 ns`** per 4 blocks (`256 B`) = **`4.255 GiB/s`** (`283.2 cyc` measured) vs. `ode advise` **`269.0 cyc`** (**`-5.0%` error**, bottleneck `ports:FP0` at `89%`).
+- **Way-A friction points logged while building `sha256_4way_reference.ode`:**
+  1. *Fixed:* `Node.add` Fibonacci blowup (`117 s` → `0.296 s` via Lean-proved `mergeAdd`).
+  2. *Fixed:* `ARM_WHOLE` in `lang/odec.py` needed `q0..q31` (for `ldr q0` / `sha256h q0`) without shadowing ChaCha20's `d0` parameter name, and `odec.assemble` needed `-march=armv8-a+crypto` for `clang` cross-checks.
+  3. *Fixed:* `advice/estimate.py` had no straight-line `whole_sim` / `--all-archs` reporting for unrolled cryptographic kernels without loops.
+  4. *Known scope boundary (stated in pre-registration):* `proof-core/verify2.py` covers the scalar byte/integer contract fragment and does not yet implement word-vector `ensures out = bytes_of(...)` contracts; `sha256-v1` marks `verify2.py` as `n/a` honestly while running full Lean `ode audit` (`VERDICT: shown`) and `NATIVE_PASS 264/264` NIST FIPS 180-4 vectors on real silicon.
+- **Experiment design (`sha256-v1`, launching now):** Controlled A/B performance experiment (`blind` vs. `advised`, `--max-rounds 8`, `--opt-rounds 4`, 7 models × 2 targets × 2 arms = **28 cells**, canonical IDs `o3hgxtczokkzp7r2eaybjvdgc4cyrny6vawtweqxrzmxu32hrswa` on `arm64` and `2wohv4skh4liyco6pegmuwcvelhqew4xgp7gbki4hrg44azweuda` on `x86_64`, `stack 512` so both zero-stack interleaved hardware kernels and modular/software kernels are admitted on equal footing).
+- **Pre-registered hypothesis:** (1) Frontier models will pass `sha256_4way` using hardware SHA-NI / ARMv8.2 SHA2 instructions; (2) initial passing kernels will predominantly be latency-bound 1-block-at-a-time implementations (`~500–560 cyc/call`); and (3) models in the `advised` arm receiving `ode advise --all-archs` (explicitly naming the latency bottleneck and low port utilization) will discover 2-way+ interleaving and achieve lower real-silicon cycles/call than `blind` models.
+
 

@@ -32,6 +32,7 @@ BIN64 = {"add": "add64", "sub": "sub64", "and": "and64", "or": "or64", "cmp": "c
 VEC128 = {
     "paddd": ("paddd128", "L"), "vpaddd": ("paddd128", "V"),
     "pxor": ("pxor128", "L"), "vpxor": ("pxor128", "V"), "vpxord": ("pxor128", "E"),
+    "pand": ("pand128", "L"), "vpand": ("pand128", "V"),
     "por": ("por128", "L"), "vpor": ("por128", "V"),
     "punpckldq": ("unpckldq", "L"), "vpunpckldq": ("unpckldq", "V"),
     "punpckhdq": ("unpckhdq", "L"), "vpunpckhdq": ("unpckhdq", "V"),
@@ -46,7 +47,7 @@ VEC512 = {
 
 # What an operand is, in words; the size word of the memory that a row moves to or from a register of a class;
 # and the old two-operand forms of the rows that the table writes with three (the first operand is both).
-CLASS = {"r64": "a register of 64 bits", "r32": "a register of 32 bits", "r8": "a register of 8 bits", "al": "al", "xmm": "an xmm register",
+CLASS = {"r64": "a register of 64 bits", "r32": "a register of 32 bits", "r8": "a register of 8 bits", "al": "al", "xmm0": "xmm0", "xmm": "an xmm register",
          "zmm": "a zmm register", "zmm{k}": "a zmm register under a mask", "k": "a mask register", "number": "a number", "memory": "memory"}
 MOVED = {"r64": "qword", "r32": "dword", "r8": "byte", "xmm": "xmmword", "zmm": "zmmword", "zmm{k}": "zmmword"}
 TWO = {m for m, (_, k) in VEC128.items() if k == "L"} | {"shufps", "pslld", "psrld"}
@@ -85,7 +86,7 @@ def template(row, mn):
     for t in [x.strip() for x in row.asm.partition(" ")[2].split(",") if x.strip()]:
         m = re.fullmatch(WORD + r"\[.*\]", t)
         if m: out.append(("memory", m.group(1))); continue
-        cls = ("al" if t == "al" else "r64" if re.fullmatch(r"[A-Z]64", t) else "r32" if re.fullmatch(r"[A-Z]32", t) else "r8" if re.fullmatch(r"[A-Z]8", t)
+        cls = ("al" if t == "al" else "xmm0" if t == "xmm0" else "r64" if re.fullmatch(r"[A-Z]64", t) else "r32" if re.fullmatch(r"[A-Z]32", t) else "r8" if re.fullmatch(r"[A-Z]8", t)
                else "xmm" if re.fullmatch(r"xmm[A-Z]", t) else "zmm" if re.fullmatch(r"zmm[A-Z]", t) else "zmm{k}" if re.fullmatch(r"zmm[A-Z]\{kM\}", t)
                else "k" if t == "kM" else "number" if t == "I" or t.isdigit() else None)
         if cls is None: raise ValueError(f"x86.tab: the operand `{t}` of `{row.asm}` is not read")
@@ -102,7 +103,7 @@ def same(mn, ops, row):
     if len(want) != len(ops): raise ValueError(f"{len(ops)} operands where x86.tab's `{row.asm}` has {len(want)}")
     for text, (cls, word) in zip(ops, want):
         got, given = operand(text)
-        if (text.strip() != "al") if cls == "al" else (got != cls): raise ValueError(f"`{text.strip()}` where x86.tab's `{row.asm}` has {CLASS[cls]}")
+        if (text.strip() != cls) if cls in ("al", "xmm0") else (got != cls): raise ValueError(f"`{text.strip()}` where x86.tab's `{row.asm}` has {CLASS[cls]}")
         if given is not None and word is not None and given != word: raise ValueError(f"`{given} ptr` where x86.tab's `{row.asm}` moves a {word}")
 
 
@@ -337,6 +338,15 @@ def write(line, mn, ops):
             return ("fixed", pick("shufps128", {"X": x, "Y": x, "Z": int(ops[1][3:]), "I": num(ops[2])}, lambda w: w.kind == "L"))
         return ("fixed", pick("shufps128", {"X": int(ops[0][3:]), "Y": int(ops[1][3:]), "Z": int(ops[2][3:]), "I": num(ops[3])}, lambda w: w.kind == "V"))
     if mn == "vpblendd": return ("fixed", pick("pblendd128", {"X": int(ops[0][3:]), "Y": int(ops[1][3:]), "Z": int(ops[2][3:]), "I": num(ops[3])}))
+    if mn == "vpalignr":
+        iv = num(ops[3])
+        if iv not in (4, 8, 12): raise ValueError(f"vpalignr immediate must be 4, 8, or 12: {line}")
+        return ("fixed", pick(f"palignr{iv}", {"X": int(ops[0][3:]), "Y": int(ops[1][3:]), "Z": int(ops[2][3:])}))
+    if mn == "sha256rnds2":
+        if len(ops) != 3 or ops[2] != "xmm0": raise ValueError(f"sha256rnds2 takes `xmmX, xmmZ, xmm0`: {line}")
+        return ("fixed", pick("sha256rnds2", {"X": int(ops[0][3:]), "Z": int(ops[1][3:])}))
+    if mn in ("sha256msg1", "sha256msg2"):
+        return ("fixed", pick(mn, {"X": int(ops[0][3:]), "Z": int(ops[1][3:])}))
     if mn == "vprord":
         return ("fixed", pick("prord128" if ops[0].startswith("xmm") else "prord512", {"X": int(ops[0][3:]), "Y": int(ops[1][3:]), "I": num(ops[2])}))
     if mn == "vpbroadcastd":
@@ -357,7 +367,7 @@ def write(line, mn, ops):
         x = int(ops[0][3:])
         if k == "L": return ("fixed", pick(row_name, {"X": x, "Y": x, "Z": int(ops[1][3:])}, lambda w: w.kind == "L"))
         y, z = int(ops[1][3:]), int(ops[2][3:])
-        if k == "V" and mn in ("vpaddd", "vpxor", "vpor") and y < 8 <= z: y, z = z, y
+        if k == "V" and mn in ("vpaddd", "vpxor", "vpor", "vpand") and y < 8 <= z: y, z = z, y
         return ("fixed", pick(row_name, {"X": x, "Y": y, "Z": z}, lambda w: w.kind == k))
     if ops[0].startswith("zmm"):
         mk = re.fullmatch(r"zmm(\d+)\s*\{k(\d+)\}", ops[0])

@@ -183,7 +183,9 @@ def isVectorLetter (n : String) : Bool := n == "X" || n == "Y" || n == "Z"
 
 /-- The vector register a letter of an EFFECT stands for, in an instance: its number, of the thirty-two. -/
 def vecOf (bind : Bind) (n : String) : Option Nat :=
-  if isVectorLetter n then ((bind.lookup n).bind String.toNat?).bind fun r => if r < 32 then some r else none else none
+  if n == "xmm0" then some 0
+  else if isVectorLetter n then ((bind.lookup n).bind String.toNat?).bind fun r => if r < 32 then some r else none
+  else none
 
 /-- The mask register the letter `M` of an EFFECT stands for, in an instance (k1 to k7): where its sixteen
 bits are kept among the vector registers, after the thirty-two of them. (Not k0: where an instruction is
@@ -241,6 +243,65 @@ def laneArg (bind : Bind) (s : State) : Expr → Option Nat
   | .lane n k => (vecOf bind n).map fun r => s.vec r k
   | _ => none
 
+/-- SHA-256 32-bit word primitives matching FIPS 180-4 and both x86-64 SHA-NI and AArch64 ARMv8.2 SHA2. -/
+def sha256Ch (e f g : Nat) : Nat := g ^^^ (e &&& (f ^^^ g))
+def sha256Maj (a b c : Nat) : Nat := (a &&& b) ^^^ ((a ^^^ b) &&& c)
+def sha256S0 (a : Nat) : Nat := (rotr a 2 ^^^ rotr a 13) ^^^ rotr a 22
+def sha256S1 (e : Nat) : Nat := (rotr e 6 ^^^ rotr e 11) ^^^ rotr e 25
+def sha256s0 (x : Nat) : Nat := (rotr x 7 ^^^ rotr x 18) ^^^ (x >>> 3)
+def sha256s1 (x : Nat) : Nat := (rotr x 17 ^^^ rotr x 19) ^^^ (x >>> 10)
+
+def sha256Round (a b c d e f g h wk : Nat) : Nat × Nat × Nat × Nat × Nat × Nat × Nat × Nat :=
+  let t1 := ((((h + sha256S1 e) % W32 + sha256Ch e f g) % W32) + wk) % W32
+  let t2 := (sha256S0 a + sha256Maj a b c) % W32
+  ((t1 + t2) % W32, a, b, c, (d + t1) % W32, e, f, g)
+
+def sha256Msg1 (x y : List Nat) : List Nat :=
+  [(x.getD 0 0 + sha256s0 (x.getD 1 0)) % W32,
+   (x.getD 1 0 + sha256s0 (x.getD 2 0)) % W32,
+   (x.getD 2 0 + sha256s0 (x.getD 3 0)) % W32,
+   (x.getD 3 0 + sha256s0 (y.getD 0 0)) % W32]
+
+def sha256Msg2 (x z : List Nat) : List Nat :=
+  let r0 := (x.getD 0 0 + sha256s1 (z.getD 2 0)) % W32
+  let r1 := (x.getD 1 0 + sha256s1 (z.getD 3 0)) % W32
+  let r2 := (x.getD 2 0 + sha256s1 r0) % W32
+  let r3 := (x.getD 3 0 + sha256s1 r1) % W32
+  [r0, r1, r2, r3]
+
+def sha256Su1 (x y z : List Nat) : List Nat :=
+  sha256Msg2
+    [(x.getD 0 0 + y.getD 1 0) % W32,
+     (x.getD 1 0 + y.getD 2 0) % W32,
+     (x.getD 2 0 + y.getD 3 0) % W32,
+     (x.getD 3 0 + z.getD 0 0) % W32] z
+
+def sha256Rnds2 (x z wk : List Nat) : List Nat :=
+  let (a1, b1, c1, d1, e1, f1, g1, h1) :=
+    sha256Round (z.getD 3 0) (z.getD 2 0) (x.getD 3 0) (x.getD 2 0)
+                (z.getD 1 0) (z.getD 0 0) (x.getD 1 0) (x.getD 0 0) (wk.getD 0 0)
+  let (a2, b2, _, _, e2, f2, _, _) :=
+    sha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0)
+  [f2, e2, b2, a2]
+
+def sha256H (x y wk : List Nat) : List Nat :=
+  let (a1, b1, c1, d1, e1, f1, g1, h1) :=
+    sha256Round (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0)
+                (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0) (wk.getD 0 0)
+  let (a2, b2, c2, d2, e2, f2, g2, h2) := sha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0)
+  let (a3, b3, c3, d3, e3, f3, g3, h3) := sha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0)
+  let (a4, b4, c4, d4, _, _, _, _) := sha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0)
+  [a4, b4, c4, d4]
+
+def sha256H2 (x y wk : List Nat) : List Nat :=
+  let (a1, b1, c1, d1, e1, f1, g1, h1) :=
+    sha256Round (y.getD 0 0) (y.getD 1 0) (y.getD 2 0) (y.getD 3 0)
+                (x.getD 0 0) (x.getD 1 0) (x.getD 2 0) (x.getD 3 0) (wk.getD 0 0)
+  let (a2, b2, c2, d2, e2, f2, g2, h2) := sha256Round a1 b1 c1 d1 e1 f1 g1 h1 (wk.getD 1 0)
+  let (a3, b3, c3, d3, e3, f3, g3, h3) := sha256Round a2 b2 c2 d2 e2 f2 g2 h2 (wk.getD 2 0)
+  let (_, _, _, _, e4, f4, g4, h4) := sha256Round a3 b3 c3 d3 e3 f3 g3 h3 (wk.getD 3 0)
+  [e4, f4, g4, h4]
+
 /-- Four lanes: what a vector register is set to, or what sixteen bytes of memory are (conc.py). -/
 def lanesOf (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List Nat)
   | .name n => vecArg bind s (.name n)
@@ -276,15 +337,28 @@ def lanesOf (perm : Perm) (bind : Bind) (s : State) : Expr → Option (List Nat)
       | _ => none
     else
       match args with
-      | [a, b] => if f == "shuffle_bytes" then (vecArg bind s a).bind fun x => (vecArg bind s b).map fun y => shuffleBytes x y else none
-      | [a, b, i] =>
-        match vecArg bind s a, vecArg bind s b, value perm bind s i with
-        | some x, some y, some i =>
-          if f == "pick4" then some [x.getD (i % 4) 0, x.getD (i / 4 % 4) 0, y.getD (i / 16 % 4) 0, y.getD (i / 64 % 4) 0]
-          else if f == "blend4" then some ((List.range 4).map fun k => if i / 2 ^ k % 2 = 1 then y.getD k 0 else x.getD k 0)
-          else if f == "blend_halves" then some (blendHalves x y i)
-          else none
-        | _, _, _ => none
+      | [a, b] =>
+        if f == "shuffle_bytes" then (vecArg bind s a).bind fun x => (vecArg bind s b).map fun y => shuffleBytes x y
+        else if f == "sha256msg1" then (vecArg bind s a).bind fun x => (vecArg bind s b).map fun y => sha256Msg1 x y
+        else if f == "sha256msg2" then (vecArg bind s a).bind fun x => (vecArg bind s b).map fun y => sha256Msg2 x y
+        else none
+      | [a, b, c] =>
+        if f == "sha256su1" || f == "sha256rnds2" || f == "sha256h" || f == "sha256h2" then
+          match vecArg bind s a, vecArg bind s b, vecArg bind s c with
+          | some x, some y, some z =>
+            if f == "sha256su1" then some (sha256Su1 x y z)
+            else if f == "sha256rnds2" then some (sha256Rnds2 x y z)
+            else if f == "sha256h" then some (sha256H x y z)
+            else some (sha256H2 x y z)
+          | _, _, _ => none
+        else
+          match vecArg bind s a, vecArg bind s b, value perm bind s c with
+          | some x, some y, some i =>
+            if f == "pick4" then some [x.getD (i % 4) 0, x.getD (i / 4 % 4) 0, y.getD (i / 16 % 4) 0, y.getD (i / 64 % 4) 0]
+            else if f == "blend4" then some ((List.range 4).map fun k => if i / 2 ^ k % 2 = 1 then y.getD k 0 else x.getD k 0)
+            else if f == "blend_halves" then some (blendHalves x y i)
+            else none
+          | _, _, _ => none
       | _ => none
   | _ => none
 

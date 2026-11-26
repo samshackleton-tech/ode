@@ -336,6 +336,19 @@ def _uop_spec_for_row(row_name, cls, pipe):
         return [(pipe["store_ports"], 1.0)], 1.0, False, False, 1
     if cls in ("vec_alu", "vec_shift", "vec_shuf"):
         return [(pipe["fp_ports"], 1.0)], 2.0, True, False, 1
+    if cls == "vec_crypto":
+        # Empirically calibrated on Apple M6 (4.786 GHz):
+        # sha256h/h2: lat=4.00 cyc, rTP=2.00 cyc; sha256su0: lat=2.00 cyc, rTP=1.00 cyc (independent pipe);
+        # sha256su1: lat=3.00 cyc, rTP=1.00 cyc (independent pipe).
+        p0 = [pipe["fp_ports"][0]]
+        p1 = [pipe["fp_ports"][1]] if len(pipe["fp_ports"]) > 1 else p0
+        if row_name in ("sha256h", "sha256h2"):
+            return [(p0, 2.0)], 4.0, True, False, 1
+        if row_name == "sha256su0":
+            return [(p1, 1.0)], 2.0, True, False, 1
+        if row_name == "sha256su1":
+            return [(p1, 1.0)], 3.0, True, False, 1
+        return [(p0, 1.0)], 3.0, True, False, 1
     if cls in ("branch", "call", "ret"):
         return [(pipe["branch_ports"], 1.0)], 1.0, False, False, 1
     return [(pipe["alu_ports"], 1.0)], 1.0, False, False, 1
@@ -827,11 +840,11 @@ TARGET_ARCHS = {
 }
 
 
-def compare_all_archs(seq, target, line_map=None):
+def compare_all_archs(seq, target, line_map=None, iterations=12):
     """Run purely static pipeline analysis across all calibrated CPUs for `target` (<5 ms total)."""
     out = []
     for arch in TARGET_ARCHS.get(target, []):
-        sim = simulate_loop(seq, arch, iterations=12)
+        sim = simulate_loop(seq, arch, iterations=iterations)
         lints = static_lint_loop(seq, arch, line_map=line_map, sim_rep=sim)
         out.append({
             "arch": arch,
