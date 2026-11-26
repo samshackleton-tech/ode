@@ -113,6 +113,30 @@ class TestRunSuite(unittest.TestCase):
         finally:
             run_suite.EXP_DIR = orig_exp
 
+    def test_04_regression_presets_valid_and_no_quickstart_overlap(self):
+        for preset_name, want_tasks, want_models in [
+            ("regression-v1", 4, 7),
+            ("regression-v1-efficient", 4, 4),
+        ]:
+            path, data = run_suite.load_preset(preset_name)
+            self.assertTrue(path.exists())
+            self.assertEqual(len(data["tasks"]), want_tasks)
+            self.assertEqual(len(data["models"]), want_models)
+            tasks = []
+            for tid in data["tasks"]:
+                tp = run_suite.TASKS_DIR / f"{tid}.json"
+                self.assertTrue(tp.exists(), f"missing task {tid}")
+                with tp.open("r", encoding="utf-8") as f:
+                    t = json.load(f)
+                self.assertTrue((run_suite.ROOT / t["spec_file"]).exists())
+                self.assertTrue((run_suite.ROOT / t["reference_solution"]).exists())
+                self.assertTrue((run_suite.ROOT / t["native_harness"]).exists())
+                tasks.append(t)
+            run_suite.check_quickstart_leakage(tasks)
+
+        with self.assertRaises(SystemExit):
+            run_suite.load_preset("does-not-exist-preset")
+
 
 if __name__ == "__main__":
     unittest.main()

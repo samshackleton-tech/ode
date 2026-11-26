@@ -1,0 +1,27 @@
+{
+  "id": "regression-v1-efficient",
+  "description": "Fast inner-loop subset of regression-v1: the same 4 orthogonal tasks across the 4 lower-cost/open-weights models (claude-sonnet-5.5, claude-haiku-5.5, qwen3.8-2.4t-a95b, kimi-k3.1-pro) on both x86_64 and arm64 (32 cells).",
+  "tasks": [
+    "der_valid",
+    "ct_base64_decode",
+    "ipv4_valid",
+    "chacha20_4way"
+  ],
+  "models": [
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-haiku-5.5",
+    "qwen/qwen3.8-2.4t-a95b",
+    "moonshotai/kimi-k3.1-pro"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "max_rounds": 8,
+  "perf_arms": "",
+  "opt_rounds": 3,
+  "tool_timeout": 45,
+  "cell_timeout": 720,
+  "max_truncations": 2,
+  "max_usd": 25.0
+}

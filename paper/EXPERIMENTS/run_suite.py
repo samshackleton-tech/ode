@@ -35,6 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent.parent
 EXP_DIR = ROOT / "paper" / "EXPERIMENTS"
 TASKS_DIR = EXP_DIR / "tasks"
+SUITES_DIR = EXP_DIR / "suites"
 QUICKSTART_PATH = ROOT / "docs" / "QUICKSTART.md"
 ODE_TOOL = ROOT / "lang" / "ode_tool.py"
 VERIFY2 = ROOT / "proof-core" / "verify2.py"
@@ -1141,28 +1142,34 @@ def check_quickstart_leakage(tasks: list[dict]) -> None:
             )
 
 
+def load_preset(name: str) -> tuple[Path, dict]:
+    p = SUITES_DIR / f"{name}.json"
+    if not p.exists():
+        avail = sorted(x.stem for x in SUITES_DIR.glob("*.json")) if SUITES_DIR.exists() else []
+        raise SystemExit(f"Unknown suite preset `{name}` (missing {p}; available: {', '.join(avail) or 'none'})")
+    with p.open("r", encoding="utf-8") as f:
+        return p, json.load(f)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Push-button pre-registered cold-room experiment runner for Ode.")
     ap.add_argument("--run-id", required=True, help="Short run identifier, e.g. ebpf-v2")
-    ap.add_argument("--tasks", default="ebpf", help="Comma-separated task IDs from paper/EXPERIMENTS/tasks/")
-    ap.add_argument("--models", default=(
-        "openai/gpt-6.2-astra-pro,anthropic/claude-fable-5.2,google/gemini-4-neon,"
-        "anthropic/claude-sonnet-5.5,anthropic/claude-haiku-5.5,"
-        "qwen/qwen3.8-2.4t-a95b,moonshotai/kimi-k3.1-pro"
-    ))
-    ap.add_argument("--targets", default="x86_64,arm64")
-    ap.add_argument("--max-rounds", type=int, default=8)
-    ap.add_argument("--perf-arms", default="", help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
-    ap.add_argument("--opt-rounds", type=int, default=3, help="Extra optimization rounds after first verified pass when --perf-arms is active")
-    ap.add_argument("--tool-timeout", type=int, default=45)
-    ap.add_argument("--cell-timeout", type=int, default=720, help="Per-cell wall-clock cap in seconds (0 = off)")
-    ap.add_argument("--max-truncations", type=int, default=2, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
+    ap.add_argument("--preset", default="", help="Named fixed suite JSON in paper/EXPERIMENTS/suites/ (e.g. regression-v1)")
+    ap.add_argument("--tasks", default=None, help="Comma-separated task IDs from paper/EXPERIMENTS/tasks/")
+    ap.add_argument("--models", default=None)
+    ap.add_argument("--targets", default=None)
+    ap.add_argument("--max-rounds", type=int, default=None)
+    ap.add_argument("--perf-arms", default=None, help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
+    ap.add_argument("--opt-rounds", type=int, default=None, help="Extra optimization rounds after first verified pass when --perf-arms is active")
+    ap.add_argument("--tool-timeout", type=int, default=None)
+    ap.add_argument("--cell-timeout", type=int, default=None, help="Per-cell wall-clock cap in seconds (0 = off)")
+    ap.add_argument("--max-truncations", type=int, default=None, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
     ap.add_argument("--prover-slots", type=int, default=10, help="Max simultaneous local ode pack/audit runs")
     ap.add_argument("--api-timeout", type=int, default=240)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
-    ap.add_argument("--max-usd", type=float, default=60.0, help="Cumulative API spend circuit breaker")
+    ap.add_argument("--max-usd", type=float, default=None, help="Cumulative API spend circuit breaker")
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--baseline", default="", help="Optional baseline results JSON for before/after diff")
     ap.add_argument("--out-dir", required=True, help="Private directory for full JSON transcripts and .o/.proof/.ode artifacts")
@@ -1172,10 +1179,27 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true", help="Run preflight & print plan without writing prereg or calling models")
     args = ap.parse_args(argv)
 
-    task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()]
-    models = [m.strip() for m in args.models.split(",") if m.strip()]
-    targets = [t.strip() for t in args.targets.split(",") if t.strip()]
-    arms: list[str | None] = [a.strip() for a in args.perf_arms.split(",") if a.strip()] or [None]
+    preset_path: Path | None = None
+    preset: dict = {}
+    if args.preset:
+        preset_path, preset = load_preset(args.preset)
+
+    default_models = [
+        "openai/gpt-6.2-astra-pro", "anthropic/claude-fable-5.2", "google/gemini-4-neon",
+        "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5",
+        "qwen/qwen3.8-2.4t-a95b", "moonshotai/kimi-k3.1-pro",
+    ]
+    task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()] if args.tasks is not None else list(preset.get("tasks", ["ebpf"]))
+    models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models is not None else list(preset.get("models", default_models))
+    targets = [t.strip() for t in args.targets.split(",") if t.strip()] if args.targets is not None else list(preset.get("targets", ["x86_64", "arm64"]))
+    raw_arms = args.perf_arms if args.perf_arms is not None else str(preset.get("perf_arms", ""))
+    arms: list[str | None] = [a.strip() for a in raw_arms.split(",") if a.strip()] or [None]
+    args.max_rounds = args.max_rounds if args.max_rounds is not None else int(preset.get("max_rounds", 8))
+    args.opt_rounds = args.opt_rounds if args.opt_rounds is not None else int(preset.get("opt_rounds", 3))
+    args.tool_timeout = args.tool_timeout if args.tool_timeout is not None else int(preset.get("tool_timeout", 45))
+    args.cell_timeout = args.cell_timeout if args.cell_timeout is not None else int(preset.get("cell_timeout", 720))
+    args.max_truncations = args.max_truncations if args.max_truncations is not None else int(preset.get("max_truncations", 2))
+    args.max_usd = args.max_usd if args.max_usd is not None else float(preset.get("max_usd", 60.0))
 
     tasks = []
     for tid in task_ids:
@@ -1195,6 +1219,8 @@ def main(argv=None) -> int:
         "proof-core/verify2.py": blake3_hex(VERIFY2),
         "paper/EXPERIMENTS/run_suite.py": blake3_hex(EXP_DIR / "run_suite.py"),
     }
+    if preset_path is not None:
+        hashes[str(preset_path.relative_to(ROOT))] = blake3_hex(preset_path)
     if ODEVERIFY.exists():
         hashes["proof-core/.lake/build/bin/odeverify"] = blake3_hex(ODEVERIFY)
     for t in tasks:
