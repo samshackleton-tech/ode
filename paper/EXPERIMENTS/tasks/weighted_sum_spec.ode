@@ -1,0 +1,6 @@
+def wsum_from(a, i, s1, s2) {
+    if i >= len(a) then s2
+    else wsum_from(a, i + 1, s1 + a[i], s2 + s1 + a[i])
+}
+
+def weighted_sum(a) { wsum_from(a, 0, 0, 0) }

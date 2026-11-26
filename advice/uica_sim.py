@@ -244,7 +244,7 @@ PIPELINES = {
 _X86_COND_JCC = {"je", "jne", "jae", "jb", "ja", "jbe"}
 _X86_FUSE_CMP = {"cmp64_rr", "cmp64_ri", "cmp64_rm", "test64_same", "test32_same"}
 _X86_FUSE_ALU = {"add64_rr", "add64_ri", "sub64_rr", "sub64_ri", "and64_rr", "and64_ri", "dec64", "dec32", "dec8_al"}
-_ARM_COND_BR = {"b_eq", "b_ne", "b_hs", "b_lo"}
+_ARM_COND_BR = {"b_eq", "b_ne", "b_hs", "b_lo", "b_hi", "b_ls"}
 _ARM_FUSE_CMP = {"cmp_rr", "cmp_ri", "subs_rr", "subs_ri", "adds_rr", "adds_ri"}
 
 

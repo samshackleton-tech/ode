@@ -241,6 +241,15 @@ fn f(a: n bytes, n: number)
             self.assertIsNotNone(h_dup)
             self.assertIn("declare `stack N` in only one place", h_dup)
 
+            # Deep recursive unfolding limit (`need spec` + `o 14`) hints at mid-loop join-point `place`
+            h_spec = ode_tool._diagnostic_hint(
+                "need spec\nc 19\no 14\nh 0",
+                target="x86_64", info={"frame": None}, contract=None, row=None,
+            )
+            self.assertIsNotNone(h_spec)
+            self.assertIn("mid-loop join point", h_spec)
+            self.assertIn("without `decreases`", h_spec)
+
 
 if __name__ == "__main__":
     unittest.main()

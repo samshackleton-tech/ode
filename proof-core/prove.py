@@ -407,6 +407,9 @@ class Prover:
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
+        self.furthest_root = 0
+        self.spec_fuel_hit = False
+        self.spec_fuel_proof = []
         self.trace_exprs = list(trace_exprs)
         self.instrs = list(instrs)
         self.reg_list = list(reg_list)
@@ -580,12 +583,23 @@ class Prover:
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])
                 held = int(([l for l in lines if l.startswith("h ")] or ["h 0"])[0].split()[1])
+                start_len = len(proof)
+                if opened == 0:
+                    if start_len > self.furthest_root:
+                        self.furthest_root = start_len
+                    self.spec_fuel_hit = False
                 before, before_proof = self.last, self.last_proof
                 for k in reversed(range(held)):                # a value held, carried over to the fact asked for
                     done = self.solve(proof + [f"t carry {k}"])
                     if done is not None: return done
+                    if self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
-                if opened >= 14: return None
+                if opened >= 14:
+                    self.spec_fuel_hit = True
+                    self.spec_fuel_proof = proof
+                    self.last = "need spec (reached 14 specification definition opens without closing goal)"
+                    self.last_proof = proof
+                    return None
                 if opened >= 2:
                     # Deep recursive unfolding (e.g. 4x..14x unrolled loops): advance greedily along the
                     # single newly created call (at the tail/head of `callsOf`), so depth 14 stays O(depth)
@@ -637,11 +651,23 @@ class Prover:
                         # Spec goal closed (or moved past `spec` to next instruction)!
                         done = self.solve(p_try)
                         if done is not None: return done
-                    if opened >= 3:
+                        if self.furthest_root > start_len: return None
+                    if opened >= 3 or self.spec_fuel_hit:
                         return None
+                any_fuel_hit = False
                 for k in reversed(range(count)):
+                    self.spec_fuel_hit = False
                     done = self.solve(proof + [f"t open {k}"])
                     if done is not None: return done
+                    if self.furthest_root > start_len:
+                        return None
+                    if self.spec_fuel_hit:
+                        any_fuel_hit = True
+                if any_fuel_hit:
+                    self.spec_fuel_hit = True
+                    if opened == 0:
+                        self.last = "need spec (reached 14 specification definition opens without closing goal)"
+                        self.last_proof = self.spec_fuel_proof
                 return None
             elif what == "held":                               # which value held is of a use with the same things
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])

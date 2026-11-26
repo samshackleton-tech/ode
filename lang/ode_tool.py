@@ -280,6 +280,14 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
         return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), merge branches with a `place { ... }` join point, or state the relation in `place { ... }`"
+    if "reached 14 specification definition opens" in reason or (
+        "need spec" in reason and re.search(r"(?m)^o\s+(1[2-9]|[2-9]\d)\b", reason)
+    ):
+        return (
+            "hint: reached the verifier's unfolding depth limit for a single step — "
+            "for >12x unrolled loops, insert a zero-instruction mid-loop join point `place { ... }` "
+            "(without `decreases`) every 8 steps to split the unfolding into 8 + 8"
+        )
     if "need spec" in reason:
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
