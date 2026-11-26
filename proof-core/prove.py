@@ -585,7 +585,60 @@ class Prover:
                     done = self.solve(proof + [f"t carry {k}"])
                     if done is not None: return done
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
-                if opened >= 3: return None
+                if opened >= 14: return None
+                if opened >= 2:
+                    # Deep recursive unfolding (e.g. 4x..14x unrolled loops): advance greedily along the
+                    # single newly created call (at the tail/head of `callsOf`), so depth 14 stays O(depth)
+                    # instead of branching exponentially.
+                    cands = []
+                    for k in (count - 2, count - 1, count - 3, 1, 0):
+                        if 0 <= k < count and k not in cands:
+                            cands.append(k)
+                    for k in cands:
+                        p_try = proof + [f"t open {k}"]
+                        # Step through deterministic inner checks of `openCall` (`below`/`entail`/`compare`)
+                        # until we either close the `spec` goal, hit the next `need spec`, or fail.
+                        ok_step, nxt = True, self.ask(p_try)
+                        for _ in range(16):
+                            if not nxt.startswith("need "): break
+                            nl = nxt.split("\n")
+                            nw = nl[0][5:]
+                            if nw == "spec": break
+                            if nw not in ("below", "entail", "same", "compare"):
+                                break
+                            nf_raw = [l[2:].strip() for l in nl if l.startswith("f ")]
+                            ng_raw = [l[2:].strip() for l in nl if l.startswith("g ")]
+                            nf = [lin([int(x) for x in s.split()]) for s in nf_raw]
+                            ng = [lin([int(x) for x in s.split()]) for s in ng_raw]
+                            if nw in ("entail", "same"):
+                                rp = refutation(nf + [negation(ng[0])], quick=nw == "same")
+                                if rp is None: ok_step = False; break
+                                gn = [int(x) for x in ng_raw[0].split()]
+                                nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
+                                p_try = p_try + proof_text(rp, [negation(ng[0])] + nf, [nr] + nf_raw)
+                            elif nw == "below":
+                                if refutation(nf + [ng[0]]): p_try = p_try + ["t lt"]
+                                elif refutation(nf + [negation(ng[0])]): p_try = p_try + ["t ge"]
+                                else: ok_step = False; break
+                            elif nw == "compare":
+                                if refutation(nf + [negation(ng[0])]) and refutation(nf + [negation(-ng[0])]): p_try = p_try + ["t eq"]
+                                elif refutation(nf + [ng[0]]): p_try = p_try + ["t lt"]
+                                elif refutation(nf + [-ng[0]]): p_try = p_try + ["t gt"]
+                                else: ok_step = False; break
+                            nxt = self.ask(p_try)
+                        if not ok_step:
+                            continue
+                        if nxt.startswith("need spec\n"):
+                            nc = int([l for l in nxt.split("\n") if l.startswith("c ")][0].split()[1])
+                            if nc <= count:
+                                continue                       # already-opened call; skip without branching
+                            done = self.solve(p_try)           # brand-new call created: follow strictly linearly
+                            return done
+                        # Spec goal closed (or moved past `spec` to next instruction)!
+                        done = self.solve(p_try)
+                        if done is not None: return done
+                    if opened >= 3:
+                        return None
                 for k in reversed(range(count)):
                     done = self.solve(proof + [f"t open {k}"])
                     if done is not None: return done

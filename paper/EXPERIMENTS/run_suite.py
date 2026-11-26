@@ -371,9 +371,71 @@ def slug(s: str) -> str:
     return re.sub(r"[^a-zA-Z0-9._-]+", "_", s).strip("_")
 
 
+def parse_advise_metrics(advise_txt: str, target: str) -> dict:
+    """Extract hot-loop static `cyc/B`, `cyc/iter`, `load_bytes`, and cross-CPU `cyc/B` from `ode advise --all-archs`."""
+    default_arch = "apple_m" if target == "arm64" else "zen5"
+    loops = []
+    cur = None
+    for line in advise_txt.splitlines():
+        m_lp = re.search(
+            r"loop\s+(\d+):.*pipeline sim ~([0-9.]+) cyc/iter \(([^,]+),\s*(\d+) fused(?:,\s*([0-9.]+) cyc/B across (\d+) load\(s\)/(\d+) B)?\)",
+            line,
+        )
+        if m_lp:
+            cur = {
+                "loop_idx": int(m_lp.group(1)),
+                "cycles_per_iter": float(m_lp.group(2)),
+                "bottleneck": m_lp.group(3).strip(),
+                "fused_pairs": int(m_lp.group(4)),
+                "cyc_per_b": float(m_lp.group(5)) if m_lp.group(5) else None,
+                "load_count": int(m_lp.group(6)) if m_lp.group(6) else 0,
+                "load_bytes": int(m_lp.group(7)) if m_lp.group(7) else 0,
+                "all_archs_cyc_per_b": {},
+                "all_archs_cyc_per_iter": {},
+                "lints": 0,
+            }
+            loops.append(cur)
+            continue
+        if cur is not None:
+            if "hint [" in line:
+                cur["lints"] += 1
+            m_aa = re.match(r"^\s+(\w+)\s*:\s*~\s*([0-9.]+) cyc/iter(?:,\s*([0-9.]+) cyc/B)?", line)
+            if m_aa:
+                cur["all_archs_cyc_per_iter"][m_aa.group(1)] = float(m_aa.group(2))
+                if m_aa.group(3):
+                    cur["all_archs_cyc_per_b"][m_aa.group(1)] = float(m_aa.group(3))
+    load_loops = [lp for lp in loops if lp["load_bytes"] > 0 and lp["cyc_per_b"] is not None]
+    if not load_loops:
+        return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops}
+    # Main hot loop for large buffers is the one loading the most bytes per iteration (tie-break: lowest cyc/B)
+    hot = min(load_loops, key=lambda lp: (-lp["load_bytes"], lp["cyc_per_b"]))
+    return {
+        "hot_loop": hot["loop_idx"],
+        "primary_arch": default_arch,
+        "cyc_per_b": round(hot["cyc_per_b"], 4),
+        "cycles_per_iter": round(hot["cycles_per_iter"], 3),
+        "load_bytes": hot["load_bytes"],
+        "load_count": hot["load_count"],
+        "bottleneck": hot["bottleneck"],
+        "lints": hot["lints"],
+        "all_archs_cyc_per_b": hot["all_archs_cyc_per_b"],
+        "loop_count": len(loops),
+    }
+
+
+def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path) -> tuple[str, dict]:
+    cmd = [sys.executable, str(ODE_TOOL), "advise", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
+    rc, out, _ = run_tool(cmd, work, timeout=30)
+    if rc != 0:
+        return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
+    return out, parse_advise_metrics(out, target)
+
+
 def run_cell(task: dict, model: str, target: str, args, api_key: str,
-             budget: BudgetGuard, out_dir: Path, prover_sem: threading.BoundedSemaphore) -> dict:
-    cell_id = f"{task['id']}__{slug(model.split('/')[-1])}__{target}"
+             budget: BudgetGuard, out_dir: Path, prover_sem: threading.BoundedSemaphore,
+             arm: str | None = None) -> dict:
+    arm_tag = f"__{arm}" if arm else ""
+    cell_id = f"{task['id']}__{slug(model.split('/')[-1])}__{target}{arm_tag}"
     print(f"[start] {cell_id}", flush=True)
     t_cell_start = time.monotonic()
     consec_trunc = 0
@@ -386,10 +448,12 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         "task": task["id"],
         "model": model,
         "target": target,
+        "arm": arm,
         "expected_contract_id": task["expected_contract_id"],
         "started_utc": utc_now(),
         "strict_pass": False,
         "rounds_to_pass": None,
+        "passing_rounds": 0,
         "total_cost_usd": 0.0,
         "total_api_s": 0.0,
         "total_tool_s": 0.0,
@@ -398,9 +462,14 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         "verify2_s": None,
         "native_status": "not_run",
         "native_detail": None,
+        "initial_perf": None,
+        "best_perf": None,
+        "best_round": None,
         "final_metrics": {},
         "rounds": [],
     }
+    opt_rounds_left = args.opt_rounds if arm else 0
+    best_cyc_per_b = None
 
     spec_src = ROOT / task["spec_file"]
     last_ode = ""
@@ -508,34 +577,87 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     metrics["audit_s"] = round(dt_a, 3)
                     metrics["pack_s"] = round(dt_p, 3)
                     metrics["proof_bytes"] = out_p.stat().st_size
-                    cell["strict_pass"] = True
-                    cell["rounds_to_pass"] = rnum
-                    cell["final_metrics"] = metrics
                     rec["stage"] = "passed"
                     rec["category"] = "passed"
 
                     # Step C: independent pure-Python second verifier (`verify2.py`)
                     v2_ok, v2_msg, v2_s = run_verify2_on_bundle(out_o, out_p, target)
-                    cell["verify2_pass"] = v2_ok
-                    cell["verify2_detail"] = v2_msg
-                    cell["verify2_s"] = round(v2_s, 3)
+                    # Step D: real-silicon native tests + optional static `ode advise --all-archs`
+                    nat_st, nat_det = run_native_test(out_o, task, target, args.x86_exec_script)
+                    adv_txt, perf = ("", None)
+                    if arm is not None:
+                        adv_txt, perf = run_static_advise(cand, task["entry_fn"], target, work)
+                        rec["perf"] = perf
 
-                    # Step D: copy winning artifacts to out_dir and run real-silicon native tests
-                    shutil.copy2(cand, out_dir / f"{cell_id}.ode")
-                    shutil.copy2(out_o, out_dir / f"{cell_id}.o")
-                    shutil.copy2(out_p, out_dir / f"{cell_id}.proof")
-                    nat_st, nat_det = run_native_test(out_dir / f"{cell_id}.o", task, target, args.x86_exec_script)
-                    cell["native_status"] = nat_st
-                    cell["native_detail"] = nat_det
+                    cpb = perf.get("cyc_per_b") if perf else None
+                    first_pass = not cell["strict_pass"]
+                    improved = first_pass or (
+                        cpb is not None and (best_cyc_per_b is None or cpb < best_cyc_per_b - 1e-6)
+                    )
+                    if first_pass:
+                        cell["strict_pass"] = True
+                        cell["rounds_to_pass"] = rnum
+                        cell["initial_perf"] = perf
+                        if arm is not None:
+                            shutil.copy2(cand, out_dir / f"{cell_id}.r{rnum}.ode")
+                            shutil.copy2(out_o, out_dir / f"{cell_id}.r{rnum}.o")
+                    cell["passing_rounds"] += 1
+                    if improved:
+                        best_cyc_per_b = cpb
+                        cell["best_perf"] = perf
+                        cell["best_round"] = rnum
+                        cell["final_metrics"] = metrics
+                        cell["verify2_pass"] = v2_ok
+                        cell["verify2_detail"] = v2_msg
+                        cell["verify2_s"] = round(v2_s, 3)
+                        cell["native_status"] = nat_st
+                        cell["native_detail"] = nat_det
+                        shutil.copy2(cand, out_dir / f"{cell_id}.ode")
+                        shutil.copy2(out_o, out_dir / f"{cell_id}.o")
+                        shutil.copy2(out_p, out_dir / f"{cell_id}.proof")
 
                     cell["rounds"].append(rec)
+                    perf_tag = f" hot={cpb:.2f}cyc/B({perf.get('load_bytes')}B/it)" if cpb is not None else ""
                     print(
                         f"[PASS]  {cell_id} R{rnum} (${cell['total_cost_usd']:.2f}, suite=${total_spent:.2f}) "
                         f"{metrics.get('functions')}fns {metrics.get('instructions')}insns "
-                        f"{metrics.get('code_bytes')}B verify2={v2_ok} native={nat_st}",
+                        f"{metrics.get('code_bytes')}B verify2={v2_ok} native={nat_st}{perf_tag}",
                         flush=True,
                     )
-                    break
+                    if arm is None or opt_rounds_left <= 0 or rnum >= args.max_rounds:
+                        break
+                    opt_rounds_left -= 1
+                    messages.append({"role": "assistant", "content": reply})
+                    if arm == "advised":
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Round {rnum} PASSED verification (`shown`, {metrics.get('functions')} fn(s), "
+                                f"{metrics.get('instructions')} instructions, {metrics.get('code_bytes')} B, "
+                                f"verify2={v2_ok}, native={nat_st}).\n\n"
+                                f"Here is the static `ode advise --all-archs` report on your verified code (no execution):\n"
+                                f"```\n{adv_txt}\n```\n\n"
+                                f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
+                                f"Use this static pipeline report (cycles/iter, `cyc/B`, bottlenecks, critical path, "
+                                f"i-cache alignment, and lints) to reduce loop cycles per byte (`cyc/B`) further for large `n` "
+                                f"while keeping `ode pack`, `ode audit`, and native tests passing. "
+                                f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
+                            ),
+                        })
+                    else:
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Round {rnum} PASSED verification (`shown`, {metrics.get('functions')} fn(s), "
+                                f"{metrics.get('instructions')} instructions, {metrics.get('code_bytes')} B, "
+                                f"verify2={v2_ok}, native={nat_st}).\n\n"
+                                f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
+                                f"Try to make the hot loop significantly faster (lower cycles per byte for large `n`, e.g. `n = 4096`) "
+                                f"while keeping `ode pack`, `ode audit`, and native tests passing. "
+                                f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
+                            ),
+                        })
+                    continue
                 else:
                     fb = out_a_txt
                     cat = classify_failure("audit", fb, rc_a)
@@ -579,7 +701,9 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
 
 
 def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: list[str],
-                 args, hashes: dict[str, str], commit_sha: str, started_utc: str) -> Path:
+                 args, hashes: dict[str, str], commit_sha: str, started_utc: str,
+                 arms: list[str | None] | None = None) -> Path:
+    arms = arms or [None]
     path = EXP_DIR / f"prereg-{run_id}.md"
     lines = [
         f"# Pre-Registration: Cold-Room Suite `{run_id}`",
@@ -594,7 +718,8 @@ def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: lis
         f"- **Tasks:** {', '.join('`' + t['id'] + '`' for t in tasks)}",
         f"- **Models ({len(models)}):** {', '.join(f'`{m}`' for m in models)}",
         f"- **Targets ({len(targets)}):** {', '.join(f'`{t}`' for t in targets)}",
-        f"- **Total cells:** {len(tasks) * len(models) * len(targets)}",
+        f"- **Experimental arms:** {', '.join('`' + (a or 'default') + '`' for a in arms)}" + (f" (`--opt-rounds {args.opt_rounds}` after first pass)" if any(arms) else ""),
+        f"- **Total cells:** {len(tasks) * len(models) * len(targets) * len(arms)}",
         f"- **Budget cap:** max `{args.max_rounds}` rounds per cell, `{args.tool_timeout}s` tool timeout, "
         f"`{args.cell_timeout}s` wall-clock cap per cell, early stop after `{args.max_truncations}` consecutive "
         f"`output_token_limit` replies, `{args.prover_slots}` concurrent local prover slots, "
@@ -648,7 +773,8 @@ def summarize_categories(cells: list[dict]) -> dict[str, int]:
 def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: list[str],
                   targets: list[str], cells: list[dict], baseline_path: Path | None,
                   expected_total: int | None = None) -> tuple[Path, Path]:
-    cells_sorted = sorted(cells, key=lambda c: (c["task"], c["model"], c["target"]))
+    cells_sorted = sorted(cells, key=lambda c: (c["task"], c["model"], c["target"], c.get("arm") or ""))
+    has_arms = any(c.get("arm") for c in cells_sorted)
     total_expected = expected_total if expected_total is not None else len(cells_sorted)
     in_progress = len(cells_sorted) < total_expected
     strict_passes = sum(1 for c in cells_sorted if c["strict_pass"])
@@ -679,9 +805,14 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
                 "task": c["task"],
                 "model": c["model"],
                 "target": c["target"],
+                "arm": c.get("arm"),
                 "strict_pass": c["strict_pass"],
                 "rounds_used": len(c["rounds"]),
                 "rounds_to_pass": c["rounds_to_pass"],
+                "passing_rounds": c.get("passing_rounds", 1 if c["strict_pass"] else 0),
+                "best_round": c.get("best_round"),
+                "initial_perf": c.get("initial_perf"),
+                "best_perf": c.get("best_perf"),
                 "stopped_reason": c.get("stopped_reason"),
                 "total_cost_usd": c["total_cost_usd"],
                 "verify2_pass": c["verify2_pass"],
@@ -715,19 +846,40 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
         "",
         "Each row reports one cold-room cell: verdict, rounds used, API cost, compiled code size, `verify2.py` status, and real-silicon test result.",
         "",
-        "| Task | Model | Target | Verdict | Rounds | Cost (USD) | Code | `verify2.py` | Native CPU |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for c in summary["cells"]:
-        verdict = f"PASS (R{c['rounds_to_pass']})" if c["strict_pass"] else f"FAIL ({c['round_categories'][-1] if c['round_categories'] else 'none'})"
-        fm = c["final_metrics"]
-        code_s = f"{fm.get('functions')} fns / {fm.get('instructions')} insns / {fm.get('code_bytes')} B" if c["strict_pass"] else "—"
-        v2_s = "shown" if c["verify2_pass"] is True else ("refused" if c["verify2_pass"] is False else "—")
-        nat_s = c["native_detail"] if c["native_status"] == "pass" else c["native_status"]
-        md_lines.append(
-            f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | {verdict} | {c['rounds_used']} | "
-            f"${c['total_cost_usd']:.2f} | {code_s} | {v2_s} | {nat_s} |"
-        )
+    if has_arms:
+        md_lines += [
+            "| Task | Model | Target | Arm | Verdict | Rounds | Initial -> Best `cyc/B` | Unroll (B/it) | Cost (USD) | `verify2.py` | Native CPU |",
+            "| --- | --- | --- | --- | --- | ---: | --- | ---: | ---: | --- | --- |",
+        ]
+        for c in summary["cells"]:
+            verdict = f"PASS (R{c['rounds_to_pass']}, best R{c['best_round']})" if c["strict_pass"] else f"FAIL ({c['round_categories'][-1] if c['round_categories'] else 'none'})"
+            ip = (c.get("initial_perf") or {}).get("cyc_per_b")
+            bp = (c.get("best_perf") or {}).get("cyc_per_b")
+            lb = (c.get("best_perf") or {}).get("load_bytes")
+            perf_s = f"{ip:.2f} -> **{bp:.2f}**" if (ip is not None and bp is not None) else "—"
+            lb_s = f"{lb} B" if lb else "—"
+            v2_s = "shown" if c["verify2_pass"] is True else ("refused" if c["verify2_pass"] is False else "—")
+            nat_s = c["native_detail"] if c["native_status"] == "pass" else c["native_status"]
+            md_lines.append(
+                f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | `{c.get('arm') or ''}` | {verdict} | {c['rounds_used']} | "
+                f"{perf_s} | {lb_s} | ${c['total_cost_usd']:.2f} | {v2_s} | {nat_s} |"
+            )
+    else:
+        md_lines += [
+            "| Task | Model | Target | Verdict | Rounds | Cost (USD) | Code | `verify2.py` | Native CPU |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        for c in summary["cells"]:
+            verdict = f"PASS (R{c['rounds_to_pass']})" if c["strict_pass"] else f"FAIL ({c['round_categories'][-1] if c['round_categories'] else 'none'})"
+            fm = c["final_metrics"]
+            code_s = f"{fm.get('functions')} fns / {fm.get('instructions')} insns / {fm.get('code_bytes')} B" if c["strict_pass"] else "—"
+            v2_s = "shown" if c["verify2_pass"] is True else ("refused" if c["verify2_pass"] is False else "—")
+            nat_s = c["native_detail"] if c["native_status"] == "pass" else c["native_status"]
+            md_lines.append(
+                f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | {verdict} | {c['rounds_used']} | "
+                f"${c['total_cost_usd']:.2f} | {code_s} | {v2_s} | {nat_s} |"
+            )
 
     md_lines += [
         "",
@@ -908,6 +1060,8 @@ def main(argv=None) -> int:
     ap.add_argument("--models", default="openai/gpt-6.2-astra-pro,anthropic/claude-fable-5.2,google/gemini-4-neon,anthropic/claude-sonnet-5.5")
     ap.add_argument("--targets", default="x86_64,arm64")
     ap.add_argument("--max-rounds", type=int, default=8)
+    ap.add_argument("--perf-arms", default="", help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
+    ap.add_argument("--opt-rounds", type=int, default=3, help="Extra optimization rounds after first verified pass when --perf-arms is active")
     ap.add_argument("--tool-timeout", type=int, default=120)
     ap.add_argument("--cell-timeout", type=int, default=900, help="Per-cell wall-clock cap in seconds (0 = off)")
     ap.add_argument("--max-truncations", type=int, default=2, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
@@ -929,6 +1083,7 @@ def main(argv=None) -> int:
     task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()]
     models = [m.strip() for m in args.models.split(",") if m.strip()]
     targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    arms: list[str | None] = [a.strip() for a in args.perf_arms.split(",") if a.strip()] or [None]
 
     tasks = []
     for tid in task_ids:
@@ -960,7 +1115,7 @@ def main(argv=None) -> int:
     check_references(tasks, targets, args.x86_exec_script or None)
 
     if args.dry_run:
-        print(f"DRY-RUN OK (CLI self-test passed on {targets}): run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} cells={len(tasks)*len(models)*len(targets)}")
+        print(f"DRY-RUN OK (CLI self-test passed on {targets}): run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} arms={arms} cells={len(tasks)*len(models)*len(targets)*len(arms)}")
         for k, v in sorted(hashes.items()):
             print(f"  {v[:16]}...  {k}")
         return 0
@@ -973,7 +1128,7 @@ def main(argv=None) -> int:
 
     started_utc = utc_now()
     base_sha = git_head()
-    prereg_path = write_prereg(args.run_id, tasks, models, targets, args, hashes, base_sha, started_utc)
+    prereg_path = write_prereg(args.run_id, tasks, models, targets, args, hashes, base_sha, started_utc, arms=arms)
     print(f"[prereg] wrote {prereg_path.relative_to(ROOT)}", flush=True)
 
     prereg_sha = base_sha
@@ -996,10 +1151,10 @@ def main(argv=None) -> int:
     if baseline_p and not baseline_p.is_absolute():
         baseline_p = ROOT / baseline_p
 
-    jobs = [(t, m, tgt) for t in tasks for m in models for tgt in targets]
+    jobs = [(t, m, tgt, arm) for t in tasks for m in models for tgt in targets for arm in arms]
     cells = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as ex:
-        futs = [ex.submit(run_cell, t, m, tgt, args, api_key, budget, out_dir, prover_sem) for (t, m, tgt) in jobs]
+        futs = [ex.submit(run_cell, t, m, tgt, args, api_key, budget, out_dir, prover_sem, arm) for (t, m, tgt, arm) in jobs]
         for fut in concurrent.futures.as_completed(futs):
             cells.append(fut.result())
             # Progressive atomic summary update so finished cells are readable immediately without waiting for stragglers.

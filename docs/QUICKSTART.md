@@ -316,7 +316,25 @@ Both the compiler and the verifiers read `core/x86.tab` and `arm64/arm64.tab`. O
 
 ---
 
-## 7. Release and Audit Checklist
+## 7. Static Performance Analysis (`ode advise`)
+
+Without executing the binary, `ode advise` runs a calibrated static out-of-order pipeline simulation over every loop and reports cycles per iteration, bytes loaded per iteration (`cyc/B`), the active bottleneck (`frontend`, `dependency`, or execution ports), source-line critical-path chains when dependency-limited, instruction-cache line alignment, and microarchitectural hints (broken macro-op fusion, non-eliminated self-moves, and Apple Silicon NEON pipe saturation):
+
+```sh
+# Static cross-CPU report (no execution; runs in a few milliseconds)
+python3 lang/ode_tool.py advise paper/examples/all_zero.ode --target x86_64 --all-archs
+```
+
+Use `--arch NAME` to focus on one microarchitecture (`zen5`, `zen4`, `zen3`, `icelake` on x86-64; `apple_m`, `ampere1` on AArch64), or declare explicit compile-time budgets inside a target body (`budget { max_bytes N; max_icache_lines N; max_loop_cycles C }`) so regressions fail immediately.
+
+Common levers that show up directly in `ode advise` reports:
+- **Throughput per byte (`cyc/B`):** unrolling a hot byte or word loop `4x` or `8x` by computing `addr = base + idx` once per iteration and loading via base-plus-immediate offsets (`[addr + 0]`, `[addr + 1]`, ... or `[addr, 0]`, `[addr, 1]`, ...) cuts address-generation overhead and fills the CPU's load pipes (`3` on Apple M-series, `4` on Zen 5, `2` on AmpereOne).
+- **Independent accumulators:** splitting one loop-carried sum into `2`–`4` independent accumulator registers breaks serial dependency chains (and on Apple M-series NEON, keeping at least `12` independent vector chains reaches `4.0` ops/cycle instead of `3.0`).
+- **Branch macro-op fusion:** keeping `cmp` immediately before its conditional jump (`jb`/`jae`/`je`/`jne` on x86-64; `b.lo`/`b.hs`/`b.eq`/`b.ne` on AArch64) fuses them into a single uop.
+
+---
+
+## 8. Release and Audit Checklist
 
 1. **Contract:** Every `def` terminates; `requires` states every buffer bound and non-overlap precondition (`no_overlap`); `trace depends on` names only inputs that branches and memory addresses are permitted to use.
 2. **Verify and pack:** `ode check` prints `shown` for every target; `ode pack` produces the `.o` object file and separate `.proof` file.

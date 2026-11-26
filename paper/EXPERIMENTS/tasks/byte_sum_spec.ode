@@ -1,0 +1,6 @@
+def sum_from(a, i, acc) {
+    if i >= len(a) then acc
+    else sum_from(a, i + 1, acc + a[i])
+}
+
+def byte_sum(a) { sum_from(a, 0, 0) }

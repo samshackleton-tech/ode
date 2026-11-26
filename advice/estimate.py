@@ -231,6 +231,35 @@ def _frame_field_for(frame, sp_entry, addr):
     return f"frame (sp+{off})"
 
 
+def _insn_load_bytes(it):
+    """Exact byte width read by a single decoded memory-load instruction, or 0."""
+    r = it["row"]
+    t = it["text"]
+    if r == "ldp" or r == "ldp_sp":
+        return 16
+    if r.startswith("vmov") and "_rm" in r:
+        return 64 if "zmm" in t else (32 if "ymm" in t else 16)
+    if r in ("movdqu_rm", "movdqa_rm", "ldr_q", "ldr_q_sp"):
+        return 16
+    if r in ("mov64_rm", "mov_rm", "ldr_x", "ldr_sp", "ldr", "pop") or (r.startswith("ldr") and ("x" in t or "sp" in t) and "q" not in r and "b" not in r and "h" not in r and "w" not in r):
+        return 8
+    if r in ("mov32_rm", "ldr_w", "ldr_w_sp"):
+        return 4
+    if r in ("movzx16_rm", "ldrh"):
+        return 2
+    if r in ("movzx8_rm", "ldrb"):
+        return 1
+    if "byte ptr" in t and not t.startswith("mov byte ptr"):
+        return 1
+    if "dword ptr" in t and not t.startswith("mov dword ptr"):
+        return 4
+    if "qword ptr" in t and not t.startswith("mov qword ptr"):
+        return 8
+    if it["class"] in ("load", "vec_load"):
+        return 16 if it["class"] == "vec_load" else 8
+    return 0
+
+
 def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, all_archs=False):
     """Compute static code-size, loop i-cache layout, dependency critical path, and throughput bounds."""
     arch_key = arch_name or DEFAULT_ARCH[target]
@@ -320,6 +349,9 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
             lints = uica_sim.static_lint_loop(body, arch_key, line_map=line_map, sim_rep=sim_rep) if arch_key in uica_sim.PIPELINES else []
             crit_chain = uica_sim.critical_path_chain(body, arch_key, line_map=line_map) if arch_key in uica_sim.PIPELINES else None
             arch_table = uica_sim.compare_all_archs(body, target, line_map=line_map) if all_archs else None
+            load_widths = [_insn_load_bytes(x) for x in body]
+            load_count = sum(1 for w in load_widths if w > 0)
+            load_bytes = sum(load_widths)
             loops.append({
                 "start_pc": start_pc,
                 "end_pc": end_pc,
@@ -328,6 +360,8 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 "min_icache_lines": min_lines,
                 "align_saves_line": touched_lines > min_lines,
                 "source_lines": [src_start["line"], src_end["line"]] if (src_start and src_end) else None,
+                "load_count": load_count,
+                "load_bytes": load_bytes,
                 "body": analyze_seq(body),
                 "pipeline_sim": sim_rep,
                 "critical_chain": crit_chain,
@@ -830,9 +864,12 @@ def format_report(symbol, static_rep, mem_rep=None):
         src_note = f" lines {lp['source_lines'][0]}..{lp['source_lines'][1]}" if lp["source_lines"] else ""
         al_note = f" [aligning loop top saves {lp['icache_lines'] - lp['min_icache_lines']} i-cache line(s)]" if lp["align_saves_line"] else ""
         sim_rep = lp.get("pipeline_sim")
+        lb_bytes = lp.get("load_bytes") or 0
+        lb_cnt = lp.get("load_count") or 0
+        tp_note = f", {sim_rep['cycles_per_iter'] / lb_bytes:.2f} cyc/B across {lb_cnt} load(s)/{lb_bytes} B" if (sim_rep is not None and lb_bytes > 0) else ""
         sim_note = (
-            f" | pipeline sim ~{sim_rep['cycles_per_iter']:.1f} cyc/iter "
-            f"({sim_rep['bottleneck']}, {sim_rep['fused_pairs']} fused)"
+            f" | pipeline sim ~{sim_rep['cycles_per_iter']:.2f} cyc/iter"
+            f" ({sim_rep['bottleneck']}, {sim_rep['fused_pairs']} fused{tp_note})"
             if sim_rep is not None else ""
         )
         lines.append(
@@ -857,8 +894,9 @@ def format_report(symbol, static_rep, mem_rep=None):
         if aa:
             lines.append("    cross-CPU static estimate (no execution):")
             for row in aa:
+                cpb = f", {row['cycles_per_iter'] / lb_bytes:4.2f} cyc/B" if lb_bytes > 0 else ""
                 lines.append(
-                    f"      {row['arch']:8s}: ~{row['cycles_per_iter']:5.1f} cyc/iter "
+                    f"      {row['arch']:8s}: ~{row['cycles_per_iter']:5.2f} cyc/iter{cpb} "
                     f"[{row['bottleneck']:12s}] ({row['fused_pairs']} fused, {row['eliminated_moves']} elim"
                     + (f", {row['lint_count']} hint(s)" if row["lint_count"] else "")
                     + ")"
