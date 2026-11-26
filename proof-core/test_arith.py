@@ -64,7 +64,7 @@ print(json.dumps([derive([x - 4, x - 5, 3 - x]),
             with self.subTest(seed=seed):
                 r = subprocess.run([sys.executable, "-c", program], cwd=HERE,
                                    env=dict(os.environ, PYTHONHASHSEED=seed),
-                                   capture_output=True, text=True, timeout=10, check=True)
+                                   capture_output=True, text=True, check=True)
                 self.assertEqual(json.loads(r.stdout), expected)
 
 

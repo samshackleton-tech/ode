@@ -569,7 +569,7 @@ def run_llvm_mca(asm_loop_lines, mcpu):
     text = ".intel_syntax noprefix\n" + "\n".join(asm_loop_lines) + "\n"
     try:
         r = subprocess.run(["llvm-mca", f"-mcpu={mcpu}", "-iterations=100"],
-                           input=text, capture_output=True, text=True, timeout=15)
+                           input=text, capture_output=True, text=True)
         if r.returncode != 0:
             return None
         m = re.search(r"Total Cycles:\s+(\d+)", r.stdout)

@@ -221,15 +221,10 @@ def classify_failure(stage: str, out: str, rc: int) -> str:
     return "other"
 
 
-def run_tool(cmd: list[str], cwd: Path, timeout: int = 120) -> tuple[int, str, float]:
+def run_tool(cmd: list[str], cwd: Path) -> tuple[int, str, float]:
     t0 = time.monotonic()
-    try:
-        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout)
-        return r.returncode, (r.stdout + "\n" + r.stderr).strip(), time.monotonic() - t0
-    except subprocess.TimeoutExpired as e:
-        out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
-        return 124, f"TIMEOUT after {timeout}s\n{out}\n{err}".strip(), time.monotonic() - t0
+    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    return r.returncode, (r.stdout + "\n" + r.stderr).strip(), time.monotonic() - t0
 
 
 def expected_contract_id_for(task: dict, target: str) -> str:
@@ -301,16 +296,16 @@ def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str |
                 bin_p = td_p / "text.bin"
                 exe_p = td_p / "run_arm64"
                 bin_p.write_bytes(text_bytes)
-                rc_c, out_c, _ = run_tool(["cc", "-O2", "-DNATIVE_JIT_BIN", str(harness), "-o", str(exe_p)], td_p, 30)
+                rc_c, out_c, _ = run_tool(["cc", "-O2", "-DNATIVE_JIT_BIN", str(harness), "-o", str(exe_p)], td_p)
                 if rc_c != 0:
                     return "fail", f"cc failed: {out_c[:200]}"
-                rc_r, out_r, _ = run_tool([str(exe_p), str(bin_p), str(entry_off)], td_p, 30)
+                rc_r, out_r, _ = run_tool([str(exe_p), str(bin_p), str(entry_off)], td_p)
                 if rc_r == 0 and "NATIVE_PASS" in out_r:
                     return "pass", out_r.splitlines()[-1].strip()
                 return "fail", out_r[:200]
         if arm64_exec_script:
             cid = expected_contract_id_for(task, target)
-            rc_r, out_r, _ = run_tool([arm64_exec_script, str(out_o), str(harness), cid], out_o.parent, 60)
+            rc_r, out_r, _ = run_tool([arm64_exec_script, str(out_o), str(harness), cid], out_o.parent)
             if rc_r == 0 and "NATIVE_PASS" in out_r:
                 return "pass", [l for l in out_r.splitlines() if "NATIVE_PASS" in l][-1].strip()
             return "fail", out_r[:200]
@@ -320,15 +315,15 @@ def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str |
             with tempfile.TemporaryDirectory(prefix="ode_nat_x86_") as td:
                 td_p = Path(td)
                 exe_p = td_p / "run_x86"
-                rc_c, out_c, _ = run_tool(["cc", "-O2", str(harness), str(out_o), "-o", str(exe_p)], td_p, 30)
+                rc_c, out_c, _ = run_tool(["cc", "-O2", str(harness), str(out_o), "-o", str(exe_p)], td_p)
                 if rc_c != 0:
                     return "fail", f"cc failed: {out_c[:200]}"
-                rc_r, out_r, _ = run_tool([str(exe_p)], td_p, 30)
+                rc_r, out_r, _ = run_tool([str(exe_p)], td_p)
                 if rc_r == 0 and "NATIVE_PASS" in out_r:
                     return "pass", out_r.splitlines()[-1].strip()
                 return "fail", out_r[:200]
         if x86_exec_script:
-            rc_r, out_r, _ = run_tool([x86_exec_script, str(out_o), str(harness)], out_o.parent, 60)
+            rc_r, out_r, _ = run_tool([x86_exec_script, str(out_o), str(harness)], out_o.parent)
             if rc_r == 0 and "NATIVE_PASS" in out_r:
                 return "pass", [l for l in out_r.splitlines() if "NATIVE_PASS" in l][-1].strip()
             return "fail", out_r[:200]
@@ -492,7 +487,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
 
 def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None) -> tuple[str, dict]:
     cmd = [sys.executable, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
-    rc, out, _ = run_tool(cmd, work, timeout=30)
+    rc, out, _ = run_tool(cmd, work)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
     metrics = parse_advise_metrics(out, target, input_bytes_per_call=input_bytes_per_call)
@@ -630,7 +625,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
             with prover_sem:
-                rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, timeout=args.tool_timeout)
+                rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work)
             cell["total_tool_s"] += dt_p
 
             rec = {
@@ -655,7 +650,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 ]
                 def _do_audit():
                     with prover_sem:
-                        return run_tool(audit_cmd, work, timeout=args.tool_timeout)
+                        return run_tool(audit_cmd, work)
                 def _do_verify2():
                     if task.get("skip_verify2"):
                         return None, "n/a (word-vector contract outside verify2 scalar fragment)", 0.0
@@ -835,8 +830,9 @@ def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: lis
         f"- **Targets ({len(targets)}):** {', '.join(f'`{t}`' for t in targets)}",
         f"- **Experimental arms:** {', '.join('`' + (a or 'default') + '`' for a in arms)}" + (f" (`--opt-rounds {args.opt_rounds}` after first pass)" if any(arms) else ""),
         f"- **Total cells:** {len(tasks) * len(models) * len(targets) * len(arms)}",
-        f"- **Budget cap:** max `{args.max_rounds}` rounds per cell, `{args.tool_timeout}s` tool timeout, "
-        f"`{args.cell_timeout}s` wall-clock cap per cell, early stop after `{args.max_truncations}` consecutive "
+        f"- **Budget cap:** max `{args.max_rounds}` rounds per cell, no subprocess tool timeout "
+        f"(deterministic query cap `ODE_PROVE_MAX_ASKS`), "
+        f"`{args.cell_timeout}s` wall-clock cap per cell (`0` = off), early stop after `{args.max_truncations}` consecutive "
         f"`output_token_limit` replies, `{args.prover_slots}` concurrent local prover slots, "
         f"provider sort `{getattr(args, 'provider_sort', 'throughput') or 'default'}`, "
         f"temperature `{args.temperature}`, reasoning effort `{args.effort}`, max_tokens `{args.max_tokens}`, "
@@ -1118,7 +1114,7 @@ def self_test_cli(targets: list[str]) -> None:
                 sys.executable, str(ODE_TOOL), "pack", str(src), "--c-abi",
                 "--fn", "id_fn", "--target", tgt,
                 "--out", str(out_o), "--proof", str(out_p),
-            ], td_p, timeout=30)
+            ], td_p)
             if rc_p != 0 or not out_o.exists() or not out_p.exists():
                 raise SystemExit(f"CLI self-test failed on `ode pack` ({tgt}): {out_p_txt}")
             cid_m = re.search(r"BLAKE3\(contract\):\s+([a-z2-7]{52})", out_p_txt)
@@ -1127,7 +1123,7 @@ def self_test_cli(targets: list[str]) -> None:
             rc_a, out_a_txt, _ = run_tool([
                 sys.executable, str(ODE_TOOL), "audit", str(out_o),
                 "--proof", str(out_p), "--expect-contract", cid_m.group(1),
-            ], td_p, timeout=30)
+            ], td_p)
             if rc_a != 0 or "VERDICT:           shown" not in out_a_txt:
                 raise SystemExit(f"CLI self-test failed on `ode audit` ({tgt}): {out_a_txt}")
             v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
@@ -1234,12 +1230,12 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
             out_o, out_p = td_p / "out.o", td_p / "out.proof"
             rc_p, txt_p, _ = run_tool([
                 sys.executable, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
-                "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p, timeout=120)
+                "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
             if rc_p != 0 or not out_o.exists():
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
             rc_a, txt_a, _ = run_tool([
                 sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
-                "--expect-contract", expected_contract_id_for(task, tgt)], td_p, timeout=120)
+                "--expect-contract", expected_contract_id_for(task, tgt)], td_p)
             if rc_a != 0 or "VERDICT:           shown" not in txt_a:
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")
             if task.get("skip_verify2"):
@@ -1309,11 +1305,10 @@ def main(argv=None) -> int:
     ap.add_argument("--max-rounds", type=int, default=None)
     ap.add_argument("--perf-arms", default=None, help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
     ap.add_argument("--opt-rounds", type=int, default=None, help="Extra optimization rounds after first verified pass when --perf-arms is active")
-    ap.add_argument("--tool-timeout", type=int, default=None)
-    ap.add_argument("--cell-timeout", type=int, default=None, help="Per-cell wall-clock cap in seconds (0 = off)")
+    ap.add_argument("--cell-timeout", type=int, default=0, help="Optional per-cell wall-clock cap in seconds (0 = off, default)")
     ap.add_argument("--max-truncations", type=int, default=None, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
     ap.add_argument("--prover-slots", type=int, default=None, help="Max simultaneous local ode pack/audit runs (default: 75%% of CPUs)")
-    ap.add_argument("--api-timeout", type=int, default=240)
+    ap.add_argument("--api-timeout", type=int, default=360)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
@@ -1348,8 +1343,6 @@ def main(argv=None) -> int:
     arms: list[str | None] = [a.strip() for a in raw_arms.split(",") if a.strip()] or [None]
     args.max_rounds = args.max_rounds if args.max_rounds is not None else int(preset.get("max_rounds", 8))
     args.opt_rounds = args.opt_rounds if args.opt_rounds is not None else int(preset.get("opt_rounds", 3))
-    args.tool_timeout = args.tool_timeout if args.tool_timeout is not None else int(preset.get("tool_timeout", 45))
-    args.cell_timeout = args.cell_timeout if args.cell_timeout is not None else int(preset.get("cell_timeout", 720))
     args.max_truncations = args.max_truncations if args.max_truncations is not None else int(preset.get("max_truncations", 2))
     args.max_usd = args.max_usd if args.max_usd is not None else float(preset.get("max_usd", 60.0))
     if args.prover_slots is None:

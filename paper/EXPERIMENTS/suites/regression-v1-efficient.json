@@ -22,8 +22,6 @@
   "max_rounds": 8,
   "perf_arms": "",
   "opt_rounds": 3,
-  "tool_timeout": 45,
-  "cell_timeout": 720,
   "max_truncations": 2,
   "max_usd": 45.0
 }

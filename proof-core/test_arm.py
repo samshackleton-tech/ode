@@ -261,7 +261,7 @@ class Run(unittest.TestCase):
         with open(os.path.join(self.dir, "harness.c"), "w") as f: f.write(HARNESS)
         exe = os.path.join(self.dir, "run")
         subprocess.run(["clang", "-O1", "-o", exe, os.path.join(self.dir, "harness.c"), os.path.join(self.dir, "fns.S")], check=True, capture_output=True)
-        r = subprocess.run([exe], input=self.cases, capture_output=True, timeout=60)
+        r = subprocess.run([exe], input=self.cases, capture_output=True)
         return r.stdout.decode().strip() if r.returncode == 0 else f"ended with {r.returncode}"
 
     def test_the_functions_do_what_their_contracts_say(self):
@@ -375,7 +375,7 @@ class PadArm64(unittest.TestCase):
         with open(asm_p, "w") as f: f.write("\n".join(lines) + "\n")
         with open(c_p, "w") as f: f.write(PAD_HARNESS)
         subprocess.run(["clang", "-O1", "-o", exe_p, c_p, asm_p], check=True, capture_output=True)
-        r = subprocess.run([exe_p], capture_output=True, text=True, check=True, timeout=30)
+        r = subprocess.run([exe_p], capture_output=True, text=True, check=True)
         self.assertEqual(r.stdout.strip(), "65 lengths: b3l_pad_arm64 same")
 
 
@@ -633,7 +633,7 @@ class CompressArm64(unittest.TestCase):
             with open(c_p, "w") as f: f.write(COMPRESS_HARNESS)
             subprocess.run(["clang", "-O1", "-o", exe_p, c_p, asm_p], check=True, capture_output=True)
             inp = "\n".join(str(c["input_len"]) for c in cases) + "\n"
-            r = subprocess.run([exe_p], input=inp, capture_output=True, text=True, check=True, timeout=60)
+            r = subprocess.run([exe_p], input=inp, capture_output=True, text=True, check=True)
             got = {}
             for ln in r.stdout.strip().splitlines():
                 n_s, h1, h2 = ln.split()

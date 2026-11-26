@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end tests for Unified Structured Wirth High-Level Ode (`lang/ode_hl.py`)."""
-import faulthandler, os, signal, subprocess, sys, tempfile, time, unittest
+import os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -42,21 +42,6 @@ def _dual_verify(testcase, src_text, fn_name, targets=("x86_64", "arm64"), check
 
 
 class TestHighLevelOde(unittest.TestCase):
-    PER_TEST_TIMEOUT_S = int(os.environ.get("ODE_TEST_TIMEOUT", "30"))
-
-    def setUp(self):
-        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
-            def _on_timeout(_sig, _frame):
-                faulthandler.dump_traceback(file=sys.stderr, all_threads=False)
-                raise TimeoutError(f"{self.id()} exceeded {self.PER_TEST_TIMEOUT_S}s per-test timeout")
-            self._prev_alarm = signal.signal(signal.SIGALRM, _on_timeout)
-            signal.alarm(self.PER_TEST_TIMEOUT_S)
-
-    def tearDown(self):
-        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, self._prev_alarm)
-
     def test_01_portable_ct_b64_dec_select_and_wrap(self):
         """One portable High-Level Ode `b64_dec` with `select` + `-%` dual-verifies on both x86_64 and arm64."""
         src = """

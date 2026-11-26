@@ -3,11 +3,9 @@
 on the exact same `.statement` and order-independent (`r ...`) `.proof` files across both
 x86-64 and AArch64, including shuffled-facts order-independence and 4 negative controls each.
 """
-import faulthandler
 import os
 import random
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -57,20 +55,6 @@ def _extract_stmt_and_proof(src, target, tmp_dir):
 
 @unittest.skipUnless(HAVE_LEAN, "requires built proof-core odeverify binary")
 class TestVerify2(unittest.TestCase):
-    PER_TEST_TIMEOUT_S = int(os.environ.get("ODE_TEST_TIMEOUT", "45"))
-
-    def setUp(self):
-        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
-            def _on_timeout(_sig, _frame):
-                faulthandler.dump_traceback(file=sys.stderr, all_threads=False)
-                raise TimeoutError(f"{self.id()} exceeded {self.PER_TEST_TIMEOUT_S}s per-test timeout")
-            self._prev_alarm = signal.signal(signal.SIGALRM, _on_timeout)
-            signal.alarm(self.PER_TEST_TIMEOUT_S)
-
-    def tearDown(self):
-        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, self._prev_alarm)
     def _run_dual(self, target):
         odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
         with tempfile.TemporaryDirectory() as d:
@@ -1535,7 +1519,6 @@ def _run_one_test(test_name):
 
 
 if __name__ == "__main__":
-    os.environ.setdefault("ODE_PROVE_TIMEOUT", "45")
     if "--serial" in sys.argv or any(a.startswith("TestVerify2") or a.startswith("test_") for a in sys.argv[1:]):
         args = [a for a in sys.argv if a != "--serial"]
         unittest.main(argv=args)

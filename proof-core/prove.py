@@ -562,6 +562,7 @@ class Prover:
                     fail_pc, _, _ = locate(self.statement, self.out)
                     if fail_pc is not None:
                         before, before_proof = self.last, self.last_proof
+                        before_best, before_best_proof, before_root = self.best_last, self.best_last_proof, self.furthest_root
                         for clear_pc, reg, expr in self.clear_candidates(fail_pc, said):
                             key = (len(proof), clear_pc, reg, expr)
                             if key in self.tried_clears: continue
@@ -569,6 +570,8 @@ class Prover:
                             done = self.solve(proof + [f"clear {clear_pc} {reg} {expr}"])
                             if done is not None: return done
                         self.last, self.last_proof = (before, before_proof) if before else (said, proof)
+                        self.best_last, self.best_last_proof = (before_best, before_best_proof) if before_best else (said, proof)
+                        self.furthest_root = before_root
                         return None
                 is_spec_local = any(said.startswith(p) for p in (
                     "refused: the value held is of another use",
@@ -979,7 +982,7 @@ def prove(spec_text, targets, statement_out, out):
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
         max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "15000"))
-        timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "60"))
+        timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "0"))
         fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}

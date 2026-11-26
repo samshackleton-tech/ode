@@ -552,14 +552,14 @@ class CallingConvVerification(unittest.TestCase):
             fns = build_ode_pair(d, bad_x86, [("step_x86", "ode_step_x86")])
             ok, msg, _ = prove_and_verify(X86_SPEC, fns, "x86-64")
             self.assertFalse(ok, "x86-64 callee clobbering preserved rdi must be refused!")
-            self.assertIn("a register a callee keeps does not hold what it held at entry", msg)
+            self.assertIn("a register a callee keeps (rdi) does not hold what it held at entry", msg)
 
         bad_arm = ARM_ODE.replace("  add x11, x11, 5\n", "  add x11, x11, 5\n  mov x0, x9\n")
         with tempfile.TemporaryDirectory() as d:
             fns = build_ode_pair(d, bad_arm, [("step_arm", "ode_step_arm")])
             ok, msg, _ = prove_and_verify(ARM_SPEC, fns, "arm64")
             self.assertFalse(ok, "AArch64 callee clobbering preserved x0 must be refused!")
-            self.assertIn("a register a callee keeps does not hold what it held at entry", msg)
+            self.assertIn("a register a callee keeps (x0) does not hold what it held at entry", msg)
 
     def test_caller_wrong_in_or_out_reg_refused(self):
         """Caller putting args in C ABI regs or reading result from C ABI rax/x0 must be refused."""

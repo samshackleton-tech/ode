@@ -805,7 +805,7 @@ def run_llvm_mca_arm64(src, mcpu):
     try:
         r = subprocess.run(
             ["llvm-mca", "-mtriple=aarch64-linux-gnu", f"-mcpu={mcpu}", "-iterations=100"],
-            input=asm, text=True, capture_output=True, timeout=10,
+            input=asm, text=True, capture_output=True,
         )
     except FileNotFoundError:
         return None

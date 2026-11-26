@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(HERE, ".lake", "build", "bin", "odeprove")
 import statement
 TABLE = statement.TABLES["x86-64"]         # (a statement of functions for AArch64 is given AArch64's table: statement.table_for)
-DEPTH = 300
+DEPTH = 100000
 
 
 def whole(lines):

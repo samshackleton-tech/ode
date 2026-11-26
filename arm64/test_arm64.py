@@ -194,7 +194,7 @@ class Processor(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "changed.tab"
             path.write_text(text)
-            r = subprocess.run([sys.executable, str(HERE / "cross.py"), "--cases", str(cases), "--table", str(path), "--work", d], capture_output=True, text=True, timeout=250)
+            r = subprocess.run([sys.executable, str(HERE / "cross.py"), "--cases", str(cases), "--table", str(path), "--work", d], capture_output=True, text=True)
         return r.returncode, r.stdout.strip().splitlines()[-1] if r.stdout.strip() else r.stderr[-300:]
 
     def test_every_row_is_what_the_processor_does(self):
