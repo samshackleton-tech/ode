@@ -210,26 +210,26 @@ fn real_sse2_g_round as "k_real_sse2_g_round" {
 @lp:
   vpaddd xmm0, xmm0, xmm4
   vpaddd xmm0, xmm0, xmm1
-  vpxord xmm3, xmm3, xmm0
+  vpxor xmm3, xmm3, xmm0
   vmovdqa xmm6, xmm3
   vpslld xmm3, xmm3, 16
   vpsrld xmm6, xmm6, 16
   vpor xmm3, xmm3, xmm6
   vpaddd xmm2, xmm2, xmm3
-  vpxord xmm1, xmm1, xmm2
+  vpxor xmm1, xmm1, xmm2
   vmovdqa xmm6, xmm1
   vpslld xmm1, xmm1, 20
   vpsrld xmm6, xmm6, 12
   vpor xmm1, xmm1, xmm6
   vpaddd xmm0, xmm0, xmm5
   vpaddd xmm0, xmm0, xmm1
-  vpxord xmm3, xmm3, xmm0
+  vpxor xmm3, xmm3, xmm0
   vmovdqa xmm6, xmm3
   vpslld xmm3, xmm3, 24
   vpsrld xmm6, xmm6, 8
   vpor xmm3, xmm3, xmm6
   vpaddd xmm2, xmm2, xmm3
-  vpxord xmm1, xmm1, xmm2
+  vpxor xmm1, xmm1, xmm2
   vmovdqa xmm6, xmm1
   vpslld xmm1, xmm1, 25
   vpsrld xmm6, xmm6, 7
@@ -503,7 +503,7 @@ def generate_random_kernels(has_avx512=True, count=12, seed=20261125):
             elif op == "mov_rm": body.append(f"  mov {d}, qword ptr [rsi + {off8}]")
             elif op == "mov_mr": body.append(f"  mov qword ptr [rsi + {2048 + off8}], {s}")
             elif op == "vpaddd_x": body.append(f"  vpaddd {xd}, {xs1}, {xs2}")
-            elif op == "vpxord_x": body.append(f"  vpxord {xd}, {xs1}, {xs2}")
+            elif op == "vpxord_x": body.append(f"  vpxor {xd}, {xs1}, {xs2}")
             elif op == "vpslld_x": body.append(f"  vpslld {xd}, {xs1}, {rng.randint(1, 16)}")
             elif op == "vpsrld_x": body.append(f"  vpsrld {xd}, {xs1}, {rng.randint(1, 16)}")
             elif op == "vpshufd_x": body.append(f"  pshufd {xd}, {xs1}, 0x4E")
