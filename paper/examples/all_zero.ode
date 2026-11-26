@@ -19,11 +19,10 @@ fn all_zero(a: n bytes, n: number)
 
         idx := 0
         place {
-            name i = idx
-            fact 0 <= i
-            fact i <= n
-            fact zeros(a) == zero_from(a, i)
-            decreases n - i
+            fact 0 <= idx
+            fact idx <= n
+            fact zeros(a) == zero_from(a, idx)
+            decreases n - idx
         }
     @loop:
         cmp idx, count
@@ -49,11 +48,10 @@ fn all_zero(a: n bytes, n: number)
 
         idx := 0
         place {
-            name i = idx
-            fact 0 <= i
-            fact i <= n
-            fact zeros(a) == zero_from(a, i)
-            decreases n - i
+            fact 0 <= idx
+            fact idx <= n
+            fact zeros(a) == zero_from(a, idx)
+            decreases n - idx
         }
     @loop:
         cmp idx, count

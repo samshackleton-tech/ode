@@ -370,7 +370,7 @@ def written(line, target="x86_64"):
     return WRITTEN[key]
 
 
-def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86_64", meta=None):
+def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86_64", meta=None, contract_params=None):
     """A function's lines [(number, text)] as instructions: the uses of inline functions and the fors
     expanded, `$x`, `@label` and `#data` replaced. What is no instruction is left out of them and, where
     `notes` is a list, put there with the number of the instruction it stands before:
@@ -380,6 +380,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     instruction given back, (the number of its line, the line as it was typed, with a for's number put in).
     Where `meta` is a dict, it receives `regs` ({name: register}) and `frame` ((size, fields) or None)."""
     classes, whole, general, g64_addr, sp_name = target_spec(target)
+    g64_gprs = {r for r, sz in general.items() if sz == 8 and r != sp_name}
     branch_map = BRANCH_ARM if target == "arm64" else BRANCH_X86
     jmp_op = "b" if target == "arm64" else "jmp"
     out, uses, ctrl_seq, names, frame, budget = [], [0], [0], {}, [None], [None]          # (names: the registers' names; frame: (size, fields); budget: {key: int})
@@ -395,31 +396,89 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
         out.append(asm_line)
         if typed_lines is not None: typed_lines.append((n, typed_line))
 
-    def rewrite_place_line(ln, line):
-        """Replace declared `reg` names and `frame` fields in the register/cell positions of a `place { ... }`
-        line so loop invariants can use the coder's own names without colliding with contract variables."""
-        if not names and frame[0] is None:
-            return line
-        m = re.fullmatch(r"name\s+(\w+)\s*=\s*(\w+)", line)
-        if m and m.group(2) in names:
-            return f"name {m.group(1)} = {names[m.group(2)]}"
-        m = re.fullmatch(r"keep\s+(.+)", line)
-        if m:
-            toks = [names.get(t, t) for t in m.group(1).split()]
-            return "keep " + " ".join(toks)
-        m = re.fullmatch(r"lane\s+(\w+):\s*(.+)", line)
-        if m and m.group(1) in names:
-            return f"lane {names[m.group(1)]}: {m.group(2)}"
-        m = re.fullmatch(r"cell\s+(\w+)(?:\[([^\]]+)\])?:\s*(.+)", line)
-        if m and frame[0] is not None and m.group(1) in frame[0][1]:
-            fname, slot_s, rest = m.group(1), m.group(2), m.group(3)
-            before, count, one = frame[0][1][fname]
-            idx = 0 if slot_s is None else number(slot_s)
-            if idx is None or not 0 <= idx < count:
-                stop(src, ln, f"place cell `{fname}[{slot_s}]` is out of range (0 to {count - 1})")
-            off = before + idx * one
-            return f"cell [{sp_name} + {off}]: {rest}"
-        return line
+    _PLACE_KW = {"if", "then", "else", "and", "or", "not", "len", "true", "false", "mod", "in", "for", "let"}
+    _PLACE_ID_RE = re.compile(r"(?<![.\w])([A-Za-z_]\w*)(?![.\w]|\s*\()")
+
+    def expand_place_block(body_lines):
+        """Expand a `place { ... }` block: resolve `reg` aliases in `name`/`keep`/`lane` and `frame` fields
+        in `cell`, accept optional commas in `keep`, and auto-bind any `reg` alias or 64-bit hardware GPR
+        referenced directly in `fact`/`decreases`/`wrote` so boilerplate `name x = reg` lines are optional."""
+        cparams = set(contract_params) if contract_params is not None else set()
+        explicit_names = {}   # var_name -> hw_reg
+        reg_to_name = {}      # hw_reg -> var_name
+        rewritten = []
+
+        for ln, raw in body_lines:
+            line = raw.split("//")[0].strip()
+            if not line:
+                continue
+            m = re.fullmatch(r"name\s+(\w+)\s*=\s*(\w+)", line)
+            if m:
+                vname, rhs = m.group(1), m.group(2)
+                reg = names.get(rhs, rhs)
+                hw = whole.get(reg, reg)
+                explicit_names[vname] = hw
+                reg_to_name.setdefault(hw, vname)
+                rewritten.append((ln, f"name {vname} = {reg}"))
+                continue
+            m = re.fullmatch(r"keep\s+(.+)", line)
+            if m:
+                raw_toks = [t for t in re.split(r"[\s,]+", m.group(1).strip()) if t]
+                toks = [whole.get(names.get(t, t), names.get(t, t)) for t in raw_toks]
+                rewritten.append((ln, "keep " + " ".join(toks)))
+                continue
+            m = re.fullmatch(r"lane\s+(\w+):\s*(.+)", line)
+            if m and m.group(1) in names:
+                rewritten.append((ln, f"lane {names[m.group(1)]}: {m.group(2)}"))
+                continue
+            m = re.fullmatch(r"cell\s+(\w+)(?:\[([^\]]+)\])?:\s*(.+)", line)
+            if m and frame[0] is not None and m.group(1) in frame[0][1]:
+                fname, slot_s, rest = m.group(1), m.group(2), m.group(3)
+                before, count, one = frame[0][1][fname]
+                idx = 0 if slot_s is None else number(slot_s)
+                if idx is None or not 0 <= idx < count:
+                    stop(src, ln, f"place cell `{fname}[{slot_s}]` is out of range (0 to {count - 1})")
+                off = before + idx * one
+                rewritten.append((ln, f"cell [{sp_name} + {off}]: {rest}"))
+                continue
+            rewritten.append((ln, line))
+
+        auto_names = []
+
+        def bind_expr(expr):
+            def _sub(mm):
+                tok = mm.group(1)
+                if tok in explicit_names or tok in cparams or tok in _PLACE_KW:
+                    return tok
+                hw = None
+                if contract_params is not None and tok in names:
+                    cand = whole.get(names[tok], names[tok])
+                    if cand in g64_gprs:
+                        hw = cand
+                elif tok in g64_gprs:
+                    hw = tok
+                if hw is None:
+                    return tok
+                if hw in reg_to_name:
+                    return reg_to_name[hw]
+                reg_to_name[hw] = tok
+                explicit_names[tok] = hw
+                auto_names.append(f"name {tok} = {hw}")
+                return tok
+            return _PLACE_ID_RE.sub(_sub, expr)
+
+        final_lines = []
+        for _, line in rewritten:
+            m = re.fullmatch(r"(fact|decreases)\s+(.+)", line)
+            if m:
+                final_lines.append(f"{m.group(1)} {bind_expr(m.group(2))}")
+                continue
+            m = re.fullmatch(r"(wrote\s+\w+)(\[[^\]]+\]\s*=\s*.+)", line)
+            if m:
+                final_lines.append(m.group(1) + bind_expr(m.group(2)))
+                continue
+            final_lines.append(line)
+        return auto_names + final_lines
 
     def field(name, n, inside):
         if inside: stop(src, n, "a field of the frame inside an inline function")
@@ -641,7 +700,7 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
                 body, i = block(lines, i)
-                said = [rewrite_place_line(ln, l.split("//")[0].strip()) for ln, l in body if l.split("//")[0].strip()]
+                said = expand_place_block(body)
                 if notes is None: continue
                 if '"' in s or m.group(1) is None: notes.append(("at", len(out), m.group(1), said, n))      # a place for the prover of proof-core
                 else: notes.append(("place", len(out), m.group(1), said))                                # a kernel's, with its count's name
@@ -821,13 +880,27 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 
+def _contract_params_for(src, name):
+    """Return the contract parameter names for unified `fn NAME(...)`, or None for legacy sources."""
+    import ode_unified
+    text = read_source(src)
+    if not ode_unified.is_unified(text):
+        return None
+    parsed = ode_unified.parse_unified(text, src)
+    for fn_rec in parsed["fns"]:
+        if fn_rec["name"] == name:
+            return ode_unified._collect_param_names(fn_rec["params_text"])
+    return set()
+
+
 def compile_info(src, name, symbol=None, target=None):
     """Compile one function to ELF bytes and return its full metadata (target, symbol, ELF bytes, exact
     pc-to-source line_map, user register names, frame layout, label offsets, and per-entry places text)."""
     target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     sym = symbol or own
     notes, typed, meta = [], [], {}
-    expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta)
+    cparams = _contract_params_for(src, name)
+    expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta, contract_params=cparams)
     entries = {sym} | {note[2] for note in notes if note[0] == "entry"}
     for note in notes:
         if note[0] == "at" and note[2] is not None and note[2] not in entries:
@@ -903,7 +976,8 @@ def places(src, name, entry=None, target=None):
     entry. "" where there is none. The object is not changed by its places: build() leaves them out."""
     target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     notes, typed = [], []
-    expanded = expand(src, name, lines, inlines, notes, typed, target=target)
+    cparams = _contract_params_for(src, name)
+    expanded = expand(src, name, lines, inlines, notes, typed, target=target, contract_params=cparams)
     entries = {own} | {note[2] for note in notes if note[0] == "entry"}
     if (entry or own) not in entries: sys.exit(f"{src}: fn {name} has no entry `{entry}`")
     for note in notes:

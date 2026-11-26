@@ -529,6 +529,163 @@ fn sum_steps(buf: n bytes, n: number)
                     self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                     self.assertIn("shown (1 function, verify2)", r2.stdout)
 
+    def test_07_deep_unroll_lea_and_guarded_loop_entry(self):
+        """Guarded loop entry (`Sym.general` path facts) + x86-64 `lea` (`at`) + 8x unroll pass both verifiers."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        sys.path.insert(0, os.path.join(ROOT, "lang"))
+        import ode_audit
+        src = """
+def sum_from(a, i, acc) {
+    if i >= len(a) then acc
+    else sum_from(a, i + 1, acc + a[i])
+}
+def total(a) { sum_from(a, 0, 0) }
+
+fn fast_sum(a: n bytes, n: number)
+    requires n <= 1048576
+    returns total(a)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        rcx := 0
+        rax := 0
+        cmp rsi, 8
+        jb @tail
+        place {
+            fact 0 <= rcx
+            fact rcx + 8 <= n
+            fact 0 <= rax
+            fact rax <= rcx * 255
+            fact total(a) == sum_from(a, rcx, rax)
+            decreases n - rcx
+        }
+    @bulk:
+        mov r8, rdi
+        add r8, rcx
+        movzx edx, byte ptr [r8 + 0]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 1]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 2]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 3]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 4]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 5]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 6]
+        add rax, rdx
+        movzx edx, byte ptr [r8 + 7]
+        add rax, rdx
+        lea rcx, [rcx + 8]
+        lea r9, [rcx + 8]
+        cmp r9, rsi
+        jbe @bulk
+        place {
+            fact 0 <= rcx
+            fact rcx <= n
+            fact 0 <= rax
+            fact rax <= rcx * 255
+            fact total(a) == sum_from(a, rcx, rax)
+            decreases n - rcx
+        }
+    @tail:
+        cmp rcx, rsi
+        jae @done
+        mov r8, rdi
+        add r8, rcx
+        movzx edx, byte ptr [r8 + 0]
+        add rax, rdx
+        lea rcx, [rcx + 1]
+        jmp @tail
+    @done:
+        ret
+    }
+    for arm64 {
+        x2 := 0
+        x3 := 0
+        cmp x1, 8
+        b.lo @tail
+        place {
+            fact 0 <= x2
+            fact x2 + 8 <= n
+            fact 0 <= x3
+            fact x3 <= x2 * 255
+            fact total(a) == sum_from(a, x2, x3)
+            decreases n - x2
+        }
+    @bulk:
+        add x4, x0, x2
+        ldrb w5, [x4, 0]
+        ldrb w6, [x4, 1]
+        ldrb w7, [x4, 2]
+        ldrb w8, [x4, 3]
+        add x5, x5, x6
+        add x7, x7, x8
+        add x5, x5, x7
+        add x3, x3, x5
+        ldrb w5, [x4, 4]
+        ldrb w6, [x4, 5]
+        ldrb w7, [x4, 6]
+        ldrb w8, [x4, 7]
+        add x5, x5, x6
+        add x7, x7, x8
+        add x5, x5, x7
+        add x3, x3, x5
+        add x2, x2, 8
+        add x9, x2, 8
+        cmp x9, x1
+        b.ls @bulk
+        place {
+            fact 0 <= x2
+            fact x2 <= n
+            fact 0 <= x3
+            fact x3 <= x2 * 255
+            fact total(a) == sum_from(a, x2, x3)
+            decreases n - x2
+        }
+    @tail:
+        cmp x2, x1
+        b.hs @done
+        add x4, x0, x2
+        ldrb w5, [x4, 0]
+        add x3, x3, x5
+        add x2, x2, 1
+        b @tail
+    @done:
+        mov x0, x3
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "fast_sum.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                out_o = os.path.join(d, "out.o")
+                out_p = os.path.join(d, "out.proof")
+                res = ode_audit.pack_verified(p, None, out_o, out_p, fn_name="fast_sum", target=target)
+                self.assertEqual(res["verdict"], "shown", res)
+                dump = os.path.join(d, "dump.sh")
+                st_p = os.path.join(d, "st.txt")
+                pf_p = os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertIn("shown (1 function, verify2)", r2.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

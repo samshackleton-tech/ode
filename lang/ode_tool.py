@@ -266,11 +266,16 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
             return f"hint: check save/restore symmetry for callee-saved register(s) referenced in function: {', '.join(touched)}"
         return "hint: save every modified callee-saved register on entry and restore it before `ret`"
     if "more stack than this function's contract allows" in reason:
-        fsz = info["frame"]["size"] if info and info.get("frame") else None
-        if fsz is not None:
-            return f"hint: local frame is {fsz} B; check `stack N` in contract (must cover local frame + call slot + callee stack)"
+        fsz = info["frame"]["size"] if info and info.get("frame") else 0
+        slot_note = "8 B return address + " if target != "arm64" else ""
+        return (
+            f"hint: local frame is {fsz} B; a `call`/`bl` also needs the call slot ({slot_note}callee stack) — "
+            f"raise `stack N` in the contract or tail-call a `stack 0` helper with `jmp`/`b`"
+        )
     if "need entail" in reason:
         return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
+    if "need below" in reason:
+        return "hint: if a specification `if` condition tests this inequality, branch on it in code (using a join-point `place { ... }` to merge sequential branches) or strengthen the loop `place { ... }` invariant"
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
@@ -288,6 +293,8 @@ def _compile_error_hint(err):
         return "hint: return a complete `.ode` file containing `fn NAME(...) ... { for x86_64 { ... } }` or `{ for arm64 { ... } }`"
     if "not a number: &" in err:
         return "hint: use `REG := &field` (or `frame.<field>` for the byte offset) to reference a stack-frame field"
+    if "a contract says `stack` once" in err:
+        return "hint: declare `stack N` in only one place — either on the `fn` contract header or on the `for <target>` header, not both"
     if "is not one expression" in err:
         return "hint: in `place { ... }`, write `wrote out[.. i] = spec_expr` or `wrote out[i ..] = spec_expr` (e.g. `wrote out[.. i] = pad16(src)`)"
     # Live table lookup directly from x86.tab / arm64.tab whenever an instruction fails to match.
@@ -362,6 +369,12 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
             out.append(f"  need {arith['kind']} (arithmetic fact not shown from {arith['total_facts']} inequalities in context)")
             for g in arith["goals"]:
                 out.append(f"  cannot show: {g}")
+            if arith["kind"] == "below":
+                spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"))
+                if spec_hits:
+                    out.append("  matching spec condition(s):")
+                    for sh in spec_hits:
+                        out.append(f"    {sh}")
         if arith["relevant_facts"]:
             out.append("  relevant facts:")
             for f in arith["relevant_facts"]:

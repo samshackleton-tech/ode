@@ -30,11 +30,10 @@ fn all_zero(a: n bytes, n: number)
 
         idx := 0
         place {
-            name i = idx
-            fact 0 <= i
-            fact i <= n
-            fact zeros(a) == zero_from(a, i)
-            decreases n - i
+            fact 0 <= idx
+            fact idx <= n
+            fact zeros(a) == zero_from(a, idx)
+            decreases n - idx
         }
     @loop:
         cmp idx, count
@@ -60,11 +59,10 @@ fn all_zero(a: n bytes, n: number)
 
         idx := 0
         place {
-            name i = idx
-            fact 0 <= i
-            fact i <= n
-            fact zeros(a) == zero_from(a, i)
-            decreases n - i
+            fact 0 <= idx
+            fact idx <= n
+            fact zeros(a) == zero_from(a, idx)
+            decreases n - idx
         }
     @loop:
         cmp idx, count
@@ -134,11 +132,11 @@ The verifier never guesses invariants: state what holds at a loop head or a bran
 
 | Directive in `place { ... }` | Meaning or obligation |
 |---|---|
-| `name x = reg` | Binds a register `reg` to a symbolic name `x` at the label so `fact` lines can constrain it. |
-| `fact E` | Inequality (`0 <= i`, `i <= n`) or specification equality proved on every path reaching the label. |
+| `fact E` | Inequality (`0 <= idx`, `idx <= n`) or specification equality proved on every path reaching the label. Declared `reg` aliases and 64-bit hardware registers (`rcx`, `x2`, ...) are bound automatically without separate `name` lines (contract parameters are never shadowed). |
 | `decreases E` | Whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (proves loop termination). |
 | `wrote buf[.. k] = E` | For count-up loops writing `buf`: promises bytes `[0, k)` already match `E`. For count-down loops, write `wrote buf[k ..] = E` for `[k, len(buf))`. |
-| `keep r1 r2` | Promises that registers `r1`, `r2` retain their pre-loop values across every iteration. |
+| `keep r1, r2` | Promises that registers `r1`, `r2` retain their pre-loop values across every iteration (space- or comma-separated; accepts `reg` aliases). |
+| `name x = reg` | Optional short local alias binding register `reg` to `x` inside this `place` block. |
 
 **Merging branches without a loop (mid-function join points):** A `place { ... }` block *without* a `decreases` line acts as an acyclic join point. Every incoming branch proves the stated `fact` lines, and the verifier checks the code after the label only once — turning a chain of `k` sequential `if/else` diamonds from `2^k` paths into `2k` linear steps. Join points work both at top level and inside loops; if a path ever returns to a join point without a `decreases` measure, the verifier refuses it.
 
@@ -150,12 +148,10 @@ The verifier never guesses invariants: state what holds at a loop head or a bran
     @case_zero:
         mov r9, 1
         place {
-            name i = rcx
-            name dv = r9
-            fact i < n
-            fact 0 <= dv
-            fact dv <= 5
-            fact dv == step_v(buf[i])
+            fact rcx < n
+            fact 0 <= r9
+            fact r9 <= 5
+            fact r9 == step_v(buf[rcx])
         }
     @merged:
         add r10, r9

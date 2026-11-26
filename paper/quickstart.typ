@@ -209,11 +209,11 @@ The verifier never guesses invariants: you state what holds at a loop head or a 
     stroke: (x: none, y: 0.4pt + rulecol),
     fill: (x, y) => if y == 0 { sand } else if calc.rem(y, 2) == 0 { ivory } else { white },
     [*Directive in `place { ... }`*], [*Meaning or obligation*],
-    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[name x = reg]], [Binds a register `reg` to a symbolic name `x` at the label so `fact` lines can constrain it.],
-    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[fact E]], [States an inequality (`0 <= i`, `i <= n`) or specification equality proved on every path reaching the label.],
+    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[fact E]], [States an inequality (`0 <= idx`, `idx <= n`) or specification equality proved on every path reaching the label. Declared `reg` aliases and 64-bit hardware registers (`rcx`, `x2`, ...) are bound automatically without separate `name` lines (contract parameters are never shadowed).],
     [#text(font: "Menlo", size: 8.1pt, weight: "bold")[decreases E]], [States a whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (proves termination).],
     [#text(font: "Menlo", size: 8.1pt, weight: "bold")[wrote buf[.. k] = E]], [For count-up loops writing `buf`: promises bytes `[0, k)` already match `E`. For count-down loops, write `wrote buf[k ..] = E` for `[k, len(buf))`.],
-    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[keep r1 r2]], [Promises that registers `r1`, `r2` retain their pre-loop values across every iteration.],
+    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[keep r1, r2]], [Promises that registers `r1`, `r2` retain their pre-loop values across every iteration (space- or comma-separated; accepts `reg` aliases).],
+    [#text(font: "Menlo", size: 8.1pt, weight: "bold")[name x = reg]], [Optional short local alias binding register `reg` to `x` inside this `place` block.],
   )
 ]
 
@@ -293,6 +293,19 @@ A leaf helper with `stack 0` can also be tail-called with `jmp helper` (x86-64) 
 
 #block(width: 6.80in, above: 0.45em)[
   *Target notes:* Register aliases (`reg idx = rcx`) cannot shadow hardware register names (such as `v0..v31` on AArch64 or `al..dl` on x86-64). On AArch64, constants from `65,536` up to `2^32 - 1` are built from two 16-bit halves (`d := hi; lsl d, d, 16; t := lo; add d, d, t`). Leaf functions (those making no calls) with `stack 0` keep all state in caller-saved registers (`rax, rcx, rdx, rsi, rdi, r8..r11` on x86-64; `x0..x15` on AArch64).
+]
+
+#pagebreak()
+= Static Performance Analysis
+
+Without executing the binary, `ode advise` runs a calibrated static out-of-order pipeline simulation over every loop and reports cycles per iteration, bytes loaded per iteration (`cyc/B`), the active bottleneck (`frontend`, `dependency`, or execution ports), source-line critical-path chains, instruction-cache line alignment, and microarchitectural hints (broken macro-op fusion, non-eliminated self-moves, and Apple Silicon NEON pipe saturation).
+
+#codebox("Cross-CPU static analysis (no execution; runs in milliseconds)", "python3 lang/ode_tool.py advise paper/examples/all_zero.ode --target x86_64 --all-archs\n\n# loop 0: +0x7..+0x21 — 9 ins, 26 B, 1 i-cache line | ~1.00 cyc/iter (1.00 cyc/B)\n#   zen5    : ~ 1.00 cyc/iter, 1.00 cyc/B [frontend    ] (2 fused, 1 elim)\n#   zen4    : ~ 1.25 cyc/iter, 1.25 cyc/B [ports:ALU0  ] (2 fused, 1 elim)\n#   zen3    : ~ 2.00 cyc/iter, 2.00 cyc/B [dependency  ] (2 fused, 1 elim)\n#   icelake : ~ 1.50 cyc/iter, 1.50 cyc/B [frontend    ] (2 fused, 1 elim)", span: 6.80in)
+
+#with_note([
+  *Compile-time budgets:* Declare `budget { max_bytes N; max_icache_lines N; max_loop_cycles C }` inside a target body so performance regressions fail during compilation.
+])[
+  Use `--arch NAME` to focus on one microarchitecture (`zen5`, `zen4`, `zen3`, `icelake`, `apple_m`, `ampere1`). Unrolling hot loops `4x` or `8x` by computing `addr = base + idx` once per iteration with base-plus-immediate offsets (`[addr + 0]`, `[addr + 1]`, ...), splitting serial sums into independent accumulators, and keeping `cmp` adjacent to its branch all appear immediately in `ode advise` output.
 ]
 
 = Release and Audit Checklist

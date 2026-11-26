@@ -881,7 +881,7 @@ class Verifier:
                 return st["regs"][nm], st["marks"][nm]
             if tag == "call":
                 op, args = ex[1], ex[2]
-                if op == "add64":
+                if op in ("add64", "at"):
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
                     res = r_add(a, b)
@@ -1067,9 +1067,9 @@ class Verifier:
                             if o not in st["stack_mem"] or st["stack_mem"][o][1]:
                                 raise Refuse(f"at loop place clean frame slot {o} may depend on values kept out of the trace")
                         return
-                    # Enter place once as fresh symbolic state, keeping `eqs` (spec facts)
+                    # Enter place once as fresh symbolic state, keeping path facts and `eqs` (matching Core.lean `Sym.general`)
                     pst = clone(st)
-                    pst["facts"] = list(facts)
+                    pst["facts"] = list(st["facts"])
                     pst["eqs"] = list(st["eqs"])
                     pst["neq"] = []
                     pst["place_entry_fq"] = frozenset(o for o, (_, mk) in st["stack_mem"].items() if not mk)

@@ -127,6 +127,120 @@ fn f as "f_sym" {
             self.assertIn("no `fn` definitions", resp["error"])
             self.assertIn("hint:", resp.get("hint", ""))
 
+    def test_zero_boilerplate_place_and_suite_v5_diagnostics(self):
+        """Zero-boilerplate `place { ... }` auto-binds `reg` aliases & 64-bit GPRs without shadowing contract
+        params, accepts comma-separated `keep`, and `need below`/`stack` diagnostics give concrete guidance."""
+        import ode_tool
+        src = """
+def sum_from(a, i, acc) {
+    if i >= len(a) then acc
+    else sum_from(a, i + 1, acc + a[i])
+}
+def total(a) { sum_from(a, 0, 0) }
+
+fn sum_clean(a: n bytes, n: number)
+    requires n <= 1000
+    returns total(a)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        reg n = rsi, idx = rcx, acc = rax
+        idx := 0
+        acc := 0
+        place {
+            keep rdi, n
+            fact 0 <= idx
+            fact idx <= n
+            fact 0 <= acc
+            fact acc <= idx * 255
+            fact total(a) == sum_from(a, idx, acc)
+            decreases n - idx
+        }
+    @loop:
+        cmp idx, n
+        jae @done
+        mov rdx, rdi
+        add rdx, idx
+        movzx r8d, byte ptr [rdx]
+        add acc, r8
+        add idx, 1
+        jmp @loop
+    @done:
+        ret
+    }
+    for arm64 {
+        x2 := 0
+        x3 := 0
+        place {
+            keep x0, x1
+            fact 0 <= x2
+            fact x2 <= n
+            fact 0 <= x3
+            fact x3 <= x2 * 255
+            fact total(a) == sum_from(a, x2, x3)
+            decreases n - x2
+        }
+    @loop:
+        cmp x2, x1
+        b.hs @done
+        add x4, x0, x2
+        ldrb w5, [x4, 0]
+        add x3, x3, x5
+        add x2, x2, 1
+        b @loop
+    @done:
+        mov x0, x3
+        ret
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "sum_clean.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src)
+            for tgt in ("x86_64", "arm64"):
+                res = ode_tool.run_check(p, target=tgt)
+                self.assertEqual(res["verdict"], "shown", res.get("diagnostic"))
+
+            # `need below` diagnostic names the matching spec condition and hints at branch + join-point `place`
+            bad = os.path.join(d, "bad_below.ode")
+            with open(bad, "w", encoding="utf-8") as f:
+                f.write("""
+def r0(x) { if x >= 128 then 17 else 0 }
+fn f(a: n bytes, n: number)
+    requires n == 1
+    returns r0(a[0])
+    trace depends on a, n
+    stack 0
+{
+    for x86_64 {
+        movzx eax, byte ptr [rdi]
+        shr rax, 7
+        ret
+    }
+}
+""")
+            res_b = ode_tool.run_check(bad, target="x86_64")
+            self.assertNotEqual(res_b["verdict"], "shown")
+            self.assertIn("matching spec condition(s):", res_b["diagnostic"])
+            self.assertIn("x >= 128", res_b["diagnostic"])
+            self.assertIn("join-point", res_b["diagnostic"])
+
+            # `stack 0` calling helper gives concrete stack-slot hint even when frame is None
+            h_st = ode_tool._diagnostic_hint(
+                "refused: a call needs more stack than this function's contract allows",
+                target="x86_64", info={"frame": None}, contract=None, row=None,
+            )
+            self.assertIsNotNone(h_st)
+            self.assertIn("local frame is 0 B", h_st)
+            self.assertIn("tail-call", h_st)
+
+            # Duplicate `stack` compile error hint
+            h_dup = ode_tool._compile_error_hint("ode: line 12: a contract says `stack` once")
+            self.assertIsNotNone(h_dup)
+            self.assertIn("declare `stack N` in only one place", h_dup)
+
 
 if __name__ == "__main__":
     unittest.main()

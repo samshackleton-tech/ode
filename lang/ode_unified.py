@@ -694,11 +694,17 @@ def _rewrite_asm_line(line, mod_prefix, mod_exports, uses_map, src, line_no):
 def _rewrite_asm_lines(lines, first_line, fn_params, mod_prefix, mod_exports, uses_map, src):
     """Rewrite assembly lines of a `for <arch>` block, routing `place { ... }` through spec rewriting."""
     out = []
+    reg_aliases = set()
     i = 0
     n = len(lines)
     while i < n:
         ln = lines[i]
         stripped = _strip_line_comment(ln).strip()
+        if re.match(r"^reg\b", stripped):
+            for part in stripped[3:].split(","):
+                mm = re.fullmatch(r"\s*(\w+)\s*=\s*(\w+)\s*", part)
+                if mm:
+                    reg_aliases.add(mm.group(1))
         if re.match(r"^place\s*\{", stripped):
             # Gather multi-line `place { ... }` block
             block_lines = [ln]
@@ -713,7 +719,7 @@ def _rewrite_asm_lines(lines, first_line, fn_params, mod_prefix, mod_exports, us
             bopen = joined.find("{")
             hdr = joined[:bopen + 1]
             rest = joined[bopen + 1:]
-            binders = _collect_local_binders(rest, fn_params)
+            binders = _collect_local_binders(rest, fn_params) | reg_aliases
             rew = hdr + _rewrite_spec_text(rest, mod_prefix, mod_exports, uses_map, binders, src, first_line + i)
             out.extend(rew.split("\n"))
             i = j

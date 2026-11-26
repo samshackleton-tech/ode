@@ -211,7 +211,8 @@ class Inline(unittest.TestCase):
         self.assertGreaterEqual(len(sources), 25)
         for path in sources:
             with self.subTest(source=path.relative_to(ROOT)):
-                self.assertIsNone(re.search(r"^\s*def\s", path.read_text(), re.M))
+                # Indented `def` text macros inside function bodies are forbidden (top-level `def` is a pure spec definition)
+                self.assertIsNone(re.search(r"^[ \t]+def\s", path.read_text(), re.M))
 
 
 if __name__ == "__main__": unittest.main()
