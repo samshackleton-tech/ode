@@ -418,7 +418,7 @@ def parse_arg_overrides(items):
 
 def parse_budgets(args):
     out = {}
-    for key in ("max_bytes", "max_icache_lines", "max_frame_bytes",
+    for key in ("max_bytes", "max_icache_lines", "max_frame_bytes", "max_loop_cycles",
                 "max_line_splits", "max_page_crossings", "max_stlf_partial", "max_alias_4k"):
         val = getattr(args, key, None)
         if val is not None:
@@ -594,9 +594,9 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
 
 
 def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False,
-               align=0, arg_overrides=None, budgets=None, includes=None):
+               align=0, arg_overrides=None, budgets=None, includes=None, target=None, all_archs=False):
     """Compile and run static + optional memory advice without invoking Lean."""
-    target, compiled = compile_source(src_path, None)
+    target, compiled = compile_source(src_path, None, target=target)
     by_name = {info["name"]: info for info in compiled}
     by_sym = {info["symbol"]: info for info in compiled}
     if fn_name is None:
@@ -619,7 +619,9 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
             _, dec = estimate.decode_object(op, sym, target)
             progs[sym] = dec
             lmaps[sym] = info["line_map"]
-        static_rep = estimate.static_analyze(progs[top_sym], target, arch, lmaps[top_sym], top["frame"])
+        static_rep = estimate.static_analyze(
+            progs[top_sym], target, arch, lmaps[top_sym], top["frame"], all_archs=all_archs
+        )
         mem_rep = None
         if do_trace or arg_overrides:
             init_r, init_m = default_args_from_spec(spec_text, top_sym, target, align=align) if spec_text else ({}, {})
@@ -666,12 +668,14 @@ def _add_common_flags(p):
     p.add_argument("--include", action="append", default=[], help="additional .spec file(s) prepended before spec (repeatable)")
     p.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
     p.add_argument("--arch", choices=sorted(estimate.ARCHS), default=None, help="microarchitecture profile")
+    p.add_argument("--all-archs", action="store_true", help="print static pipeline estimates across all calibrated CPUs for this target")
     p.add_argument("--trace", action="store_true", help="run concrete memory-access trace via core/conc.py")
     p.add_argument("--align", type=int, default=0, help="byte misalignment added to default buffer addresses")
     p.add_argument("--arg", action="append", default=[], help="initial register value REG=VAL (repeatable)")
     p.add_argument("--max-bytes", type=int, default=None)
     p.add_argument("--max-icache-lines", type=int, default=None)
     p.add_argument("--max-frame-bytes", type=int, default=None)
+    p.add_argument("--max-loop-cycles", type=int, default=None)
     p.add_argument("--max-line-splits", type=int, default=None)
     p.add_argument("--max-page-crossings", type=int, default=None)
     p.add_argument("--max-stlf-partial", type=int, default=None)
@@ -740,6 +744,7 @@ def main(argv=None):
     p_adv.add_argument("source", help=".ode source file")
     p_adv.add_argument("--fn", default=None, help="function name or symbol (default: last in source)")
     p_adv.add_argument("--spec", default=None, help="optional .spec file for default --trace argument layout")
+    p_adv.add_argument("--target", default=None, help="target architecture (e.g. x86_64, arm64) for multi-target .ode")
     _add_common_flags(p_adv)
 
     p_cmp = sub.add_parser("compare", help="compare two Ode variants side by side (with optional verification)")
@@ -837,7 +842,8 @@ def main(argv=None):
     if args.cmd == "advise":
         res = run_advise(args.source, fn_name=args.fn, spec_path=args.spec, arch=args.arch,
                          do_trace=args.trace, align=args.align, arg_overrides=overrides,
-                         budgets=budgets, includes=args.include)
+                         budgets=budgets, includes=args.include, target=args.target,
+                         all_archs=args.all_archs)
         if args.json:
             print(json.dumps(_json_safe(res)))
             return 2 if res["budget_errors"] else 0

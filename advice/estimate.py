@@ -231,7 +231,7 @@ def _frame_field_for(frame, sp_entry, addr):
     return f"frame (sp+{off})"
 
 
-def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
+def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, all_archs=False):
     """Compute static code-size, loop i-cache layout, dependency critical path, and throughput bounds."""
     arch_key = arch_name or DEFAULT_ARCH[target]
     arch = ARCHS[arch_key]
@@ -317,6 +317,9 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
             src_start = _source_lookup(line_map, start_pc)
             src_end = _source_lookup(line_map, body[-1]["pc"])
             sim_rep = uica_sim.simulate_loop(body, arch_key, iterations=12) if arch_key in uica_sim.PIPELINES else None
+            lints = uica_sim.static_lint_loop(body, arch_key, line_map=line_map, sim_rep=sim_rep) if arch_key in uica_sim.PIPELINES else []
+            crit_chain = uica_sim.critical_path_chain(body, arch_key, line_map=line_map) if arch_key in uica_sim.PIPELINES else None
+            arch_table = uica_sim.compare_all_archs(body, target, line_map=line_map) if all_archs else None
             loops.append({
                 "start_pc": start_pc,
                 "end_pc": end_pc,
@@ -327,6 +330,9 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
                 "source_lines": [src_start["line"], src_end["line"]] if (src_start and src_end) else None,
                 "body": analyze_seq(body),
                 "pipeline_sim": sim_rep,
+                "critical_chain": crit_chain,
+                "lints": lints,
+                "all_archs": arch_table,
             })
 
     # Build basic-block DAG (ignoring loop back-edges, which `loops` analyzes separately)
@@ -777,6 +783,12 @@ def check_budgets(static_rep, mem_rep, budgets):
         ("max_icache_lines", static_rep["icache_lines"], "instruction-cache lines"),
         ("max_frame_bytes", static_rep["frame_bytes"], "frame bytes"),
     ]
+    if static_rep.get("loops") and budgets.get("max_loop_cycles") is not None:
+        max_sim = max(
+            (lp["pipeline_sim"]["cycles_per_iter"] for lp in static_rep["loops"] if lp.get("pipeline_sim")),
+            default=0.0,
+        )
+        checks.append(("max_loop_cycles", max_sim, "static loop pipeline cycles/iter"))
     if mem_rep is not None:
         checks += [
             ("max_line_splits", mem_rep["line_splits"], "cache-line splits"),
@@ -828,6 +840,29 @@ def format_report(symbol, static_rep, mem_rep=None):
             f"{lb['instructions']} ins, {lp['bytes']} B, {lp['icache_lines']} i-cache line(s), "
             f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){sim_note}{al_note}"
         )
+        cc = lp.get("critical_chain")
+        if cc and cc["steps"] and sim_rep and sim_rep["bottleneck"] == "dependency":
+            steps = cc["steps"]
+            def _fmt_step(st):
+                loc = f"L{st['line']}" if st["line"] else f"+0x{st['pc']:x}"
+                return f"{loc}({st['row']})"
+            if len(steps) > 8:
+                chain_s = " -> ".join(_fmt_step(s) for s in steps[:5]) + f" -> ... ({len(steps)-7} more) -> " + " -> ".join(_fmt_step(s) for s in steps[-2:])
+            else:
+                chain_s = " -> ".join(_fmt_step(s) for s in steps)
+            lines.append(f"    crit path ({cc['total_cycles']:.1f} cyc, {len(steps)} ops): {chain_s}")
+        for lt in lp.get("lints") or []:
+            lines.append(f"    hint [{lt['kind']}]: {lt['message']}")
+        aa = lp.get("all_archs")
+        if aa:
+            lines.append("    cross-CPU static estimate (no execution):")
+            for row in aa:
+                lines.append(
+                    f"      {row['arch']:8s}: ~{row['cycles_per_iter']:5.1f} cyc/iter "
+                    f"[{row['bottleneck']:12s}] ({row['fused_pairs']} fused, {row['eliminated_moves']} elim"
+                    + (f", {row['lint_count']} hint(s)" if row["lint_count"] else "")
+                    + ")"
+                )
     if mem_rep is not None:
         lines.append(
             f"  memory ({mem_rep['steps']} dynamic steps, returned={mem_rep['returned']}): "

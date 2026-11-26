@@ -628,6 +628,7 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
         iter_exec_ends.append(max(float(disp_cyc), max_done))
 
     # Measure steady-state throughput from the last half of iterations (after pipeline warm-up)
+    disp_rate = 0.0
     if iterations >= 6:
         deltas = [iter_exec_ends[k] - iter_exec_ends[k - 1] for k in range(iterations - 4, iterations)]
         cyc_per_iter = sum(deltas) / len(deltas)
@@ -650,9 +651,9 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
         bottleneck = f"ports:{top_port}"
     elif stall_rob > 0 and stall_rob >= stall_fe and stall_rob >= stall_fp_disp:
         bottleneck = "rob"
-    elif fp_bound >= cyc_per_iter * 0.90 and fp_uops_iter > 0:
+    elif fp_bound >= cyc_per_iter * 0.88 and fp_uops_iter > 0:
         bottleneck = "fp_dispatch"
-    elif fe_bound >= cyc_per_iter * 0.90 or stall_fe > stall_fp_disp * 2:
+    elif fe_bound >= cyc_per_iter * 0.82 or (disp_rate >= cyc_per_iter * 0.95 and fe_bound >= cyc_per_iter * 0.65):
         bottleneck = "frontend"
     else:
         bottleneck = "dependency"
@@ -673,3 +674,152 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             "sched": stall_sched,
         },
     }
+
+
+def _line_for_pc(line_map, pc):
+    if not line_map:
+        return None
+    for e in line_map:
+        if e["pc"] == pc:
+            return e["line"]
+    return None
+
+
+def critical_path_chain(seq, arch_name, line_map=None):
+    """Purely static O(N) DAG longest-path backtrack over `seq` using calibrated per-CPU latencies.
+    Returns `{"total_cycles": float, "steps": [{"pc", "line", "row", "lat"}, ...]}`."""
+    if not seq or arch_name not in PIPELINES:
+        return {"total_cycles": 0.0, "steps": []}
+    pipe = PIPELINES[arch_name]
+    reg_best = {}   # reg -> (ready_cyc, producer_idx)
+    node_pred = {}
+    node_info = {}
+    best_end = (0.0, -1)
+    for idx, it in enumerate(seq):
+        _, lat, _, is_elim, _ = _uop_spec_for_row(it["row"], it["class"], pipe)
+        if it["row"] in ("mov64_rr", "mov32_rr", "mov_rr") and is_elim and it["reads"] == it["writes"] and not pipe.get("self_mov_elim", True):
+            lat = 1.0
+        if it["row"] == "orr_v" and len(it["reads"]) == 1 and pipe["mov_elim_vec"]:
+            lat = 0.0
+        if it["row"] in ("pxor128", "pxord512", "eor_v", "sub64_rr") and len(it["reads"]) == 1:
+            lat = 0.0
+            reads = set()
+        else:
+            reads = set(it["reads"])
+        start = 0.0
+        pred = -1
+        for r in reads:
+            if r in reg_best and reg_best[r][0] > start:
+                start, pred = reg_best[r]
+        done = start + lat
+        node_pred[idx] = pred
+        node_info[idx] = {"pc": it["pc"], "line": _line_for_pc(line_map, it["pc"]), "row": it["row"], "lat": round(lat, 2)}
+        for w in it["writes"]:
+            if w not in ("zf", "cf") or len(it["writes"]) <= 2:
+                reg_best[w] = (done, idx)
+        if done > best_end[0]:
+            best_end = (done, idx)
+    chain = []
+    cur = best_end[1]
+    seen = set()
+    while cur >= 0 and cur not in seen:
+        seen.add(cur)
+        chain.append(node_info[cur])
+        cur = node_pred.get(cur, -1)
+    chain.reverse()
+    return {"total_cycles": round(best_end[0], 2), "steps": chain}
+
+
+def static_lint_loop(seq, arch_name, line_map=None, sim_rep=None):
+    """Purely static microarchitectural lint pass grounded in our 7-processor hardware findings.
+    Returns a list of `{"kind": str, "line": int|None, "message": str}` dicts."""
+    if not seq or arch_name not in PIPELINES:
+        return []
+    pipe = PIPELINES[arch_name]
+    lints = []
+    conds = _X86_COND_JCC if pipe["target"] == "x86_64" else _ARM_COND_BR
+    fusers = (_X86_FUSE_CMP | (_X86_FUSE_ALU if pipe["fuse_alu_jcc"] else set())) if pipe["target"] == "x86_64" else _ARM_FUSE_CMP
+
+    # 1. Broken macro-op fusion: flag-setter separated from conditional branch by 1-2 non-flag-writing ops
+    if pipe["macro_fusion"]:
+        for i, it in enumerate(seq):
+            if it["row"] in conds and i >= 2:
+                prev1 = seq[i - 1]
+                if not _can_fuse(prev1, it, pipe) and not ({"zf", "cf"} & prev1["writes"]):
+                    for gap in (2, 3):
+                        if i - gap >= 0:
+                            cand = seq[i - gap]
+                            inter = seq[i - gap + 1:i]
+                            if _can_fuse(cand, it, pipe) and all(not ({"zf", "cf"} & x["writes"]) for x in inter):
+                                l1 = _line_for_pc(line_map, cand["pc"])
+                                l2 = _line_for_pc(line_map, it["pc"])
+                                loc = f"lines {l1}..{l2}" if (l1 and l2) else f"+0x{cand['pc']:x}..+0x{it['pc']:x}"
+                                lints.append({
+                                    "kind": "broken_macro_fusion",
+                                    "line": l1,
+                                    "message": (
+                                        f"{loc}: `{cand['row']}` separated from `{it['row']}` by "
+                                        f"`{', '.join(x['row'] for x in inter)}` prevents macro-op fusion "
+                                        f"(moving `{cand['row']}` directly before `{it['row']}` saves 1 uop/iter)"
+                                    ),
+                                })
+                                break
+
+    # 2. Non-eliminated self-moves (`mov rdx, rdx` on Zen 4 / Zen 3 / Ice Lake)
+    if not pipe.get("self_mov_elim", True):
+        for it in seq:
+            if it["row"] in ("mov64_rr", "mov32_rr", "mov_rr") and it["reads"] == it["writes"] and it["reads"]:
+                ln = _line_for_pc(line_map, it["pc"])
+                reg = next(iter(it["writes"]))
+                loc = f"line {ln}" if ln else f"+0x{it['pc']:x}"
+                lints.append({
+                    "kind": "non_eliminated_self_move",
+                    "line": ln,
+                    "message": (
+                        f"{loc}: self-move `{it['row']}` on `{reg}` is not rename-eliminated on "
+                        f"{arch_name} (costs 1 ALU cycle and extends the dependency chain)"
+                    ),
+                })
+
+    # 3. Apple Silicon NEON independent-chain saturation threshold (<12 live vector chains -> 3.0 vs 4.0 ops/cyc)
+    if arch_name == "apple_m":
+        vec_ops = [it for it in seq if it["class"] in ("vec_alu", "vec_shift", "vec_shuf")]
+        if len(vec_ops) >= 12:
+            vec_dsts = {w for it in vec_ops for w in it["writes"] if w.startswith("v")}
+            bn = (sim_rep or {}).get("bottleneck", "")
+            if 4 <= len(vec_dsts) < 12 and (bn.startswith("ports:V") or bn == "fp_dispatch"):
+                ln = _line_for_pc(line_map, vec_ops[0]["pc"])
+                lints.append({
+                    "kind": "apple_neon_under_unrolled",
+                    "line": ln,
+                    "message": (
+                        f"NEON loop writes only {len(vec_dsts)} distinct vector registers; Apple Silicon "
+                        f"reaches ~3.0 ops/cyc at 8 independent chains and full 4.0 ops/cyc (+33%) at >=12 chains"
+                    ),
+                })
+
+    return lints
+
+
+TARGET_ARCHS = {
+    "x86_64": ["zen5", "zen4", "zen3", "icelake"],
+    "arm64": ["apple_m", "ampere1"],
+}
+
+
+def compare_all_archs(seq, target, line_map=None):
+    """Run purely static pipeline analysis across all calibrated CPUs for `target` (<5 ms total)."""
+    out = []
+    for arch in TARGET_ARCHS.get(target, []):
+        sim = simulate_loop(seq, arch, iterations=12)
+        lints = static_lint_loop(seq, arch, line_map=line_map, sim_rep=sim)
+        out.append({
+            "arch": arch,
+            "cycles_per_iter": sim["cycles_per_iter"],
+            "bottleneck": sim["bottleneck"],
+            "fused_pairs": sim["fused_pairs"],
+            "eliminated_moves": sim["eliminated_moves"],
+            "lint_count": len(lints),
+        })
+    return out
+

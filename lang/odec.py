@@ -119,7 +119,7 @@ COND_ALIAS = {"lo": "ult", "cc": "ult", "hs": "uge", "cs": "uge"}
 SIZES = {1: "byte", 4: "dword", 8: "qword"}                        # what one `mov` moves, as memory is written in an operand
 KINDS = {"byte": 1, "u32": 4, "u64": 8, "cv": 32, "block": 64}     # what a field of a frame holds, and the bytes of one
 BUDGET_KEYS = {
-    "max_bytes", "max_icache_lines", "max_frame_bytes",
+    "max_bytes", "max_icache_lines", "max_frame_bytes", "max_loop_cycles",
     "max_line_splits", "max_page_crossings", "max_stlf_partial", "max_alias_4k",
 }
 

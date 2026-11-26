@@ -443,6 +443,62 @@ fn fall as "t_fall" {
         txt = estimate.format_report("probe_fusion_cmp", rep)
         self.assertIn("pipeline sim ~", txt)
 
+    def test_10_static_compile_time_lints_crit_chain_and_all_archs(self):
+        """Purely static compile-time diagnostics: broken macro-op fusion, non-eliminated
+        self-moves, Apple Silicon NEON <12-chain saturation hint, critical-path source lines,
+        cross-CPU `--all-archs` table, and `max_loop_cycles` budget checks (zero execution)."""
+        import pmu_validate, pmu_validate_arm64
+
+        # 1. Broken macro-op fusion (`cmp` separated from `jb` by `lea`)
+        src_nofuse = pmu_validate.TARGETED_KERNELS[1][2]
+        t, progs, lms, frms = _compile_and_decode(src_nofuse, ["probe_nofusion_sep"])
+        rep_nf = estimate.static_analyze(progs["k_probe_nofusion_sep"], t, "zen5", lms["k_probe_nofusion_sep"], frms["k_probe_nofusion_sep"], all_archs=True)
+        kinds_nf = [x["kind"] for x in rep_nf["loops"][0]["lints"]]
+        self.assertIn("broken_macro_fusion", kinds_nf)
+        self.assertEqual([r["arch"] for r in rep_nf["loops"][0]["all_archs"]], ["zen5", "zen4", "zen3", "icelake"])
+        txt_nf = estimate.format_report("probe_nofusion_sep", rep_nf)
+        self.assertIn("hint [broken_macro_fusion]", txt_nf)
+        self.assertIn("cross-CPU static estimate", txt_nf)
+
+        # 2. Non-eliminated self-move (`mov rdx, rdx`): flagged on Zen 4 / Ice Lake, clean on Zen 5
+        src_selfmov = """target x86_64
+fn selfmov as "k_selfmov" {
+  xor ecx, ecx
+@lp:
+  mov rdx, rdx
+  add rdx, 1
+  add rcx, 1
+  cmp rcx, rdi
+  jb @lp
+  ret
+}
+"""
+        t, progs, lms, frms = _compile_and_decode(src_selfmov, ["selfmov"])
+        rep_z4 = estimate.static_analyze(progs["k_selfmov"], t, "zen4", lms["k_selfmov"], frms["k_selfmov"])
+        rep_z5 = estimate.static_analyze(progs["k_selfmov"], t, "zen5", lms["k_selfmov"], frms["k_selfmov"])
+        self.assertIn("non_eliminated_self_move", [x["kind"] for x in rep_z4["loops"][0]["lints"]])
+        self.assertNotIn("non_eliminated_self_move", [x["kind"] for x in rep_z5["loops"][0]["lints"]])
+
+        # 3. Apple Silicon NEON <12 chains hint: 8-reg warns, 16-reg does NOT warn
+        src_8 = dict((n, s) for n, _, s in pmu_validate_arm64.TARGETED_KERNELS)["probe_vec_add_wide"]
+        src_16 = dict((n, s) for n, _, s in pmu_validate_arm64.TARGETED_KERNELS)["probe_vec_add_16reg"]
+        t8, p8, l8, f8 = _compile_and_decode(src_8, ["probe_vec_add_wide"])
+        t16, p16, l16, f16 = _compile_and_decode(src_16, ["probe_vec_add_16reg"])
+        r8 = estimate.static_analyze(p8["k_probe_vec_add_wide"], t8, "apple_m", l8["k_probe_vec_add_wide"], f8["k_probe_vec_add_wide"])
+        r16 = estimate.static_analyze(p16["k_probe_vec_add_16reg"], t16, "apple_m", l16["k_probe_vec_add_16reg"], f16["k_probe_vec_add_16reg"])
+        self.assertIn("apple_neon_under_unrolled", [x["kind"] for x in r8["loops"][0]["lints"]])
+        self.assertNotIn("apple_neon_under_unrolled", [x["kind"] for x in r16["loops"][0]["lints"]])
+
+        # 4. Critical-path source-line chain + `max_loop_cycles` budget check
+        src_dep = dict((n, s) for n, _, s in pmu_validate_arm64.TARGETED_KERNELS)["real_neon_b3_g1"]
+        td_t, pd, ld, fd = _compile_and_decode(src_dep, ["real_neon_b3_g1"])
+        rd = estimate.static_analyze(pd["k_real_neon_b3_g1"], td_t, "apple_m", ld["k_real_neon_b3_g1"], fd["k_real_neon_b3_g1"], all_archs=True)
+        self.assertEqual(rd["loops"][0]["pipeline_sim"]["bottleneck"], "dependency")
+        self.assertGreaterEqual(rd["loops"][0]["critical_chain"]["total_cycles"], 30.0)
+        self.assertTrue(all(st["line"] is not None for st in rd["loops"][0]["critical_chain"]["steps"]))
+        self.assertEqual(estimate.check_budgets(rd, None, {"max_loop_cycles": 40}), [])
+        self.assertEqual(len(estimate.check_budgets(rd, None, {"max_loop_cycles": 20})), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
