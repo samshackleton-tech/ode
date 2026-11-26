@@ -12,10 +12,10 @@ import collections, json, math, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-for d in (os.path.join(ROOT, "core"), os.path.join(ROOT, "arm64"), os.path.join(ROOT, "kcheck")):
+for d in (HERE, os.path.join(ROOT, "core"), os.path.join(ROOT, "arm64"), os.path.join(ROOT, "kcheck")):
     if d not in sys.path:
         sys.path.insert(0, d)
-import conc, table
+import conc, table, uica_sim
 
 with open(os.path.join(HERE, "arch.json")) as _f:
     ARCHS = {k: v for k, v in json.load(_f).items() if not k.startswith("_")}
@@ -316,6 +316,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
             min_lines = math.ceil((end_pc - start_pc) / line_bytes)
             src_start = _source_lookup(line_map, start_pc)
             src_end = _source_lookup(line_map, body[-1]["pc"])
+            sim_rep = uica_sim.simulate_loop(body, arch_key, iterations=12) if arch_key in uica_sim.PIPELINES else None
             loops.append({
                 "start_pc": start_pc,
                 "end_pc": end_pc,
@@ -325,6 +326,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None):
                 "align_saves_line": touched_lines > min_lines,
                 "source_lines": [src_start["line"], src_end["line"]] if (src_start and src_end) else None,
                 "body": analyze_seq(body),
+                "pipeline_sim": sim_rep,
             })
 
     # Build basic-block DAG (ignoring loop back-edges, which `loops` analyzes separately)
@@ -815,10 +817,16 @@ def format_report(symbol, static_rep, mem_rep=None):
         lb = lp["body"]
         src_note = f" lines {lp['source_lines'][0]}..{lp['source_lines'][1]}" if lp["source_lines"] else ""
         al_note = f" [aligning loop top saves {lp['icache_lines'] - lp['min_icache_lines']} i-cache line(s)]" if lp["align_saves_line"] else ""
+        sim_rep = lp.get("pipeline_sim")
+        sim_note = (
+            f" | pipeline sim ~{sim_rep['cycles_per_iter']:.1f} cyc/iter "
+            f"({sim_rep['bottleneck']}, {sim_rep['fused_pairs']} fused)"
+            if sim_rep is not None else ""
+        )
         lines.append(
             f"  loop {idx}: +0x{lp['start_pc']:x}..+0x{lp['end_pc']:x}{src_note} — "
             f"{lb['instructions']} ins, {lp['bytes']} B, {lp['icache_lines']} i-cache line(s), "
-            f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){al_note}"
+            f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){sim_note}{al_note}"
         )
     if mem_rep is not None:
         lines.append(

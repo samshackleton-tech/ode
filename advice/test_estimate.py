@@ -347,6 +347,51 @@ fn fall as "t_fall" {
         self.assertLess(r_early["paths"]["expected_lower_bound"], r_fall["paths"]["expected_lower_bound"])
         self.assertLessEqual(r_early["whole"]["compute_lower_bound"], r_fall["whole"]["compute_lower_bound"])
 
+    def test_09_uica_pipeline_simulator_calibrated_against_hardware(self):
+        """uiCA-style pipeline simulator models macro-op fusion, move elimination, and out-of-order
+        port scheduling, matching >=75% of bare-metal PMU kernels within 10% on Zen 5 and Ice Lake."""
+        import json, statistics
+        import pmu_validate, uica_sim
+        kernels = (
+            list(pmu_validate.TARGETED_KERNELS)
+            + list(pmu_validate.AVX512_KERNELS)
+            + pmu_validate.generate_random_kernels(True)
+        )
+        with tempfile.TemporaryDirectory() as td:
+            seqs = {}
+            for name, _, src in kernels:
+                p = os.path.join(td, f"{name}.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                info = odec.compile_info(p, name)
+                obj_p = os.path.join(td, f"{name}.o")
+                with open(obj_p, "wb") as f:
+                    f.write(info["elf"])
+                _, seqs[name] = pmu_validate.extract_loop_seq(obj_p, info["symbol"])
+
+            for fname, arch, min_w10 in (
+                ("pmu-zen5-epyc9255.json", "zen5", 19),
+                ("pmu-icelake.json", "icelake", 19),
+            ):
+                with open(os.path.join(HERE, "results", fname), "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                errs = []
+                for rec in data["records"]:
+                    sim = uica_sim.simulate_loop(seqs[rec["name"]], arch, iterations=16)
+                    errs.append(abs(100.0 * (sim["cycles_per_iter"] - rec["measured"]) / rec["measured"]))
+                w10 = sum(1 for e in errs if e <= 10.0)
+                self.assertGreaterEqual(w10, min_w10, f"{fname}: only {w10}/25 within 10%")
+                self.assertLess(statistics.mean(errs), 9.0, f"{fname}: mean abs err {statistics.mean(errs):.1f}%")
+
+        # Also check `static_analyze` + `format_report` include `pipeline_sim` for loops.
+        src = pmu_validate.TARGETED_KERNELS[0][2]
+        t, progs, lms, frms = _compile_and_decode(src, ["probe_fusion_cmp"])
+        rep = estimate.static_analyze(progs["k_probe_fusion_cmp"], t, "zen5", lms["k_probe_fusion_cmp"], frms["k_probe_fusion_cmp"])
+        self.assertEqual(len(rep["loops"]), 1)
+        self.assertEqual(rep["loops"][0]["pipeline_sim"]["fused_pairs"], 1)
+        txt = estimate.format_report("probe_fusion_cmp", rep)
+        self.assertIn("pipeline sim ~", txt)
+
 
 if __name__ == "__main__":
     unittest.main()

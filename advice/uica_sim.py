@@ -33,22 +33,28 @@ PIPELINES = {
         "opcache_line_uops": 12,    # max uops delivered per 64B op-cache window per cycle
         "rob_size": 448,
         "retire_width": 8,
-        "fp_dispatch_width": 4,     # Zen 5 FP/Vec dispatch bottleneck (4/cyc; calibrated via PMU)
+        "int_dispatch_width": 6,    # Zen 5 integer execution dispatch width (calibrated via PMU: 14 ALU -> 3.01 cyc, 14 mov -> 2.01 cyc)
+        "fp_dispatch_width": 6,     # Zen 5 widened FP/Vec dispatch (6/cyc; calibrated via PMU)
         "fp_sched_size": 96,
         "int_sched_size": 144,
         "alu_ports": ["ALU0", "ALU1", "ALU2", "ALU3", "ALU4", "ALU5"],
         "branch_ports": ["ALU0", "ALU1", "ALU2"],
-        "load_ports": ["AGU0", "AGU1", "AGU2"],
+        "load_ports": ["AGU0", "AGU1", "AGU2", "AGU3"],  # Zen 5 has 4 L1D load AGUs (PMU: 8 loads = 2.20 cyc)
         "store_ports": ["AGU0", "AGU1", "AGU2", "AGU3"],
         "store_data_ports": ["FP4", "FP5"],
         "fp_ports": ["FP0", "FP1", "FP2", "FP3"],
         "macro_fusion": True,
         "fuse_alu_jcc": True,       # AMD Zen fuses cmp/test/add/sub/and/or/dec + jcc
+        "micro_fusion_fe": True,    # load+alu is 1 macro-op in Zen dispatch/ROB
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": True,
-        # Calibrated fractional port occupancy scale for 512-bit FP ops when uops.info TP > 1/|ports|
-        "use_measured_tp_occ": True,
+        "branch_ends_fetch": True,  # PMU: Zen 5 loop back-edge closes fetch/dispatch cycle (2.01, 3.01, 6.00)
+        # Zen 5 has native 512-bit FP pipes (PMU: 16 vpaddd/vpxord zmm = 4.01 cyc = 4.0/cyc)
+        # and 2.000-cycle latency on all 512-bit integer ALU/logic/rotate ops (PMU: g1_14ops = 28.002 cyc)
+        "use_measured_tp_occ": False,
+        "zmm_min_lat": 2.0,
+        "fp_cross_bypass": 0.0,
     },
     "zen4": {
         "uops_arch": "ZEN4",
@@ -57,6 +63,7 @@ PIPELINES = {
         "opcache_line_uops": 9,
         "rob_size": 320,
         "retire_width": 8,
+        "int_dispatch_width": 6,
         "fp_dispatch_width": 4,
         "fp_sched_size": 64,
         "int_sched_size": 96,
@@ -68,10 +75,13 @@ PIPELINES = {
         "fp_ports": ["FP0", "FP1", "FP2", "FP3"],
         "macro_fusion": True,
         "fuse_alu_jcc": True,
+        "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": True,
+        "branch_ends_fetch": True,
         "use_measured_tp_occ": True,
+        "fp_cross_bypass": 0.0,
     },
     "zen3": {
         "uops_arch": "ZEN3",
@@ -80,6 +90,7 @@ PIPELINES = {
         "opcache_line_uops": 8,
         "rob_size": 256,
         "retire_width": 8,
+        "int_dispatch_width": 6,
         "fp_dispatch_width": 4,
         "fp_sched_size": 64,
         "int_sched_size": 96,
@@ -91,10 +102,13 @@ PIPELINES = {
         "fp_ports": ["FP0", "FP1", "FP2", "FP3"],
         "macro_fusion": True,
         "fuse_alu_jcc": True,
+        "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": True,
+        "branch_ends_fetch": True,
         "use_measured_tp_occ": True,
+        "fp_cross_bypass": 0.0,
     },
     "icelake": {
         "uops_arch": "ICL",
@@ -103,6 +117,7 @@ PIPELINES = {
         "opcache_line_uops": 6,
         "rob_size": 352,
         "retire_width": 5,
+        "int_dispatch_width": 5,
         "fp_dispatch_width": 5,
         "fp_sched_size": 160,
         "int_sched_size": 160,
@@ -114,10 +129,13 @@ PIPELINES = {
         "fp_ports": ["p0", "p1", "p5"],
         "macro_fusion": True,
         "fuse_alu_jcc": True,
+        "micro_fusion_fe": True,    # Intel fused-domain micro-fusion (load+alu, store = 1 FE/ROB uop, 2 port uops)
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": False,
-        "use_measured_tp_occ": True,
+        "branch_ends_fetch": False, # Ice Lake LSD/IDQ buffers across taken loop back-edges smoothly
+        "use_measured_tp_occ": False,
+        "fp_cross_bypass": 0.0,
     },
     "emr": {
         "uops_arch": "EMR",
@@ -126,6 +144,7 @@ PIPELINES = {
         "opcache_line_uops": 8,
         "rob_size": 512,
         "retire_width": 8,
+        "int_dispatch_width": 6,
         "fp_dispatch_width": 6,
         "fp_sched_size": 192,
         "int_sched_size": 192,
@@ -137,10 +156,13 @@ PIPELINES = {
         "fp_ports": ["p0", "p1", "p5"],
         "macro_fusion": True,
         "fuse_alu_jcc": True,
+        "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": False,
-        "use_measured_tp_occ": True,
+        "branch_ends_fetch": False,
+        "use_measured_tp_occ": False,
+        "fp_cross_bypass": 0.0,
     },
     "apple_m": {
         "uops_arch": None,
@@ -149,6 +171,7 @@ PIPELINES = {
         "opcache_line_uops": 8,
         "rob_size": 630,
         "retire_width": 8,
+        "int_dispatch_width": 8,
         "fp_dispatch_width": 4,
         "fp_sched_size": 120,
         "int_sched_size": 160,
@@ -160,10 +183,13 @@ PIPELINES = {
         "fp_ports": ["V0", "V1", "V2", "V3"],
         "macro_fusion": True,
         "fuse_alu_jcc": False,
+        "micro_fusion_fe": False,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
         "split_sched": True,
+        "branch_ends_fetch": False,
         "use_measured_tp_occ": False,
+        "fp_cross_bypass": 0.0,
     },
     "ampere1": {
         "uops_arch": None,
@@ -172,6 +198,7 @@ PIPELINES = {
         "opcache_line_uops": 4,
         "rob_size": 256,
         "retire_width": 4,
+        "int_dispatch_width": 4,
         "fp_dispatch_width": 2,
         "fp_sched_size": 64,
         "int_sched_size": 64,
@@ -183,10 +210,13 @@ PIPELINES = {
         "fp_ports": ["V0", "V1"],
         "macro_fusion": False,
         "fuse_alu_jcc": False,
+        "micro_fusion_fe": False,
         "mov_elim_gpr": True,
         "mov_elim_vec": False,
         "split_sched": True,
+        "branch_ends_fetch": False,
         "use_measured_tp_occ": False,
+        "fp_cross_bypass": 0.0,
     },
 }
 
@@ -220,9 +250,16 @@ def _uop_spec_for_row(row_name, cls, pipe):
     if uarch is not None and row_name in _UOPS_DB and uarch in _UOPS_DB[row_name]:
         rec = _UOPS_DB[row_name][uarch]
         lat = float(rec["lat"])
+        if cls in ("wide_alu", "wide_xor", "wide_shift", "wide_unpck") and pipe.get("zmm_min_lat"):
+            lat = max(lat, pipe["zmm_min_lat"])
         fe_uops = max(1, int(rec["uops"]))
         tp = rec.get("tp")
         ports_spec = rec.get("ports") or []
+
+        # Micro-fusion in fused domain (front-end & ROB): load+alu and store fuse into 1 FE/ROB uop
+        # while still dispatching 2 unfused uops to the scheduler & execution ports.
+        if pipe.get("micro_fusion_fe") and cls in ("alu_mem", "store", "vec_store", "wide_store"):
+            fe_uops = 1
 
         if ports_spec:
             # Explicit port masks directly from uops.info!
@@ -230,8 +267,6 @@ def _uop_spec_for_row(row_name, cls, pipe):
             is_fp = is_vec_cls or any(p.startswith("FP") for _, ps in ports_spec for p in ps)
             total_port_uops = sum(cnt for cnt, _ in ports_spec)
             for cnt, ps in ports_spec:
-                # Fractional port occupancy when measured TP > cnt / len(ps) (e.g. Zen 4 double-pumped
-                # 512-bit ops or Zen 5 512-bit VPADDD with TP=0.37 on 4 FP pipes!).
                 occ = 1.0
                 if pipe["use_measured_tp_occ"] and tp is not None and len(ports_spec) == 1 and cnt == 1:
                     ideal_tp = 1.0 / max(1, len(ps))
@@ -239,11 +274,12 @@ def _uop_spec_for_row(row_name, cls, pipe):
                         occ = tp * len(ps)
                 for _ in range(cnt):
                     groups.append((ps, occ))
-            return groups, lat, is_fp, False, max(fe_uops, total_port_uops)
+            if not (pipe.get("micro_fusion_fe") and cls in ("alu_mem", "store", "vec_store", "wide_store")):
+                fe_uops = max(fe_uops, total_port_uops)
+            return groups, lat, is_fp, False, fe_uops
 
         # AMD Zen integer / load / store rows (uops.info gives uops, tp, lat; map to Zen ALU/AGU ports)
         if cls in ("load", "vec_load", "wide_load", "wide_bcast"):
-            # Wide 512-bit load on Zen 4/5: 1 load uop (double-pumped on Zen 4 via tp)
             lports = pipe["load_ports"]
             occ = max(1.0, (tp * len(lports)) if (tp and pipe["use_measured_tp_occ"]) else 1.0)
             return [(lports, occ)], lat, is_vec_cls, False, fe_uops
@@ -252,13 +288,11 @@ def _uop_spec_for_row(row_name, cls, pipe):
             occ = max(1.0, (tp * len(sports)) if (tp and pipe["use_measured_tp_occ"]) else 1.0)
             return [(sports, occ)], lat, is_vec_cls, False, fe_uops
         if cls == "alu_mem":
-            return [(pipe["load_ports"], 1.0), (pipe["alu_ports"], 1.0)], lat, False, False, max(2, fe_uops)
+            return [(pipe["load_ports"], 1.0), (pipe["alu_ports"], 1.0)], lat, False, False, 1 if pipe.get("micro_fusion_fe") else max(2, fe_uops)
         if cls in ("branch", "call", "ret"):
             return [(pipe["branch_ports"], 1.0)], lat, False, False, fe_uops
-        # Pure integer ALU / LEA / shift
         aports = pipe["alu_ports"]
         if tp is not None and tp >= 0.45 and len(aports) >= 4:
-            # Restricted ALU ops (e.g. complex LEA or shifts on fewer pipes)
             k = max(1, min(len(aports), round(1.0 / tp)))
             aports = aports[:k]
         return [(aports, 1.0) for _ in range(fe_uops)], lat, False, False, fe_uops
@@ -345,6 +379,18 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             i += 2
             continue
         groups, lat, is_fp, is_elim, fe_uops = _uop_spec_for_row(it["row"], it["class"], pipe)
+        # Intel (unified-scheduler) CPUs do not rename-eliminate self-moves (`mov rdx, rdx`),
+        # whereas AMD Zen eliminates them cleanly (verified by PMU on rand_00_scalar: 3.02 Zen5 vs 4.35 ICL).
+        if it["row"] in ("mov64_rr", "mov32_rr") and is_elim and it["reads"] == it["writes"] and not pipe["split_sched"]:
+            groups, lat, is_elim = [(pipe["alu_ports"], 1.0)], 1.0, False
+        # Same-register vector XOR zero-idiom (`vpxord xmmX, xmmY, xmmY` where both inputs match)
+        if it["row"] in ("pxor128", "pxord512") and len(it["reads"]) == 1:
+            groups, lat, is_elim, fe_uops = [], 0.0, True, 1
+            it = dict(it, reads=set())
+        # Same-register integer SUB zero-idiom (`sub rax, rax` where both inputs match)
+        if it["row"] == "sub64_rr" and len(it["reads"]) == 1:
+            groups, lat, is_elim, fe_uops = [], 0.0, True, 1
+            it = dict(it, reads=set())
         if is_elim:
             elim_count += 1
         micro_seq.append({
@@ -358,6 +404,7 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             "is_fp": is_fp,
             "is_elim": is_elim,
             "fe_uops": fe_uops,
+            "is_branch": it["class"] == "branch",
         })
         i += 1
 
@@ -366,18 +413,31 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
     # Step 2: Out-of-order cycle-accurate dispatch + dynamic least-loaded port scheduling.
     # Register readiness (rename handles WAR/WAW automatically; only true RAW dependencies tracked!).
     reg_ready = collections.defaultdict(float)
-    # Port next-free fractional cycle (`port_free[p]`) and cumulative port work (`port_work[p]`)
-    port_free = collections.defaultdict(float)
+    # Track last producer class per register to model cross-pipe FP bypass delay on Zen 5
+    reg_fp_kind = {}
+    # Per-port occupied cycle sets (true out-of-order reservation stations: a ready younger uop
+    # can execute in an earlier free cycle `t < later_op_cycle`!) and cumulative port load.
+    port_busy = collections.defaultdict(set)
     port_work = collections.defaultdict(float)
+
+    def next_free_cycle(p, t0, occ_int):
+        t = int(math.ceil(t0))
+        b = port_busy[p]
+        while any((t + j) in b for j in range(occ_int)):
+            t += 1
+        return t
 
     # Front-end / Dispatch state
     fe_width = pipe["fe_width"]
+    int_disp_width = pipe.get("int_dispatch_width", fe_width)
     fp_disp_width = pipe["fp_dispatch_width"]
     opcache_win = pipe["opcache_line_uops"]
     rob_size = pipe["rob_size"]
     retire_width = pipe["retire_width"]
     fp_sched = pipe["fp_sched_size"]
     int_sched = pipe["int_sched_size"]
+    fp_bypass = pipe.get("fp_cross_bypass", 0.0)
+    branch_ends_fetch = pipe.get("branch_ends_fetch", False)
 
     # Track dispatch cycle and completion cycle of every in-flight uop in the ROB (ring/deque).
     rob_complete = collections.deque()   # completion cycle of each uop in program order
@@ -386,9 +446,8 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
 
     disp_cyc = 0
     disp_used = 0
+    disp_int_used = 0
     disp_fp_used = 0
-    disp_line64 = None
-    disp_line_uops = 0
 
     stall_fe = 0
     stall_fp_disp = 0
@@ -399,13 +458,12 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
     iter_exec_ends = []
 
     def advance_disp_cycle(new_cyc):
-        nonlocal disp_cyc, disp_used, disp_fp_used, disp_line64, disp_line_uops
+        nonlocal disp_cyc, disp_used, disp_int_used, disp_fp_used
         if new_cyc > disp_cyc:
             disp_cyc = new_cyc
             disp_used = 0
+            disp_int_used = 0
             disp_fp_used = 0
-            disp_line64 = None
-            disp_line_uops = 0
 
     # Retirement pointer: earliest cycle at which the head of ROB can retire
     retire_cyc = 0
@@ -429,18 +487,14 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
     for it_idx in range(iterations):
         for op in micro_seq:
             u = op["fe_uops"]
-            # Front-end / Op-Cache / Dispatch width / FP dispatch width
+            # Front-end / Dispatch width / split Int & FP dispatch width
             if disp_used + u > fe_width:
                 stall_fe += 1
                 advance_disp_cycle(disp_cyc + 1)
             if op["is_fp"] and (disp_fp_used + u > fp_disp_width):
                 stall_fp_disp += 1
                 advance_disp_cycle(disp_cyc + 1)
-            if disp_line64 is not None and op["line64"] != disp_line64 and disp_line_uops >= opcache_win // 2:
-                # Switching 64B op-cache line after consuming a half-window ends the fetch cycle
-                stall_fe += 1
-                advance_disp_cycle(disp_cyc + 1)
-            elif disp_line64 == op["line64"] and disp_line_uops + u > opcache_win:
+            if (not op["is_fp"]) and (not op["is_elim"]) and (disp_int_used + u > int_disp_width):
                 stall_fe += 1
                 advance_disp_cycle(disp_cyc + 1)
 
@@ -468,17 +522,23 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             disp_used += u
             if op["is_fp"]:
                 disp_fp_used += u
-            if disp_line64 != op["line64"]:
-                disp_line64 = op["line64"]
-                disp_line_uops = u
-            else:
-                disp_line_uops += u
+            elif not op["is_elim"]:
+                disp_int_used += u
 
-            # Compute data-ready time from RAW operand dependencies
-            data_ready = max((reg_ready[r] for r in op["reads"]), default=0.0)
+            # Compute data-ready time from RAW operand dependencies (plus FP bypass if switching FP op class)
+            cur_fp_kind = op["row"] if op["is_fp"] else None
+            data_ready = 0.0
+            for r in op["reads"]:
+                rt = reg_ready[r]
+                if fp_bypass > 0.0 and cur_fp_kind is not None:
+                    prev_k = reg_fp_kind.get(r)
+                    if prev_k is not None and prev_k != cur_fp_kind:
+                        rt += fp_bypass
+                if rt > data_ready:
+                    data_ready = rt
             earliest = max(float(disp_cyc), data_ready)
 
-            # Dynamic least-loaded earliest-free port selection (uiCA scheduler model)
+            # Dynamic least-loaded earliest-free port selection (true out-of-order uiCA scheduler)
             if not op["groups"]:
                 exec_start = earliest
                 exec_done = earliest + op["lat"]
@@ -486,23 +546,31 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
                 exec_done = earliest
                 exec_start = earliest
                 for ps, occ in op["groups"]:
-                    # Pick port minimizing `max(earliest, port_free[p])`, tie-break by least total work!
-                    chosen = min(ps, key=lambda p: (max(earliest, port_free[p]), port_work[p]))
-                    st = max(earliest, port_free[chosen])
-                    port_free[chosen] = st + occ
-                    port_work[chosen] += occ
+                    occ_i = max(1, int(round(occ)))
+                    # Pick port with earliest true free cycle >= earliest, tie-breaking by least total work!
+                    chosen, st = min(
+                        ((p, next_free_cycle(p, earliest, occ_i)) for p in ps),
+                        key=lambda kv: (kv[1], port_work[kv[0]]),
+                    )
+                    b = port_busy[chosen]
+                    for j in range(occ_i):
+                        b.add(st + j)
+                    port_work[chosen] += occ_i
                     if st > exec_start:
-                        exec_start = st
+                        exec_start = float(st)
                     if st + op["lat"] > exec_done:
                         exec_done = st + op["lat"]
-                    # Keep scheduler occupancy sorted approximately by issue cycle
-                    q_inflight.append(st + 1.0)
+                    q_inflight.append(float(st + 1))
 
             for w in op["writes"]:
                 reg_ready[w] = exec_done
+                if cur_fp_kind is not None:
+                    reg_fp_kind[w] = cur_fp_kind
             for _ in range(u):
                 rob_complete.append(exec_done)
 
+        if branch_ends_fetch and disp_used > 0:
+            advance_disp_cycle(disp_cyc + 1)
         iter_disp_ends.append(float(disp_cyc))
         max_done = max((reg_ready[r] for r in reg_ready), default=float(disp_cyc))
         iter_exec_ends.append(max(float(disp_cyc), max_done))
