@@ -39,6 +39,7 @@ SUITES_DIR = EXP_DIR / "suites"
 QUICKSTART_PATH = ROOT / "docs" / "QUICKSTART.md"
 ODE_TOOL = ROOT / "lang" / "ode_tool.py"
 VERIFY2 = ROOT / "proof-core" / "verify2.py"
+ODE_PYTHON = shutil.which("pypy3") or sys.executable
 ODEVERIFY = ROOT / "proof-core" / ".lake" / "build" / "bin" / "odeverify"
 
 sys.path[:0] = [str(ROOT / "lang"), str(ROOT / "proof-core"), str(ROOT / "kcheck")]
@@ -486,7 +487,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
 
 
 def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None) -> tuple[str, dict]:
-    cmd = [sys.executable, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
+    cmd = [ODE_PYTHON, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
     rc, out, _ = run_tool(cmd, work)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
@@ -560,6 +561,10 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         out_p = work / "out.proof"
 
         for rnum in range(1, args.max_rounds + 1):
+            if cell["strict_pass"]:
+                if arm is None or opt_rounds_left <= 0:
+                    break
+                opt_rounds_left -= 1
             if budget.exceeded():
                 cell["stopped_reason"] = f"budget_cap_{args.max_usd}"
                 print(f"[stop]  {cell_id}: cumulative budget cap ${args.max_usd:.2f} reached", flush=True)
@@ -620,7 +625,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
 
             # Step A: `ode pack --c-abi` (bounded local prover concurrency so parallel API cells do not starve each other)
             pack_cmd = [
-                sys.executable, str(ODE_TOOL), "pack", str(cand),
+                ODE_PYTHON, str(ODE_TOOL), "pack", str(cand),
                 "--c-abi", "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
@@ -644,7 +649,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 # Steps B+C+D in parallel: independent `ode audit`, `verify2.py`, real-silicon native test,
                 # and static `ode advise --asm --all-archs` all read immutable `(cand, out_o, out_p)`.
                 audit_cmd = [
-                    sys.executable, str(ODE_TOOL), "audit", str(out_o),
+                    ODE_PYTHON, str(ODE_TOOL), "audit", str(out_o),
                     "--proof", str(out_p),
                     "--expect-contract", expected_contract_id_for(task, target),
                 ]
@@ -732,9 +737,8 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                         f"{metrics.get('code_bytes')}B verify2={v2_ok} native={nat_st}{perf_tag}",
                         flush=True,
                     )
-                    if arm is None or opt_rounds_left <= 0 or rnum >= args.max_rounds:
+                    if arm is None or opt_rounds_left <= 0 or rnum >= args.max_rounds or cpb is None:
                         break
-                    opt_rounds_left -= 1
                     messages.append({"role": "assistant", "content": reply})
                     opt_goal = task.get("opt_goal", "reduce loop cycles per byte (`cyc/B`) further for large `n`")
                     if arm == "advised":
@@ -747,7 +751,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                                 f"Here is the instant static `ode advise --asm --all-archs` report on your verified code "
                                 f"(register/spill map, lowered assembly, and static pipeline sim — no execution):\n"
                                 f"```\n{adv_txt}\n```\n\n"
-                                f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
+                                f"You have {opt_rounds_left} optimization attempt(s) left (until round {args.max_rounds}). "
                                 f"Use this static report (register/spill map, stack frame, cycles, `cyc/B`, bottlenecks, "
                                 f"critical path, port utilization, i-cache alignment, and lints) to {opt_goal} "
                                 f"while keeping `ode pack`, `ode audit`, and native tests passing. "
@@ -761,7 +765,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                                 f"Round {rnum} PASSED verification (`shown`, {metrics.get('functions')} fn(s), "
                                 f"{metrics.get('instructions')} instructions, {metrics.get('code_bytes')} B, "
                                 f"verify2={v2_ok}, native={nat_st}).\n\n"
-                                f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
+                                f"You have {opt_rounds_left} optimization attempt(s) left (until round {args.max_rounds}). "
                                 f"Try to make the code significantly faster ({opt_goal}) "
                                 f"while keeping `ode pack`, `ode audit`, and native tests passing. "
                                 f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
@@ -1111,7 +1115,7 @@ def self_test_cli(targets: list[str]) -> None:
             out_o = td_p / f"id_{tgt}.o"
             out_p = td_p / f"id_{tgt}.proof"
             rc_p, out_p_txt, _ = run_tool([
-                sys.executable, str(ODE_TOOL), "pack", str(src), "--c-abi",
+                ODE_PYTHON, str(ODE_TOOL), "pack", str(src), "--c-abi",
                 "--fn", "id_fn", "--target", tgt,
                 "--out", str(out_o), "--proof", str(out_p),
             ], td_p)
@@ -1121,7 +1125,7 @@ def self_test_cli(targets: list[str]) -> None:
             if not cid_m:
                 raise SystemExit(f"CLI self-test failed: no BLAKE3(contract) in pack output ({tgt}): {out_p_txt}")
             rc_a, out_a_txt, _ = run_tool([
-                sys.executable, str(ODE_TOOL), "audit", str(out_o),
+                ODE_PYTHON, str(ODE_TOOL), "audit", str(out_o),
                 "--proof", str(out_p), "--expect-contract", cid_m.group(1),
             ], td_p)
             if rc_a != 0 or "VERDICT:           shown" not in out_a_txt:
@@ -1229,12 +1233,12 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
             shutil.copy2(ROOT / ref, cand)
             out_o, out_p = td_p / "out.o", td_p / "out.proof"
             rc_p, txt_p, _ = run_tool([
-                sys.executable, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
+                ODE_PYTHON, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
                 "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
             if rc_p != 0 or not out_o.exists():
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
             rc_a, txt_a, _ = run_tool([
-                sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
+                ODE_PYTHON, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
                 "--expect-contract", expected_contract_id_for(task, tgt)], td_p)
             if rc_a != 0 or "VERDICT:           shown" not in txt_a:
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")

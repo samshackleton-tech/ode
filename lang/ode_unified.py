@@ -252,7 +252,7 @@ def _rewrite_hl_lines(lines, first_line, mod_prefix, mod_exports, uses_map, src)
     return out
 
 
-def _lower_all_hl(fns, data, src, c_abi_fn=None):
+def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
     """Lower every High-Level Ode implementation block deterministically into `odec` assembly + `hl_meta`,
     giving every `fn` (including `use`-imported top-level functions) Ode's fast calling convention
     with auto-derived exact `preserves` by default; only `c_abi_fn` (when packing for C FFI) uses C ABI."""
@@ -261,6 +261,13 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
     for darch, dname, _ in data:
         for a in (TARGETS if darch is None else (darch,)):
             data_by_arch.setdefault(a, set()).add(dname)
+    hl_inlines_by_arch = {a: {} for a in TARGETS}
+    for iarch, raw_inl, lno in inlines:
+        if not ode_hl.is_hl_inline(raw_inl):
+            continue
+        parsed_inl = ode_hl.parse_hl_inline(raw_inl, lno, src)
+        for a in (TARGETS if iarch is None else (iarch,)):
+            hl_inlines_by_arch[a][parsed_inl.name] = parsed_inl
     # Every function called by another function (in this file OR across `use`-imported modules) gets
     # Ode's fast calling convention with exact `preserves`; `c_abi_fn` uses pure C ABI at the FFI boundary.
     called_by_other = set()
@@ -274,9 +281,11 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
                 called_by_other.add(g["name"])
     callee_clobbers = {a: {} for a in TARGETS}
     callee_stack = {a: {} for a in TARGETS}
+    callee_sym_stack = {a: {} for a in TARGETS}
     for fn_rec in fns:
         has_fn_stack = bool(re.search(r"(?m)^\s*stack\b", fn_rec["clauses_text"]))
         raw_params = fn_rec.get("raw_params_text", fn_rec["params_text"])
+        fn_param_names = [nm for nm, _ in ode_hl.parse_param_list(raw_params)]
         for key, im in fn_rec["impls"].items():
             if not im.get("hl"):
                 continue
@@ -293,6 +302,7 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
                     explicit_stack=explicit_stack,
                     callee_clobbers=callee_clobbers.get(arch),
                     needs=impl_needs,
+                    hl_inlines=hl_inlines_by_arch.get(arch),
                 )
             except ode_hl.HLErr as exc:
                 if im.get("portable"):
@@ -302,27 +312,76 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
             im["hl_lines"] = list(im["lines"])
             im["lines"] = res["lines"]
             im["hl_meta"] = res
+            # Auto-infer `needs avx` / `needs avx512` on x86_64 when HL lowering emits AVX/AVX-512 instructions
+            if arch == "x86_64":
+                asm_joined = "\n".join(res["lines"])
+                uses_avx512 = bool(re.search(r"\b(?:zmm\d+|vprord|vpxord|vmovdqu32|vshufi32x4)\b", asm_joined))
+                uses_avx = uses_avx512 or bool(re.search(
+                    r"\b(?:vmovdqu|vmovaps|vmovq|vpaddd|vpxor|vpand|vpor|vpslld|vpsrld|vpshufd|vshufps|vpblendd|vpalignr|vpunpck[a-z]+|vpbroadcastd)\b",
+                    asm_joined,
+                ))
+                extra_needs = []
+                if uses_avx and "avx" not in impl_needs:
+                    extra_needs.append("needs avx")
+                    impl_needs.add("avx")
+                if uses_avx512 and "avx512" not in impl_needs:
+                    extra_needs.append("needs avx512")
+                    impl_needs.add("avx512")
+                if extra_needs:
+                    im["extra_clauses"] = list(im["extra_clauses"]) + extra_needs
+            # Record symbolic `stack` formula if declared explicitly (e.g. `stack 64 + 64 * rem`)
+            raw_stk_exprs = [m.group(1).strip() for ec in im["extra_clauses"] for m in [re.match(r"^\s*stack\s+(.+)$", ec)] if m]
+            if not raw_stk_exprs:
+                raw_stk_exprs = [m.group(1).strip() for m in re.finditer(r"(?m)^\s*stack\s+(.+)$", fn_rec["clauses_text"])]
+            sym_stk_expr = raw_stk_exprs[-1] if (raw_stk_exprs and not re.fullmatch(r"\d+", raw_stk_exprs[-1])) else None
             # Compute transitive stack budget across called functions in this `.ode` graph
             max_callee_stk = 0
+            inferred_sym_stks = []
+            hl_joined = "\n".join(im["hl_lines"])
             for ln in res["lines"]:
                 mc = re.match(r"^\s*(?:call|bl|jmp|b)\s+([A-Za-z_]\w*)$", ln)
-                if mc and mc.group(1) in callee_stack[arch]:
-                    max_callee_stk = max(max_callee_stk, callee_stack[arch][mc.group(1)])
+                if not mc:
+                    continue
+                cname = mc.group(1)
+                if cname in callee_stack[arch]:
+                    max_callee_stk = max(max_callee_stk, callee_stack[arch][cname])
+                if cname in callee_sym_stack[arch]:
+                    c_params, c_expr = callee_sym_stack[arch][cname]
+                    # Try substituting call-site argument into callee's symbolic stack formula
+                    for cm in re.finditer(rf"\b{re.escape(cname)}\s*\(([^)]*)\)", hl_joined):
+                        cargs = [a.strip() for a in cm.group(1).split(",")]
+                        if len(cargs) == len(c_params):
+                            sub_e = c_expr
+                            for cp, ca in zip(c_params, cargs):
+                                if re.fullmatch(r"[A-Za-z_]\w*|\d+", ca):
+                                    sub_e = re.sub(rf"\b{re.escape(cp)}\b", ca, sub_e)
+                            # Keep only if every identifier in `sub_e` is a parameter of this caller!
+                            ids_left = set(re.findall(r"\b[A-Za-z_]\w*\b", sub_e))
+                            if ids_left <= set(fn_param_names):
+                                inferred_sym_stks.append(sub_e)
             eff_stack = res["total_stack"] + max_callee_stk
             res["total_stack"] = eff_stack
-            callee_stack[arch][fn_rec["name"]] = eff_stack
-            callee_stack[arch][fn_rec["symbol"]] = eff_stack
-            if not explicit_stack:
-                im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
+            if sym_stk_expr is not None:
+                callee_sym_stack[arch][fn_rec["name"]] = (fn_param_names, sym_stk_expr)
+                callee_sym_stack[arch][fn_rec["symbol"]] = (fn_param_names, sym_stk_expr)
+            elif inferred_sym_stks and not explicit_stack:
+                base_sym = inferred_sym_stks[0]
+                full_sym = f"{res['total_stack']} + {base_sym}" if res["total_stack"] > 0 else base_sym
+                im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {full_sym}"]
+                callee_sym_stack[arch][fn_rec["name"]] = (fn_param_names, full_sym)
+                callee_sym_stack[arch][fn_rec["symbol"]] = (fn_param_names, full_sym)
             else:
-                stk_vals = [int(m.group(1)) for ec in im["extra_clauses"] for m in [re.match(r"^\s*stack\s+(\d+)\b", ec)] if m]
-                if not stk_vals:
-                    stk_vals = [int(m.group(1)) for m in re.finditer(r"(?m)^\s*stack\s+(\d+)\b", fn_rec["clauses_text"])]
-                if stk_vals and eff_stack > stk_vals[-1]:
-                    im["hl_err"] = (
-                        f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
-                        f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
-                    )
+                callee_stack[arch][fn_rec["name"]] = eff_stack
+                callee_stack[arch][fn_rec["symbol"]] = eff_stack
+                if not explicit_stack:
+                    im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
+                else:
+                    stk_vals = [int(s) for s in raw_stk_exprs if re.fullmatch(r"\d+", s)]
+                    if stk_vals and eff_stack > stk_vals[-1]:
+                        im["hl_err"] = (
+                            f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
+                            f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
+                        )
             # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
             # (never on the explicit `--c-abi` FFI entry function).
             if fn_rec["name"] != c_abi_fn and fn_rec["name"] in called_by_other and im["calling_text"] is None and res.get("auto_calling"):
@@ -982,11 +1041,12 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
     """
     root_parsed = _parse_single_unified(text, src)
     if not resolve_uses or not root_parsed["uses"]:
-        _lower_all_hl(root_parsed["fns"], root_parsed["data"], src, c_abi_fn=c_abi_fn)
+        all_inlines = [(arch, raw, lno) for arch, _, raw, lno in root_parsed["inlines"]]
+        _lower_all_hl(root_parsed["fns"], root_parsed["data"], src, c_abi_fn=c_abi_fn, inlines=all_inlines)
         return {
             "spec_defs": [raw for _, _, raw, _ in root_parsed["spec_defs"]],
             "data": root_parsed["data"],
-            "inlines": [(arch, raw, lno) for arch, _, raw, lno in root_parsed["inlines"]],
+            "inlines": [(arch, raw, lno) for arch, raw, lno in all_inlines if not ode_hl.is_hl_inline(raw)],
             "fns": root_parsed["fns"],
             "fns_by_name": root_parsed["fns_by_name"],
             "root_fns": list(root_parsed["fns"]),
@@ -1085,10 +1145,13 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
                     ilines[0],
                     count=1,
                 )
-            rew_body = [ilines[0]] + [
-                _rewrite_asm_line(ln, pref, exps, umap, msrc, lno + k)
-                for k, ln in enumerate(ilines[1:], start=1)
-            ]
+            if ode_hl.is_hl_inline(raw_inl):
+                rew_body = [ilines[0]] + _rewrite_hl_lines(ilines[1:], lno + 1, pref, exps, umap, msrc)
+            else:
+                rew_body = [ilines[0]] + [
+                    _rewrite_asm_line(ln, pref, exps, umap, msrc, lno + k)
+                    for k, ln in enumerate(ilines[1:], start=1)
+                ]
             merged_inlines.append((iarch, "\n".join(rew_body), lno))
 
         for fn_rec in p["fns"]:
@@ -1123,11 +1186,11 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
             if real == root_real:
                 root_fns.append(new_fn)
 
-    _lower_all_hl(merged_fns, merged_data, src, c_abi_fn=c_abi_fn)
+    _lower_all_hl(merged_fns, merged_data, src, c_abi_fn=c_abi_fn, inlines=merged_inlines)
     return {
         "spec_defs": merged_spec_defs,
         "data": merged_data,
-        "inlines": merged_inlines,
+        "inlines": [(a, r, l) for a, r, l in merged_inlines if not ode_hl.is_hl_inline(r)],
         "fns": merged_fns,
         "fns_by_name": merged_fns_by_name,
         "root_fns": root_fns,

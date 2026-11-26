@@ -156,6 +156,77 @@ class TestRunSuite(unittest.TestCase):
         self.assertEqual(k1, k2)
         self.assertNotEqual(k1, k3)
 
+    def test_06_opt_rounds_cap_and_non_loop_skip(self):
+        """Post-pass opt rounds stop immediately when `cyc/B` is None, and failed opt rounds consume `opt_rounds`."""
+        import threading, types
+        with (run_suite.TASKS_DIR / "der_valid.json").open("r", encoding="utf-8") as f:
+            task = json.load(f)
+
+        orig_api = run_suite.call_openrouter
+        orig_tool = run_suite.run_tool
+        orig_adv = run_suite.run_static_advise
+        orig_v2 = run_suite.run_verify2_on_bundle
+        orig_nat = run_suite.run_native_test
+        orig_exp = run_suite.expected_contract_id_for
+        try:
+            run_suite.expected_contract_id_for = lambda t, tgt: "a" * 52
+            run_suite.run_verify2_on_bundle = lambda o, p, tgt: (True, "shown", 0.01)
+            run_suite.run_native_test = lambda o, t, tgt, x, a=None: ("pass", "NATIVE_PASS")
+            args = types.SimpleNamespace(
+                run_id="t6", max_rounds=8, opt_rounds=2, max_usd=10.0, cell_timeout=0,
+                temperature=0.2, max_tokens=2048, effort="medium", api_timeout=30,
+                x86_exec_script=None, arm64_exec_script=None, provider_sort="throughput",
+            )
+            # Case A: non-loop task (`cpb is None`) stops immediately on R1 (0 wasted opt rounds!)
+            calls = [0]
+            def fake_api_a(*a, **kw):
+                calls[0] += 1
+                return "```ode\nfn der_valid() { return 0 }\n```", {"cost": 0.01}, 0.1
+            def fake_tool_a(cmd, work):
+                if "pack" in cmd:
+                    (work / "out.o").write_bytes(b"o")
+                    (work / "out.proof").write_bytes(b"p")
+                return 0, "VERDICT:           shown\nFUNCTIONS: 1\nINSTRUCTIONS: 10\nCODE_BYTES: 40\n", 0.01
+            run_suite.call_openrouter = fake_api_a
+            run_suite.run_tool = fake_tool_a
+            run_suite.run_static_advise = lambda *a, **kw: ("fn der_valid: no loops\n", {"cyc_per_b": None})
+            with tempfile.TemporaryDirectory() as td:
+                c = run_suite.run_cell(
+                    task, "m1", "x86_64", args, "k",
+                    run_suite.BudgetGuard(10.0), Path(td), threading.BoundedSemaphore(2), arm="advised",
+                )
+            self.assertTrue(c["strict_pass"])
+            self.assertEqual(len(c["rounds"]), 1)
+            self.assertEqual(calls[0], 1)
+
+            # Case B: loop task (`cpb = 1.50`) where R2 & R3 opt attempts FAIL stops after exactly 2 opt rounds (3 total!)
+            calls[0] = 0
+            def fake_tool_b(cmd, work):
+                if "pack" in cmd:
+                    if calls[0] == 1:
+                        (work / "out.o").write_bytes(b"o")
+                        (work / "out.proof").write_bytes(b"p")
+                        return 0, "VERDICT:           shown\nFUNCTIONS: 1\nINSTRUCTIONS: 10\nCODE_BYTES: 40\n", 0.01
+                    return 1, "refused in opt attempt", 0.01
+                return 0, "VERDICT:           shown\nFUNCTIONS: 1\nINSTRUCTIONS: 10\nCODE_BYTES: 40\n", 0.01
+            run_suite.run_tool = fake_tool_b
+            run_suite.run_static_advise = lambda *a, **kw: ("loop 0: 1.50 cyc/B\n", {"cyc_per_b": 1.5, "load_bytes": 1})
+            with tempfile.TemporaryDirectory() as td:
+                c = run_suite.run_cell(
+                    task, "m1", "x86_64", args, "k",
+                    run_suite.BudgetGuard(10.0), Path(td), threading.BoundedSemaphore(2), arm="advised",
+                )
+            self.assertTrue(c["strict_pass"])
+            self.assertEqual(len(c["rounds"]), 3)
+            self.assertEqual(calls[0], 3)
+        finally:
+            run_suite.call_openrouter = orig_api
+            run_suite.run_tool = orig_tool
+            run_suite.run_static_advise = orig_adv
+            run_suite.run_verify2_on_bundle = orig_v2
+            run_suite.run_native_test = orig_nat
+            run_suite.expected_contract_id_for = orig_exp
+
 
 if __name__ == "__main__":
     unittest.main()

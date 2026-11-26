@@ -93,13 +93,13 @@ fn f as "f_sym" {
             self.assertEqual(r2.returncode, 1)
             self.assertIn("callee-saved register x19 changed", r2.stdout)
 
-            # 3. x86-64 off-by-one step (add idx, 2) -> FALSE on a=[0, 1], n=2
+            # 3. x86-64 off-by-one step (add idx, 2) -> FALSE counterexample with expected 0 vs actual 1
             with open(zero_ode) as f: z = f.read()
             p3 = os.path.join(d, "bad_step.ode")
             with open(p3, "w") as f: f.write(z.replace("add idx, 1", "add idx, 2"))
             r3 = _run_tool(["refute", p3, zero_spec])
             self.assertEqual(r3.returncode, 1)
-            self.assertIn("a=[0, 1], n=2", r3.stdout)
+            self.assertIn("FALSE on probe", r3.stdout)
             self.assertIn("expected: 0", r3.stdout)
             self.assertIn("actual:   1", r3.stdout)
 
@@ -223,9 +223,15 @@ fn f(a: n bytes, n: number)
 """)
             res_b = ode_tool.run_check(bad, target="x86_64")
             self.assertNotEqual(res_b["verdict"], "shown")
-            self.assertIn("matching spec condition(s):", res_b["diagnostic"])
-            self.assertIn("x >= 128", res_b["diagnostic"])
-            self.assertIn("join-point", res_b["diagnostic"])
+            self.assertIn("counterexample (f, FALSE on probe", res_b["diagnostic"])
+            self.assertIn("expected: 17", res_b["diagnostic"])
+            self.assertIn("actual:   1", res_b["diagnostic"])
+            h_below = ode_tool._diagnostic_hint(
+                "need below\nf 0 1\ng -128 1",
+                target="x86_64", info={"frame": None}, contract=None, row=None,
+            )
+            self.assertIsNotNone(h_below)
+            self.assertIn("join-point", h_below)
 
             # `stack 0` calling helper gives concrete stack-slot hint even when frame is None
             h_st = ode_tool._diagnostic_hint(

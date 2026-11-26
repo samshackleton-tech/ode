@@ -1448,7 +1448,6 @@ class Verifier:
                         _check_arrive_join(first_j, st)
                         # Build generalized join state from scope-bounded `first_j`
                         gj = clone(first_j)
-                        gj["neq"] = []
                         gj["wrote"] = []
                         gj["range"] = None
                         base_v = gj["nvars"]
@@ -1487,11 +1486,11 @@ class Verifier:
                             if o not in st["stack_mem"] or st["stack_mem"][o][1]:
                                 raise Refuse(f"at loop place clean frame slot {o} may depend on values kept out of the trace")
                         return
-                    # Enter place once as fresh symbolic state, keeping path facts and `eqs` (matching Core.lean `Sym.general`)
+                    # Enter place once as fresh symbolic state, keeping path facts, `eqs`, and `neq` (matching Core.lean `Sym.general`)
                     pst = clone(st)
                     pst["facts"] = list(st["facts"])
                     pst["eqs"] = list(st["eqs"])
-                    pst["neq"] = []
+                    pst["neq"] = list(st["neq"])
                     pst["wrote"] = []
                     pst["range"] = None
                     pst["place_entry_fq"] = frozenset(o for o, (_, mk) in st["stack_mem"].items() if not mk)

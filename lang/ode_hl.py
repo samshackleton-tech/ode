@@ -946,14 +946,17 @@ def expand_unrolls(stmts, src):
 _INTRINSICS = frozenset({
     "load_u32x4", "store_u32x4", "load_u32x16", "store_u32x16", "broadcast_u32x16",
     "const_u32x4", "zeros_u32x16", "rotl32", "rotr32", "shl32", "shr32", "bswap32",
-    "shuf32", "shuf32_pair", "shufi32x4", "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64",
+    "shuf32", "shuf32_pair", "shufps", "shufi32x4",
+    "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64",
+    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
     "blend32", "palignr", "ext4", "ext8", "ext12",
     "sha256rnds2", "sha256msg1", "sha256msg2", "sha256h", "sha256h2", "sha256su0", "sha256su1",
     "add_u32x16_data",
 })
 
 _VEC4_INTRINSICS = frozenset({
-    "load_u32x4", "const_u32x4", "shuf32", "shuf32_pair", "blend32", "palignr",
+    "load_u32x4", "const_u32x4", "shuf32", "shuf32_pair", "shufps", "blend32", "palignr",
+    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
     "ext4", "ext8", "ext12", "bswap32",
     "sha256rnds2", "sha256msg1", "sha256msg2", "sha256h", "sha256h2", "sha256su0", "sha256su1",
 })
@@ -961,6 +964,226 @@ _VEC4_INTRINSICS = frozenset({
 _VEC16_INTRINSICS = frozenset({
     "load_u32x16", "broadcast_u32x16", "zeros_u32x16", "shufi32x4", "add_u32x16_data",
 })
+
+
+# ---------------------------------------------------------------------------
+# Wirth-style High-Level `inline fn` with `var` (by-reference) parameters
+# ---------------------------------------------------------------------------
+
+@dataclass
+class HLInline:
+    name: str
+    params: list   # [(param_name, param_ty, is_var)]
+    stmts: list
+    line: int
+
+
+def is_hl_inline(raw_text):
+    """Return True if an `inline fn ... { ... }` declaration is a High-Level Ode inline
+    (typed HL params / `var` params and no raw-asm `distinct(...)`/`changes ...` clauses)."""
+    bopen = raw_text.find("{")
+    if bopen == -1:
+        return False
+    hdr = raw_text[:bopen]
+    if re.search(r"\b(?:distinct|changes)\b", hdr):
+        return False
+    p1 = hdr.find("(")
+    p2 = hdr.rfind(")")
+    if p1 != -1 and p2 > p1:
+        params_s = hdr[p1 + 1:p2]
+        if re.search(r"\bvar\s+[A-Za-z_]\w*\s*:", params_s):
+            return True
+        if re.search(r":\s*(?:u64|u32|u8|u32x4|u32x16)\b", params_s):
+            return True
+    body_lines = raw_text[bopen + 1:raw_text.rfind("}")].splitlines()
+    return is_hl_body(body_lines)
+
+
+def parse_hl_inline(raw_text, first_line, src="<ode>"):
+    """Parse a High-Level Ode `inline fn NAME([var] p: ty, ...) { <HL stmts> }`."""
+    bopen = raw_text.find("{")
+    bclose = raw_text.rfind("}")
+    if bopen == -1 or bclose <= bopen:
+        raise HLErr(f"{src}: line {first_line}: malformed `inline fn` block")
+    hdr = raw_text[:bopen]
+    m = re.match(r"^\s*inline\s+fn\s+([A-Za-z_]\w*)\s*(?:for\s+\w+\s*)?\((.*)\)\s*$", hdr, re.S)
+    if not m:
+        raise HLErr(f"{src}: line {first_line}: invalid High-Level `inline fn` header `{hdr.strip()}`")
+    name = m.group(1)
+    pstr = m.group(2).strip()
+    params = []
+    seen = set()
+    if pstr:
+        for raw_p in pstr.split(","):
+            ps = raw_p.strip()
+            if not ps:
+                continue
+            pm = re.fullmatch(r"(var\s+)?([A-Za-z_]\w*)\s*:\s*([A-Za-z0-9_]+)", ps)
+            if not pm:
+                raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: invalid parameter `{ps}` (expected `[var] name: type`)")
+            is_var = bool(pm.group(1))
+            pname, pty = pm.group(2), pm.group(3)
+            if pname in seen:
+                raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: duplicate parameter `{pname}`")
+            seen.add(pname)
+            params.append((pname, pty, is_var))
+    body_start_line = first_line + raw_text[:bopen].count("\n")
+    body_text = raw_text[bopen + 1:bclose]
+    body_lines = body_text.split("\n")
+    parser = HLParser(body_lines, body_start_line, src)
+    stmts = parser.parse_block_stmts(until_brace=False)
+    return HLInline(name, params, stmts, first_line)
+
+
+def _subst_inline_expr(e, vmap, emap, call_line):
+    if isinstance(e, Var):
+        if e.name in emap:
+            return emap[e.name]
+        return Var(vmap.get(e.name, e.name), call_line)
+    if isinstance(e, Num):
+        return Num(e.val, call_line)
+    if isinstance(e, RawReg):
+        return RawReg(e.reg, call_line)
+    if isinstance(e, IndexLoad):
+        buf = vmap.get(e.buf, e.buf)
+        if e.buf in emap and isinstance(emap[e.buf], Var):
+            buf = emap[e.buf].name
+        return IndexLoad(buf, _subst_inline_expr(e.idx, vmap, emap, call_line), e.width, call_line)
+    if isinstance(e, BinOp):
+        l = _subst_inline_expr(e.left, vmap, emap, call_line)
+        r = _subst_inline_expr(e.right, vmap, emap, call_line)
+        if isinstance(l, Num) and isinstance(r, Num):
+            val = _const_eval_binop(e.op, l.val, r.val)
+            if val is not None:
+                return Num(val, call_line)
+        return BinOp(e.op, l, r, call_line)
+    if isinstance(e, Cmp):
+        return Cmp(e.op, _subst_inline_expr(e.left, vmap, emap, call_line), _subst_inline_expr(e.right, vmap, emap, call_line), call_line)
+    if isinstance(e, BoolOp):
+        return BoolOp(e.op, _subst_inline_expr(e.left, vmap, emap, call_line), _subst_inline_expr(e.right, vmap, emap, call_line), call_line)
+    if isinstance(e, NotOp):
+        return NotOp(_subst_inline_expr(e.expr, vmap, emap, call_line), call_line)
+    if isinstance(e, Select):
+        return Select(
+            _subst_inline_expr(e.cond, vmap, emap, call_line),
+            _subst_inline_expr(e.then_e, vmap, emap, call_line),
+            _subst_inline_expr(e.else_e, vmap, emap, call_line),
+            call_line,
+        )
+    if isinstance(e, Call):
+        return Call(e.name, [_subst_inline_expr(a, vmap, emap, call_line) for a in e.args], call_line)
+    return e
+
+
+def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
+    out = []
+    cur_vmap = dict(vmap)
+    for st in stmts:
+        if isinstance(st, LetStmt):
+            ne = _subst_inline_expr(st.expr, cur_vmap, emap, call_line)
+            new_nm = f"{prefix}{st.name}"
+            cur_vmap[st.name] = new_nm
+            out.append(LetStmt(new_nm, st.ty, ne, st.mutable, call_line))
+        elif isinstance(st, AssignStmt):
+            tgt = cur_vmap.get(st.target, st.target)
+            out.append(AssignStmt(tgt, st.op, _subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
+        elif isinstance(st, StoreStmt):
+            buf = cur_vmap.get(st.buf, st.buf)
+            if st.buf in emap and isinstance(emap[st.buf], Var):
+                buf = emap[st.buf].name
+            out.append(StoreStmt(buf, _subst_inline_expr(st.idx, cur_vmap, emap, call_line), st.width, _subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
+        elif isinstance(st, IfStmt):
+            out.append(IfStmt(
+                _subst_inline_expr(st.cond, cur_vmap, emap, call_line),
+                _subst_inline_stmts(st.then_body, cur_vmap, emap, prefix, call_line),
+                _subst_inline_stmts(st.else_body, cur_vmap, emap, prefix, call_line),
+                call_line,
+            ))
+        elif isinstance(st, WhileStmt):
+            out.append(WhileStmt(
+                _subst_inline_expr(st.cond, cur_vmap, emap, call_line),
+                st.maintains, st.writes, st.decreases,
+                _subst_inline_stmts(st.body, cur_vmap, emap, prefix, call_line),
+                call_line,
+            ))
+        elif isinstance(st, ForStmt):
+            nv = f"{prefix}{st.var}"
+            inner_vm = dict(cur_vmap)
+            inner_vm[st.var] = nv
+            out.append(ForStmt(
+                nv,
+                _subst_inline_expr(st.lo, cur_vmap, emap, call_line),
+                _subst_inline_expr(st.hi, cur_vmap, emap, call_line),
+                st.step, st.unroll, st.maintains, st.writes, st.decreases,
+                _subst_inline_stmts(st.body, inner_vm, emap, prefix, call_line),
+                call_line,
+            ))
+        elif isinstance(st, ExprStmt):
+            out.append(ExprStmt(_subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
+        elif isinstance(st, ReturnStmt):
+            out.append(ReturnStmt(_subst_inline_expr(st.expr, cur_vmap, emap, call_line) if st.expr is not None else None, call_line))
+        else:
+            out.append(st)
+    return out
+
+
+def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None):
+    """Hygienically expand High-Level `inline fn` calls in exact statement order."""
+    if not hl_inlines:
+        return stmts
+    if seq is None:
+        seq = [0]
+    if depth > 16:
+        raise HLErr(f"{src}: `inline fn` expansion exceeded max depth 16 (recursive inline fn?)")
+    out = []
+    for st in stmts:
+        if isinstance(st, ExprStmt) and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
+            inl = hl_inlines[st.expr.name]
+            args = st.expr.args
+            if len(args) != len(inl.params):
+                raise HLErr(
+                    f"{src}: line {st.line}: inline fn `{inl.name}` takes {len(inl.params)} argument(s), got {len(args)}"
+                )
+            seq[0] += 1
+            pfx = f"__inl_{seq[0]}_"
+            vmap, emap, preamble = {}, {}, []
+            for (pname, pty, is_var), a in zip(inl.params, args):
+                if is_var:
+                    if not isinstance(a, Var):
+                        raise HLErr(
+                            f"{src}: line {st.line}: inline fn `{inl.name}` parameter `var {pname}: {pty}` requires a variable argument"
+                        )
+                    vmap[pname] = a.name
+                elif isinstance(a, (Var, Num)):
+                    emap[pname] = a
+                else:
+                    tmp_nm = f"{pfx}arg_{pname}"
+                    preamble.append(LetStmt(tmp_nm, pty, a, False, st.line))
+                    vmap[pname] = tmp_nm
+            expanded = preamble + _subst_inline_stmts(inl.stmts, vmap, emap, pfx, st.line)
+            out.extend(_expand_hl_inlines(expanded, hl_inlines, src, depth + 1, seq))
+        elif isinstance(st, IfStmt):
+            out.append(IfStmt(
+                st.cond,
+                _expand_hl_inlines(st.then_body, hl_inlines, src, depth, seq),
+                _expand_hl_inlines(st.else_body, hl_inlines, src, depth, seq),
+                st.line,
+            ))
+        elif isinstance(st, WhileStmt):
+            out.append(WhileStmt(
+                st.cond, st.maintains, st.writes, st.decreases,
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq),
+                st.line,
+            ))
+        elif isinstance(st, ForStmt):
+            out.append(ForStmt(
+                st.var, st.lo, st.hi, st.step, st.unroll, st.maintains, st.writes, st.decreases,
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq),
+                st.line,
+            ))
+        else:
+            out.append(st)
+    return out
 
 
 def _mutated_vars(stmts):
@@ -1466,7 +1689,7 @@ def _clobber_sensitive_vars(e):
 # ---------------------------------------------------------------------------
 
 class HLLower:
-    def __init__(self, fn_name, params, arch, stmts, src, fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=()):
+    def __init__(self, fn_name, params, arch, stmts, src, fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None):
         self.fn_name = fn_name
         self.params = params          # [(name, kind_str)]
         self.param_names = [p[0] for p in params]
@@ -1478,11 +1701,16 @@ class HLLower:
         self.explicit_stack = explicit_stack
         self.callee_clobbers = dict(callee_clobbers) if callee_clobbers else {}
         self.needs = set(needs) if needs else set()
+        self.hl_inlines = dict(hl_inlines) if hl_inlines else {}
 
-        self.stmts = _alpha_rename_blocks(expand_unrolls(stmts, src), self.param_names)
+        expanded = _expand_hl_inlines(stmts, self.hl_inlines, src)
+        expanded = expand_unrolls(expanded, src)
+        expanded = _expand_hl_inlines(expanded, self.hl_inlines, src)
+        self.stmts = _alpha_rename_blocks(expanded, self.param_names)
         self.stmts, self.const_vals = _fold_const_lets(self.stmts)
         self.has_select = _has_select_stmts(self.stmts)
         self.x86_scratch = list(X86_SCRATCH)
+        self._pinned_scratch = set()
         (self.locals_order, self.local_types, self.bufs,
          self.has_calls, self.live_across_call) = _analyze_calls_and_vars(
             self.stmts, self.param_names, self.fn_names, self_name=fn_name
@@ -1795,9 +2023,9 @@ class HLLower:
         # 4. Exact stack frame layout & alignment
         if self.arch == "x86_64":
             push_bytes = 8 * len(self.callee_saved)
-            raw_frame = (off + 15) // 16 * 16 if off > 0 else 0
-            # On entry to x86-64 fn, rsp ≡ 8 (mod 16). Before `call`, rsp must be ≡ 0 (mod 16).
-            if self.has_calls and ((push_bytes + raw_frame + 8) % 16 != 0):
+            need_align16 = self.uses_zmm or any(b[2] >= 16 for b in self.bufs)
+            raw_frame = (off + 15) // 16 * 16 if (off > 0 and need_align16) else ((off + 7) // 8 * 8 if off > 0 else 0)
+            if self.has_calls and need_align16 and ((push_bytes + raw_frame + 8) % 16 != 0):
                 raw_frame += 8
             self.frame_bytes = raw_frame
             self.total_stack = push_bytes + raw_frame + (8 if self.has_calls else 0)
@@ -1831,7 +2059,34 @@ class HLLower:
         return f"@{prefix}_{self.lbl_seq}"
 
     def _scratch_pool(self):
-        return ARM_SCRATCH if self.arch == "arm64" else self.x86_scratch
+        base = ARM_SCRATCH if self.arch == "arm64" else self.x86_scratch
+        if self._pinned_scratch:
+            avail = [r for r in base if r not in self._pinned_scratch]
+            if avail:
+                return avail
+        return base
+
+    def _expr_reads_reg(self, e, reg):
+        """True if scalar expression `e` reads any variable or buffer base currently located in `reg`."""
+        if isinstance(e, Var):
+            return self.var_loc.get(e.name) == ("reg", reg)
+        if isinstance(e, RawReg):
+            return e.reg == reg
+        if isinstance(e, IndexLoad):
+            return self.var_loc.get(e.buf) == ("reg", reg) or self._expr_reads_reg(e.idx, reg)
+        if isinstance(e, (BinOp, Cmp, BoolOp)):
+            return self._expr_reads_reg(e.left, reg) or self._expr_reads_reg(e.right, reg)
+        if isinstance(e, NotOp):
+            return self._expr_reads_reg(e.expr, reg)
+        if isinstance(e, Select):
+            return (
+                self._expr_reads_reg(e.cond, reg)
+                or self._expr_reads_reg(e.then_e, reg)
+                or self._expr_reads_reg(e.else_e, reg)
+            )
+        if isinstance(e, Call):
+            return any(self._expr_reads_reg(a, reg) for a in e.args)
+        return False
 
     def _n_scr(self):
         return len(self._scratch_pool())
@@ -2059,7 +2314,14 @@ class HLLower:
                         self.emit(line, "wrap")
                     self.emit(line, f"{mn} {dst}, {lhs_reg}, {tr}")
             return
-        rreg = self._as_reg(rhs_e, tmp_idx)
+        pin_l = lhs_reg in self._scratch_pool()
+        if pin_l:
+            self._pinned_scratch.add(lhs_reg)
+        try:
+            rreg = self._as_reg(rhs_e, tmp_idx)
+        finally:
+            if pin_l:
+                self._pinned_scratch.discard(lhs_reg)
         if self.arch == "x86_64":
             if rreg == dst and lhs_reg != dst:
                 tr = self.scratch(tmp_idx if self.scratch(tmp_idx) != dst else (tmp_idx + 1) % self._n_scr())
@@ -2093,29 +2355,46 @@ class HLLower:
             else:
                 self.emit(line, f"lsl {dst}, {lhs_reg}, {sh}")
             return
-        # Sum of power-of-two terms (e.g. * 3, * 10, * 12)
+        # Sum of power-of-two terms (e.g. * 3, * 10, * 12).
+        # Order highest bit first so odd factors (`3 * g`, `5 * g`, `9 * g`) finish with
+        # `add dst, base` using ZERO extra scratch registers and one fewer instruction!
         bits = [b for b in range(64) if (k >> b) & 1]
-        tr = self.scratch(tmp_idx)
         base = lhs_reg
+        pinned_base = None
         if base == dst:
+            tr = self.scratch(tmp_idx)
+            if tr == dst:
+                tr = self.scratch((tmp_idx + 1) % self._n_scr())
             self.emit(line, f"mov {tr}, {lhs_reg}")
             base = tr
-        first_b = bits[0]
-        if first_b == 0:
+            pinned_base = tr
+        hi_b = bits[-1]
+        if self.arch == "x86_64":
             self.emit(line, f"mov {dst}, {base}")
-        elif self.arch == "x86_64":
-            self.emit(line, f"mov {dst}, {base}")
-            self.emit(line, f"shl {dst}, {first_b}")
+            if hi_b > 0:
+                self.emit(line, f"shl {dst}, {hi_b}")
         else:
-            self.emit(line, f"lsl {dst}, {base}, {first_b}")
-        t2 = self.scratch((tmp_idx + 1) % self._n_scr())
-        if t2 in (dst, base):
-            for cand in self._scratch_pool():
-                if cand not in (dst, base):
-                    t2 = cand
-                    break
-        for b in bits[1:]:
-            if self.arch == "x86_64":
+            if hi_b > 0:
+                self.emit(line, f"lsl {dst}, {base}, {hi_b}")
+            else:
+                self.emit(line, f"mov {dst}, {base}")
+        rest_bits = list(reversed(bits[:-1]))
+        if any(b > 0 for b in rest_bits):
+            t2 = self.scratch((tmp_idx + 1) % self._n_scr())
+            if t2 in (dst, base):
+                for cand in self._scratch_pool():
+                    if cand not in (dst, base):
+                        t2 = cand
+                        break
+        else:
+            t2 = None
+        for b in rest_bits:
+            if b == 0:
+                if self.arch == "x86_64":
+                    self.emit(line, f"add {dst}, {base}")
+                else:
+                    self.emit(line, f"add {dst}, {dst}, {base}")
+            elif self.arch == "x86_64":
                 self.emit(line, f"mov {t2}, {base}")
                 self.emit(line, f"shl {t2}, {b}")
                 self.emit(line, f"add {dst}, {t2}")
@@ -2189,10 +2468,22 @@ class HLLower:
                 wrap = e.op in ("+%", "-%")
                 if isinstance(e.left, Var) and self.var_loc.get(e.left.name, (None,))[0] == "reg":
                     lreg = self.var_loc[e.left.name][1]
+                    self._emit_add_sub(e.line, e.op, dst, lreg, e.right, wrap=wrap, tmp_idx=nxt_idx)
+                elif self._expr_reads_reg(e.right, dst):
+                    # Evaluating `e.left` directly into `dst` would clobber a reg read by `e.right`
+                    # (e.g. `return 256 * buf[pos + 2] + buf[pos + 3]` on arm64 where `buf` is `x0`).
+                    tr = self.scratch(s_idx)
+                    if tr == dst:
+                        tr = self.scratch(nxt_idx)
+                    self._eval_scalar(e.left, tr, s_idx)
+                    self._pinned_scratch.add(tr)
+                    try:
+                        self._emit_add_sub(e.line, e.op, dst, tr, e.right, wrap=wrap, tmp_idx=0)
+                    finally:
+                        self._pinned_scratch.discard(tr)
                 else:
                     self._eval_scalar(e.left, dst, s_idx)
-                    lreg = dst
-                self._emit_add_sub(e.line, e.op, dst, lreg, e.right, wrap=wrap, tmp_idx=nxt_idx)
+                    self._emit_add_sub(e.line, e.op, dst, dst, e.right, wrap=wrap, tmp_idx=nxt_idx)
                 return
             if e.op == "*":
                 if isinstance(e.right, Num):
@@ -2235,37 +2526,54 @@ class HLLower:
                     self.emit(e.line, f"{'lsl' if e.op == '<<' else 'lsr'} {dst}, {lreg}, {k}")
                 return
             if e.op in ("&", "|"):
+                pinned_l = None
                 if isinstance(e.left, Var) and self.var_loc.get(e.left.name, (None,))[0] == "reg":
                     lreg = self.var_loc[e.left.name][1]
+                elif self._expr_reads_reg(e.right, dst):
+                    tr = self.scratch(s_idx)
+                    if tr == dst:
+                        tr = self.scratch(nxt_idx)
+                    self._eval_scalar(e.left, tr, s_idx)
+                    lreg = tr
+                    pinned_l = tr
+                    self._pinned_scratch.add(tr)
                 else:
                     self._eval_scalar(e.left, dst, s_idx)
                     lreg = dst
-                if self.arch == "x86_64":
-                    mn = "and" if e.op == "&" else "or"
-                    if isinstance(e.right, Num):
-                        k = e.right.val
-                        if lreg != dst:
-                            self.emit(e.line, f"mov {dst}, {lreg}")
-                        if -(1 << 31) <= k < (1 << 31):
-                            self.emit(e.line, f"{mn} {dst}, {k}")
+                    if lreg in self._scratch_pool():
+                        pinned_l = lreg
+                        self._pinned_scratch.add(lreg)
+                try:
+                    cur_nxt = 0 if pinned_l else nxt_idx
+                    if self.arch == "x86_64":
+                        mn = "and" if e.op == "&" else "or"
+                        if isinstance(e.right, Num):
+                            k = e.right.val
+                            if lreg != dst:
+                                self.emit(e.line, f"mov {dst}, {lreg}")
+                            if -(1 << 31) <= k < (1 << 31):
+                                self.emit(e.line, f"{mn} {dst}, {k}")
+                            else:
+                                tr2 = self.scratch(cur_nxt)
+                                self._emit_imm(e.line, tr2, k)
+                                self.emit(e.line, f"{mn} {dst}, {tr2}")
                         else:
-                            tr = self.scratch(nxt_idx)
-                            self._emit_imm(e.line, tr, k)
-                            self.emit(e.line, f"{mn} {dst}, {tr}")
+                            rreg = self._as_reg(e.right, cur_nxt)
+                            if lreg != dst:
+                                self.emit(e.line, f"mov {dst}, {lreg}")
+                            self.emit(e.line, f"{mn} {dst}, {rreg}")
                     else:
-                        rreg = self._as_reg(e.right, nxt_idx)
-                        if lreg != dst:
-                            self.emit(e.line, f"mov {dst}, {lreg}")
-                        self.emit(e.line, f"{mn} {dst}, {rreg}")
-                else:
-                    mn = "and" if e.op == "&" else "orr"
-                    if isinstance(e.right, Num):
-                        tr = self.scratch(nxt_idx)
-                        self._emit_imm(e.line, tr, e.right.val)
-                        self.emit(e.line, f"{mn} {dst}, {lreg}, {tr}")
-                    else:
-                        rreg = self._as_reg(e.right, nxt_idx)
-                        self.emit(e.line, f"{mn} {dst}, {lreg}, {rreg}")
+                        mn = "and" if e.op == "&" else "orr"
+                        if isinstance(e.right, Num):
+                            tr2 = self.scratch(cur_nxt)
+                            self._emit_imm(e.line, tr2, e.right.val)
+                            self.emit(e.line, f"{mn} {dst}, {lreg}, {tr2}")
+                        else:
+                            rreg = self._as_reg(e.right, cur_nxt)
+                            self.emit(e.line, f"{mn} {dst}, {lreg}, {rreg}")
+                finally:
+                    if pinned_l:
+                        self._pinned_scratch.discard(pinned_l)
                 return
             if e.op == "^":
                 raise HLErr(
@@ -2336,44 +2644,85 @@ class HLLower:
             flip = {"==": "==", "!=": "!=", "<": ">", "<=": ">=", ">": "<", ">=": "<="}[cmp_op]
             cmp_l, cmp_op, cmp_r = cmp_r, flip, cmp_l
 
-        # Pick a free scratch register for `t_expr` (distinct from `dst` and `cmp_l`/`cmp_r` if in regs)
+        # Pick target register `out_reg` and evaluate `else_e` / `then_e` without clobbering either.
+        # Crucially, nested `select(..., t, select(...))` MUST evaluate the recursive `else_e` into
+        # `out_reg` FIRST so inner selects never overwrite the outer `t_reg` scratch register!
         pool = list(self._scratch_pool())
         cmp_regs = set()
         if isinstance(cmp_l, Var) and cmp_l.name in self.var_loc and self.var_loc[cmp_l.name][0] == "reg":
             cmp_regs.add(self.var_loc[cmp_l.name][1])
         if isinstance(cmp_r, Var) and cmp_r.name in self.var_loc and self.var_loc[cmp_r.name][0] == "reg":
             cmp_regs.add(self.var_loc[cmp_r.name][1])
-        avoid = {dst} | cmp_regs
 
-        t_reg = None
-        if isinstance(sel.then_e, Var) and self.var_loc.get(sel.then_e.name, (None,))[0] == "reg" and self.var_loc[sel.then_e.name][1] != dst:
-            t_reg = self.var_loc[sel.then_e.name][1]
-        else:
-            for cand in pool:
-                if cand not in avoid:
-                    t_reg = cand
-                    break
-            if t_reg is None:
-                t_reg = next(cand for cand in pool if cand != dst)
-            self._eval_scalar(sel.then_e, t_reg, pool.index(t_reg) if t_reg in pool else 0)
+        else_is_dst = isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", dst)
+        then_reads_dst = self._expr_reads_reg(sel.then_e, dst)
+        else_is_complex = isinstance(sel.else_e, Select) or not isinstance(sel.else_e, (Var, Num))
 
-        # If `dst` holds one of the comparison operands (e.g., `ev` in `rax` on `return select(ev == 65535, 1, 0)`),
-        # evaluate `else_e` and `cmov`/`csel` into a scratch reg first so `cmp` still reads the original operand!
         out_reg = dst
-        if dst in cmp_regs and not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", dst)):
-            f_reg = next((r for r in pool if r not in (t_reg, dst) and r not in cmp_regs), None)
+        if not else_is_dst and (dst in cmp_regs or (else_is_complex and then_reads_dst)):
+            f_reg = next((r for r in pool if r != dst and r not in cmp_regs), None)
             if f_reg is not None:
                 out_reg = f_reg
 
-        # Evaluate `f_expr` into `out_reg` (ZERO instructions when `f_expr` is already `out_reg`!)
-        if not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", out_reg)):
-            # Pick a scratch index that doesn't clobber `t_reg` or `out_reg`
-            f_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, out_reg)), 0)
-            self._eval_scalar(sel.else_e, out_reg, f_sidx)
+        avoid_t = {out_reg, dst} | cmp_regs
 
-        # Emit `cmp` using scratch index avoiding `t_reg` and `out_reg`
-        c_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, out_reg)), 0)
-        self._emit_cmp(sel.line, cmp_l, cmp_r, c_sidx)
+        def pick_t_reg():
+            if isinstance(sel.then_e, Var) and self.var_loc.get(sel.then_e.name, (None,))[0] == "reg":
+                vr = self.var_loc[sel.then_e.name][1]
+                if vr != out_reg:
+                    return vr, False
+            cur_pool = list(self._scratch_pool())
+            for cand in cur_pool:
+                if cand not in avoid_t:
+                    return cand, True
+            return next((cand for cand in cur_pool if cand != out_reg), cur_pool[0]), True
+
+        if else_is_complex or not self._expr_reads_reg(sel.then_e, out_reg):
+            # Evaluate `else_e` into `out_reg` FIRST (freeing the whole scratch pool for nested selects!).
+            if not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", out_reg)):
+                self._eval_scalar(sel.else_e, out_reg, 0)
+            pin_out = out_reg in self._scratch_pool()
+            if pin_out:
+                self._pinned_scratch.add(out_reg)
+            try:
+                t_reg, need_eval_t = pick_t_reg()
+                if need_eval_t:
+                    cur_pool = list(self._scratch_pool())
+                    self._eval_scalar(sel.then_e, t_reg, cur_pool.index(t_reg) if t_reg in cur_pool else 0)
+                pin_t = t_reg in self._scratch_pool()
+                if pin_t:
+                    self._pinned_scratch.add(t_reg)
+                try:
+                    self._emit_cmp(sel.line, cmp_l, cmp_r, 0)
+                finally:
+                    if pin_t:
+                        self._pinned_scratch.discard(t_reg)
+            finally:
+                if pin_out:
+                    self._pinned_scratch.discard(out_reg)
+        else:
+            # Simple `else_e` with `then_e` reading `out_reg` (e.g. `r := select(c, r + 1, 0)`):
+            # evaluate `then_e` into `t_reg` BEFORE writing `else_e` into `out_reg`.
+            t_reg, need_eval_t = pick_t_reg()
+            if need_eval_t:
+                self._eval_scalar(sel.then_e, t_reg, pool.index(t_reg) if t_reg in pool else 0)
+            pin_t = t_reg in self._scratch_pool()
+            if pin_t:
+                self._pinned_scratch.add(t_reg)
+            try:
+                if not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", out_reg)):
+                    self._eval_scalar(sel.else_e, out_reg, 0)
+                pin_out = out_reg in self._scratch_pool()
+                if pin_out:
+                    self._pinned_scratch.add(out_reg)
+                try:
+                    self._emit_cmp(sel.line, cmp_l, cmp_r, 0)
+                finally:
+                    if pin_out:
+                        self._pinned_scratch.discard(out_reg)
+            finally:
+                if pin_t:
+                    self._pinned_scratch.discard(t_reg)
 
         if self.arch == "x86_64":
             cc = {"==": "e", "!=": "ne", "<": "b", "<=": "be", ">": "a", ">=": "ae"}[cmp_op]
@@ -2483,6 +2832,15 @@ class HLLower:
         self._eval_vec(e, vr, ty, s_idx)
         return vr
 
+    def _vec_expr_uses_reg(self, e, reg):
+        if isinstance(e, Var):
+            return self.var_loc.get(e.name) == ("reg", reg)
+        if isinstance(e, BinOp):
+            return self._vec_expr_uses_reg(e.left, reg) or self._vec_expr_uses_reg(e.right, reg)
+        if isinstance(e, Call):
+            return any(self._vec_expr_uses_reg(a, reg) for a in e.args)
+        return False
+
     def _eval_vec(self, e, dst, ty, s_idx=0):
         line = getattr(e, "line", 0)
         if isinstance(e, Var):
@@ -2501,7 +2859,11 @@ class HLLower:
                 self.emit(line, f"vmovdqu32 {dst}, [{base}{d_str}]")
             return
         if isinstance(e, BinOp):
-            lr = self._as_vec_reg(e.left, ty, s_idx)
+            if not isinstance(e.left, Var) and not self._vec_expr_uses_reg(e.right, dst):
+                self._eval_vec(e.left, dst, ty, s_idx)
+                lr = dst
+            else:
+                lr = self._as_vec_reg(e.left, ty, s_idx)
             nxt = 1 - (s_idx & 1)
             if self._vec_scratch(ty, nxt) == lr:
                 nxt = 1 - nxt
@@ -2514,7 +2876,8 @@ class HLLower:
                 else:
                     raise HLErr(f"{self.src}: line {line}: unsupported u32x16 op `{e.op}`")
             elif self.arch == "x86_64":
-                op_map = {"+": "vpaddd", "+%": "vpaddd", "^": "vpxord", "&": "vpand", "|": "vpor"}
+                xor_mn = "vpxord" if "avx512" in self.needs else "vpxor"
+                op_map = {"+": "vpaddd", "+%": "vpaddd", "^": xor_mn, "&": "vpand", "|": "vpor"}
                 if e.op not in op_map:
                     raise HLErr(f"{self.src}: line {line}: unsupported u32x4 op `{e.op}`")
                 self.emit(line, f"{op_map[e.op]} {dst}, {lr}, {rr}")
@@ -2548,7 +2911,7 @@ class HLLower:
                     d_str = f" + {disp}" if disp else ""
                     self.emit(line, f"vpbroadcastd {dst}, dword ptr [{base}{d_str}]")
                 elif isinstance(a0, Var) and a0.name in self.data_names:
-                    self.emit(line, f"vpbroadcastd {dst}, dword ptr [rip + {a0.name}]")
+                    self.emit(line, f"vpbroadcastd {dst}, dword ptr [rip + #{a0.name}]")
                 else:
                     sr = self._as_reg(a0, 0)
                     self.emit(line, f"vpbroadcastd {dst}, {X86_REG32[sr]}")
@@ -2556,9 +2919,36 @@ class HLLower:
             if nm == "const_u32x4":
                 a0 = args[0]
                 if self.arch == "x86_64":
-                    self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + {a0.name}]")
+                    self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + #{a0.name}]")
                 else:
-                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` on arm64 uses `load_u32x4`")
+                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` on arm64 uses `u32x4(w0, w1, w2, w3)`")
+                return
+            if nm == "u32x4":
+                if len(args) != 4 or not all(isinstance(a, Num) for a in args):
+                    raise HLErr(f"{self.src}: line {line}: `u32x4(w0, w1, w2, w3)` requires 4 constant 32-bit integers")
+                w0, w1, w2, w3 = (a.val & 0xFFFFFFFF for a in args)
+                lo64 = w0 | (w1 << 32)
+                hi64 = w2 | (w3 << 32)
+                self._eval_vec(Call("pack_u64x2", [Num(lo64, line), Num(hi64, line)], line), dst, "u32x4", s_idx)
+                return
+            if nm == "pack_u64x2":
+                if len(args) != 2:
+                    raise HLErr(f"{self.src}: line {line}: `pack_u64x2(lo, hi)` takes 2 scalar u64 arguments")
+                vtmp = self._vec_scratch("u32x4", 0)
+                if vtmp == dst:
+                    vtmp = self._vec_scratch("u32x4", 1)
+                lo_r = self._as_reg(args[0], 0)
+                if self.arch == "x86_64":
+                    self.emit(line, f"vmovq {dst}, {lo_r}")
+                else:
+                    self.emit(line, f"fmov d{dst[1:]}, {lo_r}")
+                hi_r = self._as_reg(args[1], 0)
+                if self.arch == "x86_64":
+                    self.emit(line, f"vmovq {vtmp}, {hi_r}")
+                    self.emit(line, f"vpunpcklqdq {dst}, {dst}, {vtmp}")
+                else:
+                    self.emit(line, f"fmov d{vtmp[1:]}, {hi_r}")
+                    self.emit(line, f"zip1 {dst}.2d, {dst}.2d, {vtmp}.2d")
                 return
             if nm in ("rotl32", "rotr32"):
                 k = args[1].val
@@ -2602,6 +2992,28 @@ class HLLower:
                 imm = args[1].val
                 self.emit(line, f"vpshufd {dst}, {a}, {imm}")
                 return
+            if nm == "shufps":
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
+                imm = args[2].val
+                self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
+                return
+            if nm == "blend32":
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
+                imm = args[2].val
+                self.emit(line, f"vpblendd {dst}, {a}, {b}, {imm}")
+                return
+            if nm in ("uzp1_32", "uzp2_32"):
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
+                if self.arch == "arm64":
+                    mn = "uzp1" if nm == "uzp1_32" else "uzp2"
+                    self.emit(line, f"{mn} {dst}.4s, {a}.4s, {b}.4s")
+                else:
+                    imm = 136 if nm == "uzp1_32" else 221
+                    self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
+                return
             if nm in ("ext4", "ext8", "ext12"):
                 k = int(nm[3:])
                 a = self._as_vec_reg(args[0], ty, s_idx)
@@ -2627,7 +3039,7 @@ class HLLower:
                 return
             if nm == "add_u32x16_data":
                 a = self._as_vec_reg(args[0], ty, s_idx)
-                self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + {args[1].name}]")
+                self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + #{args[1].name}]")
                 return
             raise HLErr(f"{self.src}: line {line}: unknown vector intrinsic `{nm}`")
         raise HLErr(f"{self.src}: line {line}: unsupported vector expression")
@@ -2813,10 +3225,28 @@ class HLLower:
                     d_str = f" + {disp}" if disp else ""
                     self.emit(st.line, f"vmovdqu32 [{base}{d_str}], {vr}")
                 return
-            # Scalar store (`out[i] := expr`)
-            val_r = self._as_reg(st.expr, 0)
-            addr_sidx = 1 if val_r == self.scratch(0) else 0
-            base, disp = self._emit_addr(st.line, st.buf, st.idx, self.scratch(addr_sidx), addr_sidx)
+            # Scalar store (`out[i] := expr`): pin `val_r` if in scratch so complex indices like `3 * g`
+            # never clobber the value being stored!
+            if isinstance(st.expr, (Var, Num)):
+                base, disp = self._emit_addr(st.line, st.buf, st.idx, self.scratch(0), 0)
+                pin_b = base in self._scratch_pool()
+                if pin_b:
+                    self._pinned_scratch.add(base)
+                try:
+                    val_r = self._as_reg(st.expr, 0)
+                finally:
+                    if pin_b:
+                        self._pinned_scratch.discard(base)
+            else:
+                val_r = self._as_reg(st.expr, 0)
+                pin_v = val_r in self._scratch_pool()
+                if pin_v:
+                    self._pinned_scratch.add(val_r)
+                try:
+                    base, disp = self._emit_addr(st.line, st.buf, st.idx, self.scratch(0), 0)
+                finally:
+                    if pin_v:
+                        self._pinned_scratch.discard(val_r)
             if st.width == "u8":
                 if self.arch == "x86_64":
                     d_str = f" + {disp}" if disp else ""
@@ -3117,12 +3547,12 @@ def normalize_contract_params(params_text):
     return ", ".join(parts), extra_req
 
 
-def lower_hl_block(fn_name, params_text, lines, first_line, arch, src="<ode>", fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=()):
+def lower_hl_block(fn_name, params_text, lines, first_line, arch, src="<ode>", fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None):
     """Parse and deterministically lower a High-Level Ode function body to `odec` assembly lines + metadata."""
     parser = HLParser(lines, first_line, src)
     stmts = parser.parse_block_stmts(until_brace=False)
     params = parse_param_list(params_text)
-    lowerer = HLLower(fn_name, params, arch, stmts, src, fn_names=fn_names, data_names=data_names, explicit_stack=explicit_stack, callee_clobbers=callee_clobbers, needs=needs)
+    lowerer = HLLower(fn_name, params, arch, stmts, src, fn_names=fn_names, data_names=data_names, explicit_stack=explicit_stack, callee_clobbers=callee_clobbers, needs=needs, hl_inlines=hl_inlines)
     res = lowerer.lower()
     # Group lowered asm lines by original High-Level Ode source line for `ode advise --asm`
     src_by_no = {first_line + i: raw.rstrip() for i, raw in enumerate(lines)}

@@ -1502,6 +1502,59 @@ fn rec_zero(a: n bytes, n: number, d: number)
                 self.assertEqual(r2.returncode, 0, f"verify2 stacklin/{target}: {r2.stdout}{r2.stderr}")
                 self.assertIn("shown (1 function, verify2)", r2.stdout)
 
+    def test_17_neq_preserved_across_loop_place(self):
+        """A `neq` fact learned before a loop `place` stays in `s.spec` across `Sym.general`, matching `Core.lean`."""
+        src = """\
+def sum_nz(buf, i, n, acc) {
+    if i >= n then acc
+    else sum_nz(buf, i + 1, n, acc + buf[i])
+}
+
+def tagged_sum(buf, n, tag) {
+    if tag == 1 then 100
+    else if tag == 2 then 200
+    else if tag == 3 then sum_nz(buf, 0, n, 0)
+    else 0
+}
+
+fn run_tagged(buf: n bytes, n: u64, tag: u64) -> u64
+    requires 0 <= n, n <= 16
+    returns tagged_sum(buf, n, tag)
+    trace depends on buf, n, tag
+{
+    if tag == 1 { return 100 }
+    if tag == 2 { return 200 }
+    if tag != 3 { return 0 }
+    var acc: u64 := 0
+    for i in 0..n
+        maintains acc <= 255 * i
+        maintains sum_nz(buf, 0, n, 0) == sum_nz(buf, i, n, acc)
+    {
+        acc += buf[i]
+    }
+    return acc
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "neq_loop.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                out_o, out_p = os.path.join(d, "neq.o"), os.path.join(d, "neq.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="run_tagged", target=target)
+                self.assertEqual(res["verdict"], "shown", f"neq_loop/{target}: {res}")
+                dump = os.path.join(d, "dump.sh")
+                st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, f"verify2 neq_loop/{target}: {r2.stdout}{r2.stderr}")
+                self.assertIn("shown (1 function, verify2)", r2.stdout)
+
 
 def _run_one_test(test_name):
     import io, time

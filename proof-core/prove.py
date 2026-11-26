@@ -282,25 +282,54 @@ def near(system, seed, steps):
 FOUND = {}                # (the rows, the seed) -> what was found: the same question comes again and again in a search
 
 
+def _strip_isolated_bounds(system):
+    """Drop single-variable non-contradictory bound rows (e.g. `0 <= v <= 2^64-1` for unused registers)
+    whose variable appears in no multi-variable row. Preserves satisfiability identically."""
+    multi = set()
+    singles = {}
+    for f in system:
+        if len(f.c) > 1:
+            for n, _ in f.c:
+                multi.add(n)
+        elif len(f.c) == 1:
+            n, a = f.c[0]
+            singles.setdefault(n, []).append((a, f.k))
+    dead_vars = set()
+    for n, bs in singles.items():
+        if n in multi:
+            continue
+        # Only drop if every pos/neg pair of bounds on `n` has a non-negative combination (satisfiable).
+        pos = [(a, k) for a, k in bs if a > 0]
+        neg = [(-a, k) for a, k in bs if a < 0]
+        if not pos or not neg:
+            dead_vars.add(n)
+        elif all(k1 * b + k2 * a >= 0 for a, k1 in pos for b, k2 in neg):
+            dead_vars.add(n)
+    if not dead_vars:
+        return system
+    return [f for f in system if not (len(f.c) == 1 and f.c[0][0] in dead_vars)]
+
+
 def refutation(system, seed=-1, quick=False):
     """A proof that the rows (each >= 0) cannot all hold, or None; `seed`: the row asked about (the goal's, or the
-    newest fact). Elimination over all the rows first, in a small room. Then over the rows that bear on the one
-    asked about: in the usual order; with the unknowns that some row multiplies (a quotient, in x = m * q + r)
-    left for last, so that what is known of them as whole numbers is used (a row m * q + k >= 0 is rounded
-    where it is made); and in a large room. `quick`: only the small room (for a question that, where its answer
-    is yes, is a plain one: are two uses of a definition of the same things)."""
+    newest fact). Try the connected component (`bearing`) first — skipping dozens of unused register bounds on
+    arm64/x86-64 — then fall back to the stripped full system only for disconnected contradictions."""
     if not system: return None
-    key = (tuple(system), seed, quick)
+    seed_row = system[seed % len(system)]
+    clean = _strip_isolated_bounds(system)
+    if not clean: return None
+    key = (tuple(clean), seed_row, quick)
     if key not in FOUND:
-        found = kprove.derive(system, 600)
+        seed_i = clean.index(seed_row) if seed_row in clean else -1
+        rows = bearing(clean, seed_i) if seed_i >= 0 else clean
+        found = kprove.derive(rows, 600)
+        if not found and len(rows) < len(clean):
+            found = kprove.derive(clean, 600)
         if not found:
-            rows = bearing(system, seed % len(system))
-            if len(rows) < len(system): found = kprove.derive(rows, 600)
-            if not found and not quick:                # the equalities first, on the rows near the one asked about
-                seed_row = system[seed % len(system)]
+            if not quick and seed_i >= 0:                # the equalities first, on the rows near the one asked about
                 tried = None
                 for steps in (2, 3, 4, 6):
-                    close = near(system, seed % len(system), steps)
+                    close = near(clean, seed_i, steps)
                     if close == tried: break
                     tried = close
                     last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)
@@ -308,12 +337,11 @@ def refutation(system, seed=-1, quick=False):
                     if not found and last_q and len(close) <= 45:
                         found = derive_eq(close, 1200, last=frozenset())
                     if found: break
-            if not found and not quick:
-                seed_row = system[seed % len(system)]
+            if not found and not quick and seed_i >= 0:
                 for room in (12000,):                  # the rows near the one asked about, the quotients left for last
                     tried = None
                     for steps in (1, 2, 3, 4):
-                        close = near(system, seed % len(system), steps)
+                        close = near(clean, seed_i, steps)
                         if close == tried or len(close) == len(rows): break
                         tried = close
                         last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)

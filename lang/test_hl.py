@@ -626,6 +626,307 @@ fn hl_bad_copy(src: n bytes, out: 16 bytes, n: number) -> u64
             else:
                 os.environ["ODE_PROVE_MAX_LIVES"] = old
 
+    def test_19_wirth_inline_fn_var_and_sha256_big_sigma(self):
+        """Wirth `inline fn (var ...)` by-reference expansion + portable 9-line `sha256_big_sigma_4x` on both arches."""
+        src = """
+def sig0(x) { (x >>> 2) ^ (x >>> 13) ^ (x >>> 22) }
+def sig1(x) { (x >>> 6) ^ (x >>> 11) ^ (x >>> 25) }
+def big_sigma_4x(a, e) {
+    [ sig0(a[0]) + sig1(e[0]),
+      sig0(a[1]) + sig1(e[1]),
+      sig0(a[2]) + sig1(e[2]),
+      sig0(a[3]) + sig1(e[3]) ]
+}
+
+inline fn add_sig1(var acc: u32x4, e: u32x4) {
+    let s1: u32x4 := rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+    acc +%= s1
+}
+
+fn hl_sha256_big_sigma_4x(out: 16 bytes, a: 16 bytes, e: 16 bytes)
+    requires no_overlap(out, a, e)
+    ensures out = bytes_of(big_sigma_4x(words(a), words(e)))
+    stack 0
+for x86_64 needs avx {
+    let va: u32x4 := a.u32x4(0)
+    let ve: u32x4 := e.u32x4(0)
+    var acc: u32x4 := rotr32(va, 2) ^ rotr32(va, 13) ^ rotr32(va, 22)
+    add_sig1(acc, ve)
+    out.u32x4(0) := acc
+}
+for arm64 {
+    let va: u32x4 := a.u32x4(0)
+    let ve: u32x4 := e.u32x4(0)
+    var acc: u32x4 := rotr32(va, 2) ^ rotr32(va, 13) ^ rotr32(va, 22)
+    add_sig1(acc, ve)
+    out.u32x4(0) := acc
+}
+"""
+        _dual_verify(self, src, "hl_sha256_big_sigma_4x", check_verify2=False)
+
+    def test_20_blake3_compress1_pure_hl_both_arches(self):
+        """Full 7-round BLAKE3 1-block compression in 100% pure High-Level Ode verifies on both x86_64 and arm64."""
+        src = """
+use b3 = "blake3_spec.ode"
+
+data one_iv = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
+
+inline fn g_half(var a: u32x4, var b: u32x4, var c: u32x4, var d: u32x4, mx: u32x4, my: u32x4) {
+    a +%= mx
+    a +%= b
+    d := rotr32(d ^ a, 16)
+    c +%= d
+    b := rotr32(b ^ c, 12)
+    a +%= my
+    a +%= b
+    d := rotr32(d ^ a, 8)
+    c +%= d
+    b := rotr32(b ^ c, 7)
+}
+
+inline fn perm_x86(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
+    let t0: u32x4 := shufps(m0, m1, 214)
+    let nm1_a: u32x4 := shuf32(m0, 0x0F)
+    let nm0: u32x4 := shuf32(t0, 0x39)
+    let t1: u32x4 := shufps(m2, m3, 250)
+    let nm1: u32x4 := blend32(nm1_a, t1, 0xAA)
+    let t2: u32x4 := unpacklo64(m3, m1)
+    let t3: u32x4 := blend32(t2, m2, 0x88)
+    let nm2: u32x4 := shuf32(t3, 0x78)
+    let t4: u32x4 := unpackhi32(m1, m3)
+    let t5: u32x4 := unpacklo32(m2, t4)
+    let nm3: u32x4 := shuf32(t5, 0x1E)
+    m0 := nm0
+    m1 := nm1
+    m2 := nm2
+    m3 := nm3
+}
+
+inline fn perm_arm(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
+    let t0: u32x4 := uzp2_32(m1, m0)
+    let t1: u32x4 := unpacklo64(m0, t0)
+    let t2: u32x4 := ext8(m0, m0)
+    let t3: u32x4 := ext4(m2, m0)
+    let t4: u32x4 := uzp2_32(m0, t3)
+    let t5: u32x4 := ext12(m3, m0)
+    let nm0: u32x4 := ext4(t1, t2)
+    let u0: u32x4 := uzp1_32(m3, m1)
+    let u1: u32x4 := ext12(m2, m3)
+    let u2: u32x4 := unpackhi32(m1, m3)
+    let u3: u32x4 := unpacklo64(m2, u2)
+    let u6: u32x4 := ext4(m1, m2)
+    let nm1: u32x4 := ext4(t4, t5)
+    let nm2: u32x4 := uzp1_32(u0, u1)
+    let nm3: u32x4 := uzp2_32(u3, u6)
+    m0 := nm0
+    m1 := nm1
+    m2 := nm2
+    m3 := nm3
+}
+
+fn hl_b3_compress1(h: cv, m: block, length: word, t: counter, flags: low word)
+    requires no_overlap(h, m)
+    ensures h = b3.compress(h, m, t, length, flags)
+    stack 0
+for x86_64 needs avx needs avx512 {
+    var v0: u32x4 := h.u32x4(0)
+    var v1: u32x4 := h.u32x4(16)
+    var v2: u32x4 := const_u32x4(one_iv)
+    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    let b0: u32x4 := m.u32x4(0)
+    let b1: u32x4 := m.u32x4(16)
+    var m0: u32x4 := uzp1_32(b0, b1)
+    var m1: u32x4 := uzp2_32(b0, b1)
+    let b2: u32x4 := m.u32x4(32)
+    let b3: u32x4 := m.u32x4(48)
+    var m2: u32x4 := shuf32(uzp1_32(b2, b3), 0x93)
+    var m3: u32x4 := shuf32(uzp2_32(b2, b3), 0x93)
+    for r in 0..6 unroll {
+        g_half(v0, v1, v2, v3, m0, m1)
+        v0 := shuf32(v0, 0x93)
+        v3 := shuf32(v3, 0x4E)
+        v2 := shuf32(v2, 0x39)
+        g_half(v0, v1, v2, v3, m2, m3)
+        v0 := shuf32(v0, 0x39)
+        v3 := shuf32(v3, 0x4E)
+        v2 := shuf32(v2, 0x93)
+        perm_x86(m0, m1, m2, m3)
+    }
+    g_half(v0, v1, v2, v3, m0, m1)
+    v0 := shuf32(v0, 0x93)
+    v3 := shuf32(v3, 0x4E)
+    v2 := shuf32(v2, 0x39)
+    g_half(v0, v1, v2, v3, m2, m3)
+    v0 := shuf32(v0, 0x39)
+    v3 := shuf32(v3, 0x4E)
+    v2 := shuf32(v2, 0x93)
+    h.u32x4(0) := v0 ^ v2
+    h.u32x4(16) := v1 ^ v3
+}
+for arm64 {
+    var v0: u32x4 := h.u32x4(0)
+    var v1: u32x4 := h.u32x4(16)
+    var v2: u32x4 := u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+    var v3: u32x4 := pack_u64x2(t, length + (flags << 32))
+    let b0: u32x4 := m.u32x4(0)
+    let b1: u32x4 := m.u32x4(16)
+    var m0: u32x4 := uzp1_32(b0, b1)
+    var m1: u32x4 := uzp2_32(b0, b1)
+    let b2: u32x4 := m.u32x4(32)
+    let b3: u32x4 := m.u32x4(48)
+    let p2: u32x4 := uzp1_32(b2, b3)
+    let p3: u32x4 := uzp2_32(b2, b3)
+    var m2: u32x4 := ext12(p2, p2)
+    var m3: u32x4 := ext12(p3, p3)
+    for r in 0..6 unroll {
+        g_half(v0, v1, v2, v3, m0, m1)
+        v0 := ext12(v0, v0)
+        v3 := ext8(v3, v3)
+        v2 := ext4(v2, v2)
+        g_half(v0, v1, v2, v3, m2, m3)
+        v0 := ext4(v0, v0)
+        v3 := ext8(v3, v3)
+        v2 := ext12(v2, v2)
+        perm_arm(m0, m1, m2, m3)
+    }
+    g_half(v0, v1, v2, v3, m0, m1)
+    v0 := ext12(v0, v0)
+    v3 := ext8(v3, v3)
+    v2 := ext4(v2, v2)
+    g_half(v0, v1, v2, v3, m2, m3)
+    v0 := ext4(v0, v0)
+    v3 := ext8(v3, v3)
+    v2 := ext12(v2, v2)
+    h.u32x4(0) := v0 ^ v2
+    h.u32x4(16) := v1 ^ v3
+}
+"""
+        import shutil
+        spec_src = os.path.join(HERE, "..", "proof-core", "examples", "hashr_arm64_fast", "blake3_spec.ode")
+        with tempfile.TemporaryDirectory() as d:
+            shutil.copy2(spec_src, os.path.join(d, "blake3_spec.ode"))
+            src_p = os.path.join(d, "b3_c1.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src)
+            for tgt in ("x86_64", "arm64"):
+                out_o = os.path.join(d, f"c1_{tgt}.o")
+                out_p = os.path.join(d, f"c1_{tgt}.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="hl_b3_compress1", target=tgt, c_abi=True)
+                self.assertEqual(res["verdict"], "shown")
+
+    def test_21_nested_select_no_scratch_clobber(self):
+        """Nested `select(c1, t1, select(c2, t2, select(c3, t3, d)))` preserves outer `then_e` across inner selects."""
+        src = """\
+def classify(c) {
+    if c == 1 then 10
+    else if c == 2 then 20
+    else if c == 3 then 30
+    else 99
+}
+
+fn classify_fn(c: u8) -> u64
+    returns classify(c)
+    trace depends on nothing
+{
+    return select(c == 1, 10, select(c == 2, 20, select(c == 3, 30, 99)))
+}
+"""
+        _dual_verify(self, src, "classify_fn")
+
+    def test_22_store_compound_3x_index_no_val_clobber(self):
+        """`out[3 * g] := expr` with non-power-of-2 index never clobbers the value register before storing."""
+        src = """\
+def pack_triples_spec(inp) {
+    [ if j % 3 == 0 then ((inp[(j / 3) * 4] % 64) * 4 + (inp[(j / 3) * 4 + 1] % 64) / 16)
+      else if j % 3 == 1 then inp[(j / 3) * 4 + 2]
+      else inp[(j / 3) * 4 + 3]
+      for j in 0..12 ]
+}
+
+fn pack_triples(inp: n bytes, n: u64, out: 12 bytes) -> u64
+    requires n == 16
+    requires no_overlap(inp, out)
+    ensures out = pack_triples_spec(inp)
+    returns 1
+    trace depends on n
+{
+    for g in 0..4
+        writes out[.. 3 * g] = pack_triples_spec(inp)
+    {
+        let a := inp[4 * g] & 63
+        let b := inp[4 * g + 1] & 63
+        out[3 * g] := (a << 2) + (b >> 4)
+        out[3 * g + 1] := inp[4 * g + 2]
+        out[3 * g + 2] := inp[4 * g + 3]
+    }
+    return 1
+}
+"""
+        _dual_verify(self, src, "pack_triples")
+
+    def test_23_return_binop_preserves_param_x0_arm64(self):
+        """`return 256 * buf[pos + 2] + buf[pos + 3]` must not clobber `buf` (`x0` on arm64) while evaluating LHS."""
+        src = """\
+def read_be16(buf, pos) { 256 * buf[pos + 2] + buf[pos + 3] }
+
+fn get_be16(buf: n bytes, n: u64, pos: u64) -> u64
+    requires pos + 4 <= n, n <= 1024
+    returns read_be16(buf, pos)
+    trace depends on buf, n, pos
+{
+    return 256 * buf[pos + 2] + buf[pos + 3]
+}
+"""
+        _dual_verify(self, src, "get_be16")
+
+    def test_24_symbolic_stack_propagation_and_auto_needs_avx(self):
+        """Caller omitting `stack` inherits callee's symbolic `stack`; `u32x4` on x86_64 auto-adds `needs avx`."""
+        src_stk = """\
+def all_zero(buf, i, rem) {
+    if rem == 0 then 1
+    else if buf[i] != 0 then 0
+    else all_zero(buf, i + 1, rem - 1)
+}
+
+fn check_rec(buf: n bytes, n: u64, i: u64, rem: u64) -> u64
+    requires i + rem <= n, n <= 64
+    returns all_zero(buf, i, rem)
+    decreases rem
+    stack 64 + 64 * rem
+    trace depends on buf, n, i, rem
+{
+    if rem == 0 { return 1 }
+    if buf[i] != 0 { return 0 }
+    return check_rec(buf, n, i + 1, rem - 1)
+}
+
+fn check_entry(buf: n bytes, n: u64) -> u64
+    requires n <= 64
+    returns all_zero(buf, 0, n)
+    trace depends on buf, n
+{
+    return check_rec(buf, n, 0, n)
+}
+"""
+        _dual_verify(self, src_stk, "check_entry")
+
+        src_avx = """\
+def add4_w(a, b) {
+    [ a[0] + b[0], a[1] + b[1], a[2] + b[2], a[3] + b[3] ]
+}
+
+fn add_vec4(out: 16 bytes, a: 16 bytes, b: 16 bytes)
+    requires no_overlap(out, a, b)
+    ensures out = bytes_of(add4_w(words(a), words(b)))
+    trace depends on nothing
+{
+    let va: u32x4 := a.u32x4(0)
+    let vb: u32x4 := b.u32x4(0)
+    out.u32x4(0) := va +% vb
+}
+"""
+        _dual_verify(self, src_avx, "add_vec4", check_verify2=False)
+
 
 if __name__ == "__main__":
     unittest.main()
