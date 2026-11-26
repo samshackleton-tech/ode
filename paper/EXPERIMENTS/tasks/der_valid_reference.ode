@@ -1,0 +1,1295 @@
+use spec = "der_valid_spec.ode"
+
+fn bitstr_low_zero_fn(b: number, u: number)
+    requires b <= 255
+    requires u <= 7
+    returns spec.bitstr_low_zero(b, u)
+    trace depends on b, u
+    stack 0
+{
+    for x86_64 calling {
+        in b = r10, u = r11
+        out = rax
+        preserves rdi, rsi, rdx, rcx, r8, r9, rbx, rbp, r12, r13, r14, r15
+    } {
+        cmp r11, 0
+        je @ok
+        cmp r11, 1
+        je @u1
+        cmp r11, 2
+        je @u2
+        cmp r11, 3
+        je @u3
+        cmp r11, 4
+        je @u4
+        cmp r11, 5
+        je @u5
+        cmp r11, 6
+        je @u6
+        and r10, 127
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u1:
+        and r10, 1
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u2:
+        and r10, 3
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u3:
+        and r10, 7
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u4:
+        and r10, 15
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u5:
+        and r10, 31
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @u6:
+        and r10, 63
+        cmp r10, 0
+        je @ok
+        xor eax, eax
+        ret
+    @ok:
+        mov rax, 1
+        ret
+    }
+    for arm64 calling {
+        in b = x6, u = x7
+        out = x0
+        preserves x4, x1, x2, x3, x5, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        cmp x7, 0
+        b.eq @ok
+        cmp x7, 1
+        b.eq @u1
+        cmp x7, 2
+        b.eq @u2
+        cmp x7, 3
+        b.eq @u3
+        cmp x7, 4
+        b.eq @u4
+        cmp x7, 5
+        b.eq @u5
+        cmp x7, 6
+        b.eq @u6
+        mov x8, 127
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u1:
+        mov x8, 1
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u2:
+        mov x8, 3
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u3:
+        mov x8, 7
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u4:
+        mov x8, 15
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u5:
+        mov x8, 31
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @u6:
+        mov x8, 63
+        and x6, x6, x8
+        cmp x6, 0
+        b.eq @ok
+        mov x0, 0
+        ret
+    @ok:
+        mov x0, 1
+        ret
+    }
+}
+
+fn oid_ok_fn(buf: n bytes, n: number, start: number, end: number)
+    requires start <= end
+    requires end <= n
+    requires n <= 65536
+    returns spec.oid_ok(buf, start, end, 1)
+    trace depends on buf, n, start, end
+    stack 0
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, start = rdx, end = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        reg base = rdi, i = rdx, lim = rcx, at_start = r8, addr = r9, bv = r10, bvw = r10d
+
+        at_start := 1
+        place {
+            fact start <= i
+            fact i <= lim
+            fact lim == end
+            fact 0 <= at_start
+            fact at_start <= 1
+            fact spec.oid_ok(buf, start, end, 1) == spec.oid_ok(buf, i, lim, at_start)
+            decreases lim - i
+        }
+    @loop:
+        cmp i, lim
+        jae @done
+        lea addr, [base + i]
+        movzx bvw, byte ptr [addr + 0]
+        cmp at_start, 1
+        jne @check_cont
+        cmp bv, 128
+        je @bad
+    @check_cont:
+        cmp bv, 128
+        jae @cont
+        at_start := 1
+        add i, 1
+        jmp @loop
+    @cont:
+        at_start := 0
+        add i, 1
+        jmp @loop
+    @done:
+        mov rax, at_start
+        ret
+    @bad:
+        xor eax, eax
+        ret
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, start = x2, end = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        reg base = x4, i = x2, lim = x3, at_start = x5, addr = x6, bv = x7, bvw = w7
+
+        at_start := 1
+        place {
+            fact start <= i
+            fact i <= lim
+            fact lim == end
+            fact 0 <= at_start
+            fact at_start <= 1
+            fact spec.oid_ok(buf, start, end, 1) == spec.oid_ok(buf, i, lim, at_start)
+            decreases lim - i
+        }
+    @loop:
+        cmp i, lim
+        b.hs @done
+        add addr, base, i
+        ldrb bvw, [addr, 0]
+        cmp at_start, 1
+        b.ne @check_cont
+        cmp bv, 128
+        b.eq @bad
+    @check_cont:
+        cmp bv, 128
+        b.hs @cont
+        at_start := 1
+        add i, i, 1
+        b @loop
+    @cont:
+        at_start := 0
+        add i, i, 1
+        b @loop
+    @done:
+        mov x0, at_start
+        ret
+    @bad:
+        mov x0, 0
+        ret
+    }
+}
+
+fn der_prim_ok_fn(buf: n bytes, n: number, tag: number, vpos: number, vlen: number)
+    requires vpos + vlen <= n
+    requires n <= 65536
+    returns spec.der_prim_ok(buf, tag, vpos, vlen)
+    trace depends on buf, n, tag, vpos, vlen
+    stack 0
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, tag = r8, vpos = rdx, vlen = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        cmp r8, 1
+        je @t_bool
+        cmp r8, 2
+        je @t_int
+        cmp r8, 3
+        je @t_bitstr
+        cmp r8, 4
+        je @ok
+        cmp r8, 5
+        je @t_null
+        cmp r8, 6
+        je @t_oid
+    @bad:
+        xor eax, eax
+        ret
+    @ok:
+        mov rax, 1
+        ret
+    @t_bool:
+        cmp rcx, 1
+        jne @bad
+        lea r9, [rdi + rdx]
+        movzx r10d, byte ptr [r9 + 0]
+        cmp r10, 0
+        je @ok
+        cmp r10, 255
+        je @ok
+        jmp @bad
+    @t_int:
+        cmp rcx, 0
+        je @bad
+        cmp rcx, 1
+        je @ok
+        lea r9, [rdi + rdx]
+        movzx r10d, byte ptr [r9 + 0]
+        movzx r11d, byte ptr [r9 + 1]
+        cmp r10, 0
+        jne @int_neg
+        cmp r11, 128
+        jb @bad
+        jmp @ok
+    @int_neg:
+        cmp r10, 255
+        jne @ok
+        cmp r11, 128
+        jae @bad
+        jmp @ok
+    @t_bitstr:
+        cmp rcx, 0
+        je @bad
+        lea r9, [rdi + rdx]
+        movzx r11d, byte ptr [r9 + 0]
+        cmp r11, 7
+        ja @bad
+        cmp rcx, 1
+        jne @bitstr_nonempty
+        cmp r11, 0
+        je @ok
+        jmp @bad
+    @bitstr_nonempty:
+        lea r9, [rdx + rcx]
+        sub r9, 1
+        add r9, rdi
+        movzx r10d, byte ptr [r9 + 0]
+        jmp bitstr_low_zero_fn
+    @t_null:
+        cmp rcx, 0
+        je @ok
+        jmp @bad
+    @t_oid:
+        cmp rcx, 0
+        je @bad
+        add rcx, rdx
+        jmp oid_ok_fn
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, tag = x5, vpos = x2, vlen = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        cmp x5, 1
+        b.eq @t_bool
+        cmp x5, 2
+        b.eq @t_int
+        cmp x5, 3
+        b.eq @t_bitstr
+        cmp x5, 4
+        b.eq @ok
+        cmp x5, 5
+        b.eq @t_null
+        cmp x5, 6
+        b.eq @t_oid
+    @bad:
+        mov x0, 0
+        ret
+    @ok:
+        mov x0, 1
+        ret
+    @t_bool:
+        cmp x3, 1
+        b.ne @bad
+        add x8, x4, x2
+        ldrb w6, [x8, 0]
+        cmp x6, 0
+        b.eq @ok
+        cmp x6, 255
+        b.eq @ok
+        b @bad
+    @t_int:
+        cmp x3, 0
+        b.eq @bad
+        cmp x3, 1
+        b.eq @ok
+        add x8, x4, x2
+        ldrb w6, [x8, 0]
+        ldrb w7, [x8, 1]
+        cmp x6, 0
+        b.ne @int_neg
+        cmp x7, 128
+        b.lo @bad
+        b @ok
+    @int_neg:
+        cmp x6, 255
+        b.ne @ok
+        cmp x7, 128
+        b.hs @bad
+        b @ok
+    @t_bitstr:
+        cmp x3, 0
+        b.eq @bad
+        add x8, x4, x2
+        ldrb w7, [x8, 0]
+        cmp x7, 7
+        b.hi @bad
+        cmp x3, 1
+        b.ne @bitstr_nonempty
+        cmp x7, 0
+        b.eq @ok
+        b @bad
+    @bitstr_nonempty:
+        add x8, x2, x3
+        sub x8, x8, 1
+        add x8, x4, x8
+        ldrb w6, [x8, 0]
+        b bitstr_low_zero_fn
+    @t_null:
+        cmp x3, 0
+        b.eq @ok
+        b @bad
+    @t_oid:
+        cmp x3, 0
+        b.eq @bad
+        add x3, x2, x3
+        b oid_ok_fn
+    }
+}
+
+fn der_seq0(buf: n bytes, n: number, pos: number, end: number)
+    requires pos <= end
+    requires end <= n
+    requires n <= 65536
+    returns spec.der_seq(buf, pos, end, 0)
+    trace depends on buf, n, pos, end
+    stack 32
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, pos = rdx, end = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        push r12
+        push r13
+        mov r12, rdx
+        mov r13, rcx
+        place {
+            fact pos <= r12
+            fact r12 <= r13
+            fact r13 == end
+            fact spec.der_seq(buf, pos, end, 0) == spec.der_seq(buf, r12, r13, 0)
+            decreases r13 - r12
+        }
+    @loop:
+        cmp r12, r13
+        jae @ok
+        lea r10, [r12 + 2]
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx r9d, byte ptr [r11 + 1]
+        cmp r9, 128
+        jb @len_short
+        cmp r9, 129
+        je @len81
+        cmp r9, 130
+        je @len82
+        jmp @bad
+    @len_short:
+        mov r8, 2
+        jmp @have_len
+    @len81:
+        lea r10, [r12 + 3]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 128
+        jb @bad
+        mov r8, 3
+        jmp @have_len
+    @len82:
+        lea r10, [r12 + 4]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 1
+        jb @bad
+        shl r9, 8
+        movzx r10d, byte ptr [r11 + 3]
+        add r9, r10
+        mov r8, 4
+        place {
+            fact pos <= r12
+            fact r12 < r13
+            fact r13 == end
+            fact 2 <= r8
+            fact r8 <= 4
+            fact 0 <= r9
+            fact r9 <= 65535
+            fact r12 + r8 <= r13
+            fact r8 == spec.der_hdr_len(buf, r12, r13)
+            fact r9 == spec.der_val_len(buf, r12, r13)
+            fact spec.der_seq(buf, pos, end, 0) == spec.der_seq(buf, r12, r13, 0)
+        }
+    @have_len:
+        lea r10, [r12 + r8]
+        add r10, r9
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx eax, byte ptr [r11 + 0]
+        cmp rax, 48
+        je @bad
+        lea rdx, [r12 + r8]
+        mov rcx, r9
+        mov r8, rax
+        mov r12, r10
+        call der_prim_ok_fn
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @ok:
+        mov rax, 1
+        pop r13
+        pop r12
+        ret
+    @bad:
+        xor eax, eax
+        pop r13
+        pop r12
+        ret
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, pos = x2, end = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        str x19, [sp, 8]
+        str x20, [sp, 16]
+        mov x19, x2
+        mov x20, x3
+        place {
+            fact pos <= x19
+            fact x19 <= x20
+            fact x20 == end
+            fact spec.der_seq(buf, pos, end, 0) == spec.der_seq(buf, x19, x20, 0)
+            decreases x20 - x19
+        }
+    @loop:
+        cmp x19, x20
+        b.hs @ok
+        add x7, x19, 2
+        cmp x7, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w6, [x9, 1]
+        cmp x6, 128
+        b.lo @len_short
+        cmp x6, 129
+        b.eq @len81
+        cmp x6, 130
+        b.eq @len82
+        b @bad
+    @len_short:
+        mov x5, 2
+        b @have_len
+    @len81:
+        add x7, x19, 3
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 128
+        b.lo @bad
+        mov x5, 3
+        b @have_len
+    @len82:
+        add x7, x19, 4
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 1
+        b.lo @bad
+        lsl x6, x6, 8
+        ldrb w8, [x9, 3]
+        add x6, x6, x8
+        mov x5, 4
+        place {
+            fact pos <= x19
+            fact x19 < x20
+            fact x20 == end
+            fact 2 <= x5
+            fact x5 <= 4
+            fact 0 <= x6
+            fact x6 <= 65535
+            fact x19 + x5 <= x20
+            fact x5 == spec.der_hdr_len(buf, x19, x20)
+            fact x6 == spec.der_val_len(buf, x19, x20)
+            fact spec.der_seq(buf, pos, end, 0) == spec.der_seq(buf, x19, x20, 0)
+        }
+    @have_len:
+        add x7, x19, x5
+        add x8, x7, x6
+        cmp x8, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w5, [x9, 0]
+        cmp x5, 48
+        b.eq @bad
+        mov x2, x7
+        mov x3, x6
+        mov x19, x8
+        bl der_prim_ok_fn
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @ok:
+        mov x0, 1
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    @bad:
+        mov x0, 0
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    }
+}
+
+fn der_seq1(buf: n bytes, n: number, pos: number, end: number)
+    requires pos <= end
+    requires end <= n
+    requires n <= 65536
+    returns spec.der_seq(buf, pos, end, 1)
+    trace depends on buf, n, pos, end
+    stack 64
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, pos = rdx, end = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        push r12
+        push r13
+        mov r12, rdx
+        mov r13, rcx
+        place {
+            fact pos <= r12
+            fact r12 <= r13
+            fact r13 == end
+            fact spec.der_seq(buf, pos, end, 1) == spec.der_seq(buf, r12, r13, 1)
+            decreases r13 - r12
+        }
+    @loop:
+        cmp r12, r13
+        jae @ok
+        lea r10, [r12 + 2]
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx r9d, byte ptr [r11 + 1]
+        cmp r9, 128
+        jb @len_short
+        cmp r9, 129
+        je @len81
+        cmp r9, 130
+        je @len82
+        jmp @bad
+    @len_short:
+        mov r8, 2
+        jmp @have_len
+    @len81:
+        lea r10, [r12 + 3]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 128
+        jb @bad
+        mov r8, 3
+        jmp @have_len
+    @len82:
+        lea r10, [r12 + 4]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 1
+        jb @bad
+        shl r9, 8
+        movzx r10d, byte ptr [r11 + 3]
+        add r9, r10
+        mov r8, 4
+        place {
+            fact pos <= r12
+            fact r12 < r13
+            fact r13 == end
+            fact 2 <= r8
+            fact r8 <= 4
+            fact 0 <= r9
+            fact r9 <= 65535
+            fact r12 + r8 <= r13
+            fact r8 == spec.der_hdr_len(buf, r12, r13)
+            fact r9 == spec.der_val_len(buf, r12, r13)
+            fact spec.der_seq(buf, pos, end, 1) == spec.der_seq(buf, r12, r13, 1)
+        }
+    @have_len:
+        lea r10, [r12 + r8]
+        add r10, r9
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx eax, byte ptr [r11 + 0]
+        lea rdx, [r12 + r8]
+        mov r12, r10
+        cmp rax, 48
+        je @nested
+        mov rcx, r9
+        mov r8, rax
+        call der_prim_ok_fn
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @nested:
+        mov rcx, r10
+        call der_seq0
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @ok:
+        mov rax, 1
+        pop r13
+        pop r12
+        ret
+    @bad:
+        xor eax, eax
+        pop r13
+        pop r12
+        ret
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, pos = x2, end = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        str x19, [sp, 8]
+        str x20, [sp, 16]
+        mov x19, x2
+        mov x20, x3
+        place {
+            fact pos <= x19
+            fact x19 <= x20
+            fact x20 == end
+            fact spec.der_seq(buf, pos, end, 1) == spec.der_seq(buf, x19, x20, 1)
+            decreases x20 - x19
+        }
+    @loop:
+        cmp x19, x20
+        b.hs @ok
+        add x7, x19, 2
+        cmp x7, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w6, [x9, 1]
+        cmp x6, 128
+        b.lo @len_short
+        cmp x6, 129
+        b.eq @len81
+        cmp x6, 130
+        b.eq @len82
+        b @bad
+    @len_short:
+        mov x5, 2
+        b @have_len
+    @len81:
+        add x7, x19, 3
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 128
+        b.lo @bad
+        mov x5, 3
+        b @have_len
+    @len82:
+        add x7, x19, 4
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 1
+        b.lo @bad
+        lsl x6, x6, 8
+        ldrb w8, [x9, 3]
+        add x6, x6, x8
+        mov x5, 4
+        place {
+            fact pos <= x19
+            fact x19 < x20
+            fact x20 == end
+            fact 2 <= x5
+            fact x5 <= 4
+            fact 0 <= x6
+            fact x6 <= 65535
+            fact x19 + x5 <= x20
+            fact x5 == spec.der_hdr_len(buf, x19, x20)
+            fact x6 == spec.der_val_len(buf, x19, x20)
+            fact spec.der_seq(buf, pos, end, 1) == spec.der_seq(buf, x19, x20, 1)
+        }
+    @have_len:
+        add x7, x19, x5
+        add x8, x7, x6
+        cmp x8, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w5, [x9, 0]
+        mov x2, x7
+        mov x19, x8
+        cmp x5, 48
+        b.eq @nested
+        mov x3, x6
+        bl der_prim_ok_fn
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @nested:
+        mov x3, x8
+        bl der_seq0
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @ok:
+        mov x0, 1
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    @bad:
+        mov x0, 0
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    }
+}
+
+fn der_seq2(buf: n bytes, n: number, pos: number, end: number)
+    requires pos <= end
+    requires end <= n
+    requires n <= 65536
+    returns spec.der_seq(buf, pos, end, 2)
+    trace depends on buf, n, pos, end
+    stack 96
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, pos = rdx, end = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        push r12
+        push r13
+        mov r12, rdx
+        mov r13, rcx
+        place {
+            fact pos <= r12
+            fact r12 <= r13
+            fact r13 == end
+            fact spec.der_seq(buf, pos, end, 2) == spec.der_seq(buf, r12, r13, 2)
+            decreases r13 - r12
+        }
+    @loop:
+        cmp r12, r13
+        jae @ok
+        lea r10, [r12 + 2]
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx r9d, byte ptr [r11 + 1]
+        cmp r9, 128
+        jb @len_short
+        cmp r9, 129
+        je @len81
+        cmp r9, 130
+        je @len82
+        jmp @bad
+    @len_short:
+        mov r8, 2
+        jmp @have_len
+    @len81:
+        lea r10, [r12 + 3]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 128
+        jb @bad
+        mov r8, 3
+        jmp @have_len
+    @len82:
+        lea r10, [r12 + 4]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 1
+        jb @bad
+        shl r9, 8
+        movzx r10d, byte ptr [r11 + 3]
+        add r9, r10
+        mov r8, 4
+        place {
+            fact pos <= r12
+            fact r12 < r13
+            fact r13 == end
+            fact 2 <= r8
+            fact r8 <= 4
+            fact 0 <= r9
+            fact r9 <= 65535
+            fact r12 + r8 <= r13
+            fact r8 == spec.der_hdr_len(buf, r12, r13)
+            fact r9 == spec.der_val_len(buf, r12, r13)
+            fact spec.der_seq(buf, pos, end, 2) == spec.der_seq(buf, r12, r13, 2)
+        }
+    @have_len:
+        lea r10, [r12 + r8]
+        add r10, r9
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx eax, byte ptr [r11 + 0]
+        lea rdx, [r12 + r8]
+        mov r12, r10
+        cmp rax, 48
+        je @nested
+        mov rcx, r9
+        mov r8, rax
+        call der_prim_ok_fn
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @nested:
+        mov rcx, r10
+        call der_seq1
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @ok:
+        mov rax, 1
+        pop r13
+        pop r12
+        ret
+    @bad:
+        xor eax, eax
+        pop r13
+        pop r12
+        ret
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, pos = x2, end = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        str x19, [sp, 8]
+        str x20, [sp, 16]
+        mov x19, x2
+        mov x20, x3
+        place {
+            fact pos <= x19
+            fact x19 <= x20
+            fact x20 == end
+            fact spec.der_seq(buf, pos, end, 2) == spec.der_seq(buf, x19, x20, 2)
+            decreases x20 - x19
+        }
+    @loop:
+        cmp x19, x20
+        b.hs @ok
+        add x7, x19, 2
+        cmp x7, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w6, [x9, 1]
+        cmp x6, 128
+        b.lo @len_short
+        cmp x6, 129
+        b.eq @len81
+        cmp x6, 130
+        b.eq @len82
+        b @bad
+    @len_short:
+        mov x5, 2
+        b @have_len
+    @len81:
+        add x7, x19, 3
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 128
+        b.lo @bad
+        mov x5, 3
+        b @have_len
+    @len82:
+        add x7, x19, 4
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 1
+        b.lo @bad
+        lsl x6, x6, 8
+        ldrb w8, [x9, 3]
+        add x6, x6, x8
+        mov x5, 4
+        place {
+            fact pos <= x19
+            fact x19 < x20
+            fact x20 == end
+            fact 2 <= x5
+            fact x5 <= 4
+            fact 0 <= x6
+            fact x6 <= 65535
+            fact x19 + x5 <= x20
+            fact x5 == spec.der_hdr_len(buf, x19, x20)
+            fact x6 == spec.der_val_len(buf, x19, x20)
+            fact spec.der_seq(buf, pos, end, 2) == spec.der_seq(buf, x19, x20, 2)
+        }
+    @have_len:
+        add x7, x19, x5
+        add x8, x7, x6
+        cmp x8, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w5, [x9, 0]
+        mov x2, x7
+        mov x19, x8
+        cmp x5, 48
+        b.eq @nested
+        mov x3, x6
+        bl der_prim_ok_fn
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @nested:
+        mov x3, x8
+        bl der_seq1
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @ok:
+        mov x0, 1
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    @bad:
+        mov x0, 0
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    }
+}
+
+fn der_seq3(buf: n bytes, n: number, pos: number, end: number)
+    requires pos <= end
+    requires end <= n
+    requires n <= 65536
+    returns spec.der_seq(buf, pos, end, 3)
+    trace depends on buf, n, pos, end
+    stack 128
+{
+    for x86_64 calling {
+        in buf = rdi, n = rsi, pos = rdx, end = rcx
+        out = rax
+        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
+    } {
+        push r12
+        push r13
+        mov r12, rdx
+        mov r13, rcx
+        place {
+            fact pos <= r12
+            fact r12 <= r13
+            fact r13 == end
+            fact spec.der_seq(buf, pos, end, 3) == spec.der_seq(buf, r12, r13, 3)
+            decreases r13 - r12
+        }
+    @loop:
+        cmp r12, r13
+        jae @ok
+        lea r10, [r12 + 2]
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx r9d, byte ptr [r11 + 1]
+        cmp r9, 128
+        jb @len_short
+        cmp r9, 129
+        je @len81
+        cmp r9, 130
+        je @len82
+        jmp @bad
+    @len_short:
+        mov r8, 2
+        jmp @have_len
+    @len81:
+        lea r10, [r12 + 3]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 128
+        jb @bad
+        mov r8, 3
+        jmp @have_len
+    @len82:
+        lea r10, [r12 + 4]
+        cmp r10, r13
+        ja @bad
+        movzx r9d, byte ptr [r11 + 2]
+        cmp r9, 1
+        jb @bad
+        shl r9, 8
+        movzx r10d, byte ptr [r11 + 3]
+        add r9, r10
+        mov r8, 4
+        place {
+            fact pos <= r12
+            fact r12 < r13
+            fact r13 == end
+            fact 2 <= r8
+            fact r8 <= 4
+            fact 0 <= r9
+            fact r9 <= 65535
+            fact r12 + r8 <= r13
+            fact r8 == spec.der_hdr_len(buf, r12, r13)
+            fact r9 == spec.der_val_len(buf, r12, r13)
+            fact spec.der_seq(buf, pos, end, 3) == spec.der_seq(buf, r12, r13, 3)
+        }
+    @have_len:
+        lea r10, [r12 + r8]
+        add r10, r9
+        cmp r10, r13
+        ja @bad
+        lea r11, [rdi + r12]
+        movzx eax, byte ptr [r11 + 0]
+        lea rdx, [r12 + r8]
+        mov r12, r10
+        cmp rax, 48
+        je @nested
+        mov rcx, r9
+        mov r8, rax
+        call der_prim_ok_fn
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @nested:
+        mov rcx, r10
+        call der_seq2
+        cmp rax, 0
+        je @bad
+        jmp @loop
+    @ok:
+        mov rax, 1
+        pop r13
+        pop r12
+        ret
+    @bad:
+        xor eax, eax
+        pop r13
+        pop r12
+        ret
+    }
+    for arm64 calling {
+        in buf = x4, n = x1, pos = x2, end = x3
+        out = x0
+        preserves x4, x1, x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29
+    } {
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        str x19, [sp, 8]
+        str x20, [sp, 16]
+        mov x19, x2
+        mov x20, x3
+        place {
+            fact pos <= x19
+            fact x19 <= x20
+            fact x20 == end
+            fact spec.der_seq(buf, pos, end, 3) == spec.der_seq(buf, x19, x20, 3)
+            decreases x20 - x19
+        }
+    @loop:
+        cmp x19, x20
+        b.hs @ok
+        add x7, x19, 2
+        cmp x7, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w6, [x9, 1]
+        cmp x6, 128
+        b.lo @len_short
+        cmp x6, 129
+        b.eq @len81
+        cmp x6, 130
+        b.eq @len82
+        b @bad
+    @len_short:
+        mov x5, 2
+        b @have_len
+    @len81:
+        add x7, x19, 3
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 128
+        b.lo @bad
+        mov x5, 3
+        b @have_len
+    @len82:
+        add x7, x19, 4
+        cmp x7, x20
+        b.hi @bad
+        ldrb w6, [x9, 2]
+        cmp x6, 1
+        b.lo @bad
+        lsl x6, x6, 8
+        ldrb w8, [x9, 3]
+        add x6, x6, x8
+        mov x5, 4
+        place {
+            fact pos <= x19
+            fact x19 < x20
+            fact x20 == end
+            fact 2 <= x5
+            fact x5 <= 4
+            fact 0 <= x6
+            fact x6 <= 65535
+            fact x19 + x5 <= x20
+            fact x5 == spec.der_hdr_len(buf, x19, x20)
+            fact x6 == spec.der_val_len(buf, x19, x20)
+            fact spec.der_seq(buf, pos, end, 3) == spec.der_seq(buf, x19, x20, 3)
+        }
+    @have_len:
+        add x7, x19, x5
+        add x8, x7, x6
+        cmp x8, x20
+        b.hi @bad
+        add x9, x4, x19
+        ldrb w5, [x9, 0]
+        mov x2, x7
+        mov x19, x8
+        cmp x5, 48
+        b.eq @nested
+        mov x3, x6
+        bl der_prim_ok_fn
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @nested:
+        mov x3, x8
+        bl der_seq2
+        cmp x0, 0
+        b.eq @bad
+        b @loop
+    @ok:
+        mov x0, 1
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    @bad:
+        mov x0, 0
+        ldr x20, [sp, 16]
+        ldr x19, [sp, 8]
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    }
+}
+
+fn der_valid(buf: n bytes, n: number)
+    requires n <= 65536
+    returns spec.der_valid(buf)
+    trace depends on buf, n
+    stack 512
+{
+    for x86_64 {
+        cmp rsi, 0
+        je @empty
+        xor edx, edx
+        mov rcx, rsi
+        jmp der_seq3
+    @empty:
+        xor eax, eax
+        ret
+    }
+    for arm64 {
+        cmp x1, 0
+        b.eq @empty
+        mov x4, x0
+        mov x2, 0
+        mov x3, x1
+        b der_seq3
+    @empty:
+        mov x0, 0
+        ret
+    }
+}

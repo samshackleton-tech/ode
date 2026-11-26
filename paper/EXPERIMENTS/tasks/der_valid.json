@@ -1,0 +1,12 @@
+{
+  "id": "der_valid",
+  "title": "ASN.1 / X.690 DER canonical TLV validator with nested SEQUENCE support",
+  "spec_file": "paper/EXPERIMENTS/tasks/der_valid_spec.ode",
+  "spec_basename": "der_valid_spec.ode",
+  "entry_fn": "der_valid",
+  "expected_contract_id": "pyqksm2d6u3quuwvpwjwr4j4kgmgy7zlqjixoqobp2gr24sggfma",
+  "reference_solution": "paper/EXPERIMENTS/tasks/der_valid_reference.ode",
+  "native_harness": "paper/EXPERIMENTS/tasks/der_valid_native.c",
+  "contract_header": "use spec = \"der_valid_spec.ode\"\n\nfn der_valid(buf: n bytes, n: number)\n    requires n <= 65536\n    returns spec.der_valid(buf)\n    trace depends on buf, n\n    stack 512\n",
+  "task_summary": "Implement `der_valid(buf, n)`, returning `1` if `buf[0 .. n-1]` is a non-empty sequence of canonical ASN.1 / X.690 DER TLV records (supporting `BOOLEAN`, `INTEGER`, `BIT STRING`, `OCTET STRING`, `NULL`, `OBJECT IDENTIFIER`, and nested `SEQUENCE` containers up to depth 3, with canonical short/long length encodings and all canonicality checks from `der_valid_spec.ode`), and `0` otherwise."
+}

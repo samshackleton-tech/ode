@@ -504,60 +504,60 @@ class Verifier:
                 self.entail(state["facts"], r_sub(r_sub(state["buf_len"][buf], idx), r_const(1)), stream)
             return state["get_byte"](buf, idx, state)
         if op == "ifx":
-            cond, thn, els = e[1], e[2], e[3]
-            if cond[0] != "bin":
-                raise Refuse(f"unsupported ifx condition {cond}")
-            cop, cl, cr = cond[1], cond[2], cond[3]
-            lv = self.as_num(self.eval_sexpr(cl, env, state, stream), env, state, stream)
-            rv = self.as_num(self.eval_sexpr(cr, env, state, stream), env, state, stream)
-            facts = state["facts"]
-            diff = r_sub(lv, rv)
-            if cop in ("==", "!=") and (diff in state["neq"] or r_sub(rv, lv) in state["neq"]):
-                taken = (cop == "!=")
-                return self.eval_sexpr(thn if taken else els, env, state, stream)
-            if not diff[1]:
-                k = diff[0]
-                if cop == "==": taken = (k == 0)
-                elif cop == "!=": taken = (k != 0)
-                elif cop == "<": taken = (k < 0)
-                elif cop == "<=": taken = (k <= 0)
-                elif cop == ">": taken = (k > 0)
-                elif cop == ">=": taken = (k >= 0)
-                else: raise Refuse(f"unsupported ifx op `{cop}`")
-                return self.eval_sexpr(thn if taken else els, env, state, stream)
-            tag, _ = stream.pop_tag()
-            if cop in ("<", ">="):
-                if tag == "lt":
-                    self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
-                    taken = (cop == "<")
-                elif tag == "ge":
-                    self.entail(facts, r_sub(lv, rv), stream)
-                    taken = (cop == ">=")
-                else:
-                    raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
-            elif cop in (">", "<="):
-                if tag == "lt":
-                    self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
-                    taken = (cop == ">")
-                elif tag == "ge":
-                    self.entail(facts, r_sub(rv, lv), stream)
-                    taken = (cop == "<=")
-                else:
-                    raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
-            else:
-                if tag == "eq":
-                    self.entail_eq(facts, lv, rv, stream)
-                    taken = (cop == "==")
-                elif tag == "lt":
-                    self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
-                    taken = (cop == "!=")
-                elif tag == "gt":
-                    self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
-                    taken = (cop == "!=")
-                else:
-                    raise Refuse(f"expected `eq`/`lt`/`gt` for `{cop}`, got `{tag}`")
-            return self.eval_sexpr(thn if taken else els, env, state, stream)
+            taken = self.eval_cond(e[1], env, state, stream)
+            return self.eval_sexpr(e[2] if taken else e[3], env, state, stream)
         raise Refuse(f"unsupported spec expr {e}")
+
+    def eval_cond(self, cond, env, state, stream):
+        """Evaluate a specification condition (comparison or nested `ifx` from `&&`/`||`)."""
+        if cond[0] == "ifx":
+            c_taken = self.eval_cond(cond[1], env, state, stream)
+            return self.eval_cond(cond[2] if c_taken else cond[3], env, state, stream)
+        if cond[0] != "bin":
+            raise Refuse(f"unsupported ifx condition {cond}")
+        cop, cl, cr = cond[1], cond[2], cond[3]
+        lv = self.as_num(self.eval_sexpr(cl, env, state, stream), env, state, stream)
+        rv = self.as_num(self.eval_sexpr(cr, env, state, stream), env, state, stream)
+        facts = state["facts"]
+        diff = r_sub(lv, rv)
+        if cop in ("==", "!=") and (diff in state["neq"] or r_sub(rv, lv) in state["neq"]):
+            return cop == "!="
+        if not diff[1]:
+            k = diff[0]
+            if cop == "==": return k == 0
+            if cop == "!=": return k != 0
+            if cop == "<": return k < 0
+            if cop == "<=": return k <= 0
+            if cop == ">": return k > 0
+            if cop == ">=": return k >= 0
+            raise Refuse(f"unsupported ifx op `{cop}`")
+        tag, _ = stream.pop_tag()
+        if cop in ("<", ">="):
+            if tag == "lt":
+                self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
+                return cop == "<"
+            if tag == "ge":
+                self.entail(facts, r_sub(lv, rv), stream)
+                return cop == ">="
+            raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
+        if cop in (">", "<="):
+            if tag == "lt":
+                self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
+                return cop == ">"
+            if tag == "ge":
+                self.entail(facts, r_sub(rv, lv), stream)
+                return cop == "<="
+            raise Refuse(f"expected `lt`/`ge` for `{cop}`, got `{tag}`")
+        if tag == "eq":
+            self.entail_eq(facts, lv, rv, stream)
+            return cop == "=="
+        if tag == "lt":
+            self.entail(facts, r_sub(r_sub(rv, lv), r_const(1)), stream)
+            return cop == "!="
+        if tag == "gt":
+            self.entail(facts, r_sub(r_sub(lv, rv), r_const(1)), stream)
+            return cop == "!="
+        raise Refuse(f"expected `eq`/`lt`/`gt` for `{cop}`, got `{tag}`")
 
     def expand_eq(self, lhs, rhs, env, state, stream):
         """Unfold `def` calls as directed by `t open K`, closing over held equalities in `state['eqs']`."""
@@ -662,18 +662,18 @@ class Verifier:
         else:
             raise Refuse(f"unsupported fact op `{op}`")
 
-    def assume_fact(self, fact, env, state):
+    def assume_fact(self, fact, env, state, stream=None):
         if fact[0] != "bin":
             raise Refuse(f"unsupported assumed fact {fact}")
         op, l, r = fact[1], fact[2], fact[3]
         if op == "==" and (l[0] == "call" or r[0] == "call"):
             # Record symbolic call equality `lhs == rhs` for later substitution
-            lv = self.eval_sexpr(l, env, state, None)
-            rv = self.eval_sexpr(r, env, state, None)
+            lv = self.eval_sexpr(l, env, state, stream)
+            rv = self.eval_sexpr(r, env, state, stream)
             state["eqs"].insert(0, (lv, rv))
             return
-        lv = self.eval_sexpr(l, env, state, None)
-        rv = self.eval_sexpr(r, env, state, None)
+        lv = self.eval_sexpr(l, env, state, stream)
+        rv = self.eval_sexpr(r, env, state, stream)
         if op == "<=":
             state["facts"].append(r_sub(rv, lv))
         elif op == "<":
@@ -1046,7 +1046,7 @@ class Verifier:
                         for nm, rn in pl["names"]:
                             penv2[nm] = gj["regs"][rn]
                         for fct in pl["facts"]:
-                            self.assume_fact(fct, penv2, gj)
+                            self.assume_fact(fct, penv2, gj, stream)
                         run_path(pc, gj, origin_place, origin_dec, visited_places | {pc}, base_st, jstack | {pc}, jdone)
                         jdone[pc] = first_j
                         return
@@ -1086,7 +1086,7 @@ class Verifier:
                     for nm, rn in pl["names"]:
                         penv2[nm] = pst["regs"][rn]
                     for fct in pl["facts"]:
-                        self.assume_fact(fct, penv2, pst)
+                        self.assume_fact(fct, penv2, pst, stream)
                     dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, stream) if pl["decreases"] is not None else None
                     if dec_val is not None:
                         self.entail(pst["facts"], dec_val, stream)
@@ -1134,6 +1134,64 @@ class Verifier:
                     elif kind == "jump":
                         tgt_expr, cond = stmt[1], stmt[2]
                         tval = bind[tgt_expr[1]] if tgt_expr[0] == "name" else tgt_expr[1]
+                        if cond is None and isinstance(tval, str) and tval in self.proven:
+                            # Tail call (`jmp callee` on x86-64 / `b callee` on AArch64)
+                            c = self.proven[tval]
+                            if (c["machine"] == "arm64") != is_arm:
+                                raise Refuse(f"tail callee `{tval}` targets a different machine")
+                            c_arg_regs = c["argregs"] if c["argregs"] is not None else (ARM_ARGS if is_arm else X86_ARGS)
+                            c_keeps = set(c["keeps"]) if c["keeps"] is not None else (ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED)
+                            c_ret_reg = c["retreg"] if c["retreg"] is not None else ("x0" if is_arm else "rax")
+                            if c["stack"] > fn["stack"]:
+                                raise Refuse(f"tail call to `{tval}` exceeds stack budget {fn['stack']}")
+                            if c_ret_reg != ret_reg:
+                                raise Refuse(f"tail callee `{tval}` returns in `{c_ret_reg}`, expected `{ret_reg}`")
+                            self.entail_eq(st["facts"], st["regs"][sp_reg], entry_regs[sp_reg], stream)
+                            if st["marks"][sp_reg]:
+                                raise Refuse("at tail call stack pointer may depend on values kept out of the trace")
+                            if is_arm:
+                                self.entail_eq(st["facts"], st["regs"]["x30"], entry_regs["x30"], stream)
+                                if st["marks"]["x30"]:
+                                    raise Refuse("at tail call link register x30 may depend on values kept out of the trace")
+                            for r in callee_saved:
+                                if r not in c_keeps:
+                                    raise Refuse(f"tail callee `{tval}` does not preserve `{r}`")
+                                self.entail_eq(st["facts"], st["regs"][r], entry_regs[r], stream)
+                            cenv = {}
+                            for idx, (anm, akind, alen) in enumerate(c["args"]):
+                                areg = c_arg_regs[idx]
+                                if akind == "bytes":
+                                    found_buf = None
+                                    for bnm, bbase in st["buf_base"].items():
+                                        if st["regs"][areg] == bbase:
+                                            found_buf = bnm
+                                            break
+                                    if found_buf is None:
+                                        raise Refuse(f"tail callee `{tval}` bytes arg `{anm}` does not match a caller buffer")
+                                    cenv[anm] = ("buf", found_buf)
+                                    if anm not in c["hidden"] and not st["buf_clean"][found_buf]:
+                                        raise Refuse(f"tail callee `{tval}` exposes buffer `{found_buf}` kept out of caller trace")
+                                else:
+                                    cenv[anm] = st["regs"][areg]
+                                    if anm not in c["hidden"] and st["marks"][areg]:
+                                        raise Refuse(f"tail callee `{tval}` trace arg `{anm}` may depend on values kept out of trace")
+                            for anm, bnd in c["atleast"]:
+                                if anm in cenv:
+                                    self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
+                            for k, terms in c["linpre"]:
+                                self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                            for anm, bnd in c["below"]:
+                                if anm in cenv:
+                                    self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)
+                            for req in c["requires"]:
+                                self.check_fact(req, cenv, st, stream)
+                            if fn["returns"] is not None:
+                                if c["returns"] is None:
+                                    raise Refuse(f"tail callee `{tval}` has no returns clause")
+                                got_val = self.eval_sexpr(c["returns"], cenv, st, stream)
+                                want = self.eval_sexpr(fn["returns"], env, st, stream)
+                                self.expand_eq(got_val, want, env, st, stream)
+                            return
                         target = int(tval, 0) if isinstance(tval, str) else tval
                         if cond is None:
                             next_pc = target

@@ -186,7 +186,7 @@ def extract_ode_source(reply: str, entry_fn: str) -> str:
 def classify_failure(stage: str, out: str, rc: int) -> str:
     low = out.lower()
     if rc == 124 or "timeout after" in low:
-        return "prover_timeout_120s"
+        return "prover_timeout"
     if "cannot decide: is " in low:
         return "arith_need_compare"
     if ("ode does not use semicolons" in low or "calling {" in low or "calling `" in low
@@ -1057,21 +1057,25 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Push-button pre-registered cold-room experiment runner for Ode.")
     ap.add_argument("--run-id", required=True, help="Short run identifier, e.g. ebpf-v2")
     ap.add_argument("--tasks", default="ebpf", help="Comma-separated task IDs from paper/EXPERIMENTS/tasks/")
-    ap.add_argument("--models", default="openai/gpt-6.2-astra-pro,anthropic/claude-fable-5.2,google/gemini-4-neon,anthropic/claude-sonnet-5.5")
+    ap.add_argument("--models", default=(
+        "openai/gpt-6.2-astra-pro,anthropic/claude-fable-5.2,google/gemini-4-neon,"
+        "anthropic/claude-sonnet-5.5,anthropic/claude-haiku-5.5,"
+        "qwen/qwen3.8-2.4t-a95b,moonshotai/kimi-k3.1-pro"
+    ))
     ap.add_argument("--targets", default="x86_64,arm64")
     ap.add_argument("--max-rounds", type=int, default=8)
     ap.add_argument("--perf-arms", default="", help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
     ap.add_argument("--opt-rounds", type=int, default=3, help="Extra optimization rounds after first verified pass when --perf-arms is active")
-    ap.add_argument("--tool-timeout", type=int, default=120)
-    ap.add_argument("--cell-timeout", type=int, default=900, help="Per-cell wall-clock cap in seconds (0 = off)")
+    ap.add_argument("--tool-timeout", type=int, default=45)
+    ap.add_argument("--cell-timeout", type=int, default=540, help="Per-cell wall-clock cap in seconds (0 = off)")
     ap.add_argument("--max-truncations", type=int, default=2, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
-    ap.add_argument("--prover-slots", type=int, default=6, help="Max simultaneous local ode pack/audit runs")
+    ap.add_argument("--prover-slots", type=int, default=10, help="Max simultaneous local ode pack/audit runs")
     ap.add_argument("--api-timeout", type=int, default=240)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
-    ap.add_argument("--max-usd", type=float, default=40.0, help="Cumulative API spend circuit breaker")
-    ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--max-usd", type=float, default=60.0, help="Cumulative API spend circuit breaker")
+    ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--baseline", default="", help="Optional baseline results JSON for before/after diff")
     ap.add_argument("--out-dir", required=True, help="Private directory for full JSON transcripts and .o/.proof/.ode artifacts")
     ap.add_argument("--x86-exec-script", default="", help="Optional executable taking `<obj.o> <harness.c>` to run x86_64 native tests")
