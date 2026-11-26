@@ -90,6 +90,13 @@ def r_neg(g):
     return r_sub(r_const(-1), g)
 
 
+def r_signed(r):
+    # Match `Core.lean:signed`: signed displacement constants (`>= 3 * 2^62`) wrap below 0.
+    if (not r[1]) and r[0] >= 3 * (1 << 62):
+        return r_const(r[0] - (1 << 64))
+    return r
+
+
 def r_plain(facts, g):
     cg, vg = g
     if not vg:
@@ -960,14 +967,14 @@ class Verifier:
                 if op in ("add64", "at"):
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    res = r_add(a, b)
+                    res = r_add(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
                     return res, (ma or mb)
                 if op == "sub64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    res = r_sub(a, b)
+                    res = r_sub(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
                     return res, (ma or mb)

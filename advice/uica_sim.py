@@ -539,6 +539,7 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
                 retired_in_cyc = 0
 
     for it_idx in range(iterations):
+        iter_max_done = float(disp_cyc)
         for op in micro_seq:
             u = op["fe_uops"]
             # Front-end / Dispatch width / split Int & FP dispatch width
@@ -643,6 +644,8 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
                     reg_pipe[w] = chosen_fp_port
                 elif w in reg_pipe:
                     del reg_pipe[w]
+            if exec_done > iter_max_done:
+                iter_max_done = exec_done
             for _ in range(u):
                 rob_complete.append(exec_done)
 
@@ -650,7 +653,7 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             advance_disp_cycle(disp_cyc + 1)
         iter_disp_ends.append(float(disp_cyc))
         max_done = max((reg_ready[r] for r in reg_ready), default=float(disp_cyc))
-        iter_exec_ends.append(max(float(disp_cyc), max_done))
+        iter_exec_ends.append(max(float(disp_cyc), max_done, iter_max_done))
 
     # Measure steady-state throughput from the last 6 iterations (LCM(2,3)=6 eliminates
     # period-2 and period-3 aliasing from overlapping OOO iterations after warm-up).

@@ -501,6 +501,37 @@ fn selfmov as "k_selfmov" {
         self.assertEqual(estimate.check_budgets(rd, None, {"max_loop_cycles": 40}), [])
         self.assertEqual(len(estimate.check_budgets(rd, None, {"max_loop_cycles": 20})), 1)
 
+    def test_branch_port_saturation(self):
+        # Zero-write ops (fused cmp+jcc, jmp) must count toward iter_exec_ends so branch-dense
+        # loops report branch-port saturation (6 branches on 2 ports >= 3.0 cyc/iter on Zen 4).
+        src_br = """target x86_64
+fn scan6 as "k_scan6" {
+  xor rcx, rcx
+@lp:
+  cmp rcx, rsi
+  jae @done
+  mov r9, rdi
+  add r9, rcx
+  movzx eax, byte ptr [r9]
+  cmp rax, 92
+  je @done
+  cmp rax, 32
+  jb @done
+  cmp rax, 34
+  je @done
+  cmp rax, 126
+  ja @done
+  add rcx, 1
+  jmp @lp
+@done:
+  ret
+}
+"""
+        t, progs, lms, frms = _compile_and_decode(src_br, ["scan6"])
+        rz4 = estimate.static_analyze(progs["k_scan6"], t, "zen4", lms["k_scan6"], frms["k_scan6"])
+        self.assertGreaterEqual(rz4["loops"][0]["pipeline_sim"]["cycles_per_iter"], 2.95)
+        self.assertEqual(rz4["loops"][0]["pipeline_sim"]["bottleneck"], "ports:ALU0")
+
 
 if __name__ == "__main__":
     unittest.main()

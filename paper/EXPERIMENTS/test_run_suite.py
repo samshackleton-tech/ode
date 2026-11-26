@@ -63,6 +63,44 @@ class TestRunSuite(unittest.TestCase):
         finally:
             run_suite.EXP_DIR = orig_exp
 
+    def test_03_parse_advise_excludes_callees_and_arm_baseline(self):
+        adv = (
+            "  loop 0: +0x10..+0x50 lines 10..20 — 12 ins, 48 B, 1 i-cache line(s), >= 3.0 cyc/iter (ports) | "
+            "pipeline sim ~4.50 cyc/iter (ports:ALU0, 2 fused, 1.12 cyc/B across 4 load(s)/4 B, excludes 4 callee(s))\n"
+            "      zen5    : ~ 4.50 cyc/iter, 1.12 cyc/B [ports:ALU0]\n"
+        )
+        m = run_suite.parse_advise_metrics(adv, "x86_64")
+        self.assertEqual(m["hot_loop"], 0)
+        self.assertAlmostEqual(m["cyc_per_b"], 1.12)
+        self.assertEqual(m["excludes_callees"], 4)
+
+        orig_exp = run_suite.EXP_DIR
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                run_suite.EXP_DIR = Path(td)
+                base_cells = [
+                    {"task": "t1", "model": "m1", "target": "x86_64", "arm": "blind", "strict_pass": True,
+                     "rounds_to_pass": 1, "total_cost_usd": 0.5, "rounds_used": 2, "round_categories": ["passed", "passed"]},
+                    {"task": "t1", "model": "m1", "target": "x86_64", "arm": "advised", "strict_pass": False,
+                     "rounds_to_pass": None, "total_cost_usd": 0.8, "rounds_used": 4, "round_categories": ["other"] * 4},
+                ]
+                bp = Path(td) / "base.json"
+                bp.write_text(json.dumps({"run_id": "v1", "cells": base_cells}), encoding="utf-8")
+                cur_cells = [
+                    {"task": "t1", "model": "m1", "target": "x86_64", "arm": "blind", "strict_pass": True,
+                     "rounds_to_pass": 1, "total_cost_usd": 0.4, "verify2_pass": True, "native_status": "pass",
+                     "native_detail": "NATIVE_PASS 1/1", "final_metrics": {}, "rounds": [{"category": "passed"}]},
+                    {"task": "t1", "model": "m1", "target": "x86_64", "arm": "advised", "strict_pass": True,
+                     "rounds_to_pass": 2, "total_cost_usd": 0.6, "verify2_pass": True, "native_status": "pass",
+                     "native_detail": "NATIVE_PASS 1/1", "final_metrics": {}, "rounds": [{"category": "other"}, {"category": "passed"}]},
+                ]
+                _, mp = run_suite.write_results("v2", "0" * 40, [{"id": "t1"}], ["m1"], ["x86_64"], cur_cells, bp, expected_total=2)
+                md = mp.read_text(encoding="utf-8")
+                self.assertIn("| Strict passes | 1/2 | 2/2 | +1 |", md)
+                self.assertIn("| `t1` | `m1` | `x86_64` | `advised` | FAIL ($0.80) | PASS (R2, $0.60) |", md)
+        finally:
+            run_suite.EXP_DIR = orig_exp
+
 
 if __name__ == "__main__":
     unittest.main()

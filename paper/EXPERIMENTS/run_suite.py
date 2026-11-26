@@ -405,7 +405,9 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 continue
             in_whole_aa = False
         m_lp = re.search(
-            r"loop\s+(\d+):.*pipeline sim ~([0-9.]+) cyc/iter \(([^,]+),\s*(\d+) fused(?:,\s*([0-9.]+) cyc/B across (\d+) load\(s\)/(\d+) B)?\)",
+            r"loop\s+(\d+):.*pipeline sim ~([0-9.]+) cyc/iter \(([^,]+),\s*(\d+) fused"
+            r"(?:,\s*([0-9.]+) cyc/B across (\d+) load\(s\)/(\d+) B)?"
+            r"(?:,\s*excludes (\d+) callee\(s\))?\)",
             line,
         )
         if m_lp:
@@ -417,6 +419,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 "cyc_per_b": float(m_lp.group(5)) if m_lp.group(5) else None,
                 "load_count": int(m_lp.group(6)) if m_lp.group(6) else 0,
                 "load_bytes": int(m_lp.group(7)) if m_lp.group(7) else 0,
+                "excludes_callees": int(m_lp.group(8)) if m_lp.group(8) else 0,
                 "all_archs_cyc_per_b": {},
                 "all_archs_cyc_per_iter": {},
                 "lints": 0,
@@ -450,7 +453,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
             }
         return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops}
     # Main hot loop for large buffers is the one loading the most bytes per iteration (tie-break: lowest cyc/B)
-    hot = min(load_loops, key=lambda lp: (-lp["load_bytes"], lp["cyc_per_b"]))
+    hot = min(load_loops, key=lambda lp: (-lp["load_bytes"], lp["excludes_callees"] > 0, lp["cyc_per_b"]))
     return {
         "hot_loop": hot["loop_idx"],
         "primary_arch": default_arch,
@@ -458,6 +461,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
         "cycles_per_iter": round(hot["cycles_per_iter"], 3),
         "load_bytes": hot["load_bytes"],
         "load_count": hot["load_count"],
+        "excludes_callees": hot["excludes_callees"],
         "bottleneck": hot["bottleneck"],
         "lints": hot["lints"],
         "all_archs_cyc_per_b": hot["all_archs_cyc_per_b"],
@@ -511,7 +515,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         "rounds": [],
     }
     opt_rounds_left = args.opt_rounds if arm else 0
-    best_cyc_per_b = None
+    best_rank = None
 
     spec_src = ROOT / task["spec_file"]
     last_ode = ""
@@ -638,10 +642,17 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                         rec["perf"] = perf
 
                     cpb = perf.get("cyc_per_b") if perf else None
-                    first_pass = not cell["strict_pass"]
-                    improved = first_pass or (
-                        cpb is not None and (best_cyc_per_b is None or cpb < best_cyc_per_b - 1e-6)
+                    excl = int(perf.get("excludes_callees", 0)) if perf else 0
+                    # Rank passing candidates: prefer zero-callee inlined loops, then lower static cyc/B,
+                    # then smaller total instruction count / code bytes (captures callee optimizations too).
+                    cand_rank = (
+                        1 if excl > 0 else 0,
+                        round(cpb, 4) if cpb is not None else 1e9,
+                        int(metrics.get("instructions") or 10**9),
+                        int(metrics.get("code_bytes") or 10**9),
                     )
+                    first_pass = not cell["strict_pass"]
+                    improved = first_pass or (best_rank is None) or (cand_rank < best_rank)
                     if first_pass:
                         cell["strict_pass"] = True
                         cell["rounds_to_pass"] = rnum
@@ -651,7 +662,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                             shutil.copy2(out_o, out_dir / f"{cell_id}.r{rnum}.o")
                     cell["passing_rounds"] += 1
                     if improved:
-                        best_cyc_per_b = cpb
+                        best_rank = cand_rank
                         cell["best_perf"] = perf
                         cell["best_round"] = rnum
                         cell["final_metrics"] = metrics
@@ -953,10 +964,12 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
         with baseline_path.open("r", encoding="utf-8") as f:
             base = json.load(f)
         b_id = base.get("run_id", baseline_path.stem)
-        # Totals are compared over the cells both runs have (same task, model and target), so that a run
-        # with more tasks is not set against a run with fewer.
-        b_all = {(c["task"], c["model"], c["target"]): c for c in base.get("cells", [])}
-        both = [(b_all[k], c) for c in summary["cells"] for k in [(c["task"], c["model"], c["target"])] if k in b_all]
+        # Totals are compared over the cells both runs have (same task, model, target, and arm), so that
+        # blind/advised arms never overwrite each other and runs with different task counts stay aligned.
+        def _bkey(c):
+            return (c["task"], c["model"], c["target"], c.get("arm"))
+        b_all = {_bkey(c): c for c in base.get("cells", [])}
+        both = [(b_all[_bkey(c)], c) for c in summary["cells"] if _bkey(c) in b_all]
         def tot(cs):
             fc = {}
             for c in cs:
@@ -971,7 +984,7 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
             "",
             f"## Before vs. After Comparison (`{b_id}` -> `{run_id}`)",
             "",
-            f"The first table compares totals over the {len(both)} cells that both runs have (the same task, model and target); "
+            f"The first table compares totals over the {len(both)} cells that both runs have (the same task, model, target, and arm); "
             "each cell was run once in each run, so a difference in one cell may be chance. "
             "The second table sets each such cell of the two runs side by side.",
             "",
@@ -984,20 +997,28 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
         for ck in sorted(set(bf) | set(nf)):
             md_lines.append(f"| Failing rounds: `{ck}` | {bf.get(ck, 0)} | {nf.get(ck, 0)} | {nf.get(ck, 0) - bf.get(ck, 0):+d} |")
 
-        b_map = {(c["task"], c["model"], c["target"]): c for c in base.get("cells", [])}
-        md_lines += [
-            "",
-            f"| Task | Model | Target | `{b_id}` | `{run_id}` |",
-            "| --- | --- | --- | --- | --- |",
-        ]
+        if has_arms:
+            md_lines += [
+                "",
+                f"| Task | Model | Target | Arm | `{b_id}` | `{run_id}` |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        else:
+            md_lines += [
+                "",
+                f"| Task | Model | Target | `{b_id}` | `{run_id}` |",
+                "| --- | --- | --- | --- | --- |",
+            ]
         for c in summary["cells"]:
-            key = (c["task"], c["model"], c["target"])
-            bc = b_map.get(key)
+            bc = b_all.get(_bkey(c))
             b_str = (f"PASS (R{bc['rounds_to_pass']}, ${bc['total_cost_usd']:.2f})" if bc["strict_pass"]
                      else f"FAIL (${bc['total_cost_usd']:.2f})") if bc else "—"
             n_str = (f"PASS (R{c['rounds_to_pass']}, ${c['total_cost_usd']:.2f})" if c["strict_pass"]
                      else f"FAIL (${c['total_cost_usd']:.2f})")
-            md_lines.append(f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | {b_str} | {n_str} |")
+            if has_arms:
+                md_lines.append(f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | `{c.get('arm') or '-'}` | {b_str} | {n_str} |")
+            else:
+                md_lines.append(f"| `{c['task']}` | `{c['model']}` | `{c['target']}` | {b_str} | {n_str} |")
 
     md_path = EXP_DIR / f"results-{run_id}.md"
     tmp_md = EXP_DIR / f".results-{run_id}.md.tmp"

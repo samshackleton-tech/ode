@@ -1,0 +1,14 @@
+{
+  "id": "json_str_valid",
+  "title": "RFC 8259 ASCII JSON string literal validator",
+  "spec_file": "paper/EXPERIMENTS/tasks/json_str_valid_spec.ode",
+  "spec_basename": "json_str_valid_spec.ode",
+  "entry_fn": "json_str_valid",
+  "expected_contract_id": "4totxwdumkxnrfw5zgsfvw54fmy24uvfzvgtjkvn2u77hkoetyma",
+  "reference_solution": "paper/EXPERIMENTS/tasks/json_str_valid_reference.ode",
+  "native_harness": "paper/EXPERIMENTS/tasks/json_str_valid_native.c",
+  "input_bytes_per_call": 512,
+  "contract_header": "use spec = \"json_str_valid_spec.ode\"\n\nfn json_str_valid(src: n bytes, n: number)\n    requires n <= 4096\n    returns spec.json_str_valid(src)\n    trace depends on src, n\n    stack 32\n",
+  "task_summary": "Implement `json_str_valid(src, n)`, an RFC 8259 Section 7 ASCII JSON string literal validator. Return `1` iff `src[0..n]` starts and ends with `\"` (34), has `n >= 2`, contains only printable ASCII bytes (`32..126`) other than unescaped `\"` (34) or `\\` (92), and every `\\` (92) begins either one of the 8 two-byte escapes (`\\\"`, `\\\\`, `\\/`, `\\b`, `\\f`, `\\n`, `\\r`, `\\t`) or a six-byte Unicode escape `\\uXXXX` with four ASCII hexadecimal digits (`0-9`, `A-F`, `a-f`). Return `0` otherwise. Your goal is BOTH full verification (`shown`) AND high scanning throughput on realistic JSON strings (lowest cycles per byte on the hot interior scanning loop).",
+  "opt_goal": "reduce hot-loop cycles per byte (`cyc/B`) on typical printable-ASCII JSON strings (e.g., via unrolling multiple plain bytes per iteration, collapsing byte range checks, removing call overhead, or aligning hot loops) while keeping `ode pack`, `ode audit`, `verify2.py`, and native tests passing"
+}

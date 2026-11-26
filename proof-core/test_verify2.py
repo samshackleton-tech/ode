@@ -980,6 +980,53 @@ fn copy_bump(out: 8 bytes, src: n bytes, n: number)
                 self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
                 self.assertIn("shown (2 functions, verify2)", r2.stdout)
 
+    def test_12_signed_disp_lea_and_cmov(self):
+        """Negative displacement `lea rdx, [rdi - 65]` wraps via `r_signed` in verify2 (parity with Core.lean)."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        src = """
+def shift_az(c) { if 65 <= c && c <= 90 then c - 65 else 0 }
+
+fn shift_fn(c: number)
+    requires c < 256
+    returns shift_az(c)
+    stack 0
+{
+    for x86_64 {
+        rax := 100
+        lea rdx, [rdi + 35]
+        cmp rdi, 65
+        cmovae rax, rdx
+        rcx := 100
+        cmp rdi, 90
+        cmova rax, rcx
+        lea rax, [rax - 100]
+        ret
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            src_p = os.path.join(d, "s.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src)
+            out_o = os.path.join(d, "s.o")
+            out_p = os.path.join(d, "s.proof")
+            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="shift_fn", target="x86_64")
+            self.assertEqual(res["verdict"], "shown", res)
+            dump = os.path.join(d, "dump.sh")
+            st_p = os.path.join(d, "st.txt")
+            pf_p = os.path.join(d, "pf.txt")
+            with open(dump, "w", encoding="utf-8") as f:
+                f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+            os.chmod(dump, 0o755)
+            ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+            tab = os.path.join(ROOT, "core", "x86.tab")
+            r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+            self.assertIn("shown (1 function, verify2)", r2.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
