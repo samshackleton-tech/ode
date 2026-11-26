@@ -1026,6 +1026,59 @@ theorem dataAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {
   refine ⟨hd, ?_⟩
   omega
 
+theorem readBytes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {r base len : Nat}
+    (hreg : ctx.contract.regions[r]? = some (base, len)) :
+    ∀ (n : Nat) {s s' : Sym} {o v : Row} {items rest : Items} {ρ : Nat → Int} {st : State},
+    readBytes ctx s r o n items = .ok ((v, s'), rest) →
+    Holds ctx s0 ρ s st → WF ctx s → bounded s.nvars o →
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ bounded s'.nvars v ∧
+      (∀ k, k < n → 0 ≤ ev ρ' o + k ∧ ev ρ' o + k < s0.reg len) ∧
+      (0 < n → ev ρ' v = load s0.mem (s0.reg base + (ev ρ' o).toNat) n) ∧
+      (n = 0 → ev ρ' v = 0)
+  | 0, s, s', o, v, items, rest, ρ, st, h, H, wf, _ => by
+    simp only [readBytes] at h
+    have hp := V.pure_ok h; injection hp with hp _; injection hp with hv hs; subst hv hs
+    exact ⟨ρ, Carried.here H wf, bounded_const _ _, fun _ hk => by omega, fun hk => by omega, fun _ => ev_const _ _⟩
+  | n + 1, s, s', o, v, items, rest, ρ, st, h, H, wf, hbo => by
+    simp only [readBytes] at h
+    obtain ⟨⟨b, s1⟩, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨⟨hi, s2⟩, r2, e2, h⟩ := V.bind_ok h
+    have hp := V.pure_ok h; injection hp with hp _; injection hp with hv hs; subst hv hs
+    obtain ⟨ρ1, c1, hbb, base1, len1, hreg1, g1, g2, g3⟩ := readByte_sound E e1 H wf hbo
+    rw [hreg] at hreg1; injection hreg1 with hreg1; injection hreg1 with hb1 hl1; subst hb1 hl1
+    have hbo1 : bounded s1.nvars (Lin.add o (Lin.const 1)) :=
+      bounded_add (bounded_mono c1.mono hbo) (bounded_const _ _)
+    obtain ⟨ρ2, c2, hbhi, hbounds, hloadn, hz⟩ := readBytes_sound E hreg n e2 c1.holds c1.wf hbo1
+    have c12 := Carried.then c1 c2
+    have eo12 : ev ρ2 o = ev ρ1 o := (ev_agree (bounded_mono c1.mono hbo) c2.agree).symm
+    have eo1 : ev ρ2 (Lin.add o (Lin.const 1)) = ev ρ2 o + 1 := by rw [ev_add, ev_const]
+    have eb12 : ev ρ2 b = ev ρ1 b := (ev_agree hbb c2.agree).symm
+    have hbv : bounded s'.nvars (Lin.add b (Lin.scale 256 hi)) :=
+      bounded_add (bounded_mono c2.mono hbb) (bounded_scale _ hbhi)
+    refine ⟨ρ2, c12, hbv, ?_, ?_, fun h0 => by omega⟩
+    · intro k hk
+      cases k with
+      | zero => rw [eo12]; omega
+      | succ k' =>
+        have hk' := hbounds k' (by omega)
+        rw [eo1] at hk'; omega
+    · intro _
+      rw [ev_add, ev_scale, eb12, g3, ← eo12]
+      cases n with
+      | zero =>
+        rw [hz rfl]
+        simp only [load, Nat.mul_zero, Nat.add_zero, Int.mul_zero, Int.add_zero]
+      | succ m =>
+        have hl := hloadn (by omega)
+        rw [hl, eo1]
+        have hpos : 0 ≤ ev ρ2 o := by rw [eo12]; exact g1
+        have hidx : s0.reg base + (ev ρ2 o + 1).toNat = s0.reg base + (ev ρ2 o).toNat + 1 := by omega
+        rw [hidx]
+        have hld : load s0.mem (s0.reg base + (ev ρ2 o).toNat) (m + 2) =
+            (s0.mem (s0.reg base + (ev ρ2 o).toNat)).val + 256 * load s0.mem (s0.reg base + (ev ρ2 o).toNat + 1) (m + 1) := rfl
+        rw [hld, Int.natCast_add, Int.natCast_mul]
+        rfl
+
 theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s s' : Sym} {addr : Row} {size : Nat} {v : EV}
     {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symLoad ctx s addr size items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hb : bounded s.nvars addr)
@@ -1136,7 +1189,58 @@ theorem symLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
           exact List.any_eq_true.mpr ⟨(base, len), hmem, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
         · simp only [load]; unfold M64; omega
         · rw [g3, ← hadr]; simp only [load, hmem0]; omega
-      next => exact (refuse_ok h).elim
+      next hne1 =>
+        split at h
+        next hsz =>
+          obtain ⟨⟨v0, s1⟩, r1, e1, h⟩ := V.bind_ok h
+          have hp := V.pure_ok h; injection hp with hp _; injection hp with hv hs; subst hv hs
+          have hbo : bounded s.nvars o := by
+            rw [ho]; exact bounded_sub hb (bounded_var (Nat.lt_of_lt_of_le hbl.1 wf.regs))
+          obtain ⟨ρ', c1, bv, hbounds, hloadn, _⟩ := readBytes_sound E hreg size e1 H wf hbo
+          have hpos : 0 < size := by rcases hsz with rfl | rfl | rfl <;> decide
+          have hle8 : size ≤ 8 := by rcases hsz with rfl | rfl | rfl <;> decide
+          have hb0 := hbounds 0 hpos
+          have eo : ev ρ' o = ev ρ addr - s0.reg base := by
+            rw [← ev_agree hbo c1.agree, ho, ev_sub, ev_var, H.entry base hbl.1]
+          obtain ⟨hfit, hapart⟩ := E.regionAt hmem
+          unfold M64 at hfit
+          have hadr : a = s0.reg base + (ev ρ' o).toNat := by omega
+          have hmem_eq : load st.mem a size = load s0.mem a size := by
+            have hstep : ∀ (n : Nat) (k : Nat), (∀ j, j < n → a + k + j < s0.reg base + s0.reg len ∧ s0.reg base ≤ a + k + j) →
+                load st.mem (a + k) n = load s0.mem (a + k) n := by
+              intro n
+              induction n with
+              | zero => intro _ _; rfl
+              | succ m ih =>
+                intro k hkj
+                simp only [load]
+                have h0 := hkj 0 (by omega)
+                have hm0 : st.mem (a + k) = s0.mem (a + k) := by
+                  apply c1.holds.mem
+                  · simp only [Contract.inFrame, Bool.and_eq_false_iff, decide_eq_false_iff_not]; omega
+                  · exact E.region_notOut hmem (by omega) (by omega)
+                rw [hm0]
+                have hnext := ih (k + 1) (fun j hj => by
+                  have := hkj (j + 1) (by omega)
+                  have heq : a + (k + 1) + j = a + k + (j + 1) := by omega
+                  rw [heq]; exact this)
+                have ha1 : a + k + 1 = a + (k + 1) := by omega
+                rw [ha1, hnext]
+            have := hstep size 0 (fun j hj => by
+              have hbj := hbounds j hj
+              omega)
+            simpa using this
+          refine ⟨ρ', c1, allowed_of _ _ _ (fun x x1 x2 => ?_), ?_, ?_, bv⟩
+          · have hbj := hbounds (x - a) (by omega)
+            simp only [Contract.perm, Bool.or_eq_true]
+            left; left; left; left; right
+            exact List.any_eq_true.mpr ⟨(base, len), hmem, by simp only [Bool.and_eq_true, decide_eq_true_eq]; omega⟩
+          · have lt := load_lt st.mem a size
+            have le : 256 ^ size ≤ 256 ^ 8 := Nat.pow_le_pow_right (by decide) hle8
+            have e8 : (256 : Nat) ^ 8 = 2 ^ 64 := by decide
+            unfold M64; omega
+          · rw [hmem_eq, hadr, hloadn hpos]
+        next => exact (refuse_ok h).elim
 
 /-- What `divided` finds is a division the state knows. -/
 theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x m = some q) : Known.div x m q ∈ s.known := by
@@ -1330,6 +1434,87 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     exact ⟨ρ', c, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr,
            bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
 
+theorem rowUpperAux_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
+    ∀ (cs : List Int) (i : Nat) {u : Int}, rowUpperAux facts cs i = some u →
+      0 ≤ dot cs (fun k => ρ (i + k)) ∧ dot cs (fun k => ρ (i + k)) ≤ u
+  | [], _, _, h => by simp only [rowUpperAux, Option.some.injEq] at h; subst h; simp [dot]
+  | c :: cs, i, u, h => by
+    unfold rowUpperAux at h
+    split at h
+    · next hc =>
+      have hc0 : c = 0 := beq_iff_eq.mp hc
+      have ih := rowUpperAux_sound hf cs (i + 1) h
+      simp only [dot, hc0, Int.zero_mul, Int.zero_add]
+      have hfn : (fun k => ρ (i + (k + 1))) = (fun k => ρ (i + 1 + k)) := by funext k; congr 1; omega
+      rw [hfn]; exact ih
+    · next hc =>
+      split at h
+      · cases h
+      · next hneg =>
+        split at h
+        · next hp =>
+          cases hb : boundOf facts (Lin.var i) with
+          | none => simp [hb] at h
+          | some ub =>
+            cases hr : rowUpperAux facts cs (i + 1) with
+            | none => simp [hb, hr] at h
+            | some rest =>
+              simp only [hb, hr, Option.some.injEq] at h
+              subst h
+              have hlo := plain_sound hp ρ hf
+              rw [ev_var] at hlo
+              have hhi := boundOf_sound hb ρ hf
+              rw [ev_var] at hhi
+              have ih := rowUpperAux_sound hf cs (i + 1) hr
+              have hfn : (fun k => ρ (i + (k + 1))) = (fun k => ρ (i + 1 + k)) := by funext k; congr 1; omega
+              have h0 : 0 ≤ c * ρ i := Int.mul_nonneg (by omega) hlo
+              have h1 : c * ρ i ≤ c * ub := Int.mul_le_mul_of_nonneg_left hhi (by omega)
+              simp only [dot, Nat.add_zero, hfn]
+              omega
+        · cases h
+
+theorem rowUpper_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ)
+    {r : Row} {u : Int} (h : rowUpper facts r = some u) : 0 ≤ ev ρ r ∧ ev ρ r ≤ u := by
+  unfold rowUpper at h
+  split at h
+  · cases h
+  · next hneg =>
+    cases ha : rowUpperAux facts r.coeff 0 with
+    | none => simp [ha] at h
+    | some v =>
+      simp only [ha, Option.map_some, Option.some.injEq] at h
+      subst h
+      have ih := rowUpperAux_sound hf r.coeff 0 ha
+      have hfn : (fun k => ρ (0 + k)) = ρ := by funext k; simp
+      rw [hfn] at ih
+      simp only [ev]
+      omega
+
+theorem symSplit_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ)
+    {n : Nat} {x q r : Row} {m : Int} (hx : bounded n x) (pos : 0 < m)
+    (h : symSplit facts x m = some (q, r)) :
+    ev ρ q = ev ρ x / m ∧ ev ρ r = ev ρ x % m ∧ bounded n q ∧ bounded n r := by
+  unfold symSplit at h
+  cases hu : rowUpper facts (Lin.splitMod x m).2 with
+  | none => simp [hu] at h
+  | some u =>
+    simp only [hu] at h
+    split at h
+    · next hlt =>
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      obtain ⟨hq, hr⟩ := h
+      subst hq hr
+      have hb := rowUpper_sound hf hu
+      have hev := ev_splitMod ρ x m
+      have hdiv : ev ρ x / m = ev ρ (Lin.splitMod x m).1 := by
+        rw [hev, Int.mul_add_ediv_left _ _ (Int.ne_of_gt pos), Int.ediv_eq_zero_of_lt hb.1 (by omega), Int.add_zero]
+      have hmod : ev ρ x % m = ev ρ (Lin.splitMod x m).2 := by
+        rw [hev, Int.mul_add_emod_self_left, Int.emod_eq_of_lt hb.1 (by omega)]
+      refine ⟨hdiv.symm, hmod.symm, ?_, ?_⟩
+      · exact Nat.le_trans (strip_length _) (by rw [List.length_map]; exact hx)
+      · exact Nat.le_trans (strip_length _) (by rw [List.length_map]; exact hx)
+    · cases h
+
 theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
     ∃ ρ', Carried ctx s0 ρ s ρ' (symLow s x m).2 st ∧ ev ρ' (symLow s x m).1 = ev ρ x % m ∧
@@ -1347,9 +1532,16 @@ theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
       rw [ev_sub, ev_const] at g
       exact ⟨ρ, Carried.here H wf, (Int.emod_eq_of_lt x0 (by omega)).symm, hx⟩
     | false =>
-      simp only [symLow, hk, hp, Bool.false_eq_true, ↓reduceIte]
-      obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
-      exact ⟨ρ', c, hr, br⟩
+      cases hs : symSplit s.facts x m with
+      | some qr =>
+        obtain ⟨q, r⟩ := qr
+        simp only [symLow, hk, hp, hs, Bool.false_eq_true, ↓reduceIte]
+        obtain ⟨_, hr, _, br⟩ := symSplit_sound H.facts hx pos hs
+        exact ⟨ρ, Carried.here H wf, hr, br⟩
+      | none =>
+        simp only [symLow, hk, hp, hs, Bool.false_eq_true, ↓reduceIte]
+        obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
+        exact ⟨ρ', c, hr, br⟩
 
 theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
@@ -1361,9 +1553,16 @@ theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     refine ⟨ρ, Carried.here H wf, ev_quot_exact pos hk, ?_⟩
     exact Nat.le_trans (strip_length _) (by rw [List.length_map]; exact hx)
   | false =>
-    simp only [symQuot, hk, Bool.false_eq_true, ↓reduceIte]
-    obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
-    exact ⟨ρ', c, hq, bq⟩
+    cases hs : symSplit s.facts x m with
+    | some qr =>
+      obtain ⟨q, r⟩ := qr
+      simp only [symQuot, hk, hs, Bool.false_eq_true, ↓reduceIte]
+      obtain ⟨hq, _, bq, _⟩ := symSplit_sound H.facts hx pos hs
+      exact ⟨ρ, Carried.here H wf, hq, bq⟩
+    | none =>
+      simp only [symQuot, hk, hs, Bool.false_eq_true, ↓reduceIte]
+      obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
+      exact ⟨ρ', c, hq, bq⟩
 
 theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l = some v → Known.or v x y ∈ l ∨ Known.or v y x ∈ l
   | [], _, h => by simp [knownOr] at h
@@ -1733,7 +1932,7 @@ theorem symAndConst_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {m : I
         injection hp with h1 h2
         subst h1 h2
         have posw : (0 : Int) < (2 : Int) ^ w := Int.pow_pos (by decide)
-        obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) H wf hx3 posw (by rw [← hx2]; omega)
+        obtain ⟨ρ', c, hr, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) H wf hx3 posw (by rw [← hx2]; omega)
         have castw : ((2 ^ w : Nat) : Int) = (2 : Int) ^ w := by simp
         refine ⟨ρ', c, Nat.mod_lt _ (by decide), ?_, br⟩
         rw [hand, Nat.pow_zero, Nat.div_one, Nat.mul_one, Nat.mod_eq_of_lt (by simpa using hlt),
@@ -1748,7 +1947,7 @@ theorem symAndConst_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {m : I
           injection hp with h1 h2
           subst h1 h2
           have posk : (0 : Int) < (2 : Int) ^ (k' + 1) := Int.pow_pos (by decide)
-          obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
+          obtain ⟨ρ', c, hq, bq⟩ := symQuot_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
           have castk : ((2 ^ (k' + 1) : Nat) : Int) = (2 : Int) ^ (k' + 1) := by simp
           have hdiv_lt : xa / 2 ^ (k' + 1) < 2 ^ w := by
             have hm64 : M64 = 2 ^ w * 2 ^ (k' + 1) := by
@@ -1765,10 +1964,10 @@ theorem symAndConst_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {m : I
           subst h1 h2
           have posk : (0 : Int) < (2 : Int) ^ (k' + 1) := Int.pow_pos (by decide)
           have posw : (0 : Int) < (2 : Int) ^ w := Int.pow_pos (by decide)
-          obtain ⟨ρ1, c1, hq1, _, bq1, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
-          have hq1_nn : 0 ≤ ev ρ1 (symDivide s x ((2 : Int) ^ (k' + 1))).1 := by
+          obtain ⟨ρ1, c1, hq1, bq1⟩ := symQuot_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
+          have hq1_nn : 0 ≤ ev ρ1 (symQuot s x ((2 : Int) ^ (k' + 1))).1 := by
             rw [hq1, ← hx2]; exact Int.ediv_nonneg (Int.natCast_nonneg _) (Int.le_of_lt posk)
-          obtain ⟨ρ2, c2, _, hr2, _, br2⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) c1.holds c1.wf bq1 posw hq1_nn
+          obtain ⟨ρ2, c2, hr2, br2⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) c1.holds c1.wf bq1 posw hq1_nn
           have castk : ((2 ^ (k' + 1) : Nat) : Int) = (2 : Int) ^ (k' + 1) := by simp
           have castw : ((2 ^ w : Nat) : Int) = (2 : Int) ^ w := by simp
           refine ⟨ρ2, c1.then c2, Nat.mod_lt _ (by decide), ?_, bounded_scale _ br2⟩
@@ -1912,7 +2111,7 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
                   have e : xb = k.toNat := by omega
                   subst e
                   have pos : (0 : Int) < 2 ^ k.toNat := Int.pow_pos (by decide)
-                  obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
+                  obtain ⟨ρ', c, hq, bq⟩ := symQuot_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
                   have cast : ((2 ^ k.toNat : Nat) : Int) = (2 : Int) ^ k.toNat := by simp
                   refine ⟨ρ', c, (xa % M64) >>> k.toNat, by simp [prim], ?_, ?_, bq⟩
                   · rw [Nat.mod_eq_of_lt hx1', Nat.shiftRight_eq_div_pow]

@@ -1884,14 +1884,18 @@ theorem symLow_flags (s : Sym) (x : Row) (m : Int) :
   · exact ⟨rfl, rfl⟩
   · split
     · exact ⟨rfl, rfl⟩
-    · exact symDivide_flags s x m
+    · split
+      · exact ⟨rfl, rfl⟩
+      · exact symDivide_flags s x m
 
 theorem symQuot_flags (s : Sym) (x : Row) (m : Int) :
     (symQuot s x m).2.zf = s.zf ∧ (symQuot s x m).2.cf = s.cf := by
   unfold symQuot
   split
   · exact ⟨rfl, rfl⟩
-  · exact symDivide_flags s x m
+  · split
+    · exact ⟨rfl, rfl⟩
+    · exact symDivide_flags s x m
 
 theorem readByte_flags {ctx : Ctx} {s s1 : Sym} {r : Nat} {o v : Row} {items rest : Items}
     (h : readByte ctx s r o items = .ok ((v, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by
@@ -1983,6 +1987,22 @@ theorem symLoadFixed_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val :
             | none => simp only [hk] at h; have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
           · simp only [hsz, ite_false] at h; exact (refuse_ok h).elim
 
+theorem readBytes_flags {ctx : Ctx} {r : Nat} :
+    ∀ (n : Nat) {s s1 : Sym} {o v : Row} {items rest : Items},
+    readBytes ctx s r o n items = .ok ((v, s1), rest) → s1.zf = s.zf ∧ s1.cf = s.cf
+  | 0, _, _, _, _, _, _, h => by
+    simp only [readBytes] at h
+    have hp := V.pure_ok h; injection hp with hp _; injection hp with _ hs; subst hs
+    exact ⟨rfl, rfl⟩
+  | n + 1, _, _, _, _, _, _, h => by
+    simp only [readBytes] at h
+    obtain ⟨⟨_, s'⟩, _, e1, h⟩ := V.bind_ok h
+    obtain ⟨⟨_, s2⟩, _, e2, h⟩ := V.bind_ok h
+    have hp := V.pure_ok h; injection hp with hp _; injection hp with _ hs; subst hs
+    have f1 := readByte_flags e1
+    have f2 := readBytes_flags n e2
+    exact ⟨f2.1.trans f1.1, f2.2.trans f1.2⟩
+
 theorem symLoad_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} {items rest : Items}
     (h : symLoad ctx s addr sz items = .ok ((val, s1), rest)) : (∃ r, val = .lin r) ∧ s1.zf = s.zf ∧ s1.cf = s.cf := by
   unfold symLoad at h
@@ -2006,7 +2026,13 @@ theorem symLoad_lin {ctx : Ctx} {s s1 : Sym} {addr : Row} {sz : Nat} {val : EV} 
         obtain ⟨⟨v, s'⟩, _, hr, hp⟩ := V.bind_ok h
         have := V.pure_ok hp; injection this with h _; injection h with h1 h2; subst h1 h2
         exact ⟨⟨_, rfl⟩, readByte_flags hr⟩
-      · rw [if_neg hsz] at h; exact (refuse_ok h).elim
+      · rw [if_neg hsz] at h
+        by_cases hszm : sz = 2 ∨ sz = 4 ∨ sz = 8
+        · simp only [hszm, ite_true] at h
+          obtain ⟨⟨v, s'⟩, _, hr, hp⟩ := V.bind_ok h
+          have := V.pure_ok hp; injection this with h _; injection h with h1 h2; subst h1 h2
+          exact ⟨⟨_, rfl⟩, readBytes_flags sz hr⟩
+        · rw [if_neg hszm] at h; exact (refuse_ok h).elim
     | out _ _ => dsimp only at h; exact (refuse_ok h).elim
     | data c =>
       dsimp only at h
@@ -2106,7 +2132,7 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
               | some k =>
                 simp only [hc] at h
                 by_cases hk : 0 ≤ k ∧ k < 64
-                · simp only [hk, ite_true] at h; exact ofLin _ _ _ h (symDivide_flags s x _).1 (symDivide_flags s x _).2
+                · simp only [hk, ite_true] at h; exact ofLin _ _ _ h (symQuot_flags s x _).1 (symQuot_flags s x _).2
                 · simp only [hk, ite_false] at h; exact (refuse_ok (items := items) h).elim
             · simp only [h6, ite_false] at h
               by_cases h7 : (f == "and64") = true
@@ -2127,15 +2153,15 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
                       cases k with
                       | zero =>
                         simp only [hms] at ha
-                        exact ofLin _ _ _ ha (symDivide_flags s x' _).1 (symDivide_flags s x' _).2
+                        exact ofLin _ _ _ ha (symLow_flags s x' _).1 (symLow_flags s x' _).2
                       | succ k' =>
                         simp only [hms] at ha
                         by_cases h64 : (k' + 1 + w == 64) = true
                         · simp only [h64, ite_true] at ha
-                          exact ofLin _ _ _ ha (symDivide_flags s x' _).1 (symDivide_flags s x' _).2
+                          exact ofLin _ _ _ ha (symQuot_flags s x' _).1 (symQuot_flags s x' _).2
                         · simp only [h64, ite_false] at ha
-                          have f1 := symDivide_flags s x' ((2 : Int) ^ (k' + 1))
-                          have f2 := symDivide_flags (symDivide s x' ((2 : Int) ^ (k' + 1))).2.2 (symDivide s x' ((2 : Int) ^ (k' + 1))).1 ((2 : Int) ^ w)
+                          have f1 := symQuot_flags s x' ((2 : Int) ^ (k' + 1))
+                          have f2 := symLow_flags (symQuot s x' ((2 : Int) ^ (k' + 1))).2 (symQuot s x' ((2 : Int) ^ (k' + 1))).1 ((2 : Int) ^ w)
                           exact ofLin _ _ _ ha (f2.1.trans f1.1) (f2.2.trans f1.2)
                 cases hc : constOf s.facts y with
                 | some m => simp only [hc] at h; exact ofAnd h

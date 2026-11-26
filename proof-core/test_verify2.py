@@ -1152,6 +1152,144 @@ fn hi_nib(c: number)
             self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
             self.assertIn("shown (1 function, verify2)", r2.stdout)
 
+    def test_14_multibyte_bytes_load_and_exact_byte_split(self):
+        """Multi-byte (32-bit and 64-bit) loads from a `bytes` buffer plus exact `symSplit` byte
+        extraction (`& 255`, `>> 8`, `>> 16`, `>> 24`, `>> 56`) dual-verify on both x86-64 and AArch64,
+        and trace-excluded multi-byte loads still block branches."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built here")
+        sys.path.insert(0, os.path.join(ROOT, "lang"))
+        import ode_audit
+
+        # 1. 32-bit load from `pkt: n bytes` -> sum two big-endian 16-bit words (IPv4 checksum pattern)
+        src32 = """
+def be16_pair(pkt) { (pkt[0] * 256 + pkt[1]) + (pkt[2] * 256 + pkt[3]) }
+
+fn sum4(pkt: n bytes, n: number)
+    requires 4 <= n
+    requires n <= 4096
+    returns be16_pair(pkt)
+    trace depends on pkt, n
+    stack 0
+{
+    for x86_64 {
+        mov r8d, dword ptr [rdi]
+        mov rax, r8
+        and rax, 255
+        shl rax, 8
+        mov r9, r8
+        shr r9, 8
+        and r9, 255
+        add rax, r9
+        mov r10, r8
+        shr r10, 16
+        and r10, 255
+        shl r10, 8
+        add rax, r10
+        shr r8, 24
+        add rax, r8
+        ret
+    }
+    for arm64 {
+        ldr w2, [x0, 0]
+        x3 := 255
+        and x4, x2, x3
+        lsl x4, x4, 8
+        lsr x5, x2, 8
+        and x5, x5, x3
+        add x4, x4, x5
+        lsr x6, x2, 16
+        and x6, x6, x3
+        lsl x6, x6, 8
+        add x4, x4, x6
+        lsr x7, x2, 24
+        add x0, x4, x7
+        ret
+    }
+}
+"""
+        # 2. 64-bit load from `pkt: n bytes` -> sum first byte b[0] and last byte b[7]
+        src64 = """
+def ends8(pkt) { pkt[0] + pkt[7] }
+
+fn sum_ends(pkt: n bytes, n: number)
+    requires 8 <= n
+    requires n <= 4096
+    returns ends8(pkt)
+    trace depends on pkt, n
+    stack 0
+{
+    for x86_64 {
+        mov r8, qword ptr [rdi]
+        mov rax, r8
+        and rax, 255
+        shr r8, 56
+        add rax, r8
+        ret
+    }
+    for arm64 {
+        ldr x2, [x0, 0]
+        x3 := 255
+        and x4, x2, x3
+        lsr x5, x2, 56
+        add x0, x4, x5
+        ret
+    }
+}
+"""
+        for label, src, fn in [("mem32", src32, "sum4"), ("mem64", src64, "sum_ends")]:
+            for target in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    src_p = os.path.join(d, f"{label}.ode")
+                    with open(src_p, "w", encoding="utf-8") as f:
+                        f.write(src)
+                    out_o, out_p = os.path.join(d, "o.o"), os.path.join(d, "o.proof")
+                    res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name=fn, target=target)
+                    self.assertEqual(res["verdict"], "shown", f"{label}/{target}: {res}")
+                    dump = os.path.join(d, "dump.sh")
+                    st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                    with open(dump, "w", encoding="utf-8") as f:
+                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                    os.chmod(dump, 0o755)
+                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                    tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                    r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                        capture_output=True, text=True)
+                    self.assertEqual(r2.returncode, 0, f"{label}/{target}: {r2.stdout}{r2.stderr}")
+                    self.assertIn("shown (1 function, verify2)", r2.stdout)
+
+        # 3. Negative control: 32-bit load of trace-excluded bytes cannot drive a branch
+        src_bad = """
+fn bad_branch(pkt: n bytes, n: number)
+    requires 4 <= n
+    requires n <= 4096
+    returns if pkt[0] == 0 then 1 else 0
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        mov r8d, dword ptr [rdi]
+        and r8, 255
+        cmp r8, 0
+        je @z
+        mov rax, 0
+        ret
+    @z:
+        mov rax, 1
+        ret
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            src_p = os.path.join(d, "bad.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src_bad)
+            with self.assertRaises(BaseException) as ctx_err:
+                ode_audit.pack_verified(src_p, None, os.path.join(d, "b.o"), os.path.join(d, "b.proof"),
+                                        fn_name="bad_branch", target="x86_64")
+            self.assertIn("kept out of the trace", str(ctx_err.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

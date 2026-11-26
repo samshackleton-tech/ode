@@ -405,6 +405,34 @@ theorem ev_quot_exact {ρ : Nat → Int} {x : Row} {m : Int} (pos : 0 < m) (h : 
   rw [dot_exact m x.coeff ρ h, Int.add_comm (m * _), Int.add_mul_ediv_left _ _ (Int.ne_of_gt pos)]
   exact Int.add_comm _ _
 
+theorem dot_splitMod (m : Int) (cs : List Int) : ∀ (ρ : Nat → Int),
+    dot cs ρ = m * dot (cs.map fun c => if c % m == 0 then c / m else 0) ρ
+               + dot (cs.map fun c => if c % m == 0 then 0 else c) ρ := by
+  induction cs with
+  | nil => intro ρ; simp [dot]
+  | cons c cs ih =>
+    intro ρ
+    simp only [List.map_cons, dot]
+    rw [ih (fun n => ρ (n + 1))]
+    by_cases h : c % m == 0
+    · simp only [h, ↓reduceIte, Int.zero_mul, Int.zero_add]
+      have h0 : c % m = 0 := beq_iff_eq.mp h
+      have e := Int.emod_add_mul_ediv c m
+      rw [h0, Int.zero_add] at e
+      have hmul : m * (c / m * ρ 0) = c * ρ 0 := by rw [← Int.mul_assoc, e]
+      rw [Int.mul_add, hmul]
+      omega
+    · simp only [h, Bool.false_eq_true, ↓reduceIte, Int.zero_mul, Int.zero_add]
+      omega
+
+theorem ev_splitMod (ρ : Nat → Int) (x : Row) (m : Int) :
+    ev ρ x = m * ev ρ (Lin.splitMod x m).1 + ev ρ (Lin.splitMod x m).2 := by
+  simp only [Lin.splitMod, ev, dot_strip]
+  have hd := dot_splitMod m x.coeff ρ
+  have hc := Int.emod_add_mul_ediv x.constant m
+  rw [Int.mul_add]
+  omega
+
 /-! ## A row as a word -/
 
 theorem dot_word (cs : List Int) : ∀ (ρ : Nat → Int), dot (cs.map (· % W32i)) ρ % W32i = dot cs ρ % W32i := by

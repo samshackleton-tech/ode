@@ -900,13 +900,70 @@ class Verifier:
             cur_st["div_cache"][key] = (q, rem)
             return q, rem
 
+        def r_bound_of(facts, row):
+            best = None
+            for fact in facts:
+                s = r_add(fact, row)
+                if not s[1]:
+                    if best is None or s[0] < best:
+                        best = s[0]
+            return best
+
+        def r_row_upper(facts, row):
+            c0, cs = row
+            if c0 < 0:
+                return None
+            total = c0
+            for i, c in enumerate(cs):
+                if c == 0:
+                    continue
+                if c < 0:
+                    return None
+                vi = r_var(i)
+                if not r_plain(facts, vi):
+                    return None
+                ub = r_bound_of(facts, vi)
+                if ub is None:
+                    return None
+                total += c * ub
+            return total
+
+        def sym_split(facts, x, m):
+            c0, cs = x
+            q_cs = [c // m if c % m == 0 else 0 for c in cs]
+            r_cs = [0 if c % m == 0 else c for c in cs]
+            while q_cs and q_cs[-1] == 0:
+                q_cs.pop()
+            while r_cs and r_cs[-1] == 0:
+                r_cs.pop()
+            q = (c0 // m, tuple(q_cs))
+            r = (c0 % m, tuple(r_cs))
+            ub = r_row_upper(facts, r)
+            if ub is not None and ub < m:
+                return q, r
+            return None
+
         def sym_low(x, m, cur_st):
-            if not x[1]:
+            if all(c % m == 0 for c in x[1]):
                 return r_const(x[0] % m)
             f = cur_st["facts"]
-            if (x in f) and r_plain(f, r_sub(r_const(m - 1), x)):
+            if r_plain(f, r_sub(r_const(m - 1), x)):
                 return x
-            return quot_rem(x, m, cur_st, nonneg=True)[1]
+            sp = sym_split(f, x, m)
+            if sp is not None:
+                return sp[1]
+            return quot_rem(x, m, cur_st, nonneg=True, fold_const=False)[1]
+
+        def sym_quot(x, m, cur_st):
+            if all(c % m == 0 for c in x[1]):
+                q_cs = [c // m for c in x[1]]
+                while q_cs and q_cs[-1] == 0:
+                    q_cs.pop()
+                return (x[0] // m, tuple(q_cs))
+            sp = sym_split(cur_st["facts"], x, m)
+            if sp is not None:
+                return sp[0]
+            return quot_rem(x, m, cur_st, nonneg=True, fold_const=False)[0]
 
         state = {
             "nvars": init_nvars,
@@ -1033,8 +1090,7 @@ class Verifier:
                     k = bk
                     if not a[1]:
                         return r_const((a[0] & M64) >> k), (ma or mb)
-                    q, _ = quot_rem(a, 1 << k, st, nonneg=True, fold_const=False)
-                    return q, (ma or mb)
+                    return sym_quot(a, 1 << k, st), (ma or mb)
                 if op == "and64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
@@ -1053,13 +1109,12 @@ class Verifier:
                         raise Refuse(f"unsupported and64 mask {mask_m}")
                     k, w = sp
                     if k == 0:
-                        _, rem = quot_rem(val_x, 1 << w, st, nonneg=True, fold_const=False)
-                        return rem, (ma or mb)
+                        return sym_low(val_x, 1 << w, st), (ma or mb)
                     if k + w == 64:
-                        q, _ = quot_rem(val_x, 1 << k, st, nonneg=True, fold_const=False)
+                        q = sym_quot(val_x, 1 << k, st)
                         return r_scale(1 << k, q), (ma or mb)
-                    q1, _ = quot_rem(val_x, 1 << k, st, nonneg=True, fold_const=False)
-                    _, rem2 = quot_rem(q1, 1 << w, st, nonneg=True, fold_const=False)
+                    q1 = sym_quot(val_x, 1 << k, st)
+                    rem2 = sym_low(q1, 1 << w, st)
                     return r_scale(1 << k, rem2), (ma or mb)
                 if op == "low32":
                     a, ma = eval_table_expr(args[0], bind, st)
@@ -1075,15 +1130,19 @@ class Verifier:
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
                     return ("lt", a, b), (ma or mb)
-                if op == "mem8":
+                if op in ("mem8", "mem16", "mem32", "mem64"):
+                    sz_map = {"mem8": 1, "mem16": 2, "mem32": 4, "mem64": 8}
+                    msz = sz_map[op]
                     base, mb = eval_table_expr(args[0], bind, st)
                     disp, md = eval_table_expr(args[1], bind, st)
                     addr = r_add(base, disp)
                     if mb or md:
-                        raise Refuse("memory read address depends on values kept out of the trace")
-                    # Match `addr = buf_base[b] + idx` with `0 <= idx < buf_len[b]`
-                    # (the run is the one whose base address, a single unknown of the entry, the address
-                    # is counted from once; that the address lies within it is then shown, not assumed)
+                        raise Refuse(f"{op} address depends on values kept out of the trace")
+                    if msz == 8:
+                        off_row = r_sub(addr, entry_regs[sp_reg])
+                        if not off_row[1] and off_row[0] in st["stack_mem"]:
+                            return st["stack_mem"][off_row[0]]
+                    # Match `addr = buf_base[b] + idx` with `0 <= idx + k < buf_len[b]` for k=0..msz-1
                     def counted_from(bbase):
                         vs = [i for i, cf in enumerate(bbase[1]) if cf != 0]
                         return (bbase[0] == 0 and len(vs) == 1 and bbase[1][vs[0]] == 1
@@ -1091,20 +1150,18 @@ class Verifier:
                     for bnm, bbase in st["buf_base"].items():
                         if not counted_from(bbase):
                             continue
-                        idx = r_sub(addr, bbase)
-                        self.entail(st["facts"], idx, stream)
-                        self.entail(st["facts"], r_sub(r_sub(st["buf_len"][bnm], idx), r_const(1)), stream)
-                        return st["get_byte"](bnm, idx, st, stream), (not st["buf_clean"][bnm])
-                    raise Refuse("mem8 address does not fall in any contract buffer")
-                if op == "mem64":
-                    base, mb = eval_table_expr(args[0], bind, st)
-                    disp, md = eval_table_expr(args[1], bind, st)
-                    if mb or md:
-                        raise Refuse("mem64 address depends on values kept out of the trace")
-                    off_row = r_sub(r_add(base, disp), entry_regs[sp_reg])
-                    if not off_row[1] and off_row[0] in st["stack_mem"]:
-                        return st["stack_mem"][off_row[0]]
-                    raise Refuse("mem64 load from unwritten stack slot")
+                        idx0 = r_sub(addr, bbase)
+                        acc = r_const(0)
+                        mul = 1
+                        for k_off in range(msz):
+                            idx_k = idx0 if k_off == 0 else r_add(idx0, r_const(k_off))
+                            self.entail(st["facts"], idx_k, stream)
+                            self.entail(st["facts"], r_sub(r_sub(st["buf_len"][bnm], idx_k), r_const(1)), stream)
+                            bk_row = st["get_byte"](bnm, idx_k, st, stream)
+                            acc = r_add(acc, r_scale(mul, bk_row))
+                            mul *= 256
+                        return acc, (not st["buf_clean"][bnm])
+                    raise Refuse(f"{op} address does not fall in any contract buffer or stack slot")
                 if op == "on16":
                     return eval_table_expr(args[0], bind, st)
                 raise Refuse(f"unsupported table op `{op}` in verify2")

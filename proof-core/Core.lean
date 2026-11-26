@@ -731,6 +731,15 @@ def readByte (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : V (Row × Sym) :=
         pure (Lin.var s.nvars, { s with nvars := s.nvars + 1, bytes := (s.nvars, r, o) :: s.bytes,
                                         facts := Lin.var s.nvars :: Lin.sub (Lin.const 255) (Lin.var s.nvars) :: s.facts })
 
+/-- Read `n` consecutive bytes from a run of bytes starting at offset `o`, little-endian:
+`b0 + 256 * (b1 + 256 * ...)`. Each byte checks bounds and shares its variable in `s.bytes`. -/
+def readBytes (ctx : Ctx) (s : Sym) (r : Nat) (o : Row) : Nat → V (Row × Sym)
+  | 0 => pure (Lin.const 0, s)
+  | n + 1 => do
+    let (b, s1) ← readByte ctx s r o
+    let (hi, s2) ← readBytes ctx s1 r (Lin.add o (Lin.const 1)) n
+    pure (Lin.add b (Lin.scale 256 hi), s2)
+
 inductive Where where
   | frame (off : Int)
   | region (r : Nat) (off : Row)
@@ -862,7 +871,10 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
     if size = 1 then do
       let (v, s) ← readByte ctx s r o
       pure (.lin v, s)
-    else refuse "a read of a run of bytes that is not one byte: not here yet"
+    else if size = 2 ∨ size = 4 ∨ size = 8 then do
+      let (v, s) ← readBytes ctx s r o size
+      pure (.lin v, s)
+    else refuse "a read of a run of bytes that is not one, two, four or eight bytes: not here yet"
   | some (.out _ _) => refuse "a read of a run given only to write"
   | some (.data c) =>
     -- the file's read-only data: the bytes are the file's, so what is read is a plain number
@@ -871,18 +883,56 @@ def symLoad (ctx : Ctx) (s : Sym) (addr : Row) (size : Nat) : V (EV × Sym) :=
     else refuse "a read of the file's read-only data that is not one, four or eight bytes within it"
   | none => symLoadFixed ctx s addr size
 
+/-- Split a linear combination `x` into `(q, r)` with `ev ρ x = m * ev ρ q + ev ρ r`, pulling out
+every term whose coefficient is divisible by `m` (plus `constant / m`). -/
+def Lin.splitMod (x : Row) (m : Int) : Row × Row :=
+  (⟨Lin.strip (x.coeff.map fun c => if c % m == 0 then c / m else 0), x.constant / m⟩,
+   ⟨Lin.strip (x.coeff.map fun c => if c % m == 0 then 0 else c), x.constant % m⟩)
+
+/-- Fast non-negative upper bound on `dot cs (fun k => ρ (i + k))` when every non-zero coefficient is
+positive and each variable is seen at once from `facts` to lie in `[0, u]`. -/
+def rowUpperAux (facts : List Row) : List Int → Nat → Option Int
+  | [], _ => some 0
+  | c :: cs, i =>
+    if c == 0 then rowUpperAux facts cs (i + 1)
+    else if c < 0 then none
+    else if plain facts (Lin.var i) then
+      match boundOf facts (Lin.var i), rowUpperAux facts cs (i + 1) with
+      | some u, some rest => some (c * u + rest)
+      | _, _ => none
+    else none
+
+/-- Fast proof that `0 ≤ ev ρ r ≤ u` directly from variable bounds in `facts` (e.g. packed bytes
+`b0 + 256*b1 + ...` from a multi-byte load or shift-add). -/
+def rowUpper (facts : List Row) (r : Row) : Option Int :=
+  if r.constant < 0 then none
+  else (rowUpperAux facts r.coeff 0).map (r.constant + ·)
+
+/-- Exact Euclidean split `x = m * q + r` with `0 ≤ r < m` proved immediately from `facts` without
+introducing division variables (extracts individual bytes/words from multi-byte loads and shift-adds). -/
+def symSplit (facts : List Row) (x : Row) (m : Int) : Option (Row × Row) :=
+  let (q, r) := Lin.splitMod x m
+  match rowUpper facts r with
+  | some u => if u < m then some (q, r) else none
+  | none => none
+
 /-- The remainder of a number by a divisor above zero: worked out where every multiple in the number is a
 multiple of the divisor (so where the number is one of the table's); the number itself where it is seen at
-once to be below the divisor; and else by the one division of it the state knows of. -/
+once to be below the divisor; exact split where the non-multiple remainder is seen below the divisor;
+and else by the one division of it the state knows of. -/
 def symLow (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (Lin.const (x.constant % m), s)
   else if plain s.facts (Lin.sub (Lin.const (m - 1)) x) then (x, s)
-  else ((symDivide s x m).2.1, (symDivide s x m).2.2)
+  else match symSplit s.facts x m with
+    | some (_, r) => (r, s)
+    | none => ((symDivide s x m).2.1, (symDivide s x m).2.2)
 
 /-- The quotient likewise. -/
 def symQuot (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (⟨Lin.strip (x.coeff.map (· / m)), x.constant / m⟩, s)
-  else ((symDivide s x m).1, (symDivide s x m).2.2)
+  else match symSplit s.facts x m with
+    | some (q, _) => (q, s)
+    | none => ((symDivide s x m).1, (symDivide s x m).2.2)
 
 /-- The unknown the state knows as the two numbers' bits put together (in either order). -/
 def knownOr (x y : Row) : List Known → Option Nat
@@ -965,16 +1015,16 @@ def symAndConst (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
   if m == 0 then pure (.lin (Lin.const 0), s)
   else match maskSpan m with
   | some (0, w) =>
-    let d := symDivide s x ((2 : Int) ^ w)
-    pure (.lin d.2.1, d.2.2)
+    let d := symLow s x ((2 : Int) ^ w)
+    pure (.lin d.1, d.2)
   | some (k, w) =>
     if k + w == 64 then
-      let d := symDivide s x ((2 : Int) ^ k)
-      pure (.lin (Lin.scale ((2 : Int) ^ k) d.1), d.2.2)
+      let d := symQuot s x ((2 : Int) ^ k)
+      pure (.lin (Lin.scale ((2 : Int) ^ k) d.1), d.2)
     else
-      let d1 := symDivide s x ((2 : Int) ^ k)
-      let d2 := symDivide d1.2.2 d1.1 ((2 : Int) ^ w)
-      pure (.lin (Lin.scale ((2 : Int) ^ k) d2.2.1), d2.2.2)
+      let d1 := symQuot s x ((2 : Int) ^ k)
+      let d2 := symLow d1.2 d1.1 ((2 : Int) ^ w)
+      pure (.lin (Lin.scale ((2 : Int) ^ k) d2.1), d2.2)
   | none =>
     refuse "no proof rule for this AND mask (supported: any contiguous bitmask (2^w - 1) << k, or 0)"
 
@@ -1002,7 +1052,7 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
     -- a shift to the right by a known constant: the quotient by so many doublings
     match constOf s.facts y with
     | some k =>
-      if 0 ≤ k ∧ k < 64 then pure (.lin (symDivide s x (2 ^ k.toNat)).1, (symDivide s x (2 ^ k.toNat)).2.2)
+      if 0 ≤ k ∧ k < 64 then pure (.lin (symQuot s x (2 ^ k.toNat)).1, (symQuot s x (2 ^ k.toNat)).2)
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "and64" then
@@ -3287,9 +3337,14 @@ def plainRow (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → Option Row
     else none
   | _ => none
 
-/-- A load of `size` bytes at `a + b` reads memory that is given to read only and is not hidden: a byte
-of a run of bytes that the contract does not say is hidden, at a place the statement has shown to be
-within the run (`s1` is the state after the statement: the byte is known there); or bytes at a place that is a number, within a run of a fixed count
+/-- Every byte in `[o, o + n)` of run `r` is recorded in `bs` (hence shown within the run). -/
+def hasBytes (r : Nat) (o : Row) (bs : List (Nat × Nat × Row)) : Nat → Bool
+  | 0 => true
+  | n + 1 => (lookupByte r o bs).isSome && hasBytes r (Lin.add o (Lin.const 1)) bs n
+
+/-- A load of `size` bytes at `a + b` reads memory that is given to read only and is not hidden: bytes
+of a run of bytes that the contract does not say is hidden, at places the statement has shown to be
+within the run (`s1` is the state after the statement: the bytes are known there); or bytes at a place that is a number, within a run of a fixed count
 that the contract does not say is hidden. Such bytes are not marked at entry, and nothing can write them. -/
 def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) : Bool :=
   match plainRow ctx bind s a, plainRow ctx bind s b with
@@ -3298,7 +3353,7 @@ def publicLoad (ctx : Ctx) (bind : Bind) (s s1 : Sym) (size : Nat) (a b : Expr) 
     match locate ctx addr with
     | some (.frame c) => size == 8 && s.q.fq.contains c       -- (a cell of the frame known not to be marked)
     | some (.region r o) =>
-      size == 1 && (lookupByte r o s1.bytes).isSome &&
+      (size == 1 || size == 2 || size == 4 || size == 8) && hasBytes r o s1.bytes size &&
         match ctx.contract.regions[r]? with
         | some (base, _) => !ctx.contract.hiddenAt base
         | none => false

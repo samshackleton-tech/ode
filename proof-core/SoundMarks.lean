@@ -203,6 +203,42 @@ theorem frameAddr {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) 
   omega
 
 /-- A load the verifier takes as one of memory given to read only: its bytes are not marked. -/
+theorem hasBytes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int}
+    {s s1 : Sym} {st st1 : State} (M : MarksOk ctx s0 s.q st) (C : Carried ctx s0 ρ s ρ1 s1 st1)
+    {r base len : Nat} (hreg : ctx.contract.regions[r]? = some (base, len))
+    (hnh : ctx.contract.hiddenAt base = false) :
+    ∀ (n : Nat) {o : Row}, hasBytes r o s1.bytes n = true → 0 < n →
+      0 ≤ ev ρ1 o ∧ ev ρ1 o < s0.reg len ∧
+      anyMarked st.marks.mem (s0.reg base + (ev ρ1 o).toNat) n = false
+  | 0, _, _, hpos => by omega
+  | n + 1, o, h, _ => by
+    simp only [hasBytes, Bool.and_eq_true] at h
+    cases hv : lookupByte r o s1.bytes with
+    | none => simp [hv] at h
+    | some v =>
+      obtain ⟨base', len', hr', g1, g2, _⟩ := C.holds.bytes v r o (lookupByte_mem hv)
+      rw [hreg] at hr'
+      injection hr' with hr'
+      injection hr' with hb1 hb2
+      subst hb1 hb2
+      have hmem : (base, len) ∈ ctx.contract.regions := List.mem_of_getElem? hreg
+      obtain ⟨r1, r2⟩ := E.regionAt hmem
+      have hk : (ev ρ1 o).toNat < s0.reg len := by omega
+      have hcur : st.marks.mem (s0.reg base + (ev ρ1 o).toNat) = false := by
+        rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
+        exact E.quiet.2.2.1 base len hmem hnh _ hk
+      refine ⟨g1, g2, ?_⟩
+      cases n with
+      | zero =>
+        simp only [anyMarked, hcur, Bool.or_false]
+      | succ m =>
+        obtain ⟨_, _, hrest⟩ := hasBytes_sound E M C hreg hnh (m + 1) h.2 (by omega)
+        rw [ev_add, ev_const] at hrest
+        have hidx : s0.reg base + (ev ρ1 o + 1).toNat = s0.reg base + (ev ρ1 o).toNat + 1 := by omega
+        rw [hidx] at hrest
+        change (st.marks.mem (s0.reg base + (ev ρ1 o).toNat) || anyMarked st.marks.mem (s0.reg base + (ev ρ1 o).toNat + 1) (m + 1)) = false
+        rw [hcur, hrest]; rfl
+
 theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ ρ1 : Nat → Int}
     {s s1 : Sym} {st st1 : State} (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (C : Carried ctx s0 ρ s ρ1 s1 st1) {bind : Bind} {size : Nat} {a b : Expr}
@@ -256,30 +292,20 @@ theorem publicLoad_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
             exact this
         | region r o =>
           obtain ⟨base, len, hreg, ho⟩ := locate_region hl
-          simp only [hl, hreg, Bool.and_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
-          obtain ⟨⟨hsize, hlook⟩, hnh⟩ := h
-          subst hsize
-          cases hv : lookupByte r o s1.bytes with
-          | none => simp [hv] at hlook
-          | some v =>
-            obtain ⟨base', len', hr', g1, g2, _⟩ := C.holds.bytes v r o (lookupByte_mem hv)
-            rw [hreg] at hr'
-            injection hr' with hr'
-            injection hr' with hb1 hb2
-            subst hb1 hb2
-            have hmem : (base, len) ∈ ctx.contract.regions := List.mem_of_getElem? hreg
-            have hbase := (regions_lt hmem).1
-            have eo : ev ρ1 o = ev ρ (Lin.add (signed x) (signed y)) - s0.reg base := by
-              rw [ho, ev_sub, ev_var, C.holds.entry base hbase, ← ev_agree hb C.agree]
-            obtain ⟨r1, r2⟩ := E.regionAt hmem
-            have had : (va + (vb + 0)) % M64 = s0.reg base + (ev ρ1 o).toNat := by
-              unfold M64 at *
-              omega
-            rw [had]
-            have hk : (ev ρ1 o).toNat < s0.reg len := by omega
-            simp only [anyMarked, Bool.or_false]
-            rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
-            exact E.quiet.2.2.1 base len hmem hnh _ hk
+          simp only [hl, hreg, Bool.and_eq_true, Bool.or_eq_true, beq_iff_eq, Bool.not_eq_true'] at h
+          obtain ⟨⟨hsize, hhas⟩, hnh⟩ := h
+          have hpos : 0 < size := by rcases hsize with ((rfl | rfl) | rfl) | rfl <;> decide
+          obtain ⟨g1, g2, hmk⟩ := hasBytes_sound E M C hreg hnh size hhas hpos
+          have hmem : (base, len) ∈ ctx.contract.regions := List.mem_of_getElem? hreg
+          have hbase := (regions_lt hmem).1
+          have eo : ev ρ1 o = ev ρ (Lin.add (signed x) (signed y)) - s0.reg base := by
+            rw [ho, ev_sub, ev_var, C.holds.entry base hbase, ← ev_agree hb C.agree]
+          obtain ⟨r1, r2⟩ := E.regionAt hmem
+          have had : (va + (vb + 0)) % M64 = s0.reg base + (ev ρ1 o).toNat := by
+            unfold M64 at *
+            omega
+          rw [had]
+          exact hmk
       | none =>
         simp only [hl] at h
         cases hf : findOut (Lin.add (signed x) (signed y)) ctx.contract.fixeds 0 with
