@@ -83,30 +83,43 @@ Summary of what calibration showed:
   1. The first version of `estimate.py` only tracked register dependencies and static `[sp + offset]` frame slots in its critical path, missing store-to-load chains through non-`sp` pointers (such as `add x2, sp, 0; st1 [x2]; ld1 [x2]` in `arm_stlf_width`). `analyze_memory` now tracks store-to-load dependency edges on exact concrete byte addresses from the trace.
   2. Summing raw L2 miss latency (10 cycles) or raw 4K-alias replay latency (10–12 cycles) per event overstated slowdowns because out-of-order memory-level parallelism and disambiguation predictors hide most of that latency. `arch.json` now uses amortized effective hazard penalties while Layer-1 hazard counts remain exact.
 
-## Bare-metal PMU pipeline validation (`pmu_validate.py`, `uica_sim.py`)
+## Bare-metal PMU pipeline validation (`pmu_validate.py`, `pmu_validate_arm64.py`, `uica_sim.py`)
 
-On 26 November 2026 we ran `advice/pmu_validate.py --run` (25 loop kernels: 4 real Ode kernels, 9 targeted pipeline probes, and 12 reproducible randomized instruction mixes) under Linux `perf_event_open` hardware cycle counters on three bare-metal processors, comparing the older static lower bound, `llvm-mca`, and `uica_sim.py`. Full JSON data lives in `advice/results/pmu-*.json`.
+On 26 November 2026 we ran our x86-64 (`advice/pmu_validate.py`, 25 kernels with AVX-512 / 21 without) and AArch64 (`advice/pmu_validate_arm64.py`, 7 latency probes + 24 evaluation kernels) validation suites across seven real processors (six microarchitectures across both x86-64 and AArch64, 169 kernel-runs total), using Linux `perf_event_open` hardware cycle counters everywhere supported and an interleaved `cal_add64` reference clock (verified against an independent `cal_orr64` chain) on macOS Apple Silicon. Full sanitized JSON datasets live in `advice/results/pmu-*.json`.
 
-The table below shows how many of the 25 kernels each estimator predicted within 10% and 15% of bare-metal measured cycles, along with median and mean absolute percentage error.
+The table below shows how many kernels each estimator predicted within 10% and 15% of hardware measured cycles on each processor, together with median and mean absolute percentage error.
 
 | Processor | Model | Within 10% | Within 15% | Median abs error | Mean abs error |
 | --- | --- | ---: | ---: | ---: | ---: |
-| AMD EPYC 9255 (Zen 5 server) | old `estimate.py` | 9/25 (36%) | 9/25 | 47.7% | 80.1% |
-| AMD EPYC 9255 (Zen 5 server) | `llvm-mca -mcpu=znver5` | 8/25 (32%) | 13/25 | 14.5% | 28.8% |
-| AMD EPYC 9255 (Zen 5 server) | **`uica_sim.py`** | **19/25 (76%)** | **22/25 (88%)** | **1.1%** | **6.3%** |
-| AMD Ryzen 7 9700X (Zen 5 desktop) | old `estimate.py` | 9/25 (36%) | 9/25 | 47.7% | 80.1% |
-| AMD Ryzen 7 9700X (Zen 5 desktop) | `llvm-mca -mcpu=znver5` | 8/25 (32%) | 13/25 | 14.5% | 28.8% |
-| AMD Ryzen 7 9700X (Zen 5 desktop) | **`uica_sim.py`** | **19/25 (76%)** | **21/25 (84%)** | **5.3%** | **7.9%** |
-| Intel Xeon Gold 6330 (Ice Lake) | old `estimate.py` | 7/25 (28%) | 8/25 | 31.1% | 61.7% |
-| Intel Xeon Gold 6330 (Ice Lake) | `llvm-mca -mcpu=icelake-server` | 15/25 (60%) | 15/25 | 7.2% | 15.3% |
-| Intel Xeon Gold 6330 (Ice Lake) | **`uica_sim.py`** | **19/25 (76%)** | **22/25 (88%)** | **8.1%** | **8.2%** |
+| AMD EPYC 9255 (Zen 5 server, x86-64) | old `estimate.py` | 9/25 (36%) | 9/25 | 47.7% | 80.1% |
+| AMD EPYC 9255 (Zen 5 server, x86-64) | `llvm-mca -mcpu=znver5` | 8/25 (32%) | 13/25 | 14.5% | 28.8% |
+| AMD EPYC 9255 (Zen 5 server, x86-64) | **`uica_sim.py`** | **19/25 (76%)** | **22/25 (88%)** | **1.1%** | **6.3%** |
+| AMD Ryzen 7 9700X (Zen 5 desktop, x86-64) | old `estimate.py` | 9/25 (36%) | 9/25 | 47.7% | 80.1% |
+| AMD Ryzen 7 9700X (Zen 5 desktop, x86-64) | `llvm-mca -mcpu=znver5` | 8/25 (32%) | 13/25 | 14.5% | 28.8% |
+| AMD Ryzen 7 9700X (Zen 5 desktop, x86-64) | **`uica_sim.py`** | **19/25 (76%)** | **21/25 (84%)** | **5.3%** | **7.9%** |
+| AMD Threadripper PRO 7975WX (Zen 4, x86-64) | old `estimate.py` | 9/25 (36%) | 9/25 | 31.1% | 68.6% |
+| AMD Threadripper PRO 7975WX (Zen 4, x86-64) | `llvm-mca -mcpu=znver4` | 14/25 (56%) | 14/25 | 8.9% | 16.7% |
+| AMD Threadripper PRO 7975WX (Zen 4, x86-64) | **`uica_sim.py`** | **20/25 (80%)** | **23/25 (92%)** | **2.4%** | **5.3%** |
+| AMD EPYC 7443 (Zen 3, x86-64) | old `estimate.py` | 7/21 (33%) | 7/21 | 32.9% | 69.3% |
+| AMD EPYC 7443 (Zen 3, x86-64) | `llvm-mca -mcpu=znver3` | 13/21 (62%) | 15/21 | 8.7% | 13.6% |
+| AMD EPYC 7443 (Zen 3, x86-64) | **`uica_sim.py`** | **17/21 (81%)** | **20/21 (95%)** | **3.9%** | **5.0%** |
+| Intel Xeon Gold 6330 (Ice Lake, x86-64) | old `estimate.py` | 7/25 (28%) | 8/25 | 31.1% | 61.7% |
+| Intel Xeon Gold 6330 (Ice Lake, x86-64) | `llvm-mca -mcpu=icelake-server` | 15/25 (60%) | 15/25 | 7.2% | 15.3% |
+| Intel Xeon Gold 6330 (Ice Lake, x86-64) | **`uica_sim.py`** | **19/25 (76%)** | **22/25 (88%)** | **8.1%** | **8.2%** |
+| Apple M6 Super core (AArch64 + NEON) | old `estimate.py` | 8/24 (33%) | 8/24 | 24.6% | 73.5% |
+| Apple M6 Super core (AArch64 + NEON) | **`uica_sim.py`** | **17/24 (71%)** | **18/24 (75%)** | **2.2%** | **7.1%** |
+| AmpereOne (AArch64 + NEON) | old `estimate.py` | 16/24 (67%) | 16/24 | 6.5% | 35.6% |
+| AmpereOne (AArch64 + NEON) | `llvm-mca -mcpu=ampere1` | 22/24 (92%) | 22/24 | 2.9% | 4.4% |
+| AmpereOne (AArch64 + NEON) | **`uica_sim.py`** | **21/24 (88%)** | **22/24 (92%)** | **0.7%** | **3.5%** |
 
-Four concrete hardware findings from this PMU run directly improved `uica_sim.py`:
+Six concrete hardware findings from these runs directly improved `uica_sim.py`:
 
-1. **Zen 5 512-bit latency bug in `uops.info` (solved the `p16` 390-cycle mystery):** `uops.info` listed 1-cycle latency for `VPXORD (ZMM)` and `VPRORD (ZMM)` on Zen 5, whereas bare-metal EPYC 9255 latency probes measured **2.000 cycles** for all three of `VPADDD`, `VPXORD`, and `VPRORD` on 512-bit ZMM registers (a single 14-instruction BLAKE3 G column measured `28.002` cycles, and 4 parallel columns `30.099` cycles). With this correction, `uica_sim.py` predicts the 985-instruction `p16` BLAKE3 kernel at **356 cyc vs. 390 measured (-8.7%)** on Zen 5 (down from -26.2%) and **461 cyc vs. 502 measured (-8.2%)** on Ice Lake (down from -14.3%).
-2. **Zen 5 native 512-bit throughput and 4 load AGUs:** Bare-metal EPYC 9255 measured `4.01` cycles for 16 independent `VPADDD`/`VPXORD (ZMM)` (true 4.0/cycle across `FP0..3`, rather than `uops.info`'s `TP=0.37`) and `2.20` cycles for 8 independent loads (4 load AGUs, not 3).
-3. **True out-of-order per-port cycle sets:** Tracking only a scalar next-free time per port prevented ready younger operations from filling earlier free cycles; switching to per-port occupied cycle sets jumped Ice Lake accuracy from 56% to 76% within 10%.
-4. **Intel vs. AMD self-move elimination:** Hardware confirmed `mov rdx, rdx` is rename-eliminated on Zen 5 (`rand_00_scalar`: 3.02 cyc) but takes 1 ALU cycle on Ice Lake (`4.35` cyc).
+1. **Zen 5 512-bit latency error in `uops.info` (solved the `p16` 390-cycle mystery):** `uops.info` listed 1-cycle latency for `VPXORD (ZMM)` and `VPRORD (ZMM)` on Zen 5, whereas bare-metal EPYC 9255 latency probes measured **2.000 cycles** for all three of `VPADDD`, `VPXORD`, and `VPRORD` on 512-bit ZMM registers (a single 14-instruction BLAKE3 G column measured `28.002` cycles, and 4 parallel columns `30.099` cycles). With this fix, `uica_sim.py` predicts the 985-instruction `p16` BLAKE3 kernel at **356 cyc vs. 390 measured (-8.7%)** on Zen 5 (down from -26.2%) and **461 cyc vs. 502 measured (-8.2%)** on Ice Lake (down from -14.3%).
+2. **Zen 4 double-pumped 512-bit vs. Zen 5 native 512-bit:** Direct latency probes on Threadripper PRO 7975WX measured `1.02` / `1.02` / `2.00` cycles for Zen 4 `VPADDD` / `VPXORD` / `VPRORD (ZMM)` (`g1_14ops = 18.021` cyc vs. `g4_56ops = 36.924` cyc), confirming Zen 4 splits 512-bit operations into two 256-bit micro-ops with 6-wide 128-bit SSE dispatch and a streaming op-cache across loop back-edges, whereas Zen 5 and Zen 3 close the op-cache dispatch window on a taken loop back-edge.
+3. **Zen 5 native 512-bit throughput and 4 load AGUs:** EPYC 9255 measured `4.01` cycles for 16 independent `VPADDD`/`VPXORD (ZMM)` (true 4.0/cycle across `FP0..3`, rather than `uops.info`'s `TP=0.37`) and `2.20` cycles for 8 independent loads (4 load AGUs, not 3). Ryzen 7 9700X matched EPYC 9255 to three decimal places on 24/25 kernels, differing only on back-to-back `vpxord zmm` (`7.11` vs. `4.01` cycles).
+4. **True out-of-order per-port cycle sets and self-move rules:** Switching from scalar port timestamps to per-port occupied cycle sets jumped Ice Lake from 56% to 76% within 10%. Hardware also showed `mov rdx, rdx` is rename-eliminated on Zen 5 (`3.02` cyc) but costs 1 ALU cycle on Zen 4 (`4.00` cyc), Zen 3 (`4.01` cyc), and Ice Lake (`4.35` cyc).
+5. **Apple M6 NEON independent-chain saturation threshold and load routing:** All five NEON operations (`add.4s`, `eor`, `ushr`, `rev32`, `ext`) measured `2.000` cycles latency and `4.00` ops/cycle across 4 symmetric NEON pipes when given 16 independent chains (`3.99` cyc for 16 ops, `7.98` cyc for 32 ops), dropping to `3.00` ops/cycle when only 8 chains are active (`5.33` cyc for 16 ops, `10.58` cyc for 32 ops). Vector loads (`ldr qN`) share the 3-wide load queue (`ld_q_12 = 3.99` cyc) rather than NEON ALU dispatch, and canonical `orr vD, vS, vS` moves eliminate cleanly.
+6. **AmpereOne macro-op fusion:** Hardware `perf_event_open` counters confirmed AmpereOne macro-op fuses `cmp + b.lo` (`3.52`, `4.54`, `5.03`, `6.52` cyc on 15/19/21/27-instruction loops), bringing `uica_sim.py` to 0.7% median and 3.5% mean absolute error (ahead of `llvm-mca -mcpu=ampere1` at 2.9% median / 4.4% mean).
 
 ## Explicit budgets
 

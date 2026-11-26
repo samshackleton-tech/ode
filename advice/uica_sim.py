@@ -113,7 +113,7 @@ PIPELINES = {
         "mov_elim_vec": True,
         "self_mov_elim": False,
         "split_sched": True,
-        "branch_ends_fetch": False,
+        "branch_ends_fetch": True,  # PMU: Zen 3 closes fetch/dispatch on loop back-edge (3.01, 2.01, 4.01)
         "use_measured_tp_occ": True,
         "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
@@ -226,7 +226,7 @@ PIPELINES = {
         "store_ports": ["S0", "S1"],
         "store_data_ports": ["S0", "S1"],
         "fp_ports": ["V0", "V1"],
-        "macro_fusion": False,
+        "macro_fusion": True,       # PMU: AmpereOne macro-fuses cmp+b.lo (3.52, 4.54, 5.03, 6.52 cyc)
         "fuse_alu_jcc": False,
         "micro_fusion_fe": False,
         "mov_elim_gpr": True,

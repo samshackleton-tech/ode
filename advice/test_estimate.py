@@ -384,7 +384,29 @@ fn fall as "t_fall" {
                 self.assertGreaterEqual(w10, min_w10, f"{fname}: only {w10}/25 within 10%")
                 self.assertLess(statistics.mean(errs), 9.0, f"{fname}: mean abs err {statistics.mean(errs):.1f}%")
 
-        # Also validate Apple M6 AArch64 + NEON hardware dataset
+        # Also validate AMD Zen 3 (21 non-AVX-512 x86-64 kernels)
+        z3_kernels = list(pmu_validate.TARGETED_KERNELS) + pmu_validate.generate_random_kernels(False)
+        with tempfile.TemporaryDirectory() as td:
+            z3_seqs = {}
+            for name, _, src in z3_kernels:
+                p = os.path.join(td, f"{name}.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                info = odec.compile_info(p, name)
+                obj_p = os.path.join(td, f"{name}.o")
+                with open(obj_p, "wb") as f:
+                    f.write(info["elf"])
+                _, z3_seqs[name] = pmu_validate.extract_loop_seq(obj_p, info["symbol"])
+            with open(os.path.join(HERE, "results", "pmu-zen3.json"), "r", encoding="utf-8") as f:
+                z3 = json.load(f)
+            z3_errs = [
+                abs(100.0 * (uica_sim.simulate_loop(z3_seqs[r["name"]], "zen3", iterations=16)["cycles_per_iter"] - r["measured"]) / r["measured"])
+                for r in z3["records"]
+            ]
+            self.assertGreaterEqual(sum(1 for e in z3_errs if e <= 10.0), 17)
+            self.assertLess(statistics.mean(z3_errs), 6.0)
+
+        # Also validate Apple M6 and AmpereOne AArch64 + NEON hardware datasets
         import pmu_validate_arm64
         arm_kernels = list(pmu_validate_arm64.TARGETED_KERNELS) + pmu_validate_arm64.generate_random_kernels()
         with tempfile.TemporaryDirectory() as td:
@@ -398,15 +420,19 @@ fn fall as "t_fall" {
                 with open(elf_p, "wb") as f:
                     f.write(info["elf"])
                 _, _, aseqs[name] = pmu_validate_arm64.extract_arm64_code_and_loop(info["elf"], elf_p, info["symbol"])
-            with open(os.path.join(HERE, "results", "pmu-apple-m6.json"), "r", encoding="utf-8") as f:
-                m6 = json.load(f)
-            aerrs = []
-            for rec in m6["records"]:
-                sim = uica_sim.simulate_loop(aseqs[rec["name"]], "apple_m", iterations=16)
-                aerrs.append(abs(100.0 * (sim["cycles_per_iter"] - rec["measured"]) / rec["measured"]))
-            aw10 = sum(1 for e in aerrs if e <= 10.0)
-            self.assertGreaterEqual(aw10, 17, f"pmu-apple-m6.json: only {aw10}/24 within 10%")
-            self.assertLess(statistics.mean(aerrs), 8.0, f"pmu-apple-m6.json: mean abs err {statistics.mean(aerrs):.1f}%")
+            for fname, arch, min_w10, max_mean in (
+                ("pmu-apple-m6.json", "apple_m", 17, 8.0),
+                ("pmu-ampere1.json", "ampere1", 21, 4.5),
+            ):
+                with open(os.path.join(HERE, "results", fname), "r", encoding="utf-8") as f:
+                    ad = json.load(f)
+                aerrs = []
+                for rec in ad["records"]:
+                    sim = uica_sim.simulate_loop(aseqs[rec["name"]], arch, iterations=16)
+                    aerrs.append(abs(100.0 * (sim["cycles_per_iter"] - rec["measured"]) / rec["measured"]))
+                aw10 = sum(1 for e in aerrs if e <= 10.0)
+                self.assertGreaterEqual(aw10, min_w10, f"{fname}: only {aw10}/24 within 10%")
+                self.assertLess(statistics.mean(aerrs), max_mean, f"{fname}: mean abs err {statistics.mean(aerrs):.1f}%")
 
         # Also check `static_analyze` + `format_report` include `pipeline_sim` for loops.
         src = pmu_validate.TARGETED_KERNELS[0][2]

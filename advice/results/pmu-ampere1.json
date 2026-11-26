@@ -1,0 +1,285 @@
+{
+  "processor": "AmpereOne (AArch64 Linux, perf_event_open)",
+  "arch": "ampere1",
+  "date_utc": "2026-11-26",
+  "meta": {
+    "mode": "perf_event_open",
+    "freq_ghz": "3.181",
+    "orr_over_add": "0.9957"
+  },
+  "latencies": {
+    "lat_add_gpr": 1.001,
+    "lat_orr_gpr": 1.001,
+    "lat_vec_add4s": 2.002,
+    "lat_vec_eor": 2.002,
+    "lat_vec_ushr": 2.001,
+    "lat_vec_rev32": 2.002,
+    "lat_vec_ext": 2.002
+  },
+  "old_bound_accuracy": {
+    "n": 24,
+    "within_10pct": 16,
+    "within_10pct_rate": 66.7,
+    "within_15pct": 16,
+    "median_abs_err_pct": 6.5,
+    "mean_abs_err_pct": 35.6
+  },
+  "uica_sim_accuracy": {
+    "n": 24,
+    "within_10pct": 21,
+    "within_10pct_rate": 87.5,
+    "within_15pct": 22,
+    "median_abs_err_pct": 0.7,
+    "mean_abs_err_pct": 3.5
+  },
+  "llvm_mca_accuracy": {
+    "n": 24,
+    "within_10pct": 22,
+    "within_10pct_rate": 91.7,
+    "within_15pct": 22,
+    "median_abs_err_pct": 2.9,
+    "mean_abs_err_pct": 4.4
+  },
+  "records": [
+    {
+      "name": "probe_cmp_fusion",
+      "kind": "probe",
+      "loop_insns": 4,
+      "old_bound": 2.0,
+      "uica_sim": 1.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 1.05,
+      "measured": 1.0206
+    },
+    {
+      "name": "probe_nofusion_sep",
+      "kind": "probe",
+      "loop_insns": 4,
+      "old_bound": 2.0,
+      "uica_sim": 1.0,
+      "uica_bottleneck": "ports:I0",
+      "llvm_mca": 1.05,
+      "measured": 1.0204
+    },
+    {
+      "name": "probe_mov_elim",
+      "kind": "probe",
+      "loop_insns": 15,
+      "old_bound": 3.75,
+      "uica_sim": 3.5,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 3.8,
+      "measured": 3.5213
+    },
+    {
+      "name": "probe_alu_wide",
+      "kind": "probe",
+      "loop_insns": 15,
+      "old_bound": 3.75,
+      "uica_sim": 3.5,
+      "uica_bottleneck": "ports:I0",
+      "llvm_mca": 3.8,
+      "measured": 3.5186
+    },
+    {
+      "name": "probe_dep_chain",
+      "kind": "probe",
+      "loop_insns": 13,
+      "old_bound": 10.0,
+      "uica_sim": 10.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 10.03,
+      "measured": 10.0262
+    },
+    {
+      "name": "probe_load_mix",
+      "kind": "probe",
+      "loop_insns": 19,
+      "old_bound": 6.0,
+      "uica_sim": 4.5,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 4.82,
+      "measured": 4.5387
+    },
+    {
+      "name": "probe_vec_add_wide",
+      "kind": "probe",
+      "loop_insns": 19,
+      "old_bound": 8.0,
+      "uica_sim": 8.0,
+      "uica_bottleneck": "ports:V0",
+      "llvm_mca": 8.05,
+      "measured": 8.0359
+    },
+    {
+      "name": "probe_vec_shf_wide",
+      "kind": "probe",
+      "loop_insns": 19,
+      "old_bound": 8.0,
+      "uica_sim": 8.0,
+      "uica_bottleneck": "ports:V0",
+      "llvm_mca": 8.05,
+      "measured": 8.0412
+    },
+    {
+      "name": "probe_vec_ext_wide",
+      "kind": "probe",
+      "loop_insns": 19,
+      "old_bound": 8.0,
+      "uica_sim": 8.0,
+      "uica_bottleneck": "ports:V0",
+      "llvm_mca": 8.04,
+      "measured": 8.0392
+    },
+    {
+      "name": "probe_vec_add_16reg",
+      "kind": "probe",
+      "loop_insns": 19,
+      "old_bound": 8.0,
+      "uica_sim": 8.0,
+      "uica_bottleneck": "ports:V0",
+      "llvm_mca": 8.05,
+      "measured": 8.0417
+    },
+    {
+      "name": "real_adler32_body",
+      "kind": "real",
+      "loop_insns": 8,
+      "old_bound": 8.0,
+      "uica_sim": 2.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 2.09,
+      "measured": 2.0326
+    },
+    {
+      "name": "real_ct_lt_body",
+      "kind": "real",
+      "loop_insns": 10,
+      "old_bound": 9.0,
+      "uica_sim": 3.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 3.09,
+      "measured": 3.0276
+    },
+    {
+      "name": "real_neon_b3_g1",
+      "kind": "real",
+      "loop_insns": 23,
+      "old_bound": 34.0,
+      "uica_sim": 34.0,
+      "uica_bottleneck": "dependency",
+      "llvm_mca": 43.03,
+      "measured": 36.0346
+    },
+    {
+      "name": "real_neon_b3_round",
+      "kind": "real",
+      "loop_insns": 49,
+      "old_bound": 72.0,
+      "uica_sim": 72.0,
+      "uica_bottleneck": "dependency",
+      "llvm_mca": 90.03,
+      "measured": 77.0396
+    },
+    {
+      "name": "rand_00_scalar",
+      "kind": "random",
+      "loop_insns": 15,
+      "old_bound": 3.75,
+      "uica_sim": 3.5,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 3.81,
+      "measured": 4.0192
+    },
+    {
+      "name": "rand_01_scalar_mem",
+      "kind": "random",
+      "loop_insns": 17,
+      "old_bound": 5.5,
+      "uica_sim": 5.5,
+      "uica_bottleneck": "ports:L0",
+      "llvm_mca": 5.56,
+      "measured": 5.5325
+    },
+    {
+      "name": "rand_02_neon",
+      "kind": "random",
+      "loop_insns": 17,
+      "old_bound": 10.0,
+      "uica_sim": 8.0,
+      "uica_bottleneck": "dependency",
+      "llvm_mca": 10.05,
+      "measured": 11.0235
+    },
+    {
+      "name": "rand_03_neon_heavy",
+      "kind": "random",
+      "loop_insns": 25,
+      "old_bound": 11.0,
+      "uica_sim": 11.0,
+      "uica_bottleneck": "ports:V0",
+      "llvm_mca": 11.08,
+      "measured": 11.2211
+    },
+    {
+      "name": "rand_04_mixed",
+      "kind": "random",
+      "loop_insns": 21,
+      "old_bound": 6.0,
+      "uica_sim": 5.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 5.31,
+      "measured": 5.0267
+    },
+    {
+      "name": "rand_05_scalar",
+      "kind": "random",
+      "loop_insns": 21,
+      "old_bound": 6.0,
+      "uica_sim": 6.0,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 5.98,
+      "measured": 6.0192
+    },
+    {
+      "name": "rand_06_scalar_mem",
+      "kind": "random",
+      "loop_insns": 19,
+      "old_bound": 6.5,
+      "uica_sim": 6.5,
+      "uica_bottleneck": "ports:L0",
+      "llvm_mca": 6.56,
+      "measured": 6.5339
+    },
+    {
+      "name": "rand_07_neon",
+      "kind": "random",
+      "loop_insns": 21,
+      "old_bound": 14.0,
+      "uica_sim": 14.0,
+      "uica_bottleneck": "dependency",
+      "llvm_mca": 17.03,
+      "measured": 16.6521
+    },
+    {
+      "name": "rand_08_mixed",
+      "kind": "random",
+      "loop_insns": 27,
+      "old_bound": 6.75,
+      "uica_sim": 6.5,
+      "uica_bottleneck": "frontend",
+      "llvm_mca": 6.81,
+      "measured": 6.5239
+    },
+    {
+      "name": "rand_09_neon_mem",
+      "kind": "random",
+      "loop_insns": 19,
+      "old_bound": 7.0,
+      "uica_sim": 4.5,
+      "uica_bottleneck": "ports:L0",
+      "llvm_mca": 4.83,
+      "measured": 4.5331
+    }
+  ]
+}
