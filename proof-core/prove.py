@@ -337,12 +337,26 @@ class GaveUp(Exception): pass           # more runs of the verifier, or more tim
 class NoPlace(Exception): pass          # a path looped back to the same instruction repeatedly with no place
 
 
+_NO_DEST_OPS = frozenset({
+    ".cmp", ".cmpi", ".cmpr", ".test", ".tst",
+    ".push", ".str", ".str8", ".str32", ".str64", ".str64_sp", ".str128", ".str128_sp", ".st1",
+    ".jmp", ".je", ".jne", ".jb", ".jae", ".ja", ".jbe",
+    ".b", ".beq", ".bne", ".bhs", ".blo", ".bhi", ".bls",
+    ".ret", ".nop", ".vzeroupper", ".prefetch",
+})
+_UNCOND_EXIT_OPS = frozenset({".ret", ".jmp", ".b"})
+
+
 def fn_statement_info(statement_path, symbol, reg_list):
     """Extract (trace_exprs, instrs, written_at) for `symbol` from a statement file.
     `instrs`: list of (pc, next_pc, op, regs_used) in statement order.
-    `written_at`: list of (pc, next_pc, op, target_or_none, dest_regs) for loop keep pre-seeding."""
+    `written_at`: list of (pc, next_pc, op, target_or_none, dest_regs) for keep pre-seeding."""
     trace_exprs, instrs, raw_ins, cur = [], [], [], None
     reg_set = set(reg_list)
+    is_arm = ("x0" in reg_set)
+    default_keeps = ({"x19", "x20", "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28", "x29", "sp"}
+                     if is_arm else {"rbx", "rbp", "r12", "r13", "r14", "r15", "rsp"})
+    fn_keeps = {}
     with open(statement_path) as f:
         for raw in f:
             line = raw.strip()
@@ -350,6 +364,9 @@ def fn_statement_info(statement_path, symbol, reg_list):
             parts = line.split()
             if parts[0] == "fn" and len(parts) >= 2:
                 cur = parts[1]; continue
+            if parts[0] == "keeps" and cur is not None:
+                fn_keeps[cur] = set(parts[1:]) | ({"sp"} if is_arm else {"rsp"})
+                continue
             if cur != symbol: continue
             if parts[0] == "traceexpr":
                 trace_exprs.append(line[len("traceexpr "):].strip())
@@ -357,27 +374,34 @@ def fn_statement_info(statement_path, symbol, reg_list):
                 pc, nxt, op = int(parts[1]), int(parts[2]), parts[3]
                 regs, dests, target = [], set(), None
                 for tok in parts[4:]:
-                    if "=" in tok:
-                        k, v = tok.split("=", 1)
-                        v = v.strip("().")
-                        if k == "D" and v in reg_set: dests.add(v)
-                        elif k == "I":
-                            try: target = int(v)
-                            except ValueError: pass
-                    else:
-                        v = tok.strip("().")
-                    if v in reg_set and v not in regs: regs.append(v)
-                if op == "bl" and "x30" in reg_set: dests.add("x30")
+                    v = tok.strip("().")
+                    if v in reg_set and v not in regs:
+                        regs.append(v)
+                if op in (".call", ".bl") and len(parts) >= 5:
+                    callee = parts[4].strip("().")
+                    ck = fn_keeps.get(callee, default_keeps)
+                    dests |= (reg_set - ck)
+                    if op == ".bl" and "x30" in reg_set: dests.add("x30")
+                    if op == ".call" and "rax" in reg_set: dests.add("rax")
+                elif op in (".jmp", ".je", ".jne", ".jb", ".jae", ".ja", ".jbe",
+                            ".b", ".beq", ".bne", ".bhs", ".blo", ".bhi", ".bls"):
+                    if len(parts) >= 5:
+                        try: target = int(parts[4], 0)
+                        except ValueError: pass
+                elif op not in _NO_DEST_OPS and not (op == ".mov" and len(parts) >= 6 and "(.mem" in parts[5]):
+                    # First register token in operand list is the written destination GPR
+                    if regs:
+                        dests.add(regs[0])
                 instrs.append((pc, nxt, op, regs))
                 raw_ins.append((pc, nxt, op, target, dests))
     return trace_exprs, instrs, raw_ins
 
 
 def loop_written_regs(raw_ins, at, reg_list):
-    """Registers modified on instructions that can reach `at` via a back-edge (excluding stack pointer)."""
+    """Registers NOT modified on instructions that can reach `at` via a back-edge (always keeping sp/rsp)."""
     preds = {}
     for pc, nxt, op, target, _ in raw_ins:
-        if op not in ("ret", "jmp", "b", "tail_call"):
+        if op not in _UNCOND_EXIT_OPS:
             preds.setdefault(nxt, []).append(pc)
         if target is not None:
             preds.setdefault(target, []).append(pc)
@@ -389,6 +413,32 @@ def loop_written_regs(raw_ins, at, reg_list):
         seen.add(u)
         for p in preds.get(u, ()):
             if p >= at and p not in seen:
+                stack.append(p)
+    written = set()
+    for pc, _, _, _, dests in raw_ins:
+        if pc in seen:
+            written |= dests
+    written.discard("rsp"); written.discard("sp")
+    return [r for r in reg_list if r not in written]
+
+
+def join_written_regs(raw_ins, at, stop_pcs, reg_list):
+    """For an acyclic join point at `at`, registers NOT modified on any path reaching `at` since
+    entry or a preceding `place` in `stop_pcs` (always keeping sp/rsp)."""
+    preds = {}
+    for pc, nxt, op, target, _ in raw_ins:
+        if op not in _UNCOND_EXIT_OPS:
+            preds.setdefault(nxt, []).append(pc)
+        if target is not None:
+            preds.setdefault(target, []).append(pc)
+    seen, stack = set(), [p for p in preds.get(at, ()) if p < at]
+    while stack:
+        u = stack.pop()
+        if u in seen: continue
+        seen.add(u)
+        if u in stop_pcs: continue
+        for p in preds.get(u, ()):
+            if p < at and p not in seen:
                 stack.append(p)
     written = set()
     for pc, _, _, _, dests in raw_ins:
@@ -698,6 +748,8 @@ def prove(spec_text, targets, statement_out, out):
         trace_exprs, instrs, raw_ins = fn_statement_info(statement_out, symbol, reg_list)
         # Pre-seed `keep` for loop `place`s (those with `decreases`) by excluding registers written in the loop body.
         preseeded = False
+        place_pcs = set()
+        place_specs = []
         cur_pat, cur_has_dec = None, False
         for pline in places_of[symbol].splitlines():
             sline = pline.split("//")[0].strip()
@@ -707,10 +759,16 @@ def prove(spec_text, targets, statement_out, out):
             elif sline.startswith("decreases "):
                 cur_has_dec = True
             elif sline == "}" and cur_pat is not None:
-                if cur_has_dec:
-                    keep[cur_pat] = loop_written_regs(raw_ins, cur_pat, reg_list)
-                    preseeded = True
+                place_pcs.add(cur_pat)
+                place_specs.append((cur_pat, cur_has_dec))
                 cur_pat, cur_has_dec = None, False
+        for cur_pat, cur_has_dec in place_specs:
+            if cur_has_dec:
+                keep[cur_pat] = loop_written_regs(raw_ins, cur_pat, reg_list)
+                preseeded = True
+            else:
+                keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
+                preseeded = True
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
             p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
