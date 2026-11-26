@@ -1,0 +1,54 @@
+// RFC 8439 ChaCha20 20-round keystream block function, 4-way parallel batch (`chacha20_4way`).
+//
+// Each block takes 16 32-bit unsigned initial state words `s[0..15]` (4 constants, 8 key
+// words, 1 block counter, 3 nonce words) and outputs the 16 32-bit keystream words after
+// 10 double rounds (4 column quarter-rounds + 4 diagonal quarter-rounds) plus feed-forward
+// addition of the initial state `s`.
+//
+// `chacha20_4way(st)` computes 4 independent ChaCha20 blocks laid out contiguously:
+//   st[0..15]  -> out[0..15]
+//   st[16..31] -> out[16..31]
+//   st[32..47] -> out[32..47]
+//   st[48..63] -> out[48..63]
+
+def qr(a, b, c, d) {
+    let a1 = a + b
+    let d1 = (d ^ a1) >>> 16
+    let c1 = c + d1
+    let b1 = (b ^ c1) >>> 20
+    let a2 = a1 + b1
+    let d2 = (d1 ^ a2) >>> 24
+    let c2 = c1 + d2
+    let b2 = (b1 ^ c2) >>> 25
+    [a2, b2, c2, d2]
+}
+
+def double_round(s) {
+    let c0 = qr(s[0], s[4], s[8],  s[12])
+    let c1 = qr(s[1], s[5], s[9],  s[13])
+    let c2 = qr(s[2], s[6], s[10], s[14])
+    let c3 = qr(s[3], s[7], s[11], s[15])
+    let d0 = qr(c0[0], c1[1], c2[2], c3[3])
+    let d1 = qr(c1[0], c2[1], c3[2], c0[3])
+    let d2 = qr(c2[0], c3[1], c0[2], c1[3])
+    let d3 = qr(c3[0], c0[1], c1[2], c2[3])
+    [d0[0], d1[0], d2[0], d3[0],
+     d3[1], d0[1], d1[1], d2[1],
+     d2[2], d3[2], d0[2], d1[2],
+     d1[3], d2[3], d3[3], d0[3]]
+}
+
+def chacha20_block(s) {
+    let r[0] = s
+    let r[i + 1] = double_round(r[i])
+    let f = r[10]
+    [f[i] + s[i] for i in 0..16]
+}
+
+def chacha20_4way(st) {
+    let b0 = chacha20_block(st[0..16])
+    let b1 = chacha20_block(st[16..32])
+    let b2 = chacha20_block(st[32..48])
+    let b3 = chacha20_block(st[48..64])
+    b0 ++ b1 ++ b2 ++ b3
+}

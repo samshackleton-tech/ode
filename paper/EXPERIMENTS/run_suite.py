@@ -727,13 +727,13 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     cat = classify_failure("audit", fb, rc_a)
                     rec["stage"] = "audit_failed"
                     rec["category"] = cat
-                    rec["diagnostic_head"] = fb[:600]
+                    rec["diagnostic_head"] = fb[-600:] if "Traceback" in fb else fb[:600]
             else:
                 fb = out_p_txt
                 cat = classify_failure("pack", fb, rc_p)
                 rec["stage"] = "pack_failed"
                 rec["category"] = cat
-                rec["diagnostic_head"] = fb[:600]
+                rec["diagnostic_head"] = fb[-600:] if "Traceback" in fb else fb[:600]
 
             cell["rounds"].append(rec)
             print(f"[fail]  {cell_id} R{rnum} ({cat}, {dt_p:.1f}s, ${cost:.2f}, suite=${total_spent:.2f})", flush=True)

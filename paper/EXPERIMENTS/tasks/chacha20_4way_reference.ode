@@ -1,0 +1,260 @@
+use spec = "chacha20_4way_spec.ode"
+
+inline fn qr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
+    distinct(a, b, c, d)
+    changes a, b, c, d
+{
+    vpaddd a, a, b
+    vpxord d, d, a
+    vprord d, d, 16
+    vpaddd c, c, d
+    vpxord b, b, c
+    vprord b, b, 20
+    vpaddd a, a, b
+    vpxord d, d, a
+    vprord d, d, 24
+    vpaddd c, c, d
+    vpxord b, b, c
+    vprord b, b, 25
+}
+
+inline fn dr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
+    distinct(a, b, c, d)
+    changes a, b, c, d
+{
+    qr_x86(a, b, c, d)
+    vpshufd b, b, 57
+    vpshufd c, c, 78
+    vpshufd d, d, 147
+    qr_x86(a, b, c, d)
+    vpshufd b, b, 147
+    vpshufd c, c, 78
+    vpshufd d, d, 57
+}
+
+inline fn ten_dr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
+    distinct(a, b, c, d)
+    changes a, b, c, d
+{
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+    dr_x86(a, b, c, d)
+}
+
+inline fn qr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
+    distinct(a, b, c, d, t1, t2)
+    changes a, b, c, d, t1, t2
+{
+    add a.4s, a.4s, b.4s
+    eor d.16b, d.16b, a.16b
+    rev32 d.8h, d.8h
+    add c.4s, c.4s, d.4s
+    eor b.16b, b.16b, c.16b
+    shl t1.4s, b.4s, 12
+    ushr t2.4s, b.4s, 20
+    orr b.16b, t1.16b, t2.16b
+    add a.4s, a.4s, b.4s
+    eor d.16b, d.16b, a.16b
+    shl t1.4s, d.4s, 8
+    ushr t2.4s, d.4s, 24
+    orr d.16b, t1.16b, t2.16b
+    add c.4s, c.4s, d.4s
+    eor b.16b, b.16b, c.16b
+    shl t1.4s, b.4s, 7
+    ushr t2.4s, b.4s, 25
+    orr b.16b, t1.16b, t2.16b
+}
+
+inline fn dr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
+    distinct(a, b, c, d, t1, t2)
+    changes a, b, c, d, t1, t2
+{
+    qr_arm(a, b, c, d, t1, t2)
+    ext b.16b, b.16b, b.16b, 4
+    ext c.16b, c.16b, c.16b, 8
+    ext d.16b, d.16b, d.16b, 12
+    qr_arm(a, b, c, d, t1, t2)
+    ext b.16b, b.16b, b.16b, 12
+    ext c.16b, c.16b, c.16b, 8
+    ext d.16b, d.16b, d.16b, 4
+}
+
+inline fn ten_dr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
+    distinct(a, b, c, d, t1, t2)
+    changes a, b, c, d, t1, t2
+{
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+    dr_arm(a, b, c, d, t1, t2)
+}
+
+fn chacha20_4way(out: 256 bytes, st: 256 bytes)
+    requires no_overlap(out, st)
+    ensures out = bytes_of(spec.chacha20_4way(words(st)))
+    stack 256
+{
+    for x86_64 needs avx needs avx512 {
+        // Block 0
+        vmovdqu xmm0, [rsi + 0]
+        vmovdqu xmm1, [rsi + 16]
+        vmovdqu xmm2, [rsi + 32]
+        vmovdqu xmm3, [rsi + 48]
+        vmovdqa xmm4, xmm0
+        vmovdqa xmm5, xmm1
+        vmovdqa xmm6, xmm2
+        vmovdqa xmm7, xmm3
+        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
+        vpaddd xmm0, xmm0, xmm4
+        vpaddd xmm1, xmm1, xmm5
+        vpaddd xmm2, xmm2, xmm6
+        vpaddd xmm3, xmm3, xmm7
+        vmovdqu [rdi + 0], xmm0
+        vmovdqu [rdi + 16], xmm1
+        vmovdqu [rdi + 32], xmm2
+        vmovdqu [rdi + 48], xmm3
+        // Block 1
+        vmovdqu xmm0, [rsi + 64]
+        vmovdqu xmm1, [rsi + 80]
+        vmovdqu xmm2, [rsi + 96]
+        vmovdqu xmm3, [rsi + 112]
+        vmovdqa xmm4, xmm0
+        vmovdqa xmm5, xmm1
+        vmovdqa xmm6, xmm2
+        vmovdqa xmm7, xmm3
+        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
+        vpaddd xmm0, xmm0, xmm4
+        vpaddd xmm1, xmm1, xmm5
+        vpaddd xmm2, xmm2, xmm6
+        vpaddd xmm3, xmm3, xmm7
+        vmovdqu [rdi + 64], xmm0
+        vmovdqu [rdi + 80], xmm1
+        vmovdqu [rdi + 96], xmm2
+        vmovdqu [rdi + 112], xmm3
+        // Block 2
+        vmovdqu xmm0, [rsi + 128]
+        vmovdqu xmm1, [rsi + 144]
+        vmovdqu xmm2, [rsi + 160]
+        vmovdqu xmm3, [rsi + 176]
+        vmovdqa xmm4, xmm0
+        vmovdqa xmm5, xmm1
+        vmovdqa xmm6, xmm2
+        vmovdqa xmm7, xmm3
+        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
+        vpaddd xmm0, xmm0, xmm4
+        vpaddd xmm1, xmm1, xmm5
+        vpaddd xmm2, xmm2, xmm6
+        vpaddd xmm3, xmm3, xmm7
+        vmovdqu [rdi + 128], xmm0
+        vmovdqu [rdi + 144], xmm1
+        vmovdqu [rdi + 160], xmm2
+        vmovdqu [rdi + 176], xmm3
+        // Block 3
+        vmovdqu xmm0, [rsi + 192]
+        vmovdqu xmm1, [rsi + 208]
+        vmovdqu xmm2, [rsi + 224]
+        vmovdqu xmm3, [rsi + 240]
+        vmovdqa xmm4, xmm0
+        vmovdqa xmm5, xmm1
+        vmovdqa xmm6, xmm2
+        vmovdqa xmm7, xmm3
+        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
+        vpaddd xmm0, xmm0, xmm4
+        vpaddd xmm1, xmm1, xmm5
+        vpaddd xmm2, xmm2, xmm6
+        vpaddd xmm3, xmm3, xmm7
+        vmovdqu [rdi + 192], xmm0
+        vmovdqu [rdi + 208], xmm1
+        vmovdqu [rdi + 224], xmm2
+        vmovdqu [rdi + 240], xmm3
+        ret
+    }
+    for arm64 {
+        // Block 0
+        ldr q0, [x1, 0]
+        ldr q1, [x1, 16]
+        ldr q2, [x1, 32]
+        ldr q3, [x1, 48]
+        mov v4.16b, v0.16b
+        mov v5.16b, v1.16b
+        mov v6.16b, v2.16b
+        mov v7.16b, v3.16b
+        ten_dr_arm(v0, v1, v2, v3, v16, v17)
+        add v0.4s, v0.4s, v4.4s
+        add v1.4s, v1.4s, v5.4s
+        add v2.4s, v2.4s, v6.4s
+        add v3.4s, v3.4s, v7.4s
+        str q0, [x0, 0]
+        str q1, [x0, 16]
+        str q2, [x0, 32]
+        str q3, [x0, 48]
+        // Block 1
+        ldr q0, [x1, 64]
+        ldr q1, [x1, 80]
+        ldr q2, [x1, 96]
+        ldr q3, [x1, 112]
+        mov v4.16b, v0.16b
+        mov v5.16b, v1.16b
+        mov v6.16b, v2.16b
+        mov v7.16b, v3.16b
+        ten_dr_arm(v0, v1, v2, v3, v16, v17)
+        add v0.4s, v0.4s, v4.4s
+        add v1.4s, v1.4s, v5.4s
+        add v2.4s, v2.4s, v6.4s
+        add v3.4s, v3.4s, v7.4s
+        str q0, [x0, 64]
+        str q1, [x0, 80]
+        str q2, [x0, 96]
+        str q3, [x0, 112]
+        // Block 2
+        ldr q0, [x1, 128]
+        ldr q1, [x1, 144]
+        ldr q2, [x1, 160]
+        ldr q3, [x1, 176]
+        mov v4.16b, v0.16b
+        mov v5.16b, v1.16b
+        mov v6.16b, v2.16b
+        mov v7.16b, v3.16b
+        ten_dr_arm(v0, v1, v2, v3, v16, v17)
+        add v0.4s, v0.4s, v4.4s
+        add v1.4s, v1.4s, v5.4s
+        add v2.4s, v2.4s, v6.4s
+        add v3.4s, v3.4s, v7.4s
+        str q0, [x0, 128]
+        str q1, [x0, 144]
+        str q2, [x0, 160]
+        str q3, [x0, 176]
+        // Block 3
+        ldr q0, [x1, 192]
+        ldr q1, [x1, 208]
+        ldr q2, [x1, 224]
+        ldr q3, [x1, 240]
+        mov v4.16b, v0.16b
+        mov v5.16b, v1.16b
+        mov v6.16b, v2.16b
+        mov v7.16b, v3.16b
+        ten_dr_arm(v0, v1, v2, v3, v16, v17)
+        add v0.4s, v0.4s, v4.4s
+        add v1.4s, v1.4s, v5.4s
+        add v2.4s, v2.4s, v6.4s
+        add v3.4s, v3.4s, v7.4s
+        str q0, [x0, 192]
+        str q1, [x0, 208]
+        str q2, [x0, 224]
+        str q3, [x0, 240]
+        ret
+    }
+}
