@@ -1188,6 +1188,7 @@ def main(argv=None) -> int:
         "openai/gpt-6.2-astra-pro", "anthropic/claude-fable-5.2", "google/gemini-4-neon",
         "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5",
         "qwen/qwen3.8-2.4t-a95b", "moonshotai/kimi-k3.1-pro",
+        "meta/muse-spark-open", "z-ai/glm-5.3-prime",
     ]
     task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()] if args.tasks is not None else list(preset.get("tasks", ["ebpf"]))
     models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models is not None else list(preset.get("models", default_models))

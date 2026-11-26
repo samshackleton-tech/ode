@@ -1028,13 +1028,31 @@ def symAndConst (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
   | none =>
     refuse "no proof rule for this AND mask (supported: any contiguous bitmask (2^w - 1) << k, or 0)"
 
+/-- Optional wrapping tag in a proof: consumes `.tag "wrap" _` when present (signaling exact modular
+wraparound mod 2^64 on `add64` or `sub64`), otherwise leaves the proof stream untouched so existing
+no-wrap proofs remain unchanged. -/
+def takeWrap : V Bool := fun items =>
+  match items.line items.next with
+  | some (.tag "wrap" _) => .ok (true, { items with next := items.next + 1 })
+  | _ => .ok (false, items)
+
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
-    inRange s.facts (Lin.add (signed x) (signed y))
-    pure (.lin (Lin.add (signed x) (signed y)), s)
+    let w ← takeWrap
+    if w then
+      let d := symLow s (Lin.add x y) (M64 : Int)
+      pure (.lin d.1, d.2)
+    else do
+      inRange s.facts (Lin.add (signed x) (signed y))
+      pure (.lin (Lin.add (signed x) (signed y)), s)
   else if f == "sub64" then do
-    inRange s.facts (Lin.sub (signed x) (signed y))
-    pure (.lin (Lin.sub (signed x) (signed y)), s)
+    let w ← takeWrap
+    if w then
+      let d := symLow s (Lin.add (Lin.sub x y) (Lin.const (M64 : Int))) (M64 : Int)
+      pure (.lin d.1, d.2)
+    else do
+      inRange s.facts (Lin.sub (signed x) (signed y))
+      pure (.lin (Lin.sub (signed x) (signed y)), s)
   else if f == "equal" then pure (.equal x y, s)
   else if f == "below" then pure (.below x y, s)
   else if f == "shl64" then
@@ -3267,26 +3285,48 @@ def keptRegRefusal (c : Contract) (s : Sym) : String :=
     s!"at the return a register a callee keeps ({nm}) does not hold what it held at entry"
   | none => "at the return a register a callee keeps does not hold what it held at entry"
 
+def symReturnBody (ctx : Ctx) (s : Sym) : V Unit := do
+  each (symEnsureKnown ctx s) ctx.contract.ensuresW
+  let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
+  match ctx.contract.returns with
+  | none => pure ()
+  | some e => do
+    let (res, s) ← seval ctx (symEnv ctx.contract) s e
+    let rr := ctx.contract.retReg
+    match res with
+    | .val (.lin v) => do
+      entail s.facts (Lin.sub v (s.reg rr))
+      entail s.facts (Lin.sub (s.reg rr) v)
+    | .tail c => do
+      let _ ← specGoal ctx 16 s (.value c (s.reg rr))
+      pure ()
+    | _ => refuse "a function returns a number"
+
+/-- Optional proof-directed case split at return (`t split` followed by `k ROW`): checks the return postcondition
+separately under `ROW ≥ 0` and `-1 - ROW ≥ 0` (`ROW < 0`), supporting branchless single-compare range checks such as
+`(c -% lo) <= hi - lo`. -/
+def symReturnSplit : Nat → Ctx → Sym → V Unit
+  | 0, ctx, s => symReturnBody ctx s
+  | fuel + 1, ctx, s => fun items =>
+    match items.line items.next with
+    | some (.tag "split" _) =>
+      let items1 := { items with next := items.next + 1 }
+      match items1.line items1.next with
+      | some (.know r) =>
+        if r.coeff.length ≤ s.nvars then
+          let items2 := { items1 with next := items1.next + 1 }
+          match symReturnSplit fuel ctx { s with facts := r :: s.facts } items2 with
+          | .ok (_, items3) => symReturnSplit fuel ctx { s with facts := Lin.sub (Lin.const (-1)) r :: s.facts } items3
+          | .error e => .error e
+        else .error "split row references an unknown variable"
+      | _ => .error "split expects a row (`k ...`)"
+    | _ => symReturnBody ctx s items
+
 def symReturn (ctx : Ctx) (s : Sym) : V Unit :=
   if s.sp != some 0 then refuse "at the return the stack pointer is not where it was at entry"
   else if !(ctx.contract.keeps.all fun r => s.reg r == Lin.var r) then refuse (keptRegRefusal ctx.contract s)
   else if !(ctx.contract.keepsVec.all fun r => s.vecIntact.contains r) then refuse "at the return a callee-saved vector register was modified"
-  else do
-    each (symEnsureKnown ctx s) ctx.contract.ensuresW
-    let s ← fold (symEnsure ctx (symEnvAfter ctx.contract s)) s ctx.contract.ensures
-    match ctx.contract.returns with
-    | none => pure ()
-    | some e => do
-      let (res, s) ← seval ctx (symEnv ctx.contract) s e
-      let rr := ctx.contract.retReg
-      match res with
-      | .val (.lin v) => do
-        entail s.facts (Lin.sub v (s.reg rr))
-        entail s.facts (Lin.sub (s.reg rr) v)
-      | .tail c => do
-        let _ ← specGoal ctx 16 s (.value c (s.reg rr))
-        pure ()
-      | _ => refuse "a function returns a number"
+  else symReturnSplit 8 ctx s
 
 /-! ## Marks: what may depend on values kept out of the trace
 
@@ -3719,35 +3759,128 @@ def stackFitsAt (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) : 
     | none => decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack)
     | some rcal =>
       let acal := s.reg rcal
-      ((List.range 64).any fun d =>
-        decide (0 < cb.div) &&
-        decide (-(ctx.contract.stack : Int) ≤ sp - extra - (c.stack + cb.step * d : Nat)) &&
-        plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)) ||
-      match ctx.contract.stackBits with
-      | none => false
-      | some pb =>
-        match ctx.contract.regOf pb.arg with
+      if cb.linear then
+        (decide (0 < cb.div) &&
+         let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+         decide (0 ≤ rem) &&
+         (cb.step == 0 ||
+          let d := rem.toNat / cb.step
+          plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * (d + 1) : Nat) : Int) - 1)) acal))) ||
+        match ctx.contract.stackBits with
         | none => false
-        | some rpar =>
-          decide (cb.step ≤ pb.step) &&
-          ((decide (cb.div = pb.div) && decide (pb.sub ≤ cb.sub) &&
-            decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack) &&
-            plain s.facts (Lin.sub (Lin.var rpar) acal)) ||
-           (decide (0 < cb.div) && decide (0 < pb.div) &&
-            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
-            (List.range 64).any fun d =>
-              plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal) &&
-              plain s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))) ||
-           (decide (cb.div = pb.div) && decide (cb.sub = pb.sub) && decide (0 < cb.div) &&
-            decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
-            plain s.facts (Lin.sub (Lin.add (Lin.var rpar) (Lin.const cb.sub)) (Lin.scale 2 acal)) &&
-            plain s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))))
+        | some pb =>
+          pb.linear &&
+          match ctx.contract.regOf pb.arg with
+          | none => false
+          | some rpar =>
+            decide (cb.step ≤ pb.step) && decide (cb.div = pb.div) && decide (0 < cb.div) &&
+            ((decide (pb.sub ≤ cb.sub) &&
+              decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack) &&
+              plain s.facts (Lin.sub (Lin.var rpar) acal)) ||
+             (decide (pb.sub = cb.sub) &&
+              decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
+              plain s.facts (Lin.sub (Lin.sub (Lin.var rpar) (Lin.const cb.div)) acal) &&
+              plain s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))))
+      else
+        ((List.range 64).any fun d =>
+          decide (0 < cb.div) &&
+          decide (-(ctx.contract.stack : Int) ≤ sp - extra - (c.stack + cb.step * d : Nat)) &&
+          plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)) ||
+        match ctx.contract.stackBits with
+        | none => false
+        | some pb =>
+          !pb.linear &&
+          match ctx.contract.regOf pb.arg with
+          | none => false
+          | some rpar =>
+            decide (cb.step ≤ pb.step) &&
+            ((decide (cb.div = pb.div) && decide (pb.sub ≤ cb.sub) &&
+              decide (-(ctx.contract.stack : Int) ≤ sp - extra - c.stack) &&
+              plain s.facts (Lin.sub (Lin.var rpar) acal)) ||
+             (decide (0 < cb.div) && decide (0 < pb.div) &&
+              decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
+              (List.range 64).any fun d =>
+                plain s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal) &&
+                plain s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))) ||
+             (decide (cb.div = pb.div) && decide (cb.sub = pb.sub) && decide (0 < cb.div) &&
+              decide (-(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack) &&
+              plain s.facts (Lin.sub (Lin.add (Lin.var rpar) (Lin.const cb.sub)) (Lin.scale 2 acal)) &&
+              plain s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))))
 
 def stackFits (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : Bool :=
   stackFitsAt ctx s sp c.slot c
 
+/-- Monadic stack-budget check for a callee with a linear stack term `stack C + D * arg`. -/
+def stackFitsMLin (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) (cb : StackBits) (acal : Row) : V Unit :=
+  match ctx.contract.stackBits with
+  | none =>
+    let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+    if 0 ≤ rem then
+      if cb.step == 0 then pure ()
+      else
+        let d := rem.toNat / cb.step
+        entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * (d + 1) : Nat) : Int) - 1)) acal)
+    else refuse "a call needs more stack than this function's contract allows"
+  | some pb =>
+    if !pb.linear then refuse "a call needs more stack than this function's contract allows"
+    else match ctx.contract.regOf pb.arg with
+    | none => refuse "a call needs more stack than this function's contract allows"
+    | some rpar =>
+      if !(cb.step ≤ pb.step && cb.div == pb.div) then
+        refuse "a call needs more stack than this function's contract allows"
+      else if pb.sub ≤ cb.sub && -(ctx.contract.stack : Int) ≤ sp - extra - c.stack then
+        entail s.facts (Lin.sub (Lin.var rpar) acal)
+      else if pb.sub == cb.sub && -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack then do
+        entail s.facts (Lin.sub (Lin.sub (Lin.var rpar) (Lin.const cb.div)) acal)
+        entail s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))
+      else refuse "a call needs more stack than this function's contract allows"
+
+/-- Monadic stack-budget check for a callee with a logarithmic stack term `stack C + D * bits(...)`. -/
+def stackFitsMBits (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) (cb : StackBits) (acal : Row) : V Unit :=
+  match ctx.contract.stackBits with
+  | none =>
+    let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+    if 0 ≤ rem then
+      let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
+      entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)
+    else refuse "a call needs more stack than this function's contract allows"
+  | some pb =>
+    if pb.linear then refuse "a call needs more stack than this function's contract allows"
+    else match ctx.contract.regOf pb.arg with
+    | none => refuse "a call needs more stack than this function's contract allows"
+    | some rpar =>
+      if !(cb.step ≤ pb.step && 0 < pb.div) then
+        refuse "a call needs more stack than this function's contract allows"
+      else if cb.div == pb.div && pb.sub ≤ cb.sub && -(ctx.contract.stack : Int) ≤ sp - extra - c.stack then
+        entail s.facts (Lin.sub (Lin.var rpar) acal)
+      else if -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack then
+        match Lin.isConst acal with
+        | some k =>
+          if 0 ≤ k then
+            let d := bitsNat ((k.toNat - cb.sub) / cb.div)
+            if d < 64 then
+              entail s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))
+            else refuse "a call needs more stack than this function's contract allows"
+          else refuse "a call needs more stack than this function's contract allows"
+        | none =>
+          match Lin.isConst (Lin.sub (Lin.var rpar) acal) with
+          | some diff =>
+            if 0 < diff && diff.toNat / cb.div > 0 then
+              let d := Nat.log2 (diff.toNat / cb.div)
+              if d < 64 then do
+                entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)
+                entail s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))
+              else refuse "a call needs more stack than this function's contract allows"
+            else refuse "a call needs more stack than this function's contract allows"
+          | none =>
+            if cb.div == pb.div && cb.sub == pb.sub then do
+              entail s.facts (Lin.sub (Lin.add (Lin.var rpar) (Lin.const cb.sub)) (Lin.scale 2 acal))
+              entail s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))
+            else refuse "a call needs more stack than this function's contract allows"
+      else refuse "a call needs more stack than this function's contract allows"
+
 /-- Monadic stack-budget check at a call or tail call: first tries the zero-item `stackFitsAt` fast path,
-then uses `entail` for symbolic arithmetic (fixed-caller cap, monotone, power-of-two split, or halving). -/
+then uses `entail` for symbolic arithmetic (fixed-caller cap, monotone, step-down, power-of-two split, or halving). -/
 def stackFitsMAt (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) : V Unit :=
   if stackFitsAt ctx s sp extra c then pure ()
   else if !(sp ≤ 0) then refuse "a call needs more stack than this function's contract allows"
@@ -3758,48 +3891,8 @@ def stackFitsMAt (ctx : Ctx) (s : Sym) (sp : Int) (extra : Nat) (c : Contract) :
     | none => refuse "a call needs more stack than this function's contract allows"
     | some rcal =>
       if !(0 < cb.div) then refuse "a call needs more stack than this function's contract allows"
-      else
-        let acal := s.reg rcal
-        match ctx.contract.stackBits with
-        | none =>
-          let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
-          if 0 ≤ rem then
-            let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
-            entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)
-          else refuse "a call needs more stack than this function's contract allows"
-        | some pb =>
-          match ctx.contract.regOf pb.arg with
-          | none => refuse "a call needs more stack than this function's contract allows"
-          | some rpar =>
-            if !(cb.step ≤ pb.step && 0 < pb.div) then
-              refuse "a call needs more stack than this function's contract allows"
-            else if cb.div == pb.div && pb.sub ≤ cb.sub && -(ctx.contract.stack : Int) ≤ sp - extra - c.stack then
-              entail s.facts (Lin.sub (Lin.var rpar) acal)
-            else if -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack then
-              match Lin.isConst acal with
-              | some k =>
-                if 0 ≤ k then
-                  let d := bitsNat ((k.toNat - cb.sub) / cb.div)
-                  if d < 64 then
-                    entail s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))
-                  else refuse "a call needs more stack than this function's contract allows"
-                else refuse "a call needs more stack than this function's contract allows"
-              | none =>
-                match Lin.isConst (Lin.sub (Lin.var rpar) acal) with
-                | some diff =>
-                  if 0 < diff && diff.toNat / cb.div > 0 then
-                    let d := Nat.log2 (diff.toNat / cb.div)
-                    if d < 64 then do
-                      entail s.facts (Lin.sub (Lin.const (((cb.sub + cb.div * 2 ^ d : Nat) : Int) - 1)) acal)
-                      entail s.facts (Lin.sub (Lin.var rpar) (Lin.const ((pb.sub + pb.div * 2 ^ d : Nat) : Int)))
-                    else refuse "a call needs more stack than this function's contract allows"
-                  else refuse "a call needs more stack than this function's contract allows"
-                | none =>
-                  if cb.div == pb.div && cb.sub == pb.sub then do
-                    entail s.facts (Lin.sub (Lin.add (Lin.var rpar) (Lin.const cb.sub)) (Lin.scale 2 acal))
-                    entail s.facts (Lin.sub (Lin.var rpar) (Lin.const (cb.sub + cb.div : Nat)))
-                  else refuse "a call needs more stack than this function's contract allows"
-            else refuse "a call needs more stack than this function's contract allows"
+      else if cb.linear then stackFitsMLin ctx s sp extra c cb (s.reg rcal)
+      else stackFitsMBits ctx s sp extra c cb (s.reg rcal)
 
 def stackFitsM (ctx : Ctx) (s : Sym) (sp : Int) (c : Contract) : V Unit :=
   stackFitsMAt ctx s sp c.slot c

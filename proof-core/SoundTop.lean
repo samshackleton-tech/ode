@@ -383,6 +383,157 @@ theorem symEnsureKnown_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting
   have C := symKnow_sound (ctx := ctx) KNOWN e1 H wf
   exact symEnsureW_sound E hpv h C.holds C.wf hmem
 
+private theorem symReturnBody_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {s : Sym} {items : Items}
+    {r : Unit × Items} {ρ : Nat → Int} {st : State}
+    (hsp' : s.sp = some 0) (hcs' : ∀ r ∈ ctx.contract.keeps, s.reg r = Lin.var r)
+    (hkv' : ∀ r ∈ ctx.contract.keepsVec, r ∈ s.vecIntact)
+    (h : symReturnBody ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
+    st.reg RSP = s0.reg RSP ∧
+    ∀ st' : State, st'.mem = st.mem → st'.vec = st.vec → (∀ r, r ≠ RSP → st'.reg r = st.reg r) →
+      st'.reg RSP = st.reg RSP + ctx.contract.slot → st'.rip = ctx.contract.backTo s0 →
+      ctx.contract.post ctx.defs s0 st' := by
+  unfold symReturnBody at h
+  have e := ev_isConst (ρ := ρ) hsp'
+  simp only [ev_sub, ev_var] at e
+  have h1 := H.reg RSP ctx.rsp_lt
+  have h2 := H.entry RSP ctx.rsp_lt
+  have hrsp : st.reg RSP = s0.reg RSP := by omega
+  refine ⟨hrsp, fun st' hmem hvec hreg hsp1 hrip => ?_⟩
+  have hrr_spec := retReg_spec ctx.contract
+  have hrax' : st'.reg ctx.contract.retReg = st.reg ctx.contract.retReg := hreg ctx.contract.retReg hrr_spec.2.1
+  have lt0 : ctx.contract.retReg < ctx.nreg := hrr_spec.1
+  -- every `ensures` of a whole run of words: of this state's memory, which the return leaves as it is
+  obtain ⟨_, rW, enW, h⟩ := V.bind_ok h
+  have hensW : ctx.contract.preVals ctx.defs s0 → ∀ e ∈ ctx.contract.ensuresW, e.holds ctx.contract ctx.defs s0 st' := by
+    intro hpv e me
+    obtain ⟨items', r', hr⟩ := each_mem enW e me
+    exact symEnsureKnown_sound E hr H wf hpv hmem
+  -- every `ensures` first: of the state the return leaves, whose memory and return register are this state's
+  obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
+  have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
+    have hsym := (symEnv_bounded ctx.contract).mono wf.regs
+    unfold symEnvAfter
+    split
+    · intro nv m
+      rcases List.mem_cons.mp m with rfl | m
+      · exact wf.reg ctx.contract.retReg lt0
+      · exact hsym nv m
+    · exact hsym
+  have henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' (symEnvAfter ctx.contract s) = ctx.contract.envAfter s0 st' := by
+    intro ρ' a
+    have hsym := semEnv_symEnv ctx s0 ρ' (fun r hr => by rw [← a r (Nat.lt_of_lt_of_le hr wf.regs)]; exact H.entry r hr)
+    have hrax : ev ρ' (s.reg ctx.contract.retReg) = (st.reg ctx.contract.retReg : Int) := by
+      rw [← ev_agree (wf.reg ctx.contract.retReg lt0) a]; exact (H.reg ctx.contract.retReg lt0).symm
+    cases hres : ctx.contract.result with
+    | none => simp only [symEnvAfter, Contract.envAfter, hres]; exact hsym
+    | some name =>
+      simp only [symEnvAfter, Contract.envAfter, hres]
+      show (name, semv ctx s0 ρ' (.lin (s.reg ctx.contract.retReg))) :: semEnv ctx s0 ρ' (symEnv ctx.contract) = _
+      rw [hsym]
+      simp only [semv, hrax, hrax']
+  obtain ⟨ρE, cE, hens⟩ := symEnsures_sound E en H wf henvB henv hmem
+  have habove := E.above
+  refine ⟨hrip, by rw [hsp1, hrsp], ?_, ?_, ?_, ?_, (fun hpv => ⟨hens, hensW hpv⟩), fun r hr => by rw [hvec]; exact H.vecIntact r (hkv' r hr)⟩
+  · intro r hr
+    obtain ⟨lt, ne, _⟩ := keeps_spec hr
+    rw [hreg r ne]
+    have := H.reg r lt
+    rw [hcs' r hr, ev_var, H.entry r lt] at this
+    omega
+  · intro a ha ho
+    rw [hmem]
+    exact H.mem a ha ho
+  · intro e he
+    simp only [he] at h
+    obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
+    obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 cE.holds cE.wf ((symEnv_bounded ctx.contract).mono cE.wf.regs)
+    rw [semEnv_symEnv ctx s0 ρ1 c1.holds.entry] at sem
+    rw [hrax']
+    have hrax := c1.holds.reg ctx.contract.retReg lt0
+    cases res with
+    | list _ => exact (refuse_ok h).elim
+    | val v =>
+      cases v with
+      | region _ => exact (refuse_ok h).elim
+      | bool _ => exact (refuse_ok h).elim
+      | lin v =>
+        simp only at h
+        obtain ⟨_, r2, g1, h⟩ := V.bind_ok h
+        have g1 := entail_sound g1 ρ1 c1.holds.facts
+        have g2 := entail_sound h ρ1 c1.holds.facts
+        simp only [ev_sub] at g1 g2
+        simp only [SRes.sem, semv] at sem
+        have : ev ρ1 v = (st.reg ctx.contract.retReg : Int) := by omega
+        rw [this] at sem
+        exact sem
+    | tail c =>
+      simp only at h
+      obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
+      obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg ctx.contract.retReg lt0⟩
+      simp only [SFact.holds] at gh
+      rw [← ev_agree (c1.wf.reg ctx.contract.retReg lt0) c2.agree, ← hrax] at gh
+      exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
+  · intro r
+    by_cases hr : r = RSP
+    · subst hr; rw [hsp1, hrsp]; exact habove
+    · rw [hreg r hr]; exact H.small r
+
+private theorem symReturnSplit_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) (fuel : Nat)
+    {s : Sym} {items : Items} {r : Unit × Items} {ρ : Nat → Int} {st : State}
+    (hsp' : s.sp = some 0) (hcs' : ∀ r ∈ ctx.contract.keeps, s.reg r = Lin.var r)
+    (hkv' : ∀ r ∈ ctx.contract.keepsVec, r ∈ s.vecIntact)
+    (h : symReturnSplit fuel ctx s items = .ok r) (H : Holds ctx s0 ρ s st) (wf : WF ctx s) :
+    st.reg RSP = s0.reg RSP ∧
+    ∀ st' : State, st'.mem = st.mem → st'.vec = st.vec → (∀ r, r ≠ RSP → st'.reg r = st.reg r) →
+      st'.reg RSP = st.reg RSP + ctx.contract.slot → st'.rip = ctx.contract.backTo s0 →
+      ctx.contract.post ctx.defs s0 st' := by
+  induction fuel generalizing s items r with
+  | zero => exact symReturnBody_sound E hsp' hcs' hkv' h H wf
+  | succ fuel ih =>
+    unfold symReturnSplit at h
+    split at h
+    · dsimp only at h
+      split at h
+      · next row _ =>
+        split at h
+        · next hlen =>
+          cases hb1 : symReturnSplit fuel ctx { s with facts := row :: s.facts } { line := items.line, next := items.next + 1 + 1 } with
+          | error e => rw [hb1] at h; cases h
+          | ok res1 =>
+            rw [hb1] at h; dsimp only at h
+            have hbd : bounded s.nvars row := hlen
+            by_cases hge : 0 ≤ ev ρ row
+            · have hf1 : ∀ f ∈ row :: s.facts, f.holds ρ := fun f mf => by
+                rcases List.mem_cons.mp mf with rfl | mf
+                · exact hge
+                · exact H.facts f mf
+              have hw1 : ∀ f ∈ row :: s.facts, bounded s.nvars f := fun f mf => by
+                rcases List.mem_cons.mp mf with rfl | mf
+                · exact hbd
+                · exact wf.facts f mf
+              have H1 : Holds ctx s0 ρ { s with facts := row :: s.facts } st := { H with facts := hf1 }
+              have wf1 : WF ctx { s with facts := row :: s.facts } :=
+                { wf with facts := hw1, words := ⟨wf.words.1, wf.words.2, wf.words.3, wf.words.4, wf.words.5, wf.words.6⟩ }
+              exact ih (s := { s with facts := row :: s.facts }) hsp' hcs' hkv' hb1 H1 wf1
+            · have hlt : (Lin.sub (Lin.const (-1)) row).holds ρ := by
+                show 0 ≤ ev ρ (Lin.sub (Lin.const (-1)) row)
+                rw [ev_sub, ev_const]; omega
+              have hf2 : ∀ f ∈ Lin.sub (Lin.const (-1)) row :: s.facts, f.holds ρ := fun f mf => by
+                rcases List.mem_cons.mp mf with rfl | mf
+                · exact hlt
+                · exact H.facts f mf
+              have hw2 : ∀ f ∈ Lin.sub (Lin.const (-1)) row :: s.facts, bounded s.nvars f := fun f mf => by
+                rcases List.mem_cons.mp mf with rfl | mf
+                · exact bounded_sub (bounded_const s.nvars (-1)) hbd
+                · exact wf.facts f mf
+              have H2 : Holds ctx s0 ρ { s with facts := Lin.sub (Lin.const (-1)) row :: s.facts } st := { H with facts := hf2 }
+              have wf2 : WF ctx { s with facts := Lin.sub (Lin.const (-1)) row :: s.facts } :=
+                { wf with facts := hw2, words := ⟨wf.words.1, wf.words.2, wf.words.3, wf.words.4, wf.words.5, wf.words.6⟩ }
+              exact ih (s := { s with facts := Lin.sub (Lin.const (-1)) row :: s.facts }) hsp' hcs' hkv' h H2 wf2
+        · cases h
+      · cases h
+    · exact symReturnBody_sound E hsp' hcs' hkv' h H wf
+
 /-- At a return the verifier has passed: the stack pointer is where it was at entry; and the contract's
 promise is so of every state that has this state's memory and its registers but the stack pointer, the
 stack pointer above the bytes of the address returned to (`slot`: eight on x86-64, none on AArch64), and
@@ -411,90 +562,7 @@ theorem symReturn_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         intro r hr
         have all : (ctx.contract.keepsVec.all fun r => s.vecIntact.contains r) = true := by simpa using hkv
         exact List.contains_iff_mem.mp (List.all_eq_true.mp all r hr)
-      have e := ev_isConst (ρ := ρ) hsp'
-      simp only [ev_sub, ev_var] at e
-      have h1 := H.reg RSP ctx.rsp_lt
-      have h2 := H.entry RSP ctx.rsp_lt
-      have hrsp : st.reg RSP = s0.reg RSP := by omega
-      refine ⟨hrsp, fun st' hmem hvec hreg hsp1 hrip => ?_⟩
-      have hrr_spec := retReg_spec ctx.contract
-      have hrax' : st'.reg ctx.contract.retReg = st.reg ctx.contract.retReg := hreg ctx.contract.retReg hrr_spec.2.1
-      have lt0 : ctx.contract.retReg < ctx.nreg := hrr_spec.1
-      -- every `ensures` of a whole run of words: of this state's memory, which the return leaves as it is
-      obtain ⟨_, rW, enW, h⟩ := V.bind_ok h
-      have hensW : ctx.contract.preVals ctx.defs s0 → ∀ e ∈ ctx.contract.ensuresW, e.holds ctx.contract ctx.defs s0 st' := by
-        intro hpv e me
-        obtain ⟨items', r', hr⟩ := each_mem enW e me
-        exact symEnsureKnown_sound E hr H wf hpv hmem
-      -- every `ensures` first: of the state the return leaves, whose memory and return register are this state's
-      obtain ⟨sE, rE, en, h⟩ := V.bind_ok h
-      have henvB : EnvB s.nvars (symEnvAfter ctx.contract s) := by
-        have hsym := (symEnv_bounded ctx.contract).mono wf.regs
-        unfold symEnvAfter
-        split
-        · intro nv m
-          rcases List.mem_cons.mp m with rfl | m
-          · exact wf.reg ctx.contract.retReg lt0
-          · exact hsym nv m
-        · exact hsym
-      have henv : ∀ ρ', Agree s.nvars ρ ρ' → semEnv ctx s0 ρ' (symEnvAfter ctx.contract s) = ctx.contract.envAfter s0 st' := by
-        intro ρ' a
-        have hsym := semEnv_symEnv ctx s0 ρ' (fun r hr => by rw [← a r (Nat.lt_of_lt_of_le hr wf.regs)]; exact H.entry r hr)
-        have hrax : ev ρ' (s.reg ctx.contract.retReg) = (st.reg ctx.contract.retReg : Int) := by
-          rw [← ev_agree (wf.reg ctx.contract.retReg lt0) a]; exact (H.reg ctx.contract.retReg lt0).symm
-        cases hres : ctx.contract.result with
-        | none => simp only [symEnvAfter, Contract.envAfter, hres]; exact hsym
-        | some name =>
-          simp only [symEnvAfter, Contract.envAfter, hres]
-          show (name, semv ctx s0 ρ' (.lin (s.reg ctx.contract.retReg))) :: semEnv ctx s0 ρ' (symEnv ctx.contract) = _
-          rw [hsym]
-          simp only [semv, hrax, hrax']
-      obtain ⟨ρE, cE, hens⟩ := symEnsures_sound E en H wf henvB henv hmem
-      have habove := E.above
-      refine ⟨hrip, by rw [hsp1, hrsp], ?_, ?_, ?_, ?_, (fun hpv => ⟨hens, hensW hpv⟩), fun r hr => by rw [hvec]; exact H.vecIntact r (hkv' r hr)⟩
-      · intro r hr
-        obtain ⟨lt, ne, _⟩ := keeps_spec hr
-        rw [hreg r ne]
-        have := H.reg r lt
-        rw [hcs' r hr, ev_var, H.entry r lt] at this
-        omega
-      · intro a ha ho
-        rw [hmem]
-        exact H.mem a ha ho
-      · intro e he
-        simp only [he] at h
-        obtain ⟨⟨res, s1⟩, r1, e1, h⟩ := V.bind_ok h
-        obtain ⟨ρ1, c1, sem, bd⟩ := seval_sound E _ e e1 cE.holds cE.wf ((symEnv_bounded ctx.contract).mono cE.wf.regs)
-        rw [semEnv_symEnv ctx s0 ρ1 c1.holds.entry] at sem
-        rw [hrax']
-        have hrax := c1.holds.reg ctx.contract.retReg lt0
-        cases res with
-        | list _ => exact (refuse_ok h).elim
-        | val v =>
-          cases v with
-          | region _ => exact (refuse_ok h).elim
-          | bool _ => exact (refuse_ok h).elim
-          | lin v =>
-            simp only at h
-            obtain ⟨_, r2, g1, h⟩ := V.bind_ok h
-            have g1 := entail_sound g1 ρ1 c1.holds.facts
-            have g2 := entail_sound h ρ1 c1.holds.facts
-            simp only [ev_sub] at g1 g2
-            simp only [SRes.sem, semv] at sem
-            have : ev ρ1 v = (st.reg ctx.contract.retReg : Int) := by omega
-            rw [this] at sem
-            exact sem
-        | tail c =>
-          simp only at h
-          obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
-          obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg ctx.contract.retReg lt0⟩
-          simp only [SFact.holds] at gh
-          rw [← ev_agree (c1.wf.reg ctx.contract.retReg lt0) c2.agree, ← hrax] at gh
-          exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
-      · intro r
-        by_cases hr : r = RSP
-        · subst hr; rw [hsp1, hrsp]; exact habove
-        · rw [hreg r hr]; exact H.small r
+      exact symReturnSplit_sound E 8 hsp' hcs' hkv' h H wf
 
 /-- A return the verifier has passed, on x86-64, in the machine's words: the eight bytes of the address to
 return to may be read, and the state the machine's return leaves is one the contract promises. -/

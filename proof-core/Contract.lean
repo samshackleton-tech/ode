@@ -298,19 +298,25 @@ def EnsureW.size (e : EnsureW) (n : Nat) : Nat :=
   | some (_, m) => m
   | none => n
 
-/-- A stack budget term `step * bits((arg - sub) / div)`, where `bits(0) = 0` and `bits(n) = log2(n) + 1`
-for `n > 0`. Together with `Contract.stack` (`base`), the contract allows `base + step * bits(...)` bytes. -/
+/-- A stack budget term `step * units((arg - sub) / div)`, where `units(q) = bitsNat q` (logarithmic,
+`linear = false`) or `units(q) = q` (linear, `linear = true`). Together with `Contract.stack` (`base`),
+the contract allows `base + step * units(...)` bytes. -/
 structure StackBits where
-  step : Nat
-  arg  : String
-  sub  : Nat := 0
-  div  : Nat := 1
+  step   : Nat
+  arg    : String
+  sub    : Nat := 0
+  div    : Nat := 1
+  linear : Bool := false
   deriving Repr, Inhabited
 
 /-- Number of bits needed to write `n`: `0` for `0`, and `floor(log2(n)) + 1` for `n > 0`. -/
 def bitsNat : Nat → Nat
   | 0 => 0
   | n + 1 => Nat.log2 (n + 1) + 1
+
+def StackBits.units (sb : StackBits) (v : Nat) : Nat :=
+  let q := (v - sb.sub) / sb.div
+  if sb.linear then q else bitsNat q
 
 structure Contract where
   args : List (String × Kind)
@@ -562,14 +568,14 @@ the bytes memory holds there in the state at entry. An `EnsureW` is said by thes
 addresses comes first, by its name: there the name is the list of its lanes (the first of a name counts). -/
 def Contract.envW (c : Contract) (s : State) : List (String × Val) := c.lanesEnv s ++ envWIn c s c.args c.argRegs
 
-/-- The stack budget at entry state `s`: `c.stack` plus `step * bits((arg - sub) / div)` if present.
+/-- The stack budget at entry state `s`: `c.stack` plus `step * units(...)` if present.
 When `c.stackBits = none`, this is `c.stack` by definition. -/
 def Contract.stackAt (c : Contract) (s : State) : Nat :=
   c.stack + match c.stackBits with
   | none => 0
   | some sb =>
     match c.regOf sb.arg with
-    | some r => sb.step * bitsNat ((s.reg r - sb.sub) / sb.div)
+    | some r => sb.step * sb.units (s.reg r)
     | none => 0
 
 theorem Contract.stack_le_stackAt (c : Contract) (s : State) : c.stack ≤ c.stackAt s :=

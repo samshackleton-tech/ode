@@ -441,6 +441,26 @@ def stack_bits_spec(e, num_args):
     return None
 
 
+def stack_lin_spec(e, num_args):
+    """Parse `BASE + STEP * ((ARG - SUB) / DIV)` (with optional `- SUB` and `/ DIV`), or None."""
+    if not (e[0] == "bin" and e[1] == "+" and e[2][0] == "num" and e[2][1] >= 0): return None
+    base = e[2][1]
+    rhs = e[3]
+    if not (rhs[0] == "bin" and rhs[1] == "*" and rhs[2][0] == "num" and rhs[2][1] >= 0): return None
+    step = rhs[2][1]
+    inner = rhs[3]
+    sub, div = 0, 1
+    if inner[0] == "bin" and inner[1] == "/" and inner[3][0] == "num" and inner[3][1] > 0:
+        div = inner[3][1]
+        inner = inner[2]
+    if inner[0] == "bin" and inner[1] == "-" and inner[3][0] == "num" and inner[3][1] >= 0:
+        sub = inner[3][1]
+        inner = inner[2]
+    if inner[0] == "name" and inner[1] in num_args:
+        return (base, step, inner[1], sub, div)
+    return None
+
+
 _X86_GPRS = frozenset(["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"])
 _ARM64_GPRS = frozenset([f"x{i}" for i in range(31)] + ["sp"])
 _X86_VECS = frozenset([f"{p}{i}" for p in ("xmm", "ymm") for i in range(16)] + [f"zmm{i}" for i in range(32)])
@@ -736,11 +756,17 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}, is_arm64=False):
         out.append(f"stack {c['stack']}")
     elif isinstance(c["stack"], tuple) and c["stack"][0] == "grows":
         sb = stack_bits_spec(c["stack"][1], num_args)
-        if sb is None:
-            raise SystemExit(f"statement: the contract of {name} has a `stack` formula the verifier in Lean does not read yet")
-        base, step, arg, sub, div = sb
-        out.append(f"stack {base}")
-        out.append(f"stackbits {step} {arg} {sub} {div}")
+        if sb is not None:
+            base, step, arg, sub, div = sb
+            out.append(f"stack {base}")
+            out.append(f"stackbits {step} {arg} {sub} {div}")
+        else:
+            sl = stack_lin_spec(c["stack"][1], num_args)
+            if sl is None:
+                raise SystemExit(f"statement: the contract of {name} has a `stack` formula the verifier in Lean does not read yet")
+            base, step, arg, sub, div = sl
+            out.append(f"stack {base}")
+            out.append(f"stacklin {step} {arg} {sub} {div}")
     else:
         raise SystemExit(f"statement: the contract of {name} has a `stack` line the verifier in Lean does not read yet")
     out += _calling_lines(c.get("calling"), name, names, r, result, is_arm64)

@@ -1988,35 +1988,73 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
   unfold symPrim at h
   split at h
   next hc =>
-    obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
-    unfold inRange at e1
-    obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
-    have g1 := entail_sound e2 ρ hf
-    have g2 := entail_sound e3 ρ hf
-    simp only [ev_sub, ev_add, ev_const, top] at g1 g2
-    have := V.pure_ok h
-    injection this with hp _
-    injection hp with h1 h2
-    subst h1 h2
-    refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
-    · exact Nat.mod_lt _ (by decide)
-    · rw [ev_add]; unfold M64; omega
-  next hc =>
-    split at h
-    next hc2 =>
+    obtain ⟨w, r0, _, h⟩ := V.bind_ok h
+    cases w with
+    | true =>
+      simp only [ite_true] at h
+      have := V.pure_ok h
+      injection this with hp _
+      injection hp with h1 h2
+      subst h1 h2
+      have hpos : (0 : Int) < (M64 : Int) := by decide
+      have hnn : 0 ≤ ev ρ (Lin.add x y) := by rw [ev_add, ← hx2, ← hy2]; omega
+      obtain ⟨ρ', hc', er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (M64 : Int)) H wf
+        (bounded_add hx3 hy3) hpos hnn
+      refine ⟨ρ', hc', (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], Nat.mod_lt _ (by decide), ?_, br⟩
+      rw [er, ev_add, ← hx2, ← hy2, Int.natCast_emod, Int.natCast_add]
+    | false =>
+      simp only [Bool.false_eq_true, ite_false] at h
       obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
       unfold inRange at e1
       obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
       have g1 := entail_sound e2 ρ hf
       have g2 := entail_sound e3 ρ hf
-      simp only [ev_sub, ev_const, top] at g1 g2
+      simp only [ev_sub, ev_add, ev_const, top] at g1 g2
       have := V.pure_ok h
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      refine ⟨ρ, Carried.here H wf, (xa + (M64 - xb % M64)) % M64, by simp only [prim]; rw [if_neg hc, if_pos hc2], ?_, ?_, bounded_sub (bounded_signed hx3) (bounded_signed hy3)⟩
+      refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
       · exact Nat.mod_lt _ (by decide)
-      · rw [ev_sub]; unfold M64; omega
+      · rw [ev_add]; unfold M64; omega
+  next hc =>
+    split at h
+    next hc2 =>
+      obtain ⟨w, r0, _, h⟩ := V.bind_ok h
+      cases w with
+      | true =>
+        simp only [ite_true] at h
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        have hpos : (0 : Int) < (M64 : Int) := by decide
+        have hnn : 0 ≤ ev ρ (Lin.add (Lin.sub x y) (Lin.const (M64 : Int))) := by
+          rw [ev_add, ev_sub, ev_const, ← hx2, ← hy2]; unfold M64; omega
+        obtain ⟨ρ', hc', er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (M64 : Int)) H wf
+          (bounded_add (bounded_sub hx3 hy3) (bounded_const s.nvars _)) hpos hnn
+        refine ⟨ρ', hc', (xa + (M64 - xb % M64)) % M64, by simp only [prim]; rw [if_neg hc, if_pos hc2], Nat.mod_lt _ (by decide), ?_, br⟩
+        rw [er, ev_add, ev_sub, ev_const, ← hx2, ← hy2]
+        have hbmod : xb % M64 = xb := Nat.mod_eq_of_lt (by unfold M64; exact hy1)
+        rw [hbmod, Int.natCast_emod]
+        have hcast : ((xa + (M64 - xb) : Nat) : Int) = (xa : Int) - (xb : Int) + (M64 : Int) := by
+          unfold M64; omega
+        rw [hcast]
+      | false =>
+        simp only [Bool.false_eq_true, ite_false] at h
+        obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+        unfold inRange at e1
+        obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
+        have g1 := entail_sound e2 ρ hf
+        have g2 := entail_sound e3 ρ hf
+        simp only [ev_sub, ev_const, top] at g1 g2
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        refine ⟨ρ, Carried.here H wf, (xa + (M64 - xb % M64)) % M64, by simp only [prim]; rw [if_neg hc, if_pos hc2], ?_, ?_, bounded_sub (bounded_signed hx3) (bounded_signed hy3)⟩
+        · exact Nat.mod_lt _ (by decide)
+        · rw [ev_sub]; unfold M64; omega
     next hc2 =>
       split at h
       next hc3 =>

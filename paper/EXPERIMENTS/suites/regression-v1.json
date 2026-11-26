@@ -1,6 +1,6 @@
 {
   "id": "regression-v1",
-  "description": "Fixed 4-task orthogonal regression suite spanning multi-function parsing (der_valid), constant-time output-buffer decoding (ct_base64_decode), bitfield/checksum/multi-byte-load scalar loops (ipv4_valid), and wide SIMD crypto (chacha20_4way) across all 7 panel models and both x86_64 and arm64.",
+  "description": "Fixed 4-task orthogonal regression suite spanning multi-function parsing (der_valid), constant-time output-buffer decoding (ct_base64_decode), bitfield/checksum/multi-byte-load scalar loops (ipv4_valid), and wide SIMD crypto (chacha20_4way) across all 9 panel models and both x86_64 and arm64.",
   "tasks": [
     "der_valid",
     "ct_base64_decode",
@@ -14,7 +14,9 @@
     "anthropic/claude-sonnet-5.5",
     "anthropic/claude-haiku-5.5",
     "qwen/qwen3.8-2.4t-a95b",
-    "moonshotai/kimi-k3.1-pro"
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime"
   ],
   "targets": [
     "x86_64",
@@ -26,5 +28,5 @@
   "tool_timeout": 45,
   "cell_timeout": 720,
   "max_truncations": 2,
-  "max_usd": 90.0
+  "max_usd": 110.0
 }

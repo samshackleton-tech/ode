@@ -134,10 +134,64 @@ def _infer_anon_var_bounds(facts, base_len):
     return tags
 
 
-def _matching_spec_comparisons(spec_text, raw_goals):
-    """Find up to 3 `def` comparisons in `spec_text` testing the same integer constant as a `need compare` goal."""
+def _reachable_defs_for_contract(spec_text, contract):
+    """Return the set of `def` names reachable from `contract`'s returns/ensures/requires (or None if unknown)."""
+    if not spec_text or contract is None:
+        return None
+    def_bodies = {}
+    cur = None
+    for raw_line in spec_text.splitlines():
+        s = raw_line.split("//")[0].strip()
+        if not s:
+            continue
+        dm = re.match(r"def\s+(\w+)\s*\(", s)
+        if dm:
+            cur = dm.group(1)
+            def_bodies.setdefault(cur, [])
+        if cur is not None:
+            def_bodies[cur].append(s)
+    if not def_bodies:
+        return None
+    seeds = set()
+    def _collect_names(expr):
+        if expr is None:
+            return
+        if isinstance(expr, str):
+            for tok in re.findall(r"\b[A-Za-z_]\w*\b", expr):
+                if tok in def_bodies:
+                    seeds.add(tok)
+        elif isinstance(expr, (list, tuple)):
+            for x in expr:
+                _collect_names(x)
+        elif isinstance(expr, dict):
+            for x in expr.values():
+                _collect_names(x)
+    if isinstance(contract, dict):
+        for k in ("returns", "ensures", "requires"):
+            _collect_names(contract.get(k))
+    else:
+        for k in ("returns", "ensures", "requires"):
+            _collect_names(getattr(contract, k, None))
+    if not seeds:
+        return None
+    reach = set(seeds)
+    stack = list(seeds)
+    while stack:
+        d = stack.pop()
+        txt = " ".join(def_bodies.get(d, []))
+        for tok in re.findall(r"\b[A-Za-z_]\w*\b", txt):
+            if tok in def_bodies and tok not in reach:
+                reach.add(tok)
+                stack.append(tok)
+    return reach
+
+
+def _matching_spec_comparisons(spec_text, raw_goals, contract=None):
+    """Find up to 3 `def` comparisons in `spec_text` testing the same integer constant as a `need compare` goal,
+    scoped to `def`s reachable from `contract` when known."""
     if not spec_text or not raw_goals:
         return []
+    reachable = _reachable_defs_for_contract(spec_text, contract)
     consts = set()
     for row in raw_goals:
         if not row:
@@ -157,6 +211,8 @@ def _matching_spec_comparisons(spec_text, raw_goals):
         if dm:
             cur_def = dm.group(1)
         if cur_def is None:
+            continue
+        if reachable is not None and cur_def not in reachable:
             continue
         for k in sorted(consts):
             if re.search(rf"(?:==|!=|<=|>=|<|>)\s*{k}\b|\b{k}\s*(?:==|!=|<=|>=|<|>)", s):
@@ -255,7 +311,8 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         if contract is not None:
             td = contract.get("trace", []) if isinstance(contract, dict) else getattr(contract, "trace", [])
         listed = ", ".join(str(x) for x in td) if td else "(none)"
-        return f"hint: contract `trace depends on` lists {listed}; avoid branching/indexing on other inputs or use branchless instructions"
+        return (f"hint: contract `trace depends on` lists {listed}; avoid branching/indexing on other inputs, "
+                f"use `select`/branchless instructions, or check whether a called helper's `trace depends on` omits an argument it uses")
     if "register a callee keeps" in reason:
         saved = CALLEE_SAVED_ARM if target == "arm64" else CALLEE_SAVED_X86
         touched = []
@@ -377,7 +434,7 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
                 m = re.match(r"^(.*?) (>=|<=) (.*)$", g)
                 a, b = (m.group(1), m.group(3)) if m else (g, "0")
                 out.append(f"  cannot decide: is {a} equal to {b}, below it, or above it? (the proof needs one of the three to follow from the facts)")
-            spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"))
+            spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"), contract)
             if spec_hits:
                 out.append("  matching spec comparison(s):")
                 for sh in spec_hits:
@@ -387,7 +444,7 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
             for g in arith["goals"]:
                 out.append(f"  cannot show: {g}")
             if arith["kind"] == "below":
-                spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"))
+                spec_hits = _matching_spec_comparisons(spec_text, arith.get("raw_goals"), contract)
                 if spec_hits:
                     out.append("  matching spec condition(s):")
                     for sh in spec_hits:

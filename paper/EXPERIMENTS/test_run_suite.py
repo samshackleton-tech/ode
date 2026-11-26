@@ -115,8 +115,8 @@ class TestRunSuite(unittest.TestCase):
 
     def test_04_regression_presets_valid_and_no_quickstart_overlap(self):
         for preset_name, want_tasks, want_models in [
-            ("regression-v1", 4, 7),
-            ("regression-v1-efficient", 4, 4),
+            ("regression-v1", 4, 9),
+            ("regression-v1-efficient", 4, 6),
         ]:
             path, data = run_suite.load_preset(preset_name)
             self.assertTrue(path.exists())

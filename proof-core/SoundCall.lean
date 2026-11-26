@@ -609,6 +609,18 @@ theorem stackAt_afterCall {ctx : Ctx} {st : State} {i : Instr} {c : Contract} (F
       have rarg : r ∈ c.argRegs := regOfIn_mem sb.arg c.args c.argRegs r hr
       simp only [hr, afterCall_reg F.link (F.arg rarg).2]
 
+private theorem div_le_of_lt_succ {a sub div d : Nat} (hd : 0 < div) (h : a < sub + div * (d + 1)) :
+    (a - sub) / div ≤ d := by
+  have hpos : 0 < div * (d + 1) := Nat.mul_pos hd (Nat.succ_pos d)
+  have : (a - sub) / div < d + 1 := (Nat.div_lt_iff_lt_mul hd).mpr (by rw [Nat.mul_comm]; omega)
+  omega
+
+private theorem div_succ_le_of_sub {a b sub div : Nat} (hd : 0 < div) (h1 : a + div ≤ b) (h2 : sub + div ≤ b) :
+    (a - sub) / div + 1 ≤ (b - sub) / div := by
+  have hle : a - sub + div ≤ b - sub := by omega
+  have : (a - sub) / div + 1 = (a - sub + div) / div := by rw [Nat.add_div_right _ hd]
+  rw [this]; exact Nat.div_le_div_right hle
+
 theorem stackFitsAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {extra : Nat} {c : Contract}
     (harm : c.arm64 = ctx.contract.arm64) (H : Holds ctx s0 ρ s st)
     (hg : stackFitsAt ctx s sp extra c = true) :
@@ -632,87 +644,141 @@ theorem stackFitsAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
       have hlow : -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by simpa using hrest
       simp only [Contract.stackAt, hcb, hrcal, Nat.add_zero]; omega
     | some rcal =>
-      simp only [hrcal, Bool.or_eq_true] at hrest
+      simp only [hrcal] at hrest
       have rcal_arg : rcal ∈ c.argRegs := regOfIn_mem cb.arg c.args c.argRegs rcal hrcal
       have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (hregs ▸ (argRegs_spec rcal_arg).1)
-      rcases hrest with hconst | hpar
-      · obtain ⟨d, _, hd⟩ := List.any_eq_true.mp hconst
-        simp only [Bool.and_eq_true, decide_eq_true_eq] at hd
-        obtain ⟨⟨hdiv, hlow⟩, hpl⟩ := hd
-        have hok := plain_sound hpl ρ H.facts
-        simp only [ev_sub, ev_const, ← hrcal_val] at hok
-        have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
-        have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by omega
-        have hbits : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
-          bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdiv hpow hlt)
-        have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ cb.step * d :=
-          Nat.mul_le_mul_left cb.step hbits
-        simp only [Contract.stackAt, hcb, hrcal]; omega
-      · cases hpb : ctx.contract.stackBits with
-        | none => simp [hpb] at hpar
-        | some pb =>
-          simp only [hpb] at hpar
-          cases hrpar : ctx.contract.regOf pb.arg with
-          | none => simp [hrpar] at hpar
-          | some rpar =>
-            simp only [hrpar, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hpar
-            obtain ⟨hstep, hcases⟩ := hpar
-            have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
-            have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
-            have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
-            simp only [Contract.stackAt, hcb, hrcal, hpb, hrpar]
-            rcases hcases with (⟨⟨⟨hdiv_eq, hsub_le⟩, hlow⟩, hpl⟩ | ⟨⟨⟨hdivc, hdivp⟩, hlow⟩, hex⟩) | ⟨⟨⟨⟨⟨hdiv_eq, hsub_eq⟩, hdivc⟩, hlow⟩, hpl1⟩, hpl2⟩
-            · have hok := plain_sound hpl ρ H.facts
-              simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
-              have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
-                rw [hdiv_eq]; exact Nat.div_le_div_right (by omega)
-              have hbits := bitsNat_mono hdiv_le
-              have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
-                  pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                Nat.mul_le_mul hstep hbits
-              omega
-            · obtain ⟨d, _, hd⟩ := List.any_eq_true.mp hex
-              simp only [Bool.and_eq_true] at hd
-              obtain ⟨hpl1, hpl2⟩ := hd
-              have hok1 := plain_sound hpl1 ρ H.facts
-              have hok2 := plain_sound hpl2 ρ H.facts
-              simp only [ev_sub, ev_const, ← hrcal_val] at hok1
-              simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok2
-              have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
-              have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by omega
-              have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by omega
-              have hb1 : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
-                bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc hpow hlt)
-              have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
-              have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d :=
-                Nat.mul_le_mul hstep hb1
-              have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                Nat.mul_le_mul_left pb.step hb2
-              have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
-              omega
-            · have hok1 := plain_sound hpl1 ρ H.facts
-              have hok2 := plain_sound hpl2 ρ H.facts
-              simp only [ev_sub, ev_add, ev_var, ev_const, ev_scale, hrpar_val, ← hrcal_val] at hok1 hok2
-              have hq_pos : 0 < (s0.reg rpar - pb.sub) / pb.div := by
-                rw [← hdiv_eq, ← hsub_eq]
-                exact (Nat.le_div_iff_mul_le hdivc).mpr (by omega)
-              have hq_dbl : 2 * ((st.reg rcal - cb.sub) / cb.div) ≤ (s0.reg rpar - pb.sub) / pb.div := by
-                rw [← hdiv_eq, ← hsub_eq, Nat.le_div_iff_mul_le hdivc]
-                have hdm : cb.div * ((st.reg rcal - cb.sub) / cb.div) ≤ st.reg rcal - cb.sub :=
-                  Nat.mul_div_le (st.reg rcal - cb.sub) cb.div
-                have hmul_comm : 2 * ((st.reg rcal - cb.sub) / cb.div) * cb.div =
-                    2 * (cb.div * ((st.reg rcal - cb.sub) / cb.div)) := by
-                  rw [Nat.mul_assoc, Nat.mul_comm _ cb.div]
+      cases hlin : cb.linear with
+      | true =>
+        simp only [hlin, ↓reduceIte, Bool.or_eq_true] at hrest
+        rcases hrest with hconst | hpar
+        · simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq, beq_iff_eq] at hconst
+          obtain ⟨hdiv, hrem, hcap⟩ := hconst
+          simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hlin, ↓reduceIte]
+          rcases hcap with hstep0 | hpl
+          · rw [hstep0]; omega
+          · have hok := plain_sound hpl ρ H.facts
+            simp only [ev_sub, ev_const, ← hrcal_val] at hok
+            let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+            let d := rem.toNat / cb.step
+            have hq : (st.reg rcal - cb.sub) / cb.div ≤ d := div_le_of_lt_succ hdiv (by dsimp only [d, rem]; omega)
+            have hmul : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤ rem.toNat :=
+              Nat.le_trans (Nat.mul_le_mul_left cb.step hq) (Nat.mul_div_le _ _)
+            omega
+        · cases hpb : ctx.contract.stackBits with
+          | none => simp [hpb] at hpar
+          | some pb =>
+            simp only [hpb, Bool.and_eq_true] at hpar
+            obtain ⟨hpblin, hpar⟩ := hpar
+            cases hrpar : ctx.contract.regOf pb.arg with
+            | none => simp [hrpar] at hpar
+            | some rpar =>
+              simp only [hrpar, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hpar
+              obtain ⟨⟨⟨hstep, hdiv_eq⟩, hdivc⟩, hcases⟩ := hpar
+              have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
+              have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
+              have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
+              simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hrpar, hlin, hpblin, ↓reduceIte]
+              rcases hcases with ⟨⟨hsub_le, hlow⟩, hpl⟩ | ⟨⟨⟨hsub_eq, hlow⟩, hpl1⟩, hpl2⟩
+              · have hok := plain_sound hpl ρ H.facts
+                simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
+                have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                  rw [hdiv_eq]; exact Nat.div_le_div_right (by omega)
+                have hmul : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤
+                    pb.step * ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul hstep hdiv_le
                 omega
-              have hbits := bitsNat_succ_le_of_double hq_pos hq_dbl
-              have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
-                  pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
-              have hmul2 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) ≤
-                  pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hbits
-              have hmul3 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) =
-                  pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
-              omega
+              · have hok1 := plain_sound hpl1 ρ H.facts
+                have hok2 := plain_sound hpl2 ρ H.facts
+                simp only [ev_sub, ev_var, ev_const, hrpar_val, ← hrcal_val] at hok1 hok2
+                have hsucc : (st.reg rcal - cb.sub) / cb.div + 1 ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                  rw [← hdiv_eq, hsub_eq]; exact div_succ_le_of_sub hdivc (by omega) (by omega)
+                have hmul1 : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤
+                    pb.step * ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
+                have hmul2 : pb.step * ((st.reg rcal - cb.sub) / cb.div + 1) ≤
+                    pb.step * ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hsucc
+                have hmul3 : pb.step * ((st.reg rcal - cb.sub) / cb.div + 1) =
+                    pb.step * ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
+                omega
+      | false =>
+        simp only [hlin, Bool.false_eq_true, ↓reduceIte, Bool.or_eq_true] at hrest
+        rcases hrest with hconst | hpar
+        · obtain ⟨d, _, hd⟩ := List.any_eq_true.mp hconst
+          simp only [Bool.and_eq_true, decide_eq_true_eq] at hd
+          obtain ⟨⟨hdiv, hlow⟩, hpl⟩ := hd
+          have hok := plain_sound hpl ρ H.facts
+          simp only [ev_sub, ev_const, ← hrcal_val] at hok
+          have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
+          have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by omega
+          have hbits : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
+            bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdiv hpow hlt)
+          have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ cb.step * d :=
+            Nat.mul_le_mul_left cb.step hbits
+          simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hlin, Bool.false_eq_true, ↓reduceIte]; omega
+        · cases hpb : ctx.contract.stackBits with
+          | none => simp [hpb] at hpar
+          | some pb =>
+            simp only [hpb, Bool.and_eq_true, Bool.not_eq_true'] at hpar
+            obtain ⟨hpblin, hpar⟩ := hpar
+            cases hrpar : ctx.contract.regOf pb.arg with
+            | none => simp [hrpar] at hpar
+            | some rpar =>
+              simp only [hrpar, Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at hpar
+              obtain ⟨hstep, hcases⟩ := hpar
+              have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
+              have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
+              have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
+              simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hrpar, hlin, hpblin, Bool.false_eq_true, ↓reduceIte]
+              rcases hcases with (⟨⟨⟨hdiv_eq, hsub_le⟩, hlow⟩, hpl⟩ | ⟨⟨⟨hdivc, hdivp⟩, hlow⟩, hex⟩) | ⟨⟨⟨⟨⟨hdiv_eq, hsub_eq⟩, hdivc⟩, hlow⟩, hpl1⟩, hpl2⟩
+              · have hok := plain_sound hpl ρ H.facts
+                simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
+                have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                  rw [hdiv_eq]; exact Nat.div_le_div_right (by omega)
+                have hbits := bitsNat_mono hdiv_le
+                have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
+                    pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                  Nat.mul_le_mul hstep hbits
+                omega
+              · obtain ⟨d, _, hd⟩ := List.any_eq_true.mp hex
+                simp only [Bool.and_eq_true] at hd
+                obtain ⟨hpl1, hpl2⟩ := hd
+                have hok1 := plain_sound hpl1 ρ H.facts
+                have hok2 := plain_sound hpl2 ρ H.facts
+                simp only [ev_sub, ev_const, ← hrcal_val] at hok1
+                simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok2
+                have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
+                have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by omega
+                have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by omega
+                have hb1 : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
+                  bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc hpow hlt)
+                have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                  le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
+                have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d :=
+                  Nat.mul_le_mul hstep hb1
+                have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                  Nat.mul_le_mul_left pb.step hb2
+                have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
+                omega
+              · have hok1 := plain_sound hpl1 ρ H.facts
+                have hok2 := plain_sound hpl2 ρ H.facts
+                simp only [ev_sub, ev_add, ev_var, ev_const, ev_scale, hrpar_val, ← hrcal_val] at hok1 hok2
+                have hq_pos : 0 < (s0.reg rpar - pb.sub) / pb.div := by
+                  rw [← hdiv_eq, ← hsub_eq]
+                  exact (Nat.le_div_iff_mul_le hdivc).mpr (by omega)
+                have hq_dbl : 2 * ((st.reg rcal - cb.sub) / cb.div) ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                  rw [← hdiv_eq, ← hsub_eq, Nat.le_div_iff_mul_le hdivc]
+                  have hdm : cb.div * ((st.reg rcal - cb.sub) / cb.div) ≤ st.reg rcal - cb.sub :=
+                    Nat.mul_div_le (st.reg rcal - cb.sub) cb.div
+                  have hmul_comm : 2 * ((st.reg rcal - cb.sub) / cb.div) * cb.div =
+                      2 * (cb.div * ((st.reg rcal - cb.sub) / cb.div)) := by
+                    rw [Nat.mul_assoc, Nat.mul_comm _ cb.div]
+                  omega
+                have hbits := bitsNat_succ_le_of_double hq_pos hq_dbl
+                have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
+                    pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
+                have hmul2 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) ≤
+                    pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hbits
+                have hmul3 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) =
+                    pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
+                omega
 
 theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
     {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st)
@@ -721,21 +787,251 @@ theorem stackFits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
   rw [stackAt_afterCall F p q]
   exact stackFitsAt_sound F.machine H hg
 
+private theorem stackFitsMLin_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    {sp : Int} {extra : Nat} {c : Contract} {cb : StackBits} {rcal : Nat}
+    (H : Holds ctx s0 ρ s st) (hcb : c.stackBits = some cb) (hrcal : c.regOf cb.arg = some rcal)
+    (hdivc' : 0 < cb.div) (hlin : cb.linear = true)
+    (hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal)) {items rest : Items}
+    (h : stackFitsMLin ctx s sp extra c cb (s.reg rcal) items = .ok ((), rest)) :
+    -(ctx.contract.stackAt s0 : Int) ≤ sp - extra - (c.stackAt st : Int) := by
+  have hle0 := Contract.stack_le_stackAt ctx.contract s0
+  unfold stackFitsMLin at h
+  cases hpb : ctx.contract.stackBits with
+  | none =>
+    simp only [hpb] at h
+    split at h
+    next hrem =>
+      simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hlin, ↓reduceIte]
+      split at h
+      next hstep0 =>
+        have hs0 : cb.step = 0 := by simpa using hstep0
+        rw [hs0]; omega
+      next =>
+        let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+        let d := rem.toNat / cb.step
+        have hok := entail_sound h ρ H.facts
+        simp only [ev_sub, ev_const, ← hrcal_val] at hok
+        have hq : (st.reg rcal - cb.sub) / cb.div ≤ d := div_le_of_lt_succ hdivc' (by dsimp only [d, rem]; omega)
+        have hmul : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤ rem.toNat :=
+          Nat.le_trans (Nat.mul_le_mul_left cb.step hq) (Nat.mul_div_le _ _)
+        omega
+    next => exact (refuse_ok h).elim
+  | some pb =>
+    simp only [hpb] at h
+    cases hpblin : pb.linear with
+    | false => simp [hpblin] at h; exact (refuse_ok h).elim
+    | true =>
+      simp only [hpblin, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
+      cases hrpar : ctx.contract.regOf pb.arg with
+      | none => simp [hrpar] at h; exact (refuse_ok h).elim
+      | some rpar =>
+        simp only [hrpar] at h
+        have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
+        have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
+        have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
+        simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hrpar, hlin, hpblin, ↓reduceIte]
+        split at h
+        · exact (refuse_ok h).elim
+        next hspb =>
+          have hspb' : cb.step ≤ pb.step ∧ cb.div = pb.div := by simp at hspb; exact hspb
+          obtain ⟨hstep, hdiv_eq⟩ := hspb'
+          split at h
+          next hmono =>
+            have hmono' : pb.sub ≤ cb.sub ∧ -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by
+              simpa using hmono
+            have hok := entail_sound h ρ H.facts
+            simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
+            have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
+              rw [hdiv_eq]; exact Nat.div_le_div_right (by omega)
+            have hmul : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤
+                pb.step * ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul hstep hdiv_le
+            omega
+          next =>
+            split at h
+            next hdec =>
+              have hdec' : pb.sub = cb.sub ∧ -(ctx.contract.stack : Int) - (pb.step : Int) ≤ sp - extra - c.stack := by
+                simpa using hdec
+              obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
+              have hok1 := entail_sound e1 ρ H.facts
+              have hok2 := entail_sound e2 ρ H.facts
+              simp only [ev_sub, ev_var, ev_const, hrpar_val, ← hrcal_val] at hok1 hok2
+              have hsucc : (st.reg rcal - cb.sub) / cb.div + 1 ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                rw [← hdiv_eq, hdec'.1]; exact div_succ_le_of_sub hdivc' (by omega) (by omega)
+              have hmul1 : cb.step * ((st.reg rcal - cb.sub) / cb.div) ≤
+                  pb.step * ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
+              have hmul2 : pb.step * ((st.reg rcal - cb.sub) / cb.div + 1) ≤
+                  pb.step * ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hsucc
+              have hmul3 : pb.step * ((st.reg rcal - cb.sub) / cb.div + 1) =
+                  pb.step * ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
+              omega
+            next => exact (refuse_ok h).elim
+
+private theorem stackFitsMBits_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym}
+    {sp : Int} {extra : Nat} {c : Contract} {cb : StackBits} {rcal : Nat}
+    (H : Holds ctx s0 ρ s st) (hcb : c.stackBits = some cb) (hrcal : c.regOf cb.arg = some rcal)
+    (hdivc' : 0 < cb.div) (hlin : cb.linear = false)
+    (hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal)) {items rest : Items}
+    (h : stackFitsMBits ctx s sp extra c cb (s.reg rcal) items = .ok ((), rest)) :
+    -(ctx.contract.stackAt s0 : Int) ≤ sp - extra - (c.stackAt st : Int) := by
+  have hle0 := Contract.stack_le_stackAt ctx.contract s0
+  unfold stackFitsMBits at h
+  cases hpb : ctx.contract.stackBits with
+  | none =>
+    simp only [hpb] at h
+    split at h
+    next hrem =>
+      let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
+      let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
+      have hok := entail_sound h ρ H.facts
+      simp only [ev_sub, ev_const, ← hrcal_val] at hok
+      have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
+      have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by dsimp only [d, rem]; omega
+      have hbits : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
+        bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc' hpow hlt)
+      have hstep_d : cb.step * d ≤ rem.toNat := by
+        show cb.step * (if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)) ≤ rem.toNat
+        cases hst0 : cb.step with
+        | zero => simp
+        | succ k =>
+          simp only [Nat.succ_ne_zero, beq_iff_eq, ↓reduceIte]
+          exact Nat.le_trans (Nat.mul_le_mul_left (k + 1) (Nat.min_le_right 63 _)) (Nat.mul_div_le _ _)
+      have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ rem.toNat :=
+        Nat.le_trans (Nat.mul_le_mul_left cb.step hbits) hstep_d
+      simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hlin, Bool.false_eq_true, ↓reduceIte]; omega
+    next => exact (refuse_ok h).elim
+  | some pb =>
+    simp only [hpb] at h
+    cases hpblin : pb.linear with
+    | true => simp [hpblin] at h; exact (refuse_ok h).elim
+    | false =>
+      simp only [hpblin, Bool.false_eq_true, ↓reduceIte] at h
+      cases hrpar : ctx.contract.regOf pb.arg with
+      | none => simp [hrpar] at h; exact (refuse_ok h).elim
+      | some rpar =>
+        simp only [hrpar] at h
+        have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
+        have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
+        have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
+        simp only [Contract.stackAt, StackBits.units, hcb, hrcal, hpb, hrpar, hlin, hpblin, Bool.false_eq_true, ↓reduceIte]
+        split at h
+        · exact (refuse_ok h).elim
+        next hspb =>
+          have hspb' : cb.step ≤ pb.step ∧ 0 < pb.div := by simp at hspb; omega
+          obtain ⟨hstep, hdivp⟩ := hspb'
+          split at h
+          next hmono =>
+            have hmono' : cb.div = pb.div ∧ pb.sub ≤ cb.sub ∧ -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by
+              simp at hmono; exact ⟨hmono.1.1, hmono.1.2, hmono.2⟩
+            have hok := entail_sound h ρ H.facts
+            simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
+            have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
+              rw [hmono'.1]; exact Nat.div_le_div_right (by omega)
+            have hbits := bitsNat_mono hdiv_le
+            have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
+                pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul hstep hbits
+            omega
+          next =>
+            split at h
+            next hlow =>
+              cases hkc : Lin.isConst (s.reg rcal) with
+              | some k =>
+                simp only [hkc] at h
+                split at h
+                next hk0 =>
+                  split at h
+                  next hd64 =>
+                    have ek := ev_isConst (ρ := ρ) hkc
+                    have hok := entail_sound h ρ H.facts
+                    simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok
+                    let d := bitsNat ((k.toNat - cb.sub) / cb.div)
+                    have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by dsimp only [d]; omega
+                    have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                      le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
+                    have hkeq : st.reg rcal = k.toNat := by omega
+                    have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d := by
+                      rw [hkeq]; exact Nat.mul_le_mul_right d hstep
+                    have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                      Nat.mul_le_mul_left pb.step hb2
+                    have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
+                    omega
+                  next => exact (refuse_ok h).elim
+                next => exact (refuse_ok h).elim
+              | none =>
+                simp only [hkc] at h
+                cases hdiff : Lin.isConst (Lin.sub (Lin.var rpar) (s.reg rcal)) with
+                | some diff =>
+                  simp only [hdiff] at h
+                  split at h
+                  next hdpos =>
+                    split at h
+                    next hd64 =>
+                      obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
+                      have hok1 := entail_sound e1 ρ H.facts
+                      have hok2 := entail_sound e2 ρ H.facts
+                      simp only [ev_sub, ev_const, ← hrcal_val] at hok1
+                      simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok2
+                      let d := Nat.log2 (diff.toNat / cb.div)
+                      have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
+                      have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by dsimp only [d]; omega
+                      have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by dsimp only [d]; omega
+                      have hb1 : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
+                        bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc' hpow hlt)
+                      have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                        le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
+                      have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d :=
+                        Nat.mul_le_mul hstep hb1
+                      have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
+                        Nat.mul_le_mul_left pb.step hb2
+                      have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
+                      omega
+                    next => exact (refuse_ok h).elim
+                  next => exact (refuse_ok h).elim
+                | none =>
+                  simp only [hdiff] at h
+                  split at h
+                  next hds =>
+                    have hds' : cb.div = pb.div ∧ cb.sub = pb.sub := by simpa using hds
+                    obtain ⟨hdiv_eq, hsub_eq⟩ := hds'
+                    obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
+                    have hok1 := entail_sound e1 ρ H.facts
+                    have hok2 := entail_sound e2 ρ H.facts
+                    simp only [ev_sub, ev_add, ev_var, ev_const, ev_scale, hrpar_val, ← hrcal_val] at hok1 hok2
+                    have hq_pos : 0 < (s0.reg rpar - pb.sub) / pb.div := by
+                      rw [← hdiv_eq, ← hsub_eq]
+                      exact (Nat.le_div_iff_mul_le hdivc').mpr (by omega)
+                    have hq_dbl : 2 * ((st.reg rcal - cb.sub) / cb.div) ≤ (s0.reg rpar - pb.sub) / pb.div := by
+                      rw [← hdiv_eq, ← hsub_eq, Nat.le_div_iff_mul_le hdivc']
+                      have hdm : cb.div * ((st.reg rcal - cb.sub) / cb.div) ≤ st.reg rcal - cb.sub :=
+                        Nat.mul_div_le (st.reg rcal - cb.sub) cb.div
+                      have hmul_comm : 2 * ((st.reg rcal - cb.sub) / cb.div) * cb.div =
+                          2 * (cb.div * ((st.reg rcal - cb.sub) / cb.div)) := by
+                        rw [Nat.mul_assoc, Nat.mul_comm _ cb.div]
+                      omega
+                    have hbits := bitsNat_succ_le_of_double hq_pos hq_dbl
+                    have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
+                        pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
+                    have hmul2 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) ≤
+                        pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hbits
+                    have hmul3 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) =
+                        pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
+                    omega
+                  next => exact (refuse_ok h).elim
+            next => exact (refuse_ok h).elim
+
 theorem stackFitsMAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {extra : Nat} {c : Contract}
     (harm : c.arm64 = ctx.contract.arm64) (H : Holds ctx s0 ρ s st) {items rest : Items}
     (h : stackFitsMAt ctx s sp extra c items = .ok ((), rest)) :
     sp ≤ 0 ∧ -(ctx.contract.stackAt s0 : Int) ≤ sp - extra - (c.stackAt st : Int) := by
   have hregs : c.regs = ctx.nreg := by unfold Ctx.nreg Contract.regs; rw [harm]
-  unfold stackFitsMAt at h
-  split at h
-  next hfast => exact stackFitsAt_sound harm H hfast
-  next =>
+  by_cases hfast : stackFitsAt ctx s sp extra c = true
+  · exact stackFitsAt_sound harm H hfast
+  · unfold stackFitsMAt at h
+    rw [if_neg hfast] at h
     split at h
     · exact (refuse_ok h).elim
     next hsp0 =>
       have hsp0' : sp ≤ 0 := by simpa using hsp0
       refine ⟨hsp0', ?_⟩
-      have hle0 := Contract.stack_le_stackAt ctx.contract s0
       cases hcb : c.stackBits with
       | none => simp [hcb] at h; exact (refuse_ok h).elim
       | some cb =>
@@ -750,144 +1046,13 @@ theorem stackFitsMAt_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : S
             have hdivc' : 0 < cb.div := by simp at hdivc; omega
             have rcal_arg : rcal ∈ c.argRegs := regOfIn_mem cb.arg c.args c.argRegs rcal hrcal
             have hrcal_val : (st.reg rcal : Int) = ev ρ (s.reg rcal) := H.reg rcal (hregs ▸ (argRegs_spec rcal_arg).1)
-            cases hpb : ctx.contract.stackBits with
-            | none =>
-              simp only [hpb] at h
-              split at h
-              next hrem =>
-                let rem := (ctx.contract.stack : Int) + sp - extra - c.stack
-                let d := if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)
-                have hok := entail_sound h ρ H.facts
-                simp only [ev_sub, ev_const, ← hrcal_val] at hok
-                have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
-                have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by dsimp only [d, rem]; omega
-                have hbits : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
-                  bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc' hpow hlt)
-                have hstep_d : cb.step * d ≤ rem.toNat := by
-                  show cb.step * (if cb.step == 0 then 63 else min 63 (rem.toNat / cb.step)) ≤ rem.toNat
-                  cases hst0 : cb.step with
-                  | zero => simp
-                  | succ k =>
-                    simp only [Nat.succ_ne_zero, beq_iff_eq, ↓reduceIte]
-                    exact Nat.le_trans (Nat.mul_le_mul_left (k + 1) (Nat.min_le_right 63 _)) (Nat.mul_div_le _ _)
-                have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ rem.toNat :=
-                  Nat.le_trans (Nat.mul_le_mul_left cb.step hbits) hstep_d
-                simp only [Contract.stackAt, hcb, hrcal, hpb]; omega
-              next => exact (refuse_ok h).elim
-            | some pb =>
-              simp only [hpb] at h
-              cases hrpar : ctx.contract.regOf pb.arg with
-              | none => simp [hrpar] at h; exact (refuse_ok h).elim
-              | some rpar =>
-                simp only [hrpar] at h
-                have rpar_arg : rpar ∈ ctx.contract.argRegs := regOfIn_mem pb.arg ctx.contract.args ctx.contract.argRegs rpar hrpar
-                have hrpar_lt : rpar < ctx.nreg := (argRegs_spec rpar_arg).1
-                have hrpar_val : ρ rpar = (s0.reg rpar : Int) := H.entry rpar hrpar_lt
-                simp only [Contract.stackAt, hcb, hrcal, hpb, hrpar]
-                split at h
-                · exact (refuse_ok h).elim
-                next hspb =>
-                  have hspb' : cb.step ≤ pb.step ∧ 0 < pb.div := by simp at hspb; omega
-                  obtain ⟨hstep, hdivp⟩ := hspb'
-                  split at h
-                  next hmono =>
-                    have hmono' : cb.div = pb.div ∧ pb.sub ≤ cb.sub ∧ -(ctx.contract.stack : Int) ≤ sp - extra - c.stack := by
-                      simp at hmono; exact ⟨hmono.1.1, hmono.1.2, hmono.2⟩
-                    have hok := entail_sound h ρ H.facts
-                    simp only [ev_sub, ev_var, hrpar_val, ← hrcal_val] at hok
-                    have hdiv_le : (st.reg rcal - cb.sub) / cb.div ≤ (s0.reg rpar - pb.sub) / pb.div := by
-                      rw [hmono'.1]; exact Nat.div_le_div_right (by omega)
-                    have hbits := bitsNat_mono hdiv_le
-                    have hmul : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
-                        pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul hstep hbits
-                    omega
-                  next =>
-                    split at h
-                    next hlow =>
-                      cases hkc : Lin.isConst (s.reg rcal) with
-                      | some k =>
-                        simp only [hkc] at h
-                        split at h
-                        next hk0 =>
-                          split at h
-                          next hd64 =>
-                            have ek := ev_isConst (ρ := ρ) hkc
-                            have hok := entail_sound h ρ H.facts
-                            simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok
-                            let d := bitsNat ((k.toNat - cb.sub) / cb.div)
-                            have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by dsimp only [d]; omega
-                            have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                              le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
-                            have hkeq : st.reg rcal = k.toNat := by omega
-                            have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d := by
-                              rw [hkeq]; exact Nat.mul_le_mul_right d hstep
-                            have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                              Nat.mul_le_mul_left pb.step hb2
-                            have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
-                            omega
-                          next => exact (refuse_ok h).elim
-                        next => exact (refuse_ok h).elim
-                      | none =>
-                        simp only [hkc] at h
-                        cases hdiff : Lin.isConst (Lin.sub (Lin.var rpar) (s.reg rcal)) with
-                        | some diff =>
-                          simp only [hdiff] at h
-                          split at h
-                          next hdpos =>
-                            split at h
-                            next hd64 =>
-                              obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
-                              have hok1 := entail_sound e1 ρ H.facts
-                              have hok2 := entail_sound e2 ρ H.facts
-                              simp only [ev_sub, ev_const, ← hrcal_val] at hok1
-                              simp only [ev_sub, ev_var, ev_const, hrpar_val] at hok2
-                              let d := Nat.log2 (diff.toNat / cb.div)
-                              have hpow : 0 < 2 ^ d := Nat.two_pow_pos d
-                              have hlt : st.reg rcal < cb.sub + cb.div * 2 ^ d := by dsimp only [d]; omega
-                              have hge : pb.sub + pb.div * 2 ^ d ≤ s0.reg rpar := by dsimp only [d]; omega
-                              have hb1 : bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ d :=
-                                bitsNat_le_of_lt_pow (div_lt_of_sub_lt hdivc' hpow hlt)
-                              have hb2 : d + 1 ≤ bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                                le_bitsNat_of_pow_le (le_div_of_le_sub hdivp hge)
-                              have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤ pb.step * d :=
-                                Nat.mul_le_mul hstep hb1
-                              have hmul2 : pb.step * (d + 1) ≤ pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) :=
-                                Nat.mul_le_mul_left pb.step hb2
-                              have hmul3 : pb.step * (d + 1) = pb.step * d + pb.step := Nat.mul_succ pb.step d
-                              omega
-                            next => exact (refuse_ok h).elim
-                          next => exact (refuse_ok h).elim
-                        | none =>
-                          simp only [hdiff] at h
-                          split at h
-                          next hds =>
-                            have hds' : cb.div = pb.div ∧ cb.sub = pb.sub := by simpa using hds
-                            obtain ⟨hdiv_eq, hsub_eq⟩ := hds'
-                            obtain ⟨_, r1, e1, e2⟩ := V.bind_ok h
-                            have hok1 := entail_sound e1 ρ H.facts
-                            have hok2 := entail_sound e2 ρ H.facts
-                            simp only [ev_sub, ev_add, ev_var, ev_const, ev_scale, hrpar_val, ← hrcal_val] at hok1 hok2
-                            have hq_pos : 0 < (s0.reg rpar - pb.sub) / pb.div := by
-                              rw [← hdiv_eq, ← hsub_eq]
-                              exact (Nat.le_div_iff_mul_le hdivc').mpr (by omega)
-                            have hq_dbl : 2 * ((st.reg rcal - cb.sub) / cb.div) ≤ (s0.reg rpar - pb.sub) / pb.div := by
-                              rw [← hdiv_eq, ← hsub_eq, Nat.le_div_iff_mul_le hdivc']
-                              have hdm : cb.div * ((st.reg rcal - cb.sub) / cb.div) ≤ st.reg rcal - cb.sub :=
-                                Nat.mul_div_le (st.reg rcal - cb.sub) cb.div
-                              have hmul_comm : 2 * ((st.reg rcal - cb.sub) / cb.div) * cb.div =
-                                  2 * (cb.div * ((st.reg rcal - cb.sub) / cb.div)) := by
-                                rw [Nat.mul_assoc, Nat.mul_comm _ cb.div]
-                              omega
-                            have hbits := bitsNat_succ_le_of_double hq_pos hq_dbl
-                            have hmul1 : cb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) ≤
-                                pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) := Nat.mul_le_mul_right _ hstep
-                            have hmul2 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) ≤
-                                pb.step * bitsNat ((s0.reg rpar - pb.sub) / pb.div) := Nat.mul_le_mul_left pb.step hbits
-                            have hmul3 : pb.step * (bitsNat ((st.reg rcal - cb.sub) / cb.div) + 1) =
-                                pb.step * bitsNat ((st.reg rcal - cb.sub) / cb.div) + pb.step := Nat.mul_succ _ _
-                            omega
-                          next => exact (refuse_ok h).elim
-                    next => exact (refuse_ok h).elim
+            cases hlin : cb.linear with
+            | true =>
+              simp only [hlin, ↓reduceIte] at h
+              exact stackFitsMLin_sound H hcb hrcal hdivc' hlin hrcal_val h
+            | false =>
+              simp only [hlin, Bool.false_eq_true, ↓reduceIte] at h
+              exact stackFitsMBits_sound H hcb hrcal hdivc' hlin hrcal_val h
 
 theorem stackFitsM_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {sp : Int} {c : Contract}
     {i : Instr} (F : Fits ctx st i c) (p q : Program) (H : Holds ctx s0 ρ s st) {items rest : Items}

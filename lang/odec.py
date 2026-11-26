@@ -696,6 +696,9 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
                 emit(n, f"{br} {loops[-1][0]}", s, inside); continue
             if re.match(r"(if|loop|break|continue)\b", s):
                 stop(src, n, f"malformed control form `{s}` (use `if COND {{`, `loop {{`, `break [if COND]`, `continue [if COND]`)")
+            if s == "wrap":
+                if notes is not None: notes.append(("wrap", len(out), None, None, n))
+                continue
             m = re.fullmatch(r'place\s*(?:"(\w+)"\s*)?\{', s) or re.fullmatch(r"place\s+(\w+)\s*\{", s)
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
@@ -906,8 +909,11 @@ def compile_info(src, name, symbol=None, target=None):
         if note[0] == "at" and note[2] is not None and note[2] not in entries:
             stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
     at_notes = [note for note in notes if note[0] == "at"]
-    non_at = [note for note in notes if note[0] != "at"]
-    elf_notes = non_at + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(at_notes)]
+    wrap_notes = [note for note in notes if note[0] == "wrap"]
+    non_at = [note for note in notes if note[0] not in ("at", "wrap")]
+    elf_notes = (non_at
+                 + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(at_notes)]
+                 + [("at", note[1], f".Lode_wrap_{k}") for k, note in enumerate(wrap_notes)])
     where, locs = {}, []
     blob = elf(src, name, sym, expanded, typed, elf_notes, data, where=where, target=target, locs=locs)
     base = where[sym]
@@ -925,14 +931,20 @@ def compile_info(src, name, symbol=None, target=None):
     places_by_entry = {}
     for entry in sorted(entries):
         mine = [(k, note) for k, note in enumerate(at_notes) if (note[2] or sym) == entry]
+        parts = []
         if mine:
-            places_by_entry[entry] = "".join(
+            parts.append("".join(
                 f"place +0x{where[f'.Lode_at_{k}'] - where[entry]:x} {{\n"
                 + "".join(f"    {line}\n" for line in note[3]) + "}\n"
                 for k, note in mine
-            )
-        else:
-            places_by_entry[entry] = ""
+            ))
+        if wrap_notes:
+            parts.append("".join(
+                f"wrap +0x{where[f'.Lode_wrap_{k}'] - where[entry]:x}\n"
+                for k in range(len(wrap_notes))
+                if where[f'.Lode_wrap_{k}'] >= where[entry]
+            ))
+        places_by_entry[entry] = "".join(parts)
     frame_info = None
     if meta["frame"] is not None:
         fsize, ffields = meta["frame"]
@@ -964,7 +976,7 @@ def build(src, name, obj, symbol=None, target=None):
     target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
     notes, typed = [], []
     expanded = expand(src, name, lines, inlines, notes, typed, target=target)
-    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] != "at"], data, target=target)
+    blob = elf(src, name, symbol or own, expanded, typed, [note for note in notes if note[0] not in ("at", "wrap")], data, target=target)
     with open(obj, "wb") as f: f.write(blob)
 
 
@@ -983,10 +995,19 @@ def places(src, name, entry=None, target=None):
     for note in notes:
         if note[0] == "at" and note[2] is not None and note[2] not in entries: stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
     mine = [note for note in notes if note[0] == "at" and (note[2] or own) == (entry or own)]
-    if not mine: return ""
+    wrap_notes = [note for note in notes if note[0] == "wrap"]
+    if not mine and not wrap_notes: return ""
     where = {}
-    elf(src, name, own, expanded, typed, [note for note in notes if note[0] != "at"] + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)], data, where, target=target)
-    return "".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine))
+    elf_notes = ([note for note in notes if note[0] not in ("at", "wrap")]
+                 + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)]
+                 + [("at", note[1], f".Lode_wrap_{k}") for k, note in enumerate(wrap_notes)])
+    elf(src, name, own, expanded, typed, elf_notes, data, where, target=target)
+    parts = []
+    if mine:
+        parts.append("".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine)))
+    if wrap_notes:
+        parts.append("".join(f"wrap +0x{where[f'.Lode_wrap_{k}'] - where[entry or own]:x}\n" for k in range(len(wrap_notes)) if where[f'.Lode_wrap_{k}'] >= where[entry or own]))
+    return "".join(parts)
 
 
 def source_of(folder, name):

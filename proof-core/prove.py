@@ -451,7 +451,7 @@ def join_written_regs(raw_ins, at, stop_pcs, reg_list):
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=()):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
         self.session = None                 # the talk with `odeprove`, begun at the first question
@@ -466,6 +466,7 @@ class Prover:
         self.trace_exprs = list(trace_exprs)
         self.instrs = list(instrs)
         self.reg_list = list(reg_list)
+        self.wrap_pcs = set(wrap_pcs)
         self.tried_clears = set()
 
     def close(self):
@@ -582,7 +583,16 @@ class Prover:
             goals = [lin([int(x) for x in s.split()]) for s in raw_goals]
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
-                if p is None: self.fail(proof, said); return None
+                if p is None:
+                    if what == "entail" and self.wrap_pcs:
+                        with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+                        fail_pc, _, _ = locate(self.statement, self.out)
+                        if fail_pc is not None and fail_pc in self.wrap_pcs:
+                            nxt_said = self.ask(proof + ["t wrap"])
+                            if nxt_said != said and not nxt_said.startswith("refused:"):
+                                proof = proof + ["t wrap"]
+                                continue
+                    self.fail(proof, said); return None
                 g_nums = [int(x) for x in raw_goals[0].split()]
                 neg_raw = " ".join([str(-1 - g_nums[0])] + [str(-x) for x in g_nums[1:]])
                 proof = proof + proof_text(p, [negation(goals[0])] + facts, [neg_raw] + raw_facts)
@@ -627,7 +637,26 @@ class Prover:
                 d = goals[0]
                 if refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
-                else: self.fail(proof, said); return None
+                else:
+                    # Support branchless single-compare range checks like `(c -% lo) <= hi - lo`:
+                    # if we are at `symReturnSplit`, split on `d >= 0` vs `d < 0` via `t split` + `k <row>`.
+                    split_row = raw_goals[0]
+                    tried_split = False
+                    if proof.count("t split") < 6:
+                        for cut in range(len(proof), max(-1, len(proof) - 16), -1):
+                            if cut < len(proof) and proof[cut].startswith("k "):
+                                continue
+                            cand = proof[:cut] + ["t split", "k " + split_row]
+                            ans = self.ask(cand)
+                            if ans != said and not ans.startswith("refused:") and not ans.startswith("prove:"):
+                                done = self.solve(cand)
+                                if done is not None:
+                                    return done
+                                tried_split = True
+                                break
+                    if not tried_split:
+                        self.fail(proof, said)
+                    return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
                 rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
                 for g, row in zip(goals, rows):
@@ -803,13 +832,21 @@ def prove(spec_text, targets, statement_out, out):
         later = [s for _, s in functions[at + 1:]]
         keep, marked, marked_result, runs = {}, {}, {}, 0
         trace_exprs, instrs, raw_ins = fn_statement_info(statement_out, symbol, reg_list)
-        # Pre-seed `keep` for loop `place`s (those with `decreases`) by excluding registers written in the loop body.
+        # Pre-seed `keep` for loop `place`s (those with `decreases`) by excluding registers written in the loop body,
+        # and collect any `wrap +0xNN` directives marking explicit wrapping `+%`/`-%` instructions.
         preseeded = False
         place_pcs = set()
         place_specs = []
+        wrap_pcs = set()
+        filtered_place_lines = []
         cur_pat, cur_has_dec = None, False
         for pline in places_of[symbol].splitlines():
             sline = pline.split("//")[0].strip()
+            wm = re.fullmatch(r"wrap \+(0x[0-9a-fA-F]+)", sline)
+            if wm:
+                wrap_pcs.add(int(wm.group(1), 16))
+                continue
+            filtered_place_lines.append(pline)
             pm = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", sline)
             if pm:
                 cur_pat, cur_has_dec = int(pm.group(1), 16), False
@@ -819,6 +856,7 @@ def prove(spec_text, targets, statement_out, out):
                 place_pcs.add(cur_pat)
                 place_specs.append((cur_pat, cur_has_dec))
                 cur_pat, cur_has_dec = None, False
+        clean_places_text = "\n".join(filtered_place_lines)
         for cur_pat, cur_has_dec in place_specs:
             if cur_has_dec:
                 keep[cur_pat] = loop_written_regs(raw_ins, cur_pat, reg_list)
@@ -828,8 +866,8 @@ def prove(spec_text, targets, statement_out, out):
                 preseeded = True
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
-            p = Prover(statement_out, done + [f"for {symbol}"] + places(places_of[symbol], keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
-                       trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list)
+            p = Prover(statement_out, done + [f"for {symbol}"] + places(clean_places_text, keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
+                       trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs)
             p.last = ""
             p.last_proof = []
             try: proof = p.solve([])

@@ -344,6 +344,10 @@ def parse_proof(path):
                 tag = parts[1]
                 arg = int(parts[2]) if len(parts) > 2 else 0
                 cur["items"].append(("t", tag, arg))
+            elif kw == "k":
+                cur_place = None
+                nums = [int(x) for x in parts[1:]]
+                cur["items"].append(("k", (nums[0], _trim(tuple(nums[1:])))))
             elif kw == "p":
                 cur_place = None
                 cur_p = ("p", [int(x) for x in parts[1:]], [])
@@ -985,6 +989,7 @@ class Verifier:
             "byte_cache": {},
             "quot_rem": quot_rem,
             "div_cache": {},
+            "or_cache": {},
             "stack_mem": {},  # sp_offset -> (val, mark)
             "min_sp": 0,
         }
@@ -1024,6 +1029,7 @@ class Verifier:
                 "byte_cache": dict(st["byte_cache"]),
                 "quot_rem": st["quot_rem"],
                 "div_cache": dict(st["div_cache"]),
+                "or_cache": dict(st["or_cache"]),
                 "stack_mem": dict(st["stack_mem"]),
                 "min_sp": st["min_sp"],
                 "place_entry_regs": st.get("place_entry_regs", {}),
@@ -1049,6 +1055,9 @@ class Verifier:
                 if op in ("add64", "at"):
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
+                    if stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
+                        stream.pos += 1
+                        return sym_low(r_add(a, b), M64 + 1, st), (ma or mb)
                     res = r_add(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
@@ -1056,10 +1065,55 @@ class Verifier:
                 if op == "sub64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
+                    if stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
+                        stream.pos += 1
+                        return sym_low(r_add(r_sub(a, b), r_const(M64 + 1)), M64 + 1, st), (ma or mb)
                     res = r_sub(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
                     return res, (ma or mb)
+                if op == "or64":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    b, mb = eval_table_expr(args[1], bind, st)
+                    def _or_known(x, y):
+                        if (x, y) in st["or_cache"]:
+                            return st["or_cache"][(x, y)]
+                        if (y, x) in st["or_cache"]:
+                            return st["or_cache"][(y, x)]
+                        v = fresh_var(st, 0, M64)
+                        st["or_cache"][(x, y)] = v
+                        st["facts"].append(r_sub(v, x))
+                        st["facts"].append(r_sub(v, y))
+                        for kbits in (8, 16, 32):
+                            lim = (1 << kbits) - 1
+                            if r_plain(st["facts"], r_sub(r_const(lim), x)) and r_plain(st["facts"], r_sub(r_const(lim), y)):
+                                st["facts"].append(r_sub(r_const(lim), v))
+                                break
+                        return v
+                    def _small_bits(x):
+                        for jbits in (8, 16, 32):
+                            if r_plain(st["facts"], x) and r_plain(st["facts"], r_sub(r_const((1 << jbits) - 1), x)):
+                                return jbits
+                        return None
+                    def _or_small(x, k, jbits):
+                        powj = 1 << jbits
+                        if k % powj == 0:
+                            return r_add(x, r_const(k))
+                        u = _or_known(x, r_const(k % powj))
+                        return r_add(u, r_const(k - (k % powj)))
+                    if (not b[1]) and b[0] == 0:
+                        return a, (ma or mb)
+                    if (not a[1]) and a[0] == 0:
+                        return b, (ma or mb)
+                    kb = r_const_of(st["facts"], b)
+                    ja = _small_bits(a) if kb is not None else None
+                    if kb is not None and ja is not None and (1 << ja) <= kb:
+                        return _or_small(a, kb, ja), (ma or mb)
+                    ka = r_const_of(st["facts"], a)
+                    jb = _small_bits(b) if ka is not None else None
+                    if ka is not None and jb is not None and (1 << jb) <= ka:
+                        return _or_small(b, ka, jb), (ma or mb)
+                    return _or_known(a, b), (ma or mb)
                 if op == "shl64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
@@ -1735,33 +1789,57 @@ class Verifier:
                                 raise Refuse("at return link register x30 may depend on values kept out of the trace")
                         for r in callee_saved:
                             self.entail_eq(st["facts"], st["regs"][r], entry_regs[r], stream)
-                        for run_nm, lo_e, hi_e, val_e in fn["ensures"]:
-                            if run_nm not in st["out_len"]:
-                                raise Refuse(f"ensures names unknown out buffer `{run_nm}`")
-                            rg = st["range"]
-                            if (rg is not None and isinstance(val_e, tuple) and len(val_e) >= 2
-                                    and val_e[0] == "call" and val_e[1] == rg[2]):
-                                vs = tuple(self.eval_sexpr(ae, env, st, stream) for ae in val_e[2:])
-                                if vs != rg[3]:
-                                    raise Refuse("ensures range arguments do not match loop place")
-                                eo = _each_of(rg[2], len(vs))
-                                if eo is None:
-                                    raise Refuse("ensures range is not an `(each ... 0 hi)` list")
-                                _, _, _, hi_n = eo
-                                lo_v = self.as_num(self.eval_sexpr(lo_e, env, st, stream), env, st, stream)
-                                top_v = self.as_num(self.eval_sexpr(hi_e, env, st, stream), env, st, stream)
-                                self.entail(st["facts"], lo_v, stream)
-                                self.entail(st["facts"], r_scale(-1, lo_v), stream)
-                                self.entail(st["facts"], r_sub(top_v, r_const(hi_n)), stream)
-                                self.entail(st["facts"], r_sub(r_const(hi_n), top_v), stream)
-                                self.entail(st["facts"], r_sub(rg[1], r_const(hi_n)) if rg[4] else r_scale(-1, rg[1]), stream)
-                                if run_nm != rg[0]:
-                                    raise Refuse("ensures names a different out buffer than loop place")
+
+                        def _check_ret_body(st_r):
+                            for run_nm, lo_e, hi_e, val_e in fn["ensures"]:
+                                if run_nm not in st_r["out_len"]:
+                                    raise Refuse(f"ensures names unknown out buffer `{run_nm}`")
+                                rg = st_r["range"]
+                                if (rg is not None and isinstance(val_e, tuple) and len(val_e) >= 2
+                                        and val_e[0] == "call" and val_e[1] == rg[2]):
+                                    vs = tuple(self.eval_sexpr(ae, env, st_r, stream) for ae in val_e[2:])
+                                    if vs != rg[3]:
+                                        raise Refuse("ensures range arguments do not match loop place")
+                                    eo = _each_of(rg[2], len(vs))
+                                    if eo is None:
+                                        raise Refuse("ensures range is not an `(each ... 0 hi)` list")
+                                    _, _, _, hi_n = eo
+                                    lo_v = self.as_num(self.eval_sexpr(lo_e, env, st_r, stream), env, st_r, stream)
+                                    top_v = self.as_num(self.eval_sexpr(hi_e, env, st_r, stream), env, st_r, stream)
+                                    self.entail(st_r["facts"], lo_v, stream)
+                                    self.entail(st_r["facts"], r_scale(-1, lo_v), stream)
+                                    self.entail(st_r["facts"], r_sub(top_v, r_const(hi_n)), stream)
+                                    self.entail(st_r["facts"], r_sub(r_const(hi_n), top_v), stream)
+                                    self.entail(st_r["facts"], r_sub(rg[1], r_const(hi_n)) if rg[4] else r_scale(-1, rg[1]), stream)
+                                    if run_nm != rg[0]:
+                                        raise Refuse("ensures names a different out buffer than loop place")
+                                else:
+                                    raise Refuse(f"unsupported non-range ensures in verify2: {val_e}")
+                            if fn["returns"] is not None:
+                                want = self.eval_sexpr(fn["returns"], env, st_r, stream)
+                                self.expand_eq(st_r["regs"][ret_reg], want, env, st_r, stream)
+
+                        def _check_ret_split(st_r, fuel=8):
+                            if (fuel > 0 and stream.pos < len(stream.items)
+                                    and stream.items[stream.pos][0] == "t"
+                                    and stream.items[stream.pos][1] == "split"):
+                                stream.pos += 1
+                                if stream.pos >= len(stream.items) or stream.items[stream.pos][0] != "k":
+                                    raise Refuse("split expects a row (`k ...`)")
+                                row = stream.items[stream.pos][1]
+                                stream.pos += 1
+                                if len(row[1]) > st_r["nvars"]:
+                                    raise Refuse("split row references an unknown variable")
+                                st_pos = clone(st_r)
+                                st_pos["facts"].append(row)
+                                _check_ret_split(st_pos, fuel - 1)
+                                st_neg = clone(st_r)
+                                st_neg["facts"].append(r_sub(r_const(-1), row))
+                                _check_ret_split(st_neg, fuel - 1)
                             else:
-                                raise Refuse(f"unsupported non-range ensures in verify2: {val_e}")
-                        if fn["returns"] is not None:
-                            want = self.eval_sexpr(fn["returns"], env, st, stream)
-                            self.expand_eq(st["regs"][ret_reg], want, env, st, stream)
+                                _check_ret_body(st_r)
+
+                        _check_ret_split(st)
                         return
                     else:
                         raise Refuse(f"unsupported table stmt `{kind}` in verify2")

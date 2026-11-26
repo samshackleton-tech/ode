@@ -76,7 +76,7 @@ def vecOrFail (name : String) : Except String Nat :=
   | some r => if r < 32 then pure r else throw s!"no vector register {name}"
   | none => throw s!"no vector register {name}"
 
-def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "argregs", "retreg", "keeps", "keepsvec", "data", "piece", "stack", "stackbits", "fndecreases", "linpre", "valspec", "def"]
+def statementKinds : List String := ["fn", "machine", "i", "arg", "returns", "result", "ensures", "ensuresw", "needs", "needsif", "below", "mbelow", "lanes", "atleast", "hidden", "traceexpr", "resultdep", "argregs", "retreg", "keeps", "keepsvec", "data", "piece", "stack", "stackbits", "stacklin", "fndecreases", "linpre", "valspec", "def"]
 
 /-- An instruction of a function that takes addresses in its file's read-only data says which file's
 (`pieceOf` reads it). (It stands after what the row's placeholders are, which are looked up far more often.) -/
@@ -227,7 +227,12 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
   | ["stackbits", step, arg, sub, div] => match step.toNat?, sub.toNat?, div.toNat? with
     | some step, some sub, some div =>
       if div == 0 then throw s!"cannot read {line}"
-      else onLast fun g => { g with contract := { g.contract with stackBits := some ⟨step, arg, sub, div⟩ } }
+      else onLast fun g => { g with contract := { g.contract with stackBits := some ⟨step, arg, sub, div, false⟩ } }
+    | _, _, _ => throw s!"cannot read {line}"
+  | ["stacklin", step, arg, sub, div] => match step.toNat?, sub.toNat?, div.toNat? with
+    | some step, some sub, some div =>
+      if div == 0 then throw s!"cannot read {line}"
+      else onLast fun g => { g with contract := { g.contract with stackBits := some ⟨step, arg, sub, div, true⟩ } }
     | _, _, _ => throw s!"cannot read {line}"
   | ["fndecreases", name] => onLast fun g => { g with contract := { g.contract with decreases := some name } }
   | "linpre" :: c :: more => match readInt c, readLinPairs more with

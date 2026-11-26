@@ -1290,6 +1290,201 @@ fn bad_branch(pkt: n bytes, n: number)
                                         fn_name="bad_branch", target="x86_64")
             self.assertIn("kept out of the trace", str(ctx_err.exception))
 
+    def test_15_or64_wrap_sub64_and_stacklin(self):
+        """`or64` (verify2 parity), explicit `wrap` modular `sub64` before `cmov`/`csel` (plus exact refusal),
+        and recursive linear `stack C + D * param` all verify end-to-end on both x86_64 and arm64."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+
+        # 1. `or64` on both arches -> dual-verified by Lean odeverify AND verify2.py
+        src_or = """
+def hi_zero(a, n) {
+    if a[0] < 128 && a[1] < 128 then 1 else 0
+}
+
+fn check2(a: n bytes, n: number)
+    requires 2 <= n
+    requires n <= 4096
+    returns hi_zero(a, n)
+    trace depends on a, n
+    stack 0
+{
+    for x86_64 {
+        movzx r8d, byte ptr [rdi]
+        movzx r9d, byte ptr [rdi + 1]
+        mov r10, r8
+        or r10, r9
+        and r10, 128
+        cmp r10, 0
+        je @ok
+        cmp r8, 128
+        jae @bad
+        cmp r9, 128
+        jae @bad
+    @ok:
+        mov rax, 1
+        ret
+    @bad:
+        mov rax, 0
+        ret
+    }
+    for arm64 {
+        ldrb w2, [x0, 0]
+        ldrb w3, [x0, 1]
+        orr x5, x2, x3
+        x4 := 128
+        and x5, x5, x4
+        cmp x5, 0
+        b.eq @ok
+        cmp x2, 128
+        b.hs @bad
+        cmp x3, 128
+        b.hs @bad
+    @ok:
+        mov x0, 1
+        ret
+    @bad:
+        mov x0, 0
+        ret
+    }
+}
+"""
+        # 2. Wrapping `sub64` (`wrap`) before branchless `cmov`/`csel` on both arches -> dual-verified!
+        src_wrap = """
+def dec_cap(c) {
+    if 65 <= c && c <= 90 then c - 65 else 255
+}
+
+fn cap_val(c: number)
+    requires 0 <= c
+    requires c <= 255
+    returns dec_cap(c)
+    trace depends on nothing
+    stack 0
+{
+    for x86_64 {
+        mov r8, rdi
+        wrap
+        sub r8, 65
+        mov rax, 255
+        cmp r8, 25
+        cmovbe rax, r8
+        ret
+    }
+    for arm64 {
+        wrap
+        sub x1, x0, 65
+        mov x2, 255
+        cmp x1, 25
+        csel x0, x1, x2, ls
+        ret
+    }
+}
+"""
+        # 2b. Negative control: identical `sub` WITHOUT `wrap` must be REFUSED because `c < 65` underflows!
+        src_nowrap = src_wrap.replace("        wrap\n", "")
+
+        for label, src, fn in [("or64", src_or, "check2"), ("wrap_sub", src_wrap, "cap_val")]:
+            for target in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    src_p = os.path.join(d, f"{label}.ode")
+                    with open(src_p, "w", encoding="utf-8") as f:
+                        f.write(src)
+                    out_o, out_p = os.path.join(d, "o.o"), os.path.join(d, "o.proof")
+                    res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name=fn, target=target)
+                    self.assertEqual(res["verdict"], "shown", f"{label}/{target}: {res}")
+                    dump = os.path.join(d, "dump.sh")
+                    st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                    with open(dump, "w", encoding="utf-8") as f:
+                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                    os.chmod(dump, 0o755)
+                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                    tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                    r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                        capture_output=True, text=True)
+                    self.assertEqual(r2.returncode, 0, f"{label}/{target}: {r2.stdout}{r2.stderr}")
+                    self.assertIn("shown (1 function, verify2)", r2.stdout)
+
+        with tempfile.TemporaryDirectory() as d:
+            src_p = os.path.join(d, "nowrap.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src_nowrap)
+            with self.assertRaises(BaseException):
+                ode_audit.pack_verified(src_p, None, os.path.join(d, "b.o"), os.path.join(d, "b.proof"),
+                                        fn_name="cap_val", target="x86_64")
+
+        # 3. Recursive linear stack bound `stack 32 + 32 * d` verified in Lean on both arches!
+        src_rec = """
+def all_zero(a, n, d) {
+    if d == 0 then 1
+    else if a[d - 1] != 0 then 0
+    else all_zero(a, n, d - 1)
+}
+
+fn rec_zero(a: n bytes, n: number, d: number)
+    requires 0 <= d
+    requires d <= n
+    requires n <= 64
+    returns all_zero(a, n, d)
+    decreases d
+    trace depends on a, n, d
+    stack 32 + 32 * d
+{
+    for x86_64 {
+        cmp rdx, 0
+        je @base
+        mov r8, rdx
+        sub r8, 1
+        lea r10, [rdi + r8]
+        movzx r9d, byte ptr [r10]
+        cmp r9, 0
+        jne @bad
+        push rbx
+        mov rdx, r8
+        call rec_zero
+        pop rbx
+        ret
+    @base:
+        mov rax, 1
+        ret
+    @bad:
+        mov rax, 0
+        ret
+    }
+    for arm64 {
+        cmp x2, 0
+        b.eq @base
+        sub x3, x2, 1
+        add x4, x0, x3
+        ldrb w5, [x4, 0]
+        cmp x5, 0
+        b.ne @bad
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        mov x2, x3
+        bl rec_zero
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    @base:
+        mov x0, 1
+        ret
+    @bad:
+        mov x0, 0
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "rec.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src_rec)
+                out_o, out_p = os.path.join(d, "rec.o"), os.path.join(d, "rec.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="rec_zero", target=target)
+                self.assertEqual(res["verdict"], "shown", f"stacklin/{target}: {res}")
+
 
 if __name__ == "__main__":
     unittest.main()
