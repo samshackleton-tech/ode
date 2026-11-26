@@ -54,20 +54,20 @@ You have NEVER seen an implementation of this task before. You are given:
 
 Your goal is to write ONE complete, self-contained `.ode` file that imports the
 specification file and implements the requested entry function for the requested
-target architecture so that `ode pack` and `ode audit` return `shown` against the
-exact canonical contract header in the task prompt.
+target architecture so that `ode pack --c-abi` and `ode audit` return `shown`
+against the exact canonical contract header in the task prompt.
 
 Rules:
 - Keep the exact exported function signature and contract clauses given in the task
   prompt (so its canonical contract ID matches the expected 52-character BLAKE3 ID).
-- You may define private helper functions in the same file (callees before callers)
-  using Ode's newline-separated custom-calling syntax (one clause per line, no
-  semicolons), e.g.:
-    for x86_64 calling {
-        in a = r10, b = r11
-        out = r9
-        preserves rdi, rsi, rbx, rbp, r12, r13, r14, r15
-    } { ... }
+- Prefer clean, idiomatic High-Level Ode (`let`/`var`, exact `+`/`-`/`*` vs wrapping
+  `+%`/`-%`/`*%`, `select(cond, a, b)`, `for`/`while`, `join maintains`, typed SIMD
+  `u32x4`/`u32x16`) inside either a portable `{ ... }` body or the target block
+  shown in the task prompt (`for x86_64 ... { ... }` / `for arm64 { ... }`).
+- You may define private helper `fn`s in the same file (callees before callers);
+  plain helper `fn`s automatically use Ode's fast calling convention with exact
+  auto-derived `preserves` (no manual `calling { ... }` block needed). Raw assembly
+  from the target table also remains valid if you want explicit register control.
 - Output the complete `.ode` source file inside a single fenced code block
   (` ```ode ... ``` `).
 - Do NOT modify the specification file; reference its definitions through the
@@ -351,8 +351,10 @@ def build_initial_user_prompt(task: dict, target: str) -> str:
         f"Use this EXACT import and exported contract header for `{task['entry_fn']}` "
         f"(expected canonical contract ID: `{exp_cid}`):\n\n"
         f"```ode\n{task['contract_header']}```\n\n"
-        f"Return a single complete `.ode` file implementing `{blk_hdr}` "
-        f"(and any optional private `for {target} calling {{ ... }} {{ ... }}` helpers you choose to define).\n\n"
+        f"Return a single complete `.ode` file implementing `{task['entry_fn']}` "
+        f"(either as a portable High-Level Ode body `{{ ... }}` when no target-specific "
+        f"`needs` clause is required, or inside `{blk_hdr}`, plus any optional private "
+        f"helper `fn`s defined before `{task['entry_fn']}`).\n\n"
         f"---\n\n"
         f"## Complete Ode Quickstart (`docs/QUICKSTART.md`)\n\n{quickstart}\n\n"
         f"---\n\n"
@@ -475,11 +477,28 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
 
 
 def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None) -> tuple[str, dict]:
-    cmd = [sys.executable, str(ODE_TOOL), "advise", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
+    cmd = [sys.executable, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
     rc, out, _ = run_tool(cmd, work, timeout=30)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
-    return out, parse_advise_metrics(out, target, input_bytes_per_call=input_bytes_per_call)
+    metrics = parse_advise_metrics(out, target, input_bytes_per_call=input_bytes_per_call)
+    # Keep full variable->reg/spill map + pipeline simulation while bounding huge unrolled asm dumps
+    if len(out) > 6000:
+        marker = "\n  lowering (source -> exact instructions):"
+        sim_idx = out.find("\n\n=== ")
+        if sim_idx < 0:
+            sim_idx = out.find("\nfunction ")
+        m_idx = out.find(marker)
+        if m_idx >= 0 and sim_idx > m_idx:
+            hdr = out[:m_idx]
+            body = out[m_idx:sim_idx]
+            tail = out[sim_idx:]
+            if len(body) > 2200:
+                body = body[:1400] + "\n    ... [middle of unrolled lowering omitted] ...\n" + body[-600:]
+            out = hdr + body + tail
+        if len(out) > 6500:
+            out = out[:3200] + "\n... [truncated] ...\n" + out[-3000:]
+    return out, metrics
 
 
 def run_cell(task: dict, model: str, target: str, args, api_key: str,
@@ -589,10 +608,10 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 if p.exists():
                     p.unlink()
 
-            # Step A: `ode pack` (bounded local prover concurrency so parallel API cells do not starve each other)
+            # Step A: `ode pack --c-abi` (bounded local prover concurrency so parallel API cells do not starve each other)
             pack_cmd = [
                 sys.executable, str(ODE_TOOL), "pack", str(cand),
-                "--fn", task["entry_fn"], "--target", target,
+                "--c-abi", "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
             with prover_sem:
@@ -700,11 +719,12 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                                 f"Round {rnum} PASSED verification (`shown`, {metrics.get('functions')} fn(s), "
                                 f"{metrics.get('instructions')} instructions, {metrics.get('code_bytes')} B, "
                                 f"verify2={v2_ok}, native={nat_st}).\n\n"
-                                f"Here is the static `ode advise --all-archs` report on your verified code (no execution):\n"
+                                f"Here is the instant static `ode advise --asm --all-archs` report on your verified code "
+                                f"(register/spill map, lowered assembly, and static pipeline sim — no execution):\n"
                                 f"```\n{adv_txt}\n```\n\n"
                                 f"You have {opt_rounds_left + 1} optimization attempt(s) left (until round {args.max_rounds}). "
-                                f"Use this static pipeline report (cycles, `cyc/B`, bottlenecks, critical path, "
-                                f"port utilization, i-cache alignment, and lints) to {opt_goal} "
+                                f"Use this static report (register/spill map, stack frame, cycles, `cyc/B`, bottlenecks, "
+                                f"critical path, port utilization, i-cache alignment, and lints) to {opt_goal} "
                                 f"while keeping `ode pack`, `ode audit`, and native tests passing. "
                                 f"Return a complete updated `.ode` file in a single ```ode ... ``` block."
                             ),
@@ -1064,7 +1084,7 @@ def self_test_cli(targets: list[str]) -> None:
             out_o = td_p / f"id_{tgt}.o"
             out_p = td_p / f"id_{tgt}.proof"
             rc_p, out_p_txt, _ = run_tool([
-                sys.executable, str(ODE_TOOL), "pack", str(src),
+                sys.executable, str(ODE_TOOL), "pack", str(src), "--c-abi",
                 "--fn", "id_fn", "--target", tgt,
                 "--out", str(out_o), "--proof", str(out_p),
             ], td_p, timeout=30)
@@ -1104,7 +1124,7 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
                 shutil.copy2(ROOT / ref, cand)
                 out_o, out_p = td_p / "out.o", td_p / "out.proof"
                 rc_p, txt_p, _ = run_tool([
-                    sys.executable, str(ODE_TOOL), "pack", str(cand), "--fn", task["entry_fn"],
+                    sys.executable, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
                     "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p, timeout=120)
                 if rc_p != 0 or not out_o.exists():
                     raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")

@@ -1,14 +1,14 @@
 # Ode Quickstart
 
-*For the full book-style edition, see [`paper/quickstart.pdf`](../paper/quickstart.pdf); for the complete language design and formal semantics, see [`paper/ODE.pdf`](../paper/ODE.pdf).*
+*For the complete High-Level Ode design, see [`paper/HIGH-LEVEL-ODE-SPEC.md`](../paper/HIGH-LEVEL-ODE-SPEC.md); for the core language and formal semantics, see [`paper/ODE.pdf`](../paper/ODE.pdf).*
 
-When you write performance-critical code in C or assembly, you rely on a compiler or manual review not to introduce an out-of-bounds read, a missed edge case, or a data-dependent branch. An Ode source file (`.ode`) pairs a short mathematical specification with the exact machine instructions you want the processor to execute. You keep full control over registers, branches, and stack layout; a prover searches for a `.proof` file (relied on for nothing), and a standalone verifier checks the compiled object bytes directly against the contract.
+When you write performance-critical code in C or assembly, you rely on an optimizing compiler or manual review not to introduce an out-of-bounds read, integer overflow, missed edge case, or data-dependent branch. An Ode source file (`.ode`) pairs a short mathematical specification (`def`) with structured, deterministic systems code (`fn`) that lowers 1-to-1 in written statement order to exact machine instructions. A prover searches for a `.proof` file (relied on for nothing), and a standalone verifier checks the compiled ELF object bytes directly against the contract.
 
 ---
 
 ## 1. A First Program: `all_zero`
 
-Consider a function `all_zero` that tests whether every byte of an `n`-byte buffer is zero: on `[0, 0]` it returns `1`; on `[0, 7]` it returns `0`; on the empty buffer `[]` it returns `1`. A single file (`paper/examples/all_zero.ode`) states the specification (`def`), the contract (`fn`), and both target bodies (`for x86_64` and `for arm64`):
+Consider a function `all_zero` that tests whether every byte of an `n`-byte buffer is zero: on `[0, 0]` it returns `1`; on `[0, 7]` it returns `0`; on `[]` it returns `1`. One portable `.ode` file defines the specification (`def`), the contract (`fn`), and a single structured body that compiles and verifies for both `x86_64` and `arm64`:
 
 ```ode
 def zero_from(a, at) {
@@ -24,88 +24,40 @@ fn all_zero(a: n bytes, n: number)
     trace depends on a, n
     stack 0
 {
-    for x86_64 {
-        reg base = rdi, count = rsi, idx = rcx, res = rax
-        reg addr = rdx, cur = edx, cur64 = rdx
-
-        idx := 0
-        place {
-            fact 0 <= idx
-            fact idx <= n
-            fact zeros(a) == zero_from(a, idx)
-            decreases n - idx
-        }
-    @loop:
-        cmp idx, count
-        jae @yes
-        mov addr, base
-        add addr, idx
-        movzx cur, byte ptr [addr]
-        cmp cur64, 0
-        jne @no
-        add idx, 1
-        jmp @loop
-    @yes:
-        res := 1
-        jmp @done
-    @no:
-        res := 0
-    @done:
-        ret
+    for i in 0..n
+        maintains zeros(a) == zero_from(a, i)
+    {
+        if a[i] != 0 { return 0 }
     }
-    for arm64 {
-        reg base = x0, count = x1, idx = x2, res = x0
-        reg addr = x3, cur = w4, cur64 = x4
-
-        idx := 0
-        place {
-            fact 0 <= idx
-            fact idx <= n
-            fact zeros(a) == zero_from(a, idx)
-            decreases n - idx
-        }
-    @loop:
-        cmp idx, count
-        b.hs @yes
-        add addr, base, idx
-        ldrb cur, [addr, 0]
-        cmp cur64, 0
-        b.ne @no
-        add idx, idx, 1
-        b @loop
-    @yes:
-        res := 1
-        b @done
-    @no:
-        res := 0
-    @done:
-        ret
-    }
+    return 1
 }
 ```
 
 How to read it:
 
-- Every `def` is a pure mathematical definition evaluated over exact integers; `fn` binds that specification to executable machine code.
-- `a: n bytes` grants read-only access to `n` bytes at `a` (`n` is a `number`, an unsigned 64-bit integer). Because no output buffer is declared, any write to caller memory is refused.
-- `returns zeros(a)` obliges the machine code to return the exact value of `zeros(a)`.
+- Every `def` is a pure mathematical definition evaluated over exact integers; `fn` binds that specification to native machine code.
+- `a: n bytes` grants read-only access to `n` bytes at `a` (`n` is a `number`, an unsigned 64-bit integer; `u64` is a synonym for `number`, and `u8` adds `0 <= x <= 255`). Without an `out` buffer, any write to caller memory is refused.
+- `returns zeros(a)` obliges the compiled machine code to return the exact value of `zeros(a)`.
 - `trace depends on a, n` permits branches and memory addresses to depend on both the length `n` and the bytes of `a` (allowing early exit on the first nonzero byte).
-- `stack 0` promises zero local stack workspace beyond the caller's return mechanism.
-- Exported functions follow System V AMD64 on x86-64 (`rdi, rsi, rdx, rcx, r8, r9`; return in `rax`) and AAPCS64 on AArch64 (`x0..x7`; return in `x0`).
-- Inside each target body, `reg name = r` declares a readable alias (`cur`/`cur64` are the 32-bit/64-bit views of one register so the byte load zero-extends into the 64-bit compare), `r := k` loads a small constant, and `place { ... }` is a proof annotation (never emitted as machine instructions) stating why the loop is sound: on every arrival at `@loop`, all bytes before `idx` have tested zero so checking the suffix from `idx` gives the same answer, and `n - idx` strictly decreases each turn.
+- `stack 0` promises zero local stack workspace beyond the caller's return mechanism (when omitted on non-recursive functions, the compiler computes the exact stack budget automatically).
+- Inside the body, `for i in 0..n` automatically tracks `0 <= i <= n` and `decreases n - i`, and lowers deterministically to exact machine code on both `x86_64` and `arm64` with zero spills.
 
 ---
 
-## 2. Checking, Packing, and Auditing
+## 2. Checking, Packing, Auditing, and Instant Assembly Feedback
 
-Run all commands from the repository root (`python3 lang/ode_tool.py ...`, abbreviated `ode ...` in prose):
+Run all commands from the repository root (`python3 lang/ode_tool.py ...`, abbreviated `ode ...`):
 
 ```sh
 # Development: compile, prove, and verify one target
 python3 lang/ode_tool.py check paper/examples/all_zero.ode --target arm64
 
-# Release: emit ELF64 object (.o, with embedded .ode.ocl) + separate .proof
-python3 lang/ode_tool.py pack paper/examples/all_zero.ode --target arm64 \
+# Instant (< 50 ms) register/spill map, exact lowered assembly, and static pipeline sim
+python3 lang/ode_tool.py advise --asm paper/examples/all_zero.ode --target arm64 --all-archs
+
+# Release: emit ELF64 object (.o with embedded .ode.ocl) + separate .proof
+# Pass --c-abi when linking against a legacy C or Rust caller
+python3 lang/ode_tool.py pack paper/examples/all_zero.ode --c-abi --target arm64 \
   --out /tmp/all_zero.o --proof /tmp/all_zero.proof
 
 # Audit: verify 100% of .text against an independently expected contract ID
@@ -113,229 +65,146 @@ python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
   --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika
 ```
 
-The auditor obtains `--expect-contract` independently from the published specification or release record—never by copying it from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no external symbol relocations remain unresolved, that the embedded `.ode.ocl` section hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that the verifier accepts the `.proof` file for those bytes. An auditor who wants a second check outside the primary Lean verifier can also run the standalone pure-Python verifier `python3 proof-core/verify2.py` on the same proof files.
+The auditor obtains `--expect-contract` independently from the published specification—never from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no unresolved external relocations exist, that `.ode.ocl` hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that the verifier accepts the `.proof` file for those bytes. An auditor can also run the independent pure-Python verifier `python3 proof-core/verify2.py` on the same `.statement` and `.proof` files.
 
 ### The Four Outcomes
 
 | Tool outcome | Meaning | Next action |
 |---|---|---|
-| **`shown`** | Verified: the verifier checked every path of the compiled bytes against the contract. | Ship the `.o` object file together with its `.proof` file. |
-| **`refused with a proof`** | Counterexample: a concrete input demonstrates that the machine code violates the contract. | Fix the code or contract using the printed failing input. |
-| **`no proof found`** | Inconclusive: no counterexample was found, and the prover could not close a proof obligation. | Check bounds and `place` facts; fix unintended branches rather than relaxing `trace depends on`. |
+| **`shown`** | Verified: every path of the compiled machine bytes meets the contract. | Ship the `.o` object file together with its `.proof` file. |
+| **`refused with a proof`** | Counterexample: a concrete input shows the machine code violates the contract. | Fix the code or contract using the printed failing input. |
+| **`no proof found`** | Inconclusive: no counterexample was found, and the prover could not close an obligation. | Strengthen loop `maintains` / `writes` / `join` facts or fix unintended branches. |
 | **`run`** | Execution without a proof (concrete test or benchmark, not a verification verdict). | Verify with `ode check` or `ode pack` before shipping. |
 
 ---
 
-## 3. Loop Invariants and Join Points (`place`)
+## 3. Structured Language Summary
 
-The verifier never guesses invariants: state what holds at a loop head or a branch merge point in a `place { ... }` block immediately before its label. Writing loop specifications in direct tail-recursive form (passing running accumulators as parameters) lets the prover close each iteration in a single step.
+High-Level Ode lowers statements in exact written order with lexical block scoping and deterministic register allocation (check the exact variable-to-register mapping and spill count any time in `< 50 ms` via `ode advise --asm`):
 
-| Directive in `place { ... }` | Meaning or obligation |
-|---|---|
-| `fact E` | Inequality (`0 <= idx`, `idx <= n`) or specification equality proved on every path reaching the label. Declared `reg` aliases and 64-bit hardware registers (`rcx`, `x2`, ...) are bound automatically without separate `name` lines (contract parameters are never shadowed). |
-| `decreases E` | Whole-number measure proved `>= 0` on entry and strictly smaller on every back-edge (proves loop termination). |
-| `wrote buf[.. k] = E` | For count-up loops writing `buf`: promises bytes `[0, k)` already match `E`. For count-down loops, write `wrote buf[k ..] = E` for `[k, len(buf))`. |
-| `keep r1, r2` | Promises that registers `r1`, `r2` retain their pre-loop values across every iteration (space- or comma-separated; accepts `reg` aliases). |
-| `name x = reg` | Optional short local alias binding register `reg` to `x` inside this `place` block. |
+| Construct | Syntax | Deterministic lowering & proof semantics |
+|---|---|---|
+| Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0` | Allocates a register (`u8` records `0 <= b <= 255`); disjoint scopes reuse registers. |
+| Local stack buffer | `buf tmp[64] align 16` | Fixed aligned stack frame slot; no dynamic allocation. |
+| Exact arithmetic (default) | `a + b`, `a - b`, `a * b`, `x += k`, `x -= k` | Verifier proves no 64-bit unsigned overflow or underflow. |
+| Explicit wrapping mod $2^{64}$ | `a +% b`, `a -% b`, `a *% b`, `x +%= k`, `x -%= k` | Emits hardware wraparound (`wrap` proof marker); enables single-compare unsigned range checks like `(c -% 65) <= 25`. |
+| Bitwise & shifts | `a & b`, `a \| b`, `a ^ b`, `a << k`, `a >> k` | Exact bitmask (`& (2^w - 1)`), contiguous bitfields, power-of-two shifts (`<< k` / `>> k`). |
+| Branchless select | `select(cond, then_expr, else_expr)` | Lowers directly to `cmov*` (x86-64) / `csel` (AArch64); safe on data kept out of the trace (`trace depends on ...`). |
+| Scalar memory loads/stores | `a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `out.u32(i) := v` | 1-, 2-, 4-, or 8-byte little-endian loads and stores (`i` is a byte offset). |
+| Branches | `if cond { ... } else if cond2 { ... } else { ... }` | Exact comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) and short-circuit `&&`, `\|\|`, `!`. |
+| Counted loop | `for i in lo..hi [step k] [maintains ...] [writes ...] { ... }` | Auto-tracks `lo <= i <= hi`, step alignment, `decreases hi - i`, and inherits all invariant dominating outer `if`-guards and `let` equalities automatically. |
+| Compile-time unroll | `for i in 0..N [step k] unroll { ... }` | Expands straight-line at compile time with constant folding on `i` (zero loop overhead). |
+| General loop | `while cond [maintains ...] [writes ...] decreases E { ... }` | Explicit termination measure `decreases E`; inherits invariant outer facts automatically. |
+| Acyclic branch merge | `join maintains fact1, fact2` | Emits a `place` without `decreases` to merge `k` sequential `if/else` diamonds in linear `2k` steps instead of `2^k` paths. |
+| Calls & tail calls | `let r := helper(a, b)`, `return helper(a, b)` | Plain `fn` uses Ode's fast calling convention (auto-derived exact `preserves` across local and `use`-imported files); `return helper(...)` lowers to a verified tail jump (`jmp`/`b`). |
 
-**Merging branches without a loop (mid-function join points):** A `place { ... }` block *without* a `decreases` line acts as an acyclic join point. Every incoming branch proves the stated `fact` lines, and the verifier checks the code after the label only once — turning a chain of `k` sequential `if/else` diamonds from `2^k` paths into `2k` linear steps. Join points work both at top level and inside loops; if a path ever returns to a join point without a `decreases` measure, the verifier refuses it.
-
-```ode
-        cmp rax, 0
-        je @case_zero
-        mov r9, 5
-        jmp @merged
-    @case_zero:
-        mov r9, 1
-        place {
-            fact rcx < n
-            fact 0 <= r9
-            fact r9 <= 5
-            fact r9 == step_v(buf[rcx])
-        }
-    @merged:
-        add r10, r9
-```
+**Output-buffer loop invariants (`writes`):** For a function with an output buffer `out: N bytes` and `ensures out = E`, state on the loop what prefix has already been written:
+- Count-up loop: `writes out[.. j] = spec_expr[i]` (promises `out[0 .. j)` matches the specification on entry to each iteration).
+- Count-down loop: `writes out[j ..] = spec_expr[i]`.
 
 ---
 
 ## 4. Multi-File Namespaces (`use`) and Trace Policies (`trace depends on`)
 
-Unlike `all_zero` (which may stop on the first nonzero byte), a cryptographic tag comparison must not disclose which byte differed first. In Ode, the **trace** of an execution is the sequence of instruction addresses executed and memory addresses accessed. Given fixed starting buffer addresses and lengths, two executions whose inputs agree on everything named in `trace depends on` are proved to follow the exact same instruction and address trace. (Physical effects outside the architectural trace—speculative execution, power draw, and data-dependent instruction latency—are not modeled.)
+In Ode, the **trace** of an execution is the sequence of instruction addresses executed and memory addresses accessed. Given fixed buffer addresses and lengths, two executions whose inputs agree on everything listed in `trace depends on` are proved to follow the exact same instruction and address trace. (Physical effects outside the architectural trace—speculative execution, power draw, and variable instruction latency—are not modeled.)
 
 - Omitting `trace depends on` (or writing `trace depends on nothing`) keeps every input value and every buffer byte out of the trace.
-- `trace depends on n` permits branches and memory addresses to depend only on the length `n`, never on any byte in memory.
-- `trace depends on a, n` permits dependence on both the length and the bytes of `a`.
+- `trace depends on n` permits branches and memory addresses to depend only on `n`, never on any byte in memory.
+- `trace depends on a, n` permits dependence on both `n` and the bytes of `a`.
 
-To keep a pure specification separate from its implementations, import another `.ode` file under a local alias with `use alias = "file.ode"` and qualify its definitions as `alias.name`. Below is a complete constant-time byte-slice comparison (`proof-core/examples/hasher/hash_eq_ct_spec.ode` + `hash_eq_ct.ode`):
+Import another `.ode` file under a closed local alias with `use alias = "file.ode"` and refer to its definitions or functions as `alias.name`. Below is a complete constant-time byte-slice comparison using `select` so no branch ever depends on input bytes:
 
 ```ode
-// hash_eq_ct_spec.ode
+// eq_spec.ode
 def eq_from(a, b, i, diff) {
     if i >= len(a) then 1 - diff
-    else eq_from(a, b, i + 1, (diff + ((a[i] + 256 - b[i]) % 256) + 255) / 256)
+    else eq_from(a, b, i + 1, if a[i] != b[i] then 1 else diff)
 }
-
 def ct_bytes_eq(a, b) { eq_from(a, b, 0, 0) }
 ```
 
 ```ode
-// hash_eq_ct.ode
-use eq = "hash_eq_ct_spec.ode"
+// eq.ode
+use eq = "eq_spec.ode"
 
 fn ct_bytes_eq(a: n bytes, b: n bytes, n: number)
     returns eq.ct_bytes_eq(a, b)
     trace depends on n
     stack 0
 {
-    for arm64 {
-        reg pa = x0, pb = x1, len_r = x2, idx = x3, diff = x4, addr = x5
-        reg vaw = w6, va = x6, vbw = w7, vb = x7, mask = x8
-
-        idx := 0
-        diff := 0
-        mask := 255
-        place {
-            name i = idx
-            name d = diff
-            fact 0 <= i
-            fact i <= n
-            fact 0 <= d
-            fact d <= 1
-            fact eq.ct_bytes_eq(a, b) == eq.eq_from(a, b, i, d)
-            decreases n - i
-        }
-    @loop:
-        cmp idx, len_r
-        b.hs @done
-        add addr, pa, idx
-        ldrb vaw, [addr, 0]
-        add addr, pb, idx
-        ldrb vbw, [addr, 0]
-        add va, va, 256
-        sub va, va, vb
-        and va, va, mask
-        add diff, diff, va
-        add diff, diff, 255
-        lsr diff, diff, 8
-        add idx, idx, 1
-        b @loop
-    @done:
-        mov x0, 1
-        sub x0, x0, diff
-        ret
+    var diff: u64 := 0
+    for i in 0..n
+        maintains 0 <= diff, diff <= 1
+        maintains eq.ct_bytes_eq(a, b) == eq.eq_from(a, b, i, diff)
+    {
+        let va := a[i]
+        let vb := b[i]
+        diff := select(va != vb, 1, diff)
     }
+    return 1 - diff
 }
 ```
 
-In `eq_from`, `diff` stays `0` while all bytes match and becomes `1` once any pair differs (`(a[i] + 256 - b[i]) % 256` is `0` on equal bytes and `1..255` otherwise; integer division by `256` after adding `255` maps `0 -> 0` and any positive sum to `1`). The AArch64 loop executes that exact arithmetic without branching on any byte, so the verifier approves `trace depends on n`.
+Because `select(va != vb, 1, diff)` lowers directly to `cmp` + `cmovne` (x86-64) or `cmp` + `csel` (AArch64) with zero conditional jumps on `va` or `vb`, the verifier approves `trace depends on n` on both architectures.
 
 ---
 
-## 5. Custom Calling Conventions and Tail Calls
+## 5. Helper Functions, Recursion, and Calling Conventions
 
-Exported entry points follow System V AMD64 (`rdi, rsi, rdx, rcx, r8, r9`; return `rax`) on x86-64 and AAPCS64 (`x0..x7`; return `x0`) on AArch64. Between private helper functions inside one program, saving and restoring C-convention registers wastes instructions. A private helper (placed above its caller in the `.ode` file) may declare a `for <target> calling { ... }` block with one clause per line: argument bindings (`in param = reg, ...`), return register (`out = reg`), and preserved registers (`preserves ...`):
+Every plain `fn` in `.ode` stays free of C-ABI boilerplate. When one Ode function calls another (in the same file or across `use`-imported files, with callees defined before callers), the compiler automatically derives the callee's exact `preserves` set so caller registers stay live across the call with minimal or zero stack spills. Only the exported boundary packed with `ode pack --c-abi` follows System V AMD64 (`rdi..r9`, return `rax`) / AAPCS64 (`x0..x7`, return `x0`).
+
+**Direct self-recursion:** A recursive function declares a `decreases arg` clause (where `arg` is a parameter listed in `trace depends on`) and a linear stack budget `stack C + D * arg` (for example `stack 64 + 64 * depth` for frame size `<= 64` bytes per recursive level) or logarithmic `stack C + D * bits(arg)`:
 
 ```ode
-// paper/examples/quad.ode (x86-64 excerpt)
-fn step(a: number, b: number)
-    requires a < 1000000
-    requires b < 1000000
-    returns a + b + 3
-    trace depends on nothing
-    stack 0
+fn rec_all_zero(a: n bytes, n: u64, d: u64) -> u64
+    requires d <= n, n <= 65536
+    returns zero_prefix(a, d)
+    decreases d
+    trace depends on a, n, d
+    stack 32 + 32 * d
 {
-    for x86_64 calling {
-        in a = r10, b = r11
-        out = r9
-        preserves rdi, rsi, rdx, rcx, r8, rbx, rbp, r12, r13, r14, r15
-    } {
-        mov r9, r10
-        add r9, r11
-        add r9, 3
-        ret
-    }
-}
-
-fn quad(x: number, y: number)
-    requires x < 100000
-    requires y < 100000
-    returns quad_fn(x, y)
-    trace depends on nothing
-{
-    for x86_64 stack 8 {
-        mov r10, rdi
-        mov r11, rsi
-        call step
-        mov r8, r9
-        mov r10, rsi
-        mov r11, rdi
-        call step
-        mov rax, r8
-        add rax, r9
-        add rax, rdi
-        add rax, rsi
-        ret
-    }
+    if d == 0 { return 1 }
+    if a[d - 1] != 0 { return 0 }
+    return rec_all_zero(a, n, d - 1)
 }
 ```
 
-Here `step` preserves `rdi`, `rsi`, and `r8`, so `quad` calls `step` twice with zero stack spills. Factoring complex multi-way dispatch (such as a bytecode interpreter loop) into small `calling` helpers matching specification sub-definitions also keeps symbolic proof paths additive rather than multiplicative.
-
-A leaf helper with `stack 0` can also be tail-called with `jmp helper` (x86-64) or `b helper` (AArch64) once the caller has restored its own stack frame and callee-saved registers. Repeated short straight-line sequences can be factored into an `inline fn` with explicit `distinct(...)` and `changes` clauses (see `paper/ODE.pdf`, sections 4 and 5).
-
 ---
 
-## 6. Core Instruction Reference
+## 6. Target Blocks and Typed SIMD (`u32x4`, `u32x16`)
 
-Both the compiler and the verifiers read `core/x86.tab` and `arm64/arm64.tab`. Operands: `d, a, b` are 64-bit general registers (`rax..r15` / `x0..x30`); `w` is a 32-bit AArch64 register (`w0..w30`); `r32` is a 32-bit x86-64 register (`eax..r15d`); `breg` is an 8-bit x86-64 byte register (`al, cl, dl, ...`); `k` is an immediate; `off` is a byte offset.
+Portable functions use a single `{ ... }` body. When you want architecture-specific vector widths, CPU feature gates (`needs avx`, `needs avx512`), or manual instruction tuning, write target blocks `for x86_64 [needs ...] { ... }` and `for arm64 { ... }`:
 
-| Operation | x86-64 | AArch64 |
+| SIMD Operation | Syntax (`u32x4` on both arches; `u32x16` on `x86_64 needs avx needs avx512`) | Lowering (`x86_64` / `arm64`) |
 |---|---|---|
-| Register move | `mov d, a` | `mov d, a` |
-| Constant load (shorthand) | `d := k` | `d := k` (`0..65535`) |
-| Add / subtract | `add d, a`, `sub d, a` | `add d, a, b`, `sub d, a, b` |
-| Shift / mask | `shl d, k`, `shr d, k`, `and d, k` (any contiguous bitfield `(2^w-1)<<k`) | `lsl d, a, k`, `lsr d, a, k`, `and d, a, b` (hoisted mask regs supported) |
-| Byte load / store | `movzx r32, byte ptr [a]`, `mov byte ptr [a], breg` | `ldrb w, [a, off]`, `strb w, [a, off]` |
-| Multi-byte `bytes` load | `mov r32, dword ptr [a + off]`, `mov d, qword ptr [a + off]` | `ldr w, [a, off]`, `ldr d, [a, off]` |
-| 64-bit stack slot | `mov d, qword ptr [rsp + off]`, `mov qword ptr [rsp + off], a` | `ldr d, [sp, off]`, `str a, [sp, off]` |
-| Stack push / pop | `push a`, `pop d` | `sub sp, sp, 16`, `add sp, sp, 16` |
-| Compare | `cmp a, b` | `cmp a, b` |
-| Equality branches | `je @L`, `jne @L` | `b.eq @L`, `b.ne @L` |
-| Unsigned order branches | `jb`, `jbe`, `ja`, `jae` | `b.lo`, `b.ls`, `b.hi`, `b.hs` |
-| Constant-time select | `cmove`, `cmovne`, `cmovb`, `cmovae`, `cmova`, `cmovbe` | `csel d, a, b, eq/ne/lo/hs/hi/ls` |
-| Jump / call | `jmp @L`, `call fn` | `b @L`, `bl fn` |
-| Tail call / return | `jmp fn`, `ret` | `b fn`, `ret` |
+| Unaligned vector load | `let v: u32x4 := inp.u32x4(off)` / `inp.u32x16(off)` | `vmovdqu` / `vmovdqu32` (`x86_64`); `ldr qN, [base, off]` (`arm64`) |
+| Unaligned vector store | `out.u32x4(off) := v` / `out.u32x16(off) := v` | `vmovdqu` / `vmovdqu32` (`x86_64`); `str qN, [base, off]` (`arm64`) |
+| 32-bit lane add / xor / and / or | `a +% b` (or `a +%= b`), `a ^ b`, `a & b`, `a \| b` | `vpaddd`, `vpxord`, `vpand`, `vpor` / `add.4s`, `eor.16b`, `and.16b`, `orr.16b` |
+| 32-bit lane rotate | `rotl32(a, k)`, `rotr32(a, k)` | `vprord` (`avx512` / `u32x16`) or `vpslld+vpsrld+vpor`; `rev32.8h` (`k=16`) or `shl+ushr+orr` (`arm64`) |
+| 128-bit lane rotate / align | `ext4(a, b)`, `ext8(a, b)`, `ext12(a, b)` | `vpalignr` (`x86_64`) / `ext.16b` (`arm64`) |
+| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32(a, b)`, `unpackhi32(a, b)`, `unpacklo64(a, b)`, `unpackhi64(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`, `vpunpckhdq`, `vpunpcklqdq`, `vpunpckhqdq`, `vshufi32x4` |
 
-**Target notes:**
-- Register aliases (`reg idx = rcx`) cannot shadow hardware register names (such as `v0..v31` on AArch64 or `al..dl` on x86-64).
-- On AArch64, constants from `65,536` up to `2^32 - 1` are built from two 16-bit halves (`d := hi; lsl d, d, 16; t := lo; add d, d, t`).
-- Leaf functions (those making no calls) with `stack 0` keep all state in caller-saved registers (`rax, rcx, rdx, rsi, rdi, r8..r11` on x86-64; `x0..x15` on AArch64).
-- **128-bit vector and hardware crypto instructions:** Both target tables include 128-bit vector operations (`xmm0..xmm15` on x86-64; `v0..v31`/`q0..q31` on AArch64, with `mov vD.16b, vS.16b` as the canonical NEON register move) as well as hardware SHA-256 instructions (`sha256rnds2`, `sha256msg1`, `sha256msg2`, `vpalignr` on x86-64; `sha256h`, `sha256h2`, `sha256su0`, `sha256su1` on AArch64). On x86-64, functions using VEX/AVX or SHA-NI instructions declare `for x86_64 needs avx { ... }` on the target block. Repeated straight-line rounds can be expanded at compile time with `for i in 0..N { ... }` or `inline fn`.
-- **Constant-time conditional select:** `cmov*` (x86-64) and `csel` (AArch64) select between two registers based on flags without branching, so they may operate on data kept out of the trace (`trace depends on ...`). The destination register inherits any trace-exclusion mark from the flags or inputs.
+On AArch64, `u32x4` uses up to 23 caller-saved NEON registers (`v0..v7, v16..v30`) with zero stack pushes (and automatically saves/restores `v8..v15` if more than 23 vectors are live at once). On x86-64, `u32x4` uses `xmm1..xmm15` and `u32x16` uses `zmm1..zmm31` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 
 ---
 
-## 7. Static Performance Analysis (`ode advise`)
+## 7. Static Performance Analysis (`ode advise --asm`)
 
-Without executing the binary, `ode advise` runs a calibrated static out-of-order pipeline simulation over every loop (and straight-line functions) and reports cycles per iteration or call, bytes loaded per iteration (`cyc/B`), the active bottleneck (`frontend`, `dependency`, or execution ports), source-line critical-path chains when dependency-limited, instruction-cache line alignment, and microarchitectural hints (broken macro-op fusion, non-eliminated self-moves, misaligned x86-64 vector stack spills, and Apple Silicon NEON pipe saturation):
+Without executing the binary, `ode advise --asm --all-archs` prints:
+1. The exact `variable -> register / [sp+off] (SPILL)` table and stack frame size.
+2. Side-by-side High-Level Ode source lines and the exact machine instructions emitted.
+3. A calibrated out-of-order pipeline simulation over every loop and straight-line function (`cyc/iter`, `cyc/B`, active bottleneck: `frontend`, `dependency`, or execution ports, critical-path chains, i-cache line alignment, and microarchitectural hints).
 
-```sh
-# Static cross-CPU report (no execution; runs in a few milliseconds)
-python3 lang/ode_tool.py advise paper/examples/all_zero.ode --target x86_64 --all-archs
-```
-
-Use `--arch NAME` to focus on one microarchitecture (`zen5`, `zen4`, `zen3`, `icelake` on x86-64; `apple_m`, `ampere1` on AArch64), or declare explicit compile-time budgets inside a target body (`budget { max_bytes N; max_icache_lines N; max_loop_cycles C }`) so regressions fail immediately.
-
-Common levers that show up directly in `ode advise` reports:
-- **Throughput per byte (`cyc/B`):** unrolling a hot byte or word loop `4x` or `8x` by computing `addr = base + idx` once per iteration and loading via base-plus-immediate offsets (`[addr + 0]`, `[addr + 1]`, ... or `[addr, 0]`, `[addr, 1]`, ...) cuts address-generation overhead and fills the CPU's load pipes (`3` on Apple M-series, `4` on Zen 5, `2` on AmpereOne).
-- **Independent accumulators:** splitting one loop-carried sum into `2`–`4` independent accumulator registers breaks serial dependency chains (and on Apple M-series NEON, keeping at least `12` independent vector chains reaches `4.0` ops/cycle instead of `3.0`).
-- **Branch macro-op fusion:** keeping `cmp` immediately before its conditional jump (`jb`/`jae`/`je`/`jne` on x86-64; `b.lo`/`b.hs`/`b.eq`/`b.ne` on AArch64) fuses them into a single uop.
+Common optimization levers visible in `ode advise --asm`:
+- **Eliminate spills and callee-saves:** inspect the `variables:` table; shrinking live ranges or using `unroll` keeps hot state in caller-saved registers (`stack 0 B`, `spills: 0`).
+- **Interleave independent chains:** compute 2–4 independent lanes or blocks side by side (e.g., `a0..d0` and `a1..d1`, or 4-way interleaved vectors) to hide multi-cycle ALU/vector latency and fill all execution ports.
+- **Widen memory reads/unroll loops:** use `.u32(off)` / `.u64(off)` / `.u32x4(off)` / `.u32x16(off)` and `for k in 0..4 unroll` to reduce loop overhead and saturate load pipes.
+- **Keep branchless hot paths:** replace short data-dependent branches with `select(cond, a, b)` and single-compare wrapping checks `(c -% lo) <= hi - lo`.
 
 ---
 
 ## 8. Release and Audit Checklist
 
-1. **Contract:** Every `def` terminates; `requires` states every buffer bound and non-overlap precondition (`no_overlap`); `trace depends on` names only inputs that branches and memory addresses are permitted to use.
-2. **Verify and pack:** `ode check` prints `shown` for every target; `ode pack` produces the `.o` object file and separate `.proof` file.
-3. **Independent audit:** `ode audit FILE.o --proof FILE.proof --expect-contract EXPECTED_ID` prints `shown` with 100% coverage of `.text`, where `EXPECTED_ID` comes from the independently audited specification—not from the object file itself.
+1. **Contract:** Every `def` terminates; `requires` states every buffer bound and `no_overlap`; `trace depends on` names only inputs permitted in branches and addresses.
+2. **Verify and pack:** `ode pack FILE.ode --c-abi --target TARGET --out FILE.o --proof FILE.proof` prints `VERDICT: shown`.
+3. **Independent audit:** `ode audit FILE.o --proof FILE.proof --expect-contract EXPECTED_ID` prints `shown` with 100% coverage of `.text`, where `EXPECTED_ID` comes from the independently audited specification.

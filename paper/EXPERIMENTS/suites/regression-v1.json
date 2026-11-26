@@ -23,10 +23,10 @@
     "arm64"
   ],
   "max_rounds": 8,
-  "perf_arms": "",
-  "opt_rounds": 3,
-  "tool_timeout": 45,
+  "perf_arms": "advised",
+  "opt_rounds": 2,
+  "tool_timeout": 60,
   "cell_timeout": 720,
   "max_truncations": 2,
-  "max_usd": 110.0
+  "max_usd": 140.0
 }
