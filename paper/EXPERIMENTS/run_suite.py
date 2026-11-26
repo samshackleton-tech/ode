@@ -420,6 +420,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 "load_count": int(m_lp.group(6)) if m_lp.group(6) else 0,
                 "load_bytes": int(m_lp.group(7)) if m_lp.group(7) else 0,
                 "excludes_callees": int(m_lp.group(8)) if m_lp.group(8) else 0,
+                "secondary_backedge": "[secondary back-edge" in line,
                 "all_archs_cyc_per_b": {},
                 "all_archs_cyc_per_iter": {},
                 "lints": 0,
@@ -452,8 +453,11 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 "loop_count": 0,
             }
         return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops}
-    # Main hot loop for large buffers is the one loading the most bytes per iteration (tie-break: lowest cyc/B)
-    hot = min(load_loops, key=lambda lp: (-lp["load_bytes"], lp["excludes_callees"] > 0, lp["cyc_per_b"]))
+    # Prefer primary (shortest) back-edge per loop header so cold enclosing slices spanning multiple
+    # branches never masquerade as wide unrolled loops; then most bytes/iter, zero callees, lowest cyc/B.
+    primary_loops = [lp for lp in load_loops if not lp.get("secondary_backedge")]
+    cand_loops = primary_loops if primary_loops else load_loops
+    hot = min(cand_loops, key=lambda lp: (-lp["load_bytes"], lp["excludes_callees"] > 0, lp["cyc_per_b"]))
     return {
         "hot_loop": hot["loop_idx"],
         "primary_arch": default_arch,

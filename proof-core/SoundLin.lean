@@ -160,6 +160,50 @@ theorem plain_sound {facts : List Row} {g : Row} (h : plain facts g = true) (ρ 
     simp only [ev] at f0 ⊢
     omega
 
+private theorem findSome_mem {α β : Type} {p : α → Option β} {xs : List α} {b : β}
+    (h : xs.findSome? p = some b) : ∃ x ∈ xs, p x = some b := by
+  induction xs with
+  | nil => simp at h
+  | cons a rest ih =>
+    simp only [List.findSome?] at h
+    cases ha : p a with
+    | some v =>
+      rw [ha] at h
+      injection h with hv
+      subst hv
+      exact ⟨a, List.mem_cons_self .., ha⟩
+    | none =>
+      rw [ha] at h
+      obtain ⟨x, hx, hpx⟩ := ih h
+      exact ⟨x, List.mem_cons_of_mem _ hx, hpx⟩
+
+theorem constOf_sound {facts : List Row} {r : Row} {k : Int} (h : constOf facts r = some k)
+    (ρ : Nat → Int) (hf : ∀ f ∈ facts, f.holds ρ) : ev ρ r = k := by
+  unfold constOf at h
+  cases hc : Lin.isConst r with
+  | some k' =>
+    simp only [hc, Option.some.injEq] at h
+    subst h
+    exact ev_isConst hc
+  | none =>
+    simp only [hc] at h
+    obtain ⟨f, fin, hfk⟩ := findSome_mem h
+    split at hfk
+    next hsc =>
+      split at hfk
+      next hpl =>
+        injection hfk with hk
+        subst hk
+        have f0 := hf f fin
+        rw [holds_iff] at f0
+        have e := dot_sameCoeff r.coeff f.coeff ρ hsc
+        have hi := plain_sound hpl ρ hf
+        simp only [ev_sub, ev_const] at hi
+        simp only [ev] at f0 hi ⊢
+        omega
+      next => cases hfk
+    next => cases hfk
+
 theorem plainTimes_sound {facts : List Row} {g : Row} (h : plainTimes facts g = true) (ρ : Nat → Int)
     (hf : ∀ f ∈ facts, f.holds ρ) : 0 ≤ ev ρ g := by
   unfold plainTimes at h

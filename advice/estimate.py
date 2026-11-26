@@ -380,6 +380,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
 
     # Detect backward-edge loops
     loops = []
+    seen_loop_headers = set()
     for idx, it in enumerate(parsed):
         if it["jump"] is not None and it["jump"] <= it["pc"]:
             head_idx = next((k for k, x in enumerate(parsed) if x["pc"] == it["jump"]), None)
@@ -387,6 +388,8 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 continue
             body = parsed[head_idx:idx + 1]
             start_pc, end_pc = body[0]["pc"], body[-1]["end"]
+            secondary_backedge = start_pc in seen_loop_headers
+            seen_loop_headers.add(start_pc)
             first_line = start_pc // line_bytes
             last_line = (end_pc - 1) // line_bytes
             touched_lines = last_line - first_line + 1
@@ -420,6 +423,7 @@ def static_analyze(decoded, target, arch_name=None, line_map=None, frame=None, a
                 "load_count": load_count,
                 "load_bytes": load_bytes,
                 "call_count": call_count,
+                "secondary_backedge": secondary_backedge,
                 "body": analyze_seq(body),
                 "pipeline_sim": sim_rep,
                 "critical_chain": crit_chain,
@@ -947,6 +951,7 @@ def format_report(symbol, static_rep, mem_rep=None):
         lb = lp["body"]
         src_note = f" lines {lp['source_lines'][0]}..{lp['source_lines'][1]}" if lp["source_lines"] else ""
         al_note = f" [aligning loop top saves {lp['icache_lines'] - lp['min_icache_lines']} i-cache line(s)]" if lp["align_saves_line"] else ""
+        sec_note = f" [secondary back-edge to +0x{lp['start_pc']:x}; slice spans multiple paths]" if lp.get("secondary_backedge") else ""
         sim_rep = lp.get("pipeline_sim")
         lb_bytes = lp.get("load_bytes") or 0
         lb_cnt = lp.get("load_count") or 0
@@ -960,7 +965,7 @@ def format_report(symbol, static_rep, mem_rep=None):
         lines.append(
             f"  loop {idx}: +0x{lp['start_pc']:x}..+0x{lp['end_pc']:x}{src_note} — "
             f"{lb['instructions']} ins, {lp['bytes']} B, {lp['icache_lines']} i-cache line(s), "
-            f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){sim_note}{al_note}"
+            f">= {lb['compute_lower_bound']:.1f} cyc/iter ({lb['limiting']}){sim_note}{al_note}{sec_note}"
         )
         cc = lp.get("critical_chain")
         if cc and cc["steps"] and sim_rep and sim_rep["bottleneck"] == "dependency":

@@ -1027,6 +1027,131 @@ fn shift_fn(c: number)
             self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
             self.assertIn("shown (1 function, verify2)", r2.stdout)
 
+    def test_13_hoisted_mask_and_contiguous_bitfield(self):
+        """Loop-hoisted mask register (`constOf`), symmetric `and64`, and interior bitfield mask `0xF0` dual-verify."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        # 1. Loop-hoisted mask register on both arm64 (`and x9, x9, x7`) and x86_64 (`and r10, r8`)
+        src_loop = """
+def sum_low6(src, i, n, acc) {
+    if i >= n then acc
+    else sum_low6(src, i + 1, n, acc + (src[i] % 64))
+}
+
+fn sum_masked(src: n bytes, n: number)
+    requires n <= 64
+    returns sum_low6(src, 0, n, 0)
+    trace depends on n
+    stack 0
+{
+    for x86_64 {
+        r8 := 63
+        rax := 0
+        rcx := 0
+        place {
+            fact 0 <= rcx
+            fact rcx <= n
+            fact r8 == 63
+            fact rax <= rcx * 63
+            fact sum_low6(src, 0, n, 0) == sum_low6(src, rcx, n, rax)
+            decreases n - rcx
+        }
+    @lp:
+        cmp rcx, rsi
+        jae @done
+        mov r9, rdi
+        add r9, rcx
+        movzx r10d, byte ptr [r9]
+        and r10, r8
+        add rax, r10
+        add rcx, 1
+        jmp @lp
+    @done:
+        ret
+    }
+    for arm64 {
+        x7 := 63
+        x2 := 0
+        x3 := 0
+        place {
+            fact 0 <= x3
+            fact x3 <= n
+            fact x7 == 63
+            fact x2 <= x3 * 63
+            fact sum_low6(src, 0, n, 0) == sum_low6(src, x3, n, x2)
+            decreases n - x3
+        }
+    @lp:
+        cmp x3, x1
+        b.hs @done
+        add x8, x0, x3
+        ldrb w9, [x8, 0]
+        and x9, x9, x7
+        add x2, x2, x9
+        add x3, x3, 1
+        b @lp
+    @done:
+        mov x0, x2
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "m.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src_loop)
+                out_o, out_p = os.path.join(d, "m.o"), os.path.join(d, "m.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="sum_masked", target=target)
+                self.assertEqual(res["verdict"], "shown", res)
+                dump = os.path.join(d, "dump.sh")
+                st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertIn("shown (1 function, verify2)", r2.stdout)
+
+        # 2. Interior contiguous bitmask `0xF0` (240) + commutative mask-first `and mask, val`
+        src_bf = """
+def hi_nibble_shifted(c) { ((c / 16) % 16) * 16 }
+
+fn hi_nib(c: number)
+    requires c < 256
+    returns hi_nibble_shifted(c)
+    stack 0
+{
+    for x86_64 {
+        rax := 240
+        and rax, rdi
+        ret
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            src_p = os.path.join(d, "b.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src_bf)
+            out_o, out_p = os.path.join(d, "b.o"), os.path.join(d, "b.proof")
+            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="hi_nib", target="x86_64")
+            self.assertEqual(res["verdict"], "shown", res)
+            dump = os.path.join(d, "dump.sh")
+            st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+            with open(dump, "w", encoding="utf-8") as f:
+                f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+            os.chmod(dump, 0o755)
+            ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+            tab = os.path.join(ROOT, "core", "x86.tab")
+            r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+            self.assertIn("shown (1 function, verify2)", r2.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

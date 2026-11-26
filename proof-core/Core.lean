@@ -145,6 +145,19 @@ def plain (facts : List Row) (g : Row) : Bool :=
   -- (the two constants are compared first: that is one step, and comparing the multiples is one for every unknown)
   | none => facts.any fun f => decide (f.constant ≤ g.constant) && Lin.sameCoeff g.coeff f.coeff
 
+/-- Seen at once to equal a constant `k`: either `r` is already a constant row, or `facts`
+contains a lower bound `f` with the same variable coefficients (`ev r ≥ k`) and `plain` sees
+the matching upper bound `k - r ≥ 0`. Lets loop-hoisted mask/shift registers work seamlessly. -/
+def constOf (facts : List Row) (r : Row) : Option Int :=
+  match Lin.isConst r with
+  | some k => some k
+  | none =>
+    facts.findSome? fun f =>
+      if Lin.sameCoeff r.coeff f.coeff then
+        let k := r.constant - f.constant
+        if plain facts (Lin.sub (Lin.const k) r) then some k else none
+      else none
+
 /-- The rows a proof of arithmetic starts from: those of the rows given that it names by their numbers. -/
 def pick (given : List Row) (numbers : List Nat) : List Row := numbers.filterMap fun k => given[k]?
 
@@ -915,7 +928,7 @@ def symOrSmall (s : Sym) (x : Row) (k : Int) (j : Nat) : V (EV × Sym) :=
 /-- Where the first number is seen at once to lie below 2^j (j: 8, 16 or 32) and the second is a number `k` of
 the table that is 2^j or more: `k` and j. -/
 def orParts (facts : List Row) (x y : Row) : Option (Int × Nat) :=
-  match Lin.isConst y, smallBits facts x with
+  match constOf facts y, smallBits facts x with
   | some k, some j => if (2 : Int) ^ j ≤ k then some (k, j) else none
   | _, _ => none
 
@@ -933,6 +946,38 @@ def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
       | some (k, j) => symOrSmall s y k j
       | none => symOrKnown s x y
 
+/-- Decompose a contiguous 64-bit bitmask `0 < m < 2^64` into `(k, w)` with `m = (2^w - 1) * 2^k`
+and `k + w ≤ 64` (covering low-bit masks `k = 0`, alignment masks `k + w = 64`, single-bit tests `w = 1`,
+and arbitrary contiguous bitfields such as `0xF0` or `0xFF00`). -/
+def maskSpan (m : Int) : Option (Nat × Nat) :=
+  if m ≤ 0 || m ≥ 2 ^ 64 then none
+  else
+    (List.range 64).findSome? fun k =>
+      let powk : Int := (2 : Int) ^ k
+      if m % powk == 0 then
+        let q := m / powk
+        (List.range (65 - k)).findSome? fun w =>
+          if w ≥ 1 && (2 : Int) ^ w - 1 == q then some (k, w) else none
+      else none
+
+/-- Bitwise AND of a symbolic 64-bit value `x` with a known constant mask `m`. -/
+def symAndConst (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
+  if m == 0 then pure (.lin (Lin.const 0), s)
+  else match maskSpan m with
+  | some (0, w) =>
+    let d := symDivide s x ((2 : Int) ^ w)
+    pure (.lin d.2.1, d.2.2)
+  | some (k, w) =>
+    if k + w == 64 then
+      let d := symDivide s x ((2 : Int) ^ k)
+      pure (.lin (Lin.scale ((2 : Int) ^ k) d.1), d.2.2)
+    else
+      let d1 := symDivide s x ((2 : Int) ^ k)
+      let d2 := symDivide d1.2.2 d1.1 ((2 : Int) ^ w)
+      pure (.lin (Lin.scale ((2 : Int) ^ k) d2.2.1), d2.2.2)
+  | none =>
+    refuse "no proof rule for this AND mask (supported: any contiguous bitmask (2^w - 1) << k, or 0)"
+
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
     inRange s.facts (Lin.add (signed x) (signed y))
@@ -943,9 +988,9 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   else if f == "equal" then pure (.equal x y, s)
   else if f == "below" then pure (.below x y, s)
   else if f == "shl64" then
-    -- a shift to the left by a number of the table: so many doublings of what stays below 2^64, which is
+    -- a shift to the left by a known constant: so many doublings of what stays below 2^64, which is
     -- the number itself where it is shown to be small enough, else its remainder (the proof says which)
-    match Lin.isConst y with
+    match constOf s.facts y with
     | some k =>
       if 0 ≤ k ∧ k < 64 then do
         let kept ← staysBelow s.facts x (2 ^ (64 - k.toNat))
@@ -954,25 +999,19 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "shr64" then
-    -- a shift to the right by a number of the table: the quotient by so many doublings
-    match Lin.isConst y with
+    -- a shift to the right by a known constant: the quotient by so many doublings
+    match constOf s.facts y with
     | some k =>
       if 0 ≤ k ∧ k < 64 then pure (.lin (symDivide s x (2 ^ k.toNat)).1, (symDivide s x (2 ^ k.toNat)).2.2)
       else refuse "a shift by 64 or more"
     | none => refuse "a shift by what is no number of the table: not here yet"
   else if f == "and64" then
-    match Lin.isConst y with
-    | some m =>
-      if m == 2 ^ 64 - 64 then
-        -- Round down to a 64-byte boundary, keeping the quotient explicit.
-        let d := symDivide s x 64
-        pure (.lin (Lin.scale 64 d.1), d.2.2)
-      else
-        -- A mask of low bits takes the remainder by a power of two.
-        match (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
-        | some k => pure (.lin (symDivide s x (2 ^ k)).2.1, (symDivide s x (2 ^ k)).2.2)
-        | none => refuse "no proof rule for this AND mask (supported: low-bit masks 2^k - 1 and 2^64 - 64; for upper nibbles/fields use lsr/shr then and)"
-    | none => refuse "an and with what is no number of the table: not here yet"
+    match constOf s.facts y with
+    | some m => symAndConst s x m
+    | none =>
+      match constOf s.facts x with
+      | some m => symAndConst s y m
+      | none => refuse "an and with what is no number of the table: not here yet"
   else if f == "sub8" then
     -- a byte less a byte, wrapping: the remainder by 256 of the one, and 256, less the other's low byte
     let y' := symLow s y 256

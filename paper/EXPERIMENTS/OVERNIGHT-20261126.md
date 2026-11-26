@@ -203,7 +203,48 @@ Every experiment below runs in an isolated git worktree with a pre-registered co
 - **Static performance-model discovery driven directly by the real-silicon reference benchmark (Sam's standing benchmark principle):**
   - Comparing `ode advise` on `json_str_valid_reference.ode` loop 0 (6 branches per 1-byte iteration) against real silicon exposed a major blind spot in `advice/uica_sim.py` (and `cpu-uarch-probe/sim.py`): `iter_exec_ends` only took `max(reg_ready[r])`, completely ignoring `exec_done` of zero-write instructions (fused `cmp+jcc`, `jmp`/`b`, and pure stores!). As a result, branch-port saturation on 2 branch pipes was invisible (`zen4` predicted `1.67` vs real `4.25 cyc/B`; `apple_m` predicted `1.17` vs real `2.23 cyc/B`).
   - **Fix:** Track `iter_max_done = max(iter_max_done, exec_done)` across every uop in the iteration and include it in `iter_exec_ends`. Immediately shifts `json_str_valid` loop 0 from `1.67 → 3.00 cyc/iter` (`[ports:ALU0]`) on Zen 4 and `1.17 → 3.00 cyc/iter` (`[ports:I4]`) on Apple M6, with zero regressions across all 6 calibrated bare-metal PMU suites (`zen5 7.91%`, `zen4 4.79%`, `icelake 7.97%`, `apple_m 7.23%`, `ampere1 4.19%`). Added unit test (`advice/test_estimate.py` **13/13 OK**) and mirrored & raw-verified in `samshackleton-tech/cpu-uarch-probe` (`4644293d`, `test_sim.py` 3/3 OK).
-- **Experiment design (`json-v1`, launching now):** 7-model panel × 2 targets (`x86_64`, `arm64`) × 2 arms (`blind`, `advised`) = **28 cells** (`--max-rounds 8 --opt-rounds 3 --workers 16 --prover-slots 10 --tool-timeout 45 --cell-timeout 600 --max-usd 60`), live `verify2.py` + `NATIVE_PASS 681/681`.
-- **Pre-registered hypothesis:** (1) High pass rate across frontier models and first breakthroughs from small/open-weights models (`claude-haiku-5.5`, `qwen3.8-2.4t-a95b`, `kimi-k3.1-pro`) thanks to pure scalar byte semantics and clear variable-stride spec; (2) `ode advise`'s newly accurate branch-port saturation signal (`ports:ALU0` / `ports:I4` at `3.00 cyc/B` for naive 1-byte loops) will guide `advised` cells to collapse range checks and unroll plain-ASCII scanning (`4×`/`8×`), substantially beating the hand-written reference (`2.01 GiB/s` Apple M6 / `1.11 GiB/s` AMD Zen 4) on real silicon.
+- **Experiment design (`json-v1`):** 7-model panel × 2 targets (`x86_64`, `arm64`) × 2 arms (`blind`, `advised`) = **28 cells** (`--max-rounds 8 --opt-rounds 3 --workers 16 --prover-slots 10 --tool-timeout 45 --cell-timeout 600 --max-usd 60`), live `verify2.py` + `NATIVE_PASS 681/681`.
+- **Pre-registration / Results:** [`prereg-json-v1.md`](prereg-json-v1.md), [`results-json-v1.md`](results-json-v1.md) (pre-reg commit `8f2718f8`).
+- **Headline results (19 min wall clock, 187 rounds, `$30.64` USD):**
+  - **17/28 strict passes (60.7%)**, **17/17 (100%) `verify2.py` dual-verified live**, **17/17 (100%) `NATIVE_PASS 681/681`**!
+  - **6 of 7 models passed — including every small and open-weights model:**
+    - `anthropic/claude-fable-5.2`: **4/4 (100%)**
+    - `openai/gpt-6.2-astra-pro`: **4/4 (100%)**
+    - `anthropic/claude-sonnet-5.5`: **4/4 (100%)**
+    - `moonshotai/kimi-k3.1-pro`: **2/4** (`x86_64` 2/2, `$0.26–$0.33`)
+    - `qwen/qwen3.8-2.4t-a95b`: **2/4** (`arm64 blind` + `x86_64 advised`, `$0.28–$0.51`)
+    - `anthropic/claude-haiku-5.5`: **1/4** (`x86_64 advised` passed on **Round 1 for `$0.02`**!)
+  - Only `3` `compile_or_parse_error` and `0` `isa_table_error` across all 187 rounds (`1.6%` syntax error rate).
+- **Real-silicon throughput & static-model validation (512 B valid JSON strings):**
+  - **AMD Zen 4 (`taskset -c 2`, RDTSC reference cycles at 4.00 GHz TSC / 5.054 GHz turbo → `core_cyc = ref_cyc × 1.263`, immune to frequency scaling):**
+    - Hand-written 6-branch 1-byte reference: `plain = 1234.3 ref_cyc` (`3.06 core cyc/B`), `mixed = 1262.3 ref_cyc`. Every naive 6-branch solution (`sonnet`, `qwen`, `kimi`, `haiku`, `fable blind`) landed identically at `1235–1240 ref_cyc` (`3.06 core cyc/B`), **matching our brand-new `iter_max_done` `uica_sim.py` prediction (`3.00 cyc/B`) to `2.0%` error** (down from `-45.4%` error before the fix!).
+    - **`gpt-6.2-astra-pro x86_64 advised R2`**: collapsed range checks to 4 fused branches → **`849.0 ref_cyc` (`2.10 core cyc/B`, `217.6 ns`, `2.19 GiB/s`, `+45.4%` faster than hand reference!)**; `mixed = 961.5 ref_cyc` (`+31.3%` vs reference).
+    - `gpt-6.2-astra-pro x86_64 blind`: `1035.0 ref_cyc` (`+19.3%`); `claude-fable-5.2 x86_64 advised`: `1058.0 ref_cyc` (`+16.7%`).
+  - **Apple M6 (`4.786 GHz`, local Mac, not reserved and under no timing lock — caveat applies):**
+    - Hand-written reference: `plain = 237.40 ns` (`2.009 GiB/s`), `mixed = 231.57 ns` (`2.059 GiB/s`).
+    - **`claude-fable-5.2 arm64 blind`** (4× unrolled plain-ASCII loop!): **`plain = 168.52 ns` (`2.830 GiB/s`, `+40.9%` faster than hand reference!)**, `mixed = 175.74 ns` (`2.713 GiB/s`).
+    - **`claude-sonnet-5.5 arm64 blind`**: improved R3 `222.90 ns` → R5 **`173.18 ns` (`2.753 GiB/s`, `+37.0%` vs reference)**, `mixed = 175.41 ns` (`2.718 GiB/s`).
+    - `gpt-6.2-astra-pro arm64 blind`: `200.76 ns` (`2.375 GiB/s`, `+18.2%` vs reference).
+- **Major static-analyzer & process discovery caught by `json-v1`'s real-silicon A/B comparison:**
+  - Notice `arm64 blind` (`168–201 ns`) beat `arm64 advised` (`241–246 ns`) on all three frontier models, and `gpt-6.2 x86_64 advised` regressed from R2 (`849 ref_cyc`) → R7 (`969 ref_cyc`).
+  - **Root cause:** `advice/estimate.py` sliced `[header_pc .. backedge_pc]` independently for every back-edge jumping to the same loop header. In a state-machine loop with 3 back-edges (plain `+1`, simple escape `+2`, `\uXXXX` `+6`), the longest back-edge enclosed ALL intermediate branches into one fake `22 B/iter` "loop", and `run_suite.py`'s `max(load_bytes)` heuristic crowned that cold enclosing slice as the "hot loop" — misleading both `advised` optimization prompts and best-round selection!
+  - **Fix applied & unit-tested:** `advice/estimate.py` now tags every longer back-edge targeting an already-seen loop header with `[secondary back-edge to +0xNN; slice spans multiple paths]`, and `run_suite.py` (`parse_advise_metrics`) excludes secondary back-edges when selecting `hot` (`test_run_suite.py` **3/3 OK**). Also noted: wall-clock `clock_gettime` on the unreserved workhorse fluctuates with CPU turbo scaling (`410 ns` vs `261 ns` on identical bytes); RDTSC reference cycles on `taskset -c 2` eliminate frequency noise to `< 0.2%`.
+
+---
+
+## Iteration 9: `ipv4-v1` — Unified Contiguous Bitfield Masks & Hoisted Mask Registers in Lean 4 + RFC 791/1071 IPv4 Validator
+
+- **Lean 4 core verifier upgrade driven by `ct-b64-v2`'s #1 remaining failure (`7×` hoisted mask registers + `3×` non-low-bit AND masks):**
+  1. **`constOf (facts : List Row) (r : Row)` (`Core.lean` + `SoundLin.lean` `constOf_sound`):** Detects any linear expression pinned to a single constant `k` by `facts` (`r >= k` and `k >= r`), letting loop-hoisted mask and shift registers (`x7 := 63; place { fact x7 == 63 ... }; and x9, x9, x7`) verify seamlessly across `and64`, `shl64`, `shr64`, and `orParts` without reloading masks inside hot loops.
+  2. **Unified contiguous bitfield rule `maskSpan` + `symAndConst` (`Core.lean` + `SoundStep.lean` `and_maskSpan` + `SoundTrace.lean`):** Replaces the two special cases (`2^64 - 64` and `2^k - 1`) with one general rule handling `0` and every contiguous 64-bit bitmask `(2^w - 1) << k` (low-bit masks, arbitrary alignment masks `~7/~15/~31/~63/~255`, single-bit tests `64/128`, and interior fields like `0xF0` / `0xFF00`) — symmetrically for both `and x, mask` and `and mask, x`.
+  3. **Full Lean 4 & dual-verifier verification:** Workhorse `lake build && python3 test_sound.py -v` **55/55 jobs, 2/2 OK in `0.643 s`**, ZERO `sorry`, ZERO `maxHeartbeats`, standard axioms only, all 11 top-level theorem statements unchanged. Mirrored identically in `proof-core/verify2.py` (`test_verify2.py` **13/13 OK**, including `test_13_hoisted_mask_and_contiguous_bitfield` on both `x86_64` and `arm64`). Local Mini binaries rebuilt (`24/24`).
+- **New network-security task (`paper/EXPERIMENTS/tasks/ipv4_valid_{spec.ode,reference.ode,native.c,.json}`):**
+  - RFC 791 IPv4 packet header validator + RFC 1071 one's-complement checksum (`n <= 65535`, `stack 0`, canonical contract ID `hh2id4zrh6vshq5hjpeuu53hlzy3x4uqhnnvuctrsk6hlfzseysa`, zero overlap with `QUICKSTART.md`).
+  - **Way-A verification (non-recursive `fold2_ok` specification cuts proving time 150×: `56 s → 0.46 s`!):** Reference (`1 fn`, `stack 0`, `51 insns x86_64` / `48 insns arm64`) passes `ode pack` (`0.46 s` / `0.45 s`), `ode audit`, `verify2.py` (`0.20 s` / `0.13 s`), and **`NATIVE_PASS 607/607`** on both architectures.
+  - **Real-silicon reference baseline:**
+    - **Apple M6** *(local Mac, not reserved and under no timing lock)*: `ihl=5` (20 B) **`3.44 ns`** (`16.5 cyc`, 291 Mpps), `ihl=15` (60 B) **`8.37 ns`** (`40.1 cyc`, 119 Mpps).
+    - **AMD Zen 4 (`taskset -c 2`, RDTSC):** `ihl=5` (20 B) **`5.69 ns` (`22.84 ref_cyc` = `28.8 core cyc`, 176 Mpps)**, `ihl=15` (60 B) **`14.43 ns` (`57.88 ref_cyc`, 69 Mpps)**.
+- **Experiment design (`ipv4-v1`, launching now):** 7-model panel × 2 targets (`x86_64`, `arm64`) × 2 arms (`blind`, `advised`) = **28 cells** (`--max-rounds 8 --opt-rounds 3 --workers 16 --prover-slots 10 --tool-timeout 45 --cell-timeout 600 --max-usd 60`), live `verify2.py` + `NATIVE_PASS 607/607` + fixed primary-loop `ode advise`.
+- **Pre-registered hypothesis:** (1) High pass rate across all 7 models (including small/open-weights models) with fast proving (`< 2 s` per cell) and `100%` live `verify2.py` dual verification; (2) models will exploit the `ihl == 5` (20-byte standard IPv4 header) unrolled fast path and parallel reduction trees (using our newly supported `0xF0` bitfield mask & hoisted mask registers) to beat our hand-written loop reference (`3.44 ns` Apple M6 / `22.84 ref_cyc` AMD Zen 4) by `1.5×–2.5×` on real silicon.
 
 

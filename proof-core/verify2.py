@@ -107,6 +107,31 @@ def r_plain(facts, g):
     return False
 
 
+def r_const_of(facts, r):
+    cr, vr = r
+    if not vr:
+        return cr
+    for cf, vf in facts:
+        if vf == vr:
+            k = cr - cf
+            if r_plain(facts, r_sub(r_const(k), r)):
+                return k
+    return None
+
+
+def mask_span(m):
+    if m <= 0 or m >= (1 << 64):
+        return None
+    for k in range(64):
+        powk = 1 << k
+        if m % powk == 0:
+            q = m // powk
+            for w in range(1, 65 - k):
+                if (1 << w) - 1 == q:
+                    return (k, w)
+    return None
+
+
 def r_refutes(given, starts, steps):
     """Independent checker of the Farkas/Gomory arithmetic refutation rule (indexed starts)."""
     rows = []
@@ -981,9 +1006,10 @@ class Verifier:
                 if op == "shl64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if b[1]:
-                        raise Refuse("non-constant shift in shl64")
-                    k = b[0] % 64
+                    bk = r_const_of(st["facts"], b)
+                    if bk is None or bk < 0 or bk >= 64:
+                        raise Refuse("non-constant or out-of-range shift in shl64")
+                    k = bk
                     if not a[1]:
                         return r_const(((a[0] & M64) << k) & M64), (ma or mb)
                     lim = 1 << (64 - k)
@@ -1001,9 +1027,10 @@ class Verifier:
                 if op == "shr64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if b[1]:
-                        raise Refuse("non-constant shift in shr64")
-                    k = b[0] % 64
+                    bk = r_const_of(st["facts"], b)
+                    if bk is None or bk < 0 or bk >= 64:
+                        raise Refuse("non-constant or out-of-range shift in shr64")
+                    k = bk
                     if not a[1]:
                         return r_const((a[0] & M64) >> k), (ma or mb)
                     q, _ = quot_rem(a, 1 << k, st, nonneg=True, fold_const=False)
@@ -1011,14 +1038,29 @@ class Verifier:
                 if op == "and64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if not b[1] and b[0] >= 0 and ((b[0] + 1) & b[0]) == 0:
-                        d = b[0] + 1
-                        _, rem = quot_rem(a, d, st, nonneg=True, fold_const=False)
+                    bm = r_const_of(st["facts"], b)
+                    if bm is not None:
+                        val_x, mask_m = a, bm
+                    else:
+                        am = r_const_of(st["facts"], a)
+                        if am is None:
+                            raise Refuse(f"unsupported and64 mask {b}")
+                        val_x, mask_m = b, am
+                    if mask_m == 0:
+                        return r_const(0), (ma or mb)
+                    sp = mask_span(mask_m)
+                    if sp is None:
+                        raise Refuse(f"unsupported and64 mask {mask_m}")
+                    k, w = sp
+                    if k == 0:
+                        _, rem = quot_rem(val_x, 1 << w, st, nonneg=True, fold_const=False)
                         return rem, (ma or mb)
-                    if not b[1] and b[0] == (1 << 64) - 64:
-                        q, _ = quot_rem(a, 64, st, nonneg=True, fold_const=False)
-                        return r_scale(64, q), (ma or mb)
-                    raise Refuse(f"unsupported and64 mask {b}")
+                    if k + w == 64:
+                        q, _ = quot_rem(val_x, 1 << k, st, nonneg=True, fold_const=False)
+                        return r_scale(1 << k, q), (ma or mb)
+                    q1, _ = quot_rem(val_x, 1 << k, st, nonneg=True, fold_const=False)
+                    _, rem2 = quot_rem(q1, 1 << w, st, nonneg=True, fold_const=False)
+                    return r_scale(1 << k, rem2), (ma or mb)
                 if op == "low32":
                     a, ma = eval_table_expr(args[0], bind, st)
                     return sym_low(a, 1 << 32, st), ma

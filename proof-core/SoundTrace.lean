@@ -2087,7 +2087,7 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
         · simp only [h4, ite_false] at h
           by_cases h5 : (f == "shl64") = true
           · simp only [h5, ite_true] at h
-            cases hc : Lin.isConst y with
+            cases hc : constOf s.facts y with
             | none => simp only [hc] at h; exact (refuse_ok (items := items) h).elim
             | some k =>
               simp only [hc] at h
@@ -2101,7 +2101,7 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
           · simp only [h5, ite_false] at h
             by_cases h6 : (f == "shr64") = true
             · simp only [h6, ite_true] at h
-              cases hc : Lin.isConst y with
+              cases hc : constOf s.facts y with
               | none => simp only [hc] at h; exact (refuse_ok (items := items) h).elim
               | some k =>
                 simp only [hc] at h
@@ -2111,16 +2111,39 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
             · simp only [h6, ite_false] at h
               by_cases h7 : (f == "and64") = true
               · simp only [h7, ite_true] at h
-                cases hc : Lin.isConst y with
-                | none => simp only [hc] at h; exact (refuse_ok (items := items) h).elim
-                | some m =>
+                have ofAnd : ∀ {x' : Row} {m : Int}, symAndConst s x' m items = .ok ((val, s1), rest) →
+                    s1.zf = s.zf ∧ s1.cf = s.cf ∧
+                    (∀ a b, val = .equal a b → f = "equal" ∧ a = x ∧ b = y ∧ s1 = s) ∧
+                    (∀ a b, val = .below a b → f = "below" ∧ a = x ∧ b = y ∧ s1 = s) := by
+                  intro x' m ha
+                  unfold symAndConst at ha
+                  by_cases hm0 : (m == 0) = true
+                  · simp only [hm0, ite_true] at ha; exact ofLin _ _ _ ha rfl rfl
+                  · simp only [hm0, ite_false] at ha
+                    cases hms : maskSpan m with
+                    | none => simp only [hms] at ha; exact (refuse_ok (items := items) ha).elim
+                    | some kw =>
+                      rcases kw with ⟨k, w⟩
+                      cases k with
+                      | zero =>
+                        simp only [hms] at ha
+                        exact ofLin _ _ _ ha (symDivide_flags s x' _).1 (symDivide_flags s x' _).2
+                      | succ k' =>
+                        simp only [hms] at ha
+                        by_cases h64 : (k' + 1 + w == 64) = true
+                        · simp only [h64, ite_true] at ha
+                          exact ofLin _ _ _ ha (symDivide_flags s x' _).1 (symDivide_flags s x' _).2
+                        · simp only [h64, ite_false] at ha
+                          have f1 := symDivide_flags s x' ((2 : Int) ^ (k' + 1))
+                          have f2 := symDivide_flags (symDivide s x' ((2 : Int) ^ (k' + 1))).2.2 (symDivide s x' ((2 : Int) ^ (k' + 1))).1 ((2 : Int) ^ w)
+                          exact ofLin _ _ _ ha (f2.1.trans f1.1) (f2.2.trans f1.2)
+                cases hc : constOf s.facts y with
+                | some m => simp only [hc] at h; exact ofAnd h
+                | none =>
                   simp only [hc] at h
-                  by_cases hm64 : (m == 2 ^ 64 - 64) = true
-                  · simp only [hm64, ite_true] at h; exact ofLin _ _ _ h (symDivide_flags s x 64).1 (symDivide_flags s x 64).2
-                  · simp only [hm64, ite_false] at h
-                    cases hf : (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
-                    | none => simp only [hf] at h; exact (refuse_ok (items := items) h).elim
-                    | some k => simp only [hf] at h; exact ofLin _ _ _ h (symDivide_flags s x _).1 (symDivide_flags s x _).2
+                  cases hcx : constOf s.facts x with
+                  | some m => simp only [hcx] at h; exact ofAnd h
+                  | none => simp only [hcx] at h; exact (refuse_ok (items := items) h).elim
               · simp only [h7, ite_false] at h
                 by_cases h8 : (f == "sub8") = true
                 · simp only [h8, ite_true] at h

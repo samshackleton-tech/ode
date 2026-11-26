@@ -1507,7 +1507,7 @@ from 0 to below 2^j; and j is at most 32. -/
 theorem orParts_sound {facts : List Row} {x y : Row} {k : Int} {j : Nat} (h : orParts facts x y = some (k, j)) (ρ : Nat → Int)
     (hf : ∀ f ∈ facts, f.holds ρ) : ev ρ y = k ∧ 0 ≤ ev ρ x ∧ ev ρ x < (2 : Int) ^ j ∧ j ≤ 32 := by
   unfold orParts at h
-  cases hc : Lin.isConst y with
+  cases hc : constOf facts y with
   | none => simp [hc] at h
   | some k' =>
     cases hj : smallBits facts x with
@@ -1519,7 +1519,7 @@ theorem orParts_sound {facts : List Row} {x y : Row} {k : Int} {j : Nat} (h : or
         injection h with h
         injection h with h1 h2
         subst h1 h2
-        exact ⟨ev_isConst hc, smallBits_sound hj ρ hf⟩
+        exact ⟨constOf_sound hc ρ hf, smallBits_sound hj ρ hf⟩
       next => cases h
 
 /-- The bits of a small number and of a number of the table that is 2^j or more, put together: what
@@ -1628,6 +1628,153 @@ theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64)
     rw [Nat.and_mod_two_pow, show (M64 - 64) % (2 ^ 6) = 0 by decide, Nat.and_zero]
   omega
 
+private theorem findSome_mem_step {α β : Type} {p : α → Option β} {xs : List α} {b : β}
+    (h : xs.findSome? p = some b) : ∃ x ∈ xs, p x = some b := by
+  induction xs with
+  | nil => simp at h
+  | cons a rest ih =>
+    simp only [List.findSome?] at h
+    cases ha : p a with
+    | some v =>
+      rw [ha] at h
+      injection h with hv
+      subst hv
+      exact ⟨a, List.mem_cons_self .., ha⟩
+    | none =>
+      rw [ha] at h
+      obtain ⟨x, hx, hpx⟩ := ih h
+      exact ⟨x, List.mem_cons_of_mem _ hx, hpx⟩
+
+theorem maskSpan_spec {m : Int} {k w : Nat} (h : maskSpan m = some (k, w)) :
+    k < 64 ∧ 1 ≤ w ∧ k + w ≤ 64 ∧ m = (((2 ^ w - 1) * 2 ^ k : Nat) : Int) := by
+  unfold maskSpan at h
+  split at h
+  next => cases h
+  next =>
+    obtain ⟨k', hk'mem, hk'⟩ := findSome_mem_step h
+    have hk'lt : k' < 64 := List.mem_range.mp hk'mem
+    dsimp only at hk'
+    split at hk'
+    next hmod =>
+      obtain ⟨w', hw'mem, hw'⟩ := findSome_mem_step hk'
+      have hw'lt : w' < 65 - k' := List.mem_range.mp hw'mem
+      split at hw'
+      next hcond =>
+        injection hw' with heq
+        injection heq with ek ew
+        subst ek ew
+        simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hcond hmod
+        refine ⟨hk'lt, hcond.1, by omega, ?_⟩
+        have hm1 : m = (m / (2 : Int) ^ k') * (2 : Int) ^ k' := by
+          have := Int.mul_ediv_add_emod m ((2 : Int) ^ k')
+          rw [hmod, Int.add_zero, Int.mul_comm] at this
+          exact this.symm
+        have hpoww : ((2 ^ w' : Nat) : Int) = (2 : Int) ^ w' := by simp
+        have hnat : ((2 ^ w' - 1 : Nat) : Int) = (2 : Int) ^ w' - 1 := by
+          have := Nat.two_pow_pos w'
+          rw [← hpoww]; omega
+        have hpow : ((2 ^ k' : Nat) : Int) = (2 : Int) ^ k' := by simp
+        rw [Int.natCast_mul, hnat, hpow, hm1, ← hcond.2]
+      next => cases hw'
+    next => cases hk'
+
+theorem and_maskSpan (xa k w : Nat) :
+    xa &&& ((2 ^ w - 1) * 2 ^ k) = ((xa / 2 ^ k) % 2 ^ w) * 2 ^ k := by
+  apply Nat.eq_of_testBit_eq
+  intro i
+  rw [Nat.testBit_and, ← Nat.shiftLeft_eq, ← Nat.shiftLeft_eq,
+      Nat.testBit_shiftLeft, Nat.testBit_shiftLeft]
+  by_cases hki : k ≤ i
+  · simp only [decide_eq_true hki, Bool.true_and, Nat.testBit_two_pow_sub_one,
+               Nat.testBit_mod_two_pow, Nat.testBit_div_two_pow]
+    rw [Nat.sub_add_cancel hki, Bool.and_comm]
+  · simp [hki]
+
+theorem symAndConst_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {m : Int} {v : EV}
+    {items rest : Items} {ρ : Nat → Int} {st : State}
+    (h : symAndConst s x m items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
+    (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hxb : (xb : Int) = m) :
+    ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ EV.sem ρ' s'.nvars ((xa &&& xb) % M64) v := by
+  obtain ⟨hx1, hx2, hx3⟩ := hx
+  have hx1' : xa < M64 := hx1
+  unfold symAndConst at h
+  split at h
+  next hm0 =>
+    simp only [beq_iff_eq] at hm0
+    have hxb0 : xb = 0 := by omega
+    subst hxb0
+    have := V.pure_ok h
+    injection this with hp _
+    injection hp with h1 h2
+    subst h1 h2
+    refine ⟨ρ, Carried.here H wf, Nat.mod_lt _ (by decide), ?_, bounded_const _ _⟩
+    simp [ev_const]
+  next =>
+    cases hms : maskSpan m with
+    | none => simp only [hms] at h; exact (refuse_ok h).elim
+    | some kw =>
+      rcases kw with ⟨k, w⟩
+      obtain ⟨hk64, hw1, hkw64, hmeq⟩ := maskSpan_spec hms
+      have hxb_eq : xb = (2 ^ w - 1) * 2 ^ k := by omega
+      subst hxb_eq
+      have hand := and_maskSpan xa k w
+      have hlt : ((xa / 2 ^ k) % 2 ^ w) * 2 ^ k < M64 := by
+        have h1 : (xa / 2 ^ k) % 2 ^ w < 2 ^ w := Nat.mod_lt _ (Nat.two_pow_pos w)
+        have h2 : ((xa / 2 ^ k) % 2 ^ w) * 2 ^ k < 2 ^ w * 2 ^ k :=
+          Nat.mul_lt_mul_of_pos_right h1 (Nat.two_pow_pos k)
+        have h3 : 2 ^ w * 2 ^ k ≤ M64 := by
+          rw [← Nat.pow_add]; unfold M64; exact Nat.pow_le_pow_right (by decide) (by omega)
+        omega
+      cases k with
+      | zero =>
+        simp only [hms] at h
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        have posw : (0 : Int) < (2 : Int) ^ w := Int.pow_pos (by decide)
+        obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) H wf hx3 posw (by rw [← hx2]; omega)
+        have castw : ((2 ^ w : Nat) : Int) = (2 : Int) ^ w := by simp
+        refine ⟨ρ', c, Nat.mod_lt _ (by decide), ?_, br⟩
+        rw [hand, Nat.pow_zero, Nat.div_one, Nat.mul_one, Nat.mod_eq_of_lt (by simpa using hlt),
+            hr, ← hx2, Int.natCast_emod, castw]
+      | succ k' =>
+        simp only [hms] at h
+        split at h
+        next h64 =>
+          simp only [beq_iff_eq] at h64
+          have := V.pure_ok h
+          injection this with hp _
+          injection hp with h1 h2
+          subst h1 h2
+          have posk : (0 : Int) < (2 : Int) ^ (k' + 1) := Int.pow_pos (by decide)
+          obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
+          have castk : ((2 ^ (k' + 1) : Nat) : Int) = (2 : Int) ^ (k' + 1) := by simp
+          have hdiv_lt : xa / 2 ^ (k' + 1) < 2 ^ w := by
+            have hm64 : M64 = 2 ^ w * 2 ^ (k' + 1) := by
+              rw [← Nat.pow_add, show w + (k' + 1) = 64 by omega]; rfl
+            rw [Nat.div_lt_iff_lt_mul (Nat.two_pow_pos _), ← hm64]
+            exact hx1'
+          refine ⟨ρ', c, Nat.mod_lt _ (by decide), ?_, bounded_scale _ bq⟩
+          rw [hand, Nat.mod_eq_of_lt hlt, Nat.mod_eq_of_lt hdiv_lt, ev_scale, hq, ← hx2,
+              Int.natCast_mul, Int.natCast_ediv, castk, Int.mul_comm]
+        next =>
+          have := V.pure_ok h
+          injection this with hp _
+          injection hp with h1 h2
+          subst h1 h2
+          have posk : (0 : Int) < (2 : Int) ^ (k' + 1) := Int.pow_pos (by decide)
+          have posw : (0 : Int) < (2 : Int) ^ w := Int.pow_pos (by decide)
+          obtain ⟨ρ1, c1, hq1, _, bq1, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ (k' + 1)) H wf hx3 posk (by rw [← hx2]; omega)
+          have hq1_nn : 0 ≤ ev ρ1 (symDivide s x ((2 : Int) ^ (k' + 1))).1 := by
+            rw [hq1, ← hx2]; exact Int.ediv_nonneg (Int.natCast_nonneg _) (Int.le_of_lt posk)
+          obtain ⟨ρ2, c2, _, hr2, _, br2⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := (2 : Int) ^ w) c1.holds c1.wf bq1 posw hq1_nn
+          have castk : ((2 ^ (k' + 1) : Nat) : Int) = (2 : Int) ^ (k' + 1) := by simp
+          have castw : ((2 ^ w : Nat) : Int) = (2 : Int) ^ w := by simp
+          refine ⟨ρ2, c1.then c2, Nat.mod_lt _ (by decide), ?_, bounded_scale _ br2⟩
+          rw [hand, Nat.mod_eq_of_lt hlt, ev_scale, hr2, hq1, ← hx2,
+              Int.natCast_mul, Int.natCast_emod, Int.natCast_ediv, castk, castw, Int.mul_comm]
+
 theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symPrim f s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (xa xb : Nat) (hx : EV.sem ρ s.nvars xa (.lin x)) (hy : EV.sem ρ s.nvars xb (.lin y)) :
@@ -1702,13 +1849,13 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
           next hc5 =>
             have fe : f = "shl64" := by simpa using hc5
             subst fe
-            cases hk : Lin.isConst y with
+            cases hk : constOf s.facts y with
             | none => simp only [hk] at h; exact (refuse_ok h).elim
             | some k =>
               simp only [hk] at h
               split at h
               next hk2 =>
-                have yk : (xb : Int) = k := by rw [hy2]; exact ev_isConst hk
+                have yk : (xb : Int) = k := by rw [hy2]; exact constOf_sound hk ρ hf
                 have e : xb = k.toNat := by omega
                 subst e
                 have k64 : k.toNat < 64 := by omega
@@ -1751,7 +1898,7 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
             next hc6 =>
               have fe : f = "shr64" := by simpa using hc6
               subst fe
-              cases hk : Lin.isConst y with
+              cases hk : constOf s.facts y with
               | none => simp only [hk] at h; exact (refuse_ok h).elim
               | some k =>
                 simp only [hk] at h
@@ -1761,7 +1908,7 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
                   injection this with hp _
                   injection hp with h1 h2
                   subst h1 h2
-                  have yk : (xb : Int) = k := by rw [hy2]; exact ev_isConst hk
+                  have yk : (xb : Int) = k := by rw [hy2]; exact constOf_sound hk ρ hf
                   have e : xb = k.toNat := by omega
                   subst e
                   have pos : (0 : Int) < 2 ^ k.toNat := Int.pow_pos (by decide)
@@ -1777,45 +1924,22 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
               next hc7 =>
                 have fe : f = "and64" := by simpa using hc7
                 subst fe
-                cases hk : Lin.isConst y with
-                | none => simp only [hk] at h; exact (refuse_ok h).elim
+                cases hk : constOf s.facts y with
                 | some m =>
                   simp only [hk] at h
-                  have ym : (xb : Int) = m := by rw [hy2]; exact ev_isConst hk
-                  split at h
-                  next hm =>
-                    simp only [beq_iff_eq] at hm
-                    have xbm : xb = M64 - 64 := by unfold M64; omega
-                    subst xb
-                    have := V.pure_ok h
-                    injection this with hp _
-                    injection hp with h1 h2
-                    subst h1 h2
-                    obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := 64) H wf hx3 (by decide) (by rw [← hx2]; omega)
-                    have lt : 64 * (xa / 64) < M64 := by unfold M64 at hx1' ⊢; omega
-                    refine ⟨ρ', c, (xa &&& (M64 - 64)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale 64 bq⟩
-                    rw [align64_mask hx1', Nat.mod_eq_of_lt lt, ev_scale, hq, ← hx2]
-                    simp [Int.natCast_ediv]
-                  next =>
-                    cases hfind : (List.range 65).find? (fun k => (2 : Int) ^ k - 1 == m) with
-                    | none => simp only [hfind] at h; exact (refuse_ok h).elim
-                    | some k =>
-                      simp only [hfind] at h
-                      have := V.pure_ok h
-                      injection this with hp _
-                      injection hp with h1 h2
-                      subst h1 h2
-                      have hm : (2 : Int) ^ k - 1 = m := by simpa using List.find?_some hfind
-                      have pos : (0 : Int) < 2 ^ k := Int.pow_pos (by decide)
-                      have cast : ((2 ^ k : Nat) : Int) = (2 : Int) ^ k := by simp
-                      have xbk : xb = 2 ^ k - 1 := by
-                        have := Nat.two_pow_pos k
-                        omega
-                      subst xbk
-                      obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx3 pos (by rw [← hx2]; omega)
-                      have lt : xa % 2 ^ k < M64 := Nat.lt_of_le_of_lt (Nat.mod_le _ _) hx1'
-                      refine ⟨ρ', c, (xa &&& (2 ^ k - 1)) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, br⟩
-                      rw [hr, ← hx2, Nat.and_two_pow_sub_one_eq_mod, Nat.mod_eq_of_lt lt, Int.natCast_emod, cast]
+                  have ym : (xb : Int) = m := by rw [hy2]; exact constOf_sound hk ρ hf
+                  obtain ⟨ρ', c, hsem⟩ := symAndConst_sound h H wf xa xb ⟨hx1, hx2, hx3⟩ ym
+                  exact ⟨ρ', c, (xa &&& xb) % M64, by simp [prim], hsem⟩
+                | none =>
+                  simp only [hk] at h
+                  cases hkx : constOf s.facts x with
+                  | none => simp only [hkx] at h; exact (refuse_ok h).elim
+                  | some m =>
+                    simp only [hkx] at h
+                    have xm : (xa : Int) = m := by rw [hx2]; exact constOf_sound hkx ρ hf
+                    obtain ⟨ρ', c, hsem⟩ := symAndConst_sound h H wf xb xa ⟨hy1, hy2, hy3⟩ xm
+                    rw [Nat.and_comm] at hsem
+                    exact ⟨ρ', c, (xa &&& xb) % M64, by simp [prim], hsem⟩
               next =>
                 split at h
                 next hc8 =>

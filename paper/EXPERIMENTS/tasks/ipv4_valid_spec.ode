@@ -1,0 +1,31 @@
+// RFC 791 IPv4 packet header validator + RFC 1071 one's-complement header checksum.
+//
+// Returns 1 iff `pkt[0..len(pkt)]` starts with a valid IPv4 header:
+//   1. len(pkt) >= 20
+//   2. version == 4 (high nibble `pkt[0] / 16 == 4`)
+//   3. ihl >= 5 and 4 * ihl <= len(pkt) (low nibble `pkt[0] % 16`; header length 20..60 bytes)
+//   4. total_length = pkt[2] * 256 + pkt[3] satisfies 4 * ihl <= total_length <= len(pkt)
+//   5. RFC 1071 header checksum: folding the sum of all 2*ihl big-endian 16-bit halfwords
+//      in pkt[0 .. 4*ihl) with end-around carry twice equals 65535 (0xFFFF).
+
+def u16be(pkt, i) { pkt[i] * 256 + pkt[i + 1] }
+
+def fold2_ok(s) {
+    if ((s % 65536 + s / 65536) % 65536) + ((s % 65536 + s / 65536) / 65536) == 65535 then 1
+    else 0
+}
+
+def sum16_check(pkt, k, words, acc) {
+    if k >= words then fold2_ok(acc)
+    else sum16_check(pkt, k + 1, words, acc + u16be(pkt, 2 * k))
+}
+
+def ipv4_valid(pkt) {
+    if len(pkt) < 20 then 0
+    else if pkt[0] / 16 != 4 then 0
+    else if pkt[0] % 16 < 5 then 0
+    else if (pkt[0] % 16) * 4 > len(pkt) then 0
+    else if u16be(pkt, 2) < (pkt[0] % 16) * 4 then 0
+    else if u16be(pkt, 2) > len(pkt) then 0
+    else sum16_check(pkt, 0, (pkt[0] % 16) * 2, 0)
+}

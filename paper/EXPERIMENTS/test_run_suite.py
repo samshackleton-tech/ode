@@ -74,6 +74,18 @@ class TestRunSuite(unittest.TestCase):
         self.assertAlmostEqual(m["cyc_per_b"], 1.12)
         self.assertEqual(m["excludes_callees"], 4)
 
+        adv_multi = (
+            "  loop 0: +0x34..+0x74 lines 68..84 — 16 ins, 64 B, 1 i-cache line(s), >= 6.0 cyc/iter (critical_path) | "
+            "pipeline sim ~3.50 cyc/iter (ports:I4, 6 fused, 3.50 cyc/B across 1 load(s)/1 B)\n"
+            "  loop 1: +0x34..+0x188 lines 68..157 — 85 ins, 340 B, 4 i-cache line(s), >= 22.0 cyc/iter (branch_throughput) | "
+            "pipeline sim ~22.00 cyc/iter (ports:I4, 22 fused, 1.00 cyc/B across 8 load(s)/22 B, excludes 4 callee(s)) "
+            "[secondary back-edge to +0x34; slice spans multiple paths]\n"
+        )
+        m2 = run_suite.parse_advise_metrics(adv_multi, "arm64")
+        self.assertEqual(m2["hot_loop"], 0)
+        self.assertEqual(m2["load_bytes"], 1)
+        self.assertAlmostEqual(m2["cyc_per_b"], 3.50)
+
         orig_exp = run_suite.EXP_DIR
         try:
             with tempfile.TemporaryDirectory() as td:
