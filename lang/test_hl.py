@@ -367,6 +367,110 @@ fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
 """
         _dual_verify(self, src, "hl_vec_add", check_verify2=False)
 
+    def test_10_nested_rotl_non_avx512_and_u8_var_name(self):
+        """2-reg vector scratch handles `rotl32(u8 + b, 12)` on both arm64 and non-avx512 x86_64, and `u8` as var name."""
+        src = """
+def arx12(w) {
+    let s0 = (w[0] + w[4]) >>> 20
+    let s1 = (w[1] + w[5]) >>> 20
+    let s2 = (w[2] + w[6]) >>> 20
+    let s3 = (w[3] + w[7]) >>> 20
+    [ s0, s1, s2, s3 ]
+}
+
+fn hl_rotl_nested(out: 16 bytes, inp: 32 bytes)
+    requires no_overlap(out, inp)
+    ensures out = bytes_of(arx12(words(inp)))
+{
+    for x86_64 needs avx {
+        let u8: u32x4 := inp.u32x4(0)
+        var b: u32x4 := inp.u32x4(16)
+        b := rotl32(u8 + b, 12)
+        out.u32x4(0) := b
+    }
+    for arm64 {
+        let u8: u32x4 := inp.u32x4(0)
+        var b: u32x4 := inp.u32x4(16)
+        b := rotl32(u8 + b, 12)
+        out.u32x4(0) := b
+    }
+}
+"""
+        _dual_verify(self, src, "hl_rotl_nested", check_verify2=False)
+
+    def test_11_disjoint_or_select_wrap_div_mod_and_large_arm_imm(self):
+        """Proved `disjointOr`, auto-wrapped `select(c >= 97, c - 97, 0)`, `/`/`%` by powers of 2, and >16-bit arm64 imm."""
+        src = """
+def pack_bits(a, b) {
+    (a % 4) * 262144 + (if 97 <= b && b <= 122 then b - 97 else 0)
+}
+
+fn hl_pack_bits(a: u64, b: u8) -> u64
+    requires 0 <= a, a <= 1000
+    returns pack_bits(a, b)
+    trace depends on
+{
+    let hi := (a % 4) << 18
+    let m := 131071
+    let lo := select(b >= 97 && b <= 122, b - 97, 0) & m
+    let half := (hi | lo) / 1
+    return half
+}
+"""
+        _dual_verify(self, src, "hl_pack_bits")
+
+    def test_12_congruence_t_same_alias_inheritance_and_step2(self):
+        """Pure-function congruence (`t same`), dead `let` alias inheritance, and `for ... step 2` parity."""
+        src = """
+def pair_sum(p, k, lim, acc) {
+    if k >= lim then acc
+    else pair_sum(p, k + 1, lim, acc + p[k])
+}
+
+fn hl_step2_sum(p: n bytes, n: number, m: number) -> u64
+    requires 0 <= m, m <= 32
+    requires n == 2 * m
+    returns pair_sum(p, 0, n, 0)
+    trace depends on n, m
+{
+    let lim := m << 1
+    var acc: u64 := 0
+    for k in 0..lim step 2
+        maintains acc <= k * 255
+        maintains pair_sum(p, 0, lim, 0) == pair_sum(p, k, lim, acc)
+    {
+        let b0 := p[k]
+        let b1 := p[k + 1]
+        acc += b0 + b1
+    }
+    return acc
+}
+"""
+        _dual_verify(self, src, "hl_step2_sum")
+
+    def test_13_concrete_prefilter_fast_refusal(self):
+        """Buggy scalar function is caught immediately by the concrete pre-filter with a counterexample."""
+        src = """
+fn hl_bad_add(x: u64) -> u64
+    requires 0 <= x, x <= 100
+    returns x + 1
+    trace depends on x
+{
+    return x + 2
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src)
+            with self.assertRaises(ode_audit.PackProofError) as ctx:
+                ode_audit.pack_verified(
+                    p, None, os.path.join(d, "o.o"), os.path.join(d, "o.p"),
+                    fn_name="hl_bad_add", target="x86_64", c_abi=True,
+                )
+            self.assertIn("refused with a proof", str(ctx.exception))
+            self.assertIn("counterexample", ctx.exception.extra_note)
+
 
 if __name__ == "__main__":
     unittest.main()

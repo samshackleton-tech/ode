@@ -304,7 +304,7 @@ theorem each_mem {α : Type} {f : α → V Unit} : ∀ {l : List α} {items : It
 /-- Facts of the specification the verifier has come to, one after another: all are so. -/
 theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) :
     ∀ (goals : List SFact) {s s' : Sym} {items rest : Items} {ρ : Nat → Int} {st : State},
-    fold (specGoal ctx 16) s goals items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → (∀ f ∈ goals, f.bounded s.nvars) →
+    fold (specGoal ctx 32) s goals items = .ok (s', rest) → Holds ctx s0 ρ s st → WF ctx s → (∀ f ∈ goals, f.bounded s.nvars) →
     ∃ ρ', Carried ctx s0 ρ s ρ' s' st ∧ ∀ f ∈ goals, f.holds ctx s0 ρ'
   | [], s, s', items, rest, ρ, st, h, H, wf, hb => by
     simp only [fold] at h
@@ -315,7 +315,7 @@ theorem specGoals_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
   | g :: more, s, s', items, rest, ρ, st, h, H, wf, hb => by
     simp only [fold] at h
     obtain ⟨s1, r1, e1, h⟩ := V.bind_ok h
-    obtain ⟨ρ1, c1, g1⟩ := specGoal_sound E 16 e1 H wf (hb g (List.mem_cons_self ..))
+    obtain ⟨ρ1, c1, g1⟩ := specGoal_sound E 32 e1 H wf (hb g (List.mem_cons_self ..))
     obtain ⟨ρ2, c2, g2⟩ := specGoals_sound E more h c1.holds c1.wf
       (fun f m => SFact.bounded_mono c1.mono (hb f (List.mem_cons_of_mem _ m)))
     refine ⟨ρ2, c1.then c2, fun f m => ?_⟩

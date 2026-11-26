@@ -1535,6 +1535,7 @@ def _run_one_test(test_name):
 
 
 if __name__ == "__main__":
+    os.environ.setdefault("ODE_PROVE_TIMEOUT", "45")
     if "--serial" in sys.argv or any(a.startswith("TestVerify2") or a.startswith("test_") for a in sys.argv[1:]):
         args = [a for a in sys.argv if a != "--serial"]
         unittest.main(argv=args)

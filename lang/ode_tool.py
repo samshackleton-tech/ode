@@ -1043,6 +1043,8 @@ def main(argv=None):
                 target=exc.target, contract=exc.contract, spec_text=exc.spec_text,
             )
             print(diag)
+            if getattr(exc, "extra_note", ""):
+                print(exc.extra_note)
             return 1
         except SystemExit as exc:
             msg = str(exc)

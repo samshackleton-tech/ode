@@ -137,6 +137,25 @@ class TestRunSuite(unittest.TestCase):
         with self.assertRaises(SystemExit):
             run_suite.load_preset("does-not-exist-preset")
 
+    def test_05_lpt_schedule_provider_sort_and_ref_cache(self):
+        jobs = [
+            ({"id": "ipv4_valid"}, "anthropic/claude-haiku-5.5", "x86_64", "advised"),
+            ({"id": "chacha20_4way"}, "anthropic/claude-fable-5.2", "arm64", "advised"),
+            ({"id": "der_valid"}, "openai/gpt-6.2-astra-pro", "x86_64", "advised"),
+        ]
+        ordered = run_suite.schedule_jobs_lpt(jobs)
+        self.assertEqual(ordered[0][0]["id"], "chacha20_4way")
+        self.assertEqual(ordered[0][1], "anthropic/claude-fable-5.2")
+        self.assertEqual(ordered[-1][0]["id"], "ipv4_valid")
+        # Cache key changes when task/target changes and stays deterministic across repeated calls
+        with (run_suite.TASKS_DIR / "ipv4_valid.json").open("r", encoding="utf-8") as f:
+            t_ip = json.load(f)
+        k1 = run_suite._ref_cache_key(t_ip, "x86_64")
+        k2 = run_suite._ref_cache_key(t_ip, "x86_64")
+        k3 = run_suite._ref_cache_key(t_ip, "arm64")
+        self.assertEqual(k1, k2)
+        self.assertNotEqual(k1, k3)
+
 
 if __name__ == "__main__":
     unittest.main()

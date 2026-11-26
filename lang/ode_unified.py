@@ -283,15 +283,21 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
             arch = im["arch"]
             has_impl_stack = any(re.match(r"^\s*stack\b", ec) for ec in im["extra_clauses"])
             explicit_stack = has_fn_stack or has_impl_stack
+            impl_needs = set(re.findall(r"(?m)^\s*needs\s+([A-Za-z0-9_]+)", fn_rec["clauses_text"]))
+            for ec in im["extra_clauses"]:
+                impl_needs.update(re.findall(r"(?m)^\s*needs\s+([A-Za-z0-9_]+)", ec))
             try:
                 res = ode_hl.lower_hl_block(
                     fn_rec["name"], raw_params, im["lines"], im["first_line"], arch,
                     src=src, fn_names=fn_names, data_names=data_by_arch.get(arch, set()),
                     explicit_stack=explicit_stack,
                     callee_clobbers=callee_clobbers.get(arch),
-                    needs=im.get("needs", ()),
+                    needs=impl_needs,
                 )
             except ode_hl.HLErr as exc:
+                if im.get("portable"):
+                    im["hl_err"] = str(exc)
+                    continue
                 raise UnifiedErr(str(exc)) from exc
             im["hl_lines"] = list(im["lines"])
             im["lines"] = res["lines"]
@@ -308,6 +314,15 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None):
             callee_stack[arch][fn_rec["symbol"]] = eff_stack
             if not explicit_stack:
                 im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
+            else:
+                stk_vals = [int(m.group(1)) for ec in im["extra_clauses"] for m in [re.match(r"^\s*stack\s+(\d+)\b", ec)] if m]
+                if not stk_vals:
+                    stk_vals = [int(m.group(1)) for m in re.finditer(r"(?m)^\s*stack\s+(\d+)\b", fn_rec["clauses_text"])]
+                if stk_vals and eff_stack > stk_vals[-1]:
+                    im["hl_err"] = (
+                        f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
+                        f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
+                    )
             # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
             # (never on the explicit `--c-abi` FFI entry function).
             if fn_rec["name"] != c_abi_fn and fn_rec["name"] in called_by_other and im["calling_text"] is None and res.get("auto_calling"):
@@ -1067,19 +1082,24 @@ def _select_impl(fn_rec, target_key, src="<ode>"):
     impls = fn_rec["impls"]
     if not impls:
         return None
+    picked = None
     if target_key is None:
         if len(impls) == 1:
-            return next(iter(impls.values()))
-        raise UnifiedErr(
-            f"{src}: `fn {fn_rec['name']}` has multiple targets ({', '.join(impls)}); specify `--target`"
-        )
-    if target_key in impls:
-        return impls[target_key]
-    # If `target_key` has a variant like `x86_64:avx512`, fall back to base `x86_64` for helpers without that variant
-    base = target_key.split(":", 1)[0]
-    if base in impls:
-        return impls[base]
-    return None
+            picked = next(iter(impls.values()))
+        else:
+            raise UnifiedErr(
+                f"{src}: `fn {fn_rec['name']}` has multiple targets ({', '.join(impls)}); specify `--target`"
+            )
+    elif target_key in impls:
+        picked = impls[target_key]
+    else:
+        # If `target_key` has a variant like `x86_64:avx512`, fall back to base `x86_64` for helpers without that variant
+        base = target_key.split(":", 1)[0]
+        if base in impls:
+            picked = impls[base]
+    if picked is not None and picked.get("hl_err"):
+        raise UnifiedErr(picked["hl_err"])
+    return picked
 
 
 def _contract_text_for(fn_rec, impl, include_calling=False):

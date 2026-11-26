@@ -469,7 +469,7 @@ private theorem symReturnBody_sound {ctx : Ctx} {p : Program} {s0 : State} (E : 
     | tail c =>
       simp only at h
       obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
-      obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg ctx.contract.retReg lt0⟩
+      obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 32 g1 c1.holds c1.wf ⟨bd, c1.wf.reg ctx.contract.retReg lt0⟩
       simp only [SFact.holds] at gh
       rw [← ev_agree (c1.wf.reg ctx.contract.retReg lt0) c2.agree, ← hrax] at gh
       exact (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)
@@ -1229,7 +1229,7 @@ theorem symRevealReg_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting c
         simp only at h
         obtain ⟨s2, r2, g1, h⟩ := V.bind_ok h
         have hp := V.pure_ok h; injection hp with hs' _; subst hs'
-        obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 16 g1 c1.holds c1.wf ⟨bd, c1.wf.reg r hr⟩
+        obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E 32 g1 c1.holds c1.wf ⟨bd, c1.wf.reg r hr⟩
         simp only [SFact.holds] at gh
         rw [← ev_agree (c1.wf.reg r hr) c2.agree, ← hreg] at gh
         exact ⟨hr, hcl, rfl, (sem _).mpr ((CallValue_agree bd c2.agree _).mpr gh)⟩

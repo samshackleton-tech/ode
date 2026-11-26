@@ -57,8 +57,6 @@ def is_hl_body(lines):
         s = raw.split("//", 1)[0].strip()
         if not s or s in ("{", "}", "break", "continue"):
             continue
-        if _RAW_ASM_RE.match(s):
-            return False
         if _HL_START_RE.match(s):
             saw_hl = True
             continue
@@ -68,8 +66,11 @@ def is_hl_body(lines):
                 return False
             saw_hl = True
             continue
-        if any(op in s for op in ("+=", "-=", "+%=", "-%=", "&=", "|=", "^=", "<<=", ">>=", "select(", ".u16(", ".u32(", ".u64(", ".u32x4(", ".u32x16(")):
+        if any(op in s for op in (":=", "+=", "-=", "+%=", "-%=", "&=", "|=", "^=", "<<=", ">>=", "select(", ".u16(", ".u32(", ".u64(", ".u32x4(", ".u32x16(")):
             saw_hl = True
+            continue
+        if _RAW_ASM_RE.match(s):
+            return False
     return saw_hl
 
 
@@ -79,7 +80,7 @@ def is_hl_body(lines):
 
 _KEYWORDS = frozenset({
     "let", "var", "if", "else", "while", "for",
-    "break", "continue", "return", "select", "u64", "u8", "u32x4", "u32x16",
+    "break", "continue", "return", "select",
 })
 
 _TWO_THREE_OPS = (
@@ -140,7 +141,7 @@ def tokenize_hl(lines, first_line, src):
                 toks.append(Tok("op", matched, lno))
                 i += len(matched)
                 continue
-            if ch in "+-*&|^!<>()[]{}:;=,.":
+            if ch in "+-*/%&|^!<>()[]{}:;=,.":
                 toks.append(Tok("op", ch, lno))
                 i += 1
                 continue
@@ -645,7 +646,7 @@ class HLParser:
 
     def _parse_mul(self):
         e = self._parse_atom()
-        while self.cur().val in ("*", "*%"):
+        while self.cur().val in ("*", "*%", "/", "%"):
             op = self.take()
             e = BinOp(op.val, e, self._parse_atom(), op.line)
         return e
@@ -760,6 +761,8 @@ def _const_eval_binop(op, a, b):
     if op == "+": return a + b
     if op == "-": return a - b
     if op == "*": return a * b
+    if op == "/" and b > 0: return a // b
+    if op == "%" and b > 0: return a % b
     if op == "+%": return (a + b) & M64
     if op == "-%": return (a - b) & M64
     if op == "*%": return (a * b) & M64
@@ -927,6 +930,24 @@ _VEC4_INTRINSICS = frozenset({
 _VEC16_INTRINSICS = frozenset({
     "load_u32x16", "broadcast_u32x16", "zeros_u32x16", "shufi32x4", "add_u32x16_data",
 })
+
+
+def _mutated_vars(stmts):
+    """Return set of variable names that are mutable (`var`, `:=`, `+=`, `for` counter) anywhere in `stmts`."""
+    w = set()
+    for st in stmts:
+        if isinstance(st, LetStmt) and st.mutable:
+            w.add(st.name)
+        elif isinstance(st, AssignStmt):
+            w.add(st.target)
+        elif isinstance(st, ForStmt):
+            w.add(st.var)
+            w |= _mutated_vars(st.body)
+        elif isinstance(st, IfStmt):
+            w |= _mutated_vars(st.then_body) | _mutated_vars(st.else_body)
+        elif isinstance(st, WhileStmt):
+            w |= _mutated_vars(st.body)
+    return w
 
 
 def _written_vars(stmts):
@@ -1225,6 +1246,10 @@ def _pure_to_spec(e, bytes_params=()):
             l = _pure_to_spec(e.left, bytes_params)
             if l is not None:
                 return f"({l[0]} * {1 << e.right.val})", l[1]
+        if e.op in ("/", "%") and isinstance(e.right, Num) and e.right.val > 0 and (e.right.val & (e.right.val - 1)) == 0:
+            l = _pure_to_spec(e.left, bytes_params)
+            if l is not None:
+                return f"({l[0]} {e.op} {e.right.val})", l[1]
     return None
 
 
@@ -1306,8 +1331,10 @@ class HLLower:
         self.lbl_seq = 0
         self.loop_stack = []     # [(head_lbl, end_lbl, step_lbl_or_None)]
         self.active_facts = []   # [(fact_str, vars_used)]
+        self.pure_aliases = {}   # immutable `let` var -> (spec_expr_str, vars_used)
         self.defined_vars = set(self.param_names)
         self.fn_written_vars = _written_vars(self.stmts)
+        self.fn_mutated_vars = _mutated_vars(self.stmts)
         self.reg_owner = {self.var_loc[p][1]: p for p in self.param_names if self.var_loc[p][0] == "reg"}
 
     def _compute_interference(self):
@@ -1464,10 +1491,10 @@ class HLLower:
         used_regs = set()
         callee_pool_all = list(ARM_CALLEE_SAVED if self.arch == "arm64" else X86_CALLEE_SAVED)
         caller_pool_all = list(ARM_CALLER_POOL if self.arch == "arm64" else X86_CALLER_POOL)
-        vec4_pool_all = ([f"v{k}" for k in range(0, 8)] + [f"v{k}" for k in range(16, 31)] + [f"v{k}" for k in range(8, 16)]
+        vec4_pool_all = ([f"v{k}" for k in range(0, 8)] + [f"v{k}" for k in range(16, 30)] + [f"v{k}" for k in range(8, 16)]
                          if self.arch == "arm64"
-                         else [f"xmm{k}" for k in range(1, 16)])
-        vec16_pool_all = [f"zmm{k}" for k in range(16, 32)] + [f"zmm{k}" for k in range(1, 16)]
+                         else [f"xmm{k}" for k in range(1, 15)])
+        vec16_pool_all = [f"zmm{k}" for k in range(16, 31)] + [f"zmm{k}" for k in range(1, 16)]
 
         # 1. Assign parameters (only copy to another reg if live across call AND its ABI reg is clobbered!)
         param_regs = set()
@@ -1672,10 +1699,25 @@ class HLLower:
             else:
                 self.emit(line, f"mov {dst}, {val}")
         else:
-            if 0 <= val <= 65535:
-                self.emit(line, f"mov {dst}, {val}")
-            else:
-                self.emit(line, f"{dst} := {val}")
+            x = val & ((1 << 64) - 1)
+            if x <= 65535:
+                self.emit(line, f"mov {dst}, {x}")
+                return
+            # Build arbitrary 64-bit constant using mov + lsl + add (zero extra scratch regs, all in arm64.tab)
+            chunks = []
+            while x > 65535:
+                chunks.append((12, x & 0xfff))
+                x >>= 12
+            self.emit(line, f"mov {dst}, {x}")
+            pending_sh = 0
+            for sh, lo in reversed(chunks):
+                pending_sh += sh
+                if lo:
+                    self.emit(line, f"lsl {dst}, {dst}, {pending_sh}")
+                    self.emit(line, f"add {dst}, {dst}, {lo}")
+                    pending_sh = 0
+            if pending_sh:
+                self.emit(line, f"lsl {dst}, {dst}, {pending_sh}")
 
     def _load_var(self, line, name, dst):
         if name not in self.var_loc:
@@ -1966,6 +2008,17 @@ class HLLower:
                     self._emit_const_mul(e.line, dst, rreg, e.left.val, nxt_idx)
                     return
                 raise HLErr(f"{self.src}: line {e.line}: scalar `*` requires a constant factor (use shifts/adds for general multiplication)")
+            if e.op in ("/", "%"):
+                if not isinstance(e.right, Num) or e.right.val <= 0 or (e.right.val & (e.right.val - 1)) != 0:
+                    raise HLErr(
+                        f"{self.src}: line {e.line}: scalar `{e.op}` requires a power-of-two constant "
+                        f"({'use >> k' if e.op == '/' else 'use & (m - 1)'})"
+                    )
+                if e.op == "/":
+                    self._eval_scalar(BinOp(">>", e.left, Num(e.right.val.bit_length() - 1, e.line), e.line), dst, s_idx)
+                else:
+                    self._eval_scalar(BinOp("&", e.left, Num(e.right.val - 1, e.line), e.line), dst, s_idx)
+                return
             if e.op in ("<<", ">>"):
                 if not isinstance(e.right, Num):
                     raise HLErr(f"{self.src}: line {e.line}: shift amount must be a constant")
@@ -1974,6 +2027,10 @@ class HLLower:
                 if lreg is None:
                     self._eval_scalar(e.left, dst, s_idx)
                     lreg = dst
+                if k == 0:
+                    if lreg != dst:
+                        self.emit(e.line, f"mov {dst}, {lreg}")
+                    return
                 if self.arch == "x86_64":
                     if lreg != dst:
                         self.emit(e.line, f"mov {dst}, {lreg}")
@@ -2044,8 +2101,19 @@ class HLLower:
         rreg = self._as_reg(right_e, nxt if self.scratch(nxt) != lreg else (nxt + 1) % n_scr)
         self.emit(line, f"cmp {lreg}, {rreg}")
 
+    def _speculative_wrap(self, e):
+        """Convert speculative `+`/`-` inside `select(cond, T, F)` arms into wrapping `+%`/`-%`
+        so dead arms (e.g. `c - 97` when `c == 65`) never fail overflow/underflow before `cmov`/`csel`."""
+        if isinstance(e, BinOp):
+            op = "+%" if e.op == "+" else ("-%" if e.op == "-" else e.op)
+            return BinOp(op, self._speculative_wrap(e.left), self._speculative_wrap(e.right), e.line)
+        if isinstance(e, Select):
+            return Select(e.cond, self._speculative_wrap(e.then_e), self._speculative_wrap(e.else_e), e.line)
+        return e
+
     def _eval_select(self, sel, dst, s_idx=0):
         """Lower `select(cond, t_expr, f_expr)` branchlessly to `cmp + cmov* / csel`."""
+        sel = Select(sel.cond, self._speculative_wrap(sel.then_e), self._speculative_wrap(sel.else_e), sel.line)
         c = sel.cond
         if isinstance(c, NotOp):
             self._eval_select(Select(c.expr, sel.else_e, sel.then_e, sel.line), dst, s_idx)
@@ -2191,19 +2259,19 @@ class HLLower:
             self.emit(call.line, f"mov {dst}, {ret_reg}")
 
     # -- Vector Lowering (`u32x4` and `u32x16`) --
-    def _vec_scratch(self, ty):
+    def _vec_scratch(self, ty, idx=0):
         if ty == "u32x16":
-            return "zmm0"
-        return "v31" if self.arch == "arm64" else "xmm0"
+            return ("zmm0", "zmm31")[idx & 1]
+        return ("v31", "v30")[idx & 1] if self.arch == "arm64" else ("xmm0", "xmm15")[idx & 1]
 
-    def _as_vec_reg(self, e, ty):
+    def _as_vec_reg(self, e, ty, s_idx=0):
         if isinstance(e, Var) and e.name in self.var_loc and self.var_loc[e.name][0] == "reg":
             return self.var_loc[e.name][1]
-        vr = self._vec_scratch(ty)
-        self._eval_vec(e, vr, ty)
+        vr = self._vec_scratch(ty, s_idx)
+        self._eval_vec(e, vr, ty, s_idx)
         return vr
 
-    def _eval_vec(self, e, dst, ty):
+    def _eval_vec(self, e, dst, ty, s_idx=0):
         line = getattr(e, "line", 0)
         if isinstance(e, Var):
             self._load_var(line, e.name, dst)
@@ -2221,8 +2289,11 @@ class HLLower:
                 self.emit(line, f"vmovdqu32 {dst}, [{base}{d_str}]")
             return
         if isinstance(e, BinOp):
-            lr = self._as_vec_reg(e.left, ty)
-            rr = self._as_vec_reg(e.right, ty)
+            lr = self._as_vec_reg(e.left, ty, s_idx)
+            nxt = 1 - (s_idx & 1)
+            if self._vec_scratch(ty, nxt) == lr:
+                nxt = 1 - nxt
+            rr = self._as_vec_reg(e.right, ty, nxt)
             if ty == "u32x16":
                 if e.op in ("+", "+%"):
                     self.emit(line, f"vpaddd {dst}, {lr}, {rr}")
@@ -2250,10 +2321,10 @@ class HLLower:
         if isinstance(e, Call):
             nm, args = e.name, e.args
             if nm == "load_u32x4":
-                self._eval_vec(IndexLoad(args[0].name, args[1], "u32x4", line), dst, "u32x4")
+                self._eval_vec(IndexLoad(args[0].name, args[1], "u32x4", line), dst, "u32x4", s_idx)
                 return
             if nm == "load_u32x16":
-                self._eval_vec(IndexLoad(args[0].name, args[1], "u32x16", line), dst, "u32x16")
+                self._eval_vec(IndexLoad(args[0].name, args[1], "u32x16", line), dst, "u32x16", s_idx)
                 return
             if nm == "zeros_u32x16":
                 self.emit(line, f"vpxord {dst}, {dst}, {dst}")
@@ -2281,14 +2352,19 @@ class HLLower:
                 k = args[1].val
                 r = (32 - k) if nm == "rotl32" else k
                 l = (32 - r)
-                sr = self._as_vec_reg(args[0], ty)
+                if isinstance(args[0], Var) and args[0].name in self.var_loc and self.var_loc[args[0].name][0] == "reg":
+                    sr = self.var_loc[args[0].name][1]
+                else:
+                    # Evaluate compound/spilled operand directly into `dst` so `tmp` (from 2-reg scratch pool)
+                    # is guaranteed distinct from both `sr` and `dst`!
+                    self._eval_vec(args[0], dst, ty, s_idx)
+                    sr = dst
                 if ty == "u32x16" or (self.arch == "x86_64" and "avx512" in self.needs):
                     self.emit(line, f"vprord {dst}, {sr}, {r}")
                 elif self.arch == "x86_64":
-                    # Portable SSE/AVX rotate (or vprord if available; use vpslld+vpsrld+vpor for AVX2/SSE compatibility)
-                    tmp = self._vec_scratch(ty)
-                    if tmp == dst:
-                        raise HLErr(f"{self.src}: line {line}: nested vector rotate needs a named `let`")
+                    tmp = self._vec_scratch(ty, 0)
+                    if tmp in (dst, sr):
+                        tmp = self._vec_scratch(ty, 1)
                     self.emit(line, f"vpslld {tmp}, {sr}, {l}")
                     self.emit(line, f"vpsrld {dst}, {sr}, {r}")
                     self.emit(line, f"vpor {dst}, {dst}, {tmp}")
@@ -2296,40 +2372,42 @@ class HLLower:
                     if r == 16:
                         self.emit(line, f"rev32 {dst}.8h, {sr}.8h")
                     else:
-                        tmp = self._vec_scratch(ty)
+                        tmp = self._vec_scratch(ty, 0)
+                        if tmp in (dst, sr):
+                            tmp = self._vec_scratch(ty, 1)
                         self.emit(line, f"shl {tmp}.4s, {sr}.4s, {l}")
                         self.emit(line, f"ushr {dst}.4s, {sr}.4s, {r}")
                         self.emit(line, f"orr {dst}.16b, {dst}.16b, {tmp}.16b")
                 return
             if nm == "shufi32x4":
-                a = self._as_vec_reg(args[0], ty)
-                b = self._as_vec_reg(args[1], ty) if len(args) == 3 else a
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1)) if len(args) == 3 else a
                 imm = args[-1].val
                 self.emit(line, f"vshufi32x4 {dst}, {a}, {b}, {imm}")
                 return
             if nm == "shuf32":
-                a = self._as_vec_reg(args[0], ty)
+                a = self._as_vec_reg(args[0], ty, s_idx)
                 imm = args[1].val
                 self.emit(line, f"vpshufd {dst}, {a}, {imm}")
                 return
             if nm in ("ext4", "ext8", "ext12"):
                 k = int(nm[3:])
-                a = self._as_vec_reg(args[0], ty)
-                b = self._as_vec_reg(args[1], ty)
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 if self.arch == "arm64":
                     self.emit(line, f"ext {dst}.16b, {a}.16b, {b}.16b, {k}")
                 else:
                     self.emit(line, f"vpalignr {dst}, {b}, {a}, {k}")
                 return
             if nm in ("unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64"):
-                a = self._as_vec_reg(args[0], ty)
-                b = self._as_vec_reg(args[1], ty)
+                a = self._as_vec_reg(args[0], ty, s_idx)
+                b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
                       "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
                 self.emit(line, f"{mn} {dst}, {a}, {b}")
                 return
             if nm == "add_u32x16_data":
-                a = self._as_vec_reg(args[0], ty)
+                a = self._as_vec_reg(args[0], ty, s_idx)
                 self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + {args[1].name}]")
                 return
             raise HLErr(f"{self.src}: line {line}: unknown vector intrinsic `{nm}`")
@@ -2366,24 +2444,44 @@ class HLLower:
         #    (do NOT emit `fact cs == param`, which would strip `cs` from `keep`!).
 
         # 2. Inherit all active dominating outer facts mentioning only unmodified variables whose
-        #    registers are still live (not recycled by another variable and not written in the loop)!
+        #    registers are still live (expanding dead pure immutable `let` aliases lazily so facts like
+        #    `let hlen := ihl << 2; if hlen > n { return 0 }` survive as `(ihl * 4) <= n` after `hlen` is recycled)!
         loop_written_regs = {self.var_loc[v][1] for v in loop_written if v in self.var_loc and self.var_loc[v][0] == "reg"}
         for fact_s, fvars in self.active_facts:
-            if fvars & loop_written:
-                continue
+            cur_s, cur_v = fact_s, set(fvars)
             ok = True
-            for v in fvars:
-                if v in self.param_set:
-                    continue
-                loc = self.var_loc.get(v)
-                if loc is None or loc[0] != "reg":
+            for _step in range(5):
+                if cur_v & loop_written:
                     ok = False
                     break
-                if self.reg_owner.get(loc[1]) != v or loc[1] in loop_written_regs:
-                    ok = False
+                dead = []
+                for v in cur_v:
+                    if v in self.param_set:
+                        continue
+                    loc = self.var_loc.get(v)
+                    if loc is None or loc[0] != "reg" or self.reg_owner.get(loc[1]) != v or loc[1] in loop_written_regs:
+                        dead.append(v)
+                if not dead:
                     break
-            if ok:
-                add_fact(self._subst_spec_vars(fact_s))
+                expanded_any = False
+                for v in dead:
+                    alias = self.pure_aliases.get(v)
+                    if alias is None or (alias[1] & loop_written):
+                        ok = False
+                        break
+                    cur_s = re.sub(rf"\b{re.escape(v)}\b", f"({alias[0]})", cur_s)
+                    cur_v.discard(v)
+                    cur_v |= alias[1]
+                    expanded_any = True
+                if not ok or not expanded_any:
+                    break
+            else:
+                ok = False
+            if ok and not (cur_v & loop_written):
+                # Skip tautologies like `(ihl * 4) == (ihl * 4)` after self-alias expansion
+                m_eq = re.fullmatch(r"\s*(.+?)\s*==\s*(.+?)\s*", cur_s)
+                if not (m_eq and m_eq.group(1).strip("()") == m_eq.group(2).strip("()")):
+                    add_fact(self._subst_spec_vars(cur_s))
 
         # 3. Automatic `u8` range bounds ONLY for loop-carried outer byte variables (not body-local `let`s!)
         for v in sorted(loop_written):
@@ -2400,10 +2498,11 @@ class HLLower:
         for mf in maintains:
             add_fact(self._subst_spec_vars(mf))
 
-        # 6. User `writes` clauses
+        # 6. User `writes` clauses (canonicalize `writes out[.. j] = spec.fn(args)[i]` / `[.. j]` -> `spec.fn(args)`)
         for buf_nm, mode, idx_s, rhs_s in writes:
             idx_r = self._subst_spec_vars(idx_s)
-            rhs_r = self._subst_spec_vars(rhs_s)
+            rhs_r = self._subst_spec_vars(rhs_s).strip()
+            rhs_r = re.sub(r"\[\s*(?:i|\.\.[^\]]*)\s*\]\s*$", "", rhs_r).strip()
             if mode == "prefix":
                 place_lines.append(f"wrote {buf_nm}[.. {idx_r}] = {rhs_r}")
             else:
@@ -2447,6 +2546,8 @@ class HLLower:
                     pure = _pure_to_spec(st.expr, bparams)
                     if pure is not None:
                         self.active_facts.append((f"{st.name} == {pure[0]}", {st.name} | pure[1]))
+                        if not (pure[1] & self.fn_mutated_vars):
+                            self.pure_aliases[st.name] = pure
             self.defined_vars.add(st.name)
             if kind == "reg":
                 self.reg_owner[loc] = st.name
@@ -2532,9 +2633,13 @@ class HLLower:
             if not st.else_body:
                 self._emit_branch(st.cond, end_lbl, jump_if_true=False)
                 saved = len(self.active_facts)
+                saved_owner = dict(self.reg_owner)
                 self.active_facts.extend(then_facts)
                 self.lower_stmts(st.then_body)
                 del self.active_facts[saved:]
+                if _stmts_always_exit(st.then_body):
+                    # Dead `then` branch never falls through: restore register owners from before `if`!
+                    self.reg_owner = saved_owner
                 self.emit(st.line, f"{end_lbl}:")
                 # Crucial for W1: if `then` unconditionally exits (`if ihl < 20 { return 0 }`),
                 # the negated condition (`ihl >= 20`) holds for the rest of the enclosing block!
@@ -2543,12 +2648,14 @@ class HLLower:
             else:
                 self._emit_branch(st.cond, else_lbl, jump_if_true=False)
                 saved = len(self.active_facts)
+                saved_owner = dict(self.reg_owner)
                 self.active_facts.extend(then_facts)
                 self.lower_stmts(st.then_body)
                 del self.active_facts[saved:]
                 if not _stmts_always_exit(st.then_body):
                     self.emit(st.line, f"{'b' if self.arch == 'arm64' else 'jmp'} {end_lbl}")
                 self.emit(st.line, f"{else_lbl}:")
+                self.reg_owner = dict(saved_owner)
                 saved2 = len(self.active_facts)
                 self.active_facts.extend(else_facts)
                 self.lower_stmts(st.else_body)
@@ -2593,6 +2700,8 @@ class HLLower:
                 extra.append(f"{lo_lin[0]} <= {st.var}")
             if hi_lin is not None and not (hi_lin[1] & wvars):
                 extra.append(f"{st.var} <= {hi_lin[0]}")
+            if st.step > 1 and isinstance(st.lo, Num):
+                extra.append(f"({st.var} % {st.step}) == {st.lo.val % st.step}")
             dec = st.decreases
             if dec is None and hi_lin is not None and not (hi_lin[1] & wvars):
                 dec = f"{hi_lin[0]} - {st.var}"

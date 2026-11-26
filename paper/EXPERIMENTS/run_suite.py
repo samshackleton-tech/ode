@@ -115,7 +115,8 @@ def load_openrouter_key() -> str:
 def call_openrouter(model: str, messages: list[dict], api_key: str,
                     temperature: float = 0.2, max_tokens: int = 16000,
                     effort: str = "medium", timeout: int = 240,
-                    run_title: str = "Ode Pre-Registered Suite") -> tuple[str, dict, float]:
+                    run_title: str = "Ode Pre-Registered Suite",
+                    provider_sort: str = "throughput") -> tuple[str, dict, float]:
     reasoning_cfg = {"max_tokens": 8192} if model.startswith("qwen/") else {"effort": effort}
     payload = {
         "model": model,
@@ -124,6 +125,8 @@ def call_openrouter(model: str, messages: list[dict], api_key: str,
         "reasoning": reasoning_cfg,
         "messages": messages,
     }
+    if provider_sort:
+        payload["provider"] = {"sort": provider_sort}
     last_err = None
     for attempt in range(3):
         req = urllib.request.Request(
@@ -156,13 +159,14 @@ def call_openrouter(model: str, messages: list[dict], api_key: str,
     raise RuntimeError(f"OpenRouter request failed after 3 attempts: {last_err}") from last_err
 
 
-def preflight_ping(models: list[str], api_key: str, effort: str) -> dict[str, dict]:
+def preflight_ping(models: list[str], api_key: str, effort: str,
+                   provider_sort: str = "throughput") -> dict[str, dict]:
     """Send a tiny 1-word ping to every model in parallel to verify ID & schema before spending."""
     def _ping(m: str) -> tuple[str, dict]:
         content, usage, dt = call_openrouter(
             m, [{"role": "user", "content": "Reply with the single word OK."}],
             api_key, temperature=0.0, max_tokens=64, effort="low", timeout=60,
-            run_title="Ode Suite Preflight",
+            run_title="Ode Suite Preflight", provider_sort=provider_sort,
         )
         return m, {"ok": True, "reply": content[:32], "cost_usd": float(usage.get("cost") or 0.0), "s": round(dt, 2)}
 
@@ -254,7 +258,8 @@ def run_verify2_on_bundle(out_o: Path, out_p: Path, target: str) -> tuple[bool, 
         return False, f"refused: {exc}", time.monotonic() - t0
 
 
-def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str | None) -> tuple[str, str]:
+def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str | None,
+                    arm64_exec_script: str | None = None) -> tuple[str, str]:
     """Execute the verified binary on real silicon matching `target`."""
     harness = ROOT / task["native_harness"]
     if not harness.exists():
@@ -300,6 +305,12 @@ def run_native_test(out_o: Path, task: dict, target: str, x86_exec_script: str |
                 if rc_r == 0 and "NATIVE_PASS" in out_r:
                     return "pass", out_r.splitlines()[-1].strip()
                 return "fail", out_r[:200]
+        if arm64_exec_script:
+            cid = expected_contract_id_for(task, target)
+            rc_r, out_r, _ = run_tool([arm64_exec_script, str(out_o), str(harness), cid], out_o.parent, 60)
+            if rc_r == 0 and "NATIVE_PASS" in out_r:
+                return "pass", [l for l in out_r.splitlines() if "NATIVE_PASS" in l][-1].strip()
+            return "fail", out_r[:200]
         return "skipped", f"local host is {platform.system()}/{platform.machine()}"
     if target == "x86_64":
         if platform.system() == "Linux" and platform.machine() == "x86_64":
@@ -565,6 +576,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     temperature=args.temperature, max_tokens=args.max_tokens,
                     effort=args.effort, timeout=args.api_timeout,
                     run_title=f"Ode Suite {args.run_id}",
+                    provider_sort=getattr(args, "provider_sort", "throughput"),
                 )
             except Exception as exc:
                 cell["rounds"].append({"round": rnum, "stage": "api_error", "category": "api_error",
@@ -631,14 +643,42 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
             }
 
             if rc_p == 0 and out_o.exists() and out_p.exists():
-                # Step B: independent `ode audit --expect-contract`
+                # Steps B+C+D in parallel: independent `ode audit`, `verify2.py`, real-silicon native test,
+                # and static `ode advise --asm --all-archs` all read immutable `(cand, out_o, out_p)`.
                 audit_cmd = [
                     sys.executable, str(ODE_TOOL), "audit", str(out_o),
                     "--proof", str(out_p),
                     "--expect-contract", expected_contract_id_for(task, target),
                 ]
-                with prover_sem:
-                    rc_a, out_a_txt, dt_a = run_tool(audit_cmd, work, timeout=args.tool_timeout)
+                def _do_audit():
+                    with prover_sem:
+                        return run_tool(audit_cmd, work, timeout=args.tool_timeout)
+                def _do_verify2():
+                    if task.get("skip_verify2"):
+                        return None, "n/a (word-vector contract outside verify2 scalar fragment)", 0.0
+                    with prover_sem:
+                        return run_verify2_on_bundle(out_o, out_p, target)
+                def _do_native():
+                    return run_native_test(
+                        out_o, task, target, args.x86_exec_script or None,
+                        getattr(args, "arm64_exec_script", None) or None,
+                    )
+                def _do_advise():
+                    if arm is None:
+                        return "", None
+                    return run_static_advise(
+                        cand, task["entry_fn"], target, work,
+                        input_bytes_per_call=task.get("input_bytes_per_call"),
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pex:
+                    f_aud = pex.submit(_do_audit)
+                    f_v2 = pex.submit(_do_verify2)
+                    f_nat = pex.submit(_do_native)
+                    f_adv = pex.submit(_do_advise)
+                    rc_a, out_a_txt, dt_a = f_aud.result()
+                    v2_ok, v2_msg, v2_s = f_v2.result()
+                    nat_st, nat_det = f_nat.result()
+                    adv_txt, perf = f_adv.result()
                 cell["total_tool_s"] += dt_a
                 rec["audit_rc"] = rc_a
                 rec["audit_s"] = round(dt_a, 3)
@@ -649,20 +689,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     metrics["proof_bytes"] = out_p.stat().st_size
                     rec["stage"] = "passed"
                     rec["category"] = "passed"
-
-                    # Step C: independent pure-Python second verifier (`verify2.py`)
-                    if task.get("skip_verify2"):
-                        v2_ok, v2_msg, v2_s = None, "n/a (word-vector contract outside verify2 scalar fragment)", 0.0
-                    else:
-                        v2_ok, v2_msg, v2_s = run_verify2_on_bundle(out_o, out_p, target)
-                    # Step D: real-silicon native tests + optional static `ode advise --all-archs`
-                    nat_st, nat_det = run_native_test(out_o, task, target, args.x86_exec_script)
-                    adv_txt, perf = ("", None)
                     if arm is not None:
-                        adv_txt, perf = run_static_advise(
-                            cand, task["entry_fn"], target, work,
-                            input_bytes_per_call=task.get("input_bytes_per_call"),
-                        )
                         rec["perf"] = perf
 
                     cpb = perf.get("cyc_per_b") if perf else None
@@ -808,6 +835,7 @@ def write_prereg(run_id: str, tasks: list[dict], models: list[str], targets: lis
         f"- **Budget cap:** max `{args.max_rounds}` rounds per cell, `{args.tool_timeout}s` tool timeout, "
         f"`{args.cell_timeout}s` wall-clock cap per cell, early stop after `{args.max_truncations}` consecutive "
         f"`output_token_limit` replies, `{args.prover_slots}` concurrent local prover slots, "
+        f"provider sort `{getattr(args, 'provider_sort', 'throughput') or 'default'}`, "
         f"temperature `{args.temperature}`, reasoning effort `{args.effort}`, max_tokens `{args.max_tokens}`, "
         f"cumulative suite cap `${args.max_usd:.2f}`.",
         "",
@@ -1104,43 +1132,140 @@ def self_test_cli(targets: list[str]) -> None:
                 raise SystemExit(f"CLI self-test failed on `verify2.py` ({tgt}): {v2_msg}")
 
 
-def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str | None) -> None:
-    """Before any model is asked: a task that names a reference solution must be solvable as posed.
+REF_CACHE_PATH = Path.home() / ".cache" / "ode-exp-ref-cache.json"
 
-    The reference is put through the very steps a candidate is (`ode pack`, `ode audit` with the task's
-    expected contract ID, `verify2.py`, the native harness). A task whose reference fails any of them is a
-    fault of the task, the tools or the harness, and would otherwise be read as a failure of the models.
-    A task with no reference is named, so the report can say its solvability was not shown beforehand."""
+_LPT_TASK_WEIGHT = {
+    "chacha20_4way": 40,
+    "ct_base64_decode": 30,
+    "der_valid": 20,
+    "ipv4_valid": 15,
+}
+_LPT_MODEL_WEIGHT = {
+    "anthropic/claude-fable-5.2": 50,
+    "google/gemini-4-neon": 42,
+    "openai/gpt-6.2-astra-pro": 38,
+    "qwen/qwen3.8-2.4t-a95b": 34,
+    "z-ai/glm-5.3-prime": 30,
+    "anthropic/claude-sonnet-5.5": 24,
+    "moonshotai/kimi-k3.1-pro": 20,
+    "meta/muse-spark-open": 15,
+    "anthropic/claude-haiku-5.5": 10,
+}
+
+
+def schedule_jobs_lpt(jobs: list[tuple]) -> list[tuple]:
+    """Longest-Processing-Time-First scheduling so the slowest model/task cells start first."""
+    return sorted(
+        jobs,
+        key=lambda item: (
+            -(_LPT_TASK_WEIGHT.get(item[0]["id"], 25) + _LPT_MODEL_WEIGHT.get(item[1], 25)),
+            item[2],
+            item[0]["id"],
+            item[1],
+        ),
+    )
+
+
+def _ref_cache_key(task: dict, tgt: str) -> str:
+    """BLAKE3 content key for one `(task, target)` reference check across inputs, compiler, and verifiers."""
+    paths = [
+        ROOT / task["spec_file"],
+        ROOT / task["reference_solution"],
+        ROOT / ("core/x86.tab" if tgt == "x86_64" else "arm64/arm64.tab"),
+        ROOT / "proof-core/verify2.py",
+        ROOT / "proof-core/prove.py",
+        ROOT / "lang/ode_hl.py",
+        ROOT / "lang/ode_unified.py",
+        ROOT / "lang/ode_audit.py",
+    ]
+    if task.get("native_harness"):
+        paths.append(ROOT / task["native_harness"])
+    if ODEVERIFY.exists():
+        paths.append(ODEVERIFY)
+    parts = [f"{task['id']}|{tgt}|{expected_contract_id_for(task, tgt)}"]
+    for p in paths:
+        parts.append(f"{p.name}:{blake3_hex(p) if p.exists() else 'missing'}")
+    return "|".join(parts)
+
+
+def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str | None,
+                     arm64_exec_script: str | None = None, use_cache: bool = True,
+                     max_workers: int = 8) -> None:
+    """Before any model is asked: every task with a reference solution must be solvable as posed.
+
+    Runs uncached `(task, target)` reference checks in parallel and caches passing verdicts by full
+    BLAKE3 hashes of the task, reference, compiler, and verifiers."""
+    cache = {}
+    if use_cache and REF_CACHE_PATH.exists():
+        try:
+            with REF_CACHE_PATH.open("r", encoding="utf-8") as cf:
+                cache = json.load(cf)
+        except Exception:
+            cache = {}
+
+    todo = []
     for task in tasks:
         ref = task.get("reference_solution")
         if not ref:
             print(f"[reference] {task['id']}: no reference solution named (solvability not shown beforehand)", flush=True)
             continue
         for tgt in targets:
-            with tempfile.TemporaryDirectory(prefix="ode_ref_") as td:
-                td_p = Path(td)
-                shutil.copy2(ROOT / task["spec_file"], td_p / task["spec_basename"])
-                cand = td_p / f"{task['id']}.ode"
-                shutil.copy2(ROOT / ref, cand)
-                out_o, out_p = td_p / "out.o", td_p / "out.proof"
-                rc_p, txt_p, _ = run_tool([
-                    sys.executable, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
-                    "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p, timeout=120)
-                if rc_p != 0 or not out_o.exists():
-                    raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
-                rc_a, txt_a, _ = run_tool([
-                    sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
-                    "--expect-contract", expected_contract_id_for(task, tgt)], td_p, timeout=120)
-                if rc_a != 0 or "VERDICT:           shown" not in txt_a:
-                    raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")
-                if task.get("skip_verify2"):
-                    v2_ok, v2_msg = None, "n/a (word-vector)"
-                else:
-                    v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
-                nat_st, nat_det = run_native_test(out_o, task, tgt, x86_exec_script)
-                if nat_st == "fail":
-                    raise SystemExit(f"reference of task `{task['id']}` fails the native harness ({tgt}): {nat_det}")
-                print(f"[reference] {task['id']} {tgt}: pack+audit shown; verify2: {v2_msg}; native: {nat_st} ({nat_det})", flush=True)
+            ckey = _ref_cache_key(task, tgt)
+            cached = cache.get(ckey) if use_cache else None
+            if cached:
+                print(f"[reference] {task['id']} {tgt}: CACHED ({cached})", flush=True)
+            else:
+                todo.append((task, tgt, ckey))
+
+    if not todo:
+        return
+
+    def _run_one(item):
+        task, tgt, ckey = item
+        ref = task["reference_solution"]
+        with tempfile.TemporaryDirectory(prefix="ode_ref_") as td:
+            td_p = Path(td)
+            shutil.copy2(ROOT / task["spec_file"], td_p / task["spec_basename"])
+            cand = td_p / f"{task['id']}.ode"
+            shutil.copy2(ROOT / ref, cand)
+            out_o, out_p = td_p / "out.o", td_p / "out.proof"
+            rc_p, txt_p, _ = run_tool([
+                sys.executable, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
+                "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p, timeout=120)
+            if rc_p != 0 or not out_o.exists():
+                raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
+            rc_a, txt_a, _ = run_tool([
+                sys.executable, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p),
+                "--expect-contract", expected_contract_id_for(task, tgt)], td_p, timeout=120)
+            if rc_a != 0 or "VERDICT:           shown" not in txt_a:
+                raise SystemExit(f"reference of task `{task['id']}` fails `ode audit` ({tgt}): {txt_a[-800:]}")
+            if task.get("skip_verify2"):
+                v2_ok, v2_msg = None, "n/a (word-vector)"
+            else:
+                v2_ok, v2_msg, _ = run_verify2_on_bundle(out_o, out_p, tgt)
+            nat_st, nat_det = run_native_test(out_o, task, tgt, x86_exec_script, arm64_exec_script)
+            if nat_st == "fail":
+                raise SystemExit(f"reference of task `{task['id']}` fails the native harness ({tgt}): {nat_det}")
+            summary = f"pack+audit shown; verify2: {v2_msg}; native: {nat_st} ({nat_det})"
+            print(f"[reference] {task['id']} {tgt}: {summary}", flush=True)
+            return ckey, summary, nat_st
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(todo), max(1, max_workers))) as ex:
+        futs = [ex.submit(_run_one, it) for it in todo]
+        for fut in concurrent.futures.as_completed(futs):
+            ckey, summary, nat_st = fut.result()
+            if use_cache and nat_st == "pass":
+                cache[ckey] = summary
+
+    if use_cache:
+        try:
+            REF_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp_c = REF_CACHE_PATH.with_suffix(".json.tmp")
+            with tmp_c.open("w", encoding="utf-8") as cf:
+                json.dump(cache, cf, indent=2, sort_keys=True)
+            tmp_c.replace(REF_CACHE_PATH)
+        except Exception:
+            pass
 
 
 def check_quickstart_leakage(tasks: list[dict]) -> None:
@@ -1184,16 +1309,19 @@ def main(argv=None) -> int:
     ap.add_argument("--tool-timeout", type=int, default=None)
     ap.add_argument("--cell-timeout", type=int, default=None, help="Per-cell wall-clock cap in seconds (0 = off)")
     ap.add_argument("--max-truncations", type=int, default=None, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
-    ap.add_argument("--prover-slots", type=int, default=10, help="Max simultaneous local ode pack/audit runs")
+    ap.add_argument("--prover-slots", type=int, default=None, help="Max simultaneous local ode pack/audit runs (default: 75% of CPUs)")
     ap.add_argument("--api-timeout", type=int, default=240)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
+    ap.add_argument("--provider-sort", default="throughput", help="OpenRouter provider.sort preference (throughput, latency, price, or empty)")
     ap.add_argument("--max-usd", type=float, default=None, help="Cumulative API spend circuit breaker")
-    ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--workers", type=int, default=72)
     ap.add_argument("--baseline", default="", help="Optional baseline results JSON for before/after diff")
     ap.add_argument("--out-dir", required=True, help="Private directory for full JSON transcripts and .o/.proof/.ode artifacts")
     ap.add_argument("--x86-exec-script", default="", help="Optional executable taking `<obj.o> <harness.c>` to run x86_64 native tests")
+    ap.add_argument("--arm64-exec-script", default="", help="Optional executable taking `<obj.o> <harness.c> <contract_id>` to run arm64 native tests")
+    ap.add_argument("--no-ref-cache", action="store_true", help="Disable BLAKE3 reference-check cache")
     ap.add_argument("--commit-prereg", action="store_true", help="Commit prereg-<run-id>.md before starting any task call")
     ap.add_argument("--allow-dirty", action="store_true", help="Allow running with uncommitted files (for dry-runs)")
     ap.add_argument("--dry-run", action="store_true", help="Run preflight & print plan without writing prereg or calling models")
@@ -1221,6 +1349,8 @@ def main(argv=None) -> int:
     args.cell_timeout = args.cell_timeout if args.cell_timeout is not None else int(preset.get("cell_timeout", 720))
     args.max_truncations = args.max_truncations if args.max_truncations is not None else int(preset.get("max_truncations", 2))
     args.max_usd = args.max_usd if args.max_usd is not None else float(preset.get("max_usd", 60.0))
+    if args.prover_slots is None:
+        args.prover_slots = max(6, (os.cpu_count() or 8) * 3 // 4)
 
     tasks = []
     for tid in task_ids:
@@ -1250,18 +1380,30 @@ def main(argv=None) -> int:
             hashes[t["native_harness"]] = blake3_hex(ROOT / t["native_harness"])
 
     check_quickstart_leakage(tasks)
-    self_test_cli(targets)
-    check_references(tasks, targets, args.x86_exec_script or None)
 
     if args.dry_run:
+        self_test_cli(targets)
+        check_references(
+            tasks, targets, args.x86_exec_script or None, args.arm64_exec_script or None,
+            use_cache=not args.no_ref_cache, max_workers=args.prover_slots,
+        )
         print(f"DRY-RUN OK (CLI self-test passed on {targets}): run_id={args.run_id} tasks={task_ids} models={len(models)} targets={targets} arms={arms} cells={len(tasks)*len(models)*len(targets)*len(arms)}")
         for k, v in sorted(hashes.items()):
             print(f"  {v[:16]}...  {k}")
         return 0
 
     api_key = load_openrouter_key()
-    print(f"[preflight] pinging {len(models)} models...", flush=True)
-    pings = preflight_ping(models, api_key, args.effort)
+    print(f"[preflight] starting CLI self-test + parallel reference checks + {len(models)}-model ping concurrently...", flush=True)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as st_ex:
+        f_cli = st_ex.submit(self_test_cli, targets)
+        f_ref = st_ex.submit(
+            check_references, tasks, targets, args.x86_exec_script or None, args.arm64_exec_script or None,
+            not args.no_ref_cache, args.prover_slots,
+        )
+        f_ping = st_ex.submit(preflight_ping, models, api_key, args.effort, args.provider_sort)
+        f_cli.result()
+        f_ref.result()
+        pings = f_ping.result()
     for m, info in pings.items():
         print(f"[preflight] {m}: OK ({info['s']}s, ${info['cost_usd']:.4f}, reply={info['reply']!r})", flush=True)
 
@@ -1290,7 +1432,7 @@ def main(argv=None) -> int:
     if baseline_p and not baseline_p.is_absolute():
         baseline_p = ROOT / baseline_p
 
-    jobs = [(t, m, tgt, arm) for t in tasks for m in models for tgt in targets for arm in arms]
+    jobs = schedule_jobs_lpt([(t, m, tgt, arm) for t in tasks for m in models for tgt in targets for arm in arms])
     cells = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(args.workers, len(jobs))) as ex:
         futs = [ex.submit(run_cell, t, m, tgt, args, api_key, budget, out_dir, prover_sem, arm) for (t, m, tgt, arm) in jobs]

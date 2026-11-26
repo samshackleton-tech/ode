@@ -1371,7 +1371,27 @@ theorem specGoal_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
               injection this with h1 _
               subst h1
               exact ⟨ρ, Carried.here H wf, carry_sound H e1⟩
-            next => exact (refuse_ok h).elim
+            next =>
+              split at h
+              next =>
+                cases hci : (callsOf s.spec goal)[n / 256]? with
+                | none => simp only [hci] at h; exact (refuse_ok h).elim
+                | some ci =>
+                  simp only [hci] at h
+                  cases hcj : (callsOf s.spec goal)[n % 256]? with
+                  | none => simp only [hcj] at h; exact (refuse_ok h).elim
+                  | some cj =>
+                    simp only [hcj] at h
+                    obtain ⟨_, r2, e1, h⟩ := V.bind_ok h
+                    have H1 := H.withSpec (.same ci cj) (sameUse_sound H e1)
+                    have wf1 := wf.withSpec (.same ci cj)
+                      ⟨callsOf_bounded wf.spec hg ci (List.mem_of_getElem? hci),
+                       callsOf_bounded wf.spec hg cj (List.mem_of_getElem? hcj)⟩
+                    obtain ⟨ρ2, c2, gh⟩ := specGoal_sound E fuel h H1 wf1 hg
+                    have c1 : Carried ctx s0 ρ s ρ { s with spec := .same ci cj :: s.spec } st :=
+                      { mono := Nat.le_refl _, agree := fun _ _ => rfl, holds := H1, wf := wf1 }
+                    exact ⟨ρ2, c1.then c2, gh⟩
+              next => exact (refuse_ok h).elim
 
 /-! ## The contract's names -/
 

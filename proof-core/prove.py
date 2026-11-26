@@ -302,6 +302,8 @@ def refutation(system, seed=-1, quick=False):
                     tried = close
                     last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)
                     found = derive_eq(close, 30000, last=last_q)
+                    if not found and len(close) <= 45:
+                        found = derive_eq(close, 1200, last=frozenset())
                     if found: break
             if not found and not quick:
                 seed_row = system[seed % len(system)]
@@ -466,6 +468,7 @@ class Prover:
         self.furthest_root = 0
         self.spec_fuel_hit = False
         self.spec_fuel_proof = []
+        self.spec_max_open = 14
         self.hard_refusal = False
         self.trace_exprs = list(trace_exprs)
         self.instrs = list(instrs)
@@ -709,6 +712,38 @@ class Prover:
                         self.furthest_root = start_len
                     self.spec_fuel_hit = False
                 before, before_proof = self.last, self.last_proof
+                # First try exact congruence (`t same (i * 256 + j)`) on any same-function call pair
+                # reported by `p ...` whose arguments are provably equal (e.g. `words == 2 * ihl`)!
+                # Use `quick=True` and cap at `opened <= 2` so non-equal pairs reject in <0.1 ms!
+                plines = [l[2:].strip() for l in lines if l.startswith("p ")]
+                if opened <= 2 and plines and plines[0]:
+                    nums = [int(x) for x in plines[0].split()]
+                    for pi in range(0, len(nums) - 1, 2):
+                        ci_k, cj_k = nums[pi], nums[pi + 1]
+                        p_same = proof + [f"t same {ci_k * 256 + cj_k}"]
+                        sa = self.ask(p_same)
+                        ok_same = True
+                        while sa.startswith("need same\n"):
+                            sl = sa.split("\n")
+                            sf_raw = [l[2:].strip() for l in sl if l.startswith("f ")]
+                            sg_raw = [l[2:].strip() for l in sl if l.startswith("g ")]
+                            sf = [lin([int(x) for x in s.split()]) for s in sf_raw]
+                            sg = [lin([int(x) for x in s.split()]) for s in sg_raw]
+                            rp = refutation(sf + [negation(sg[0])], quick=True)
+                            if rp is None:
+                                ok_same = False
+                                break
+                            gn = [int(x) for x in sg_raw[0].split()]
+                            nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
+                            p_same = p_same + proof_text(rp, [negation(sg[0])] + sf, [nr] + sf_raw)
+                            sa = self.ask(p_same)
+                        if ok_same and not sa.startswith("refused:"):
+                            proof = p_same
+                            break
+                    else:
+                        p_same = None
+                    if p_same is not None and proof is p_same:
+                        continue
                 for k in reversed(range(held)):                # a value held, carried over to the fact asked for
                     if self.hard_refusal or self.furthest_root > start_len: return None
                     trial = proof + [f"t carry {k}"]
@@ -718,30 +753,57 @@ class Prover:
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
-                if opened >= 14:
+                if opened >= self.spec_max_open:
                     self.spec_fuel_hit = True
                     self.spec_fuel_proof = proof
-                    self.last = "need spec (reached 14 specification definition opens without closing goal)"
+                    self.last = f"need spec (reached {self.spec_max_open} specification definition opens without closing goal)"
                     self.last_proof = proof
                     return None
                 if opened >= 2:
-                    # Deep recursive unfolding (e.g. 4x..14x unrolled loops): advance greedily along the
-                    # single newly created call (at the tail/head of `callsOf`), so depth 14 stays O(depth)
+                    # Deep recursive unfolding (e.g. 4x..18x unrolled loops): advance greedily along the
+                    # single newly created call (at the tail/head of `callsOf`), so depth 20 stays O(depth)
                     # instead of branching exponentially.
                     cands = []
-                    for k in (count - 2, count - 1, count - 3, 1, 0):
+                    order_k = (count - 1, count - 2, count - 3, 1, 0) if opened == 2 else (count - 2, count - 1, count - 3, 1, 0)
+                    for k in order_k:
                         if 0 <= k < count and k not in cands:
                             cands.append(k)
                     for k in cands:
                         p_try = proof + [f"t open {k}"]
-                        # Step through deterministic inner checks of `openCall` (`below`/`entail`/`compare`)
+                        # Step through deterministic inner checks of `openCall` (`below`/`entail`/`same`/`compare`/`held`)
                         # until we either close the `spec` goal, hit the next `need spec`, or fail.
                         ok_step, nxt = True, self.ask(p_try)
-                        for _ in range(16):
+                        for _ in range(24):
                             if not nxt.startswith("need "): break
                             nl = nxt.split("\n")
                             nw = nl[0][5:]
                             if nw == "spec": break
+                            if nw == "held":
+                                hc = int([l for l in nl if l.startswith("c ")][0].split()[1])
+                                picked = None
+                                for hk in reversed(range(hc)):
+                                    ht = p_try + [f"t held {hk}"]
+                                    ha = self.ask(ht)
+                                    if ha.startswith("refused: the value held is of another use"):
+                                        continue
+                                    if ha.startswith("need same\n"):
+                                        hl = ha.split("\n")
+                                        hf_raw = [l[2:].strip() for l in hl if l.startswith("f ")]
+                                        hg_raw = [l[2:].strip() for l in hl if l.startswith("g ")]
+                                        hf = [lin([int(x) for x in s.split()]) for s in hf_raw]
+                                        hg = [lin([int(x) for x in s.split()]) for s in hg_raw]
+                                        rp = refutation(hf + [negation(hg[0])], quick=True)
+                                        if rp is None:
+                                            continue
+                                        gn = [int(x) for x in hg_raw[0].split()]
+                                        nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
+                                        picked = ht + proof_text(rp, [negation(hg[0])] + hf, [nr] + hf_raw)
+                                        break
+                                    picked = ht
+                                    break
+                                p_try = picked if picked is not None else (p_try + ["t open"])
+                                nxt = self.ask(p_try)
+                                continue
                             if nw not in ("below", "entail", "same", "compare"):
                                 break
                             nf_raw = [l[2:].strip() for l in nl if l.startswith("f ")]
@@ -767,11 +829,16 @@ class Prover:
                         if not ok_step:
                             continue
                         if nxt.startswith("need spec\n"):
-                            nc = int([l for l in nxt.split("\n") if l.startswith("c ")][0].split()[1])
-                            if nc <= count:
-                                continue                       # already-opened call; skip without branching
-                            done = self.solve(p_try, allow_split=allow_split) # brand-new call created: follow strictly linearly
-                            return done
+                            nl2 = nxt.split("\n")
+                            nc = int([l for l in nl2 if l.startswith("c ")][0].split()[1])
+                            no = int([l for l in nl2 if l.startswith("o ")][0].split()[1])
+                            nh = int(([l for l in nl2 if l.startswith("h ")] or ["h 0"])[0].split()[1])
+                            if no > 0 and nc <= count and nh <= held:
+                                continue                       # already-opened call with no new held value; skip without branching
+                            done = self.solve(p_try, allow_split=allow_split) # brand-new call or next path (`no == 0`)
+                            if done is not None: return done
+                            if opened >= 3 or self.hard_refusal or self.furthest_root > start_len: return None
+                            continue
                         # Spec goal closed (or moved past `spec` to next instruction)!
                         done = self.solve(p_try, allow_split=allow_split)
                         if done is not None: return done
@@ -779,19 +846,32 @@ class Prover:
                     if opened >= 3 or self.spec_fuel_hit:
                         return None
                 any_fuel_hit = False
-                for k in reversed(range(count)):
-                    if self.hard_refusal: return None
-                    self.spec_fuel_hit = False
-                    done = self.solve(proof + [f"t open {k}"], allow_split=allow_split)
-                    if done is not None: return done
-                    if self.hard_refusal or self.furthest_root > start_len:
-                        return None
-                    if self.spec_fuel_hit:
-                        any_fuel_hit = True
+                prev_max = self.spec_max_open
+                budgets = (14, 30) if opened == 0 else (prev_max,)
+                for bud in budgets:
+                    self.spec_max_open = bud
+                    any_fuel_hit = False
+                    for k in reversed(range(count)):
+                        if self.hard_refusal:
+                            self.spec_max_open = prev_max
+                            return None
+                        self.spec_fuel_hit = False
+                        done = self.solve(proof + [f"t open {k}"], allow_split=allow_split)
+                        if done is not None:
+                            self.spec_max_open = prev_max
+                            return done
+                        if self.hard_refusal or self.furthest_root > start_len:
+                            self.spec_max_open = prev_max
+                            return None
+                        if self.spec_fuel_hit:
+                            any_fuel_hit = True
+                    if not any_fuel_hit:
+                        break
+                self.spec_max_open = prev_max
                 if any_fuel_hit:
                     self.spec_fuel_hit = True
                     if opened == 0:
-                        self.last = "need spec (reached 14 specification definition opens without closing goal)"
+                        self.last = "need spec (reached 30 specification definition opens without closing goal)"
                         self.last_proof = self.spec_fuel_proof
                 return None
             elif what == "held":                               # which value held is of a use with the same things
@@ -806,6 +886,19 @@ class Prover:
                     ans = self.ask(trial)
                     if ans.startswith("refused: the value held is of another use"):
                         continue
+                    if ans.startswith("need same\n"):
+                        hl = ans.split("\n")
+                        hf_raw = [l[2:].strip() for l in hl if l.startswith("f ")]
+                        hg_raw = [l[2:].strip() for l in hl if l.startswith("g ")]
+                        hf = [lin([int(x) for x in s.split()]) for s in hf_raw]
+                        hg = [lin([int(x) for x in s.split()]) for s in hg_raw]
+                        rp = refutation(hf + [negation(hg[0])], quick=True)
+                        if rp is not None:
+                            gn = [int(x) for x in hg_raw[0].split()]
+                            nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
+                            trial = trial + proof_text(rp, [negation(hg[0])] + hf, [nr] + hf_raw)
+                        elif refutation(hf + [negation(hg[0])]) is None:
+                            continue
                     matched_any = True
                     done = self.solve(trial, allow_split=allow_split)
                     if done is not None: return done

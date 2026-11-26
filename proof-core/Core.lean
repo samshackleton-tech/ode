@@ -982,12 +982,28 @@ def orParts (facts : List Row) (x y : Row) : Option (Int × Nat) :=
   | some k, some j => if (2 : Int) ^ j ≤ k then some (k, j) else none
   | _, _ => none
 
+/-- Detect disjoint bit-fields for `x | y`: `y` has an upper bound `0 ≤ u < 2^j` (`1 ≤ j ≤ 63`)
+while `x` is a multiple of `2^j`, so `x | y = x + y` holds identically without overflow. -/
+def disjointOr (facts : List Row) (x y : Row) : Option Nat :=
+  match rowUpper facts y with
+  | none => none
+  | some u =>
+    if u < 0 then none
+    else
+      (List.range 63).findSome? fun k =>
+        let j := k + 1
+        let m : Int := (2 : Int) ^ j
+        if u < m && x.constant % m == 0 && x.coeff.all (fun c => c % m == 0) then some j else none
+
 /-- Two numbers' bits put together: where one of the two is the number zero, the other (zero adds no bit);
-where one is seen at once to lie below 2^j (j: 8, 16 or 32) and the other is a number of the table that is
-2^j or more, by `symOrSmall`; else the unknown that stands for the pair. -/
+where the two bit-fields are disjoint (`disjointOr`), their exact sum; where one is seen at once to lie
+below 2^j (j: 8, 16 or 32) and the other is a number of the table that is 2^j or more, by `symOrSmall`;
+else the unknown that stands for the pair. -/
 def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
   if Lin.isConst y = some 0 then pure (.lin x, s)
   else if Lin.isConst x = some 0 then pure (.lin y, s)
+  else if (disjointOr s.facts x y).isSome || (disjointOr s.facts y x).isSome then
+    pure (.lin (Lin.add x y), s)
   else
     match orParts s.facts x y with
     | some (k, j) => symOrSmall s x k j
@@ -1029,30 +1045,33 @@ def symAndConst (s : Sym) (x : Row) (m : Int) : V (EV × Sym) :=
     refuse "no proof rule for this AND mask (supported: any contiguous bitmask (2^w - 1) << k, or 0)"
 
 /-- Optional wrapping tag in a proof: consumes `.tag "wrap" _` when present (signaling exact modular
-wraparound mod 2^64 on `add64` or `sub64`), otherwise leaves the proof stream untouched so existing
-no-wrap proofs remain unchanged. -/
-def takeWrap : V Bool := fun items =>
-  match items.line items.next with
+wraparound mod 2^64 on `add64` or `sub64`) unless the exact result is already plainly in range
+(so a preceding constant/in-range `add`/`sub` never steals `t wrap` from a later instruction). -/
+def takeWrapIf (skip : Bool) : V Bool := fun items =>
+  if skip then .ok (false, items)
+  else match items.line items.next with
   | some (.tag "wrap" _) => .ok (true, { items with next := items.next + 1 })
   | _ => .ok (false, items)
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
-    let w ← takeWrap
+    let r := Lin.add (signed x) (signed y)
+    let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))
     if w then
       let d := symLow s (Lin.add x y) (M64 : Int)
       pure (.lin d.1, d.2)
     else do
-      inRange s.facts (Lin.add (signed x) (signed y))
-      pure (.lin (Lin.add (signed x) (signed y)), s)
+      inRange s.facts r
+      pure (.lin r, s)
   else if f == "sub64" then do
-    let w ← takeWrap
+    let r := Lin.sub (signed x) (signed y)
+    let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))
     if w then
       let d := symLow s (Lin.add (Lin.sub x y) (Lin.const (M64 : Int))) (M64 : Int)
       pure (.lin d.1, d.2)
     else do
-      inRange s.facts (Lin.sub (signed x) (signed y))
-      pure (.lin (Lin.sub (signed x) (signed y)), s)
+      inRange s.facts r
+      pure (.lin r, s)
   else if f == "equal" then pure (.equal x y, s)
   else if f == "below" then pure (.below x y, s)
   else if f == "shl64" then
@@ -2305,8 +2324,18 @@ def carry (s : Sym) (goal : SFact) (k : Nat) : V Unit :=
     entail s.facts (Lin.sub v' v)
   | _, _ => refuse "no such value is held, or the fact is not of a value"
 
+/-- Pairs `(i, j)` of distinct calls of the same specification function not yet equated in `facts` (prover advice only). -/
+def samePairs (facts : List SFact) (calls : List SCall) : String :=
+  let indexed := calls.zipIdx
+  let ps := indexed.foldl (fun acc (ci, i) =>
+    indexed.foldl (fun acc2 (cj, j) =>
+      if i < j && ci.f == cj.f && !(holdsSpec facts (.same ci cj)) then
+        acc2 ++ [s!"{i} {j}"]
+      else acc2) acc) []
+  String.intercalate " " ps
+
 /-- A fact of the specification, from the facts held, uses of definitions the proof says to open (`open K`),
-and values held that the proof says to carry over (`carry K`). -/
+values held that the proof says to carry over (`carry K`), and congruent uses (`same (I * 256 + J)`). -/
 def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
   | 0, _, _ => refuse "too many definitions opened for one fact"
   | fuel + 1, s, goal =>
@@ -2322,9 +2351,20 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
         else if name == "carry" then do
           carry s goal n
           pure s
-        else refuse "open or carry is expected"
-      | some _ => refuse "open or carry is expected"
-      | none => fun _ => .error s!"need spec\nc {(callsOf s.spec goal).length}\no {15 - fuel}\nh {(heldValues s.spec).length}\n"
+        else if name == "same" then
+          let calls := callsOf s.spec goal
+          match calls[n / 256]?, calls[n % 256]? with
+          | some ci, some cj => do
+            sameUse s ci cj
+            specGoal ctx fuel { s with spec := .same ci cj :: s.spec } goal
+          | _, _ => refuse "no such pair of uses of a definition"
+        else refuse "open, carry, or same is expected"
+      | some _ => refuse "open, carry, or same is expected"
+      | none =>
+        let calls := callsOf s.spec goal
+        let ps := samePairs s.spec calls
+        let pline := if ps.isEmpty then "" else s!"p {ps}\n"
+        fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\n{pline}"
 
 /-- What a line `fact …` of a place says: rows, and facts of the specification. -/
 def assertion (ctx : Ctx) (env : List (String × SVal)) (s : Sym) : SExpr → V (List Row × List SFact × Sym)
@@ -2349,7 +2389,7 @@ def assertion (ctx : Ctx) (env : List (String × SVal)) (s : Sym) : SExpr → V 
 def establish (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : SExpr) : V Sym := do
   let (rows, facts, s) ← assertion ctx env s e
   each (entail s.facts) rows
-  fold (specGoal ctx 16) s facts
+  fold (specGoal ctx 32) s facts
 
 /-- Take what the assertion says as known, of the state `s`. -/
 def suppose (ctx : Ctx) (env : List (String × SVal)) (s : Sym) (e : SExpr) : V Sym := do
@@ -3298,7 +3338,7 @@ def symReturnBody (ctx : Ctx) (s : Sym) : V Unit := do
       entail s.facts (Lin.sub v (s.reg rr))
       entail s.facts (Lin.sub (s.reg rr) v)
     | .tail c => do
-      let _ ← specGoal ctx 16 s (.value c (s.reg rr))
+      let _ ← specGoal ctx 32 s (.value c (s.reg rr))
       pure ()
     | _ => refuse "a function returns a number"
 
@@ -5601,7 +5641,7 @@ def symRevealReg (ctx : Ctx) (s : Sym) (r : Nat) (e : SExpr) : V Sym :=
       entail s1.facts (Lin.sub (s1.reg r) v)
       pure { s with q := { s.q with regq := r :: s.q.regq } }
     | .tail c => do
-      let _ ← specGoal ctx 16 s1 (.value c (s1.reg r))
+      let _ ← specGoal ctx 32 s1 (.value c (s1.reg r))
       pure { s with q := { s.q with regq := r :: s.q.regq } }
     | _ => refuse "a trace-clear step names an expression that is not a number"
 

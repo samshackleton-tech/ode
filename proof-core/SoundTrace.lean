@@ -2072,13 +2072,15 @@ theorem symOr_lin {s s1 : Sym} {x y : Row} {val : EV} {items rest : Items}
     · simp only [hx0, ite_true] at h
       have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
     · simp only [hx0, ite_false] at h
-      cases hp1 : orParts s.facts x y with
-      | some p => simp only [hp1] at h; exact symOrSmall_lin h
-      | none =>
-        simp only [hp1] at h
-        cases hp2 : orParts s.facts y x with
-        | some p => simp only [hp2] at h; exact symOrSmall_lin h
-        | none => simp only [hp2] at h; exact symOrKnown_lin h
+      split at h
+      · have := V.pure_ok h; injection this with h _; injection h with h1 h2; subst h1 h2; exact ⟨⟨_, rfl⟩, rfl, rfl⟩
+      · cases hp1 : orParts s.facts x y with
+        | some p => simp only [hp1] at h; exact symOrSmall_lin h
+        | none =>
+          simp only [hp1] at h
+          cases hp2 : orParts s.facts y x with
+          | some p => simp only [hp2] at h; exact symOrSmall_lin h
+          | none => simp only [hp2] at h; exact symOrKnown_lin h
 
 theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items rest : Items}
     (h : symPrim f s x y items = .ok ((val, s1), rest)) :

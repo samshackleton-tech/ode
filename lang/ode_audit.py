@@ -1059,7 +1059,7 @@ class PackProofError(SystemExit):
     original function name, bytecode offset, compile `line_map`, contract, and spec text."""
 
     def __init__(self, message, *, fn_sym=None, pc=None, reason="", info=None,
-                 contract=None, spec_text=None, target="x86_64"):
+                 contract=None, spec_text=None, target="x86_64", extra_note=""):
         super().__init__(message)
         self.fn_sym = fn_sym
         self.pc = pc
@@ -1068,6 +1068,69 @@ class PackProofError(SystemExit):
         self.contract = contract
         self.spec_text = spec_text
         self.target = target
+        self.extra_note = extra_note
+
+
+def _count_cond_splits(info):
+    """Count conditional branch / cmov / csel instructions in a compiled function `info`."""
+    if not info:
+        return 0
+    lmap = info.get("line_map") or ()
+    items = lmap.values() if isinstance(lmap, dict) else lmap
+    cnt = 0
+    for item in items:
+        txt = (item[2] if isinstance(item, (list, tuple)) and len(item) > 2 else "").strip().lower()
+        if txt.startswith(("cmov", "csel", "b.", "je ", "jne ", "jb ", "jbe ", "ja ", "jae ", "jl ", "jle ", "jg ", "jge ")):
+            cnt += 1
+    return cnt
+
+
+def _prefilter_concrete(compiled_by_sym, export_sym, full_spec_text, target):
+    """Fast (~50 ms) concrete counterexample pre-filter before running the symbolic prover.
+    Skips doomed 30 s proof searches when compiled machine code already disagrees with the contract."""
+    if os.environ.get("ODE_PREFILTER", "1") == "0":
+        return
+    if not compiled_by_sym or export_sym not in compiled_by_sym:
+        return
+    try:
+        import estimate, refute_conc
+        tgt = "x86_64" if target in ("x86-64", "x86_64") else "arm64"
+        sp = ode.Spec(full_spec_text)
+        c = sp.contracts.get(export_sym)
+        if not c or c.get("calling"):
+            return
+        progs = {}
+        for sym, info in compiled_by_sym.items():
+            elf = info.get("elf")
+            if not elf:
+                continue
+            with tempfile.NamedTemporaryFile(suffix=".o", delete=False) as tf:
+                tf.write(elf)
+                tpath = tf.name
+            try:
+                _, progs[sym] = estimate.decode_object(tpath, sym, tgt)
+            finally:
+                try:
+                    os.unlink(tpath)
+                except OSError:
+                    pass
+        if export_sym not in progs:
+            return
+        ref = refute_conc.refute_function(progs, export_sym, full_spec_text, tgt, cases=16, max_steps=50000)
+        if ref and ref.get("status") == "FALSE":
+            note = refute_conc.format_refutation(ref, export_sym)
+            raise PackProofError(
+                f"refused with a proof in {export_sym}: {ref.get('reason', 'concrete mismatch')}",
+                fn_sym=export_sym, pc=None,
+                reason=f"refused with a proof: concrete execution disagrees with contract ({ref.get('reason', '')})",
+                info=compiled_by_sym.get(export_sym), contract=c, spec_text=full_spec_text,
+                target=target, extra_note=note,
+            )
+    except PackProofError:
+        raise
+    except Exception:
+        # Never block verification if concrete pre-filter cannot simulate a construct (e.g. vector/custom).
+        return
 
 
 def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_sym, full_spec_text, target):
@@ -1088,9 +1151,21 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
             contract = sp.contracts.get(orig_sym)
         except Exception:
             contract = None
+    extra_note = ""
+    if "search budget exceeded" in msg:
+        mq = re.search(r"\(search budget exceeded[^)]*\)", msg)
+        q_str = mq.group(0) if mq else "(search budget exceeded)"
+        n_splits = _count_cond_splits(info)
+        split_msg = f" ({n_splits} branch/select splits in `{orig_sym}`)" if n_splits >= 6 else ""
+        extra_note = (
+            f"NOTE: prover {q_str}{split_msg}. "
+            f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
+            f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
+            f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
+        )
     raise PackProofError(
         msg, fn_sym=orig_sym, pc=pc, reason=reason, info=info,
-        contract=contract, spec_text=full_spec_text, target=target,
+        contract=contract, spec_text=full_spec_text, target=target, extra_note=extra_note,
     ) from exc
 
 
@@ -1157,6 +1232,7 @@ def pack_bundle(
             orig_proof, rename_map, top_map, export_orig_sym, hash_sym, export_param_map,
         )
     else:
+        _prefilter_concrete(compiled_by_sym, export_orig_sym, full_spec_text, target)
         places_by_sym = places_by_sym or {}
         prove_items = []
         for orig in orig_order:
@@ -1352,6 +1428,9 @@ def pack_verified(
     os.makedirs(os.path.dirname(os.path.abspath(out_obj)), exist_ok=True)
     with open(out_obj, "wb") as f:
         f.write(obj_bytes)
+
+    # Fast concrete pre-filter before running the symbolic prover (~50 ms)
+    _prefilter_concrete({orig_sym: info}, orig_sym, spec_text, parse_elf64(obj_bytes)["target"])
 
     # Generate `.statement` and separate `.proof` via `proof-core/prove.py`.
     bound_spec = ode_canon.bind_symbol(canon["canonical"], hash_sym)

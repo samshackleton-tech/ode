@@ -684,7 +684,7 @@ class Verifier:
                 state["eqs"] = eqs
                 return
             nxt_item = stream.items[stream.pos] if stream.pos < len(stream.items) else None
-            if nxt_item is None or nxt_item[0] != "t" or nxt_item[1] not in ("open", "carry"):
+            if nxt_item is None or nxt_item[0] != "t" or nxt_item[1] not in ("open", "carry", "same"):
                 l_rows = [x for x in l_eq if is_row(x)]
                 r_rows = [x for x in r_eq if is_row(x)]
                 if l_rows and r_rows:
@@ -703,6 +703,14 @@ class Verifier:
             calls_in(lhs, calls)
             calls_in(rhs, calls)
             tag, idx = stream.pop_tag()
+            if tag == "same":
+                ci_idx, cj_idx = idx // 256, idx % 256
+                if ci_idx >= len(calls) or cj_idx >= len(calls):
+                    raise Refuse(f"`t same {idx}` out of range for {len(calls)} call(s)")
+                self.same_call(calls[ci_idx], calls[cj_idx], state, stream)
+                eqs.insert(0, (calls[ci_idx], calls[cj_idx]))
+                state["eqs"] = eqs
+                continue
             if tag == "carry":
                 hv = self.held_values({"eqs": eqs})
                 if idx >= len(hv):
@@ -1121,20 +1129,22 @@ class Verifier:
                 if op in ("add64", "at"):
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
+                    res = r_add(r_signed(a), r_signed(b))
+                    plain_ok = r_plain(st["facts"], res) and r_plain(st["facts"], r_sub(r_const(M64), res))
+                    if (not plain_ok) and stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
                         stream.pos += 1
                         return sym_low(r_add(a, b), M64 + 1, st), (ma or mb)
-                    res = r_add(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
                     return res, (ma or mb)
                 if op == "sub64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
-                    if stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
+                    res = r_sub(r_signed(a), r_signed(b))
+                    plain_ok = r_plain(st["facts"], res) and r_plain(st["facts"], r_sub(r_const(M64), res))
+                    if (not plain_ok) and stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
                         stream.pos += 1
                         return sym_low(r_add(r_sub(a, b), r_const(M64 + 1)), M64 + 1, st), (ma or mb)
-                    res = r_sub(r_signed(a), r_signed(b))
                     self.entail(st["facts"], res, stream)
                     self.entail(st["facts"], r_sub(r_const(M64), res), stream)
                     return res, (ma or mb)
@@ -1171,6 +1181,39 @@ class Verifier:
                         return a, (ma or mb)
                     if (not a[1]) and a[0] == 0:
                         return b, (ma or mb)
+                    def _row_upper(r):
+                        if r[0] < 0:
+                            return None
+                        tot = r[0]
+                        for vi, c in enumerate(r[1]):
+                            if c == 0:
+                                continue
+                            if c < 0:
+                                return None
+                            vr = r_var(vi)
+                            if not r_plain(st["facts"], vr):
+                                return None
+                            ub = None
+                            for f in st["facts"]:
+                                nz = [(i, fc) for i, fc in enumerate(f[1]) if fc != 0]
+                                if len(nz) == 1 and nz[0] == (vi, -1):
+                                    if ub is None or f[0] < ub:
+                                        ub = f[0]
+                            if ub is None:
+                                return None
+                            tot += c * ub
+                        return tot
+                    def _disjoint_or(x, y):
+                        u = _row_upper(y)
+                        if u is None or u < 0:
+                            return False
+                        for jbits in range(1, 64):
+                            m = 1 << jbits
+                            if u < m and (x[0] % m == 0) and all(c % m == 0 for c in x[1]):
+                                return True
+                        return False
+                    if _disjoint_or(a, b) or _disjoint_or(b, a):
+                        return r_add(a, b), (ma or mb)
                     kb = r_const_of(st["facts"], b)
                     ja = _small_bits(a) if kb is not None else None
                     if kb is not None and ja is not None and (1 << ja) <= kb:

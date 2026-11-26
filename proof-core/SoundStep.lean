@@ -1765,6 +1765,36 @@ theorem symOrSmall_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {k : In
     | equal _ _ => exact (refuse_ok h).elim
     | below _ _ => exact (refuse_ok h).elim
 
+/-- If `disjointOr facts x y = some j`, then `y < 2^j` and `x` is a multiple of `2^j`, so `xa ||| xb = xa + xb`. -/
+theorem disjointOr_sound {facts : List Row} {x y : Row} {j : Nat} {ρ : Nat → Int}
+    (h : disjointOr facts x y = some j) (hf : ∀ f ∈ facts, f.holds ρ)
+    (xa xb : Nat) (hx : (xa : Int) = ev ρ x) (hy : (xb : Int) = ev ρ y) :
+    xa ||| xb = xa + xb := by
+  unfold disjointOr at h
+  cases hu : rowUpper facts y with
+  | none => simp [hu] at h
+  | some u =>
+    simp only [hu] at h
+    split at h
+    · cases h
+    · obtain ⟨_, k, _, _, hk, _⟩ := List.findSome?_eq_some_iff.mp h
+      split at hk
+      next hcond =>
+        injection hk with hj; subst hj
+        simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hcond
+        obtain ⟨⟨hult, hc0⟩, hall⟩ := hcond
+        have hb := rowUpper_sound hf hu
+        have hblt : xb < 2 ^ (k + 1) := Int.ofNat_lt.mp (by rw [hy]; exact Int.lt_of_le_of_lt hb.2 hult)
+        have hamod_int : ev ρ x % ((2 : Int) ^ (k + 1)) = 0 := by rw [ev_low_exact hall, hc0]
+        have hamod : xa % 2 ^ (k + 1) = 0 := by
+          have hmod := emod_two_pow_toNat (k := (xa : Int)) (j := k + 1) (Int.natCast_nonneg xa)
+          rw [Int.toNat_natCast, hx, hamod_int] at hmod
+          exact Int.ofNat_eq_zero.mp hmod.symm
+        have hsplit := or_small (k := xa) hblt
+        have hwhole := Nat.div_add_mod xa (2 ^ (k + 1))
+        rw [Nat.or_comm, hsplit, hamod, Nat.or_zero]; omega
+      next => cases hk
+
 /-- Two numbers' bits put together, one of the two being the number zero or neither. -/
 theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
     (h : symOr s x y items = .ok ((v, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
@@ -1795,26 +1825,41 @@ theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {
       rw [Nat.zero_or]
       exact ⟨ρ, Carried.here H wf, hy.1, hy⟩
     next =>
-      cases hp : orParts s.facts x y with
-      | some kj =>
-        obtain ⟨k, j⟩ := kj
-        simp only [hp] at h
-        obtain ⟨ek, x0, xlt, j32⟩ := orParts_sound hp ρ H.facts
-        have small : xa < 2 ^ j := Int.ofNat_lt.mp (by rw [hx.2.1]; simpa using xlt)
-        exact symOrSmall_sound h H wf xa xb hx (by rw [hy.2.1, ek]) hy.1 small j32
-      | none =>
-        simp only [hp] at h
-        cases hq : orParts s.facts y x with
+      split at h
+      next hdisj =>
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        have lt : xa ||| xb < M64 := by unfold M64 at *; exact Nat.or_lt_two_pow hx.1 hy.1
+        have heq : xa ||| xb = xa + xb := by
+          simp only [Bool.or_eq_true, Option.isSome_iff_exists] at hdisj
+          rcases hdisj with ⟨j, hj⟩ | ⟨j, hj⟩
+          · exact disjointOr_sound hj H.facts xa xb hx.2.1 hy.2.1
+          · rw [Nat.or_comm, Nat.add_comm]; exact disjointOr_sound hj H.facts xb xa hy.2.1 hx.2.1
+        refine ⟨ρ, Carried.here H wf, lt, lt, ?_, bounded_add hx.2.2 hy.2.2⟩
+        rw [heq, Int.natCast_add, ev_add, hx.2.1, hy.2.1]
+      next =>
+        cases hp : orParts s.facts x y with
         | some kj =>
           obtain ⟨k, j⟩ := kj
-          simp only [hq] at h
-          obtain ⟨ek, y0, ylt, j32⟩ := orParts_sound hq ρ H.facts
-          have small : xb < 2 ^ j := Int.ofNat_lt.mp (by rw [hy.2.1]; simpa using ylt)
-          rw [Nat.or_comm]
-          exact symOrSmall_sound h H wf xb xa hy (by rw [hx.2.1, ek]) hx.1 small j32
+          simp only [hp] at h
+          obtain ⟨ek, x0, xlt, j32⟩ := orParts_sound hp ρ H.facts
+          have small : xa < 2 ^ j := Int.ofNat_lt.mp (by rw [hx.2.1]; simpa using xlt)
+          exact symOrSmall_sound h H wf xa xb hx (by rw [hy.2.1, ek]) hy.1 small j32
         | none =>
-          simp only [hq] at h
-          exact symOrKnown_sound h H wf xa xb hx hy
+          simp only [hp] at h
+          cases hq : orParts s.facts y x with
+          | some kj =>
+            obtain ⟨k, j⟩ := kj
+            simp only [hq] at h
+            obtain ⟨ek, y0, ylt, j32⟩ := orParts_sound hq ρ H.facts
+            have small : xb < 2 ^ j := Int.ofNat_lt.mp (by rw [hy.2.1]; simpa using ylt)
+            rw [Nat.or_comm]
+            exact symOrSmall_sound h H wf xb xa hy (by rw [hx.2.1, ek]) hx.1 small j32
+          | none =>
+            simp only [hq] at h
+            exact symOrKnown_sound h H wf xa xb hx hy
 
 /-- The 64-bit mask ending in six zero bits rounds an address down to a multiple of 64. -/
 theorem align64_mask {x : Nat} (hx : x < M64) : x &&& (M64 - 64) = 64 * (x / 64) := by

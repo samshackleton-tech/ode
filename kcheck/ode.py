@@ -288,8 +288,11 @@ class Parser:
                 # trace depends on EXPR, ...: which instructions run and which addresses are touched may depend on those arguments or computed values
                 if self.take(kind="name") != "depends": raise Err("`trace depends on EXPR, ...` expected")
                 self.take("on")
+                _clause_kws = {"requires", "ensures", "writes", "returns", "stack", "trace", "result", "calls", "needs", "decreases", "calling"}
                 if self.t[self.i][0] == "name" and self.t[self.i][1] == "nothing" and not any(a[0] == "nothing" for a in args):
                     self.take(kind="name")
+                elif self.peek("}") or (self.t[self.i][0] == "name" and self.t[self.i][1] in _clause_kws and not any(a[0] == self.t[self.i][1] for a in args)):
+                    pass
                 else:
                     while True:
                         e = self.expr()
