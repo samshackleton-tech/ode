@@ -6,35 +6,176 @@
     "line_bytes": 64,
     "page_bytes": 4096,
     "issue_width": 8.0,
-    "l1d": {"bytes": 49152, "ways": 12, "line": 64, "lat": 4},
-    "l2": {"bytes": 1048576, "ways": 16, "line": 64, "lat": 14},
-    "hazards": {"line_split": 1.0, "page_cross": 4.0, "stlf_partial": 10.0, "alias_4k": 1.5, "l1_miss": 2.0},
+    "l1d": {
+      "bytes": 49152,
+      "ways": 12,
+      "line": 64,
+      "lat": 4
+    },
+    "l2": {
+      "bytes": 1048576,
+      "ways": 16,
+      "line": 64,
+      "lat": 14
+    },
+    "hazards": {
+      "line_split": 1.0,
+      "page_cross": 4.0,
+      "stlf_partial": 10.0,
+      "alias_4k": 1.5,
+      "l1_miss": 2.0
+    },
     "classes": {
-      "nop":        {"uops": 0.25, "lat": 0.0, "rtp": 0.17, "unit": "fe"},
-      "zero":       {"uops": 1.0,  "lat": 0.0, "rtp": 0.17, "unit": "fe"},
-      "mov_rr":     {"uops": 1.0,  "lat": 0.0, "rtp": 0.17, "unit": "fe"},
-      "alu":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.20, "unit": "alu"},
-      "lea":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "alu"},
-      "branch":     {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "call":       {"uops": 2.0,  "lat": 2.0, "rtp": 1.00, "unit": "branch"},
-      "ret":        {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "branch"},
-      "load":       {"uops": 1.0,  "lat": 4.0, "rtp": 0.33, "unit": "load"},
-      "alu_mem":    {"uops": 1.0,  "lat": 5.0, "rtp": 0.33, "unit": "load"},
-      "store":      {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "vec_alu":    {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "vec"},
-      "vec_shift":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "vec_shuf":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "vec_load":   {"uops": 1.0,  "lat": 7.0, "rtp": 0.33, "unit": "load"},
-      "vec_store":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "wide_mov":   {"uops": 1.0,  "lat": 0.0, "rtp": 0.37, "unit": "vec"},
-      "wide_alu":   {"uops": 1.0,  "lat": 2.0, "rtp": 0.37, "unit": "vec"},
-      "wide_xor":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.37, "unit": "vec"},
-      "wide_shift": {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "wide_shuf":  {"uops": 1.0,  "lat": 4.0, "rtp": 0.50, "unit": "vec"},
-      "wide_unpck": {"uops": 1.0,  "lat": 1.0, "rtp": 0.37, "unit": "vec"},
-      "wide_bcast": {"uops": 1.0,  "lat": 7.0, "rtp": 0.50, "unit": "load"},
-      "wide_load":  {"uops": 1.0,  "lat": 8.0, "rtp": 0.50, "unit": "load"},
-      "wide_store": {"uops": 2.0,  "lat": 1.0, "rtp": 1.00, "unit": "store"}
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.17,
+        "unit": "fe"
+      },
+      "zero": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.17,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.17,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.2,
+        "unit": "alu"
+      },
+      "lea": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 2.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "alu_mem": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 7.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "wide_mov": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.37,
+        "unit": "vec"
+      },
+      "wide_alu": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.37,
+        "unit": "vec"
+      },
+      "wide_xor": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.37,
+        "unit": "vec"
+      },
+      "wide_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_shuf": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_unpck": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.37,
+        "unit": "vec"
+      },
+      "wide_bcast": {
+        "uops": 1.0,
+        "lat": 7.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_load": {
+        "uops": 1.0,
+        "lat": 8.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "store"
+      }
     }
   },
   "zen4": {
@@ -43,35 +184,176 @@
     "line_bytes": 64,
     "page_bytes": 4096,
     "issue_width": 6.0,
-    "l1d": {"bytes": 32768, "ways": 8, "line": 64, "lat": 4},
-    "l2": {"bytes": 1048576, "ways": 8, "line": 64, "lat": 14},
-    "hazards": {"line_split": 1.0, "page_cross": 4.0, "stlf_partial": 10.0, "alias_4k": 1.5, "l1_miss": 2.0},
+    "l1d": {
+      "bytes": 32768,
+      "ways": 8,
+      "line": 64,
+      "lat": 4
+    },
+    "l2": {
+      "bytes": 1048576,
+      "ways": 8,
+      "line": 64,
+      "lat": 14
+    },
+    "hazards": {
+      "line_split": 1.0,
+      "page_cross": 4.0,
+      "stlf_partial": 10.0,
+      "alias_4k": 1.5,
+      "l1_miss": 2.0
+    },
     "classes": {
-      "nop":        {"uops": 0.25, "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "zero":       {"uops": 1.0,  "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "mov_rr":     {"uops": 1.0,  "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "alu":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "alu"},
-      "lea":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "alu"},
-      "branch":     {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "call":       {"uops": 2.0,  "lat": 2.0, "rtp": 1.00, "unit": "branch"},
-      "ret":        {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "branch"},
-      "load":       {"uops": 1.0,  "lat": 4.0, "rtp": 0.33, "unit": "load"},
-      "alu_mem":    {"uops": 1.0,  "lat": 5.0, "rtp": 0.33, "unit": "load"},
-      "store":      {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "vec_alu":    {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "vec"},
-      "vec_shift":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "vec_shuf":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "vec_load":   {"uops": 1.0,  "lat": 7.0, "rtp": 0.33, "unit": "load"},
-      "vec_store":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "wide_mov":   {"uops": 1.0,  "lat": 0.0, "rtp": 0.50, "unit": "vec"},
-      "wide_alu":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "wide_xor":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "wide_shift": {"uops": 1.0,  "lat": 2.0, "rtp": 1.00, "unit": "vec"},
-      "wide_shuf":  {"uops": 1.0,  "lat": 4.0, "rtp": 1.00, "unit": "vec"},
-      "wide_unpck": {"uops": 1.0,  "lat": 1.0, "rtp": 0.67, "unit": "vec"},
-      "wide_bcast": {"uops": 1.0,  "lat": 8.0, "rtp": 0.50, "unit": "load"},
-      "wide_load":  {"uops": 1.0,  "lat": 9.0, "rtp": 1.00, "unit": "load"},
-      "wide_store": {"uops": 2.0,  "lat": 1.0, "rtp": 2.00, "unit": "store"}
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "zero": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "lea": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 2.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "alu_mem": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 7.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "wide_mov": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_xor": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_shift": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_shuf": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_unpck": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.67,
+        "unit": "vec"
+      },
+      "wide_bcast": {
+        "uops": 1.0,
+        "lat": 8.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_load": {
+        "uops": 1.0,
+        "lat": 9.0,
+        "rtp": 1.0,
+        "unit": "load"
+      },
+      "wide_store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 2.0,
+        "unit": "store"
+      }
     }
   },
   "icelake": {
@@ -80,35 +362,176 @@
     "line_bytes": 64,
     "page_bytes": 4096,
     "issue_width": 5.0,
-    "l1d": {"bytes": 49152, "ways": 12, "line": 64, "lat": 5},
-    "l2": {"bytes": 1310720, "ways": 20, "line": 64, "lat": 14},
-    "hazards": {"line_split": 1.2, "page_cross": 5.0, "stlf_partial": 14.0, "alias_4k": 1.5, "l1_miss": 1.5},
+    "l1d": {
+      "bytes": 49152,
+      "ways": 12,
+      "line": 64,
+      "lat": 5
+    },
+    "l2": {
+      "bytes": 1310720,
+      "ways": 20,
+      "line": 64,
+      "lat": 14
+    },
+    "hazards": {
+      "line_split": 1.2,
+      "page_cross": 5.0,
+      "stlf_partial": 14.0,
+      "alias_4k": 1.5,
+      "l1_miss": 1.5
+    },
     "classes": {
-      "nop":        {"uops": 0.25, "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "zero":       {"uops": 0.5,  "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "mov_rr":     {"uops": 0.5,  "lat": 0.0, "rtp": 0.20, "unit": "fe"},
-      "alu":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "alu"},
-      "lea":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "alu"},
-      "branch":     {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "call":       {"uops": 3.0,  "lat": 2.0, "rtp": 1.00, "unit": "branch"},
-      "ret":        {"uops": 2.0,  "lat": 1.0, "rtp": 1.00, "unit": "branch"},
-      "load":       {"uops": 1.0,  "lat": 5.0, "rtp": 0.50, "unit": "load"},
-      "alu_mem":    {"uops": 2.0,  "lat": 6.0, "rtp": 0.50, "unit": "load"},
-      "store":      {"uops": 2.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "vec_alu":    {"uops": 1.0,  "lat": 1.0, "rtp": 0.33, "unit": "vec"},
-      "vec_shift":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "vec_shuf":   {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "vec"},
-      "vec_load":   {"uops": 1.0,  "lat": 6.0, "rtp": 0.50, "unit": "load"},
-      "vec_store":  {"uops": 2.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "wide_mov":   {"uops": 0.5,  "lat": 0.0, "rtp": 0.37, "unit": "vec"},
-      "wide_alu":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "wide_xor":   {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "vec"},
-      "wide_shift": {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "vec"},
-      "wide_shuf":  {"uops": 1.0,  "lat": 3.0, "rtp": 1.00, "unit": "vec"},
-      "wide_unpck": {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "vec"},
-      "wide_bcast": {"uops": 1.0,  "lat": 5.0, "rtp": 0.50, "unit": "load"},
-      "wide_load":  {"uops": 1.0,  "lat": 5.0, "rtp": 0.50, "unit": "load"},
-      "wide_store": {"uops": 2.0,  "lat": 1.0, "rtp": 1.00, "unit": "store"}
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "zero": {
+        "uops": 0.5,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 0.5,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "lea": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 3.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "alu_mem": {
+        "uops": 2.0,
+        "lat": 6.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.33,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 6.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "wide_mov": {
+        "uops": 0.5,
+        "lat": 0.0,
+        "rtp": 0.37,
+        "unit": "vec"
+      },
+      "wide_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_xor": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_shuf": {
+        "uops": 1.0,
+        "lat": 3.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_unpck": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_bcast": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_load": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "store"
+      }
     }
   },
   "apple_m": {
@@ -117,23 +540,104 @@
     "line_bytes": 128,
     "page_bytes": 16384,
     "issue_width": 8.0,
-    "l1d": {"bytes": 131072, "ways": 8, "line": 128, "lat": 4},
-    "l2": {"bytes": 16777216, "ways": 16, "line": 128, "lat": 16},
-    "hazards": {"line_split": 1.0, "page_cross": 6.0, "stlf_partial": 10.0, "alias_4k": 0.0, "l1_miss": 2.5},
+    "l1d": {
+      "bytes": 131072,
+      "ways": 8,
+      "line": 128,
+      "lat": 4
+    },
+    "l2": {
+      "bytes": 16777216,
+      "ways": 16,
+      "line": 128,
+      "lat": 16
+    },
+    "hazards": {
+      "line_split": 1.0,
+      "page_cross": 6.0,
+      "stlf_partial": 10.0,
+      "alias_4k": 0.0,
+      "l1_miss": 2.5
+    },
     "classes": {
-      "nop":        {"uops": 0.25, "lat": 0.0, "rtp": 0.13, "unit": "fe"},
-      "mov_rr":     {"uops": 1.0,  "lat": 0.0, "rtp": 0.17, "unit": "fe"},
-      "alu":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.17, "unit": "alu"},
-      "branch":     {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "call":       {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "ret":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "load":       {"uops": 1.0,  "lat": 4.0, "rtp": 0.33, "unit": "load"},
-      "store":      {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"},
-      "vec_alu":    {"uops": 1.0,  "lat": 2.0, "rtp": 0.25, "unit": "vec"},
-      "vec_shift":  {"uops": 1.0,  "lat": 2.0, "rtp": 0.25, "unit": "vec"},
-      "vec_shuf":   {"uops": 1.0,  "lat": 2.0, "rtp": 0.25, "unit": "vec"},
-      "vec_load":   {"uops": 1.0,  "lat": 5.0, "rtp": 0.33, "unit": "load"},
-      "vec_store":  {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "store"}
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.13,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.17,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.17,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      }
     }
   },
   "ampere1": {
@@ -142,23 +646,282 @@
     "line_bytes": 64,
     "page_bytes": 4096,
     "issue_width": 4.0,
-    "l1d": {"bytes": 65536, "ways": 4, "line": 64, "lat": 4},
-    "l2": {"bytes": 2097152, "ways": 8, "line": 64, "lat": 14},
-    "hazards": {"line_split": 1.0, "page_cross": 6.0, "stlf_partial": 10.0, "alias_4k": 1.5, "l1_miss": 1.5},
+    "l1d": {
+      "bytes": 65536,
+      "ways": 4,
+      "line": 64,
+      "lat": 4
+    },
+    "l2": {
+      "bytes": 2097152,
+      "ways": 8,
+      "line": 64,
+      "lat": 14
+    },
+    "hazards": {
+      "line_split": 1.0,
+      "page_cross": 6.0,
+      "stlf_partial": 10.0,
+      "alias_4k": 1.5,
+      "l1_miss": 1.5
+    },
     "classes": {
-      "nop":        {"uops": 0.25, "lat": 0.0, "rtp": 0.25, "unit": "fe"},
-      "mov_rr":     {"uops": 1.0,  "lat": 0.0, "rtp": 0.25, "unit": "fe"},
-      "alu":        {"uops": 1.0,  "lat": 1.0, "rtp": 0.25, "unit": "alu"},
-      "branch":     {"uops": 1.0,  "lat": 1.0, "rtp": 0.50, "unit": "branch"},
-      "call":       {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "branch"},
-      "ret":        {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "branch"},
-      "load":       {"uops": 1.0,  "lat": 4.0, "rtp": 0.50, "unit": "load"},
-      "store":      {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "store"},
-      "vec_alu":    {"uops": 1.0,  "lat": 2.0, "rtp": 0.50, "unit": "vec"},
-      "vec_shift":  {"uops": 1.0,  "lat": 2.0, "rtp": 0.50, "unit": "vec"},
-      "vec_shuf":   {"uops": 1.0,  "lat": 2.0, "rtp": 0.50, "unit": "vec"},
-      "vec_load":   {"uops": 1.0,  "lat": 5.0, "rtp": 0.50, "unit": "load"},
-      "vec_store":  {"uops": 1.0,  "lat": 1.0, "rtp": 1.00, "unit": "store"}
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.25,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.25,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "store"
+      }
+    }
+  },
+  "zen3": {
+    "target": "x86_64",
+    "name": "AMD Zen 3 (x86-64, AVX2)",
+    "line_bytes": 64,
+    "page_bytes": 4096,
+    "issue_width": 6.0,
+    "l1d": {
+      "bytes": 32768,
+      "ways": 8,
+      "line": 64,
+      "lat": 4
+    },
+    "l2": {
+      "bytes": 524288,
+      "lat": 12,
+      "line": 64,
+      "ways": 8
+    },
+    "hazards": {
+      "line_split": 1.0,
+      "page_cross": 4.0,
+      "stlf_partial": 10.0,
+      "alias_4k": 1.5,
+      "l1_miss": 2.0
+    },
+    "classes": {
+      "nop": {
+        "uops": 0.25,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "zero": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "mov_rr": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.2,
+        "unit": "fe"
+      },
+      "alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "lea": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "alu"
+      },
+      "branch": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "branch"
+      },
+      "call": {
+        "uops": 2.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "ret": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 1.0,
+        "unit": "branch"
+      },
+      "load": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "alu_mem": {
+        "uops": 1.0,
+        "lat": 5.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "vec_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.25,
+        "unit": "vec"
+      },
+      "vec_shift": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_shuf": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "vec_load": {
+        "uops": 1.0,
+        "lat": 7.0,
+        "rtp": 0.33,
+        "unit": "load"
+      },
+      "vec_store": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "store"
+      },
+      "wide_mov": {
+        "uops": 1.0,
+        "lat": 0.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_alu": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_xor": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.5,
+        "unit": "vec"
+      },
+      "wide_shift": {
+        "uops": 1.0,
+        "lat": 2.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_shuf": {
+        "uops": 1.0,
+        "lat": 4.0,
+        "rtp": 1.0,
+        "unit": "vec"
+      },
+      "wide_unpck": {
+        "uops": 1.0,
+        "lat": 1.0,
+        "rtp": 0.67,
+        "unit": "vec"
+      },
+      "wide_bcast": {
+        "uops": 1.0,
+        "lat": 8.0,
+        "rtp": 0.5,
+        "unit": "load"
+      },
+      "wide_load": {
+        "uops": 1.0,
+        "lat": 9.0,
+        "rtp": 1.0,
+        "unit": "load"
+      },
+      "wide_store": {
+        "uops": 2.0,
+        "lat": 1.0,
+        "rtp": 2.0,
+        "unit": "store"
+      }
     }
   }
 }

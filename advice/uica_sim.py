@@ -48,13 +48,16 @@ PIPELINES = {
         "micro_fusion_fe": True,    # load+alu is 1 macro-op in Zen dispatch/ROB
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": True,      # PMU: Zen 5 eliminates `mov rdx, rdx` (rand_00_scalar: 3.02 cyc)
         "split_sched": True,
         "branch_ends_fetch": True,  # PMU: Zen 5 loop back-edge closes fetch/dispatch cycle (2.01, 3.01, 6.00)
         # Zen 5 has native 512-bit FP pipes (PMU: 16 vpaddd/vpxord zmm = 4.01 cyc = 4.0/cyc)
         # and 2.000-cycle latency on all 512-bit integer ALU/logic/rotate ops (PMU: g1_14ops = 28.002 cyc)
         "use_measured_tp_occ": False,
         "zmm_min_lat": 2.0,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "zen4": {
         "uops_arch": "ZEN4",
@@ -64,7 +67,7 @@ PIPELINES = {
         "rob_size": 320,
         "retire_width": 8,
         "int_dispatch_width": 6,
-        "fp_dispatch_width": 4,
+        "fp_dispatch_width": 6,     # PMU: Zen 4 dispatches 6 128-bit SSE ops/cyc (rand_02_sse=3.51, rand_08_sse=5.61)
         "fp_sched_size": 64,
         "int_sched_size": 96,
         "alu_ports": ["ALU0", "ALU1", "ALU2", "ALU3"],
@@ -78,10 +81,13 @@ PIPELINES = {
         "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": False,     # PMU: Zen 4 does not eliminate `mov rdx, rdx` (rand_00_scalar: 4.00 cyc)
         "split_sched": True,
-        "branch_ends_fetch": True,
+        "branch_ends_fetch": False, # PMU: Zen 4 op-cache streams across back-edges (2.34, 2.51, 3.17)
         "use_measured_tp_occ": True,
+        "zmm_double_pump": True,    # PMU: Zen 4 double-pumps 512-bit ZMM as 2x256-bit micro-ops (lat 1/1/2, g4=36.92)
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "zen3": {
         "uops_arch": "ZEN3",
@@ -91,7 +97,7 @@ PIPELINES = {
         "rob_size": 256,
         "retire_width": 8,
         "int_dispatch_width": 6,
-        "fp_dispatch_width": 4,
+        "fp_dispatch_width": 6,
         "fp_sched_size": 64,
         "int_sched_size": 96,
         "alu_ports": ["ALU0", "ALU1", "ALU2", "ALU3"],
@@ -105,10 +111,13 @@ PIPELINES = {
         "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": False,
         "split_sched": True,
-        "branch_ends_fetch": True,
+        "branch_ends_fetch": False,
         "use_measured_tp_occ": True,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "icelake": {
         "uops_arch": "ICL",
@@ -132,10 +141,13 @@ PIPELINES = {
         "micro_fusion_fe": True,    # Intel fused-domain micro-fusion (load+alu, store = 1 FE/ROB uop, 2 port uops)
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": False,     # PMU: Ice Lake does not eliminate `mov rdx, rdx` (rand_00_scalar: 4.35 cyc)
         "split_sched": False,
         "branch_ends_fetch": False, # Ice Lake LSD/IDQ buffers across taken loop back-edges smoothly
         "use_measured_tp_occ": False,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "emr": {
         "uops_arch": "EMR",
@@ -159,37 +171,43 @@ PIPELINES = {
         "micro_fusion_fe": True,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": False,
         "split_sched": False,
         "branch_ends_fetch": False,
         "use_measured_tp_occ": False,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "apple_m": {
         "uops_arch": None,
         "target": "arm64",
-        "fe_width": 8,
+        "fe_width": 8,              # PMU: Apple M6 steady-state dispatch (probe_mov_elim=1.72, rand_08_mixed=3.35)
         "opcache_line_uops": 8,
         "rob_size": 630,
         "retire_width": 8,
         "int_dispatch_width": 8,
-        "fp_dispatch_width": 4,
+        "fp_dispatch_width": 4,     # PMU: 4-wide NEON vector dispatch (vec_*_32 = 8.00 cyc = 4.00/cyc)
         "fp_sched_size": 120,
         "int_sched_size": 160,
-        "alu_ports": ["I0", "I1", "I2", "I3", "I4", "I5"],
+        "alu_ports": ["I0", "I1", "I2", "I3", "I4", "I5"],  # PMU: 6 integer ALU pipes (probe_alu_wide=2.53 cyc)
         "branch_ports": ["I4", "I5"],
-        "load_ports": ["L0", "L1", "L2"],
+        "load_ports": ["L0", "L1", "L2"],      # PMU: 3 load pipes shared by GPR & NEON loads (ld_x_12=3.96, ld_q_12=3.99)
         "store_ports": ["S0", "S1"],
         "store_data_ports": ["S0", "S1"],
-        "fp_ports": ["V0", "V1", "V2", "V3"],
+        "fp_ports": ["V0", "V1", "V2", "V3"],  # PMU: 4 symmetric NEON pipes (all lat=2.000 cyc, 4.00/cyc at 16 chains)
         "macro_fusion": True,
         "fuse_alu_jcc": False,
         "micro_fusion_fe": False,
         "mov_elim_gpr": True,
         "mov_elim_vec": True,
+        "self_mov_elim": True,
         "split_sched": True,
         "branch_ends_fetch": False,
         "use_measured_tp_occ": False,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
     "ampere1": {
         "uops_arch": None,
@@ -213,10 +231,13 @@ PIPELINES = {
         "micro_fusion_fe": False,
         "mov_elim_gpr": True,
         "mov_elim_vec": False,
+        "self_mov_elim": False,
         "split_sched": True,
         "branch_ends_fetch": False,
         "use_measured_tp_occ": False,
+        "zmm_double_pump": False,
         "fp_cross_bypass": 0.0,
+        "fp_cross_pipe_lat": 0.0,
     },
 }
 
@@ -272,8 +293,14 @@ def _uop_spec_for_row(row_name, cls, pipe):
                     ideal_tp = 1.0 / max(1, len(ps))
                     if tp > ideal_tp * 1.15:
                         occ = tp * len(ps)
-                for _ in range(cnt):
-                    groups.append((ps, occ))
+                if pipe.get("zmm_double_pump") and cls.startswith("wide_") and occ >= 1.8:
+                    # Zen 4 double-pumps 512-bit ZMM as 2 consecutive 256-bit micro-ops through FP dispatch!
+                    for _ in range(cnt * 2):
+                        groups.append((ps, 1.0))
+                    fe_uops = max(fe_uops, cnt * 2)
+                else:
+                    for _ in range(cnt):
+                        groups.append((ps, occ))
             if not (pipe.get("micro_fusion_fe") and cls in ("alu_mem", "store", "vec_store", "wide_store")):
                 fe_uops = max(fe_uops, total_port_uops)
             return groups, lat, is_fp, False, fe_uops
@@ -298,10 +325,12 @@ def _uop_spec_for_row(row_name, cls, pipe):
         return [(aports, 1.0) for _ in range(fe_uops)], lat, False, False, fe_uops
 
     # Fallback / AArch64 (`apple_m`, `ampere1`)
+    # Note: on AArch64, `ldr qN` and `str qN` execute on the load/store queue (`is_fp = False`),
+    # NOT the NEON ALU dispatch queue (verified on Apple M6: ld_q_12=3.99 cyc, rand_09_neon_mem=2.99 cyc).
     if cls in ("load", "vec_load"):
-        return [(pipe["load_ports"], 1.0)], (5.0 if cls == "vec_load" else 4.0), (cls == "vec_load"), False, 1
+        return [(pipe["load_ports"], 1.0)], (5.0 if cls == "vec_load" else 4.0), False, False, 1
     if cls in ("store", "vec_store"):
-        return [(pipe["store_ports"], 1.0)], 1.0, (cls == "vec_store"), False, 1
+        return [(pipe["store_ports"], 1.0)], 1.0, False, False, 1
     if cls in ("vec_alu", "vec_shift", "vec_shuf"):
         return [(pipe["fp_ports"], 1.0)], 2.0, True, False, 1
     if cls in ("branch", "call", "ret"):
@@ -379,12 +408,14 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             i += 2
             continue
         groups, lat, is_fp, is_elim, fe_uops = _uop_spec_for_row(it["row"], it["class"], pipe)
-        # Intel (unified-scheduler) CPUs do not rename-eliminate self-moves (`mov rdx, rdx`),
-        # whereas AMD Zen eliminates them cleanly (verified by PMU on rand_00_scalar: 3.02 Zen5 vs 4.35 ICL).
-        if it["row"] in ("mov64_rr", "mov32_rr") and is_elim and it["reads"] == it["writes"] and not pipe["split_sched"]:
+        # Self-moves (`mov rdx, rdx`): eliminated on Zen 5 & Apple M6, 1 ALU cycle on Zen 4 / Ice Lake.
+        if it["row"] in ("mov64_rr", "mov32_rr", "mov_rr") and is_elim and it["reads"] == it["writes"] and not pipe.get("self_mov_elim", True):
             groups, lat, is_elim = [(pipe["alu_ports"], 1.0)], 1.0, False
-        # Same-register vector XOR zero-idiom (`vpxord xmmX, xmmY, xmmY` where both inputs match)
-        if it["row"] in ("pxor128", "pxord512") and len(it["reads"]) == 1:
+        # AArch64 canonical NEON register move is encoded as `orr vD.16b, vS.16b, vS.16b` (1 distinct read).
+        if it["row"] == "orr_v" and len(it["reads"]) == 1 and pipe["mov_elim_vec"]:
+            groups, lat, is_elim, fe_uops = [], 0.0, True, 1
+        # Same-register vector XOR zero-idiom (`vpxord xmmX, xmmY, xmmY` or `eor vX, vY, vY`)
+        if it["row"] in ("pxor128", "pxord512", "eor_v") and len(it["reads"]) == 1:
             groups, lat, is_elim, fe_uops = [], 0.0, True, 1
             it = dict(it, reads=set())
         # Same-register integer SUB zero-idiom (`sub rax, rax` where both inputs match)
@@ -413,8 +444,11 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
     # Step 2: Out-of-order cycle-accurate dispatch + dynamic least-loaded port scheduling.
     # Register readiness (rename handles WAR/WAW automatically; only true RAW dependencies tracked!).
     reg_ready = collections.defaultdict(float)
-    # Track last producer class per register to model cross-pipe FP bypass delay on Zen 5
+    # Track last producer class & pipe per register (for cross-pipe FP bypass delay on Zen 5 / Apple M)
     reg_fp_kind = {}
+    reg_pipe = {}
+    fp_port_set = set(pipe["fp_ports"])
+    fp_cross_pipe_lat = pipe.get("fp_cross_pipe_lat", 0.0)
     # Per-port occupied cycle sets (true out-of-order reservation stations: a ready younger uop
     # can execute in an earlier free cycle `t < later_op_cycle`!) and cumulative port load.
     port_busy = collections.defaultdict(set)
@@ -539,6 +573,7 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
             earliest = max(float(disp_cyc), data_ready)
 
             # Dynamic least-loaded earliest-free port selection (true out-of-order uiCA scheduler)
+            chosen_fp_port = None
             if not op["groups"]:
                 exec_start = earliest
                 exec_done = earliest + op["lat"]
@@ -547,11 +582,24 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
                 exec_start = earliest
                 for ps, occ in op["groups"]:
                     occ_i = max(1, int(round(occ)))
-                    # Pick port with earliest true free cycle >= earliest, tie-breaking by least total work!
-                    chosen, st = min(
-                        ((p, next_free_cycle(p, earliest, occ_i)) for p in ps),
-                        key=lambda kv: (kv[1], port_work[kv[0]]),
-                    )
+                    # Compute per-port ready time (accounting for cross-pipe NEON bypass on Apple M)
+                    best_p, best_st, best_key = None, 0, None
+                    for p in ps:
+                        p_ready = earliest
+                        if fp_cross_pipe_lat > 0.0 and p in fp_port_set:
+                            for r in op["reads"]:
+                                rp = reg_pipe.get(r)
+                                if rp is not None and rp in fp_port_set and rp != p:
+                                    rt = reg_ready[r] + fp_cross_pipe_lat
+                                    if rt > p_ready:
+                                        p_ready = rt
+                        st = next_free_cycle(p, p_ready, occ_i)
+                        key = (st, port_work[p])
+                        if best_key is None or key < best_key:
+                            best_p, best_st, best_key = p, st, key
+                    chosen, st = best_p, best_st
+                    if chosen in fp_port_set:
+                        chosen_fp_port = chosen
                     b = port_busy[chosen]
                     for j in range(occ_i):
                         b.add(st + j)
@@ -566,6 +614,10 @@ def simulate_loop(seq, arch_name, iterations=12, overrides=None):
                 reg_ready[w] = exec_done
                 if cur_fp_kind is not None:
                     reg_fp_kind[w] = cur_fp_kind
+                if chosen_fp_port is not None:
+                    reg_pipe[w] = chosen_fp_port
+                elif w in reg_pipe:
+                    del reg_pipe[w]
             for _ in range(u):
                 rob_complete.append(exec_done)
 
