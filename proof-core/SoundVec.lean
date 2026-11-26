@@ -74,6 +74,11 @@ theorem wXor_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t :
     Step inp ρ nv t.list (wXor a b t).2.list (wXor a b t).1 (den inp ρ t.list a ^^^ den inp ρ t.list b) :=
   step_of_made ok (wXor_made (t' := (wXor a b t).2) (i := (wXor a b t).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
 
+theorem wAnd_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
+    (ha : a < t.list.length) (hb : b < t.list.length) :
+    Step inp ρ nv t.list (wAnd a b t).2.list (wAnd a b t).1 (den inp ρ t.list a &&& den inp ρ t.list b) :=
+  step_of_made ok (wAnd_made (t' := (wAnd a b t).2) (i := (wAnd a b t).1) rfl ok.wf ha hb) (fun r e => by cases e) (fun a k e => by cases e)
+
 theorem wUlt_step {inp : Nat → Nat → Nat} {ρ : Nat → Int} {nv : Nat} {t : Tab} {a b : Nat} (ok : TableOk nv t.list)
     (ha : a < t.list.length) (hb : b < t.list.length) :
     Step inp ρ nv t.list (wUlt a b t).2.list (wUlt a b t).1 (if den inp ρ t.list a < den inp ρ t.list b then 1 else 0) := by
@@ -1170,48 +1175,75 @@ theorem symEach32_sound {ctx : Ctx} {s0 : State} (bind : Bind) {s s1 : Sym}  {ar
                 · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
             next hop2 =>
               split at h
-              next hop3 =>
-                -- the or of a word shifted left and the same word shifted right: the word turned
-                have oe : op = "or32" := by simpa using hop3
+              next hop2a =>
+                have oe : op = "and32" := by simpa using hop2a
                 subst oe
-                cases ht : orTurns s.terms ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) with
-                | none => simp only [ht] at h; exact (refuse_ok h).elim
-                | some turns =>
-                  simp only [ht] at h
-                  obtain ⟨rfl, rfl⟩ := pure_pair h
-                  obtain ⟨t0, t1, t2, t3, rfl, g0, g1, g2, g3⟩ := orTurns4 ht
-                  have dl : ∀ i, den (inpOf ctx s0) ρ s.terms i < W32 := fun i => den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
-                  have o0 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g0
-                  have o1 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g1
-                  have o2 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g2
-                  have o3 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g3
-                  obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wRotr q.1 q.2)
-                    (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q.1) q.2)
-                    (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [t0, t1, t2, t3] s.tab
-                    (by
-                      intro q mq T eT okT
-                      have hq : q.1 < s.terms.length ∧ q.2 ≤ 32 := by
-                        simp only [List.mem_cons, List.mem_nil_iff, or_false] at mq
-                        rcases mq with rfl | rfl | rfl | rfl
-                        · exact ⟨o0.1, o0.2.1⟩
-                        · exact ⟨o1.1, o1.2.1⟩
-                        · exact ⟨o2.1, o2.2.1⟩
-                        · exact ⟨o3.1, o3.2.1⟩
-                      have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le hq.1 eT.le) hq.2
-                      rw [den_ext wf.words.table eT hq.1] at S
-                      exact S)
-                    (Ext.refl _) wf.words.ok
-                  refine ⟨ρ, Carried.terms H wf e ok,
-                    [st.vec rx 0 ||| st.vec ry 0, st.vec rx 1 ||| st.vec ry 1, st.vec rx 2 ||| st.vec ry 2, st.vec rx 3 ||| st.vec ry 3],
-                    ?_, lt, ?_⟩
-                  · simp [lanesOf, hvx, hvy, prim32]
-                  · intro k hk
-                    rcases lt4 hk with rfl | rfl | rfl | rfl
-                    · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; exact o0.2.2
-                    · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; exact o1.2.2
-                    · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; exact o2.2.2
-                    · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; exact o3.2.2
-              next => exact (refuse_ok h).elim
+                obtain ⟨rfl, rfl⟩ := pure_pair h
+                obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wAnd q.1 q.2)
+                  (val := fun q => den (inpOf ctx s0) ρ s.terms q.1 &&& den (inpOf ctx s0) ρ s.terms q.2)
+                  (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) s.tab
+                  (by
+                    intro q mq T eT okT
+                    have m1 := ltx q.1 (List.of_mem_zip (a := q.1) (b := q.2) mq).1
+                    have m2 := lty q.2 (List.of_mem_zip (a := q.1) (b := q.2) mq).2
+                    have S := wAnd_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le m1 eT.le) (Nat.lt_of_lt_of_le m2 eT.le)
+                    rw [den_ext wf.words.table eT m1, den_ext wf.words.table eT m2] at S
+                    exact S)
+                  (Ext.refl _) wf.words.ok
+                refine ⟨ρ, Carried.terms H wf e ok,
+                  [st.vec rx 0 &&& st.vec ry 0, st.vec rx 1 &&& st.vec ry 1, st.vec rx 2 &&& st.vec ry 2, st.vec rx 3 &&& st.vec ry 3],
+                  ?_, lt, ?_⟩
+                · simp [lanesOf, hvx, hvy, prim32]
+                · intro k hk
+                  rcases lt4 hk with rfl | rfl | rfl | rfl
+                  · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; rfl
+                  · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; rfl
+                  · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; rfl
+                  · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; rfl
+              next hop2a =>
+                split at h
+                next hop3 =>
+                  -- the or of a word shifted left and the same word shifted right: the word turned
+                  have oe : op = "or32" := by simpa using hop3
+                  subst oe
+                  cases ht : orTurns s.terms ([x0, x1, x2, x3].zip [y0, y1, y2, y3]) with
+                  | none => simp only [ht] at h; exact (refuse_ok h).elim
+                  | some turns =>
+                    simp only [ht] at h
+                    obtain ⟨rfl, rfl⟩ := pure_pair h
+                    obtain ⟨t0, t1, t2, t3, rfl, g0, g1, g2, g3⟩ := orTurns4 ht
+                    have dl : ∀ i, den (inpOf ctx s0) ρ s.terms i < W32 := fun i => den_lt wf.words.table (inpOf_lt ctx s0) wf.words.rotrs i
+                    have o0 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g0
+                    have o1 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g1
+                    have o2 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g2
+                    have o3 := orTurn_sound (inp := inpOf ctx s0) (ρ := ρ) wf.words.table dl g3
+                    obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := fun (q : Nat × Nat) => wRotr q.1 q.2)
+                      (val := fun q => rotr (den (inpOf ctx s0) ρ s.terms q.1) q.2)
+                      (inp := inpOf ctx s0) (ρ := ρ) (nv := s.nvars) (T0 := s.terms) [t0, t1, t2, t3] s.tab
+                      (by
+                        intro q mq T eT okT
+                        have hq : q.1 < s.terms.length ∧ q.2 ≤ 32 := by
+                          simp only [List.mem_cons, List.mem_nil_iff, or_false] at mq
+                          rcases mq with rfl | rfl | rfl | rfl
+                          · exact ⟨o0.1, o0.2.1⟩
+                          · exact ⟨o1.1, o1.2.1⟩
+                          · exact ⟨o2.1, o2.2.1⟩
+                          · exact ⟨o3.1, o3.2.1⟩
+                        have S := wRotr_step (inp := inpOf ctx s0) (ρ := ρ) okT (Nat.lt_of_lt_of_le hq.1 eT.le) hq.2
+                        rw [den_ext wf.words.table eT hq.1] at S
+                        exact S)
+                      (Ext.refl _) wf.words.ok
+                    refine ⟨ρ, Carried.terms H wf e ok,
+                      [st.vec rx 0 ||| st.vec ry 0, st.vec rx 1 ||| st.vec ry 1, st.vec rx 2 ||| st.vec ry 2, st.vec rx 3 ||| st.vec ry 3],
+                      ?_, lt, ?_⟩
+                    · simp [lanesOf, hvx, hvy, prim32]
+                    · intro k hk
+                      rcases lt4 hk with rfl | rfl | rfl | rfl
+                      · rw [dn 0 (by show _ < 4; omega), hdx 0 (by omega), hdy 0 (by omega)]; exact o0.2.2
+                      · rw [dn 1 (by show _ < 4; omega), hdx 1 (by omega), hdy 1 (by omega)]; exact o1.2.2
+                      · rw [dn 2 (by show _ < 4; omega), hdx 2 (by omega), hdy 2 (by omega)]; exact o2.2.2
+                      · rw [dn 3 (by show _ < 4; omega), hdx 3 (by omega), hdy 3 (by omega)]; exact o3.2.2
+                next => exact (refuse_ok h).elim
         | none =>
           simp only [hy] at h
           cases hn : symNumber bind b with

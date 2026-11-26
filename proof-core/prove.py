@@ -457,9 +457,12 @@ class Prover:
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
+        self.best_last = None
+        self.best_last_proof = []
         self.furthest_root = 0
         self.spec_fuel_hit = False
         self.spec_fuel_proof = []
+        self.hard_refusal = False
         self.trace_exprs = list(trace_exprs)
         self.instrs = list(instrs)
         self.reg_list = list(reg_list)
@@ -493,6 +496,15 @@ class Prover:
 
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
+
+    def fail(self, proof, said, force=False):
+        """Record a branch failure, preserving the deepest partial proof reached across backtracking."""
+        self.last = said
+        self.last_proof = proof
+        if force or self.best_last is None or len(proof) >= len(self.best_last_proof):
+            self.best_last = said
+            self.best_last_proof = proof
+        self.note(proof, said)
 
     def clear_candidates(self, fail_pc, said):
         """Candidate (clear_pc, reg, expr) steps right at or just before `fail_pc`."""
@@ -548,7 +560,20 @@ class Prover:
                             if done is not None: return done
                         self.last, self.last_proof = (before, before_proof) if before else (said, proof)
                         return None
-                self.last = said; self.last_proof = proof; self.note(proof, said); return None
+                is_spec_local = any(said.startswith(p) for p in (
+                    "refused: the value held is of another use",
+                    "refused: two uses of a definition with other things",
+                    "refused: a use of a definition opened where a number is needed",
+                    "refused: no such value is held",
+                    "refused: no such use of a definition",
+                    "refused: a condition that is not true or false",
+                ))
+                if not is_spec_local:
+                    self.hard_refusal = True
+                    self.fail(proof, said, force=True)
+                else:
+                    self.last = said; self.last_proof = proof; self.note(proof, said)
+                return None
             lines = said.split("\n")
             what = lines[0][5:]
             raw_facts = [l[2:].strip() for l in lines if l.startswith("f ")]
@@ -557,7 +582,7 @@ class Prover:
             goals = [lin([int(x) for x in s.split()]) for s in raw_goals]
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
-                if p is None: self.last = said; self.last_proof = proof; self.note(proof, said + ' (no proof found)'); return None
+                if p is None: self.fail(proof, said); return None
                 g_nums = [int(x) for x in raw_goals[0].split()]
                 neg_raw = " ".join([str(-1 - g_nums[0])] + [str(-x) for x in g_nums[1:]])
                 proof = proof + proof_text(p, [negation(goals[0])] + facts, [neg_raw] + raw_facts)
@@ -602,7 +627,7 @@ class Prover:
                 d = goals[0]
                 if refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
-                else: self.last = said; self.last_proof = proof; self.note(proof, said + ' (undecided)'); return None
+                else: self.fail(proof, said); return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
                 rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
                 for g, row in zip(goals, rows):
@@ -619,7 +644,7 @@ class Prover:
                             found = trial
                             break
                     break
-                if found is None: self.last = said; self.last_proof = proof; self.note(proof, said + ' (none of the rows has a proof)'); return None
+                if found is None: self.fail(proof, said); return None
                 proof = found
             elif what == "shift":                              # a shift to the left: is the number shown to lose no bit, or is only its low part kept
                 proof = proof + (["t exact"] if refutation(facts + [negation(goals[0])]) else ["t wrap"])
@@ -628,7 +653,7 @@ class Prover:
                 if refutation(facts + [negation(d)]) and refutation(facts + [negation(-d)]): proof = proof + ["t eq"]
                 elif refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [-d]): proof = proof + ["t gt"]
-                else: self.last = said; self.last_proof = proof; self.note(proof, said + ' (undecided)'); return None
+                else: self.fail(proof, said); return None
             elif what == "spec":
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])
@@ -640,9 +665,13 @@ class Prover:
                     self.spec_fuel_hit = False
                 before, before_proof = self.last, self.last_proof
                 for k in reversed(range(held)):                # a value held, carried over to the fact asked for
-                    done = self.solve(proof + [f"t carry {k}"])
+                    if self.hard_refusal or self.furthest_root > start_len: return None
+                    trial = proof + [f"t carry {k}"]
+                    if self.ask(trial).startswith("refused: the value held is of another use"):
+                        continue
+                    done = self.solve(trial)
                     if done is not None: return done
-                    if self.furthest_root > start_len: return None
+                    if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
                 if opened >= 14:
                     self.spec_fuel_hit = True
@@ -701,15 +730,16 @@ class Prover:
                         # Spec goal closed (or moved past `spec` to next instruction)!
                         done = self.solve(p_try)
                         if done is not None: return done
-                        if self.furthest_root > start_len: return None
+                        if self.hard_refusal or self.furthest_root > start_len: return None
                     if opened >= 3 or self.spec_fuel_hit:
                         return None
                 any_fuel_hit = False
                 for k in reversed(range(count)):
+                    if self.hard_refusal: return None
                     self.spec_fuel_hit = False
                     done = self.solve(proof + [f"t open {k}"])
                     if done is not None: return done
-                    if self.furthest_root > start_len:
+                    if self.hard_refusal or self.furthest_root > start_len:
                         return None
                     if self.spec_fuel_hit:
                         any_fuel_hit = True
@@ -721,12 +751,30 @@ class Prover:
                 return None
             elif what == "held":                               # which value held is of a use with the same things
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
+                start_len = len(proof)
+                before, before_proof = self.last, self.last_proof
+                matched_any = False
                 for k in reversed(range(count)):
-                    done = self.solve(proof + [f"t held {k}"])
+                    if self.hard_refusal or self.furthest_root > start_len:
+                        return None
+                    trial = proof + [f"t held {k}"]
+                    ans = self.ask(trial)
+                    if ans.startswith("refused: the value held is of another use"):
+                        continue
+                    matched_any = True
+                    done = self.solve(trial)
                     if done is not None: return done
+                    if self.hard_refusal or self.furthest_root > start_len:
+                        return None
+                if not matched_any:
+                    self.last, self.last_proof = before, before_proof
+                if self.hard_refusal: return None
                 done = self.solve(proof + ["t open"])           # no value held fits: the use is opened where it is met
                 if done is not None: return done
-                self.last = said; self.note(proof, said + ' (no value held fits, and opening the use does not do)')
+                if self.hard_refusal: return None
+                if not self.last or self.last.startswith("refused: the value held is of another use"):
+                    self.last = said; self.last_proof = proof
+                self.note(proof, said + ' (no value held fits, and opening the use does not do)')
                 return None
             else: raise SystemExit(f"prove: the verifier needs what this prover does not know: {said}")
 
@@ -804,9 +852,11 @@ def prove(spec_text, targets, statement_out, out):
                     runs += p.runs
                     p.close()
                     continue
-                # Preserve partial proof so callers can run `locate()` on the exact point of failure.
-                with open(out, "w") as f: f.write("\n".join(p.lines + p.last_proof) + "\n")
-                raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{p.last}")
+                # Preserve partial proof at the deepest failure so callers can run `locate()` on the exact point.
+                fin_last = p.best_last or p.last
+                fin_proof = p.best_last_proof if p.best_last is not None else p.last_proof
+                with open(out, "w") as f: f.write("\n".join(p.lines + fin_proof) + "\n")
+                raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{fin_last}")
             if len(proof) < 200:
                 k = len(proof) - 1
                 while k >= 0:                              # a use of a definition opened to no purpose is taken out

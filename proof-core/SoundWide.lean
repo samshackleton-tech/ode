@@ -203,12 +203,19 @@ theorem symEachOp_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s' : S
         eachTerms_sound (fn := fun p q => p ^^^ q) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wXor_step ok hp hq)⟩
     next =>
       split at h
-      next hU =>
-        simp only [beq_iff_eq] at hU
+      next hA =>
+        simp only [beq_iff_eq] at hA
         subst op
-        exact ⟨fun p q => if p < q then 1 else 0, fun _ _ => rfl,
-          eachTerms_sound (fn := fun p q => if p < q then 1 else 0) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wUlt_step ok hp hq)⟩
-      next => exact (refuse_ok h).elim
+        exact ⟨fun p q => p &&& q, fun _ _ => rfl,
+          eachTerms_sound (fn := fun p q => p &&& q) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wAnd_step ok hp hq)⟩
+      next =>
+        split at h
+        next hU =>
+          simp only [beq_iff_eq] at hU
+          subst op
+          exact ⟨fun p q => if p < q then 1 else 0, fun _ _ => rfl,
+            eachTerms_sound (fn := fun p q => if p < q then 1 else 0) H wf lx ly ltx lty h (fun _ _ _ ok hp hq => wUlt_step ok hp hq)⟩
+        next => exact (refuse_ok h).elim
 
 /-- Terms made lane by lane change no register's lanes. -/
 theorem symLaneTerms_vec {α : Type} {s s' : Sym} {l : List Nat} {mk : α → Tab → Nat × Tab} {xs : List α} {items rest : Items}
@@ -226,7 +233,9 @@ theorem symEachOp_vec {s s' : Sym} {l x y : List Nat} {op : String} {items rest 
     · exact symLaneTerms_vec h
     · split at h
       · exact symLaneTerms_vec h
-      · exact (refuse_ok h).elim
+      · split at h
+        · exact symLaneTerms_vec h
+        · exact (refuse_ok h).elim
 
 theorem symVec512_vec {bind : Bind} {s s' : Sym} (hv : s'.vec = s.vec) (e : Expr) : symVec512 bind s' e = symVec512 bind s e := by
   cases e <;> simp [symVec512, hv]

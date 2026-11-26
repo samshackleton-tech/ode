@@ -60,6 +60,7 @@ structure Def where
 def wordop (op : String) (a b : Nat) : Option Val :=
   if op == "+" then some (.word ((a + b) % W32))
   else if op == "^" then some (.word (a ^^^ b))
+  else if op == "&" then some (.word (a &&& b))
   else if op == "|" then some (.word (a ||| b))
   else none
 
@@ -82,6 +83,7 @@ def binop (op : String) : Val → Val → Option Val
   -- a number beside a word stands for the word of its low 32 bits; `w >>> n` turns the word right by n bits
   | .word a, .int b =>
     if op == ">>>" then (if 0 ≤ b ∧ b ≤ 32 then some (.word (rotr a b.toNat)) else none)
+    else if op == ">>" then (if 0 ≤ b ∧ b < 32 then some (.word (a >>> b.toNat)) else none)
     else if 0 ≤ b then wordop op a (b.toNat % W32) else none
   | .int a, .word b => if 0 ≤ a then wordop op (a.toNat % W32) b else none
   | .counter c, .int n => if op == "+" ∧ 0 ≤ n then some (.counter ((c + n.toNat) % 2 ^ 64)) else none

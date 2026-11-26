@@ -4743,6 +4743,119 @@
         "uops_name": "VPADDD (ZMM, ZMM, M512)"
       }
     },
+    "pand128": {
+      "ADL-P": {
+        "lat": 1.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p015",
+        "tp": 0.33,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      },
+      "EMR": {
+        "lat": 1.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p015",
+        "tp": 0.33,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      },
+      "ICL": {
+        "lat": 1.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "p0",
+              "p1",
+              "p5"
+            ]
+          ]
+        ],
+        "ports_raw": "1*p015",
+        "tp": 0.33,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      },
+      "ZEN3": {
+        "lat": 1.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1",
+              "FP2",
+              "FP3"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0123",
+        "tp": 0.25,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      },
+      "ZEN4": {
+        "lat": 1.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1",
+              "FP2",
+              "FP3"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0123",
+        "tp": 0.25,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      },
+      "ZEN5": {
+        "lat": 2.0,
+        "mem_lat": null,
+        "ports": [
+          [
+            1,
+            [
+              "FP0",
+              "FP1",
+              "FP2",
+              "FP3"
+            ]
+          ]
+        ],
+        "ports_raw": "1*FP0123",
+        "tp": 0.25,
+        "uops": 1,
+        "uops_name": "VPAND (XMM, XMM, XMM)"
+      }
+    },
     "pblendd128": {
       "ADL-P": {
         "lat": 1.0,

@@ -115,11 +115,12 @@ def call_openrouter(model: str, messages: list[dict], api_key: str,
                     temperature: float = 0.2, max_tokens: int = 16000,
                     effort: str = "medium", timeout: int = 240,
                     run_title: str = "Ode Pre-Registered Suite") -> tuple[str, dict, float]:
+    reasoning_cfg = {"max_tokens": 8192} if model.startswith("qwen/") else {"effort": effort}
     payload = {
         "model": model,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning": {"effort": effort},
+        "reasoning": reasoning_cfg,
         "messages": messages,
     }
     last_err = None
@@ -954,7 +955,14 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
 
 
 def self_test_cli(targets: list[str]) -> None:
-    """Verify `ode pack`, `ode audit`, and `verify2.py` CLI wiring locally in <2s before any API call."""
+    """Verify Lean binaries + `ode pack`, `ode audit`, and `verify2.py` CLI wiring locally in <2s before any API call."""
+    bin_dir = ROOT / "proof-core" / ".lake" / "build" / "bin"
+    missing_bins = [b for b in ("odeverify", "odeprove", "odespec") if not (bin_dir / b).exists()]
+    if missing_bins:
+        raise SystemExit(
+            f"CLI self-test failed: missing Lean binary(ies) {missing_bins} in {bin_dir}. "
+            "Without `odeprove`, proving falls back to subprocess-per-step and loses source-located diagnostics."
+        )
     trivial = (
         "fn id_fn(x: number)\n"
         "    returns x\n"
@@ -1067,7 +1075,7 @@ def main(argv=None) -> int:
     ap.add_argument("--perf-arms", default="", help="Comma-separated optimization arms (e.g. blind,advised); empty = single-pass correctness suite")
     ap.add_argument("--opt-rounds", type=int, default=3, help="Extra optimization rounds after first verified pass when --perf-arms is active")
     ap.add_argument("--tool-timeout", type=int, default=45)
-    ap.add_argument("--cell-timeout", type=int, default=540, help="Per-cell wall-clock cap in seconds (0 = off)")
+    ap.add_argument("--cell-timeout", type=int, default=720, help="Per-cell wall-clock cap in seconds (0 = off)")
     ap.add_argument("--max-truncations", type=int, default=2, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
     ap.add_argument("--prover-slots", type=int, default=10, help="Max simultaneous local ode pack/audit runs")
     ap.add_argument("--api-timeout", type=int, default=240)

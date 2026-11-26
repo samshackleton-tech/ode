@@ -151,6 +151,7 @@ def rotr (w n : Nat) : Nat := w / 2 ^ n + w % 2 ^ n * 2 ^ (32 - n)
 def prim32 (f : String) (a b : Nat) : Option Nat :=
   if f == "add32" then some ((a + b) % W32)
   else if f == "xor32" then some (a ^^^ b)
+  else if f == "and32" then some (a &&& b)
   else if f == "or32" then some (a ||| b)
   else if f == "ror32" then some (rotr a (b % 32))
   else if f == "shl32" then some ((a <<< b) % W32)

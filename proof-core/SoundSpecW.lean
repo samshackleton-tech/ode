@@ -906,7 +906,29 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
               | inl le => rw [Nat.min_eq_left le, Nat.max_eq_right le]
               | inr le => rw [Nat.min_eq_right le, Nat.max_eq_left le, Nat.xor_comm]
             rw [e]; exact WDen.one wf i
-        next => simp at h
+        next hop2 =>
+          split at h
+          next hop3 =>
+            have oe : op = "&" := by simpa using hop3
+            subst oe
+            cases ha : idOf look xs <;> cases hb : idOf look ys <;> simp only [ha, hb, reduceCtorEq] at h
+            rename_i a b
+            cases hf : look (.band (min a b) (max a b)) with
+            | none => simp [hf] at h
+            | some i =>
+              simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
+              have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
+              have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
+              have db := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hb
+              refine ⟨.word (sumList (xs.map 𝔻) % W32 &&& sumList (ys.map 𝔻) % W32), by simp [binop, wordop], ?_⟩
+              have e : sumList (xs.map 𝔻) % W32 &&& sumList (ys.map 𝔻) % W32 = 𝔻 i := by
+                rw [di, ← da, ← db]
+                simp only [Node.value]
+                cases Nat.le_total a b with
+                | inl le => rw [Nat.min_eq_left le, Nat.max_eq_right le]
+                | inr le => rw [Nat.min_eq_right le, Nat.max_eq_left le, Nat.and_comm]
+              rw [e]; exact WDen.one wf i
+          next => simp at h
     | int n =>
       cases hx; cases hy
       simp only [wbin] at h
@@ -928,7 +950,26 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
             refine ⟨.word (rotr (sumList (xs.map 𝔻) % W32) n.toNat), by simp [binop, n0, n32], ?_⟩
             have e : rotr (sumList (xs.map 𝔻) % W32) n.toNat = 𝔻 i := by rw [di, ← da]; rfl
             rw [e]; exact WDen.one wf i
-      next => simp at h
+      next hc =>
+        split at h
+        next hc2 =>
+          obtain ⟨hop, n0, n32⟩ := hc2
+          have oe : op = ">>" := by simpa using hop
+          subst oe
+          cases ha : idOf look xs with
+          | none => simp [ha] at h
+          | some a =>
+            simp only [ha] at h
+            cases hf : look (.shr a n.toNat) with
+            | none => simp [hf] at h
+            | some i =>
+              simp only [hf, Option.map_some, Option.some.injEq] at h; subst h
+              have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
+              have da := idOf_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
+              refine ⟨.word ((sumList (xs.map 𝔻) % W32) >>> n.toNat), by simp [binop, n0, n32], ?_⟩
+              have e : (sumList (xs.map 𝔻) % W32) >>> n.toNat = 𝔻 i := by rw [di, ← da]; rfl
+              rw [e]; exact WDen.one wf i
+        next => simp at h
     | _ => simp [wbin] at h
   | num r =>
     cases y with

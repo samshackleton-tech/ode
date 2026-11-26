@@ -35,9 +35,9 @@ class Err(Exception):
 
 # ---------------------------------------------------------------------------------------------------------
 # Text to tree.
-TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.]))")
+TOKEN = re.compile(r"\s*(?:(//[^\n]*)|(0x[0-9A-Fa-f]+|\d+)|([A-Za-z_][A-Za-z_0-9]*)|(>>>|>>|\+\+|\.\.|==|!=|<=|>=|&&|\|\||[-+*/%^|&<>=!(){}\[\],:.]))")
 KEYWORDS = {"const", "def", "sequence", "the", "machine", "contract", "layout", "kind", "on", "while", "for", "in", "turn", "if", "then", "else", "let", "fails", "lemma"}
-LEVELS = [["||"], ["&&"], ["==", "!=", "<", "<=", ">", ">="], ["++"], ["|"], ["^"], ["&"], ["+", "-"], ["*", "/", "%"], [">>>"]]
+LEVELS = [["||"], ["&&"], ["==", "!=", "<", "<=", ">", ">="], ["++"], ["|"], ["^"], ["&"], ["+", "-"], ["*", "/", "%"], [">>>", ">>"]]
 
 
 def lex(text):
@@ -470,8 +470,10 @@ class Numbers:
     def word(self, n): return Word(n & M32)
     def add(self, a, b): return Word((a.v + b.v) & M32)
     def xor(self, a, b): return Word(a.v ^ b.v)
+    def and_(self, a, b): return Word(a.v & b.v)
     def or_(self, a, b): return Word(a.v | b.v)
     def rotr(self, a, n): return Word(((a.v >> n) | (a.v << (32 - n))) & M32)
+    def shr(self, a, n): return Word((a.v & M32) >> n)
     def counter(self, n): return Counter(Word(n & M32), Word((n >> 32) & M32))
     def counter_add(self, t, n):
         v = (t.lo.v | t.hi.v << 32) + n
@@ -787,10 +789,12 @@ class Spec:
         if op in ("==", "!=", "<", "<=", ">", ">="): return A.compare(op, x, y)
         if op == "++": return A.concat(x, y)
         if op == ">>>": return A.rotr(self.as_word(A, x), self.number(y))
+        if op == ">>": return A.shr(self.as_word(A, x), self.number(y))
         words = isinstance(x, Word) or isinstance(y, Word)
         if op == "+" and isinstance(x, Counter): return A.counter_add(x, self.number(y))
         if op == "+" and words: return A.add(self.as_word(A, x), self.as_word(A, y))
         if op == "^": return A.xor(self.as_word(A, x), self.as_word(A, y))
+        if op == "&" and words: return A.and_(self.as_word(A, x), self.as_word(A, y))
         if op == "|" and words: return A.or_(self.as_word(A, x), self.as_word(A, y))
         if isinstance(x, Word) or isinstance(y, Word): raise Err(f"{op} of words")
         if op == "+": return A.plus(x, y) if hasattr(A, "plus") else x + y

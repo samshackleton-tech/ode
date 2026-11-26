@@ -260,6 +260,7 @@ inductive Node where
   | input (run k : Nat)         -- word `k` of a run of words given to read, as it was at entry
   | add (xs : List Nat)         -- the terms of these numbers summed, wrapping
   | xor (a b : Nat)
+  | band (a b : Nat)
   | rotr (a n : Nat)            -- the term turned right by `n` bits
   | shl (a n : Nat)             -- the term shifted left by `n` bits, what passes 32 bits dropped
   | shr (a n : Nat)             -- the term shifted right by `n` bits
@@ -273,6 +274,7 @@ def Node.parts : Node → List Nat
   | .input _ _ => []
   | .add xs => xs
   | .xor a b => [a, b]
+  | .band a b => [a, b]
   | .rotr a _ => [a]
   | .shl a _ => [a]
   | .shr a _ => [a]
@@ -332,6 +334,8 @@ def wAdd (a b : Nat) (t : Tab) : Nat × Tab :=
   intern (.add ((addends t a ++ addends t b).foldr insertSorted [])) t
 
 def wXor (a b : Nat) (t : Tab) : Nat × Tab := intern (.xor (min a b) (max a b)) t
+
+def wAnd (a b : Nat) (t : Tab) : Nat × Tab := intern (.band (min a b) (max a b)) t
 
 def wRotr (a n : Nat) (t : Tab) : Nat × Tab := intern (.rotr a n) t
 
@@ -1169,6 +1173,9 @@ def symEach32 (bind : Bind) (s : Sym) (args : List Expr) : V (List Nat × Sym) :
             else if op == "xor32" then
               let made := termsOf (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y) s.tab
               pure (made.1, { s with tab := made.2 })
+            else if op == "and32" then
+              let made := termsOf (fun (p : Nat × Nat) => wAnd p.1 p.2) (x.zip y) s.tab
+              pure (made.1, { s with tab := made.2 })
             else if op == "or32" then
               -- the or of a word shifted left and the same word shifted right: the word turned
               match orTurns s.terms (x.zip y) with
@@ -1411,6 +1418,7 @@ def symMem512 (ctx : Ctx) (bind : Bind) (s : Sym) (f : String) (args : List Expr
 def symEachOp (s : Sym) (op : String) (x y : List Nat) : V (List Nat × Sym) :=
   if op == "add32" then symLaneTerms s (fun (p : Nat × Nat) => wAdd p.1 p.2) (x.zip y)
   else if op == "xor32" then symLaneTerms s (fun (p : Nat × Nat) => wXor p.1 p.2) (x.zip y)
+  else if op == "and32" then symLaneTerms s (fun (p : Nat × Nat) => wAnd p.1 p.2) (x.zip y)
   else if op == "ult32" then symLaneTerms s (fun (p : Nat × Nat) => wUlt p.1 p.2) (x.zip y)
   else refuse "no proof rule for this 512-bit operation"
 
@@ -2340,11 +2348,19 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
       match idOf look xs, idOf look ys with
       | some a, some b => (look (.xor (min a b) (max a b))).map fun i => .word [i]
       | _, _ => none
+    else if op == "&" then
+      match idOf look xs, idOf look ys with
+      | some a, some b => (look (.band (min a b) (max a b))).map fun i => .word [i]
+      | _, _ => none
     else none
   | .word xs, .int n =>
     if op == ">>>" ∧ 0 ≤ n ∧ n ≤ 32 then
       match idOf look xs with
       | some a => (look (.rotr a n.toNat)).map fun i => .word [i]
+      | none => none
+    else if op == ">>" ∧ 0 ≤ n ∧ n < 32 then
+      match idOf look xs with
+      | some a => (look (.shr a n.toNat)).map fun i => .word [i]
       | none => none
     else none
   | .num r, .int m =>

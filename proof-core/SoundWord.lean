@@ -16,6 +16,7 @@ def Node.value (inp : Nat → Nat → Nat) (ρ : Nat → Int) (g : Nat → Nat) 
   | .input j k => inp j k
   | .add xs => sumList (xs.map g) % W32
   | .xor a b => g a ^^^ g b
+  | .band a b => g a &&& g b
   | .rotr a n => Ode.rotr (g a) n
   | .shl a n => (g a <<< n) % W32
   | .shr a n => g a >>> n
@@ -46,6 +47,9 @@ theorem Node.value_congr {inp : Nat → Nat → Nat} {ρ ρ' : Nat → Int} {g g
     have : xs.map g' = xs.map g := List.map_congr_left (fun j m => hg j m)
     rw [this]
   | xor a b =>
+    simp only [Node.value]
+    rw [hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
+  | band a b =>
     simp only [Node.value]
     rw [hg a (by simp [Node.parts]), hg b (by simp [Node.parts])]
   | rotr a k =>
@@ -276,6 +280,7 @@ theorem addends_spec {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t : Tab} (h
     | atom r => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | input r k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | xor x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
+    | band x y => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | rotr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | shl x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
     | shr x k => exact ⟨by simp [sumList], fun j m => by simp at m; omega⟩
@@ -322,6 +327,20 @@ theorem wXor_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a
   cases Nat.le_total a b with
   | inl le => rw [Nat.min_eq_left le, Nat.max_eq_right le]
   | inr le => rw [Nat.min_eq_right le, Nat.max_eq_left le, Nat.xor_comm]
+
+theorem wAnd_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a b i : Nat} (h : wAnd a b t = (i, t'))
+    (hw : WFT t.list) (ha : a < t.list.length) (hb : b < t.list.length) :
+    Made inp ρ t.list t'.list i (den inp ρ t.list a &&& den inp ρ t.list b) := by
+  have m := made (inp := inp) (ρ := ρ) h hw (by
+    intro j mj
+    simp only [Node.parts, List.mem_cons, List.mem_nil_iff, or_false] at mj
+    rcases mj with mj | mj <;> (rw [mj]; omega))
+  refine ⟨m.ext, m.wf, m.lt, ?_⟩
+  rw [m.den]
+  simp only [Node.value]
+  cases Nat.le_total a b with
+  | inl le => rw [Nat.min_eq_left le, Nat.max_eq_right le]
+  | inr le => rw [Nat.min_eq_right le, Nat.max_eq_left le, Nat.and_comm]
 
 theorem wRotr_made {inp : Nat → Nat → Nat} {ρ : Nat → Int} {t t' : Tab} {a n i : Nat} (h : wRotr a n t = (i, t'))
     (hw : WFT t.list) (ha : a < t.list.length) : Made inp ρ t.list t'.list i (rotr (den inp ρ t.list a) n) := by
@@ -439,6 +458,9 @@ theorem den_lt {inp : Nat → Nat → Nat} {ρ : Nat → Int} {T : List Node} (h
       | xor a b =>
         simp only [Node.value]
         exact Nat.xor_lt_two_pow (ih a (hw i _ h a (by simp [Node.parts]))) (ih b (hw i _ h b (by simp [Node.parts])))
+      | band a b =>
+        simp only [Node.value]
+        exact Nat.lt_of_le_of_lt Nat.and_le_left (ih a (hw i _ h a (by simp [Node.parts])))
       | rotr a n => exact rotr_lt (ih a (hw i _ h a (by simp [Node.parts]))) (hrot i a n h)
       | shl a n => exact Nat.mod_lt _ (by decide)
       | shr a n => exact Nat.lt_of_le_of_lt (Nat.shiftRight_le _ _) (ih a (hw i _ h a (by simp [Node.parts])))

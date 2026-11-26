@@ -241,6 +241,9 @@ pslld128     | vpslld xmmX, xmmY, I    | .xpslld X Y I                 | X = eac
 psrld128     | vpsrld xmmX, xmmY, I    | .xpsrld X Y I                 | X = each32(shr32, Y, I)
              = 66 0F 72 /2 cb ; rm=X,Y imm=I
              = VEX.128.66.0F.W0 72 /2 cb ; vvvv=X rm=Y imm=I
+pand128      | vpand xmmX, xmmY, xmmZ  | .xpand X Y Z                  | X = each32(and32, Y, Z)
+             = 66 0F DB /r ; reg=X,Y rm=Z
+             = VEX.128.66.0F.W0 DB /r ; reg=X vvvv=Y rm=Z
 por128       | vpor xmmX, xmmY, xmmZ   | .xpor X Y Z                   | X = each32(or32, Y, Z)
              = 66 0F EB /r ; reg=X,Y rm=Z
              = VEX.128.66.0F.W0 EB /r ; reg=X vvvv=Y rm=Z

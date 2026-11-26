@@ -2491,12 +2491,15 @@ theorem symEach32_flags {bind : Bind} {s s1 : Sym} {args : List Expr} {l : List 
             by_cases h2 : (op == "xor32") = true
             · simp only [h2, ite_true] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
             · simp only [h2, ite_false] at h
-              by_cases h3 : (op == "or32") = true
-              · simp only [h3, ite_true] at h
-                cases ho : orTurns s.terms (xv.zip yv) <;> simp only [ho] at h
-                · exact (refuse_ok (items := items) h).elim
-                · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
-              · simp only [h3, ite_false] at h; exact (refuse_ok (items := items) h).elim
+              by_cases h2a : (op == "and32") = true
+              · simp only [h2a, ite_true] at h; have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+              · simp only [h2a, ite_false] at h
+                by_cases h3 : (op == "or32") = true
+                · simp only [h3, ite_true] at h
+                  cases ho : orTurns s.terms (xv.zip yv) <;> simp only [ho] at h
+                  · exact (refuse_ok (items := items) h).elim
+                  · have := V.pure_ok h; injection this with h _; injection h with _ h; subst h; exact ⟨rfl, rfl⟩
+                · simp only [h3, ite_false] at h; exact (refuse_ok (items := items) h).elim
   · exact (refuse_ok (items := items) h).elim
 
 theorem symShuffle_flags {bind : Bind} {s s1 : Sym} {args : List Expr} {l : List Nat} {items rest : Items}
@@ -2718,9 +2721,12 @@ theorem symEachOp_flags {s s1 : Sym} {op : String} {x y l : List Nat} {items res
     by_cases h2 : (op == "xor32") = true
     · simp only [h2, ite_true] at h; exact symLaneTerms_flags h
     · simp only [h2, ite_false] at h
-      by_cases h3 : (op == "ult32") = true
-      · simp only [h3, ite_true] at h; exact symLaneTerms_flags h
-      · simp only [h3, ite_false] at h; exact (refuse_ok (items := items) h).elim
+      by_cases h2a : (op == "and32") = true
+      · simp only [h2a, ite_true] at h; exact symLaneTerms_flags h
+      · simp only [h2a, ite_false] at h
+        by_cases h3 : (op == "ult32") = true
+        · simp only [h3, ite_true] at h; exact symLaneTerms_flags h
+        · simp only [h3, ite_false] at h; exact (refuse_ok (items := items) h).elim
 
 theorem symEach512_flags {ctx : Ctx} {bind : Bind} {s s1 : Sym} {op : String} {a b : Expr} {l : List Nat} {items rest : Items}
     (h : symEach512 ctx bind s op a b items = .ok ((l, s1), rest)) : s1.zf = s.zf ∧ s1.cf = s.cf := by

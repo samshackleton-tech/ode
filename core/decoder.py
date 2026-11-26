@@ -22,7 +22,7 @@ M64, M32 = table.M64, table.M32
 def swappable(row):
     """A row whose effect is one of add32, xor32, or32 of each pair of lanes of Y and Z: the same with the two exchanged."""
     st = row.effect[0]
-    return len(row.effect) == 1 and st[0] == "set" and st[2][0] == "call" and st[2][1] == "each32" and st[2][2][0] in (("name", "add32"), ("name", "xor32"), ("name", "or32")) \
+    return len(row.effect) == 1 and st[0] == "set" and st[2][0] == "call" and st[2][1] == "each32" and st[2][2][0] in (("name", "add32"), ("name", "xor32"), ("name", "and32"), ("name", "or32")) \
         and [x[1] for x in st[2][2][1:]] in (["Y", "Z"], ["Y512", "Z512"])
 
 

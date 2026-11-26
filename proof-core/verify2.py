@@ -403,6 +403,22 @@ class Verifier:
         return out
 
     def same_call(self, c1, c2, state, stream):
+        if c1 == c2:
+            return
+        # Match Core.lean `sameUse`: first check reachability through known `eqs`
+        seen = {c1}
+        frontier = [c1]
+        while frontier:
+            cur = frontier.pop()
+            if cur == c2:
+                return
+            for a, b in state["eqs"]:
+                if a == cur and b not in seen:
+                    seen.add(b)
+                    frontier.append(b)
+                elif b == cur and a not in seen:
+                    seen.add(a)
+                    frontier.append(a)
         if c1[1] != c2[1] or len(c1[2]) != len(c2[2]):
             raise Refuse(f"mismatched call `{c1[1]}` vs `{c2[1]}`")
         for a1, a2 in zip(c1[2], c2[2]):
@@ -476,12 +492,14 @@ class Verifier:
         if op == "call":
             fn_nm = e[1]
             raw_args = [self.eval_sexpr(a, env, state, stream) for a in e[2:]]
-            args = []
-            for a in raw_args:
+            # Match Core.lean `.cons`: evaluate args left-to-right, resolve `argumentV` right-to-left
+            args = [None] * len(raw_args)
+            for idx in range(len(raw_args) - 1, -1, -1):
+                a = raw_args[idx]
                 if isinstance(a, tuple) and len(a) == 3 and a[0] == "call":
-                    args.append(self.as_num(a, env, state, stream))
+                    args[idx] = self.as_num(a, env, state, stream)
                 else:
-                    args.append(a)
+                    args[idx] = a
             if fn_nm == "len":
                 if len(args) == 1 and isinstance(args[0], tuple) and len(args[0]) == 2 and args[0][0] == "buf":
                     return state["buf_len"][args[0][1]]
@@ -985,13 +1003,15 @@ class Verifier:
             raise Refuse(f"unsupported table expr {ex} in verify2")
 
         def run_path(pc, st, origin_place=None, origin_dec=None, visited_places=frozenset(),
-                     base_st=None, jstack=frozenset(), jdone=None):
+                     base_st=None, jstack=frozenset(), jdone=None, at_entry=False):
             if jdone is None:
                 jdone = {}
             if base_st is None:
                 base_st = clone(st)
             while True:
-                if pc in places and pc not in visited_places:
+                if at_entry:
+                    at_entry = False
+                elif pc in places and pc not in visited_places:
                     pl = places[pc]
                     if pl["is_join"]:
                         if pc in jstack:
@@ -1090,7 +1110,7 @@ class Verifier:
                     dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, stream) if pl["decreases"] is not None else None
                     if dec_val is not None:
                         self.entail(pst["facts"], dec_val, stream)
-                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=visited_places | {pc},
+                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=(visited_places - jstack) | {pc},
                              base_st=clone(pst), jstack=frozenset(), jdone={})
                     return
 
@@ -1355,7 +1375,7 @@ class Verifier:
                         raise Refuse(f"unsupported table stmt `{kind}` in verify2")
                 pc = next_pc
 
-        run_path(0, state)
+        run_path(0, state, at_entry=True)
         self.proven[fn["name"]] = fn
 
 

@@ -42,7 +42,7 @@ CONC = {
     "equal": lambda a, b: int(a & M64 == b & M64), "below": lambda a, b: int(a & M64 < b & M64),
     "low8": lambda a: a & 0xFF, "sub8": lambda a, b: (a - b) & 0xFF, "on16": on16,
     "setlow8": lambda a, b: (a & ~0xFF & M64) | (b & 0xFF),
-    "add32": lambda a, b: (a + b) & M32, "xor32": lambda a, b: a ^ b, "ror32": ror32,
+    "add32": lambda a, b: (a + b) & M32, "xor32": lambda a, b: a ^ b, "and32": lambda a, b: a & b, "ror32": ror32,
     "shl32": lambda a, n: (a << n) & M32, "shr32": lambda a, n: a >> n, "or32": lambda a, b: a | b,
     "each32": lambda f, a, b: tuple(f(x, y) for x, y in zip(a, b if isinstance(b, tuple) else (b,) * len(a))),
     "lanes": lambda a, b, c, d: (a, b, c, d), "words": lambda *numbers: tuple(n & M32 for n in numbers),
