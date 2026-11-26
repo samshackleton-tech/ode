@@ -1309,7 +1309,7 @@ def main(argv=None) -> int:
     ap.add_argument("--tool-timeout", type=int, default=None)
     ap.add_argument("--cell-timeout", type=int, default=None, help="Per-cell wall-clock cap in seconds (0 = off)")
     ap.add_argument("--max-truncations", type=int, default=None, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
-    ap.add_argument("--prover-slots", type=int, default=None, help="Max simultaneous local ode pack/audit runs (default: 75% of CPUs)")
+    ap.add_argument("--prover-slots", type=int, default=None, help="Max simultaneous local ode pack/audit runs (default: 75%% of CPUs)")
     ap.add_argument("--api-timeout", type=int, default=240)
     ap.add_argument("--max-tokens", type=int, default=32000)
     ap.add_argument("--temperature", type=float, default=0.2)
