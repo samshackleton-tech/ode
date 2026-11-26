@@ -27,6 +27,7 @@ for _d in (HERE, os.path.join(ROOT, "kcheck")):
         sys.path.insert(0, _d)
 
 import ode
+import ode_hl
 
 TARGETS = ("x86_64", "arm64")
 
@@ -175,11 +176,168 @@ def is_unified(text):
     return has_unified_fn or (has_spec_def and not has_contract)
 
 
+def _dedent_body(body_text, body_start_line):
+    raw_lines = body_text.split("\n")
+    start_line = body_start_line
+    if raw_lines and not raw_lines[0].strip():
+        raw_lines = raw_lines[1:]
+        start_line += 1
+    if raw_lines and not raw_lines[-1].strip():
+        raw_lines = raw_lines[:-1]
+    non_empty = [ln for ln in raw_lines if ln.strip()]
+    indent = min((len(ln) - len(ln.lstrip(" ")) for ln in non_empty), default=0)
+    dedented = [ln[indent:] if len(ln) >= indent else ln.lstrip(" ") for ln in raw_lines]
+    return dedented, start_line
+
+
+def _expand_comma_requires(clauses_text):
+    """Allow comma-separated `requires a <= b, b <= c` (splitting only at top-level commas, never `no_overlap`)."""
+    out = []
+    for raw in clauses_text.splitlines():
+        code = _strip_line_comment(raw)
+        s = code.strip()
+        if s.startswith("requires ") and not s.startswith("requires no_overlap"):
+            rest = s[len("requires "):]
+            parts, cur, depth = [], [], 0
+            for ch in rest:
+                if ch in "([{":
+                    depth += 1
+                elif ch in ")]}":
+                    depth = max(0, depth - 1)
+                elif ch == "," and depth == 0:
+                    parts.append("".join(cur).strip())
+                    cur = []
+                    continue
+                cur.append(ch)
+            parts.append("".join(cur).strip())
+            if len(parts) > 1:
+                for p in parts:
+                    if p:
+                        out.append(f"requires {p}")
+                continue
+        out.append(raw)
+    return "\n".join(out)
+
+
+def _rewrite_hl_lines(lines, first_line, mod_prefix, mod_exports, uses_map, src):
+    """Rewrite `alias.member` references inside a High-Level Ode body (specs, calls, data)."""
+    out = []
+    for idx, ln in enumerate(lines):
+        code = _strip_line_comment(ln)
+        comment = ln[len(code):]
+        line_no = first_line + idx
+
+        def repl_qual(m):
+            alias, member = m.group(1), m.group(2)
+            if alias not in uses_map:
+                return m.group(0)
+            dep = uses_map[alias]
+            if member not in dep["exports"]:
+                avail = ", ".join(sorted(dep["exports"])) or "(none)"
+                raise UnifiedErr(
+                    f"{src}: line {line_no}: `{alias}.{member}` not found in `{dep['rel']}` (exports: {avail})"
+                )
+            exp = dep["exports"][member]
+            if exp["kind"] == "fn":
+                return dep["prefix"] + exp["symbol"]
+            return dep["prefix"] + member
+
+        code = re.sub(r"(?<!\.)\b([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", repl_qual, code)
+        if mod_prefix:
+            for nm, exp in mod_exports.items():
+                if exp["kind"] in ("fn", "def", "const", "data"):
+                    target_nm = mod_prefix + (exp["symbol"] if exp["kind"] == "fn" else nm)
+                    code = re.sub(rf"(?<!\.)\b{re.escape(nm)}\b", target_nm, code)
+        out.append(code + comment)
+    return out
+
+
+def _lower_all_hl(fns, data, src, c_abi_fn=None):
+    """Lower every High-Level Ode implementation block deterministically into `odec` assembly + `hl_meta`,
+    giving every `fn` (including `use`-imported top-level functions) Ode's fast calling convention
+    with auto-derived exact `preserves` by default; only `c_abi_fn` (when packing for C FFI) uses C ABI."""
+    fn_names = {f["name"] for f in fns} | {f["symbol"] for f in fns}
+    data_by_arch = {}
+    for darch, dname, _ in data:
+        for a in (TARGETS if darch is None else (darch,)):
+            data_by_arch.setdefault(a, set()).add(dname)
+    # Every function called by another function (in this file OR across `use`-imported modules) gets
+    # Ode's fast calling convention with exact `preserves`; `c_abi_fn` uses pure C ABI at the FFI boundary.
+    called_by_other = set()
+    for f in fns:
+        all_txt = "\n".join("\n".join(im["lines"]) for im in f["impls"].values())
+        for g in fns:
+            if g["name"] != f["name"] and (
+                re.search(rf"\b{re.escape(g['name'])}\s*\(", all_txt)
+                or re.search(rf"\b{re.escape(g['symbol'])}\s*\(", all_txt)
+            ):
+                called_by_other.add(g["name"])
+    callee_clobbers = {a: {} for a in TARGETS}
+    callee_stack = {a: {} for a in TARGETS}
+    for fn_rec in fns:
+        has_fn_stack = bool(re.search(r"(?m)^\s*stack\b", fn_rec["clauses_text"]))
+        raw_params = fn_rec.get("raw_params_text", fn_rec["params_text"])
+        for key, im in fn_rec["impls"].items():
+            if not im.get("hl"):
+                continue
+            arch = im["arch"]
+            has_impl_stack = any(re.match(r"^\s*stack\b", ec) for ec in im["extra_clauses"])
+            explicit_stack = has_fn_stack or has_impl_stack
+            try:
+                res = ode_hl.lower_hl_block(
+                    fn_rec["name"], raw_params, im["lines"], im["first_line"], arch,
+                    src=src, fn_names=fn_names, data_names=data_by_arch.get(arch, set()),
+                    explicit_stack=explicit_stack,
+                    callee_clobbers=callee_clobbers.get(arch),
+                    needs=im.get("needs", ()),
+                )
+            except ode_hl.HLErr as exc:
+                raise UnifiedErr(str(exc)) from exc
+            im["hl_lines"] = list(im["lines"])
+            im["lines"] = res["lines"]
+            im["hl_meta"] = res
+            # Compute transitive stack budget across called functions in this `.ode` graph
+            max_callee_stk = 0
+            for ln in res["lines"]:
+                mc = re.match(r"^\s*(?:call|bl|jmp|b)\s+([A-Za-z_]\w*)$", ln)
+                if mc and mc.group(1) in callee_stack[arch]:
+                    max_callee_stk = max(max_callee_stk, callee_stack[arch][mc.group(1)])
+            eff_stack = res["total_stack"] + max_callee_stk
+            res["total_stack"] = eff_stack
+            callee_stack[arch][fn_rec["name"]] = eff_stack
+            callee_stack[arch][fn_rec["symbol"]] = eff_stack
+            if not explicit_stack:
+                im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
+            # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
+            # (never on the explicit `--c-abi` FFI entry function).
+            if fn_rec["name"] != c_abi_fn and fn_rec["name"] in called_by_other and im["calling_text"] is None and res.get("auto_calling"):
+                im["calling_text"] = res["auto_calling"]
+                callee_clobbers[arch][fn_rec["name"]] = res["clobbered"]
+                callee_clobbers[arch][fn_rec["symbol"]] = res["clobbered"]
+
+
 def _parse_for_blocks(body_text, fn_name, body_start_line, src):
-    """Parse zero or more `for <arch>[:variant] [needs ...] [stack ...] [calling { ... }] { asm }` blocks."""
-    impls = {}
+    """Parse zero or more `for <arch>[:variant] ... { ... }` blocks OR a portable High-Level Ode body `{ ... }`."""
     pos = _skip_ws_and_comments(body_text, 0)
     n = len(body_text)
+    if pos < n and not re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", body_text[pos:]):
+        dedented, start_line = _dedent_body(body_text, body_start_line)
+        if ode_hl.is_hl_body(dedented):
+            impls = {}
+            for arch in TARGETS:
+                impls[arch] = {
+                    "arch": arch,
+                    "variant": None,
+                    "key": arch,
+                    "extra_clauses": [],
+                    "calling_text": None,
+                    "lines": list(dedented),
+                    "first_line": start_line,
+                    "hl": True,
+                    "portable": True,
+                }
+            return impls
+    impls = {}
     while pos < n:
         line_no = body_start_line + body_text.count("\n", 0, pos)
         m = re.match(r"for\s+([A-Za-z0-9_]+)(?::([A-Za-z0-9_+.-]+))?\b", body_text[pos:])
@@ -273,6 +431,7 @@ def _parse_for_blocks(body_text, fn_name, body_start_line, src):
             "calling_text": calling_text,
             "lines": dedented,
             "first_line": asm_start_line,
+            "hl": ode_hl.is_hl_body(dedented),
         }
         pos = _skip_ws_and_comments(body_text, bclose + 1)
     return impls
@@ -416,11 +575,16 @@ def _parse_single_unified(text, src="<ode>"):
                     f"every Ode `fn` must declare parameters and a contract: `fn {fname}(...) requires/returns/ensures ... stack N {{ ... }}`"
                 )
             pclose = _find_matching_paren(text, after_name, src)
-            params_text = text[after_name + 1:pclose].strip()
+            raw_params_text = text[after_name + 1:pclose].strip()
+            params_text, u8_reqs = ode_hl.normalize_contract_params(raw_params_text)
             bopen = _find_open_brace(text, pclose + 1)
             if bopen == -1:
                 raise UnifiedErr(f"{src}: line {line_no}: `fn {fname}` missing `{{`")
-            clauses_text = text[pclose + 1:bopen].strip()
+            clauses_raw = text[pclose + 1:bopen].strip()
+            clauses_raw = re.sub(r"^->\s*(?:u64|u8|number|void)\b\s*", "", clauses_raw)
+            clauses_text = _expand_comma_requires(clauses_raw)
+            if u8_reqs:
+                clauses_text = ("\n".join(u8_reqs) + ("\n" + clauses_text if clauses_text else "")).strip()
             bclose = _find_matching_brace(text, bopen, src)
             body_start_line = text.count("\n", 0, bopen + 1) + 1
             body_text = text[bopen + 1:bclose]
@@ -437,6 +601,7 @@ def _parse_single_unified(text, src="<ode>"):
                 "name": fname,
                 "symbol": fsym,
                 "params_text": params_text,
+                "raw_params_text": raw_params_text,
                 "clauses_text": clauses_text,
                 "line": line_no,
                 "impls": impls,
@@ -729,7 +894,7 @@ def _rewrite_asm_lines(lines, first_line, fn_params, mod_prefix, mod_exports, us
     return out
 
 
-def parse_unified(text, src="<ode>", resolve_uses=True):
+def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
     """Parse a unified `.ode` source file (closed local namespace) and resolve any `use` links.
 
     Returns a dict:
@@ -744,6 +909,7 @@ def parse_unified(text, src="<ode>", resolve_uses=True):
     """
     root_parsed = _parse_single_unified(text, src)
     if not resolve_uses or not root_parsed["uses"]:
+        _lower_all_hl(root_parsed["fns"], root_parsed["data"], src, c_abi_fn=c_abi_fn)
         return {
             "spec_defs": [raw for _, _, raw, _ in root_parsed["spec_defs"]],
             "data": root_parsed["data"],
@@ -865,12 +1031,16 @@ def parse_unified(text, src="<ode>", resolve_uses=True):
                     _rewrite_spec_text(ec, pref, exps, umap, _collect_local_binders(ec, fn_params), msrc, im["first_line"])
                     for ec in im["extra_clauses"]
                 ]
-                rew_lines = _rewrite_asm_lines(im["lines"], im["first_line"], fn_params, pref, exps, umap, msrc)
+                if im.get("hl"):
+                    rew_lines = _rewrite_hl_lines(im["lines"], im["first_line"], pref, exps, umap, msrc)
+                else:
+                    rew_lines = _rewrite_asm_lines(im["lines"], im["first_line"], fn_params, pref, exps, umap, msrc)
                 new_impls[k] = dict(im, extra_clauses=rew_extra, lines=rew_lines)
             new_fn = {
                 "name": new_name,
                 "symbol": new_sym,
                 "params_text": rew_params,
+                "raw_params_text": fn_rec.get("raw_params_text", fn_rec["params_text"]),
                 "clauses_text": rew_clauses,
                 "line": fn_rec["line"],
                 "impls": new_impls,
@@ -880,6 +1050,7 @@ def parse_unified(text, src="<ode>", resolve_uses=True):
             if real == root_real:
                 root_fns.append(new_fn)
 
+    _lower_all_hl(merged_fns, merged_data, src, c_abi_fn=c_abi_fn)
     return {
         "spec_defs": merged_spec_defs,
         "data": merged_data,

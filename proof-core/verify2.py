@@ -238,6 +238,8 @@ def parse_statement(path):
                     "returns": None,
                     "ensures": [],
                     "stack": 0,
+                    "stacklin": None,
+                    "decreases": None,
                     "hidden": set(),
                     "argregs": None,
                     "keeps": None,
@@ -281,6 +283,13 @@ def parse_statement(path):
                 cur["returns"] = parse_sexpr(line[len("returns "):])
             elif kw == "stack":
                 cur["stack"] = int(parts[1])
+            elif kw == "stacklin":
+                step, arg, sub, div = int(parts[1]), parts[2], int(parts[3]), int(parts[4])
+                if div <= 0:
+                    raise Refuse(f"malformed stacklin in verify2: {line}")
+                cur["stacklin"] = (step, arg, sub, div)
+            elif kw == "fndecreases":
+                cur["decreases"] = parts[1]
             elif kw == "hidden":
                 cur["hidden"].update(parts[1:])
             elif kw == "argregs":
@@ -406,6 +415,11 @@ class Verifier:
         self.heads = tab_mod.by_head(rows)
         self.defs = defs
         self.proven = proven_contracts
+
+    def plain_entail(self, facts, g):
+        if not g[1]:
+            return g[0] >= 0
+        return any(f[1] == g[1] and f[0] <= g[0] for f in facts)
 
     def entail(self, facts, g, stream):
         if r_plain(facts, g):
@@ -838,7 +852,59 @@ class Verifier:
             elif akind == "out":
                 facts.append(r_sub(r_const(M64 + 1), r_add(out_base[aname], r_const(int(alen)))))
 
-        # Stack headroom: `sp >= stack_budget`
+        if fn["decreases"] is not None:
+            dnm = fn["decreases"]
+            if dnm not in [a[0] for a in fn["args"]] or dnm in fn["hidden"]:
+                raise Refuse("`decreases` argument must be a parameter listed in `trace depends on`")
+        if fn["stacklin"] is not None:
+            _, sarg, _, sdiv = fn["stacklin"]
+            if sdiv <= 0 or sarg not in [a[0] for a in fn["args"]] or sarg in fn["hidden"]:
+                raise Refuse("stacklin argument must be a parameter listed in `trace depends on` with positive divisor")
+
+        def _check_call_stack(c, sp_off_val, extra, cenv, cur_facts, strm):
+            """Match Core.lean `stackFitsMAt` / `stackFitsMLin` (fast path then entail)."""
+            if sp_off_val > 0:
+                raise Refuse(f"call to `{c['name']}` exceeds stack budget")
+            c_sl = c.get("stacklin")
+            p_sl = fn.get("stacklin")
+            if c_sl is None:
+                if -fn["stack"] <= sp_off_val - extra - c["stack"]:
+                    return
+                raise Refuse(f"call to `{c['name']}` exceeds stack budget {fn['stack']}")
+            c_step, c_arg, c_sub, c_div = c_sl
+            acal = cenv.get(c_arg)
+            if acal is None:
+                raise Refuse(f"stacklin argument `{c_arg}` missing in call to `{c['name']}`")
+            if p_sl is None:
+                rem = fn["stack"] + sp_off_val - extra - c["stack"]
+                if rem < 0:
+                    raise Refuse(f"call to `{c['name']}` exceeds stack budget {fn['stack']}")
+                if c_step == 0:
+                    return
+                d = rem // c_step
+                need = r_sub(r_const(c_sub + c_div * (d + 1) - 1), acal)
+                if not self.plain_entail(cur_facts, need):
+                    self.entail(cur_facts, need, strm)
+                return
+            p_step, p_arg, p_sub, p_div = p_sl
+            apar = env.get(p_arg)
+            if apar is None or not (c_step <= p_step and c_div == p_div):
+                raise Refuse(f"call to `{c['name']}` exceeds linear stack budget")
+            if p_sub <= c_sub and -fn["stack"] <= sp_off_val - extra - c["stack"]:
+                need = r_sub(apar, acal)
+                if not self.plain_entail(cur_facts, need):
+                    self.entail(cur_facts, need, strm)
+                return
+            if p_sub == c_sub and -fn["stack"] - p_step <= sp_off_val - extra - c["stack"]:
+                n1 = r_sub(r_sub(apar, r_const(c_div)), acal)
+                n2 = r_sub(apar, r_const(c_sub + c_div))
+                if not (self.plain_entail(cur_facts, n1) and self.plain_entail(cur_facts, n2)):
+                    self.entail(cur_facts, n1, strm)
+                    self.entail(cur_facts, n2, strm)
+                return
+            raise Refuse(f"call to `{c['name']}` exceeds linear stack budget")
+
+        # Stack headroom: `sp >= stack_budget` (at least the constant base `fn["stack"]`)
         if fn["stack"] > 0:
             facts.append(r_sub(regs[sp_reg], r_const(fn["stack"])))
 
@@ -1576,16 +1642,14 @@ class Verifier:
                     elif kind == "jump":
                         tgt_expr, cond = stmt[1], stmt[2]
                         tval = bind[tgt_expr[1]] if tgt_expr[0] == "name" else tgt_expr[1]
-                        if cond is None and isinstance(tval, str) and tval in self.proven:
+                        if cond is None and isinstance(tval, str) and (tval in self.proven or (tval == fn["name"] and fn["decreases"] is not None)):
                             # Tail call (`jmp callee` on x86-64 / `b callee` on AArch64)
-                            c = self.proven[tval]
+                            c = fn if tval == fn["name"] else self.proven[tval]
                             if (c["machine"] == "arm64") != is_arm:
                                 raise Refuse(f"tail callee `{tval}` targets a different machine")
                             c_arg_regs = c["argregs"] if c["argregs"] is not None else (ARM_ARGS if is_arm else X86_ARGS)
                             c_keeps = set(c["keeps"]) if c["keeps"] is not None else (ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED)
                             c_ret_reg = c["retreg"] if c["retreg"] is not None else ("x0" if is_arm else "rax")
-                            if c["stack"] > fn["stack"]:
-                                raise Refuse(f"tail call to `{tval}` exceeds stack budget {fn['stack']}")
                             if c_ret_reg != ret_reg:
                                 raise Refuse(f"tail callee `{tval}` returns in `{c_ret_reg}`, expected `{ret_reg}`")
                             self.entail_eq(st["facts"], st["regs"][sp_reg], entry_regs[sp_reg], stream)
@@ -1617,11 +1681,15 @@ class Verifier:
                                     cenv[anm] = st["regs"][areg]
                                     if anm not in c["hidden"] and st["marks"][areg]:
                                         raise Refuse(f"tail callee `{tval}` trace arg `{anm}` may depend on values kept out of trace")
+                            _check_call_stack(c, 0, 0, cenv, st["facts"], stream)
                             for anm, bnd in c["atleast"]:
                                 if anm in cenv:
                                     self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
                             for k, terms in c["linpre"]:
                                 self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                            if tval == fn["name"]:
+                                dnm = fn["decreases"]
+                                self.entail(st["facts"], r_sub(r_sub(env[dnm], cenv[dnm]), r_const(1)), stream)
                             for anm, bnd in c["below"]:
                                 if anm in cenv:
                                     self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)
@@ -1707,21 +1775,21 @@ class Verifier:
                     elif kind == "call":
                         tgt_expr = stmt[1]
                         callee_nm = bind[tgt_expr[1]] if tgt_expr[0] == "name" else tgt_expr[1]
-                        if callee_nm not in self.proven:
+                        if callee_nm == fn["name"] and fn["decreases"] is not None:
+                            c = fn
+                        elif callee_nm in self.proven:
+                            c = self.proven[callee_nm]
+                        else:
                             raise Refuse(f"callee `{callee_nm}` has not been verified")
-                        c = self.proven[callee_nm]
                         c_is_arm = c["machine"] == "arm64"
                         if c_is_arm != is_arm:
                             raise Refuse(f"callee `{callee_nm}` targets a different machine")
                         c_arg_regs = c["argregs"] if c["argregs"] is not None else (ARM_ARGS if is_arm else X86_ARGS)
                         c_keeps = set(c["keeps"]) if c["keeps"] is not None else (ARM_CALLEE_SAVED if is_arm else X86_CALLEE_SAVED)
                         c_ret_reg = c["retreg"] if c["retreg"] is not None else ("x0" if is_arm else "rax")
-                        need_stk = c["stack"] + (0 if is_arm else 8)
                         sp_off = r_sub(st["regs"][sp_reg], entry_regs[sp_reg])
                         if sp_off[1]:
                             raise Refuse("non-constant stack pointer at call")
-                        if -sp_off[0] + need_stk > fn["stack"]:
-                            raise Refuse(f"call to `{callee_nm}` exceeds stack budget {fn['stack']}")
                         if is_arm and (sp_off[0] % 16 != 0):
                             raise Refuse("stack pointer is not 16-byte aligned at AArch64 call")
                         # Build callee argument environment and check trace cleanliness of non-hidden args
@@ -1743,13 +1811,16 @@ class Verifier:
                                 cenv[anm] = st["regs"][areg]
                                 if anm not in c["hidden"] and st["marks"][areg]:
                                     raise Refuse(f"callee `{callee_nm}` trace arg `{anm}` may depend on values kept out of trace")
-                        # Check callee entry preconditions (`below`, `atleast`, `requires`)
-                        # (the order the proof file's items are read in: at-least, linear conditions, bounds)
+                        _check_call_stack(c, sp_off[0], 0 if is_arm else 8, cenv, st["facts"], stream)
+                        # Check callee entry preconditions (`atleast`, `linpre`, self-recursion `decreases`, `below`, `requires`)
                         for anm, bnd in c["atleast"]:
                             if anm in cenv:
                                 self.entail(st["facts"], r_sub(cenv[anm], r_const(bnd)), stream)
                         for k, terms in c["linpre"]:
                             self.entail(st["facts"], self.linpre_row(k, terms, cenv), stream)
+                        if callee_nm == fn["name"]:
+                            dnm = fn["decreases"]
+                            self.entail(st["facts"], r_sub(r_sub(env[dnm], cenv[dnm]), r_const(1)), stream)
                         for anm, bnd in c["below"]:
                             if anm in cenv:
                                 self.entail(st["facts"], r_sub(r_const(bnd - 1), cenv[anm]), stream)

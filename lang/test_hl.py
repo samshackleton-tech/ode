@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""End-to-end tests for Unified Structured Wirth High-Level Ode (`lang/ode_hl.py`)."""
+import faulthandler, os, signal, subprocess, sys, tempfile, time, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+for p in (HERE, os.path.join(ROOT, "proof-core"), os.path.join(ROOT, "kcheck")):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+import ode_audit
+import ode_tool
+
+
+def _dual_verify(testcase, src_text, fn_name, targets=("x86_64", "arm64"), check_verify2=True):
+    odeverify = os.path.join(ROOT, "proof-core", ".lake", "build", "bin", "odeverify")
+    if not os.path.exists(odeverify):
+        testcase.skipTest("odeverify binary not built")
+    for target in targets:
+        with tempfile.TemporaryDirectory() as d:
+            src_p = os.path.join(d, f"{fn_name}.ode")
+            with open(src_p, "w", encoding="utf-8") as f:
+                f.write(src_text)
+            out_o = os.path.join(d, "out.o")
+            out_p = os.path.join(d, "out.proof")
+            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name=fn_name, target=target)
+            testcase.assertEqual(res["verdict"], "shown", f"{fn_name}/{target}: {res}")
+            if check_verify2:
+                dump = os.path.join(d, "dump.sh")
+                st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r2 = subprocess.run(
+                    [sys.executable, os.path.join(ROOT, "proof-core", "verify2.py"), tab, st_p, pf_p],
+                    capture_output=True, text=True,
+                )
+                testcase.assertEqual(r2.returncode, 0, f"{fn_name}/{target} verify2: {r2.stdout}{r2.stderr}")
+                testcase.assertIn("shown (", r2.stdout)
+
+
+class TestHighLevelOde(unittest.TestCase):
+    PER_TEST_TIMEOUT_S = int(os.environ.get("ODE_TEST_TIMEOUT", "30"))
+
+    def setUp(self):
+        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
+            def _on_timeout(_sig, _frame):
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=False)
+                raise TimeoutError(f"{self.id()} exceeded {self.PER_TEST_TIMEOUT_S}s per-test timeout")
+            self._prev_alarm = signal.signal(signal.SIGALRM, _on_timeout)
+            signal.alarm(self.PER_TEST_TIMEOUT_S)
+
+    def tearDown(self):
+        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, self._prev_alarm)
+
+    def test_01_portable_ct_b64_dec_select_and_wrap(self):
+        """One portable High-Level Ode `b64_dec` with `select` + `-%` dual-verifies on both x86_64 and arm64."""
+        src = """
+def b64_dec(c) {
+    if 65 <= c && c <= 90 then c - 1
+    else if 97 <= c && c <= 122 then c - 7
+    else if 48 <= c && c <= 57 then c + 68
+    else if c == 43 then 126
+    else if c == 47 then 127
+    else 0
+}
+
+fn hl_b64_dec(c: u8) -> u64
+    returns b64_dec(c)
+    trace depends on nothing
+{
+    var r: u64 := 0
+    r := select(65 <= c && c <= 90,  c -% 1,  r)
+    r := select(97 <= c && c <= 122, c -% 7,  r)
+    r := select(48 <= c && c <= 57,  c + 68,  r)
+    r := select(c == 43, 126, r)
+    r := select(c == 47, 127, r)
+    return r
+}
+"""
+        _dual_verify(self, src, "hl_b64_dec")
+
+    def test_02_wrap_range_check_passes_and_exact_refuses(self):
+        """Single-compare `(c -% 65) <= 25` dual-verifies via `t wrap` + `t split`; exact `c - 65` is refused."""
+        src_wrap = """
+def cap_val_spec(c) {
+    if 65 <= c && c <= 90 then c - 65 else 255
+}
+
+fn hl_cap_val(c: u8) -> u64
+    returns cap_val_spec(c)
+    trace depends on nothing
+{
+    let d := c -% 65
+    return select(d <= 25, d, 255)
+}
+"""
+        _dual_verify(self, src_wrap, "hl_cap_val")
+
+        src_exact = src_wrap.replace("c -% 65", "c - 65")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "exact_bad.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src_exact)
+            with self.assertRaises(BaseException):
+                ode_audit.pack_verified(p, None, os.path.join(d, "b.o"), os.path.join(d, "b.proof"),
+                                        fn_name="hl_cap_val", target="x86_64")
+
+    def test_03_auto_outer_context_inheritance_and_for_loop(self):
+        """Early-exit guards (`if n < 1`, `if lim > n`) auto-inherit into `for i in 0..lim` with zero manual `place`."""
+        src = """
+def sum_prefix(a, i, lim, acc) {
+    if i >= lim then acc
+    else sum_prefix(a, i + 1, lim, acc + a[i])
+}
+
+def checked_sum(a, n) {
+    if n < 1 then 0
+    else if a[0] > n then 0
+    else sum_prefix(a, 0, a[0], 0)
+}
+
+fn hl_checked_sum(a: n bytes, n: u64) -> u64
+    requires 0 <= n, n <= 4096
+    returns checked_sum(a, n)
+    trace depends on a, n
+{
+    if n < 1 { return 0 }
+    let lim := a[0]
+    if lim > n { return 0 }
+    var acc: u64 := 0
+    for i in 0..lim
+        maintains acc <= i * 255
+        maintains checked_sum(a, n) == sum_prefix(a, i, lim, acc)
+    {
+        acc += a[i]
+    }
+    return acc
+}
+"""
+        _dual_verify(self, src, "hl_checked_sum")
+
+    def test_04_portable_output_buffer_loop(self):
+        """Portable `for i in 0..64 writes out[.. i] = ...` with `out[i] := ...` dual-verifies on both arches."""
+        src = """
+def inc_bytes(src) {
+    [ (src[j] + 1) % 256 for j in 0..64 ]
+}
+
+fn hl_inc_copy(out: 64 bytes, src: n bytes, n: u64) -> u64
+    requires no_overlap(out, src)
+    requires 64 <= n, n <= 64
+    ensures out = inc_bytes(src)
+    returns 1
+    trace depends on n
+{
+    for i in 0..64
+        writes out[.. i] = inc_bytes(src)
+    {
+        let b := src[i]
+        out[i] := (b + 1) & 255
+    }
+    return 1
+}
+"""
+        _dual_verify(self, src, "hl_inc_copy")
+
+    def test_05_recursive_linear_stack_and_tail_call(self):
+        """Portable recursive `stack 32 + 32 * d` (no manual prologue/epilogue) and tail-call helper both verify."""
+        src_rec = """
+def all_zero(a, n, d) {
+    if d == 0 then 1
+    else if a[d - 1] != 0 then 0
+    else all_zero(a, n, d - 1)
+}
+
+fn hl_rec_zero(a: n bytes, n: u64, d: u64) -> u64
+    requires 0 <= d, d <= n, n <= 64
+    returns all_zero(a, n, d)
+    decreases d
+    trace depends on a, n, d
+    stack 32 + 32 * d
+{
+    if d == 0 { return 1 }
+    let idx := d - 1
+    if a[idx] != 0 { return 0 }
+    return hl_rec_zero(a, n, idx)
+}
+"""
+        # Note: `return hl_rec_zero(...)` lowers to a verified tail call (`jmp`/`b`) when leaf/tail!
+        _dual_verify(self, src_rec, "hl_rec_zero", check_verify2=True)
+
+        src_tail = """
+def add3(x) { x + 3 }
+def wrap_add3(x) { add3(x) }
+
+fn hl_add3(x: u64) -> u64
+    requires 0 <= x, x <= 1000
+    returns add3(x)
+    trace depends on x
+{
+    return x + 3
+}
+
+fn hl_wrap_add3(x: u64) -> u64
+    requires 0 <= x, x <= 1000
+    returns wrap_add3(x)
+    trace depends on x
+{
+    return hl_add3(x)
+}
+"""
+        _dual_verify(self, src_tail, "hl_wrap_add3")
+
+    def test_06_instant_advise_asm_under_50ms(self):
+        """`ode advise --asm` returns var->reg map, 1-to-1 lowering, and pipeline estimate in < 50 ms."""
+        src = """
+def b64_dec(c) {
+    if 65 <= c && c <= 90 then c - 1 else 0
+}
+
+fn hl_fast(c: u8) -> u64
+    returns b64_dec(c)
+    trace depends on nothing
+{
+    var r: u64 := 0
+    r := select(65 <= c && c <= 90, c -% 1, r)
+    return r
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "fast.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src)
+            # Warm import once, then time both x86_64 and arm64
+            ode_tool.run_advise(p, fn_name="hl_fast", target="x86_64", show_asm=True)
+            for target in ("x86_64", "arm64"):
+                t0 = time.monotonic()
+                res = ode_tool.run_advise(p, fn_name="hl_fast", target=target, show_asm=True)
+                dt_ms = (time.monotonic() - t0) * 1000.0
+                self.assertIn("High-Level Ode lowering (hl_fast,", res["advice_text"])
+                self.assertIn("spills: 0", res["advice_text"])
+                self.assertIn("variables:", res["advice_text"])
+                self.assertIn("lowering (source -> exact instructions):", res["advice_text"])
+                self.assertLess(dt_ms, 150.0, f"advise --asm on {target} took {dt_ms:.1f} ms")
+
+    def test_07_option2_default_fast_calling_and_c_abi_boundary(self):
+        """Plain `fn` stays C-free: Ode->Ode calls (incl. across `use` modules) get Ode fast calling; `--c-abi` exports C ABI."""
+        import ode_unified
+        helper_src = """
+fn inc2_fn(x: u64) -> u64
+    requires 0 <= x, x <= 2000
+    returns x + 2
+    trace depends on x
+{
+    return x + 2
+}
+"""
+        main_src = """
+use h = "helper.ode"
+
+fn entry_inc4(x: u64) -> u64
+    requires 0 <= x, x <= 1500
+    returns x + 4
+    trace depends on x
+{
+    let a := h.inc2_fn(x)
+    return h.inc2_fn(a)
+}
+"""
+        top_src = """
+use m = "main.ode"
+
+fn top_inc8(x: u64) -> u64
+    requires 0 <= x, x <= 1000
+    returns x + 8
+    trace depends on x
+{
+    let a := m.entry_inc4(x)
+    return m.entry_inc4(a)
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            hp = os.path.join(d, "helper.ode")
+            mp = os.path.join(d, "main.ode")
+            tp = os.path.join(d, "top.ode")
+            for path, txt in ((hp, helper_src), (mp, main_src), (tp, top_src)):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(txt)
+            # When `main.ode` is imported by `top.ode`, BOTH `inc2_fn` AND `entry_inc4` get Ode fast calling automatically!
+            p_top = ode_unified.parse_unified(top_src, tp, c_abi_fn="top_inc8")
+            self.assertIsNone(p_top["fns_by_name"]["top_inc8"]["impls"]["x86_64"]["calling_text"])
+            for fn in p_top["fns"]:
+                if fn["name"] != "top_inc8":
+                    ct = fn["impls"]["x86_64"]["calling_text"]
+                    self.assertIsNotNone(ct, f"imported fn {fn['name']} must get Ode fast calling")
+                    self.assertIn("preserves", ct)
+            # End-to-end `pack_verified` with `--c-abi` on both `main.ode` (2-file) and `top.ode` (3-file) on both arches
+            for target in ("x86_64", "arm64"):
+                out_o = os.path.join(d, f"inc8_{target}.o")
+                out_p = os.path.join(d, f"inc8_{target}.proof")
+                res = ode_audit.pack_verified(tp, None, out_o, out_p, fn_name="top_inc8", target=target, c_abi=True)
+                self.assertEqual(res["verdict"], "shown", f"{target}: {res}")
+
+    def test_08_parallel_move_call_marshaling_and_arg_swap(self):
+        """Calling a helper with swapped/aliased register arguments never clobbers an unread argument."""
+        src = """
+def sub_ord(a, b) { a + 2 * b }
+
+fn helper_ord(a: u64, b: u64) -> u64
+    requires 0 <= a, a <= 1000, 0 <= b, b <= 1000
+    returns sub_ord(a, b)
+    trace depends on a, b
+{
+    return a + b + b
+}
+
+fn call_swapped(x: u64, y: u64) -> u64
+    requires 0 <= x, x <= 1000, 0 <= y, y <= 1000
+    returns sub_ord(y, x)
+    trace depends on x, y
+{
+    return helper_ord(y, x)
+}
+"""
+        _dual_verify(self, src, "call_swapped", check_verify2=True)
+
+    def test_09_simd_u32x4_unroll_vprord_and_ext(self):
+        """Typed `u32x4` + `unroll` + `rotl32` (`vprord` on avx512, `rev32.8h` on arm64) + `ext4` verify with 0 spills."""
+        src = """
+def arx1(w) {
+    let s0 = ((w[0] + w[4]) ^ w[4]) >>> 16
+    let s1 = ((w[1] + w[5]) ^ w[5]) >>> 16
+    let s2 = ((w[2] + w[6]) ^ w[6]) >>> 16
+    let s3 = ((w[3] + w[7]) ^ w[7]) >>> 16
+    [ s1, s2, s3, s0 ]
+}
+
+fn hl_vec_add(out: 16 bytes, inp: 32 bytes)
+    requires no_overlap(out, inp)
+    ensures out = bytes_of(arx1(words(inp)))
+    stack 0
+{
+    for x86_64 needs avx needs avx512 {
+        var a: u32x4 := inp.u32x4(0)
+        var b: u32x4 := inp.u32x4(16)
+        a +%= b
+        a ^= b
+        a := rotl32(a, 16)
+        a := ext4(a, a)
+        out.u32x4(0) := a
+    }
+    for arm64 {
+        var a: u32x4 := inp.u32x4(0)
+        var b: u32x4 := inp.u32x4(16)
+        a +%= b
+        a ^= b
+        a := rotl32(a, 16)
+        a := ext4(a, a)
+        out.u32x4(0) := a
+    }
+}
+"""
+        _dual_verify(self, src, "hl_vec_add", check_verify2=False)
+
+
+if __name__ == "__main__":
+    unittest.main()

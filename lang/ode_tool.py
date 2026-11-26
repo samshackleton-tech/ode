@@ -681,8 +681,9 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
 
 
 def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False,
-               align=0, arg_overrides=None, budgets=None, includes=None, target=None, all_archs=False):
+               align=0, arg_overrides=None, budgets=None, includes=None, target=None, all_archs=False, show_asm=False):
     """Compile and run static + optional memory advice without invoking Lean."""
+    import ode_hl, ode_unified
     target, compiled = compile_source(src_path, None, target=target)
     by_name = {info["name"]: info for info in compiled}
     by_sym = {info["symbol"]: info for info in compiled}
@@ -695,6 +696,20 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
     else:
         raise SystemExit(f"ode_tool: {src_path}: no function {fn_name}")
     top_sym = top["symbol"]
+    asm_text = None
+    if show_asm:
+        with open(src_path, "r", encoding="utf-8") as f:
+            raw_src = f.read()
+        if ode_unified.is_unified(raw_src):
+            parsed = ode_unified.parse_unified(raw_src, src_path)
+            fn_rec = parsed["fns_by_name"].get(top["name"])
+            if fn_rec is not None:
+                im = ode_unified._select_impl(fn_rec, target, src_path)
+                if im is not None and im.get("hl_meta") is not None:
+                    asm_text = ode_hl.format_asm_report(top["name"], im["hl_meta"], top.get("line_map"))
+        if asm_text is None:
+            rows = [f"    +0x{r['pc']:03x} ({r['len']:2d}B)  {r['asm']}" for r in top.get("line_map", [])]
+            asm_text = f"emitted assembly ({top['name']}, {target}):\n" + "\n".join(rows)
     spec_text = load_spec_text(spec_path, includes) if spec_path else None
     with tempfile.TemporaryDirectory() as td:
         progs, lmaps = {}, {}
@@ -720,6 +735,9 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
         if budgets:
             eff_budgets.update(budgets)
         budget_errs = estimate.check_budgets(static_rep, mem_rep, eff_budgets)
+        advice = estimate.format_report(top_sym, static_rep, mem_rep)
+        if asm_text:
+            advice = asm_text + "\n\n" + advice
         return {
             "target": target,
             "symbol": top_sym,
@@ -727,7 +745,8 @@ def run_advise(src_path, fn_name=None, spec_path=None, arch=None, do_trace=False
             "memory": mem_rep,
             "budgets": eff_budgets,
             "budget_errors": budget_errs,
-            "advice_text": estimate.format_report(top_sym, static_rep, mem_rep),
+            "asm_text": asm_text,
+            "advice_text": advice,
         }
 
 
@@ -832,6 +851,7 @@ def main(argv=None):
     p_adv.add_argument("--fn", default=None, help="function name or symbol (default: last in source)")
     p_adv.add_argument("--spec", default=None, help="optional .spec file for default --trace argument layout")
     p_adv.add_argument("--target", default=None, help="target architecture (e.g. x86_64, arm64) for multi-target .ode")
+    p_adv.add_argument("--asm", action="store_true", help="print exact variable->register/spill map and 1-to-1 emitted assembly")
     _add_common_flags(p_adv)
 
     p_cmp = sub.add_parser("compare", help="compare two Ode variants side by side (with optional verification)")
@@ -867,6 +887,7 @@ def main(argv=None):
     p_pck.add_argument("--proof", required=True, help="output separate .proof file path")
     p_pck.add_argument("--fn", default=None, help="function name in source (default: last in source)")
     p_pck.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
+    p_pck.add_argument("--c-abi", action="store_true", help="export the packed entry function with the C ABI for legacy C/Rust callers")
     p_pck.add_argument("--glossary-out", default=None, help="write separate author glossary JSON")
     p_pck.add_argument("--include", action="append", default=[], help="additional .ocl/.spec file(s) prepended before spec")
     p_pck.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
@@ -930,7 +951,7 @@ def main(argv=None):
         res = run_advise(args.source, fn_name=args.fn, spec_path=args.spec, arch=args.arch,
                          do_trace=args.trace, align=args.align, arg_overrides=overrides,
                          budgets=budgets, includes=args.include, target=args.target,
-                         all_archs=args.all_archs)
+                         all_archs=args.all_archs, show_asm=args.asm)
         if args.json:
             print(json.dumps(_json_safe(res)))
             return 2 if res["budget_errors"] else 0
@@ -1013,6 +1034,7 @@ def main(argv=None):
             res = ode_audit.pack_verified(
                 args.source, args.spec, args.out, args.proof,
                 fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
+                c_abi=args.c_abi,
             )
         except ode_audit.PackProofError as exc:
             by_sym = {exc.fn_sym: exc.info} if (exc.fn_sym and exc.info) else {}

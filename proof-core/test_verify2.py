@@ -3,9 +3,11 @@
 on the exact same `.statement` and order-independent (`r ...`) `.proof` files across both
 x86-64 and AArch64, including shuffled-facts order-independence and 4 negative controls each.
 """
+import faulthandler
 import os
 import random
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -55,6 +57,20 @@ def _extract_stmt_and_proof(src, target, tmp_dir):
 
 @unittest.skipUnless(HAVE_LEAN, "requires built proof-core odeverify binary")
 class TestVerify2(unittest.TestCase):
+    PER_TEST_TIMEOUT_S = int(os.environ.get("ODE_TEST_TIMEOUT", "45"))
+
+    def setUp(self):
+        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
+            def _on_timeout(_sig, _frame):
+                faulthandler.dump_traceback(file=sys.stderr, all_threads=False)
+                raise TimeoutError(f"{self.id()} exceeded {self.PER_TEST_TIMEOUT_S}s per-test timeout")
+            self._prev_alarm = signal.signal(signal.SIGALRM, _on_timeout)
+            signal.alarm(self.PER_TEST_TIMEOUT_S)
+
+    def tearDown(self):
+        if hasattr(signal, "SIGALRM") and self.PER_TEST_TIMEOUT_S > 0:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, self._prev_alarm)
     def _run_dual(self, target):
         odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
         with tempfile.TemporaryDirectory() as d:
@@ -803,41 +819,47 @@ fn bad_branch(a: number, b: number)
                     ode_audit.pack_verified(neg_p, None, bad_o, bad_p, fn_name="bad_branch", target=target)
                 self.assertIn("kept out of the trace", str(cm.exception))
 
-    def test_10_ct_base64_decode_out_buffer_dual_verify(self):
-        """Output-buffer `ensures out = ...` + `wrote_pre` + `samebyte` + `cmov`/`csel` dual-verify on both arches."""
+    def _check_ct_base64_decode(self, target):
         odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
         if not os.path.exists(odeverify):
             self.skipTest("odeverify binary not built")
         src_p = os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks", "ct_base64_decode_reference.ode")
-        for target in ("x86_64", "arm64"):
-            with tempfile.TemporaryDirectory() as d:
-                out_o = os.path.join(d, "ct_b64.o")
-                out_p = os.path.join(d, "ct_b64.proof")
-                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="ct_base64_decode", target=target)
-                self.assertEqual(res["verdict"], "shown", res)
-                dump = os.path.join(d, "dump.sh")
-                st_p = os.path.join(d, "st.txt")
-                pf_p = os.path.join(d, "pf.txt")
-                with open(dump, "w", encoding="utf-8") as f:
-                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
-                os.chmod(dump, 0o755)
-                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
-                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
-                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
-                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
-                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
-                                    capture_output=True, text=True)
-                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
-                self.assertIn("shown (2 functions, verify2)", r2.stdout)
-                # Negative control: tamper ensures upper bound 192 -> 191; verify2 must refuse
-                with open(st_p, "r", encoding="utf-8") as f:
-                    st_txt = f.read()
-                bad_st = os.path.join(d, "bad_st.txt")
-                with open(bad_st, "w", encoding="utf-8") as f:
-                    f.write(st_txt.replace("ensures a0 (num 0) (num 192)", "ensures a0 (num 0) (num 191)", 1))
-                r3 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, bad_st, pf_p],
-                                    capture_output=True, text=True)
-                self.assertNotEqual(r3.returncode, 0, "tampered ensures must be refused by verify2")
+        with tempfile.TemporaryDirectory() as d:
+            out_o = os.path.join(d, "ct_b64.o")
+            out_p = os.path.join(d, "ct_b64.proof")
+            res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="ct_base64_decode", target=target)
+            self.assertEqual(res["verdict"], "shown", res)
+            dump = os.path.join(d, "dump.sh")
+            st_p = os.path.join(d, "st.txt")
+            pf_p = os.path.join(d, "pf.txt")
+            with open(dump, "w", encoding="utf-8") as f:
+                f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+            os.chmod(dump, 0o755)
+            ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+            tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+            r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+            self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+            r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                capture_output=True, text=True)
+            self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+            self.assertIn("shown (2 functions, verify2)", r2.stdout)
+            # Negative control: tamper ensures upper bound 192 -> 191; verify2 must refuse
+            with open(st_p, "r", encoding="utf-8") as f:
+                st_txt = f.read()
+            bad_st = os.path.join(d, "bad_st.txt")
+            with open(bad_st, "w", encoding="utf-8") as f:
+                f.write(st_txt.replace("ensures a0 (num 0) (num 192)", "ensures a0 (num 0) (num 191)", 1))
+            r3 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, bad_st, pf_p],
+                                capture_output=True, text=True)
+            self.assertNotEqual(r3.returncode, 0, "tampered ensures must be refused by verify2")
+
+    def test_10a_ct_base64_decode_out_buffer_dual_verify_x86_64(self):
+        """Output-buffer `ensures out = ...` + `wrote_pre` + `samebyte` + `cmov` dual-verify on x86-64."""
+        self._check_ct_base64_decode("x86_64")
+
+    def test_10b_ct_base64_decode_out_buffer_dual_verify_arm64(self):
+        """Output-buffer `ensures out = ...` + `wrote_pre` + `samebyte` + `csel` dual-verify on AArch64."""
+        self._check_ct_base64_decode("arm64")
 
     def test_11_cmov_csel_custom_calling_and_stack_spill_wrote(self):
         """`cmov`/`csel` caller invoking a custom-calling helper + stack spill inside a `wrote` loop dual-verifies."""
@@ -1484,7 +1506,53 @@ fn rec_zero(a: n bytes, n: number, d: number)
                 out_o, out_p = os.path.join(d, "rec.o"), os.path.join(d, "rec.proof")
                 res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="rec_zero", target=target)
                 self.assertEqual(res["verdict"], "shown", f"stacklin/{target}: {res}")
+                dump = os.path.join(d, "dump.sh")
+                st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, f"verify2 stacklin/{target}: {r2.stdout}{r2.stderr}")
+                self.assertIn("shown (1 function, verify2)", r2.stdout)
+
+
+def _run_one_test(test_name):
+    import io, time
+    t0 = time.monotonic()
+    suite = unittest.TestSuite([TestVerify2(test_name)])
+    buf = io.StringIO()
+    res = unittest.TextTestRunner(stream=buf, verbosity=0).run(suite)
+    dt = time.monotonic() - t0
+    if res.skipped:
+        return test_name, "SKIP", dt, res.skipped[0][1]
+    if res.wasSuccessful():
+        return test_name, "ok", dt, ""
+    detail = "\n".join(tb for _, tb in (res.failures + res.errors))
+    return test_name, "FAIL", dt, detail
 
 
 if __name__ == "__main__":
-    unittest.main()
+    if "--serial" in sys.argv or any(a.startswith("TestVerify2") or a.startswith("test_") for a in sys.argv[1:]):
+        args = [a for a in sys.argv if a != "--serial"]
+        unittest.main(argv=args)
+    else:
+        import concurrent.futures, time
+        names = sorted(unittest.defaultTestLoader.getTestCaseNames(TestVerify2))
+        jobs = min(len(names), max(1, min(os.cpu_count() or 4, 8)))
+        t_start = time.monotonic()
+        failed = []
+        with concurrent.futures.ProcessPoolExecutor(max_workers=jobs) as ex:
+            futs = {ex.submit(_run_one_test, nm): nm for nm in names}
+            for fut in concurrent.futures.as_completed(futs):
+                nm, st, dt, detail = fut.result()
+                print(f"{nm} ... {st} ({dt:.2f}s)", flush=True)
+                if st == "FAIL":
+                    failed.append((nm, detail))
+        wall = time.monotonic() - t_start
+        for nm, detail in failed:
+            print(f"\n=== FAIL: {nm} ===\n{detail}", flush=True)
+        print(f"\nRan {len(names)} tests in {wall:.2f}s ({jobs} workers) — {'OK' if not failed else f'FAILED ({len(failed)})'}", flush=True)
+        sys.exit(0 if not failed else 1)

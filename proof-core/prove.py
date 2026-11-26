@@ -294,21 +294,25 @@ def refutation(system, seed=-1, quick=False):
             rows = bearing(system, seed % len(system))
             if len(rows) < len(system): found = kprove.derive(rows, 600)
             if not found and not quick:                # the equalities first, on the rows near the one asked about
+                seed_row = system[seed % len(system)]
                 tried = None
                 for steps in (2, 3, 4, 6):
                     close = near(system, seed % len(system), steps)
                     if close == tried: break
                     tried = close
-                    found = derive_eq(close, 30000, last=frozenset(n for f in close for n, c in f.c if abs(c) > 1))
+                    last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)
+                    found = derive_eq(close, 30000, last=last_q)
                     if found: break
             if not found and not quick:
+                seed_row = system[seed % len(system)]
                 for room in (30000, 300000):           # the rows near the one asked about, the quotients left for last
                     tried = None
                     for steps in (1, 2, 3, 4):
                         close = near(system, seed % len(system), steps)
                         if close == tried or len(close) == len(rows): break
                         tried = close
-                        found = kprove.derive(close, room, last=frozenset(n for f in close for n, c in f.c if abs(c) > 1))
+                        last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)
+                        found = kprove.derive(close, room, last=last_q)
                         if found: break
                     if found: break
             if not found and not quick:
@@ -468,6 +472,8 @@ class Prover:
         self.reg_list = list(reg_list)
         self.wrap_pcs = set(wrap_pcs)
         self.tried_clears = set()
+        self.saw_undecided_below = False
+        self.split_tries = 0
 
     def close(self):
         if self.session is not None: self.session.close(); self.session = None
@@ -533,7 +539,7 @@ class Prover:
                     cands.append((pc_i, r, expr))
         return cands
 
-    def solve(self, proof):
+    def solve(self, proof, allow_split=False):
         """The proof extended until the verifier says shown; None if this way does not get there."""
         while True:
             said = self.ask(proof)
@@ -629,7 +635,7 @@ class Prover:
                 elif not gt_lin.c or not lt_lin.c:
                     proof = proof + ["t neq 0"]
                 else:
-                    done = self.solve(proof + ["t neq 0"])
+                    done = self.solve(proof + ["t neq 0"], allow_split=allow_split)
                     if done is not None:
                         return done
                     proof = proof + ["t live"]
@@ -638,24 +644,25 @@ class Prover:
                 if refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [negation(d)]): proof = proof + ["t ge"]
                 else:
-                    # Support branchless single-compare range checks like `(c -% lo) <= hi - lo`:
-                    # if we are at `symReturnSplit`, split on `d >= 0` vs `d < 0` via `t split` + `k <row>`.
+                    self.saw_undecided_below = True
+                    # Pass 2 only: branchless single-compare range checks like `(c -% lo) <= hi - lo`:
+                    # split on `d >= 0` vs `d < 0` via `t split` + `k <row>` (strictly bounded).
                     split_row = raw_goals[0]
-                    tried_split = False
-                    if proof.count("t split") < 6:
+                    if allow_split and proof.count("t split") < 2 and self.split_tries < 6:
+                        saved_furthest = self.furthest_root
                         for cut in range(len(proof), max(-1, len(proof) - 16), -1):
                             if cut < len(proof) and proof[cut].startswith("k "):
                                 continue
                             cand = proof[:cut] + ["t split", "k " + split_row]
                             ans = self.ask(cand)
-                            if ans != said and not ans.startswith("refused:") and not ans.startswith("prove:"):
-                                done = self.solve(cand)
+                            if ans != said and (ans == "shown" or ans.startswith("need ")):
+                                self.split_tries += 1
+                                done = self.solve(cand, allow_split=allow_split)
                                 if done is not None:
                                     return done
-                                tried_split = True
+                                self.furthest_root = saved_furthest
                                 break
-                    if not tried_split:
-                        self.fail(proof, said)
+                    self.fail(proof, said)
                     return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
                 rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
@@ -707,7 +714,7 @@ class Prover:
                     trial = proof + [f"t carry {k}"]
                     if self.ask(trial).startswith("refused: the value held is of another use"):
                         continue
-                    done = self.solve(trial)
+                    done = self.solve(trial, allow_split=allow_split)
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
@@ -763,10 +770,10 @@ class Prover:
                             nc = int([l for l in nxt.split("\n") if l.startswith("c ")][0].split()[1])
                             if nc <= count:
                                 continue                       # already-opened call; skip without branching
-                            done = self.solve(p_try)           # brand-new call created: follow strictly linearly
+                            done = self.solve(p_try, allow_split=allow_split) # brand-new call created: follow strictly linearly
                             return done
                         # Spec goal closed (or moved past `spec` to next instruction)!
-                        done = self.solve(p_try)
+                        done = self.solve(p_try, allow_split=allow_split)
                         if done is not None: return done
                         if self.hard_refusal or self.furthest_root > start_len: return None
                     if opened >= 3 or self.spec_fuel_hit:
@@ -775,7 +782,7 @@ class Prover:
                 for k in reversed(range(count)):
                     if self.hard_refusal: return None
                     self.spec_fuel_hit = False
-                    done = self.solve(proof + [f"t open {k}"])
+                    done = self.solve(proof + [f"t open {k}"], allow_split=allow_split)
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len:
                         return None
@@ -800,14 +807,14 @@ class Prover:
                     if ans.startswith("refused: the value held is of another use"):
                         continue
                     matched_any = True
-                    done = self.solve(trial)
+                    done = self.solve(trial, allow_split=allow_split)
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len:
                         return None
                 if not matched_any:
                     self.last, self.last_proof = before, before_proof
                 if self.hard_refusal: return None
-                done = self.solve(proof + ["t open"])           # no value held fits: the use is opened where it is met
+                done = self.solve(proof + ["t open"], allow_split=allow_split) # no value held fits: the use is opened where it is met
                 if done is not None: return done
                 if self.hard_refusal: return None
                 if not self.last or self.last.startswith("refused: the value held is of another use"):
@@ -864,13 +871,31 @@ def prove(spec_text, targets, statement_out, out):
             else:
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
+        max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "15000"))
+        timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "30"))
+        fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
             p = Prover(statement_out, done + [f"for {symbol}"] + places(clean_places_text, keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
+                       budget=max_asks if max_asks > 0 else None, until=fn_deadline,
                        trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs)
             p.last = ""
             p.last_proof = []
-            try: proof = p.solve([])
+            try:
+                proof = p.solve([], allow_split=False)
+                if proof is None and p.saw_undecided_below and not p.hard_refusal:
+                    p.furthest_root = 0
+                    p.spec_fuel_hit = False
+                    proof = p.solve([], allow_split=True)
+            except GaveUp:
+                fin_last = p.best_last or p.last or "prover search budget exceeded"
+                fin_proof = p.best_last_proof if p.best_last is not None else p.last_proof
+                p.close()
+                with open(out, "w") as f: f.write("\n".join(p.lines + fin_proof) + "\n")
+                raise SystemExit(
+                    f"prove: no proof of {symbol} found (search budget exceeded after {p.runs} verifier queries; "
+                    f"set ODE_PROVE_TIMEOUT/ODE_PROVE_MAX_ASKS to raise). The verifier's last word:\n{fin_last}"
+                )
             except Unkept as e:
                 keep[e.args[0]] = [r for r in keep.get(e.args[0], reg_list) if r != reg_list[e.args[1]]]
                 runs += p.runs

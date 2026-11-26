@@ -1205,19 +1205,22 @@ def pack_verified(
     includes=None,
     verify_bin=None,
     existing_bundle_proof=None,
+    c_abi=False,
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
     Accepts either a unified `.ode` file (single-function or multi-function with local callees
     and custom `calling { ... }`, `spec_path=None`) or a legacy `(source_path, spec_path)` pair.
-    Refuses contractless functions loudly.
+    Refuses contractless functions loudly. When `c_abi=True`, forces pure C ABI on the exported
+    entry function for legacy C/Rust FFI callers while all Ode-to-Ode calls keep Ode's fast calling
+    convention.
     """
     import ode_unified
     src_text = odec.read_source(source_path)
     unified = ode_unified.is_unified(src_text)
 
     if unified:
-        parsed = ode_unified.parse_unified(src_text, source_path)
+        parsed = ode_unified.parse_unified(src_text, source_path, c_abi_fn=(fn_name if c_abi else None))
         arch, _, _, fns = odec.source(src_text, source_path, target=target)
         if not fns:
             raise ValueError(f"{source_path}: no `fn` found for target {target!r}")
