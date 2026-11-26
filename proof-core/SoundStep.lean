@@ -2178,11 +2178,18 @@ theorem Flag.below_holds {ρ : Nat → Int} {a b : Row} {x : Nat} (h : x = if ev
 theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State}
     (H : Holds ctx s0 ρ s st) (c : Int) (h1 : -(ctx.contract.stack : Int) ≤ c) (h2 : c + 8 ≤ 0)
     (a : Nat) (ha : (a : Int) = (s0.reg RSP : Int) + c) (x : Nat) (xr : Row) (hx : x < M64) (hxr : (x : Int) = ev ρ xr) :
-    Holds ctx s0 ρ { s with spill := [], range := none,
+    Holds ctx s0 ρ { s with spill := [],
                             frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o),
                             frameW := s.frameW.filter fun (o, _) => decide (o + 4 ≤ c) || decide (c + 8 ≤ o) }
       { st with mem := store st.mem a x 8 } where
-  range := fun _ h => nomatch h
+  range rg hrg := by
+    obtain ⟨name, r, n, params, bx, bb, hi, g1, g2, g3, g4, g5⟩ := H.range rg hrg
+    refine ⟨name, r, n, params, bx, bb, hi, g1, g2, g3, g4, fun j hj1 hj2 => ?_⟩
+    have hs := E.stack
+    have ho := (E.out (List.mem_of_getElem? g1)).2
+    show Value ctx.defs _ bb (.int (store st.mem a x 8 (s0.reg r + j)))
+    rw [store_other _ _ _ _ _ (by omega)]
+    exact g5 j hj1 hj2
   vecIntact := H.vecIntact
   entry := H.entry
   data := H.data
@@ -2253,10 +2260,10 @@ theorem Holds.write {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0
   known := H.known
 
 theorem WF.write {s : Sym} (wf : WF ctx s) (c : Int) (xr : Row) (hb : bounded s.nvars xr) :
-    WF ctx { s with spill := [], range := none,
+    WF ctx { s with spill := [],
                     frame := (c, xr) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o),
                     frameW := s.frameW.filter fun (o, _) => decide (o + 4 ≤ c) || decide (c + 8 ≤ o) } where
-  range := fun _ h => nomatch h
+  range := wf.range
   base := wf.base
   reg := wf.reg
   zf := wf.zf

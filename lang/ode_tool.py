@@ -273,9 +273,18 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
             f"raise `stack N` in the contract or tail-call a `stack 0` helper with `jmp`/`b`"
         )
     if "need entail" in reason:
+        if row and re.match(r"^\s*sub\b", row.get("asm", "")):
+            return (
+                "hint: unsigned `sub` requires operand >= subtrahend (no underflow); guard before subtracting or, "
+                "in branchless `cmov*`/`csel` code, shift intermediate values up by a positive constant +K and subtract K at the end"
+            )
         return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
     if "need below" in reason:
-        return "hint: if a specification `if` condition tests this inequality, branch on it in code (using a join-point `place { ... }` to merge sequential branches) or strengthen the loop `place { ... }` invariant"
+        return (
+            "hint: if a specification `if` condition tests this inequality, test it with a branch or conditional select "
+            "(`cmov*`/`csel`), using a join-point `place { ... }` (without `decreases`) to merge sequential paths, "
+            "or strengthen the loop `place { ... }` invariant"
+        )
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:

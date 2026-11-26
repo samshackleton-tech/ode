@@ -7,7 +7,6 @@
   "native_harness": "paper/EXPERIMENTS/tasks/ct_base64_decode_native.c",
   "entry_fn": "ct_base64_decode",
   "expected_contract_id": "5ibuszg65c23xbxdcscfcsjfpw3w3xju3hi672yvtmecj7y7e2dq",
-  "skip_verify2": true,
   "input_bytes_per_call": 256,
   "contract_header": "use spec = \"ct_base64_decode_spec.ode\"\n\nfn ct_base64_decode(out: 192 bytes, src: n bytes, n: number)\n    requires no_overlap(out, src)\n    requires n >= 256\n    requires n <= 256\n    ensures out = spec.b64_decode(src)\n    returns spec.b64_valid(src)\n    trace depends on n\n    stack 64\n",
   "task_summary": "Implement `ct_base64_decode(out, src, n)`, a constant-time RFC 4648 Standard Base64 block decoder that decodes 256 input characters in `src` into 192 output bytes in `out` (`ensures out = spec.b64_decode(src)`) and returns `1` if every byte of `src` is a valid Standard Base64 character (`'A'..'Z'`, `'a'..'z'`, `'0'..'9'`, `'+'`, `'/'`) or `0` otherwise (`returns spec.b64_valid(src)`). Because `trace depends on n` excludes every byte of `src` from the execution trace, neither control flow nor memory addresses may depend on any input byte — use branchless arithmetic or hardware conditional select (`cmov*` on x86-64, `csel` on AArch64) instead of branches or byte-indexed lookup tables. Your goal is BOTH full verification (`shown`) AND maximum decoding throughput (lowest cycles per 256-byte block).",

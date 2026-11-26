@@ -204,6 +204,7 @@ def parse_statement(path):
                     "atleast": [],
                     "linpre": [],
                     "returns": None,
+                    "ensures": [],
                     "stack": 0,
                     "hidden": set(),
                     "argregs": None,
@@ -222,8 +223,17 @@ def parse_statement(path):
                     cur["args"].append((parts[1], "number", None))
                 elif len(parts) == 4 and parts[2] == "bytes":
                     cur["args"].append((parts[1], "bytes", parts[3]))
+                elif len(parts) == 4 and parts[2] == "out":
+                    cur["args"].append((parts[1], "out", parts[3]))
                 else:
                     raise Refuse(f"unsupported arg form in verify2: {line}")
+            elif kw == "ensures":
+                rest = line[len("ensures "):].strip()
+                run_nm, exprs_txt = rest.split(None, 1)
+                es = parse_sexpr("(" + exprs_txt + ")")
+                if len(es) != 3:
+                    raise Refuse(f"malformed ensures line in verify2: {line}")
+                cur["ensures"].append((run_nm, es[0], es[1], es[2]))
             elif kw == "requires":
                 cur["requires"].append(parse_sexpr(line[len("requires "):]))
             elif kw == "below":
@@ -276,7 +286,8 @@ def parse_proof(path):
                 cur_place = None
             elif kw in ("place", "join"):
                 pc = int(parts[1])
-                cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(), "decreases": None, "is_join": (kw == "join")}
+                cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(),
+                             "decreases": None, "wrote": None, "is_join": (kw == "join")}
                 cur["places"][pc] = cur_place
             elif kw == "name" and cur_place is not None:
                 cur_place["names"].append((parts[1], parts[2]))
@@ -288,6 +299,14 @@ def parse_proof(path):
                 cur_place["marked"].update(parts[1:])
             elif kw == "decreases" and cur_place is not None:
                 cur_place["decreases"] = parse_sexpr(line[len("decreases "):])
+            elif kw in ("wrote", "wrote_pre") and cur_place is not None:
+                rest = line[len(kw):].strip()
+                run_nm, expr_txt = rest.split(None, 1)
+                ex = parse_sexpr(expr_txt)
+                if not (isinstance(ex, tuple) and len(ex) == 3 and ex[0] == "index"
+                        and isinstance(ex[1], tuple) and len(ex[1]) >= 2 and ex[1][0] == "call"):
+                    raise Refuse(f"malformed `{kw}` line in verify2: {line}")
+                cur_place["wrote"] = (run_nm, ex[2], ex[1][1], ex[1][2:], kw == "wrote_pre")
             elif kw == "t":
                 cur_place = None
                 tag = parts[1]
@@ -486,7 +505,8 @@ class Verifier:
             if bop in ("%", "/"):
                 if rv[1] or rv[0] <= 0:
                     raise Refuse(f"unsupported divisor in `{bop}`: {rv}")
-                q, rem = state["quot_rem"](lv, rv[0], state)
+                nn = (not lv[1] and lv[0] >= 0) or (lv in state["facts"])
+                q, rem = state["quot_rem"](lv, rv[0], state, nonneg=nn, fold_const=False)
                 return rem if bop == "%" else q
             raise Refuse(f"unsupported binary spec op `{bop}`")
         if op == "call":
@@ -756,15 +776,22 @@ class Verifier:
         buf_base = {}
         buf_len = {}
         buf_clean = {}
+        out_base = {}
+        out_len = {}
         for idx, (aname, akind, alen) in enumerate(fn["args"]):
             areg = arg_regs[idx]
             if akind == "bytes":
                 env[aname] = ("buf", aname)
                 buf_base[aname] = regs[areg]
                 buf_clean[aname] = aname not in fn["hidden"]
+            elif akind == "out":
+                env[aname] = ("out", aname)
+                out_base[aname] = regs[areg]
+                out_len[aname] = int(alen)
+                buf_clean[aname] = True
             else:
                 env[aname] = regs[areg]
-            if aname not in fn["hidden"] or akind == "bytes":
+            if aname not in fn["hidden"] or akind in ("bytes", "out"):
                 marks[areg] = False
 
         for aname, akind, alen in fn["args"]:
@@ -772,6 +799,8 @@ class Verifier:
                 buf_len[aname] = env[alen] if alen in env else r_const(int(alen))
                 # Buffer sits in 64-bit address space (`base + len <= 2^64`)
                 facts.append(r_sub(r_const(M64 + 1), r_add(buf_base[aname], buf_len[aname])))
+            elif akind == "out":
+                facts.append(r_sub(r_const(M64 + 1), r_add(out_base[aname], r_const(int(alen)))))
 
         # Stack headroom: `sp >= stack_budget`
         if fn["stack"] > 0:
@@ -810,8 +839,8 @@ class Verifier:
                     cur_st["facts"].append(r_sub(r_const(255), v))
             return bc[key]
 
-        def quot_rem(x, m, cur_st, nonneg=False):
-            if not x[1]:
+        def quot_rem(x, m, cur_st, nonneg=False, fold_const=True):
+            if fold_const and not x[1]:
                 return r_const(x[0] // m), r_const(x[0] % m)
             key = (x, m)
             if key in cur_st["div_cache"]:
@@ -859,6 +888,10 @@ class Verifier:
             "buf_base": buf_base,
             "buf_len": buf_len,
             "buf_clean": buf_clean,
+            "out_base": out_base,
+            "out_len": out_len,
+            "wrote": [],      # list of (out_name, offset_row, byte_val_row)
+            "range": None,    # optional (out_name, lo_row, f_name, arg_vals_tuple, from_start)
             "get_byte": get_byte,
             "byte_cache": {},
             "quot_rem": quot_rem,
@@ -894,6 +927,10 @@ class Verifier:
                 "buf_base": st["buf_base"],
                 "buf_len": st["buf_len"],
                 "buf_clean": st["buf_clean"],
+                "out_base": st["out_base"],
+                "out_len": st["out_len"],
+                "wrote": list(st["wrote"]),
+                "range": st["range"],
                 "get_byte": st["get_byte"],
                 "byte_cache": dict(st["byte_cache"]),
                 "quot_rem": st["quot_rem"],
@@ -962,16 +999,17 @@ class Verifier:
                     k = b[0] % 64
                     if not a[1]:
                         return r_const((a[0] & M64) >> k), (ma or mb)
-                    q, _ = quot_rem(a, 1 << k, st, nonneg=True)
+                    q, _ = quot_rem(a, 1 << k, st, nonneg=True, fold_const=False)
                     return q, (ma or mb)
                 if op == "and64":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
                     if not b[1] and b[0] >= 0 and ((b[0] + 1) & b[0]) == 0:
                         d = b[0] + 1
-                        return sym_low(a, d, st), (ma or mb)
+                        _, rem = quot_rem(a, d, st, nonneg=True, fold_const=False)
+                        return rem, (ma or mb)
                     if not b[1] and b[0] == (1 << 64) - 64:
-                        q, _ = quot_rem(a, 64, st, nonneg=True)
+                        q, _ = quot_rem(a, 64, st, nonneg=True, fold_const=False)
                         return r_scale(64, q), (ma or mb)
                     raise Refuse(f"unsupported and64 mask {b}")
                 if op == "low32":
@@ -1023,6 +1061,74 @@ class Verifier:
                 raise Refuse(f"unsupported table op `{op}` in verify2")
             raise Refuse(f"unsupported table expr {ex} in verify2")
 
+        def _each_of(f_name, nargs):
+            if f_name not in self.defs:
+                return None
+            params, body = self.defs[f_name]
+            if (len(params) == nargs and isinstance(body, tuple) and len(body) == 5
+                    and body[0] == "each" and body[3] == ("num", "0")
+                    and isinstance(body[4], tuple) and len(body[4]) == 2 and body[4][0] == "num"):
+                hi = int(body[4][1])
+                if hi >= 0:
+                    return params, body[2], body[1], hi
+            return None
+
+        def _wrote_at(wrote_list, run_nm, place_row):
+            for w_nm, o_row, b_val in wrote_list:
+                if w_nm == run_nm:
+                    d = r_sub(o_row, place_row)
+                    if not d[1] and d[0] == 0:
+                        return b_val
+            return None
+
+        def _range_shown(pl, penv, cur_st):
+            if pl.get("wrote") is None:
+                return
+            run_nm, lo_e, f_name, arg_es, from_start = pl["wrote"]
+            if run_nm not in cur_st["out_len"]:
+                raise Refuse(f"place wrote names unknown out buffer `{run_nm}`")
+            lo_val = self.as_num(self.eval_sexpr(lo_e, penv, cur_st, stream), penv, cur_st, stream)
+            vs = tuple(self.eval_sexpr(ae, penv, cur_st, stream) for ae in arg_es)
+            eo = _each_of(f_name, len(vs))
+            if eo is None:
+                raise Refuse(f"place wrote `{f_name}` is not an `(each ... 0 hi)` list definition")
+            params, x_var, body, hi = eo
+            if cur_st["out_len"][run_nm] < hi:
+                raise Refuse("place wrote exceeds output buffer length")
+            self.entail(cur_st["facts"], lo_val, stream)
+            rg = cur_st["range"]
+            if rg is not None and rg[0] == run_nm and rg[2] == f_name and rg[3] == vs and rg[4] == from_start:
+                base = rg[1]
+            else:
+                base = r_const(0) if from_start else r_const(hi)
+            diff = r_sub(lo_val, base) if from_start else r_sub(base, lo_val)
+            if diff[1] or diff[0] < 0 or diff[0] > 64:
+                raise Refuse("place wrote step is not a constant in 0..64")
+            count = diff[0]
+            start = base if from_start else lo_val
+            for k_step in range(count):
+                here = r_add(start, r_const(k_step))
+                b_val = _wrote_at(cur_st["wrote"], run_nm, here)
+                if b_val is None:
+                    raise Refuse(f"place wrote: byte at offset +{k_step} not known written")
+                benv = dict(zip(params, vs))
+                benv[x_var] = here
+                ev_b = self.eval_sexpr(body, benv, cur_st, stream)
+                if not self.is_row(ev_b):
+                    raise Refuse("place wrote: list element is not a number")
+                self.entail(cur_st["facts"], r_sub(ev_b, b_val), stream)
+                self.entail(cur_st["facts"], r_sub(b_val, ev_b), stream)
+
+        def _suppose_range(pl, penv, cur_st):
+            if pl.get("wrote") is None:
+                return
+            run_nm, lo_e, f_name, arg_es, from_start = pl["wrote"]
+            if run_nm not in cur_st["out_len"]:
+                raise Refuse(f"place wrote names unknown out buffer `{run_nm}`")
+            lo_val = self.as_num(self.eval_sexpr(lo_e, penv, cur_st, stream), penv, cur_st, stream)
+            vs = tuple(self.eval_sexpr(ae, penv, cur_st, stream) for ae in arg_es)
+            cur_st["range"] = (run_nm, lo_val, f_name, vs, from_start)
+
         def run_path(pc, st, origin_place=None, origin_dec=None, visited_places=frozenset(),
                      base_st=None, jstack=frozenset(), jdone=None, at_entry=False):
             if jdone is None:
@@ -1054,6 +1160,7 @@ class Verifier:
                                 penv[nm] = arr_st["regs"][rn]
                             for fct in pl["facts"]:
                                 self.check_fact(fct, penv, arr_st, stream)
+                            _range_shown(pl, penv, arr_st)
                         if pc in jdone:
                             _check_arrive_join(jdone[pc], st)
                             return
@@ -1073,6 +1180,8 @@ class Verifier:
                         # Build generalized join state from scope-bounded `first_j`
                         gj = clone(first_j)
                         gj["neq"] = []
+                        gj["wrote"] = []
+                        gj["range"] = None
                         base_v = gj["nvars"]
                         gj["nvars"] += len(reg_names)
                         for r_idx, r in enumerate(reg_names):
@@ -1088,6 +1197,7 @@ class Verifier:
                             penv2[nm] = gj["regs"][rn]
                         for fct in pl["facts"]:
                             self.assume_fact(fct, penv2, gj, stream)
+                        _suppose_range(pl, penv2, gj)
                         run_path(pc, gj, origin_place, origin_dec, visited_places | {pc}, base_st, jstack | {pc}, jdone)
                         jdone[pc] = first_j
                         return
@@ -1096,6 +1206,7 @@ class Verifier:
                         penv[nm] = st["regs"][rn]
                     for fct in pl["facts"]:
                         self.check_fact(fct, penv, st, stream)
+                    _range_shown(pl, penv, st)
                     if origin_place == pc and pl["decreases"] is not None:
                         new_dec = self.eval_sexpr(pl["decreases"], penv, st, stream)
                         self.entail(st["facts"], r_sub(r_sub(origin_dec, new_dec), r_const(1)), stream)
@@ -1112,6 +1223,8 @@ class Verifier:
                     pst["facts"] = list(st["facts"])
                     pst["eqs"] = list(st["eqs"])
                     pst["neq"] = []
+                    pst["wrote"] = []
+                    pst["range"] = None
                     pst["place_entry_fq"] = frozenset(o for o, (_, mk) in st["stack_mem"].items() if not mk)
                     base_v = pst["nvars"]
                     pst["nvars"] += len(reg_names)
@@ -1128,6 +1241,7 @@ class Verifier:
                         penv2[nm] = pst["regs"][rn]
                     for fct in pl["facts"]:
                         self.assume_fact(fct, penv2, pst, stream)
+                    _suppose_range(pl, penv2, pst)
                     dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, stream) if pl["decreases"] is not None else None
                     if dec_val is not None:
                         self.entail(pst["facts"], dec_val, stream)
@@ -1258,6 +1372,45 @@ class Verifier:
                                 raise Refuse("non-constant stack store offset")
                             st["stack_mem"][off_row[0]] = (val, mk)
                             st["min_sp"] = min(st["min_sp"], off_row[0])
+                        elif lhs[0] == "call" and lhs[1] == "mem8":
+                            base, mb = eval_table_expr(lhs[2][0], bind, st)
+                            disp, md = eval_table_expr(lhs[2][1], bind, st)
+                            if mb or md:
+                                raise Refuse("mem8 store address depends on values kept out of the trace")
+                            addr = r_add(base, disp)
+                            def _counted_from_out(obase):
+                                vs = [i for i, cf in enumerate(obase[1]) if cf != 0]
+                                return (obase[0] == 0 and len(vs) == 1 and obase[1][vs[0]] == 1
+                                        and vs[0] < len(addr[1]) and addr[1][vs[0]] == 1)
+                            matched_out = None
+                            for onm, obase in st["out_base"].items():
+                                if _counted_from_out(obase):
+                                    matched_out = (onm, r_sub(addr, obase))
+                                    break
+                            if matched_out is None:
+                                raise Refuse("mem8 store address does not fall in any output buffer")
+                            onm, off = matched_out
+                            self.entail(st["facts"], off, stream)
+                            self.entail(st["facts"], r_sub(r_const(st["out_len"][onm] - 1), off), stream)
+                            self.entail(st["facts"], val, stream)
+                            self.entail(st["facts"], r_sub(r_const(255), val), stream)
+                            kept_w = []
+                            for w_nm, o_prev, v_prev in st["wrote"]:
+                                if w_nm != onm:
+                                    kept_w.append((w_nm, o_prev, v_prev))
+                                else:
+                                    d = r_sub(o_prev, off)
+                                    if d[1]:
+                                        raise Refuse("mem8 store at offset not known apart from an earlier write")
+                                    if d[0] != 0:
+                                        kept_w.append((w_nm, o_prev, v_prev))
+                            rg = st["range"]
+                            if rg is not None and rg[0] == onm:
+                                if rg[4]:
+                                    self.entail(st["facts"], r_sub(off, rg[1]), stream)
+                                else:
+                                    self.entail(st["facts"], r_sub(r_sub(rg[1], off), r_const(1)), stream)
+                            st["wrote"] = [(onm, off, val)] + kept_w
                         else:
                             raise Refuse(f"unsupported lhs {lhs} in verify2")
                     elif kind == "jump":
@@ -1476,6 +1629,30 @@ class Verifier:
                                 raise Refuse("at return link register x30 may depend on values kept out of the trace")
                         for r in callee_saved:
                             self.entail_eq(st["facts"], st["regs"][r], entry_regs[r], stream)
+                        for run_nm, lo_e, hi_e, val_e in fn["ensures"]:
+                            if run_nm not in st["out_len"]:
+                                raise Refuse(f"ensures names unknown out buffer `{run_nm}`")
+                            rg = st["range"]
+                            if (rg is not None and isinstance(val_e, tuple) and len(val_e) >= 2
+                                    and val_e[0] == "call" and val_e[1] == rg[2]):
+                                vs = tuple(self.eval_sexpr(ae, env, st, stream) for ae in val_e[2:])
+                                if vs != rg[3]:
+                                    raise Refuse("ensures range arguments do not match loop place")
+                                eo = _each_of(rg[2], len(vs))
+                                if eo is None:
+                                    raise Refuse("ensures range is not an `(each ... 0 hi)` list")
+                                _, _, _, hi_n = eo
+                                lo_v = self.as_num(self.eval_sexpr(lo_e, env, st, stream), env, st, stream)
+                                top_v = self.as_num(self.eval_sexpr(hi_e, env, st, stream), env, st, stream)
+                                self.entail(st["facts"], lo_v, stream)
+                                self.entail(st["facts"], r_scale(-1, lo_v), stream)
+                                self.entail(st["facts"], r_sub(top_v, r_const(hi_n)), stream)
+                                self.entail(st["facts"], r_sub(r_const(hi_n), top_v), stream)
+                                self.entail(st["facts"], r_sub(rg[1], r_const(hi_n)) if rg[4] else r_scale(-1, rg[1]), stream)
+                                if run_nm != rg[0]:
+                                    raise Refuse("ensures names a different out buffer than loop place")
+                            else:
+                                raise Refuse(f"unsupported non-range ensures in verify2: {val_e}")
                         if fn["returns"] is not None:
                             want = self.eval_sexpr(fn["returns"], env, st, stream)
                             self.expand_eq(st["regs"][ret_reg], want, env, st, stream)

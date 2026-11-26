@@ -803,6 +803,183 @@ fn bad_branch(a: number, b: number)
                     ode_audit.pack_verified(neg_p, None, bad_o, bad_p, fn_name="bad_branch", target=target)
                 self.assertIn("kept out of the trace", str(cm.exception))
 
+    def test_10_ct_base64_decode_out_buffer_dual_verify(self):
+        """Output-buffer `ensures out = ...` + `wrote_pre` + `samebyte` + `cmov`/`csel` dual-verify on both arches."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        src_p = os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks", "ct_base64_decode_reference.ode")
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                out_o = os.path.join(d, "ct_b64.o")
+                out_p = os.path.join(d, "ct_b64.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="ct_base64_decode", target=target)
+                self.assertEqual(res["verdict"], "shown", res)
+                dump = os.path.join(d, "dump.sh")
+                st_p = os.path.join(d, "st.txt")
+                pf_p = os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertIn("shown (2 functions, verify2)", r2.stdout)
+                # Negative control: tamper ensures upper bound 192 -> 191; verify2 must refuse
+                with open(st_p, "r", encoding="utf-8") as f:
+                    st_txt = f.read()
+                bad_st = os.path.join(d, "bad_st.txt")
+                with open(bad_st, "w", encoding="utf-8") as f:
+                    f.write(st_txt.replace("ensures a0 (num 0) (num 192)", "ensures a0 (num 0) (num 191)", 1))
+                r3 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, bad_st, pf_p],
+                                    capture_output=True, text=True)
+                self.assertNotEqual(r3.returncode, 0, "tampered ensures must be refused by verify2")
+
+    def test_11_cmov_csel_custom_calling_and_stack_spill_wrote(self):
+        """`cmov`/`csel` caller invoking a custom-calling helper + stack spill inside a `wrote` loop dual-verifies."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        src = """
+def bump(c) { if c >= 10 then c - 1 else 0 }
+def out_list(src) { [bump(src[j]) % 256 for j in 0..8] }
+
+fn helper(c: number)
+    requires c < 256
+    returns bump(c)
+    stack 0
+{
+    for x86_64 calling {
+        in c = rdi
+        out = rax
+        preserves rbx, rbp, r12, r13, r14, r15, r8, r9
+    } {
+        rax := 1
+        cmp rdi, 10
+        cmovae rax, rdi
+        sub rax, 1
+        ret
+    }
+    for arm64 calling {
+        in c = x0
+        out = x0
+        preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x2, x3
+    } {
+        x10 := 1
+        cmp x0, 10
+        csel x0, x0, x10, hs
+        sub x0, x0, 1
+        ret
+    }
+}
+
+fn copy_bump(out: 8 bytes, src: n bytes, n: number)
+    requires no_overlap(out, src)
+    requires n >= 8
+    requires n <= 8
+    ensures out = out_list(src)
+    returns 1
+    trace depends on n
+    stack 32
+{
+    for x86_64 {
+        sub rsp, 24
+        mov r8, rdi
+        mov r9, rsi
+        rdx := 0
+        place {
+            fact 0 <= rdx
+            fact rdx <= 8
+            keep r8, r9
+            wrote out[.. rdx] = out_list(src)
+            decreases 8 - rdx
+        }
+    @lp:
+        cmp rdx, 8
+        jae @done
+        mov qword ptr [rsp + 0], rdx
+        mov r10, r9
+        add r10, rdx
+        movzx edi, byte ptr [r10]
+        call helper
+        rcx := 0
+        cmp rax, 0
+        cmove rcx, rax
+        mov rdx, qword ptr [rsp + 0]
+        mov r11, r8
+        add r11, rdx
+        mov byte ptr [r11], al
+        add rdx, 1
+        jmp @lp
+    @done:
+        rax := 1
+        add rsp, 24
+        ret
+    }
+    for arm64 {
+        sub sp, sp, 32
+        str x30, [sp, 0]
+        mov x2, x0
+        mov x3, x1
+        x1 := 0
+        place {
+            fact 0 <= x1
+            fact x1 <= 8
+            keep x2, x3
+            wrote out[.. x1] = out_list(src)
+            decreases 8 - x1
+        }
+    @lp:
+        cmp x1, 8
+        b.hs @done
+        str x1, [sp, 8]
+        add x9, x3, x1
+        ldrb w0, [x9, 0]
+        bl helper
+        x11 := 0
+        cmp x0, 0
+        csel x11, x0, x11, eq
+        ldr x1, [sp, 8]
+        add x10, x2, x1
+        strb w0, [x10, 0]
+        add x1, x1, 1
+        b @lp
+    @done:
+        x0 := 1
+        ldr x30, [sp, 0]
+        add sp, sp, 32
+        ret
+    }
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "t.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                out_o = os.path.join(d, "t.o")
+                out_p = os.path.join(d, "t.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="copy_bump", target=target)
+                self.assertEqual(res["verdict"], "shown", res)
+                dump = os.path.join(d, "dump.sh")
+                st_p = os.path.join(d, "st.txt")
+                pf_p = os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r1 = subprocess.run([odeverify, tab, st_p, pf_p], capture_output=True, text=True)
+                self.assertEqual(r1.returncode, 0, r1.stdout + r1.stderr)
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
+                self.assertIn("shown (2 functions, verify2)", r2.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

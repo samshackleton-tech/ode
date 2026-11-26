@@ -1846,7 +1846,7 @@ def symStmt (ctx : Ctx) (bind : Bind) (s : Sym) : Stmt → V Sym
           match locate ctx (Lin.add (signed a) (signed b)) with
           | some (.frame c) =>
             if memSize f = some 8 ∧ inFrame ctx s c = true then
-              pure { s with spill := [], range := none,
+              pure { s with spill := [],
                             frame := (c, x) :: s.frame.filter fun (o, _) => decide (o + 8 ≤ c) || decide (c + 8 ≤ o),
                             frameW := s.frameW.filter fun (o, _) => decide (o + 4 ≤ c) || decide (c + 8 ≤ o) }
             else refuse "a write that is not eight bytes of the frame in use"
@@ -5035,8 +5035,8 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c =>
       if !callFits ctx s i c then refuse "a call that is not one this function's machine makes of a function for that machine, or a stack pointer that is not shown to be a multiple of 16 at a call"
-      else if hasSelect ctx.code && (!(ctx.runsCallees.contains name || ctx.selfName == some name) || !(c.keeps == keptAt i)) then
-        refuse "a function using conditional select can only call standard-ABI helpers without computed `trace depends on` values"
+      else if hasSelect ctx.code && !(ctx.runsCallees.contains name || ctx.selfName == some name) then
+        refuse "a function using conditional select can only call helpers without computed `trace depends on` values"
       else do
       needsOf ctx s c
       let s' ← symCall ctx s name c
