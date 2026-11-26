@@ -278,8 +278,49 @@ Every experiment below runs in an isolated git worktree with a pre-registered co
   - **Static pipeline simulator (`ode advise`) accuracy on real 1,745-instruction crypto silicon (ZERO execution):**
     - **Apple M6** *(local Mac, not reserved and under no timing lock; `4.786 GHz`)*: Real silicon **`405.20 ns/256B` (`0.588 GiB/s`, `1,939.3 cyc`)** vs `ode advise` static prediction **`1,939.3 cyc` (`0.00%` error!)** — exposing `V0..V3 = 22%` utilization (`4.5×` headroom via 4-block NEON interleaving!).
     - **AMD Zen 4 (`taskset -c 2`, `5.054 GHz` turbo, `4.00 GHz` TSC):** Real silicon **`234.42 ns/256B` (`1.017 GiB/s`, `938.2 ref_cyc` = `1,184.9 core cyc`)** vs `ode advise` static prediction **`1,171.7 cyc` (`-1.1%` error!)** — exposing `FP0..FP3 = 20%` utilization (`5×–10×` headroom via 4-block `xmm` interleaving or 512-bit AVX-512 `zmm`!).
-- **Experiment design (`chacha20-v1`, running in `~/tmp/wt-chacha20-v1`, pre-reg commit `d6632d44`):** 7-model panel × 2 targets (`x86_64`, `arm64`) × 2 arms (`blind`, `advised`) = **28 cells** (`--max-rounds 8 --opt-rounds 3 --workers 16 --prover-slots 10 --tool-timeout 45 --cell-timeout 600 --max-usd 60`).
+- **Experiment design (`chacha20-v1`):** 7-model panel × 2 targets (`x86_64`, `arm64`) × 2 arms (`blind`, `advised`) = **28 cells** (`--max-rounds 8 --opt-rounds 3 --workers 16 --prover-slots 10 --tool-timeout 45 --cell-timeout 600 --max-usd 60`).
+- **Pre-registration / Results:** [`prereg-chacha20-v1.md`](prereg-chacha20-v1.md), [`results-chacha20-v1.md`](results-chacha20-v1.md) (pre-reg commit `d6632d44`).
 - **Pre-registered hypothesis:** (1) High pass rate with sub-second proving (`< 1 s` per valid 4-way ChaCha20 file); (2) `advised` models seeing `bottleneck: dependency; top ports: V0..V3=22% / FP0..FP3=20%` will interleave all 4 blocks across vector registers (and/or exploit 512-bit AVX-512 `zmm` on x86-64) to achieve **`3×–6×` real-silicon speedup** (`2.0–4.0+ GiB/s` on Apple M6 and `3.5–7.0+ GiB/s` on AMD Zen 4) over the sequential reference.
+- **Headline results (22 min wall clock, 143 rounds, `$33.84` USD):**
+  - **24/28 strict passes (85.7% — highest real-crypto pass rate yet!)**, **24/24 (100%) `NATIVE_PASS 98/98` on real silicon**, **ZERO `prover_timeout` across all 143 rounds!**
+  - **ALL 7 OF 7 MODELS PASSED (100% of the expanded panel!):**
+    - `openai/gpt-6.2-astra-pro`: **4/4 (ALL R1!)**
+    - `anthropic/claude-fable-5.2`: **4/4 (ALL R1!)**
+    - `google/gemini-4-neon`: **4/4 (ALL R1!)**
+    - `anthropic/claude-sonnet-5.5`: **4/4**
+    - `anthropic/claude-haiku-5.5`: **4/4** (`$0.27` total across all 4 cells — **and #1 fastest overall on real Apple M6!**)
+    - `moonshotai/kimi-k3.1-pro`: **3/4** (`arm64` 2/2, `x86_64 blind` 343-insn 512-bit AVX-512 for `$0.35`)
+    - `qwen/qwen3.8-2.4t-a95b`: **1/4** (`arm64 advised`: R7 `319.12 ns` sequential → saw `ode advise`'s `V0..V3 = 22%` hint → R8 **`142.49 ns`, `+124%` real-silicon speedup in one single advised round!**)
+- **Real-silicon throughput & microarchitecture discoveries (256-byte 4-way ChaCha20 keystream):**
+  - **Apple M6 (`4.786 GHz` nominal / `4.477–4.98 GHz` measured; local Mac, not reserved and under no timing lock — caveat applies):**
+    - Sequential 1-block reference (`1,745 insns`): `405.20 ns/256B` (`0.588 GiB/s`).
+    - **#1 overall — `anthropic/claude-haiku-5.5 arm64 blind R3` (`$0.05`):** **`121.87 ns/256B` (`1.956 GiB/s`, `3.32×` faster than reference!)**; `haiku arm64 advised R3`: **`122.16 ns/256B` (`1.952 GiB/s`, `3.32×`)**.
+    - **#2 overall — `moonshotai/kimi-k3.1-pro arm64 blind R3` (`$0.65`):** **`123.23 ns/256B` (`1.935 GiB/s`, `3.29×` faster!)**.
+    - **#3 — `openai/gpt-6.2-astra-pro arm64 blind R4` & `google/gemini-4-neon arm64 advised R1`:** **`131.08–131.09 ns/256B` (`1.819 GiB/s`, `3.09×` faster!)**.
+    - `anthropic/claude-fable-5.2 arm64 advised`: improved R1 `139.81 ns` → R3 **`133.35 ns/256B` (`1.788 GiB/s`, `3.04×`)**.
+    - **Why Haiku & Kimi (`121.9–123.2 ns`) beat Fable & GPT-6.2 (`131.1–133.4 ns`) by `~9.4%` with identical instruction counts (`~1,570 insns`):** All models independently discovered 4-block vertical NEON transposition in caller-saved `v0..v7, v16..v23` (zero callee-saved spills), but Haiku and Kimi emitted one full 18-instruction quarter-round at a time (letting Apple M6's OOO window overlap `QR0` of the next round with `QR3` of the previous round right at the `609 cyc` critical-path floor), whereas lock-step 4×4 interleaving (`4× add, 4× eor, 4× shl+ushr, 4× orr`) serialized round boundaries and hit Apple M6's measured `3.0 NEON ops/cyc` (`0.333 cyc/op` RTP on 8 regs) on bursts of 8 back-to-back vector shifts.
+  - **AMD Zen 4 (`taskset -c 2`, `5.054 GHz` single-core / `4.81 GHz` AVX-512 turbo, `4.00 GHz` RDTSC):**
+    - Sequential 1-block reference (`1,265 insns` 128-bit `xmm`): `234.42 ns/256B` (`1.017 GiB/s`, `938.2 ref_cyc`).
+    - **All four frontier models plus Kimi independently invented a 342–346 instruction (`2.2 KiB`) full 512-bit AVX-512 `zmm16..31` 4-way ChaCha20 kernel** using only the upper 16 ZMM registers (no `vzeroupper` needed) and **rotating `a, c, d` via `vshufi32x4` while leaving the critical-path row `b` completely unshuffled** (cutting half-round critical path from 20 to 17 cycles!):
+      - **`anthropic/claude-fable-5.2 x86_64 advised R1`**: **`333.9 ref_cyc`** (`83.82 ns/256B`, **`2.844 GiB/s`, `2.81×` faster than reference!**).
+      - **`google/gemini-4-neon x86_64 advised R4`**: **`335.1 ref_cyc`** (**`83.20 ns/256B`, `2.866 GiB/s`, `2.80×` faster!**; improved R1 `350.3` → R4 `335.1 ref_cyc`).
+      - **`openai/gpt-6.2-astra-pro x86_64 advised R5`**: **`334.9 ref_cyc`** (`85.22 ns/256B`, **`2.798 GiB/s`, `2.80×` faster!**; improved R1 `349.7` → R5 `334.9 ref_cyc`).
+      - **`moonshotai/kimi-k3.1-pro x86_64 blind R3` (`$0.35`)**: **`388.3 ref_cyc`** (`96.22 ns/256B`, **`2.478 GiB/s`, `2.42×` faster!**).
+      - **`anthropic/claude-haiku-5.5 x86_64 blind R4` (`$0.06`)**: 4-way interleaved 128-bit `xmm` (`1,299 insns`) **`393.9 ref_cyc`** (`98.09 ns/256B`, **`2.431 GiB/s`, `2.38×` faster for six cents!**).
+      - `anthropic/claude-sonnet-5.5 x86_64 blind R4`: **`409.5 ref_cyc`** (`96.17 ns/256B`, `2.479 GiB/s`, `2.29×` faster!).
+  - **Direct hardware probe calibration confirmation (AMD Zen 4 & Apple M6):** Probing isolated latency & throughput chains on real AMD Zen 4 confirmed `uops_ports.json` to `0.005` cycles (`vpaddd zmm = 1.000`, `vpxord zmm = 1.000`, `vprord zmm = 2.004`, `vshufi32x4 zmm = 4.009`, `vpslld/vpsrld xmm = 1.003–1.004`, `vprord xmm = 1.995` core cycles, `vprord zmm RTP = 1.005`, `vshufi32x4 zmm RTP = 1.005`, 1 half-round unshuffled-`b` `14.117 ref_cyc` → `282.3 ref_cyc` = `356.5 core_cyc` vs `ode advise --arch zen4` `356.0 cyc`!). On Apple M6, adjacent vs separated `shl + ushr + orr` measured identical (`4.024` vs `4.001 cyc`), ruling out macro-op rotate fusion and confirming OOO round-boundary overlap + 3-op/cyc shift-burst throttling as the true mechanism behind Haiku's `9.4%` win.
+
+---
+
+## Iteration 11: `ipv4-v2` — Lean-Proved Multi-Byte `bytes` Loads (`mem16`/`mem32`/`mem64`) + Exact `symSplit` Byte Extraction (Causal A/B Re-Run)
+
+- **Lean 4 core verifier + `verify2.py` upgrade (commit `11acba1`, driven directly by `ipv4-v1`'s `6×` multi-byte `bytes` load refusals):**
+  1. **`readBytes` + `symLoad` (`Core.lean`, `SoundStep.lean` `readBytes_sound`, `SoundTrace.lean` `readBytes_flags`, `SoundMarks.lean` `hasBytes_sound`):** Generalizes `bytes`-buffer loads from 1 byte only to `1, 2, 4, 8` bytes (`b0 + 256*b1 + ...`, covering `mov r32, dword ptr`, `mov r64, qword ptr`, `ldr wD`, `ldr xD`) with full bounds and trace-mark enforcement.
+  2. **`Lin.splitMod`, `rowUpper`, and `symSplit` (`Core.lean`, `SoundWord.lean` `dot_splitMod`/`ev_splitMod`, `SoundStep.lean` `rowUpper_sound`/`symSplit_sound`):** Extracts exact Euclidean quotients and remainders from linear combinations of bounded variables (e.g. packed bytes from multi-byte loads or `(hi << 8) + lo`) without introducing fresh division variables, routed through `symLow` / `symQuot` in both `shr64` and `symAndConst`.
+  3. **Verification:** Workhorse `lake build && python3 test_sound.py -v` **55/55 jobs, 2/2 OK in `0.666 s`**, ZERO `sorry`, ZERO `maxHeartbeats`, standard axioms only, all 11 top-level theorem statements unchanged. Mirrored identically in `proof-core/verify2.py`; `proof-core/test_verify2.py` **14/14 OK** (`test_14_multibyte_bytes_load_and_exact_byte_split` verifying 32-bit & 64-bit `bytes` loads on both `x86_64` and `arm64` plus negative trace-exclusion branch control). Local Mini Lean binaries rebuilt (`24/24`).
+- **Experiment design (`ipv4-v2`, running in `~/tmp/wt-ipv4-v2`, pre-reg commit `51fac777`, `--baseline paper/EXPERIMENTS/results-ipv4-v1.json`):** Exact single-variable causal A/B re-run on `ipv4_valid` (zero change to `QUICKSTART.md` or task prompt) across the 7-model panel × 2 targets × 2 arms (`28 cells`), live `verify2.py` + `NATIVE_PASS 607/607`.
+- **Pre-registered hypothesis:** Eliminating multi-byte `bytes`-load refusals and division-variable blowup via `symSplit` will raise `ipv4_valid` strict pass rate above `ipv4-v1`'s `14/28` (and unlock `claude-sonnet` / `claude-haiku` / `gemini` cells that timed out or failed `other` in `ipv4-v1`) while maintaining `100%` live `verify2.py` dual verification and `100%` `NATIVE_PASS 607/607`.
+
 
 
 
