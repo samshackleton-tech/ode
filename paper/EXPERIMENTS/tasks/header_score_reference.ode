@@ -1,0 +1,428 @@
+use spec = "header_score_spec.ode"
+
+fn header_score(h: n bytes, n: number)
+    requires n == 16
+    returns spec.header_score(h)
+    trace depends on h, n
+    stack 0
+{
+    for x86_64 {
+        reg hp = rdi
+        reg acc = rax
+        reg b = rdx
+
+        xor eax, eax
+
+        movzx edx, byte ptr [hp]
+        cmp b, 128
+        if uge {
+            add acc, 17
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 17
+            fact s == spec.s1(h)
+        }
+        @j1:
+
+        movzx edx, byte ptr [hp + 1]
+        cmp b, 64
+        if uge {
+            add acc, 23
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 40
+            fact s == spec.s2(h)
+        }
+        @j2:
+
+        movzx edx, byte ptr [hp + 2]
+        cmp b, 200
+        if uge {
+            add acc, 31
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 71
+            fact s == spec.s3(h)
+        }
+        @j3:
+
+        movzx edx, byte ptr [hp + 3]
+        cmp b, 0
+        if eq {
+            add acc, 41
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 112
+            fact s == spec.s4(h)
+        }
+        @j4:
+
+        movzx edx, byte ptr [hp + 4]
+        cmp b, 100
+        if uge {
+            add acc, 13
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 125
+            fact s == spec.s5(h)
+        }
+        @j5:
+
+        movzx edx, byte ptr [hp + 5]
+        cmp b, 16
+        if ult {
+            add acc, 29
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 154
+            fact s == spec.s6(h)
+        }
+        @j6:
+
+        movzx edx, byte ptr [hp + 6]
+        cmp b, 180
+        if uge {
+            add acc, 37
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 191
+            fact s == spec.s7(h)
+        }
+        @j7:
+
+        movzx edx, byte ptr [hp + 7]
+        cmp b, 255
+        if eq {
+            add acc, 53
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 244
+            fact s == spec.s8(h)
+        }
+        @j8:
+
+        movzx edx, byte ptr [hp + 8]
+        cmp b, 90
+        if uge {
+            add acc, 19
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 263
+            fact s == spec.s9(h)
+        }
+        @j9:
+
+        movzx edx, byte ptr [hp + 9]
+        cmp b, 40
+        if ult {
+            add acc, 43
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 306
+            fact s == spec.s10(h)
+        }
+        @j10:
+
+        movzx edx, byte ptr [hp + 10]
+        cmp b, 150
+        if uge {
+            add acc, 11
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 317
+            fact s == spec.s11(h)
+        }
+        @j11:
+
+        movzx edx, byte ptr [hp + 11]
+        cmp b, 42
+        if eq {
+            add acc, 59
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 376
+            fact s == spec.s12(h)
+        }
+        @j12:
+
+        movzx edx, byte ptr [hp + 12]
+        cmp b, 220
+        if uge {
+            add acc, 47
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 423
+            fact s == spec.s13(h)
+        }
+        @j13:
+
+        movzx edx, byte ptr [hp + 13]
+        cmp b, 32
+        if ult {
+            add acc, 61
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 484
+            fact s == spec.s14(h)
+        }
+        @j14:
+
+        movzx edx, byte ptr [hp + 14]
+        cmp b, 75
+        if uge {
+            add acc, 29
+        }
+        place {
+            name s = rax
+            fact 0 <= s
+            fact s <= 513
+            fact s == spec.s15(h)
+        }
+        @j15:
+
+        movzx edx, byte ptr [hp + 15]
+        cmp b, 1
+        if eq {
+            add acc, 71
+        }
+        ret
+    }
+    for arm64 {
+        reg hp = x3
+        reg acc = x0
+        reg b = x2
+
+        mov hp, x0
+        mov acc, 0
+
+        ldrb w2, [hp, 0]
+        cmp b, 128
+        if hs {
+            add acc, acc, 17
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 17
+            fact s == spec.s1(h)
+        }
+        @j1:
+
+        ldrb w2, [hp, 1]
+        cmp b, 64
+        if hs {
+            add acc, acc, 23
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 40
+            fact s == spec.s2(h)
+        }
+        @j2:
+
+        ldrb w2, [hp, 2]
+        cmp b, 200
+        if hs {
+            add acc, acc, 31
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 71
+            fact s == spec.s3(h)
+        }
+        @j3:
+
+        ldrb w2, [hp, 3]
+        cmp b, 0
+        if eq {
+            add acc, acc, 41
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 112
+            fact s == spec.s4(h)
+        }
+        @j4:
+
+        ldrb w2, [hp, 4]
+        cmp b, 100
+        if hs {
+            add acc, acc, 13
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 125
+            fact s == spec.s5(h)
+        }
+        @j5:
+
+        ldrb w2, [hp, 5]
+        cmp b, 16
+        if lo {
+            add acc, acc, 29
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 154
+            fact s == spec.s6(h)
+        }
+        @j6:
+
+        ldrb w2, [hp, 6]
+        cmp b, 180
+        if hs {
+            add acc, acc, 37
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 191
+            fact s == spec.s7(h)
+        }
+        @j7:
+
+        ldrb w2, [hp, 7]
+        cmp b, 255
+        if eq {
+            add acc, acc, 53
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 244
+            fact s == spec.s8(h)
+        }
+        @j8:
+
+        ldrb w2, [hp, 8]
+        cmp b, 90
+        if hs {
+            add acc, acc, 19
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 263
+            fact s == spec.s9(h)
+        }
+        @j9:
+
+        ldrb w2, [hp, 9]
+        cmp b, 40
+        if lo {
+            add acc, acc, 43
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 306
+            fact s == spec.s10(h)
+        }
+        @j10:
+
+        ldrb w2, [hp, 10]
+        cmp b, 150
+        if hs {
+            add acc, acc, 11
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 317
+            fact s == spec.s11(h)
+        }
+        @j11:
+
+        ldrb w2, [hp, 11]
+        cmp b, 42
+        if eq {
+            add acc, acc, 59
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 376
+            fact s == spec.s12(h)
+        }
+        @j12:
+
+        ldrb w2, [hp, 12]
+        cmp b, 220
+        if hs {
+            add acc, acc, 47
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 423
+            fact s == spec.s13(h)
+        }
+        @j13:
+
+        ldrb w2, [hp, 13]
+        cmp b, 32
+        if lo {
+            add acc, acc, 61
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 484
+            fact s == spec.s14(h)
+        }
+        @j14:
+
+        ldrb w2, [hp, 14]
+        cmp b, 75
+        if hs {
+            add acc, acc, 29
+        }
+        place {
+            name s = x0
+            fact 0 <= s
+            fact s <= 513
+            fact s == spec.s15(h)
+        }
+        @j15:
+
+        ldrb w2, [hp, 15]
+        cmp b, 1
+        if eq {
+            add acc, acc, 71
+        }
+        ret
+    }
+}

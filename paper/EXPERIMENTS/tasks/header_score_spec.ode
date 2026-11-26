@@ -1,0 +1,39 @@
+// 16-field fixed-header policy risk scorer.
+// Each byte h[0..15] independently triggers one threshold or exact-match rule;
+// `header_score(h)` returns the sum of all 16 rule weights.
+
+def r0(x)  { if x < 128 then 0 else 17 }
+def r1(x)  { if x < 64  then 0 else 23 }
+def r2(x)  { if x < 200 then 0 else 31 }
+def r3(x)  { if x == 0  then 41 else 0 }
+def r4(x)  { if x < 100 then 0 else 13 }
+def r5(x)  { if x < 16  then 29 else 0 }
+def r6(x)  { if x < 180 then 0 else 37 }
+def r7(x)  { if x == 255 then 53 else 0 }
+def r8(x)  { if x < 90  then 0 else 19 }
+def r9(x)  { if x < 40  then 43 else 0 }
+def r10(x) { if x < 150 then 0 else 11 }
+def r11(x) { if x == 42 then 59 else 0 }
+def r12(x) { if x < 220 then 0 else 47 }
+def r13(x) { if x < 32  then 61 else 0 }
+def r14(x) { if x < 75  then 0 else 29 }
+def r15(x) { if x == 1  then 71 else 0 }
+
+def s1(h)  { r0(h[0]) }
+def s2(h)  { s1(h) + r1(h[1]) }
+def s3(h)  { s2(h) + r2(h[2]) }
+def s4(h)  { s3(h) + r3(h[3]) }
+def s5(h)  { s4(h) + r4(h[4]) }
+def s6(h)  { s5(h) + r5(h[5]) }
+def s7(h)  { s6(h) + r6(h[6]) }
+def s8(h)  { s7(h) + r7(h[7]) }
+def s9(h)  { s8(h) + r8(h[8]) }
+def s10(h) { s9(h) + r9(h[9]) }
+def s11(h) { s10(h) + r10(h[10]) }
+def s12(h) { s11(h) + r11(h[11]) }
+def s13(h) { s12(h) + r12(h[12]) }
+def s14(h) { s13(h) + r13(h[13]) }
+def s15(h) { s14(h) + r14(h[14]) }
+def s16(h) { s15(h) + r15(h[15]) }
+
+def header_score(h) { s16(h) }
