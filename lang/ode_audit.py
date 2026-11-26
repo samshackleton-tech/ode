@@ -1249,6 +1249,10 @@ def pack_bundle(
             except SystemExit as exc:
                 inv_rename = {v: k for k, v in rename_map.items()}
                 _raise_pack_proof_error(exc, stmt_path, raw_path, inv_rename, compiled_by_sym, full_spec_text, target)
+            except Exception as exc:
+                if type(exc).__name__ == "Stop":
+                    raise SystemExit(f"ode: decode error in `{export_orig_sym}`: {exc} (missing `ret` or empty body?)") from exc
+                raise
             with open(raw_path, "r", encoding="utf-8") as rf:
                 raw_proof = rf.read()
 
@@ -1445,6 +1449,10 @@ def pack_verified(
             _raise_pack_proof_error(
                 exc, stmt_path, out_proof, {hash_sym: orig_sym}, {orig_sym: info}, spec_text, tgt,
             )
+        except Exception as exc:
+            if type(exc).__name__ == "Stop":
+                raise SystemExit(f"ode: decode error in `{orig_sym}`: {exc} (missing `ret` or empty body?)") from exc
+            raise
 
     if glossary_out:
         os.makedirs(os.path.dirname(os.path.abspath(glossary_out)), exist_ok=True)

@@ -592,17 +592,75 @@ def _parse_single_unified(text, src="<ode>"):
             pclose = _find_matching_paren(text, after_name, src)
             raw_params_text = text[after_name + 1:pclose].strip()
             params_text, u8_reqs = ode_hl.normalize_contract_params(raw_params_text)
-            bopen = _find_open_brace(text, pclose + 1)
-            if bopen == -1:
-                raise UnifiedErr(f"{src}: line {line_no}: `fn {fname}` missing `{{`")
-            clauses_raw = text[pclose + 1:bopen].strip()
+            # Accept BOTH `fn f(...) <clauses> { ... }` AND direct `fn f(...) <clauses> for <arch> ... { ... }`
+            # without redundant outer double braces.
+            scan = pclose + 1
+            bopen = -1
+            direct_for_pos = -1
+            s_pdepth = 0
+            while scan < n:
+                ch = text[scan]
+                if ch == "/" and scan + 1 < n and text[scan + 1] == "/":
+                    nl = text.find("\n", scan)
+                    scan = n if nl == -1 else nl + 1
+                    continue
+                if ch == "(":
+                    s_pdepth += 1
+                elif ch == ")":
+                    s_pdepth = max(0, s_pdepth - 1)
+                elif s_pdepth == 0:
+                    if ch == "{":
+                        bopen = scan
+                        break
+                    if (scan == pclose + 1 or text[scan - 1].isspace()) and re.match(
+                        r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[scan:]
+                    ):
+                        direct_for_pos = scan
+                        break
+                scan += 1
+            if direct_for_pos != -1:
+                clauses_raw = text[pclose + 1:direct_for_pos].strip()
+                # Consume one or more consecutive `for <arch>[:variant] [needs/stack/calling...] { ... }` blocks
+                cur_f = direct_for_pos
+                end_f = direct_for_pos
+                while cur_f < n:
+                    cur_f = _skip_ws_and_comments(text, cur_f)
+                    if cur_f >= n or not re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[cur_f:]):
+                        break
+                    # Skip optional `calling { ... }` blocks in the `for` header, then find the body `{ ... }`
+                    fm = re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[cur_f:])
+                    hpos = cur_f + fm.end()
+                    while hpos < n:
+                        hpos = _skip_ws_and_comments(text, hpos)
+                        if hpos >= n:
+                            raise UnifiedErr(f"{src}: line {line_no}: `fn {fname}` missing `{{` for target block")
+                        if text[hpos] == "{":
+                            break
+                        cm = re.match(r"calling\b", text[hpos:])
+                        if cm:
+                            copen = _skip_ws_and_comments(text, hpos + cm.end())
+                            if copen >= n or text[copen] != "{":
+                                raise UnifiedErr(f"{src}: line {line_no}: `calling` must be followed by `{{ ... }}`")
+                            hpos = _find_matching_brace(text, copen, src) + 1
+                            continue
+                        hpos += 1
+                    fclose = _find_matching_brace(text, hpos, src)
+                    end_f = fclose + 1
+                    cur_f = end_f
+                body_start_line = text.count("\n", 0, direct_for_pos) + 1
+                body_text = text[direct_for_pos:end_f]
+                bclose = end_f - 1
+            else:
+                if bopen == -1:
+                    raise UnifiedErr(f"{src}: line {line_no}: `fn {fname}` missing `{{`")
+                clauses_raw = text[pclose + 1:bopen].strip()
+                bclose = _find_matching_brace(text, bopen, src)
+                body_start_line = text.count("\n", 0, bopen + 1) + 1
+                body_text = text[bopen + 1:bclose]
             clauses_raw = re.sub(r"^->\s*(?:u64|u8|number|void)\b\s*", "", clauses_raw)
             clauses_text = _expand_comma_requires(clauses_raw)
             if u8_reqs:
                 clauses_text = ("\n".join(u8_reqs) + ("\n" + clauses_text if clauses_text else "")).strip()
-            bclose = _find_matching_brace(text, bopen, src)
-            body_start_line = text.count("\n", 0, bopen + 1) + 1
-            body_text = text[bopen + 1:bclose]
             impls = _parse_for_blocks(body_text, fname, body_start_line, src)
 
             # Enforce non-empty contract clauses (refuse contractless `fn` loudly!)

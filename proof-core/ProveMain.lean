@@ -113,7 +113,7 @@ def stepFinishPlace (ctx : Ctx) (st : DriverState) (arr : Array Item) (p : Place
             stack := .filledBytes fenv x b w start 0 cnt s3 (fun s' => .afterRange p s' cont) :: tail }
 
 /-- Execute one pure step of the verifier driver, calling `Core` functions directly. -/
-def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) : StepOut :=
+def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool := false) : StepOut :=
   match st.stack with
   | [] => .done
   | task :: tail =>
@@ -138,9 +138,8 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) : StepOut :=
         | .ok (s', it') =>
           .next { st with next := it'.next, stack := .afterClears (fuel - 1) base seen jstack s' pc i :: tail }
     | .afterClears fuel base seen jstack s pc i =>
-      let _ := pc
       match symNext ctx s i it with
-      | .error msg => .err msg
+      | .error msg => .err (if withPc && msg.startsWith "need entail\n" then s!"{msg}at {pc}\n" else msg)
       | .ok (nexts, it') =>
         let tasks := nexts.map fun nx => StepTask.onward fuel base seen jstack nx
         .next { st with next := it'.next, stack := tasks ++ tail }
@@ -338,9 +337,9 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) : StepOut :=
 
 /-- Advance from the latest checkpoint as far as `.next` steps succeed, committing a checkpoint whenever
 `next` strictly advances while staying strictly below `arr.size` (so no committed step ever saw EOF). -/
-partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) : Except String Unit × Array DriverState :=
+partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) (withPc : Bool := false) : Except String Unit × Array DriverState :=
   let rec go (cur : DriverState) (cs : Array DriverState) : Except String Unit × Array DriverState :=
-    match stepOnce ctx cur arr with
+    match stepOnce ctx cur arr withPc with
     | .done => (.ok (), cs)
     | .err msg => (.error msg, cs)
     | .next cur' =>
@@ -419,9 +418,13 @@ def main (args : List String) : IO UInt32 := do
         done := (f.name, f.contract) :: done
     IO.println "shown"
     return 0
+  | ["--only", "--with-pc", tablePath, statementPath, headPath, name]
+  | ["--with-pc", "--only", tablePath, statementPath, headPath, name]
+  | ["--with-pc", tablePath, statementPath, headPath, name]
   | ["--only", tablePath, statementPath, headPath, name]
   | [tablePath, statementPath, headPath, name] =>
-    let onlyTarget := args.length == 5
+    let onlyTarget := args.contains "--only"
+    let withPc := args.contains "--with-pc"
     let table ← match readTable (← IO.FS.readFile tablePath) with
       | .ok t => pure t
       | .error e => say s!"{e}\n.end\n"; return 2
@@ -493,7 +496,7 @@ def main (args : List String) : IO UInt32 := do
     let mut batches : Array (Nat × Nat) := #[]
 
     let evalCurrent (curItems : Array Item) (curCkpts : Array DriverState) : (String × Bool × Array DriverState) :=
-      let (res, ckpts') := advance ctx curItems curCkpts
+      let (res, ckpts') := advance ctx curItems curCkpts withPc
       match res with
       | .error why => (s!"{why}\nin {name}", true, ckpts')
       | .ok () =>

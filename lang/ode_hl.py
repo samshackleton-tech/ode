@@ -69,6 +69,8 @@ def is_hl_body(lines):
         if any(op in s for op in (":=", "+=", "-=", "+%=", "-%=", "&=", "|=", "^=", "<<=", ">>=", "select(", ".u16(", ".u32(", ".u64(", ".u32x4(", ".u32x16(")):
             saw_hl = True
             continue
+        if saw_hl and re.match(r"^place\s*\{", s):
+            continue
         if _RAW_ASM_RE.match(s):
             return False
     return saw_hl
@@ -525,6 +527,35 @@ class HLParser:
                     facts.append(self._raw_spec_until({"maintains", "COMMA", "SEMI"}, stop_on_stmt=True))
                     if not self.maybe(","):
                         break
+            return JoinStmt(facts, t.line)
+
+        if t.val == "place" and self.i + 1 < len(self.toks) and self.toks[self.i + 1].val == "{":
+            self.i += 2
+            facts = []
+            while not self.peek("}") and not self.peek(kind="eof"):
+                if self.maybe(";"):
+                    continue
+                if self.maybe("fact") or self.maybe("maintains"):
+                    facts.append(self._raw_spec_until({"fact", "maintains", "}", "SEMI"}, stop_on_stmt=False))
+                else:
+                    fl = self.toks[self.i].line
+                    parts = []
+                    depth = 0
+                    while not self.peek(kind="eof"):
+                        cur = self.toks[self.i]
+                        if depth == 0 and (cur.val in ("}", ";") or (parts and cur.line != fl)):
+                            break
+                        if cur.val in ("(", "["):
+                            depth += 1
+                        elif cur.val in (")", "]"):
+                            depth = max(0, depth - 1)
+                        parts.append(cur.val)
+                        self.i += 1
+                    txt = _join_spec_tokens(parts).strip()
+                    if txt:
+                        facts.append(txt)
+                self.maybe(";")
+            self.take("}")
             return JoinStmt(facts, t.line)
 
         # Assignment, store, or call statement
@@ -1282,6 +1313,155 @@ def _cmp_to_fact(c):
 
 
 # ---------------------------------------------------------------------------
+# Constant `let` Folding & Liveness Helpers
+# ---------------------------------------------------------------------------
+
+def _const_eval_expr(e, env):
+    if isinstance(e, Num):
+        return e.val
+    if isinstance(e, Var) and e.name in env:
+        return env[e.name]
+    if isinstance(e, BinOp):
+        lv = _const_eval_expr(e.left, env)
+        rv = _const_eval_expr(e.right, env)
+        if lv is not None and rv is not None:
+            v = _const_eval_binop(e.op, lv, rv)
+            if v is not None and 0 <= v < (1 << 64):
+                return v
+    return None
+
+
+def _subst_consts_expr(e, env):
+    if not env:
+        return e
+    if isinstance(e, Var) and e.name in env:
+        return Num(env[e.name], e.line)
+    if isinstance(e, IndexLoad):
+        return IndexLoad(e.buf, _subst_consts_expr(e.idx, env), e.width, e.line)
+    if isinstance(e, BinOp):
+        l = _subst_consts_expr(e.left, env)
+        r = _subst_consts_expr(e.right, env)
+        if isinstance(l, Num) and isinstance(r, Num):
+            v = _const_eval_binop(e.op, l.val, r.val)
+            if v is not None and 0 <= v < (1 << 64):
+                return Num(v, e.line)
+        return BinOp(e.op, l, r, e.line)
+    if isinstance(e, Cmp):
+        return Cmp(e.op, _subst_consts_expr(e.left, env), _subst_consts_expr(e.right, env), e.line)
+    if isinstance(e, BoolOp):
+        return BoolOp(e.op, _subst_consts_expr(e.left, env), _subst_consts_expr(e.right, env), e.line)
+    if isinstance(e, NotOp):
+        return NotOp(_subst_consts_expr(e.expr, env), e.line)
+    if isinstance(e, Select):
+        return Select(_subst_consts_expr(e.cond, env), _subst_consts_expr(e.then_e, env), _subst_consts_expr(e.else_e, env), e.line)
+    if isinstance(e, Call):
+        return Call(e.name, [_subst_consts_expr(a, env) for a in e.args], e.line)
+    return e
+
+
+def _fold_const_lets(stmts):
+    """Fold pure immutable scalar constant `let m := <const>` bindings directly into `Num(k)` so
+    constant masks/shifts (`c & m`, `x >> sh`) use immediate operands and zero physical registers."""
+    mutated = _mutated_vars(stmts)
+    const_vals = {}
+
+    def walk(body, env):
+        out = []
+        cur = dict(env)
+        for st in body:
+            if isinstance(st, LetStmt):
+                ex = _subst_consts_expr(st.expr, cur)
+                if (not st.mutable) and st.name not in mutated and st.ty in (None, "u64", "u8"):
+                    kv = _const_eval_expr(ex, cur)
+                    if kv is not None:
+                        cur[st.name] = kv
+                        const_vals[st.name] = kv
+                        continue
+                out.append(LetStmt(st.name, st.ty, ex, st.mutable, st.line))
+            elif isinstance(st, AssignStmt):
+                out.append(AssignStmt(st.target, st.op, _subst_consts_expr(st.expr, cur), st.line))
+            elif isinstance(st, StoreStmt):
+                out.append(StoreStmt(st.buf, _subst_consts_expr(st.idx, cur), st.width, _subst_consts_expr(st.expr, cur), st.line))
+            elif isinstance(st, IfStmt):
+                out.append(IfStmt(_subst_consts_expr(st.cond, cur), walk(st.then_body, cur), walk(st.else_body, cur), st.line))
+            elif isinstance(st, WhileStmt):
+                out.append(WhileStmt(_subst_consts_expr(st.cond, cur), st.maintains, st.writes, st.decreases, walk(st.body, cur), st.line))
+            elif isinstance(st, ForStmt):
+                out.append(ForStmt(st.var, _subst_consts_expr(st.lo, cur), _subst_consts_expr(st.hi, cur), st.step, st.unroll, st.maintains, st.writes, st.decreases, walk(st.body, cur), st.line))
+            elif isinstance(st, ReturnStmt):
+                out.append(ReturnStmt(_subst_consts_expr(st.expr, cur) if st.expr is not None else None, st.line))
+            elif isinstance(st, ExprStmt):
+                out.append(ExprStmt(_subst_consts_expr(st.expr, cur), st.line))
+            else:
+                out.append(st)
+        return out
+
+    return walk(stmts, {}), const_vals
+
+
+def _is_simple_select(e):
+    """True when `select(cmp, t, f)` needs at most 2 scratch regs (`r10`, `r11`) on x86-64."""
+    return (
+        isinstance(e, Select)
+        and isinstance(e.cond, Cmp)
+        and isinstance(e.cond.left, (Var, Num))
+        and isinstance(e.cond.right, (Var, Num))
+        and isinstance(e.then_e, (Var, Num))
+        and isinstance(e.else_e, (Var, Num))
+    )
+
+
+def _has_select_expr(e):
+    if isinstance(e, Select):
+        return not _is_simple_select(e)
+    if isinstance(e, (BinOp, Cmp, BoolOp)):
+        return _has_select_expr(e.left) or _has_select_expr(e.right)
+    if isinstance(e, NotOp):
+        return _has_select_expr(e.expr)
+    if isinstance(e, IndexLoad):
+        return _has_select_expr(e.idx)
+    if isinstance(e, Call):
+        return any(_has_select_expr(a) for a in e.args)
+    return False
+
+
+def _has_select_stmts(stmts):
+    for st in stmts:
+        if isinstance(st, (LetStmt, AssignStmt, ExprStmt)) and _has_select_expr(st.expr):
+            return True
+        if isinstance(st, StoreStmt) and (_has_select_expr(st.idx) or _has_select_expr(st.expr)):
+            return True
+        if isinstance(st, ReturnStmt) and st.expr is not None and _has_select_expr(st.expr):
+            return True
+        if isinstance(st, IfStmt) and (_has_select_expr(st.cond) or _has_select_stmts(st.then_body) or _has_select_stmts(st.else_body)):
+            return True
+        if isinstance(st, WhileStmt) and (_has_select_expr(st.cond) or _has_select_stmts(st.body)):
+            return True
+        if isinstance(st, ForStmt) and (_has_select_expr(st.lo) or _has_select_expr(st.hi) or _has_select_stmts(st.body)):
+            return True
+    return False
+
+
+def _clobber_sensitive_vars(e):
+    """Variables read inside `e` that must NOT share a register with `dst` because `e` may write `dst`
+    before finishing reading them. Simple unary/single-var ops (`x`, `x & K`, `x << K`, `buf[x]`) can
+    safely overwrite dead `x` in place, saving both registers and `mov` instructions."""
+    if isinstance(e, (Num, Var, RawReg)):
+        return set()
+    if isinstance(e, IndexLoad) and e.width in ("u8", "u32", "u64"):
+        if isinstance(e.idx, (Num, Var)):
+            return set()
+    if isinstance(e, BinOp) and e.op in ("+", "-", "+%", "-%", "*", "/", "%", "<<", ">>", "&", "|"):
+        if isinstance(e.left, Var) and isinstance(e.right, Num):
+            return set()
+        if e.op in ("+", "+%", "*") and isinstance(e.left, Num) and isinstance(e.right, Var):
+            return set()
+        if e.op in ("+", "-", "+%", "-%", "*", "&", "|") and isinstance(e.left, Var) and isinstance(e.right, Var):
+            return {e.right.name} if e.right.name != e.left.name else set()
+    return _used_vars_expr(e)
+
+
+# ---------------------------------------------------------------------------
 # Deterministic Lowering Engine (`HLLower`)
 # ---------------------------------------------------------------------------
 
@@ -1300,6 +1480,9 @@ class HLLower:
         self.needs = set(needs) if needs else set()
 
         self.stmts = _alpha_rename_blocks(expand_unrolls(stmts, src), self.param_names)
+        self.stmts, self.const_vals = _fold_const_lets(self.stmts)
+        self.has_select = _has_select_stmts(self.stmts)
+        self.x86_scratch = list(X86_SCRATCH)
         (self.locals_order, self.local_types, self.bufs,
          self.has_calls, self.live_across_call) = _analyze_calls_and_vars(
             self.stmts, self.param_names, self.fn_names, self_name=fn_name
@@ -1373,14 +1556,15 @@ class HLLower:
                         live |= spec_vars(f)
                 elif isinstance(st, LetStmt):
                     rhs_v = _used_vars_expr(st.expr) & local_set
-                    add_interf(st.name, live | rhs_v)
+                    add_interf(st.name, live | (_clobber_sensitive_vars(st.expr) & local_set))
                     live = (live - {st.name}) | rhs_v
                 elif isinstance(st, AssignStmt):
                     rhs_v = _used_vars_expr(st.expr) & local_set
-                    add_interf(st.target, live | rhs_v)
                     if st.op == ":=":
+                        add_interf(st.target, live | (_clobber_sensitive_vars(st.expr) & local_set))
                         live = (live - {st.target}) | rhs_v
                     else:
+                        add_interf(st.target, live | rhs_v)
                         live = live | ({st.target} & local_set) | rhs_v
                 elif isinstance(st, StoreStmt):
                     live |= ((_used_vars_expr(st.idx) | _used_vars_expr(st.expr)) & local_set)
@@ -1530,7 +1714,10 @@ class HLLower:
             self.var_map.append((pname, f"param ({pty})", areg, ""))
 
         caller_pool_avail = [r for r in caller_pool_all if r not in param_regs]
-        call_safe_caller = [r for r in caller_pool_avail if r not in call_clob]
+        # On x86-64 without `select`, 2 scratch regs (`r10`, `r11`) suffice, freeing `rax` as an extra zero-stack reg!
+        if self.arch == "x86_64" and not self.has_select and "rax" not in caller_pool_avail:
+            caller_pool_avail.append("rax")
+        call_safe_caller = [r for r in caller_pool_avail if r not in call_clob and r != "rax"]
 
         # 2. Local `buf` stack arrays (aligned)
         off = 0
@@ -1602,6 +1789,8 @@ class HLLower:
                     spill_count += 1
 
         self.spills = spill_count
+        if self.arch == "x86_64" and "rax" in used_regs:
+            self.x86_scratch = ["r10", "r11"]
 
         # 4. Exact stack frame layout & alignment
         if self.arch == "x86_64":
@@ -1641,8 +1830,15 @@ class HLLower:
         self.lbl_seq += 1
         return f"@{prefix}_{self.lbl_seq}"
 
+    def _scratch_pool(self):
+        return ARM_SCRATCH if self.arch == "arm64" else self.x86_scratch
+
+    def _n_scr(self):
+        return len(self._scratch_pool())
+
     def scratch(self, idx=0):
-        return (ARM_SCRATCH if self.arch == "arm64" else X86_SCRATCH)[idx]
+        pool = self._scratch_pool()
+        return pool[idx % len(pool)]
 
     def _emit_prologue(self, line):
         if self.arch == "x86_64":
@@ -1866,7 +2062,7 @@ class HLLower:
         rreg = self._as_reg(rhs_e, tmp_idx)
         if self.arch == "x86_64":
             if rreg == dst and lhs_reg != dst:
-                tr = self.scratch(tmp_idx if self.scratch(tmp_idx) != dst else (tmp_idx + 1) % 3)
+                tr = self.scratch(tmp_idx if self.scratch(tmp_idx) != dst else (tmp_idx + 1) % self._n_scr())
                 self.emit(line, f"mov {tr}, {rreg}")
                 rreg = tr
             if lhs_reg != dst:
@@ -1912,9 +2108,9 @@ class HLLower:
             self.emit(line, f"shl {dst}, {first_b}")
         else:
             self.emit(line, f"lsl {dst}, {base}, {first_b}")
-        t2 = self.scratch((tmp_idx + 1) % (4 if self.arch == "arm64" else 3))
+        t2 = self.scratch((tmp_idx + 1) % self._n_scr())
         if t2 in (dst, base):
-            for cand in (ARM_SCRATCH if self.arch == "arm64" else X86_SCRATCH):
+            for cand in self._scratch_pool():
                 if cand not in (dst, base):
                     t2 = cand
                     break
@@ -1929,7 +2125,7 @@ class HLLower:
 
     def _eval_scalar(self, e, dst, s_idx=0):
         """Evaluate scalar expression `e` into register `dst`."""
-        n_scr = 4 if self.arch == "arm64" else 3
+        n_scr = self._n_scr()
         nxt_idx = (s_idx + 1) % n_scr
         if self.scratch(nxt_idx) == dst:
             nxt_idx = (nxt_idx + 1) % n_scr
@@ -1957,7 +2153,7 @@ class HLLower:
                 # Two byte loads -> low | (high << 8) (little-endian)
                 t_hi = self.scratch((nxt_idx + 1) % n_scr)
                 if t_hi in (dst, base):
-                    for cand in (ARM_SCRATCH if self.arch == "arm64" else X86_SCRATCH):
+                    for cand in self._scratch_pool():
                         if cand not in (dst, base):
                             t_hi = cand
                             break
@@ -2071,6 +2267,11 @@ class HLLower:
                         rreg = self._as_reg(e.right, nxt_idx)
                         self.emit(e.line, f"{mn} {dst}, {lreg}, {rreg}")
                 return
+            if e.op == "^":
+                raise HLErr(
+                    f"{self.src}: line {e.line}: bitwise XOR (`^`) is supported on vector types (`u32x4`, `u32x16`); "
+                    f"for scalar `u64` values use `&`, `|`, `<<`, `>>`, `+`, `-` (or annotate vector locals `: u32x4`)"
+                )
             raise HLErr(f"{self.src}: line {e.line}: unsupported scalar operator `{e.op}`")
         if isinstance(e, Select):
             self._eval_select(e, dst, s_idx)
@@ -2082,7 +2283,7 @@ class HLLower:
 
     def _emit_cmp(self, line, left_e, right_e, s_idx=0):
         """Emit `cmp a, b` and return whether operand order was kept (True)."""
-        n_scr = 4 if self.arch == "arm64" else 3
+        n_scr = self._n_scr()
         nxt = (s_idx + 1) % n_scr
         # If left is a constant and right is non-constant, swap and flip op at caller? No: just put left in scratch if needed.
         lreg = self._as_reg(left_e, s_idx)
@@ -2136,12 +2337,13 @@ class HLLower:
             cmp_l, cmp_op, cmp_r = cmp_r, flip, cmp_l
 
         # Pick a free scratch register for `t_expr` (distinct from `dst` and `cmp_l`/`cmp_r` if in regs)
-        pool = list(ARM_SCRATCH if self.arch == "arm64" else X86_SCRATCH)
-        avoid = {dst}
+        pool = list(self._scratch_pool())
+        cmp_regs = set()
         if isinstance(cmp_l, Var) and cmp_l.name in self.var_loc and self.var_loc[cmp_l.name][0] == "reg":
-            avoid.add(self.var_loc[cmp_l.name][1])
+            cmp_regs.add(self.var_loc[cmp_l.name][1])
         if isinstance(cmp_r, Var) and cmp_r.name in self.var_loc and self.var_loc[cmp_r.name][0] == "reg":
-            avoid.add(self.var_loc[cmp_r.name][1])
+            cmp_regs.add(self.var_loc[cmp_r.name][1])
+        avoid = {dst} | cmp_regs
 
         t_reg = None
         if isinstance(sel.then_e, Var) and self.var_loc.get(sel.then_e.name, (None,))[0] == "reg" and self.var_loc[sel.then_e.name][1] != dst:
@@ -2155,22 +2357,32 @@ class HLLower:
                 t_reg = next(cand for cand in pool if cand != dst)
             self._eval_scalar(sel.then_e, t_reg, pool.index(t_reg) if t_reg in pool else 0)
 
-        # Evaluate `f_expr` into `dst` (ZERO instructions when `f_expr` is already `dst`, e.g. `r := select(..., t, r)`!)
-        if not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", dst)):
-            # Pick a scratch index that doesn't clobber `t_reg`
-            f_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, dst)), 0)
-            self._eval_scalar(sel.else_e, dst, f_sidx)
+        # If `dst` holds one of the comparison operands (e.g., `ev` in `rax` on `return select(ev == 65535, 1, 0)`),
+        # evaluate `else_e` and `cmov`/`csel` into a scratch reg first so `cmp` still reads the original operand!
+        out_reg = dst
+        if dst in cmp_regs and not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", dst)):
+            f_reg = next((r for r in pool if r not in (t_reg, dst) and r not in cmp_regs), None)
+            if f_reg is not None:
+                out_reg = f_reg
 
-        # Emit `cmp` using scratch index avoiding `t_reg` and `dst`
-        c_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, dst)), 0)
+        # Evaluate `f_expr` into `out_reg` (ZERO instructions when `f_expr` is already `out_reg`!)
+        if not (isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", out_reg)):
+            # Pick a scratch index that doesn't clobber `t_reg` or `out_reg`
+            f_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, out_reg)), 0)
+            self._eval_scalar(sel.else_e, out_reg, f_sidx)
+
+        # Emit `cmp` using scratch index avoiding `t_reg` and `out_reg`
+        c_sidx = next((idx for idx, r in enumerate(pool) if r not in (t_reg, out_reg)), 0)
         self._emit_cmp(sel.line, cmp_l, cmp_r, c_sidx)
 
         if self.arch == "x86_64":
             cc = {"==": "e", "!=": "ne", "<": "b", "<=": "be", ">": "a", ">=": "ae"}[cmp_op]
-            self.emit(sel.line, f"cmov{cc} {dst}, {t_reg}")
+            self.emit(sel.line, f"cmov{cc} {out_reg}, {t_reg}")
         else:
             cc = {"==": "eq", "!=": "ne", "<": "lo", "<=": "ls", ">": "hi", ">=": "hs"}[cmp_op]
-            self.emit(sel.line, f"csel {dst}, {t_reg}, {dst}, {cc}")
+            self.emit(sel.line, f"csel {out_reg}, {t_reg}, {out_reg}, {cc}")
+        if out_reg != dst:
+            self.emit(sel.line, f"mov {dst}, {out_reg}")
 
     def _emit_branch(self, cond, target_lbl, jump_if_true, s_idx=0):
         """Emit macro-fused `cmp` + conditional branch (handling `&&`, `||`, `!`)."""
@@ -2402,9 +2614,16 @@ class HLLower:
             if nm in ("unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64"):
                 a = self._as_vec_reg(args[0], ty, s_idx)
                 b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
-                mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
-                      "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
-                self.emit(line, f"{mn} {dst}, {a}, {b}")
+                if self.arch == "arm64":
+                    mn, suf = {
+                        "unpacklo32": ("zip1", "4s"), "unpackhi32": ("zip2", "4s"),
+                        "unpacklo64": ("zip1", "2d"), "unpackhi64": ("zip2", "2d"),
+                    }[nm]
+                    self.emit(line, f"{mn} {dst}.{suf}, {a}.{suf}, {b}.{suf}")
+                else:
+                    mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
+                          "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
+                    self.emit(line, f"{mn} {dst}, {a}, {b}")
                 return
             if nm == "add_u32x16_data":
                 a = self._as_vec_reg(args[0], ty, s_idx)
@@ -2424,6 +2643,8 @@ class HLLower:
                 or tok not in self.fn_written_vars
             ):
                 return tok
+            if tok in self.const_vals:
+                return str(self.const_vals[tok])
             if tok in self.var_loc and self.var_loc[tok][0] == "reg":
                 return self.var_loc[tok][1]
             return tok

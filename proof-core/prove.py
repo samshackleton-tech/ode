@@ -246,6 +246,7 @@ def derive_eq(system, limit=30000, last=frozenset()):
             rows, again = list(dict.fromkeys(new)), True
             break
     rows = dict.fromkeys(rows)
+    work = 0
     while rows:
         count = {}
         for f in rows:
@@ -253,7 +254,9 @@ def derive_eq(system, limit=30000, last=frozenset()):
                 p = count.setdefault(s, [0, 0]); p[0 if a > 0 else 1] += 1
         s = min(count, key=lambda s: (s in last, count[s][0] * count[s][1], s))
         rows, pos, neg = kprove.split_rows(rows, s)
-        if len(rows) + len(pos) * len(neg) > limit: return None
+        pairs = len(pos) * len(neg)
+        work += pairs
+        if len(rows) + pairs > limit or work > limit: return None
         for p, a in pos:
             for n, b in neg:
                 g = gcd(a, b)
@@ -301,13 +304,13 @@ def refutation(system, seed=-1, quick=False):
                     if close == tried: break
                     tried = close
                     last_q = frozenset(n for f in close if f != seed_row for n, c in f.c if abs(c) > 1)
-                    found = derive_eq(close, 30000, last=last_q)
-                    if not found and len(close) <= 45:
+                    found = derive_eq(close, 12000, last=last_q)
+                    if not found and last_q and len(close) <= 45:
                         found = derive_eq(close, 1200, last=frozenset())
                     if found: break
             if not found and not quick:
                 seed_row = system[seed % len(system)]
-                for room in (30000, 300000):           # the rows near the one asked about, the quotients left for last
+                for room in (12000,):                  # the rows near the one asked about, the quotients left for last
                     tried = None
                     for steps in (1, 2, 3, 4):
                         close = near(system, seed % len(system), steps)
@@ -320,7 +323,7 @@ def refutation(system, seed=-1, quick=False):
             if not found and not quick:
                 multiplied = frozenset(n for f in rows for n, c in f.c if abs(c) > 1)
                 if multiplied: found = kprove.derive(rows, 3000, last=multiplied)
-            found = found or kprove.derive(rows, 30000)
+            found = found or kprove.derive(rows, 12000)
         FOUND[key] = found
     return FOUND[key]
 
@@ -457,9 +460,10 @@ def join_written_regs(raw_ins, at, stop_pcs, reg_list):
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=()):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=(), max_lives=None):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
+        self.max_lives = max_lives          # deterministic branch-split fuel per function (`t live` count)
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
@@ -501,7 +505,7 @@ class Prover:
         if self.session is None:
             names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
             if not names: raise SystemExit("prove: the lines before the proof name no function (`for NAME`)")
-            self.session = session.Session(self.statement, self.lines, names[-1], only=True)
+            self.session = session.Session(self.statement, self.lines, names[-1], only=True, with_pc=bool(self.wrap_pcs))
         return self.session.ask(proof)
 
     def note(self, proof, said):
@@ -597,13 +601,22 @@ class Prover:
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
                 if p is None:
                     if what == "entail" and self.wrap_pcs:
-                        with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
-                        fail_pc, _, _ = locate(self.statement, self.out)
-                        if fail_pc is not None and fail_pc in self.wrap_pcs:
+                        at_lines = [l for l in lines if l.startswith("at ")]
+                        if at_lines:
+                            fail_pc = int(at_lines[0].split()[1])
+                            if fail_pc in self.wrap_pcs:
+                                nxt_said = self.ask(proof + ["t wrap"])
+                                if nxt_said != said and not nxt_said.startswith("refused:"):
+                                    proof = proof + ["t wrap"]
+                                    continue
+                        else:
                             nxt_said = self.ask(proof + ["t wrap"])
                             if nxt_said != said and not nxt_said.startswith("refused:"):
-                                proof = proof + ["t wrap"]
-                                continue
+                                with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+                                fail_pc, _, _ = locate(self.statement, self.out)
+                                if fail_pc is not None and fail_pc in self.wrap_pcs:
+                                    proof = proof + ["t wrap"]
+                                    continue
                     self.fail(proof, said); return None
                 g_nums = [int(x) for x in raw_goals[0].split()]
                 neg_raw = " ".join([str(-1 - g_nums[0])] + [str(-x) for x in g_nums[1:]])
@@ -619,6 +632,9 @@ class Prover:
                         if pc is not None and "with no place" in msg:
                             self.last = f"at +{pc}\n{msg}"; self.last_proof = proof
                             raise NoPlace(self.last)
+                    if self.max_lives is not None and lives >= self.max_lives:
+                        self.fail(proof, said)
+                        raise GaveUp(f"{lives} live branch splits")
                     proof = proof + ["t live"]
                 else:
                     proof = proof + ["t dead"] + proof_text(p, facts, raw_facts)
@@ -767,10 +783,10 @@ class Prover:
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
-                if opened >= self.spec_max_open:
+                if opened >= self.spec_max_open or (opened >= 14 and count >= 16):
                     self.spec_fuel_hit = True
                     self.spec_fuel_proof = proof
-                    self.last = f"need spec (reached {self.spec_max_open} specification definition opens without closing goal)"
+                    self.last = f"need spec (reached {opened} specification definition opens without closing goal)"
                     self.last_proof = proof
                     return None
                 if opened >= 2:
@@ -981,14 +997,16 @@ def prove(spec_text, targets, statement_out, out):
             else:
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
-        max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "15000"))
+        max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "6000"))
+        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "250"))
         timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "0"))
         fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
             kinds = kinds_of(spec.contracts[symbol], symbol, spec.layouts) if symbol in spec.contracts else {}
             p = Prover(statement_out, done + [f"for {symbol}"] + places(clean_places_text, keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
-                       budget=max_asks if max_asks > 0 else None, until=fn_deadline,
-                       trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs)
+                       budget=max(1, max_asks - runs) if max_asks > 0 else None, until=fn_deadline,
+                       trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs,
+                       max_lives=max_lives if max_lives > 0 else None)
             p.last = ""
             p.last_proof = []
             try:
@@ -997,14 +1015,16 @@ def prove(spec_text, targets, statement_out, out):
                     p.furthest_root = 0
                     p.spec_fuel_hit = False
                     proof = p.solve([], allow_split=True)
-            except GaveUp:
+            except GaveUp as ge:
                 fin_last = p.best_last or p.last or "prover search budget exceeded"
                 fin_proof = p.best_last_proof if p.best_last is not None else p.last_proof
+                tot_runs = runs + p.runs
                 p.close()
                 with open(out, "w") as f: f.write("\n".join(p.lines + fin_proof) + "\n")
+                why = f", {ge.args[0]}" if ge.args and isinstance(ge.args[0], str) else ""
                 raise SystemExit(
-                    f"prove: no proof of {symbol} found (search budget exceeded after {p.runs} verifier queries; "
-                    f"set ODE_PROVE_TIMEOUT/ODE_PROVE_MAX_ASKS to raise). The verifier's last word:\n{fin_last}"
+                    f"prove: no proof of {symbol} found (search budget exceeded after {tot_runs} verifier queries{why}; "
+                    f"set ODE_PROVE_MAX_ASKS/ODE_PROVE_MAX_LIVES to raise). The verifier's last word:\n{fin_last}"
                 )
             except Unkept as e:
                 keep[e.args[0]] = [r for r in keep.get(e.args[0], reg_list) if r != reg_list[e.args[1]]]

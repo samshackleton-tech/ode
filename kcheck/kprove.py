@@ -115,6 +115,7 @@ def derive(system, limit=30000, last=frozenset(), order=None):
         if not f.c:
             if f.k < 0: return done(f)
         else: rows[f] = None
+    work = 0
     while rows:
         count = {}
         for f in rows:
@@ -122,7 +123,9 @@ def derive(system, limit=30000, last=frozenset(), order=None):
                 p = count.setdefault(s, [0, 0]); p[0 if a > 0 else 1] += 1
         s = min(count, key=(lambda s: (s in last, count[s][0] * count[s][1], s)) if order is None else order)
         rows, pos, neg = split_rows(rows, s)
-        if len(rows) + len(pos) * len(neg) > limit: return None
+        pairs = len(pos) * len(neg)
+        work += pairs
+        if len(rows) + pairs > limit or work > limit: return None
         for p, a in pos:
             for n, b in neg:
                 g = math.gcd(a, b)

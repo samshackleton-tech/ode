@@ -62,6 +62,40 @@ def _eval_requires(spec, contract, env):
     return True
 
 
+_B64_ALPHA = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def _extract_num_bounds(contract):
+    """Extract simple constant lower/upper bounds `[lo, hi]` on number parameters from `requires` clauses."""
+    lo, hi = {}, {}
+
+    def walk(cond):
+        if not isinstance(cond, tuple) or not cond:
+            return
+        if cond[0] == "bin" and cond[1] == "&&":
+            walk(cond[2]); walk(cond[3]); return
+        if cond[0] == "bin" and len(cond) == 4:
+            op, a, b = cond[1], cond[2], cond[3]
+            if isinstance(a, tuple) and a[0] == "name" and isinstance(b, tuple) and b[0] == "num":
+                nm, val = a[1], int(b[1])
+                if op == ">=": lo[nm] = max(lo.get(nm, val), val)
+                elif op == ">": lo[nm] = max(lo.get(nm, val + 1), val + 1)
+                elif op == "<=": hi[nm] = min(hi.get(nm, val), val)
+                elif op == "<": hi[nm] = min(hi.get(nm, val - 1), val - 1)
+                elif op == "==": lo[nm] = max(lo.get(nm, val), val); hi[nm] = min(hi.get(nm, val), val)
+            elif isinstance(a, tuple) and a[0] == "num" and isinstance(b, tuple) and b[0] == "name":
+                val, nm = int(a[1]), b[1]
+                if op == "<=": lo[nm] = max(lo.get(nm, val), val)
+                elif op == "<": lo[nm] = max(lo.get(nm, val + 1), val + 1)
+                elif op == ">=": hi[nm] = min(hi.get(nm, val), val)
+                elif op == ">": hi[nm] = min(hi.get(nm, val - 1), val - 1)
+                elif op == "==": lo[nm] = max(lo.get(nm, val), val); hi[nm] = min(hi.get(nm, val), val)
+
+    for cond in contract.get("asks", ()) or ():
+        walk(cond)
+    return lo, hi
+
+
 def _make_cases(contract, n_cases=16, seed=1):
     """Generate edge-case and random concrete inputs for a contract's arguments."""
     args = contract.get("args", ())
@@ -71,24 +105,41 @@ def _make_cases(contract, n_cases=16, seed=1):
 
     out_names = {lv["name"] for lv in contract.get("leaves", ()) or ()}
     len_vars = {k[1] for _, k in kinds if k[0] == "bytes" and isinstance(k[1], str)}
+    lo_b, hi_b = _extract_num_bounds(contract)
     rng = random.Random(seed)
 
-    # Structured edge patterns first (catches off-by-one, empty, zero/nonzero, equal/differing)
-    edge_lens = [0, 1, 2, 3, 4, 8, 16, 32]
-    patterns = ["zero", "first_nz", "last_nz", "all_ff", "ramp", "same_a", "diff_first", "diff_last"]
+    # Structured edge patterns first (catches off-by-one, empty, zero/nonzero, equal/differing, Base64/IPv4)
+    edge_lens = [0, 1, 2, 3, 4, 8, 16, 20, 32, 64]
+    patterns = [
+        "b64_valid", "b64_bad_last", "ipv4_ok", "zero", "first_nz",
+        "last_nz", "all_ff", "ramp", "same_a", "diff_first", "diff_last",
+    ]
     cases = []
 
-    for ci in range(max(n_cases * 3, 24)):
+    for ci in range(max(n_cases * 3, 32)):
         if len(cases) >= n_cases:
             break
         env = {}
-        # 1. Assign numbers (especially slice lengths) first
+        # 1. Assign numbers (respecting `requires` bounds like `n >= 256, n <= 256`)
         for name, k in kinds:
             if k[0] == "number":
-                if name in len_vars:
-                    env[name] = edge_lens[ci] if ci < len(edge_lens) else rng.randint(0, 48)
+                l = lo_b.get(name, 0)
+                h = hi_b.get(name, 48 if name in len_vars else 1000)
+                if h < l:
+                    h = l
+                cap_h = min(h, l + (64 if name in len_vars else 1000))
+                if l == h:
+                    env[name] = l
+                elif name in len_vars:
+                    cands = [v for v in edge_lens if l <= v <= cap_h]
+                    if l not in cands:
+                        cands.insert(0, l)
+                    if cap_h not in cands:
+                        cands.append(cap_h)
+                    env[name] = cands[ci] if ci < len(cands) else rng.randint(l, cap_h)
                 else:
-                    env[name] = [0, 1, 2, 7, 16, 64][ci] if ci < 6 else rng.randint(0, 1000)
+                    cands = [v for v in [l, l + 1, 0, 1, 2, 7, 16, 64, cap_h] if l <= v <= cap_h]
+                    env[name] = cands[ci] if ci < len(cands) else rng.randint(l, cap_h)
 
         # 2. Assign byte slices and word blocks
         pat = patterns[ci] if ci < len(patterns) else "rand"
@@ -99,6 +150,21 @@ def _make_cases(contract, n_cases=16, seed=1):
                 ln = k[1] if isinstance(k[1], int) else env[k[1]]
                 if name in out_names:
                     bs = [0xAA] * ln
+                elif pat == "b64_valid":
+                    bs = [_B64_ALPHA[i % 64] for i in range(ln)]
+                elif pat == "b64_bad_last":
+                    bs = [_B64_ALPHA[i % 64] for i in range(ln)]
+                    if ln > 0: bs[-1] = ord("!")
+                elif pat == "ipv4_ok" and ln >= 20:
+                    # Minimal valid 20-byte IPv4 header (version=4, ihl=5, totlen=20, valid checksum)
+                    hdr = [0x45, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x40, 0x06, 0x7A, 0xE5,
+                           0x7F, 0x00, 0x00, 0x01, 0x7F, 0x00, 0x00, 0x01]
+                    s = sum((hdr[2 * j] << 8) + hdr[2 * j + 1] for j in range(10) if j != 5)
+                    while s >> 16:
+                        s = (s & 0xFFFF) + (s >> 16)
+                    cs = (~s) & 0xFFFF
+                    hdr[10], hdr[11] = cs >> 8, cs & 0xFF
+                    bs = hdr + [0] * (ln - 20)
                 elif pat == "zero":
                     bs = [0] * ln
                 elif pat == "first_nz":

@@ -456,6 +456,176 @@ fn hl_bad_add(x: u64) -> u64
             self.assertIn("refused with a proof", str(ctx.exception))
             self.assertIn("counterexample", ctx.exception.extra_note)
 
+    def test_14_direct_fn_for_arch_and_arm64_neon_zip(self):
+        """Direct `fn ... for x86_64 { ... } for arm64 { ... }` without outer braces + NEON `zip1`/`zip2`."""
+        src = """
+def zip32_words(w) {
+    [ w[0], w[4], w[1], w[5], w[2], w[6], w[3], w[7] ]
+}
+
+fn hl_zip_demo(out: 32 bytes, src: 32 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(zip32_words(words(src)))
+    stack 0
+for x86_64 needs avx {
+    let a: u32x4 := src.u32x4(0)
+    let b: u32x4 := src.u32x4(16)
+    let lo: u32x4 := unpacklo32(a, b)
+    let hi: u32x4 := unpackhi32(a, b)
+    out.u32x4(0) := lo
+    out.u32x4(16) := hi
+}
+for arm64 {
+    let a: u32x4 := src.u32x4(0)
+    let b: u32x4 := src.u32x4(16)
+    let lo: u32x4 := unpacklo32(a, b)
+    let hi: u32x4 := unpackhi32(a, b)
+    out.u32x4(0) := lo
+    out.u32x4(16) := hi
+}
+"""
+        _dual_verify(self, src, "hl_zip_demo", check_verify2=False)
+
+    def test_15_zero_stack_x86_rax_simple_select_and_const_fold(self):
+        """5 live locals + const `let mask := 255` + `return select(s == 100, 1, 0)` fits in `stack 0` on x86-64."""
+        src = """
+fn hl_zero_stack_sel(p: n bytes, n: number) -> u64
+    requires 8 <= n, n <= 64
+    returns if p[0] + p[1] + p[2] + p[3] + p[4] == 100 then 1 else 0
+    trace depends on n
+    stack 0
+{
+    let mask := 255
+    let a := p[0] & mask
+    let b := p[1] & mask
+    let c := p[2] & mask
+    let d := p[3] & mask
+    let e := p[4] & mask
+    var s: u64 := a + b
+    s += c
+    s += d
+    s += e
+    return select(s == 100, 1, 0)
+}
+"""
+        _dual_verify(self, src, "hl_zero_stack_sel")
+
+    def test_16_place_join_alias_and_scalar_xor_diagnostic(self):
+        """`place { ... }` works as a mid-function join in High-Level Ode; scalar `^` gives a clear error."""
+        src = """
+def step_fn(x) {
+    if x < 50 then x + 10 else x + 20
+}
+
+fn hl_place_join(x: u64) -> u64
+    requires 0 <= x, x <= 100
+    returns step_fn(x)
+    trace depends on x
+{
+    var r: u64 := 0
+    if x < 50 {
+        r := x + 10
+    } else {
+        r := x + 20
+    }
+    place {
+        r == step_fn(x)
+    }
+    return r
+}
+"""
+        _dual_verify(self, src, "hl_place_join")
+
+        bad_xor = """
+fn hl_bad_xor(a: u64, b: u64) -> u64
+    requires 0 <= a, a <= 10, 0 <= b, b <= 10
+    returns a
+    trace depends on
+{
+    return a ^ b
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad_xor.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(bad_xor)
+            with self.assertRaises(Exception) as ctx:
+                ode_audit.pack_verified(
+                    p, None, os.path.join(d, "o.o"), os.path.join(d, "o.p"),
+                    fn_name="hl_bad_xor", target="x86_64", c_abi=True,
+                )
+            self.assertIn("vector types", str(ctx.exception))
+
+    def test_17_prefilter_fixed_len_out_buffer(self):
+        """Concrete pre-filter handles fixed-size `requires n >= 16, n <= 16` + `ensures out = ...`."""
+        src = """
+def copy_inc(src) {
+    [ (src[j] + 1) % 256 for j in 0..16 ]
+}
+
+fn hl_bad_copy(src: n bytes, out: 16 bytes, n: number) -> u64
+    requires n >= 16, n <= 16
+    requires no_overlap(src, out)
+    returns 0
+    ensures out = copy_inc(src)
+    trace depends on n
+{
+    for i in 0..16 {
+        out[i] := src[i]
+    }
+    return 0
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad_copy.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src)
+            with self.assertRaises(ode_audit.PackProofError) as ctx:
+                ode_audit.pack_verified(
+                    p, None, os.path.join(d, "o.o"), os.path.join(d, "o.p"),
+                    fn_name="hl_bad_copy", target="x86_64", c_abi=True,
+                )
+            self.assertIn("refused with a proof", str(ctx.exception))
+            self.assertIn("counterexample", ctx.exception.extra_note)
+
+    def test_18_deterministic_branch_fuel_max_lives(self):
+        """Deterministic `ODE_PROVE_MAX_LIVES` stops exponential sequential branch explosion cleanly."""
+        sum_terms = " + ".join(f"(if p[{i}] == 65 then 1 else 0)" for i in range(10))
+        lines = [
+            f"def count65(p) {{ {sum_terms} }}",
+            "fn hl_branch_bomb(p: n bytes, n: number) -> u64",
+            "    requires n >= 16, n <= 16",
+            "    returns count65(p)",
+            "    trace depends on n",
+            "{",
+            "    var s: u64 := 0",
+        ]
+        for i in range(10):
+            lines.append(f"    let c{i} := p[{i}]")
+            lines.append(f"    s := select(c{i} == 65, s + 1, s)")
+        lines.append("    return s")
+        lines.append("}")
+        src = "\n".join(lines) + "\n"
+        old = os.environ.get("ODE_PROVE_MAX_LIVES")
+        os.environ["ODE_PROVE_MAX_LIVES"] = "40"
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "bomb.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                with self.assertRaises(ode_audit.PackProofError) as ctx:
+                    ode_audit.pack_verified(
+                        p, None, os.path.join(d, "o.o"), os.path.join(d, "o.p"),
+                        fn_name="hl_branch_bomb", target="x86_64", c_abi=True,
+                    )
+                self.assertIn("search budget exceeded", str(ctx.exception))
+                self.assertIn("helper `fn`", ctx.exception.extra_note)
+        finally:
+            if old is None:
+                os.environ.pop("ODE_PROVE_MAX_LIVES", None)
+            else:
+                os.environ["ODE_PROVE_MAX_LIVES"] = old
+
 
 if __name__ == "__main__":
     unittest.main()
