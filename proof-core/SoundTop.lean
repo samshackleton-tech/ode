@@ -1365,24 +1365,12 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
             (∀ r, r ≠ RSP → t.reg r = (setReg s2 RSP (s0.reg RSP)).reg r) →
             t.reg RSP = s0.reg RSP + ctx.contract.slot → t.rip = ctx.contract.backTo s0 →
             ctx.contract.post ctx.defs s0 t := by
-          by_cases hsel : hasSelect ctx.code = true
-          · simp only [hsel, Bool.true_and, ↓reduceIte] at htail
-            split at htail
-            · exact (refuse_ok htail).elim
-            · split at htail
-              · exact (refuse_ok htail).elim
-              · split at htail
-                · exact (refuse_ok htail).elim
-                · intro t hm hv hr hsp hrip
-                  exact (symReturn_sound E htail (c'.q _).holds (c'.q _).wf).2 t hm hv hr
-                    (by simp [setReg, Nat.mod_eq_of_lt (E.small RSP)]; exact hsp) hrip
-          · have hsel' : hasSelect ctx.code = false := Bool.eq_false_iff.mpr hsel
-            simp only [hsel', Bool.false_eq_true, Bool.false_and, ↓reduceIte] at htail
-            split at htail
-            · exact (refuse_ok htail).elim
-            · intro t hm hv hr hsp hrip
-              exact (symReturn_sound E htail (c'.q _).holds (c'.q _).wf).2 t hm hv hr
-                (by simp [setReg, Nat.mod_eq_of_lt (E.small RSP)]; exact hsp) hrip
+          dsimp only at htail
+          split at htail
+          · exact (refuse_ok htail).elim
+          · intro t hm hv hr hsp hrip
+            exact (symReturn_sound E htail (c'.q _).holds (c'.q _).wf).2 t hm hv hr
+              (by simp [setReg, Nat.mod_eq_of_lt (E.small RSP)]; exact hsp) hrip
         apply hret s2 rfl rfl (fun r hr => by simp [setReg, hr])
         · have hs2rsp := hpost2.2.1
           simp only [afterTail] at hs2rsp
@@ -1399,9 +1387,6 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
       next hfit =>
       have hfit : callFits ctx s i c = true := by simpa using hfit
       have F := callFits_sound E H hfit
-      split at h
-      next => exact (refuse_ok h).elim
-      next =>
       obtain ⟨_, _, _, h⟩ := V.bind_ok h
       obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
       split at h
@@ -1447,8 +1432,7 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
           obtain ⟨_, ne, nl⟩ := keeps_spec hr
           rw [this, afterCall_reg F.link (callKeeps ne nl)])
         (fun s2 lf2 => by
-          let cleanRet := if hasSelect ctx.code then c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
-                          else callReturnsClean ctx (quietAtCall s c) c
+          let cleanRet := callReturnsClean ctx (quietAtCall s c) c
           let s2m : State := { s2 with marks := postCallMarks c cleanRet (afterCall p q i st) }
           have hpost_m : c.post ctx.defs (afterCall p q i st) s2m := post_fields lf2.1 rfl rfl rfl rfl
           have hdata_m : s2m.data = st.data := lf2.2
@@ -1460,10 +1444,7 @@ theorem step_runs {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} 
           obtain ⟨hrip2, ρ', c'⟩ := hpost s2m hpost_m hdata_m
           have hcont := K _ i.next ρ' (backFrom c.keeps st s2m) (List.mem_cons_self ..) hrip2
             ((c'.q _).fields rfl rfl rfl rfl rfl rfl)
-            (hafter cleanRet s2m (fun hcr => callReturnsClean_givesNumber (by
-              dsimp only [cleanRet] at hcr; split at hcr
-              · exact (Bool.and_eq_true _ _ |>.mp hcr).2
-              · exact hcr)) hqm)
+            (hafter cleanRet s2m (fun hcr => callReturnsClean_givesNumber hcr) hqm)
           exact runsPlain_of_plain (fun _ _ => post_plain) hcont _ rfl)
 
 /-- What the verifier relies on along a path, of each place the path has come to, `n` being the unknowns
@@ -2056,20 +2037,20 @@ theorem verifyOne_sound (world : List Program) (ctx : Ctx) (p : Program) (proof 
     (fun name c hl => let ⟨q, hq, hf, M⟩ := W name c hl; ⟨q, hq, hf, M.below _⟩) loaded clear pre
 
 theorem verifyOne_sound_rec (world : List Program) (pieces : List Piece) (defs : List Def)
-    (runsOk : List String) (done : List (String × Contract)) (f : Fn) (p : Program)
+    (done : List (String × Contract)) (f : Fn) (p : Program)
     (hp : findProgram world f.name = some p) (hc : p.code = f.code) (hf : p.fits)
     (I : ∀ name c, done.lookup name = some c → ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world pieces c defs q)
     (hpass : verdictOne
       { code := f.code, contract := f.contract, defs := defs, places := f.places,
         callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
         selfName := if f.contract.decreases.isSome then some f.name else none,
-        pieces := pieces, piece := f.piece, runsCallees := runsOk } f.proof = none) :
+        pieces := pieces, piece := f.piece } f.proof = none) :
     Meets world pieces f.contract defs p := by
   let ctx : Ctx :=
     { code := f.code, contract := f.contract, defs := defs, places := f.places,
       callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
       selfName := if f.contract.decreases.isSome then some f.name else none,
-      pieces := pieces, piece := f.piece, runsCallees := runsOk }
+      pieces := pieces, piece := f.piece }
   cases hdec : f.contract.decreases with
   | none =>
     have W : CalleesMeet world ctx := fun name c hl => by
@@ -2122,20 +2103,20 @@ def Linked (world : List Program) (fns : List Fn) : Prop :=
   ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ p.code = f.code ∧ p.fits
 
 theorem verdictFrom_sound (world : List Program) (pieces : List Piece) (defs : List Def) :
-    ∀ (fns : List Fn) (runsOk : List String) (done : List (String × Contract)),
+    ∀ (fns : List Fn) (done : List (String × Contract)),
     (∀ name c, done.lookup name = some c → ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world pieces c defs q) →
-    Linked world fns → verdictFrom.go pieces defs runsOk done fns = none →
+    Linked world fns → verdictFrom pieces defs done fns = none →
     ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world pieces f.contract defs p
-  | [], _, _, _, _, _ => fun f m => nomatch m
-  | f :: more, runsOk, done, I, L, h => by
-    simp only [verdictFrom.go] at h
+  | [], _, _, _, _ => fun f m => nomatch m
+  | f :: more, done, I, L, h => by
+    simp only [verdictFrom] at h
     split at h
     · cases h
     · let ctx : Ctx :=
         { code := f.code, contract := f.contract, defs := defs, places := f.places,
           callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
           selfName := if f.contract.decreases.isSome then some f.name else none,
-          pieces := pieces, piece := f.piece, runsCallees := runsOk }
+          pieces := pieces, piece := f.piece }
       cases hv : verdict ctx f.proof with
       | some why => simp [ctx, hv] at h
       | none =>
@@ -2145,7 +2126,7 @@ theorem verdictFrom_sound (world : List Program) (pieces : List Piece) (defs : L
           unfold verdict at hv; cases hv1 : verdictOne ctx f.proof with
           | none => rfl
           | some _ => rw [hv1] at hv; cases hv
-        have M : Meets world pieces f.contract defs p := verifyOne_sound_rec world pieces defs runsOk done f p hp hc hf I hpass1
+        have M : Meets world pieces f.contract defs p := verifyOne_sound_rec world pieces defs done f p hp hc hf I hpass1
         have I' : ∀ name c, ((f.name, f.contract) :: done).lookup name = some c →
             ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world pieces c defs q := by
           intro name c hl
@@ -2163,7 +2144,7 @@ theorem verdictFrom_sound (world : List Program) (pieces : List Piece) (defs : L
         intro g m
         cases m with
         | head => exact ⟨p, hp, M⟩
-        | tail _ m => exact verdictFrom_sound world pieces defs more _ _ I' (fun g m => L g (List.mem_cons_of_mem _ m)) h g m
+        | tail _ m => exact verdictFrom_sound world pieces defs more _ I' (fun g m => L g (List.mem_cons_of_mem _ m)) h g m
 
 /-- **What the verifier's yes of a statement stands for.** If the verifier says yes of the functions of a
 statement, whatever the proofs are, then every one of them meets its contract: given only that the
@@ -2175,7 +2156,7 @@ any addresses, and nothing the function may write is of the program's own bytes)
 theorem verify_all_sound (world : List Program) (pieces : List Piece) (defs : List Def) (fns : List Fn) (L : Linked world fns)
     (h : verdictAll pieces defs fns = none) :
     ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧ Meets world pieces f.contract defs p :=
-  verdictFrom_sound world pieces defs fns [] [] (fun name c hl => by simp [List.lookup] at hl) L h
+  verdictFrom_sound world pieces defs fns [] (fun name c hl => by simp [List.lookup] at hl) L h
 
 /-! ## Two-run lockstep trace and result soundness (`verify_all_trace`, `verify_all_result`) -/
 
@@ -3369,7 +3350,7 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
         next => exact (refuse_ok htail).elim
         next hcq =>
         have hcq : callQuiet ctx (quietAtCall s1 c) c = true := by simpa using hcq
-        simp only [hno, Bool.false_eq_true, ↓reduceIte, Bool.false_and] at htail
+        dsimp only at htail
         split at htail
         next => exact (refuse_ok htail).elim
         next hretq =>
@@ -3530,7 +3511,6 @@ theorem step_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : Sta
       have hfit : callFits ctx s i c = true := by simpa using hfit
       have Fa := callFits_sound Ea Ha hfit
       have Fb := callFits_sound Eb Hb hfit
-      simp only [hno, Bool.false_eq_true, Bool.false_and, ↓reduceIte] at h
       obtain ⟨_, _, _, h⟩ := V.bind_ok h
       obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
       split at h
@@ -4089,307 +4069,391 @@ theorem retReg_of_resultFollowsTrace {c : Contract} (h : c.resultFollowsTrace = 
   | none => rfl
   | some r => simp [hr]
 
-/-- Single-run mark-tracked execution parameterized by per-callee preserved register lists (`keptOf name`),
-allowing constant-time functions using `cmov`/`csel` to call helpers with custom calling conventions. -/
-inductive RunsK (world : List Program) (keptOf : String → List Nat) : Perm → Program → (State → Prop) → State → Prop where
-  | step (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr) :
+
+/-- Reusable post-call `Alike` lemma: if `sta`/`stb` are `Alike` with `RSP` unmarked, and the callee's
+postconditions hold on `s2a`/`s2b` with matching traces (and matching `c.retReg` when `cr = true`), then
+`backFrom c.keeps sta { s2a with marks := postCallMarks c cr ... }` and its counterpart are `Alike`. -/
+theorem backFrom_postCallMarks_alike {p q : Program} {i : Instr} {c : Contract} {defs : List Def}
+    {sta stb s2a s2b : State} {cr : Bool}
+    (hsbok : c.stackBitsOk = true) (hlink : callLink i = c.link)
+    (A : Alike sta stb) (hrspa : sta.marks.reg RSP = false)
+    (hta : c.traceAgree defs (afterCall p q i sta) (afterCall p q i stb))
+    (hpa : c.post defs (afterCall p q i sta) s2a) (hpb : c.post defs (afterCall p q i stb) s2b)
+    (hda : s2a.data = sta.data) (hdb : s2b.data = stb.data)
+    (htr : s2a.trace = s2b.trace) (hret : cr = true → s2a.reg c.retReg = s2b.reg c.retReg) :
+    Alike (backFrom c.keeps sta { s2a with marks := postCallMarks c cr (afterCall p q i sta) })
+          (backFrom c.keeps stb { s2b with marks := postCallMarks c cr (afterCall p q i stb) }) := by
+  have Ac : Alike (afterCall p q i sta) (afterCall p q i stb) := afterCall_alike A (fun _ => hrspa)
+  let s2am : State := { s2a with marks := postCallMarks c cr (afterCall p q i sta) }
+  let s2bm : State := { s2b with marks := postCallMarks c cr (afterCall p q i stb) }
+  have hmk_eq : s2am.marks = s2bm.marks := by
+    have hsp_eq : (afterCall p q i sta).reg RSP = (afterCall p q i stb).reg RSP := hta.2.2.2.1
+    have hout_eq : ∀ addr, c.inOut (afterCall p q i sta) addr = c.inOut (afterCall p q i stb) addr := by
+      intro addr
+      unfold Contract.inOut
+      have hall : ∀ x ∈ c.outs,
+          (decide ((afterCall p q i sta).reg x.2.1 ≤ addr) && decide (addr < (afterCall p q i sta).reg x.2.1 + x.2.2)) =
+          (decide ((afterCall p q i stb).reg x.2.1 ≤ addr) && decide (addr < (afterCall p q i stb).reg x.2.1 + x.2.2)) := by
+        intro ⟨nm, r, n⟩ hm
+        have hr_cl : r ∈ c.cleanAtEntry := by
+          have hcl : ∀ args regs, (nm, r, n) ∈ outsIn args regs → r ∈ cleanIn c args regs := by
+            intro args; induction args with
+            | nil => intro regs h; cases h
+            | cons ak more ih =>
+              intro regs h; cases regs with
+              | nil => cases ak.2 <;> simp [outsIn] at h
+              | cons r0 rs =>
+                cases ak with
+                | mk nm0 k0 =>
+                  cases k0 with
+                  | out n0 =>
+                    simp only [outsIn, List.mem_cons] at h
+                    simp only [cleanIn, List.mem_append, List.mem_singleton]
+                    rcases h with h1 | h2
+                    · injection h1 with _ h1; injection h1 with h1 _; exact Or.inl h1
+                    · exact Or.inr (ih rs h2)
+                  | inout n0 =>
+                    simp only [outsIn, List.mem_cons] at h
+                    simp only [cleanIn, List.mem_append, List.mem_singleton]
+                    rcases h with h1 | h2
+                    · injection h1 with _ h1; injection h1 with h1 _; exact Or.inl h1
+                    · exact Or.inr (ih rs h2)
+                  | number | bytes _ | fixed _ | valArray _ _ =>
+                    simp only [outsIn] at h
+                    simp only [cleanIn, List.mem_append]
+                    exact Or.inr (ih rs h)
+          exact List.mem_cons_of_mem RSP (hcl c.args c.argRegs hm)
+        have heq := hta.2.2.2.2.2.1 r hr_cl
+        simp [heq]
+      have any_congr : ∀ (l : List (String × Nat × Nat)) (f g : String × Nat × Nat → Bool),
+          (∀ x ∈ l, f x = g x) → l.any f = l.any g := by
+        intro l f g hfg; induction l with
+        | nil => rfl
+        | cons x xs ih => simp only [List.any_cons, hfg x (List.mem_cons_self ..), ih (fun y hy => hfg y (List.mem_cons_of_mem _ hy))]
+      exact any_congr c.outs _ _ hall
+    have hstack_eq : c.stackAt (afterCall p q i sta) = c.stackAt (afterCall p q i stb) :=
+      stackAt_eq_of_traceAgree hsbok hta
+    have hfr_eq : ∀ addr, c.inFrame (afterCall p q i sta) addr = c.inFrame (afterCall p q i stb) addr := by
+      intro addr; simp [Contract.inFrame, hsp_eq, hstack_eq]
+    have hmem_mk : (afterCall p q i sta).marks.mem = (afterCall p q i stb).marks.mem :=
+      congrArg Marks.mem Ac.marks
+    show postCallMarks c cr (afterCall p q i sta) = postCallMarks c cr (afterCall p q i stb)
+    unfold postCallMarks
+    congr 1
+    funext addr
+    simp [hfr_eq addr, hout_eq addr, hmem_mk]
+  have As2m : Alike s2am s2bm := by
+    refine ⟨hmk_eq, ?_, ?_, htr, ?_, (fun h => by simp [s2am, postCallMarks] at h),
+      (fun h => by simp [s2am, postCallMarks] at h), ?_, (fun _ h => by simp [s2am, postCallMarks] at h)⟩
+    · show s2a.rip = s2b.rip
+      rw [hpa.1, hpb.1]; exact hta.2.2.2.2.1
+    · show s2a.data = s2b.data
+      rw [hda, hdb]; exact A.data
+    · intro r hr
+      simp only [s2am, postCallMarks, Bool.not_eq_false', Bool.or_eq_true, Bool.and_eq_true, beq_iff_eq] at hr
+      rcases hr with rfl | ⟨hcr, rfl⟩
+      · show s2a.reg RSP = s2b.reg RSP
+        rw [hpa.2.1, hpb.2.1, hta.2.2.2.1]
+      · exact hret hcr
+    · intro addr ha
+      simp only [s2am, postCallMarks] at ha
+      cases hfr : c.inFrame (afterCall p q i sta) addr <;>
+      cases hou : c.inOut (afterCall p q i sta) addr <;>
+        simp only [hfr, hou, Bool.true_or, Bool.or_true, Bool.false_or, ↓reduceIte] at ha
+      · have hfrb : c.inFrame (afterCall p q i stb) addr = false := by
+          rw [← hfr]; simp [Contract.inFrame, hta.2.2.2.1, stackAt_eq_of_traceAgree hsbok hta]
+        have houb : c.inOut (afterCall p q i stb) addr = false := by
+          have hme : (postCallMarks c cr (afterCall p q i sta)).mem addr =
+                     (postCallMarks c cr (afterCall p q i stb)).mem addr :=
+            congrFun (congrArg Marks.mem hmk_eq) addr
+          simp only [postCallMarks, hfr, hou, Bool.false_or, Bool.false_eq_true, ↓reduceIte, hfrb] at hme
+          have ha' : (afterCall p q i sta).marks.mem addr = false := ha
+          cases hb0 : c.inOut (afterCall p q i stb) addr with
+          | false => rfl
+          | true => simp [hb0, ha'] at hme
+        show s2a.mem addr = s2b.mem addr
+        rw [hpa.2.2.2.1 addr hfr hou, hpb.2.2.2.1 addr hfrb houb]
+        exact Ac.mem addr ha
+      · cases ha
+      · cases ha
+      · cases ha
+  have hkept_a : ∀ r ∈ c.keeps, s2am.reg r = sta.reg r := fun r hr => by
+    obtain ⟨_, ne, nl⟩ := keeps_spec hr
+    show s2a.reg r = sta.reg r
+    rw [hpa.2.2.1 r hr, afterCall_reg hlink (callKeeps ne nl)]
+  have hkept_b : ∀ r ∈ c.keeps, s2bm.reg r = stb.reg r := fun r hr => by
+    obtain ⟨_, ne, nl⟩ := keeps_spec hr
+    show s2b.reg r = stb.reg r
+    rw [hpb.2.2.1 r hr, afterCall_reg hlink (callKeeps ne nl)]
+  exact backFrom_alike A As2m hkept_a hkept_b
+
+/-- Single-run trace safety using `CalleesTrace` directly (unified across all callees: no `RunsOk`,
+`keptOf`, or callee restriction needed). Every non-call step obeys `execQ`; every `call`/`tail` carries
+the callee's `MeetsBelow` + `TraceOkBelow`, single-run `traceAgree` from `Alike`, and return cleanliness. -/
+inductive RunsT (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) : State → Prop where
+  | step (s : State) (i : Instr) :
       p.fetch s.rip = some i →
-      (∀ u, execQ perm p i u s ≠ none) →
-      (∀ u s', execQ perm p i u s = some (.next s') → RunsK world keptOf perm p Q s') →
-      (∀ u s', execQ perm p i u s = some (.returned s') → Q s') →
-      RunsK world keptOf perm p Q s
-  | call (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
-      (name : String) (q : Program) (inner : Perm) (R : State → Prop) :
-      p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      (callLink i = none → 8 ≤ s.reg RSP ∧ allowed perm.write (s.reg RSP - 8) 8 = true ∧ s.marks.reg RSP = false) →
-      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
-      RunsK world keptOf inner q R (afterCall p q i s) →
-      (∀ s', R s' → ∀ r ∈ keptOf name, s'.reg r = s.reg r) →
-      (∀ s', R s' → RunsK world keptOf perm p Q (backFrom (keptOf name) s s')) →
-      RunsK world keptOf perm p Q s
-  | tail (perm : Perm) (p : Program) (Q : State → Prop) (s : State) (i : Instr)
-      (name : String) (q : Program) (inner : Perm) :
-      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
-      (∀ a, inner.read a = true → perm.read a = true) → (∀ a, inner.write a = true → perm.write a = true) →
-      RunsK world keptOf inner q Q (afterTail q s) →
-      RunsK world keptOf perm p Q s
+      (∀ u, execQ (ctx.contract.perm ctx.pieces s0) p i u s ≠ none) →
+      (∀ u s', execQ (ctx.contract.perm ctx.pieces s0) p i u s = some (.next s') → RunsT world ctx p s0 s') →
+      (∀ u s', execQ (ctx.contract.perm ctx.pieces s0) p i u s = some (.returned s') →
+        ctx.contract.resultFollowsTrace = true → s'.marks.reg 0 = false) →
+      RunsT world ctx p s0 s
+  | call (s : State) (i : Instr) (name : String) (c : Contract) (q : Program) (cleanRet : Bool) :
+      p.fetch s.rip = some i →
+      callTarget i = some name →
+      ctx.callees.lookup name = some c →
+      findProgram world name = some q →
+      c.stackBitsOk = true →
+      callLink i = c.link →
+      s.marks.reg RSP = false →
+      (∀ r m, ctx.recBound name c s0 = some (r, m) → (afterCall p q i s).reg r < m) →
+      Loaded ctx.pieces (afterCall p q i s) →
+      c.clear world ctx.pieces (afterCall p q i s) →
+      c.pre q (afterCall p q i s) →
+      MeetsBelow world ctx.pieces c ctx.defs q (ctx.recBound name c s0) →
+      TraceOkBelow world ctx.pieces c ctx.defs q (ctx.recBound name c s0) →
+      (∀ stb, Alike s stb → c.traceAgree ctx.defs (afterCall p q i s) (afterCall p q i stb)) →
+      (cleanRet = true → ∀ stb s1a s1b s2a s2b, Alike s stb →
+        Loaded ctx.pieces (afterCall p q i stb) → c.clear world ctx.pieces (afterCall p q i stb) →
+        c.pre q (afterCall p q i stb) →
+        EndsP world q (afterCall p q i s).plain s1a → EndsP world q (afterCall p q i stb).plain s1b →
+        c.post ctx.defs (afterCall p q i s) s2a → c.post ctx.defs (afterCall p q i stb) s2b →
+        s1a = s2a.plain → s1b = s2b.plain →
+        s2a.reg c.retReg = s2b.reg c.retReg) →
+      (∀ (cr : Bool) s2, (cleanRet = true → cr = true) →
+        c.post ctx.defs (afterCall p q i s) s2 → s2.data = s.data →
+        RunsT world ctx p s0 (backFrom c.keeps s { s2 with marks := postCallMarks c cr (afterCall p q i s) })) →
+      RunsT world ctx p s0 s
+  | tail (s : State) (i : Instr) (name : String) (c : Contract) (q : Program) :
+      p.fetch s.rip = some i →
+      tailTarget i = some name →
+      ctx.callees.lookup name = some c →
+      findProgram world name = some q →
+      (∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q s).reg r < m) →
+      Loaded ctx.pieces (afterTail q s) →
+      c.clear world ctx.pieces (afterTail q s) →
+      c.pre q (afterTail q s) →
+      TraceOkBelow world ctx.pieces c ctx.defs q (ctx.recBound name c s0) →
+      (∀ stb, Alike s stb → c.traceAgree ctx.defs (afterTail q s) (afterTail q stb)) →
+      (ctx.contract.resultFollowsTrace = true → ∀ stb ra rb, Alike s stb →
+        Loaded ctx.pieces (afterTail q stb) → c.clear world ctx.pieces (afterTail q stb) →
+        c.pre q (afterTail q stb) →
+        EndsP world q (afterTail q s).plain ra → EndsP world q (afterTail q stb).plain rb →
+        ra.reg 0 = rb.reg 0) →
+      RunsT world ctx p s0 s
 
-inductive EndsK (world : List Program) (keptOf : String → List Nat) : Program → State → State → Prop where
-  | ret (p : Program) (s : State) (i : Instr) (perm : Perm) (u : Nat → Nat) (s' : State) :
-      p.fetch s.rip = some i → execQ perm p i u s = some (.returned s') → EndsK world keptOf p s s'
-  | step (p : Program) (s : State) (i : Instr) (perm : Perm) (u : Nat → Nat) (s1 s' : State) :
-      p.fetch s.rip = some i → execQ perm p i u s = some (.next s1) → EndsK world keptOf p s1 s' → EndsK world keptOf p s s'
-  | call (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s1 s' : State) :
-      p.fetch s.rip = some i → callTarget i = some name → findProgram world name = some q →
-      (callLink i = none → s.marks.reg RSP = false) →
-      EndsK world keptOf q (afterCall p q i s) s1 → (∀ r ∈ keptOf name, s1.reg r = s.reg r) →
-      EndsK world keptOf p (backFrom (keptOf name) s s1) s' → EndsK world keptOf p s s'
-  | tail (p : Program) (s : State) (i : Instr) (name : String) (q : Program) (s' : State) :
-      p.fetch s.rip = some i → tailTarget i = some name → findProgram world name = some q →
-      EndsK world keptOf q (afterTail q s) s' → EndsK world keptOf p s s'
+theorem alike_symm {a b : State} (A : Alike a b) : Alike b a :=
+  ⟨A.marks.symm, A.rip.symm, A.data.symm, A.trace.symm,
+   fun r hr => (A.reg r (A.marks ▸ hr)).symm, fun h => (A.zf (A.marks ▸ h)).symm,
+   fun h => (A.cf (A.marks ▸ h)).symm, fun x hx => (A.mem x (A.marks ▸ hx)).symm,
+   fun r hr => (A.low r (A.marks ▸ hr)).symm⟩
 
-theorem runsK_mono {world : List Program} {keptOf : String → List Nat} {perm : Perm} {p : Program} {Q Q' : State → Prop}
-    (h : ∀ t, Q t → Q' t) : ∀ {s}, RunsK world keptOf perm p Q s → RunsK world keptOf perm p Q' s := by
-  intro s hr
-  induction hr with
-  | step perm p Q s i hf hn _ hr ih => exact .step perm p Q' s i hf hn (fun u s' hx => ih u s' hx h) (fun u s' hx => h s' (hr u s' hx))
-  | call perm p Q s i nm q inn R hf hc hw hsp hrd hwr hcall hkeep _ ih1 ih2 =>
-    exact .call perm p Q' s i nm q inn R hf hc hw hsp hrd hwr hcall hkeep (fun s' hr => ih2 s' hr h)
-  | tail perm p Q s i nm q inn hf ht hw hrd hwr _ ih =>
-    exact .tail perm p Q' s i nm q inn hf ht hw hrd hwr (ih h)
+/-- Two `RunsT` derivations starting from `Alike` states produce identical observable traces (and
+identical return values in register 0 whenever `ctx.contract.resultFollowsTrace = true`). -/
+theorem runsT_traceOk {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 sta : State}
+    (Ra : RunsT world ctx p a0 sta) :
+    ∀ {stb a' b' : State}, RunsT world ctx p b0 stb → Alike sta stb →
+      EndsP world p sta.plain a' → EndsP world p stb.plain b' →
+      a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0) := by
+  induction Ra with
+  | step sa i hfa hna hnexta hreta iha =>
+    intro stb a' b' Rb A Epa Epb
+    cases Rb with
+    | step _ i2 hfb hnb hnextb hretb =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2
+      have noCall : ∀ {st t : State}, p.fetch st.rip = some i →
+          (∀ u, execQ (ctx.contract.perm ctx.pieces a0) p i u st ≠ none ∨ execQ (ctx.contract.perm ctx.pieces b0) p i u st ≠ none) →
+          EndsP world p st.plain t →
+          (∃ u, execP Perm.all p i u st.plain = some (.returned t)) ∨
+          (∃ u s1, execP Perm.all p i u st.plain = some (.next s1) ∧ EndsP world p s1 t) := by
+        intro st t hf hne Ep
+        cases Ep with
+        | ret _ _ i3 u _ hf3 hx =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; exact Or.inl ⟨u, hx⟩
+        | step _ _ i3 u s1 _ hf3 hx E1 =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; exact Or.inr ⟨u, s1, hx, E1⟩
+        | call _ _ i3 _ _ _ _ hf3 hc3 _ _ _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3
+          rcases hne (fun _ => 0) with h | h
+          · exact absurd (execQ_call hc3 _ _ _) h
+          · exact absurd (execQ_call hc3 _ _ _) h
+        | tail _ _ i3 _ _ _ hf3 ht3 _ _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3
+          rcases hne (fun _ => 0) with h | h
+          · exact absurd (execQ_tail ht3 _ _ _) h
+          · exact absurd (execQ_tail ht3 _ _ _) h
+      rcases noCall hfa (fun u => Or.inl (hna u)) Epa with ⟨ua, hxa⟩ | ⟨ua, s1a, hxa, E1a⟩ <;>
+      rcases noCall hfb (fun u => Or.inr (hnb u)) Epb with ⟨ub, hxb⟩ | ⟨ub, s1b, hxb, E1b⟩
+      · cases hoa : execQ (ctx.contract.perm ctx.pieces a0) p i ua sa with
+        | none => exact absurd hoa (hna ua)
+        | some oa =>
+          cases hob : execQ (ctx.contract.perm ctx.pieces b0) p i ub stb with
+          | none => exact absurd hob (hnb ub)
+          | some ob =>
+            have hpa : execP Perm.all p i ua sa.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+            have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+            rw [hxa] at hpa; rw [hxb] at hpb
+            obtain ⟨ra, rfl, rfl⟩ := outcome_returned (Option.some.inj hpa).symm
+            obtain ⟨rb, rfl, rfl⟩ := outcome_returned (Option.some.inj hpb).symm
+            have Alr := execQ_alike A hoa hob
+            exact ⟨Alr.trace, fun hrf => Alr.reg 0 (hreta ua ra hoa hrf)⟩
+      · cases hoa : execQ (ctx.contract.perm ctx.pieces a0) p i ua sa with
+        | none => exact absurd hoa (hna ua)
+        | some oa =>
+          cases hob : execQ (ctx.contract.perm ctx.pieces b0) p i ub stb with
+          | none => exact absurd hob (hnb ub)
+          | some ob =>
+            have hpa : execP Perm.all p i ua sa.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+            have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+            rw [hxa] at hpa; rw [hxb] at hpb
+            obtain ⟨ra, rfl, _⟩ := outcome_returned (Option.some.inj hpa).symm
+            obtain ⟨sb1, rfl, _⟩ := outcome_next (Option.some.inj hpb).symm
+            exact (execQ_alike A hoa hob).elim
+      · cases hoa : execQ (ctx.contract.perm ctx.pieces a0) p i ua sa with
+        | none => exact absurd hoa (hna ua)
+        | some oa =>
+          cases hob : execQ (ctx.contract.perm ctx.pieces b0) p i ub stb with
+          | none => exact absurd hob (hnb ub)
+          | some ob =>
+            have hpa : execP Perm.all p i ua sa.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+            have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+            rw [hxa] at hpa; rw [hxb] at hpb
+            obtain ⟨sa1, rfl, _⟩ := outcome_next (Option.some.inj hpa).symm
+            obtain ⟨rb, rfl, _⟩ := outcome_returned (Option.some.inj hpb).symm
+            exact (execQ_alike A hoa hob).elim
+      · cases hoa : execQ (ctx.contract.perm ctx.pieces a0) p i ua sa with
+        | none => exact absurd hoa (hna ua)
+        | some oa =>
+          cases hob : execQ (ctx.contract.perm ctx.pieces b0) p i ub stb with
+          | none => exact absurd hob (hnb ub)
+          | some ob =>
+            have hpa : execP Perm.all p i ua sa.plain = some oa.plain := by rw [exec_plain, exec_all (execQ_exec hoa)]; rfl
+            have hpb : execP Perm.all p i ub stb.plain = some ob.plain := by rw [exec_plain, exec_all (execQ_exec hob)]; rfl
+            rw [hxa] at hpa; rw [hxb] at hpb
+            obtain ⟨sa1, rfl, rfl⟩ := outcome_next (Option.some.inj hpa).symm
+            obtain ⟨sb1, rfl, rfl⟩ := outcome_next (Option.some.inj hpb).symm
+            exact iha ua sa1 hoa (hnextb ub sb1 hob) (execQ_alike A hoa hob) E1a E1b
+    | call _ i2 _ _ _ _ hfb hc2 _ _ _ _ _ _ _ _ _ _ _ _ _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; exact absurd (execQ_call hc2 _ _ _) (hna (fun _ => 0))
+    | tail _ i2 _ _ _ hfb ht2 _ _ _ _ _ _ _ _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; exact absurd (execQ_tail ht2 _ _ _) (hna (fun _ => 0))
+  | call sa i name c q cleanRet hfa hca hlk hqa hsbok hlink hrspa hbda hla hca_clr hprea meetsa troka hta hreta hconta iha =>
+    intro stb a' b' Rb A Epa Epb
+    cases Rb with
+    | step _ i2 hfb hnb _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; exact absurd (execQ_call hca _ _ _) (hnb (fun _ => 0))
+    | tail _ i2 _ _ _ hfb ht2 _ _ _ _ _ _ _ _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; rw [tailTarget_not_call ht2] at hca; cases hca
+    | call _ i2 name2 c2 q2 cleanRet2 hfb hc2 hlk2 hqb _ _ _ hbdb hlb hcb_clr hpreb meetsb _ _ hretb hcontb =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2
+      rw [hca] at hc2; injection hc2 with e; subst e
+      rw [hlk] at hlk2; injection hlk2 with e; subst e
+      rw [hqa] at hqb; injection hqb with e; subst e
+      have isCall : ∀ {st t : State}, p.fetch st.rip = some i → EndsP world p st.plain t →
+          ∃ s1, EndsP world q (afterCall p q i st).plain s1 ∧ EndsP world p s1 t := by
+        intro st t hf Ep
+        have no : ∀ u, execP Perm.all p i u st.plain = none := fun u => by rw [exec_plain, exec_call hca]; rfl
+        cases Ep with
+        | ret _ _ i3 u _ hf3 hx =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [no u] at hx; cases hx
+        | step _ _ i3 u _ _ hf3 hx _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [no u] at hx; cases hx
+        | call _ _ i3 nm3 q3 s1 _ hf3 hc3 hw3 Ein Eout =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [hca] at hc3; injection hc3 with e; subst e
+          rw [hqa] at hw3; injection hw3 with e; subst e
+          rw [afterCallP_plain] at Ein; exact ⟨s1, Ein, Eout⟩
+        | tail _ _ i3 _ _ _ hf3 ht3 _ _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [tailTarget_not_call ht3] at hca; cases hca
+      obtain ⟨s1a, Eina, Eouta⟩ := isCall hfa Epa
+      obtain ⟨s1b, Einb, Eoutb⟩ := isCall hfb Epb
+      have hruna := runsPlain_data (meetsa (afterCall p q i sa) hbda hla hca_clr hprea)
+      have hrunb := runsPlain_data (meetsb (afterCall p q i stb) hbdb hlb hcb_clr hpreb)
+      rw [afterCall_data] at hruna hrunb
+      obtain ⟨s2a, ⟨hpost2a, hdata2a⟩, hs1a⟩ := runsPlain_endsP hruna Eina
+      obtain ⟨s2b, ⟨hpost2b, hdata2b⟩, hs1b⟩ := runsPlain_endsP hrunb Einb
+      have hta_call := hta stb A
+      obtain ⟨htr2, _⟩ := troka (afterCall p q i sa) (afterCall p q i stb) hbda hla hca_clr hprea hlb hcb_clr hpreb hta_call s1a s1b Eina Einb
+      have htr2' : s2a.trace = s2b.trace := by
+        have h1 : s1a.trace = s2a.trace := by rw [hs1a]; rfl
+        have h2 : s1b.trace = s2b.trace := by rw [hs1b]; rfl
+        rw [← h1, ← h2]; exact htr2
+      let cr := cleanRet || cleanRet2
+      have hret_cr : cr = true → s2a.reg c.retReg = s2b.reg c.retReg := by
+        intro hcr
+        rcases Bool.or_eq_true _ _ |>.mp hcr with hca1 | hcb1
+        · exact hreta hca1 stb s1a s1b s2a s2b A hlb hcb_clr hpreb Eina Einb hpost2a hpost2b hs1a hs1b
+        · exact (hretb hcb1 sa s1b s1a s2b s2a (alike_symm A) hla hca_clr hprea Einb Eina hpost2b hpost2a hs1b hs1a).symm
+      have Aback := backFrom_postCallMarks_alike hsbok hlink A hrspa hta_call hpost2a hpost2b hdata2a hdata2b htr2' hret_cr
+      have hpla : (backFrom c.keeps sa { s2a with marks := postCallMarks c cr (afterCall p q i sa) }).plain = s1a := hs1a.symm
+      have hplb : (backFrom c.keeps stb { s2b with marks := postCallMarks c cr (afterCall p q i stb) }).plain = s1b := hs1b.symm
+      exact iha cr s2a (fun h => by simp [cr, h]) hpost2a hdata2a
+        (hcontb cr s2b (fun h => by simp [cr, h]) hpost2b hdata2b)
+        Aback (hpla ▸ Eouta) (hplb ▸ Eoutb)
+  | tail sa i name c q hfa hta_t hlk hqa hbda hla hca_clr hprea troka hta hreta =>
+    intro stb a' b' Rb A Epa Epb
+    cases Rb with
+    | step _ i2 hfb hnb _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; exact absurd (execQ_tail hta_t _ _ _) (hnb (fun _ => 0))
+    | call _ i2 _ _ _ _ hfb hc2 _ _ _ _ _ _ _ _ _ _ _ _ _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2; rw [tailTarget_not_call hta_t] at hc2; cases hc2
+    | tail _ i2 name2 c2 q2 hfb ht2 hlk2 hqb _ hlb hcb_clr hpreb _ _ _ =>
+      have ei : i2 = i := by rw [← A.rip, hfa] at hfb; exact (Option.some.inj hfb).symm
+      subst i2
+      rw [hta_t] at ht2; injection ht2 with e; subst e
+      rw [hlk] at hlk2; injection hlk2 with e; subst e
+      rw [hqa] at hqb; injection hqb with e; subst e
+      have isTail : ∀ {st t : State}, p.fetch st.rip = some i → EndsP world p st.plain t →
+          EndsP world q (afterTail q st).plain t := by
+        intro st t hf Ep
+        have no : ∀ u, execP Perm.all p i u st.plain = none := fun u => by rw [exec_plain, exec_tail hta_t]; rfl
+        cases Ep with
+        | ret _ _ i3 u _ hf3 hx =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [no u] at hx; cases hx
+        | step _ _ i3 u _ _ hf3 hx _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [no u] at hx; cases hx
+        | call _ _ i3 _ _ _ _ hf3 hc3 _ _ _ =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [tailTarget_not_call hta_t] at hc3; cases hc3
+        | tail _ _ i3 nm3 q3 _ hf3 ht3 hw3 Ein =>
+          have e : i3 = i := by rw [show st.plain.rip = st.rip from rfl, hf] at hf3; exact (Option.some.inj hf3).symm
+          subst i3; rw [hta_t] at ht3; injection ht3 with e; subst e
+          rw [hqa] at hw3; injection hw3 with e; subst e
+          exact Ein
+      have Eina := isTail hfa Epa
+      have Einb := isTail hfb Epb
+      have hta_call := hta stb A
+      obtain ⟨htr, _⟩ := troka (afterTail q sa) (afterTail q stb) hbda hla hca_clr hprea hlb hcb_clr hpreb hta_call a' b' Eina Einb
+      exact ⟨htr, fun hrf => hreta hrf stb a' b' A hlb hcb_clr hpreb Eina Einb⟩
 
-theorem runsK_data {world : List Program} {keptOf : String → List Nat} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
-    (h : RunsK world keptOf perm p Q s) : RunsK world keptOf perm p (fun s' => Q s' ∧ s'.data = s.data) s := by
-  induction h with
-  | step perm p Q s i hf hn _ hr ih =>
-    refine RunsK.step perm p _ s i hf hn (fun u s' e => ?_) (fun u s' e => ⟨hr u s' e, execQ_data e⟩)
-    have hd : s'.data = s.data := execQ_data e
-    have := ih u s' e
-    rw [hd] at this; exact this
-  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
-    rw [afterCall_data] at ihq
-    refine RunsK.call perm p _ s i name q inner (fun s' => R s' ∧ s'.data = s.data) hf hc hw hstack hir hiw ihq
-      (fun s' hs' => hk s' hs'.1) (fun s' hs' => ?_)
-    have := ihp s' hs'.1
-    have hd : (backFrom (keptOf name) s s').data = s.data := hs'.2
-    rw [hd] at this; exact this
-  | tail perm p Q s i name q inner hf ht hw hir hiw _ ihq =>
-    exact RunsK.tail perm p _ s i name q inner hf ht hw hir hiw ihq
-
-theorem endsK_alike {world : List Program} {keptOf : String → List Nat} {p : Program} {a a' : State}
-    (E : EndsK world keptOf p a a') : ∀ {b b' : State}, Alike a b → EndsK world keptOf p b b' → Alike a' b' := by
-  induction E with
-  | ret p s i perm u s' hf hx =>
-    intro b b' A E2
-    cases E2 with
-    | ret _ _ i2 perm2 u2 _ hf2 hx2 =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      exact execQ_alike A hx hx2
-    | step _ _ i2 perm2 u2 _ _ hf2 hx2 _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      exact (execQ_alike A hx hx2).elim
-    | call _ _ i2 _ _ _ _ hf2 hc _ _ _ _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_call hc] at hx; cases hx
-    | tail _ _ i2 _ _ _ hf2 ht _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_tail ht] at hx; cases hx
-  | step p s i perm u s1 s' hf hx _ ih =>
-    intro b b' A E2
-    cases E2 with
-    | ret _ _ i2 perm2 u2 _ hf2 hx2 =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      exact (execQ_alike A hx hx2).elim
-    | step _ _ i2 perm2 u2 t1 _ hf2 hx2 E2' =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      exact ih (execQ_alike A hx hx2) E2'
-    | call _ _ i2 _ _ _ _ hf2 hc _ _ _ _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_call hc] at hx; cases hx
-    | tail _ _ i2 _ _ _ hf2 ht _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_tail ht] at hx; cases hx
-  | call p s i name q s1 s' hf hc hw hsp _ hk _ ih1 ih2 =>
-    intro b b' A E2
-    cases E2 with
-    | ret _ _ i2 _ _ _ hf2 hx2 =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_call hc] at hx2; cases hx2
-    | step _ _ i2 _ _ _ _ hf2 hx2 _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_call hc] at hx2; cases hx2
-    | call _ _ i2 name2 q2 t1 _ hf2 hc2 hw2 _ Ein hk2 Eout =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [hc] at hc2; injection hc2 with e; subst e
-      rw [hw] at hw2; injection hw2 with e; subst e
-      exact ih2 (backFrom_alike A (ih1 (afterCall_alike A hsp) Ein) hk hk2) Eout
-    | tail _ _ i2 name2 q2 _ hf2 ht2 _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [tailTarget_not_call ht2] at hc; cases hc
-  | tail p s i name q s' hf ht hw _ ih =>
-    intro b b' A E2
-    cases E2 with
-    | ret _ _ i2 _ _ _ hf2 hx2 =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_tail ht] at hx2; cases hx2
-    | step _ _ i2 _ _ _ _ hf2 hx2 _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [execQ_tail ht] at hx2; cases hx2
-    | call _ _ i2 _ _ _ _ hf2 hc2 _ _ _ _ _ =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [tailTarget_not_call ht] at hc2; cases hc2
-    | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
-      rw [← A.rip, hf] at hf2; injection hf2 with e; subst e
-      rw [ht] at ht2; injection ht2 with e; subst e
-      rw [hw] at hw2; injection hw2 with e; subst e
-      exact ih (afterTail_alike A) Ein
-
-theorem runsK_endsP {world : List Program} {keptOf : String → List Nat} {perm : Perm} {p : Program} {Q : State → Prop} {s : State}
-    (h : RunsK world keptOf perm p Q s) : ∀ {t : State}, EndsP world p s.plain t → ∃ s', EndsK world keptOf p s s' ∧ Q s' ∧ t = s'.plain := by
-  induction h with
-  | step perm p Q s i hf hn _ hr ih =>
-    intro t E
-    have both : ∀ u, ∃ o, execQ perm p i u s = some o ∧ execP Perm.all p i u s.plain = some o.plain := by
-      intro u
-      cases e : execQ perm p i u s with
-      | none => exact absurd e (hn u)
-      | some o => exact ⟨o, rfl, by rw [exec_plain, exec_all (execQ_exec e)]; rfl⟩
-    cases E with
-    | ret _ _ i2 u s' hf2 hx =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; obtain ⟨o, eq, e'⟩ := both u; rw [hx] at e'
-      obtain ⟨s2, rfl, rfl⟩ := outcome_returned (Option.some.inj e').symm
-      exact ⟨s2, EndsK.ret p s i2 perm u s2 hf eq, hr u s2 eq, rfl⟩
-    | step _ _ i2 u s1 _ hf2 hx E1 =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; obtain ⟨o, eq, e'⟩ := both u; rw [hx] at e'
-      obtain ⟨s2, rfl, rfl⟩ := outcome_next (Option.some.inj e').symm
-      obtain ⟨s3, e3, q3, rfl⟩ := ih u s2 eq E1
-      exact ⟨s3, EndsK.step p s i2 perm u s2 s3 hf eq e3, q3, rfl⟩
-    | call _ _ i2 name q s1 _ hf2 hc _ _ _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; exact absurd (execQ_call hc perm (fun _ => 0) s) (hn _)
-    | tail _ _ i2 name q _ hf2 ht _ _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; exact absurd (execQ_tail ht perm (fun _ => 0) s) (hn _)
-  | call perm p Q s i name q inner R hf hc hw hstack hir hiw _ hk _ ihq ihp =>
-    intro t E
-    have no : ∀ u, execP Perm.all p i u s.plain = none := by intro u; rw [exec_plain, exec_call hc]; rfl
-    cases E with
-    | ret _ _ i2 u s' hf2 hx =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [no u] at hx; cases hx
-    | step _ _ i2 u s1 _ hf2 hx _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [no u] at hx; cases hx
-    | call _ _ i2 name2 q2 s1 _ hf2 hc2 hw2 Ein Eout =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [hc] at hc2; injection hc2 with e; subst e; rw [hw] at hw2; injection hw2 with e; subst e
-      rw [afterCallP_plain] at Ein
-      obtain ⟨s1', e1, r1, rfl⟩ := ihq Ein
-      obtain ⟨s2', e2, q2, rfl⟩ := ihp s1' r1 Eout
-      exact ⟨s2', EndsK.call p s i2 name q s1' s2' hf hc hw (fun hl => (hstack hl).2.2) e1 (hk s1' r1) e2, q2, rfl⟩
-    | tail _ _ i2 name2 q2 _ hf2 ht2 _ _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [tailTarget_not_call ht2] at hc; cases hc
-  | tail perm p Q s i name q inner hf ht hw _ _ _ ihq =>
-    intro t E
-    have no : ∀ u, execP Perm.all p i u s.plain = none := by intro u; rw [exec_plain, exec_tail ht]; rfl
-    cases E with
-    | ret _ _ i2 u s' hf2 hx =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [no u] at hx; cases hx
-    | step _ _ i2 u s1 _ hf2 hx _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [no u] at hx; cases hx
-    | call _ _ i2 name2 q2 s1 _ hf2 hc2 _ _ _ =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [tailTarget_not_call ht] at hc2; cases hc2
-    | tail _ _ i2 name2 q2 _ hf2 ht2 hw2 Ein =>
-      have e : i2 = i := by have := hf2; rw [show s.plain.rip = s.rip from rfl, hf] at this; exact (Option.some.inj this).symm
-      subst e; rw [ht] at ht2; injection ht2 with e; subst e; rw [hw] at hw2; injection hw2 with e; subst e
-      have htp : (afterTail q s).plain = afterTail q s.plain := rfl
-      rw [← htp] at Ein
-      obtain ⟨s2', e2, q2, rfl⟩ := ihq Ein
-      exact ⟨s2', EndsK.tail p s i2 name q s2' hf ht hw e2, q2, rfl⟩
-
-/-- Postcondition proved under single-run `RunsK`: contract postcondition plus mark preservation on `RSP`,
-`retReg` (when `resultFollowsTrace`), and memory outside the function's frame and outputs. -/
-def runsPost (c : Contract) (defs : List Def) (s0 t : State) : Prop :=
-  c.post defs s0 t ∧
-  t.marks.reg RSP = false ∧
-  (c.resultFollowsTrace = true → t.marks.reg c.retReg = false) ∧
-  ∀ a, c.inFrame s0 a = false → c.inOut s0 a = false → t.marks.mem a = s0.marks.mem a
-
-def RunsOk (world : List Program) (keptOf : String → List Nat) (pieces : List Piece) (c : Contract) (defs : List Def) (p : Program) : Prop :=
-  ∀ s0, Loaded pieces s0 → c.clear world pieces s0 → c.pre p s0 → c.quietAt s0 →
-    (∀ k pc, pieces[k]? = some pc → ∀ j, j < pc.bytes.length → s0.marks.mem (s0.data k + j) = false) →
-    RunsK world keptOf (c.perm pieces s0) p (runsPost c defs s0) s0
-
-def RunsOkBelow (world : List Program) (keptOf : String → List Nat) (pieces : List Piece) (c : Contract) (defs : List Def) (p : Program)
-    (bound : Option (Nat × Nat)) : Prop :=
-  ∀ s0, (∀ r m, bound = some (r, m) → s0.reg r < m) →
-    Loaded pieces s0 → c.clear world pieces s0 → c.pre p s0 → c.quietAt s0 →
-    (∀ k pc, pieces[k]? = some pc → ∀ j, j < pc.bytes.length → s0.marks.mem (s0.data k + j) = false) →
-    RunsK world keptOf (c.perm pieces s0) p (runsPost c defs s0) s0
-
-theorem RunsOk.below {world : List Program} {keptOf : String → List Nat} {pieces : List Piece} {c : Contract} {defs : List Def} {p : Program}
-    (R : RunsOk world keptOf pieces c defs p) (bound : Option (Nat × Nat)) : RunsOkBelow world keptOf pieces c defs p bound :=
-  fun s0 _ hl hc hp hq hd => R s0 hl hc hp hq hd
-
-def CalleesRunsAt (world : List Program) (keptOf : String → List Nat) (ctx : Ctx) (s0 : State) : Prop :=
-  ∀ name c, ctx.callees.lookup name = some c →
-    (ctx.runsCallees.contains name = true ∨ ctx.selfName = some name) →
-    ∃ q, findProgram world name = some q ∧ q.fits ∧ keptOf name = c.keeps ∧
-      RunsOkBelow world keptOf ctx.pieces c ctx.defs q (ctx.recBound name c s0)
-
-theorem tailQuiet_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
-    {ρ : Nat → Int} {s : Sym} {st : State} {name : String} {c : Contract}
-    (T : TailOk ctx s name c) (M : MarksOk ctx s0 s.q st) (H : Holds ctx s0 ρ s st)
-    (hq : callQuiet ctx s c = true) (q : Program) :
-    c.quietAt (afterTail q st) := by
-  simp only [callQuiet, Bool.and_eq_true] at hq
-  obtain ⟨⟨⟨⟨hregs, hfix⟩, _⟩, hrun⟩, _⟩ := hq
-  have regs : ∀ r ∈ c.cleanAtEntry, st.marks.reg r = false := fun r hr =>
-    M.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hregs r hr))
-  refine ⟨fun r hr => regs r hr, ?_, fun r l hm hnh k hk => ?_, fun x r n hm hnot => ?_⟩
-  · unfold Contract.backQuiet
-    cases ha : c.arm64 with
-    | false =>
-      simp only [ha, Bool.false_eq_true, ↓reduceIte]
-      intro k hk
-      have hsp : (afterTail q st).reg RSP = s0.reg RSP := by
-        show st.reg RSP = s0.reg RSP; exact T.rsp_eq H
-      rw [hsp]
-      have hca : ctx.contract.arm64 = false := T.machine.symm.trans ha
-      have hbq := E.quiet.2.1; unfold Contract.backQuiet at hbq; simp only [hca, Bool.false_eq_true, ↓reduceIte] at hbq
-      have hnf : ctx.contract.inFrame s0 (s0.reg RSP + k) = false := notFrame (Or.inr (by omega))
-      have hno : ctx.contract.inOut s0 (s0.reg RSP + k) = false := E.frame_notOut (by omega) (by rw [Contract.slot, if_neg (by rw [hca]; decide)]; omega)
-      exact (M.stable _ hnf hno).trans (hbq k hk)
-    | true =>
-      simp only [ha, ↓reduceIte]
-      have hca : ctx.contract.arm64 = true := T.machine.symm.trans ha
-      exact M.reg LINK (T.linkOk hca).2
-  · have hfound := List.all_eq_true.mp hrun (r, l) hm
-    simp only [hnh, Bool.false_or, Bool.and_eq_true] at hfound
-    have hfound := hfound.2
-    cases hf : findRun s r l ctx.contract.regions 0 with
-    | none => simp [hf] at hfound
-    | some j =>
-      obtain ⟨b0, l0, _, hget, er, el⟩ := findRun_spec hf
-      have hnh0 : ctx.contract.hiddenAt b0 = false := by
-        rw [hf] at hfound; simp only at hfound
-        have hget' : ctx.contract.regions[j]? = some (b0, l0) := by simpa using hget
-        rw [hget'] at hfound; simpa using hfound
-      have hmem : (b0, l0) ∈ ctx.contract.regions := List.mem_of_getElem? hget
-      obtain ⟨hb0, hl0⟩ := regions_lt hmem
-      obtain ⟨ra, la⟩ := regions_args hm
-      have hregs_eq : ctx.nreg = c.regs := by unfold Ctx.nreg Contract.regs; rw [T.machine]
-      have hrlt : r < ctx.nreg := by rw [hregs_eq]; exact argRegs_lt ra
-      have hllt : l < ctx.nreg := by rw [hregs_eq]; exact argRegs_lt la
-      have vr : st.reg r = s0.reg b0 := by have := H.reg r hrlt; rw [er, ev_var, H.entry b0 hb0] at this; omega
-      have vl : st.reg l = s0.reg l0 := by have := H.reg l hllt; rw [el, ev_var, H.entry l0 hl0] at this; omega
-      change st.marks.mem (st.reg r + k) = false
-      change k < st.reg l at hk
-      rw [vr]; rw [vl] at hk
-      obtain ⟨_, r2⟩ := E.regionAt hmem
-      rw [M.stable _ (notFrame (by omega)) (E.region_notOut hmem (by omega) (by omega))]
-      exact E.quiet.2.2.1 b0 l0 hmem hnh0 k hk
-  · have hx := List.all_eq_true.mp hfix (x, r, n) hm
-    rcases Bool.or_eq_true_iff.mp hx with hh | hframe
-    · exact absurd (List.contains_iff_mem.mp hh) hnot
-    · have hnone : frameAt s r = none := T.noFrameFix (x, r, n) hm
-      rw [hnone] at hframe; simp at hframe
-
-theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
-    (W : CalleesRunsAt world keptOf ctx s0) (Kc : ctx.contract.clear world ctx.pieces s0)
-    (hcap : hasSelect ctx.code = true ∨ hasCallOrTail ctx.code = false)
-    {s : Sym} {pc : Nat} {i : Instr} {nexts : List (Sym × Next)} {items rest : Items} {ρ : Nat → Int} {st : State}
-    (hl : ctx.code.lookup pc = some i) (h : symNext ctx s i items = .ok (nexts, rest))
+theorem step_runsT {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
+    (W : CalleesTrace world ctx s0) (Kc : ctx.contract.clear world ctx.pieces s0)
+    (hsel : hasSelect ctx.code = true)
+    {pc : Nat} {i : Instr} (hl : ctx.code.lookup pc = some i)
+    {s : Sym} {items rest : Items} {nexts : List (Sym × Next)}
+    (h : symNext ctx s i items = .ok (nexts, rest))
+    {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hrip : st.rip = p.base + pc) (M : MarksOk ctx s0 s.q st)
     (K : ∀ s' pc' ρ' st', (s', Next.at pc') ∈ nexts → st'.rip = p.base + pc' → Carried ctx s0 ρ s ρ' s' st' →
-      MarksOk ctx s0 s'.q st' → RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) st') :
-    RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) st := by
+      MarksOk ctx s0 s'.q st' → RunsT world ctx p s0 st') :
+    RunsT world ctx p s0 st := by
   have hfetch : p.fetch st.rip = some i := by
     unfold Program.fetch; rw [hrip, if_neg (by omega), E.code, Nat.add_sub_cancel_left]; exact hl
   cases hc : callTarget i with
@@ -4397,25 +4461,18 @@ theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : 
     cases ht : tailTarget i with
     | none =>
       simp only [symNext, hc, ht] at h
-      apply RunsK.step _ p _ st i hfetch
+      apply RunsT.step st i hfetch
       · intro u hn; obtain ⟨o, ho, _⟩ := symInstr_sound E h H wf M u; rw [ho] at hn; cases hn
       · intro u st' hx
         obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
         rw [hx] at ho; injection ho with ho; subst ho
         obtain ⟨s', pc', ρ', m, hrip', c', M'⟩ := hmatch
         exact K s' pc' ρ' st' m hrip' c' M'
-      · intro u st' hx
+      · intro u st' hx hrf
         obtain ⟨o, ho, hmatch⟩ := symInstr_sound E h H wf M u
         rw [hx] at ho; injection ho with ho; subst ho
-        refine ⟨hmatch.1, hmatch.2.1, fun hrf => ?_, hmatch.2.2.2⟩
-        rw [retReg_of_resultFollowsTrace hrf]; exact hmatch.2.2.1 hrf
+        exact hmatch.2.2.1 hrf
     | some name =>
-      have hsel : hasSelect ctx.code = true := by
-        rcases hcap with h1 | hno
-        · exact h1
-        · have hany : hasCallOrTail ctx.code = true := by
-            unfold hasCallOrTail; exact List.any_eq_true.mpr ⟨(pc, i), lookup_mem hl, by simp [ht]⟩
-          rw [hno] at hany; cases hany
       simp only [symNext, hc, ht] at h
       cases hl2 : ctx.callees.lookup name with
       | none => simp only [hl2] at h; exact (refuse_ok h).elim
@@ -4435,92 +4492,129 @@ theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : 
         next => exact (refuse_ok htail).elim
         next hcq =>
         have hcq : callQuiet ctx (quietAtCall s1 c) c = true := by simpa using hcq
-        simp only [hsel, Bool.true_and, ↓reduceIte] at htail
+        dsimp only at htail
         split at htail
         next => exact (refuse_ok htail).elim
-        next hrun_in =>
-        have hrun_in : ctx.runsCallees.contains name = true ∨ ctx.selfName = some name := by
-          cases hc1 : ctx.runsCallees.contains name with
-          | true => exact Or.inl rfl
-          | false =>
-            cases hc2 : (ctx.selfName == some name) with
-            | true => exact Or.inr (beq_iff_eq.mp hc2)
-            | false =>
-              simp only [hc1, hc2, Bool.or_self, Bool.not_false, Bool.true_and, not_true_eq_false] at hrun_in
-        split at htail
-        next => exact (refuse_ok htail).elim
-        next hclean_tail =>
-        split at htail
-        next => exact (refuse_ok htail).elim
-        next _ =>
+        next hretq =>
+        obtain ⟨q, hq, fitq, _, _, meets, trok, trok2⟩ := W name c hl2
         have c1 := symKnow_sound KNOWN e0 H wf
         have T1 := symKnow_tailOk T KNOWN e0
         have hqeq : s1.q = s.q := (symKnow_sp KNOWN e0).2.1
         have M1 : MarksOk ctx s0 s1.q st := hqeq ▸ M
         have EX := tailPreOk_sound E T1 c1.holds e1
-        obtain ⟨q, hq, fitq, _, hruns⟩ := W name c hl2 hrun_in
-        obtain ⟨hpre, hread, hwrite, hpost⟩ := tailCall'_sound E T1 EX e2 c1.holds c1.wf q fitq
+        obtain ⟨hpre, _, hwrite, _⟩ := tailCall'_sound E T1 EX e2 c1.holds c1.wf q fitq
         have hbd : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q st).reg r < m := by
           intro r m hb; unfold Ctx.recBound at hb
           have hne : (ctx.selfName == some name) = false := beq_false_of_ne T.notSelf
           simp only [hne, Bool.false_eq_true, ite_false] at hb; cases hb
+        have hload := loaded_tail E c1.holds q
+        have hclr := clear_tail Kc T1 c1.holds q hwrite
         have T1q : TailOk ctx (quietAtCall s1 c) name c :=
           ⟨T1.notSelf, T1.machine, T1.sp0, T1.rspClean, T1.linkOk, T1.keeps, T1.keepsVec,
            T1.noLanes, T1.noValArrays, T1.noFrameOut, T1.noFrameFix⟩
-        have hq_tail : c.quietAt (afterTail q st) :=
-          tailQuiet_sound E T1q (quietAtCall_marks M1 c) (quietAtCall_holds c1.holds c) hcq q
-        have hdata_q : ∀ k pc', ctx.pieces[k]? = some pc' → ∀ j, j < pc'.bytes.length →
-            (afterTail q st).marks.mem ((afterTail q st).data k + j) = false := by
-          intro k pc' hk j hj
-          change st.marks.mem (st.data k + j) = false
-          rw [c1.holds.data.2]
-          have hnf : ctx.contract.inFrame s0 (s0.data k + j) = false :=
-            (Kc _ (Or.inl (inPieces_iff.mpr ⟨k, pc', hk, Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩))).1
-          have hno : ctx.contract.inOut s0 (s0.data k + j) = false :=
-            (Kc _ (Or.inl (inPieces_iff.mpr ⟨k, pc', hk, Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩))).2.1
-          rw [M.stable _ hnf hno]; exact E.dataQuiet k pc' hk j hj
-        have hrun := runsK_data (hruns (afterTail q st) hbd (loaded_tail E c1.holds q) (clear_tail Kc T1 c1.holds q hwrite) hpre hq_tail hdata_q)
-        rw [afterTail_data] at hrun
-        apply RunsK.tail _ p _ st i name q (c.perm ctx.pieces (afterTail q st)) hfetch ht hq hread hwrite
-        refine runsK_mono (fun s2 ⟨⟨hpost2, hsp2, hret2, hmem2⟩, hdata2⟩ => ?_) hrun
-        obtain ⟨ρ', c'⟩ := hpost s2 hpost2 hdata2
-        let cleanRet := c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s1 c) c
-        have c'q : Carried ctx s0 ρ s1 ρ' { s' with q := afterCallQ cleanRet c (quietAtCall s1 c) }
-            (setReg s2 RSP (s0.reg RSP)) := c'.q _
-        obtain ⟨_, hret⟩ := symReturn_sound E htail c'q.holds c'q.wf
-        have hpost0 : ctx.contract.post ctx.defs s0 s2 := by
-          apply hret s2 rfl rfl (fun r hr => by simp [setReg, hr])
-          · have hs2rsp := hpost2.2.1; simp only [afterTail] at hs2rsp
-            rw [hs2rsp, T1.rsp_eq c1.holds, T1.slot]; simp only [setReg, ite_true, Nat.mod_eq_of_lt (E.small RSP)]
-          · rw [hpost2.1, T1.backTo_eq E c1.holds q]
-        refine ⟨hpost0, hsp2, fun hrf => ?_, fun a hnf hno => ?_⟩
-        · have hcr : cleanRet = true := by
-            cases hc0 : cleanRet with
+        have hclean_c : c.cleanAtEntry.all (quietAtCall s1 c).q.regq.contains = true := by
+          simp only [callQuiet, Bool.and_eq_true] at hcq; exact hcq.1.1.1.1
+        have hta : ∀ stb, Alike st stb → c.traceAgree ctx.defs (afterTail q st) (afterTail q stb) := fun stb A =>
+          tailQuiet_traceAgree_alike E E.quiet hsel T1q (quietAtCall_holds c1.holds c) (quietAtCall_marks M1 c) A hcq
+        refine RunsT.tail st i name c q hfetch ht hl2 hq hbd hload hclr hpre trok hta ?_
+        intro hrft stb ra rb A hloadb hclrb hpreb Eina Einb
+        have hri0 : ctx.contract.result.isSome = true := (Bool.and_eq_true _ _ |>.mp hrft).1
+        have hrr0 : ctx.contract.retReg = 0 := (retReg_spec ctx.contract).2.2.2 hri0
+        let cleanRet := callReturnsClean ctx (quietAtCall s1 c) c
+        let q' := afterCallQ cleanRet c (quietAtCall s1 c)
+        have hmem0 : 0 ∈ q'.regq := by
+          have hnot : ¬(ctx.contract.resultFollowsTrace = true ∧ q'.regq.contains ctx.contract.retReg = false) := by
+            simpa [q', cleanRet, Bool.and_eq_true, Bool.not_eq_true'] using hretq
+          have hcont : q'.regq.contains 0 = true := by
+            rw [← hrr0]; cases hc0 : q'.regq.contains ctx.contract.retReg with
             | true => rfl
-            | false => exact absurd (by simp [hrf, cleanRet, hc0]) hclean_tail
-          have hcrf : c.resultFollowsTrace = true := (Bool.and_eq_true _ _ |>.mp hcr).1
-          rw [retReg_of_resultFollowsTrace hrf, ← retReg_of_resultFollowsTrace hcrf]
-          exact hret2 hcrf
-        · have hc_nf : c.inFrame (afterTail q st) a = false := by
-            cases hx : c.inFrame (afterTail q st) a with
-            | false => rfl
-            | true =>
-              have hw1 : (c.perm ctx.pieces (afterTail q st)).write a = true := by simp [Contract.perm, hx]
-              have hw0 := hwrite a hw1; simp [Contract.perm, hnf, hno] at hw0
-          have hc_no : c.inOut (afterTail q st) a = false := by
-            cases hx : c.inOut (afterTail q st) a with
-            | false => rfl
-            | true =>
-              have hw1 : (c.perm ctx.pieces (afterTail q st)).write a = true := by simp [Contract.perm, hx]
-              have hw0 := hwrite a hw1; simp [Contract.perm, hnf, hno] at hw0
-          exact (hmem2 a hc_nf hc_no).trans (M.stable a hnf hno)
+            | false => exact absurd ⟨hrft, hc0⟩ hnot
+          exact List.contains_iff_mem.mp hcont
+        have hruna := runsPlain_data (meets (afterTail q st) hbd hload hclr hpre)
+        have hbdb : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterTail q stb).reg r < m := by
+          intro r m hb; unfold Ctx.recBound at hb
+          have hne : (ctx.selfName == some name) = false := beq_false_of_ne T.notSelf
+          simp only [hne, Bool.false_eq_true, ite_false] at hb; cases hb
+        have hrunb := runsPlain_data (meets (afterTail q stb) hbdb hloadb hclrb hpreb)
+        obtain ⟨s2a, ⟨hpost2a, _⟩, ha'eq⟩ := runsPlain_endsP hruna Eina
+        obtain ⟨s2b, ⟨hpost2b, _⟩, hb'eq⟩ := runsPlain_endsP hrunb Einb
+        have ha'r : ra.reg 0 = s2a.reg 0 := by rw [ha'eq]; rfl
+        have hb'r : rb.reg 0 = s2b.reg 0 := by rw [hb'eq]; rfl
+        have hta_call := hta stb A
+        obtain ⟨_, hrf2⟩ := trok _ _ hbd hload hclr hpre hloadb hclrb hpreb hta_call ra rb Eina Einb
+        simp only [q', afterCallQ, List.mem_append, List.mem_filter, List.contains_iff_mem] at hmem0
+        rcases hmem0 with hhead | ⟨hq0, hkeep0⟩
+        · have hcr : cleanRet = true ∧ c.retReg = 0 := by
+            split at hhead
+            · next hc1 =>
+              simp only [List.mem_cons, List.not_mem_nil, or_false] at hhead
+              rcases hhead with h0 | h0
+              · exact ⟨hc1, h0.symm⟩
+              · exact absurd h0 (by decide)
+            · next hc1 =>
+              simp only [List.mem_cons, List.not_mem_nil, or_false] at hhead
+              exact absurd hhead (by decide)
+          obtain ⟨hcr, hcreg0⟩ := hcr
+          simp only [cleanRet, callReturnsClean] at hcr
+          cases hret : c.returns with
+          | some e =>
+            simp only [hret] at hcr
+            have hvea := hpost2a.2.2.2.2.1 e hret
+            have hveb := hpost2b.2.2.2.2.1 e hret
+            have hsame := (tailExprClean_alike E E.quiet hsel T1q (quietAtCall_holds c1.holds c)
+              (quietAtCall_marks M1 c) A hclean_c hcr (.int (s2a.reg c.retReg))).mp hvea
+            have hu := Value.unique hsame hveb
+            injection hu with hu
+            have hreg_eq : s2a.reg c.retReg = s2b.reg c.retReg := Int.ofNat.inj hu
+            rw [hcreg0] at hreg_eq; omega
+          | none =>
+            simp only [hret] at hcr
+            by_cases hrf : c.resultFollowsTrace = true
+            · exact hrf2 hrf
+            · simp only [hrf, Bool.false_eq_true, ite_false] at hcr
+              cases hri : c.result.isSome with
+              | false => simp [hri] at hcr
+              | true =>
+                simp only [hri, ite_true] at hcr
+                cases hrh : c.resultHidden with
+                | none => simp [hrh] at hcr
+                | some rh =>
+                  simp only [hrh] at hcr
+                  obtain ⟨_, trokr⟩ := trok2 rh hrh
+                  have T1_r : TailOk ctx (quietAtCall s1 c) name (c.forResult rh) :=
+                    ⟨T1q.notSelf, T1q.machine, T1q.sp0, T1q.rspClean, T1q.linkOk,
+                     by intro r hr; rw [show (c.forResult rh).keeps = c.keeps from rfl]; exact T1q.keeps r hr,
+                     by intro v hv; rw [show (c.forResult rh).keepsVec = c.keepsVec from rfl]; exact T1q.keepsVec v hv,
+                     T1q.noLanes,
+                     (by
+                       have hgo : ∀ args regs, valArraysIn (c.forResult rh) args regs = valArraysIn c args regs := by
+                         intro args; induction args with
+                         | nil => intro regs; rfl
+                         | cons ak more ih =>
+                           obtain ⟨nm, kd⟩ := ak
+                           intro regs; cases regs with
+                           | nil => simp [valArraysIn]
+                           | cons r rs =>
+                             cases kd with
+                             | valArray len ch el =>
+                               simp only [valArraysIn, show (c.forResult rh).regOf len = c.regOf len from rfl, ih]
+                             | number | bytes _ | out _ | fixed _ | inout _ => simp only [valArraysIn, ih]
+                       exact (hgo c.args c.argRegs).trans T1q.noValArrays),
+                     by intro x hx; rw [show (c.forResult rh).outs = c.outs from rfl] at hx; exact T1q.noFrameOut x hx,
+                     by intro x hx; rw [show (c.forResult rh).fixeds = c.fixeds from rfl] at hx; exact T1q.noFrameFix x hx⟩
+                  have hta_r := tailQuiet_traceAgree_alike (q := q) (c := c.forResult rh) E E.quiet hsel T1_r
+                    (quietAtCall_holds c1.holds c) (quietAtCall_marks M1 c) A hcr
+                  have hrf_r : (c.forResult rh).resultFollowsTrace = true := by
+                    simp [Contract.forResult, Contract.resultFollowsTrace, hri]
+                  exact (trokr _ _ hbd hload ((forResult_clear c rh _ _ _).mpr hclr) ((forResult_pre c rh _ _).mpr hpre)
+                    hloadb ((forResult_clear c rh _ _ _).mpr hclrb) ((forResult_pre c rh _ _).mpr hpreb)
+                    hta_r ra rb Eina Einb).2 hrf_r
+        · have hmk0 : st.marks.reg 0 = false := (quietAtCall_marks M1 c).reg 0 hq0
+          have heq_st : st.reg 0 = stb.reg 0 := A.reg 0 hmk0
+          have hk_a : s2a.reg 0 = st.reg 0 := hpost2a.2.2.1 0 hkeep0
+          have hk_b : s2b.reg 0 = stb.reg 0 := hpost2b.2.2.1 0 hkeep0
+          omega
   | some name =>
-    have hsel : hasSelect ctx.code = true := by
-      rcases hcap with h1 | hno
-      · exact h1
-      · have hany : hasCallOrTail ctx.code = true := by
-          unfold hasCallOrTail; exact List.any_eq_true.mpr ⟨(pc, i), lookup_mem hl, by simp [hc]⟩
-        rw [hno] at hany; cases hany
     simp only [symNext, hc] at h
     cases hl2 : ctx.callees.lookup name with
     | none => simp only [hl2] at h; exact (refuse_ok h).elim
@@ -4531,18 +4625,6 @@ theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : 
       next hfit =>
       have hfit : callFits ctx s i c = true := by simpa using hfit
       have F := callFits_sound E H hfit
-      simp only [hsel, Bool.true_and, ↓reduceIte] at h
-      split at h
-      next => exact (refuse_ok h).elim
-      next hguard =>
-      have hrun_in : ctx.runsCallees.contains name = true ∨ ctx.selfName = some name := by
-        cases hc1 : ctx.runsCallees.contains name with
-        | true => exact Or.inl rfl
-        | false =>
-          cases hc2 : (ctx.selfName == some name) with
-          | true => exact Or.inr (beq_iff_eq.mp hc2)
-          | false =>
-            simp only [hc1, hc2, Bool.or_self, Bool.not_false, not_true_eq_false] at hguard
       obtain ⟨_, _, _, h⟩ := V.bind_ok h
       obtain ⟨s', r1, e1, h⟩ := V.bind_ok h
       split at h
@@ -4550,10 +4632,10 @@ theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : 
       next hcq =>
       have hcq : callQuiet ctx (quietAtCall s c) c = true := by simpa using hcq
       have hp := V.pure_ok h; injection hp with hn _; subst hn
-      obtain ⟨q, hq, fitq, hkept_eq, hruns⟩ := W name c hl2 hrun_in
+      obtain ⟨q, hq, fitq, hsbok, _, meets, trok, trok2⟩ := W name c hl2
       have hcode : (pc, i) ∈ p.code := by rw [E.code]; exact lookup_mem hl
       obtain ⟨h8, hw, hpre, hdec, hread, hwrite, hpost⟩ := symCall_sound E e1 H wf q fitq i F (E.fits hcode)
-      obtain ⟨hrsp_m, hq_call, hafter⟩ := callQuiet_sound E (quietAtCall_marks M c) (quietAtCall_holds H c) hcq q i F hw hwrite
+      obtain ⟨hrsp_m, _, hafter⟩ := callQuiet_sound E (quietAtCall_marks M c) (quietAtCall_holds H c) hcq q i F hw hwrite
       have hbd : ∀ r m, ctx.recBound name c s0 = some (r, m) → (afterCall p q i st).reg r < m := by
         intro r m hb; unfold Ctx.recBound at hb
         split at hb
@@ -4569,89 +4651,117 @@ theorem step_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : 
               simp only [hr, Option.map_some, Option.some.injEq, Prod.mk.injEq] at hb
               obtain ⟨rfl, rfl⟩ := hb; exact hdec hself' d r' hd hr
         next => cases hb
-      have hdata_q : ∀ k pc', ctx.pieces[k]? = some pc' → ∀ j, j < pc'.bytes.length →
-          (afterCall p q i st).marks.mem ((afterCall p q i st).data k + j) = false := by
-        intro k pc' hk j hj
-        rw [afterCall_data, afterCall_marks_mem F.link, H.data.2]
-        unfold markBytes
-        split
-        · rfl
-        · have hnf : ctx.contract.inFrame s0 (s0.data k + j) = false :=
-            (Kc _ (Or.inl (inPieces_iff.mpr ⟨k, pc', hk, Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩))).1
-          have hno : ctx.contract.inOut s0 (s0.data k + j) = false :=
-            (Kc _ (Or.inl (inPieces_iff.mpr ⟨k, pc', hk, Nat.le_add_right _ _, Nat.add_lt_add_left hj _⟩))).2.1
-          rw [M.stable _ hnf hno]; exact E.dataQuiet k pc' hk j hj
-      have hrun := runsK_data (hruns (afterCall p q i st) hbd (loaded_call E H q i F.link h8 hw) (clear_call Kc H p q i F.link hw hwrite) hpre hq_call hdata_q)
-      rw [afterCall_data] at hrun
-      exact RunsK.call _ p _ st i name q (c.perm ctx.pieces (afterCall p q i st))
-        (fun s2 => runsPost c ctx.defs (afterCall p q i st) s2 ∧ s2.data = st.data)
-        hfetch hc hq
-        (fun hnone => by
-          have hs := (Contract.link_none (F.link.symm.trans hnone)).2
-          rw [hs] at h8 hw; exact ⟨h8, hw, hrsp_m⟩)
-        hread hwrite hrun
-        (fun s2 lf2 r hr => by
-          rw [hkept_eq] at hr
-          have := lf2.1.1.2.2.1 r hr
-          obtain ⟨_, ne, nl⟩ := keeps_spec hr
-          rw [this, afterCall_reg F.link (callKeeps ne nl)])
-        (fun s2 ⟨⟨hpost2, hsp2, hret2, hmem2⟩, hdata2⟩ => by
-          let cleanRet := c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
-          obtain ⟨hrip2, ρ', c'⟩ := hpost s2 hpost2 hdata2
-          rw [hkept_eq]
-          exact K _ i.next ρ' (backFrom c.keeps st s2) (List.mem_cons_self ..) hrip2
-            ((c'.q _).fields rfl rfl rfl rfl rfl rfl)
-            (hafter cleanRet s2 (fun hcr => callReturnsClean_givesNumber (Bool.and_eq_true _ _ |>.mp hcr).2)
-              ⟨hsp2, fun hcr => hret2 (Bool.and_eq_true _ _ |>.mp hcr).1, hmem2⟩))
+      have hload := loaded_call E H q i F.link h8 hw
+      have hclr := clear_call Kc H p q i F.link hw hwrite
+      have hclean_c : c.cleanAtEntry.all (quietAtCall s c).q.regq.contains = true := by
+        simp only [callQuiet, Bool.and_eq_true] at hcq; exact hcq.1.1.1.1
+      have hta : ∀ stb, Alike st stb → c.traceAgree ctx.defs (afterCall p q i st) (afterCall p q i stb) := fun stb A =>
+        callQuiet_traceAgree_alike E E.quiet hsel (quietAtCall_holds H c) (quietAtCall_marks M c) A F h8 hw hwrite hcq
+      let cleanRet := callReturnsClean ctx (quietAtCall s c) c
+      refine RunsT.call st i name c q cleanRet hfetch hc hl2 hq hsbok F.link hrsp_m hbd hload hclr hpre meets trok hta ?_ ?_
+      · intro hcr stb s1a s1b s2a s2b A hloadb hclrb hpreb Eina Einb hpost2a hpost2b hs1a hs1b
+        have hta_call := hta stb A
+        obtain ⟨_, hrf2⟩ := trok _ _ hbd hload hclr hpre hloadb hclrb hpreb hta_call s1a s1b Eina Einb
+        have heq0 : s1a.reg 0 = s1b.reg 0 → c.retReg = 0 → s2a.reg c.retReg = s2b.reg c.retReg := by
+          intro h0 hr
+          have h1 : s1a.reg 0 = s2a.reg 0 := by rw [hs1a]; rfl
+          have h2 : s1b.reg 0 = s2b.reg 0 := by rw [hs1b]; rfl
+          rw [hr]; omega
+        simp only [cleanRet, callReturnsClean] at hcr
+        cases hret : c.returns with
+        | some e =>
+          simp only [hret] at hcr
+          have hvea := hpost2a.2.2.2.2.1 e hret
+          have hveb := hpost2b.2.2.2.2.1 e hret
+          have hsame := (callExprClean_alike E E.quiet hsel (quietAtCall_holds H c) (quietAtCall_marks M c) A F h8 hw hclean_c hcr (.int (s2a.reg c.retReg))).mp hvea
+          have hu := Value.unique hsame hveb
+          injection hu with hu; exact Int.ofNat.inj hu
+        | none =>
+          simp only [hret] at hcr
+          by_cases hrf : c.resultFollowsTrace = true
+          · have hri : c.result.isSome = true := (Bool.and_eq_true _ _ |>.mp hrf).1
+            exact heq0 (hrf2 hrf) ((retReg_spec c).2.2.2 hri)
+          · simp only [hrf] at hcr
+            cases hri : c.result.isSome with
+            | false => simp [hri] at hcr
+            | true =>
+              simp only [hri, ↓reduceIte] at hcr
+              cases hrh : c.resultHidden with
+              | none => simp [hrh] at hcr
+              | some rh =>
+                simp only [hrh] at hcr
+                obtain ⟨_, trokr⟩ := trok2 rh hrh
+                have F_r : Fits ctx st i (c.forResult rh) := ⟨F.machine, F.link, F.aligned⟩
+                have hta_r := callQuiet_traceAgree_alike (c := c.forResult rh) E E.quiet hsel
+                  (quietAtCall_holds H c) (quietAtCall_marks M c) A F_r h8 hw hwrite hcr
+                have hrf_r : (c.forResult rh).resultFollowsTrace = true := by
+                  simp [Contract.forResult, Contract.resultFollowsTrace, hri]
+                exact heq0 ((trokr _ _ hbd hload ((forResult_clear c rh _ _ _).mpr hclr) ((forResult_pre c rh _ _).mpr hpre)
+                  hloadb ((forResult_clear c rh _ _ _).mpr hclrb) ((forResult_pre c rh _ _).mpr hpreb)
+                  hta_r s1a s1b Eina Einb).2 hrf_r) ((retReg_spec c).2.2.2 hri)
+      · intro cr s2 hcr_imp hpost2 hdata2
+        let s2m : State := { s2 with marks := postCallMarks c cr (afterCall p q i st) }
+        have hpost_m : c.post ctx.defs (afterCall p q i st) s2m := post_fields hpost2 rfl rfl rfl rfl
+        have hdata_m : s2m.data = st.data := hdata2
+        have hqm : s2m.marks.reg RSP = false ∧ (cleanRet = true → s2m.marks.reg c.retReg = false) ∧
+            ∀ a, c.inFrame (afterCall p q i st) a = false → c.inOut (afterCall p q i st) a = false →
+              s2m.marks.mem a = (afterCall p q i st).marks.mem a :=
+          ⟨by simp [s2m, postCallMarks], fun h0 => by simp [s2m, postCallMarks, hcr_imp h0],
+           fun a hf ho => by simp [s2m, postCallMarks, hf, ho]⟩
+        obtain ⟨hrip2, ρ', c'⟩ := hpost s2m hpost_m hdata_m
+        exact K _ i.next ρ' (backFrom c.keeps st s2m) (List.mem_cons_self ..) hrip2
+          ((c'.q _).fields rfl rfl rfl rfl rfl rfl)
+          (hafter cleanRet s2m (fun hcr => callReturnsClean_givesNumber hcr) hqm)
 
-def ReliedQ (world : List Program) (keptOf : String → List Nat) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
+def ReliedT (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (seen : List Seen) (n : Nat) (ρ : Nat → Int) : Prop :=
   ∀ e ∈ seen, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars ≤ n ∧ bounded n e.d ∧
     ∀ ρ' st', AtPlace ctx e.place s0 e.first ρ ρ' st' → st'.rip = p.base + e.place.pc →
       MarksOk ctx s0 { regq := e.first.q.regq, fq := e.first.q.fq } st' →
       (∃ k : Int, Value ctx.defs (placeVals ctx e.place s0 st') e.place.decreases (.int k) ∧ k + 1 ≤ ev ρ e.d) →
-      RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) st'
+      RunsT world ctx p s0 st'
 
-theorem ReliedQ.carried {world : List Program} {keptOf : String → List Nat} {ctx : Ctx} {p : Program} {s0 : State} {seen : List Seen}
-    {n m : Nat} {ρ ρ' : Nat → Int} (T : ReliedQ world keptOf ctx p s0 seen n ρ) (hle : n ≤ m) (hag : Agree n ρ ρ') :
-    ReliedQ world keptOf ctx p s0 seen m ρ' := by
+theorem ReliedT.carried {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} {seen : List Seen}
+    {n m : Nat} {ρ ρ' : Nat → Int} (T : ReliedT world ctx p s0 seen n ρ) (hle : n ≤ m) (hag : Agree n ρ ρ') :
+    ReliedT world ctx p s0 seen m ρ' := by
   intro e me
   obtain ⟨hn, hf, hd, run⟩ := T e me
   exact ⟨hn, Nat.le_trans hf hle, bounded_mono hle hd, fun ρx stx A hrip M ⟨k, val, lt⟩ =>
     run ρx stx ⟨Agree.trans (Nat.le_refl _) (Agree.mono hf hag) A.outer, A.entry, A.data, A.kept, A.small, A.frame, A.mem, A.facts, A.lanes, A.cells, A.wrote, A.vecIntact⟩
       hrip M ⟨k, val, by rwa [ev_agree hd hag]⟩⟩
 
-def ReliedJoinQ (world : List Program) (keptOf : String → List Nat) (ctx : Ctx) (p : Program) (s0 : State) (jdone : List JoinEntry) (n : Nat) (ρ : Nat → Int) : Prop :=
+def ReliedJoinT (world : List Program) (ctx : Ctx) (p : Program) (s0 : State) (jdone : List JoinEntry) (n : Nat) (ρ : Nat → Int) : Prop :=
   ∀ e ∈ jdone, (∀ nr ∈ e.place.names, nr.2 < ctx.nreg) ∧ e.first.nvars = n ∧
     ∀ ρ' st', AtPlace ctx e.place s0 e.first ρ ρ' st' → st'.rip = p.base + e.place.pc →
       MarksOk ctx s0 { regq := e.first.q.regq, fq := e.first.q.fq } st' →
-      RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) st'
+      RunsT world ctx p s0 st'
 
-theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
-    (W : CalleesRunsAt world keptOf ctx s0) (Kc : ctx.contract.clear world ctx.pieces s0)
-    (he : ctx.contract.traceExprs.isEmpty = true) (hcap : hasSelect ctx.code = true ∨ hasCallOrTail ctx.code = false) :
-    ∀ (fuel : Nat) {base : Sym} {seen : List Seen} {jstack : List Nat} {jdone jdone' : List JoinEntry}
-      {s : Sym} {pc : Nat} {items rest : Items} {ρb : Nat → Int} {stb : State},
+theorem explore_runsT {world : List Program} {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0)
+    (W : CalleesTrace world ctx s0) (Kc : ctx.contract.clear world ctx.pieces s0)
+    (he : ctx.contract.traceExprs.isEmpty = true) (hsel : hasSelect ctx.code = true) :
+    ∀ fuel {base : Sym} {seen : List Seen} {jstack : List Nat} {jdone jdone' : List JoinEntry} {s : Sym} {pc : Nat}
+      {items rest : Items} {ρb : Nat → Int} {stb : State},
     explore ctx fuel base seen jstack jdone s pc items = .ok (jdone', rest) →
     Holds ctx s0 ρb base stb → WF ctx base →
-    ReliedQ world keptOf ctx p s0 seen base.nvars ρb →
-    ReliedJoinQ world keptOf ctx p s0 jdone base.nvars ρb →
-    ReliedJoinQ world keptOf ctx p s0 jdone' base.nvars ρb ∧
-    (∀ ρ st, base.nvars ≤ s.nvars → Agree base.nvars ρb ρ →
+    ReliedT world ctx p s0 seen base.nvars ρb →
+    ReliedJoinT world ctx p s0 jdone base.nvars ρb →
+    ReliedJoinT world ctx p s0 jdone' base.nvars ρb ∧
+    ∀ ρ st, base.nvars ≤ s.nvars → Agree base.nvars ρb ρ →
       Holds ctx s0 ρ s st → WF ctx s → st.rip = p.base + pc → MarksOk ctx s0 s.q st →
-      RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) st)
-  | 0, _, _, _, _, _, _, _, _, _, _, _, h, _, _, _, _ => by simp only [explore] at h; exact (refuse_ok h).elim
+      RunsT world ctx p s0 st
+  | 0, _, _, _, _, _, _, _, _, _, _, _, h, _, _, _, _ => by simp [explore] at h; exact (refuse_ok h).elim
   | fuel + 1, base, seen, jstack, jdone, jdone', s, pc, items, rest, ρb, stb, h, Hb, wfb, Tb, Jb => by
+    simp only [explore] at h
     cases hl : ctx.code.lookup pc with
-    | none => simp only [explore, hl] at h; exact (refuse_ok h).elim
+    | none => simp only [hl] at h; exact (refuse_ok h).elim
     | some i =>
-      simp only [explore, hl] at h
+      simp only [hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
       have hsc := symClears_empty he CLEARS hc; rw [hsc] at h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
       have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
-          ReliedJoinQ world keptOf ctx p s0 jd base.nvars ρb →
+          ReliedJoinT world ctx p s0 jd base.nvars ρb →
           onward ctx base seen jstack (explore ctx fuel) jd nx it = .ok (jd', it') →
-          ReliedJoinQ world keptOf ctx p s0 jd' base.nvars ρb := by
+          ReliedJoinT world ctx p s0 jd' base.nvars ρb := by
         intro nx _ jd jd' it it' Jcur hbody
         rcases nx with ⟨snx, nxt⟩
         cases nxt with
@@ -4659,7 +4769,7 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
         | «at» pc' =>
           simp only [onward] at hbody
           cases hp : ctx.places.find? (fun p => p.pc == pc') with
-          | none => simp only [hp] at hbody; exact (explore_runsQ E W Kc he hcap fuel hbody Hb wfb Tb Jcur).1
+          | none => simp only [hp] at hbody; exact (explore_runsT E W Kc he hsel fuel hbody Hb wfb Tb Jcur).1
           | some pl =>
             simp only [hp] at hbody
             have epc : pl.pc = pc' := by simpa using List.find?_some hp
@@ -4686,7 +4796,7 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
                     obtain ⟨jmid, _, hgo, hpur⟩ := V.bind_ok h3
                     have := V.pure_ok hpur; injection this with h1 _; subst h1
                     obtain ⟨hnames, hnv, G⟩ := generalizeJoin_sound E pl hfirst eg Hb wfb
-                    obtain ⟨Jmid, runG⟩ := explore_runsQ E W Kc he hcap fuel hgo Hb wfb Tb Jcur
+                    obtain ⟨Jmid, runG⟩ := explore_runsT E W Kc he hsel fuel hgo Hb wfb Tb Jcur
                     intro je mje
                     cases mje with
                     | head =>
@@ -4696,20 +4806,20 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
                       have agb : Agree base.nvars ρb ρ'' := Agree.trans (Nat.le_refl _) (hnv ▸ Ax.outer) agx
                       exact runG ρ'' stx leg agb (Hg.q _) (wg.q _) (by rw [← epc]; exact hripx) Mx
                     | tail _ mt => exact Jmid je mt
-      obtain ⟨Jout, hmem⟩ := eachState_prop (P := fun jd => ReliedJoinQ world keptOf ctx p s0 jd base.nvars ρb) h Jb honward_J
+      obtain ⟨Jout, hmem⟩ := eachState_prop (P := fun jd => ReliedJoinT world ctx p s0 jd base.nvars ρb) h Jb honward_J
       refine ⟨Jout, ?_⟩
       intro ρ st hle hag H wf hrip M
-      apply step_runsQ E W Kc hcap hl e1 H wf hrip M
+      apply step_runsT E W Kc hsel hl e1 H wf hrip M
       intro s' pc' ρ' st' m hrip' c' M'
       obtain ⟨jd, jd', items', r', Jcur, hbody⟩ := hmem (s', Next.at pc') m
       have hle' : base.nvars ≤ s'.nvars := Nat.le_trans hle c'.mono
       have hag' : Agree base.nvars ρb ρ' := Agree.trans hle hag c'.agree
-      have T' : ReliedQ world keptOf ctx p s0 seen s'.nvars ρ' := Tb.carried hle' hag'
+      have T' : ReliedT world ctx p s0 seen s'.nvars ρ' := Tb.carried hle' hag'
       simp only [onward] at hbody
       cases hp : ctx.places.find? (fun p => p.pc == pc') with
       | none =>
         simp only [hp] at hbody
-        exact (explore_runsQ E W Kc he hcap fuel hbody Hb wfb Tb Jcur).2 ρ' st' hle' hag' c'.holds c'.wf hrip' M'
+        exact (explore_runsT E W Kc he hsel fuel hbody Hb wfb Tb Jcur).2 ρ' st' hle' hag' c'.holds c'.wf hrip' M'
       | some pl =>
         simp only [hp] at hbody
         have epc : pl.pc = pc' := by simpa using List.find?_some hp
@@ -4737,7 +4847,7 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
                 obtain ⟨g, _, eg, h3⟩ := V.bind_ok h2
                 obtain ⟨_, _, hgo, _⟩ := V.bind_ok h3
                 obtain ⟨hnames, hnv, G⟩ := generalizeJoin_sound E pl hfirst eg Hb wfb
-                have runG := (explore_runsQ E W Kc he hcap fuel hgo Hb wfb Tb Jcur).2
+                have runG := (explore_runsT E W Kc he hsel fuel hgo Hb wfb Tb Jcur).2
                 have A := arriveJoin_sound E pl hnames harr c'.holds c'.wf (hnv.symm ▸ hag')
                 obtain ⟨ρ'', Hg, wg, leg, agx⟩ := G ρ' st' A
                 have agb : Agree base.nvars ρb ρ'' := Agree.trans (Nat.le_refl _) (hnv ▸ A.outer) agx
@@ -4758,11 +4868,11 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
             obtain ⟨⟨g, d, first⟩, r2, e2, h2⟩ := V.bind_ok hbody
             obtain ⟨_, _, hgo, _⟩ := V.bind_ok h2
             obtain ⟨hn, ρ1, ag1, le1, A1, wg, leg, hd, G⟩ := generalize_sound E pl e2 c'.holds c'.wf
-            have T1 : ReliedQ world keptOf ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
+            have T1 : ReliedT world ctx p s0 seen first.nvars ρ1 := T'.carried le1 ag1
             have all : ∀ (n : Nat) (ρx : Nat → Int) (stx : State), AtPlace ctx pl s0 first ρ1 ρx stx → stx.rip = p.base + pl.pc →
                 MarksOk ctx s0 { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } stx →
                 Value ctx.defs (placeVals ctx pl s0 stx) pl.decreases (.int (n : Int)) →
-                RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) stx := by
+                RunsT world ctx p s0 stx := by
               intro n
               induction n using Nat.strongRecOn with
               | ind n ih =>
@@ -4771,7 +4881,7 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
                 have same := Value.unique val val'
                 injection same with same
                 have a1 : Agree first.nvars ρ1 ρ'' := Agree.trans (Nat.le_refl _) A.outer agx
-                have Tinner : ReliedQ world keptOf ctx p s0 (⟨pl, d, { first with q := { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } }⟩ :: seen) g.nvars ρ'' := by
+                have Tinner : ReliedT world ctx p s0 (⟨pl, d, { first with q := { regq := placeQuiet ctx pl s'.q.regq, fq := s'.q.fq } }⟩ :: seen) g.nvars ρ'' := by
                   intro e me
                   cases me with
                   | head =>
@@ -4786,20 +4896,20 @@ theorem explore_runsQ {world : List Program} {keptOf : String → List Nat} {ctx
                     have small : k.toNat < n := by omega
                     exact ih k.toNat small ρy sty Ay1 hripy My (by rw [Int.toNat_of_nonneg (by omega)]; exact valy)
                   | tail _ me => exact (T1.carried leg a1) e me
-                exact (explore_runsQ E W Kc he hcap fuel hgo (Hg.q _) (wg.q _) Tinner (fun _ m => nomatch m)).2
+                exact (explore_runsT E W Kc he hsel fuel hgo (Hg.q _) (wg.q _) Tinner (fun _ m => nomatch m)).2
                   ρ'' stx (Nat.le_refl _) (Agree.refl _ _) (Hg.q _) (wg.q _) (by rw [← epc]; exact hripx) Mx
             obtain ⟨ρ'', _, _, pos, val⟩ := G ρ1 st' A1
             exact all (ev ρ'' d).toNat ρ1 st' A1 (by rw [epc]; exact hrip')
               (M'.fewer (placeQuiet_all ctx pl s'.q.regq) (List.all_eq_true.mpr fun _ hm => List.contains_iff_mem.mpr hm))
               (by rw [Int.toNat_of_nonneg pos]; exact val)
 
-theorem verifyOne_runsQ_at (world : List Program) (keptOf : String → List Nat) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
-    (he : ctx.contract.traceExprs.isEmpty = true) (hcap : hasSelect ctx.code = true ∨ hasCallOrTail ctx.code = false)
-    (h : verdictOne ctx proof = none) (s0 : State) (W : CalleesRunsAt world keptOf ctx s0)
+theorem verifyOne_runsT_at (world : List Program) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
+    (he : ctx.contract.traceExprs.isEmpty = true) (hsel : hasSelect ctx.code = true)
+    (h : verdictOne ctx proof = none) (s0 : State) (W : CalleesTrace world ctx s0)
     (loaded : Loaded ctx.pieces s0) (clear : ctx.contract.clear world ctx.pieces s0) (pre : ctx.contract.pre p s0)
     (quiet : ctx.contract.quietAt s0)
     (dq : ∀ k pc, ctx.pieces[k]? = some pc → ∀ j, j < pc.bytes.length → s0.marks.mem (s0.data k + j) = false) :
-    RunsK world keptOf (ctx.contract.perm ctx.pieces s0) p (runsPost ctx.contract ctx.defs s0) s0 := by
+    RunsT world ctx p s0 s0 := by
   have E : Setting ctx p s0 := ⟨hcode, pre, quiet, loaded, dq, fun a ha => ⟨(clear a (Or.inl ha)).1, (clear a (Or.inl ha)).2.1⟩⟩
   obtain ⟨_, _, _, r, hv⟩ := verdictOne_ok h
   unfold verify at hv
@@ -4816,167 +4926,89 @@ theorem verifyOne_runsQ_at (world : List Program) (keptOf : String → List Nat)
         simp only [ha, ↓reduceIte] at hb h2
         have e : r = LINK := by simpa using h2
         rw [e]; exact hb
-  exact (explore_runsQ E W clear he hcap PATH e1 H wf (fun e m => nomatch m) (fun e m => nomatch m)).2
+  exact (explore_runsT E W clear he hsel PATH e1 H wf (fun e m => nomatch m) (fun e m => nomatch m)).2
     ρ0 s0 (Nat.le_refl _) (Agree.refl _ _) H wf (by rw [E.rip]; rfl)
     (by rw [entrySym_q]; exact ⟨Mreg, (fun x => by cases x), (fun x => by cases x), (fun _ _ _ => rfl), CellsOk.nil, (fun _ m => nomatch m)⟩)
 
-theorem verifyOne_runsQ_rec (world : List Program) (keptOf : String → List Nat) (pieces : List Piece) (defs : List Def)
-    (runsOk : List String) (done : List (String × Contract)) (f : Fn) (p : Program) (c : Contract) (rp : Bool)
-    (hp : findProgram world f.name = some p) (hc : p.code = f.code) (hf : p.fits)
-    (hkept_f : keptOf f.name = f.contract.keeps)
-    (hceq : c.decreases = f.contract.decreases ∧ ∀ x, c.regOf x = f.contract.regOf x)
-    (he : c.traceExprs.isEmpty = true) (hcap : hasSelect f.code = true ∨ hasCallOrTail f.code = false)
-    (I : ∀ name c', done.lookup name = some c' → name ∈ runsOk →
-      ∃ q, findProgram world name = some q ∧ q.fits ∧ keptOf name = c'.keeps ∧ RunsOk world keptOf pieces c' defs q)
-    (hpass : verdictOne
-      { code := f.code, contract := c, defs := defs, places := f.places,
-        callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
-        selfName := if f.contract.decreases.isSome then some f.name else none,
-        pieces := pieces, piece := f.piece, resultPass := rp, runsCallees := runsOk } f.proof = none)
-    (hrself : f.contract.decreases.isSome = true → c = f.contract ∨ RunsOk world keptOf pieces f.contract defs p) :
-    RunsOk world keptOf pieces c defs p := by
-  let ctx : Ctx :=
-    { code := f.code, contract := c, defs := defs, places := f.places,
-      callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
-      selfName := if f.contract.decreases.isSome then some f.name else none,
-      pieces := pieces, piece := f.piece, resultPass := rp, runsCallees := runsOk }
-  cases hdec : f.contract.decreases with
-  | none =>
-    have W : ∀ s0, CalleesRunsAt world keptOf ctx s0 := fun s0 name c' hl hmem => by
-      simp only [ctx, hdec, Option.isSome_none, Bool.false_eq_true, ↓reduceIte] at hl hmem
-      rcases hmem with hm | hs
-      · obtain ⟨q, hq, fitq, hkq, Rq⟩ := I name c' hl (List.contains_iff_mem.mp hm)
-        exact ⟨q, hq, fitq, hkq, Rq.below _⟩
-      · cases hs
-    exact fun s0 hl hcl hpre hq hdq => verifyOne_runsQ_at world keptOf ctx p f.proof hc he hcap hpass s0 (W s0) hl hcl hpre hq hdq
-  | some d =>
-    have hdok := (verdictOne_ok hpass).2.1
-    simp only [ctx, Contract.decreasesOk, hceq.1, hdec] at hdok
-    cases hr : f.contract.regOf d with
-    | none => rw [hceq.2 d, hr] at hdok; simp at hdok
-    | some rDec =>
-      have all : ∀ n s0, s0.reg rDec = n →
-          Loaded pieces s0 → c.clear world pieces s0 → c.pre p s0 → c.quietAt s0 →
-          (∀ k pc, pieces[k]? = some pc → ∀ j, j < pc.bytes.length → s0.marks.mem (s0.data k + j) = false) →
-          RunsK world keptOf (c.perm pieces s0) p (runsPost c defs s0) s0 := by
-        intro n
-        refine Nat.strongRecOn n fun n ih => ?_
-        intro s0 heq loaded clear pre quiet dq
-        have W : CalleesRunsAt world keptOf ctx s0 := by
-          intro name c' hl hmem
-          simp only [ctx, hdec, Option.isSome_some, ↓reduceIte, List.lookup_cons] at hl
-          cases hn : (name == f.name) with
-          | true =>
-            rw [hn] at hl; injection hl with hl
-            have e : name = f.name := by simpa using hn
-            subst hl e
-            rcases hrself (by simp [hdec]) with hce | Rmain
-            · refine ⟨p, hp, hf, hkept_f, fun sc hbd hl' hc' hp' hq' hdq' => ?_⟩
-              have hlt : sc.reg rDec < s0.reg rDec := hbd rDec (s0.reg rDec) (by simp [Ctx.recBound, ctx, hdec, hr])
-              rw [← hce]; exact ih (sc.reg rDec) (by omega) sc rfl hl' (hce ▸ hc') (hce ▸ hp') (hce ▸ hq') hdq'
-            · exact ⟨p, hp, hf, hkept_f, Rmain.below _⟩
-          | false =>
-            rw [hn] at hl
-            have hm : name ∈ runsOk := by
-              rcases hmem with hm | hs
-              · exact List.contains_iff_mem.mp hm
-              · simp only [ctx, hdec, Option.isSome_some, ↓reduceIte, Option.some.injEq] at hs
-                subst hs; simp at hn
-            obtain ⟨q, hq, fitq, hkq, Rq⟩ := I name c' hl hm
-            exact ⟨q, hq, fitq, hkq, Rq.below _⟩
-        exact verifyOne_runsQ_at world keptOf ctx p f.proof hc he hcap hpass s0 W loaded clear pre quiet dq
-      exact fun s0 hl hc' hp' hq' hdq' => all (s0.reg rDec) s0 rfl hl hc' hp' hq' hdq'
-
-theorem runsOk_traceOk {world : List Program} {keptOf : String → List Nat} {pieces : List Piece} {c : Contract} {defs : List Def} {p : Program}
-    (R : RunsOk world keptOf pieces c defs p) : TraceOk world pieces c defs p := by
-  intro a0 b0 la ka pa lb kb pb ta a' b' Epa Epb
-  let mk := initMarks c pieces a0
-  let a0m : State := { a0 with marks := mk }
-  let b0m : State := { b0 with marks := mk }
-  have A0 : Alike a0m b0m := initMarks_alike la lb ta
-  obtain ⟨qa, qb⟩ := initMarks_quiet (pieces := pieces) ta
-  have dqa : ∀ k pc, pieces[k]? = some pc → ∀ j, j < pc.bytes.length → a0m.marks.mem (a0m.data k + j) = false :=
-    initMarks_dataQuiet (c := c) (pieces := pieces) (a0 := a0)
-  have dqb : ∀ k pc, pieces[k]? = some pc → ∀ j, j < pc.bytes.length → b0m.marks.mem (b0m.data k + j) = false := by
-    intro k pc hk j hj; show mk.mem (b0.data k + j) = false; rw [← ta.2.1]; exact dqa k pc hk j hj
-  have Ra := R a0m la ka pa qa dqa
-  have Rb := R b0m lb kb pb qb dqb
-  obtain ⟨ra, Ea, Qa, ha⟩ := runsK_endsP Ra Epa
-  obtain ⟨rb, Eb, Qb, hb⟩ := runsK_endsP Rb Epb
-  have Alr := endsK_alike Ea A0 Eb
-  subst ha hb
-  refine ⟨Alr.trace, fun hrf => ?_⟩
-  have hmk0 : ra.marks.reg 0 = false := by
-    have := Qa.2.2.1 hrf; rw [retReg_of_resultFollowsTrace hrf] at this; exact this
-  exact Alr.reg 0 hmk0
-
-theorem verdictFrom_nodup (pieces : List Piece) (defs : List Def) :
-    ∀ (fns : List Fn) (runsOk : List String) (done : List (String × Contract)),
-    verdictFrom.go pieces defs runsOk done fns = none →
-    ∀ f ∈ fns, done.lookup f.name = none ∧ (fns.find? fun g => g.name == f.name) = some f
-  | [], _, _, _ => fun _ m => nomatch m
-  | f :: more, runsOk, done, h => by
-    simp only [verdictFrom.go] at h
-    split at h
-    · cases h
-    next hnodup =>
-      let ctx : Ctx :=
-        { code := f.code, contract := f.contract, defs := defs, places := f.places,
-          callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
-          selfName := if f.contract.decreases.isSome then some f.name else none,
-          pieces := pieces, piece := f.piece, runsCallees := runsOk }
-      cases hv : verdict ctx f.proof with
-      | some _ => simp [ctx, hv] at h
-      | none =>
-        simp only [ctx, hv] at h
-        have hnotd : done.lookup f.name = none := by
-          cases hlk : done.lookup f.name with
+/-- Unified single-function trace soundness for BOTH `hasSelect = false` (lockstep two-run proof) and
+`hasSelect = true` (single-run `RunsT` + `runsT_traceOk`), sharing one identical `CalleesTrace` interface. -/
+theorem verifyOne_trace_unified (world : List Program) (ctx : Ctx) (p : Program) (proof : List Item) (hcode : p.code = ctx.code)
+    (h : verdictOne ctx proof = none) (a0 b0 : State) (W : CalleesTrace world ctx a0)
+    (la : Loaded ctx.pieces a0) (ka : ctx.contract.clear world ctx.pieces a0) (pa : ctx.contract.pre p a0)
+    (lb : Loaded ctx.pieces b0) (kb : ctx.contract.clear world ctx.pieces b0) (pb : ctx.contract.pre p b0)
+    (ta : ctx.contract.traceAgree ctx.defs a0 b0)
+    (a' b' : State) (Epa : EndsP world p a0.plain a') (Epb : EndsP world p b0.plain b') :
+    a'.trace = b'.trace ∧ (ctx.contract.resultFollowsTrace = true → a'.reg 0 = b'.reg 0) := by
+  cases hsel : hasSelect ctx.code with
+  | false =>
+    exact verifyOne_trace_sound_at world ctx p proof hcode hsel h a0 b0 W la ka pa lb kb pb ta a' b' Epa Epb
+  | true =>
+    obtain ⟨_, hdok, hsel_emp, _, _⟩ := verdictOne_ok h
+    have he : ctx.contract.traceExprs.isEmpty = true := hsel_emp hsel
+    let mk := initMarks ctx.contract ctx.pieces a0
+    let a0m : State := { a0 with marks := mk }
+    let b0m : State := { b0 with marks := mk }
+    have A0 : Alike a0m b0m := initMarks_alike la lb ta
+    obtain ⟨qa, qb⟩ := initMarks_quiet (pieces := ctx.pieces) ta
+    have dqa : ∀ k pc, ctx.pieces[k]? = some pc → ∀ j, j < pc.bytes.length → a0m.marks.mem (a0m.data k + j) = false :=
+      initMarks_dataQuiet (c := ctx.contract) (pieces := ctx.pieces) (a0 := a0)
+    have dqb : ∀ k pc, ctx.pieces[k]? = some pc → ∀ j, j < pc.bytes.length → b0m.marks.mem (b0m.data k + j) = false := by
+      intro k pc hk j hj; show mk.mem (b0.data k + j) = false; rw [← ta.2.1]; exact dqa k pc hk j hj
+    have Wa : CalleesTrace world ctx a0m := W
+    have Wb : CalleesTrace world ctx b0m := by
+      intro name c hl
+      obtain ⟨q, hq, fitq, hsbok, hself_eq, Mq, Tq, Tq2⟩ := W name c hl
+      have hrb : ctx.recBound name c b0m = ctx.recBound name c a0 := by
+        unfold Ctx.recBound
+        split
+        next hself =>
+          have hself' : ctx.selfName = some name := by simpa using hself
+          obtain ⟨hdeq, hreq⟩ := hself_eq hself'
+          cases hd : c.decreases with
           | none => rfl
-          | some c0 => exact absurd (List.any_eq_true.mpr ⟨(f.name, c0), lookup_mem hlk, by simp⟩) hnodup
-        intro g mg
-        cases mg with
-        | head => exact ⟨hnotd, by simp⟩
-        | tail _ mg' =>
-          have ih := verdictFrom_nodup pieces defs more _ ((f.name, f.contract) :: done) h g mg'
-          have hlk := ih.1
-          rw [List.lookup_cons] at hlk
-          cases hne : (g.name == f.name) with
-          | true => simp [hne] at hlk
-          | false =>
-            rw [hne] at hlk
-            have hne' : (f.name == g.name) = false := by
-              cases h0 : (f.name == g.name) with
-              | false => rfl
-              | true => have : f.name = g.name := beq_iff_eq.mp h0; rw [this] at hne; simp at hne
-            exact ⟨hlk, by simp [hne', ih.2]⟩
+          | some d =>
+            simp only [Option.bind_some]
+            cases hr : c.regOf d with
+            | none => rfl
+            | some r =>
+              simp only [Option.map_some, Option.some.injEq, Prod.mk.injEq, true_and]
+              have hr_ctx : ctx.contract.regOf d = some r := (hreq d).symm.trans hr
+              have hcl : r ∈ ctx.contract.cleanAtEntry := by
+                have hdok' := hdok
+                unfold Contract.decreasesOk at hdok'
+                simp only [← hdeq, hd, hr_ctx] at hdok'
+                exact List.contains_iff_mem.mp hdok'
+              exact (ta.2.2.2.2.2.1 r hcl).symm
+        next => rfl
+      rw [hrb]
+      exact ⟨q, hq, fitq, hsbok, hself_eq, Mq, Tq, Tq2⟩
+    have Ra := verifyOne_runsT_at world ctx p proof hcode he hsel h a0m Wa la ka pa qa dqa
+    have Rb := verifyOne_runsT_at world ctx p proof hcode he hsel h b0m Wb lb kb pb qb dqb
+    exact runsT_traceOk Ra Rb A0 Epa Epb
 
-theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List Nat) (pieces : List Piece) (defs : List Def) :
-    ∀ (fns : List Fn) (runsOk : List String) (done : List (String × Contract)),
-    (∀ name ∈ runsOk, ∃ c, done.lookup name = some c) →
-    (∀ f ∈ fns, keptOf f.name = f.contract.keeps) →
+theorem verdictFrom_trace_sound (world : List Program) (pieces : List Piece) (defs : List Def) :
+    ∀ (fns : List Fn) (done : List (String × Contract)),
     (∀ name c, done.lookup name = some c →
       ∃ q, findProgram world name = some q ∧ q.fits ∧
-        c.stackBitsOk = true ∧ keptOf name = c.keeps ∧
+        c.stackBitsOk = true ∧
         Meets world pieces c defs q ∧
         TraceOk world pieces c defs q ∧
-        (∀ rh, c.resultHidden = some rh → c.result.isSome = true ∧ TraceOk world pieces (c.forResult rh) defs q) ∧
-        (name ∈ runsOk → RunsOk world keptOf pieces c defs q)) →
-    Linked world fns → verdictFrom.go pieces defs runsOk done fns = none →
+        (∀ rh, c.resultHidden = some rh → c.result.isSome = true ∧ TraceOk world pieces (c.forResult rh) defs q)) →
+    Linked world fns → verdictFrom pieces defs done fns = none →
     ∀ f ∈ fns, ∃ p, findProgram world f.name = some p ∧
       Meets world pieces f.contract defs p ∧
       TraceOk world pieces f.contract defs p ∧
       (∀ rh, f.contract.resultHidden = some rh → f.contract.result.isSome = true ∧ TraceOk world pieces (f.contract.forResult rh) defs p)
-  | [], _, _, _, _, _, _, _ => fun f m => nomatch m
-  | f :: more, runsOk, done, hsub, hkf, I, L, h => by
-    simp only [verdictFrom.go] at h
+  | [], _, _, _, _ => fun f m => nomatch m
+  | f :: more, done, I, L, h => by
+    simp only [verdictFrom] at h
     split at h
     · cases h
-    next hnodup =>
-      let ctx : Ctx :=
+    · let ctx : Ctx :=
         { code := f.code, contract := f.contract, defs := defs, places := f.places,
           callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
           selfName := if f.contract.decreases.isSome then some f.name else none,
-          pieces := pieces, piece := f.piece, runsCallees := runsOk }
+          pieces := pieces, piece := f.piece }
       cases hv : verdict ctx f.proof with
       | some why => simp [ctx, hv] at h
       | none =>
@@ -4988,14 +5020,9 @@ theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List
           | some _ => rw [hv1] at hv; cases hv
         have hsbok1 : f.contract.stackBitsOk = true := (verdictOne_ok hpass1).1
         have hdok1 : f.contract.decreasesOk = true := (verdictOne_ok hpass1).2.1
-        have hsel_emp : hasSelect f.code = true → f.contract.traceExprs.isEmpty = true := (verdictOne_ok hpass1).2.2.1
         have IM : ∀ name c, done.lookup name = some c → ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world pieces c defs q :=
-          fun name c hl => let ⟨q, hq, fitq, _, _, Mq, _, _, _⟩ := I name c hl; ⟨q, hq, fitq, Mq⟩
-        have IR : ∀ name c, done.lookup name = some c → name ∈ runsOk →
-            ∃ q, findProgram world name = some q ∧ q.fits ∧ keptOf name = c.keeps ∧ RunsOk world keptOf pieces c defs q :=
-          fun name c hl hm => let ⟨q, hq, fitq, _, hkq, _, _, _, Rq⟩ := I name c hl; ⟨q, hq, fitq, hkq, Rq hm⟩
-        have hkf0 : keptOf f.name = f.contract.keeps := hkf f (List.mem_cons_self ..)
-        have M : Meets world pieces f.contract defs p := verifyOne_sound_rec world pieces defs runsOk done f p hp hc hf IM hpass1
+          fun name c hl => let ⟨q, hq, fitq, _, Mq, _, _⟩ := I name c hl; ⟨q, hq, fitq, Mq⟩
+        have M : Meets world pieces f.contract defs p := verifyOne_sound_rec world pieces defs done f p hp hc hf IM hpass1
         have hpass2 : ∀ rh, f.contract.resultHidden = some rh →
             f.contract.result.isSome = true ∧
             verdictOne { ctx with contract := f.contract.forResult rh, resultPass := true } f.proof = none := by
@@ -5007,50 +5034,27 @@ theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List
           split at hv
           · cases hv
           · split at hv
-            next => cases hv
-            next hres =>
-              have hres' : f.contract.result.isSome = true := by
-                cases h0 : f.contract.result <;> simp [ctx, h0] at hres ⊢
-              cases hv2 : verdictOne { ctx with contract := f.contract.forResult rh, resultPass := true } f.proof with
+            · cases hv
+            · next hres =>
+              have hres' : f.contract.result.isSome = true := Option.isSome_iff_ne_none.mpr (by simpa [ctx] using hres)
+              cases hv2 : verdictOne { ctx with contract := ctx.contract.forResult rh, resultPass := true } f.proof with
               | some _ =>
                 have hv2' : verdictOne { ctx with contract := ctx.contract.forResult rh, resultPass := true } f.proof = some _ := hv2
                 rw [hv2'] at hv; cases hv
               | none => exact ⟨hres', rfl⟩
-        have hR : fnRunsCapable f = true → RunsOk world keptOf pieces f.contract defs p := by
-          intro hcap_f
-          unfold fnRunsCapable at hcap_f
-          obtain ⟨he, hsc⟩ := Bool.and_eq_true _ _ |>.mp hcap_f
-          have hcap' : hasSelect f.code = true ∨ hasCallOrTail f.code = false := by
-            rcases Bool.or_eq_true _ _ |>.mp hsc with h1 | h2
-            · exact Or.inl h1
-            · exact Or.inr (by simpa using h2)
-          exact verifyOne_runsQ_rec world keptOf pieces defs runsOk done f p f.contract false hp hc hf hkf0 ⟨rfl, fun _ => rfl⟩ he hcap' IR hpass1 (fun _ => Or.inl rfl)
         have hTT : TraceOk world pieces f.contract defs p ∧
             (∀ rh, f.contract.resultHidden = some rh → f.contract.result.isSome = true ∧
               TraceOk world pieces (f.contract.forResult rh) defs p) := by
-          cases hsel : hasSelect f.code with
-          | true =>
-            have he : f.contract.traceExprs.isEmpty = true := hsel_emp hsel
-            have R1 : RunsOk world keptOf pieces f.contract defs p := hR (by simp [fnRunsCapable, he, hsel])
-            refine ⟨runsOk_traceOk R1, fun rh hrh => ?_⟩
-            obtain ⟨hres', hv2⟩ := hpass2 rh hrh
-            have he2 : (f.contract.forResult rh).traceExprs.isEmpty = true := he
-            have R2 : RunsOk world keptOf pieces (f.contract.forResult rh) defs p :=
-              verifyOne_runsQ_rec world keptOf pieces defs runsOk done f p (f.contract.forResult rh) true hp hc hf hkf0
-                ⟨rfl, fun x => forResult_regOf f.contract rh x⟩ he2 (Or.inl hsel) IR
-                (by exact hv2) (fun _ => Or.inr R1)
-            exact ⟨hres', runsOk_traceOk R2⟩
-          | false =>
           cases hdec : f.contract.decreases with
           | none =>
             have W1 : ∀ a0, CalleesTrace world ctx a0 := fun a0 name c hl => by
               simp only [ctx, hdec, Option.isSome_none, Bool.false_eq_true, ↓reduceIte] at hl
-              obtain ⟨q, hq, fitq, hsb, _, Mq, Tq, Tq2, _⟩ := I name c hl
+              obtain ⟨q, hq, fitq, hsb, Mq, Tq, Tq2⟩ := I name c hl
               exact ⟨q, hq, fitq, hsb, fun hs => by simp [ctx, hdec] at hs, Mq.below _, Tq.below _,
                 fun rh hrh => ⟨(Tq2 rh hrh).1, (Tq2 rh hrh).2.below _⟩⟩
             have T1 : TraceOk world pieces f.contract defs p :=
               fun a0 b0 la ka pa lb kb pb ta a' b' Epa Epb =>
-                verifyOne_trace_sound_at world ctx p f.proof hc hsel hpass1 a0 b0 (W1 a0) la ka pa lb kb pb ta a' b' Epa Epb
+                verifyOne_trace_unified world ctx p f.proof hc hpass1 a0 b0 (W1 a0) la ka pa lb kb pb ta a' b' Epa Epb
             have T2 : ∀ rh, f.contract.resultHidden = some rh → f.contract.result.isSome = true ∧
                 TraceOk world pieces (f.contract.forResult rh) defs p := by
               intro rh hrh
@@ -5058,12 +5062,12 @@ theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List
               have W2 : ∀ a0, CalleesTrace world { ctx with contract := f.contract.forResult rh, resultPass := true } a0 :=
                 fun a0 name c hl => by
                   simp only [ctx, hdec, Option.isSome_none, Bool.false_eq_true, ↓reduceIte] at hl
-                  obtain ⟨q, hq, fitq, hsb, _, Mq, Tq, Tq2, _⟩ := I name c hl
+                  obtain ⟨q, hq, fitq, hsb, Mq, Tq, Tq2⟩ := I name c hl
                   exact ⟨q, hq, fitq, hsb, fun hs => by simp [ctx, hdec] at hs, Mq.below _, Tq.below _,
                     fun rh' hrh' => ⟨(Tq2 rh' hrh').1, (Tq2 rh' hrh').2.below _⟩⟩
               exact ⟨hres', fun a0 b0 la ka pa lb kb pb ta a' b' Epa Epb =>
-                verifyOne_trace_sound_at world { ctx with contract := f.contract.forResult rh, resultPass := true }
-                  p f.proof hc hsel hv2 a0 b0 (W2 a0) la ka pa lb kb pb ta a' b' Epa Epb⟩
+                verifyOne_trace_unified world { ctx with contract := f.contract.forResult rh, resultPass := true }
+                  p f.proof hc hv2 a0 b0 (W2 a0) la ka pa lb kb pb ta a' b' Epa Epb⟩
             exact ⟨T1, T2⟩
           | some d =>
             simp only [Contract.decreasesOk, hdec] at hdok1
@@ -5107,50 +5111,30 @@ theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List
                       exact (ih (sa.reg rDec) (by omega)).2 rh hrh sa sb rfl la ka pa lb kb pb ta a' b' Epa Epb
                   | false =>
                     rw [hn] at hl
-                    obtain ⟨q, hq, fitq, hsb, _, Mq, Tq, Tq2, _⟩ := I name c hl
+                    obtain ⟨q, hq, fitq, hsb, Mq, Tq, Tq2⟩ := I name c hl
                     refine ⟨q, hq, fitq, hsb, fun hs => by
                         simp only [ctx, hdec, Option.isSome_some, ↓reduceIte, Option.some.injEq] at hs
                         subst hs; simp at hn,
                       Mq.below _, Tq.below _, fun rh hrh => ⟨(Tq2 rh hrh).1, (Tq2 rh hrh).2.below _⟩⟩
                 refine ⟨?_, ?_⟩
                 · intro a0 b0 heq la ka pa lb kb pb ta a' b' Epa Epb
-                  exact verifyOne_trace_sound_at world ctx p f.proof hc hsel hpass1 a0 b0
+                  exact verifyOne_trace_unified world ctx p f.proof hc hpass1 a0 b0
                     (mkW f.contract rfl (fun _ => rfl) a0 heq) la ka pa lb kb pb ta a' b' Epa Epb
                 · intro rh hrh a0 b0 heq la ka pa lb kb pb ta a' b' Epa Epb
                   have W2 : CalleesTrace world { ctx with contract := f.contract.forResult rh, resultPass := true } a0 :=
                     mkW (f.contract.forResult rh) rfl (fun x => forResult_regOf f.contract rh x) a0 heq
-                  exact verifyOne_trace_sound_at world { ctx with contract := f.contract.forResult rh, resultPass := true }
-                    p f.proof hc hsel (hpass2 rh hrh).2 a0 b0 W2 la ka pa lb kb pb ta a' b' Epa Epb
+                  exact verifyOne_trace_unified world { ctx with contract := f.contract.forResult rh, resultPass := true }
+                    p f.proof hc (hpass2 rh hrh).2 a0 b0 W2 la ka pa lb kb pb ta a' b' Epa Epb
               exact ⟨fun a0 b0 la ka pa lb kb pb ta a' b' Epa Epb =>
                   (all (a0.reg rDec)).1 a0 b0 rfl la ka pa lb kb pb ta a' b' Epa Epb,
                 fun rh hrh => ⟨(hpass2 rh hrh).1, fun a0 b0 la ka pa lb kb pb ta a' b' Epa Epb =>
                   (all (a0.reg rDec)).2 rh hrh a0 b0 rfl la ka pa lb kb pb ta a' b' Epa Epb⟩⟩
         obtain ⟨T1, T2⟩ := hTT
-        let runsOk' := if fnRunsCapable f then f.name :: runsOk else runsOk
-        have hnot_in_runs : f.name ∉ runsOk := by
-          intro hm
-          obtain ⟨c0, hlk0⟩ := hsub f.name hm
-          have hmem0 : (f.name, c0) ∈ done := lookup_mem hlk0
-          exact hnodup (List.any_eq_true.mpr ⟨(f.name, c0), hmem0, by simp⟩)
-        have hsub' : ∀ name ∈ runsOk', ∃ c, ((f.name, f.contract) :: done).lookup name = some c := by
-          intro name hm
-          dsimp only [runsOk'] at hm
-          by_cases hnf : name = f.name
-          · subst hnf; exact ⟨f.contract, by simp [List.lookup_cons]⟩
-          · have hm' : name ∈ runsOk := by
-              split at hm
-              · rcases List.mem_cons.mp hm with rfl | h2
-                · exact absurd rfl hnf
-                · exact h2
-              · exact hm
-            obtain ⟨c0, hlk0⟩ := hsub name hm'
-            exact ⟨c0, by rw [List.lookup_cons, beq_false_of_ne hnf]; exact hlk0⟩
         have I' : ∀ name c, ((f.name, f.contract) :: done).lookup name = some c →
             ∃ q, findProgram world name = some q ∧ q.fits ∧
-              c.stackBitsOk = true ∧ keptOf name = c.keeps ∧
+              c.stackBitsOk = true ∧
               Meets world pieces c defs q ∧ TraceOk world pieces c defs q ∧
-              (∀ rh, c.resultHidden = some rh → c.result.isSome = true ∧ TraceOk world pieces (c.forResult rh) defs q) ∧
-              (name ∈ runsOk' → RunsOk world keptOf pieces c defs q) := by
+              (∀ rh, c.resultHidden = some rh → c.result.isSome = true ∧ TraceOk world pieces (c.forResult rh) defs q) := by
           intro name c hl
           rw [List.lookup_cons] at hl
           cases hn : (name == f.name) with
@@ -5158,26 +5142,14 @@ theorem verdictFrom_trace_sound (world : List Program) (keptOf : String → List
             rw [hn] at hl; injection hl with hl
             have e : name = f.name := by simpa using hn
             subst hl e
-            refine ⟨p, hp, hf, hsbok1, hkf0, M, T1, T2, fun hmem => ?_⟩
-            by_cases hcap_f : fnRunsCapable f = true
-            · exact hR hcap_f
-            · dsimp only [runsOk'] at hmem
-              rw [if_neg hcap_f] at hmem
-              exact (hnot_in_runs hmem).elim
+            exact ⟨p, hp, hf, hsbok1, M, T1, T2⟩
           | false =>
             rw [hn] at hl
-            obtain ⟨q, hq, fitq, hsb, hkq, Mq, Tq, Tq2, Rq⟩ := I name c hl
-            refine ⟨q, hq, fitq, hsb, hkq, Mq, Tq, Tq2, fun hmem => Rq ?_⟩
-            dsimp only [runsOk'] at hmem
-            split at hmem
-            · rcases List.mem_cons.mp hmem with rfl | hmem'
-              · simp at hn
-              · exact hmem'
-            · exact hmem
+            exact I name c hl
         intro g m
         cases m with
         | head => exact ⟨p, hp, M, T1, T2⟩
-        | tail _ m => exact verdictFrom_trace_sound world keptOf pieces defs more runsOk' _ hsub' (fun g mg => hkf g (List.mem_cons_of_mem _ mg)) I' (fun g m => L g (List.mem_cons_of_mem _ m)) h g m
+        | tail _ m => exact verdictFrom_trace_sound world pieces defs more _ I' (fun g m => L g (List.mem_cons_of_mem _ m)) h g m
 
 /-- **Constant time, of what the verifier says yes of — stated directly on entry agreement (`traceAgree`),
 with no mention of marks.** Take any two states at the function's entry where the program is loaded,
@@ -5194,11 +5166,7 @@ theorem verify_all_trace (world : List Program) (pieces : List Piece) (defs : Li
         f.contract.traceAgree defs a b →
         ∀ a' b' : State, EndsP world p a.plain a' → EndsP world p b.plain b' → a'.trace = b'.trace := by
   intro f m
-  let keptOf : String → List Nat := fun nm => (fns.find? fun g => g.name == nm).map (·.contract.keeps) |>.getD []
-  have hkf : ∀ g ∈ fns, keptOf g.name = g.contract.keeps := fun g mg => by
-    have hfind := (verdictFrom_nodup pieces defs fns [] [] h g mg).2
-    simp [keptOf, hfind]
-  obtain ⟨p, hp, _, T1, _⟩ := verdictFrom_trace_sound world keptOf pieces defs fns [] [] (fun _ m => nomatch m) hkf (fun name c hl => by simp [List.lookup] at hl) L h f m
+  obtain ⟨p, hp, _, T1, _⟩ := verdictFrom_trace_sound world pieces defs fns [] (fun name c hl => by simp [List.lookup] at hl) L h f m
   exact ⟨p, hp, fun a b la ka pa lb kb pb ta a' b' Epa Epb => (T1 a b la ka pa lb kb pb ta a' b' Epa Epb).1⟩
 
 /-- **Return-value independence (`result depends on`), stated directly on entry agreement (`traceAgree`).**
@@ -5223,11 +5191,7 @@ theorem verify_all_result (world : List Program) (pieces : List Piece) (defs : L
           (f.contract.forResult rh).traceAgree defs a b →
           ∀ a' b' : State, EndsP world p a.plain a' → EndsP world p b.plain b' → a'.reg 0 = b'.reg 0) := by
   intro f m
-  let keptOf : String → List Nat := fun nm => (fns.find? fun g => g.name == nm).map (·.contract.keeps) |>.getD []
-  have hkf : ∀ g ∈ fns, keptOf g.name = g.contract.keeps := fun g mg => by
-    have hfind := (verdictFrom_nodup pieces defs fns [] [] h g mg).2
-    simp [keptOf, hfind]
-  obtain ⟨p, hp, _, T1, T2⟩ := verdictFrom_trace_sound world keptOf pieces defs fns [] [] (fun _ m => nomatch m) hkf (fun name c hl => by simp [List.lookup] at hl) L h f m
+  obtain ⟨p, hp, _, T1, T2⟩ := verdictFrom_trace_sound world pieces defs fns [] (fun name c hl => by simp [List.lookup] at hl) L h f m
   refine ⟨p, hp, fun hrf a b la ka pa lb kb pb ta a' b' Epa Epb => (T1 a b la ka pa lb kb pb ta a' b' Epa Epb).2 hrf, ?_⟩
   intro rh hrh a b la ka pa lb kb pb ta a' b' Epa Epb
   obtain ⟨hres, Tr⟩ := T2 rh hrh

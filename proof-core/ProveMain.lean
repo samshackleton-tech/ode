@@ -352,7 +352,7 @@ partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) (
 
 /-- After `name` passes `verify`, check optional `result depends on` and any subsequent functions. -/
 def finishRest (ctx : Ctx) (items : Array Item) (afterFns : List Fn) (doneAfter : List (String × Contract))
-    (runsAfter : List String) (onlyTarget : Bool) : String :=
+    (onlyTarget : Bool) : String :=
   let resWhy : Option String :=
     match ctx.contract.resultHidden with
     | none => none
@@ -368,7 +368,7 @@ def finishRest (ctx : Ctx) (items : Array Item) (afterFns : List Fn) (doneAfter 
   | none =>
     if onlyTarget then "shown"
     else
-      let rec checkTail (fns : List Fn) (done : List (String × Contract)) (runsOk : List String) : String :=
+      let rec checkTail (fns : List Fn) (done : List (String × Contract)) : String :=
         match fns with
         | [] => "shown"
         | f :: more =>
@@ -380,14 +380,12 @@ def finishRest (ctx : Ctx) (items : Array Item) (afterFns : List Fn) (doneAfter 
               ctx with
               code := f.code, contract := f.contract, places := f.places,
               callees := callees, selfName := selfName, piece := f.piece,
-              runsCallees := runsOk, advice := {}
+              advice := {}
             }
             match verdict fctx f.proof with
             | some why => s!"{why}\nin {f.name}"
-            | none =>
-              let runs' := if fnRunsCapable f then f.name :: runsOk else runsOk
-              checkTail more ((f.name, f.contract) :: done) runs'
-      checkTail afterFns doneAfter runsAfter
+            | none => checkTail more ((f.name, f.contract) :: done)
+      checkTail afterFns doneAfter
 
 def main (args : List String) : IO UInt32 := do
   match args with
@@ -404,19 +402,17 @@ def main (args : List String) : IO UInt32 := do
       | .error e => IO.println e; return 2
       | .ok job => pure job
     let mut done : List (String × Contract) := []
-    let mut runsOk : List String := []
     for f in job.fns do
       if done.any (fun d => d.1 == f.name) then
         IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
       let baseCtx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
-                             selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
+                             selfName := selfName, pieces := job.pieces, piece := f.piece }
       let ctx : Ctx := { baseCtx with advice := { specMeta := specMetaFor baseCtx } }
       match locateRefusal ctx f.proof with
       | some why => IO.println s!"{why}\nin {f.name}"; return 1
       | none =>
-        if fnRunsCapable f then runsOk := f.name :: runsOk
         done := (f.name, f.contract) :: done
     IO.println "shown"
     return 0
@@ -451,7 +447,6 @@ def main (args : List String) : IO UInt32 := do
 
     -- Verify any functions before `name` (unless `--only`), and capture `name`'s context + trailing functions.
     let mut done : List (String × Contract) := []
-    let mut runsOk : List String := []
     let mut targetCtx : Option Ctx := none
     let mut targetFn : Option Fn := none
     let mut afterFns : List Fn := []
@@ -465,7 +460,7 @@ def main (args : List String) : IO UInt32 := do
         let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
         let selfName := if f.contract.decreases.isSome then some f.name else none
         let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
-                           selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
+                           selfName := selfName, pieces := job.pieces, piece := f.piece }
         if f.name == name then
           if !ctx.contract.callingOk then
             say s!"refused: invalid custom calling convention (register out of range, duplicate, RSP/LINK, or return register preserved)\nin {name}\n.end\n"; return 0
@@ -483,13 +478,11 @@ def main (args : List String) : IO UInt32 := do
             match verdict ctx f.proof with
             | some why => say s!"{why}\nin {f.name}\n.end\n"; return 0
             | none => pure ()
-          if fnRunsCapable f then runsOk := f.name :: runsOk
           done := (f.name, f.contract) :: done
 
     let some ctx := targetCtx | return 2
     let some tf := targetFn | return 2
     let doneAfter := (tf.name, tf.contract) :: done
-    let runsAfter := if fnRunsCapable tf then tf.name :: runsOk else runsOk
 
     let s0 := entrySym ctx
     let initState : DriverState := { next := 0, jdone := [], stack := [.instr PATH s0 [] [] s0 0, .checkFinished] }
@@ -503,7 +496,7 @@ def main (args : List String) : IO UInt32 := do
       | .error why => (s!"{why}\nin {name}", true, ckpts')
       | .ok () =>
         let restMsg :=
-          let raw := finishRest ctx curItems afterFns doneAfter runsAfter onlyTarget
+          let raw := finishRest ctx curItems afterFns doneAfter onlyTarget
           if raw.endsWith "\nin " then s!"{raw}{name}" else raw
         (restMsg, false, ckpts')
 

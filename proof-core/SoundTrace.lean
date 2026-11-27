@@ -1524,7 +1524,9 @@ theorem callExprClean_same {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}
       fun r hr => (A.low r (A.marks ▸ hr)).symm⟩
     exact ⟨(callAllClean_imp Ea Eb ta Ha Hb Ma A Fa Fb h8a h8b hwa hwb e [] hall).1 v,
            (callAllClean_imp Eb Ea (traceAgree_symm ta) Hb Ha Mb As Fb Fa h8b h8a hwb hwa e [] hall).1 v⟩
-  · cases hs : substCallExpr ctx s c [] e with
+  · simp only [Bool.and_eq_true, Bool.not_eq_true'] at hsub
+    obtain ⟨_, hsub⟩ := hsub
+    cases hs : substCallExpr ctx s c [] e with
     | none => rw [hs] at hsub; cases hsub
     | some e' =>
       rw [hs] at hsub
@@ -1532,6 +1534,404 @@ theorem callExprClean_same {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}
       obtain ⟨eb1, eb2⟩ := substCallExpr_equiv Eb Hb Fb h8b hwb e [] hs
       have hsame := traceClean_same ta hsub v
       exact ⟨fun h => eb2.1 v (hsame.mp (ea1.1 v h)), fun h => ea2.1 v (hsame.mpr (eb1.1 v h))⟩
+
+/-- Single-run-marks version of `callArgClean_agree` (no `Hb`/`Eb`/`ta` needed): relies only on
+`sta`'s own `MarksOk`, `ctx.contract.quietAt a0`, `c.cleanAtEntry` clean in `s.q`, and `Alike sta stb`. -/
+theorem callArgClean_alike {ctx : Ctx} {p q : Program} {a0 sta stb : State}
+    (Ea : Setting ctx p a0) (hq0 : ctx.contract.quietAt a0)
+    {ρa : Nat → Int} {s : Sym} (Ha : Holds ctx a0 ρa s sta) (Ma : MarksOk ctx a0 s.q sta)
+    (A : Alike sta stb) {c : Contract} {i : Instr} (Fa : Fits ctx sta i c)
+    (h8a : c.slot ≤ sta.reg RSP)
+    (hwa : allowed (ctx.contract.perm ctx.pieces a0).write (sta.reg RSP - c.slot) c.slot = true)
+    (hclean : c.cleanAtEntry.all s.q.regq.contains = true) :
+    ∀ (args : List (String × Kind)) (regs : List Nat) (x : String),
+    (∀ r ∈ regs, r ∈ c.argRegs) →
+    (∀ r ∈ cleanIn c args regs, r ∈ c.cleanAtEntry) →
+    callArgClean.go ctx s c x args regs = true →
+    (envIn c (afterCall p q i sta) args regs).lookup x = (envIn c (afterCall p q i stb) args regs).lookup x
+  | [], _, _, _, _, h => by simp [callArgClean.go] at h
+  | _ :: _, [], _, _, _, h => by simp [callArgClean.go] at h
+  | (n, k) :: args, r :: regs, x, hregs, hcin, h => by
+    have hr_in : r ∈ c.argRegs := hregs r (List.mem_cons_self ..)
+    have hregs' : ∀ r' ∈ regs, r' ∈ c.argRegs := fun r' hm => hregs r' (List.mem_cons_of_mem _ hm)
+    have hcin' : ∀ r' ∈ cleanIn c args regs, r' ∈ c.cleanAtEntry := fun r' hm =>
+      hcin r' (by simp only [cleanIn, List.mem_append]; exact Or.inr hm)
+    obtain ⟨ra16, rak⟩ := Fa.arg hr_in
+    have hrsp_mk : sta.marks.reg RSP = false :=
+      Ma.reg RSP (List.contains_iff_mem.mp (List.all_eq_true.mp hclean RSP (List.mem_cons_self ..)))
+    have hrsp_eq : sta.reg RSP = stb.reg RSP := A.reg RSP hrsp_mk
+    cases k with
+    | number =>
+      simp only [envIn, List.lookup_cons]
+      cases hxn : (x == n) with
+      | true =>
+        simp only [callArgClean.go, str_beq_comm n x, hxn, ite_true] at h
+        have hmk : sta.marks.reg r = false := Ma.reg r (List.contains_iff_mem.mp h)
+        simp only [hxn]
+        rw [afterCall_reg Fa.link rak, afterCall_reg Fa.link rak, A.reg r hmk]
+      | false =>
+        simp only [callArgClean.go, str_beq_comm n x, hxn, Bool.false_eq_true, ite_false] at h
+        exact callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean args regs x hregs' hcin' h
+    | bytes len =>
+      cases hl : c.regOf len with
+      | none =>
+        simp only [envIn, hl]
+        simp only [callArgClean.go] at h
+        cases hnx : (n == x) with
+        | true => simp [hnx, hl] at h
+        | false =>
+          simp only [hnx, Bool.false_eq_true, ite_false] at h
+          exact callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean args regs x hregs' hcin' h
+      | some l =>
+        simp only [envIn, hl, List.lookup_cons]
+        cases hxn : (x == n) with
+        | true =>
+          simp only [callArgClean.go, str_beq_comm n x, hxn, ite_true, hl, Bool.and_eq_true] at h
+          obtain ⟨hlq, hfind⟩ := h
+          have hr_clean : r ∈ c.cleanAtEntry :=
+            hcin r (by simp [cleanIn])
+          have hrmk : sta.marks.reg r = false :=
+            Ma.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hclean r hr_clean))
+          have hlmk : sta.marks.reg l = false := Ma.reg l (List.contains_iff_mem.mp hlq)
+          have hreq : sta.reg r = stb.reg r := A.reg r hrmk
+          have hleq : sta.reg l = stb.reg l := A.reg l hlmk
+          cases hf : findRun s r l ctx.contract.regions 0 with
+          | none => simp [hf] at hfind
+          | some j =>
+            obtain ⟨b0r, l0r, _, hget, er, el⟩ := findRun_spec hf
+            have hnh0 : ctx.contract.hiddenAt b0r = false := by
+              rw [hf] at hfind; simp only at hfind
+              have hget' : ctx.contract.regions[j]? = some (b0r, l0r) := by simpa using hget
+              rw [hget'] at hfind; simpa using hfind
+            have hmem : (b0r, l0r) ∈ ctx.contract.regions := List.mem_of_getElem? hget
+            obtain ⟨hb0, hl0⟩ := regions_lt hmem
+            have hl_in : l ∈ c.argRegs := regOfIn_mem len c.args c.argRegs l hl
+            obtain ⟨la16, lak⟩ := Fa.arg hl_in
+            have vra : sta.reg r = a0.reg b0r := by have := Ha.reg r ra16; rw [er, ev_var, Ha.entry b0r hb0] at this; omega
+            have vla : sta.reg l = a0.reg l0r := by have := Ha.reg l la16; rw [el, ev_var, Ha.entry l0r hl0] at this; omega
+            simp only [hxn]
+            congr 2
+            rw [afterCall_reg Fa.link lak, afterCall_reg Fa.link lak, hleq]
+            apply List.map_congr_left
+            intro k hk
+            have hk' : k < a0.reg l0r := by rw [← vla, hleq]; exact List.mem_range.mp hk
+            obtain ⟨_, r2⟩ := Ea.regionAt hmem
+            have hnf : ctx.contract.inFrame a0 (a0.reg b0r + k) = false := notFrame (by omega)
+            have hno : ctx.contract.inOut a0 (a0.reg b0r + k) = false := Ea.region_notOut hmem (by omega) (by omega)
+            have hnot : a0.reg b0r + k < sta.reg RSP - c.slot ∨ sta.reg RSP ≤ a0.reg b0r + k := by
+              by_cases h1 : a0.reg b0r + k < sta.reg RSP - c.slot
+              · exact Or.inl h1
+              · by_cases h2 : sta.reg RSP ≤ a0.reg b0r + k
+                · exact Or.inr h2
+                · exfalso
+                  have := allowed_at hwa (a0.reg b0r + k) (by omega) (by omega)
+                  simp [Contract.perm, hnf, hno] at this
+            have hnotb : a0.reg b0r + k < stb.reg RSP - c.slot ∨ stb.reg RSP ≤ a0.reg b0r + k := hrsp_eq ▸ hnot
+            have hmk_mem : sta.marks.mem (a0.reg b0r + k) = false := by
+              rw [Ma.stable _ hnf hno]; exact hq0.2.2.1 b0r l0r hmem hnh0 k hk'
+            rw [afterCall_reg Fa.link rak, afterCall_reg Fa.link rak, ← hreq, vra,
+                afterCall_mem Fa.link h8a hnot, afterCall_mem Fa.link (hrsp_eq ▸ h8a) hnotb, A.mem _ hmk_mem]
+        | false =>
+          simp only [callArgClean.go, str_beq_comm n x, hxn, Bool.false_eq_true, ite_false] at h
+          exact callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean args regs x hregs' hcin' h
+    | out _ | fixed _ | inout _ | valArray _ _ =>
+      simp only [envIn]
+      simp only [callArgClean.go] at h
+      exact callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean args regs x hregs' hcin' h
+
+theorem callAllClean_alike {ctx : Ctx} {p q : Program} {a0 sta stb : State}
+    (Ea : Setting ctx p a0) (hq0 : ctx.contract.quietAt a0)
+    {ρa : Nat → Int} {s : Sym} (Ha : Holds ctx a0 ρa s sta) (Ma : MarksOk ctx a0 s.q sta)
+    (A : Alike sta stb) {c : Contract} {i : Instr} (Fa : Fits ctx sta i c)
+    (h8a : c.slot ≤ sta.reg RSP)
+    (hwa : allowed (ctx.contract.perm ctx.pieces a0).write (sta.reg RSP - c.slot) c.slot = true)
+    (hclean : c.cleanAtEntry.all s.q.regq.contains = true) :
+    ∀ (e : SExpr) (ext : List (String × Val)),
+    callAllClean ctx s c (ext.map Prod.fst) e = true →
+    ExprImp ctx.defs (ext ++ c.env (afterCall p q i sta)) (ext ++ c.env (afterCall p q i stb)) e e := by
+  have arg_eq : ∀ x, callArgClean ctx s c x = true →
+      (c.env (afterCall p q i sta)).lookup x = (c.env (afterCall p q i stb)).lookup x := fun x hx =>
+    callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean c.args c.argRegs x (fun _ hm => hm)
+      (fun r hr => List.mem_cons_of_mem _ hr) hx
+  intro e
+  induction e with
+  | num _ =>
+    intro ext _
+    exact ExprImp.of_val rfl fun v ⟨f, hf⟩ => by cases f with | zero => cases hf | succ f => exact ⟨1, by simpa [evalSpec] using hf⟩
+  | nil =>
+    intro ext _
+    exact ⟨fun _ ⟨f, hf⟩ => by cases f <;> simp [evalSpec] at hf,
+      fun _ _ hl => by simp only [evalList, Option.some.injEq] at hl; subst hl; exact ⟨0, rfl⟩⟩
+  | cons a1 r1 iha ihr =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.cons (iha ext h.1) (ihr ext h.2)
+  | name x =>
+    intro ext h
+    simp only [callAllClean, Bool.or_eq_true] at h
+    exact ExprImp.of_val rfl fun v ⟨f, hf⟩ => by
+      cases f with
+      | zero => cases hf
+      | succ f =>
+        simp only [evalSpec] at hf
+        rcases h with hbd | hcl
+        · rw [lookup_append_mem hbd] at hf
+          exact ⟨1, by simp only [evalSpec, lookup_append_mem hbd]; exact hf⟩
+        · cases hbd : (ext.map Prod.fst).contains x with
+          | true =>
+            rw [lookup_append_mem hbd] at hf
+            exact ⟨1, by simp only [evalSpec, lookup_append_mem hbd]; exact hf⟩
+          | false =>
+            rw [lookup_append_not_mem hbd] at hf
+            rw [arg_eq x hcl] at hf
+            exact ⟨1, by simp only [evalSpec, lookup_append_not_mem hbd]; exact hf⟩
+  | bin op a1 b1 iha ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.bin (iha ext h.1) (ihb ext h.2)
+  | ifx cond a1 b1 ihc iha ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.ifx (ihc ext h.1.1) (iha ext h.1.2) (ihb ext h.2)
+  | index a1 i1 iha ihi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.index (iha ext h.1) (ihi ext h.2)
+  | call fn args iha =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.call (iha ext h)
+  | list items ihi =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.list (ihi ext h)
+  | letx x r1 b1 ihr ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.letx (ihr ext h.1) (fun w => ihb ((x, w) :: ext) h.2)
+  | each body x a1 b1 ihb iha ihhi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.each (iha ext h.1.1) (ihhi ext h.1.2) (fun i => ihb ((x, .int i) :: ext) h.2)
+  | slice a1 lo1 hi1 iha ihlo ihhi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.slice (iha ext h.1.1) (ihlo ext h.1.2) (ihhi ext h.2)
+  | withx a1 p1 iha ihp =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.withx (iha ext h.1) (ihp ext h.2)
+  | record ns items ihi =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.record (ihi ext h)
+  | field e1 fn ihe =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.field (ihe ext h)
+  | theNumber g x a1 b1 cond iha ihb ihc =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.theNumber (iha ext h.1.1) (ihb ext h.1.2) (fun i => ihc ((x, .int i) :: ext) h.2)
+  | thePower g x cond ihc =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.thePower (fun i => ihc ((x, .int i) :: ext) h)
+
+theorem callAllClean_alike_symm {ctx : Ctx} {p q : Program} {a0 sta stb : State}
+    (Ea : Setting ctx p a0) (hq0 : ctx.contract.quietAt a0)
+    {ρa : Nat → Int} {s : Sym} (Ha : Holds ctx a0 ρa s sta) (Ma : MarksOk ctx a0 s.q sta)
+    (A : Alike sta stb) {c : Contract} {i : Instr} (Fa : Fits ctx sta i c)
+    (h8a : c.slot ≤ sta.reg RSP)
+    (hwa : allowed (ctx.contract.perm ctx.pieces a0).write (sta.reg RSP - c.slot) c.slot = true)
+    (hclean : c.cleanAtEntry.all s.q.regq.contains = true) :
+    ∀ (e : SExpr) (ext : List (String × Val)),
+    callAllClean ctx s c (ext.map Prod.fst) e = true →
+    ExprImp ctx.defs (ext ++ c.env (afterCall p q i stb)) (ext ++ c.env (afterCall p q i sta)) e e := by
+  have arg_eq : ∀ x, callArgClean ctx s c x = true →
+      (c.env (afterCall p q i stb)).lookup x = (c.env (afterCall p q i sta)).lookup x := fun x hx =>
+    (callArgClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean c.args c.argRegs x (fun _ hm => hm)
+      (fun r hr => List.mem_cons_of_mem _ hr) hx).symm
+  intro e
+  induction e with
+  | num _ =>
+    intro ext _
+    exact ExprImp.of_val rfl fun v ⟨f, hf⟩ => by cases f with | zero => cases hf | succ f => exact ⟨1, by simpa [evalSpec] using hf⟩
+  | nil =>
+    intro ext _
+    exact ⟨fun _ ⟨f, hf⟩ => by cases f <;> simp [evalSpec] at hf,
+      fun _ _ hl => by simp only [evalList, Option.some.injEq] at hl; subst hl; exact ⟨0, rfl⟩⟩
+  | cons a1 r1 iha ihr =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.cons (iha ext h.1) (ihr ext h.2)
+  | name x =>
+    intro ext h
+    simp only [callAllClean, Bool.or_eq_true] at h
+    exact ExprImp.of_val rfl fun v ⟨f, hf⟩ => by
+      cases f with
+      | zero => cases hf
+      | succ f =>
+        simp only [evalSpec] at hf
+        rcases h with hbd | hcl
+        · rw [lookup_append_mem hbd] at hf
+          exact ⟨1, by simp only [evalSpec, lookup_append_mem hbd]; exact hf⟩
+        · cases hbd : (ext.map Prod.fst).contains x with
+          | true =>
+            rw [lookup_append_mem hbd] at hf
+            exact ⟨1, by simp only [evalSpec, lookup_append_mem hbd]; exact hf⟩
+          | false =>
+            rw [lookup_append_not_mem hbd] at hf
+            rw [arg_eq x hcl] at hf
+            exact ⟨1, by simp only [evalSpec, lookup_append_not_mem hbd]; exact hf⟩
+  | bin op a1 b1 iha ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.bin (iha ext h.1) (ihb ext h.2)
+  | ifx cond a1 b1 ihc iha ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.ifx (ihc ext h.1.1) (iha ext h.1.2) (ihb ext h.2)
+  | index a1 i1 iha ihi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.index (iha ext h.1) (ihi ext h.2)
+  | call fn args iha =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.call (iha ext h)
+  | list items ihi =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.list (ihi ext h)
+  | letx x r1 b1 ihr ihb =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.letx (ihr ext h.1) (fun w => ihb ((x, w) :: ext) h.2)
+  | each body x a1 b1 ihb iha ihhi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.each (iha ext h.1.1) (ihhi ext h.1.2) (fun i => ihb ((x, .int i) :: ext) h.2)
+  | slice a1 lo1 hi1 iha ihlo ihhi =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.slice (iha ext h.1.1) (ihlo ext h.1.2) (ihhi ext h.2)
+  | withx a1 p1 iha ihp =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.withx (iha ext h.1) (ihp ext h.2)
+  | record ns items ihi =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.record (ihi ext h)
+  | field e1 fn ihe =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.field (ihe ext h)
+  | theNumber g x a1 b1 cond iha ihb ihc =>
+    intro ext h; simp only [callAllClean, Bool.and_eq_true] at h
+    exact ExprImp.theNumber (iha ext h.1.1) (ihb ext h.1.2) (fun i => ihc ((x, .int i) :: ext) h.2)
+  | thePower g x cond ihc =>
+    intro ext h; simp only [callAllClean] at h
+    exact ExprImp.thePower (fun i => ihc ((x, .int i) :: ext) h)
+
+theorem callExprClean_alike {ctx : Ctx} {p q : Program} {a0 sta stb : State}
+    (Ea : Setting ctx p a0) (hq0 : ctx.contract.quietAt a0) (hsel : hasSelect ctx.code = true)
+    {ρa : Nat → Int} {s : Sym} (Ha : Holds ctx a0 ρa s sta) (Ma : MarksOk ctx a0 s.q sta)
+    (A : Alike sta stb) {c : Contract} {i : Instr} (Fa : Fits ctx sta i c)
+    (h8a : c.slot ≤ sta.reg RSP)
+    (hwa : allowed (ctx.contract.perm ctx.pieces a0).write (sta.reg RSP - c.slot) c.slot = true)
+    (hclean : c.cleanAtEntry.all s.q.regq.contains = true)
+    {e : SExpr} (he : callExprClean ctx s c e = true) (v : Val) :
+    Value ctx.defs (c.env (afterCall p q i sta)) e v ↔ Value ctx.defs (c.env (afterCall p q i stb)) e v := by
+  simp only [callExprClean, hsel, Bool.not_true, Bool.false_and, Bool.or_false] at he
+  exact ⟨(callAllClean_alike Ea hq0 Ha Ma A Fa h8a hwa hclean e [] he).1 v,
+         (callAllClean_alike_symm Ea hq0 Ha Ma A Fa h8a hwa hclean e [] he).1 v⟩
+
+/-- Single-run-marks version of `callQuiet_traceAgree` (for functions with `hasSelect = true`). -/
+theorem callQuiet_traceAgree_alike {ctx : Ctx} {p q : Program} {a0 sta stb : State}
+    (Ea : Setting ctx p a0) (hq0 : ctx.contract.quietAt a0) (hsel : hasSelect ctx.code = true)
+    {ρa : Nat → Int} {s : Sym} (Ha : Holds ctx a0 ρa s sta) (Ma : MarksOk ctx a0 s.q sta)
+    (A : Alike sta stb) {c : Contract} {i : Instr} (Fa : Fits ctx sta i c)
+    (h8a : c.slot ≤ sta.reg RSP)
+    (hwa : allowed (ctx.contract.perm ctx.pieces a0).write (sta.reg RSP - c.slot) c.slot = true)
+    (hwritea : ∀ a, (c.perm ctx.pieces (afterCall p q i sta)).write a = true → (ctx.contract.perm ctx.pieces a0).write a = true)
+    (hq : callQuiet ctx s c = true) :
+    c.traceAgree ctx.defs (afterCall p q i sta) (afterCall p q i stb) := by
+  obtain ⟨hrsp, hqa, _⟩ := callQuiet_sound Ea Ma Ha hq q i Fa hwa hwritea
+  have Ac : Alike (afterCall p q i sta) (afterCall p q i stb) :=
+    afterCall_alike A (fun _ => hrsp)
+  simp only [callQuiet, Bool.and_eq_true] at hq
+  obtain ⟨⟨⟨⟨hclean, _⟩, _⟩, hrun⟩, htexpr⟩ := hq
+  have hrsp_eq : sta.reg RSP = stb.reg RSP :=
+    A.reg RSP (Ma.reg RSP (List.contains_iff_mem.mp (List.all_eq_true.mp hclean RSP (List.mem_cons_self ..))))
+  refine ⟨Ac.rip, Ac.data, Ac.trace, Ac.reg RSP (hqa.1 RSP (List.mem_cons_self ..)), ?_,
+    fun r hr => Ac.reg r (hqa.1 r hr), fun r l hm hnh => ?_, fun x r n hm hnh k hk => ?_,
+    fun e he v => callExprClean_alike Ea hq0 hsel Ha Ma A Fa h8a hwa hclean (List.all_eq_true.mp htexpr e he) v⟩
+  · have hbq := hqa.2.1
+    unfold Contract.backQuiet at hbq
+    unfold Contract.backTo
+    cases ha : c.arm64 with
+    | true => simp only [ha, ite_true] at hbq ⊢; exact Ac.reg LINK hbq
+    | false =>
+      simp only [ha, Bool.false_eq_true, ite_false] at hbq ⊢
+      rw [Ac.reg RSP (hqa.1 RSP (List.mem_cons_self ..))]
+      apply load_same
+      intro x hx1 hx2
+      have hk : x - (afterCall p q i sta).reg RSP < 8 := by
+        rw [Ac.reg RSP (hqa.1 RSP (List.mem_cons_self ..))]; omega
+      have hmx := hbq (x - (afterCall p q i sta).reg RSP) hk
+      have heq : (afterCall p q i sta).reg RSP + (x - (afterCall p q i sta).reg RSP) = x := by
+        rw [Ac.reg RSP (hqa.1 RSP (List.mem_cons_self ..))]; omega
+      rw [heq] at hmx
+      exact Ac.mem x hmx
+  · have hfound := List.all_eq_true.mp hrun (r, l) hm
+    simp only [hnh, Bool.false_or, Bool.and_eq_true] at hfound
+    have hlq : sta.marks.reg l = false := Ma.reg l (List.contains_iff_mem.mp hfound.1)
+    obtain ⟨ra, len, hlen⟩ := regionsIn_mem c c.args c.argRegs r l hm
+    have la : l ∈ c.argRegs := regOfIn_mem len c.args c.argRegs l hlen
+    obtain ⟨ra16, rak⟩ := Fa.arg ra
+    obtain ⟨la16, lak⟩ := Fa.arg la
+    have hr_clean : r ∈ c.cleanAtEntry := List.mem_cons_of_mem _ (by
+      suffices ∀ args regs, (r, l) ∈ regionsIn c args regs → r ∈ cleanIn c args regs from this c.args c.argRegs hm
+      intro args; induction args with
+      | nil => intro regs h; simp [regionsIn] at h
+      | cons ak more ih =>
+        intro regs h; cases regs with | nil => simp [regionsIn] at h | cons r0 rs =>
+        obtain ⟨nm, kd⟩ := ak; cases kd with
+        | bytes ln =>
+          simp only [regionsIn] at h; cases hrl : c.regOf ln with
+          | none => rw [hrl] at h; exact List.mem_append_right _ (ih rs h)
+          | some l0 =>
+            rw [hrl] at h; rcases List.mem_cons.mp h with he | ht
+            · injection he with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
+            · exact List.mem_append_right _ (ih rs ht)
+        | number | out _ | fixed _ | inout _ | valArray _ _ => simp only [regionsIn] at h; exact List.mem_append_right _ (ih rs h))
+    have hrmk : sta.marks.reg r = false :=
+      Ma.reg r (List.contains_iff_mem.mp (List.all_eq_true.mp hclean r hr_clean))
+    have hreq : sta.reg r = stb.reg r := A.reg r hrmk
+    have hleq : sta.reg l = stb.reg l := A.reg l hlq
+    have hlen_eq : (afterCall p q i sta).reg l = (afterCall p q i stb).reg l := by
+      rw [afterCall_reg Fa.link lak, afterCall_reg Fa.link lak, hleq]
+    refine ⟨hlen_eq, fun k hk => ?_⟩
+    cases hf : findRun s r l ctx.contract.regions 0 with
+    | none => rw [hf] at hfound; cases hfound.2
+    | some j =>
+      obtain ⟨b0r, l0r, _, hget, er, el⟩ := findRun_spec hf
+      have hnh0 : ctx.contract.hiddenAt b0r = false := by
+        rw [hf] at hfound; have h2 := hfound.2; simp only at h2
+        have hget' : ctx.contract.regions[j]? = some (b0r, l0r) := by simpa using hget
+        rw [hget'] at h2; simpa using h2
+      have hmem : (b0r, l0r) ∈ ctx.contract.regions := List.mem_of_getElem? hget
+      obtain ⟨hb0, hl0⟩ := regions_lt hmem
+      have vra : sta.reg r = a0.reg b0r := by have := Ha.reg r ra16; rw [er, ev_var, Ha.entry b0r hb0] at this; omega
+      have vla : sta.reg l = a0.reg l0r := by have := Ha.reg l la16; rw [el, ev_var, Ha.entry l0r hl0] at this; omega
+      have hk' : k < a0.reg l0r := by rw [afterCall_reg Fa.link lak, vla] at hk; exact hk
+      obtain ⟨_, r2⟩ := Ea.regionAt hmem
+      have hnf : ctx.contract.inFrame a0 (a0.reg b0r + k) = false := notFrame (by omega)
+      have hno : ctx.contract.inOut a0 (a0.reg b0r + k) = false := Ea.region_notOut hmem (by omega) (by omega)
+      have hnot : a0.reg b0r + k < sta.reg RSP - c.slot ∨ sta.reg RSP ≤ a0.reg b0r + k := by
+        by_cases h1 : a0.reg b0r + k < sta.reg RSP - c.slot
+        · exact Or.inl h1
+        · by_cases h2 : sta.reg RSP ≤ a0.reg b0r + k
+          · exact Or.inr h2
+          · exfalso
+            have := allowed_at hwa (a0.reg b0r + k) (by omega) (by omega)
+            simp [Contract.perm, hnf, hno] at this
+      have hnotb : a0.reg b0r + k < stb.reg RSP - c.slot ∨ stb.reg RSP ≤ a0.reg b0r + k := hrsp_eq ▸ hnot
+      have hmk_mem : sta.marks.mem (a0.reg b0r + k) = false := by
+        rw [Ma.stable _ hnf hno]; exact hq0.2.2.1 b0r l0r hmem hnh0 k hk'
+      rw [afterCall_reg Fa.link rak, afterCall_reg Fa.link rak, ← hreq, vra,
+          afterCall_mem Fa.link h8a hnot, afterCall_mem Fa.link (hrsp_eq ▸ h8a) hnotb, A.mem _ hmk_mem]
+  · have hfa := hqa.2.2.2 x r n hm hnh k hk
+    have hr_in : r ∈ c.cleanAtEntry := List.mem_cons_of_mem _ (by
+      suffices ∀ args regs, (x, r, n) ∈ fixedsIn args regs → r ∈ cleanIn c args regs from this c.args c.argRegs hm
+      intro args; induction args with
+      | nil => intro regs h; simp [fixedsIn] at h
+      | cons ak more ih =>
+        intro regs h; cases regs with | nil => simp [fixedsIn] at h | cons r0 rs =>
+        obtain ⟨nm, kd⟩ := ak; cases kd with
+        | fixed cnt =>
+          simp only [fixedsIn] at h; rcases List.mem_cons.mp h with he | ht
+          · injection he with _ he2; injection he2 with er _; subst er; exact List.mem_append_left _ (List.mem_cons_self ..)
+          · exact List.mem_append_right _ (ih rs ht)
+        | number | bytes _ | out _ | inout _ | valArray _ _ => simp only [fixedsIn] at h; exact List.mem_append_right _ (ih rs h))
+    rw [← Ac.reg r (hqa.1 r hr_in)]
+    exact Ac.mem _ hfa
 
 /-- At a call approved by `callQuiet`, the callee's entry states satisfy `c.traceAgree`. -/
 theorem callQuiet_traceAgree {ctx : Ctx} {p q : Program} {a0 b0 sta stb : State}

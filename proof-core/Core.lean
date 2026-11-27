@@ -565,7 +565,6 @@ structure Ctx where
   piece : Option Nat := none                    -- the file this function is of, where it takes an address in
                                                 -- that file's read-only data
   resultPass : Bool := false                    -- true during the second pass for `result depends on`
-  runsCallees : List String := []               -- callees verified under `Runs` (for functions using `cmov`/`csel`)
   deriving Inhabited
 
 /-- Does this function contain any conditional select (`cmov*` / `csel`) instruction? -/
@@ -574,10 +573,6 @@ def hasSelect (code : List (Nat × Instr)) : Bool :=
     match p.2.effect with
     | [.set (.name _) (.call "select" [.name _, _, _])] => true
     | _ => false
-
-/-- Does this function contain any call or tail-call instruction? -/
-def hasCallOrTail (code : List (Nat × Instr)) : Bool :=
-  code.any fun p => (callTarget p.2).isSome || (tailTarget p.2).isSome
 
 /-- The bytes of the read-only data of the function's own file, where the function takes an address there. -/
 def Ctx.data (ctx : Ctx) : List Nat :=
@@ -5127,9 +5122,10 @@ def substCallExpr (ctx : Ctx) (s : Sym) (c : Contract) (bound : List String) : S
 /-- Is a callee expression `e` guaranteed to take the same value in any two runs agreeing at this call? -/
 def callExprClean (ctx : Ctx) (s : Sym) (c : Contract) (e : SExpr) : Bool :=
   callAllClean ctx s c [] e ||
-  match substCallExpr ctx s c [] e with
-  | some e' => ctx.contract.traceClean e'
-  | none => false
+  (!hasSelect ctx.code &&
+    match substCallExpr ctx s c [] e with
+    | some e' => ctx.contract.traceClean e'
+    | none => false)
 
 /-- What a called function's contract asks about marks is so at the call: the stack pointer and the
 registers of its arguments, but for the numbers its contract says are hidden, are known not to be marked;
@@ -5251,14 +5247,9 @@ def symTail (ctx : Ctx) (s : Sym) (name : String) (c : Contract) : V Unit := do
     if !callQuiet ctx (quietAtCall s c) c then
       refuse "at a tail call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
     else
-      let cleanRet := if hasSelect ctx.code then c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
-                      else callReturnsClean ctx (quietAtCall s c) c
+      let cleanRet := callReturnsClean ctx (quietAtCall s c) c
       let q' := afterCallQ cleanRet c (quietAtCall s c)
-      if hasSelect ctx.code && !(ctx.runsCallees.contains name || ctx.selfName == some name) then
-        refuse "a function using conditional select can only tail-call helpers without computed `trace depends on` values"
-      else if hasSelect ctx.code && ctx.contract.resultFollowsTrace && !cleanRet then
-        refuse "at a tail call from a function using conditional select, the called function's result must depend only on values allowed in the trace"
-      else if ctx.contract.resultFollowsTrace && !q'.regq.contains ctx.contract.retReg then
+      if ctx.contract.resultFollowsTrace && !q'.regq.contains ctx.contract.retReg then
         refuse "at a tail call, the returned value may depend on data kept out of the trace"
       else
         symReturn ctx { s' with q := q' }
@@ -5271,16 +5262,13 @@ def symNext (ctx : Ctx) (s : Sym) (i : Instr) : V (List (Sym × Next)) :=
     | none => refuse s!"a call of {name}, which is not a function shown before this one"
     | some c =>
       if !callFits ctx s i c then refuse "a call that is not one this function's machine makes of a function for that machine, or a stack pointer that is not shown to be a multiple of 16 at a call"
-      else if hasSelect ctx.code && !(ctx.runsCallees.contains name || ctx.selfName == some name) then
-        refuse "a function using conditional select can only call helpers without computed `trace depends on` values"
       else do
       needsOf ctx s c
       let s' ← symCall ctx s name c
       if !callQuiet ctx (quietAtCall s c) c then
         refuse "at a call, something the called function's contract requires to stay out of the trace may depend on values kept out of the trace"
       else
-        let cleanRet := if hasSelect ctx.code then c.resultFollowsTrace && callReturnsClean ctx (quietAtCall s c) c
-                        else callReturnsClean ctx (quietAtCall s c) c
+        let cleanRet := callReturnsClean ctx (quietAtCall s c) c
         pure [({ s' with q := afterCallQ cleanRet c (quietAtCall s c) }, .at i.next)]
   | none =>
     match tailTarget i with
@@ -5793,17 +5781,10 @@ structure Fn where
   places : List Place := []
   proof : List Item := []
 
-/-- Does this function qualify for single-run `Runs` tracking (and thus as a callee of functions using `cmov`/`csel`)? -/
-def fnRunsCapable (f : Fn) : Bool :=
-  f.contract.traceExprs.isEmpty && (hasSelect f.code || !hasCallOrTail f.code)
-
 /-- The functions one after another, `done` being those already shown, each with its contract. A call is
 taken by the contract of a function already shown, and by nothing else: so no function calls itself, or
 one that calls it, or one that is not in the statement. -/
-def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contract) → List Fn → Option String :=
-  go []
-where
-  go (runsOk : List String) : List (String × Contract) → List Fn → Option String
+def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contract) → List Fn → Option String
   | _, [] => none
   | done, f :: more =>
     if done.any (fun d => d.1 == f.name) then some s!"refused: two functions are named {f.name}"
@@ -5811,11 +5792,9 @@ where
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
       match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := callees,
-                      selfName := selfName, pieces := pieces, piece := f.piece, runsCallees := runsOk } f.proof with
+                      selfName := selfName, pieces := pieces, piece := f.piece } f.proof with
       | some why => some s!"{why}\nin {f.name}"
-      | none =>
-        let runsOk' := if fnRunsCapable f then f.name :: runsOk else runsOk
-        go runsOk' ((f.name, f.contract) :: done) more
+      | none => verdictFrom pieces defs ((f.name, f.contract) :: done) more
 
 /-- Do the functions of a statement meet their contracts, by these proofs? `none`: yes, every one. (`pieces`:
 the read-only data of the object files the functions are of.) -/

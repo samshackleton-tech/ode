@@ -1098,6 +1098,60 @@ fn hl_fast_fail_demo(x: u8) -> u64
                 else:
                     os.environ[k] = v
 
+    def test_27_select_calls_nested_and_recursive_helpers(self):
+        """Option 3: functions using `select` (`cmov`/`csel`) can call and tail-call
+        arbitrary helpers (including helpers that call other helpers and helpers with
+        `result depends on` / hidden results) on both x86_64 and arm64."""
+        src = """\
+fn leaf_add(x: u64) -> u64
+    requires x < 100
+    returns x + 1
+    trace depends on nothing
+{
+    return x + 1
+}
+
+fn mid_add(x: u64) -> u64
+    requires x < 100
+    returns x + 2
+    trace depends on nothing
+{
+    let t: u64 := leaf_add(x)
+    return t + 1
+}
+
+fn select_calls_nested(x: u64, flag: u64) -> u64
+    requires x < 100
+    returns if flag == 0 then x + 2 else x + 3
+    trace depends on nothing
+{
+    let a: u64 := mid_add(x)
+    let b: u64 := a + 1
+    return select(flag == 0, a, b)
+}
+
+fn select_tail_nested(x: u64, flag: u64) -> u64
+    requires x < 50
+    returns if flag == 0 then x + 2 else x + 3
+    trace depends on nothing
+{
+    let y: u64 := select(flag == 0, x, x + 1)
+    return mid_add(y)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "sel_call.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                for fn in ("select_calls_nested", "select_tail_nested"):
+                    o_path = os.path.join(d, f"{fn}.o")
+                    pr_path = os.path.join(d, f"{fn}.proof")
+                    res = ode_audit.pack_verified(p, None, o_path, pr_path, fn_name=fn, target=arch)
+                    self.assertEqual(res["verdict"], "shown", f"{fn} on {arch}: {res}")
+                    aud = ode_audit.audit_binary(o_path, pr_path)
+                    self.assertEqual(aud["verdict"], "shown", f"audit {fn} on {arch}: {aud}")
+
 
 if __name__ == "__main__":
     unittest.main()
