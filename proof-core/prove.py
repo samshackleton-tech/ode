@@ -574,7 +574,7 @@ class Prover:
                     cands.append((pc_i, r, expr))
         return cands
 
-    def solve(self, proof, allow_split=False):
+    def solve(self, proof, allow_split=False, split_depth=0):
         """The proof extended until the verifier says shown; None if this way does not get there."""
         while True:
             said = self.ask(proof)
@@ -696,18 +696,20 @@ class Prover:
                 else:
                     self.saw_undecided_below = True
                     # Pass 2 only: branchless single-compare range checks like `(c -% lo) <= hi - lo`:
-                    # split on `d >= 0` vs `d < 0` via `t split` + `k <row>` (strictly bounded).
+                    # split on `d >= 0` vs `d < 0` via `t split` + `k <row>` (bounded by per-path
+                    # `split_depth < 4` so 3+ range checks like Base64 A-Z/a-z/0-9 and multi-`join`
+                    # functions work without exponential blowup).
                     split_row = raw_goals[0]
-                    if allow_split and proof.count("t split") < 2 and self.split_tries < 6:
+                    if allow_split and split_depth < 4 and self.split_tries < 48:
                         saved_furthest = self.furthest_root
-                        for cut in range(len(proof), max(-1, len(proof) - 16), -1):
+                        for cut in range(len(proof), max(-1, len(proof) - 96), -1):
                             if cut < len(proof) and proof[cut].startswith("k "):
                                 continue
                             cand = proof[:cut] + ["t split", "k " + split_row]
                             ans = self.ask(cand)
                             if ans != said and (ans == "shown" or ans.startswith("need ")):
                                 self.split_tries += 1
-                                done = self.solve(cand, allow_split=allow_split)
+                                done = self.solve(cand, allow_split=allow_split, split_depth=split_depth + 1)
                                 if done is not None:
                                     return done
                                 self.furthest_root = saved_furthest
@@ -818,14 +820,17 @@ class Prover:
                     self.last_proof = proof
                     return None
                 if opened >= 2:
-                    # Deep recursive unfolding (e.g. 4x..18x unrolled loops): advance greedily along the
-                    # single newly created call (at the tail/head of `callsOf`), so depth 20 stays O(depth)
-                    # instead of branching exponentially.
+                    # Recursive unfolding (e.g. loop-exit chains and 4x..18x unrolled loops):
+                    # try the newly created call (`count - 1`) and invariant head (`0`) before older
+                    # calls, and keep per-candidate `spec_fuel_hit` isolated so shallow iterative
+                    # deepening never aborts before trying the remaining candidates.
                     cands = []
-                    order_k = (count - 1, count - 2, count - 3, 1, 0) if opened == 2 else (count - 2, count - 1, count - 3, 1, 0)
+                    order_k = (count - 1, count - 2, 1, 0, count - 3) if opened == 2 else (count - 2, count - 1)
                     for k in order_k:
                         if 0 <= k < count and k not in cands:
                             cands.append(k)
+                    any_cands_fuel = False
+                    deferred = []
                     for k in cands:
                         p_try = proof + [f"t open {k}"]
                         # Step through deterministic inner checks of `openCall` (`below`/`entail`/`same`/`compare`/`held`)
@@ -893,21 +898,36 @@ class Prover:
                             nc = int([l for l in nl2 if l.startswith("c ")][0].split()[1])
                             no = int([l for l in nl2 if l.startswith("o ")][0].split()[1])
                             nh = int(([l for l in nl2 if l.startswith("h ")] or ["h 0"])[0].split()[1])
-                            if no > 0 and nc <= count and nh <= held:
-                                continue                       # already-opened call with no new held value; skip without branching
-                            done = self.solve(p_try, allow_split=allow_split) # brand-new call or next path (`no == 0`)
-                            if done is not None: return done
-                            if opened >= 3 or self.hard_refusal or self.furthest_root > start_len: return None
-                            continue
+                            if no > 0:
+                                if nc <= count and nh <= held:
+                                    continue                       # already-opened call with no new held value; skip without branching
+                                deferred.append(p_try)
+                                continue
                         # Spec goal closed (or moved past `spec` to next instruction)!
-                        done = self.solve(p_try, allow_split=allow_split)
+                        self.spec_fuel_hit = False
+                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth)
                         if done is not None: return done
-                        if self.hard_refusal or self.furthest_root > start_len: return None
-                    if opened >= 3 or self.spec_fuel_hit:
+                        if self.spec_fuel_hit:
+                            any_cands_fuel = True
+                        if self.hard_refusal or self.furthest_root > start_len:
+                            if any_cands_fuel: self.spec_fuel_hit = True
+                            return None
+                    for p_try in deferred:
+                        self.spec_fuel_hit = False
+                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth) # brand-new call or next path (`no == 0`)
+                        if done is not None: return done
+                        if self.spec_fuel_hit:
+                            any_cands_fuel = True
+                        if opened >= 3 or self.hard_refusal or self.furthest_root > start_len:
+                            if any_cands_fuel: self.spec_fuel_hit = True
+                            return None
+                    if any_cands_fuel:
+                        self.spec_fuel_hit = True
+                    if opened >= 3:
                         return None
                 any_fuel_hit = False
                 prev_max = self.spec_max_open
-                budgets = (14, 30) if opened == 0 else (prev_max,)
+                budgets = (1, 2, 5, 10, 14, 30) if opened == 0 else (prev_max,)
                 for bud in budgets:
                     self.spec_max_open = bud
                     any_fuel_hit = False
@@ -916,7 +936,7 @@ class Prover:
                             self.spec_max_open = prev_max
                             return None
                         self.spec_fuel_hit = False
-                        done = self.solve(proof + [f"t open {k}"], allow_split=allow_split)
+                        done = self.solve(proof + [f"t open {k}"], allow_split=allow_split, split_depth=split_depth)
                         if done is not None:
                             self.spec_max_open = prev_max
                             return done

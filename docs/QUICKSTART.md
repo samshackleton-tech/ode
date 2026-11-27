@@ -186,6 +186,20 @@ Portable functions use a single `{ ... }` body. When you want architecture-speci
 
 On AArch64, `u32x4` uses up to 23 caller-saved NEON registers (`v0..v7, v16..v30`) with zero stack pushes (and automatically saves/restores `v8..v15` if more than 23 vectors are live at once). On x86-64, `u32x4` uses `xmm1..xmm15` and `u32x16` uses `zmm1..zmm31` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 
+### Zero-Overhead Helpers (`inline fn`)
+
+To share repeated sequences (round functions, bit-packing steps, header-length helpers) with zero call overhead and without losing surrounding path facts across a call boundary, define a hygienic `inline fn` with by-value or by-reference (`var`) parameters:
+
+```ode
+inline fn mix_step(var a: u32x4, var b: u32x4, c: u32x4) {
+    a +%= b
+    b := rotr32(b ^ a, 8)
+    a +%= c
+}
+```
+
+At each call site `mix_step(v0, v1, m0)`, `var` parameters alias the caller's live variables directly (zero copies, zero stack slots), value parameters bind fresh hygienic locals, and the expanded code is verified in place alongside the caller. Unlike separate `fn` helpers, `inline fn` needs no separate contract — use separate `fn` helpers only when you want to break up exponential branch/select paths or share code across multiple call sites.
+
 ---
 
 ## 7. Static Performance Analysis (`ode advise --asm`)

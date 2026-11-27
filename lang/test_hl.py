@@ -927,6 +927,82 @@ fn add_vec4(out: 16 bytes, a: 16 bytes, b: 16 bytes)
 """
         _dual_verify(self, src_avx, "add_vec4", check_verify2=False)
 
+    def test_25_select_compound_cond_no_trailing_ret_and_maintains_diag(self):
+        """Regression tests for `select(b & 1 == 0, ...)`, `if/else` return without dead `ret`, `maintains` `&&`/`||`, and 3-range `t split`."""
+        src = """\
+def low_zero_spec(b, u) {
+    if u == 0 then 1
+    else if u == 1 then (if b % 2 == 0 then 1 else 0)
+    else if b % 4 == 0 then 1 else 0
+}
+
+fn hl_low_zero(b: u64, u: u64) -> u64
+    requires u <= 2
+    returns low_zero_spec(b, u)
+    trace depends on b, u
+    stack 0
+{
+    if u == 0 { return 1 }
+    if u == 1 { return select(b & 1 == 0, 1, 0) }
+    if (b & 3) == 0 {
+        return 1
+    } else {
+        return 0
+    }
+}
+"""
+        _dual_verify(self, src, "hl_low_zero")
+
+        # 3-range branchless `t split` (A-Z, a-z, 0-9) + `maintains a && b`
+        src_3r = """\
+def is_alnum(c) {
+    if 65 <= c && c <= 90 then 1
+    else if 97 <= c && c <= 122 then 1
+    else if 48 <= c && c <= 57 then 1
+    else 0
+}
+
+fn hl_is_alnum(c: u8) -> u64
+    returns is_alnum(c)
+    trace depends on nothing
+    stack 0
+{
+    let t65 := c -% 65
+    let t97 := c -% 97
+    let t48 := c -% 48
+    let a := select(t65 <= 25, 1, 0)
+    let b := select(t97 <= 25, 1, 0)
+    let d := select(t48 <= 9, 1, 0)
+    return a + b + d
+}
+"""
+        _dual_verify(self, src_3r, "hl_is_alnum")
+
+        # `maintains` with `||` produces a clear compile diagnostic (not an opaque verifier refusal)
+        src_bad = """\
+fn bad_or(a: n bytes, n: u64) -> u64
+    requires n <= 16
+    returns 0
+    trace depends on n
+{
+    var x: u64 := 0
+    for i in 0..n
+        maintains x == 0 || x == 1
+    {
+        x := 0
+    }
+    return x
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad_or.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src_bad)
+            with self.assertRaises(BaseException) as ctx:
+                ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                        fn_name="bad_or", target="x86_64", c_abi=True)
+            self.assertIn("`maintains` cannot use `||`", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

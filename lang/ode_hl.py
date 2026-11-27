@@ -2648,11 +2648,11 @@ class HLLower:
         # Crucially, nested `select(..., t, select(...))` MUST evaluate the recursive `else_e` into
         # `out_reg` FIRST so inner selects never overwrite the outer `t_reg` scratch register!
         pool = list(self._scratch_pool())
-        cmp_regs = set()
-        if isinstance(cmp_l, Var) and cmp_l.name in self.var_loc and self.var_loc[cmp_l.name][0] == "reg":
-            cmp_regs.add(self.var_loc[cmp_l.name][1])
-        if isinstance(cmp_r, Var) and cmp_r.name in self.var_loc and self.var_loc[cmp_r.name][0] == "reg":
-            cmp_regs.add(self.var_loc[cmp_r.name][1])
+        cmp_regs = {
+            self.var_loc[v][1]
+            for v in (_used_vars_expr(cmp_l) | _used_vars_expr(cmp_r))
+            if v in self.var_loc and self.var_loc[v][0] == "reg"
+        }
 
         else_is_dst = isinstance(sel.else_e, Var) and self.var_loc.get(sel.else_e.name) == ("reg", dst)
         then_reads_dst = self._expr_reads_reg(sel.then_e, dst)
@@ -3127,9 +3127,17 @@ class HLLower:
         for ef in extra_facts:
             add_fact(self._subst_spec_vars(ef))
 
-        # 5. User `maintains` clauses
+        # 5. User `maintains` clauses (split top-level `&&`; give a clear diagnostic on `||`)
         for mf in maintains:
-            add_fact(self._subst_spec_vars(mf))
+            if "||" in mf:
+                raise HLErr(
+                    f"{self.src}: line {line}: `maintains` cannot use `||` (`{mf.strip()}`); "
+                    f"write linear bounds instead (for example `0 <= x, x <= 1` instead of `x == 0 || x == 1`)"
+                )
+            for part in mf.split("&&"):
+                part = part.strip()
+                if part:
+                    add_fact(self._subst_spec_vars(part))
 
         # 6. User `writes` clauses (canonicalize `writes out[.. j] = spec.fn(args)[i]` / `[.. j]` -> `spec.fn(args)`)
         for buf_nm, mode, idx_s, rhs_s in writes:
@@ -3311,7 +3319,8 @@ class HLLower:
                 self.active_facts.extend(else_facts)
                 self.lower_stmts(st.else_body)
                 del self.active_facts[saved2:]
-                self.emit(st.line, f"{end_lbl}:")
+                if not (_stmts_always_exit(st.then_body) and _stmts_always_exit(st.else_body)):
+                    self.emit(st.line, f"{end_lbl}:")
             return
 
         if isinstance(st, WhileStmt):
@@ -3410,10 +3419,11 @@ class HLLower:
         self._emit_prologue(first_ln)
         self.lower_stmts(self.stmts)
         # Void functions without trailing `return`
-        if not self.out_lines or self.out_lines[-1][1] not in ("ret",) and not self.out_lines[-1][1].startswith(("jmp ", "b ")):
-            last_ln = self.stmts[-1].line if self.stmts else first_ln
-            self._emit_epilogue(last_ln)
-            self.emit(last_ln, "ret")
+        if not _stmts_always_exit(self.stmts):
+            if not self.out_lines or (self.out_lines[-1][1] not in ("ret",) and not self.out_lines[-1][1].startswith(("jmp ", "b "))):
+                last_ln = self.stmts[-1].line if self.stmts else first_ln
+                self._emit_epilogue(last_ln)
+                self.emit(last_ln, "ret")
         lines_out = [txt for _, txt in self.out_lines]
         clobbered = _compute_clobbered_regs(lines_out, self.arch, self.callee_saved, self.callee_clobbers)
         auto_calling = _build_auto_calling(self.params, self.arch, clobbered)
