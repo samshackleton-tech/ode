@@ -85,7 +85,7 @@ High-Level Ode lowers statements in exact written order with lexical block scopi
 
 | Construct | Syntax | Deterministic lowering & proof semantics |
 |---|---|---|
-| Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0` | Allocates a register (`u8` records `0 <= b <= 255`); disjoint scopes and dead parameters reuse registers. |
+| Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0`, `{ ... }` | Allocates a register (`u8` records `0 <= b <= 255`); lexical `{ ... }` blocks and dead parameters reuse registers immediately. |
 | Explicit stack variable | `stack var x: u64 := 0`, `stack let v: u32x4 := expr` | Places the variable in an explicit aligned stack slot instead of a register (avoids register pressure with no hidden spills). |
 | Local stack buffer | `buf tmp[64] align 16` | Fixed aligned stack frame slot; no dynamic allocation. |
 | Exact arithmetic (default) | `a + b`, `a - b`, `a * b`, `x += k`, `x -= k` | Verifier proves no 64-bit unsigned overflow or underflow. |
@@ -181,12 +181,13 @@ Portable functions use a single `{ ... }` body. When you want architecture-speci
 |---|---|---|
 | Unaligned vector load | `let v: u32x4 := inp.u32x4(off)` / `inp.u32x16(off)` | `vmovdqu` / `vmovdqu32` (`x86_64`); `ldr qN, [base, off]` (`arm64`) |
 | Unaligned vector store | `out.u32x4(off) := v` / `out.u32x16(off) := v` | `vmovdqu` / `vmovdqu32` (`x86_64`); `str qN, [base, off]` (`arm64`) |
+| Vector constructors | `u32x4(w0, w1, w2, w3)`, `u32x4.splat(w)`, `u32x16.splat(w)` | Builds a 4-lane (const or runtime `word`/`u64`) or 16-lane (`x86_64` `vpbroadcastd`) vector portably. |
 | 32-bit lane add / xor / and / or | `a +% b` (or `a +%= b`), `a ^ b`, `a & b`, `a \| b` | `vpaddd`, `vpxord`, `vpand`, `vpor` / `add.4s`, `eor.16b`, `and.16b`, `orr.16b` |
-| 32-bit lane rotate | `rotl32(a, k)`, `rotr32(a, k)` | `vprord` (`avx512` / `u32x16`) or `vpslld+vpsrld+vpor`; `rev32.8h` (`k=16`) or `shl+ushr+orr` (`arm64`) |
+| 32-bit lane shift & rotate | `a >> k`, `a << k`, `rotl32(a, k)`, `rotr32(a, k)` | `vpsrld`/`vpslld`, `vprord` (`avx512`) or shift+or / `ushr.4s`/`shl.4s`, `rev32.8h` (`k=16`) or shift+orr (`arm64`) |
 | 128-bit lane rotate / align | `ext4(a, b)`, `ext8(a, b)`, `ext12(a, b)` | `vpalignr` (`x86_64`) / `ext.16b` (`arm64`) |
-| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32(a, b)`, `unpackhi32(a, b)`, `unpacklo64(a, b)`, `unpackhi64(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`, `vpunpckhdq`, `vpunpcklqdq`, `vpunpckhqdq`, `vshufi32x4` / `zip1.4s`, `zip2.4s`, `zip1.2d`, `zip2.2d` (`arm64`) |
+| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32/hi32(a, b)`, `unpacklo64/hi64(a, b)`, `uzp1_32/uzp2_32(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`/`hdq`/`lqdq`, `vshufps`, `vshufi32x4` / `zip1.4s`/`zip2.4s`/`zip1.2d`/`zip2.2d`/`uzp1.4s`/`uzp2.4s`/`ext.16b` (`arm64`; `shuf32` supports lane rotations `0x39`/`0x4E`/`0x93`/`0xE4` and splats `0x00`/`0x55`/`0xAA`/`0xFF` portably) |
 
-On AArch64, `u32x4` uses up to 23 caller-saved NEON registers (`v0..v7, v16..v30`) with zero stack pushes (and automatically saves/restores `v8..v15` if more than 23 vectors are live at once). On x86-64, `u32x4` uses `xmm1..xmm15` and `u32x16` uses `zmm1..zmm31` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
+On AArch64, `u32x4` uses up to 22 caller-saved NEON registers (`v0..v7, v16..v29`, keeping `v8..v15` untouched with zero stack pushes; declare `stack var` for any extra vectors). On x86-64, `u32x4` uses `xmm1..xmm14` and `u32x16` uses `zmm1..zmm30` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 
 ### Zero-Overhead Helpers (`inline fn`)
 

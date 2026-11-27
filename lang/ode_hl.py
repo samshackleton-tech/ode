@@ -315,6 +315,11 @@ class ExprStmt:
     expr: object      # e.g. store_u32x4(out, off, v) or helper(...)
     line: int
 
+@dataclass
+class BlockStmt:
+    body: list        # lexical `{ ... }` block scope (flattened in `_alpha_rename_blocks`)
+    line: int
+
 
 # ---------------------------------------------------------------------------
 # Recursive-Descent Parser
@@ -473,6 +478,12 @@ class HLParser:
             if self.maybe("align"):
                 align = int(self.take(kind="num").val, 0)
             return BufStmt(nm, sz, align, t.line)
+
+        if t.val == "{":
+            self.i += 1
+            body = self.parse_block_stmts(until_brace=True)
+            self.take("}")
+            return BlockStmt(body, t.line)
 
         if t.val == "if":
             self.i += 1
@@ -832,6 +843,8 @@ def _subst_stmts(stmts, vname, kval):
             out.append(ReturnStmt(_subst_expr(st.expr, vname, kval) if st.expr is not None else None, st.line))
         elif isinstance(st, ExprStmt):
             out.append(ExprStmt(_subst_expr(st.expr, vname, kval), st.line))
+        elif isinstance(st, BlockStmt):
+            out.append(BlockStmt(_subst_stmts(st.body, vname, kval), st.line))
         else:
             out.append(st)
     return out
@@ -924,6 +937,9 @@ def _alpha_rename_blocks(stmts, param_names):
                 out.append(JoinStmt([ren_spec(f, env) for f in st.facts], st.line))
             elif isinstance(st, ExprStmt):
                 out.append(ExprStmt(ren_expr(st.expr, env), st.line))
+            elif isinstance(st, BlockStmt):
+                # Flatten lexical `{ ... }` scope with its own alpha-renamed child env so locals stay disjoint!
+                out.extend(ren_block(st.body, env))
             else:
                 out.append(st)
         return out
@@ -946,6 +962,8 @@ def expand_unrolls(stmts, src):
             out.append(WhileStmt(st.cond, st.maintains, st.writes, st.decreases, expand_unrolls(st.body, src), st.line))
         elif isinstance(st, ForStmt):
             out.append(ForStmt(st.var, st.lo, st.hi, st.step, False, st.maintains, st.writes, st.decreases, expand_unrolls(st.body, src), st.line))
+        elif isinstance(st, BlockStmt):
+            out.append(BlockStmt(expand_unrolls(st.body, src), st.line))
         else:
             out.append(st)
     return out
@@ -953,24 +971,24 @@ def expand_unrolls(stmts, src):
 
 _INTRINSICS = frozenset({
     "load_u32x4", "store_u32x4", "load_u32x16", "store_u32x16", "broadcast_u32x16",
-    "const_u32x4", "zeros_u32x16", "rotl32", "rotr32", "shl32", "shr32", "bswap32",
-    "shuf32", "shuf32_pair", "shufps", "shufi32x4",
+    "const_u32x4", "zeros_u32x16", "rotl32", "rotr32", "shl32", "shr32",
+    "shuf32", "shufps", "shufi32x4",
     "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64",
-    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
-    "blend32", "palignr", "ext4", "ext8", "ext12",
-    "sha256rnds2", "sha256msg1", "sha256msg2", "sha256h", "sha256h2", "sha256su0", "sha256su1",
+    "uzp1_32", "uzp2_32", "pack_u64x2",
+    "u32x4", "u32x4.splat", "u32x4.of", "u32x16", "u32x16.splat",
+    "blend32", "ext4", "ext8", "ext12",
     "add_u32x16_data",
 })
 
 _VEC4_INTRINSICS = frozenset({
-    "load_u32x4", "const_u32x4", "shuf32", "shuf32_pair", "shufps", "blend32", "palignr",
-    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
-    "ext4", "ext8", "ext12", "bswap32",
-    "sha256rnds2", "sha256msg1", "sha256msg2", "sha256h", "sha256h2", "sha256su0", "sha256su1",
+    "load_u32x4", "const_u32x4", "shuf32", "shufps", "blend32",
+    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4", "u32x4.splat", "u32x4.of",
+    "ext4", "ext8", "ext12",
 })
 
 _VEC16_INTRINSICS = frozenset({
     "load_u32x16", "broadcast_u32x16", "zeros_u32x16", "shufi32x4", "add_u32x16_data",
+    "u32x16", "u32x16.splat",
 })
 
 
@@ -1130,6 +1148,8 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
             out.append(ExprStmt(_subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
         elif isinstance(st, ReturnStmt):
             out.append(ReturnStmt(_subst_inline_expr(st.expr, cur_vmap, emap, call_line) if st.expr is not None else None, call_line))
+        elif isinstance(st, BlockStmt):
+            out.append(BlockStmt(_subst_inline_stmts(st.body, cur_vmap, emap, prefix, call_line), call_line))
         else:
             out.append(st)
     return out
@@ -1189,6 +1209,8 @@ def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None):
                 _expand_hl_inlines(st.body, hl_inlines, src, depth, seq),
                 st.line,
             ))
+        elif isinstance(st, BlockStmt):
+            out.append(BlockStmt(_expand_hl_inlines(st.body, hl_inlines, src, depth, seq), st.line))
         else:
             out.append(st)
     return out
@@ -1579,12 +1601,12 @@ def _linear_to_spec(e):
     return _pure_to_spec(e, ())
 
 
-def _cmp_to_fact(c):
+def _cmp_to_fact(c, bytes_params=()):
     """Convert a linear `Cmp` into `(fact_str, vars_used)` for `place` inheritance, or None."""
     if not isinstance(c, Cmp) or c.op == "!=":
         return None
-    l = _linear_to_spec(c.left)
-    r = _linear_to_spec(c.right)
+    l = _pure_to_spec(c.left, bytes_params)
+    r = _pure_to_spec(c.right, bytes_params)
     if l is None or r is None:
         return None
     ls, lv = l
@@ -2376,12 +2398,14 @@ class HLLower:
                 self.emit(line, f"str {src_reg}, [sp, {val}]")
 
     @contextlib.contextmanager
-    def _emit_addr_held(self, line, buf_name, idx_e, avoid=(), reuse_dst=None, allow_sp=True):
+    def _emit_addr_held(self, line, buf_name, idx_e, avoid=(), reuse_dst=None, allow_sp=True, align_req=1):
         """Compute `(base_reg, const_offset)` for `buf[idx_e]`, protecting any allocated scratch `base_reg`.
         If `reuse_dst` is a scratch register allocated for the enclosing load (not read by `buf`/`idx_e`),
         evaluate `idx_e` directly into `reuse_dst` so an empty output register is never wasted.
         On `arm64`, `allow_sp=False` materializes `add r, sp, disp` because `arm64.tab` only has
-        `[sp, N]` forms for 64-bit (`ldr`/`str`) and 128-bit (`ldr q`/`str q`), not `w` or byte loads/stores."""
+        `[sp, N]` forms for 64-bit (`ldr`/`str`) and 128-bit (`ldr q`/`str q`), not `w` or byte loads/stores;
+        `align_req` ensures immediate displacements on `arm64` are multiples of 4/8/16 (materializing
+        `add tmp, base, disp` with offset 0 whenever `disp % align_req != 0` or `disp < 0`)."""
         if buf_name not in self.var_loc:
             raise HLErr(f"{self.src}: line {line}: unknown buffer `{buf_name}`")
         bkind, bval = self.var_loc[buf_name]
@@ -2393,18 +2417,24 @@ class HLLower:
             and (bkind == "buf" or bval != reuse_dst)
             and not self._expr_reads_reg(idx_e, reuse_dst)
         )
+        def _arm_needs_mat(d):
+            return self.arch == "arm64" and d != 0 and (d < 0 or (align_req > 1 and d % align_req != 0) or d > 4095)
         if bkind == "buf":
             if isinstance(idx_e, Num):
                 total_off = bval + idx_e.val
-                if allow_sp or self.arch != "arm64":
+                if (allow_sp and not _arm_needs_mat(total_off)) or self.arch != "arm64":
                     yield ("sp" if self.arch == "arm64" else "rsp"), total_off
                     return
-                if can_reuse:
+                if can_reuse and 0 <= total_off <= 4095:
                     self.emit(line, f"add {reuse_dst}, sp, {total_off}")
                     yield reuse_dst, 0
                     return
                 with self._temp_reg(line, avoid=avoid, why=addr_why) as addr_reg:
-                    self.emit(line, f"add {addr_reg}, sp, {total_off}")
+                    if 0 <= total_off <= 4095:
+                        self.emit(line, f"add {addr_reg}, sp, {total_off}")
+                    else:
+                        self._emit_imm(line, addr_reg, total_off)
+                        self.emit(line, f"add {addr_reg}, sp, {addr_reg}")
                     yield addr_reg, 0
                 return
             with self._hold_expr(idx_e, why=f"index `{_expr_brief(idx_e)}` of `{buf_name}`") as ireg:
@@ -2419,7 +2449,21 @@ class HLLower:
             return
         base_reg = bval
         if isinstance(idx_e, Num):
-            yield base_reg, idx_e.val
+            disp = idx_e.val
+            if not _arm_needs_mat(disp):
+                yield base_reg, disp
+                return
+            if can_reuse and 0 <= disp <= 4095:
+                self.emit(line, f"add {reuse_dst}, {base_reg}, {disp}")
+                yield reuse_dst, 0
+                return
+            with self._temp_reg(line, avoid=avoid, why=addr_why) as addr_reg:
+                if 0 <= disp <= 4095:
+                    self.emit(line, f"add {addr_reg}, {base_reg}, {disp}")
+                else:
+                    self._emit_imm(line, addr_reg, disp)
+                    self.emit(line, f"add {addr_reg}, {base_reg}, {addr_reg}")
+                yield addr_reg, 0
             return
         if isinstance(idx_e, BinOp) and idx_e.op == "+" and isinstance(idx_e.right, Num):
             disp = idx_e.right.val
@@ -2430,7 +2474,11 @@ class HLLower:
                     yield reuse_dst, 0
                 else:
                     self.emit(line, f"add {reuse_dst}, {base_reg}, {reuse_dst}")
-                    yield reuse_dst, disp
+                    if _arm_needs_mat(disp):
+                        self._emit_add_sub(line, "+", reuse_dst, reuse_dst, Num(disp, line))
+                        yield reuse_dst, 0
+                    else:
+                        yield reuse_dst, disp
                 return
             with self._hold_expr(idx_e.left, why=f"index `{_expr_brief(idx_e.left)}` of `{buf_name}`") as ireg:
                 if ireg in self._scratch_pool() and ireg not in avoid:
@@ -2439,7 +2487,11 @@ class HLLower:
                         yield ireg, 0
                     else:
                         self.emit(line, f"add {ireg}, {base_reg}, {ireg}")
-                        yield ireg, disp
+                        if _arm_needs_mat(disp):
+                            self._emit_add_sub(line, "+", ireg, ireg, Num(disp, line))
+                            yield ireg, 0
+                        else:
+                            yield ireg, disp
                     return
                 with self._temp_reg(line, avoid=avoid, why=addr_why) as addr_reg:
                     if self.arch == "x86_64":
@@ -2447,7 +2499,11 @@ class HLLower:
                         yield addr_reg, 0
                     else:
                         self.emit(line, f"add {addr_reg}, {base_reg}, {ireg}")
-                        yield addr_reg, disp
+                        if _arm_needs_mat(disp):
+                            self._emit_add_sub(line, "+", addr_reg, addr_reg, Num(disp, line))
+                            yield addr_reg, 0
+                        else:
+                            yield addr_reg, disp
             return
         if can_reuse and not (isinstance(idx_e, Var) and self.var_loc.get(idx_e.name, (None,))[0] == "reg"):
             self._eval_scalar(idx_e, reuse_dst)
@@ -2616,7 +2672,8 @@ class HLLower:
         if isinstance(e, IndexLoad):
             reuse = dst if e.width in ("u8", "u32", "u64") else None
             allow_sp = (self.arch != "arm64" or e.width == "u64")
-            with self._emit_addr_held(e.line, e.buf, e.idx, reuse_dst=reuse, allow_sp=allow_sp) as (base, disp):
+            align_req = {"u32": 4, "u64": 8}.get(e.width, 1)
+            with self._emit_addr_held(e.line, e.buf, e.idx, reuse_dst=reuse, allow_sp=allow_sp, align_req=align_req) as (base, disp):
                 if e.width == "u8":
                     if self.arch == "x86_64":
                         d_str = f" + {disp}" if disp else ""
@@ -2987,7 +3044,9 @@ class HLLower:
             self._load_var(line, e.name, dst)
             return
         if isinstance(e, IndexLoad):
-            with self._emit_addr_held(line, e.buf, e.idx) as (base, disp):
+            if ty == "u32x16" and self.arch != "x86_64":
+                raise HLErr(f"{self.src}: line {line}: `u32x16` (512-bit AVX-512) is only supported on `x86_64`; use `u32x4` on `arm64`")
+            with self._emit_addr_held(line, e.buf, e.idx, align_req=(16 if ty == "u32x4" else 1)) as (base, disp):
                 if ty == "u32x4":
                     if self.arch == "x86_64":
                         d_str = f" + {disp}" if disp else ""
@@ -2999,6 +3058,33 @@ class HLLower:
                     self.emit(line, f"vmovdqu32 {dst}, [{base}{d_str}]")
             return
         if isinstance(e, BinOp):
+            if e.op in (">>", "<<"):
+                if not isinstance(e.right, Num):
+                    raise HLErr(f"{self.src}: line {line}: vector shift `{e.op}` requires a constant shift count in 0..31")
+                k = e.right.val
+                if not (0 <= k < 32):
+                    raise HLErr(f"{self.src}: line {line}: vector shift count `{k}` must be in 0..31")
+                if ty != "u32x4":
+                    raise HLErr(f"{self.src}: line {line}: vector shift `{e.op}` is supported on `u32x4` (not `{ty}`)")
+                if isinstance(e.left, Var) and e.left.name in self.var_loc and self.var_loc[e.left.name][0] == "reg":
+                    sr = self.var_loc[e.left.name][1]
+                else:
+                    self._eval_vec(e.left, dst, ty, s_idx)
+                    sr = dst
+                if k == 0:
+                    if dst != sr:
+                        if self.arch == "x86_64":
+                            self.emit(line, f"vmovdqa {dst}, {sr}")
+                        else:
+                            self.emit(line, f"orr {dst}.16b, {sr}.16b, {sr}.16b")
+                    return
+                if self.arch == "x86_64":
+                    mn = "vpsrld" if e.op == ">>" else "vpslld"
+                    self.emit(line, f"{mn} {dst}, {sr}, {k}")
+                else:
+                    mn = "ushr" if e.op == ">>" else "shl"
+                    self.emit(line, f"{mn} {dst}.4s, {sr}.4s, {k}")
+                return
             if not isinstance(e.left, Var) and not self._vec_expr_uses_reg(e.right, dst):
                 self._eval_vec(e.left, dst, ty, s_idx)
                 lr = dst
@@ -3039,12 +3125,20 @@ class HLLower:
                 self._eval_vec(IndexLoad(args[0].name, args[1], "u32x4", line), dst, "u32x4", s_idx)
                 return
             if nm == "load_u32x16":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `load_u32x16` (AVX-512) is only supported on `x86_64`")
                 self._eval_vec(IndexLoad(args[0].name, args[1], "u32x16", line), dst, "u32x16", s_idx)
                 return
             if nm == "zeros_u32x16":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `zeros_u32x16` (AVX-512) is only supported on `x86_64`")
                 self.emit(line, f"vpxord {dst}, {dst}, {dst}")
                 return
-            if nm == "broadcast_u32x16":
+            if nm in ("broadcast_u32x16", "u32x16", "u32x16.splat"):
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `{nm}` (AVX-512) is only supported on `x86_64`; use `u32x4.splat(...)` on `arm64`")
+                if len(args) != 1:
+                    raise HLErr(f"{self.src}: line {line}: `{nm}(val)` takes 1 scalar argument")
                 a0 = args[0]
                 if isinstance(a0, IndexLoad) and a0.width == "u32":
                     with self._emit_addr_held(line, a0.buf, a0.idx) as (base, disp):
@@ -3057,19 +3151,61 @@ class HLLower:
                         self.emit(line, f"vpbroadcastd {dst}, {X86_REG32[sr]}")
                 return
             if nm == "const_u32x4":
+                if len(args) == 4:
+                    self._eval_vec(Call("u32x4", args, line), dst, "u32x4", s_idx)
+                    return
+                if len(args) == 1 and isinstance(args[0], Num):
+                    self._eval_vec(Call("u32x4.splat", args, line), dst, "u32x4", s_idx)
+                    return
+                if len(args) == 1 and isinstance(args[0], Var) and args[0].name in self.data_names:
+                    if self.arch == "x86_64":
+                        self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + #{args[0].name}]")
+                        return
+                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` from `data` is x86-64 only; use `u32x4(w0, w1, w2, w3)` or `u32x4.splat(w)` portably")
+                raise HLErr(f"{self.src}: line {line}: `const_u32x4` expects a `data` label or 1/4 integer constants; prefer `u32x4(w0, w1, w2, w3)` or `u32x4.splat(w)`")
+            if nm == "u32x4.splat" or (nm == "u32x4" and len(args) == 1):
+                if len(args) != 1:
+                    raise HLErr(f"{self.src}: line {line}: `u32x4.splat(w)` takes 1 scalar argument")
                 a0 = args[0]
-                if self.arch == "x86_64":
-                    self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + #{a0.name}]")
-                else:
-                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` on arm64 uses `u32x4(w0, w1, w2, w3)`")
+                if isinstance(a0, Num):
+                    a0 = Num(a0.val & 0xFFFFFFFF, line)
+                with self._hold_expr(a0, why="lane for `u32x4.splat`") as wr:
+                    if self.arch == "x86_64":
+                        self.emit(line, f"vmovq {dst}, {wr}")
+                        self.emit(line, f"vpshufd {dst}, {dst}, 0")
+                    else:
+                        self.emit(line, f"fmov d{dst[1:]}, {wr}")
+                        self.emit(line, f"zip1 {dst}.4s, {dst}.4s, {dst}.4s")
+                        self.emit(line, f"zip1 {dst}.2d, {dst}.2d, {dst}.2d")
                 return
-            if nm == "u32x4":
-                if len(args) != 4 or not all(isinstance(a, Num) for a in args):
-                    raise HLErr(f"{self.src}: line {line}: `u32x4(w0, w1, w2, w3)` requires 4 constant 32-bit integers")
-                w0, w1, w2, w3 = (a.val & 0xFFFFFFFF for a in args)
-                lo64 = w0 | (w1 << 32)
-                hi64 = w2 | (w3 << 32)
-                self._eval_vec(Call("pack_u64x2", [Num(lo64, line), Num(hi64, line)], line), dst, "u32x4", s_idx)
+            if nm in ("u32x4", "u32x4.of"):
+                if len(args) != 4:
+                    raise HLErr(f"{self.src}: line {line}: `{nm}(w0, w1, w2, w3)` takes 4 scalar arguments (or use `u32x4.splat(w)` for 1)")
+                vtmp = self._vec_scratch("u32x4", 0)
+                if vtmp == dst:
+                    vtmp = self._vec_scratch("u32x4", 1)
+                lane_args = [Num(a.val & 0xFFFFFFFF, line) if isinstance(a, Num) else a for a in args]
+                def _load_lane0(arg_e, vreg, why):
+                    with self._hold_expr(arg_e, why=why) as wr:
+                        if self.arch == "x86_64":
+                            self.emit(line, f"vmovq {vreg}, {wr}")
+                        else:
+                            self.emit(line, f"fmov d{vreg[1:]}, {wr}")
+                if self.arch == "x86_64":
+                    _load_lane0(lane_args[0], dst, "lane 0 of `u32x4`")
+                    _load_lane0(lane_args[1], vtmp, "lane 1 of `u32x4`")
+                    self.emit(line, f"vpunpckldq {dst}, {dst}, {vtmp}")
+                    _load_lane0(lane_args[2], vtmp, "lane 2 of `u32x4`")
+                    self.emit(line, f"vshufps {dst}, {dst}, {vtmp}, 4")
+                    _load_lane0(lane_args[3], vtmp, "lane 3 of `u32x4`")
+                    self.emit(line, f"vshufps {vtmp}, {dst}, {vtmp}, 10")
+                    self.emit(line, f"vshufps {dst}, {dst}, {vtmp}, 132")
+                else:
+                    _load_lane0(lane_args[0], dst, "lane 0 of `u32x4`")
+                    self.emit(line, f"ext {dst}.16b, {dst}.16b, {dst}.16b, 4")
+                    for li in (1, 2, 3):
+                        _load_lane0(lane_args[li], vtmp, f"lane {li} of `u32x4`")
+                        self.emit(line, f"ext {dst}.16b, {dst}.16b, {vtmp}.16b, 4")
                 return
             if nm == "pack_u64x2":
                 if len(args) != 2:
@@ -3121,7 +3257,15 @@ class HLLower:
                         self.emit(line, f"ushr {dst}.4s, {sr}.4s, {r}")
                         self.emit(line, f"orr {dst}.16b, {dst}.16b, {tmp}.16b")
                 return
+            if nm in ("shl32", "shr32"):
+                op = "<<" if nm == "shl32" else ">>"
+                if len(args) != 2:
+                    raise HLErr(f"{self.src}: line {line}: `{nm}(vec, imm)` takes 2 arguments")
+                self._eval_vec(BinOp(op, args[0], args[1], line), dst, ty, s_idx)
+                return
             if nm == "shufi32x4":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `shufi32x4` (AVX-512) is only supported on `x86_64`")
                 a = self._as_vec_reg(args[0], ty, s_idx)
                 b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1)) if len(args) == 3 else a
                 imm = args[-1].val
@@ -3129,16 +3273,48 @@ class HLLower:
                 return
             if nm == "shuf32":
                 a = self._as_vec_reg(args[0], ty, s_idx)
-                imm = args[1].val
-                self.emit(line, f"vpshufd {dst}, {a}, {imm}")
+                if len(args) != 2 or not isinstance(args[1], Num):
+                    raise HLErr(f"{self.src}: line {line}: `shuf32(vec, imm)` requires a constant 8-bit lane mask")
+                imm = args[1].val & 0xFF
+                if self.arch == "x86_64":
+                    self.emit(line, f"vpshufd {dst}, {a}, {imm}")
+                    return
+                # Portable AArch64 NEON lowering for rotations, lane broadcasts, and identity!
+                if imm == 0xE4:  # (0, 1, 2, 3) identity
+                    if dst != a:
+                        self.emit(line, f"orr {dst}.16b, {a}.16b, {a}.16b")
+                elif imm == 0x39:  # (1, 2, 3, 0)
+                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 4")
+                elif imm == 0x4E:  # (2, 3, 0, 1)
+                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 8")
+                elif imm == 0x93:  # (3, 0, 1, 2)
+                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 12")
+                elif imm in (0x00, 0x55, 0xAA, 0xFF):  # broadcast lane 0, 1, 2, or 3
+                    tmp = self._vec_scratch(ty, 0)
+                    if tmp in (dst, a):
+                        tmp = self._vec_scratch(ty, 1)
+                    z1 = "zip1" if imm in (0x00, 0x55) else "zip2"
+                    z2 = "zip1" if imm in (0x00, 0xAA) else "zip2"
+                    self.emit(line, f"{z1} {tmp}.4s, {a}.4s, {a}.4s")
+                    self.emit(line, f"{z2} {dst}.2d, {tmp}.2d, {tmp}.2d")
+                else:
+                    raise HLErr(
+                        f"{self.src}: line {line}: `shuf32` immediate `0x{imm:02X}` is not directly supported on `arm64` "
+                        f"(supported on arm64: rotations 0x39/0x4E/0x93, lane splats 0x00/0x55/0xAA/0xFF, identity 0xE4; "
+                        f"otherwise compose `ext4`/`ext8`/`ext12`, `unpacklo32`/`unpackhi32`, `unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`)"
+                    )
                 return
             if nm == "shufps":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `shufps` is x86-64 only; on `arm64` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`/`uzp1_32`/`uzp2_32`/`ext4`/`ext8`/`ext12`")
                 a = self._as_vec_reg(args[0], ty, s_idx)
                 b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 imm = args[2].val
                 self.emit(line, f"vshufps {dst}, {a}, {b}, {imm}")
                 return
             if nm == "blend32":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `blend32` is x86-64 only; on `arm64` use `unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`/`uzp1_32`/`uzp2_32`/`ext4`/`ext8`/`ext12`")
                 a = self._as_vec_reg(args[0], ty, s_idx)
                 b = self._as_vec_reg(args[1], ty, 1 - (s_idx & 1))
                 imm = args[2].val
@@ -3172,16 +3348,26 @@ class HLLower:
                         "unpacklo64": ("zip1", "2d"), "unpackhi64": ("zip2", "2d"),
                     }[nm]
                     self.emit(line, f"{mn} {dst}.{suf}, {a}.{suf}, {b}.{suf}")
+                elif nm == "unpackhi64" and ty == "u32x4":
+                    # `x86.tab` has `vshufps xmm` (`0xEE` = lanes(a.2, a.3, b.2, b.3)); `vpunpckhqdq` is ZMM-only.
+                    self.emit(line, f"vshufps {dst}, {a}, {b}, 238")
                 else:
                     mn = {"unpacklo32": "vpunpckldq", "unpackhi32": "vpunpckhdq",
                           "unpacklo64": "vpunpcklqdq", "unpackhi64": "vpunpckhqdq"}[nm]
                     self.emit(line, f"{mn} {dst}, {a}, {b}")
                 return
             if nm == "add_u32x16_data":
+                if self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {line}: `add_u32x16_data` (AVX-512) is only supported on `x86_64`")
                 a = self._as_vec_reg(args[0], ty, s_idx)
                 self.emit(line, f"vpaddd {dst}, {a}, zmmword ptr [rip + #{args[1].name}]")
                 return
-            raise HLErr(f"{self.src}: line {line}: unknown vector intrinsic `{nm}`")
+            raise HLErr(
+                f"{self.src}: line {line}: unknown vector intrinsic `{nm}` "
+                f"(portable u32x4 ops: `u32x4(w0,w1,w2,w3)`, `u32x4.splat(w)`, `pack_u64x2(lo,hi)`, "
+                f"`v >> k`, `v << k`, `rotl32(v,k)`, `rotr32(v,k)`, `shuf32(v,imm)`, "
+                f"`unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`, `ext4`/`ext8`/`ext12`)"
+            )
         raise HLErr(f"{self.src}: line {line}: unsupported vector expression")
 
     # -- Automatic `place { ... }` Fact Substitution & Outer-Context Inheritance --
@@ -3273,17 +3459,84 @@ class HLLower:
         for ef in extra_facts:
             add_fact(self._subst_spec_vars(ef))
 
-        # 5. User `maintains` clauses (split top-level `&&`; give a clear diagnostic on `||`)
+        # 5. User `maintains` clauses (split top-level `&&` ONLY at paren depth 0 outside `if ... then`;
+        # give crisp diagnostics on top-level `||` and top-level `!=`)
+        def _split_top_level_and(s):
+            parts, cur = [], []
+            depth = 0
+            if_depth = 0
+            i = 0
+            n = len(s)
+            while i < n:
+                ch = s[i]
+                if ch == "(":
+                    depth += 1
+                    cur.append(ch); i += 1
+                elif ch == ")":
+                    depth = max(0, depth - 1)
+                    cur.append(ch); i += 1
+                elif s[i:i+2] == "&&" and depth == 0 and if_depth == 0:
+                    parts.append("".join(cur).strip())
+                    cur = []; i += 2
+                else:
+                    if ch.isalpha() or ch == "_":
+                        j = i
+                        while j < n and (s[j].isalnum() or s[j] == "_"):
+                            j += 1
+                        w = s[i:j]
+                        if w == "if":
+                            if_depth += 1
+                        elif w == "then" and if_depth > 0:
+                            if_depth -= 1
+                        cur.append(w); i = j
+                    else:
+                        cur.append(ch); i += 1
+            tail = "".join(cur).strip()
+            if tail:
+                parts.append(tail)
+            return parts
+
+        def _has_top_level_op(s, op):
+            depth = 0
+            if_depth = 0
+            i, n = 0, len(s)
+            while i < n:
+                ch = s[i]
+                if ch == "(":
+                    depth += 1; i += 1
+                elif ch == ")":
+                    depth = max(0, depth - 1); i += 1
+                elif s[i:i+len(op)] == op and depth == 0 and if_depth == 0:
+                    return True
+                elif ch.isalpha() or ch == "_":
+                    j = i
+                    while j < n and (s[j].isalnum() or s[j] == "_"):
+                        j += 1
+                    w = s[i:j]
+                    if w == "if":
+                        if_depth += 1
+                    elif w == "then" and if_depth > 0:
+                        if_depth -= 1
+                    i = j
+                else:
+                    i += 1
+            return False
+
         for mf in maintains:
-            if "||" in mf:
+            if _has_top_level_op(mf, "||"):
                 raise HLErr(
                     f"{self.src}: line {line}: `maintains` cannot use `||` (`{mf.strip()}`); "
                     f"write linear bounds instead (for example `0 <= x, x <= 1` instead of `x == 0 || x == 1`)"
                 )
-            for part in mf.split("&&"):
-                part = part.strip()
-                if part:
-                    add_fact(self._subst_spec_vars(part))
+            for part in _split_top_level_and(mf):
+                if not part:
+                    continue
+                if _has_top_level_op(part, "!="):
+                    raise HLErr(
+                        f"{self.src}: line {line}: `maintains` cannot state `!=` (`{part}`); "
+                        f"note that `join` and loops already inherit `!=` facts automatically from earlier `if x == c {{ return ... }}` guards, so you do not need to repeat `!=` in `maintains`"
+                    )
+                add_fact(self._subst_spec_vars(part, line=line))
 
         # 6. User `writes` clauses (canonicalize `writes out[.. j] = spec.fn(args)[i]` / `[.. j]` -> `spec.fn(args)`)
         for buf_nm, mode, idx_s, rhs_s in writes:
@@ -3376,8 +3629,10 @@ class HLLower:
 
         if isinstance(st, StoreStmt):
             if st.width in ("u32x4", "u32x16"):
+                if st.width == "u32x16" and self.arch != "x86_64":
+                    raise HLErr(f"{self.src}: line {st.line}: `u32x16` store (AVX-512) is only supported on `x86_64`; use `u32x4` on `arm64`")
                 vr = self._as_vec_reg(st.expr, st.width)
-                with self._emit_addr_held(st.line, st.buf, st.idx) as (base, disp):
+                with self._emit_addr_held(st.line, st.buf, st.idx, align_req=(16 if st.width == "u32x4" else 1)) as (base, disp):
                     if st.width == "u32x4":
                         if self.arch == "x86_64":
                             d_str = f" + {disp}" if disp else ""
@@ -3401,8 +3656,9 @@ class HLLower:
                 )
             # Fixed deterministic store order: evaluate value first, then address, then store.
             allow_sp = (self.arch != "arm64" or st.width == "u64")
+            align_req = {"u32": 4, "u64": 8}.get(st.width, 1)
             with self._hold_expr(st.expr, why=f"value `{_expr_brief(st.expr)}` for store to `{st.buf}`") as val_r:
-                with self._emit_addr_held(st.line, st.buf, st.idx, allow_sp=allow_sp) as (base, disp):
+                with self._emit_addr_held(st.line, st.buf, st.idx, allow_sp=allow_sp, align_req=align_req) as (base, disp):
                     self._emit_scalar_store(st.line, st.width, base, disp, val_r)
             return
 
@@ -3418,8 +3674,9 @@ class HLLower:
         if isinstance(st, IfStmt):
             else_lbl = self.fresh_label("else")
             end_lbl = self.fresh_label("endif")
-            then_facts = [f for cc in _extract_conjuncts(st.cond) if (f := _cmp_to_fact(cc)) is not None]
-            else_facts = [f for cc in _extract_conjuncts(_negate_cond(st.cond)) if (f := _cmp_to_fact(cc)) is not None]
+            bparams = {p for p, pt in self.param_types.items() if pt == "bytes"}
+            then_facts = [f for cc in _extract_conjuncts(st.cond) if (f := _cmp_to_fact(cc, bparams)) is not None]
+            else_facts = [f for cc in _extract_conjuncts(_negate_cond(st.cond)) if (f := _cmp_to_fact(cc, bparams)) is not None]
             if not st.else_body:
                 self._emit_branch(st.cond, end_lbl, jump_if_true=False)
                 saved = len(self.active_facts)

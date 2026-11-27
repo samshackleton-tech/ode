@@ -37,17 +37,33 @@ def _to_int_list(v):
 
 
 def _parse_arg_kind(ptype):
-    """Classify a contract parameter type string into ('number',), ('words', n), or ('bytes', len_name_or_int)."""
+    """Classify a contract parameter type string into ('number',), ('word',), ('counter',),
+    ('words', n), or ('bytes', len_name_or_int, is_inout)."""
     t = str(ptype).strip()
     if t in ("number", "u64", "u32", "byte"):
         return ("number",)
+    if t in ("word", "low word"):
+        return ("word",)
+    if t == "counter":
+        return ("counter",)
     if t in FIXED_WORDS:
         return ("words", FIXED_WORDS[t])
-    m = re.fullmatch(r"(\w+)\s+bytes", t)
+    m = re.fullmatch(r"(in-out\s+)?(\w+)\s+bytes", t)
     if m:
-        s = m.group(1)
-        return ("bytes", int(s) if s.isdigit() else s)
+        is_inout = bool(m.group(1))
+        s = m.group(2)
+        return ("bytes", int(s) if s.isdigit() else s, is_inout)
     return ("unsupported", t)
+
+
+def _expr_mentions(e, target):
+    if isinstance(e, tuple):
+        if len(e) == 2 and e[0] == "name" and e[1] == target:
+            return True
+        return any(_expr_mentions(x, target) for x in e)
+    if isinstance(e, list):
+        return any(_expr_mentions(x, target) for x in e)
+    return False
 
 
 def _eval_requires(spec, contract, env):
@@ -103,7 +119,13 @@ def _make_cases(contract, n_cases=16, seed=1):
     if any(k[0] == "unsupported" for _, k in kinds):
         return None, kinds
 
-    out_names = {lv["name"] for lv in contract.get("leaves", ()) or ()}
+    leaves = contract.get("leaves", ()) or ()
+    out_names = {lv["name"] for lv in leaves}
+    inout_names = {
+        lv["name"] for lv in leaves
+        if any(_expr_mentions(lv2.get("expr"), lv["name"]) for lv2 in leaves)
+        or _expr_mentions(contract.get("returns"), lv["name"])
+    }
     len_vars = {k[1] for _, k in kinds if k[0] == "bytes" and isinstance(k[1], str)}
     lo_b, hi_b = _extract_num_bounds(contract)
     rng = random.Random(seed)
@@ -120,7 +142,7 @@ def _make_cases(contract, n_cases=16, seed=1):
         if len(cases) >= n_cases:
             break
         env = {}
-        # 1. Assign numbers (respecting `requires` bounds like `n >= 256, n <= 256`)
+        # 1. Assign numbers, 32-bit words, and 64-bit counters (respecting `requires` bounds)
         for name, k in kinds:
             if k[0] == "number":
                 l = lo_b.get(name, 0)
@@ -140,6 +162,13 @@ def _make_cases(contract, n_cases=16, seed=1):
                 else:
                     cands = [v for v in [l, l + 1, 0, 1, 2, 7, 16, 64, cap_h] if l <= v <= cap_h]
                     env[name] = cands[ci] if ci < len(cands) else rng.randint(l, cap_h)
+            elif k[0] == "word":
+                w_cands = [64, 0, 1, 11, 0x12345678, 0xFFFFFFFF]
+                env[name] = ode.Word((w_cands[ci] if ci < len(w_cands) else rng.getrandbits(32)) & 0xFFFFFFFF)
+            elif k[0] == "counter":
+                c_cands = [0, 1, 0x100000002, 0xFFFFFFFF, 0x0123456789ABCDEF]
+                cv = c_cands[ci] if ci < len(c_cands) else rng.getrandbits(64)
+                env[name] = ode.Counter(ode.Word(cv & 0xFFFFFFFF), ode.Word((cv >> 32) & 0xFFFFFFFF))
 
         # 2. Assign byte slices and word blocks
         pat = patterns[ci] if ci < len(patterns) else "rand"
@@ -148,7 +177,8 @@ def _make_cases(contract, n_cases=16, seed=1):
         for name, k in kinds:
             if k[0] == "bytes":
                 ln = k[1] if isinstance(k[1], int) else env[k[1]]
-                if name in out_names:
+                is_inout = (len(k) >= 3 and bool(k[2])) or (name in inout_names)
+                if name in out_names and not is_inout:
                     bs = [0xAA] * ln
                 elif pat == "b64_valid":
                     bs = [_B64_ALPHA[i % 64] for i in range(ln)]
@@ -222,6 +252,10 @@ def _fmt_env(env, kinds):
         v = env[name]
         if k[0] == "number":
             parts.append(f"{name}={v}")
+        elif k[0] == "word":
+            parts.append(f"{name}=0x{_to_int(v):08x}")
+        elif k[0] == "counter":
+            parts.append(f"{name}=0x{(v.lo.v | (v.hi.v << 32)):016x}")
         elif k[0] == "bytes":
             s = repr(v[:8])[:-1] + ", ...]" if len(v) > 8 else repr(v)
             parts.append(f"{name}={s}")
@@ -275,6 +309,11 @@ def refute_function(programs, symbol, spec_text, target, cases=16, seed=1, max_s
             reg = arg_regs[idx]
             if k[0] == "number":
                 init_regs[reg] = env[name]
+            elif k[0] == "word":
+                init_regs[reg] = _to_int(env[name])
+            elif k[0] == "counter":
+                cval = env[name]
+                init_regs[reg] = (cval.lo.v & 0xFFFFFFFF) | ((cval.hi.v & 0xFFFFFFFF) << 32)
             elif k[0] == "bytes":
                 addr = base + idx * step
                 init_regs[reg] = addr
@@ -353,6 +392,17 @@ def refute_function(programs, symbol, spec_text, target, cases=16, seed=1, max_s
             if got_list != want_list:
                 # Find first differing index
                 diff_i = next(i for i, (g, w) in enumerate(zip(got_list, want_list)) if g != w)
+                if bkind == "bytes" and blen % 4 == 0 and isinstance(lv.get("expr"), tuple) and lv["expr"][0] == "call" and lv["expr"][1] == "bytes_of":
+                    nw = blen // 4
+                    w_got = [struct.unpack("<I", bytes(got_list[4*j:4*j+4]))[0] for j in range(nw)]
+                    w_want = [struct.unpack("<I", bytes(want_list[4*j:4*j+4]))[0] for j in range(nw)]
+                    bad_ws = [j for j in range(nw) if w_got[j] != w_want[j]]
+                    wi = bad_ws[0]
+                    return {
+                        "status": "FALSE", "cases_run": ran, "input": _fmt_env(env, kinds),
+                        "reason": f"output `{oname}[{diff_i}]` (word {wi}, {len(bad_ws)}/{nw} words differ) disagrees with contract",
+                        "expected": f"word[{wi}]=0x{w_want[wi]:08x}", "actual": f"word[{wi}]=0x{w_got[wi]:08x}",
+                    }
                 fmt = (lambda x: f"0x{x:08x}") if bkind == "words" else str
                 return {
                     "status": "FALSE", "cases_run": ran, "input": _fmt_env(env, kinds),

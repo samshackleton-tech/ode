@@ -1557,6 +1557,66 @@ fn run_tagged(buf: n bytes, n: u64, tag: u64) -> u64
                 self.assertEqual(r2.returncode, 0, f"verify2 neq_loop/{target}: {r2.stdout}{r2.stderr}")
                 self.assertIn("shown (1 function, verify2)", r2.stdout)
 
+    def test_18_tail_call_multi_open_spec_order(self):
+        """Regression for Bug #1: tail calls (`b`/`jmp`) with callee `returns` spec expressions
+        must bind the callee's return value in `st['eqs']` BEFORE `expand_eq` (matching `Core.lean`),
+        so `verify2.py` assigns identical `callsOf` indices when `t open k` runs at the tail call."""
+        src = """\
+def u16be(pkt, i) { pkt[i] * 256 + pkt[i + 1] }
+def fold_ok(s) {
+    if ((s % 65536 + s / 65536) % 65536) + ((s % 65536 + s / 65536) / 65536) == 65535 then 1
+    else 0
+}
+def sum4_check(pkt, k, n, acc) {
+    if k >= n then fold_ok(acc)
+    else sum4_check(pkt, k + 1, n, acc + u16be(pkt, 2 * k))
+}
+
+fn check_tail(acc: u64) -> u64
+    requires acc <= 4 * 65535
+    returns fold_ok(acc)
+    trace depends on acc
+    stack 0
+{
+    let f1 := (acc & 65535) + (acc >> 16)
+    let f2 := (f1 & 65535) + (f1 >> 16)
+    if f2 == 65535 { return 1 }
+    return 0
+}
+
+fn run_tail(pkt: n bytes, n: number) -> u64
+    requires n <= 65535, n >= 8
+    returns sum4_check(pkt, 0, 4, 0)
+    trace depends on pkt, n
+    stack 0
+{
+    var acc: u64 := 0
+    for k in 0..4 unroll {
+        acc += pkt[2 * k] * 256 + pkt[2 * k + 1]
+    }
+    return check_tail(acc)
+}
+"""
+        for target in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                src_p = os.path.join(d, "tail_open.ode")
+                with open(src_p, "w", encoding="utf-8") as f:
+                    f.write(src)
+                out_o, out_p = os.path.join(d, "t.o"), os.path.join(d, "t.proof")
+                res = ode_audit.pack_verified(src_p, None, out_o, out_p, fn_name="run_tail", target=target, c_abi=True)
+                self.assertEqual(res["verdict"], "shown", f"tail_open/{target}: {res}")
+                dump = os.path.join(d, "dump.sh")
+                st_p, pf_p = os.path.join(d, "st.txt"), os.path.join(d, "pf.txt")
+                with open(dump, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                os.chmod(dump, 0o755)
+                ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                tab = os.path.join(ROOT, "arm64", "arm64.tab") if target == "arm64" else os.path.join(ROOT, "core", "x86.tab")
+                r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
+                                    capture_output=True, text=True)
+                self.assertEqual(r2.returncode, 0, f"verify2 tail_open/{target}: {r2.stdout}{r2.stderr}")
+                self.assertIn("shown (2 functions, verify2)", r2.stdout)
+
 
 def _run_one_test(test_name):
     import io, time

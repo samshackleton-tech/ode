@@ -473,8 +473,12 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
                 if row["asm"] != row["typed"]:
                     out.append(f"       | expanded: {row['asm']}")
             if isinstance(info.get("hl_meta"), dict) and info["hl_meta"].get("var_map"):
-                vm = ", ".join(f"{vnm}={vloc}" for vnm, _role, vloc, _note in info["hl_meta"]["var_map"])
-                out.append(f"  vars:  {vm}")
+                user_vm = [
+                    f"{vnm}={vloc}" for vnm, _role, vloc, _note in info["hl_meta"]["var_map"]
+                    if not vnm.startswith("__inl_")
+                ]
+                if user_vm:
+                    out.append(f"  vars:  {', '.join(user_vm)}")
             elif info["regs"]:
                 inv = ", ".join(f"{reg}={name}" for name, reg in info["regs"].items())
                 out.append(f"  regs:  {inv}")

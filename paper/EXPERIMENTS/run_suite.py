@@ -184,7 +184,29 @@ def preflight_ping(models: list[str], api_key: str, effort: str,
 
 
 def extract_ode_source(reply: str, entry_fn: str) -> str:
-    blocks = re.findall(r"```(?:ode)?[ \t]*\n(.*?)```", reply, flags=re.DOTALL)
+    """Extract the `.ode` source from fenced markdown blocks cleanly (line-based parser).
+    Handles prose containing earlier backticks, nested/repeated fences, and unclosed trailing fences."""
+    blocks: list[str] = []
+    cur: list[str] | None = None
+    for raw_ln in reply.splitlines():
+        s = raw_ln.strip()
+        if s.startswith("```"):
+            tag = s[3:].strip()
+            if cur is None:
+                cur = []
+            elif tag:
+                # A fence line with an explicit language tag (e.g. ```ode) starts a fresh block
+                # rather than closing an earlier unclosed prose fence.
+                if cur:
+                    blocks.append("\n".join(cur))
+                cur = []
+            else:
+                blocks.append("\n".join(cur))
+                cur = None
+        elif cur is not None:
+            cur.append(raw_ln)
+    if cur:
+        blocks.append("\n".join(cur))
     if blocks:
         for b in reversed(blocks):
             if f"fn {entry_fn}" in b:
@@ -216,7 +238,7 @@ def classify_failure(stage: str, out: str, rc: int) -> str:
         return "trace_refusal"
     if "a register a callee keeps" in low:
         return "kept_reg_refusal"
-    if "contract_id_mismatch" in low or "expected contract" in low:
+    if "contract_id_mismatch" in low or "contract hash mismatch" in low or "expected contract" in low:
         return "contract_id_mismatch"
     if "need entail" in low or "need compare" in low or "need below" in low or "need know" in low:
         return "arith_need_entail"
@@ -862,6 +884,22 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     continue
                 else:
                     fb = out_a_txt
+                    if "contract hash mismatch" in fb.lower() and out_o.exists() and out_p.exists():
+                        with prover_sem:
+                            _, show_txt, _ = run_tool(
+                                [ODE_PYTHON, str(ODE_TOOL), "audit", str(out_o), "--proof", str(out_p), "--show-contract"],
+                                work,
+                            )
+                        m_ct = re.search(r"(contract\s+\S+[\s\S]*?\})", show_txt)
+                        if m_ct:
+                            hint_blk = task.get("impl_hints", {}).get(target, "")
+                            fb = (
+                                fb + "\n\nYour binary passed verification, but its canonical `.ocl` contract "
+                                "clauses differed from the task's required contract (check `needs`, `stack`, "
+                                "`trace depends on`, `requires`, `ensures`/`returns`):\n"
+                                + m_ct.group(1)
+                                + (f"\nTarget header hint for `{target}`: {hint_blk}" if hint_blk else "")
+                            )
                     cat = classify_failure("audit", fb, rc_a)
                     rec["stage"] = "audit_failed"
                     rec["category"] = cat
@@ -1472,7 +1510,7 @@ def main(argv=None) -> int:
     ap.add_argument("--max-truncations", type=int, default=None, help="Stop a cell after N consecutive output_token_limit replies (0 = off)")
     ap.add_argument("--prover-slots", type=int, default=None, help="Max simultaneous local ode pack/audit runs (default: 75%% of CPUs)")
     ap.add_argument("--api-timeout", type=int, default=360)
-    ap.add_argument("--max-tokens", type=int, default=32000)
+    ap.add_argument("--max-tokens", type=int, default=None)
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--effort", default="medium")
     ap.add_argument("--provider-sort", default="throughput", help="OpenRouter provider.sort preference (throughput, latency, price, or empty)")
@@ -1508,6 +1546,7 @@ def main(argv=None) -> int:
     args.max_rounds = args.max_rounds if args.max_rounds is not None else int(preset.get("max_rounds", 8))
     args.opt_rounds = args.opt_rounds if args.opt_rounds is not None else int(preset.get("opt_rounds", 3))
     args.max_truncations = args.max_truncations if args.max_truncations is not None else int(preset.get("max_truncations", 2))
+    args.max_tokens = args.max_tokens if args.max_tokens is not None else int(preset.get("max_tokens", 16384))
     args.max_usd = args.max_usd if args.max_usd is not None else float(preset.get("max_usd", 60.0))
     if args.prover_slots is None:
         args.prover_slots = max(6, (os.cpu_count() or 8) * 3 // 4)

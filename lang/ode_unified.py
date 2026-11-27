@@ -265,7 +265,10 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
     for iarch, raw_inl, lno in inlines:
         if not ode_hl.is_hl_inline(raw_inl):
             continue
-        parsed_inl = ode_hl.parse_hl_inline(raw_inl, lno, src)
+        try:
+            parsed_inl = ode_hl.parse_hl_inline(raw_inl, lno, src)
+        except ode_hl.HLErr as exc:
+            raise UnifiedErr(str(exc)) from exc
         for a in (TARGETS if iarch is None else (iarch,)):
             hl_inlines_by_arch[a][parsed_inl.name] = parsed_inl
     # Every function called by another function (in this file OR across `use`-imported modules) gets
@@ -334,17 +337,23 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
             if not raw_stk_exprs:
                 raw_stk_exprs = [m.group(1).strip() for m in re.finditer(r"(?m)^\s*stack\s+(.+)$", fn_rec["clauses_text"])]
             sym_stk_expr = raw_stk_exprs[-1] if (raw_stk_exprs and not re.fullmatch(r"\d+", raw_stk_exprs[-1])) else None
-            # Compute transitive stack budget across called functions in this `.ode` graph
-            max_callee_stk = 0
+            # Compute transitive stack budget across called functions in this `.ode` graph.
+            # Normal calls (`call`/`bl`) sit below this function's frame + call slot (`res["total_stack"]`);
+            # tail calls (`jmp`/`b`) run after epilogue (`max(res["total_stack"], callee_stack)`).
+            max_call_callee_stk = 0
+            max_tail_callee_stk = 0
             inferred_sym_stks = []
             hl_joined = "\n".join(im["hl_lines"])
             for ln in res["lines"]:
-                mc = re.match(r"^\s*(?:call|bl|jmp|b)\s+([A-Za-z_]\w*)$", ln)
+                mc = re.match(r"^\s*(call|bl|jmp|b)\s+([A-Za-z_]\w*)$", ln)
                 if not mc:
                     continue
-                cname = mc.group(1)
+                op_c, cname = mc.group(1), mc.group(2)
                 if cname in callee_stack[arch]:
-                    max_callee_stk = max(max_callee_stk, callee_stack[arch][cname])
+                    if op_c in ("jmp", "b"):
+                        max_tail_callee_stk = max(max_tail_callee_stk, callee_stack[arch][cname])
+                    else:
+                        max_call_callee_stk = max(max_call_callee_stk, callee_stack[arch][cname])
                 if cname in callee_sym_stack[arch]:
                     c_params, c_expr = callee_sym_stack[arch][cname]
                     # Try substituting call-site argument into callee's symbolic stack formula
@@ -359,7 +368,7 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                             ids_left = set(re.findall(r"\b[A-Za-z_]\w*\b", sub_e))
                             if ids_left <= set(fn_param_names):
                                 inferred_sym_stks.append(sub_e)
-            eff_stack = res["total_stack"] + max_callee_stk
+            eff_stack = max(res["total_stack"] + max_call_callee_stk, max_tail_callee_stk)
             res["total_stack"] = eff_stack
             if sym_stk_expr is not None:
                 callee_sym_stack[arch][fn_rec["name"]] = (fn_param_names, sym_stk_expr)
@@ -371,17 +380,18 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                 callee_sym_stack[arch][fn_rec["name"]] = (fn_param_names, full_sym)
                 callee_sym_stack[arch][fn_rec["symbol"]] = (fn_param_names, full_sym)
             else:
-                callee_stack[arch][fn_rec["name"]] = eff_stack
-                callee_stack[arch][fn_rec["symbol"]] = eff_stack
+                stk_vals = [int(s) for s in raw_stk_exprs if re.fullmatch(r"\d+", s)]
+                # Callers are verified against this callee's declared contract `stack` (not a smaller lowered frame)!
+                contract_stk = max(eff_stack, stk_vals[-1]) if (explicit_stack and stk_vals) else eff_stack
+                callee_stack[arch][fn_rec["name"]] = contract_stk
+                callee_stack[arch][fn_rec["symbol"]] = contract_stk
                 if not explicit_stack:
                     im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
-                else:
-                    stk_vals = [int(s) for s in raw_stk_exprs if re.fullmatch(r"\d+", s)]
-                    if stk_vals and eff_stack > stk_vals[-1]:
-                        im["hl_err"] = (
-                            f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
-                            f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
-                        )
+                elif stk_vals and eff_stack > stk_vals[-1]:
+                    im["hl_err"] = (
+                        f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
+                        f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
+                    )
             # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
             # (never on the explicit `--c-abi` FFI entry function).
             if (
@@ -723,6 +733,16 @@ def _parse_single_unified(text, src="<ode>"):
                 body_text = text[bopen + 1:bclose]
             clauses_raw = re.sub(r"^->\s*(?:u64|u8|number|void)\b\s*", "", clauses_raw)
             clauses_text = _expand_comma_requires(clauses_raw)
+            # Crisp compile-time diagnostic for `ensures ret == E` / `ensures result == E` (instead of Lean `has conditions`)
+            has_returns = bool(re.search(r"(?m)^\s*returns\b", clauses_text))
+            for cl_line in clauses_text.splitlines():
+                cs = _strip_line_comment(cl_line).strip()
+                m_er = re.match(r"^ensures\s+(ret|result|r)\s*==\s*(.+)$", cs)
+                if m_er and not has_returns:
+                    raise UnifiedErr(
+                        f"{src}: line {line_no}: `fn {fname}`: write `returns {m_er.group(2).strip()}` "
+                        f"instead of `{cs}` (`ensures` with `=` is for output buffers; `returns <expr>` specifies the return value)"
+                    )
             if u8_reqs:
                 clauses_text = ("\n".join(u8_reqs) + ("\n" + clauses_text if clauses_text else "")).strip()
             impls = _parse_for_blocks(body_text, fname, body_start_line, src)

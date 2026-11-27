@@ -1741,8 +1741,15 @@ class Verifier:
                                 if c["returns"] is None:
                                     raise Refuse(f"tail callee `{tval}` has no returns clause")
                                 got_val = self.eval_sexpr(c["returns"], cenv, st, stream)
+                                rv = r_var(st["nvars"])
+                                st["nvars"] += 1
+                                if isinstance(got_val, tuple) and len(got_val) == 3 and got_val[0] == "call":
+                                    st["eqs"].insert(0, (got_val, rv))
+                                else:
+                                    st["facts"].append(r_sub(rv, got_val))
+                                    st["facts"].append(r_sub(got_val, rv))
                                 want = self.eval_sexpr(fn["returns"], env, st, stream)
-                                self.expand_eq(got_val, want, env, st, stream)
+                                self.expand_eq(rv, want, env, st, stream)
                             return
                         target = int(tval, 0) if isinstance(tval, str) else tval
                         if cond is None:

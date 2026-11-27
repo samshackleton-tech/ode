@@ -506,12 +506,15 @@ def _parse_spec_meta(lines):
     return meta
 
 
-def _spec_open_order(meta, count, include_interior=True):
+def _spec_open_order(meta, count, include_interior=True, prefer_chain=False):
     """Structural candidate ordering for `need spec` opens:
     1. Skip calls that already have a known `.value` (`has_val == 1`).
     2. Frontier calls (`deg <= 1`) in the goal's connected component (`in_goal == 1`),
-       non-recursive definitions first, newest (`highest idx`) first.
-    3. Other frontier calls (`deg <= 1`, `in_goal == 0`), non-recursive first, newest first.
+       non-recursive definitions first; when `prefer_chain=True` (`opened >= 1`), prefer active
+       chain tips (`deg == 1`) over untouched calls (`deg == 0`) so unrolling a recursive spec
+       proceeds linearly along one chain (`0->1->2->3->4`) instead of exponentially interleaving
+       both sides; tie-break newest (`highest idx`) first.
+    3. Other frontier calls (`deg <= 1`, `in_goal == 0`), same priority.
     4. Interior calls (`deg >= 2`, `has_val == 0`) only if `include_interior` is True.
     Falls back to `reversed(range(count))` when call metadata is absent (`FROM_THE_START=1`)."""
     if not meta:
@@ -520,8 +523,9 @@ def _spec_open_order(meta, count, include_interior=True):
     p1 = [r for r in live if r[2] == 1 and r[4] <= 1]
     p2 = [r for r in live if r[2] == 0 and r[4] <= 1]
     p3 = [r for r in live if r[4] >= 2] if include_interior else []
-    p1.sort(key=lambda r: (r[5], -r[0]))
-    p2.sort(key=lambda r: (r[5], -r[0]))
+    key = (lambda r: (0 if r[4] == 1 else 1, r[5], -r[0])) if prefer_chain else (lambda r: (r[5], -r[0]))
+    p1.sort(key=key)
+    p2.sort(key=key)
     p3.sort(key=lambda r: (-r[2], r[5], -r[0]))
     return [r[0] for r in (p1 + p2 + p3)]
 
@@ -540,7 +544,7 @@ class Prover:
         self.max_proof_len = 0
         self.goal_churn = 0
         self.max_seen_churn = 0
-        self.spec_budgets = (1, 2, 4, 8) if fast_fail else (1, 2, 5, 10, 14, 30)
+        self.spec_budgets = (1, 2, 4, 14) if fast_fail else (1, 2, 5, 14, 20, 30)
         self.split_depth_cap = 3 if fast_fail else 4
         self.split_tries_cap = 16 if fast_fail else 48
         self.session = None                 # the talk with `odeprove`, begun at the first question
@@ -832,19 +836,39 @@ class Prover:
                         self.furthest_root = start_len
                     self.spec_fuel_hit = False
                 before, before_proof = self.last, self.last_proof
+                spec_meta = _parse_spec_meta(lines)
+                deg_by_idx = {idx: deg for idx, _fn, _ig, _hv, deg, _ir in spec_meta}
                 # First try exact congruence (`t same (i * 256 + j)`) on same-function call pairs
-                # reported by `p ...` whose arguments are provably equal (e.g. `words == 2 * ihl`)!
-                # At `opened == 0` check all pairs; at `opened == 1` check only pairs involving a
-                # newly added call (tail index) so earlier unrelated calls are never re-probed.
+                # reported by `p ...` whose arguments are provably equal (e.g. `words == 2 * ihl`
+                # or after multi-step unrolling `sum16_check(0..4)` -> `sum16_check(4..10)` / `fold2_ok`).
+                # At `opened == 0` check all pairs; at `opened >= 1` check only pairs involving the
+                # newly produced active frontier tip (`newest_tip`) so old failed pairs are never re-probed.
                 plines = [l[2:].strip() for l in lines if l.startswith("p ")]
-                if opened <= 1 and plines and plines[0]:
+                if plines and plines[0]:
                     nums = [int(x) for x in plines[0].split()]
-                    for pi in range(0, len(nums) - 1, 2):
-                        ci_k, cj_k = nums[pi], nums[pi + 1]
-                        if opened == 1 and cj_k != count - 1:
-                            continue
-                        p_same = proof + [f"t same {ci_k * 256 + cj_k}"]
-                        sa = self.ask(p_same)
+                    pairs = [(nums[pi], nums[pi + 1]) for pi in range(0, len(nums) - 1, 2)]
+                    hv_by_idx = {idx: hv for idx, _fn, _ig, hv, _deg, _ir in spec_meta}
+                    if hv_by_idx:
+                        # Never waste O(N^2) `t same` queries comparing two already-resolved calls (e.g. `u16be` values).
+                        pairs = [(a, b) for a, b in pairs if hv_by_idx.get(a, 0) == 0 or hv_by_idx.get(b, 0) == 0]
+                    if opened >= 1:
+                        # Check newly created unresolved tips against ALL same-function partners,
+                        # including `deg >= 2` anchor calls (e.g. shared `join` + `for` invariant LHS)!
+                        tips = [idx for idx, _fn, _ig, hv, deg, _ir in spec_meta if hv == 0 and deg == 1]
+                        unres = [idx for idx, _fn, _ig, hv, _deg, _ir in spec_meta if hv == 0]
+                        hot = set()
+                        if tips:
+                            hot.add(max(tips))
+                        if unres:
+                            hot.add(max(unres))
+                        if not hot:
+                            hot.add(count - 1)
+                        pairs = [(a, b) for a, b in pairs if a in hot or b in hot]
+                        pairs.sort(key=lambda ab: (ab[0] + ab[1], ab[1]), reverse=True)
+                    p_same = None
+                    for ci_k, cj_k in pairs:
+                        p_try_s = proof + [f"t same {ci_k * 256 + cj_k}"]
+                        sa = self.ask(p_try_s)
                         ok_same = True
                         while sa.startswith("need same\n"):
                             sl = sa.split("\n")
@@ -852,20 +876,24 @@ class Prover:
                             sg_raw = [l[2:].strip() for l in sl if l.startswith("g ")]
                             sf = [lin([int(x) for x in s.split()]) for s in sf_raw]
                             sg = [lin([int(x) for x in s.split()]) for s in sg_raw]
-                            rp = refutation(sf + [negation(sg[0])], quick=True)
+                            rp = refutation(sf + [negation(sg[0])])
                             if rp is None:
                                 ok_same = False
                                 break
                             gn = [int(x) for x in sg_raw[0].split()]
                             nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
-                            p_same = p_same + proof_text(rp, [negation(sg[0])] + sf, [nr] + sf_raw)
-                            sa = self.ask(p_same)
+                            p_try_s = p_try_s + proof_text(rp, [negation(sg[0])] + sf, [nr] + sf_raw)
+                            sa = self.ask(p_try_s)
                         if ok_same and not sa.startswith("refused:"):
+                            p_same = p_try_s
                             proof = p_same
                             break
-                    else:
-                        p_same = None
                     if p_same is not None and proof is p_same:
+                        # If `t same` succeeded at the start of a fresh `need spec` goal (`opened == 0`),
+                        # the verifier bumps `o` from 0 -> 1. Do NOT let an earlier goal's `bud = 1`
+                        # cap choke this brand-new goal before it even runs its `budgets` loop!
+                        if opened == 0 and self.spec_max_open < self.spec_budgets[-1]:
+                            self.spec_max_open = self.spec_budgets[-1]
                         continue
                 ylines = [l for l in lines if l.startswith("y")]
                 if ylines:
@@ -884,22 +912,23 @@ class Prover:
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
-                spec_meta = _parse_spec_meta(lines)
                 meta_tail = "\n".join(l for l in lines if l.startswith(("m ", "d ")))
-                if opened >= self.spec_max_open or (opened >= 14 and count >= 16):
+                if opened >= self.spec_max_open or (opened >= 16 and count >= 34):
                     self.spec_fuel_hit = True
                     self.spec_fuel_proof = proof
                     self.last = f"need spec (reached {opened} specification definition opens without closing goal)" + (f"\n{meta_tail}" if meta_tail else "")
                     self.last_proof = proof
                     return None
-                if opened >= 2:
+                if opened >= 1:
                     # Structural frontier search (powered by `odeprove` call-graph metadata):
                     # open frontier calls (`deg <= 1`, `has_val == 0`) in the goal's connected component
-                    # first, non-recursive definitions before recursive ones, falling back only if empty.
-                    frontier = _spec_open_order(spec_meta, count, include_interior=False)
+                    # first, continuing active chains (`deg == 1`) before untouched calls (`deg == 0`),
+                    # non-recursive definitions before recursive ones, falling back only if empty.
+                    # Also skips no-op re-opens (`nc <= count and nh <= held`) at EVERY `opened >= 1`!
+                    frontier = _spec_open_order(spec_meta, count, include_interior=False, prefer_chain=True)
                     if not frontier:
-                        frontier = _spec_open_order(spec_meta, count, include_interior=True)
-                    cap = 6 if opened == 2 else (2 if self.fast_fail else 3)
+                        frontier = _spec_open_order(spec_meta, count, include_interior=True, prefer_chain=True)
+                    cap = 3 if opened == 1 else (2 if self.fast_fail else 3)
                     cands = frontier[:cap]
                     any_cands_fuel = False
                     deferred = []
@@ -995,11 +1024,11 @@ class Prover:
                             return None
                     if any_cands_fuel:
                         self.spec_fuel_hit = True
-                    if opened >= 3:
+                    if opened >= 1:
                         return None
                 any_fuel_hit = False
                 prev_max = self.spec_max_open
-                open_order = _spec_open_order(spec_meta, count, include_interior=(not self.fast_fail))
+                open_order = _spec_open_order(spec_meta, count, include_interior=(not self.fast_fail), prefer_chain=(opened >= 1))
                 if self.fast_fail and spec_meta and any(
                     r[3] == 0 and r[4] >= 2 for r in spec_meta
                 ):
