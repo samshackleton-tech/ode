@@ -57,6 +57,7 @@ python3 lang/ode_tool.py advise --asm paper/examples/all_zero.ode --target arm64
 
 # Release: emit ELF64 object (.o with embedded .ode.ocl) + separate .proof
 # Pass --c-abi when linking against a legacy C or Rust caller
+# Optional: --effort fast (quick interactive stop) or --effort deep / --try-harder
 python3 lang/ode_tool.py pack paper/examples/all_zero.ode --c-abi --target arm64 \
   --out /tmp/all_zero.o --proof /tmp/all_zero.proof
 
@@ -84,13 +85,14 @@ High-Level Ode lowers statements in exact written order with lexical block scopi
 
 | Construct | Syntax | Deterministic lowering & proof semantics |
 |---|---|---|
-| Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0` | Allocates a register (`u8` records `0 <= b <= 255`); disjoint scopes reuse registers. |
+| Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0` | Allocates a register (`u8` records `0 <= b <= 255`); disjoint scopes and dead parameters reuse registers. |
+| Explicit stack variable | `stack var x: u64 := 0`, `stack let v: u32x4 := expr` | Places the variable in an explicit aligned stack slot instead of a register (avoids register pressure with no hidden spills). |
 | Local stack buffer | `buf tmp[64] align 16` | Fixed aligned stack frame slot; no dynamic allocation. |
 | Exact arithmetic (default) | `a + b`, `a - b`, `a * b`, `x += k`, `x -= k` | Verifier proves no 64-bit unsigned overflow or underflow. |
 | Explicit wrapping mod $2^{64}$ | `a +% b`, `a -% b`, `a *% b`, `x +%= k`, `x -%= k` | Emits hardware wraparound (`wrap` proof marker); enables single-compare unsigned range checks like `(c -% 65) <= 25`. |
 | Bitwise & shifts | `a & b`, `a \| b`, `a ^ b`, `a << k`, `a >> k` | Exact bitmask (`& (2^w - 1)`), contiguous bitfields, power-of-two shifts (`<< k` / `>> k`). |
 | Branchless select | `select(cond, then_expr, else_expr)` | Lowers directly to `cmov*` (x86-64) / `csel` (AArch64); safe on data kept out of the trace (`trace depends on ...`). |
-| Scalar memory loads/stores | `a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `out.u32(i) := v` | 1-, 2-, 4-, or 8-byte little-endian loads and stores (`i` is a byte offset). |
+| Scalar memory loads/stores | `a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `buf.u64(i) := v` | 1-, 2-, 4-, or 8-byte little-endian loads; 1-byte stores to `out`, 8-byte stores to stack `buf` (pack 32-bit words with `u32x4` and `.u32x4(i) := v`). |
 | Branches | `if cond { ... } else if cond2 { ... } else { ... }` | Exact comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) and short-circuit `&&`, `\|\|`, `!`. |
 | Counted loop | `for i in lo..hi [step k] [maintains ...] [writes ...] { ... }` | Auto-tracks `lo <= i <= hi`, step alignment, `decreases hi - i`, and inherits all invariant dominating outer `if`-guards and `let` equalities automatically. |
 | Compile-time unroll | `for i in 0..N [step k] unroll { ... }` | Expands straight-line at compile time with constant folding on `i` (zero loop overhead). |

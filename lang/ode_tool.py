@@ -968,6 +968,8 @@ def main(argv=None):
     p_pck.add_argument("--fn", default=None, help="function name in source (default: last in source)")
     p_pck.add_argument("--target", default=None, help="target architecture (x86_64, arm64) for multi-target .ode")
     p_pck.add_argument("--c-abi", action="store_true", help="export the packed entry function with the C ABI for legacy C/Rust callers")
+    p_pck.add_argument("--effort", choices=("fast", "deep"), default=None, help="prover search effort: `fast` (quick interactive stop) or `deep` (try harder on the same source)")
+    p_pck.add_argument("--try-harder", action="store_true", help="shorthand for `--effort deep` (retry proving the same source with deep search effort)")
     p_pck.add_argument("--glossary-out", default=None, help="write separate author glossary JSON")
     p_pck.add_argument("--include", action="append", default=[], help="additional .ocl/.spec file(s) prepended before spec")
     p_pck.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
@@ -1110,6 +1112,15 @@ def main(argv=None):
 
     if args.cmd == "pack":
         import ode_audit
+        effort = "deep" if args.try_harder else args.effort
+        old_effort = os.environ.get("ODE_PROVE_EFFORT")
+        old_ff = os.environ.get("ODE_PROVE_FAST_FAIL")
+        if effort == "deep":
+            os.environ["ODE_PROVE_EFFORT"] = "deep"
+            os.environ["ODE_PROVE_FAST_FAIL"] = "0"
+        elif effort == "fast":
+            os.environ["ODE_PROVE_EFFORT"] = "fast"
+            os.environ["ODE_PROVE_FAST_FAIL"] = "1"
         try:
             res = ode_audit.pack_verified(
                 args.source, args.spec, args.out, args.proof,
@@ -1136,6 +1147,16 @@ def main(argv=None):
                 print(diag)
                 return 1
             raise
+        finally:
+            if effort is not None:
+                if old_effort is None:
+                    os.environ.pop("ODE_PROVE_EFFORT", None)
+                else:
+                    os.environ["ODE_PROVE_EFFORT"] = old_effort
+                if old_ff is None:
+                    os.environ.pop("ODE_PROVE_FAST_FAIL", None)
+                else:
+                    os.environ["ODE_PROVE_FAST_FAIL"] = old_ff
         if args.json:
             print(json.dumps(_json_safe(res), indent=2, sort_keys=True))
             return 0 if res["verdict"] == "shown" else 1

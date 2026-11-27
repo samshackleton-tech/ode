@@ -193,6 +193,13 @@ def extract_ode_source(reply: str, entry_fn: str) -> str:
     return reply.strip() + "\n"
 
 
+def is_try_harder_reply(reply: str, entry_fn: str) -> bool:
+    """Return True when the model asks the prover to retry the exact previous source with `--effort deep`."""
+    if not reply or f"fn {entry_fn}" in reply:
+        return False
+    return bool(re.search(r"\bTRY_HARDER\b", reply))
+
+
 def classify_failure(stage: str, out: str, rc: int) -> str:
     low = out.lower()
     if rc == 124 or "timeout after" in low:
@@ -227,7 +234,30 @@ ARM_ENV = {
     "no_spill": {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "0"},
     "fast_fail": {"ODE_HL_NO_SPILL": "0", "ODE_PROVE_FAST_FAIL": "1"},
     "ask_both": {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "1"},
+    "legacy": {
+        "ODE_HL_AUTO_KEEPS": "0",
+        "ODE_HL_RECLAIM_PARAMS": "0",
+        "ODE_HL_NO_SPILL": "0",
+        "ODE_PROVE_EFFORT": "deep",
+        "ODE_PROVE_FAST_FAIL": "0",
+    },
+    "ode_reg": {
+        "ODE_HL_AUTO_KEEPS": "1",
+        "ODE_HL_RECLAIM_PARAMS": "1",
+        "ODE_HL_NO_SPILL": "1",
+        "ODE_PROVE_EFFORT": "deep",
+        "ODE_PROVE_FAST_FAIL": "0",
+    },
+    "ode_reg_ask": {
+        "ODE_HL_AUTO_KEEPS": "1",
+        "ODE_HL_RECLAIM_PARAMS": "1",
+        "ODE_HL_NO_SPILL": "1",
+        "ODE_PROVE_EFFORT": "fast",
+        "ODE_PROVE_FAST_FAIL": "1",
+    },
 }
+
+TRY_HARDER_ARMS = {"ode_reg_ask"}
 
 
 def run_tool(cmd: list[str], cwd: Path, extra_env: dict | None = None) -> tuple[int, str, float]:
@@ -416,14 +446,21 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
     in_whole_aa = False
     hl_stack_bytes = 0
     hl_spills = 0
+    hl_callee_saved = 0
+    hl_stack_vars = 0
     saw_hl = False
     for line in advise_txt.splitlines():
-        m_hl = re.search(r"High-Level Ode lowering\s*\([^)]*\):\s*stack\s+(\d+)\s*B,\s*callee-saved:[^,]+,\s*spills:\s*(\d+)", line)
+        m_hl = re.search(r"High-Level Ode lowering\s*\([^)]*\):\s*stack\s+(\d+)\s*B,\s*callee-saved:\s*(.+?),\s*spills:\s*(\d+)", line)
         if m_hl:
             saw_hl = True
             hl_stack_bytes += int(m_hl.group(1))
-            hl_spills += int(m_hl.group(2))
+            saved_txt = m_hl.group(2).strip()
+            if saved_txt and saved_txt != "none":
+                hl_callee_saved += len([r for r in saved_txt.split(",") if r.strip()])
+            hl_spills += int(m_hl.group(3))
             continue
+        if "(stack var)" in line and "->" in line:
+            hl_stack_vars += 1
         m_ws = re.search(r"^\s*sim:\s+pipeline sim ~([0-9.]+) cyc/call \(bottleneck:\s*([^,)]+)", line)
         if m_ws:
             whole_sim = {"cycles_per_call": float(m_ws.group(1)), "bottleneck": m_ws.group(2).strip()}
@@ -469,7 +506,15 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 cur["all_archs_cyc_per_iter"][m_aa.group(1)] = float(m_aa.group(2))
                 if m_aa.group(3):
                     cur["all_archs_cyc_per_b"][m_aa.group(1)] = float(m_aa.group(3))
-    hl_extra = {"stack_bytes": hl_stack_bytes, "spills": hl_spills} if saw_hl else {}
+    hl_extra = (
+        {
+            "stack_bytes": hl_stack_bytes,
+            "spills": hl_spills,
+            "callee_saved_regs": hl_callee_saved,
+            "stack_vars": hl_stack_vars,
+        }
+        if saw_hl else {}
+    )
     load_loops = [lp for lp in loops if lp["load_bytes"] > 0 and lp["cyc_per_b"] is not None]
     if not load_loops:
         if whole_sim is not None and input_bytes_per_call:
@@ -569,6 +614,8 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
         "initial_perf": None,
         "best_perf": None,
         "best_round": None,
+        "try_harder_used": 0,
+        "try_harder_rescued": 0,
         "final_metrics": {},
         "rounds": [],
     }
@@ -640,8 +687,13 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 continue
 
             consec_trunc = 0
-            ode_src = extract_ode_source(reply, task["entry_fn"])
-            last_ode = ode_src
+            use_try_harder = bool(arm in TRY_HARDER_ARMS and last_ode and is_try_harder_reply(reply, task["entry_fn"]))
+            if use_try_harder:
+                ode_src = last_ode
+                cell["try_harder_used"] += 1
+            else:
+                ode_src = extract_ode_source(reply, task["entry_fn"])
+                last_ode = ode_src
             cand.write_text(ode_src, encoding="utf-8")
             for p in (out_o, out_p):
                 if p.exists():
@@ -654,6 +706,8 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 "--c-abi", "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
+            if use_try_harder:
+                pack_cmd.append("--try-harder")
             with prover_sem:
                 rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, extra_env=arm_env)
             cell["total_tool_s"] += dt_p
@@ -668,6 +722,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                 "finish_reason": usage.get("finish_reason"),
                 "source_lines": len(ode_src.splitlines()),
                 "pack_rc": rc_p,
+                "try_harder": use_try_harder,
             }
 
             if rc_p == 0 and out_o.exists() and out_p.exists():
@@ -737,9 +792,13 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                         cell["strict_pass"] = True
                         cell["rounds_to_pass"] = rnum
                         cell["initial_perf"] = perf
+                        if use_try_harder:
+                            cell["try_harder_rescued"] += 1
                         if arm is not None:
                             shutil.copy2(cand, out_dir / f"{cell_id}.r{rnum}.ode")
                             shutil.copy2(out_o, out_dir / f"{cell_id}.r{rnum}.o")
+                    elif use_try_harder:
+                        cell["try_harder_rescued"] += 1
                     cell["passing_rounds"] += 1
                     if improved:
                         best_rank = cand_rank
@@ -817,12 +876,31 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
             # Truncate huge feedback cleanly while keeping start + end
             fb_send = fb if len(fb) <= 6000 else (fb[:4200] + "\n... [truncated] ...\n" + fb[-1500:])
             messages.append({"role": "assistant", "content": reply})
+            can_offer_try_harder = (
+                arm in TRY_HARDER_ARMS
+                and not use_try_harder
+                and rec["stage"] == "pack_failed"
+                and "TRY_HARDER" in fb
+            )
+            if can_offer_try_harder:
+                next_action = (
+                    "Either diagnose the root cause and return the complete updated `.ode` file in a single ```ode ... ``` block, "
+                    "OR if you believe your exact current `.ode` code is already correct, reply with just `TRY_HARDER` "
+                    "to re-run the prover with `--effort deep` on the same code without editing it."
+                )
+            elif use_try_harder:
+                next_action = (
+                    "Deep effort (`--effort deep`) still could not prove this code. "
+                    "Diagnose the root cause and return the complete updated `.ode` file in a single ```ode ... ``` block."
+                )
+            else:
+                next_action = "Diagnose the root cause and return the complete updated `.ode` file in a single ```ode ... ``` block."
             messages.append({
                 "role": "user",
                 "content": (
                     f"Round {rnum} failed ({rec['stage']}, exit {rc_p if rec['stage']=='pack_failed' else rec.get('audit_rc')}).\n\n"
                     f"Tool output:\n```\n{fb_send}\n```\n\n"
-                    f"Diagnose the root cause and return the complete updated `.ode` file in a single ```ode ... ``` block."
+                    f"{next_action}"
                 ),
             })
 
@@ -959,6 +1037,8 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
                 "best_round": c.get("best_round"),
                 "initial_perf": c.get("initial_perf"),
                 "best_perf": c.get("best_perf"),
+                "try_harder_used": c.get("try_harder_used", 0),
+                "try_harder_rescued": c.get("try_harder_rescued", 0),
                 "stopped_reason": c.get("stopped_reason"),
                 "total_cost_usd": c["total_cost_usd"],
                 "total_api_s": round(c.get("total_api_s", 0.0), 2),
@@ -998,8 +1078,8 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
             "",
             "Each row summarizes all cells assigned to one experimental arm: pass rate, rounds and time to pass, API cost, and efficiency of verified code.",
             "",
-            "| Arm | Passes | Mean rounds (pass) | Mean tool s | Mean total s | Cost (USD) | Mean insns | Mean `cyc/B` | Mean stack B | Total spills |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Arm | Passes | Mean rounds (pass) | Mean tool s | Mean total s | Cost (USD) | Mean insns | Mean `cyc/B` | Mean saved regs | Mean stack B | Spills / `stack var` | `TRY_HARDER` |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for anm in distinct_arms:
             ac = [c for c in summary["cells"] if c.get("arm") == anm]
@@ -1014,12 +1094,18 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
             mi = f"{sum(ins_vals) / len(ins_vals):.1f}" if ins_vals else "—"
             cpb_vals = [(c.get("best_perf") or {}).get("cyc_per_b") for c in ap_cells if (c.get("best_perf") or {}).get("cyc_per_b") is not None]
             mcpb = f"{sum(cpb_vals) / len(cpb_vals):.3f}" if cpb_vals else "—"
+            sav_vals = [(c.get("best_perf") or {}).get("callee_saved_regs") for c in ap_cells if (c.get("best_perf") or {}).get("callee_saved_regs") is not None]
+            msav = f"{sum(sav_vals) / len(sav_vals):.2f}" if sav_vals else "—"
             stk_vals = [(c.get("best_perf") or {}).get("stack_bytes") for c in ap_cells if (c.get("best_perf") or {}).get("stack_bytes") is not None]
             mstk = f"{sum(stk_vals) / len(stk_vals):.1f}" if stk_vals else "—"
             sp_vals = [(c.get("best_perf") or {}).get("spills") for c in ap_cells if (c.get("best_perf") or {}).get("spills") is not None]
-            tsp = str(sum(sp_vals)) if sp_vals else "—"
+            sv_vals = [(c.get("best_perf") or {}).get("stack_vars") for c in ap_cells if (c.get("best_perf") or {}).get("stack_vars") is not None]
+            sp_s = f"{sum(sp_vals)} / {sum(sv_vals)}" if sp_vals else "—"
+            th_u = sum(c.get("try_harder_used", 0) for c in ac)
+            th_r = sum(c.get("try_harder_rescued", 0) for c in ac)
+            th_s = f"{th_r}/{th_u}" if th_u else "0"
             md_lines.append(
-                f"| `{anm}` | **{n_ap}/{n_ac}** | {mr} | {mt} | {mw} | ${mc:.2f} | {mi} | {mcpb} | {mstk} | {tsp} |"
+                f"| `{anm}` | **{n_ap}/{n_ac}** | {mr} | {mt} | {mw} | ${mc:.2f} | {mi} | {mcpb} | {msav} | {mstk} | {sp_s} | {th_s} |"
             )
         md_lines.append("")
 

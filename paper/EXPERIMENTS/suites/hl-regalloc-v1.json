@@ -1,0 +1,29 @@
+{
+  "id": "hl-regalloc-v1",
+  "description": "Controlled 3-arm A/B experiment evaluating Ode's new register allocation (bottom-up exact keeps + dead parameter reclamation + zero silent spills with explicit stack var) and interactive fast-fail + TRY_HARDER rescue across 6 orthogonal tasks (incl. pure HL BLAKE3 1-block and 4-way SIMD), 6 frontier models, and 2 targets (216 cells: 72 paired cells/arm).",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "chacha20_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "openai/gpt-6.2-astra-pro",
+    "anthropic/claude-fable-5.2",
+    "google/gemini-4-neon",
+    "anthropic/claude-sonnet-5.5",
+    "anthropic/claude-haiku-5.5",
+    "qwen/qwen3.8-2.4t-a95b"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "legacy,ode_reg,ode_reg_ask",
+  "max_rounds": 8,
+  "opt_rounds": 2,
+  "max_truncations": 2,
+  "max_usd": 300
+}

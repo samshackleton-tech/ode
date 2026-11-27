@@ -43,7 +43,7 @@ _RAW_ASM_RE = re.compile(
 )
 
 _HL_START_RE = re.compile(
-    r"^(?:let\s+|var\s+|buf\s+|while\s+|return(?:\s|$)|for\s+[A-Za-z_]\w*\s+in\s+|join(?:\s|$))"
+    r"^(?:let\s+|var\s+|stack\s+(?:var|let)\s+|buf\s+|while\s+|return(?:\s|$)|for\s+[A-Za-z_]\w*\s+in\s+|join(?:\s|$))"
 )
 
 _RAW_IF_CONDS = frozenset({
@@ -239,6 +239,7 @@ class LetStmt:
     expr: object
     mutable: bool
     line: int
+    on_stack: bool = False
 
 @dataclass
 class BufStmt:
@@ -440,7 +441,12 @@ class HLParser:
 
     def parse_stmt(self):
         t = self.cur()
-        if t.val in ("let", "var"):
+        if t.val in ("let", "var") or (t.val == "stack" and self.i + 1 < len(self.toks) and self.toks[self.i + 1].val in ("let", "var")):
+            on_stack = False
+            if t.val == "stack":
+                on_stack = True
+                self.i += 1
+                t = self.cur()
             mutable = (t.val == "var")
             self.i += 1
             nm = self.take(kind="id").val
@@ -455,7 +461,7 @@ class HLParser:
                 if not (self.maybe(":=") or self.maybe("=")):
                     raise HLErr(f"{self.src}: line {self.cur().line}: expected `:=` or `=` after `let {nm}`")
             expr = self.parse_expr()
-            return LetStmt(nm, ty, expr, mutable, t.line)
+            return LetStmt(nm, ty, expr, mutable, t.line, on_stack=on_stack)
 
         if t.val == "buf" and self.toks[self.i + 1].kind == "id" and self.toks[self.i + 2].val == "[":
             self.i += 1
@@ -811,7 +817,7 @@ def _subst_stmts(stmts, vname, kval):
     out = []
     for st in stmts:
         if isinstance(st, LetStmt):
-            out.append(LetStmt(st.name, st.ty, _subst_expr(st.expr, vname, kval), st.mutable, st.line))
+            out.append(LetStmt(st.name, st.ty, _subst_expr(st.expr, vname, kval), st.mutable, st.line, on_stack=st.on_stack))
         elif isinstance(st, AssignStmt):
             out.append(AssignStmt(st.target, st.op, _subst_expr(st.expr, vname, kval), st.line))
         elif isinstance(st, StoreStmt):
@@ -878,7 +884,7 @@ def _alpha_rename_blocks(stmts, param_names):
                 e2 = ren_expr(st.expr, env)
                 nm2 = fresh(st.name)
                 env[st.name] = nm2
-                out.append(LetStmt(nm2, st.ty, e2, st.mutable, st.line))
+                out.append(LetStmt(nm2, st.ty, e2, st.mutable, st.line, on_stack=st.on_stack))
             elif isinstance(st, BufStmt):
                 nm2 = fresh(st.name)
                 env[st.name] = nm2
@@ -1085,7 +1091,7 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
             ne = _subst_inline_expr(st.expr, cur_vmap, emap, call_line)
             new_nm = f"{prefix}{st.name}"
             cur_vmap[st.name] = new_nm
-            out.append(LetStmt(new_nm, st.ty, ne, st.mutable, call_line))
+            out.append(LetStmt(new_nm, st.ty, ne, st.mutable, call_line, on_stack=st.on_stack))
         elif isinstance(st, AssignStmt):
             tgt = cur_vmap.get(st.target, st.target)
             out.append(AssignStmt(tgt, st.op, _subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
@@ -1265,13 +1271,46 @@ def _expr_is_tail_call(e, fn_names, self_name=None):
             and not any(_has_real_call_expr(a, fn_names) for a in e.args))
 
 
+def _collect_real_calls_expr(e, fn_names):
+    out = []
+    if isinstance(e, Call):
+        for a in e.args:
+            out.extend(_collect_real_calls_expr(a, fn_names))
+        if e.name not in _INTRINSICS and (fn_names is None or e.name in fn_names):
+            out.append(e)
+    elif isinstance(e, (BinOp, Cmp, BoolOp)):
+        out.extend(_collect_real_calls_expr(e.left, fn_names))
+        out.extend(_collect_real_calls_expr(e.right, fn_names))
+    elif isinstance(e, NotOp):
+        out.extend(_collect_real_calls_expr(e.expr, fn_names))
+    elif isinstance(e, Select):
+        out.extend(_collect_real_calls_expr(e.cond, fn_names))
+        out.extend(_collect_real_calls_expr(e.then_e, fn_names))
+        out.extend(_collect_real_calls_expr(e.else_e, fn_names))
+    elif isinstance(e, IndexLoad):
+        out.extend(_collect_real_calls_expr(e.idx, fn_names))
+    return out
+
+
 def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
-    """Collect declared locals, inferred types, buffers, whether non-tail calls occur, and vars live across calls."""
+    """Collect declared locals, inferred types, explicit stack vars, buffers, and exact per-variable crossed non-tail calls."""
     locals_order = []   # [(name, ty, mutable, line)]
     local_types = {}
+    stack_vars = set()  # names declared with explicit `stack var` / `stack let`
     bufs = []           # [(name, size, align, line)]
     has_non_tail_call = [False]
     live_across_call = set()
+    var_crossed_calls = {}  # var_name -> list[Call]
+
+    def record_crossed(vset, calls):
+        if not calls:
+            return
+        live_across_call.update(vset)
+        for v in vset:
+            lst = var_crossed_calls.setdefault(v, [])
+            for c in calls:
+                if c not in lst:
+                    lst.append(c)
 
     def infer_ty(e):
         if isinstance(e, IndexLoad):
@@ -1305,6 +1344,8 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
                 if st.name not in local_types:
                     local_types[st.name] = ty
                     locals_order.append((st.name, ty, st.mutable, st.line))
+                if st.on_stack:
+                    stack_vars.add(st.name)
                 if _has_real_call_expr(st.expr, fn_names):
                     has_non_tail_call[0] = True
             elif isinstance(st, BufStmt):
@@ -1341,10 +1382,10 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
                     has_non_tail_call[0] = True
 
     walk(stmts)
-    # Exact backward liveness across non-tail calls (2-pass loop fixed point):
-    # only variables actually read AFTER a call get callee-saved registers!
+    # Exact backward liveness across non-tail calls (fixed point):
+    # tracks the exact set of Call nodes each variable is live across!
     if has_non_tail_call[0]:
-        def backward(body, live_out):
+        def backward(body, live_out, brk_live=frozenset(), cont_live=frozenset()):
             live = set(live_out)
             for st in reversed(body):
                 if isinstance(st, ReturnStmt):
@@ -1353,54 +1394,79 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
                     elif _expr_is_tail_call(st.expr, fn_names, self_name):
                         live = _used_vars_expr(st.expr)
                     else:
+                        cs = _collect_real_calls_expr(st.expr, fn_names)
+                        if cs and not isinstance(st.expr, Call):
+                            record_crossed(_used_vars_expr(st.expr), cs)
                         live = _used_vars_expr(st.expr)
-                elif isinstance(st, (BreakStmt, ContinueStmt, BufStmt, JoinStmt)):
+                elif isinstance(st, BreakStmt):
+                    live = set(brk_live)
+                elif isinstance(st, ContinueStmt):
+                    live = set(cont_live)
+                elif isinstance(st, (BufStmt, JoinStmt)):
                     pass
                 elif isinstance(st, LetStmt):
                     after = live - {st.name}
-                    if _has_real_call_expr(st.expr, fn_names):
-                        live_across_call.update(after)
+                    cs = _collect_real_calls_expr(st.expr, fn_names)
+                    if cs:
+                        extra = _used_vars_expr(st.expr) if not isinstance(st.expr, Call) else set()
+                        record_crossed(after | extra, cs)
                     live = after | _used_vars_expr(st.expr)
                 elif isinstance(st, AssignStmt):
                     after = (live - {st.target}) if st.op == ":=" else (live | {st.target})
-                    if _has_real_call_expr(st.expr, fn_names):
-                        live_across_call.update(after)
+                    cs = _collect_real_calls_expr(st.expr, fn_names)
+                    if cs:
+                        extra = _used_vars_expr(st.expr) if not isinstance(st.expr, Call) else set()
+                        record_crossed(after | extra, cs)
                     live = after | _used_vars_expr(st.expr)
                 elif isinstance(st, StoreStmt):
-                    if _has_real_call_expr(st.idx, fn_names) or _has_real_call_expr(st.expr, fn_names):
-                        live_across_call.update(live | {st.buf})
+                    cs = _collect_real_calls_expr(st.idx, fn_names) + _collect_real_calls_expr(st.expr, fn_names)
+                    if cs:
+                        record_crossed(live | {st.buf} | _used_vars_expr(st.idx) | _used_vars_expr(st.expr), cs)
                     live = live | {st.buf} | _used_vars_expr(st.idx) | _used_vars_expr(st.expr)
                 elif isinstance(st, ExprStmt):
-                    if _has_real_call_expr(st.expr, fn_names):
-                        live_across_call.update(live)
+                    cs = _collect_real_calls_expr(st.expr, fn_names)
+                    if cs:
+                        extra = _used_vars_expr(st.expr) if not isinstance(st.expr, Call) else set()
+                        record_crossed(live | extra, cs)
                     live = live | _used_vars_expr(st.expr)
                 elif isinstance(st, IfStmt):
-                    lt = backward(st.then_body, live)
-                    le = backward(st.else_body, live)
-                    if _has_real_call_expr(st.cond, fn_names):
-                        live_across_call.update(lt | le)
+                    lt = backward(st.then_body, live, brk_live, cont_live)
+                    le = backward(st.else_body, live, brk_live, cont_live)
+                    cs = _collect_real_calls_expr(st.cond, fn_names)
+                    if cs:
+                        record_crossed(lt | le | _used_vars_expr(st.cond), cs)
                     live = lt | le | _used_vars_expr(st.cond)
                 elif isinstance(st, WhileStmt):
                     cur_in = set(live) | _used_vars_expr(st.cond)
-                    for _ in range(2):
-                        b_in = backward(st.body, cur_in)
-                        if _has_real_call_expr(st.cond, fn_names):
-                            live_across_call.update(b_in | cur_in)
+                    while True:
+                        prev_in = set(cur_in)
+                        b_in = backward(st.body, cur_in, brk_live=live, cont_live=cur_in)
+                        cs = _collect_real_calls_expr(st.cond, fn_names)
+                        if cs:
+                            record_crossed(b_in | cur_in | _used_vars_expr(st.cond), cs)
                         cur_in = cur_in | b_in | _used_vars_expr(st.cond)
+                        if cur_in == prev_in:
+                            break
+                    backward(st.body, cur_in, brk_live=live, cont_live=cur_in)
                     live = cur_in
                 elif isinstance(st, ForStmt):
                     cur_in = set(live) | _used_vars_expr(st.hi) | {st.var}
-                    for _ in range(2):
-                        b_in = backward(st.body, cur_in)
+                    while True:
+                        prev_in = set(cur_in)
+                        b_in = backward(st.body, cur_in, brk_live=live, cont_live=cur_in)
                         cur_in = cur_in | b_in | _used_vars_expr(st.hi) | {st.var}
+                        if cur_in == prev_in:
+                            break
+                    backward(st.body, cur_in, brk_live=live, cont_live=cur_in)
                     after_lo = cur_in - {st.var}
-                    if _has_real_call_expr(st.lo, fn_names) or _has_real_call_expr(st.hi, fn_names):
-                        live_across_call.update(after_lo)
+                    cs = _collect_real_calls_expr(st.lo, fn_names) + _collect_real_calls_expr(st.hi, fn_names)
+                    if cs:
+                        record_crossed(after_lo | _used_vars_expr(st.lo) | _used_vars_expr(st.hi), cs)
                     live = after_lo | _used_vars_expr(st.lo) | _used_vars_expr(st.hi)
             return live
 
         backward(stmts, set())
-    return locals_order, local_types, bufs, has_non_tail_call[0], live_across_call
+    return locals_order, local_types, stack_vars, bufs, has_non_tail_call[0], live_across_call, var_crossed_calls
 
 
 def _stmts_always_exit(stmts):
@@ -1596,13 +1662,13 @@ def _fold_const_lets(stmts):
         for st in body:
             if isinstance(st, LetStmt):
                 ex = _subst_consts_expr(st.expr, cur)
-                if (not st.mutable) and st.name not in mutated and st.ty in (None, "u64", "u8"):
+                if (not st.mutable) and (not st.on_stack) and st.name not in mutated and st.ty in (None, "u64", "u8"):
                     kv = _const_eval_expr(ex, cur)
                     if kv is not None:
                         cur[st.name] = kv
                         const_vals[st.name] = kv
                         continue
-                out.append(LetStmt(st.name, st.ty, ex, st.mutable, st.line))
+                out.append(LetStmt(st.name, st.ty, ex, st.mutable, st.line, on_stack=st.on_stack))
             elif isinstance(st, AssignStmt):
                 out.append(AssignStmt(st.target, st.op, _subst_consts_expr(st.expr, cur), st.line))
             elif isinstance(st, StoreStmt):
@@ -1685,6 +1751,8 @@ class HLLower:
         self.needs = set(needs) if needs else set()
         self.hl_inlines = dict(hl_inlines) if hl_inlines else {}
         self.allow_spill = (os.environ.get("ODE_HL_NO_SPILL", "0") != "1") if allow_spill is None else bool(allow_spill)
+        self.auto_keeps = os.environ.get("ODE_HL_AUTO_KEEPS", "1") != "0"
+        self.reclaim_params = os.environ.get("ODE_HL_RECLAIM_PARAMS", "1") != "0"
 
         expanded = _expand_hl_inlines(stmts, self.hl_inlines, src)
         expanded = expand_unrolls(expanded, src)
@@ -1692,8 +1760,8 @@ class HLLower:
         self.stmts = _alpha_rename_blocks(expanded, self.param_names)
         self.stmts, self.const_vals = _fold_const_lets(self.stmts)
         self._live_temps = {}  # reg -> description of held temporary value
-        (self.locals_order, self.local_types, self.bufs,
-         self.has_calls, self.live_across_call) = _analyze_calls_and_vars(
+        (self.locals_order, self.local_types, self.stack_vars, self.bufs,
+         self.has_calls, self.live_across_call, self.var_crossed_calls) = _analyze_calls_and_vars(
             self.stmts, self.param_names, self.fn_names, self_name=fn_name
         )
         # Param types (`u8` vs `u64` / `bytes`)
@@ -1720,6 +1788,7 @@ class HLLower:
         self._allocate()
 
         self.out_lines = []      # [(src_line, text)]
+        self._last_place_end = None   # out_lines index right after previous `place { ... }` at current PC
         self.lbl_seq = 0
         self.loop_stack = []     # [(head_lbl, end_lbl, step_lbl_or_None)]
         self.active_facts = []   # [(fact_str, vars_used)]
@@ -1730,30 +1799,32 @@ class HLLower:
         self.reg_owner = {self.var_loc[p][1]: p for p in self.param_names if self.var_loc[p][0] == "reg"}
 
     def _compute_interference(self):
-        """Compute exact AST backward liveness and interference graph `interf[v]` for all locals.
+        """Compute exact AST backward liveness and interference graph `interf[v]` for all locals and parameters.
         Two variables interfere iff one is live at a point where the other is defined/written,
-        so disjoint `if/else` or early-return branches freely reuse the exact same registers!"""
+        so disjoint `if/else` or early-return branches AND dead parameters freely release their registers!"""
         interf = {nm: set() for nm, _, _, _ in self.locals_order}
-        local_set = set(interf.keys())
+        for pn in self.param_names:
+            interf.setdefault(pn, set())
+        tracked_set = set(interf.keys())
 
         def add_interf(v, live_set):
-            if v not in local_set:
+            if v not in tracked_set:
                 return
             for u in live_set:
-                if u in local_set and u != v:
+                if u in tracked_set and u != v:
                     interf[v].add(u)
                     interf[u].add(v)
 
         def spec_vars(s):
             if not s:
                 return set()
-            return {tok for tok in re.findall(r"\b[A-Za-z_]\w*(?:\$\d+)?\b", s) if tok in local_set}
+            return {tok for tok in re.findall(r"\b[A-Za-z_]\w*(?:\$\d+)?\b", s) if tok in tracked_set}
 
         def back(body, live_out, brk_live=frozenset(), cont_live=frozenset()):
             live = set(live_out)
             for st in reversed(body):
                 if isinstance(st, ReturnStmt):
-                    live = (_used_vars_expr(st.expr) & local_set) if st.expr is not None else set()
+                    live = (_used_vars_expr(st.expr) & tracked_set) if st.expr is not None else set()
                 elif isinstance(st, BreakStmt):
                     live = set(brk_live)
                 elif isinstance(st, ContinueStmt):
@@ -1764,49 +1835,58 @@ class HLLower:
                     for f in st.facts:
                         live |= spec_vars(f)
                 elif isinstance(st, LetStmt):
-                    rhs_v = _used_vars_expr(st.expr) & local_set
-                    add_interf(st.name, live | (_clobber_sensitive_vars(st.expr) & local_set))
+                    rhs_v = _used_vars_expr(st.expr) & tracked_set
+                    add_interf(st.name, live | (_clobber_sensitive_vars(st.expr) & tracked_set))
                     live = (live - {st.name}) | rhs_v
                 elif isinstance(st, AssignStmt):
-                    rhs_v = _used_vars_expr(st.expr) & local_set
+                    rhs_v = _used_vars_expr(st.expr) & tracked_set
                     if st.op == ":=":
-                        add_interf(st.target, live | (_clobber_sensitive_vars(st.expr) & local_set))
+                        add_interf(st.target, live | (_clobber_sensitive_vars(st.expr) & tracked_set))
                         live = (live - {st.target}) | rhs_v
                     else:
                         add_interf(st.target, live | rhs_v)
-                        live = live | ({st.target} & local_set) | rhs_v
+                        live = live | ({st.target} & tracked_set) | rhs_v
                 elif isinstance(st, StoreStmt):
-                    live |= ((_used_vars_expr(st.idx) | _used_vars_expr(st.expr)) & local_set)
+                    live |= (({st.buf} | _used_vars_expr(st.idx) | _used_vars_expr(st.expr)) & tracked_set)
                 elif isinstance(st, ExprStmt):
-                    live |= (_used_vars_expr(st.expr) & local_set)
+                    live |= (_used_vars_expr(st.expr) & tracked_set)
                 elif isinstance(st, IfStmt):
                     lt = back(st.then_body, live, brk_live, cont_live)
                     le = back(st.else_body, live, brk_live, cont_live) if st.else_body else set(live)
-                    live = lt | le | (_used_vars_expr(st.cond) & local_set)
+                    live = lt | le | (_used_vars_expr(st.cond) & tracked_set)
                 elif isinstance(st, WhileStmt):
                     clause_v = set()
                     for m in st.maintains: clause_v |= spec_vars(m)
                     for _, _, is_, rs_ in st.writes: clause_v |= spec_vars(is_) | spec_vars(rs_)
                     clause_v |= spec_vars(st.decreases)
-                    head_in = set(live) | clause_v | (_used_vars_expr(st.cond) & local_set)
-                    for _ in range(3):
+                    head_in = set(live) | clause_v | (_used_vars_expr(st.cond) & tracked_set)
+                    while True:
+                        prev = set(head_in)
                         b_in = back(st.body, head_in, brk_live=live, cont_live=head_in)
-                        head_in = head_in | b_in | clause_v | (_used_vars_expr(st.cond) & local_set)
+                        head_in = head_in | b_in | clause_v | (_used_vars_expr(st.cond) & tracked_set)
+                        if head_in == prev:
+                            break
+                    back(st.body, head_in, brk_live=live, cont_live=head_in)
                     live = head_in
                 elif isinstance(st, ForStmt):
                     clause_v = set()
                     for m in st.maintains: clause_v |= spec_vars(m)
                     for _, _, is_, rs_ in st.writes: clause_v |= spec_vars(is_) | spec_vars(rs_)
                     clause_v |= spec_vars(st.decreases)
-                    hi_v = _used_vars_expr(st.hi) & local_set
-                    head_in = set(live) | clause_v | hi_v | ({st.var} & local_set)
-                    for _ in range(3):
-                        step_in = head_in | ({st.var} & local_set)
+                    hi_v = _used_vars_expr(st.hi) & tracked_set
+                    head_in = set(live) | clause_v | hi_v | ({st.var} & tracked_set)
+                    while True:
+                        prev = set(head_in)
+                        step_in = head_in | ({st.var} & tracked_set)
                         add_interf(st.var, head_in)
                         b_in = back(st.body, step_in, brk_live=live, cont_live=step_in)
-                        head_in = head_in | b_in | clause_v | hi_v | ({st.var} & local_set)
+                        head_in = head_in | b_in | clause_v | hi_v | ({st.var} & tracked_set)
+                        if head_in == prev:
+                            break
+                    step_in = head_in | ({st.var} & tracked_set)
                     add_interf(st.var, head_in)
-                    live = (head_in - {st.var}) | (_used_vars_expr(st.lo) & local_set) | hi_v
+                    back(st.body, step_in, brk_live=live, cont_live=step_in)
+                    live = (head_in - {st.var}) | (_used_vars_expr(st.lo) & tracked_set) | hi_v
             return live
 
         back(self.stmts, set())
@@ -1818,68 +1898,27 @@ class HLLower:
             raise HLErr(f"{self.src}: fn `{self.fn_name}` has {len(self.params)} parameters (max {len(arg_regs)} in ABI registers)")
 
         interf = self._compute_interference()
-        # Collect all non-tail callees actually invoked so we know which caller-saved regs they preserve!
-        called_fns = set()
-        def _collect_callees_e(e):
-            if isinstance(e, Call):
-                if e.name not in _INTRINSICS and (self.fn_names is None or e.name in self.fn_names):
-                    called_fns.add(e.name)
-                for a in e.args:
-                    _collect_callees_e(a)
-            elif isinstance(e, (BinOp, Cmp, BoolOp)):
-                _collect_callees_e(e.left); _collect_callees_e(e.right)
-            elif isinstance(e, NotOp):
-                _collect_callees_e(e.expr)
-            elif isinstance(e, Select):
-                _collect_callees_e(e.cond); _collect_callees_e(e.then_e); _collect_callees_e(e.else_e)
-            elif isinstance(e, IndexLoad):
-                _collect_callees_e(e.idx)
-        def _collect_callees_s(body):
-            for st in body:
-                if isinstance(st, (LetStmt, AssignStmt, ExprStmt)):
-                    _collect_callees_e(st.expr)
-                elif isinstance(st, StoreStmt):
-                    _collect_callees_e(st.idx); _collect_callees_e(st.expr)
-                elif isinstance(st, IfStmt):
-                    _collect_callees_e(st.cond); _collect_callees_s(st.then_body); _collect_callees_s(st.else_body)
-                elif isinstance(st, WhileStmt):
-                    _collect_callees_e(st.cond); _collect_callees_s(st.body)
-                elif isinstance(st, ForStmt):
-                    _collect_callees_e(st.lo); _collect_callees_e(st.hi); _collect_callees_s(st.body)
-                elif isinstance(st, ReturnStmt) and st.expr is not None:
-                    if not _expr_is_tail_call(st.expr, self.fn_names, self.fn_name):
-                        _collect_callees_e(st.expr)
-        _collect_callees_s(self.stmts)
+        default_clob = (set(ARM_ARGS + ARM_SCRATCH + ARM_CALLER_POOL) if self.arch == "arm64"
+                        else set(X86_ARGS + X86_SCRATCH + X86_CALLER_POOL))
 
-        # Compute exact set of regs clobbered by any non-tail call (including call arg regs we overwrite!)
-        default_clob = set(ARM_ARGS + ARM_SCRATCH + ARM_CALLER_POOL) if self.arch == "arm64" else set(X86_ARGS + X86_SCRATCH + X86_CALLER_POOL)
-        if called_fns and all(c in self.callee_clobbers for c in called_fns):
-            call_clob = set()
-            for c in called_fns:
-                call_clob |= self.callee_clobbers[c]
-        else:
-            call_clob = default_clob
-        # Also mark arg regs written when marshaling call arguments as clobbered across calls
-        max_call_args = [0]
-        def _max_args_e(e):
-            if isinstance(e, Call) and e.name not in _INTRINSICS:
-                max_call_args[0] = max(max_call_args[0], len(e.args))
-                for a in e.args: _max_args_e(a)
-            elif isinstance(e, (BinOp, Cmp, BoolOp)): _max_args_e(e.left); _max_args_e(e.right)
-            elif isinstance(e, NotOp): _max_args_e(e.expr)
-            elif isinstance(e, Select): _max_args_e(e.cond); _max_args_e(e.then_e); _max_args_e(e.else_e)
-            elif isinstance(e, IndexLoad): _max_args_e(e.idx)
-        def _max_args_s(body):
-            for st in body:
-                if isinstance(st, (LetStmt, AssignStmt, ExprStmt)): _max_args_e(st.expr)
-                elif isinstance(st, StoreStmt): _max_args_e(st.idx); _max_args_e(st.expr)
-                elif isinstance(st, IfStmt): _max_args_e(st.cond); _max_args_s(st.then_body); _max_args_s(st.else_body)
-                elif isinstance(st, WhileStmt): _max_args_e(st.cond); _max_args_s(st.body)
-                elif isinstance(st, ForStmt): _max_args_e(st.lo); _max_args_e(st.hi); _max_args_s(st.body)
-                elif isinstance(st, ReturnStmt) and st.expr is not None: _max_args_e(st.expr)
-        _max_args_s(self.stmts)
-        for k in range(min(max_call_args[0], len(arg_regs))):
-            call_clob.add(arg_regs[k])
+        def _call_clob_for_param(pname, idx):
+            """True iff parameter `pname` in `arg_regs[idx]` is clobbered by any non-tail call it crosses."""
+            areg = arg_regs[idx]
+            crossed = self.var_crossed_calls.get(pname, ())
+            if not crossed:
+                return False
+            if not self.auto_keeps:
+                return areg in default_clob
+            for c in crossed:
+                c_clob = self.callee_clobbers.get(c.name, default_clob)
+                if areg in c_clob:
+                    return True
+                # Overwritten by call argument marshaling ONLY when arg `idx` is NOT pass-through `Var(pname)`!
+                if idx < len(c.args):
+                    ae = c.args[idx]
+                    if not (isinstance(ae, Var) and ae.name == pname):
+                        return True
+            return False
 
         used_regs = set()
         callee_pool_all = list(ARM_CALLEE_SAVED if self.arch == "arm64" else X86_CALLEE_SAVED)
@@ -1889,22 +1928,46 @@ class HLLower:
                          else [f"xmm{k}" for k in range(1, 15)])
         vec16_pool_all = [f"zmm{k}" for k in range(16, 31)] + [f"zmm{k}" for k in range(1, 16)]
 
-        # 1. Assign parameters (only copy to another reg if live across call AND its ABI reg is clobbered!)
+        # 1. Assign parameters: pass-through params preserved by their crossed callees stay in-place (zero copy/push!)
         param_regs = set()
-        # First mark untouched params so copied params don't take their registers
+        kept_in_place = {}  # pname -> areg (unchanged across crossed calls)
+        param_needs_copy = {pname: _call_clob_for_param(pname, idx) for idx, (pname, _) in enumerate(self.params)}
         untouched_param_regs = {
             arg_regs[idx] for idx, (pname, _) in enumerate(self.params)
-            if not (pname in self.live_across_call and arg_regs[idx] in call_clob)
+            if not param_needs_copy[pname]
         }
-        caller_preserved = [r for r in caller_pool_all if r not in call_clob and r not in untouched_param_regs]
+        # Union of callee clobbers across all calls for picking a safe caller-saved target for copied params
+        def _clob_for_crossed(crossed, include_pass_through=True):
+            if not crossed:
+                return set()
+            if not self.auto_keeps:
+                return set(default_clob)
+            clob = set()
+            for c in crossed:
+                clob |= self.callee_clobbers.get(c.name, default_clob)
+                for k in range(min(len(c.args), len(arg_regs))):
+                    ae = c.args[k]
+                    if include_pass_through and isinstance(ae, Var) and kept_in_place.get(ae.name) == arg_regs[k]:
+                        continue
+                    clob.add(arg_regs[k])
+            return clob
+
+        # First record pass-through / non-copied params so copied params and locals know `kept_in_place`
+        for idx, (pname, _) in enumerate(self.params):
+            if not param_needs_copy[pname]:
+                kept_in_place[pname] = arg_regs[idx]
+
+        copied_caller_taken = set()
         for idx, (pname, _) in enumerate(self.params):
             areg = arg_regs[idx]
             pty = self.param_types[pname]
             self.var_ty[pname] = pty
-            if pname in self.live_across_call and areg in call_clob:
-                # Prefer a caller-saved register preserved by all callees (zero push/pop!), else callee-saved!
-                if caller_preserved:
-                    cs = caller_preserved.pop(0)
+            if param_needs_copy[pname]:
+                p_clob = _clob_for_crossed(self.var_crossed_calls.get(pname, ()))
+                safe_caller = [r for r in caller_pool_all if r not in p_clob and r not in untouched_param_regs and r not in copied_caller_taken]
+                if safe_caller:
+                    cs = safe_caller[0]
+                    copied_caller_taken.add(cs)
                 elif callee_pool_all:
                     cs = callee_pool_all.pop(0)
                     self.callee_saved.append(cs)
@@ -1922,8 +1985,10 @@ class HLLower:
             self.var_loc[pname] = ("reg", areg)
             self.var_map.append((pname, f"param ({pty})", areg, ""))
 
-        caller_pool_avail = [r for r in caller_pool_all if r not in param_regs]
-        call_safe_caller = [r for r in caller_pool_avail if r not in call_clob]
+        # With `reclaim_params=True`, parameter regs stay in `caller_pool_avail` and are guarded strictly by `interf`
+        # (so once a parameter's last use has passed, its ABI register is deterministically reclaimed by later locals!).
+        caller_pool_avail = (list(caller_pool_all) if self.reclaim_params
+                             else [r for r in caller_pool_all if r not in param_regs])
         self._free_named_scalar_count = 0
 
         # 2. Local `buf` stack arrays (aligned)
@@ -1936,7 +2001,7 @@ class HLLower:
             self.var_map.append((bname, f"buf[{bsz}]", f"[sp+{off}]", f"align {balign}"))
             off += bsz
 
-        # 3. Deterministic greedy graph coloring in declaration order (zero hidden magic, exact branch reuse!)
+        # 3. Deterministic greedy graph coloring in declaration order (zero hidden magic, exact branch & dead-param reuse!)
         spill_count = 0
         callee_used_set = set(self.callee_saved)
 
@@ -1950,16 +2015,35 @@ class HLLower:
             if live_pairs:
                 lines.append("  simultaneously live variables:")
                 for vnm, vreg in live_pairs:
-                    lines.append(f"    {vnm} = {vreg}")
+                    tag = " [across call]" if vnm in self.live_across_call else ""
+                    lines.append(f"    {vnm} = {vreg}{tag}")
             lines.append("  how to fix:")
             lines.append("    - narrow an earlier `let` lifetime (move it closer to use or inside the branch that uses it)")
             lines.append("    - reuse an existing `var` instead of keeping another variable live")
-            lines.append("    - or store long-lived values explicitly in a local `buf name[N] align 8`")
+            lines.append(f"    - or declare a cold variable explicitly on the stack: `stack var {nm}: {ty} := ...`")
             raise HLErr("\n".join(lines))
 
         for nm, ty, mutable, line in self.locals_order:
             self.var_ty[nm] = ty
             role = "var" if mutable else "let"
+            if nm in self.stack_vars:
+                if ty == "u32x16":
+                    if self.arch != "x86_64":
+                        raise HLErr(f"{self.src}: `u32x16` is only available on `x86_64` (AVX-512)")
+                    self.uses_zmm = True
+                    off = (off + 63) // 64 * 64
+                    sz = 64
+                elif ty == "u32x4":
+                    off = (off + 15) // 16 * 16
+                    sz = 16
+                else:
+                    off = (off + 7) // 8 * 8
+                    sz = 8
+                self.var_loc[nm] = ("spill", off)
+                self.var_map.append((nm, f"stack {role} {ty}", f"[sp+{off}]", "stack var"))
+                off += sz
+                continue
+
             forbidden = {
                 self.var_loc[nb][1]
                 for nb in interf.get(nm, ())
@@ -1967,10 +2051,15 @@ class HLLower:
             }
 
             if ty in ("u64", "u8"):
-                # For call-crossing locals: use callee-preserved caller-saved regs FIRST (0 pushes!), then callee-saved!
-                across_call = nm in self.live_across_call
-                order = (call_safe_caller + callee_pool_all if across_call
-                         else caller_pool_avail + callee_pool_all)
+                # Exact per-variable call clobbers: use call-safe caller-saved regs FIRST (0 pushes!), then callee-saved!
+                crossed = self.var_crossed_calls.get(nm, ())
+                across_call = bool(crossed)
+                if across_call:
+                    nm_clob = _clob_for_crossed(crossed)
+                    safe_caller = [r for r in caller_pool_avail if r not in nm_clob]
+                    order = safe_caller + callee_pool_all
+                else:
+                    order = caller_pool_avail + callee_pool_all
                 reg = next((r for r in order if r not in forbidden), None)
                 if reg is not None:
                     if reg in callee_pool_all and reg not in callee_used_set:
@@ -1981,8 +2070,7 @@ class HLLower:
                     self.var_map.append((nm, f"{role} {ty}", reg, ""))
                 else:
                     if not self.allow_spill:
-                        live_pairs = [(p, self.var_loc[p][1]) for p in self.param_names if self.var_loc[p][0] == "reg"]
-                        live_pairs += [
+                        live_pairs = [
                             (nb, self.var_loc[nb][1])
                             for nb in sorted(interf.get(nm, ()))
                             if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in order
@@ -2071,6 +2159,9 @@ class HLLower:
             self.total_stack = tot
 
     def emit(self, line, text):
+        s = text.strip()
+        if s and not s.startswith("@") and not s.startswith("place ") and not s.startswith("fact ") and not s.startswith("wrote ") and not s.startswith("decreases ") and s not in ("{", "}", "wrap"):
+            self._last_place_end = None
         self.out_lines.append((line, text))
 
     def fresh_label(self, prefix):
@@ -2266,7 +2357,7 @@ class HLLower:
             else:
                 self.emit(line, f"ldr q{dst[1:]}, [sp, {val}]")
         elif ty == "u32x16":
-            self.emit(line, f"vmovdqa32 {dst}, [rsp + {val}]")
+            self.emit(line, f"vmovdqu32 {dst}, [rsp + {val}]")
         else:
             if self.arch == "x86_64":
                 self.emit(line, f"mov {dst}, qword ptr [rsp + {val}]")
@@ -2295,7 +2386,7 @@ class HLLower:
             else:
                 self.emit(line, f"str q{src_reg[1:]}, [sp, {val}]")
         elif ty == "u32x16":
-            self.emit(line, f"vmovdqa32 [rsp + {val}], {src_reg}")
+            self.emit(line, f"vmovdqu32 [rsp + {val}], {src_reg}")
         else:
             if self.arch == "x86_64":
                 self.emit(line, f"mov qword ptr [rsp + {val}], {src_reg}")
@@ -2303,10 +2394,12 @@ class HLLower:
                 self.emit(line, f"str {src_reg}, [sp, {val}]")
 
     @contextlib.contextmanager
-    def _emit_addr_held(self, line, buf_name, idx_e, avoid=(), reuse_dst=None):
+    def _emit_addr_held(self, line, buf_name, idx_e, avoid=(), reuse_dst=None, allow_sp=True):
         """Compute `(base_reg, const_offset)` for `buf[idx_e]`, protecting any allocated scratch `base_reg`.
         If `reuse_dst` is a scratch register allocated for the enclosing load (not read by `buf`/`idx_e`),
-        evaluate `idx_e` directly into `reuse_dst` so an empty output register is never wasted."""
+        evaluate `idx_e` directly into `reuse_dst` so an empty output register is never wasted.
+        On `arm64`, `allow_sp=False` materializes `add r, sp, disp` because `arm64.tab` only has
+        `[sp, N]` forms for 64-bit (`ldr`/`str`) and 128-bit (`ldr q`/`str q`), not `w` or byte loads/stores."""
         if buf_name not in self.var_loc:
             raise HLErr(f"{self.src}: line {line}: unknown buffer `{buf_name}`")
         bkind, bval = self.var_loc[buf_name]
@@ -2320,7 +2413,17 @@ class HLLower:
         )
         if bkind == "buf":
             if isinstance(idx_e, Num):
-                yield ("sp" if self.arch == "arm64" else "rsp"), bval + idx_e.val
+                total_off = bval + idx_e.val
+                if allow_sp or self.arch != "arm64":
+                    yield ("sp" if self.arch == "arm64" else "rsp"), total_off
+                    return
+                if can_reuse:
+                    self.emit(line, f"add {reuse_dst}, sp, {total_off}")
+                    yield reuse_dst, 0
+                    return
+                with self._temp_reg(line, avoid=avoid, why=addr_why) as addr_reg:
+                    self.emit(line, f"add {addr_reg}, sp, {total_off}")
+                    yield addr_reg, 0
                 return
             with self._hold_expr(idx_e, why=f"index `{_expr_brief(idx_e)}` of `{buf_name}`") as ireg:
                 with self._temp_reg(line, avoid=avoid, why=addr_why) as addr_reg:
@@ -2530,7 +2633,8 @@ class HLLower:
             return
         if isinstance(e, IndexLoad):
             reuse = dst if e.width in ("u8", "u32", "u64") else None
-            with self._emit_addr_held(e.line, e.buf, e.idx, reuse_dst=reuse) as (base, disp):
+            allow_sp = (self.arch != "arm64" or e.width == "u64")
+            with self._emit_addr_held(e.line, e.buf, e.idx, reuse_dst=reuse, allow_sp=allow_sp) as (base, disp):
                 if e.width == "u8":
                     if self.arch == "x86_64":
                         d_str = f" + {disp}" if disp else ""
@@ -3143,7 +3247,7 @@ class HLLower:
                     break
                 dead = []
                 for v in cur_v:
-                    if v in self.param_set:
+                    if v in self.param_set and (self.param_types.get(v) == "bytes" or v not in self.fn_written_vars):
                         continue
                     loc = self.var_loc.get(v)
                     if loc is None or loc[0] != "reg" or self.reg_owner.get(loc[1]) != v or loc[1] in loop_written_regs:
@@ -3204,13 +3308,21 @@ class HLLower:
                 place_lines.append(f"wrote {buf_nm}[{idx_r} ..] = {rhs_r}")
 
         # 7. Termination measure
-        if decreases is not None:
-            place_lines.append(f"decreases {self._subst_spec_vars(decreases)}")
+        dec_line = f"decreases {self._subst_spec_vars(decreases)}" if decreases is not None else None
+        if dec_line is not None:
+            place_lines.append(dec_line)
 
-        self.emit(line, "place {")
+        # Avoid emitting two `place { ... }` blocks at the exact same PC (e.g. `join` right before `while`):
+        # insert a `nop` immediately after the previous `place` (before any intervening loop header label)
+        # so the two places occupy distinct PCs and the loop back-edge jumps only to the loop's own place.
+        if self._last_place_end is not None:
+            self.out_lines.insert(self._last_place_end, (line, "nop"))
+
+        self.out_lines.append((line, "place {"))
         for pl in place_lines:
-            self.emit(line, f"    {pl}")
-        self.emit(line, "}")
+            self.out_lines.append((line, f"    {pl}"))
+        self.out_lines.append((line, "}"))
+        self._last_place_end = len(self.out_lines)
 
     # -- Statement Lowering --
     def lower_stmts(self, stmts):
@@ -3288,9 +3400,21 @@ class HLLower:
                         d_str = f" + {disp}" if disp else ""
                         self.emit(st.line, f"vmovdqu32 [{base}{d_str}], {vr}")
                 return
+            if st.width == "u32":
+                raise HLErr(
+                    f"{self.src}: line {st.line}: 32-bit scalar store `{st.buf}.u32(...) := ...` is not supported yet; "
+                    f"use `.u32x4(off) := ...` (with `u32x4.splat` / `u32x4.of`), `.u64(off) := ...` "
+                    f"on a stack `buf`, or byte stores `out[i] := ...` on an output buffer"
+                )
+            if st.width == "u8" and self.var_loc.get(st.buf, (None,))[0] == "buf":
+                raise HLErr(
+                    f"{self.src}: line {st.line}: 1-byte store `{st.buf}[...] := ...` to a stack `buf` is not supported by the verifier's frame model; "
+                    f"use `{st.buf}.u64(off) := ...`, `{st.buf}.u32x4(off) := ...`, or `stack var`"
+                )
             # Fixed deterministic store order: evaluate value first, then address, then store.
+            allow_sp = (self.arch != "arm64" or st.width == "u64")
             with self._hold_expr(st.expr, why=f"value `{_expr_brief(st.expr)}` for store to `{st.buf}`") as val_r:
-                with self._emit_addr_held(st.line, st.buf, st.idx) as (base, disp):
+                with self._emit_addr_held(st.line, st.buf, st.idx, allow_sp=allow_sp) as (base, disp):
                     self._emit_scalar_store(st.line, st.width, base, disp, val_r)
             return
 

@@ -240,7 +240,106 @@ class TestRunSuite(unittest.TestCase):
         m = run_suite.parse_advise_metrics(sample, "x86_64", input_bytes_per_call=64)
         self.assertEqual(m["stack_bytes"], 32)
         self.assertEqual(m["spills"], 2)
+        self.assertEqual(m["callee_saved_regs"], 1)
+        self.assertEqual(m["stack_vars"], 0)
         self.assertAlmostEqual(m["cyc_per_b"], 2.0)
+
+    def test_08_regalloc_arms_try_harder_and_stack_vars(self):
+        """Verify `legacy`/`ode_reg`/`ode_reg_ask` envs, `stack var` + `callee-saved` parsing, and `TRY_HARDER` flow."""
+        self.assertEqual(run_suite.ARM_ENV["legacy"]["ODE_HL_AUTO_KEEPS"], "0")
+        self.assertEqual(run_suite.ARM_ENV["legacy"]["ODE_HL_RECLAIM_PARAMS"], "0")
+        self.assertEqual(run_suite.ARM_ENV["legacy"]["ODE_HL_NO_SPILL"], "0")
+        self.assertEqual(run_suite.ARM_ENV["legacy"]["ODE_PROVE_EFFORT"], "deep")
+        self.assertEqual(run_suite.ARM_ENV["ode_reg"]["ODE_HL_AUTO_KEEPS"], "1")
+        self.assertEqual(run_suite.ARM_ENV["ode_reg"]["ODE_HL_RECLAIM_PARAMS"], "1")
+        self.assertEqual(run_suite.ARM_ENV["ode_reg"]["ODE_HL_NO_SPILL"], "1")
+        self.assertEqual(run_suite.ARM_ENV["ode_reg"]["ODE_PROVE_EFFORT"], "deep")
+        self.assertEqual(run_suite.ARM_ENV["ode_reg_ask"]["ODE_PROVE_EFFORT"], "fast")
+        self.assertIn("ode_reg_ask", run_suite.TRY_HARDER_ARMS)
+
+        sample = (
+            "High-Level Ode lowering (f, x86_64): stack 16 B, callee-saved: rbx, rbp, spills: 0\n"
+            "  variables:\n"
+            "    acc            var u64            -> [sp+0]  (stack var)\n"
+            "High-Level Ode lowering (g, x86_64): stack 0 B, callee-saved: none, spills: 0\n"
+            "  sim: pipeline sim ~64.0 cyc/call (bottleneck: alu, 0 fused)\n"
+        )
+        m = run_suite.parse_advise_metrics(sample, "x86_64", input_bytes_per_call=64)
+        self.assertEqual(m["callee_saved_regs"], 2)
+        self.assertEqual(m["stack_vars"], 1)
+        self.assertEqual(m["spills"], 0)
+
+        self.assertTrue(run_suite.is_try_harder_reply("TRY_HARDER", "foo"))
+        self.assertTrue(run_suite.is_try_harder_reply("I think it is correct.\nTRY_HARDER", "foo"))
+        self.assertFalse(run_suite.is_try_harder_reply("TRY_HARDER\n```ode\nfn foo() {}\n```", "foo"))
+
+        # End-to-end mock cell: R1 hits fast-fail recommending TRY_HARDER, R2 replies TRY_HARDER -> passes with --try-harder!
+        import threading
+        from types import SimpleNamespace
+        orig_api = run_suite.call_openrouter
+        orig_tool = run_suite.run_tool
+        orig_adv = run_suite.run_static_advise
+        orig_v2 = run_suite.run_verify2_on_bundle
+        orig_nat = run_suite.run_native_test
+        orig_exp = run_suite.expected_contract_id_for
+        seen_pack_cmds = []
+        seen_user_msgs = []
+        try:
+            task = {
+                "id": "der_valid", "entry_fn": "der_valid",
+                "spec_file": "paper/EXPERIMENTS/tasks/der_valid_spec.ode",
+                "spec_basename": "der_valid_spec.ode",
+                "task_summary": "test", "contract_header": "fn der_valid()\n",
+            }
+            args = SimpleNamespace(
+                max_rounds=4, opt_rounds=0, cell_timeout=0, max_truncations=2,
+                temperature=0.0, max_tokens=4000, effort="low", api_timeout=10,
+                run_id="t_th", provider_sort="", max_usd=10.0, x86_exec_script="",
+                arm64_exec_script="",
+            )
+            run_suite.expected_contract_id_for = lambda t, tgt: "a" * 52
+            run_suite.run_verify2_on_bundle = lambda *a, **kw: (True, "shown", 0.01)
+            run_suite.run_native_test = lambda *a, **kw: ("pass", "NATIVE_PASS")
+            run_suite.run_static_advise = lambda *a, **kw: ("ok", {"cyc_per_b": None, "stack_bytes": 0, "spills": 0, "callee_saved_regs": 0, "stack_vars": 0})
+            rd_no = [0]
+            def fake_api(model, messages, key, **kw):
+                rd_no[0] += 1
+                seen_user_msgs.append(messages[-1]["content"])
+                if rd_no[0] == 1:
+                    return "```ode\nfn der_valid() { return 1 }\n```", {"cost": 0.01}, 0.1
+                return "TRY_HARDER", {"cost": 0.005}, 0.1
+            def fake_tool(cmd, work, extra_env=None):
+                if "pack" in cmd:
+                    seen_pack_cmds.append(list(cmd))
+                    if "--try-harder" in cmd:
+                        (work / "out.o").write_bytes(b"o")
+                        (work / "out.proof").write_bytes(b"p")
+                        return 0, "VERDICT:           shown\n", 0.02
+                    return 1, "NOTE: fast-fail prover stopped early; reply `TRY_HARDER`", 0.01
+                return 0, "VERDICT:           shown\nCOVERAGE: 100% (1 function, 5 instructions, 20 B)\n", 0.01
+            run_suite.call_openrouter = fake_api
+            run_suite.run_tool = fake_tool
+            with tempfile.TemporaryDirectory() as td:
+                c = run_suite.run_cell(
+                    task, "m1", "x86_64", args, "k",
+                    run_suite.BudgetGuard(10.0), Path(td), threading.BoundedSemaphore(2), arm="ode_reg_ask",
+                )
+                saved_ode = (Path(td) / "der_valid__m1__x86_64__ode_reg_ask.ode").read_text(encoding="utf-8")
+            self.assertTrue(c["strict_pass"])
+            self.assertEqual(c["rounds_to_pass"], 2)
+            self.assertEqual(c["try_harder_used"], 1)
+            self.assertEqual(c["try_harder_rescued"], 1)
+            self.assertIn("--try-harder", seen_pack_cmds[1])
+            self.assertNotIn("--try-harder", seen_pack_cmds[0])
+            self.assertIn("TRY_HARDER", seen_user_msgs[1])
+            self.assertIn("fn der_valid()", saved_ode)
+        finally:
+            run_suite.call_openrouter = orig_api
+            run_suite.run_tool = orig_tool
+            run_suite.run_static_advise = orig_adv
+            run_suite.run_verify2_on_bundle = orig_v2
+            run_suite.run_native_test = orig_nat
+            run_suite.expected_contract_id_for = orig_exp
 
 
 if __name__ == "__main__":

@@ -1152,6 +1152,160 @@ fn select_tail_nested(x: u64, flag: u64) -> u64
                     aud = ode_audit.audit_binary(o_path, pr_path)
                     self.assertEqual(aud["verdict"], "shown", f"audit {fn} on {arch}: {aud}")
 
+    def test_28_ode_regalloc_stack_var_arm64_u32_dedup_place_and_try_harder(self):
+        """Verify bottom-up exact keeps + pass-through params, dead param reclamation,
+        explicit `stack var` with `ODE_HL_NO_SPILL=1`, arm64 `buf.u32`/`buf[i]` stores,
+        merged consecutive `place`s, and `--effort fast` -> `--try-harder` rescue."""
+        import ode_unified
+        # 1. Pass-through params (`buf`, `n`) + bottom-up exact `keeps` + dead param reclamation
+        src_pt = """\
+fn helper_sum(buf: n bytes, n: number, idx: u64) -> u64
+    requires idx < n
+    returns buf[idx] + 1
+    trace depends on buf, n, idx
+{
+    let b: u64 := buf[idx]
+    return b + 1
+}
+
+fn caller_pt(buf: n bytes, n: number, a: u64, b: u64) -> u64
+    requires n >= 2
+    requires a < 100
+    requires b < 100
+    returns buf[0] + buf[1] + a + b + 2
+    trace depends on buf, n, a, b
+{
+    let ab: u64 := a + b
+    let x0: u64 := helper_sum(buf, n, 0)
+    let x1: u64 := helper_sum(buf, n, 1)
+    return x0 + x1 + ab
+}
+"""
+        old_env = {k: os.environ.get(k) for k in ("ODE_HL_NO_SPILL", "ODE_HL_AUTO_KEEPS", "ODE_HL_RECLAIM_PARAMS")}
+        try:
+            os.environ["ODE_HL_NO_SPILL"] = "1"
+            os.environ["ODE_HL_AUTO_KEEPS"] = "1"
+            os.environ["ODE_HL_RECLAIM_PARAMS"] = "1"
+            parsed = ode_unified.parse_unified(src_pt, src="pt.ode")
+            caller_rec = [f for f in parsed["fns"] if f["name"] == "caller_pt"][0]
+            # On x86_64: `buf` (rdi) and `n` (rsi) stay in-place across `helper_sum(buf, n, ...)` -> ZERO copied copies for buf/n!
+            vm_x86 = {nm: (loc, note) for nm, _, loc, note in caller_rec["impls"]["x86_64"]["hl_meta"]["var_map"]}
+            self.assertEqual(vm_x86["buf"], ("rdi", ""))
+            self.assertEqual(vm_x86["n"], ("rsi", ""))
+            # Dead param reclamation: on x86_64, `a`/`b` die on line 1; `caller_pt` needs <= 1 callee-saved reg (only `ab` or `x0`!)
+            self.assertLessEqual(len(caller_rec["impls"]["x86_64"]["hl_meta"]["callee_saved"]), 2)
+            for arch in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    p = os.path.join(d, "pt.ode")
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(src_pt)
+                    res = ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                                  fn_name="caller_pt", target=arch)
+                    self.assertEqual(res["verdict"], "shown", f"caller_pt on {arch}: {res}")
+
+            # 2. Explicit `stack var` + `buf.u64` + merged consecutive `join` + `while` places
+            src_all = """\
+fn stack_u64_and_join(x: u64, y: u64) -> u64
+    requires x <= 100
+    requires y <= 50
+    returns x + y + 10
+    trace depends on x, y
+{
+    buf tmp[16] align 16
+    stack var saved: u64 := x + 3
+    tmp.u64(0) := y
+    tmp.u64(8) := 7
+    let t0: u64 := tmp.u64(0)
+    let t1: u64 := tmp.u64(8)
+    var acc: u64 := saved + t0
+    var k: u64 := 0
+    join maintains k == 0, acc == x + y + 3
+    while k < t1
+        maintains 0 <= k, k <= 7, acc == x + y + 3 + k, t1 == 7
+        decreases 7 - k
+    {
+        acc += 1
+        k += 1
+    }
+    return acc
+}
+"""
+            parsed2 = ode_unified.parse_unified(src_all, src="all.ode")
+            meta_a = parsed2["fns"][0]["impls"]["arm64"]["hl_meta"]
+            self.assertEqual(meta_a["spills"], 0)
+            self.assertTrue(any(nm == "saved" and note == "stack var" for nm, _, _, note in meta_a["var_map"]))
+            for arch in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as d:
+                    p = os.path.join(d, "all.ode")
+                    with open(p, "w", encoding="utf-8") as f:
+                        f.write(src_all)
+                    res = ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                                  fn_name="stack_u64_and_join", target=arch)
+                    self.assertEqual(res["verdict"], "shown", f"stack_u64_and_join on {arch}: {res}")
+
+            # 2b. `buf.u32(off) := ...` gives crisp immediate compile-time error (no broken `str w12, [sp, 0]`)
+            src_bad_u32 = """\
+fn bad_u32(x: u64) -> u64
+    requires x <= 10
+    returns x
+    trace depends on x
+{
+    buf tmp[16] align 16
+    tmp.u32(0) := x
+    return x
+}
+"""
+            p_bad = ode_unified.parse_unified(src_bad_u32, src="bad.ode")
+            for arch in ("x86_64", "arm64"):
+                err_s = p_bad["fns"][0]["impls"][arch].get("hl_err", "")
+                self.assertIn("32-bit scalar store", err_s)
+                self.assertIn(".u32x4(off)", err_s)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+        # 3. `--effort fast` early stop reports `--effort deep` / `TRY_HARDER`, and `--try-harder` rescues the same source!
+        src_rescue = """\
+def in_r(v) { if 10 <= v && v <= 20 then 1 else 0 }
+
+fn rescue_demo(a: u64, b: u64, c: u64) -> u64
+    requires a <= 255
+    requires b <= 255
+    requires c <= 255
+    returns in_r(a) + in_r(b) + in_r(c)
+    trace depends on a, b, c
+{
+    let r0: u64 := select((a -% 10) <= 10, 1, 0)
+    let r1: u64 := select((b -% 10) <= 10, 1, 0)
+    let r2: u64 := select((c -% 10) <= 10, 1, 0)
+    return r0 + r1 + r2
+}
+"""
+        import subprocess
+        ode_cli = os.path.join(os.path.dirname(__file__), "ode_tool.py")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "rescue.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src_rescue)
+            r_fast = subprocess.run(
+                [sys.executable, ode_cli, "pack", p, "--fn", "rescue_demo", "--target", "x86_64",
+                 "--effort", "fast", "--out", os.path.join(d, "f.o"), "--proof", os.path.join(d, "f.p")],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(r_fast.returncode, 0, f"expected fast effort to stop at spec limit 8: {r_fast.stdout}")
+            self.assertIn("--effort deep", r_fast.stdout + r_fast.stderr)
+            self.assertIn("TRY_HARDER", r_fast.stdout + r_fast.stderr)
+            r_deep = subprocess.run(
+                [sys.executable, ode_cli, "pack", p, "--fn", "rescue_demo", "--target", "x86_64",
+                 "--try-harder", "--out", os.path.join(d, "d.o"), "--proof", os.path.join(d, "d.p")],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(r_deep.returncode, 0, f"--try-harder should prove same source: {r_deep.stdout}\n{r_deep.stderr}")
+            self.assertIn("shown", r_deep.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -383,8 +383,14 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                             f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
                         )
             # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
-            # (never on the explicit `--c-abi` FFI entry function).
-            if fn_rec["name"] != c_abi_fn and fn_rec["name"] in called_by_other and im["calling_text"] is None and res.get("auto_calling"):
+            # (never on the explicit `--c-abi` FFI entry function; controllable via `ODE_HL_AUTO_KEEPS`).
+            if (
+                os.environ.get("ODE_HL_AUTO_KEEPS", "1") != "0"
+                and fn_rec["name"] != c_abi_fn
+                and fn_rec["name"] in called_by_other
+                and im["calling_text"] is None
+                and res.get("auto_calling")
+            ):
                 im["calling_text"] = res["auto_calling"]
                 callee_clobbers[arch][fn_rec["name"]] = res["clobbered"]
                 callee_clobbers[arch][fn_rec["symbol"]] = res["clobbered"]

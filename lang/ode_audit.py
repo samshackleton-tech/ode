@@ -1152,26 +1152,32 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
         except Exception:
             contract = None
     extra_note = ""
-    if "search budget exceeded" in msg:
+    if "fast-fail:" in msg:
+        mq = re.search(r"\((?:search budget exceeded|fast-fail:)[^)]*\)", msg)
+        q_str = mq.group(0) if mq else "(fast-fail early stop)"
+        q_str = re.sub(r";\s*set ODE_PROVE_MAX_ASKS/ODE_PROVE_MAX_LIVES to raise", "", q_str)
+        n_splits = _count_cond_splits(info)
+        split_msg = f" ({n_splits} branch/select splits in `{orig_sym}`)" if n_splits >= 6 else ""
+        extra_note = (
+            f"NOTE: fast-fail prover stopped early {q_str}{split_msg} instead of searching blindly.\n"
+            f"What did you mean here, and how should I prove this step?\n"
+            f"  1. If the code or loop invariant needs help: add the missing bound/equation to `maintains`, "
+            f"insert a `join maintains ...` merge point, or factor repeated checks into a small helper `fn`.\n"
+            f"  2. If you believe this exact source code is already correct, tell the prover to try harder "
+            f"without changing your code: run `ode pack --effort deep` (or `--try-harder`; in interactive sessions reply `TRY_HARDER`)."
+        )
+    elif "search budget exceeded" in msg:
         mq = re.search(r"\(search budget exceeded[^)]*\)", msg)
         q_str = mq.group(0) if mq else "(search budget exceeded)"
         q_str = re.sub(r";\s*set ODE_PROVE_MAX_ASKS/ODE_PROVE_MAX_LIVES to raise", "", q_str)
         n_splits = _count_cond_splits(info)
         split_msg = f" ({n_splits} branch/select splits in `{orig_sym}`)" if n_splits >= 6 else ""
-        if "fast-fail:" in msg:
-            extra_note = (
-                f"NOTE: fast-fail prover stopped early {q_str}{split_msg} instead of searching blindly. "
-                f"What did you mean here, and how should I prove this step? "
-                f"Add the missing bound or equation to `maintains`, insert a `join maintains ...` merge point, "
-                f"or factor repeated checks into a small helper `fn` with its own `returns`/`ensures` contract."
-            )
-        else:
-            extra_note = (
-                f"NOTE: prover {q_str}{split_msg}. "
-                f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
-                f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
-                f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
-            )
+        extra_note = (
+            f"NOTE: prover {q_str}{split_msg}. "
+            f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
+            f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
+            f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
+        )
     raise PackProofError(
         msg, fn_sym=orig_sym, pc=pc, reason=reason, info=info,
         contract=contract, spec_text=full_spec_text, target=target, extra_note=extra_note,

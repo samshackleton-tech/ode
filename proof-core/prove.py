@@ -558,6 +558,7 @@ class Prover:
         self.tried_clears = set()
         self.saw_undecided_below = False
         self.split_tries = 0
+        self.fast_limit_reasons = set()
 
     def close(self):
         if self.session is not None: self.session.close(); self.session = None
@@ -720,7 +721,8 @@ class Prover:
                             raise NoPlace(self.last)
                     if self.max_lives is not None and lives >= self.max_lives:
                         self.fail(proof, said)
-                        raise GaveUp(f"{lives} live branch splits")
+                        prefix = "fast-fail: " if self.fast_fail else ""
+                        raise GaveUp(f"{prefix}{lives} live branch splits")
                     proof = proof + ["t live"]
                 else:
                     proof = proof + ["t dead"] + proof_text(p, facts, raw_facts)
@@ -772,6 +774,8 @@ class Prover:
                                     return done
                                 self.furthest_root = saved_furthest
                                 break
+                    elif allow_split and self.fast_fail:
+                        self.fast_limit_reasons.add(f"case-split limit (depth {self.split_depth_cap}, tries {self.split_tries_cap})")
                     self.fail(proof, said)
                     return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
@@ -987,6 +991,10 @@ class Prover:
                 any_fuel_hit = False
                 prev_max = self.spec_max_open
                 open_order = _spec_open_order(spec_meta, count, include_interior=(not self.fast_fail))
+                if self.fast_fail and spec_meta and any(
+                    r[3] == 0 and r[4] >= 2 for r in spec_meta
+                ):
+                    self.fast_limit_reasons.add("shallow spec frontier (interior defs skipped)")
                 if not open_order:
                     open_order = list(reversed(range(count)))
                 budgets = self.spec_budgets if opened == 0 else (prev_max,)
@@ -1012,6 +1020,8 @@ class Prover:
                 self.spec_max_open = prev_max
                 if any_fuel_hit:
                     self.spec_fuel_hit = True
+                    if self.fast_fail:
+                        self.fast_limit_reasons.add(f"spec unfolding limit ({budgets[-1]})")
                     if opened == 0:
                         top_b = budgets[-1]
                         self.last = f"need spec (reached {top_b} specification definition opens without closing goal)" + (f"\n{meta_tail}" if meta_tail else "")
@@ -1108,7 +1118,13 @@ def prove(spec_text, targets, statement_out, out):
             else:
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
-        fast_fail = (os.environ.get("ODE_PROVE_FAST_FAIL", "0") == "1")
+        _effort = os.environ.get("ODE_PROVE_EFFORT", "").strip().lower()
+        if _effort == "fast":
+            fast_fail = True
+        elif _effort == "deep":
+            fast_fail = False
+        else:
+            fast_fail = (os.environ.get("ODE_PROVE_FAST_FAIL", "0") == "1")
         max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "6000"))
         max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "80" if fast_fail else "250"))
         max_churn = int(os.environ.get("ODE_PROVE_MAX_CHURN", "120" if fast_fail else "0"))
@@ -1172,7 +1188,15 @@ def prove(spec_text, targets, statement_out, out):
                 # Preserve partial proof at the deepest failure so callers can run `locate()` on the exact point.
                 fin_last = p.best_last or p.last
                 fin_proof = p.best_last_proof if p.best_last is not None else p.last_proof
+                tot_runs = runs + p.runs
                 with open(out, "w") as f: f.write("\n".join(p.lines + fin_proof) + "\n")
+                if p.fast_fail and not p.hard_refusal and p.fast_limit_reasons:
+                    why_s = ", ".join(sorted(p.fast_limit_reasons))
+                    raise SystemExit(
+                        f"prove: no proof of {symbol} found (fast-fail: stopped early at {why_s} after "
+                        f"{tot_runs} verifier queries; re-run with --effort deep to try harder on the same source code). "
+                        f"The verifier's last word:\n{fin_last}"
+                    )
                 raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{fin_last}")
             if len(proof) < 200:
                 k = len(proof) - 1

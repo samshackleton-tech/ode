@@ -466,6 +466,77 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             want = buf_data[(5 & 3) * 3] | ((buf_data[(3 & 7) + (4 & 7)] + buf_data[(5 & 7) + (4 & 7)]) & M64)
             self.assertEqual(got, want)
 
+    def test_05_stack_var_dead_params_and_pass_through_calls_both_arches(self):
+        """30 randomized multi-helper programs mixing `stack var`, dead param reclamation,
+        pass-through call arguments, loops, and `ODE_HL_NO_SPILL=1` match AST on x86_64 & arm64."""
+        rng = random.Random(2026112705)
+        old_env = {k: os.environ.get(k) for k in ("ODE_HL_NO_SPILL", "ODE_HL_AUTO_KEEPS", "ODE_HL_RECLAIM_PARAMS")}
+        try:
+            os.environ["ODE_HL_NO_SPILL"] = "1"
+            os.environ["ODE_HL_AUTO_KEEPS"] = "1"
+            os.environ["ODE_HL_RECLAIM_PARAMS"] = "1"
+            for case_i in range(30):
+                k1 = rng.randint(1, 31)
+                k2 = rng.randint(1, 31)
+                k3 = rng.randint(1, 31)
+                n_loops = rng.randint(1, 5)
+                src = (
+                    "fn leaf_rd(buf: 16 bytes, n: u64, idx: u64) -> u64\n"
+                    "    returns 0\n"
+                    "    trace depends on buf, n, idx\n"
+                    "{\n"
+                    f"    let b: u64 := buf[idx & 15]\n"
+                    f"    return (b +% n +% {k1}) & 65535\n"
+                    "}\n\n"
+                    "fn top(buf: 16 bytes, n: u64, p2: u64, p3: u64, p4: u64, p5: u64) -> u64\n"
+                    "    returns 0\n"
+                    "    trace depends on buf, n, p2, p3, p4, p5\n"
+                    "{\n"
+                    f"    stack var acc: u64 := (p2 +% p3 +% p4 +% p5 +% {k2}) & 65535\n"
+                    f"    let dead_sum: u64 := (p2 * 3 +% p3 * 5) & 1023\n"
+                    f"    let s0: u64 := leaf_rd(buf, n, dead_sum)\n"
+                    f"    var i: u64 := 0\n"
+                    f"    var cur: u64 := (s0 +% {k3}) & 65535\n"
+                    f"    while i < {n_loops}\n"
+                    f"        maintains 0 <= i, i <= {n_loops}\n"
+                    f"        decreases {n_loops} - i\n"
+                    "    {\n"
+                    "        let v: u64 := leaf_rd(buf, n, i +% cur)\n"
+                    "        acc := (acc +% v +% cur) & 65535\n"
+                    "        cur := (cur +% v +% 1) & 65535\n"
+                    "        i += 1\n"
+                    "    }\n"
+                    "    return (acc +% cur +% buf[0] +% n) & 65535\n"
+                    "}\n"
+                )
+                for tgt in ("x86_64", "arm64"):
+                    progs = compile_progs(src, "top", tgt, helper_names=("leaf_rd",))
+                    for trial in range(3):
+                        buf = [(trial * 37 + j * 13 + case_i) & 255 for j in range(16)]
+                        n = rng.randint(1, 200)
+                        p2, p3, p4, p5 = [rng.randint(0, 500) for _ in range(4)]
+                        acc = (p2 + p3 + p4 + p5 + k2) & 65535
+                        dead_sum = (p2 * 3 + p3 * 5) & 1023
+                        s0 = (buf[dead_sum & 15] + n + k1) & 65535
+                        cur = (s0 + k3) & 65535
+                        for i in range(n_loops):
+                            v = (buf[(i + cur) & 15] + n + k1) & 65535
+                            acc = (acc + v + cur) & 65535
+                            cur = (cur + v + 1) & 65535
+                        want = (acc + cur + buf[0] + n) & 65535
+                        got, _ = exec_progs(
+                            progs, src, "top", tgt,
+                            [("buf", buf), ("n", n), ("p2", p2), ("p3", p3), ("p4", p4), ("p5", p5)],
+                            bufs={"buf"},
+                        )
+                        self.assertEqual(got, want, f"case {case_i} ({tgt}) mismatch: got {got} want {want}")
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
 
 if __name__ == "__main__":
     unittest.main()
