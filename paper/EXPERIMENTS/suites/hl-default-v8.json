@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v8",
+  "description": "Iteration 8 cold-room benchmark (4 models excluding gemini-4-neon x 8 tasks x 2 targets = 64 cells) after fixing all 3 forensic bugs from hl-default-v7 ebpf/der_valid analysis (ode_hl.py reg_owner & active_facts merge across IfStmt/AssignStmt/WhileStmt/ForStmt stopping false fact emission at join maintains, prove.py t wrap unwind after non-plain Goal-1 r..q blocks on wrapping +%/ -%, and prove.py best_last downstream-failure priority over dead-end need spec backtracks; $0 replay flipped der_valid kimi x86_64 -> 24/64 strict).",
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

@@ -571,6 +571,7 @@ class Prover:
         self.last_proof = []
         self.best_last = None
         self.best_last_proof = []
+        self.best_last_in_spec = True
         self.furthest_root = 0
         self.spec_fuel_hit = False
         self.spec_fuel_proof = []
@@ -630,13 +631,17 @@ class Prover:
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
 
-    def fail(self, proof, said, force=False):
-        """Record a branch failure, preserving the deepest partial proof reached across backtracking."""
+    def fail(self, proof, said, force=False, in_spec=False):
+        """Record a branch failure, preserving the furthest partial proof reached across backtracking.
+        Downstream failures outside a speculative `need spec` retry (`in_spec=False`) always take
+        priority over dead-end failures inside an open `need spec` backtrack (`in_spec=True`)."""
         self.last = said
         self.last_proof = proof
-        if force or self.best_last is None or len(proof) >= len(self.best_last_proof):
+        better = (not in_spec, len(proof)) >= (not self.best_last_in_spec, len(self.best_last_proof))
+        if force or self.best_last is None or better:
             self.best_last = said
             self.best_last_proof = proof
+            self.best_last_in_spec = in_spec
         self.note(proof, said)
 
     def clear_candidates(self, fail_pc, said):
@@ -665,8 +670,10 @@ class Prover:
                     cands.append((pc_i, r, expr))
         return cands
 
-    def solve(self, proof, allow_split=False, split_depth=0):
+    def solve(self, proof, allow_split=False, split_depth=0, in_spec=False):
         """The proof extended until the verifier says shown; None if this way does not get there."""
+        last_entail_pc = None
+        last_entail_pos = None
         while True:
             said = self.ask(proof)
             if self.finished(said): return proof
@@ -686,6 +693,7 @@ class Prover:
                     if fail_pc is not None:
                         before, before_proof = self.last, self.last_proof
                         before_best, before_best_proof, before_root = self.best_last, self.best_last_proof, self.furthest_root
+                        before_best_in_spec = self.best_last_in_spec
                         for clear_pc, reg, expr in self.clear_candidates(fail_pc, said):
                             key = (len(proof), clear_pc, reg, expr)
                             if key in self.tried_clears: continue
@@ -694,6 +702,7 @@ class Prover:
                             if done is not None: return done
                         self.last, self.last_proof = (before, before_proof) if before else (said, proof)
                         self.best_last, self.best_last_proof = (before_best, before_best_proof) if before_best else (said, proof)
+                        self.best_last_in_spec = before_best_in_spec
                         self.furthest_root = before_root
                         return None
                 is_spec_local = any(said.startswith(p) for p in (
@@ -706,37 +715,57 @@ class Prover:
                 ))
                 if not is_spec_local:
                     self.hard_refusal = True
-                    self.fail(proof, said, force=True)
+                    self.fail(proof, said, force=True, in_spec=False)
                 else:
                     self.last = said; self.last_proof = proof; self.note(proof, said)
                 return None
             lines = said.split("\n")
             what = lines[0][5:]
+            if what in ("branch", "branch_neq", "shift", "know"):
+                in_spec = False
+            if what != "entail":
+                last_entail_pc = None
+                last_entail_pos = None
             raw_facts = [l[2:].strip() for l in lines if l.startswith("f ")]
             raw_goals = [l[2:].strip() for l in lines if l.startswith("g ")]
             facts = [lin([int(x) for x in s.split()]) for s in raw_facts]
             goals = [lin([int(x) for x in s.split()]) for s in raw_goals]
             if what in ("entail", "same"):                  # (same: are two uses of a definition of the same things)
+                fail_pc = None
+                if what == "entail" and self.wrap_pcs:
+                    at_lines = [l for l in lines if l.startswith("at ")]
+                    if at_lines:
+                        fail_pc = int(at_lines[0].split()[1])
                 p = refutation(facts + [negation(goals[0])], quick=what == "same")
                 if p is None:
                     if what == "entail" and self.wrap_pcs:
-                        at_lines = [l for l in lines if l.startswith("at ")]
-                        if at_lines:
-                            fail_pc = int(at_lines[0].split()[1])
-                            if fail_pc in self.wrap_pcs:
-                                nxt_said = self.ask(proof + ["t wrap"])
-                                if nxt_said != said and not nxt_said.startswith("refused:"):
-                                    proof = proof + ["t wrap"]
-                                    continue
-                        else:
+                        if fail_pc is None:
+                            with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
+                            fail_pc, _, _ = locate(self.statement, self.out)
+                        if fail_pc is not None and fail_pc in self.wrap_pcs:
                             nxt_said = self.ask(proof + ["t wrap"])
                             if nxt_said != said and not nxt_said.startswith("refused:"):
-                                with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
-                                fail_pc, _, _ = locate(self.statement, self.out)
-                                if fail_pc is not None and fail_pc in self.wrap_pcs:
-                                    proof = proof + ["t wrap"]
+                                proof = proof + ["t wrap"]
+                                last_entail_pc = None
+                                last_entail_pos = None
+                                continue
+                            # If Goal 1 (`r >= 0`) of `inRange` was non-plain and appended an `r..q`
+                            # block at this same `fail_pc`, unwind it so `takeWrapIf` sees `t wrap`!
+                            if last_entail_pc == fail_pc and last_entail_pos is not None:
+                                base = proof[:last_entail_pos]
+                                nxt_said2 = self.ask(base + ["t wrap"])
+                                if nxt_said2 != said and not nxt_said2.startswith("refused:"):
+                                    proof = base + ["t wrap"]
+                                    last_entail_pc = None
+                                    last_entail_pos = None
                                     continue
-                    self.fail(proof, said); return None
+                    self.fail(proof, said, in_spec=in_spec); return None
+                if what == "entail" and fail_pc is not None and fail_pc in self.wrap_pcs:
+                    last_entail_pc = fail_pc
+                    last_entail_pos = len(proof)
+                else:
+                    last_entail_pc = None
+                    last_entail_pos = None
                 g_nums = [int(x) for x in raw_goals[0].split()]
                 neg_raw = " ".join([str(-1 - g_nums[0])] + [str(-x) for x in g_nums[1:]])
                 proof = proof + proof_text(p, [negation(goals[0])] + facts, [neg_raw] + raw_facts)
@@ -801,14 +830,14 @@ class Prover:
                             ans = self.ask(cand)
                             if ans != said and (ans == "shown" or ans.startswith("need ")):
                                 self.split_tries += 1
-                                done = self.solve(cand, allow_split=allow_split, split_depth=split_depth + 1)
+                                done = self.solve(cand, allow_split=allow_split, split_depth=split_depth + 1, in_spec=in_spec)
                                 if done is not None:
                                     return done
                                 self.furthest_root = saved_furthest
                                 break
                     elif allow_split and self.fast_fail:
                         self.fast_limit_reasons.add(f"case-split limit (depth {self.split_depth_cap}, tries {self.split_tries_cap})")
-                    self.fail(proof, said)
+                    self.fail(proof, said, in_spec=in_spec)
                     return None
             elif what == "know":                               # rows of which one may be worth giving here: the first that has a proof
                 rows, given, found = [l[2:] for l in lines if l.startswith("g ")], [l for l in lines if l.startswith("f ")], None
@@ -844,13 +873,14 @@ class Prover:
                 if refutation(facts + [negation(d)]) and refutation(facts + [negation(-d)]): proof = proof + ["t eq"]
                 elif refutation(facts + [d]): proof = proof + ["t lt"]
                 elif refutation(facts + [-d]): proof = proof + ["t gt"]
-                else: self.fail(proof, said); return None
+                else: self.fail(proof, said, in_spec=in_spec); return None
             elif what == "spec":
                 count = int([l for l in lines if l.startswith("c ")][0].split()[1])
                 opened = int([l for l in lines if l.startswith("o ")][0].split()[1])
                 held = int(([l for l in lines if l.startswith("h ")] or ["h 0"])[0].split()[1])
                 start_len = len(proof)
                 if opened == 0:
+                    in_spec = False
                     if start_len > self.furthest_root:
                         self.furthest_root = start_len
                     self.spec_fuel_hit = False
@@ -927,7 +957,7 @@ class Prover:
                         break
                     if ans_c.startswith("refused:"):
                         continue
-                    done = self.solve(trial, allow_split=allow_split)
+                    done = self.solve(trial, allow_split=allow_split, in_spec=True)
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
@@ -997,7 +1027,12 @@ class Prover:
                             ng = [lin([int(x) for x in s.split()]) for s in ng_raw]
                             if nw in ("entail", "same"):
                                 rp = refutation(nf + [negation(ng[0])], quick=nw == "same")
-                                if rp is None: ok_step = False; break
+                                if rp is None:
+                                    # Hand off failed `entail` to `solve()` (which checks `wrap_pcs` and records
+                                    # downstream failures accurately instead of silently discarding them!).
+                                    if nw == "entail":
+                                        break
+                                    ok_step = False; break
                                 gn = [int(x) for x in ng_raw[0].split()]
                                 nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
                                 p_try = p_try + proof_text(rp, [negation(ng[0])] + nf, [nr] + nf_raw)
@@ -1025,7 +1060,8 @@ class Prover:
                                 continue
                         # Spec goal closed (or moved past `spec` to next instruction)!
                         self.spec_fuel_hit = False
-                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth)
+                        closed_spec = not nxt.startswith(("need spec\n", "need held\n", "need samebyte\n"))
+                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth, in_spec=(not closed_spec))
                         if done is not None: return done
                         if self.spec_fuel_hit:
                             any_cands_fuel = True
@@ -1034,7 +1070,7 @@ class Prover:
                             return None
                     for p_try in deferred:
                         self.spec_fuel_hit = False
-                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth) # brand-new call or next path (`no == 0`)
+                        done = self.solve(p_try, allow_split=allow_split, split_depth=split_depth, in_spec=True) # brand-new call or next path (`no == 0`)
                         if done is not None: return done
                         if self.spec_fuel_hit:
                             any_cands_fuel = True
@@ -1063,7 +1099,7 @@ class Prover:
                             self.spec_max_open = prev_max
                             return None
                         self.spec_fuel_hit = False
-                        done = self.solve(proof + [f"t open {k}"], allow_split=allow_split, split_depth=split_depth)
+                        done = self.solve(proof + [f"t open {k}"], allow_split=allow_split, split_depth=split_depth, in_spec=True)
                         if done is not None:
                             self.spec_max_open = prev_max
                             return done
@@ -1111,14 +1147,14 @@ class Prover:
                         nr = " ".join([str(-1 - gn[0])] + [str(-x) for x in gn[1:]])
                         trial = trial + proof_text(rp, [negation(hg[0])] + hf, [nr] + hf_raw)
                     matched_any = True
-                    done = self.solve(trial, allow_split=allow_split)
+                    done = self.solve(trial, allow_split=allow_split, in_spec=in_spec)
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len:
                         return None
                 if not matched_any:
                     self.last, self.last_proof = before, before_proof
                 if self.hard_refusal: return None
-                done = self.solve(proof + ["t open"], allow_split=allow_split) # no value held fits: the use is opened where it is met
+                done = self.solve(proof + ["t open"], allow_split=allow_split, in_spec=in_spec) # no value held fits: the use is opened where it is met
                 if done is not None: return done
                 if self.hard_refusal: return None
                 if not self.last or self.last.startswith("refused: the value held is of another use"):

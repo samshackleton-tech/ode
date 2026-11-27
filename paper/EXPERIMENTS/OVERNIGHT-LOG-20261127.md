@@ -204,9 +204,37 @@ Full diagnosis of all 42 failed cells (`25 x86_64`, `17 arm64`) showed that **18
 
 ---
 
-## Iteration 7 — Pre-Registered 4-Model Suite (`hl-default-v7`)
+## Iteration 7 — Pre-Registered 4-Model Suite (`hl-default-v7`, commit `033aa7c`)
 
 - **Suite definition:** [`suites/hl-default-v7.json`](suites/hl-default-v7.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+- **Pre-registration:** [`prereg-hl-default-v7.md`](prereg-hl-default-v7.md).
+- **Results:** [`results-hl-default-v7.md`](results-hl-default-v7.md), [`results-hl-default-v7.json`](results-hl-default-v7.json).
+- **Headline:** **23 / 64 (35.9%)** strict passes — **new all-time 4-model record** (**23 / 23** real-silicon native pass, **14 / 14** scalar `verify2.py` pass, **0** Python tracebacks, **9.0 min** wall clock (`541.2 s`), **$13.71** API spend, tool latency **p50 0.57 s / p90 3.15 s / max 14.75 s**).
+  - **`x86_64` rose to `9 / 32 (28.1%)`** (highest since removing silent stack spilling: `v3: 5 -> v4: 7 -> v5: 8 -> v6: 7 -> v7: 9`), with `arm64` at `14 / 32 (43.8%)`.
+  - **By model:** `kimi-k3.1-pro` **7/16** (`x86=4/8`, `arm=3/8`, `$6.27`), `claude-haiku-5.5` **6/16** (`x86=2/8`, `arm=4/8`, `$0.54`), `glm-5.3-prime` **6/16** (**new high!** `x86=2/8`, `arm=4/8`, `$4.00`), `muse-spark-open` **4/16** (`x86=1/8`, `arm=3/8`, `$2.90`).
+  - **By task (`x86_64` / `arm64`):** **`ipv4_valid` 8/8** (4/4, 4/4 — 100% sweep), `chacha20_4way` 5/8 (1/4, `arm64` 4/4), **`ct_base64_decode` 4/8** (**new record!** 3/4, 1/4 — up from `0/8` in `v6`), `der_valid` 2/8 (0/2), `sha256_4way` 2/8 (1/1), `blake3_compress_4way` 1/8 (0/1), `blake3_compress1` 1/8 (0/1), `ebpf` 0/8 (0/0).
+  - **Impact of `v6` fixes across all 353 rounds:** `MAP_JIT` `fread`, `disjointOr u = 0`, `imm64` signed `add`, `x86_64` scratch exhaustion, `zmm` invalid asm emission, `statement.py` crashes, and prose leaks into `.ode` all dropped to **0 rounds**.
+
+### Deep `ebpf` / `der_valid` Forensic Fixes From `hl-default-v7` (All TDD-Verified in `lang/test_hl_matrix.py::test_15`)
+
+1. **Stale `reg_owner` & `active_facts` across `IfStmt` / `AssignStmt` / `WhileStmt` / `ForStmt` (`lang/ode_hl.py`):**
+   - Root cause of `der_valid | kimi-k3.1-pro | x86_64` failing even at 6,000 queries: `b1 = buf[p + 1]` and `b2 = buf[p + 2]` shared `r9` on `x86_64`, and `IfStmt` restored `saved_owner` for an exiting `else { return 0 }` branch and kept it after the `if/else` chain, resurrecting `reg_owner["r9"] = "b1"` and emitting a false `fact r9 == buf[(rbp + 1)]` at `join maintains`.
+   - Fixed `IfStmt` to merge `reg_owner` and `active_facts` strictly across live fall-through paths (ignoring exiting branches, intersecting live ones), pruned `active_facts` on `AssignStmt`, and intersected `reg_owner` / pruned written variables across `WhileStmt`/`ForStmt`.
+   - Immediately flipped `der_valid | kimi-k3.1-pro | x86_64` (7 functions, 800 instructions, `2685 B`, exact contract ID) to **`shown`** in `4.25 s` at `$0`!
+2. **Wrapping `+%` / `-%` (`t wrap`) after a non-plain Goal-1 `r..q` derivation (`proof-core/prove.py`):**
+   - Root cause of `ebpf | glm-5.3-prime | arm64` failing at line 123 (`v := (lhs +% rhs) & 4294967295`) after already proving `1,235` proof lines: when Goal 1 (`r >= 0`) of `inRange` was non-plain (e.g. a 4-byte `imm` sum), `prove.py` appended an `r..q` block before Goal 2 (`r <= 2^64 - 1`) failed, then tried `proof + ["t wrap"]` *after* the `r..q` block where `Core.lean`'s `takeWrapIf` had already run.
+   - Tracked `(last_entail_pc, last_entail_pos)` in `Prover.solve` so Goal 2 failure on a `wrap_pcs` PC unwinds the Goal-1 block and retries `base + ["t wrap"]`. Zero Lean/verifier changes.
+3. **Downstream failure priority over dead-end `need spec` backtracks (`proof-core/prove.py`):**
+   - Root cause of `der_valid | glm-5.3-prime | x86_64` burning 4 rounds on a phantom line-64 `buf[pos + 1] >= 128` message when line 64 had already closed and line 65 (`p + hlen <= 2^64 - 1`) was the real failure: `for _ in range(24):` swallowed failed `entail` inside `opened >= 1` and `best_last` let longer dead-end `need spec` retries overwrite downstream failures.
+   - Handed failed `entail` back to `Prover.solve` and ranked `best_last` by `(not in_spec, len(proof))`, propagating `in_spec` through `need held`/`t carry`/`t split`. `der_valid | glm-5.3-prime | x86_64` now pinpoints line 65 (`p + hlen <= 2^64 - 1`) directly.
+4. **Full test suite & zero-cost replay:** `./run-tests.sh` (**636 passed, 17 skipped, 0 failed**, `SoundTop` 52 jobs built cleanly); zero-cost replay of `62` saved `hl-default-v7` files kept **23 / 23** passes (**0 regressions**) + flipped `der_valid | kimi-k3.1-pro | x86_64` to **`shown`** (`24 / 64` strict at `$0`).
+
+---
+
+## Iteration 8 — Pre-Registered 4-Model Suite (`hl-default-v8`)
+
+- **Suite definition:** [`suites/hl-default-v8.json`](suites/hl-default-v8.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+
 
 
 

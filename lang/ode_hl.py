@@ -3793,11 +3793,9 @@ class HLLower:
 
     # -- Statement Lowering --
     def lower_stmts(self, stmts):
-        saved_facts_len = len(self.active_facts)
         for st in stmts:
             self._lower_stmt(st)
             assert not self._live_temps, f"scratch-register leak after statement on line {getattr(st, 'line', 0)}: {self._live_temps}"
-        del self.active_facts[saved_facts_len:]
 
     def _lower_stmt(self, st):
         if isinstance(st, BufStmt):
@@ -3847,10 +3845,13 @@ class HLLower:
             expr = st.expr if st.op == ":=" else BinOp(st.op[:-1], Var(st.target, st.line), st.expr, st.line)
             if kind == "reg":
                 self._eval_scalar(expr, loc)
+                self.reg_owner[loc] = st.target
             else:
                 with self._temp_reg(st.line) as tr:
                     self._eval_scalar(expr, tr)
                     self._store_var(st.line, st.target, tr)
+            # Kill any active outer fact mentioning the mutated variable so later `join`/`while` places stay sound.
+            self.active_facts = [(fs, fv) for fs, fv in self.active_facts if st.target not in fv]
             return
 
         if isinstance(st, StoreStmt):
@@ -3905,35 +3906,54 @@ class HLLower:
             else_facts = [f for cc in _extract_conjuncts(_negate_cond(st.cond)) if (f := _cmp_to_fact(cc, bparams)) is not None]
             if not st.else_body:
                 self._emit_branch(st.cond, end_lbl, jump_if_true=False)
-                saved = len(self.active_facts)
+                saved_facts = list(self.active_facts)
                 saved_owner = dict(self.reg_owner)
                 self.active_facts.extend(then_facts)
                 self.lower_stmts(st.then_body)
-                del self.active_facts[saved:]
-                if _stmts_always_exit(st.then_body):
-                    # Dead `then` branch never falls through: restore register owners from before `if`!
+                then_exits = _stmts_always_exit(st.then_body)
+                if then_exits:
+                    # Dead `then` branch never falls through: restore pre-`if` state and keep negated guard!
                     self.reg_owner = saved_owner
+                    self.active_facts = saved_facts + else_facts
+                else:
+                    w_then = _written_vars(st.then_body)
+                    self.reg_owner = {r: v for r, v in saved_owner.items() if self.reg_owner.get(r) == v}
+                    self.active_facts = [(fs, fv) for fs, fv in saved_facts if not (fv & w_then)]
                 self.emit(st.line, f"{end_lbl}:")
-                # Crucial for W1: if `then` unconditionally exits (`if ihl < 20 { return 0 }`),
-                # the negated condition (`ihl >= 20`) holds for the rest of the enclosing block!
-                if _stmts_always_exit(st.then_body):
-                    self.active_facts.extend(else_facts)
             else:
                 self._emit_branch(st.cond, else_lbl, jump_if_true=False)
-                saved = len(self.active_facts)
+                saved_facts = list(self.active_facts)
                 saved_owner = dict(self.reg_owner)
                 self.active_facts.extend(then_facts)
                 self.lower_stmts(st.then_body)
-                del self.active_facts[saved:]
-                if not _stmts_always_exit(st.then_body):
+                then_owner = dict(self.reg_owner)
+                then_exits = _stmts_always_exit(st.then_body)
+                if not then_exits:
                     self.emit(st.line, f"{'b' if self.arch == 'arm64' else 'jmp'} {end_lbl}")
                 self.emit(st.line, f"{else_lbl}:")
                 self.reg_owner = dict(saved_owner)
-                saved2 = len(self.active_facts)
+                self.active_facts = list(saved_facts)
                 self.active_facts.extend(else_facts)
                 self.lower_stmts(st.else_body)
-                del self.active_facts[saved2:]
-                if not (_stmts_always_exit(st.then_body) and _stmts_always_exit(st.else_body)):
+                else_owner = dict(self.reg_owner)
+                else_exits = _stmts_always_exit(st.else_body)
+                if then_exits and else_exits:
+                    self.reg_owner = {}
+                    self.active_facts = []
+                elif then_exits:
+                    w_else = _written_vars(st.else_body)
+                    self.reg_owner = else_owner
+                    self.active_facts = [(fs, fv) for fs, fv in (saved_facts + else_facts) if not (fv & w_else)]
+                    self.emit(st.line, f"{end_lbl}:")
+                elif else_exits:
+                    w_then = _written_vars(st.then_body)
+                    self.reg_owner = then_owner
+                    self.active_facts = [(fs, fv) for fs, fv in (saved_facts + then_facts) if not (fv & w_then)]
+                    self.emit(st.line, f"{end_lbl}:")
+                else:
+                    w_both = _written_vars(st.then_body) | _written_vars(st.else_body)
+                    self.reg_owner = {r: v for r, v in then_owner.items() if else_owner.get(r) == v}
+                    self.active_facts = [(fs, fv) for fs, fv in saved_facts if not (fv & w_both)]
                     self.emit(st.line, f"{end_lbl}:")
             return
 
@@ -3945,12 +3965,14 @@ class HLLower:
             self._emit_loop_place(st.line, wvars, st.maintains, st.writes, st.decreases, outer_vars=self.defined_vars)
             self._emit_branch(st.cond, end_lbl, jump_if_true=False)
             self.loop_stack.append((head_lbl, end_lbl, head_lbl))
-            saved = len(self.active_facts)
+            saved_facts = list(self.active_facts)
+            saved_owner = dict(self.reg_owner)
             self.active_facts.extend(
                 f for cc in _extract_conjuncts(st.cond) if (f := _cmp_to_fact(cc)) is not None
             )
             self.lower_stmts(st.body)
-            del self.active_facts[saved:]
+            self.reg_owner = {r: v for r, v in saved_owner.items() if self.reg_owner.get(r) == v}
+            self.active_facts = [(fs, fv) for fs, fv in saved_facts if not (fv & wvars)]
             self.loop_stack.pop()
             self.emit(st.line, f"{'b' if self.arch == 'arm64' else 'jmp'} {head_lbl}")
             self.emit(st.line, f"{end_lbl}:")
@@ -3984,19 +4006,21 @@ class HLLower:
             self.emit(st.line, f"{head_lbl}:")
             self._emit_loop_place(st.line, wvars, st.maintains, st.writes, dec, extra_facts=extra, outer_vars=self.defined_vars)
             self.defined_vars.add(st.var)
+            saved_facts = list(self.active_facts)
+            saved_owner = dict(self.reg_owner)
             if kind == "reg":
                 self.reg_owner[loc] = st.var
             # Loop guard: `i < hi` (or `i + step <= hi`? Standard: `i < hi` — matches `0..hi`)
             self._emit_branch(Cmp("<", Var(st.var, st.line), st.hi, st.line), end_lbl, jump_if_true=False)
             self.loop_stack.append((head_lbl, end_lbl, step_lbl))
-            saved = len(self.active_facts)
             if hi_lin is not None:
                 self.active_facts.append((f"{st.var} + 1 <= {hi_lin[0]}", {st.var} | hi_lin[1]))
             self.lower_stmts(st.body)
-            del self.active_facts[saved:]
             self.loop_stack.pop()
             self.emit(st.line, f"{step_lbl}:")
             self._lower_stmt(AssignStmt(st.var, "+=", Num(st.step, st.line), st.line))
+            self.reg_owner = {r: v for r, v in saved_owner.items() if self.reg_owner.get(r) == v}
+            self.active_facts = [(fs, fv) for fs, fv in saved_facts if not (fv & wvars)]
             self.emit(st.line, f"{'b' if self.arch == 'arm64' else 'jmp'} {head_lbl}")
             self.emit(st.line, f"{end_lbl}:")
             return

@@ -1363,6 +1363,155 @@ fn f_mul(a: number, b: number)
             ode_unified._select_impl(p_mul["fns"][0], "x86_64", "<bad_mul>")
         self.assertIn("select(b == 0, 0, a)", str(cm_mul.exception))
 
+    def test_15_hl_v7_forensic_bug_regressions(self):
+        """TDD regressions for the 3 bugs surfaced by hl-default-v7 ebpf/der_valid forensics."""
+        # Bug #1a (ode_hl.py): `IfStmt` reg_owner merge across exiting `else` branch must not
+        # resurrect a dead variable's register owner into a false `fact reg == buf[...]` at `join maintains`.
+        src_join_reg_reuse = """\
+def hdr_len(buf, p, end) {
+    if p + 2 > end then 0
+    else if buf[p + 1] < 128 then 2
+    else if buf[p + 1] == 129 then (if p + 3 <= end && buf[p + 2] >= 128 then 3 else 0)
+    else 0
+}
+
+def val_len(buf, p, end) {
+    if p + 2 > end then 0
+    else if buf[p + 1] < 128 then buf[p + 1]
+    else if buf[p + 1] == 129 then (if p + 3 <= end && buf[p + 2] >= 128 then buf[p + 2] else 0)
+    else 0
+}
+
+def parse_sum(buf, p, end) {
+    if hdr_len(buf, p, end) == 0 then 0 else hdr_len(buf, p, end) + val_len(buf, p, end)
+}
+
+fn f_join_reuse(buf: n bytes, n: number, p: number, end: number)
+    requires p <= end, end <= n, n <= 65536
+    returns parse_sum(buf, p, end)
+    trace depends on buf, n, p, end
+    stack 64
+{
+    if p + 2 > end { return 0 }
+    let b1 := buf[p + 1]
+    var hlen: u64 := 0
+    var vlen: u64 := 0
+    if b1 < 128 {
+        hlen := 2
+        vlen := b1
+    } else if b1 == 129 {
+        if p + 3 > end { return 0 }
+        let b2 := buf[p + 2]
+        if b2 < 128 { return 0 }
+        hlen := 3
+        vlen := b2
+    } else {
+        return 0
+    }
+    join maintains hlen == hdr_len(buf, p, end), vlen == val_len(buf, p, end), 2 <= hlen, hlen <= 4, vlen <= 255
+    return hlen + vlen
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_join_reg_reuse, "f_join_reuse", arch, check_v2=True)
+
+        # Bug #1b (ode_hl.py): `AssignStmt` must prune stale `active_facts` mentioning the mutated variable.
+        src_assign_prune = """\
+def pick_val(c) {
+    if c == 0 then 1 else 2
+}
+
+fn f_assign_prune(c: number)
+    requires c < 2
+    returns pick_val(c)
+    trace depends on c
+    stack 0
+{
+    var x: u64 := 0
+    if c == 0 {
+        if x != 0 { return 9 }
+        x := 1
+    } else {
+        x := 2
+    }
+    join maintains x == pick_val(c), x <= 2
+    return x
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_assign_prune, "f_assign_prune", arch, check_v2=True)
+
+        # Bug #2 (prove.py): `+%` wrapping add must unwind a non-plain Goal-1 `r..q` block so
+        # `takeWrapIf` consumes `t wrap` even when operands are compound linear sums (like 4-byte `imm`).
+        src_wrap_compound = """\
+def wrap32_add(lhs, buf) {
+    (lhs + (buf[0] + 256 * buf[1] + 65536 * buf[2] + 16777216 * buf[3])) % 4294967296
+}
+
+fn f_wrap_compound(lhs: number, buf: n bytes, n: number)
+    requires n >= 4
+    returns wrap32_add(lhs, buf)
+    trace depends on n
+    stack 0
+{
+    let imm := buf[0] + 256 * buf[1] + 65536 * buf[2] + 16777216 * buf[3]
+    let res := (lhs +% imm) & 4294967295
+    return res
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_wrap_compound, "f_wrap_compound", arch, check_v2=True)
+
+        # Bug #3 (prove.py): Downstream `need entail` after a closed `specGoal` must not be
+        # overwritten by a longer dead-end `need spec` backtrack on an earlier line.
+        src_downstream_diag = """\
+def hlen_spec(buf, p, end) {
+    if p + 2 > end then 0
+    else if buf[p + 1] < 128 then 2
+    else 0
+}
+
+def seq_spec(buf, p, end) {
+    if hlen_spec(buf, p, end) == 0 then 0
+    else if p + hlen_spec(buf, p, end) > end then 0
+    else 1
+}
+
+fn hlen_helper(buf: n bytes, n: number, p: number, end: number)
+    requires p <= end, end <= n, n <= 65536
+    returns hlen_spec(buf, p, end)
+    trace depends on buf, n, p, end
+    stack 0
+{
+    if p + 2 > end { return 0 }
+    if buf[p + 1] < 128 { return 2 }
+    return 0
+}
+
+fn f_downstream(buf: n bytes, n: number, p: number, end: number)
+    requires p <= end, end <= n, n <= 65536
+    returns seq_spec(buf, p, end)
+    trace depends on buf, n, p, end
+    stack 64
+{
+    let h := hlen_helper(buf, n, p, end)
+    if h == 0 { return 0 }
+    if p + h > end { return 0 }
+    return 1
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            sp = os.path.join(td, "down.ode")
+            with open(sp, "w") as f:
+                f.write(src_downstream_diag)
+            with self.assertRaises(ode_audit.PackProofError) as cm_d:
+                ode_audit.pack_verified(
+                    sp, out_obj=os.path.join(td, "o.o"), out_proof=os.path.join(td, "o.proof"),
+                    fn_name="f_downstream", target="x86_64", c_abi=True,
+                )
+            self.assertIn("need entail", cm_d.exception.reason)
+            self.assertNotIn("need below", cm_d.exception.reason)
+
 
 if __name__ == "__main__":
     unittest.main()
