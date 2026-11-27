@@ -420,6 +420,21 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
         return "hint: `wrote` syntax is `wrote out[.. i] = expr` (forward) or `wrote out[i ..] = expr` (countdown), naming the full output value"
+    if "a read of a run given only to write" in reason:
+        return (
+            "hint: for an in-out word buffer (e.g. `h: 32 bytes` used with `words(h)`), load and store "
+            "128-bit lanes with `h.u32x4(0)` / `h.u32x4(16)` rather than scalar `h.u32(...)`"
+        )
+    if "a read of a run of a fixed count that is not eight bytes within it" in reason:
+        return (
+            "hint: fixed-size input buffers support 16-byte vector loads (`buf.u32x4(off)`) and "
+            "8-byte scalar loads (`buf.u64(off)`), not 4-byte scalar `buf.u32(off)`"
+        )
+    if "a read of the frame where nothing was written" in reason:
+        return (
+            "hint: scalar stack loads (`buf.u64(off)`) only read slots written by scalar stores "
+            "(not vector `buf.u32x4(off) := ...` spills); keep vector data in `u32x4` registers / `stack var v: u32x4`"
+        )
     return None
 
 

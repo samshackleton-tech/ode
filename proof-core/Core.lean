@@ -2240,6 +2240,12 @@ def argumentV (deeper : Sym → SCall → V Sym) (s : Sym) : SRes → V (SVal ×
     pure (.lin v, s)
   | .list _ => refuse "a use of a definition inside another, whose value is not held"
 
+/-- If `d` is a zero-argument integer constant definition (`const C = n`, `0 ≤ n`) called with no arguments, return `some n`. -/
+def constDefNum (d : Def) (vs : List SVal) : Option Int :=
+  match d.params, vs, d.body with
+  | [], [], .num n => if 0 ≤ n then some n else none
+  | _, _, _ => none
+
 def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) :=
   if f == "len" then
     match vs with
@@ -2250,7 +2256,10 @@ def scall (ctx : Ctx) (f : String) (vs : List SVal) (s : Sym) : V (SRes × Sym) 
     | _ => refuse "the length of what is no run of bytes"
   else if own.contains f then refuse s!"{f}, of the language's own: not here yet"
   else match findDef ctx.defs f with
-    | some d => if d.params.length == vs.length then pure (.tail ⟨f, vs⟩, s) else refuse s!"{f} takes another number of things"
+    | some d =>
+      match constDefNum d vs with
+      | some n => pure (.val (.lin (Lin.const n)), s)
+      | none => if d.params.length == vs.length then pure (.tail ⟨f, vs⟩, s) else refuse s!"{f} takes another number of things"
     | none => refuse s!"no definition {f}"
 
 /-- An expression of the specification, on symbols. `deeper`: how a use of a definition whose value is

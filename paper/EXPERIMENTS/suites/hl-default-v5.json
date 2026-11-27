@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v5",
+  "description": "Iteration 5 cold-room benchmark (4 models excluding gemini-4-neon x 8 tasks x 2 targets = 64 cells) after fixing all hl-default-v4 forensic defects (Core.lean `scall` + SoundSpec.lean `scall_sound` + verify2.py zero-arg integer `const` def evaluation unlocking `ebpf` error branches, index constant-folding and `let tmp := ...` hint in ode_hl.py, and 3 crisp SIMD/word-buffer refusal hints in ode_tool.py).",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

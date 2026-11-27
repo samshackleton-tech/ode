@@ -2262,7 +2262,7 @@ class HLLower:
                 lines.append(f"  reserved for output/operand: {', '.join(avoid)}")
             lines.append(f"  needed for: {why}")
             lines.append(f"  unused named scalar registers in fn `{self.fn_name}`: {self._free_named_scalar_count}")
-            lines.append(f"  fix: bind one subexpression with `let tmp = ...;` before line {line}.")
+            lines.append(f"  fix: bind one subexpression with `let tmp := ...` before line {line}.")
             raise HLErr("\n".join(lines))
         self._live_temps[r] = why
         try:
@@ -2488,6 +2488,16 @@ class HLLower:
         `add tmp, base, disp` with offset 0 whenever `disp % align_req != 0` or `disp < 0`)."""
         if buf_name not in self.var_loc:
             raise HLErr(f"{self.src}: line {line}: unknown buffer `{buf_name}`")
+        def _fold_const(ex):
+            if isinstance(ex, BinOp):
+                l, r = _fold_const(ex.left), _fold_const(ex.right)
+                if isinstance(l, Num) and isinstance(r, Num):
+                    v = _const_eval_binop(ex.op, l.val, r.val)
+                    if v is not None and 0 <= v < (1 << 64):
+                        return Num(v, ex.line)
+                return BinOp(ex.op, l, r, ex.line)
+            return ex
+        idx_e = _fold_const(idx_e)
         bkind, bval = self.var_loc[buf_name]
         addr_why = f"address of `{buf_name}[{_expr_brief(idx_e)}]`"
         can_reuse = (
@@ -2751,7 +2761,7 @@ class HLLower:
             if ty in ("u32x4", "u32x16"):
                 raise HLErr(
                     f"{self.src}: line {e.line}: vector variable `{e.name}` (type `{ty}`) cannot be used "
-                    f"in a scalar `u64` context (store to a `u32x4` buffer or extract words via a stack `buf`)"
+                    f"in a scalar `u64` context (keep it in `{ty}` vector operations or store with `.{ty}(off) := {e.name}`)"
                 )
             self._load_var(e.line, e.name, dst)
             return

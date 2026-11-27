@@ -576,6 +576,12 @@ class Verifier:
                 if len(e) == 3 and e[2][0] == "name" and e[2][1] in state["buf_len"]:
                     return state["buf_len"][e[2][1]]
                 raise Refuse(f"cannot take `len` of {e[2]}")
+            if not args and fn_nm in self.defs:
+                dparams, dbody = self.defs[fn_nm]
+                if not dparams and isinstance(dbody, tuple) and len(dbody) == 2 and dbody[0] == "num":
+                    kval = int(dbody[1])
+                    if kval >= 0:
+                        return r_const(kval)
             return ("call", fn_nm, tuple(args))
         if op == "index":
             # `a[idx]` -> symbolic byte at `(a, idx)`

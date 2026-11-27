@@ -981,6 +981,66 @@ fn read_byte(buf: n bytes, n: number)
         self.assertIn("if ...", hint)
         self.assertIn("does not split", hint)
 
+    def test_12_hl_v4_forensic_bug_regressions(self):
+        """TDD regressions for defects surfaced by hl-default-v4 forensics."""
+        import ode_tool
+
+        # Fix #1 (Core.lean `scall` + verify2.py): a `def` returning a `const ERR = 4294967296`
+        # evaluated inside `if helper(x) >= ERR then ERR else helper(x)` must verify `shown` on BOTH
+        # arches AND dual-verify in independent `verify2.py` (root cause of ebpf 0/8 in v2-v4!).
+        src_const_def = """\
+const ERR = 4294967296
+
+def alu_or_err(op, x) {
+    if op == 1 then x % 4294967296
+    else ERR
+}
+
+def dispatch(op, x) {
+    if alu_or_err(op, x) >= ERR then ERR
+    else alu_or_err(op, x)
+}
+
+fn run_disp(op: number, x: number)
+    requires op < 256
+    requires x < 4294967296
+    returns dispatch(op, x)
+    trace depends on op, x
+    stack 0
+{
+    if op == 1 {
+        return x
+    }
+    return 4294967296
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_const_def, "run_disp", arch)
+
+        # Fix #3 (ode_hl.py): address index `64 * b + 4 * 6` folds `4 * 6` cleanly without holding extra scratch.
+        src_idx_fold = """\
+fn read_off(buf: 256 bytes, b: number)
+    requires b < 4
+    returns buf[64 * b + 24]
+    trace depends on b
+    stack 0
+{
+    return buf[64 * b + 4 * 6]
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            parsed = ode_unified.parse_unified(src_idx_fold, src="<idx_fold>", c_abi_fn="read_off")
+            imp = parsed["fns"][0]["impls"][arch]
+            self.assertFalse(imp.get("hl_err"), f"index const-fold failed on {arch}: {imp.get('hl_err')}")
+
+        # Fix #4 (ode_tool.py): crisp hints for in-out word buffer, fixed-size u32, and vector-vs-scalar stack frame.
+        h1 = ode_tool._diagnostic_hint("refused: a read of a run given only to write", "x86_64", info={"hl_meta": True})
+        self.assertIn("u32x4", h1)
+        h2 = ode_tool._diagnostic_hint("refused: a read of a run of a fixed count that is not eight bytes within it", "arm64", info={"hl_meta": True})
+        self.assertIn("u32x4", h2)
+        h3 = ode_tool._diagnostic_hint("refused: a read of the frame where nothing was written", "arm64", info={"hl_meta": True})
+        self.assertIn("stack var", h3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ Every iteration fixes tool, compiler, prover, and verifier defects found in the 
 | 1 | `hl-default-v1` | `8a4cdfa` | **28 / 80 (35.0%)** | 28 / 28 | 13 / 14 | 17.5 min | $35.76 | 0.87 s / 2.94 s / 19.24 s |
 | 2 | `hl-default-v2` | `ec52868` | **32 / 80 (40.0%)** *(22/64 excl. Gemini)* | 32 / 32 | **16 / 16** | **11.3 min** | **$24.70** | 0.77 s / 3.05 s / 77.70 s |
 | 3 | `hl-default-v3` | `d0f4ea1` | **17 / 64 (26.6%)** *(4 models; arm64 **12/32** vs 8/32)* | **17 / 17** | **10 / 10** | 13.3 min *(1 hung cell)* | **$13.61** | **0.59 s** / 3.01 s / 781.51 s |
+| 4 | `hl-default-v4` | `fa6df99` | **21 / 64 (32.8%)** *(4 models; arm64 **14/32** record!)* | **21 / 21** | **12 / 12** | **7.3 min** | **$13.22** | 0.70 s / 3.53 s / **14.49 s** |
+| 5 | `hl-default-v5` | *pending* | *pending (64 cells, 4 models)* | *pending* | *pending* | *pending* | *pending* | *pending* |
 
 ---
 
@@ -128,5 +130,33 @@ Inspecting all 48 failed cells surfaced 7 concrete verifier, compiler, tool, and
 2. **Uniform `buf: n bytes` parameter syntax on `inline fn` (`lang/ode_hl.py`):** Allowed `name: <len> bytes` (and `name: bytes`/`ptr`) on `inline fn` headers to match `fn` syntax (fixing `der_valid` Kimi `x86_64` and `sha256_4way` Kimi `arm64`).
 3. **Unmangled imported spec `def` call diagnostic (`lang/ode_audit.py`):** Stopped leaking internal `m1__` prefixes when code calls an imported specification `def` (e.g. `bpf.u16_le` in `ebpf` GLM `x86_64`), reporting the alias-qualified name and explaining that a `def` is not a callable machine `fn`.
 4. **Accurate `need compare` hint (`lang/ode_tool.py`):** Replaced misleading `"compare them in an if or select(...)"` hint with an explicit warning that branchless `select(...)` merges paths and does not split prover facts for a specification `if` (addressing `ebpf` `arm64` `need compare`).
+
+---
+
+## Iteration 4 — Pre-Registered 4-Model Suite (`hl-default-v4`, commit `fa6df99`)
+
+- **Suite definition:** [`suites/hl-default-v4.json`](suites/hl-default-v4.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**.
+- **Pre-registration:** [`prereg-hl-default-v4.md`](prereg-hl-default-v4.md).
+- **Results:** [`results-hl-default-v4.md`](results-hl-default-v4.md), [`results-hl-default-v4.json`](results-hl-default-v4.json).
+- **Headline:** **21 / 64 (32.8%)** strict passes (+4 vs `v3`; **21 / 21** native CPU pass, **12 / 12** scalar `verify2.py` pass, **0** Python tracebacks, **7.3 min** total wall clock, **$13.22** API spend, worst-case prover turn dropped from **781.5 s -> 14.49 s**).
+  - **`arm64` reached a new high of `14 / 32 (43.8%)`** (`v1: 9/32 -> v2: 8/32 -> v3: 12/32 -> v4: 14/32`).
+  - **By model:** `kimi-k3.1-pro` **7/16** ($6.95), `muse-spark-open` **6/16** ($2.60, all-time high!), `claude-haiku-5.5` **4/16** ($0.58, including `ct_base64_decode x86_64` R4 which had hung for 781.5 s in `v3`!), `glm-5.3-prime` **4/16** ($3.09).
+  - **By task (`x86_64` / `arm64`):** `ipv4_valid` 7/8 (4/3), `chacha20_4way` 5/8 (1/4), `ct_base64_decode` 3/8 (1/2, new high), `blake3_compress_4way` 2/8 (0/2, new high), `der_valid` 2/8 (0/2), `blake3_compress1` 1/8 (0/1), `sha256_4way` 1/8 (1/0), `ebpf` 0/8 (0/0).
+
+### Forensic Fixes From `hl-default-v4` (All TDD-Verified in `lang/test_hl_matrix.py::test_12`)
+
+1. **Zero-arg integer `const` definitions in `scall` (`proof-core/Core.lean`, `SoundSpec.lean`, `verify2.py`):**
+   - Root cause of `ebpf` **0 / 8** across `v2`, `v3`, and `v4`: `statement.py` compiles `const ERR = 4294967296` as a zero-argument `def C0 () (num 4294967296)` and replaces references with `(call C0)`. When `ebpf_step` evaluated `if ebpf_alu(...) >= C0`, opening `ebpf_alu` on its `else C0` branch returned `.tail ⟨"C0", []⟩` instead of `.val (.lin 4294967296)`, causing `heldFor` to fail with `a use of a definition opened where a number is needed, and its value is still no number`. The prover backtracked out of the loop invariant into the dead entry call at `pc = 0`, reporting a bogus `need compare: is v41 == 149`.
+   - Fixed via `constDefNum` in `Core.lean::scall` (proved sound in `SoundSpec.lean::scall_sound`, zero new axioms, zero contract hash changes) and mirrored in `verify2.py`. Replaying `v4` `ebpf` files immediately cleared every error-return branch on GLM, Haiku, and Muse!
+2. **Index constant-folding & syntax typo fix (`lang/ode_hl.py`):** Folded compile-time integer arithmetic inside `_emit_addr_held` (e.g. `64 * b + 4 * 6 -> 64 * b + 24`, stopping wasted scratch registers on `blake3_compress_4way` Haiku `x86_64`), fixed `let tmp = ...;` -> `let tmp := ...` in scratch-exhaustion hints, and cleaned the vector-in-scalar diagnostic.
+3. **Three crisp SIMD / word-buffer refusal hints (`lang/ode_tool.py`):** Added actionable hints for in-out word buffers (`h.u32x4(0)` vs scalar `h.u32`), fixed-size input buffers (`u32x4`/`u64` vs scalar `u32`), and scalar stack reads of vector-spilled slots.
+4. **Zero-cost corpus replay:** All **21 / 21** passing `hl-default-v4` solutions still pass (**0 regressions**) in **12.4 s**.
+
+---
+
+## Iteration 5 — Pre-Registered 4-Model Suite (`hl-default-v5`)
+
+- **Suite definition:** [`suites/hl-default-v5.json`](suites/hl-default-v5.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+
 
 

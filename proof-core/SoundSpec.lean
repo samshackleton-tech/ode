@@ -557,6 +557,27 @@ theorem sbin_sound (ctx : Ctx) (s0 : State) {op : String} {s s' : Sym} {x y : Ro
 theorem runBytes_get (s0 : State) (base len k : Nat) (h : k < s0.reg len) : (runBytes s0 base len)[k]? = some (s0.mem (s0.reg base + k)).val := by
   simp [runBytes, h]
 
+theorem constDefNum_spec {d : Def} {vs : List SVal} {n : Int} (h : constDefNum d vs = some n) :
+    d.params = [] ∧ vs = [] ∧ d.body = .num n ∧ 0 ≤ n := by
+  cases d with
+  | mk nm ps bd =>
+    unfold constDefNum at h
+    cases ps with
+    | cons _ _ => simp at h
+    | nil =>
+      cases vs with
+      | cons _ _ => simp at h
+      | nil =>
+        cases bd with
+        | num m =>
+          simp only at h
+          split at h
+          · injection h with h; subst h; exact ⟨rfl, rfl, rfl, ‹_›⟩
+          · cases h
+        | name _ | bin _ _ _ | ifx _ _ _ | index _ _ | call _ _ | list _ | nil | cons _ _ | letx _ _ _
+        | each _ _ _ _ | slice _ _ _ | withx _ _ | record _ _ | field _ _ | theNumber _ _ _ _ _ | thePower _ _ _ =>
+          simp at h
+
 theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s' : Sym} {res : SRes} {items rest : Items}
     {ρ : Nat → Int} {st : State} (h : scall ctx f vs s items = .ok ((res, s'), rest)) (H : Holds ctx s0 ρ s st) (wf : WF ctx s)
     (hb : ∀ v ∈ vs, v.bounded s.nvars) (env : List (String × Val)) (args : SExpr)
@@ -601,17 +622,32 @@ theorem scall_sound {ctx : Ctx} {s0 : State} {f : String} {vs : List SVal} {s s'
       | none => simp only [hd] at h; exact (refuse_ok h).elim
       | some d =>
         simp only [hd] at h
-        split at h
-        next hp =>
+        cases hc : constDefNum d vs with
+        | some n =>
+          simp only [hc] at h
           have := V.pure_ok h
           injection this with hp' _
           injection hp' with e1 e2
           subst e1 e2
-          refine ⟨rfl, ?_, hb⟩
-          intro x
-          simp only [CallValue, hd]
-          exact Value.call (by simpa using hlen) (by simpa using ho) hd (by simpa using hp) ha x
-        next => exact (refuse_ok h).elim
+          obtain ⟨hdp, hvs, hdb, hn⟩ := constDefNum_spec hc
+          subst hvs
+          refine ⟨rfl, ?_, bounded_const _ _⟩
+          simp only [SRes.sem, semv, ev_const]
+          exact (Value.call (by simpa using hlen) (by simpa using ho) hd (by simp [hdp]) ha (.int n)).mpr
+            (by rw [hdb]; exact Value.num hn)
+        | none =>
+          simp only [hc] at h
+          split at h
+          next hp =>
+            have := V.pure_ok h
+            injection this with hp' _
+            injection hp' with e1 e2
+            subst e1 e2
+            refine ⟨rfl, ?_, hb⟩
+            intro x
+            simp only [CallValue, hd]
+            exact Value.call (by simpa using hlen) (by simpa using ho) hd (by simpa using hp) ha x
+          next => exact (refuse_ok h).elim
 
 theorem ifx_finish {r res : SRes} {s2 s' : Sym} {r2 rest : Items}
     (h : (match r with
