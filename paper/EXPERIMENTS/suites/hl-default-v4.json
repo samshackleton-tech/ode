@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v4",
+  "description": "Iteration 4 cold-room benchmark (4 models excluding gemini-4-neon x 8 tasks x 2 targets = 64 cells) after fixing all 4 hl-default-v3 forensic defects (deterministic ODE_PROVE_MAX_FACTS=800 in ProveMain.lean cutting 781.5s/143.6s unroll blowups to ~6s, uniform `buf: n bytes` syntax on `inline fn`, unmangled imported spec `def` call diagnostics, and accurate `need compare` hint warning against `select(...)` for spec `if` splits).",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}
