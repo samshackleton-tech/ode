@@ -376,7 +376,8 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             for vi in range(n_vars):
                 k = rng.randint(1, 255)
                 src_v = rng.choice(["a", "b", "c"])
-                lines.append(f"    let t{vi}: u64 := ({src_v} +% {k}) & 1023")
+                pfx = "stack let" if vi >= 8 else "let"
+                lines.append(f"    {pfx} t{vi}: u64 := ({src_v} +% {k}) & 1023")
             sum_expr = " +% ".join(f"t{vi}" for vi in range(n_vars))
             if case_i % 2 == 0:
                 tail = f"    if (a & 1) == 0 {{\n        return {sum_expr}\n    }} else {{\n        return ({sum_expr}) +% b\n    }}\n"
@@ -410,7 +411,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
                     self.assertEqual(got, want, f"pressure/call case {case_i} ({tgt}) mismatch: got {got} want {want}\n{src}")
 
     def test_04_interactive_no_spill_and_scratch_diagnostics(self):
-        """ODE_HL_NO_SPILL=1 prints full live-variable register table; deep scratch exhaustion prints held temps."""
+        """Default zero-spill prints full live-variable register table; deep scratch exhaustion prints held temps."""
         lines = [f"    let t{i}: u64 := (a +% {i + 1}) & 255" for i in range(22)]
         s = " +% ".join(f"t{i}" for i in range(22))
         spill_src = (
@@ -419,21 +420,13 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             "    trace depends on a, b\n"
             "{\n" + "\n".join(lines) + f"\n    return ({s}) +% b\n}}\n"
         )
-        old_env = os.environ.get("ODE_HL_NO_SPILL")
-        try:
-            os.environ["ODE_HL_NO_SPILL"] = "1"
-            for tgt in ("x86_64", "arm64"):
-                with self.assertRaises(ode_unified.UnifiedErr) as cm:
-                    compile_progs(spill_src, "many", tgt)
-                msg = str(cm.exception)
-                self.assertIn("silent stack spilling is disabled", msg)
-                self.assertIn("simultaneously live variables:", msg)
-                self.assertIn("how to fix:", msg)
-        finally:
-            if old_env is None:
-                os.environ.pop("ODE_HL_NO_SPILL", None)
-            else:
-                os.environ["ODE_HL_NO_SPILL"] = old_env
+        for tgt in ("x86_64", "arm64"):
+            with self.assertRaises(ode_unified.UnifiedErr) as cm:
+                compile_progs(spill_src, "many", tgt)
+            msg = str(cm.exception)
+            self.assertIn("silent stack spilling is disabled", msg)
+            self.assertIn("simultaneously live variables:", msg)
+            self.assertIn("how to fix:", msg)
 
         deep_src = (
             "fn deep(buf: 16 bytes, a: u64, b: u64, c: u64) -> u64\n"

@@ -10,6 +10,8 @@
 Written before building the rule (section 13)."""
 import os, subprocess, sys, tempfile, unittest
 
+os.environ.setdefault("ODE_PROVE_EFFORT", "deep")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path[:0] = [HERE, os.path.join(ROOT, "kcheck"), os.path.join(ROOT, "lang"), os.path.join(ROOT, "arm64"), os.path.join(ROOT, "core")]

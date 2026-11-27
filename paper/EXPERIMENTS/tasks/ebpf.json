@@ -1,11 +1,12 @@
 {
   "id": "ebpf",
   "title": "RFC 9669 eBPF Interpreter (4-register VM, 12 opcodes)",
+  "entry_fn": "ebpf_run",
   "spec_file": "proof-core/examples/ebpf/ebpf_spec.ode",
   "spec_basename": "ebpf_spec.ode",
-  "entry_fn": "ebpf_run",
   "expected_contract_id": "d7b6z5hr3w25whmsn56nvv3qcsq5ugtcxifauztdznaekaiiahfa",
   "native_harness": "paper/EXPERIMENTS/tasks/ebpf_native.c",
-  "contract_header": "use bpf = \"ebpf_spec.ode\"\n\nfn ebpf_run(prog: n bytes, n: number, fuel: number, arg1: number)\n    requires n < 18446744073709551615\n    requires arg1 < 4294967296\n    returns bpf.ebpf_run(prog, fuel, arg1)\n    trace depends on prog, n, fuel, arg1\n    stack 128\n",
-  "task_summary": "Implement and verify the RFC 9669 eBPF bytecode interpreter `ebpf_run`."
+  "reference_solution": "paper/EXPERIMENTS/tasks/ebpf_reference.ode",
+  "task_summary": "Implement and verify the RFC 9669 eBPF bytecode interpreter `ebpf_run`.",
+  "contract_header": "use bpf = \"ebpf_spec.ode\"\n\nfn ebpf_run(prog: n bytes, n: number, fuel: number, arg1: number)\n    requires n < 18446744073709551615\n    requires arg1 < 4294967296\n    returns bpf.ebpf_run(prog, fuel, arg1)\n    trace depends on prog, n, fuel, arg1\n    stack 128\n"
 }

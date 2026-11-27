@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v1",
+  "description": "Unified default-design cold-room benchmark across 8 orthogonal tasks (parsers, constant-time codecs, RFC 9669 eBPF bytecode VM, ChaCha20 4-way, SHA-256 4-way, BLAKE3 1-block and 4-way SIMD) and 5 cost-efficient models (gemini-4-neon, kimi-k3.1-pro, muse-spark-open, glm-5.3-prime, claude-haiku-5.5) on x86_64 and arm64 (80 cells).",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "google/gemini-4-neon",
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 8,
+  "opt_rounds": 2,
+  "max_truncations": 2,
+  "max_usd": 80
+}

@@ -11,6 +11,8 @@ import sys
 import tempfile
 import unittest
 
+os.environ.setdefault("ODE_PROVE_EFFORT", "deep")
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path[:0] = [

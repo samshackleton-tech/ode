@@ -337,18 +337,19 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
                            :: .restoreJdone savedJdone :: tail }
 
 /-- Advance from the latest checkpoint as far as `.next` steps succeed, committing a checkpoint whenever
-`next` strictly advances while staying strictly below `arr.size` (so no committed step ever saw EOF). -/
+`next` strictly advances or 32 straight-line steps elapse while staying strictly below `arr.size`
+(so every `items.line` read hit a present item and never observed end-of-proof). -/
 partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) (withPc : Bool := false) : Except String Unit × Array DriverState :=
-  let rec go (cur : DriverState) (cs : Array DriverState) : Except String Unit × Array DriverState :=
+  let rec go (cur : DriverState) (cs : Array DriverState) (since : Nat) : Except String Unit × Array DriverState :=
     match stepOnce ctx cur arr withPc with
     | .done => (.ok (), cs)
     | .err msg => (.error msg, cs)
     | .next cur' =>
-      let cs' :=
-        if cur'.next > cs.back!.next && cur'.next < arr.size then cs.push cur'
-        else cs
-      go cur' cs'
-  go ckpts.back! ckpts
+      if cur'.next < arr.size && (cur'.next > cs.back!.next || since ≥ 32) then
+        go cur' (cs.push cur') 0
+      else
+        go cur' cs (since + 1)
+  go ckpts.back! ckpts 0
 
 /-- After `name` passes `verify`, check optional `result depends on` and any subsequent functions. -/
 def finishRest (ctx : Ctx) (items : Array Item) (afterFns : List Fn) (doneAfter : List (String × Contract))

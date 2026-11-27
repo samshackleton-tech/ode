@@ -248,6 +248,9 @@ ARM_ENV = {
         "ODE_PROVE_EFFORT": "deep",
         "ODE_PROVE_FAST_FAIL": "0",
     },
+    "ode": {
+        "ODE_PROVE_EFFORT": "fast",
+    },
     "ode_reg_ask": {
         "ODE_HL_AUTO_KEEPS": "1",
         "ODE_HL_RECLAIM_PARAMS": "1",
@@ -257,7 +260,7 @@ ARM_ENV = {
     },
 }
 
-TRY_HARDER_ARMS = {"ode_reg_ask"}
+TRY_HARDER_ARMS = {None, "ode", "ode_reg_ask"}
 
 
 def run_tool(cmd: list[str], cwd: Path, extra_env: dict | None = None) -> tuple[int, str, float]:
@@ -1286,20 +1289,24 @@ def self_test_cli(targets: list[str]) -> None:
 REF_CACHE_PATH = Path.home() / ".cache" / "ode-exp-ref-cache.json"
 
 _LPT_TASK_WEIGHT = {
-    "chacha20_4way": 40,
+    "blake3_compress_4way": 50,
+    "sha256_4way": 48,
+    "chacha20_4way": 42,
+    "blake3_compress1": 36,
+    "ebpf": 34,
     "ct_base64_decode": 30,
-    "der_valid": 20,
+    "der_valid": 24,
     "ipv4_valid": 15,
 }
 _LPT_MODEL_WEIGHT = {
+    "qwen/qwen3.8-2.4t-a95b": 60,
     "anthropic/claude-fable-5.2": 50,
     "google/gemini-4-neon": 42,
     "openai/gpt-6.2-astra-pro": 38,
-    "qwen/qwen3.8-2.4t-a95b": 34,
-    "z-ai/glm-5.3-prime": 30,
+    "z-ai/glm-5.3-prime": 32,
+    "moonshotai/kimi-k3.1-pro": 26,
     "anthropic/claude-sonnet-5.5": 24,
-    "moonshotai/kimi-k3.1-pro": 20,
-    "meta/muse-spark-open": 15,
+    "meta/muse-spark-open": 20,
     "anthropic/claude-haiku-5.5": 10,
 }
 
@@ -1383,6 +1390,10 @@ def check_references(tasks: list[dict], targets: list[str], x86_exec_script: str
             rc_p, txt_p, _ = run_tool([
                 ODE_PYTHON, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--fn", task["entry_fn"],
                 "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
+            if (rc_p != 0 or not out_o.exists()) and "TRY_HARDER" in txt_p:
+                rc_p, txt_p, _ = run_tool([
+                    ODE_PYTHON, str(ODE_TOOL), "pack", str(cand), "--c-abi", "--try-harder", "--fn", task["entry_fn"],
+                    "--target", tgt, "--out", str(out_o), "--proof", str(out_p)], td_p)
             if rc_p != 0 or not out_o.exists():
                 raise SystemExit(f"reference of task `{task['id']}` fails `ode pack` ({tgt}): {txt_p[-800:]}")
             rc_a, txt_a, _ = run_tool([
@@ -1466,7 +1477,7 @@ def main(argv=None) -> int:
     ap.add_argument("--effort", default="medium")
     ap.add_argument("--provider-sort", default="throughput", help="OpenRouter provider.sort preference (throughput, latency, price, or empty)")
     ap.add_argument("--max-usd", type=float, default=None, help="Cumulative API spend circuit breaker")
-    ap.add_argument("--workers", type=int, default=72)
+    ap.add_argument("--workers", type=int, default=160)
     ap.add_argument("--baseline", default="", help="Optional baseline results JSON for before/after diff")
     ap.add_argument("--out-dir", required=True, help="Private directory for full JSON transcripts and .o/.proof/.ode artifacts")
     ap.add_argument("--x86-exec-script", default="", help="Optional executable taking `<obj.o> <harness.c>` to run x86_64 native tests")
@@ -1483,10 +1494,11 @@ def main(argv=None) -> int:
         preset_path, preset = load_preset(args.preset)
 
     default_models = [
-        "openai/gpt-6.2-astra-pro", "anthropic/claude-fable-5.2", "google/gemini-4-neon",
-        "anthropic/claude-sonnet-5.5", "anthropic/claude-haiku-5.5",
-        "qwen/qwen3.8-2.4t-a95b", "moonshotai/kimi-k3.1-pro",
-        "meta/muse-spark-open", "z-ai/glm-5.3-prime",
+        "google/gemini-4-neon",
+        "moonshotai/kimi-k3.1-pro",
+        "meta/muse-spark-open",
+        "z-ai/glm-5.3-prime",
+        "anthropic/claude-haiku-5.5",
     ]
     task_ids = [t.strip() for t in args.tasks.split(",") if t.strip()] if args.tasks is not None else list(preset.get("tasks", ["ebpf"]))
     models = [m.strip() for m in args.models.split(",") if m.strip()] if args.models is not None else list(preset.get("models", default_models))

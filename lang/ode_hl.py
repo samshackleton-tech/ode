@@ -1737,7 +1737,7 @@ def _clobber_sensitive_vars(e):
 # ---------------------------------------------------------------------------
 
 class HLLower:
-    def __init__(self, fn_name, params, arch, stmts, src, fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None, allow_spill=None):
+    def __init__(self, fn_name, params, arch, stmts, src, fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None):
         self.fn_name = fn_name
         self.params = params          # [(name, kind_str)]
         self.param_names = [p[0] for p in params]
@@ -1750,9 +1750,6 @@ class HLLower:
         self.callee_clobbers = dict(callee_clobbers) if callee_clobbers else {}
         self.needs = set(needs) if needs else set()
         self.hl_inlines = dict(hl_inlines) if hl_inlines else {}
-        self.allow_spill = (os.environ.get("ODE_HL_NO_SPILL", "0") != "1") if allow_spill is None else bool(allow_spill)
-        self.auto_keeps = os.environ.get("ODE_HL_AUTO_KEEPS", "1") != "0"
-        self.reclaim_params = os.environ.get("ODE_HL_RECLAIM_PARAMS", "1") != "0"
 
         expanded = _expand_hl_inlines(stmts, self.hl_inlines, src)
         expanded = expand_unrolls(expanded, src)
@@ -1779,11 +1776,12 @@ class HLLower:
         self.var_ty = {}         # name -> "u64" | "u8" | "u32x4" | "u32x16" | "bytes" | "buf"
         self.copied_params = []  # [(pname, entry_reg, saved_reg)]
         self.callee_saved = []   # list of callee-saved regs used
-        self.vec_saved = []      # ARM64 callee-saved v8..v15 if any
         self.uses_zmm = False
         self.frame_bytes = 0     # local buffer + spill bytes (excluding saved regs)
         self.total_stack = 0     # exact stack budget for contract
         self.var_map = []        # [(name, role, loc_str, note)] for `ode advise --asm`
+        self.fn_written_vars = _written_vars(self.stmts)
+        self.fn_mutated_vars = _mutated_vars(self.stmts)
 
         self._allocate()
 
@@ -1794,8 +1792,6 @@ class HLLower:
         self.active_facts = []   # [(fact_str, vars_used)]
         self.pure_aliases = {}   # immutable `let` var -> (spec_expr_str, vars_used)
         self.defined_vars = set(self.param_names)
-        self.fn_written_vars = _written_vars(self.stmts)
-        self.fn_mutated_vars = _mutated_vars(self.stmts)
         self.reg_owner = {self.var_loc[p][1]: p for p in self.param_names if self.var_loc[p][0] == "reg"}
 
     def _compute_interference(self):
@@ -1818,7 +1814,12 @@ class HLLower:
         def spec_vars(s):
             if not s:
                 return set()
-            return {tok for tok in re.findall(r"\b[A-Za-z_]\w*(?:\$\d+)?\b", s) if tok in tracked_set}
+            # Unmodified contract parameters are bound to their entry symbols in `place` by Core.lean
+            # and never need their entry machine register kept live across a loop!
+            return {
+                tok for tok in re.findall(r"\b[A-Za-z_]\w*(?:\$\d+)?\b", s)
+                if tok in tracked_set and not (tok in self.param_set and tok not in self.fn_written_vars)
+            }
 
         def back(body, live_out, brk_live=frozenset(), cont_live=frozenset()):
             live = set(live_out)
@@ -1907,8 +1908,6 @@ class HLLower:
             crossed = self.var_crossed_calls.get(pname, ())
             if not crossed:
                 return False
-            if not self.auto_keeps:
-                return areg in default_clob
             for c in crossed:
                 c_clob = self.callee_clobbers.get(c.name, default_clob)
                 if areg in c_clob:
@@ -1923,7 +1922,9 @@ class HLLower:
         used_regs = set()
         callee_pool_all = list(ARM_CALLEE_SAVED if self.arch == "arm64" else X86_CALLEE_SAVED)
         caller_pool_all = list(ARM_CALLER_POOL if self.arch == "arm64" else X86_CALLER_POOL)
-        vec4_pool_all = ([f"v{k}" for k in range(0, 8)] + [f"v{k}" for k in range(16, 30)] + [f"v{k}" for k in range(8, 16)]
+        # On AArch64, v8..v15 are callee-saved (`vecIntact` in Core.lean) and remain untouched;
+        # v0..v7 and v16..v29 (22 regs) are caller-saved vector registers (v30, v31 are scratch).
+        vec4_pool_all = ([f"v{k}" for k in range(0, 8)] + [f"v{k}" for k in range(16, 30)]
                          if self.arch == "arm64"
                          else [f"xmm{k}" for k in range(1, 15)])
         vec16_pool_all = [f"zmm{k}" for k in range(16, 31)] + [f"zmm{k}" for k in range(1, 16)]
@@ -1940,8 +1941,6 @@ class HLLower:
         def _clob_for_crossed(crossed, include_pass_through=True):
             if not crossed:
                 return set()
-            if not self.auto_keeps:
-                return set(default_clob)
             clob = set()
             for c in crossed:
                 clob |= self.callee_clobbers.get(c.name, default_clob)
@@ -1985,10 +1984,9 @@ class HLLower:
             self.var_loc[pname] = ("reg", areg)
             self.var_map.append((pname, f"param ({pty})", areg, ""))
 
-        # With `reclaim_params=True`, parameter regs stay in `caller_pool_avail` and are guarded strictly by `interf`
-        # (so once a parameter's last use has passed, its ABI register is deterministically reclaimed by later locals!).
-        caller_pool_avail = (list(caller_pool_all) if self.reclaim_params
-                             else [r for r in caller_pool_all if r not in param_regs])
+        # Parameter registers stay in `caller_pool_avail` guarded strictly by `interf` so once a parameter dies,
+        # its entry register is deterministically reclaimed by later locals.
+        caller_pool_avail = list(caller_pool_all)
         self._free_named_scalar_count = 0
 
         # 2. Local `buf` stack arrays (aligned)
@@ -2001,8 +1999,7 @@ class HLLower:
             self.var_map.append((bname, f"buf[{bsz}]", f"[sp+{off}]", f"align {balign}"))
             off += bsz
 
-        # 3. Deterministic greedy graph coloring in declaration order (zero hidden magic, exact branch & dead-param reuse!)
-        spill_count = 0
+        # 3. Deterministic greedy graph coloring in declaration order (zero silent spills; use `stack var` explicitly!)
         callee_used_set = set(self.callee_saved)
 
         def _refuse_spill(nm, ty, role, line, eligible_pool, live_pairs, across_call=False):
@@ -2069,38 +2066,24 @@ class HLLower:
                     self.var_loc[nm] = ("reg", reg)
                     self.var_map.append((nm, f"{role} {ty}", reg, ""))
                 else:
-                    if not self.allow_spill:
-                        live_pairs = [
-                            (nb, self.var_loc[nb][1])
-                            for nb in sorted(interf.get(nm, ()))
-                            if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in order
-                        ]
-                        _refuse_spill(nm, ty, role, line, order, live_pairs, across_call=across_call)
-                    off = (off + 7) // 8 * 8
-                    self.var_loc[nm] = ("spill", off)
-                    self.var_map.append((nm, f"{role} {ty}", f"[sp+{off}]", "SPILL"))
-                    off += 8
-                    spill_count += 1
+                    live_pairs = [
+                        (nb, self.var_loc[nb][1])
+                        for nb in sorted(interf.get(nm, ()))
+                        if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in order
+                    ]
+                    _refuse_spill(nm, ty, role, line, order, live_pairs, across_call=across_call)
             elif ty == "u32x4":
                 vreg = next((r for r in vec4_pool_all if r not in forbidden), None)
                 if vreg is not None:
-                    if self.arch == "arm64" and vreg in {f"v{k}" for k in range(8, 16)} and vreg not in self.vec_saved:
-                        self.vec_saved.append(vreg)
                     self.var_loc[nm] = ("reg", vreg)
                     self.var_map.append((nm, f"{role} u32x4", vreg, ""))
                 else:
-                    if not self.allow_spill:
-                        live_pairs = [
-                            (nb, self.var_loc[nb][1])
-                            for nb in sorted(interf.get(nm, ()))
-                            if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in vec4_pool_all
-                        ]
-                        _refuse_spill(nm, ty, role, line, vec4_pool_all, live_pairs)
-                    off = (off + 15) // 16 * 16
-                    self.var_loc[nm] = ("spill", off)
-                    self.var_map.append((nm, f"{role} u32x4", f"[sp+{off}]", "SPILL"))
-                    off += 16
-                    spill_count += 1
+                    live_pairs = [
+                        (nb, self.var_loc[nb][1])
+                        for nb in sorted(interf.get(nm, ()))
+                        if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in vec4_pool_all
+                    ]
+                    _refuse_spill(nm, ty, role, line, vec4_pool_all, live_pairs)
             elif ty == "u32x16":
                 if self.arch != "x86_64":
                     raise HLErr(f"{self.src}: `u32x16` is only available on `x86_64` (AVX-512)")
@@ -2110,20 +2093,14 @@ class HLLower:
                     self.var_loc[nm] = ("reg", vreg)
                     self.var_map.append((nm, f"{role} u32x16", vreg, ""))
                 else:
-                    if not self.allow_spill:
-                        live_pairs = [
-                            (nb, self.var_loc[nb][1])
-                            for nb in sorted(interf.get(nm, ()))
-                            if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in vec16_pool_all
-                        ]
-                        _refuse_spill(nm, ty, role, line, vec16_pool_all, live_pairs)
-                    off = (off + 63) // 64 * 64
-                    self.var_loc[nm] = ("spill", off)
-                    self.var_map.append((nm, f"{role} u32x16", f"[sp+{off}]", "SPILL"))
-                    off += 64
-                    spill_count += 1
+                    live_pairs = [
+                        (nb, self.var_loc[nb][1])
+                        for nb in sorted(interf.get(nm, ()))
+                        if nb in self.var_loc and self.var_loc[nb][0] == "reg" and self.var_loc[nb][1] in vec16_pool_all
+                    ]
+                    _refuse_spill(nm, ty, role, line, vec16_pool_all, live_pairs)
 
-        self.spills = spill_count
+        self.spills = 0
         all_named_scalar = set(caller_pool_all) | set(callee_pool_all)
         self._free_named_scalar_count = len(all_named_scalar - used_regs)
 
@@ -2137,11 +2114,9 @@ class HLLower:
             self.frame_bytes = raw_frame
             self.total_stack = push_bytes + raw_frame + (8 if self.has_calls else 0)
         else:
-            # AArch64: save x30 (if has_calls) + callee_saved scalars + 16-byte-aligned vec_saved (`v8..v15`) + local frame.
+            # AArch64: save x30 (if has_calls) + callee_saved scalars + local frame.
             save_slots = (1 if self.has_calls else 0) + len(self.callee_saved)
-            scalar_save_bytes = save_slots * 8
-            self.vec_save_base = (scalar_save_bytes + 15) // 16 * 16 if self.vec_saved else scalar_save_bytes
-            save_bytes = self.vec_save_base + 16 * len(self.vec_saved)
+            save_bytes = save_slots * 8
             save_pad = (save_bytes + 15) // 16 * 16 if (save_bytes > 0 and off > 0) else save_bytes
             if save_pad > 0 and off > 0:
                 # shift buf/spill offsets by save_pad
@@ -2269,10 +2244,6 @@ class HLLower:
             for r in self.callee_saved:
                 self.emit(line, f"str {r}, [sp, {slot}]")
                 slot += 8
-            vslot = self.vec_save_base
-            for vr in self.vec_saved:
-                self.emit(line, f"str q{vr[1:]}, [sp, {vslot}]")
-                vslot += 16
             for _, areg, cs in self.copied_params:
                 self.emit(line, f"mov {cs}, {areg}")
 
@@ -2293,18 +2264,29 @@ class HLLower:
                 for r in self.callee_saved:
                     self.emit(line, f"ldr {r}, [sp, {slot}]")
                     slot += 8
-                vslot = self.vec_save_base
-                for vr in self.vec_saved:
-                    self.emit(line, f"ldr q{vr[1:]}, [sp, {vslot}]")
-                    vslot += 16
                 self.emit(line, f"add sp, sp, {self.frame_bytes}")
 
     def _emit_imm(self, line, dst, val):
         if self.arch == "x86_64":
-            if val == 0:
-                self.emit(line, f"mov {dst}, 0")
-            else:
-                self.emit(line, f"mov {dst}, {val}")
+            x = val & ((1 << 64) - 1)
+            if x < (1 << 31):
+                self.emit(line, f"mov {dst}, {x}")
+                return
+            # Build arbitrary 64-bit constant using mov + shl + add (all immediates fit signed 32-bit in x86.tab)
+            chunks = []
+            while x >= (1 << 31):
+                chunks.append((31, x & ((1 << 31) - 1)))
+                x >>= 31
+            self.emit(line, f"mov {dst}, {x}")
+            pending_sh = 0
+            for sh, lo in reversed(chunks):
+                pending_sh += sh
+                if lo:
+                    self.emit(line, f"shl {dst}, {pending_sh}")
+                    self.emit(line, f"add {dst}, {lo}")
+                    pending_sh = 0
+            if pending_sh:
+                self.emit(line, f"shl {dst}, {pending_sh}")
         else:
             x = val & ((1 << 64) - 1)
             if x <= 65535:
@@ -3203,7 +3185,7 @@ class HLLower:
         raise HLErr(f"{self.src}: line {line}: unsupported vector expression")
 
     # -- Automatic `place { ... }` Fact Substitution & Outer-Context Inheritance --
-    def _subst_spec_vars(self, expr_str):
+    def _subst_spec_vars(self, expr_str, line=0):
         """Substitute High-Level Ode local variable names (including `name$k`) with allocated registers."""
         def repl(m):
             tok = m.group(0)
@@ -3215,8 +3197,14 @@ class HLLower:
                 return tok
             if tok in self.const_vals:
                 return str(self.const_vals[tok])
-            if tok in self.var_loc and self.var_loc[tok][0] == "reg":
-                return self.var_loc[tok][1]
+            if tok in self.var_loc:
+                if self.var_loc[tok][0] == "reg":
+                    return self.var_loc[tok][1]
+                if self.var_loc[tok][0] == "spill":
+                    raise HLErr(
+                        f"{self.src}: line {line}: `stack var {tok}` cannot be named directly in `maintains`/`writes`/`decreases`; "
+                        f"keep loop-invariant variables in registers and mark a cold non-invariant temporary `stack var` instead"
+                    )
             return tok
         return re.sub(r"\b[A-Za-z_]\w*(?:\$\d+)?\b", repl, expr_str)
 
@@ -3702,12 +3690,12 @@ def normalize_contract_params(params_text):
     return ", ".join(parts), extra_req
 
 
-def lower_hl_block(fn_name, params_text, lines, first_line, arch, src="<ode>", fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None, allow_spill=None):
+def lower_hl_block(fn_name, params_text, lines, first_line, arch, src="<ode>", fn_names=None, data_names=None, explicit_stack=False, callee_clobbers=None, needs=(), hl_inlines=None):
     """Parse and deterministically lower a High-Level Ode function body to `odec` assembly lines + metadata."""
     parser = HLParser(lines, first_line, src)
     stmts = parser.parse_block_stmts(until_brace=False)
     params = parse_param_list(params_text)
-    lowerer = HLLower(fn_name, params, arch, stmts, src, fn_names=fn_names, data_names=data_names, explicit_stack=explicit_stack, callee_clobbers=callee_clobbers, needs=needs, hl_inlines=hl_inlines, allow_spill=allow_spill)
+    lowerer = HLLower(fn_name, params, arch, stmts, src, fn_names=fn_names, data_names=data_names, explicit_stack=explicit_stack, callee_clobbers=callee_clobbers, needs=needs, hl_inlines=hl_inlines)
     res = lowerer.lower()
     # Group lowered asm lines by original High-Level Ode source line for `ode advise --asm`
     src_by_no = {first_line + i: raw.rstrip() for i, raw in enumerate(lines)}

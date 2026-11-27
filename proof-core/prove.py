@@ -529,18 +529,20 @@ def _spec_open_order(meta, count, include_interior=True):
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=(), max_lives=None, fast_fail=False, max_churn=None):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=(), max_lives=None, fast_fail=False, max_churn=None, max_fact_work=None):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
         self.max_lives = max_lives          # deterministic branch-split fuel per function (`t live` count)
         self.fast_fail = fast_fail
         self.max_churn = max_churn          # deterministic per-goal backtrack cap (resets whenever proof advances)
+        self.max_fact_work = max_fact_work  # deterministic total fact-inspection work cap across all queries
+        self.fact_work = 0
         self.max_proof_len = 0
         self.goal_churn = 0
         self.max_seen_churn = 0
         self.spec_budgets = (1, 2, 4, 8) if fast_fail else (1, 2, 5, 10, 14, 30)
         self.split_depth_cap = 3 if fast_fail else 4
-        self.split_tries_cap = 12 if fast_fail else 48
+        self.split_tries_cap = 16 if fast_fail else 48
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
@@ -582,18 +584,25 @@ class Prover:
             if self.goal_churn > self.max_seen_churn:
                 self.max_seen_churn = self.goal_churn
             if self.max_churn is not None and self.goal_churn >= self.max_churn:
-                raise GaveUp(f"fast-fail: {self.goal_churn} search steps at one goal without advancing")
+                prefix = "fast-fail: " if self.fast_fail else ""
+                raise GaveUp(f"{prefix}{self.goal_churn} search steps at one goal without advancing")
         self.runs += 1
         if FROM_THE_START or not os.path.exists(session.EXE):
             # the verifier itself, from the proof's first line each time
             with open(self.out, "w") as f: f.write("\n".join(self.lines + proof) + "\n")
-            return subprocess.run([EXE, table_for(self.statement), self.statement, self.out], capture_output=True, text=True).stdout
-        # `odeprove` says what the verifier would say, and goes only through the lines that are new (session.py)
-        if self.session is None:
-            names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
-            if not names: raise SystemExit("prove: the lines before the proof name no function (`for NAME`)")
-            self.session = session.Session(self.statement, self.lines, names[-1], only=True, with_pc=bool(self.wrap_pcs))
-        return self.session.ask(proof)
+            ans = subprocess.run([EXE, table_for(self.statement), self.statement, self.out], capture_output=True, text=True).stdout
+        else:
+            # `odeprove` says what the verifier would say, and goes only through the lines that are new (session.py)
+            if self.session is None:
+                names = [l.split()[1] for l in self.lines if l.split()[:1] == ["for"]]
+                if not names: raise SystemExit("prove: the lines before the proof name no function (`for NAME`)")
+                self.session = session.Session(self.statement, self.lines, names[-1], only=True, with_pc=bool(self.wrap_pcs))
+            ans = self.session.ask(proof)
+        self.fact_work += ans.count("\nf ") + 1
+        if self.max_fact_work is not None and self.fact_work >= self.max_fact_work:
+            prefix = "fast-fail: " if self.fast_fail else ""
+            raise GaveUp(f"{prefix}{self.fact_work} fact-inspection work steps")
+        return ans
 
     def note(self, proof, said):
         if os.environ.get("PROVE_TRACE"): print(f"-- after {len(proof)} lines ({[l for l in proof if l.startswith('t ')][-6:]}): {said.splitlines()[0]}", file=sys.stderr)
@@ -1123,11 +1132,14 @@ def prove(spec_text, targets, statement_out, out):
             fast_fail = True
         elif _effort == "deep":
             fast_fail = False
+        elif "ODE_PROVE_FAST_FAIL" in os.environ:
+            fast_fail = (os.environ.get("ODE_PROVE_FAST_FAIL", "1") == "1")
         else:
-            fast_fail = (os.environ.get("ODE_PROVE_FAST_FAIL", "0") == "1")
-        max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "6000"))
-        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "80" if fast_fail else "250"))
-        max_churn = int(os.environ.get("ODE_PROVE_MAX_CHURN", "120" if fast_fail else "0"))
+            fast_fail = True
+        max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "4000" if fast_fail else "6000"))
+        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "100" if fast_fail else "250"))
+        max_churn = int(os.environ.get("ODE_PROVE_MAX_CHURN", "120" if fast_fail else "2500"))
+        max_fact_work = int(os.environ.get("ODE_PROVE_MAX_WORK", "1200000" if fast_fail else "2000000"))
         timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "0"))
         fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
@@ -1137,7 +1149,8 @@ def prove(spec_text, targets, statement_out, out):
                        trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs,
                        max_lives=max_lives if max_lives > 0 else None,
                        fast_fail=fast_fail,
-                       max_churn=max_churn if max_churn > 0 else None)
+                       max_churn=max_churn if max_churn > 0 else None,
+                       max_fact_work=max_fact_work if max_fact_work > 0 else None)
             p.last = ""
             p.last_proof = []
             try:

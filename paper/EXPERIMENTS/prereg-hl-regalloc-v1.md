@@ -1,0 +1,61 @@
+# Pre-Registration: Cold-Room Suite `hl-regalloc-v1`
+
+Committed before any task API call begins.
+
+## Frozen Configuration
+
+- **Run ID:** `hl-regalloc-v1`
+- **UTC timestamp:** `2026-11-27T04:07:48Z`
+- **Repository commit (HEAD before pre-registration):** `18294d048c9c6bf2f371c5e0fbf0b68f3d34e72c`
+- **Tasks:** `ct_base64_decode`, `der_valid`, `ipv4_valid`, `chacha20_4way`, `blake3_compress1`, `blake3_compress_4way`
+- **Models (6):** `openai/gpt-6.2-astra-pro`, `anthropic/claude-fable-5.2`, `google/gemini-4-neon`, `anthropic/claude-sonnet-5.5`, `anthropic/claude-haiku-5.5`, `qwen/qwen3.8-2.4t-a95b`
+- **Targets (2):** `x86_64`, `arm64`
+- **Experimental arms:** `legacy`, `ode_reg`, `ode_reg_ask` (`--opt-rounds 2` after first pass)
+- **Total cells:** 216
+- **Budget cap:** max `8` rounds per cell, no subprocess tool timeout (deterministic query cap `ODE_PROVE_MAX_ASKS`), `0s` wall-clock cap per cell (`0` = off), early stop after `2` consecutive `output_token_limit` replies, `48` concurrent local prover slots, provider sort `throughput`, temperature `0.2`, reasoning effort `medium`, max_tokens `32000`, cumulative suite cap `$300.00`.
+
+## Frozen Input BLAKE3-256 Hashes
+
+The table below lists the full 64-hex BLAKE3-256 hash of every frozen prompt input and verifier artifact.
+
+| Artifact | BLAKE3-256 (64 hex) |
+| --- | --- |
+| `arm64/arm64.tab` | `93cfb4c85ff2b3076017f11e4ebee0e0d715663056fa91ad07d3ec7d2409f6aa` |
+| `core/x86.tab` | `1d3ba333dabca7c705da03e59320e3bf69335ee1ab082f9fab54ec3c8dea8fb2` |
+| `docs/QUICKSTART.md` | `8c6bd9dfb0e928416bad377a659c5aee60ac86aeaf8201e04191c03974c302ff` |
+| `paper/EXPERIMENTS/run_suite.py` | `3c4c9a5d6a962caa2a43ccd5628858fe727226bead0fc5501fe52f83781d66a4` |
+| `paper/EXPERIMENTS/suites/hl-regalloc-v1.json` | `0fea914fa6b7489f9257958bcddb8559fdbb2833ae7ed0dc1a35643052223190` |
+| `paper/EXPERIMENTS/tasks/blake3_compress1_native.c` | `118028b29d28e6e964cca88531b7637b3a04bd244faafe2d88e1218d5fe786ab` |
+| `paper/EXPERIMENTS/tasks/blake3_compress1_spec.ode` | `d3826addddc784dd7c59f99bc65d04a0da1e08e7748075d26020296618a7cc2d` |
+| `paper/EXPERIMENTS/tasks/blake3_compress_4way_native.c` | `87623e1d883f9114d177a7e3ec8043f2384aff4bec5d935a3b9f59a832284262` |
+| `paper/EXPERIMENTS/tasks/blake3_compress_4way_spec.ode` | `53397aea78e4ad801aefa0b5f10710e897db3aa0bb6888fd84ebe5512aa25128` |
+| `paper/EXPERIMENTS/tasks/chacha20_4way_native.c` | `1f038baa31df4cf96ad6935a432c47f923d0bbe4a8d5595d5f80b7505ed3c10f` |
+| `paper/EXPERIMENTS/tasks/chacha20_4way_spec.ode` | `8fb1af4c4a1fb9816a38a949e2287e9888fcc52c548742a210bfaec855c8bea6` |
+| `paper/EXPERIMENTS/tasks/ct_base64_decode_native.c` | `280dd6dffc7b0ffedfdc2ddeabf8d576dfbb54583d5c83c8d7b120f43e431734` |
+| `paper/EXPERIMENTS/tasks/ct_base64_decode_spec.ode` | `8d5fd88d8c83e228b5ce69dcbcafb447f8c794b62e3ec3c9b17acf4773c33355` |
+| `paper/EXPERIMENTS/tasks/der_valid_native.c` | `9b09fc02503bcbeda516e48eac3f39401205c299dbad44339707c9ba3b07f667` |
+| `paper/EXPERIMENTS/tasks/der_valid_spec.ode` | `9b712495e0104aa09f4e64b8c23ee5c366fa51bc5b7941b574e5abc002b20ce9` |
+| `paper/EXPERIMENTS/tasks/ipv4_valid_native.c` | `5396d6de3cfd761f95e34ba2cf60c0f55b701a0d181c0d2072f1925b8728577f` |
+| `paper/EXPERIMENTS/tasks/ipv4_valid_spec.ode` | `ac3a8c96246621431ed85c6d8c79c0f8f2e62558f25edf9de3947fd5b3c55a9a` |
+| `proof-core/.lake/build/bin/odeverify` | `95ac27de88f13c50b15ed499c36870045ca1db6a36708e8340d044ceea76cfe1` |
+| `proof-core/verify2.py` | `f96c0781df5f69f3ef320fbf9d7d847c155d76b580d30c7455254744e876600b` |
+
+## Expected Canonical Contract IDs
+
+The table below lists each task's required 52-character base-32 contract identifier.
+
+| Task | Entry function | Expected contract ID |
+| --- | --- | --- |
+| `ct_base64_decode` | `ct_base64_decode` | `5ibuszg65c23xbxdcscfcsjfpw3w3xju3hi672yvtmecj7y7e2dq` |
+| `der_valid` | `der_valid` | `pyqksm2d6u3quuwvpwjwr4j4kgmgy7zlqjixoqobp2gr24sggfma` |
+| `ipv4_valid` | `ipv4_valid` | `hh2id4zrh6vshq5hjpeuu53hlzy3x4uqhnnvuctrsk6hlfzseysa` |
+| `chacha20_4way` | `chacha20_4way` | arm64: `53a2xllgc33xg5rjaplh2yk5rojhwijvtmd55idtb2jx5mzvwqda`, x86_64: `i4ms6vhpzvftnenj5opj7thi6ltpvqquxwsasrtyfda67m3l7k2a` |
+| `blake3_compress1` | `blake3_compress1` | arm64: `hkxqh23yct3ndyut6iehnh6p7jtyy4qprhin7lqtbwgxqzt65u4q`, x86_64: `3mwrna2mvj7xwwguz2quumvjbhrxve5aq6r576ucii67s6l3yh2q` |
+| `blake3_compress_4way` | `blake3_compress_4way` | arm64: `btdd6bqgvacwoyoysfjzlmt7dcxlhoanqtslor6sp47cdsfp36zq`, x86_64: `ausphi6smcurx6io6ykmpcplt2skqnzhgcd6vqtqfy2br67oxgha` |
+
+## Strict Pass Criteria
+
+A cell counts as a **strict pass** if and only if, within the round limit and with no manual intervention:
+1. `ode pack` produces an ELF64 object file and `.proof` file matching the task's exact expected contract ID.
+2. `ode audit --expect-contract <ID>` returns `VERDICT: shown` with 100% executable coverage and 0 hooks.
+3. Secondary automated checks recorded on every passing cell: independent pure-Python second verifier (`proof-core/verify2.py`) and real-silicon native execution against the task harness.

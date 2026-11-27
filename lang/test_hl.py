@@ -1306,6 +1306,68 @@ fn rescue_demo(a: u64, b: u64, c: u64) -> u64
             self.assertEqual(r_deep.returncode, 0, f"--try-harder should prove same source: {r_deep.stdout}\n{r_deep.stderr}")
             self.assertIn("shown", r_deep.stdout)
 
+    def test_29_x86_large_imm_arm64_no_v8_and_stack_var_maintains_diag(self):
+        """Verify >2^31 x86-64 immediate synthesis, arm64 v8..v15 exclusion, and stack-var-in-maintains error."""
+        import ode_unified
+        # 1. > 2^31 immediate (`4294967296`) synthesizes cleanly on x86_64 & arm64 and verifies `shown`
+        src_imm = """\
+fn big_const(x: u64) -> u64
+    requires x < 4294967296
+    returns x + 4294967296
+    trace depends on x
+{
+    return x + 4294967296
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "imm.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src_imm)
+                res = ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                              fn_name="big_const", target=arch)
+                self.assertEqual(res["verdict"], "shown", f"big_const on {arch}: {res}")
+
+        # 2. `stack var` named in `maintains` gives crisp compile-time error
+        src_sv_m = """\
+fn bad_sv_m(n: u64) -> u64
+    requires n <= 10
+    returns n
+    trace depends on n
+{
+    stack var i: u64 := 0
+    while i < n
+        maintains 0 <= i, i <= n
+        decreases n - i
+    {
+        i += 1
+    }
+    return i
+}
+"""
+        p_bad = ode_unified.parse_unified(src_sv_m, src="svm.ode")
+        for arch in ("x86_64", "arm64"):
+            self.assertIn("cannot be named directly in `maintains`", p_bad["fns"][0]["impls"][arch].get("hl_err", ""))
+
+        # 3. 23 simultaneously live `u32x4` vars on arm64 refuse cleanly instead of allocating v8..v15
+        vlines = [f"    let a{i}: u32x4 := load_u32x4(buf, {(i % 4) * 16})" for i in range(23)]
+        vsum = " + ".join(f"a{i}" for i in range(23))
+        src_v23 = (
+            "fn vec23(out: 16 bytes, buf: 64 bytes)\n"
+            "    ensures out = out\n"
+            "    trace depends on nothing\n"
+            "{\n"
+            "    for arm64 {\n"
+            + "\n".join("    " + l for l in vlines) + "\n"
+            f"        store_u32x4(out, 0, {vsum})\n"
+            "    }\n"
+            "}\n"
+        )
+        with self.assertRaises(ode_unified.UnifiedErr) as cm:
+            ode_unified.parse_unified(src_v23, src="v23.ode")
+        self.assertIn("all 22 eligible registers are occupied", str(cm.exception))
+        self.assertNotIn("= v8", str(cm.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
