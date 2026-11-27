@@ -181,11 +181,11 @@ Portable functions use a single `{ ... }` body. When you want architecture-speci
 |---|---|---|
 | Unaligned vector load | `let v: u32x4 := inp.u32x4(off)` / `inp.u32x16(off)` | `vmovdqu` / `vmovdqu32` (`x86_64`); `ldr qN, [base, off]` (`arm64`) |
 | Unaligned vector store | `out.u32x4(off) := v` / `out.u32x16(off) := v` | `vmovdqu` / `vmovdqu32` (`x86_64`); `str qN, [base, off]` (`arm64`) |
-| Vector constructors | `u32x4(w0, w1, w2, w3)`, `u32x4.splat(w)`, `u32x16.splat(w)` | Builds a 4-lane (const or runtime `word`/`u64`) or 16-lane (`x86_64` `vpbroadcastd`) vector portably. |
+| Vector packing / broadcast | `pack_u64x2(lo, hi)`, `const_u32x4(data_label)` (`x86_64`), `broadcast_u32x16(w)` (`x86_64`) | `vmovq`+`vpunpcklqdq` / `fmov`+`zip1.2d`; `vmovaps [rip + #label]`; `vpbroadcastd` |
 | 32-bit lane add / xor / and / or | `a +% b` (or `a +%= b`), `a ^ b`, `a & b`, `a \| b` | `vpaddd`, `vpxord`, `vpand`, `vpor` / `add.4s`, `eor.16b`, `and.16b`, `orr.16b` |
 | 32-bit lane shift & rotate | `a >> k`, `a << k`, `rotl32(a, k)`, `rotr32(a, k)` | `vpsrld`/`vpslld`, `vprord` (`avx512`) or shift+or / `ushr.4s`/`shl.4s`, `rev32.8h` (`k=16`) or shift+orr (`arm64`) |
 | 128-bit lane rotate / align | `ext4(a, b)`, `ext8(a, b)`, `ext12(a, b)` | `vpalignr` (`x86_64`) / `ext.16b` (`arm64`) |
-| 32-bit lane shuffle / unpack | `shuf32(a, imm)`, `unpacklo32/hi32(a, b)`, `unpacklo64/hi64(a, b)`, `uzp1_32/uzp2_32(a, b)`, `shufi32x4(a, b, imm)` | `vpshufd`, `vpunpckldq`/`hdq`/`lqdq`, `vshufps`, `vshufi32x4` / `zip1.4s`/`zip2.4s`/`zip1.2d`/`zip2.2d`/`uzp1.4s`/`uzp2.4s`/`ext.16b` (`arm64`; `shuf32` supports lane rotations `0x39`/`0x4E`/`0x93`/`0xE4` and splats `0x00`/`0x55`/`0xAA`/`0xFF` portably) |
+| 32-bit lane shuffle / unpack | `unpacklo32/hi32(a, b)`, `unpacklo64/hi64(a, b)`, `uzp1_32/uzp2_32(a, b)`; `x86_64` only: `shuf32(a, imm)`, `shufps(a, b, imm)`, `blend32(a, b, imm)`, `shufi32x4(a, b, imm)` | `vpunpckldq`/`hdq`/`lqdq`, `vshufps`, `vpshufd`, `vpblendd`, `vshufi32x4` / `zip1.4s`/`zip2.4s`/`zip1.2d`/`zip2.2d`/`uzp1.4s`/`uzp2.4s` (`arm64`) |
 
 On AArch64, `u32x4` uses up to 22 caller-saved NEON registers (`v0..v7, v16..v29`, keeping `v8..v15` untouched with zero stack pushes; declare `stack var` for any extra vectors). On x86-64, `u32x4` uses `xmm1..xmm14` and `u32x16` uses `zmm1..zmm30` (emitting `vzeroupper` automatically on exit). Raw assembly from `core/x86.tab` and `arm64/arm64.tab` also remains accepted inside `for x86_64 { ... }` / `for arm64 { ... }` blocks whenever you want full manual register control.
 

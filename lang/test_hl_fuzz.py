@@ -531,16 +531,14 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
                     os.environ[k] = v
 
     def test_06_random_vector_exprs_and_intrinsics_both_arches(self):
-        """Fuzz random `u32x4` expressions (shifts, rotates, unpack/uzp/ext/shuf32, const & runtime
-        `u32x4(...)` / `u32x4.splat(...)`) across BOTH `x86_64` and `arm64`, checking exact
-        concrete execution against a Python lane oracle."""
+        """Fuzz random 1-to-1 `u32x4` expressions (shifts, rotates, unpack/uzp/ext, `pack_u64x2`)
+        across BOTH `x86_64` and `arm64`, checking exact concrete execution against a Python lane oracle."""
         import struct
         rng = random.Random(20261127)
         M32 = 0xFFFFFFFF
 
         def _rotl32(v, k): return [((w << k) | (w >> (32 - k))) & M32 for w in v]
         def _rotr32(v, k): return [((w >> k) | (w << (32 - k))) & M32 for w in v]
-        def _shuf32(v, imm): return [v[(imm >> (2 * i)) & 3] for i in range(4)]
 
         vec_ops = [
             ("add", lambda a, b: f"({a} + {b})", lambda va, vb: [(x + y) & M32 for x, y in zip(va, vb)]),
@@ -560,41 +558,33 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
             ("ext4", lambda a, b: f"ext4({a}, {b})", lambda va, vb: [va[1], va[2], va[3], vb[0]]),
             ("ext8", lambda a, b: f"ext8({a}, {b})", lambda va, vb: [va[2], va[3], vb[0], vb[1]]),
             ("ext12", lambda a, b: f"ext12({a}, {b})", lambda va, vb: [va[3], vb[0], vb[1], vb[2]]),
-            ("shuf39", lambda a, b: f"shuf32({a}, 0x39)", lambda va, vb: _shuf32(va, 0x39)),
-            ("shuf4e", lambda a, b: f"shuf32({a}, 0x4E)", lambda va, vb: _shuf32(va, 0x4E)),
-            ("shuf93", lambda a, b: f"shuf32({a}, 0x93)", lambda va, vb: _shuf32(va, 0x93)),
-            ("shuf55", lambda a, b: f"shuf32({a}, 0x55)", lambda va, vb: _shuf32(va, 0x55)),
-            ("shufff", lambda a, b: f"shuf32({a}, 0xFF)", lambda va, vb: _shuf32(va, 0xFF)),
         ]
 
         for case_i in range(24):
-            c0 = rng.getrandbits(32)
-            c1 = rng.getrandbits(32)
             steps = [rng.choice(vec_ops) for _ in range(5)]
             lines = [
                 "    var v0: u32x4 := inp.u32x4(0)",
                 "    var v1: u32x4 := inp.u32x4(16)",
-                f"    let vc: u32x4 := u32x4(w0, w1, {c0}, {c1})",
-                f"    let vs: u32x4 := u32x4.splat(w0)",
-                "    v0 := v0 ^ vc",
-                "    v1 := v1 + vs",
+                "    let vp: u32x4 := pack_u64x2(lo64, hi64)",
+                "    v0 := v0 ^ vp",
             ]
             for si, (_, fmt_fn, _) in enumerate(steps):
                 a_nm, b_nm = ("v0", "v1") if si % 2 == 0 else ("v1", "v0")
                 lines.append(f"    {a_nm} := {fmt_fn(a_nm, b_nm)}")
             lines.append("    out.u32x4(0) := v0 ^ v1")
             src = (
-                "fn vec_fuzz(out: 16 bytes, inp: 32 bytes, w0: word, w1: word)\n"
+                "fn vec_fuzz(out: 16 bytes, inp: 32 bytes, lo64: u64, hi64: u64)\n"
                 "    requires no_overlap(out, inp)\n"
                 "    trace depends on nothing\n"
                 "{\n" + "\n".join(lines) + "\n}\n"
             )
             inp_words = [rng.getrandbits(32) for _ in range(8)]
             inp_bytes = list(struct.pack("<8I", *inp_words))
-            w0_v = rng.getrandbits(32)
-            w1_v = rng.getrandbits(32)
-            v0 = [x ^ y for x, y in zip(inp_words[:4], [w0_v, w1_v, c0, c1])]
-            v1 = [(x + w0_v) & M32 for x in inp_words[4:]]
+            lo64_v = rng.getrandbits(64)
+            hi64_v = rng.getrandbits(64)
+            vp_words = [lo64_v & M32, (lo64_v >> 32) & M32, hi64_v & M32, (hi64_v >> 32) & M32]
+            v0 = [x ^ y for x, y in zip(inp_words[:4], vp_words)]
+            v1 = list(inp_words[4:])
             for si, (_, _, eval_fn) in enumerate(steps):
                 if si % 2 == 0:
                     v0 = eval_fn(v0, v1)
@@ -605,7 +595,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
                 progs = compile_progs(src, "vec_fuzz", tgt)
                 _, out_b = exec_progs(
                     progs, src, "vec_fuzz", tgt,
-                    [("out", [0xAA] * 16), ("inp", inp_bytes), ("w0", w0_v), ("w1", w1_v)],
+                    [("out", [0xAA] * 16), ("inp", inp_bytes), ("lo64", lo64_v), ("hi64", hi64_v)],
                     bufs={"out", "inp"},
                 )
                 self.assertEqual(out_b["out"], want_bytes, f"vec_fuzz case {case_i} ({tgt}) mismatch!\n{src}")

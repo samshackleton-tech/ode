@@ -71,13 +71,14 @@ Our existing unit and fuzz tests (`test_hl.py`, `test_hl_fuzz.py`) tested only a
   - **0** uncaught Python tracebacks across all 80 corpus files (down from 3).
   - `blake3_compress1` buggy solutions (`kimi-k3.1-pro`, `glm-5.3-prime`) now receive concrete word-level counterexamples (`refused with a proof`) in 0.3 s.
 
-### 2. High-Level Ode Simplifications Added
+### 2. High-Level Ode Changes Kept (Strict 1-to-1 Lowering) & Anti-Cleverness Ratchets
 
-- **Vector lane shifts:** `v >> k` and `v << k` (plus `shr32`/`shl32`) on `u32x4` lower directly to `vpsrld`/`vpslld` (`x86_64`) and `ushr.4s`/`shl.4s` (`arm64`).
-- **Portable vector constructors:** `u32x4(w0, w1, w2, w3)` / `u32x4.of(...)` and `u32x4.splat(w)` work portably for both integer constants and runtime `word`/`u64` expressions on both `x86_64` and `arm64`, using `vmovq`/`fmov` + lane shuffles with zero extra scratch registers and full Lean verification (`u32x16(w)` / `u32x16.splat(w)` lower to `vpbroadcastd` on `x86_64`).
-- **Portable `shuf32` on `arm64`:** Common lane rotations (`0x39`, `0x4E`, `0x93`, `0xE4`) and lane splats (`0x00`, `0x55`, `0xAA`, `0xFF`) lower directly to NEON `ext` / `zip1` / `zip2` / `orr`; unsupported masks emit a crisp error listing the supported masks and NEON alternatives.
-- **Lexical `{ ... }` block scopes inside functions:** Standalone `{ ... }` blocks scope `let`/`var` names cleanly (releasing registers at block exit without name collisions).
-- **Updated `docs/QUICKSTART.md`** concisely for the new portable vector constructors, vector shifts, portable `shuf32`, lexical `{ ... }` blocks, and accurate AArch64 NEON caller-saved register count (`v0..v7, v16..v29`).
+- **1-to-1 vector lane shifts:** `v >> k` and `v << k` (plus `shr32`/`shl32`) on `u32x4` lower 1-to-1 to `vpsrld`/`vpslld` (`x86_64`) and `ushr.4s`/`shl.4s` (`arm64`).
+- **Lexical `{ ... }` block scopes inside functions:** Standalone `{ ... }` blocks scope `let`/`var` names cleanly (zero extra instructions; releases registers at block exit).
+- **Strict target fidelity (rolled back multi-instruction synthesis):** An initial draft that added multi-instruction `u32x4(w0, w1, w2, w3)` / `u32x4.splat(w)` (8–10 instructions) and an 8-mask AArch64 magic table for `shuf32` was rolled back before running `hl-default-v2` so the coder—never the compiler—stays in control of instruction selection. `shuf32` remains strictly `x86_64` (`vpshufd`), raising a clear diagnostic on `arm64` pointing to the 1-instruction NEON operations (`ext4`/`ext8`/`ext12`, `unpacklo32`/`unpackhi32`, `unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`).
+- **Automated anti-cleverness ratchets (`lang/test_hl_matrix.py` `test_09`):** Locks (1) the explicit multi-instruction vector manifest (`EXPLICIT_MULTI_INSN_OPS`, forbidding silent addition of multi-instruction lowerings), (2) immediate uniformity (no partial magic-constant tables), (3) straight-line statement-order monotonicity, (4) byte-for-byte identical `.text` across `--effort fast` and `--effort deep`, and (5) `x86.tab` / `arm64.tab` row-count ratchets.
+- **Follow-up item recorded:** Revisit older grandfathered multi-instruction lowerings (`a * K` binary shift-add synthesis, 4-instruction `buf.u16` byte emulation, 5–9 instruction AArch64 large constants, 3-instruction `rotl32`/`rotr32` and `pack_u64x2`, `select`, and 2-instruction unaligned AArch64 `add + ldr`) to design a cleaner Wirth-style replacement.
+- **Updated `docs/QUICKSTART.md`** concisely for 1-to-1 vector shifts, `unpackhi64`, `uzp1_32`/`uzp2_32`, lexical `{ ... }` blocks, and accurate AArch64 NEON caller-saved register count (`v0..v7, v16..v29`).
 
 ### 3. Suite Settings for `hl-default-v2` (`paper/EXPERIMENTS/suites/hl-default-v2.json`)
 

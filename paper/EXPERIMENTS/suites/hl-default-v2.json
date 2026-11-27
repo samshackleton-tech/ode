@@ -1,6 +1,6 @@
 {
   "id": "hl-default-v2",
-  "description": "Iteration 2 cold-room benchmark (exact same 5 models x 8 tasks x 2 targets = 80 cells as hl-default-v1) after fixing all 10 hl-default-v1 tool/compiler/prover/verifier bugs, adding portable vector shifts/constructors/shuf32 and lexical block scopes, and cutting the laggy API tail (opt_rounds=0, max_tokens=16384, max_rounds=7).",
+  "description": "Iteration 2 cold-room benchmark (exact same 5 models x 8 tasks x 2 targets = 80 cells as hl-default-v1) after fixing all 10 hl-default-v1 tool/compiler/prover/verifier bugs, adding 1-to-1 vector shifts and lexical block scopes (with anti-cleverness lowering ratchets), and cutting the laggy API tail (opt_rounds=0, max_tokens=16384, max_rounds=7).",
   "tasks": [
     "ct_base64_decode",
     "der_valid",

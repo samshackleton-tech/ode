@@ -974,21 +974,19 @@ _INTRINSICS = frozenset({
     "const_u32x4", "zeros_u32x16", "rotl32", "rotr32", "shl32", "shr32",
     "shuf32", "shufps", "shufi32x4",
     "unpacklo32", "unpackhi32", "unpacklo64", "unpackhi64",
-    "uzp1_32", "uzp2_32", "pack_u64x2",
-    "u32x4", "u32x4.splat", "u32x4.of", "u32x16", "u32x16.splat",
+    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
     "blend32", "ext4", "ext8", "ext12",
     "add_u32x16_data",
 })
 
 _VEC4_INTRINSICS = frozenset({
     "load_u32x4", "const_u32x4", "shuf32", "shufps", "blend32",
-    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4", "u32x4.splat", "u32x4.of",
+    "uzp1_32", "uzp2_32", "pack_u64x2", "u32x4",
     "ext4", "ext8", "ext12",
 })
 
 _VEC16_INTRINSICS = frozenset({
     "load_u32x16", "broadcast_u32x16", "zeros_u32x16", "shufi32x4", "add_u32x16_data",
-    "u32x16", "u32x16.splat",
 })
 
 
@@ -3134,11 +3132,11 @@ class HLLower:
                     raise HLErr(f"{self.src}: line {line}: `zeros_u32x16` (AVX-512) is only supported on `x86_64`")
                 self.emit(line, f"vpxord {dst}, {dst}, {dst}")
                 return
-            if nm in ("broadcast_u32x16", "u32x16", "u32x16.splat"):
+            if nm == "broadcast_u32x16":
                 if self.arch != "x86_64":
-                    raise HLErr(f"{self.src}: line {line}: `{nm}` (AVX-512) is only supported on `x86_64`; use `u32x4.splat(...)` on `arm64`")
+                    raise HLErr(f"{self.src}: line {line}: `broadcast_u32x16` (AVX-512) is only supported on `x86_64`")
                 if len(args) != 1:
-                    raise HLErr(f"{self.src}: line {line}: `{nm}(val)` takes 1 scalar argument")
+                    raise HLErr(f"{self.src}: line {line}: `broadcast_u32x16(val)` takes 1 scalar argument")
                 a0 = args[0]
                 if isinstance(a0, IndexLoad) and a0.width == "u32":
                     with self._emit_addr_held(line, a0.buf, a0.idx) as (base, disp):
@@ -3151,61 +3149,22 @@ class HLLower:
                         self.emit(line, f"vpbroadcastd {dst}, {X86_REG32[sr]}")
                 return
             if nm == "const_u32x4":
-                if len(args) == 4:
-                    self._eval_vec(Call("u32x4", args, line), dst, "u32x4", s_idx)
-                    return
-                if len(args) == 1 and isinstance(args[0], Num):
-                    self._eval_vec(Call("u32x4.splat", args, line), dst, "u32x4", s_idx)
-                    return
                 if len(args) == 1 and isinstance(args[0], Var) and args[0].name in self.data_names:
                     if self.arch == "x86_64":
                         self.emit(line, f"vmovaps {dst}, xmmword ptr [rip + #{args[0].name}]")
                         return
-                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` from `data` is x86-64 only; use `u32x4(w0, w1, w2, w3)` or `u32x4.splat(w)` portably")
-                raise HLErr(f"{self.src}: line {line}: `const_u32x4` expects a `data` label or 1/4 integer constants; prefer `u32x4(w0, w1, w2, w3)` or `u32x4.splat(w)`")
-            if nm == "u32x4.splat" or (nm == "u32x4" and len(args) == 1):
-                if len(args) != 1:
-                    raise HLErr(f"{self.src}: line {line}: `u32x4.splat(w)` takes 1 scalar argument")
-                a0 = args[0]
-                if isinstance(a0, Num):
-                    a0 = Num(a0.val & 0xFFFFFFFF, line)
-                with self._hold_expr(a0, why="lane for `u32x4.splat`") as wr:
-                    if self.arch == "x86_64":
-                        self.emit(line, f"vmovq {dst}, {wr}")
-                        self.emit(line, f"vpshufd {dst}, {dst}, 0")
-                    else:
-                        self.emit(line, f"fmov d{dst[1:]}, {wr}")
-                        self.emit(line, f"zip1 {dst}.4s, {dst}.4s, {dst}.4s")
-                        self.emit(line, f"zip1 {dst}.2d, {dst}.2d, {dst}.2d")
-                return
-            if nm in ("u32x4", "u32x4.of"):
-                if len(args) != 4:
-                    raise HLErr(f"{self.src}: line {line}: `{nm}(w0, w1, w2, w3)` takes 4 scalar arguments (or use `u32x4.splat(w)` for 1)")
-                vtmp = self._vec_scratch("u32x4", 0)
-                if vtmp == dst:
-                    vtmp = self._vec_scratch("u32x4", 1)
-                lane_args = [Num(a.val & 0xFFFFFFFF, line) if isinstance(a, Num) else a for a in args]
-                def _load_lane0(arg_e, vreg, why):
-                    with self._hold_expr(arg_e, why=why) as wr:
-                        if self.arch == "x86_64":
-                            self.emit(line, f"vmovq {vreg}, {wr}")
-                        else:
-                            self.emit(line, f"fmov d{vreg[1:]}, {wr}")
-                if self.arch == "x86_64":
-                    _load_lane0(lane_args[0], dst, "lane 0 of `u32x4`")
-                    _load_lane0(lane_args[1], vtmp, "lane 1 of `u32x4`")
-                    self.emit(line, f"vpunpckldq {dst}, {dst}, {vtmp}")
-                    _load_lane0(lane_args[2], vtmp, "lane 2 of `u32x4`")
-                    self.emit(line, f"vshufps {dst}, {dst}, {vtmp}, 4")
-                    _load_lane0(lane_args[3], vtmp, "lane 3 of `u32x4`")
-                    self.emit(line, f"vshufps {vtmp}, {dst}, {vtmp}, 10")
-                    self.emit(line, f"vshufps {dst}, {dst}, {vtmp}, 132")
-                else:
-                    _load_lane0(lane_args[0], dst, "lane 0 of `u32x4`")
-                    self.emit(line, f"ext {dst}.16b, {dst}.16b, {dst}.16b, 4")
-                    for li in (1, 2, 3):
-                        _load_lane0(lane_args[li], vtmp, f"lane {li} of `u32x4`")
-                        self.emit(line, f"ext {dst}.16b, {dst}.16b, {vtmp}.16b, 4")
+                    raise HLErr(f"{self.src}: line {line}: `const_u32x4` from `data` is x86-64 only; on `arm64` use `u32x4(w0, w1, w2, w3)` or `pack_u64x2(lo, hi)`")
+                raise HLErr(
+                    f"{self.src}: line {line}: `const_u32x4` expects a `data` label (x86-64 `vmovaps [rip + #label]`); "
+                    f"for 4 constant 32-bit words use `u32x4(w0, w1, w2, w3)` or `pack_u64x2(lo, hi)`"
+                )
+            if nm == "u32x4":
+                if len(args) != 4 or not all(isinstance(a, Num) for a in args):
+                    raise HLErr(f"{self.src}: line {line}: `u32x4(w0, w1, w2, w3)` requires 4 constant 32-bit integers (for runtime scalars use `pack_u64x2(lo, hi)`)")
+                w0, w1, w2, w3 = (a.val & 0xFFFFFFFF for a in args)
+                lo64 = w0 | (w1 << 32)
+                hi64 = w2 | (w3 << 32)
+                self._eval_vec(Call("pack_u64x2", [Num(lo64, line), Num(hi64, line)], line), dst, "u32x4", s_idx)
                 return
             if nm == "pack_u64x2":
                 if len(args) != 2:
@@ -3272,37 +3231,17 @@ class HLLower:
                 self.emit(line, f"vshufi32x4 {dst}, {a}, {b}, {imm}")
                 return
             if nm == "shuf32":
-                a = self._as_vec_reg(args[0], ty, s_idx)
+                if self.arch != "x86_64":
+                    raise HLErr(
+                        f"{self.src}: line {line}: `shuf32` (`vpshufd`) is x86-64 only; on `arm64` use 1-instruction "
+                        f"NEON ops directly (`ext4`/`ext8`/`ext12` for lane rotations, `unpacklo32`/`unpackhi32`, "
+                        f"`unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`)"
+                    )
                 if len(args) != 2 or not isinstance(args[1], Num):
                     raise HLErr(f"{self.src}: line {line}: `shuf32(vec, imm)` requires a constant 8-bit lane mask")
+                a = self._as_vec_reg(args[0], ty, s_idx)
                 imm = args[1].val & 0xFF
-                if self.arch == "x86_64":
-                    self.emit(line, f"vpshufd {dst}, {a}, {imm}")
-                    return
-                # Portable AArch64 NEON lowering for rotations, lane broadcasts, and identity!
-                if imm == 0xE4:  # (0, 1, 2, 3) identity
-                    if dst != a:
-                        self.emit(line, f"orr {dst}.16b, {a}.16b, {a}.16b")
-                elif imm == 0x39:  # (1, 2, 3, 0)
-                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 4")
-                elif imm == 0x4E:  # (2, 3, 0, 1)
-                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 8")
-                elif imm == 0x93:  # (3, 0, 1, 2)
-                    self.emit(line, f"ext {dst}.16b, {a}.16b, {a}.16b, 12")
-                elif imm in (0x00, 0x55, 0xAA, 0xFF):  # broadcast lane 0, 1, 2, or 3
-                    tmp = self._vec_scratch(ty, 0)
-                    if tmp in (dst, a):
-                        tmp = self._vec_scratch(ty, 1)
-                    z1 = "zip1" if imm in (0x00, 0x55) else "zip2"
-                    z2 = "zip1" if imm in (0x00, 0xAA) else "zip2"
-                    self.emit(line, f"{z1} {tmp}.4s, {a}.4s, {a}.4s")
-                    self.emit(line, f"{z2} {dst}.2d, {tmp}.2d, {tmp}.2d")
-                else:
-                    raise HLErr(
-                        f"{self.src}: line {line}: `shuf32` immediate `0x{imm:02X}` is not directly supported on `arm64` "
-                        f"(supported on arm64: rotations 0x39/0x4E/0x93, lane splats 0x00/0x55/0xAA/0xFF, identity 0xE4; "
-                        f"otherwise compose `ext4`/`ext8`/`ext12`, `unpacklo32`/`unpackhi32`, `unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`)"
-                    )
+                self.emit(line, f"vpshufd {dst}, {a}, {imm}")
                 return
             if nm == "shufps":
                 if self.arch != "x86_64":
@@ -3364,9 +3303,9 @@ class HLLower:
                 return
             raise HLErr(
                 f"{self.src}: line {line}: unknown vector intrinsic `{nm}` "
-                f"(portable u32x4 ops: `u32x4(w0,w1,w2,w3)`, `u32x4.splat(w)`, `pack_u64x2(lo,hi)`, "
-                f"`v >> k`, `v << k`, `rotl32(v,k)`, `rotr32(v,k)`, `shuf32(v,imm)`, "
-                f"`unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`, `ext4`/`ext8`/`ext12`)"
+                f"(portable u32x4 ops: `pack_u64x2(lo,hi)`, `v >> k`, `v << k`, `rotl32(v,k)`, `rotr32(v,k)`, "
+                f"`unpacklo32`/`unpackhi32`/`unpacklo64`/`unpackhi64`, `uzp1_32`/`uzp2_32`, `ext4`/`ext8`/`ext12`; "
+                f"x86-64 only: `const_u32x4(data_label)`, `shuf32(v,imm)`, `shufps`, `blend32`)"
             )
         raise HLErr(f"{self.src}: line {line}: unsupported vector expression")
 
@@ -3646,7 +3585,7 @@ class HLLower:
             if st.width == "u32":
                 raise HLErr(
                     f"{self.src}: line {st.line}: 32-bit scalar store `{st.buf}.u32(...) := ...` is not supported yet; "
-                    f"use `.u32x4(off) := ...` (with `u32x4.splat` / `u32x4.of`), `.u64(off) := ...` "
+                    f"use `.u32x4(off) := ...`, `.u64(off) := ...` "
                     f"on a stack `buf`, or byte stores `out[i] := ...` on an output buffer"
                 )
             if st.width == "u8" and self.var_loc.get(st.buf, (None,))[0] == "buf":

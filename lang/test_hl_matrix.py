@@ -99,18 +99,14 @@ class TestHighLevelMatrix(unittest.TestCase):
             "store_u32x16": ("stmt16", "store_u32x16(out, 0, z0)", ("x86_64",), "needs avx512"),
             "broadcast_u32x16": ("u32x16", "broadcast_u32x16(k)", ("x86_64",), "needs avx512"),
             "zeros_u32x16": ("u32x16", "zeros_u32x16()", ("x86_64",), "needs avx512"),
-            "const_u32x4": ("u32x4", "const_u32x4(0x6A09E667)", ("x86_64", "arm64"), ""),
+            "const_u32x4": ("u32x4", "const_u32x4(0x6A09E667)", (), ""),
             "u32x4": ("u32x4", "u32x4(1, 2, 3, 4)", ("x86_64", "arm64"), ""),
-            "u32x4.splat": ("u32x4", "u32x4.splat(0x6A09E667)", ("x86_64", "arm64"), ""),
-            "u32x4.of": ("u32x4", "u32x4.of(1, 2, 3, 4)", ("x86_64", "arm64"), ""),
-            "u32x16": ("u32x16", "u32x16(k)", ("x86_64",), "needs avx512"),
-            "u32x16.splat": ("u32x16", "u32x16.splat(k)", ("x86_64",), "needs avx512"),
             "pack_u64x2": ("u32x4", "pack_u64x2(k, k)", ("x86_64", "arm64"), ""),
             "rotl32": ("u32x4", "rotl32(a, 7)", ("x86_64", "arm64"), ""),
             "rotr32": ("u32x4", "rotr32(a, 16)", ("x86_64", "arm64"), ""),
             "shl32": ("u32x4", "shl32(a, 3)", ("x86_64", "arm64"), ""),
             "shr32": ("u32x4", "shr32(a, 10)", ("x86_64", "arm64"), ""),
-            "shuf32": ("u32x4", "shuf32(a, 0x39)", ("x86_64", "arm64"), ""),
+            "shuf32": ("u32x4", "shuf32(a, 0x39)", ("x86_64",), ""),
             "shufps": ("u32x4", "shufps(a, b, 0x88)", ("x86_64",), ""),
             "shufi32x4": ("u32x16", "shufi32x4(z0, z0, 0x4E)", ("x86_64",), "needs avx512"),
             "blend32": ("u32x4", "blend32(a, b, 0x5)", ("x86_64",), ""),
@@ -185,28 +181,25 @@ class TestHighLevelMatrix(unittest.TestCase):
                         except Exception as exc:
                             self.fail(f"intrinsic `{intr}` on {arch} crashed with {type(exc).__name__}: {exc}")
 
-    def test_02_vector_shifts_constructors_and_portable_shuf32_verify_both_arches(self):
-        """`v >> k`, `v << k`, `u32x4(w0, w1, w2, w3)` (both const & runtime scalar!),
-        `u32x4.splat(x)`, `u32x4.of(...)`, `unpackhi64`, and `shuf32` (rotations & lane splats)
-        must ALL verify `shown` on BOTH `x86_64` and `arm64`!"""
+    def test_02_vector_shifts_and_1to1_ops_verify_both_arches(self):
+        """1-to-1 vector ops (`v >> k`, `v << k`, `unpackhi64`, `ext4`/`ext8`/`ext12`,
+        `uzp1_32`/`uzp2_32`) must verify `shown` on BOTH `x86_64` and `arm64`, and
+        `shuf32` must verify on `x86_64` while raising a crisp error on `arm64`."""
         src = """\
-def vec_test(ws, a, b) {
+def vec_test(ws) {
     let x = [ws[0], ws[1], ws[2], ws[3]]
     let y = [ws[4], ws[5], ws[6], ws[7]]
     let s1 = [x[0] >> 10, x[1] >> 10, x[2] >> 10, x[3] >> 10]
     let s2 = [x[0] >>> 29, x[1] >>> 29, x[2] >>> 29, x[3] >>> 29]
     let hi = [x[2], x[3], y[2], y[3]]
     let rot = [x[1], x[2], x[3], x[0]]
-    let sp0 = [y[0], y[0], y[0], y[0]]
-    let rt = [word(a), word(b), word(0x12345678), word(0x9ABCDEF0)]
-    let spc = [word(0x6A09E667), word(0x6A09E667), word(0x6A09E667), word(0x6A09E667)]
-    let spr = [word(a), word(a), word(a), word(a)]
-    [s1[i] ^ s2[i] ^ hi[i] ^ rot[i] ^ sp0[i] ^ rt[i] ^ spc[i] ^ spr[i] for i in 0..4]
+    let e2 = [x[0], x[2], y[0], y[2]]
+    [s1[i] ^ s2[i] ^ hi[i] ^ rot[i] ^ e2[i] for i in 0..4]
 }
 
-fn vec_ops(out: 16 bytes, src: 32 bytes, a: word, b: word)
+fn vec_ops(out: 16 bytes, src: 32 bytes)
     requires no_overlap(out, src)
-    ensures out = bytes_of(vec_test(words(src), a, b))
+    ensures out = bytes_of(vec_test(words(src)))
     trace depends on nothing
 {
     let x: u32x4 := src.u32x4(0)
@@ -214,16 +207,29 @@ fn vec_ops(out: 16 bytes, src: 32 bytes, a: word, b: word)
     let s1: u32x4 := x >> 10
     let s2: u32x4 := (x << 3) | (x >> 29)
     let hi: u32x4 := unpackhi64(x, y)
-    let rot: u32x4 := shuf32(x, 0x39)
-    let sp0: u32x4 := shuf32(y, 0x00)
-    let rt: u32x4 := u32x4(a, b, 0x12345678, 0x9ABCDEF0)
-    let spc: u32x4 := u32x4.splat(0x6A09E667)
-    let spr: u32x4 := u32x4.splat(a)
-    out.u32x4(0) := s1 ^ s2 ^ hi ^ rot ^ sp0 ^ rt ^ spc ^ spr
+    let rot: u32x4 := ext4(x, x)
+    let e2: u32x4 := uzp1_32(x, y)
+    out.u32x4(0) := s1 ^ s2 ^ hi ^ rot ^ e2
 }
 """
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src, "vec_ops", arch, check_v2=False)
+
+        # `shuf32` is strictly x86-64 (`vpshufd`): verifies on x86_64, crisp error on arm64
+        src_shuf = """\
+def rot1(ws) { [ws[1], ws[2], ws[3], ws[0]] }
+fn shuf_only_x86(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(rot1(words(src)))
+    trace depends on nothing
+{
+    let x: u32x4 := src.u32x4(0)
+    out.u32x4(0) := shuf32(x, 0x39)
+}
+"""
+        _pack_and_dual_verify(src_shuf, "shuf_only_x86", "x86_64", check_v2=False)
+        parsed = ode_unified.parse_unified(src_shuf, src="shuf_only_x86.ode", c_abi_fn="shuf_only_x86")
+        self.assertIn("x86-64 only", parsed["fns"][0]["impls"]["arm64"].get("hl_err", ""))
 
     def test_03_unaligned_arm64_and_x86_loads_and_stores(self):
         """Unaligned `u64(52)` and `u32x4(4)` offsets must never emit unencodable arm64
@@ -489,7 +495,6 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
         """Any `u32x4.*` or `u32x16.*` intrinsic mentioned in `ode_hl.py` error messages must exist."""
         hl_txt = (Path(HERE) / "ode_hl.py").read_text(encoding="utf-8")
         mentioned = set(re.findall(r"`(u32x(?:4|16)\.[a-z_]+)`", hl_txt))
-        self.assertTrue(mentioned, "expected at least one u32x4.* mention in ode_hl.py")
         missing = mentioned - set(ode_hl._INTRINSICS)
         self.assertEqual(missing, set(), f"ode_hl.py error hints mention nonexistent intrinsics: {sorted(missing)}")
 
@@ -527,6 +532,143 @@ fn sum4_unroll_join(pkt: n bytes, n: number) -> u64
             1,
         )
         self.assertEqual(cat, "contract_id_mismatch")
+
+    def test_09_anti_cleverness_lowering_manifest_and_ratchets(self):
+        """Anti-cleverness guardrails enforcing that the coder—not the compiler—makes all
+        clever decisions:
+          1. Every atomic vector op / intrinsic emits <= 1 machine instruction unless explicitly
+             listed in the locked EXPLICIT_MULTI_INSN_OPS manifest (never expand without approval!).
+          2. Immediate-taking intrinsics (`shuf32`) are uniform across all immediates (no partial
+             magic-constant tables like 8/256 on arm64).
+          3. Statement-order monotonicity: lowered line numbers never move backwards in straight-line code.
+          4. Prover-vs-compiler isolation: `--effort fast` and `--effort deep` emit identical `.text` bytes.
+          5. ISA table row-count ratchet: `core/x86.tab` and `arm64/arm64.tab` never grow silently."""
+        import odec
+
+        # Locked manifest of grandfathered multi-instruction vector intrinsics (exact max body insns per target).
+        # BINDING RULE: never add an entry here without explicit approval!
+        EXPLICIT_MULTI_INSN_OPS = {
+            "rotl32": {"x86_64": 3, "arm64": 3},
+            "rotr32": {"x86_64": 3, "arm64": 3},
+            "pack_u64x2": {"x86_64": 3, "arm64": 3},
+        }
+
+        vec_probes = [
+            ("add", "x + y", ("x86_64", "arm64")),
+            ("xor", "x ^ y", ("x86_64", "arm64")),
+            ("and", "x & y", ("x86_64", "arm64")),
+            ("or", "x | y", ("x86_64", "arm64")),
+            ("shr", "x >> 10", ("x86_64", "arm64")),
+            ("shl", "x << 3", ("x86_64", "arm64")),
+            ("shl32", "shl32(x, 3)", ("x86_64", "arm64")),
+            ("shr32", "shr32(x, 10)", ("x86_64", "arm64")),
+            ("rotl32", "rotl32(x, 7)", ("x86_64", "arm64")),
+            ("rotr32", "rotr32(x, 7)", ("x86_64", "arm64")),
+            ("unpacklo32", "unpacklo32(x, y)", ("x86_64", "arm64")),
+            ("unpackhi32", "unpackhi32(x, y)", ("x86_64", "arm64")),
+            ("unpacklo64", "unpacklo64(x, y)", ("x86_64", "arm64")),
+            ("unpackhi64", "unpackhi64(x, y)", ("x86_64", "arm64")),
+            ("uzp1_32", "uzp1_32(x, y)", ("x86_64", "arm64")),
+            ("uzp2_32", "uzp2_32(x, y)", ("x86_64", "arm64")),
+            ("ext4", "ext4(x, y)", ("x86_64", "arm64")),
+            ("ext8", "ext8(x, y)", ("x86_64", "arm64")),
+            ("ext12", "ext12(x, y)", ("x86_64", "arm64")),
+            ("shuf32", "shuf32(x, 0x39)", ("x86_64",)),
+            ("shufps", "shufps(x, y, 0x88)", ("x86_64",)),
+            ("blend32", "blend32(x, y, 0x5)", ("x86_64",)),
+            ("pack_u64x2", "pack_u64x2(w0, w1)", ("x86_64", "arm64")),
+        ]
+        for op_name, expr, arches in vec_probes:
+            src = (
+                "fn p(out: 64 bytes, inp: 64 bytes, w0: word, w1: word)\n"
+                "    requires no_overlap(out, inp)\n"
+                "    trace depends on nothing\n"
+                "{\n"
+                "    let x: u32x4 := inp.u32x4(0)\n"
+                "    let y: u32x4 := inp.u32x4(16)\n"
+                f"    let r: u32x4 := {expr}\n"
+                "    out.u32x4(0) := r\n"
+                "}\n"
+            )
+            for arch in arches:
+                _, _, _, fns = odec.source(src, "<manifest>", target=arch)
+                ins = [x for x in fns[0][2] if x not in ("ret", "vzeroupper") and not x.endswith(":")]
+                # Shell is 2 loads + 1 store = 3 instructions
+                body_ins = ins[2:-1]
+                max_allowed = EXPLICIT_MULTI_INSN_OPS.get(op_name, {}).get(arch, 1)
+                self.assertLessEqual(
+                    len(body_ins), max_allowed,
+                    f"Anti-cleverness ratchet FAILED: `{op_name}` on {arch} emitted {len(body_ins)} insns "
+                    f"(allowed <= {max_allowed}): {body_ins}",
+                )
+
+        # 2. Immediate uniformity for `shuf32`: every 8-bit mask emits 1 insn on x86_64 and errors on arm64
+        for imm in (0x00, 0x06, 0x39, 0x4E, 0x55, 0x93, 0xAA, 0xE4, 0xFF):
+            src_s = (
+                "fn s(out: 16 bytes, inp: 16 bytes)\n"
+                "    requires no_overlap(out, inp)\n"
+                "    trace depends on nothing\n"
+                f"{{\n    let x: u32x4 := inp.u32x4(0)\n    out.u32x4(0) := shuf32(x, {imm})\n}}\n"
+            )
+            _, _, _, fx = odec.source(src_s, "<shuf>", target="x86_64")
+            body_x = [x for x in fx[0][2] if x not in ("ret", "vzeroupper") and not x.endswith(":")][1:-1]
+            self.assertEqual(len(body_x), 1, f"shuf32({imm}) on x86_64 should emit 1 insn, got {body_x}")
+            parsed_a = ode_unified.parse_unified(src_s, src="<shuf>", c_abi_fn="s")
+            self.assertTrue(
+                parsed_a["fns"][0]["impls"]["arm64"].get("hl_err"),
+                f"shuf32({imm}) on arm64 must be refused uniformly (no partial magic-mask tables!)",
+            )
+
+        # 3. Statement-order monotonicity in straight-line code
+        src_mono = """\
+fn mono(a: u64, b: u64, c: u64) -> u64
+    requires a <= 1000, b <= 1000, c <= 1000
+    returns a + b + c + a
+    trace depends on a, b, c
+{
+    let x := a + b
+    let y := x + c
+    let z := y + a
+    return z
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            parsed_m = ode_unified.parse_unified(src_mono, src="<mono>", c_abi_fn="mono")
+            ln_map = parsed_m["fns"][0]["impls"][arch].get("hl_line_map") or []
+            # Ignore prologue/epilogue line 0 if any; real body lines must be non-decreasing
+            body_lns = [ln for ln in ln_map if ln > 0]
+            self.assertEqual(
+                body_lns, sorted(body_lns),
+                f"Statement-order monotonicity violated on {arch}: {body_lns}",
+            )
+
+        # 4. Prover-vs-compiler isolation: `--effort fast` and `--effort deep` produce identical ELF bytes
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "iso.ode"
+            p.write_text(src_mono, encoding="utf-8")
+            for arch in ("x86_64", "arm64"):
+                o_fast, p_fast = Path(td) / f"f_{arch}.o", Path(td) / f"f_{arch}.p"
+                o_deep, p_deep = Path(td) / f"d_{arch}.o", Path(td) / f"d_{arch}.p"
+                for eff, oo, op in (("fast", o_fast, p_fast), ("deep", o_deep, p_deep)):
+                    r = subprocess.run(
+                        [sys.executable, os.path.join(HERE, "ode_tool.py"), "pack", str(p),
+                         "--fn", "mono", "--target", arch, "--c-abi", "--effort", eff,
+                         "--out", str(oo), "--proof", str(op)],
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(r.returncode, 0, f"pack {eff}/{arch} failed: {r.stdout}\n{r.stderr}")
+                self.assertEqual(
+                    o_fast.read_bytes(), o_deep.read_bytes(),
+                    f"Prover effort changed emitted ELF bytes on {arch}!",
+                )
+
+        # 5. ISA table row-count ratchet (prevents gaming lowering counts by bloating ISA tables)
+        x86_rows = [l for l in Path(ROOT, "core/x86.tab").read_text(encoding="utf-8").splitlines()
+                    if "|" in l and not l.lstrip().startswith("#")]
+        arm_rows = [l for l in Path(ROOT, "arm64/arm64.tab").read_text(encoding="utf-8").splitlines()
+                    if "|" in l and not l.lstrip().startswith("#")]
+        self.assertLessEqual(len(x86_rows), 109, f"core/x86.tab grew silently ({len(x86_rows)} > 109 rows)")
+        self.assertLessEqual(len(arm_rows), 67, f"arm64/arm64.tab grew silently ({len(arm_rows)} > 67 rows)")
 
 
 if __name__ == "__main__":
