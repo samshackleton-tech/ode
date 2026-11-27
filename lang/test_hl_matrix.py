@@ -858,6 +858,129 @@ fn bad_bool_let(c: number)
         self.assertIn("select(", msg, f"Missing select() hint: {msg!r}")
         self.assertNotIn("at start of statement", msg)
 
+    def test_11_hl_v3_forensic_bug_regressions(self):
+        """TDD regressions for all 4 defects surfaced by hl-default-v3 forensics."""
+        import ode_tool, time
+
+        # Bug A (ProveMain.lean): 64x-unrolled calls blowing up s.facts must stop deterministically
+        # via ODE_PROVE_MAX_FACTS (never hang for minutes!) with an actionable hint.
+        src_unroll_blowup = """\
+def step_v(c) { if c < 128 then c else c - 128 }
+
+fn helper(c: u8)
+    returns step_v(c)
+    trace depends on nothing
+    stack 0
+{
+    return select(c < 128, c, c - 128)
+}
+
+fn blowup(out: 64 bytes, src: n bytes, n: number)
+    requires no_overlap(out, src)
+    requires n >= 256
+    requires n <= 256
+    ensures out = [step_v(src[4 * i]) for i in 0..64]
+    returns 0
+    trace depends on n
+    stack 64
+{
+    var acc: u64 := 0
+    for i in 0..64 unroll {
+        let a := helper(src[4 * i])
+        let b := helper(src[4 * i + 1])
+        let c := helper(src[4 * i + 2])
+        let d := helper(src[4 * i + 3])
+        acc := acc | (a >> 4) | (b >> 4) | (c >> 4) | (d >> 4)
+        out[i] := a
+    }
+    return 0
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            p = os.path.join(td, "blowup.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src_unroll_blowup)
+            t0 = time.monotonic()
+            r = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"),
+                 "pack", p, "--fn", "blowup", "--target", "x86_64",
+                 "--effort", "fast", "--out", os.path.join(td, "b.o"),
+                 "--proof", os.path.join(td, "b.proof")],
+                capture_output=True, text=True,
+            )
+            dt = time.monotonic() - t0
+            out = r.stdout + "\n" + r.stderr
+            self.assertNotEqual(r.returncode, 0)
+            self.assertLess(dt, 15.0, f"Unrolled blowup took {dt:.1f}s instead of fast deterministic refusal:\n{out}")
+            self.assertIn("linear facts", out, f"Expected deterministic maxFacts diagnostic, got:\n{out}")
+
+        # Bug B (ode_audit.py): calling an imported spec `def` via `use alias = ...` must NOT leak `m1__`
+        # and must explain that it is a specification `def`, not a callable machine `fn`.
+        with tempfile.TemporaryDirectory() as td:
+            spec_p = os.path.join(td, "helper_spec.ode")
+            with open(spec_p, "w", encoding="utf-8") as f:
+                f.write("def u16_le(b, i) { b[i] + 256 * b[i + 1] }\n")
+            main_p = os.path.join(td, "main.ode")
+            with open(main_p, "w", encoding="utf-8") as f:
+                f.write("""\
+use sp = "helper_spec.ode"
+
+fn f(buf: n bytes, n: number)
+    requires n >= 2
+    returns sp.u16_le(buf, 0)
+    trace depends on n
+    stack 0
+{
+    return sp.u16_le(buf, 0)
+}
+""")
+            r = subprocess.run(
+                [sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"),
+                 "pack", main_p, "--fn", "f", "--target", "x86_64",
+                 "--out", os.path.join(td, "f.o"), "--proof", os.path.join(td, "f.proof")],
+                capture_output=True, text=True,
+            )
+            out = r.stdout + "\n" + r.stderr
+            self.assertNotEqual(r.returncode, 0)
+            self.assertIn("sp.u16_le", out, f"Expected pretty name `sp.u16_le` in diagnostic:\n{out}")
+            self.assertIn("specification `def`", out, f"Expected spec `def` explanation:\n{out}")
+            self.assertNotIn("m1__", out, f"Internal mangled prefix `m1__` leaked:\n{out}")
+
+        # Bug C (ode_hl.py): `inline fn` accepts `buf: n bytes` and `mptr: 64 bytes` uniformly with `fn`.
+        src_inl_bytes = """\
+inline fn load_first(buf: n bytes, var out_v: u64) {
+    out_v := buf[0]
+}
+
+fn read_byte(buf: n bytes, n: number)
+    requires n >= 1
+    returns buf[0]
+    trace depends on n
+    stack 0
+{
+    var v: u64 := 0
+    load_first(buf, v)
+    return v
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as td:
+                p = os.path.join(td, "inl_bytes.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src_inl_bytes)
+                r = subprocess.run(
+                    [sys.executable, os.path.join(ROOT, "lang", "ode_tool.py"),
+                     "pack", p, "--fn", "read_byte", "--target", arch,
+                     "--out", os.path.join(td, "r.o"), "--proof", os.path.join(td, "r.proof")],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(r.returncode, 0, f"inline fn `buf: n bytes` failed on {arch}:\n{r.stdout}\n{r.stderr}")
+
+        # Bug D (ode_tool.py): `need compare` hint must NOT tell models to use `select(...)` for a spec `if`.
+        hint = ode_tool._diagnostic_hint("need compare", "arm64", info={"hl_meta": True})
+        self.assertIn("if ...", hint)
+        self.assertIn("does not split", hint)
+
 
 if __name__ == "__main__":
     unittest.main()

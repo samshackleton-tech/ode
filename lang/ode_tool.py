@@ -391,7 +391,12 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
         if is_hl:
-            return "hint: the specification tests these two for equality (`==`/`!=`) here; compare them in an `if` or `select(...)`, merge paths with `join maintains ...`, or add the relation to `maintains`"
+            return (
+                "hint: the specification tests these two for equality (`==`/`!=`) here; "
+                "branch on them with `if ... { ... } else { ... }` "
+                "(branchless `select(...)` merges paths and does not split facts for a spec `if`), "
+                "merge paths with `join maintains ...`, or add the relation to `maintains`"
+            )
         return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), merge branches with a `place { ... }` join point, or state the relation in `place { ... }`"
     if "reached 14 specification definition opens" in reason or (
         "need spec" in reason and re.search(r"(?m)^o\s+(1[2-9]|[2-9]\d)\b", reason)
@@ -667,7 +672,14 @@ def run_check(src_path, spec_path=None, fn_names=None, out_dir=None, arch=None,
             t_prove = time.time() - t1
         except SystemExit as exc:
             t_prove = time.time() - t1
-            pc, fn_sym, loc_msg = prove.locate(st_path, pf_path)
+            if "symbolic state grew past" in str(exc):
+                m_pc = re.search(r"(?m)^at \+(\d+)\b", str(exc))
+                m_fn = re.search(r"(?m)^in (\S+)\b", str(exc))
+                pc = int(m_pc.group(1)) if m_pc else None
+                fn_sym = m_fn.group(1) if m_fn else None
+                loc_msg = str(exc)
+            else:
+                pc, fn_sym, loc_msg = prove.locate(st_path, pf_path)
             raw = loc_msg or str(exc)
             if fn_sym is None:
                 m = re.search(r"in (\S+)", str(exc))

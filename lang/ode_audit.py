@@ -1135,9 +1135,16 @@ def _prefilter_concrete(compiled_by_sym, export_sym, full_spec_text, target):
 
 def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_sym, full_spec_text, target):
     """Locate the exact failing function & PC while `stmt_path` is still on disk and raise `PackProofError`."""
-    pc, can_sym, loc_msg = prove.locate(stmt_path, proof_path)
-    orig_sym = inv_rename.get(can_sym, can_sym)
     msg = str(exc)
+    if "symbolic state grew past" in msg:
+        m_pc = re.search(r"(?m)^at \+(\d+)\b", msg)
+        m_fn = re.search(r"(?m)^in (\S+)\b", msg)
+        pc = int(m_pc.group(1)) if m_pc else None
+        can_sym = m_fn.group(1) if m_fn else None
+        loc_msg = msg
+    else:
+        pc, can_sym, loc_msg = prove.locate(stmt_path, proof_path)
+    orig_sym = inv_rename.get(can_sym, can_sym)
     if orig_sym is None:
         m = re.search(r"no proof of (\S+) found", msg)
         if m:
@@ -1363,8 +1370,19 @@ def pack_verified(
                 if csym == inf["symbol"]:
                     continue  # direct self-recursion
                 if csym not in sym_to_fn:
+                    pretty = (parsed.get("pretty_names") or {}).get(csym, csym)
+                    spec_defs = set()
+                    for raw_def in parsed.get("spec_defs") or ():
+                        dm = re.match(r"^\s*(?:def|machine)\s+([A-Za-z_]\w*)\b", raw_def or "")
+                        if dm:
+                            spec_defs.add(dm.group(1))
+                    if csym in spec_defs:
+                        raise ValueError(
+                            f"{source_path}: `{name}` calls `{pretty}`, which is a specification `def` "
+                            f"(not a callable machine `fn`) — implement it as an `inline fn` or inline arithmetic in code"
+                        )
                     raise ValueError(
-                        f"{source_path}: `{name}` calls `{csym}`, which is not defined in this `.ode` file"
+                        f"{source_path}: `{name}` calls `{pretty}`, which is not defined in this `.ode` file"
                     )
                 visit(sym_to_fn[csym])
             visiting.remove(name)

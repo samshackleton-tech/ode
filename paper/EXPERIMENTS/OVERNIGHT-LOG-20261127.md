@@ -12,7 +12,7 @@ Every iteration fixes tool, compiler, prover, and verifier defects found in the 
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | 1 | `hl-default-v1` | `8a4cdfa` | **28 / 80 (35.0%)** | 28 / 28 | 13 / 14 | 17.5 min | $35.76 | 0.87 s / 2.94 s / 19.24 s |
 | 2 | `hl-default-v2` | `ec52868` | **32 / 80 (40.0%)** *(22/64 excl. Gemini)* | 32 / 32 | **16 / 16** | **11.3 min** | **$24.70** | 0.77 s / 3.05 s / 77.70 s |
-| 3 | `hl-default-v3` | *pending* | *pending (64 cells, 4 models)* | *pending* | *pending* | *pending* | *pending* | *pending* |
+| 3 | `hl-default-v3` | `d0f4ea1` | **17 / 64 (26.6%)** *(4 models; arm64 **12/32** vs 8/32)* | **17 / 17** | **10 / 10** | 13.3 min *(1 hung cell)* | **$13.61** | **0.59 s** / 3.01 s / 781.51 s |
 
 ---
 
@@ -113,7 +113,20 @@ Inspecting all 48 failed cells surfaced 7 concrete verifier, compiler, tool, and
 
 ---
 
-## Iteration 3 — Pre-Registered 4-Model Suite (`hl-default-v3`)
+## Iteration 3 — Pre-Registered 4-Model Suite (`hl-default-v3`, commit `d0f4ea1`)
 
 - **Suite definition:** [`suites/hl-default-v3.json`](suites/hl-default-v3.json) — 4 models (`kimi-k3.1-pro`, `muse-spark-open`, `glm-5.3-prime`, `claude-haiku-5.5`, leaving `gemini-4-neon` out for fast turnaround) × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+- **Pre-registration:** [`prereg-hl-default-v3.md`](prereg-hl-default-v3.md).
+- **Results:** [`results-hl-default-v3.md`](results-hl-default-v3.md), [`results-hl-default-v3.json`](results-hl-default-v3.json).
+- **Headline:** **17 / 64 (26.6%)** strict passes (**17 / 17** native CPU pass, **10 / 10** scalar `verify2.py` pass, **0** Python tracebacks, **$13.61** total API spend, median prover time **0.59 s**).
+  - **`arm64` surged +50% (`8 / 32 -> 12 / 32`):** All **6 / 6** newly gained cells were on `arm64`, directly confirming our `Core.lean` `on16(sp)` fix (`sha256_4way` Haiku `arm64` R3 at **1.05 cyc/B** for $0.03; `chacha20_4way` Muse `arm64` R4 using 16 `stack var: u32x4` slots at **2.42 cyc/B**; `blake3_compress1` Kimi `arm64` R2; `der_valid` Kimi `arm64` R4; `ct_base64_decode` Muse & GLM `arm64` 2/4 vs 0/4 in `v2`).
+  - **`x86_64` variance (`14 / 32 -> 5 / 32`):** Inspecting all 9 missed `x86_64` cells confirmed **0** toolchain regressions (2 concrete counterexamples, 2 GPR exhaustion, 1 `shown` with contract-clause mismatch on `sha256_4way` Kimi, 1 `output_token_limit`, 1 `inline fn` `buf: n bytes` syntax error, 1 wrong constant `c - 1`, 1 vector-lane refusal).
+
+### Forensic Fixes From `hl-default-v3` (All TDD-Verified in `lang/test_hl_matrix.py::test_11`)
+
+1. **Deterministic prover fact-count cap (`proof-core/ProveMain.lean`, `lang/ode_audit.py`, `lang/ode_tool.py`):** Both extreme prover outliers — Haiku `ct_base64_decode x86_64` R3 (**781.5 s**, terminated manually) and Kimi `ct_base64_decode arm64` R7 (**143.6 s**) — had the exact same cause: `for i in 0..64 unroll` containing 4 helper calls per iteration (`256` calls -> >1,500 linear facts across thousands of unknowns in one straight-line path). Added a deterministic `ODE_PROVE_MAX_FACTS` cap (default `800`, zero wall-clock timeouts, zero changes to `odeverify` or `Core.lean`) in `ProveMain.lean` and skipped `odeprove --locate` when triggered: **781.5 s -> 6.6 s (118x faster)** and **143.6 s -> 5.8 s (25x faster)**, with a direct hint to use `for ... maintains ...` or `join`.
+2. **Uniform `buf: n bytes` parameter syntax on `inline fn` (`lang/ode_hl.py`):** Allowed `name: <len> bytes` (and `name: bytes`/`ptr`) on `inline fn` headers to match `fn` syntax (fixing `der_valid` Kimi `x86_64` and `sha256_4way` Kimi `arm64`).
+3. **Unmangled imported spec `def` call diagnostic (`lang/ode_audit.py`):** Stopped leaking internal `m1__` prefixes when code calls an imported specification `def` (e.g. `bpf.u16_le` in `ebpf` GLM `x86_64`), reporting the alias-qualified name and explaining that a `def` is not a callable machine `fn`.
+4. **Accurate `need compare` hint (`lang/ode_tool.py`):** Replaced misleading `"compare them in an if or select(...)"` hint with an explicit warning that branchless `select(...)` merges paths and does not split prover facts for a specification `if` (addressing `ebpf` `arm64` `need compare`).
+
 

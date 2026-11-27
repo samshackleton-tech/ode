@@ -1033,7 +1033,7 @@ def is_hl_inline(raw_text):
         params_s = hdr[p1 + 1:p2]
         if re.search(r"\bvar\s+[A-Za-z_]\w*\s*:", params_s):
             return True
-        if re.search(r":\s*(?:u64|u32|u8|u32x4|u32x16)\b", params_s):
+        if re.search(r":\s*(?:(?:[A-Za-z0-9_]+\s+)?bytes|ptr|u64|u32|u8|u32x4|u32x16)\b", params_s):
             return True
     body_lines = raw_text[bopen + 1:raw_text.rfind("}")].splitlines()
     return is_hl_body(body_lines)
@@ -1058,11 +1058,15 @@ def parse_hl_inline(raw_text, first_line, src="<ode>"):
             ps = raw_p.strip()
             if not ps:
                 continue
-            pm = re.fullmatch(r"(var\s+)?([A-Za-z_]\w*)\s*:\s*([A-Za-z0-9_]+)", ps)
+            pm = re.fullmatch(
+                r"(var\s+)?([A-Za-z_]\w*)\s*:\s*(?:([A-Za-z0-9_]+)\s+bytes|([A-Za-z0-9_]+))",
+                ps,
+            )
             if not pm:
                 raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: invalid parameter `{ps}` (expected `[var] name: type`)")
             is_var = bool(pm.group(1))
-            pname, pty = pm.group(2), pm.group(3)
+            pname = pm.group(2)
+            pty = "bytes" if pm.group(3) is not None else pm.group(4)
             if pname in seen:
                 raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: duplicate parameter `{pname}`")
             seen.add(pname)

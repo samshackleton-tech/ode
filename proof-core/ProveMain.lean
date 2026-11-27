@@ -336,21 +336,37 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
                   stack := .instr fuel g0 (⟨p', d, { s with q := q0 }⟩ :: seen) [] g0 p'.pc
                            :: .restoreJdone savedJdone :: tail }
 
+/-- Number of linear facts (and optional PC) in the active symbolic state of `st`. -/
+def curFactsPc (st : DriverState) : Nat × Option Nat :=
+  match st.stack with
+  | .instr _ _ _ _ s pc :: _ => (s.facts.length, some pc)
+  | .afterClears _ _ _ _ s pc _ :: _ => (s.facts.length, some pc)
+  | .onward _ _ _ _ (s, _) :: _ => (s.facts.length, none)
+  | _ => (0, none)
+
 /-- Advance from the latest checkpoint as far as `.next` steps succeed, committing a checkpoint whenever
 `next` strictly advances or 32 straight-line steps elapse while staying strictly below `arr.size`
-(so every `items.line` read hit a present item and never observed end-of-proof). -/
-partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) (withPc : Bool := false) : Except String Unit × Array DriverState :=
+(so every `items.line` read hit a present item and never observed end-of-proof).
+If `maxFacts > 0` and a single straight-line path exceeds `maxFacts` linear facts, stop deterministically
+(no wall-clock timeout) so huge unrolled functions with calls fail fast with an actionable hint. -/
+partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState)
+    (withPc : Bool := false) (maxFacts : Nat := 800) : Except String Unit × Array DriverState :=
   let rec go (cur : DriverState) (cs : Array DriverState) (since : Nat) : Except String Unit × Array DriverState :=
-    match stepOnce ctx cur arr withPc with
-    | .done => (.ok (), cs)
-    | .err msg =>
-      let msg' := if msg.startsWith "need " || msg.startsWith "refused: " then msg else "refused: " ++ msg
-      (.error msg', cs)
-    | .next cur' =>
-      if cur'.next < arr.size && (cur'.next > cs.back!.next || since ≥ 32) then
-        go cur' (cs.push cur') 0
-      else
-        go cur' cs (since + 1)
+    let (nf, mpc) := curFactsPc cur
+    if maxFacts > 0 && nf > maxFacts then
+      let pcPref := match withPc, mpc with | true, some pc => s!"at +{pc}\n" | _, _ => ""
+      (.error s!"{pcPref}refused: symbolic state grew past {maxFacts} linear facts in one straight-line path (hint: replace a large `for ... unroll` containing calls or bit-ops with a `for ... maintains ...` loop, or insert a `join maintains ...`)", cs)
+    else
+      match stepOnce ctx cur arr withPc with
+      | .done => (.ok (), cs)
+      | .err msg =>
+        let msg' := if msg.startsWith "need " || msg.startsWith "refused: " then msg else "refused: " ++ msg
+        (.error msg', cs)
+      | .next cur' =>
+        if cur'.next < arr.size && (cur'.next > cs.back!.next || since ≥ 32) then
+          go cur' (cs.push cur') 0
+        else
+          go cur' cs (since + 1)
   go ckpts.back! ckpts 0
 
 /-- After `name` passes `verify`, check optional `result depends on` and any subsequent functions. -/
@@ -493,8 +509,13 @@ def main (args : List String) : IO UInt32 := do
     let mut ckpts : Array DriverState := #[initState]
     let mut batches : Array (Nat × Nat) := #[]
 
+    let maxFacts : Nat ← do
+      match (← IO.getEnv "ODE_PROVE_MAX_FACTS") with
+      | some s => pure (s.trimAscii.toString.toNat?.getD 800)
+      | none => pure 800
+
     let evalCurrent (curItems : Array Item) (curCkpts : Array DriverState) : (String × Bool × Array DriverState) :=
-      let (res, ckpts') := advance ctx curItems curCkpts withPc
+      let (res, ckpts') := advance ctx curItems curCkpts withPc maxFacts
       match res with
       | .error why => (s!"{why}\nin {name}", true, ckpts')
       | .ok () =>
