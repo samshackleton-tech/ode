@@ -749,8 +749,23 @@ def contract_lines(c, name, seqs={}, consts=(), layouts={}, is_arm64=False):
             out.append(f"ensuresw {leaf['name']} " + sexp(by_kind(leaf["expr"], kinds, name), seqs, scope))
             continue
         if kinds: raise SystemExit(f"statement: the contract of {name} has an `ensures` of bytes beside arguments of the kinds {', '.join(said)}: not read yet")
-        count = next(int(re.fullmatch(r"(\d+) bytes", kind).group(1)) for arg, kind in c["args"] if arg == leaf["name"])
-        lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
+        arg_kind = dict(c["args"]).get(leaf["name"])
+        if arg_kind is None:
+            raise SystemExit(
+                f"statement: the contract of {name} has `ensures {leaf['name']} = ...`, "
+                f"but `{leaf['name']}` is not a parameter of `{name}` (use `ensures result = ...` for the return value)"
+            )
+        m_fixed = re.fullmatch(r"(\d+) bytes", arg_kind)
+        if m_fixed is None:
+            if leaf["part"] is None:
+                raise SystemExit(
+                    f"statement: the contract of {name} has `ensures {leaf['name']} = ...` on `{arg_kind}`; "
+                    f"variable-length byte buffers require an explicit slice `ensures {leaf['name']}[lo .. hi] = ...`"
+                )
+            lo, hi = leaf["part"]
+        else:
+            count = int(m_fixed.group(1))
+            lo, hi = leaf["part"] if leaf["part"] is not None else (("num", 0), ("num", count))
         out.append(f"ensures {leaf['name']} {sexp(lo, seqs, scope)} {sexp(hi, seqs, scope)} {sexp(leaf['expr'], seqs, scope)}")
     if isinstance(c["stack"], int):
         out.append(f"stack {c['stack']}")

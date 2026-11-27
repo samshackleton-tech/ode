@@ -187,9 +187,10 @@ def extract_ode_source(reply: str, entry_fn: str) -> str:
     """Extract the `.ode` source from fenced markdown blocks cleanly (line-based parser).
     Handles prose containing earlier backticks, nested/repeated fences, inline fences after
     model commentary tags (e.g. `<|eom|>```ode`), and unclosed trailing fences."""
-    # If a model emitted an inline opening fence right after a control/commentary tag
-    # (e.g. `<|eom|>```ode`), break before the ``` so the line-based parser sees it cleanly.
-    normalized = re.sub(r"(<\|[a-z_]+\|>)```", r"\1\n```", reply)
+    # If a model emitted an inline opening or closing fence glued directly onto preceding prose
+    # or a control tag (e.g. `<|eom|>```ode` or `Fixed stack usage.```ode`), break before the ```
+    # so the line-based parser sees the fence cleanly.
+    normalized = re.sub(r"([^\n`])```([a-zA-Z0-9_]*)[ \t]*(?=\n|$)", r"\1\n```\2", reply)
     blocks: list[str] = []
     cur: list[str] | None = None
     for raw_ln in normalized.splitlines():

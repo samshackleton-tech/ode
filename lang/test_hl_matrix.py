@@ -1132,6 +1132,237 @@ fn dummy2(x: number)
             "refused: the specification's words are not followed on the terms the function made",
             "arm64", info={"hl_meta": True}))
 
+    def test_14_hl_v6_forensic_bug_regressions(self):
+        """TDD regressions for defects surfaced by hl-default-v6 forensics (A2-A8, B1, #3)."""
+        import importlib.util
+        import ode_tool
+
+        # A2: Core.lean & verify2.py `disjointOr` with `u = 0` (`y == 0` on a select branch).
+        src_disjoint_zero = """\
+def pack_byte(a, b, d) {
+    (a % 4) * 64 + (if d == 0 then 0 else b)
+}
+
+fn f_disjoint(a: number, b: number, d: number)
+    requires a < 64
+    requires b < 64
+    requires d < 2
+    returns pack_byte(a, b, d)
+    stack 0
+{
+    let lo: u64 := select(d == 0, 0, b)
+    let hi: u64 := (a & 3) << 6
+    let res: u64 := hi | lo
+    return res
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_disjoint_zero, "f_disjoint", arch, check_v2=True)
+
+        # A3: `add64` unsigned fast-path & x86_64 `_emit_imm` `or` for constants >= 2^63 (`u32x4(0xFFFFFFFF, ...)`).
+        src_imm64_vec = """\
+def mask_hi(m) {
+    [m[0] ^ word(4294967295), m[1] ^ word(4294967295), m[2] ^ word(1), m[3] ^ word(2)]
+}
+
+fn f_mask(out: 16 bytes, m: 16 bytes)
+    requires no_overlap(out, m)
+    ensures out = bytes_of(mask_hi(words(m)))
+    stack 64
+{
+    let v: u32x4 := m.u32x4(0)
+    let k: u32x4 := u32x4(4294967295, 4294967295, 1, 2)
+    out.u32x4(0) := v ^ k
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_imm64_vec, "f_mask", arch, check_v2=False)
+
+        # A4a: Dead `stack let` slots across expanded iterations reuse slots cleanly (16 iterations fit `stack 32`!).
+        src_stack_reuse = """\
+def add16(x) {
+    x + 16
+}
+
+fn f_stack_reuse(x: number)
+    requires x < 1000
+    returns add16(x)
+    stack 32
+{
+    var acc: u64 := x
+    for t in 0..16 unroll {
+        stack let tmp1: u64 := acc + 1
+        acc := tmp1
+    }
+    return acc
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_stack_reuse, "f_stack_reuse", arch, check_v2=True)
+
+        # A4b: `stack var` written BEFORE a `while` loop never shares its slot with a `stack let`
+        # written INSIDE the `while` loop (preserves `Core.lean`'s `first.frame` loop invariant).
+        src_stack_loop_guard = """\
+def add_n(x, n) {
+    x + n
+}
+
+fn f_stack_loop(x: number, n: number)
+    requires x < 1000
+    requires n < 1000
+    returns add_n(x, n)
+    trace depends on n
+    stack 64
+{
+    stack let pre: u64 := x + 1
+    var acc: u64 := pre - 1
+    var i: u64 := 0
+    while i < n
+        maintains i <= n
+        maintains acc == x + i
+        decreases n - i
+    {
+        stack let step: u64 := acc + 1
+        acc := step
+        i += 1
+    }
+    return acc
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_stack_loop_guard, "f_stack_loop", arch, check_v2=True)
+
+        # A4c: Explicit entry `stack` overflow warns about contract ID rather than blindly raising it.
+        src_stack_over = """\
+fn f_over(x: number)
+    requires x < 100
+    returns x + 3
+    stack 8
+{
+    stack let a: u64 := x + 1
+    stack let b: u64 := x + 2
+    return a + b - x
+}
+"""
+        p_over = ode_unified.parse_unified(src_stack_over, src="<stk_over>", c_abi_fn="f_over")
+        with self.assertRaises(ode_unified.UnifiedErr) as cm_stk:
+            ode_unified._select_impl(p_over["fns"][0], "x86_64", "<stk_over>")
+        self.assertIn("contract ID", str(cm_stk.exception))
+
+        # A5: `select(s_a == s_b, 1, 0)` with two `stack var`s inside a compound expression on x86_64 + arm64,
+        # plus stack `buf` indexed by a runtime-computed offset with in-place scratch reuse.
+        src_select_stack_and_buf = """\
+def score_eq(a, b, base) {
+    base + (if a == b then 1 else 0)
+}
+
+fn f_sel_stk(a: number, b: number, base: number)
+    requires a < 1000
+    requires b < 1000
+    requires base < 1000
+    returns score_eq(a, b, base)
+    stack 64
+{
+    stack var sa: u64 := a
+    stack var sb: u64 := b
+    let res: u64 := base + select(sa == sb, 1, 0)
+    return res
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_select_stack_and_buf, "f_sel_stk", arch, check_v2=True)
+
+        # A5b: Local stack `buf` indexed by a runtime offset inside a compound expression reuses `reuse_dst`
+        # without exhausting x86_64's 3-register scratch pool (compiled cleanly; stack `buf` constant offset verifies `shown`).
+        src_buf_rt_compile = """\
+fn f_buf_rt(x: number, y: number)
+    requires x < 1000
+    requires y < 1000
+    returns x + y
+    trace depends on x
+    stack 64
+{
+    buf w[16] align 8
+    w.u64(0) := x
+    w.u64(8) := x
+    let v: u64 := y + w.u64((x & 1) * 8)
+    return v
+}
+"""
+        p_buf = ode_unified.parse_unified(src_buf_rt_compile, src="<buf_rt>", c_abi_fn="f_buf_rt")
+        for arch in ("x86_64", "arm64"):
+            impl_b = ode_unified._select_impl(p_buf["fns"][0], arch, "<buf_rt>")
+            self.assertIsNotNone(impl_b)
+            self.assertFalse(impl_b.get("hl_err"))
+
+        # A6: Calling `u32x4`-only intrinsics (`shuf32`/`blend32`) on `u32x16` fails cleanly in HL (never asm.py).
+        for bad_call in ("let y: u32x16 := shuf32(z, 57)", "let y := shuf32(z, 57)", "let y: u32x16 := blend32(z, z, 1)"):
+            src_zmm_bad = f"""\
+fn f_zmm(out: 64 bytes, src: 64 bytes)
+    requires no_overlap(out, src)
+    ensures out = src
+    stack 64
+{{
+    let z: u32x16 := src.u32x16(0)
+    {bad_call}
+    out.u32x16(0) := z
+}}
+"""
+            p_z = ode_unified.parse_unified(src_zmm_bad, src="<zmm_bad>", c_abi_fn="f_zmm")
+            with self.assertRaises(ode_unified.UnifiedErr) as cm_z:
+                ode_unified._select_impl(p_z["fns"][0], "x86_64", "<zmm_bad>")
+            msg_z = str(cm_z.exception)
+            self.assertTrue("128-bit `u32x4`" in msg_z or "vector width mismatch" in msg_z, msg_z)
+
+        # A7: `proof-core/statement.py` raises clean `SystemExit` (never bare `StopIteration`) on bad `ensures` target.
+        sys.path.insert(0, os.path.join(ROOT, "proof-core"))
+        sys.path.insert(0, os.path.join(ROOT, "kcheck"))
+        import ode as _ode
+        import statement as _stmt
+        sp_bad = _ode.Spec("""\
+contract f_bad(src: 16 bytes) {
+    ensures missing = src
+    stack 0
+}
+""")
+        with self.assertRaises(SystemExit) as cm_st:
+            _stmt.contract_lines(sp_bad.contracts["f_bad"], "f_bad")
+        self.assertIn("not a parameter", str(cm_st.exception))
+
+        # A8: `run_suite.py::extract_ode_source` handles prose glued directly onto an inline opening fence.
+        rs_path = os.path.join(ROOT, "paper", "EXPERIMENTS", "run_suite.py")
+        spec_rs = importlib.util.spec_from_file_location("_run_suite_test", rs_path)
+        rs_mod = importlib.util.module_from_spec(spec_rs)
+        spec_rs.loader.exec_module(rs_mod)
+        glued = "Switching W to local buffer storage.```ode\nfn demo(x: number)\n    returns x\n{\n    return x\n}\n```\n"
+        extracted = rs_mod.extract_ode_source(glued, "demo")
+        self.assertTrue(extracted.startswith("fn demo("), extracted)
+        self.assertNotIn("Switching W", extracted)
+
+        # B1 & #3: diagnostic hints for vector `|`, `writes` prefix refusal, runtime `&`, and non-const `*`.
+        self.assertIn("blend32", ode_tool._diagnostic_hint(
+            "refused: an or of two vector registers that is no turn of each word", "x86_64", info={"hl_meta": True}))
+        self.assertIn("select(b == 0, 0, a)", ode_tool._diagnostic_hint(
+            "refused: an and with what is no number of the table: not here yet", "x86_64", info={"hl_meta": True}))
+        self.assertIn("writes out[.. N]", ode_tool._diagnostic_hint(
+            "refused: what a place says is written is said by the use of a definition", "x86_64", info={"hl_meta": True}))
+        self.assertIn("writes out[.. N]", ode_tool._diagnostic_hint(
+            "refused: a place says what is written by what is no list made thing by thing from 0 on", "arm64", info={"hl_meta": True}))
+        src_bad_mul = """\
+fn f_mul(a: number, b: number)
+    requires a < 2
+    requires b < 2
+    returns a * b
+    stack 0
+{
+    return a * b
+}
+"""
+        p_mul = ode_unified.parse_unified(src_bad_mul, src="<bad_mul>", c_abi_fn="f_mul")
+        with self.assertRaises(ode_unified.UnifiedErr) as cm_mul:
+            ode_unified._select_impl(p_mul["fns"][0], "x86_64", "<bad_mul>")
+        self.assertIn("select(b == 0, 0, a)", str(cm_mul.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

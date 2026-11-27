@@ -9,6 +9,7 @@ typedef uint64_t (*ct_eq_fn_t)(const uint8_t *a, const uint8_t *b, uint64_t n);
 #ifdef NATIVE_JIT_BIN
 #include <pthread.h>
 #include <sys/mman.h>
+#include <unistd.h>
 #include <libkern/OSCacheControl.h>
 
 static ct_eq_fn_t load_jit_fn(const char *path, size_t entry_off, void **out_buf, size_t *out_sz) {
@@ -17,16 +18,21 @@ static ct_eq_fn_t load_jit_fn(const char *path, size_t entry_off, void **out_buf
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    size_t map_sz = ((size_t)sz + 4095) & ~(size_t)4095;
-    if (map_sz == 0) map_sz = 4096;
+    uint8_t *tmp = (uint8_t *)malloc((size_t)(sz > 0 ? sz : 1));
+    if (!tmp) { perror("malloc"); exit(2); }
+    if (sz > 0 && fread(tmp, 1, (size_t)sz, f) != (size_t)sz) { perror("fread"); exit(2); }
+    fclose(f);
+    size_t ps = (size_t)sysconf(_SC_PAGESIZE);
+    size_t map_sz = (((size_t)sz + ps - 1) / ps) * ps;
+    if (map_sz < ps) map_sz = ps;
     void *mem = mmap(NULL, map_sz, PROT_READ | PROT_WRITE | PROT_EXEC,
                      MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (mem == MAP_FAILED) { perror("mmap"); exit(2); }
     pthread_jit_write_protect_np(0);
-    if (fread(mem, 1, (size_t)sz, f) != (size_t)sz) { perror("fread"); exit(2); }
-    fclose(f);
+    memcpy(mem, tmp, (size_t)sz);
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(mem, (size_t)sz);
+    free(tmp);
     *out_buf = mem;
     *out_sz = map_sz;
     return (ct_eq_fn_t)((uint8_t *)mem + entry_off);

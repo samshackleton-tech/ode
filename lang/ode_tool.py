@@ -447,13 +447,27 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         )
     if "an and with what is no number of the table" in reason:
         return (
-            "hint: scalar `&` requires a compile-time constant bitmask (for bitwise `&`/`^` on two runtime values, "
-            "use `u32x4` vector operations)"
+            "hint: scalar `&` requires a compile-time constant bitmask (for 0/1 flags use `select(b == 0, 0, a)`; "
+            "for bitwise `&`/`^` on two runtime values, use `u32x4` vector operations)"
+        )
+    if (
+        "what a place says is written is said by the use of a definition" in reason
+        or "a place says what is written by what is no list made thing by thing from 0 on" in reason
+    ):
+        return (
+            "hint: in `writes out[.. N] = expr`, the RHS must expand to a byte sequence indexed from `0` "
+            "(matching the entry contract's `ensures out[.. hi] = ...` form, e.g. a `[byte_expr(j) for j in 0..N]` "
+            "or `spec_fn(...)[.. N]`, not an opaque helper returning a sub-slice)"
         )
     if "the specification's words are not followed on the terms the function made" in reason:
         return (
             "hint: a 32-bit word required by `bytes_of(...)` was not found in the verifier's word table "
             "(check that every input word is extracted from `u32x4`/`u64`/`word`/`counter` inputs and combined in the same order as the specification)"
+        )
+    if "an or of two vector registers that is no turn of each word" in reason:
+        return (
+            "hint: vector bitwise `|` only proves 32-bit rotates (use `rotr32(v, k)`); "
+            "to merge lanes from two `u32x4` vectors, use `blend32(a, b, mask)` or `shufps(a, b, imm)` instead of `(a & mask) | (b & mask)`"
         )
     return None
 

@@ -388,9 +388,16 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                 if not explicit_stack:
                     im["extra_clauses"] = list(im["extra_clauses"]) + [f"stack {eff_stack}"]
                 elif stk_vals and eff_stack > stk_vals[-1]:
+                    if fn_rec["name"] == c_abi_fn or fn_rec["name"] not in called_by_other:
+                        stk_hint = (
+                            f"reduce simultaneously live `stack var`s / local `buf` bytes to fit `stack {stk_vals[-1]}` "
+                            f"(changing `stack` on an entry contract changes its contract ID; private helpers can omit `stack` to auto-compute)"
+                        )
+                    else:
+                        stk_hint = f"omit `stack` on this helper to auto-compute or raise to `stack {eff_stack}`"
                     im["hl_err"] = (
                         f"{src}: fn `{fn_rec['name']}` ({arch}): lowered stack usage is {eff_stack} bytes, "
-                        f"exceeding explicit `stack {stk_vals[-1]}`; omit `stack` to auto-compute or raise to `stack {eff_stack}`"
+                        f"exceeding explicit `stack {stk_vals[-1]}`; {stk_hint}"
                     )
             # Attach Ode's fast calling convention (`preserves ...`) to every called/imported `fn`
             # (never on the explicit `--c-abi` FFI entry function).

@@ -1009,12 +1009,14 @@ def orParts (facts : List Row) (x y : Row) : Option (Int × Nat) :=
   | _, _ => none
 
 /-- Detect disjoint bit-fields for `x | y`: `y` has an upper bound `0 ≤ u < 2^j` (`1 ≤ j ≤ 63`)
-while `x` is a multiple of `2^j`, so `x | y = x + y` holds identically without overflow. -/
+while `x` is a multiple of `2^j`, so `x | y = x + y` holds identically without overflow.
+When `u = 0` (`y` is provably `0`), require `x` to have a non-constant shifted term (`!x.coeff.isEmpty`)
+so bitwise OR of a zero-bounded variable with a small flag constant (like `flags | 2`) stays in `Known.or`. -/
 def disjointOr (facts : List Row) (known : List Known) (x y : Row) : Option Nat :=
   match rowUpper facts known y with
   | none => none
   | some u =>
-    if u ≤ 0 then none
+    if u < 0 || (u == 0 && x.coeff.isEmpty) then none
     else
       (List.range 63).findSome? fun k =>
         let j := k + 1
@@ -1081,14 +1083,18 @@ def takeWrapIf (skip : Bool) : V Bool := fun items =>
 
 def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
   if f == "add64" || f == "at" then do
-    let r := Lin.add (signed x) (signed y)
-    let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))
-    if w then
-      let d := symLow s (Lin.add x y) (M64 : Int)
-      pure (.lin d.1, d.2)
-    else do
-      inRange s.facts r
-      pure (.lin r, s)
+    let raw := Lin.add x y
+    if plain s.facts raw && plain s.facts (Lin.sub (Lin.const (M64 - 1)) raw) then
+      pure (.lin raw, s)
+    else
+      let r := Lin.add (signed x) (signed y)
+      let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))
+      if w then
+        let d := symLow s (Lin.add x y) (M64 : Int)
+        pure (.lin d.1, d.2)
+      else do
+        inRange s.facts r
+        pure (.lin r, s)
   else if f == "sub64" then do
     let r := Lin.sub (signed x) (signed y)
     let w ← takeWrapIf (plain s.facts r && plain s.facts (Lin.sub (Lin.const (M64 - 1)) r))

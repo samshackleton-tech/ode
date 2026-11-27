@@ -2148,35 +2148,49 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
   unfold symPrim at h
   split at h
   next hc =>
-    obtain ⟨w, r0, _, h⟩ := V.bind_ok h
-    cases w with
-    | true =>
-      simp only [ite_true] at h
+    dsimp only at h
+    split at h
+    next hraw =>
       have := V.pure_ok h
       injection this with hp _
       injection hp with h1 h2
       subst h1 h2
-      have hpos : (0 : Int) < (M64 : Int) := by decide
-      have hnn : 0 ≤ ev ρ (Lin.add x y) := by rw [ev_add, ← hx2, ← hy2]; omega
-      obtain ⟨ρ', hc', er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (M64 : Int)) H wf
-        (bounded_add hx3 hy3) hpos hnn
-      refine ⟨ρ', hc', (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], Nat.mod_lt _ (by decide), ?_, br⟩
-      rw [er, ev_add, ← hx2, ← hy2, Int.natCast_emod, Int.natCast_add]
-    | false =>
-      simp only [Bool.false_eq_true, ite_false] at h
-      obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
-      unfold inRange at e1
-      obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
-      have g1 := entail_sound e2 ρ hf
-      have g2 := entail_sound e3 ρ hf
-      simp only [ev_sub, ev_add, ev_const, top] at g1 g2
-      have := V.pure_ok h
-      injection this with hp _
-      injection hp with h1 h2
-      subst h1 h2
-      refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
-      · exact Nat.mod_lt _ (by decide)
-      · rw [ev_add]; unfold M64; omega
+      have hraw' := Bool.and_eq_true_iff.mp hraw
+      have hhi := plain_sound hraw'.2 ρ hf
+      simp only [ev_sub, ev_add, ev_const, M64] at hhi
+      have hlt : xa + xb < M64 := by unfold M64; omega
+      refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], Nat.mod_lt _ (by decide), ?_, bounded_add hx3 hy3⟩
+      rw [Nat.mod_eq_of_lt hlt, Int.natCast_add, ev_add, hx2, hy2]
+    next =>
+      obtain ⟨w, r0, _, h⟩ := V.bind_ok h
+      cases w with
+      | true =>
+        simp only [ite_true] at h
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        have hpos : (0 : Int) < (M64 : Int) := by decide
+        have hnn : 0 ≤ ev ρ (Lin.add x y) := by rw [ev_add, ← hx2, ← hy2]; omega
+        obtain ⟨ρ', hc', er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := (M64 : Int)) H wf
+          (bounded_add hx3 hy3) hpos hnn
+        refine ⟨ρ', hc', (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], Nat.mod_lt _ (by decide), ?_, br⟩
+        rw [er, ev_add, ← hx2, ← hy2, Int.natCast_emod, Int.natCast_add]
+      | false =>
+        simp only [Bool.false_eq_true, ite_false] at h
+        obtain ⟨_, r1, e1, h⟩ := V.bind_ok h
+        unfold inRange at e1
+        obtain ⟨_, r2, e2, e3⟩ := V.bind_ok e1
+        have g1 := entail_sound e2 ρ hf
+        have g2 := entail_sound e3 ρ hf
+        simp only [ev_sub, ev_add, ev_const, top] at g1 g2
+        have := V.pure_ok h
+        injection this with hp _
+        injection hp with h1 h2
+        subst h1 h2
+        refine ⟨ρ, Carried.here H wf, (xa + xb) % M64, by simp only [prim]; rw [if_pos hc], ?_, ?_, bounded_add (bounded_signed hx3) (bounded_signed hy3)⟩
+        · exact Nat.mod_lt _ (by decide)
+        · rw [ev_add]; unfold M64; omega
   next hc =>
     split at h
     next hc2 =>

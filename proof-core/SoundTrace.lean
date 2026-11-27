@@ -2499,10 +2499,13 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
   unfold symPrim at h
   by_cases h1 : (f == "add64" || f == "at") = true
   · simp only [h1, ite_true] at h
-    obtain ⟨w, _, _, h⟩ := V.bind_ok h
-    cases w with
-    | true => simp only [ite_true] at h; exact ofLin _ _ _ h (symLow_flags s _ _).1 (symLow_flags s _ _).2
-    | false => simp only [Bool.false_eq_true, ite_false] at h; obtain ⟨_, _, _, h⟩ := V.bind_ok h; exact ofLin _ _ _ h rfl rfl
+    by_cases hraw : (plain s.facts (Lin.add x y) && plain s.facts (Lin.sub (Lin.const (M64 - 1)) (Lin.add x y))) = true
+    · simp only [hraw, ite_true] at h; exact ofLin _ _ _ h rfl rfl
+    · simp only [hraw, ite_false] at h
+      obtain ⟨w, _, _, h⟩ := V.bind_ok h
+      cases w with
+      | true => simp only [ite_true] at h; exact ofLin _ _ _ h (symLow_flags s _ _).1 (symLow_flags s _ _).2
+      | false => simp only [Bool.false_eq_true, ite_false] at h; obtain ⟨_, _, _, h⟩ := V.bind_ok h; exact ofLin _ _ _ h rfl rfl
   · simp only [h1, ite_false] at h
     by_cases h2 : (f == "sub64") = true
     · simp only [h2, ite_true] at h

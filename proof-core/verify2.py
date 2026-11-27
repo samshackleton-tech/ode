@@ -1135,6 +1135,9 @@ class Verifier:
                 if op in ("add64", "at"):
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
+                    raw = r_add(a, b)
+                    if r_plain(st["facts"], raw) and r_plain(st["facts"], r_sub(r_const(M64), raw)):
+                        return raw, (ma or mb)
                     res = r_add(r_signed(a), r_signed(b))
                     plain_ok = r_plain(st["facts"], res) and r_plain(st["facts"], r_sub(r_const(M64), res))
                     if (not plain_ok) and stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
@@ -1211,7 +1214,7 @@ class Verifier:
                         return tot
                     def _disjoint_or(x, y):
                         u = _row_upper(y)
-                        if u is None or u < 0:
+                        if u is None or u < 0 or (u == 0 and not any(c != 0 for c in x[1])):
                             return False
                         for jbits in range(1, 64):
                             m = 1 << jbits

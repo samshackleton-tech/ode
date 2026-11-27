@@ -178,9 +178,36 @@ Inspecting all 48 failed cells surfaced 7 concrete verifier, compiler, tool, and
 
 ---
 
-## Iteration 6 — Pre-Registered 4-Model Suite (`hl-default-v6`)
+## Iteration 6 — Pre-Registered 4-Model Suite (`hl-default-v6`, commit `cc1eeaf`)
 
 - **Suite definition:** [`suites/hl-default-v6.json`](suites/hl-default-v6.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+- **Pre-registration:** [`prereg-hl-default-v6.md`](prereg-hl-default-v6.md).
+- **Results:** [`results-hl-default-v6.md`](results-hl-default-v6.md), [`results-hl-default-v6.json`](results-hl-default-v6.json).
+- **Headline:** **22 / 64 (34.4%)** strict passes (+1 vs `v5`, tying the 4-model all-time high; **21 / 22** native CPU in-run + `sha256_4way` `kimi-k3.1-pro` `arm64` (20,780 B) re-verified **`NATIVE_PASS 264/264`** on Apple Silicon after fixing the `MAP_JIT` harness bug -> **22 / 22** real-silicon pass; **12 / 12** scalar `verify2.py` pass; **0** verifier tracebacks; **8.1 min** wall clock; **$12.16** API spend; tool latency **p50 0.65 s / p90 4.74 s / max 47.85 s**).
+  - **`arm64` reached a new all-time record of `15 / 32 (46.9%)`** (`v1: 9 -> v2: 8 -> v3: 12 -> v4: 14 -> v5: 13 -> v6: 15`), while `x86_64` sat at **`7 / 32 (21.9%)`** (`v2: 14/32` before removing silent stack spilling vs `v3: 5`, `v4: 7`, `v5: 8`, `v6: 7`).
+  - **By model:** `kimi-k3.1-pro` **7/16** ($4.79), `claude-haiku-5.5` **6/16** ($0.50, new all-time high!), `glm-5.3-prime` **5/16** ($3.62), `muse-spark-open` **4/16** ($3.24).
+  - **By task (`x86_64` / `arm64`):** `ipv4_valid` 7/8 (4/3), **`der_valid` 5/8** (1/4, new high; `arm64` 4/4!), `chacha20_4way` 4/8 (1/3), **`sha256_4way` 3/8** (1/2, new high!), `blake3_compress_4way` 2/8 (0/2), `blake3_compress1` 1/8 (0/1), `ct_base64_decode` 0/8 (0/0), `ebpf` 0/8 (0/0).
+
+### Complete 42-Cell / 330-Round Forensic Analysis & Fixes (All TDD-Verified in `lang/test_hl_matrix.py::test_14`)
+
+Full diagnosis of all 42 failed cells (`25 x86_64`, `17 arm64`) showed that **18 / 25 failed `x86_64` cells (72%)** hit register or scratch exhaustion (44 rounds on `x86_64` vs 8 on `arm64`), compounded by four tool defects when models followed the explicit `stack var` rule:
+
+1. **Apple Silicon `MAP_JIT` `fread` harness fix (`paper/EXPERIMENTS/tasks/*_native.c`, all 16 harnesses):** Switched from direct `fread` into `MAP_JIT` (which fails with `EFAULT` on Apple Silicon binaries over 16 KiB) to heap `malloc` + `fread` + `memcpy` + `sysconf(_SC_PAGESIZE)`. Immediately cleared `sha256_4way` `kimi-k3.1-pro` `arm64` (`NATIVE_PASS 264/264`).
+2. **`Core.lean` & `verify2.py` `disjointOr` `u = 0` fix (`proof-core/Core.lean`, `SoundStep.lean`, `verify2.py`):** Allowed `0 <= u < 2^j` (`1 <= j <= 63`) when `u = 0` and `x` has a non-constant shifted term (`!x.coeff.isEmpty`), keeping `((v2 & 3) << 6) | select(d == 0, 0, v3)` exact while preserving `Known.or` for constant-flag bitwise OR (`flags | 2`). Proved sound in `SoundStep.lean::disjointOr_sound`.
+3. **`add64`/`at` unsigned fast-path & `x86_64` `_emit_imm` (`proof-core/Core.lean`, `SoundStep.lean`, `SoundTrace.lean`, `verify2.py`, `lang/ode_hl.py`):** Added unsigned `[0, 2^64 - 1]` fast-path in `symPrim` for `add64`/`at` and switched `x86_64` `_emit_imm` from `add` to `or` so 64-bit constants `>= 2^63` (such as `u32x4(0xFFFFFFFF, 0xFFFFFFFF, ...)`) stay exact without signed wrap.
+4. **Liveness-based dead-slot reuse for explicit `stack var` / `stack let` (`lang/ode_hl.py`, `lang/ode_unified.py`):** Applied the existing liveness interference graph (`interf`) plus a loop-order `stack_interf` guard (preventing any `stack var` written inside a `while`/`for` loop from reusing a slot written before the loop, preserving `Core.lean`'s `first.frame` invariant) to reuse dead stack slots of identical width (`8`/`16`/`64` B) across expanded `for ... unroll` loops and `inline fn` calls (fixing 16 rounds across 9 cells where dead slots blew past `stack 256`/`512`). Also updated `ode_unified.py` not to suggest raising `stack` on entry contracts (which alters the contract ID).
+5. **Scratch-register reuse in `_eval_select` & stack `buf` (`lang/ode_hl.py`):** Materialized simple flag-preserving `Num`/`Var`/`RawReg` `then` arms after `cmp` in `_eval_select` (freeing a full `x86_64` scratch register during condition evaluation, fixing all 3 `ebpf x86_64` scratch crashes) and enabled `can_reuse` / 1-insn `lea [rsp + reg + disp]` for local stack `buf` accesses.
+6. **Vector width checking for `u32x16` (`lang/ode_hl.py`):** Rejected `u32x4`-only intrinsics (`shuf32`, `shufps`, `blend32`, `uzp1_32`, `uzp2_32`, `ext4`, `ext8`, `ext12`) and mixed `u32x4`/`u32x16` operands cleanly at High-Level Ode compile time instead of emitting invalid `zmm` assembly (fixing 4 crash rounds).
+7. **Clean `ensures` parameter validation (`proof-core/statement.py`):** Replaced bare `next(...)` (`StopIteration`) on non-parameter or variable-length `ensures` targets with a clear `SystemExit` diagnostic.
+8. **Inline opening-fence normalization (`paper/EXPERIMENTS/run_suite.py`) & diagnostic hints (`lang/ode_tool.py`, `lang/ode_hl.py`):** Split opening/closing triple-backtick fences glued directly onto preceding prose (`extract_ode_source`, fixing 8 `muse-spark-open` rounds), and added crisp hints for vector `|` (`blend32`/`shufps`), `writes out[.. N]` sequence form, and `select(b == 0, 0, a)` for 0/1 flags on runtime `&` and non-constant scalar `*`.
+9. **Full test suite & zero-cost replay:** `./run-tests.sh` (**635 passed, 17 skipped, 0 failed**, `SoundTop` 52 jobs built cleanly with 0 `sorry`); zero-cost corpus replay of `61` saved `hl-default-v6` files kept **22 / 22** passes (**0 regressions**).
+
+---
+
+## Iteration 7 — Pre-Registered 4-Model Suite (`hl-default-v7`)
+
+- **Suite definition:** [`suites/hl-default-v7.json`](suites/hl-default-v7.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+
 
 
 

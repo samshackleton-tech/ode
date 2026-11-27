@@ -12,6 +12,7 @@ static ipv4_fn g_fn = NULL;
 
 #ifdef NATIVE_JIT_BIN
 #include <sys/mman.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <libkern/OSCacheControl.h>
 #include <pthread.h>
@@ -22,21 +23,27 @@ static ipv4_fn load_jit(const char *path, size_t entry_off) {
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    size_t map_sz = (size_t)sz < 4096 ? 4096 : (((size_t)sz + 4095) & ~(size_t)4095);
+    uint8_t *tmp = (uint8_t *)malloc((size_t)(sz > 0 ? sz : 1));
+    if (!tmp) { perror("malloc"); exit(2); }
+    if (sz > 0 && fread(tmp, 1, (size_t)sz, f) != (size_t)sz) { perror("fread"); exit(2); }
+    fclose(f);
+    size_t ps = (size_t)sysconf(_SC_PAGESIZE);
+    size_t map_sz = (((size_t)sz + ps - 1) / ps) * ps;
+    if (map_sz < ps) map_sz = ps;
 #ifdef __APPLE__
     void *mem = mmap(NULL, map_sz, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
     if (mem == MAP_FAILED) { perror("mmap"); exit(2); }
     pthread_jit_write_protect_np(0);
-    if (fread(mem, 1, (size_t)sz, f) != (size_t)sz) { perror("fread"); exit(2); }
+    memcpy(mem, tmp, (size_t)sz);
     pthread_jit_write_protect_np(1);
     sys_icache_invalidate(mem, (size_t)sz);
 #else
     void *mem = mmap(NULL, map_sz, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mem == MAP_FAILED) { perror("mmap"); exit(2); }
-    if (fread(mem, 1, (size_t)sz, f) != (size_t)sz) { perror("fread"); exit(2); }
+    memcpy(mem, tmp, (size_t)sz);
     if (mprotect(mem, map_sz, PROT_READ | PROT_EXEC) != 0) { perror("mprotect"); exit(2); }
 #endif
-    fclose(f);
+    free(tmp);
     return (ipv4_fn)((uint8_t *)mem + entry_off);
 }
 #else
