@@ -486,12 +486,12 @@ for arm64 {
 """
         _dual_verify(self, src, "hl_zip_demo", check_verify2=False)
 
-    def test_15_zero_stack_x86_rax_simple_select_and_const_fold(self):
-        """5 live locals + const `let mask := 255` + `return select(s == 100, 1, 0)` fits in `stack 0` on x86-64."""
+    def test_15_zero_stack_x86_fixed_scratch_and_const_fold(self):
+        """4 live locals + const `let mask := 255` + `return select(s == 100, 1, 0)` fits in `stack 0` on x86-64."""
         src = """
 fn hl_zero_stack_sel(p: n bytes, n: number) -> u64
     requires 8 <= n, n <= 64
-    returns if p[0] + p[1] + p[2] + p[3] + p[4] == 100 then 1 else 0
+    returns if p[0] + p[1] + p[2] + p[3] == 100 then 1 else 0
     trace depends on n
     stack 0
 {
@@ -500,11 +500,9 @@ fn hl_zero_stack_sel(p: n bytes, n: number) -> u64
     let b := p[1] & mask
     let c := p[2] & mask
     let d := p[3] & mask
-    let e := p[4] & mask
     var s: u64 := a + b
     s += c
     s += d
-    s += e
     return select(s == 100, 1, 0)
 }
 """

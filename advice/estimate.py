@@ -644,7 +644,10 @@ def trace_memory(programs, entry, target, init_regs=None, init_mem=None, max_ste
                     pc = end_pc
                     continue
         if st.to is not None:
-            pc = st.to
+            if isinstance(st.to, str) and st.to in parsed_prog:
+                cur_sym, pc = st.to, 0
+            else:
+                pc = st.to
         else:
             pc = end_pc
     else:
