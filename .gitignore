@@ -1,3 +1,5 @@
 __pycache__/
 .lake/
 lake-manifest.json
+.venv/
+uv.lock

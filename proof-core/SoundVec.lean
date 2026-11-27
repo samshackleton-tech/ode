@@ -960,17 +960,16 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
     injection this with h1 _
     injection h1 with h1 h2
     subst h1 h2
-    obtain ⟨ρ', c, hq, _, bq, _⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := W32i) H wf hb (by decide) (by rw [← hx]; omega)
-    have ex : ev ρ' x = ev ρ x := (ev_agree hb c.agree).symm
+    obtain ⟨ρ', c, hq, hr, bq, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) (m := W32i) H wf hb (by decide) (by rw [← hx]; omega)
     obtain ⟨e, ok, len, lt, dn⟩ := termsOf_step (mk := wAtom) (val := fun r => (ev ρ' r % W32i).toNat) (inp := inpOf ctx s0) (ρ := ρ')
       (nv := (symDivide s x W32i).2.2.nvars) (T0 := (symDivide s x W32i).2.2.terms)
-      [x, (symDivide s x W32i).1, Lin.const 0, Lin.const 0] (symDivide s x W32i).2.2.tab
+      [(symDivide s x W32i).2.1, (symDivide s x W32i).1, Lin.const 0, Lin.const 0] (symDivide s x W32i).2.2.tab
       (by
         intro r mr T eT okT
         apply wAtom_step okT
         simp only [List.mem_cons, List.mem_nil_iff, or_false] at mr
         rcases mr with rfl | rfl | rfl | rfl
-        · exact bounded_mono c.mono hb
+        · exact br
         · exact bq
         · exact bounded_const _ _
         · exact bounded_const _ _)
@@ -979,8 +978,8 @@ theorem symHalves_sound {ctx : Ctx} {s0 : State} {s s1 : Sym} {x : Row} {l : Lis
     intro k hk
     rcases lt4 hk with rfl | rfl | rfl | rfl
     · rw [dn 0 (by show _ < 4; omega)]
-      show xa % W32 = (ev ρ' x % W32i).toNat
-      rw [ex, ← hx]; unfold W32 W32i; omega
+      show xa % W32 = (ev ρ' (symDivide s x W32i).2.1 % W32i).toNat
+      rw [hr, ← hx]; unfold W32 W32i; omega
     · rw [dn 1 (by show _ < 4; omega)]
       show xa / W32 % W32 = (ev ρ' (symDivide s x W32i).1 % W32i).toNat
       rw [hq, ← hx]; unfold W32 W32i; omega

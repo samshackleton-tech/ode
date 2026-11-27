@@ -14,7 +14,8 @@ Every iteration fixes tool, compiler, prover, and verifier defects found in the 
 | 2 | `hl-default-v2` | `ec52868` | **32 / 80 (40.0%)** *(22/64 excl. Gemini)* | 32 / 32 | **16 / 16** | **11.3 min** | **$24.70** | 0.77 s / 3.05 s / 77.70 s |
 | 3 | `hl-default-v3` | `d0f4ea1` | **17 / 64 (26.6%)** *(4 models; arm64 **12/32** vs 8/32)* | **17 / 17** | **10 / 10** | 13.3 min *(1 hung cell)* | **$13.61** | **0.59 s** / 3.01 s / 781.51 s |
 | 4 | `hl-default-v4` | `fa6df99` | **21 / 64 (32.8%)** *(4 models; arm64 **14/32** record!)* | **21 / 21** | **12 / 12** | **7.3 min** | **$13.22** | 0.70 s / 3.53 s / **14.49 s** |
-| 5 | `hl-default-v5` | *pending* | *pending (64 cells, 4 models)* | *pending* | *pending* | *pending* | *pending* | *pending* |
+| 5 | `hl-default-v5` | `8834d8e` | **21 / 64 (32.8%)** *(all 8/8 tasks solved! first `ebpf` pass!)* | **21 / 21** | **12 / 12** | **6.6 min** | **$12.10** | **0.59 s** / 3.19 s / **13.40 s** |
+| 6 | `hl-default-v6` | *pending* | *pending (64 cells, 4 models; $0 v5 replay = **26/64 = 40.6%**)* | *pending* | *pending* | *pending* | *pending* | *pending* |
 
 ---
 
@@ -154,9 +155,33 @@ Inspecting all 48 failed cells surfaced 7 concrete verifier, compiler, tool, and
 
 ---
 
-## Iteration 5 — Pre-Registered 4-Model Suite (`hl-default-v5`)
+## Iteration 5 — Pre-Registered 4-Model Suite (`hl-default-v5`, commit `8834d8e`)
 
 - **Suite definition:** [`suites/hl-default-v5.json`](suites/hl-default-v5.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+- **Pre-registration:** [`prereg-hl-default-v5.md`](prereg-hl-default-v5.md).
+- **Results:** [`results-hl-default-v5.md`](results-hl-default-v5.md), [`results-hl-default-v5.json`](results-hl-default-v5.json).
+- **Headline:** **21 / 64 (32.8%)** strict passes (**8 / 8 benchmark tasks now solved!** First-ever cold-room **`ebpf` strict pass**: `kimi-k3.1-pro` `arm64` R4, 4 fns, 452 insns, `verify2=True`, `native=pass`! **21 / 21** native CPU pass, **12 / 12** scalar `verify2.py` pass, **0** Python tracebacks, **6.6 min** wall clock, **$12.10** API spend, prover latency **p50 0.59 s / p90 3.19 s / max 13.40 s**).
+  - **By model:** `kimi-k3.1-pro` **7/16** (`ebpf` arm64, `blake3_compress1` x86_64, `sha256_4way` arm64!), `muse-spark-open` **5/16**, `glm-5.3-prime` **5/16** (new high, incl. first `der_valid` x86_64!), `claude-haiku-5.5` **4/16** (incl. `chacha20_4way` x86_64!).
+  - **By task (`x86_64` / `arm64`):** `ipv4_valid` 7/8 (3/4), `chacha20_4way` **6/8** (2/4, new all-time high!), `ct_base64_decode` 2/8 (1/1), `der_valid` 2/8 (1/1), `ebpf` **1/8** (0/1, first pass!), `blake3_compress1` 1/8 (1/0), `blake3_compress_4way` 1/8 (0/1), `sha256_4way` 1/8 (0/1).
+
+### Forensic Fixes From `hl-default-v5` (All TDD-Verified in `lang/test_hl_matrix.py::test_13`)
+
+1. **Scalar `m.u64` / `k.u64` word-table linkage & canonical 32-bit remainder (`proof-core/Core.lean`, `SoundVec.lean`, `SoundSpecW.lean`, `SoundStep.lean`, `SoundTrace.lean`):**
+   - Root cause of **all 5 / 5** `the specification's words are not followed on the terms the function made` failures on mathematically correct programs (`blake3_compress1` Haiku arm64/x86_64, `blake3_compress1` Muse arm64/x86_64, `sha256_4way` Haiku arm64 — every one passed concrete execution!):
+     - `symLoadFixed` (`m.u64(off)` / `k.u64(off)`) recorded `Known.load v fj off` without connecting its low/high 32-bit halves to `words(m)` (`inputWords`), which only looked up `Node.input j k` from 128-bit/512-bit vector loads.
+     - `symHalves` interned raw `x` instead of the canonical remainder `d.2.1` from `symDivide s x W32i`, creating duplicate nodes whenever a coder both packed `m0` directly and masked `m0 & 0xffffffff`, and `wown` (`word`, `lo`, `hi`) did not check the canonical remainder `q + 1` of `Known.div`.
+   - Added `atomId`, `inputWordId`, and canonical `d.2.1` in `symHalves`, plus `Known.word32` support in `rowUpperAux`, `symSplit`, `disjointOr`, `symLow`, and `shl64` — all formally proved sound in Lean 4 across all 11 top-level `SoundTop` theorems (0 `sorry`, standard axioms only).
+   - Bonus milestone: the sentinel test in `proof-core/test_kernel.py` (`blake3_servil_compress_in_place_sse41` with weaker `flags: number` contract) flipped from *"not shown yet"* to **`shown`**!
+2. **Compile-time constant `select(...)` & `if` folding during `for ... unroll` (`lang/ode_hl.py`):** Folded constant conditions in `_subst_expr` / `_subst_stmts` (`_const_eval_cond`), eliminating dead `select(t % 2 == 0, kw & 0xffffffff, kw >> 32)` runtime branches in unrolled loops (`sha256_4way` Haiku arm64).
+3. **Clear `inline fn` & `select` statement diagnostics (`lang/ode_hl.py`) + 4 refusal hints (`lang/ode_tool.py`):** Explained `inline fn` has no return type (`-> u64`), `select(...)` is expression-only, and added hints for loop-local `stack var`, constant vector load offsets, scalar `&` constant masks, and `bytes_of(...)` word-table mismatches.
+4. **Zero-cost full-corpus replay (`59` saved `hl-default-v5` files in `14.5 s`):** **21 / 21** kept passes (**0 regressions**) + **+5 newly flipped passes at $0** (`blake3_compress1` Haiku arm64/x86_64, Muse arm64/x86_64; `sha256_4way` Haiku arm64) -> **`26 / 64 (40.6%)`**!
+
+---
+
+## Iteration 6 — Pre-Registered 4-Model Suite (`hl-default-v6`)
+
+- **Suite definition:** [`suites/hl-default-v6.json`](suites/hl-default-v6.json) — exact same 4 models × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+
 
 
 

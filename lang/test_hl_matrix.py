@@ -1041,6 +1041,97 @@ fn read_off(buf: 256 bytes, b: number)
         h3 = ode_tool._diagnostic_hint("refused: a read of the frame where nothing was written", "arm64", info={"hl_meta": True})
         self.assertIn("stack var", h3)
 
+    def test_13_hl_v5_forensic_bug_regressions(self):
+        """TDD regressions for defects surfaced by hl-default-v5 forensics."""
+        import ode_tool
+
+        # Fix #1 (Core.lean `atomId`, `inputWordId`, `symHalves` canonical remainder) &
+        # Fix #2 (ode_hl.py constant `select(...)` folding inside `for ... unroll`):
+        # Scalar `m.u64(off)` split with `& 0xffffffff`/`>> 32` + `select(j % 2 == 0, ...)`
+        # + masked `t & 0xffffffff` must verify `shown` against `bytes_of(... words(m), lo(t), hi(t))`
+        # on BOTH x86_64 and arm64!
+        src_u64_words = """\
+def mix_u64(m, t) {
+    [m[0] ^ lo(t), m[1] ^ hi(t), m[2] + m[0], m[3] + m[1]]
+}
+
+fn run_mix(out: 16 bytes, m: 16 bytes, t: counter)
+    requires no_overlap(out, m)
+    ensures out = bytes_of(mix_u64(words(m), t))
+    stack 64
+{
+    let q0: u64 := m.u64(0)
+    let q1: u64 := m.u64(8)
+    let t_lo: u64 := t & 4294967295
+    let t_hi: u64 := t >> 32
+    var acc_lo: u64 := 0
+    var acc_hi: u64 := 0
+    for j in 0..2 unroll {
+        let pick: u64 := select(j % 2 == 0, q0 & 4294967295, q0 >> 32)
+        if j == 0 {
+            acc_lo := pick
+        } else {
+            acc_hi := pick
+        }
+    }
+    let m_lo: u64 := acc_lo | (acc_hi << 32)
+    let v_m: u32x4 := pack_u64x2(m_lo, q1)
+    let v_t: u32x4 := pack_u64x2(t_lo | (t_hi << 32), m_lo)
+    let lo_xor: u32x4 := v_m ^ v_t
+    let hi_add: u32x4 := v_m +% v_t
+    out.u32x4(0) := unpacklo64(lo_xor, unpackhi64(hi_add, hi_add))
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_u64_words, "run_mix", arch, check_v2=False)
+
+        # Fix #3 (ode_hl.py): clear errors for `inline fn ... -> u64` and bare `select(...)` stmt.
+        src_bad_inl = """\
+inline fn bad_ret(x: u64) -> u64 {
+    return x
+}
+fn dummy(x: number)
+    returns x
+    stack 0
+{
+    return x
+}
+"""
+        with self.assertRaises(ode_unified.UnifiedErr) as cm1:
+            ode_unified.parse_unified(src_bad_inl, src="<bad_inl>", c_abi_fn="dummy")
+        self.assertIn("no return type", str(cm1.exception))
+        self.assertIn("var out: u64", str(cm1.exception))
+
+        src_bare_sel = """\
+inline fn bad_sel(c: u64) {
+    select(c == 0, 1, 2)
+}
+fn dummy2(x: number)
+    returns x
+    stack 0
+{
+    bad_sel(x)
+    return x
+}
+"""
+        with self.assertRaises(ode_unified.UnifiedErr) as cm2:
+            ode_unified.parse_unified(src_bare_sel, src="<bad_sel>", c_abi_fn="dummy2")
+        self.assertIn("expression, not a statement", str(cm2.exception))
+
+        # Fix #4 (ode_tool.py): 4 new refusal hints from hl-default-v5.
+        self.assertIn("inside", ode_tool._diagnostic_hint(
+            "refused: at the place the frame does not hold what it held on first coming there",
+            "x86_64", info={"hl_meta": True}))
+        self.assertIn("unroll", ode_tool._diagnostic_hint(
+            "refused: sixteen bytes at a place of a run that is no number",
+            "x86_64", info={"hl_meta": True}))
+        self.assertIn("constant bitmask", ode_tool._diagnostic_hint(
+            "refused: an and with what is no number of the table: not here yet",
+            "x86_64", info={"hl_meta": True}))
+        self.assertIn("bytes_of", ode_tool._diagnostic_hint(
+            "refused: the specification's words are not followed on the terms the function made",
+            "arm64", info={"hl_meta": True}))
+
 
 if __name__ == "__main__":
     unittest.main()

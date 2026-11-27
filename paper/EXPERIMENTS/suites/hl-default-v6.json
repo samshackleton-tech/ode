@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v6",
+  "description": "Iteration 6 cold-room benchmark (4 models excluding gemini-4-neon x 8 tasks x 2 targets = 64 cells) after fixing all hl-default-v5 forensic defects (Core.lean `atomId`, `inputWordId`, `symHalves` canonical remainder, `rowUpper` / `symSplit` / `disjointOr` / `shl64` `Known.word32` support, ode_hl.py constant `select`/`if` folding during `for ... unroll`, clear `inline fn` / `select` diagnostics, and 4 crisp refusal hints in ode_tool.py; $0 replay flipped +5 cells from v5 -> 26/64 = 40.6%).",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

@@ -352,15 +352,11 @@ class Sse41(KernelTests, unittest.TestCase):
         self.assertEqual(list(self.found(spec, self.obj, "word")), [SSE41])
         with open(self.path("word.proof")) as f: self.assertNotIn("t wrap", f.read())
 
-    def test_a_true_contract_that_is_not_shown_yet(self):
-        """Not shown, of something true. With `flags: number` the specification's `word(flags)` is the low 32
-        bits of the register, which is what the function takes; the verifier holds the function's word as the
-        remainder it made at the shift and the specification's as the register's own word, and does not see
-        that the two are one. (Kept so that it is seen when this changes.)"""
+    def test_flags_as_full_number_is_shown(self):
+        """With `flags: number`, `word(flags)` is the low 32 bits of the register (`flags % 2^32`); `atomId`
+        unifies the shift's canonical remainder with `word(flags)`, so the weaker contract is now shown."""
         spec = self.changed("flags: low word)", "flags: number)")
-        last = self.found(spec, self.obj)
-        self.assertIsInstance(last, str)
-        self.assertIn(FOLLOW, last.split("\n")[0])
+        self.assertEqual(list(self.found(spec, self.obj, "number")), [SSE41])
 
 
 if __name__ == "__main__":

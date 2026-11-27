@@ -2286,7 +2286,9 @@ theorem symLow_flags (s : Sym) (x : Row) (m : Int) :
     · exact ⟨rfl, rfl⟩
     · split
       · exact ⟨rfl, rfl⟩
-      · exact symDivide_flags s x m
+      · split
+        · exact ⟨rfl, rfl⟩
+        · exact symDivide_flags s x m
 
 theorem symQuot_flags (s : Sym) (x : Row) (m : Int) :
     (symQuot s x m).2.zf = s.zf ∧ (symQuot s x m).2.cf = s.cf := by
@@ -2529,10 +2531,17 @@ theorem symPrim_flags {f : String} {s s1 : Sym} {x y : Row} {val : EV} {items re
               simp only [hc] at h
               by_cases hk : 0 ≤ k ∧ k < 64
               · simp only [hk, ite_true] at h
-                obtain ⟨kept, _, _, h⟩ := V.bind_ok h
-                cases kept with
-                | true => simp only [ite_true] at h; exact ofLin _ _ _ h rfl rfl
-                | false => simp only [Bool.false_eq_true, ite_false] at h; exact ofLin _ _ _ h (symLow_flags s x _).1 (symLow_flags s x _).2
+                by_cases hkw : (decide (k ≤ 32) && isWord32Row s x) = true
+                · simp only [hkw, ite_true] at h
+                  obtain ⟨kept, _, _, h⟩ := V.bind_ok h
+                  cases kept with
+                  | true => simp only [ite_true] at h; exact ofLin _ _ _ h rfl rfl
+                  | false => simp only [Bool.false_eq_true, ite_false] at h; exact ofLin _ _ _ h (symLow_flags s x _).1 (symLow_flags s x _).2
+                · simp only [hkw, ite_false] at h
+                  obtain ⟨kept, _, _, h⟩ := V.bind_ok h
+                  cases kept with
+                  | true => simp only [ite_true] at h; exact ofLin _ _ _ h rfl rfl
+                  | false => simp only [Bool.false_eq_true, ite_false] at h; exact ofLin _ _ _ h (symLow_flags s x _).1 (symLow_flags s x _).2
               · simp only [hk, ite_false] at h; exact (refuse_ok (items := items) h).elim
           · simp only [h5, ite_false] at h
             by_cases h6 : (f == "shr64") = true

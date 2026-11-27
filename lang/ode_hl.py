@@ -630,6 +630,12 @@ class HLParser:
                 return ExprStmt(expr, t.line)
             raise HLErr(f"{self.src}: line {t.line}: expected assignment or call statement")
 
+        if t.val == "select":
+            raise HLErr(
+                f"{self.src}: line {t.line}: `select(...)` is an expression, not a statement "
+                f"(bind it with `let x := select(...)`, `x := select(...)`, or `return select(...)`; "
+                f"`inline fn` templates do not return values — pass a `var out: u64` parameter or use a contract-bearing `fn`)"
+            )
         raise HLErr(f"{self.src}: line {t.line}: unexpected token {t.val!r} at start of statement")
 
     # -- Boolean conditions --
@@ -816,10 +822,40 @@ def _subst_expr(e, vname, kval):
     if isinstance(e, NotOp):
         return NotOp(_subst_expr(e.expr, vname, kval), e.line)
     if isinstance(e, Select):
-        return Select(_subst_expr(e.cond, vname, kval), _subst_expr(e.then_e, vname, kval), _subst_expr(e.else_e, vname, kval), e.line)
+        c = _subst_expr(e.cond, vname, kval)
+        cv = _const_eval_cond(c)
+        if cv is True:
+            return _subst_expr(e.then_e, vname, kval)
+        if cv is False:
+            return _subst_expr(e.else_e, vname, kval)
+        return Select(c, _subst_expr(e.then_e, vname, kval), _subst_expr(e.else_e, vname, kval), e.line)
     if isinstance(e, Call):
         return Call(e.name, [_subst_expr(a, vname, kval) for a in e.args], e.line)
     return e
+
+
+def _const_eval_cond(c):
+    if isinstance(c, Cmp) and isinstance(c.left, Num) and isinstance(c.right, Num):
+        a, b = c.left.val, c.right.val
+        if c.op == "==": return a == b
+        if c.op == "!=": return a != b
+        if c.op == "<": return a < b
+        if c.op == "<=": return a <= b
+        if c.op == ">": return a > b
+        if c.op == ">=": return a >= b
+    if isinstance(c, BoolOp):
+        lv = _const_eval_cond(c.left)
+        rv = _const_eval_cond(c.right)
+        if c.op == "&&":
+            if lv is False or rv is False: return False
+            if lv is True and rv is True: return True
+        if c.op == "||":
+            if lv is True or rv is True: return True
+            if lv is False and rv is False: return False
+    if isinstance(c, NotOp):
+        v = _const_eval_cond(c.expr)
+        if v is not None: return not v
+    return None
 
 
 def _const_eval_binop(op, a, b):
@@ -850,7 +886,14 @@ def _subst_stmts(stmts, vname, kval):
         elif isinstance(st, StoreStmt):
             out.append(StoreStmt(st.buf, _subst_expr(st.idx, vname, kval), st.width, _subst_expr(st.expr, vname, kval), st.line))
         elif isinstance(st, IfStmt):
-            out.append(IfStmt(_subst_expr(st.cond, vname, kval), _subst_stmts(st.then_body, vname, kval), _subst_stmts(st.else_body, vname, kval), st.line))
+            c = _subst_expr(st.cond, vname, kval)
+            cv = _const_eval_cond(c)
+            if cv is True:
+                out.extend(_subst_stmts(st.then_body, vname, kval))
+            elif cv is False:
+                out.extend(_subst_stmts(st.else_body, vname, kval))
+            else:
+                out.append(IfStmt(c, _subst_stmts(st.then_body, vname, kval), _subst_stmts(st.else_body, vname, kval), st.line))
         elif isinstance(st, WhileStmt):
             out.append(WhileStmt(_subst_expr(st.cond, vname, kval), st.maintains, st.writes, st.decreases, _subst_stmts(st.body, vname, kval), st.line))
         elif isinstance(st, ForStmt):
@@ -1048,6 +1091,11 @@ def parse_hl_inline(raw_text, first_line, src="<ode>"):
     hdr = raw_text[:bopen]
     m = re.match(r"^\s*inline\s+fn\s+([A-Za-z_]\w*)\s*(?:for\s+\w+\s*)?\((.*)\)\s*$", hdr, re.S)
     if not m:
+        if "->" in hdr:
+            raise HLErr(
+                f"{src}: line {first_line}: High-Level `inline fn` is a statement template with no return type "
+                f"(`{hdr.strip()}`); pass a `var out: u64` parameter to write a result, or use a contract-bearing `fn ... returns ...`"
+            )
         raise HLErr(f"{src}: line {first_line}: invalid High-Level `inline fn` header `{hdr.strip()}`")
     name = m.group(1)
     pstr = m.group(2).strip()

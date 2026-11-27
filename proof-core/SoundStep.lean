@@ -1509,8 +1509,9 @@ theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     exact ⟨ρ', c, by rw [ev_var]; exact hq, by rw [ev_var]; exact hr,
            bounded_var (show s.nvars < s.nvars + 2 by omega), bounded_var (show s.nvars + 1 < s.nvars + 2 by omega)⟩
 
-theorem rowUpperAux_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ) :
-    ∀ (cs : List Int) (i : Nat) {u : Int}, rowUpperAux facts cs i = some u →
+theorem rowUpperAux_sound {ctx : Ctx} {s0 : State} {T : List Node} {facts : List Row} {known : List Known} {ρ : Nat → Int}
+    (hf : ∀ f ∈ facts, f.holds ρ) (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T) :
+    ∀ (cs : List Int) (i : Nat) {u : Int}, rowUpperAux facts known cs i = some u →
       0 ≤ dot cs (fun k => ρ (i + k)) ∧ dot cs (fun k => ρ (i + k)) ≤ u
   | [], _, _, h => by simp only [rowUpperAux, Option.some.injEq] at h; subst h; simp [dot]
   | c :: cs, i, u, h => by
@@ -1518,7 +1519,7 @@ theorem rowUpperAux_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ 
     split at h
     · next hc =>
       have hc0 : c = 0 := beq_iff_eq.mp hc
-      have ih := rowUpperAux_sound hf cs (i + 1) h
+      have ih := rowUpperAux_sound hf hk cs (i + 1) h
       simp only [dot, hc0, Int.zero_mul, Int.zero_add]
       have hfn : (fun k => ρ (i + (k + 1))) = (fun k => ρ (i + 1 + k)) := by funext k; congr 1; omega
       rw [hfn]; exact ih
@@ -1526,51 +1527,81 @@ theorem rowUpperAux_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ 
       split at h
       · cases h
       · next hneg =>
-        split at h
-        · next hp =>
-          cases hb : boundOf facts (Lin.var i) with
-          | none => simp [hb] at h
-          | some ub =>
-            cases hr : rowUpperAux facts cs (i + 1) with
-            | none => simp [hb, hr] at h
-            | some rest =>
-              simp only [hb, hr, Option.some.injEq] at h
-              subst h
-              have hlo := plain_sound hp ρ hf
-              rw [ev_var] at hlo
-              have hhi := boundOf_sound hb ρ hf
-              rw [ev_var] at hhi
-              have ih := rowUpperAux_sound hf cs (i + 1) hr
-              have hfn : (fun k => ρ (i + (k + 1))) = (fun k => ρ (i + 1 + k)) := by funext k; congr 1; omega
-              have h0 : 0 ≤ c * ρ i := Int.mul_nonneg (by omega) hlo
-              have h1 : c * ρ i ≤ c * ub := Int.mul_le_mul_of_nonneg_left hhi (by omega)
-              simp only [dot, Nat.add_zero, hfn]
-              omega
-        · cases h
+        dsimp only at h
+        have hbi : ∀ ub : Int,
+            (if plain facts (Lin.var i) then
+              match boundOf facts (Lin.var i) with
+              | some u => some u
+              | none => if inWord32 i known then some (W32i - 1) else none
+             else if inWord32 i known then some (W32i - 1) else none) = some ub →
+            0 ≤ ρ i ∧ ρ i ≤ ub := by
+          intro ub hub
+          split at hub
+          · next hp =>
+            have hlo := plain_sound hp ρ hf; rw [ev_var] at hlo
+            cases hb : boundOf facts (Lin.var i) with
+            | some u' =>
+              simp only [hb, Option.some.injEq] at hub; subst hub
+              have hhi := boundOf_sound hb ρ hf; rw [ev_var] at hhi
+              exact ⟨hlo, hhi⟩
+            | none =>
+              simp only [hb] at hub
+              split at hub
+              · next hw =>
+                simp only [Option.some.injEq] at hub; subst hub
+                have hw' := inWord32_sound hk hw; omega
+              · cases hub
+          · split at hub
+            · next hw =>
+              simp only [Option.some.injEq] at hub; subst hub
+              have hw' := inWord32_sound hk hw; omega
+            · cases hub
+        generalize hub_e : (if plain facts (Lin.var i) = true then
+            match boundOf facts (Lin.var i) with
+            | some u => some u
+            | none => if inWord32 i known = true then some (W32i - 1) else none
+          else if inWord32 i known = true then some (W32i - 1) else none) = ubo at h
+        cases ubo with
+        | none => cases h
+        | some ub =>
+          cases hr : rowUpperAux facts known cs (i + 1) with
+          | none => simp [hr] at h
+          | some rest =>
+            simp only [hr, Option.some.injEq] at h
+            subst h
+            obtain ⟨hlo, hhi⟩ := hbi ub hub_e
+            have ih := rowUpperAux_sound hf hk cs (i + 1) hr
+            have hfn : (fun k => ρ (i + (k + 1))) = (fun k => ρ (i + 1 + k)) := by funext k; congr 1; omega
+            have h0 : 0 ≤ c * ρ i := Int.mul_nonneg (by omega) hlo
+            have h1 : c * ρ i ≤ c * ub := Int.mul_le_mul_of_nonneg_left hhi (by omega)
+            simp only [dot, Nat.add_zero, hfn]
+            omega
 
-theorem rowUpper_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ)
-    {r : Row} {u : Int} (h : rowUpper facts r = some u) : 0 ≤ ev ρ r ∧ ev ρ r ≤ u := by
+theorem rowUpper_sound {ctx : Ctx} {s0 : State} {T : List Node} {facts : List Row} {known : List Known} {ρ : Nat → Int}
+    (hf : ∀ f ∈ facts, f.holds ρ) (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T)
+    {r : Row} {u : Int} (h : rowUpper facts known r = some u) : 0 ≤ ev ρ r ∧ ev ρ r ≤ u := by
   unfold rowUpper at h
   split at h
   · cases h
   · next hneg =>
-    cases ha : rowUpperAux facts r.coeff 0 with
+    cases ha : rowUpperAux facts known r.coeff 0 with
     | none => simp [ha] at h
     | some v =>
       simp only [ha, Option.map_some, Option.some.injEq] at h
       subst h
-      have ih := rowUpperAux_sound hf r.coeff 0 ha
+      have ih := rowUpperAux_sound hf hk r.coeff 0 ha
       have hfn : (fun k => ρ (0 + k)) = ρ := by funext k; simp
       rw [hfn] at ih
       simp only [ev]
       omega
 
-theorem symSplit_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ facts, f.holds ρ)
+theorem symSplit_sound {ctx : Ctx} {s0 : State} {T : List Node} {facts : List Row} {known : List Known} {ρ : Nat → Int}
+    (hf : ∀ f ∈ facts, f.holds ρ) (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T)
     {n : Nat} {x q r : Row} {m : Int} (hx : bounded n x) (pos : 0 < m)
-    (h : symSplit facts x m = some (q, r)) :
+    (h : symSplit facts known x m = some (q, r)) :
     ev ρ q = ev ρ x / m ∧ ev ρ r = ev ρ x % m ∧ bounded n q ∧ bounded n r := by
   unfold symSplit at h
-  cases hu : rowUpper facts (Lin.splitMod x m).2 with
+  cases hu : rowUpper facts known (Lin.splitMod x m).2 with
   | none => simp [hu] at h
   | some u =>
     simp only [hu] at h
@@ -1579,7 +1610,7 @@ theorem symSplit_sound {facts : List Row} {ρ : Nat → Int} (hf : ∀ f ∈ fac
       simp only [Option.some.injEq, Prod.mk.injEq] at h
       obtain ⟨hq, hr⟩ := h
       subst hq hr
-      have hb := rowUpper_sound hf hu
+      have hb := rowUpper_sound hf hk hu
       have hev := ev_splitMod ρ x m
       have hdiv : ev ρ x / m = ev ρ (Lin.splitMod x m).1 := by
         rw [hev, Int.mul_add_ediv_left _ _ (Int.ne_of_gt pos), Int.ediv_eq_zero_of_lt hb.1 (by omega), Int.add_zero]
@@ -1599,24 +1630,32 @@ theorem symLow_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ 
     simp only [symLow, hk, ↓reduceIte]
     exact ⟨ρ, Carried.here H wf, by rw [ev_const, ev_low_exact hk], bounded_const _ _⟩
   | false =>
-    cases hp : plain s.facts (Lin.sub (Lin.const (m - 1)) x) with
+    cases hw : (m == W32i && isWord32Row s x) with
     | true =>
-      -- a number seen at once to be below the divisor is its own remainder
-      simp only [symLow, hk, hp, Bool.false_eq_true, ↓reduceIte]
-      have g := plain_sound hp ρ H.facts
-      rw [ev_sub, ev_const] at g
+      simp only [symLow, hk, hw, Bool.false_eq_true, ↓reduceIte]
+      have hwb := Bool.and_eq_true_iff.mp hw
+      have hm : m = W32i := beq_iff_eq.mp hwb.1
+      have ⟨_, hlt⟩ := isWord32Row_sound H hwb.2
       exact ⟨ρ, Carried.here H wf, (Int.emod_eq_of_lt x0 (by omega)).symm, hx⟩
     | false =>
-      cases hs : symSplit s.facts x m with
-      | some qr =>
-        obtain ⟨q, r⟩ := qr
-        simp only [symLow, hk, hp, hs, Bool.false_eq_true, ↓reduceIte]
-        obtain ⟨_, hr, _, br⟩ := symSplit_sound H.facts hx pos hs
-        exact ⟨ρ, Carried.here H wf, hr, br⟩
-      | none =>
-        simp only [symLow, hk, hp, hs, Bool.false_eq_true, ↓reduceIte]
-        obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
-        exact ⟨ρ', c, hr, br⟩
+      cases hp : plain s.facts (Lin.sub (Lin.const (m - 1)) x) with
+      | true =>
+        -- a number seen at once to be below the divisor is its own remainder
+        simp only [symLow, hk, hw, hp, Bool.false_eq_true, ↓reduceIte]
+        have g := plain_sound hp ρ H.facts
+        rw [ev_sub, ev_const] at g
+        exact ⟨ρ, Carried.here H wf, (Int.emod_eq_of_lt x0 (by omega)).symm, hx⟩
+      | false =>
+        cases hs : symSplit s.facts s.known x m with
+        | some qr =>
+          obtain ⟨q, r⟩ := qr
+          simp only [symLow, hk, hw, hp, hs, Bool.false_eq_true, ↓reduceIte]
+          obtain ⟨_, hr, _, br⟩ := symSplit_sound H.facts H.known hx pos hs
+          exact ⟨ρ, Carried.here H wf, hr, br⟩
+        | none =>
+          simp only [symLow, hk, hw, hp, hs, Bool.false_eq_true, ↓reduceIte]
+          obtain ⟨ρ', c, _, hr, _, br⟩ := symDivide_sound (ctx := ctx) (s0 := s0) H wf hx pos x0
+          exact ⟨ρ', c, hr, br⟩
 
 theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : bounded s.nvars x) (pos : 0 < m) (x0 : 0 ≤ ev ρ x) :
@@ -1628,11 +1667,11 @@ theorem symQuot_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ
     refine ⟨ρ, Carried.here H wf, ev_quot_exact pos hk, ?_⟩
     exact Nat.le_trans (strip_length _) (by rw [List.length_map]; exact hx)
   | false =>
-    cases hs : symSplit s.facts x m with
+    cases hs : symSplit s.facts s.known x m with
     | some qr =>
       obtain ⟨q, r⟩ := qr
       simp only [symQuot, hk, hs, Bool.false_eq_true, ↓reduceIte]
-      obtain ⟨hq, _, bq, _⟩ := symSplit_sound H.facts hx pos hs
+      obtain ⟨hq, _, bq, _⟩ := symSplit_sound H.facts H.known hx pos hs
       exact ⟨ρ, Carried.here H wf, hq, bq⟩
     | none =>
       simp only [symQuot, hk, hs, Bool.false_eq_true, ↓reduceIte]
@@ -1841,25 +1880,25 @@ theorem symOrSmall_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x : Row} {k : In
     | equal _ _ => exact (refuse_ok h).elim
     | below _ _ => exact (refuse_ok h).elim
 
-/-- If `disjointOr facts x y = some j`, then `y < 2^j` and `x` is a multiple of `2^j`, so `xa ||| xb = xa + xb`. -/
-theorem disjointOr_sound {facts : List Row} {x y : Row} {j : Nat} {ρ : Nat → Int}
-    (h : disjointOr facts x y = some j) (hf : ∀ f ∈ facts, f.holds ρ)
+/-- If `disjointOr facts known x y = some j`, then `y < 2^j` and `x` is a multiple of `2^j`, so `xa ||| xb = xa + xb`. -/
+theorem disjointOr_sound {ctx : Ctx} {s0 : State} {T : List Node} {facts : List Row} {known : List Known} {x y : Row} {j : Nat} {ρ : Nat → Int}
+    (h : disjointOr facts known x y = some j) (hf : ∀ f ∈ facts, f.holds ρ) (hk : ∀ kn ∈ known, kn.holds ctx s0 ρ T)
     (xa xb : Nat) (hx : (xa : Int) = ev ρ x) (hy : (xb : Int) = ev ρ y) :
     xa ||| xb = xa + xb := by
   unfold disjointOr at h
-  cases hu : rowUpper facts y with
+  cases hu : rowUpper facts known y with
   | none => simp [hu] at h
   | some u =>
     simp only [hu] at h
     split at h
     · cases h
-    · obtain ⟨_, k, _, _, hk, _⟩ := List.findSome?_eq_some_iff.mp h
-      split at hk
+    · obtain ⟨_, k, _, _, hk2, _⟩ := List.findSome?_eq_some_iff.mp h
+      split at hk2
       next hcond =>
-        injection hk with hj; subst hj
+        injection hk2 with hj; subst hj
         simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hcond
         obtain ⟨⟨hult, hc0⟩, hall⟩ := hcond
-        have hb := rowUpper_sound hf hu
+        have hb := rowUpper_sound hf hk hu
         have hblt : xb < 2 ^ (k + 1) := Int.ofNat_lt.mp (by rw [hy]; exact Int.lt_of_le_of_lt hb.2 hult)
         have hamod_int : ev ρ x % ((2 : Int) ^ (k + 1)) = 0 := by rw [ev_low_exact hall, hc0]
         have hamod : xa % 2 ^ (k + 1) = 0 := by
@@ -1869,7 +1908,7 @@ theorem disjointOr_sound {facts : List Row} {x y : Row} {j : Nat} {ρ : Nat → 
         have hsplit := or_small (k := xa) hblt
         have hwhole := Nat.div_add_mod xa (2 ^ (k + 1))
         rw [Nat.or_comm, hsplit, hamod, Nat.or_zero]; omega
-      next => cases hk
+      next => cases hk2
 
 /-- Two numbers' bits put together, one of the two being the number zero or neither. -/
 theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}
@@ -1911,8 +1950,8 @@ theorem symOr_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {
         have heq : xa ||| xb = xa + xb := by
           simp only [Bool.or_eq_true, Option.isSome_iff_exists] at hdisj
           rcases hdisj with ⟨j, hj⟩ | ⟨j, hj⟩
-          · exact disjointOr_sound hj H.facts xa xb hx.2.1 hy.2.1
-          · rw [Nat.or_comm, Nat.add_comm]; exact disjointOr_sound hj H.facts xb xa hy.2.1 hx.2.1
+          · exact disjointOr_sound hj H.facts H.known xa xb hx.2.1 hy.2.1
+          · rw [Nat.or_comm, Nat.add_comm]; exact disjointOr_sound hj H.facts H.known xb xa hy.2.1 hx.2.1
         refine ⟨ρ, Carried.here H wf, lt, lt, ?_, bounded_add hx.2.2 hy.2.2⟩
         rw [heq, Int.natCast_add, ev_add, hx.2.1, hy.2.1]
       next =>
@@ -2221,35 +2260,56 @@ theorem symPrim_sound {ctx : Ctx} {s0 : State} {f : String} {s s' : Sym} {x y : 
                 have castm : ((2 ^ (64 - k.toNat) : Nat) : Int) = (2 : Int) ^ (64 - k.toNat) := by simp
                 have full : 2 ^ (64 - k.toNat) * 2 ^ k.toNat = M64 := by
                   rw [← Nat.pow_add, show 64 - k.toNat + k.toNat = 64 by omega]; rfl
-                obtain ⟨kept, rest1, ek, h⟩ := V.bind_ok h
-                cases kept with
-                | true =>
-                  -- the number is shown to be small enough: the doublings stay below 2^64
-                  have g2 := staysBelow_sound ek ρ hf
+                split at h
+                · next hkw =>
+                  have hkw' := Bool.and_eq_true_iff.mp hkw
+                  have hk32 : k.toNat ≤ 32 := by have := decide_eq_true_eq.mp hkw'.1; omega
+                  have ⟨_, hlt⟩ := isWord32Row_sound H hkw'.2
+                  have hxa32 : xa < 2 ^ 32 := Int.ofNat_lt.mp (by rw [hx2]; unfold W32i at hlt; simpa using hlt)
+                  have small : xa < 2 ^ (64 - k.toNat) := Nat.lt_of_lt_of_le hxa32 (Nat.pow_le_pow_right (by decide) (by omega))
+                  obtain ⟨kept, rest1, ek, h⟩ := V.bind_ok h
+                  have ekept : kept = true := by
+                    have := V.pure_ok ek; simp only [Prod.mk.injEq] at this; exact this.1
+                  subst ekept
                   simp only [if_true] at h
                   have := V.pure_ok h
                   injection this with hp _
                   injection hp with h1 h2
                   subst h1 h2
-                  have small : xa < 2 ^ (64 - k.toNat) := by
-                    have : ((xa : Nat) : Int) < ((2 ^ (64 - k.toNat) : Nat) : Int) := by rw [castm, hx2]; omega
-                    exact Int.ofNat_lt.mp this
                   have lt : xa * 2 ^ k.toNat < M64 := by
                     rw [← full]; exact Nat.mul_lt_mul_of_pos_right small (Nat.pow_pos (by decide))
                   refine ⟨ρ, Carried.here H wf, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
                   rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
-                | false =>
-                  -- else: so many doublings of the remainder by 2^(64 - k)
-                  simp only [Bool.false_eq_true, if_false] at h
-                  have := V.pure_ok h
-                  injection this with hp _
-                  injection hp with h1 h2
-                  subst h1 h2
-                  have pos : (0 : Int) < 2 ^ (64 - k.toNat) := Int.pow_pos (by decide)
-                  obtain ⟨ρ', hc, er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := 2 ^ (64 - k.toNat)) H wf hx3 pos (by rw [← hx2]; omega)
-                  refine ⟨ρ', hc, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ br⟩
-                  rw [ev_scale, er, ← hx2, Nat.shiftLeft_eq, ← full, Nat.mul_mod_mul_right, Int.natCast_mul, cast, Int.natCast_emod, castm,
-                    Int.mul_comm]
+                · next =>
+                  obtain ⟨kept, rest1, ek, h⟩ := V.bind_ok h
+                  cases kept with
+                  | true =>
+                    -- the number is shown to be small enough: the doublings stay below 2^64
+                    have g2 := staysBelow_sound ek ρ hf
+                    simp only [if_true] at h
+                    have := V.pure_ok h
+                    injection this with hp _
+                    injection hp with h1 h2
+                    subst h1 h2
+                    have small : xa < 2 ^ (64 - k.toNat) := by
+                      have : ((xa : Nat) : Int) < ((2 ^ (64 - k.toNat) : Nat) : Int) := by rw [castm, hx2]; omega
+                      exact Int.ofNat_lt.mp this
+                    have lt : xa * 2 ^ k.toNat < M64 := by
+                      rw [← full]; exact Nat.mul_lt_mul_of_pos_right small (Nat.pow_pos (by decide))
+                    refine ⟨ρ, Carried.here H wf, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ hx3⟩
+                    rw [ev_scale, ← hx2, Nat.shiftLeft_eq, Nat.mod_eq_of_lt lt, Int.natCast_mul, cast, Int.mul_comm]
+                  | false =>
+                    -- else: so many doublings of the remainder by 2^(64 - k)
+                    simp only [Bool.false_eq_true, if_false] at h
+                    have := V.pure_ok h
+                    injection this with hp _
+                    injection hp with h1 h2
+                    subst h1 h2
+                    have pos : (0 : Int) < 2 ^ (64 - k.toNat) := Int.pow_pos (by decide)
+                    obtain ⟨ρ', hc, er, br⟩ := symLow_sound (ctx := ctx) (s0 := s0) (m := 2 ^ (64 - k.toNat)) H wf hx3 pos (by rw [← hx2]; omega)
+                    refine ⟨ρ', hc, (xa <<< k.toNat) % M64, by simp [prim], Nat.mod_lt _ (by decide), ?_, bounded_scale _ br⟩
+                    rw [ev_scale, er, ← hx2, Nat.shiftLeft_eq, ← full, Nat.mul_mod_mul_right, Int.natCast_mul, cast, Int.natCast_emod, castm,
+                      Int.mul_comm]
               next => exact (refuse_ok h).elim
           next hc5 =>
             split at h

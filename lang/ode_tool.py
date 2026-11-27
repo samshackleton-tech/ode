@@ -435,6 +435,26 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
             "hint: scalar stack loads (`buf.u64(off)`) only read slots written by scalar stores "
             "(not vector `buf.u32x4(off) := ...` spills); keep vector data in `u32x4` registers / `stack var v: u32x4`"
         )
+    if "the frame does not hold what it held on first coming there" in reason:
+        return (
+            "hint: a `stack var` declared before a `while` loop cannot be overwritten inside the loop body; "
+            "declare loop-local `stack var` temporaries *inside* the `while` body (or keep loop-carried state in register `var`s)"
+        )
+    if "bytes at a place of a run that is no number" in reason:
+        return (
+            "hint: vector loads and stores (`buf.u32x4(off)`) require a compile-time constant byte offset `off` "
+            "(unroll the loop with `for i in 0..N unroll` so `off` folds to a constant)"
+        )
+    if "an and with what is no number of the table" in reason:
+        return (
+            "hint: scalar `&` requires a compile-time constant bitmask (for bitwise `&`/`^` on two runtime values, "
+            "use `u32x4` vector operations)"
+        )
+    if "the specification's words are not followed on the terms the function made" in reason:
+        return (
+            "hint: a 32-bit word required by `bytes_of(...)` was not found in the verifier's word table "
+            "(check that every input word is extracted from `u32x4`/`u64`/`word`/`counter` inputs and combined in the same order as the specification)"
+        )
     return None
 
 

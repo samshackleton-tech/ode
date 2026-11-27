@@ -1117,6 +1117,31 @@ theorem wbin_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {op : String} {x y
     | _ => simp [wbin] at h
   | _ => cases y <;> simp [wbin] at h
 
+/-- `atomId look s r = some i` denotes `(ev ρ r % W32i).toNat`, whether found directly as `Lin.word r`
+or via the canonical remainder `q + 1` of `Known.div r 2^32 q`. -/
+theorem atomId_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : Nat}
+    (h : atomId look s r = some i) :
+    den (inpOf ctx s0) ρ s.terms i = (ev ρ r % W32i).toNat := by
+  unfold atomId at h
+  cases h1 : look (.atom (Lin.word r)) with
+  | some j =>
+    simp only [h1, Option.some.injEq] at h; subst h
+    have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h1
+    simp only [Node.value] at di
+    rw [di, ev_word]
+  | none =>
+    simp only [h1] at h
+    cases hd : divided s r W32i with
+    | none => simp [hd] at h
+    | some q =>
+      simp only [hd, Option.bind_some] at h
+      have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h
+      simp only [Node.value] at di
+      have ⟨_, hrem⟩ := divided_spec H (by decide : (0 : Int) < W32i) hd
+      have hvar : ev ρ (Lin.var (q + 1)) = ev ρ r % W32i := by rw [ev_var]; exact hrem
+      have hmod : (ev ρ r % W32i) % W32i = ev ρ r % W32i := Int.emod_emod _ _
+      rw [di, hvar, hmod]
+
 /-- The high word of a counter that is a number and a number of the text more: what `hiPlus` finds is it. -/
 theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : Nat}
     (h : hiPlus look s r = some i) :
@@ -1141,18 +1166,17 @@ theorem hiPlus_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {r : Row} {i : N
             have di := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h
             have dm := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hm
             have d1 := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hs
-            have da := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf ha
-            have dl := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hl
-            have dh := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hhh
+            have da := atomId_sound H wf ha
+            have dl := atomId_sound H wf hl
+            have dh := atomId_sound H wf hhh
             have d0 := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hone
             have eq := highOf_sound (ρ := ρ) H hq
             have b0 := knownNonneg_sound (ρ := ρ) H hn
             have er : ev ρ r = ev ρ ⟨r.coeff, 0⟩ + r.constant := by simp [ev]
-            simp only [Node.value] at di dm d1 da dl dh d0
+            simp only [Node.value] at di dm d1 d0
             rw [sumTerms_mergeAdd] at d1
             simp only [sumTerms, Nat.one_mul, Nat.add_zero] at d1
-            rw [ev_word] at da dl dh d0
-            rw [ev_const] at d0
+            rw [ev_word, ev_const] at d0
             rw [di, dm, d1, da, dl, dh, d0, eq, er]
             generalize ev ρ ⟨r.coeff, 0⟩ = R at b0 ⊢
             generalize r.constant = c at c0 c1 ⊢
@@ -1262,10 +1286,87 @@ section
 variable {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State}
 variable {look : Node → Option Nat} [Looks look s.terms]
 
+theorem load8_split (mem : Nat → Byte) (a : Nat) :
+    load mem a 8 = load mem a 4 + W32 * load mem (a + 4) 4 := by
+  have e4 : a + 1 + 1 + 1 + 1 = a + 4 := by omega
+  simp only [load, e4, W32]
+  omega
+
+theorem load4_lt (mem : Nat → Byte) (a : Nat) : load mem a 4 < W32 := by
+  have h0 : (mem a).val < 256 := (mem a).isLt
+  have h1 : (mem (a + 1)).val < 256 := (mem (a + 1)).isLt
+  have h2 : (mem (a + 1 + 1)).val < 256 := (mem (a + 1 + 1)).isLt
+  have h3 : (mem (a + 1 + 1 + 1)).val < 256 := (mem (a + 1 + 1 + 1)).isLt
+  simp only [load, W32]; omega
+
+theorem inputWordId_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {j k i : Nat}
+    (h : inputWordId ctx look s j k = some i) :
+    den (inpOf ctx s0) ρ s.terms i = inpOf ctx s0 j k := by
+  unfold inputWordId at h
+  cases h1 : look (.input j k) with
+  | some i' =>
+    simp only [h1, Option.some.injEq] at h; subst h
+    exact found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf h1
+  | none =>
+    simp only [h1] at h
+    cases hw : ctx.contract.wordRuns[j]? with
+    | none => simp [hw] at h
+    | some wr =>
+      obtain ⟨wnm, r, wn⟩ := wr
+      simp only [hw] at h
+      cases hrf : runAt r ctx.contract.fixeds 0 with
+      | none => simp [hrf] at h
+      | some fj =>
+        simp only [hrf] at h
+        obtain ⟨_, fnm, fn, hfj⟩ := runAt_spec hrf
+        have hfj' : ctx.contract.fixeds[fj]? = some (fnm, r, fn) := by simpa using hfj
+        cases hlo : (knownLoad fj (4 * k) s.known).bind (fun v => atomId look s (Lin.var v)) with
+        | some i' =>
+          simp only [hlo, Option.some.injEq] at h; subst h
+          cases hkl : knownLoad fj (4 * k) s.known with
+          | none => simp [hkl] at hlo
+          | some v =>
+            simp only [hkl, Option.bind_some] at hlo
+            have hm := knownLoad_mem hkl
+            obtain ⟨_, r', _, hfj2, _, hrv⟩ := H.known _ hm
+            rw [hfj'] at hfj2; injection hfj2 with hfj2; injection hfj2 with _ hfj2; injection hfj2 with hr' _
+            subst hr'
+            have da := atomId_sound H wf hlo
+            rw [da, ev_var, hrv, load8_split]
+            have hlt := load4_lt s0.mem (s0.reg r + 4 * k)
+            simp only [inpOf, hw]; unfold W32 at hlt; unfold W32 W32i; omega
+        | none =>
+          simp only [hlo] at h
+          split at h
+          · next hk0 =>
+            cases hkl : knownLoad fj (4 * (k - 1)) s.known with
+            | none => simp [hkl] at h
+            | some v =>
+              simp only [hkl, Option.bind_some] at h
+              cases hhi : highOf s (Lin.var v) with
+              | none => simp [hhi] at h
+              | some q =>
+                simp only [hhi, Option.bind_some] at h
+                have hm := knownLoad_mem hkl
+                obtain ⟨_, r', _, hfj2, _, hrv⟩ := H.known _ hm
+                rw [hfj'] at hfj2; injection hfj2 with hfj2; injection hfj2 with _ hfj2; injection hfj2 with hr' _
+                subst hr'
+                have da := atomId_sound H wf h
+                have eq := highOf_sound H hhi
+                rw [ev_var, hrv, load8_split] at eq
+                have hlt0 := load4_lt s0.mem (s0.reg r + 4 * (k - 1))
+                have hlt1 := load4_lt s0.mem (s0.reg r + 4 * (k - 1) + 4)
+                have ea : s0.reg r + 4 * (k - 1) + 4 = s0.reg r + 4 * k := by omega
+                rw [ea] at eq hlt1
+                rw [da, eq]; simp only [inpOf, hw]
+                unfold W32 at hlt0 hlt1 ⊢; unfold W32i
+                rw [Int.natCast_add, Int.natCast_mul]; omega
+          · cases h
+
 /-- The words of the table that are a run's words: they are what the account's `words` makes of the run's
 bytes, four bytes a word, the lowest first. -/
-theorem toWords_fn (wf : WF ctx s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat) (wvs : List WVal),
-    inputWords look j count k = some wvs → (∀ i, i < 4 * count → g i < 256) →
+theorem toWords_fn (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {j : Nat} : ∀ (count k : Nat) (g : Nat → Nat) (wvs : List WVal),
+    inputWords ctx look s j count k = some wvs → (∀ i, i < 4 * count → g i < 256) →
     (∀ q a, a = 4 * q → q < count →
       inpOf ctx s0 j (k + q) = g a + 256 * g (a + 1) + 65536 * g (a + 2) + 16777216 * g (a + 3)) →
     ∃ ws, toWords ((List.range (4 * count)).map fun i => Val.int (g i)) = some ws ∧ WDen ctx s0 ρ s.terms (.list wvs) (.list ws)
@@ -1274,11 +1375,11 @@ theorem toWords_fn (wf : WF ctx s) {j : Nat} : ∀ (count k : Nat) (g : Nat → 
     exact ⟨[], by simp [toWords], WDen.nil⟩
   | count + 1, k, g, wvs, h, hb, hwd => by
     simp only [inputWords] at h
-    cases hf : look (.input j k) <;> cases hr : inputWords look j count (k + 1) <;>
+    cases hf : inputWordId ctx look s j k <;> cases hr : inputWords ctx look s j count (k + 1) <;>
       simp only [hf, hr, reduceCtorEq, Option.some.injEq] at h
     rename_i i rest
     subst h
-    obtain ⟨ws, hw, hd⟩ := toWords_fn wf count (k + 1) (fun i => g (i + 4)) rest hr (fun i hi => hb (i + 4) (by omega))
+    obtain ⟨ws, hw, hd⟩ := toWords_fn H wf count (k + 1) (fun i => g (i + 4)) rest hr (fun i hi => hb (i + 4) (by omega))
       (fun q a ha hq => by
         have := hwd (q + 1) (a + 4) (by omega) (by omega)
         have e : k + 1 + q = k + (q + 1) := by omega
@@ -1289,7 +1390,7 @@ theorem toWords_fn (wf : WF ctx s) {j : Nat} : ∀ (count k : Nat) (g : Nat → 
     have b3 := hb 3 (by omega)
     have h0 := hwd 0 0 rfl (by omega)
     simp only [Nat.zero_add, Nat.add_zero] at h0
-    have di : den (inpOf ctx s0) ρ s.terms i = inpOf ctx s0 j k := found_den (ctx := ctx) (s0 := s0) (ρ := ρ) wf hf
+    have di : den (inpOf ctx s0) ρ s.terms i = inpOf ctx s0 j k := inputWordId_sound H wf hf
     refine ⟨.word (inpOf ctx s0 j k) :: ws, ?_, WDen.cons (by rw [← di]; exact WDen.one wf i) hd⟩
     rw [show 4 * (count + 1) = 4 * count + 4 from rfl, map_range_add4]
     simp only [toWords]
@@ -1397,13 +1498,13 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
           next hf =>
             have fe : f = "word" := by simpa using hf
             subst fe
-            cases hfn : look (.atom (Lin.word r)) with
+            cases hfn : atomId look s r with
             | none => simp [hfn] at h
             | some i =>
               simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
-              have di : 𝔻 i = (ev ρ (Lin.word r) % W32i).toNat := found_den wf hfn
+              have di : 𝔻 i = (ev ρ r % W32i).toNat := atomId_sound H wf hfn
               refine ⟨.word ((ev ρ r).toNat % W32), by simp [builtin, r0], ?_⟩
-              have e : (ev ρ r).toNat % W32 = 𝔻 i := by rw [di, ev_word]; unfold W32 W32i; omega
+              have e : (ev ρ r).toNat % W32 = 𝔻 i := by rw [di]; unfold W32 W32i; omega
               rw [e]; exact WDen.one wf i
           next hf =>
             split at h
@@ -1438,13 +1539,13 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
             next hf2 =>
               have fe : f = "lo" := by simpa using hf2
               subst fe
-              cases hfn : look (.atom (Lin.word r)) with
+              cases hfn : atomId look s r with
               | none => simp [hfn] at h
               | some i =>
                 simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
-                have di : 𝔻 i = (ev ρ (Lin.word r) % W32i).toNat := found_den wf hfn
+                have di : 𝔻 i = (ev ρ r % W32i).toNat := atomId_sound H wf hfn
                 refine ⟨.word ((ev ρ r).toNat % 2 ^ 64 % W32), by simp [builtin], ?_⟩
-                have e : (ev ρ r).toNat % 2 ^ 64 % W32 = 𝔻 i := by rw [di, ev_word]; unfold W32 W32i; omega
+                have e : (ev ρ r).toNat % 2 ^ 64 % W32 = 𝔻 i := by rw [di]; unfold W32 W32i; omega
                 rw [e]; exact WDen.one wf i
             next hf2 =>
               split at h
@@ -1459,14 +1560,14 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
                   | none => simp [hq] at h
                   | some q =>
                     simp only [hq, Option.bind_some] at h
-                    cases hfn : look (.atom (Lin.word q)) with
+                    cases hfn : atomId look s q with
                     | none => simp [hfn] at h
                     | some i =>
                       simp only [hfn, Option.map_some, Option.some.injEq] at h; subst h
-                      have di : 𝔻 i = (ev ρ (Lin.word q) % W32i).toNat := found_den wf hfn
+                      have di : 𝔻 i = (ev ρ q % W32i).toNat := atomId_sound H wf hfn
                       have eq := highOf_sound H hq
                       refine ⟨.word ((ev ρ r).toNat % 2 ^ 64 / W32), by simp [builtin], ?_⟩
-                      have e : (ev ρ r).toNat % 2 ^ 64 / W32 = 𝔻 i := by rw [di, ev_word, eq]; unfold W32 W32i; omega
+                      have e : (ev ρ r).toNat % 2 ^ 64 / W32 = 𝔻 i := by rw [di, eq]; unfold W32 W32i; omega
                       rw [e]; exact WDen.one wf i
                 next =>
                   -- the counter is a number and a number of the text more
@@ -1490,13 +1591,13 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
-              cases hin : inputWords look j (n / 4) 0 with
+              cases hin : inputWords ctx look s j (n / 4) 0 with
               | none => simp [hin] at h
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
                 have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
-                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) 0 (fun i => (s0.mem (s0.reg r + i)).val) wvs hin
+                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) H wf (n / 4) 0 (fun i => (s0.mem (s0.reg r + i)).val) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
                     subst ha
@@ -1527,13 +1628,13 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
             | none => simp [hra] at h
             | some j =>
               simp only [hra, Option.bind_some] at h
-              cases hin : inputWords look j (n / 4) (off / 4) with
+              cases hin : inputWords ctx look s j (n / 4) (off / 4) with
               | none => simp [hin] at h
               | some wvs =>
                 simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
                 obtain ⟨_, x', n', hj⟩ := runAt_spec hra
                 have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
-                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf (n / 4) (off / 4) (fun i => (s0.mem (s0.reg r + off + i)).val) wvs hin
+                obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) H wf (n / 4) (off / 4) (fun i => (s0.mem (s0.reg r + off + i)).val) wvs hin
                   (fun i hi => hb i (by omega))
                   (fun q a ha hq => by
                     subst ha
@@ -1667,7 +1768,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
               | none => simp [hra] at h
               | some j =>
                 simp only [hra, Option.bind_some] at h
-                cases hin : inputWords look j ((more.length + 1) / 4) (off / 4) with
+                cases hin : inputWords ctx look s j ((more.length + 1) / 4) (off / 4) with
                 | none => simp [hin] at h
                 | some wvs =>
                   simp only [hin, Option.map_some, Option.some.injEq] at h; subst h
@@ -1675,7 +1776,7 @@ theorem wown_sound (H : Holds ctx s0 ρ s st) (wf : WF ctx s) {f : String} {vs :
                   have hj' : ctx.contract.wordRuns[j]? = some (x', r, n') := by simpa using hj
                   obtain ⟨has', hb⟩ := pbytesSpan_sound r off (.pbyte r off :: more) as' hx hps
                   simp only [List.length_cons] at has' hb
-                  obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) wf ((more.length + 1) / 4) (off / 4)
+                  obtain ⟨ws, hw, hd⟩ := toWords_fn (ctx := ctx) (s0 := s0) (ρ := ρ) H wf ((more.length + 1) / 4) (off / 4)
                     (fun i => (s0.mem (s0.reg r + off + i)).val) wvs hin
                     (fun i hi => hb i (by omega))
                     (fun q a ha hq => by

@@ -909,29 +909,35 @@ def Lin.splitMod (x : Row) (m : Int) : Row × Row :=
    ⟨Lin.strip (x.coeff.map fun c => if c % m == 0 then 0 else c), x.constant % m⟩)
 
 /-- Fast non-negative upper bound on `dot cs (fun k => ρ (i + k))` when every non-zero coefficient is
-positive and each variable is seen at once from `facts` to lie in `[0, u]`. -/
-def rowUpperAux (facts : List Row) : List Int → Nat → Option Int
+positive and each variable is seen at once from `facts` or `Known.word32` to lie in `[0, u]`. -/
+def rowUpperAux (facts : List Row) (known : List Known) : List Int → Nat → Option Int
   | [], _ => some 0
   | c :: cs, i =>
-    if c == 0 then rowUpperAux facts cs (i + 1)
+    if c == 0 then rowUpperAux facts known cs (i + 1)
     else if c < 0 then none
-    else if plain facts (Lin.var i) then
-      match boundOf facts (Lin.var i), rowUpperAux facts cs (i + 1) with
+    else
+      let ub : Option Int :=
+        if plain facts (Lin.var i) then
+          match boundOf facts (Lin.var i) with
+          | some u => some u
+          | none => if inWord32 i known then some (W32i - 1) else none
+        else if inWord32 i known then some (W32i - 1)
+        else none
+      match ub, rowUpperAux facts known cs (i + 1) with
       | some u, some rest => some (c * u + rest)
       | _, _ => none
-    else none
 
-/-- Fast proof that `0 ≤ ev ρ r ≤ u` directly from variable bounds in `facts` (e.g. packed bytes
-`b0 + 256*b1 + ...` from a multi-byte load or shift-add). -/
-def rowUpper (facts : List Row) (r : Row) : Option Int :=
+/-- Fast proof that `0 ≤ ev ρ r ≤ u` directly from variable bounds in `facts` or `known` (e.g. packed bytes
+`b0 + 256*b1 + ...` from a multi-byte load or shift-add, or `Known.word32` words). -/
+def rowUpper (facts : List Row) (known : List Known) (r : Row) : Option Int :=
   if r.constant < 0 then none
-  else (rowUpperAux facts r.coeff 0).map (r.constant + ·)
+  else (rowUpperAux facts known r.coeff 0).map (r.constant + ·)
 
-/-- Exact Euclidean split `x = m * q + r` with `0 ≤ r < m` proved immediately from `facts` without
+/-- Exact Euclidean split `x = m * q + r` with `0 ≤ r < m` proved immediately from `facts`/`known` without
 introducing division variables (extracts individual bytes/words from multi-byte loads and shift-adds). -/
-def symSplit (facts : List Row) (x : Row) (m : Int) : Option (Row × Row) :=
+def symSplit (facts : List Row) (known : List Known) (x : Row) (m : Int) : Option (Row × Row) :=
   let (q, r) := Lin.splitMod x m
-  match rowUpper facts r with
+  match rowUpper facts known r with
   | some u => if u < m then some (q, r) else none
   | none => none
 
@@ -941,15 +947,16 @@ once to be below the divisor; exact split where the non-multiple remainder is se
 and else by the one division of it the state knows of. -/
 def symLow (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (Lin.const (x.constant % m), s)
+  else if m == W32i && isWord32Row s x then (x, s)
   else if plain s.facts (Lin.sub (Lin.const (m - 1)) x) then (x, s)
-  else match symSplit s.facts x m with
+  else match symSplit s.facts s.known x m with
     | some (_, r) => (r, s)
     | none => ((symDivide s x m).2.1, (symDivide s x m).2.2)
 
 /-- The quotient likewise. -/
 def symQuot (s : Sym) (x : Row) (m : Int) : Row × Sym :=
   if x.coeff.all (fun c => c % m == 0) then (⟨Lin.strip (x.coeff.map (· / m)), x.constant / m⟩, s)
-  else match symSplit s.facts x m with
+  else match symSplit s.facts s.known x m with
     | some (q, _) => (q, s)
     | none => ((symDivide s x m).1, (symDivide s x m).2.2)
 
@@ -1003,8 +1010,8 @@ def orParts (facts : List Row) (x y : Row) : Option (Int × Nat) :=
 
 /-- Detect disjoint bit-fields for `x | y`: `y` has an upper bound `0 ≤ u < 2^j` (`1 ≤ j ≤ 63`)
 while `x` is a multiple of `2^j`, so `x | y = x + y` holds identically without overflow. -/
-def disjointOr (facts : List Row) (x y : Row) : Option Nat :=
-  match rowUpper facts y with
+def disjointOr (facts : List Row) (known : List Known) (x y : Row) : Option Nat :=
+  match rowUpper facts known y with
   | none => none
   | some u =>
     if u ≤ 0 then none
@@ -1021,7 +1028,7 @@ else the unknown that stands for the pair. -/
 def symOr (s : Sym) (x y : Row) : V (EV × Sym) :=
   if Lin.isConst y = some 0 then pure (.lin x, s)
   else if Lin.isConst x = some 0 then pure (.lin y, s)
-  else if (disjointOr s.facts x y).isSome || (disjointOr s.facts y x).isSome then
+  else if (disjointOr s.facts s.known x y).isSome || (disjointOr s.facts s.known y x).isSome then
     pure (.lin (Lin.add x y), s)
   else
     match orParts s.facts x y with
@@ -1099,7 +1106,7 @@ def symPrim (f : String) (s : Sym) (x y : Row) : V (EV × Sym) :=
     match constOf s.facts y with
     | some k =>
       if 0 ≤ k ∧ k < 64 then do
-        let kept ← staysBelow s.facts x (2 ^ (64 - k.toNat))
+        let kept ← if k ≤ 32 && isWord32Row s x then pure true else staysBelow s.facts x (2 ^ (64 - k.toNat))
         if kept then pure (.lin (Lin.scale (2 ^ k.toNat) x), s)
         else pure (.lin (Lin.scale (2 ^ k.toNat) (symLow s x (2 ^ (64 - k.toNat))).1), (symLow s x (2 ^ (64 - k.toNat))).2)
       else refuse "a shift by 64 or more"
@@ -1350,7 +1357,7 @@ division; else the row of the quotients by 2^32, the row of the remainders being
 def symHalves (s : Sym) (x : Row) : V (List Nat × Sym) :=
   if Lin.high x == Lin.const 0 && (Lin.isConst x).isNone then
     let d := symDivide s x W32i
-    let made := termsOf wAtom [x, d.1, Lin.const 0, Lin.const 0] d.2.2.tab
+    let made := termsOf wAtom [d.2.1, d.1, Lin.const 0, Lin.const 0] d.2.2.tab
     pure (made.1, { d.2.2 with tab := made.2 })
   else
     let made := termsOf wAtom [x, Lin.high x, Lin.const 0, Lin.const 0] s.tab
@@ -2779,24 +2786,52 @@ def wbin (look : Node → Option Nat) (s : Sym) (op : String) : WVal → WVal �
   | .list a, .list b => if op == "++" then some (.list (a ++ b)) else none
   | _, _ => none
 
+/-- Term ID of the low 32-bit word `r % 2^32`: directly as `atom (Lin.word r)`, or via the
+canonical remainder `q + 1` where `s.known` records `Known.div r 2^32 q`. -/
+def atomId (look : Node → Option Nat) (s : Sym) (r : Row) : Option Nat :=
+  match look (.atom (Lin.word r)) with
+  | some i => some i
+  | none => (divided s r W32i).bind fun q => look (.atom (Lin.var (q + 1)))
+
 /-- The high word of a counter that is a number and a number of the text more (`t + 5`), as code works it
 out from the two words of the first number: the low words summed wrap exactly where the sum comes out below
 the low word it was made from, and there the high word is one more. So it is the high word of the first
 number, or that and one, by whether the one low word is below the other. Every term must be in the table. -/
 def hiPlus (look : Node → Option Nat) (s : Sym) (r : Row) : Option Nat :=
   if 0 < r.constant ∧ r.constant < W32i ∧ knownNonneg s ⟨r.coeff, 0⟩ = true then
-    match look (.atom (Lin.word r)), look (.atom (Lin.word ⟨r.coeff, 0⟩)),
-          (highOf s ⟨r.coeff, 0⟩).bind (fun q => look (.atom (Lin.word q))), look (.atom (Lin.word (Lin.const 1))) with
+    match atomId look s r, atomId look s ⟨r.coeff, 0⟩,
+          (highOf s ⟨r.coeff, 0⟩).bind (atomId look s), look (.atom (Lin.word (Lin.const 1))) with
     | some a, some l, some h, some one =>
       (look (.ult a l)).bind fun m => (look (.add (mergeAdd [(h, 1)] [(one, 1)]))).bind fun h1 => look (.sel m h1 h)
     | _, _, _, _ => none
   else none
 
+/-- Find the 32-bit word `k` of `wordRuns[j]` in the term table: directly as `Node.input j k`
+(from a 128-bit/512-bit vector load), or from a scalar 64-bit load (`Known.load`) of the same fixed-size
+run at byte offset `4 * k` (low word) or `4 * (k - 1)` (high word). -/
+def inputWordId (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (j k : Nat) : Option Nat :=
+  match look (.input j k) with
+  | some i => some i
+  | none =>
+    match ctx.contract.wordRuns[j]? with
+    | some (_, r, _) =>
+      match runAt r ctx.contract.fixeds 0 with
+      | some fj =>
+        match (knownLoad fj (4 * k) s.known).bind (fun v => atomId look s (Lin.var v)) with
+        | some i => some i
+        | none =>
+          if 0 < k then
+            (knownLoad fj (4 * (k - 1)) s.known).bind fun v =>
+              (highOf s (Lin.var v)).bind (atomId look s)
+          else none
+      | none => none
+    | none => none
+
 /-- The words of a run, from word `k` on, `count` of them: each must be in the table. -/
-def inputWords (look : Node → Option Nat) (j : Nat) : Nat → Nat → Option (List WVal)
+def inputWords (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (j : Nat) : Nat → Nat → Option (List WVal)
   | 0, _ => some []
   | count + 1, k =>
-    match look (.input j k), inputWords look j count (k + 1) with
+    match inputWordId ctx look s j k, inputWords ctx look s j count (k + 1) with
     | some i, some rest => some (.word [(i, 1)] :: rest)
     | _, _ => none
 
@@ -2814,27 +2849,27 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
     else none
   | [.num r] =>
     if !plain s.facts r then none
-    else if f == "word" then (look (.atom (Lin.word r))).map fun i => .word [(i, 1)]
+    else if f == "word" then (atomId look s r).map fun i => .word [(i, 1)]
     else if f == "counter" then some (.counter r)
     else none
   | [.word xs] => if f == "word" then some (.word xs) else none
   | [.counter r] =>
     if f == "counter" then some (.counter r)
-    else if f == "lo" then (look (.atom (Lin.word r))).map fun i => .word [(i, 1)]
+    else if f == "lo" then (atomId look s r).map fun i => .word [(i, 1)]
     else if f == "hi" then
-      match (highOf s r).bind fun q => (look (.atom (Lin.word q))).map fun i => WVal.word [(i, 1)] with
+      match (highOf s r).bind fun q => (atomId look s q).map fun i => WVal.word [(i, 1)] with
       | some v => some v
       | none => (hiPlus look s r).map fun i => .word [(i, 1)]
     else none
   | [.run r n] =>
     if f == "words" ∧ n % 4 = 0 then
-      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) 0).map .list
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords ctx look s j (n / 4) 0).map .list
     else none
   | [.part r off n] =>
     -- a part of a run that begins and ends at whole words: those words; eight bytes of a run only read: the
     -- unknown the state knows as that number
     if f == "words" ∧ off % 4 = 0 ∧ n % 4 = 0 then
-      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords ctx look s j (n / 4) (off / 4)).map .list
     else if f == "number.le" ∧ n = 8 then
       (runAt r ctx.contract.fixeds 0).bind fun j => (knownLoad j off s.known).map fun v => .num (Lin.var v)
     else none
@@ -2854,7 +2889,7 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
   | [.list (.pbyte r off :: more)] =>
     let n := more.length + 1
     if f == "words" ∧ off % 4 = 0 ∧ n % 4 = 0 ∧ pbytesSpan r off (.pbyte r off :: more) = true then
-      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords look j (n / 4) (off / 4)).map .list
+      (runAt r ctx.contract.wordRuns 0).bind fun j => (inputWords ctx look s j (n / 4) (off / 4)).map .list
     else none
   | _ => none
 
