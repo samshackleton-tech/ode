@@ -485,13 +485,62 @@ def join_written_regs(raw_ins, at, stop_pcs, reg_list):
     return [r for r in reg_list if r not in written]
 
 
+def _parse_spec_meta(lines):
+    """Parse `d <idx> <fn> <in_goal> <has_val> <deg> <is_rec>` rows from `odeprove` `need spec` output."""
+    meta = []
+    for l in lines:
+        if l.startswith("d "):
+            parts = l.split()
+            if len(parts) >= 7:
+                try:
+                    meta.append((
+                        int(parts[1]),
+                        parts[2],
+                        int(parts[3]),
+                        int(parts[4]),
+                        int(parts[5]),
+                        int(parts[6]),
+                    ))
+                except ValueError:
+                    pass
+    return meta
+
+
+def _spec_open_order(meta, count, include_interior=True):
+    """Structural candidate ordering for `need spec` opens:
+    1. Skip calls that already have a known `.value` (`has_val == 1`).
+    2. Frontier calls (`deg <= 1`) in the goal's connected component (`in_goal == 1`),
+       non-recursive definitions first, newest (`highest idx`) first.
+    3. Other frontier calls (`deg <= 1`, `in_goal == 0`), non-recursive first, newest first.
+    4. Interior calls (`deg >= 2`, `has_val == 0`) only if `include_interior` is True.
+    Falls back to `reversed(range(count))` when call metadata is absent (`FROM_THE_START=1`)."""
+    if not meta:
+        return list(reversed(range(count)))
+    live = [r for r in meta if r[3] == 0]
+    p1 = [r for r in live if r[2] == 1 and r[4] <= 1]
+    p2 = [r for r in live if r[2] == 0 and r[4] <= 1]
+    p3 = [r for r in live if r[4] >= 2] if include_interior else []
+    p1.sort(key=lambda r: (r[5], -r[0]))
+    p2.sort(key=lambda r: (r[5], -r[0]))
+    p3.sort(key=lambda r: (-r[2], r[5], -r[0]))
+    return [r[0] for r in (p1 + p2 + p3)]
+
+
 class Prover:
     """Finds the proof of one function. `head`: the proof's lines before what is to be found (the parts of the
     functions shown before, `for NAME`, the places); `later`: the names of the statement's functions after it."""
-    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=(), max_lives=None):
+    def __init__(self, statement_path, head, out, later=(), budget=None, until=None, trace_exprs=(), instrs=(), reg_list=REGISTERS, wrap_pcs=(), max_lives=None, fast_fail=False, max_churn=None):
         self.statement, self.lines, self.out, self.runs, self.later, self.budget = statement_path, head, out, 0, set(later), budget
         self.until = until                  # the time (time.time()) after which the search gives up
         self.max_lives = max_lives          # deterministic branch-split fuel per function (`t live` count)
+        self.fast_fail = fast_fail
+        self.max_churn = max_churn          # deterministic per-goal backtrack cap (resets whenever proof advances)
+        self.max_proof_len = 0
+        self.goal_churn = 0
+        self.max_seen_churn = 0
+        self.spec_budgets = (1, 2, 4, 8) if fast_fail else (1, 2, 5, 10, 14, 30)
+        self.split_depth_cap = 3 if fast_fail else 4
+        self.split_tries_cap = 12 if fast_fail else 48
         self.session = None                 # the talk with `odeprove`, begun at the first question
         self.last = None
         self.last_proof = []
@@ -500,7 +549,7 @@ class Prover:
         self.furthest_root = 0
         self.spec_fuel_hit = False
         self.spec_fuel_proof = []
-        self.spec_max_open = 14
+        self.spec_max_open = 8 if fast_fail else 14
         self.hard_refusal = False
         self.trace_exprs = list(trace_exprs)
         self.instrs = list(instrs)
@@ -524,6 +573,15 @@ class Prover:
     def ask(self, proof):
         if self.budget is not None and self.runs >= self.budget: raise GaveUp(self.runs)
         if self.until is not None and time.time() > self.until: raise GaveUp(self.runs)
+        if len(proof) > self.max_proof_len:
+            self.max_proof_len = len(proof)
+            self.goal_churn = 0
+        else:
+            self.goal_churn += 1
+            if self.goal_churn > self.max_seen_churn:
+                self.max_seen_churn = self.goal_churn
+            if self.max_churn is not None and self.goal_churn >= self.max_churn:
+                raise GaveUp(f"fast-fail: {self.goal_churn} search steps at one goal without advancing")
         self.runs += 1
         if FROM_THE_START or not os.path.exists(session.EXE):
             # the verifier itself, from the proof's first line each time
@@ -700,7 +758,7 @@ class Prover:
                     # `split_depth < 4` so 3+ range checks like Base64 A-Z/a-z/0-9 and multi-`join`
                     # functions work without exponential blowup).
                     split_row = raw_goals[0]
-                    if allow_split and split_depth < 4 and self.split_tries < 48:
+                    if allow_split and split_depth < self.split_depth_cap and self.split_tries < self.split_tries_cap:
                         saved_furthest = self.furthest_root
                         for cut in range(len(proof), max(-1, len(proof) - 96), -1):
                             if cut < len(proof) and proof[cut].startswith("k "):
@@ -813,22 +871,23 @@ class Prover:
                     if done is not None: return done
                     if self.hard_refusal or self.furthest_root > start_len: return None
                 self.last, self.last_proof = (before, before_proof) if before else (said, proof)    # (a value that does not carry over is not why no proof is found)
+                spec_meta = _parse_spec_meta(lines)
+                meta_tail = "\n".join(l for l in lines if l.startswith(("m ", "d ")))
                 if opened >= self.spec_max_open or (opened >= 14 and count >= 16):
                     self.spec_fuel_hit = True
                     self.spec_fuel_proof = proof
-                    self.last = f"need spec (reached {opened} specification definition opens without closing goal)"
+                    self.last = f"need spec (reached {opened} specification definition opens without closing goal)" + (f"\n{meta_tail}" if meta_tail else "")
                     self.last_proof = proof
                     return None
                 if opened >= 2:
-                    # Recursive unfolding (e.g. loop-exit chains and 4x..18x unrolled loops):
-                    # try the newly created call (`count - 1`) and invariant head (`0`) before older
-                    # calls, and keep per-candidate `spec_fuel_hit` isolated so shallow iterative
-                    # deepening never aborts before trying the remaining candidates.
-                    cands = []
-                    order_k = (count - 1, count - 2, 1, 0, count - 3) if opened == 2 else (count - 2, count - 1)
-                    for k in order_k:
-                        if 0 <= k < count and k not in cands:
-                            cands.append(k)
+                    # Structural frontier search (powered by `odeprove` call-graph metadata):
+                    # open frontier calls (`deg <= 1`, `has_val == 0`) in the goal's connected component
+                    # first, non-recursive definitions before recursive ones, falling back only if empty.
+                    frontier = _spec_open_order(spec_meta, count, include_interior=False)
+                    if not frontier:
+                        frontier = _spec_open_order(spec_meta, count, include_interior=True)
+                    cap = 6 if opened == 2 else (2 if self.fast_fail else 3)
+                    cands = frontier[:cap]
                     any_cands_fuel = False
                     deferred = []
                     for k in cands:
@@ -927,11 +986,14 @@ class Prover:
                         return None
                 any_fuel_hit = False
                 prev_max = self.spec_max_open
-                budgets = (1, 2, 5, 10, 14, 30) if opened == 0 else (prev_max,)
+                open_order = _spec_open_order(spec_meta, count, include_interior=(not self.fast_fail))
+                if not open_order:
+                    open_order = list(reversed(range(count)))
+                budgets = self.spec_budgets if opened == 0 else (prev_max,)
                 for bud in budgets:
                     self.spec_max_open = bud
                     any_fuel_hit = False
-                    for k in reversed(range(count)):
+                    for k in open_order:
                         if self.hard_refusal:
                             self.spec_max_open = prev_max
                             return None
@@ -951,7 +1013,8 @@ class Prover:
                 if any_fuel_hit:
                     self.spec_fuel_hit = True
                     if opened == 0:
-                        self.last = "need spec (reached 30 specification definition opens without closing goal)"
+                        top_b = budgets[-1]
+                        self.last = f"need spec (reached {top_b} specification definition opens without closing goal)" + (f"\n{meta_tail}" if meta_tail else "")
                         self.last_proof = self.spec_fuel_proof
                 return None
             elif what == "held":                               # which value held is of a use with the same things
@@ -1045,8 +1108,10 @@ def prove(spec_text, targets, statement_out, out):
             else:
                 keep[cur_pat] = join_written_regs(raw_ins, cur_pat, place_pcs - {cur_pat}, reg_list)
                 preseeded = True
+        fast_fail = (os.environ.get("ODE_PROVE_FAST_FAIL", "0") == "1")
         max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "6000"))
-        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "250"))
+        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "80" if fast_fail else "250"))
+        max_churn = int(os.environ.get("ODE_PROVE_MAX_CHURN", "120" if fast_fail else "0"))
         timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "0"))
         fn_deadline = time.time() + timeout_s if timeout_s > 0 else None
         while True:
@@ -1054,7 +1119,9 @@ def prove(spec_text, targets, statement_out, out):
             p = Prover(statement_out, done + [f"for {symbol}"] + places(clean_places_text, keep, seqs, kinds, counted, symbol, marked, regs=reg_list, marked_result=marked_result), out, later,
                        budget=max(1, max_asks - runs) if max_asks > 0 else None, until=fn_deadline,
                        trace_exprs=trace_exprs, instrs=instrs, reg_list=reg_list, wrap_pcs=wrap_pcs,
-                       max_lives=max_lives if max_lives > 0 else None)
+                       max_lives=max_lives if max_lives > 0 else None,
+                       fast_fail=fast_fail,
+                       max_churn=max_churn if max_churn > 0 else None)
             p.last = ""
             p.last_proof = []
             try:

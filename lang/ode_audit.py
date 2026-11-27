@@ -1155,14 +1155,23 @@ def _raise_pack_proof_error(exc, stmt_path, proof_path, inv_rename, compiled_by_
     if "search budget exceeded" in msg:
         mq = re.search(r"\(search budget exceeded[^)]*\)", msg)
         q_str = mq.group(0) if mq else "(search budget exceeded)"
+        q_str = re.sub(r";\s*set ODE_PROVE_MAX_ASKS/ODE_PROVE_MAX_LIVES to raise", "", q_str)
         n_splits = _count_cond_splits(info)
         split_msg = f" ({n_splits} branch/select splits in `{orig_sym}`)" if n_splits >= 6 else ""
-        extra_note = (
-            f"NOTE: prover {q_str}{split_msg}. "
-            f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
-            f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
-            f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
-        )
+        if "fast-fail:" in msg:
+            extra_note = (
+                f"NOTE: fast-fail prover stopped early {q_str}{split_msg} instead of searching blindly. "
+                f"What did you mean here, and how should I prove this step? "
+                f"Add the missing bound or equation to `maintains`, insert a `join maintains ...` merge point, "
+                f"or factor repeated checks into a small helper `fn` with its own `returns`/`ensures` contract."
+            )
+        else:
+            extra_note = (
+                f"NOTE: prover {q_str}{split_msg}. "
+                f"Too many sequential `select`/branch splits in one function cause exponential symbolic path explosion; "
+                f"factor repeated per-element checks into a small helper `fn` with its own `returns`/`ensures` contract "
+                f"(Ode's fast calling convention keeps helper calls cheap), or insert a `join maintains ...` merge point."
+            )
     raise PackProofError(
         msg, fn_sym=orig_sym, pc=pc, reason=reason, info=info,
         contract=contract, spec_text=full_spec_text, target=target, extra_note=extra_note,
@@ -1322,11 +1331,27 @@ def pack_verified(
         visiting = set()
         visited = set()
 
+        src_lines_raw = src_text.splitlines()
+
         def visit(name):
             if name in visited or name in visiting:
                 return
             visiting.add(name)
             inf = odec.compile_info(source_path, name, target=use_target)
+            rec_n = parsed["fns_by_name"].get(name)
+            impl_n = ode_unified._select_impl(rec_n, use_target, source_path) if rec_n else None
+            if impl_n and impl_n.get("hl_meta"):
+                hm = impl_n["hl_meta"]
+                inf["hl_meta"] = hm
+                lnos = hm.get("line_nos") or ()
+                first_l = impl_n.get("first_line", 1)
+                for row in inf.get("line_map") or ():
+                    aidx = row["line"] - first_l
+                    if 0 <= aidx < len(lnos):
+                        hl_lno = lnos[aidx]
+                        row["line"] = hl_lno
+                        if 1 <= hl_lno <= len(src_lines_raw):
+                            row["hl_src"] = src_lines_raw[hl_lno - 1].rstrip()
             compiled[name] = inf
             for csym in _called_symbols(inf["elf"]):
                 if csym == inf["symbol"]:

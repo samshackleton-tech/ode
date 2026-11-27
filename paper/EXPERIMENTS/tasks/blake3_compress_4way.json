@@ -1,0 +1,23 @@
+{
+  "id": "blake3_compress_4way",
+  "title": "BLAKE3 4-way parallel 7-round compression kernel (256 bytes)",
+  "entry_fn": "blake3_compress_4way",
+  "spec_file": "paper/EXPERIMENTS/tasks/blake3_compress_4way_spec.ode",
+  "spec_basename": "blake3_compress_4way_spec.ode",
+  "reference_solution": "paper/EXPERIMENTS/tasks/blake3_compress_4way_reference.ode",
+  "native_harness": "paper/EXPERIMENTS/tasks/blake3_compress_4way_native.c",
+  "skip_verify2": true,
+  "input_bytes_per_call": 256,
+  "expected_contract_id": "btdd6bqgvacwoyoysfjzlmt7dcxlhoanqtslor6sp47cdsfp36zq",
+  "expected_contract_ids": {
+    "x86_64": "ausphi6smcurx6io6ykmpcplt2skqnzhgcd6vqtqfy2br67oxgha",
+    "arm64": "btdd6bqgvacwoyoysfjzlmt7dcxlhoanqtslor6sp47cdsfp36zq"
+  },
+  "target_block_header": {
+    "x86_64": "for x86_64 needs avx needs avx512 { ... }",
+    "arm64": "for arm64 { ... }"
+  },
+  "contract_header": "use spec = \"blake3_compress_4way_spec.ode\"\n\nfn blake3_compress_4way(out: 128 bytes, cvs: 128 bytes, blocks: 256 bytes, metas: 64 bytes)\n    requires no_overlap(out, cvs, blocks, metas)\n    ensures out = bytes_of(spec.compress_4way(words(cvs), words(blocks), words(metas)))\n    stack 256\n",
+  "task_summary": "Implement `blake3_compress_4way(out, cvs, blocks, metas)`, which computes four independent official BLAKE3 7-round block compressions (64 bytes each, 256 bytes total) from `cvs[0..128]` (four 8-word chaining values), `blocks[0..256]` (four 16-word message blocks), and `metas[0..64]` (four 4-word `[t_lo, t_hi, length, flags]` tuples), writing the four 8-word output chaining values to `out[0..128]`. You may either use 128-bit `u32x4` SIMD (row-parallel per block, interleaved across blocks, or 4-way transposed across lanes) or 512-bit AVX-512 `u32x16` on x86-64, together with hygienic `inline fn (var ...)` helpers and `for ... unroll`. Your goal is BOTH full verification (`shown`) AND maximum throughput (lowest cycles per 256-byte call and `cyc/B`).",
+  "opt_goal": "reduce total cycles per 256-byte call (and `cyc/B`) toward the vector execution-port floor (e.g., by interleaving blocks across independent vector registers, doing 4-way transposed SIMD across lanes, or using 512-bit AVX-512 `u32x16` on x86-64) while keeping `shown` verification, native tests passing, and zero unnecessary stack spills"
+}

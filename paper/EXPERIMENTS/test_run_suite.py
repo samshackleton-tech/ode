@@ -182,7 +182,7 @@ class TestRunSuite(unittest.TestCase):
             def fake_api_a(*a, **kw):
                 calls[0] += 1
                 return "```ode\nfn der_valid() { return 0 }\n```", {"cost": 0.01}, 0.1
-            def fake_tool_a(cmd, work):
+            def fake_tool_a(cmd, work, extra_env=None):
                 if "pack" in cmd:
                     (work / "out.o").write_bytes(b"o")
                     (work / "out.proof").write_bytes(b"p")
@@ -201,7 +201,7 @@ class TestRunSuite(unittest.TestCase):
 
             # Case B: loop task (`cpb = 1.50`) where R2 & R3 opt attempts FAIL stops after exactly 2 opt rounds (3 total!)
             calls[0] = 0
-            def fake_tool_b(cmd, work):
+            def fake_tool_b(cmd, work, extra_env=None):
                 if "pack" in cmd:
                     if calls[0] == 1:
                         (work / "out.o").write_bytes(b"o")
@@ -226,6 +226,21 @@ class TestRunSuite(unittest.TestCase):
             run_suite.run_verify2_on_bundle = orig_v2
             run_suite.run_native_test = orig_nat
             run_suite.expected_contract_id_for = orig_exp
+
+    def test_07_ab_arm_env_and_advise_stack_spills(self):
+        """ARM_ENV maps A/B arms to env flags; parse_advise_metrics extracts stack_bytes and spills."""
+        self.assertEqual(run_suite.ARM_ENV["auto"], {"ODE_HL_NO_SPILL": "0", "ODE_PROVE_FAST_FAIL": "0"})
+        self.assertEqual(run_suite.ARM_ENV["no_spill"], {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "0"})
+        self.assertEqual(run_suite.ARM_ENV["fast_fail"], {"ODE_HL_NO_SPILL": "0", "ODE_PROVE_FAST_FAIL": "1"})
+        self.assertEqual(run_suite.ARM_ENV["ask_both"], {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "1"})
+        sample = (
+            "High-Level Ode lowering (f, x86_64): stack 32 B, callee-saved: rbx, spills: 2\n"
+            "  sim: pipeline sim ~128.0 cyc/call (bottleneck: vec, 0 fused)\n"
+        )
+        m = run_suite.parse_advise_metrics(sample, "x86_64", input_bytes_per_call=64)
+        self.assertEqual(m["stack_bytes"], 32)
+        self.assertEqual(m["spills"], 2)
+        self.assertAlmostEqual(m["cyc_per_b"], 2.0)
 
 
 if __name__ == "__main__":

@@ -222,9 +222,21 @@ def classify_failure(stage: str, out: str, rc: int) -> str:
     return "other"
 
 
-def run_tool(cmd: list[str], cwd: Path) -> tuple[int, str, float]:
+ARM_ENV = {
+    "auto": {"ODE_HL_NO_SPILL": "0", "ODE_PROVE_FAST_FAIL": "0"},
+    "no_spill": {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "0"},
+    "fast_fail": {"ODE_HL_NO_SPILL": "0", "ODE_PROVE_FAST_FAIL": "1"},
+    "ask_both": {"ODE_HL_NO_SPILL": "1", "ODE_PROVE_FAST_FAIL": "1"},
+}
+
+
+def run_tool(cmd: list[str], cwd: Path, extra_env: dict | None = None) -> tuple[int, str, float]:
     t0 = time.monotonic()
-    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True)
+    env = None
+    if extra_env:
+        env = dict(os.environ)
+        env.update(extra_env)
+    r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, env=env)
     return r.returncode, (r.stdout + "\n" + r.stderr).strip(), time.monotonic() - t0
 
 
@@ -395,14 +407,23 @@ def slug(s: str) -> str:
 
 
 def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int | None = None) -> dict:
-    """Extract hot-loop or straight-line static `cyc/B`, `cyc/iter`, `load_bytes`, and cross-CPU `cyc/B`."""
+    """Extract hot-loop or straight-line static `cyc/B`, `cyc/iter`, `load_bytes`, stack bytes, spills, and cross-CPU `cyc/B`."""
     default_arch = "apple_m" if target == "arm64" else "zen5"
     loops = []
     cur = None
     whole_sim = None
     whole_all_archs = {}
     in_whole_aa = False
+    hl_stack_bytes = 0
+    hl_spills = 0
+    saw_hl = False
     for line in advise_txt.splitlines():
+        m_hl = re.search(r"High-Level Ode lowering\s*\([^)]*\):\s*stack\s+(\d+)\s*B,\s*callee-saved:[^,]+,\s*spills:\s*(\d+)", line)
+        if m_hl:
+            saw_hl = True
+            hl_stack_bytes += int(m_hl.group(1))
+            hl_spills += int(m_hl.group(2))
+            continue
         m_ws = re.search(r"^\s*sim:\s+pipeline sim ~([0-9.]+) cyc/call \(bottleneck:\s*([^,)]+)", line)
         if m_ws:
             whole_sim = {"cycles_per_call": float(m_ws.group(1)), "bottleneck": m_ws.group(2).strip()}
@@ -448,6 +469,7 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 cur["all_archs_cyc_per_iter"][m_aa.group(1)] = float(m_aa.group(2))
                 if m_aa.group(3):
                     cur["all_archs_cyc_per_b"][m_aa.group(1)] = float(m_aa.group(3))
+    hl_extra = {"stack_bytes": hl_stack_bytes, "spills": hl_spills} if saw_hl else {}
     load_loops = [lp for lp in loops if lp["load_bytes"] > 0 and lp["cyc_per_b"] is not None]
     if not load_loops:
         if whole_sim is not None and input_bytes_per_call:
@@ -464,8 +486,9 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
                 "lints": 0,
                 "all_archs_cyc_per_b": aa_cpb,
                 "loop_count": 0,
+                **hl_extra,
             }
-        return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops}
+        return {"hot_loop": None, "primary_arch": default_arch, "cyc_per_b": None, "load_bytes": 0, "loops": loops, **hl_extra}
     # Prefer primary (shortest) back-edge per loop header so cold enclosing slices spanning multiple
     # branches never masquerade as wide unrolled loops; then most bytes/iter, zero callees, lowest cyc/B.
     primary_loops = [lp for lp in load_loops if not lp.get("secondary_backedge")]
@@ -483,12 +506,13 @@ def parse_advise_metrics(advise_txt: str, target: str, input_bytes_per_call: int
         "lints": hot["lints"],
         "all_archs_cyc_per_b": hot["all_archs_cyc_per_b"],
         "loop_count": len(loops),
+        **hl_extra,
     }
 
 
-def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None) -> tuple[str, dict]:
+def run_static_advise(cand: Path, entry_fn: str, target: str, work: Path, input_bytes_per_call: int | None = None, extra_env: dict | None = None) -> tuple[str, dict]:
     cmd = [ODE_PYTHON, str(ODE_TOOL), "advise", "--asm", str(cand), "--fn", entry_fn, "--target", target, "--all-archs"]
-    rc, out, _ = run_tool(cmd, work)
+    rc, out, _ = run_tool(cmd, work, extra_env=extra_env)
     if rc != 0:
         return f"(ode advise exited {rc}: {out[:300]})", {"cyc_per_b": None}
     metrics = parse_advise_metrics(out, target, input_bytes_per_call=input_bytes_per_call)
@@ -624,13 +648,14 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     p.unlink()
 
             # Step A: `ode pack --c-abi` (bounded local prover concurrency so parallel API cells do not starve each other)
+            arm_env = ARM_ENV.get(arm) if arm else None
             pack_cmd = [
                 ODE_PYTHON, str(ODE_TOOL), "pack", str(cand),
                 "--c-abi", "--fn", task["entry_fn"], "--target", target,
                 "--out", str(out_o), "--proof", str(out_p),
             ]
             with prover_sem:
-                rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work)
+                rc_p, out_p_txt, dt_p = run_tool(pack_cmd, work, extra_env=arm_env)
             cell["total_tool_s"] += dt_p
 
             rec = {
@@ -672,6 +697,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                     return run_static_advise(
                         cand, task["entry_fn"], target, work,
                         input_bytes_per_call=task.get("input_bytes_per_call"),
+                        extra_env=arm_env,
                     )
                 with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pex:
                     f_aud = pex.submit(_do_audit)
@@ -741,7 +767,7 @@ def run_cell(task: dict, model: str, target: str, args, api_key: str,
                         break
                     messages.append({"role": "assistant", "content": reply})
                     opt_goal = task.get("opt_goal", "reduce loop cycles per byte (`cyc/B`) further for large `n`")
-                    if arm == "advised":
+                    if arm != "blind":
                         messages.append({
                             "role": "user",
                             "content": (
@@ -935,6 +961,8 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
                 "best_perf": c.get("best_perf"),
                 "stopped_reason": c.get("stopped_reason"),
                 "total_cost_usd": c["total_cost_usd"],
+                "total_api_s": round(c.get("total_api_s", 0.0), 2),
+                "total_tool_s": round(c.get("total_tool_s", 0.0), 2),
                 "verify2_pass": c["verify2_pass"],
                 "native_status": c["native_status"],
                 "native_detail": c["native_detail"],
@@ -962,6 +990,40 @@ def write_results(run_id: str, prereg_commit: str, tasks: list[dict], models: li
         f"- **Real-silicon native harness:** **{nat_passes}/{strict_passes}** passing cells executed and passed on matching hardware",
         f"- **Total rounds / API spend:** {total_rounds} rounds, **${total_cost:.2f}** USD",
         "",
+    ]
+    distinct_arms = sorted({c.get("arm") for c in summary["cells"] if c.get("arm")})
+    if len(distinct_arms) >= 2:
+        md_lines += [
+            "## Arm-by-Arm Controlled A/B Comparison",
+            "",
+            "Each row summarizes all cells assigned to one experimental arm: pass rate, rounds and time to pass, API cost, and efficiency of verified code.",
+            "",
+            "| Arm | Passes | Mean rounds (pass) | Mean tool s | Mean total s | Cost (USD) | Mean insns | Mean `cyc/B` | Mean stack B | Total spills |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for anm in distinct_arms:
+            ac = [c for c in summary["cells"] if c.get("arm") == anm]
+            ap_cells = [c for c in ac if c["strict_pass"]]
+            n_ac = len(ac)
+            n_ap = len(ap_cells)
+            mr = f"{sum(c['rounds_to_pass'] for c in ap_cells) / n_ap:.2f}" if n_ap else "—"
+            mt = f"{sum(c.get('total_tool_s', 0.0) for c in ac) / n_ac:.2f}" if n_ac else "—"
+            mw = f"{sum(c.get('total_api_s', 0.0) + c.get('total_tool_s', 0.0) for c in ac) / n_ac:.1f}" if n_ac else "—"
+            mc = sum(c["total_cost_usd"] for c in ac)
+            ins_vals = [c["final_metrics"]["instructions"] for c in ap_cells if c["final_metrics"].get("instructions") is not None]
+            mi = f"{sum(ins_vals) / len(ins_vals):.1f}" if ins_vals else "—"
+            cpb_vals = [(c.get("best_perf") or {}).get("cyc_per_b") for c in ap_cells if (c.get("best_perf") or {}).get("cyc_per_b") is not None]
+            mcpb = f"{sum(cpb_vals) / len(cpb_vals):.3f}" if cpb_vals else "—"
+            stk_vals = [(c.get("best_perf") or {}).get("stack_bytes") for c in ap_cells if (c.get("best_perf") or {}).get("stack_bytes") is not None]
+            mstk = f"{sum(stk_vals) / len(stk_vals):.1f}" if stk_vals else "—"
+            sp_vals = [(c.get("best_perf") or {}).get("spills") for c in ap_cells if (c.get("best_perf") or {}).get("spills") is not None]
+            tsp = str(sum(sp_vals)) if sp_vals else "—"
+            md_lines.append(
+                f"| `{anm}` | **{n_ap}/{n_ac}** | {mr} | {mt} | {mw} | ${mc:.2f} | {mi} | {mcpb} | {mstk} | {tsp} |"
+            )
+        md_lines.append("")
+
+    md_lines += [
         "## Cell-by-Cell Outcomes",
         "",
         "Each row reports one cold-room cell: verdict, rounds used, API cost, compiled code size, `verify2.py` status, and real-silicon test result.",

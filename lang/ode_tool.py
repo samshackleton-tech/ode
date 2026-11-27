@@ -93,6 +93,10 @@ def _var_labels(target, info=None, contract=None):
     if info and info.get("regs"):
         for alias, reg in info["regs"].items():
             alias_by_reg.setdefault(reg, alias)
+    if info and isinstance(info.get("hl_meta"), dict):
+        for vnm, _role, vloc, _note in info["hl_meta"].get("var_map") or ():
+            if vloc and not vloc.startswith("["):
+                alias_by_reg.setdefault(vloc, vnm)
     labels = []
     for r in base:
         tag = param_by_reg.get(r) or alias_by_reg.get(r)
@@ -210,6 +214,8 @@ def _matching_spec_comparisons(spec_text, raw_goals, contract=None):
         dm = re.match(r"def\s+(\w+)\s*\(", s)
         if dm:
             cur_def = dm.group(1)
+        elif re.match(r"(?:fn|inline\s+fn|layout|data)\b", s):
+            cur_def = None
         if cur_def is None:
             continue
         if reachable is not None and cur_def not in reachable:
@@ -301,10 +307,37 @@ def parse_arithmetic_need(reason, target, info=None, contract=None):
     return {"kind": kind, "goals": fmt_goals, "raw_goals": goals[:4], "relevant_facts": rel_facts, "total_facts": len(facts)}
 
 
+def parse_spec_need(reason):
+    """Parse structured `need spec` metadata (`m goal ...` and `d ...`) emitted by `odeprove`."""
+    raw_lines = reason.strip().splitlines()
+    if not raw_lines or not raw_lines[0].startswith("need spec"):
+        return None
+    goal_desc = None
+    calls_by_fn = {}
+    for l in raw_lines[1:]:
+        parts = l.split()
+        if len(parts) >= 4 and parts[0] == "m" and parts[1] == "goal":
+            if parts[2] == "value":
+                goal_desc = f"`{parts[3]}(...) == <computed value>`"
+            elif parts[2] == "same" and len(parts) >= 6:
+                goal_desc = f"`{parts[3]}(...) == {parts[5]}(...)`"
+        elif len(parts) >= 7 and parts[0] == "d":
+            fn_nm = parts[2]
+            has_val = parts[4] == "1"
+            ent = calls_by_fn.setdefault(fn_nm, [0, 0])
+            ent[1 if has_val else 0] += 1
+    if goal_desc is None and not calls_by_fn:
+        return None
+    return {"header": raw_lines[0], "goal": goal_desc, "calls_by_fn": calls_by_fn}
+
+
 def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
     """Produce one concrete, actionable hint tailored to the refusal reason."""
+    is_hl = bool(info and info.get("hl_meta"))
     if "with no place" in reason:
         line_note = f" (right above line {row['line']})" if row else ""
+        if is_hl:
+            return f"hint: add a `while`/`for` `maintains ...` and `decreases ...` clause{line_note} stating loop bounds"
         return f"hint: add a `place {{ ... }}` loop invariant at the loop head{line_note} stating bounds on loop counters and pointers"
     if "values kept out of the trace" in reason:
         td = []
@@ -331,12 +364,24 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
         )
     if "need entail" in reason:
         if row and re.match(r"^\s*sub\b", row.get("asm", "")):
+            if is_hl:
+                return (
+                    "hint: exact `-` requires operand >= subtrahend (no underflow); guard before subtracting, "
+                    "add the lower bound to `maintains`, or use wrapping `-%` if mod-2^64 wraparound was intended"
+                )
             return (
                 "hint: unsigned `sub` requires operand >= subtrahend (no underflow); guard before subtracting or, "
                 "in branchless `cmov*`/`csel` code, shift intermediate values up by a positive constant +K and subtract K at the end"
             )
+        if is_hl:
+            return "hint: how do I know this bound holds here? Check off-by-one guards, add the bound to the loop's `maintains` clause, or check a helper `fn`'s `ensures` range"
         return "hint: check off-by-one bounds, guard before memory access/shift, or strengthen the loop `place { ... }` invariant"
     if "need below" in reason:
+        if is_hl:
+            return (
+                "hint: the prover cannot tell which branch of the spec's `if` holds here; add an explicit branch or `select(...)`, "
+                "state the distinguishing bound in `maintains` / `join maintains ...`, or give a helper `fn` an `ensures` range"
+            )
         return (
             "hint: if a specification `if` condition tests this inequality, test it with a branch or conditional select "
             "(`cmov*`/`csel`), using a join-point `place { ... }` (without `decreases`) to merge sequential paths, "
@@ -345,16 +390,28 @@ def _diagnostic_hint(reason, target, info=None, contract=None, row=None):
     if "need know" in reason:
         return "hint: split on the missing comparison or add an explicit branch/invariant establishing the condition"
     if "need compare" in reason:
+        if is_hl:
+            return "hint: the specification tests these two for equality (`==`/`!=`) here; compare them in an `if` or `select(...)`, merge paths with `join maintains ...`, or add the relation to `maintains`"
         return "hint: the specification tests these two for equality (`==`/`!=`) at this point; make the code compare them and branch first (so each path knows the answer), merge branches with a `place { ... }` join point, or state the relation in `place { ... }`"
     if "reached 14 specification definition opens" in reason or (
         "need spec" in reason and re.search(r"(?m)^o\s+(1[2-9]|[2-9]\d)\b", reason)
     ):
+        if is_hl:
+            return (
+                "hint: reached the unfolding depth limit for a single step — "
+                "for long unrolled loops, insert `join maintains ...` every 8 steps to split the unfolding"
+            )
         return (
             "hint: reached the verifier's unfolding depth limit for a single step — "
             "for >12x unrolled loops, insert a zero-instruction mid-loop join point `place { ... }` "
             "(without `decreases`) every 8 steps to split the unfolding into 8 + 8"
         )
     if "need spec" in reason:
+        if is_hl:
+            return (
+                "hint: how does this expression connect to the specification? Check that loop `maintains` links your accumulator "
+                "to the spec `def`, that helper `fn` contracts state both `returns` and needed range `ensures`, or insert `join maintains ...`"
+            )
         return "hint: the prover could not match symbolic register/memory values to the specification formula here; check the loop `place { ... }` invariant, guard bounds, or split multi-way dispatch into small `calling` helper functions"
     if "is not one expression" in reason and "wrote" in reason:
         return "hint: `wrote` syntax is `wrote out[.. i] = expr` (forward) or `wrote out[i ..] = expr` (countdown), naming the full output value"
@@ -408,10 +465,17 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
         if row is not None:
             rel = os.path.relpath(row["file"], ROOT) if row["file"].startswith(ROOT) else row["file"]
             out.append(f"refused in {fn_sym} ({rel}:{row['line']}, pc +0x{pc:x}):")
-            out.append(f"  {row['line']:4d} | {row['typed']}")
-            if row["asm"] != row["typed"]:
-                out.append(f"       | expanded: {row['asm']}")
-            if info["regs"]:
+            if row.get("hl_src"):
+                out.append(f"  {row['line']:4d} | {row['hl_src']}")
+                out.append(f"       | lowered: {row['asm']}")
+            else:
+                out.append(f"  {row['line']:4d} | {row['typed']}")
+                if row["asm"] != row["typed"]:
+                    out.append(f"       | expanded: {row['asm']}")
+            if isinstance(info.get("hl_meta"), dict) and info["hl_meta"].get("var_map"):
+                vm = ", ".join(f"{vnm}={vloc}" for vnm, _role, vloc, _note in info["hl_meta"]["var_map"])
+                out.append(f"  vars:  {vm}")
+            elif info["regs"]:
                 inv = ", ".join(f"{reg}={name}" for name, reg in info["regs"].items())
                 out.append(f"  regs:  {inv}")
             if info["frame"]:
@@ -454,8 +518,24 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
             for f in arith["relevant_facts"]:
                 out.append(f"    {f}")
     else:
-        for line in raw_lines:
-            out.append(f"  {line}")
+        spec_need = parse_spec_need(reason)
+        if spec_need is not None:
+            out.append(f"  {spec_need['header']}")
+            if spec_need["goal"]:
+                out.append(f"  unproved specification goal: {spec_need['goal']}")
+            if spec_need["calls_by_fn"]:
+                parts = []
+                for fn_nm, (n_open, n_res) in spec_need["calls_by_fn"].items():
+                    bits = []
+                    if n_open:
+                        bits.append(f"{n_open} open")
+                    if n_res:
+                        bits.append(f"{n_res} resolved")
+                    parts.append(f"`{fn_nm}` ({', '.join(bits)})")
+                out.append("  specification calls in context: " + ", ".join(parts))
+        else:
+            for line in raw_lines:
+                out.append(f"  {line}")
     hint = _diagnostic_hint(reason, target, info, contract, row)
     if hint:
         out.append(f"  {hint}")

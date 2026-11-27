@@ -1,0 +1,44 @@
+// Official BLAKE3 4-way parallel block compression specification (BLAKE3 paper, section 2.2).
+// Compresses four independent 64-byte message blocks with independent 8-word chaining values
+// and 4-word metadata blocks `[t_lo, t_hi, length, flags]`, writing four 8-word chaining values.
+
+const IV = [0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A, 0x510E527F, 0x9B05688C, 0x1F83D9AB, 0x5BE0CD19]
+const PERMUTATION = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
+
+def g(v, a, b, c, d, x, y) {
+    let a1 = v[a] + v[b] + x
+    let d1 = (v[d] ^ a1) >>> 16
+    let c1 = v[c] + d1
+    let b1 = (v[b] ^ c1) >>> 12
+    let a2 = a1 + b1 + y
+    let d2 = (d1 ^ a2) >>> 8
+    let c2 = c1 + d2
+    let b2 = (b1 ^ c2) >>> 7
+    v with [a: a2, b: b2, c: c2, d: d2]
+}
+
+def round(v, m) {
+    let c1 = g(v, 0, 4, 8, 12, m[0], m[1])
+    let c2 = g(c1, 1, 5, 9, 13, m[2], m[3])
+    let c3 = g(c2, 2, 6, 10, 14, m[4], m[5])
+    let c4 = g(c3, 3, 7, 11, 15, m[6], m[7])
+    let d1 = g(c4, 0, 5, 10, 15, m[8], m[9])
+    let d2 = g(d1, 1, 6, 11, 12, m[10], m[11])
+    let d3 = g(d2, 2, 7, 8, 13, m[12], m[13])
+    g(d3, 3, 4, 9, 14, m[14], m[15])
+}
+
+def compress_words(h, m, meta) {
+    let s[0] = h ++ [word(IV[0]), word(IV[1]), word(IV[2]), word(IV[3])] ++ meta
+    let w[0] = m
+    let s[r + 1] = round(s[r], w[r])
+    let w[r + 1] = [w[r][PERMUTATION[i]] for i in 0..16]
+    [s[7][i] ^ s[7][i + 8] for i in 0..8]
+}
+
+def compress_4way(cvs, blocks, metas) {
+    compress_words(cvs[0..8], blocks[0..16], metas[0..4])
+    ++ compress_words(cvs[8..16], blocks[16..32], metas[4..8])
+    ++ compress_words(cvs[16..24], blocks[32..48], metas[8..12])
+    ++ compress_words(cvs[24..32], blocks[48..64], metas[12..16])
+}

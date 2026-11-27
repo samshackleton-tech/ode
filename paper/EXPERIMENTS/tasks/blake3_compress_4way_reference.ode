@@ -1,0 +1,135 @@
+use spec = "blake3_compress_4way_spec.ode"
+
+data b3_iv_lo = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
+
+inline fn g_half(var v0: u32x4, var v1: u32x4, var v2: u32x4, var v3: u32x4, mx: u32x4, my: u32x4) {
+    v0 := (v0 + v1) + mx
+    v3 := rotr32(v3 ^ v0, 16)
+    v2 := v2 + v3
+    v1 := rotr32(v1 ^ v2, 12)
+    v0 := (v0 + v1) + my
+    v3 := rotr32(v3 ^ v0, 8)
+    v2 := v2 + v3
+    v1 := rotr32(v1 ^ v2, 7)
+}
+
+inline fn perm_x86(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
+    let t0: u32x4 := shufps(m0, m1, 214)
+    let nm1_a: u32x4 := shuf32(m0, 0x0F)
+    let nm0: u32x4 := shuf32(t0, 0x39)
+    let t1: u32x4 := shufps(m2, m3, 250)
+    let nm1: u32x4 := blend32(nm1_a, t1, 0xAA)
+    let t2: u32x4 := unpacklo64(m3, m1)
+    let t3: u32x4 := blend32(t2, m2, 0x88)
+    let nm2: u32x4 := shuf32(t3, 0x78)
+    let t4: u32x4 := unpackhi32(m1, m3)
+    let t5: u32x4 := unpacklo32(m2, t4)
+    let nm3: u32x4 := shuf32(t5, 0x1E)
+    m0 := nm0
+    m1 := nm1
+    m2 := nm2
+    m3 := nm3
+}
+
+inline fn perm_arm(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
+    let t0: u32x4 := uzp2_32(m1, m0)
+    let t1: u32x4 := unpacklo64(m0, t0)
+    let t2: u32x4 := ext8(m0, m0)
+    let t3: u32x4 := ext4(m2, m0)
+    let t4: u32x4 := uzp2_32(m0, t3)
+    let t5: u32x4 := ext12(m3, m0)
+    let nm0: u32x4 := ext4(t1, t2)
+    let u0: u32x4 := uzp1_32(m3, m1)
+    let u1: u32x4 := ext12(m2, m3)
+    let u2: u32x4 := unpackhi32(m1, m3)
+    let u3: u32x4 := unpacklo64(m2, u2)
+    let u6: u32x4 := ext4(m1, m2)
+    let nm1: u32x4 := ext4(t4, t5)
+    let nm2: u32x4 := uzp1_32(u0, u1)
+    let nm3: u32x4 := uzp2_32(u3, u6)
+    m0 := nm0
+    m1 := nm1
+    m2 := nm2
+    m3 := nm3
+}
+
+fn blake3_compress_4way(out: 128 bytes, cvs: 128 bytes, blocks: 256 bytes, metas: 64 bytes)
+    requires no_overlap(out, cvs, blocks, metas)
+    ensures out = bytes_of(spec.compress_4way(words(cvs), words(blocks), words(metas)))
+    stack 256
+for x86_64 needs avx needs avx512 {
+    for blk in 0..4 unroll {
+        var v0: u32x4 := cvs.u32x4(blk * 32)
+        var v1: u32x4 := cvs.u32x4(blk * 32 + 16)
+        var v2: u32x4 := const_u32x4(b3_iv_lo)
+        var v3: u32x4 := metas.u32x4(blk * 16)
+        let b0: u32x4 := blocks.u32x4(blk * 64)
+        let b1: u32x4 := blocks.u32x4(blk * 64 + 16)
+        var m0: u32x4 := uzp1_32(b0, b1)
+        var m1: u32x4 := uzp2_32(b0, b1)
+        let b2: u32x4 := blocks.u32x4(blk * 64 + 32)
+        let b3: u32x4 := blocks.u32x4(blk * 64 + 48)
+        var m2: u32x4 := shuf32(uzp1_32(b2, b3), 0x93)
+        var m3: u32x4 := shuf32(uzp2_32(b2, b3), 0x93)
+        for r in 0..6 unroll {
+            g_half(v0, v1, v2, v3, m0, m1)
+            v0 := shuf32(v0, 0x93)
+            v3 := shuf32(v3, 0x4E)
+            v2 := shuf32(v2, 0x39)
+            g_half(v0, v1, v2, v3, m2, m3)
+            v0 := shuf32(v0, 0x39)
+            v3 := shuf32(v3, 0x4E)
+            v2 := shuf32(v2, 0x93)
+            perm_x86(m0, m1, m2, m3)
+        }
+        g_half(v0, v1, v2, v3, m0, m1)
+        v0 := shuf32(v0, 0x93)
+        v3 := shuf32(v3, 0x4E)
+        v2 := shuf32(v2, 0x39)
+        g_half(v0, v1, v2, v3, m2, m3)
+        v0 := shuf32(v0, 0x39)
+        v3 := shuf32(v3, 0x4E)
+        v2 := shuf32(v2, 0x93)
+        out.u32x4(blk * 32) := v0 ^ v2
+        out.u32x4(blk * 32 + 16) := v1 ^ v3
+    }
+}
+for arm64 {
+    for blk in 0..4 unroll {
+        var v0: u32x4 := cvs.u32x4(blk * 32)
+        var v1: u32x4 := cvs.u32x4(blk * 32 + 16)
+        var v2: u32x4 := u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+        var v3: u32x4 := metas.u32x4(blk * 16)
+        let b0: u32x4 := blocks.u32x4(blk * 64)
+        let b1: u32x4 := blocks.u32x4(blk * 64 + 16)
+        var m0: u32x4 := uzp1_32(b0, b1)
+        var m1: u32x4 := uzp2_32(b0, b1)
+        let b2: u32x4 := blocks.u32x4(blk * 64 + 32)
+        let b3: u32x4 := blocks.u32x4(blk * 64 + 48)
+        let p2: u32x4 := uzp1_32(b2, b3)
+        let p3: u32x4 := uzp2_32(b2, b3)
+        var m2: u32x4 := ext12(p2, p2)
+        var m3: u32x4 := ext12(p3, p3)
+        for r in 0..6 unroll {
+            g_half(v0, v1, v2, v3, m0, m1)
+            v0 := ext12(v0, v0)
+            v3 := ext8(v3, v3)
+            v2 := ext4(v2, v2)
+            g_half(v0, v1, v2, v3, m2, m3)
+            v0 := ext4(v0, v0)
+            v3 := ext8(v3, v3)
+            v2 := ext12(v2, v2)
+            perm_arm(m0, m1, m2, m3)
+        }
+        g_half(v0, v1, v2, v3, m0, m1)
+        v0 := ext12(v0, v0)
+        v3 := ext8(v3, v3)
+        v2 := ext4(v2, v2)
+        g_half(v0, v1, v2, v3, m2, m3)
+        v0 := ext4(v0, v0)
+        v3 := ext8(v3, v3)
+        v2 := ext12(v2, v2)
+        out.u32x4(blk * 32) := v0 ^ v2
+        out.u32x4(blk * 32 + 16) := v1 ^ v3
+    }
+}

@@ -550,6 +550,7 @@ structure Advice where
   ensures : Sym → EnsureW → List Row := fun _ _ => []
   call : Sym → Contract → List Row := fun _ _ => []
   sameByte : Sym → Nat → Row → Bool := fun _ _ _ => false
+  specMeta : Sym → SFact → List SCall → String := fun _ _ _ => ""
   deriving Inhabited
 
 structure Ctx where
@@ -2371,7 +2372,8 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
           | .value c _ => (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
               if c'.f == c.f then some (toString k) else none
           | _ => []
-        fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}"
+        let mline := ctx.advice.specMeta s goal calls
+        fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}{mline}"
 
 /-- What a line `fact …` of a place says: rows, and facts of the specification. -/
 def assertion (ctx : Ctx) (env : List (String × SVal)) (s : Sym) : SExpr → V (List Row × List SFact × Sym)

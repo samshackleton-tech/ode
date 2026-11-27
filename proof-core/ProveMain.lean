@@ -270,7 +270,8 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
             | .value c _ => (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
                 if c'.f == c.f then some (toString k) else none
             | _ => []
-          .err s!"need spec\nc {calls.length}\no {31 - (fuel - 1)}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}"
+          let mline := ctx.advice.specMeta s goal calls
+          .err s!"need spec\nc {calls.length}\no {31 - (fuel - 1)}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}{mline}"
     | .filledBytes env x b w lo k count s after =>
       if count == 0 then
         .next { st with stack := after s :: tail }
@@ -409,8 +410,9 @@ def main (args : List String) : IO UInt32 := do
         IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
-      let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
-                         selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
+      let baseCtx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
+                             selfName := selfName, pieces := job.pieces, piece := f.piece, runsCallees := runsOk }
+      let ctx : Ctx := { baseCtx with advice := { specMeta := specMetaFor baseCtx } }
       match locateRefusal ctx f.proof with
       | some why => IO.println s!"{why}\nin {f.name}"; return 1
       | none =>

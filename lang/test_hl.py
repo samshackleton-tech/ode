@@ -1001,6 +1001,103 @@ fn bad_or(a: n bytes, n: u64) -> u64
                                         fn_name="bad_or", target="x86_64", c_abi=True)
             self.assertIn("`maintains` cannot use `||`", str(ctx.exception))
 
+    def test_26_spec_meta_and_fast_fail_interactive_diagnostics(self):
+        """High-Level Ode source lines + `odeprove` `need spec` metadata + `ODE_PROVE_FAST_FAIL=1`."""
+        import ode_tool
+        # 1. Source line mapping + `vars:` + High-Level Ode hint on a refusal
+        src_bad = """\
+def sum_bytes(a, n) {
+    if n == 0 then 0 else sum_bytes(a, n - 1) + a[n - 1]
+}
+fn hl_missing_maintains(a: n bytes, n: u64) -> u64
+    requires n <= 64
+    returns sum_bytes(a, n)
+    trace depends on n
+{
+    var acc: u64 := 0
+    for i in 0..n
+        maintains acc <= 255 * i
+    {
+        acc += a[i]
+    }
+    return acc
+}
+"""
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "bad.ode")
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src_bad)
+            with self.assertRaises(ode_audit.PackProofError) as ctx:
+                ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                        fn_name="hl_missing_maintains", target="x86_64")
+            exc = ctx.exception
+            by_sym = {exc.fn_sym: exc.info} if (exc.fn_sym and exc.info) else {}
+            diag, _ = ode_tool.format_source_diagnostic(
+                by_sym, exc.pc, exc.fn_sym, exc.reason,
+                target=exc.target, contract=exc.contract, spec_text=exc.spec_text,
+            )
+            self.assertIn("return acc", diag)
+            self.assertIn("vars:", diag)
+            self.assertIn("maintains", diag)
+
+        # 2. `parse_spec_need` renders `odeprove` `m goal` + `d` metadata cleanly
+        spec_reason = (
+            "need spec\nc 3\no 0\nh 1\ny 0\n"
+            "m goal value ipv4_sum 2\n"
+            "d 0 ipv4_sum 0 1 0 1\n"
+            "d 1 ipv4_valid 1 0 1 0\n"
+            "d 2 ipv4_sum 1 0 1 1\n"
+        )
+        diag2, _ = ode_tool.format_source_diagnostic({}, None, "ipv4_valid", spec_reason, target="arm64")
+        self.assertIn("unproved specification goal: `ipv4_sum(...) == <computed value>`", diag2)
+        self.assertIn("`ipv4_sum` (1 open, 1 resolved)", diag2)
+        self.assertIn("`ipv4_valid` (1 open)", diag2)
+
+        # 3. `ODE_PROVE_FAST_FAIL=1` stops promptly on churn and asks interactive question
+        src_churn = """\
+def f_many(x) {
+    if x == 0 then 0 else if x == 1 then 1 else if x == 2 then 2 else if x == 3 then 3
+    else if x == 4 then 4 else if x == 5 then 5 else if x == 6 then 6 else 7
+}
+fn hl_fast_fail_demo(x: u8) -> u64
+    returns f_many(x)
+    trace depends on nothing
+{
+    var r: u64 := 7
+    r := select(x == 0, 0, r)
+    r := select(x == 1, 1, r)
+    r := select(x == 2, 2, r)
+    r := select(x == 3, 3, r)
+    r := select(x == 4, 4, r)
+    r := select(x == 5, 5, r)
+    r := select(x == 6, 6, r)
+    r := select(x == 7, 99, r)
+    return r
+}
+"""
+        old_ff = os.environ.get("ODE_PROVE_FAST_FAIL")
+        old_ch = os.environ.get("ODE_PROVE_MAX_CHURN")
+        old_pf = os.environ.get("ODE_PREFILTER")
+        try:
+            os.environ["ODE_PROVE_FAST_FAIL"] = "1"
+            os.environ["ODE_PROVE_MAX_CHURN"] = "8"
+            os.environ["ODE_PREFILTER"] = "0"
+            with tempfile.TemporaryDirectory() as d:
+                p = os.path.join(d, "ff.ode")
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(src_churn)
+                with self.assertRaises(ode_audit.PackProofError) as ctx:
+                    ode_audit.pack_verified(p, None, os.path.join(d, "a.o"), os.path.join(d, "a.p"),
+                                            fn_name="hl_fast_fail_demo", target="x86_64")
+                self.assertIn("fast-fail prover stopped early", ctx.exception.extra_note)
+                self.assertIn("What did you mean here", ctx.exception.extra_note)
+        finally:
+            for k, v in (("ODE_PROVE_FAST_FAIL", old_ff), ("ODE_PROVE_MAX_CHURN", old_ch), ("ODE_PREFILTER", old_pf)):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
 
 if __name__ == "__main__":
     unittest.main()

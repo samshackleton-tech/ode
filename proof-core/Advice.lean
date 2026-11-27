@@ -198,12 +198,56 @@ def callRows (ctx : Ctx) (s : Sym) (c : Contract) : List Row :=
   (callNeeds ctx s c c.args c.argRegs ++ laneRows ++ needRows).filter fun g =>
     decide (g.coeff.length ≤ s.nvars) && !plain s.facts g
 
+/-- True if specification expression `e` invokes definition `fnName`. -/
+def exprCallsFn (fnName : String) : SExpr → Bool
+  | .num _ | .name _ | .nil => false
+  | .bin _ a b => exprCallsFn fnName a || exprCallsFn fnName b
+  | .ifx c a b => exprCallsFn fnName c || exprCallsFn fnName a || exprCallsFn fnName b
+  | .index a i => exprCallsFn fnName a || exprCallsFn fnName i
+  | .call f args => f == fnName || exprCallsFn fnName args
+  | .list xs => exprCallsFn fnName xs
+  | .cons a rest => exprCallsFn fnName a || exprCallsFn fnName rest
+  | .letx _ e rest => exprCallsFn fnName e || exprCallsFn fnName rest
+  | .each e _ a b => exprCallsFn fnName e || exprCallsFn fnName a || exprCallsFn fnName b
+  | .slice a lo hi => exprCallsFn fnName a || exprCallsFn fnName lo || exprCallsFn fnName hi
+  | .withx a puts => exprCallsFn fnName a || exprCallsFn fnName puts
+  | .record _ items => exprCallsFn fnName items
+  | .field e _ => exprCallsFn fnName e
+  | .theNumber _ _ a b cond => exprCallsFn fnName a || exprCallsFn fnName b || exprCallsFn fnName cond
+  | .thePower _ _ cond => exprCallsFn fnName cond
+
+/-- Structural call-graph metadata emitted by `odeprove` on `need spec` so `prove.py` can prioritize
+frontier calls in the goal's connected component and report exact specification names on refusal.
+Never called by `odeverify` (Bob's reliance set is unchanged). -/
+def specMetaFor (ctx : Ctx) (s : Sym) (goal : SFact) (calls : List SCall) : String :=
+  let goalComp := reach s.spec (s.spec.length + 1) (callsIn goal)
+  let idxOf (c : SCall) : Int :=
+    match calls.zipIdx.find? (fun (c', _) => c' == c) with
+    | some (_, i) => i
+    | none => -1
+  let goalLine := match goal with
+    | .value c _ => s!"m goal value {c.f} {idxOf c}\n"
+    | .same a b => s!"m goal same {a.f} {idxOf a} {b.f} {idxOf b}\n"
+    | .neq _ => ""
+  let callLines := calls.zipIdx.map fun (c, idx) =>
+    let inGoal := if goalComp.contains c then 1 else 0
+    let hasVal := if s.spec.any (fun | .value c' _ => c' == c | _ => false) then 1 else 0
+    let deg := s.spec.foldl (fun acc f => match f with
+      | .same a b => acc + (if a == c || b == c then 1 else 0)
+      | _ => acc) 0
+    let isRec := match findDef ctx.defs c.f with
+      | some d => if exprCallsFn c.f d.body then 1 else 0
+      | none => 0
+    s!"d {idx} {c.f} {inGoal} {hasVal} {deg} {isRec}\n"
+  goalLine ++ String.join callLines
+
 /-- The advice `odeprove` gives the verifier's rules to print. -/
 def adviceFor (ctx : Ctx) : Advice :=
   { ensures := ensureRows ctx, call := callRows ctx,
     sameByte := fun s r o =>
       !o.coeff.isEmpty && s.bytes.any fun (_, r', o') =>
-        r' == r && !o'.coeff.isEmpty && !Lin.sameCoeff o.coeff o'.coeff }
+        r' == r && !o'.coeff.isEmpty && !Lin.sameCoeff o.coeff o'.coeff,
+    specMeta := specMetaFor ctx }
 
 private def tagPc (pc : Nat) (m : V α) : V α := fun st =>
   match m st with
