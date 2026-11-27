@@ -88,7 +88,7 @@ class Verify(unittest.TestCase):
         said = self.says(self.lines)
         took = time.time() - t
         self.assertEqual(said, "shown\n")
-        proof = [l for l in self.lines if l[:2] in ("t ", "p ", "s ") or l == "q"]
+        proof = [l for l in self.lines if l[:2] in ("t ", "p ", "r ", "s ") or l == "q"]
         self.assertEqual(len(proof), self.items)
         with open(self.proof) as f: whole = f.read()
         print(f"\node_common: shown in {1000 * took:.0f} ms; the proof: {whole.count(chr(10))} lines, {len(whole)} bytes "

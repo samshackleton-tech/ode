@@ -4,8 +4,7 @@ t live
 t live
 t live
 t live
-t live
-t live
+t neq 0
 t open 0
 t lt
 t lt
@@ -13,7 +12,8 @@ t lt
 t eq
 t live
 t dead
-p 0 2 38
+r -48 0 0 0 0 0 0 0 1
+r 47 0 0 0 0 0 0 0 -1
 s 0 1 1 1 1
 q
 t live
@@ -21,25 +21,8 @@ t open 0
 t lt
 t lt
 t lt
-t gt
 t eq
 t open 0
-t lt
-t lt
-t lt
-t gt
-t lt
-t dead
-p 0 2 39
-s 0 1 1 1 1
-q
-t dead
-p 0 1 38
-s 0 1 1 1 1
-q
-t live
-t open 0
-t lt
 t lt
 t lt
 t lt

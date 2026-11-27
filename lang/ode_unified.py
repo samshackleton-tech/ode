@@ -733,7 +733,8 @@ def _parse_single_unified(text, src="<ode>"):
                 body_text = text[bopen + 1:bclose]
             clauses_raw = re.sub(r"^->\s*(?:u64|u8|number|void)\b\s*", "", clauses_raw)
             clauses_text = _expand_comma_requires(clauses_raw)
-            # Crisp compile-time diagnostic for `ensures ret == E` / `ensures result == E` (instead of Lean `has conditions`)
+            # Crisp compile-time diagnostic for unsupported boolean `ensures` clauses
+            # (which otherwise become `conditions` and fail late with `statement: ... has conditions`).
             has_returns = bool(re.search(r"(?m)^\s*returns\b", clauses_text))
             for cl_line in clauses_text.splitlines():
                 cs = _strip_line_comment(cl_line).strip()
@@ -743,6 +744,14 @@ def _parse_single_unified(text, src="<ode>"):
                         f"{src}: line {line_no}: `fn {fname}`: write `returns {m_er.group(2).strip()}` "
                         f"instead of `{cs}` (`ensures` with `=` is for output buffers; `returns <expr>` specifies the return value)"
                     )
+                if re.match(r"^ensures\s+", cs):
+                    rhs_part = re.sub(r"^ensures\s+", "", cs)
+                    if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*(?:\s*\[[^\]]*\])?\s*=(?!=)", rhs_part):
+                        raise UnifiedErr(
+                            f"{src}: line {line_no}: `fn {fname}`: unsupported boolean `ensures` clause `{cs}`; "
+                            f"use `ensures <buf> = <expr>` (single `=`) for output buffers and `returns <expr>` "
+                            f"for the return value (helper postconditions must be exact `returns <spec_expr>` equations)"
+                        )
             if u8_reqs:
                 clauses_text = ("\n".join(u8_reqs) + ("\n" + clauses_text if clauses_text else "")).strip()
             impls = _parse_for_blocks(body_text, fname, body_start_line, src)

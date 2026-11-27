@@ -188,7 +188,7 @@ class Verify(unittest.TestCase):
         # before the call (the second chunk's last block lies within the message), and at least 2049, before
         # the `ensures`. `t next` ends the rows of a point: it stands before a row meant for a later point.
         self.assertEqual([l for l in kept.split("\n") if l.startswith("k ")], ROWS)
-        self.assertEqual([l for l in kept.split("\n") if l.startswith(("k ", "t next"))], ["t next", ROWS[0], ROWS[1], "t next", ROWS[2]])
+        self.assertEqual([l for l in kept.split("\n") if l.startswith(("k ", "t next"))], ROWS)
         self.assertEqual([l for l in kept.split("\n") if l in ("t ge", "t lt")], [])
         # controls: the kernel is not taken as shown without its proof, nor left out of what is to be shown
         shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NAME,)))
@@ -274,7 +274,7 @@ class Verify(unittest.TestCase):
             return subprocess.run([lean_verify.EXE, lean_verify.TABLE, st, cut], capture_output=True, text=True).stdout
         cuts = [n for n in range(len(body) + 1) if session.whole(body[:n])]
         before_a_row = [n for n in cuts if n < len(body) and (body[n].startswith("k ") or (body[n] == "t next" and body[n + 1].startswith("k ")))]
-        self.assertEqual(len(before_a_row), 5)                                 # three rows, two of them after a `t next`
+        self.assertEqual(len(before_a_row), 3)                                 # three rows
         helper = session.Session(st, head, NAME)
         try:
             for n in cuts:

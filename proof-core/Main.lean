@@ -76,6 +76,7 @@ def main (args : List String) : IO UInt32 := do
       match (← lines proofPath).foldlM (Job.line table true) job with
       | .error e => IO.println e; return 2
       | .ok job =>
+        let job := job.finish
         if job.fns.isEmpty then IO.println "refused: the statement has no function"; return 2
         match verdictAll job.pieces job.defs job.fns with
         | none => IO.println "shown"; return 0

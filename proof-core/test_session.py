@@ -51,6 +51,12 @@ class Helper(unittest.TestCase):
         with open(path, "w") as f: f.write("".join(l + "\n" for l in lines))
         return subprocess.run([prove.EXE, prove.TABLE, statement_path, path], capture_output=True, text=True).stdout
 
+    @staticmethod
+    def _strip_advice(msg):
+        """Strip prover-only `m ...` / `d ...` call-graph metadata lines that `odeprove` emits
+        on `need spec` (and `odeverify` intentionally omits)."""
+        return "\n".join(l for l in msg.split("\n") if not l.startswith(("m goal ", "d ")))
+
     def test_at_every_cut_the_helper_says_what_the_verifier_says(self):
         for name, st, head, body, cuts, want in self.cases:
             with self.subTest(function=name):
@@ -58,9 +64,9 @@ class Helper(unittest.TestCase):
                 self.assertGreater(len({w for w in want}), 20)         # (the verifier says many different things on the way)
                 s = session.Session(st, head, name)
                 try:
-                    self.assertEqual([s.ask(body[:n]) for n in cuts], want)
+                    self.assertEqual([self._strip_advice(s.ask(body[:n])) for n in cuts], want)
                     self.assertEqual(s.sent, len(body))                # each line was sent once
-                    self.assertEqual([s.ask(body[:n]) for n in reversed(cuts[::3])], list(reversed(want[::3])))
+                    self.assertEqual([self._strip_advice(s.ask(body[:n])) for n in reversed(cuts[::3])], list(reversed(want[::3])))
                     self.assertEqual(s.begun, 1 + (len(cuts) - 1) // (session.DEPTH + 1))
                 finally: s.close()
 
@@ -69,7 +75,7 @@ class Helper(unittest.TestCase):
         depth, session.DEPTH = session.DEPTH, 5
         try:
             s = session.Session(st, head, name)
-            got = [s.ask(body[:n]) for n in cuts] + [s.ask(body[:n]) for n in reversed(cuts[::3])]
+            got = [self._strip_advice(s.ask(body[:n])) for n in cuts] + [self._strip_advice(s.ask(body[:n])) for n in reversed(cuts[::3])]
             self.assertGreater(s.begun, 10)
             s.close()
         finally: session.DEPTH = depth

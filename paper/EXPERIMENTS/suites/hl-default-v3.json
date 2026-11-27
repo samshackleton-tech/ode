@@ -1,0 +1,30 @@
+{
+  "id": "hl-default-v3",
+  "description": "Iteration 3 cold-room benchmark (4 models excluding gemini-4-neon x 8 tasks x 2 targets = 64 cells) after fixing all 7 hl-default-v2 forensic defects (Core.lean arm64 on16(sp) vector stack loads/stores, ode_hl scalar-vs-vector diagnostic + inline fn loop-clause substitution + clean register-exhaustion vars + comparison-value select hint, ode_tool vars cap, ode_unified parse-time boolean ensures diagnostic, run_suite inline fence extraction) and bringing all 631 active Ode tests green under pytest-xdist.",
+  "tasks": [
+    "ct_base64_decode",
+    "der_valid",
+    "ipv4_valid",
+    "ebpf",
+    "chacha20_4way",
+    "sha256_4way",
+    "blake3_compress1",
+    "blake3_compress_4way"
+  ],
+  "models": [
+    "moonshotai/kimi-k3.1-pro",
+    "meta/muse-spark-open",
+    "z-ai/glm-5.3-prime",
+    "anthropic/claude-haiku-5.5"
+  ],
+  "targets": [
+    "x86_64",
+    "arm64"
+  ],
+  "perf_arms": "ode",
+  "max_rounds": 7,
+  "opt_rounds": 0,
+  "max_truncations": 2,
+  "max_tokens": 16384,
+  "max_usd": 30
+}

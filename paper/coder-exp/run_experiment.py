@@ -15,7 +15,7 @@ import argparse, concurrent.futures, json, os, queue, re, subprocess, sys, tempf
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-CARD_PATH = os.path.join(ROOT, "docs", "ODE-CARD.md")
+CARD_PATH = os.path.join(ROOT, "docs", "QUICKSTART.md")
 TOOL_PATH = os.path.join(ROOT, "lang", "ode_tool.py")
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "lang"))

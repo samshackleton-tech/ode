@@ -31,7 +31,7 @@ ENSURES = "compress(zero_cv(), a, counter(0), 64, 0) ++ compress(zero_cv(), b, c
 # Why the verifier refuses.
 FOLLOW = "refused: the specification's words are not followed on the terms the function made"
 NO_PART = "refused: a called function is given a run that is no part of a run this function was given to read"
-KEEPS = "refused: at the return a register a callee keeps does not hold what it held at entry"
+KEEPS = "refused: at the return a register a callee keeps (r12) does not hold what it held at entry"
 STACK = "refused: a call needs more stack than this function's contract allows"
 # (what is changed, the text as it is, the text changed, what the verifier then says)
 CONTRACTS = [

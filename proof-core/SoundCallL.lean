@@ -1744,10 +1744,19 @@ theorem newWords_carried {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym
     rcases hf with rfl | rfl
     · rw [holds_iff, ev_var, hval k]; omega
     · rw [holds_iff, ev_sub, ev_const, ev_var, hval k]; unfold W32i; omega
+  have hw32 : (Known.word32 s.nvars (s.nvars + m)).holds ctx s0 (extendFrom ρ s.nvars fun k => (w k : Int)) (madeN s m).2.list := by
+    intro v hv1 hv2
+    have hlt := hw (v - s.nvars) (by omega)
+    have hv := hval (v - s.nvars)
+    have ev : s.nvars + (v - s.nvars) = v := by omega
+    rw [ev] at hv
+    unfold W32 at hlt; unfold W32i; omega
+  have Cc := Carried.more Cb.holds Cb.wf 0 (Agree.refl _ _) [] (Known.word32 s.nvars (s.nvars + m))
+    (fun _ m => nomatch m) (show s.nvars + m ≤ s.nvars + m + 0 by omega) (fun _ m => nomatch m) hw32
   refine ⟨?_, by simp [Sym.newWords], ?_, rfl, e, ?_⟩
   · cases use with
     | none =>
-      exact Ca.then (Cb.then ⟨Agree.refl _ _, Nat.le_refl _, Holds.more Cb.holds _ hfh, WF.more Cb.wf _ hfb⟩)
+      exact Ca.then (Cb.then Cc)
     | some fk =>
       obtain ⟨f, keys⟩ := fk
       obtain ⟨hk, hv0⟩ := huse f keys rfl
@@ -1763,9 +1772,11 @@ theorem newWords_carried {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym
           have := hden i hi
           rw [getD_of_lt _ _ (by omega)] at this
           simp only [List.getElem_map, List.getElem_range, this]
-      exact Ca.then (Cb.then (Carried.more Cb.holds Cb.wf 0 (Agree.refl _ _) _ (Known.held f keys (madeN s m).1) hfb
-        ⟨fun k' mk' => Key.wf_mono (show s.nvars ≤ s.nvars + m + 0 by omega) e.le (hk k' mk'), lt⟩ hfh
-        (fun hpv => by obtain ⟨d, hd, hlen, hv⟩ := hv0 hpv; exact ⟨d, hd, hlen, by rw [e1, e2]; exact hv⟩)))
+      exact Ca.then (Cb.then (Cc.then (Carried.more Cc.holds Cc.wf 0 (Agree.refl _ _) [] (Known.held f keys (madeN s m).1)
+        (fun _ m => nomatch m)
+        ⟨fun k' mk' => Key.wf_mono (show s.nvars ≤ s.nvars + m + 0 + 0 by omega) e.le (hk k' mk'), lt⟩
+        (fun _ m => nomatch m)
+        (fun hpv => by obtain ⟨d, hd, hlen, hv⟩ := hv0 hpv; exact ⟨d, hd, hlen, by rw [e1, e2]; exact hv⟩))))
   · intro r mr
     have mr' : r ∈ (List.range m).map (fun k => Lin.var (s.nvars + k)) := mr
     obtain ⟨k, hk, rfl⟩ := List.mem_map.mp mr'

@@ -158,8 +158,27 @@ def row_text(c, k):
 
 def proof_text(proof, given, raw_given=None):
     """A proof of arithmetic as the verifier reads it: the starting rows (emitted explicitly as `r ...`
-    lines so the proof does not depend on any verifier's internal fact-list order), then the steps."""
+    lines so the proof does not depend on any verifier's internal fact-list order), then the steps.
+    Prunes any starting rows or intermediate steps not reachable from the final contradiction step."""
     starts, steps = proof
+    n_starts = len(starts)
+    if steps:
+        # Backward reachability from the final step so every emitted `r`/`p`/`s` line is load-bearing.
+        need = {n_starts + len(steps) - 1}
+        for si in range(len(steps) - 1, -1, -1):
+            idx = n_starts + si
+            if idx in need:
+                i, _a, j, _b = steps[si]
+                need.add(i); need.add(j)
+        used_starts = [k for k in range(n_starts) if k in need]
+        used_steps = [si for si in range(len(steps)) if (n_starts + si) in need]
+        remap = {}
+        for new_i, old_i in enumerate(used_starts):
+            remap[old_i] = new_i
+        for new_s, old_s in enumerate(used_steps):
+            remap[n_starts + old_s] = len(used_starts) + new_s
+        starts = [starts[k] for k in used_starts]
+        steps = [(remap[steps[si][0]], steps[si][1], remap[steps[si][2]], steps[si][3]) for si in used_steps]
     at = {}
     for number, f in enumerate(given): at.setdefault((frozenset(dict(f.c).items()), f.k), number)
     if os.environ.get("ODE_INDEX_PROOF") == "1" or raw_given is None:
@@ -1166,7 +1185,7 @@ def prove(spec_text, targets, statement_out, out):
         else:
             fast_fail = True
         max_asks = int(os.environ.get("ODE_PROVE_MAX_ASKS", "4000" if fast_fail else "6000"))
-        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "100" if fast_fail else "250"))
+        max_lives = int(os.environ.get("ODE_PROVE_MAX_LIVES", "200" if fast_fail else "250"))
         max_churn = int(os.environ.get("ODE_PROVE_MAX_CHURN", "120" if fast_fail else "2500"))
         max_fact_work = int(os.environ.get("ODE_PROVE_MAX_WORK", "1200000" if fast_fail else "2000000"))
         timeout_s = float(os.environ.get("ODE_PROVE_TIMEOUT", "0"))
@@ -1242,8 +1261,8 @@ def prove(spec_text, targets, statement_out, out):
                 raise SystemExit(f"prove: no proof of {symbol} found. The verifier's last word:\n{fin_last}")
             if len(proof) < 200:
                 k = len(proof) - 1
-                while k >= 0:                              # a use of a definition opened to no purpose is taken out
-                    if proof[k].startswith("t open") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]
+                while k >= 0:                              # a use of a definition opened (or `t next` skipped) to no purpose is taken out
+                    if (proof[k].startswith("t open") or proof[k] == "t next") and p.finished(p.ask(proof[:k] + proof[k + 1:])): del proof[k]
                     k -= 1
             done = p.lines + proof
             numbers[symbol] = (runs + p.runs, len(proof))

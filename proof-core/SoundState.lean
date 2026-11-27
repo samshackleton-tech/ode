@@ -122,6 +122,7 @@ def Known.wf (n t : Nat) : Known → Prop
   | .block _ _ off vs => bounded n off ∧ ∀ v ∈ vs, v < n
   | .use _ keys h => (∀ k ∈ keys, k.wf n t) ∧ h < n
   | .record u _ ids => u < n ∧ ∀ i ∈ ids, i < t
+  | .word32 _ hi => hi ≤ n
 
 /-- The table of words is in order: a term stands after the terms it is made of; the rows of its terms
 speak of unknowns in use; each known vector register has four or sixteen lanes in the table. -/
@@ -329,6 +330,7 @@ def Known.holds (ctx : Ctx) (s0 : State) (ρ : Nat → Int) (T : List Node) : Kn
       Value ctx.defs (d.params.zip (keys.map (Key.val ctx s0 ρ T))) d.body (Val.decode (ρ h).toNat)
   | .record u fields ids => ctx.contract.preVals ctx.defs s0 → ∃ fvs, Val.decode (ρ u).toNat = .record fvs ∧
       RecFieldsHolds fields (ids.map fun i => den (inpOf ctx s0) ρ T i) fvs
+  | .word32 lo hi => ∀ v, lo ≤ v → v < hi → 0 ≤ ρ v ∧ ρ v < W32i
 
 /-- The bytes of a run given, as memory held them at entry. -/
 def runBytes (s0 : State) (base len : Nat) : List Nat := (List.range (s0.reg len)).map fun k => s0.mem (s0.reg base + k)
@@ -584,6 +586,10 @@ theorem Known.holds_mono {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {T T' :
     have ei : (ids.map fun i => den (inpOf ctx s0) ρ' T' i) = ids.map fun i => den (inpOf ctx s0) ρ T i :=
       List.map_congr_left fun i hi => den_mono hw ha a e (wk.2 i hi)
     rw [ei]; exact h2
+  | word32 lo hi =>
+    intro v hv1 hv2
+    rw [← a v (Nat.lt_of_lt_of_le hv2 wk)]
+    exact h v hv1 hv2
 
 theorem Key.wf_mono {n n' t t' : Nat} {k : Key} (hn : n ≤ n') (ht : t ≤ t') (wk : k.wf n t) : k.wf n' t' := by
   cases k with
@@ -604,6 +610,7 @@ theorem Known.wf_mono {n n' t t' : Nat} {k : Known} (hn : n ≤ n') (ht : t ≤ 
   | block j c off vs => exact ⟨bounded_mono hn wk.1, fun v hv => Nat.lt_of_lt_of_le (wk.2 v hv) hn⟩
   | use f keys h => exact ⟨fun k hk => Key.wf_mono hn ht (wk.1 k hk), Nat.lt_of_lt_of_le wk.2 hn⟩
   | record u fields ids => exact ⟨Nat.lt_of_lt_of_le wk.1 hn, fun i hi => Nat.lt_of_lt_of_le (wk.2 i hi) ht⟩
+  | word32 _ _ => exact Nat.le_trans wk hn
 
 /-- What holds, holds whatever values the unknowns not yet in use are given. -/
 theorem RangeHolds.agree {ctx : Ctx} {s0 : State} {ρ ρ' : Nat → Int} {rg : RangeF} {mem : Nat → Byte} {n : Nat}

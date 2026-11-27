@@ -902,6 +902,7 @@ theorem knownLoad_mem {j c : Nat} : ∀ {l : List Known} {v : Nat}, knownLoad j 
     | block _ _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | use _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
     | record _ _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
+    | word32 _ _ => simp only [knownLoad] at h; exact List.mem_cons_of_mem _ (knownLoad_mem h)
 
 /-- Eight bytes read of a run of a fixed count given to read: the number the state knows there. The run is
 as it was at entry (the function may not write it), so the number is what `load` reads there at entry. -/
@@ -1262,6 +1263,7 @@ theorem divided_known {s : Sym} {x : Row} {m : Int} {q : Nat} (hd : divided s x 
   | block _ _ _ _ => cases e
   | use _ _ _ => cases e
   | record _ _ _ => cases e
+  | word32 _ _ => cases e
 
 /-- A number divided by a number above zero: the two new unknowns can be the quotient and the remainder. -/
 theorem divide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
@@ -1400,6 +1402,63 @@ theorem symDivide_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {
             · exact bq
             · exact c.wf.facts f hf }
 
+theorem varIdx_dot : ∀ (cs : List Int) (k v : Nat) (ρ : Nat → Int), varIdx cs k = some v →
+    Arithmetic.dot cs (fun i => ρ (k + i)) = ρ v
+  | [], _, _, _, h => by simp [varIdx] at h
+  | c :: xs, k, v, ρ, h => by
+    unfold varIdx at h
+    split at h
+    next hc0 =>
+      have hc : c = 0 := beq_iff_eq.mp hc0
+      subst hc
+      have ih := varIdx_dot xs (k + 1) v ρ h
+      simp only [Arithmetic.dot, Int.zero_mul, Int.zero_add]
+      have e : (fun i => ρ (k + (i + 1))) = (fun i => ρ (k + 1 + i)) := funext fun i => by congr 1; omega
+      rw [e]; exact ih
+    next =>
+      split at h
+      next hc1 =>
+        have hc : c = 1 := beq_iff_eq.mp hc1
+        subst hc
+        split at h
+        next hz =>
+          simp only [Option.some.injEq] at h; subst h
+          simp only [Arithmetic.dot, Int.one_mul, Nat.add_zero, Arithmetic.dot_allZero xs _ hz, Int.add_zero]
+        next => cases h
+      next => cases h
+
+theorem inWord32_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {T : List Node} {v : Nat} :
+    ∀ {ks : List Known}, (∀ k ∈ ks, k.holds ctx s0 ρ T) → inWord32 v ks = true → 0 ≤ ρ v ∧ ρ v < W32i
+  | [], _, h => by simp [inWord32] at h
+  | k :: rest, hk, h => by
+    cases k with
+    | word32 lo hi =>
+      simp only [inWord32, Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq] at h
+      rcases h with ⟨h1, h2⟩ | h
+      · exact hk (.word32 lo hi) (List.mem_cons_self ..) v h1 h2
+      · exact inWord32_sound (fun k' m => hk k' (List.mem_cons_of_mem _ m)) h
+    | load _ _ _ | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ =>
+      simp only [inWord32] at h
+      exact inWord32_sound (fun k' m => hk k' (List.mem_cons_of_mem _ m)) h
+
+theorem isWord32_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) {r : Row} (h : isWord32 s r = true) :
+    0 ≤ ev ρ r ∧ ev ρ r < W32i := by
+  unfold isWord32 at h
+  simp only [Bool.and_eq_true, beq_iff_eq] at h
+  obtain ⟨hc, hv⟩ := h
+  cases hvi : varIdx r.coeff 0 with
+  | none => simp [hvi] at hv
+  | some v =>
+    simp only [hvi] at hv
+    have hd := varIdx_dot r.coeff 0 v ρ hvi
+    have e : ev ρ r = ρ v := by
+      show Arithmetic.dot r.coeff ρ + r.constant = ρ v
+      rw [hc, Int.add_zero]
+      simpa using hd
+    rw [e]
+    exact inWord32_sound H.known hv
+
 /-- A row seen at once to be no less than zero is no less than zero. -/
 theorem knownNonneg_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} {st : State}
     (H : Holds ctx s0 ρ s st) {r : Row} (h : knownNonneg s r = true) : 0 ≤ ev ρ r := by
@@ -1407,8 +1466,24 @@ theorem knownNonneg_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} 
   split at h
   next k hk => rw [ev_isConst hk]; simpa using h
   next =>
-    have := H.facts r (among_iff.mp h)
-    rw [holds_iff] at this; exact this
+    simp only [Bool.or_eq_true] at h
+    rcases h with hw | ha
+    · exact (isWord32_sound H hw).1
+    · have := H.facts r (among_iff.mp ha)
+      rw [holds_iff] at this; exact this
+
+theorem isWord32Row_sound {ctx : Ctx} {s0 : State} {s : Sym} {ρ : Nat → Int} {st : State}
+    (H : Holds ctx s0 ρ s st) {r : Row} (h : isWord32Row s r = true) :
+    0 ≤ ev ρ r ∧ ev ρ r < W32i := by
+  unfold isWord32Row at h
+  simp only [Bool.or_eq_true, Bool.and_eq_true] at h
+  rcases h with hw | ⟨h0, h1⟩
+  · exact isWord32_sound H hw
+  · have a0 := knownNonneg_sound H h0
+    have a1 := plain_sound h1 ρ H.facts
+    simp only [ev_sub, ev_const] at a1
+    unfold W32i at a1 ⊢
+    omega
 
 /-- Any number divided by a number above zero: what `Sym.quotRem` gives is the quotient and the remainder. -/
 theorem quotRem_sound {ctx : Ctx} {s0 : State} {s : Sym} {x : Row} {m : Int} {ρ : Nat → Int} {st : State}
@@ -1585,6 +1660,7 @@ theorem knownOr_mem {x y : Row} : ∀ {l : List Known} {v : Nat}, knownOr x y l 
     | block _ _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | use _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
     | record _ _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
+    | word32 _ _ => simp only [knownOr] at h; exact (knownOr_mem h).imp (List.mem_cons_of_mem _) (List.mem_cons_of_mem _)
 
 /-- Two numbers' bits put together: the unknown the state knows as that number is it. -/
 theorem symOrKnown_sound {ctx : Ctx} {s0 : State} {s s' : Sym} {x y : Row} {v : EV} {items rest : Items} {ρ : Nat → Int} {st : State}

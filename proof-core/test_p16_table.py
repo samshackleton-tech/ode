@@ -142,7 +142,7 @@ class P16Table(unittest.TestCase):
     def test_sixteen_lanes_read_through_the_table(self):
         self.assertEqual(len(self.rows), 437)
         self.assertEqual(self.verify_files(self.statement, self.proof), "shown\n")
-        self.assertLess(self.proof.stat().st_size, 2048)
+        self.assertLess(self.proof.stat().st_size, 4096)
 
     def test_a_changed_contract_is_refused(self):
         rows = self.rows

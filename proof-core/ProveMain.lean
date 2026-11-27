@@ -268,7 +268,7 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
           let pline := if ps.isEmpty then "" else s!"p {ps}\n"
           let ys := match goal with
             | .value c _ => (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
-                if c'.f == c.f then some (toString k) else none
+                if c'.f == c.f || holdsSpec s.spec (.same c c') then some (toString k) else none
             | _ => []
           let mline := ctx.advice.specMeta s goal calls
           .err s!"need spec\nc {calls.length}\no {31 - (fuel - 1)}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}{mline}"
@@ -343,7 +343,9 @@ partial def advance (ctx : Ctx) (arr : Array Item) (ckpts : Array DriverState) (
   let rec go (cur : DriverState) (cs : Array DriverState) (since : Nat) : Except String Unit × Array DriverState :=
     match stepOnce ctx cur arr withPc with
     | .done => (.ok (), cs)
-    | .err msg => (.error msg, cs)
+    | .err msg =>
+      let msg' := if msg.startsWith "need " || msg.startsWith "refused: " then msg else "refused: " ++ msg
+      (.error msg', cs)
     | .next cur' =>
       if cur'.next < arr.size && (cur'.next > cs.back!.next || since ≥ 32) then
         go cur' (cs.push cur') 0
@@ -401,7 +403,7 @@ def main (args : List String) : IO UInt32 := do
       | .ok job => pure job
     let job ← match (← lines proofPath).foldlM (Job.line table true) job with
       | .error e => IO.println e; return 2
-      | .ok job => pure job
+      | .ok job => pure job.finish
     let mut done : List (String × Contract) := []
     for f in job.fns do
       if done.any (fun d => d.1 == f.name) then
@@ -434,7 +436,7 @@ def main (args : List String) : IO UInt32 := do
       | .ok job => pure job
     let job ← match (← lines headPath).foldlM (Job.line table true) job with
       | .error e => say s!"{e}\n.end\n"; return 2
-      | .ok job => pure job
+      | .ok job => pure job.finish
     if !job.fns.any (fun f => f.name == name) then say s!"refused: {name} is no function of the statement\n.end\n"; return 2
 
     -- Parse any incoming batch of proof lines for `name` using a clean base `Job`.
@@ -443,7 +445,7 @@ def main (args : List String) : IO UInt32 := do
     let parseBatch (ls : List String) : Except String (List Item) := do
       let j ← ls.foldlM (Job.line table true) baseJob
       match j.fns.find? (fun f => f.name == name) with
-      | some f => pure f.proof
+      | some f => pure f.proof.reverse
       | none => pure []
 
     -- Verify any functions before `name` (unless `--only`), and capture `name`'s context + trailing functions.

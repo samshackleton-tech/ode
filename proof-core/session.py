@@ -18,8 +18,8 @@ DEPTH = 100000
 
 
 def whole(lines):
-    """Do these lines end where a line of the proof ends? (An arithmetic proof is `p`, its `s` lines, then `q`.)"""
-    return not lines or lines[-1].split()[:1] not in (["p"], ["s"])
+    """Do these lines end where a line of the proof ends? (An arithmetic proof is `p`/`r`, its `s` lines, then `q`.)"""
+    return not lines or lines[-1].split()[:1] not in (["p"], ["r"], ["s"])
 
 
 class Session:

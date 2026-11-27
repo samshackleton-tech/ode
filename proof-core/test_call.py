@@ -18,7 +18,7 @@ EQUAL = os.path.join(HERE, "examples", "equal")
 LAKE = lean_verify.LAKE
 
 NOT_WHOLE = "a called function is given a run of bytes that is not one this function was given, whole"
-UNDECIDED = "need compare"            # which of two numbers is the greater is asked, and the prover has no proof either way
+UNDECIDED = "need entail"             # the contract's return value does not match, and the prover has no proof of it
 # (what is changed, the caller's source as it is, the source changed, what the verifier then lacks or refuses):
 # each is built again from the changed source
 JUMP = "a jump on a flag that may depend on values kept out of the trace"
@@ -31,12 +31,12 @@ SOURCES = [
      "  mov [rsp - 8], rdx\n  call ode_common\n  mov rbx, [rsp - 8]\n", "a write that is not eight bytes of the frame in use"),
     ("the count handed over is 0", "  call ode_common\n", "  mov rdx, 0\n  call ode_common\n", NOT_WHOLE),
     ("the count is handed over as a run", "  call ode_common\n", "  mov rdi, rdx\n  call ode_common\n", NOT_WHOLE),
-    ("the first run is handed over twice", "  call ode_common\n", "  mov rsi, rdi\n  call ode_common\n", UNDECIDED),
+    ("the first run is handed over twice", "  call ode_common\n", "  mov rsi, rdi\n  call ode_common\n", "a use of a definition opened where a number is needed"),
     ("the stack pointer is moved down before the call", "  call ode_common\n", "  sub rsp, 16\n  call ode_common\n  add rsp, 16\n",
      "a call needs more stack than this function's contract allows"),
     ("the stack pointer is above the frame at the call", "  mov rbx, rdx\n  call ode_common\n", "  mov rbx, rdx\n  add rsp, 16\n  call ode_common\n  sub rsp, 16\n",
      "the stack pointer leaves the frame the contract allows"),
-    ("rbx is not given back", "  pop rbx\n  ret\n", "  pop rcx\n  ret\n", "a register a callee keeps does not hold what it held at entry"),
+    ("rbx is not given back", "  pop rbx\n  ret\n", "  pop rcx\n  ret\n", "a register a callee keeps (rbx) does not hold what it held at entry"),
     ("1 is returned where the runs differ", "@differ:\n  xor eax, eax\n", "@differ:\n  mov rax, 1\n", UNDECIDED),
     ("the result is compared with what the call leaves in rdi", "  cmp rax, rbx\n", "  cmp rax, rdi\n", JUMP),
     ("what a call leaves in rcx is used", "  cmp rax, rbx\n", "  cmp rax, rcx\n", JUMP),
@@ -66,7 +66,7 @@ FRAME_SECRETS = [
 SPECS = [
     ("the caller's contract allows less stack", "    stack 56\n", "    stack 48\n", "ode_equal", "a call needs more stack than this function's contract allows"),
     ("both contracts allow less stack, the caller's just what the call then takes", ("    stack 40\n", "    stack 56\n"), ("    stack 32\n", "    stack 48\n"), "ode_common", "need entail"),
-    ("the called function's contract returns one less", "    returns common(a, b)\n", "    returns common(a, b) - 1\n", "ode_common", UNDECIDED),
+    ("the called function's contract returns one less", "    returns common(a, b)\n", "    returns common(a, b) - 1\n", "ode_common", "need compare"),
     ("the caller's contract says 1 for runs that differ", "if common(a, b) == len(a) then 1 else 0", "if common(a, b) == len(a) then 1 else 1", "ode_equal", UNDECIDED),
     ("the called function needs an instruction set that the caller's contract does not name", "    stack 40\n", "    stack 40\n    needs sse41\n", "ode_equal",
      "a called function needs of the processor what this function's contract does not say it needs"),

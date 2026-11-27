@@ -670,6 +670,194 @@ fn mono(a: u64, b: u64, c: u64) -> u64
         self.assertLessEqual(len(x86_rows), 109, f"core/x86.tab grew silently ({len(x86_rows)} > 109 rows)")
         self.assertLessEqual(len(arm_rows), 67, f"arm64/arm64.tab grew silently ({len(arm_rows)} > 67 rows)")
 
+    def test_10_hl_v2_forensic_bug_regressions(self):
+        """Targeted TDD regressions for every compiler/verifier/diagnostic bug found in hl-default-v2."""
+        # Bug #1 (Core.lean on16(sp)): `stack var v: u32x4` and `buf.u32x4(off)` MUST verify on arm64 & x86_64!
+        src_sp_vec = """\
+def vsum(a, b) {
+    [a[i] + b[i] for i in 0..4]
+}
+
+fn sp_vec_add(out: 16 bytes, a: 16 bytes, b: 16 bytes)
+    requires no_overlap(out, a, b)
+    ensures out = bytes_of(vsum(words(a), words(b)))
+    stack 64
+{
+    buf tmp[32] align 16
+    stack var sa: u32x4 := a.u32x4(0)
+    tmp.u32x4(0) := b.u32x4(0)
+    let va: u32x4 := sa
+    let vb: u32x4 := tmp.u32x4(0)
+    out.u32x4(0) := va +% vb
+    return
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "sp_vec.ode"
+                p.write_text(src_sp_vec, encoding="utf-8")
+                r = subprocess.run(
+                    [sys.executable, os.path.join(HERE, "ode_tool.py"), "pack", str(p),
+                     "--fn", "sp_vec_add", "--target", arch, "--c-abi",
+                     "--out", str(Path(td) / "o.o"), "--proof", str(Path(td) / "o.p")],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(r.returncode, 0, f"arm64/x86 stack u32x4 failed ({arch}):\n{r.stdout}\n{r.stderr}")
+                self.assertIn("shown", r.stdout)
+
+        # Bug #3 (ode_hl.py _eval_scalar): using a `u32x4` var in scalar context must raise HLErr,
+        # NEVER emit broken `orr x0.16b, v17.16b, v17.16b`!
+        src_vec_in_scalar = """\
+fn bad_ret_vec(a: 16 bytes)
+    returns 0
+    stack 0
+{
+    let v: u32x4 := a.u32x4(0)
+    return v
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            parsed = ode_unified.parse_unified(src_vec_in_scalar, src="<bad_vec>", c_abi_fn="bad_ret_vec")
+            msg = (parsed["fns"][0]["impls"][arch].get("hl_err") or "").lower()
+            self.assertIn("u32x4", msg, f"Expected u32x4 error on {arch}, got: {msg!r}")
+            self.assertNotIn("orr x0.16b", msg)
+
+        # Bug #4 (ode_hl.py _subst_inline_stmts): `join maintains` inside `inline fn` MUST substitute params!
+        src_inl_join = """\
+def clamp(c) {
+    if c < 10 then c else 10
+}
+
+inline fn do_clamp(c: u64, var d: u64) {
+    d := select(c < 10, c, 10)
+    join maintains d == clamp(c)
+}
+
+fn use_clamp(x: number)
+    requires x < 100
+    returns clamp(x)
+    trace depends on x
+    stack 0
+{
+    var res: u64 := 0
+    do_clamp(x, res)
+    return res
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with tempfile.TemporaryDirectory() as td:
+                p = Path(td) / "inl_join.ode"
+                p.write_text(src_inl_join, encoding="utf-8")
+                r = subprocess.run(
+                    [sys.executable, os.path.join(HERE, "ode_tool.py"), "pack", str(p),
+                     "--fn", "use_clamp", "--target", arch, "--c-abi",
+                     "--out", str(Path(td) / "o.o"), "--proof", str(Path(td) / "o.p")],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(r.returncode, 0, f"inline fn join failed ({arch}):\n{r.stdout}\n{r.stderr}")
+                self.assertIn("shown", r.stdout)
+
+        # Bug #5a (ode_tool.py vars: bloat): unrolled `$N` temporaries must NOT flood `vars:` past the refusal line!
+        src_unroll_fail = """\
+fn unroll_vars(x: number)
+    requires x < 10
+    returns x + 999
+    trace depends on x
+    stack 0
+{
+    var acc: u64 := x
+    for i in 0..20 unroll {
+        let step_tmp: u64 := acc + 1
+        acc := step_tmp
+    }
+    return acc
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "unroll_fail.ode"
+            p.write_text(src_unroll_fail, encoding="utf-8")
+            r = subprocess.run(
+                [sys.executable, os.path.join(HERE, "ode_tool.py"), "pack", str(p),
+                 "--fn", "unroll_vars", "--target", "arm64", "--c-abi",
+                 "--out", str(Path(td) / "o.o"), "--proof", str(Path(td) / "o.p")],
+                capture_output=True, text=True,
+            )
+            self.assertNotEqual(r.returncode, 0)
+            self.assertNotIn("step_tmp$", r.stdout, f"Unrolled `$N` temporaries leaked into vars:!\n{r.stdout}")
+            for ln in r.stdout.splitlines():
+                if ln.lstrip().startswith("vars:"):
+                    self.assertLess(len(ln), 320, f"vars: line too bloated ({len(ln)} chars): {ln}")
+
+        # Bug #5b (ode_hl.py _refuse_spill): internal `__inl_N_` prefixes must NOT leak in reg-exhaustion errors!
+        src_inl_spill = """\
+inline fn eat_regs(x: u64, var out_acc: u64) {
+    let t0 := x + 1
+    let t1 := t0 + 2
+    let t2 := t1 + 3
+    let t3 := t2 + 4
+    let t4 := t3 + 5
+    let t5 := t4 + 6
+    let t6 := t5 + 7
+    let t7 := t6 + 8
+    let t8 := t7 + 9
+    let t9 := t8 + 10
+    let t10 := t9 + 11
+    let t11 := t10 + 12
+    let t12 := t11 + 13
+    let t13 := t12 + 14
+    out_acc := t0 + t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8 + t9 + t10 + t11 + t12 + t13
+}
+
+fn spill_inl(x: number)
+    requires x < 100
+    returns x
+    trace depends on x
+    stack 0
+{
+    var r: u64 := 0
+    eat_regs(x, r)
+    return r
+}
+"""
+        parsed_sp = ode_unified.parse_unified(src_inl_spill, src="<inl_spill>", c_abi_fn="spill_inl")
+        err_sp = parsed_sp["fns"][0]["impls"]["x86_64"].get("hl_err") or ""
+        self.assertIn("has no free register", err_sp)
+        self.assertNotIn("__inl_", err_sp, f"Internal __inl_ leaked: {err_sp}")
+
+        # Bug #6 (ode_unified.py): boolean `ensures` (causing Lean `has 'conditions'`) caught at parse time!
+        src_cond_ens = """\
+fn bad_cond_ens(x: number)
+    requires x < 100
+    ensures x == 0 || x >= 1
+    returns x
+    trace depends on x
+    stack 0
+{
+    return x
+}
+"""
+        with self.assertRaises(ode_unified.UnifiedErr) as cm:
+            ode_unified.parse_unified(src_cond_ens, src="<cond_ens>", c_abi_fn="bad_cond_ens")
+        self.assertIn("ensures", str(cm.exception).lower())
+        self.assertNotIn("statement:", str(cm.exception))
+
+        # Bug #7 (ode_hl.py): `let isAZ := c >= 65 && c <= 90` gives crisp select() hint, NOT `unexpected token '>='`!
+        src_bool_let = """\
+fn bad_bool_let(c: number)
+    requires c < 256
+    returns 0
+    trace depends on c
+    stack 0
+{
+    let isAZ := c >= 65 && c <= 90
+    return isAZ
+}
+"""
+        parsed_bl = ode_unified.parse_unified(src_bool_let, src="<bool_let>", c_abi_fn="bad_bool_let")
+        msg = parsed_bl["fns"][0]["impls"]["x86_64"].get("hl_err") or ""
+        self.assertIn("select(", msg, f"Missing select() hint: {msg!r}")
+        self.assertNotIn("at start of statement", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

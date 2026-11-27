@@ -38,7 +38,7 @@ SOURCES = [
     ("the count returned is one more", "  mov rax, r12\n  add rax, 1\n  pop r12", "  mov rax, r12\n  add rax, 2\n  pop r12", ENTAIL),
     ("the number is shifted by eight", "  shr rax, 7\n", "  shr rax, 8\n", ENTAIL),
     ("the low eight bits are taken", "  and rcx, 127\n", "  and rcx, 255\n", ENTAIL),
-    ("the loop goes on while 128 < v", "  mov rax, 127\n", "  mov rax, 128\n", BELOW),
+    ("the loop goes on while 128 < v", "  mov rax, 127\n", "  mov rax, 128\n", ENTAIL),
     ("what was written is read", "  mov byte ptr [rcx], al\n  mov rax, r12\n", "  mov byte ptr [rcx], al\n  movzx eax, byte ptr [rcx]\n  mov rax, r12\n", READ),
 ]
 # (what is changed, the specification as it is, the specification changed, what the verifier then lacks)
@@ -46,7 +46,7 @@ SPECS = [
     ("the run is nine bytes", "out: 10 bytes", "out: 9 bytes", ENTAIL),              # (the tenth byte is then stored outside the run)
     ("the specification divides by 127", "varint(v / 128)", "varint(v / 127)", ENTAIL),
     ("the specification adds 127", "[128 + v % 128]", "[127 + v % 128]", ENTAIL),
-    ("the specification ends below 127", "if v < 128", "if v < 127", BELOW),
+    ("the specification ends below 127", "if v < 128", "if v < 127", ENTAIL),
     ("the bytes are said from place one", "out[0 .. r]", "out[1 .. r]", ENTAIL),
     ("one byte less is said", "out[0 .. r]", "out[0 .. r - 1]", ENTAIL),
     ("the stack is sixteen bytes", "stack 24", "stack 16", ENTAIL),                  # (the third push is not shown to stay in memory)

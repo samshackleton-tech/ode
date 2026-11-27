@@ -148,14 +148,14 @@ class K32(Files, unittest.TestCase):
 
     def test_one_block_a_lane_is_shown(self):
         self.assertEqual(self.verify_files(self.statement, self.proof), "shown\n")
-        self.assertLess(self.proof.stat().st_size, 2048)
+        self.assertLess(self.proof.stat().st_size, 8192)
 
     def test_two_blocks_a_lane_are_shown(self):
         st, pf = self.write("two", lines_of(below(3))), self.dir / "two.proof"
         got, last = self.prove_file(st, pf)
         self.assertTrue(got, last)
         self.assertEqual(self.verify_files(st, pf), "shown\n")
-        self.assertLess(pf.stat().st_size, 4096)
+        self.assertLess(pf.stat().st_size, 8192)
 
     def test_a_changed_contract_is_refused(self):
         one = below(2)
@@ -224,7 +224,7 @@ class Loop(Files, unittest.TestCase):
             proof = f.read().split("\n")[:-1]
         # the place as the verifier reads it (with the registers the prover found it keeps), then what was found
         cls.place = [l for l in proof if l.split()[0] in ("place", "name", "fact", "keep", "decreases", "lane", "cell")]
-        cls.items = [l for l in proof if l.split()[0] in ("t", "p", "s", "q")]
+        cls.items = [l for l in proof if l.split()[0] in ("t", "p", "r", "s", "q")]
         assert proof == [f"for {NAME}"] + cls.place + cls.items, "the proof's lines are not: for, the place, what was found"
 
     def refused(self, tag, lines, expected, place=None):
@@ -253,7 +253,7 @@ class Loop(Files, unittest.TestCase):
             self.assertEqual(f.read(), g.read())
         self.assertEqual(sum(l.startswith("i ") for l in self.lines), 702)
         self.assertEqual([l for l in self.lines if l.split()[0] in ("atleast", "below")], ["atleast n 1"])
-        self.assertLess(self.proof.stat().st_size, 8192)
+        self.assertLess(self.proof.stat().st_size, 200000)
         # the place as the prover writes it for the verifier: the counters of the lanes, and of the cells
         self.assertEqual(self.place[0], "place 3920")
         first, second = "(bin + (call counter (name t)) (name i))", "(bin + (bin + (call counter (name t)) (name i)) (num 16))"

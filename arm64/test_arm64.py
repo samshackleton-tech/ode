@@ -7,11 +7,21 @@ does (cross.py), and a table with one row changed is found out.
 
     python3 test_arm64.py"""
 from pathlib import Path
-import os, platform, random, re, shutil, subprocess, sys, tempfile, unittest
+import importlib.util, os, platform, random, re, shutil, subprocess, sys, tempfile, unittest
 
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "core")]
-import cross, table, word
+import table, word
+
+
+def _load_local(mod_name, path):
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+cross = _load_local("_arm64_cross", HERE / "cross.py")
 
 ARM = platform.machine() in ("arm64", "aarch64")
 # A row changed, and whether the processor then differs from it ("differs") or only the assembler's word ("word").
@@ -64,8 +74,8 @@ class Words(unittest.TestCase):
         cls.ways = word.ways(cls.rows)
 
     def test_the_table_is_read(self):
-        self.assertEqual(len(self.rows), 56)
-        self.assertEqual(len(self.ways), 56)
+        self.assertEqual(len(self.rows), 67)
+        self.assertEqual(len(self.ways), 67)
 
     def test_standalone_package_has_no_ode_verifier_dependencies(self):
         """`arm64/` is an independent AArch64 ISA package: no code file here may import
@@ -169,7 +179,7 @@ class Words(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             src, obj = Path(d) / "words.s", Path(d) / "words.o"
             src.write_text(".text\n" + "".join(f"    {line}\n" for line in lines))
-            subprocess.run(["clang", "--target=aarch64-unknown-linux-gnu", "-c", "-o", str(obj), str(src)], check=True, capture_output=True)
+            subprocess.run(["clang", "--target=aarch64-unknown-linux-gnu", "-march=armv8-a+sha2", "-c", "-o", str(obj), str(src)], check=True, capture_output=True)
             code = text_of(obj.read_bytes())
         self.assertEqual(len(code), 4 * len(lines))
         for k, (line, w) in enumerate(zip(lines, want)):
@@ -200,7 +210,7 @@ class Processor(unittest.TestCase):
     def test_every_row_is_what_the_processor_does(self):
         code, last = self.cross(Path(word.TABLE).read_text(), 100)
         self.assertEqual(code, 0, last)
-        self.assertIn("47 rows, each as the assembler writes it and as the table writes it, 9400 instances: 0 differ from this processor", last)
+        self.assertIn("58 rows, each as the assembler writes it and as the table writes it, 11600 instances: 0 differ from this processor", last)
         self.assertIn("0 of the assembler's words are not the table's; 9 rows are not run: b, b_eq, b_ne, b_hs, b_lo, b_hi, b_ls, bl, ret", last)
         faults = int(re.search(r"; (\d+) are faults, as the row says", last).group(1))
         self.assertGreater(faults, 50)            # (the two rows whose base is the stack pointer, where it is no multiple of 16)

@@ -3,14 +3,14 @@ t live
 t live
 t live
 t dead
-p 0 1 68
+r -97 1
+r 64 -1
 s 0 1 1 1 1
 q
 t live
 t live
 t live
-t live
-t live
+t neq 0
 t open 0
 t lt
 t lt
@@ -18,7 +18,8 @@ t lt
 t eq
 t live
 t dead
-p 0 2 71
+r -48 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
@@ -26,28 +27,11 @@ t open 0
 t lt
 t lt
 t lt
-t gt
 t eq
 t open 0
 t lt
 t lt
 t lt
-t gt
-t lt
-t dead
-p 0 2 72
-s 0 1 1 1 1
-q
-t dead
-p 0 1 71
-s 0 1 1 1 1
-q
-t live
-t open 0
-t lt
-t lt
-t lt
-t lt
 t lt
 t live
 t live
@@ -57,21 +41,25 @@ t lt
 t ge
 t ge
 t dead
-p 2 1 72
+r -58 1
+r 43 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 1 0 71
+r -58 1
+r 42 -1
 s 0 1 1 1 1
 q
 t dead
-p 3 1 73
+r -58 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 0 72
+r -58 1
+r 46 -1
 s 0 1 1 1 1
 q
 t open 0
@@ -89,31 +77,37 @@ t ge
 t live
 t live
 t dead
-p 2 0 70
+r -91 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 3 0 71
+r -91 1
+r 57 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 1 73
+r -58 1
+r 43 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 1 0 72
+r -58 1
+r 42 -1
 s 0 1 1 1 1
 q
 t dead
-p 3 1 74
+r -58 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 0 73
+r -58 1
+r 46 -1
 s 0 1 1 1 1
 q
 t open 0
@@ -132,31 +126,37 @@ t lt
 t ge
 t ge
 t dead
-p 1 0 71
+r -123 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 0 72
+r -123 1
+r 57 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 1 74
+r -58 1
+r 43 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 1 0 73
+r -58 1
+r 42 -1
 s 0 1 1 1 1
 q
 t dead
-p 3 1 75
+r -58 1
+r 47 -1
 s 0 1 1 1 1
 q
 t live
 t dead
-p 2 0 74
+r -58 1
+r 46 -1
 s 0 1 1 1 1
 q
 t open 0

@@ -329,8 +329,8 @@ theorem symNumber_sound {perm : Perm} {bind : Bind} {st : State} {e : Expr} {k :
   | lane _ _ => simp [symNumber] at h
   | call _ _ => simp [symNumber] at h
 
-/-- A general register in an EFFECT: the machine's number in it is the row's. -/
-theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st : State} {bind : Bind} {e : Expr} {x : Row}
+/-- A general register (or `on16(sp)` on AArch64) in an EFFECT: the machine's number in it is the row's. -/
+theorem symReg_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {st : State} {bind : Bind} {e : Expr} {x : Row}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symReg ctx bind s e = some x) :
     ∃ xa, value (ctx.contract.perm ctx.pieces s0) bind st e = some xa ∧ xa < M64 ∧ (xa : Int) = ev ρ x ∧ bounded s.nvars x := by
   cases e with
@@ -348,13 +348,51 @@ theorem symReg_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st :
         exact ⟨st.reg r, by simp [value, hl, hr', flagVal_none_regOf hr'], H.small r, H.reg r lt, wf.reg r lt⟩
   | number _ => simp [symReg] at h
   | lane _ _ => simp [symReg] at h
-  | call _ _ => simp [symReg] at h
+  | call f args =>
+    by_cases hf : f = "on16"
+    · subst hf
+      rcases args with _ | ⟨a, _ | ⟨_, _⟩⟩
+      · simp [symReg] at h
+      · cases a with
+        | name n =>
+          simp only [symReg] at h
+          split at h
+          next => cases h
+          next hl =>
+            cases hr : ctx.regOf bind n with
+            | none => simp [hr] at h
+            | some r =>
+              simp only [hr] at h
+              cases hc : Lin.isConst (Lin.sub (s.reg r) (Lin.var RSP)) with
+              | none => simp [hc] at h
+              | some c =>
+                simp only [hc] at h
+                split at h
+                next hcond =>
+                  injection h with h; subst h
+                  obtain ⟨hr', lt⟩ := Ctx.regOf_some hr
+                  simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
+                  have e := ev_isConst (ρ := ρ) hc
+                  rw [ev_sub, ev_var, H.entry RSP ctx.rsp_lt, ← H.reg r lt] at e
+                  have al := E.aligned hcond.1
+                  have hz : st.reg r % 16 = 0 := by omega
+                  refine ⟨st.reg r, ?_, H.small r, H.reg r lt, wf.reg r lt⟩
+                  simp [value, values, hl, hr', flagVal_none_regOf hr', memSize, prim, hz]
+                next => cases h
+        | number _ => simp [symReg] at h
+        | lane _ _ => simp [symReg] at h
+        | call _ _ => simp [symReg] at h
+      · simp [symReg] at h
+    · rcases args with _ | ⟨a, _ | ⟨_, _⟩⟩
+      · simp [symReg, hf] at h
+      · cases a <;> simp [symReg, hf] at h
+      · simp [symReg, hf] at h
 
-theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
+theorem wordAddress_sound {ctx : Ctx} {p : Program} {s0 st : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : symReg ctx bind s b = some x) (hk : symNumber bind n = some k) :
     ∃ xb, values (ctx.contract.perm ctx.pieces s0) bind st [b, n] = some [xb, k.toNat] ∧
       ∀ A : Nat, (A : Int) = ev ρ (Lin.add (signed x) (signed (Lin.const k))) → A < M64 → (xb + k.toNat) % M64 = A := by
-  obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound H wf hx
+  obtain ⟨xb, vb, xb_lt, xb_ev, _⟩ := symReg_sound E H wf hx
   obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm ctx.pieces s0) (st := st) hk
   refine ⟨xb, values_two vb vn, ?_⟩
   have sgx := signed_ev ρ x
@@ -365,7 +403,7 @@ theorem wordAddress_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
   unfold M64 at xb_lt hlt ⊢
   omega
 
-theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {args : List Expr} {addr : Row}
+theorem symWordAddr_sound {ctx : Ctx} {p : Program} {s0 st : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {bind : Bind} {args : List Expr} {addr : Row}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (h : symWordAddr ctx bind s args = some addr) :
     ∃ vs, values (ctx.contract.perm ctx.pieces s0) bind st args = some vs ∧ bounded s.nvars addr ∧
       ∀ A : Nat, (A : Int) = ev ρ addr → A < M64 → sumList vs % M64 = A := by
@@ -374,15 +412,15 @@ theorem symWordAddr_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sy
   · simp [symWordAddr] at h
   · cases hx : symReg ctx bind s b <;> cases hk : symNumber bind n <;> simp [symWordAddr, hx, hk] at h
     subst addr
-    obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
-    obtain ⟨_, _, _, _, bx⟩ := symReg_sound H wf hx
+    obtain ⟨xb, vs, ha⟩ := wordAddress_sound E H wf hx hk
+    obtain ⟨_, _, _, _, bx⟩ := symReg_sound E H wf hx
     exact ⟨_, vs, bounded_add (bounded_signed bx) (bounded_signed (bounded_const _ _)),
       by simpa only [sumList, Nat.add_zero] using ha⟩
   · cases hx : symReg ctx bind s b <;> cases hk : symNumber bind n <;> cases hy : symReg ctx bind s i <;> simp [symWordAddr, hx, hk, hy] at h
     subst addr
     rename_i x k y
-    obtain ⟨xb, vb, xb_lt, xb_ev, bx⟩ := symReg_sound H wf hx
-    obtain ⟨yb, vi, yb_lt, yb_ev, by'⟩ := symReg_sound H wf hy
+    obtain ⟨xb, vb, xb_lt, xb_ev, bx⟩ := symReg_sound E H wf hx
+    obtain ⟨yb, vi, yb_lt, yb_ev, by'⟩ := symReg_sound E H wf hy
     obtain ⟨k0, k_lt, vn, _⟩ := symNumber_sound (perm := ctx.contract.perm ctx.pieces s0) (st := st) hk
     refine ⟨[xb, k.toNat, yb], by simp [values, vb, vn, vi],
       bounded_add (bounded_add (bounded_signed bx) (bounded_signed (bounded_const _ _))) (bounded_signed by'), ?_⟩
@@ -474,11 +512,7 @@ theorem frameCellWords_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sy
       obtain ⟨g1, g2, g3⟩ := H.frame _ _ hm
       have bx : bounded s.nvars x := wf.frame _ _ hm
       have bh : bounded s.nvars (Lin.high x) := bounded_high bx
-      have hk' : knownNonneg s (Lin.word x) = true ∧ plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) = true := by
-        simpa using hk
-      have h0 := knownNonneg_sound H hk'.1
-      have h1 := plain_sound hk'.2 ρ H.facts
-      simp only [ev_sub, ev_const] at h1
+      have ⟨h0, h1⟩ := isWord32Row_sound H hk
       have eh := ev_high ρ x
       have e := load_halves_vec st.mem ((s0.reg RSP : Int) + o').toNat
       have lt1 := load_lt st.mem ((s0.reg RSP : Int) + o').toNat 4
@@ -887,7 +921,7 @@ theorem symMemWords_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat �
   unfold symMemWords at h
   cases ha : symWordAddr ctx bind s args <;> simp only [ha] at h
   · exact (refuse_ok h).elim
-  · obtain ⟨vs, vv, _, loc⟩ := symWordAddr_sound H wf ha
+  · obtain ⟨vs, vv, _, loc⟩ := symWordAddr_sound E H wf ha
     exact ⟨vs, vv, symLoadWords_sound E h H wf nonempty _ loc⟩
 
 /-! ## The four words a row sets a vector register to -/
@@ -2294,7 +2328,7 @@ theorem symLanes_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p
             | none => simp only [hx] at h; exact (refuse_ok h).elim
             | some x =>
               simp only [hx] at h
-              obtain ⟨xa, va, xa_lt, xa_ev, xa_b⟩ := symReg_sound H wf hx
+              obtain ⟨xa, va, xa_lt, xa_ev, xa_b⟩ := symReg_sound E H wf hx
               obtain ⟨ρ', c, lt, dn⟩ := symHalves_sound h H wf xa xa_lt xa_ev xa_b
               exact ⟨ρ', c, [xa % W32, xa / W32 % W32, 0, 0], by simp [lanesOf, values, va], lt, dn⟩
           · exact (refuse_ok h).elim
@@ -2805,7 +2839,7 @@ theorem symVset_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx p 
         all_goals try exact (refuse_ok h).elim
         rename_i l x k
         obtain ⟨rv, _, lt, hv, hd⟩ := symVec_sound H wf hl
-        obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+        obtain ⟨xb, vs, ha⟩ := wordAddress_sound E H wf hx hk
         let lanes := [st.vec rv 0, st.vec rv 1, st.vec rv 2, st.vec rv 3]
         obtain ⟨al, c⟩ := symStoreWords_sound (lanes := lanes) E H wf (by decide) h ha rfl lt (fun j hj => by
           simp only [lanes, vec4_getD hj, hd j hj])

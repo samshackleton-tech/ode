@@ -17,11 +17,8 @@ theorem highHalf_sound {ctx : Ctx} {s0 : State} {ρ : Nat → Int} {s : Sym} {st
   unfold highHalf at h
   split at h
   next hk =>
-    have hk' : knownNonneg s (Lin.word x) = true ∧ plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) = true := by simpa using hk
     injection h with h; subst h
-    have h0 := knownNonneg_sound H hk'.1
-    have h1 := plain_sound hk'.2 ρ H.facts
-    simp only [ev_sub, ev_const] at h1
+    have ⟨h0, h1⟩ := isWord32Row_sound H hk
     have e := ev_high ρ x
     unfold W32i at h1 e ⊢
     omega

@@ -1075,10 +1075,12 @@ fn hl_fast_fail_demo(x: u8) -> u64
     return r
 }
 """
+        old_ef = os.environ.get("ODE_PROVE_EFFORT")
         old_ff = os.environ.get("ODE_PROVE_FAST_FAIL")
         old_ch = os.environ.get("ODE_PROVE_MAX_CHURN")
         old_pf = os.environ.get("ODE_PREFILTER")
         try:
+            os.environ["ODE_PROVE_EFFORT"] = "fast"
             os.environ["ODE_PROVE_FAST_FAIL"] = "1"
             os.environ["ODE_PROVE_MAX_CHURN"] = "8"
             os.environ["ODE_PREFILTER"] = "0"
@@ -1092,7 +1094,7 @@ fn hl_fast_fail_demo(x: u8) -> u64
                 self.assertIn("fast-fail prover stopped early", ctx.exception.extra_note)
                 self.assertIn("What did you mean here", ctx.exception.extra_note)
         finally:
-            for k, v in (("ODE_PROVE_FAST_FAIL", old_ff), ("ODE_PROVE_MAX_CHURN", old_ch), ("ODE_PREFILTER", old_pf)):
+            for k, v in (("ODE_PROVE_EFFORT", old_ef), ("ODE_PROVE_FAST_FAIL", old_ff), ("ODE_PROVE_MAX_CHURN", old_ch), ("ODE_PREFILTER", old_pf)):
                 if v is None:
                     os.environ.pop(k, None)
                 else:

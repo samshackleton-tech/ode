@@ -27,6 +27,7 @@ import os, random, re, shutil, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 CORE = os.path.join(HERE, "..", "core")
 KCHECK = os.path.join(HERE, "..", "kcheck")
+sys.path.insert(0, HERE)
 sys.path.insert(0, CORE)
 sys.path.insert(0, KCHECK)
 import conc, cross, kdecode, table
@@ -285,7 +286,7 @@ class MachineArm64(unittest.TestCase):
         self.assertEqual(differs, {})
         left = [r.name for r in self.rows if r.name not in same]
         self.assertEqual(left, ["bl", "ret"])                    # (a return: the next test; a call is said in Machine.lean itself)
-        self.assertEqual(len(same), 52)
+        self.assertEqual(len(same), 65)
         self.assertGreater(faults, self.n // 4)                  # the rows at the stack pointer, where it is no multiple of 16
         print(f"\nmachine, AArch64: {len(same)} rows, {sum(same.values())} instances: Machine.lean leaves what conc.py leaves "
               f"({faults} of them faults in both); not compared: {' '.join(left)}", file=sys.stderr)

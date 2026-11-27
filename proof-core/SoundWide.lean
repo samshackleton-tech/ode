@@ -358,11 +358,11 @@ theorem symShuffle512_sound {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s s'
     next => exact (refuse_ok he).elim
   next => exact (refuse_ok h).elim
 
-theorem wideAddress {ctx : Ctx} {s0 st : State} {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
+theorem wideAddress {ctx : Ctx} {p : Program} {s0 st : State} (E : Setting ctx p s0) {ρ : Nat → Int} {s : Sym} {bind : Bind} {b n : Expr} {x : Row} {k : Int}
     (H : Holds ctx s0 ρ s st) (wf : WF ctx s) (hx : symReg ctx bind s b = some x) (hk : symNumber bind n = some k) :
     ∃ a, addr512 (ctx.contract.perm ctx.pieces s0) bind st "mem512" [b, n] = some a ∧
       ∀ A : Nat, (A : Int) = ev ρ (Lin.add (signed x) (signed (Lin.const k))) → A < M64 → a = A := by
-  obtain ⟨xb, vs, ha⟩ := wordAddress_sound H wf hx hk
+  obtain ⟨xb, vs, ha⟩ := wordAddress_sound E H wf hx hk
   exact ⟨(xb + k.toNat) % M64, by simp [addr512, vs, sumList], ha⟩
 
 theorem symLoad512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → Int} {s s' : Sym} {l : List Nat}
@@ -406,7 +406,7 @@ theorem findLane_spec {c : Contract} {addr : Row} : ∀ {l : List Known} {v j p 
         next =>
           obtain ⟨m, t⟩ := findLane_spec h
           exact ⟨List.mem_cons_of_mem _ m, t⟩
-    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ =>
+    | or _ _ _ | held _ _ _ | heldB _ _ _ | div _ _ _ | block _ _ _ _ | use _ _ _ | record _ _ _ | word32 _ _ =>
       simp only [findLane] at h
       obtain ⟨m, t⟩ := findLane_spec h
       exact ⟨List.mem_cons_of_mem _ m, t⟩
@@ -536,7 +536,7 @@ theorem symLoadLane512_sound {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat
     (h : symLoadBlock s v j pl lr addr items = .ok ((l, s'), rest)) :
     ∃ ρ' lanes, Carried ctx s0 ρ s ρ' s' st ∧ lanesOf512 (ctx.contract.perm ctx.pieces s0) bind st (.call "mem512" args) = some lanes ∧
       WideValue ctx s0 ρ' s' l lanes := by
-  obtain ⟨vs, vv, ba, loc⟩ := symWordAddr_sound H wf hw
+  obtain ⟨vs, vv, ba, loc⟩ := symWordAddr_sound E H wf hw
   obtain ⟨hk, x, r, count, ht⟩ := findLane_spec hf
   obtain ⟨al, ρ', c, val⟩ := symLoadBlock_sound E H wf hk ht ba h (sumList vs % M64) loc
   refine ⟨ρ', _, c, ?_, val⟩
@@ -558,7 +558,7 @@ theorem alignedFrameAddress {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat 
     (ok : ∀ g ∈ frameSpanGoals ctx s addr 64, g.holds ρ) :
     ∃ a, addr512 (ctx.contract.perm ctx.pieces s0) bind st "mem512a" args = some a ∧ (a : Int) = ev ρ addr ∧
       s0.reg RSP - ctx.contract.stack ≤ a ∧ a + 64 ≤ s0.reg RSP ∧ bounded s.nvars (frameOffset addr) := by
-  obtain ⟨vs, vv, b, mod⟩ := symWordAddr_sound H wf hw
+  obtain ⟨vs, vv, b, mod⟩ := symWordAddr_sound E H wf hw
   obtain ⟨a, ea, lt, lo, hi⟩ := frameSpan_sound E H ok
   have hmod := mod a ea lt
   have dal := aligned64_sound hm ρ
@@ -619,7 +619,7 @@ theorem frameAddress512 {ctx : Ctx} {p : Program} {s0 st : State} {ρ : Nat → 
     (hw : symWordAddr ctx bind s args = some addr) (ok : ∀ g ∈ frameSpanGoals ctx s addr 64, g.holds ρ) :
     ∃ a, addr512 (ctx.contract.perm ctx.pieces s0) bind st "mem512" args = some a ∧ (a : Int) = ev ρ addr ∧
       s0.reg RSP - ctx.contract.stack ≤ a ∧ a + 64 ≤ s0.reg RSP := by
-  obtain ⟨vs, vv, _, mod⟩ := symWordAddr_sound H wf hw
+  obtain ⟨vs, vv, _, mod⟩ := symWordAddr_sound E H wf hw
   obtain ⟨a, ea, lt, lo, hi⟩ := frameSpan_sound E H ok
   have hmod := mod a ea lt
   exact ⟨a, by simp [addr512, vv, hmod], ea, lo, hi⟩
@@ -992,7 +992,7 @@ theorem symVset512_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx
         let lanes := l.map d
         have load := lanesOf512_of_vecArg (perm := ctx.contract.perm ctx.pieces s0) src
         have hl : lanes.length = 16 := by simp [lanes, len]
-        obtain ⟨a, va, ha⟩ := wideAddress H wf hx hk
+        obtain ⟨a, va, ha⟩ := wideAddress E H wf hx hk
         obtain ⟨al, c⟩ := symStoreWords_sound E H wf (by decide) h ha hl lt (fun j hj => getD_map_index (by omega) d)
         refine ⟨ρ, _, c, ?_, rfl⟩
         simp [execStmt, execVec512, load, len, va, al, lanes, d]

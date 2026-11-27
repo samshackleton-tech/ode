@@ -57,7 +57,7 @@ t = time.time()
 rows, what, _ = check_binary.check(path, symbol)
 print(len(rows), 1000 * (time.time() - t), what)
 '''
-SIZE = 100_000          # bytes of a proof
+SIZE = 250_000          # bytes of an order-independent (`r ...`) proof
 TIMES = float(os.environ.get("ODE_LIMIT_TIMES", "5"))          # the Lean verifier's time over kcheck's (to see the test fail: ODE_LIMIT_TIMES=1)
 SMALL = 0.015           # seconds: under this a program's start is most of the time
 

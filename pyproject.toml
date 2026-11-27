@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = [
+    "lang",
+    "proof-core",
+    "core",
+    "arm64",
+    "advice",
+    "paper",
+    "factory",
+]
+addopts = "--import-mode=importlib -n auto --dist worksteal --ignore=arm64/agree --ignore=paper/trial"

@@ -143,7 +143,7 @@ class P16OneBlock(unittest.TestCase):
         # Six pushes (48 bytes), up to 63 bytes of 64-byte alignment, and 256 bytes of spill frame = 367 bytes.
         self.assertEqual(len(self.rows), 418)
         self.assertEqual(self.verify_files(self.statement, self.proof), "shown\n")
-        self.assertLess(self.proof.stat().st_size, 1024)
+        self.assertLess(self.proof.stat().st_size, 4096)
         got, last = self.prove_rows(self.rows, "short_stack", stack=366)
         self.assertIsNone(got)
         self.assertIn("need entail", last.splitlines()[0])

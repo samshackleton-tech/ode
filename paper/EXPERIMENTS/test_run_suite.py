@@ -341,6 +341,17 @@ class TestRunSuite(unittest.TestCase):
             run_suite.run_native_test = orig_nat
             run_suite.expected_contract_id_for = orig_exp
 
+    def test_09_extract_inline_fence_after_commentary_tokens(self):
+        """Extract ```ode blocks even when a model puts ```ode inline after `<|eom|>` / commentary tags."""
+        raw = (
+            "<|start|>assistant to=commentary<|message|>Let me fix the bug.<|eom|>"
+            "```ode\nuse spec = \"ebpf_spec.ode\"\n\nfn ebpf_run() { return 0 }\n```\n"
+        )
+        got = run_suite.extract_ode_source(raw, "ebpf_run")
+        self.assertTrue(got.startswith('use spec = "ebpf_spec.ode"'), f"Leaked tokens: {got!r}")
+        self.assertIn("fn ebpf_run()", got)
+        self.assertNotIn("<|start|>", got)
+
 
 if __name__ == "__main__":
     unittest.main()

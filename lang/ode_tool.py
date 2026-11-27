@@ -475,10 +475,12 @@ def format_source_diagnostic(compiled_by_sym, pc, fn_sym, reason, target="x86-64
             if isinstance(info.get("hl_meta"), dict) and info["hl_meta"].get("var_map"):
                 user_vm = [
                     f"{vnm}={vloc}" for vnm, _role, vloc, _note in info["hl_meta"]["var_map"]
-                    if not vnm.startswith("__inl_")
+                    if not vnm.startswith("__inl_") and "$" not in vnm
                 ]
                 if user_vm:
-                    out.append(f"  vars:  {', '.join(user_vm)}")
+                    shown_vm = user_vm[:20]
+                    tail_vm = f", ... (+{len(user_vm) - 20} more)" if len(user_vm) > 20 else ""
+                    out.append(f"  vars:  {', '.join(shown_vm)}{tail_vm}")
             elif info["regs"]:
                 inv = ", ".join(f"{reg}={name}" for name, reg in info["regs"].items())
                 out.append(f"  regs:  {inv}")

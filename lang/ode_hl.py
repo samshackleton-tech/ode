@@ -466,6 +466,11 @@ class HLParser:
                 if not (self.maybe(":=") or self.maybe("=")):
                     raise HLErr(f"{self.src}: line {self.cur().line}: expected `:=` or `=` after `let {nm}`")
             expr = self.parse_expr()
+            if self.cur().val in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+                raise HLErr(
+                    f"{self.src}: line {self.cur().line}: comparison `{self.cur().val}` cannot be used as a standalone "
+                    f"value expression; write `select(<cond>, 1, 0)` (or put `<cond>` directly inside `if` / `select`)"
+                )
             return LetStmt(nm, ty, expr, mutable, t.line, on_stack=on_stack)
 
         if t.val == "buf" and self.toks[self.i + 1].kind == "id" and self.toks[self.i + 2].val == "[":
@@ -527,7 +532,13 @@ class HLParser:
             self.i += 1
             if self.peek("}") or self.peek(";") or self.peek(kind="eof"):
                 return ReturnStmt(None, t.line)
-            return ReturnStmt(self.parse_expr(), t.line)
+            ret_e = self.parse_expr()
+            if self.cur().val in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+                raise HLErr(
+                    f"{self.src}: line {self.cur().line}: comparison `{self.cur().val}` cannot be used as a standalone "
+                    f"value expression; write `select(<cond>, 1, 0)` (or put `<cond>` directly inside `if` / `select`)"
+                )
+            return ReturnStmt(ret_e, t.line)
 
         if t.val == "break":
             self.i += 1
@@ -607,6 +618,11 @@ class HLParser:
                 nm = self.take(kind="id").val
                 op = self.take().val
                 val_e = self.parse_expr()
+                if self.cur().val in ("==", "!=", "<", "<=", ">", ">=", "&&", "||"):
+                    raise HLErr(
+                        f"{self.src}: line {self.cur().line}: comparison `{self.cur().val}` cannot be used as a standalone "
+                        f"value expression; write `select(<cond>, 1, 0)` (or put `<cond>` directly inside `if` / `select`)"
+                    )
                 return AssignStmt(nm, op, val_e, t.line)
             # 4. Bare function/intrinsic call statement
             expr = self.parse_expr()
@@ -1099,6 +1115,44 @@ def _subst_inline_expr(e, vmap, emap, call_line):
     return e
 
 
+def _expr_to_spec_str(e):
+    """Best-effort rendering of an HL argument expression for substitution inside `maintains`/`writes`/`decreases`."""
+    if isinstance(e, Var):
+        return e.name
+    if isinstance(e, Num):
+        return str(e.val)
+    if isinstance(e, IndexLoad) and e.width == "u8":
+        ix = _expr_to_spec_str(e.idx)
+        return f"{e.buf}[{ix}]" if ix is not None else None
+    if isinstance(e, BinOp) and e.op in ("+", "-", "*", "+%", "-%"):
+        a = _expr_to_spec_str(e.left)
+        b = _expr_to_spec_str(e.right)
+        if a is not None and b is not None:
+            op = e.op.rstrip("%")
+            return f"({a} {op} {b})"
+    return None
+
+
+def _subst_inline_clause(text, vmap, emap):
+    """Substitute `inline fn` parameter names inside `maintains` / `writes` / `decreases` strings."""
+    if not text:
+        return text
+    repl = {}
+    for k, v in vmap.items():
+        repl[k] = v
+    for k, expr in emap.items():
+        if k not in repl:
+            rendered = _expr_to_spec_str(expr)
+            if rendered is not None:
+                repl[k] = rendered
+    if not repl:
+        return text
+    def _sub_tok(m):
+        nm = m.group(0)
+        return repl.get(nm, nm)
+    return re.sub(r"(?<!\.)\b[A-Za-z_][A-Za-z0-9_]*\b(?!\s*\()", _sub_tok, text)
+
+
 def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
     out = []
     cur_vmap = dict(vmap)
@@ -1126,7 +1180,9 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
         elif isinstance(st, WhileStmt):
             out.append(WhileStmt(
                 _subst_inline_expr(st.cond, cur_vmap, emap, call_line),
-                st.maintains, st.writes, st.decreases,
+                [_subst_inline_clause(m, cur_vmap, emap) for m in st.maintains],
+                [_subst_inline_clause(w, cur_vmap, emap) for w in st.writes],
+                _subst_inline_clause(st.decreases, cur_vmap, emap) if st.decreases else None,
                 _subst_inline_stmts(st.body, cur_vmap, emap, prefix, call_line),
                 call_line,
             ))
@@ -1138,8 +1194,16 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
                 nv,
                 _subst_inline_expr(st.lo, cur_vmap, emap, call_line),
                 _subst_inline_expr(st.hi, cur_vmap, emap, call_line),
-                st.step, st.unroll, st.maintains, st.writes, st.decreases,
+                st.step, st.unroll,
+                [_subst_inline_clause(m, inner_vm, emap) for m in st.maintains],
+                [_subst_inline_clause(w, inner_vm, emap) for w in st.writes],
+                _subst_inline_clause(st.decreases, inner_vm, emap) if st.decreases else None,
                 _subst_inline_stmts(st.body, inner_vm, emap, prefix, call_line),
+                call_line,
+            ))
+        elif isinstance(st, JoinStmt):
+            out.append(JoinStmt(
+                [_subst_inline_clause(f, cur_vmap, emap) for f in st.facts],
                 call_line,
             ))
         elif isinstance(st, ExprStmt):
@@ -2022,22 +2086,30 @@ class HLLower:
         # 3. Deterministic greedy graph coloring in declaration order (zero silent spills; use `stack var` explicitly!)
         callee_used_set = set(self.callee_saved)
 
+        def _pretty_var(v):
+            base = re.sub(r"^__inl_\d+_", "", v)
+            base = re.sub(r"\$\d+$", "", base)
+            return base
+
         def _refuse_spill(nm, ty, role, line, eligible_pool, live_pairs, across_call=False):
+            disp = _pretty_var(nm)
+            disp_tag = " (from inline fn)" if nm.startswith("__inl_") else ""
             lines = [
-                f"{self.src}: line {line}: `{role} {nm}: {ty}` has no free register in fn `{self.fn_name}` on {self.arch} "
+                f"{self.src}: line {line}: `{role} {disp}: {ty}`{disp_tag} has no free register in fn `{self.fn_name}` on {self.arch} "
                 f"(all {len(eligible_pool)} eligible registers are occupied; silent stack spilling is disabled)"
             ]
             if across_call:
-                lines.append(f"  note: `{nm}` is live across a function call, so only call-preserved registers ({', '.join(eligible_pool)}) are eligible")
+                lines.append(f"  note: `{disp}` is live across a function call, so only call-preserved registers ({', '.join(eligible_pool)}) are eligible")
             if live_pairs:
                 lines.append("  simultaneously live variables:")
                 for vnm, vreg in live_pairs:
                     tag = " [across call]" if vnm in self.live_across_call else ""
-                    lines.append(f"    {vnm} = {vreg}{tag}")
+                    vdisp = _pretty_var(vnm) + (" (inlined)" if vnm.startswith("__inl_") else "")
+                    lines.append(f"    {vdisp} = {vreg}{tag}")
             lines.append("  how to fix:")
             lines.append("    - narrow an earlier `let` lifetime (move it closer to use or inside the branch that uses it)")
             lines.append("    - reuse an existing `var` instead of keeping another variable live")
-            lines.append(f"    - or declare a cold variable explicitly on the stack: `stack var {nm}: {ty} := ...`")
+            lines.append(f"    - or declare a cold variable explicitly on the stack: `stack var {disp}: {ty} := ...`")
             raise HLErr("\n".join(lines))
 
         for nm, ty, mutable, line in self.locals_order:
@@ -2335,6 +2407,12 @@ class HLLower:
         if kind == "reg":
             if val != dst:
                 ty = self.var_ty[name]
+                if ty in ("u32x4", "u32x16"):
+                    if not (dst.startswith(("xmm", "zmm", "v"))):
+                        raise HLErr(
+                            f"{self.src}: line {line}: vector variable `{name}` (type `{ty}`) cannot be loaded "
+                            f"into scalar register `{dst}`"
+                        )
                 if ty == "u32x4":
                     if self.arch == "x86_64":
                         self.emit(line, f"vmovdqa {dst}, {val}")
@@ -2665,6 +2743,12 @@ class HLLower:
             self._emit_imm(e.line, dst, e.val)
             return
         if isinstance(e, Var):
+            ty = self.var_ty.get(e.name)
+            if ty in ("u32x4", "u32x16"):
+                raise HLErr(
+                    f"{self.src}: line {e.line}: vector variable `{e.name}` (type `{ty}`) cannot be used "
+                    f"in a scalar `u64` context (store to a `u32x4` buffer or extract words via a stack `buf`)"
+                )
             self._load_var(e.line, e.name, dst)
             return
         if isinstance(e, IndexLoad):

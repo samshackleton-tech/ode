@@ -20,7 +20,7 @@ LOW = os.path.join(HERE, "examples", "low")
 LAKE = lean_verify.LAKE
 
 RANGE = "need entail"                 # the sum is to be shown below 2^64, and the prover has no proof of it
-RETURNS = "need spec"                 # what is returned is to be shown the contract's number, and nothing the proof can say shows it
+RETURNS = "need entail"               # what is returned is to be shown the contract's number, and the prover has no proof of it
 # (what is changed, the source as it is, the source changed, what the verifier then lacks)
 SOURCES = [
     ("the whole second number is added", "  mov ecx, esi\n", "  mov rcx, rsi\n", RANGE),

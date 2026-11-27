@@ -3388,7 +3388,7 @@ theorem symStore8_flags {ctx : Ctx} {s s1 : Sym} {w n : Nat} {o x : Row} {items 
                   · exact ⟨rfl, rfl⟩
     by_cases h1 : 0 ≤ c ∧ c % 4 = 0 ∧ c + 8 ≤ n ∧ s.wrote.all (fun e => e.1 != w) = true
     · simp only [h1, ite_true] at h
-      by_cases h2 : (Lin.hasHigh x && knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x))) = true
+      by_cases h2 : (Lin.hasHigh x && isWord32Row s (Lin.word x)) = true
       · simp only [h2, ite_true] at h; have := V.pure_ok h; injection this with h _; subst h; exact ht
       · simp only [h2, ite_false] at h; have := V.pure_ok h; injection this with h _; subst h
         have hd := symDivide_flags (s.touch ctx w) x W32i

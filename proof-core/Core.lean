@@ -454,6 +454,7 @@ inductive Known where
   | block (j c : Nat) (off : Row) (vs : List Nat)   -- the sixteen unknowns `vs` are the sixteen words at byte `off` of the blocks that the address at place `c` of the table `j` points to, as they were at entry
   | use (f : String) (keys : List Key) (h : Nat)    -- the definition `f`, used with these things, gives something; `h` is that use's own number (an unknown's number, which no row speaks of)
   | record (h : Nat) (fields : List RecField) (ids : List Nat) -- the value decoded from `h` is a record with exact `fields`, whose serialized 32-bit words are `ids`
+  | word32 (lo hi : Nat)          -- every unknown `v` with `lo ≤ v < hi` lies in `[0, 2^32)`
   deriving DecidableEq, Repr, Inhabited
 
 /-- What is known NOT to be marked (not to depend on values kept out of the trace): general registers, the two flags, and
@@ -662,11 +663,33 @@ def symDivide (s : Sym) (x : Row) (m : Int) : Row × Row × Sym :=
   | none => (Lin.var s.nvars, Lin.var (s.nvars + 1),
       { s.divide x m with facts := quotientBound s.facts x m s.nvars ++ Lin.var s.nvars :: (s.divide x m).facts })
 
-/-- A row the facts held say is no less than zero: a number of the table, or a row that is itself a fact. -/
+/-- If a coefficient list has a single `1` at index `k` and zeros elsewhere, return `some k`. -/
+def varIdx : List Int → Nat → Option Nat
+  | [], _ => none
+  | c :: xs, k =>
+    if c == 0 then varIdx xs (k + 1)
+    else if c == 1 then (if Arithmetic.allZero xs then some k else none)
+    else none
+
+/-- Is unknown `v` covered by a `Known.word32 lo hi` range? -/
+def inWord32 (v : Nat) : List Known → Bool
+  | [] => false
+  | .word32 lo hi :: rest => (decide (lo ≤ v) && decide (v < hi)) || inWord32 v rest
+  | _ :: rest => inWord32 v rest
+
+/-- Is `r` a single unknown covered by a `Known.word32` range in `s.known`? -/
+def isWord32 (s : Sym) (r : Row) : Bool :=
+  r.constant == 0 && match varIdx r.coeff 0 with | some v => inWord32 v s.known | none => false
+
+/-- A row the facts held say is no less than zero: a number of the table, a `word32` unknown, or a row that is itself a fact. -/
 def knownNonneg (s : Sym) (r : Row) : Bool :=
   match Lin.isConst r with
   | some k => decide (0 ≤ k)
-  | none => among s.facts r
+  | none => isWord32 s r || among s.facts r
+
+/-- A row known at once to lie in `[0, 2^32)`: via a `Known.word32` range first, else via `s.facts`. -/
+def isWord32Row (s : Sym) (r : Row) : Bool :=
+  isWord32 s r || (knownNonneg s r && plain s.facts (Lin.sub (Lin.const (W32i - 1)) r))
 
 /-- The quotient and the remainder of any number by a number above zero: the unknowns the facts held
 already say they are, where they say it; else two new unknowns. Of a number seen at once to be no less than
@@ -984,7 +1007,7 @@ def disjointOr (facts : List Row) (x y : Row) : Option Nat :=
   match rowUpper facts y with
   | none => none
   | some u =>
-    if u < 0 then none
+    if u ≤ 0 then none
     else
       (List.range 63).findSome? fun k =>
         let j := k + 1
@@ -1180,9 +1203,18 @@ def symNumber (bind : Bind) : Expr → Option Int
   | .name n => if isNumberLetter n then ((bind.lookup n).bind readInt).map fun i => i % (M64 : Int) else none
   | _ => none
 
-/-- What a general register holds. -/
+/-- What a general register (or `on16(sp)` for an AArch64 16-byte-aligned stack pointer) holds. -/
 def symReg (ctx : Ctx) (bind : Bind) (s : Sym) : Expr → Option Row
   | .name n => if isNumberLetter n then none else (ctx.regOf bind n).map s.reg
+  | .call "on16" [.name n] =>
+    if isNumberLetter n then none
+    else match ctx.regOf bind n with
+    | some r =>
+      let x := s.reg r
+      match Lin.isConst (Lin.sub x (Lin.var RSP)) with
+      | some c => if ctx.contract.arm64 && decide (c % 16 = 0) then some x else none
+      | none => none
+    | none => none
   | _ => none
 
 /-- A term for each thing of a list, made one after another: their numbers, and the table then. -/
@@ -1214,7 +1246,7 @@ entry): the low word and high word, where the cell is known and its low 32 bits 
 def frameCellWords (s : Sym) (o : Int) : Option (Row × Row) :=
   match s.frame.find? (fun cell => cell.1 == o) with
   | some (_, x) =>
-    if knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then
+    if isWord32Row s (Lin.word x) then
       some (x, Lin.high x)
     else none
   | none => none
@@ -1876,7 +1908,7 @@ def symStore8 (ctx : Ctx) (s : Sym) (w n : Nat) (o x : Row) : V Sym :=
   match Lin.isConst o with
   | some c =>
     if 0 ≤ c ∧ c % 4 = 0 ∧ c + 8 ≤ n ∧ s.wrote.all (fun e => e.1 != w) = true then
-      if Lin.hasHigh x && knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then
+      if Lin.hasHigh x && isWord32Row s (Lin.word x) then
         -- (the number is written as a low part and a multiple of 2^32, and the row of the remainders by
         -- 2^32 is seen at once to be a word: the high half is the row of the quotients, and nothing is
         -- divided. So a cell that two known words make gives those two words back. Any other number is
@@ -2365,7 +2397,7 @@ def specGoal (ctx : Ctx) : Nat → Sym → SFact → V Sym
         let pline := if ps.isEmpty then "" else s!"p {ps}\n"
         let ys := match goal with
           | .value c _ => (heldValues s.spec).zipIdx.filterMap fun ((c', _), k) =>
-              if c'.f == c.f then some (toString k) else none
+              if c'.f == c.f || holdsSpec s.spec (.same c c') then some (toString k) else none
           | _ => []
         let mline := ctx.advice.specMeta s goal calls
         fun _ => .error s!"need spec\nc {calls.length}\no {31 - fuel}\nh {(heldValues s.spec).length}\ny {String.intercalate " " ys}\n{pline}{mline}"
@@ -2804,8 +2836,7 @@ def wown (ctx : Ctx) (look : Node → Option Nat) (s : Sym) (f : String) : List 
       | [a, b] =>
         match s.tab.arr[a]?, s.tab.arr[b]? with
         | some (.atom r1), some (.atom r2) =>
-          if knownNonneg s r1 && plain s.facts (Lin.sub (Lin.const (W32i - 1)) r1) &&
-             knownNonneg s r2 && plain s.facts (Lin.sub (Lin.const (W32i - 1)) r2) then
+          if isWord32Row s r1 && isWord32Row s r2 then
             some (.num (Lin.add r1 (Lin.scale W32i r2)))
           else none
         | _, _ => none
@@ -3994,7 +4025,7 @@ def frameAt (s : Sym) (r : Nat) : Option Int := Lin.isConst (Lin.sub (s.reg r) (
 /-- The quotient by 2^32 of a cell's number: the row of the quotients, where the row of the remainders is
 seen at once to be a word; else as `highOf` finds it. -/
 def highHalf (s : Sym) (x : Row) : Option Row :=
-  if knownNonneg s (Lin.word x) && plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word x)) then some (Lin.high x)
+  if isWord32Row s (Lin.word x) then some (Lin.high x)
   else highOf s x
 
 /-- The four bytes of the frame at `o` (so many bytes from where the stack pointer was at entry) as a word:
@@ -4821,11 +4852,11 @@ the table; where they are what a use gives, that is known. (The rows of the word
 def Sym.newWords (s : Sym) (m : Nat) (use : Option (String × List Key)) : List Row × Sym :=
   let rows := (List.range m).map fun k => Lin.var (s.nvars + k)
   let made := termsOf wAtom rows s.tab
+  let kw := Known.word32 s.nvars (s.nvars + m)
   (rows, { s with nvars := s.nvars + m, tab := made.2,
-                  facts := ((List.range m).map fun k => ranged32 (s.nvars + k)).flatten ++ s.facts,
                   known := match use with
-                    | some (f, keys) => Known.held f keys made.1 :: s.known
-                    | none => s.known })
+                    | some (f, keys) => Known.held f keys made.1 :: kw :: s.known
+                    | none => kw :: s.known })
 
 /-- What the lanes leave. The contract has one `ensures` for each lane, in the run's order: so many bytes of
 the run, whole words, from where the lane before ended. Each lane's words are new unknowns, each from 0 to

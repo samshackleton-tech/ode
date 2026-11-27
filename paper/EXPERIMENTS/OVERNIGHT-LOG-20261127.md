@@ -11,7 +11,8 @@ Every iteration fixes tool, compiler, prover, and verifier defects found in the 
 | Iteration | Suite | Code Commit | Strict Pass | Native Pass | `verify2.py` (scalar) | Wall Clock | API Cost | Prover Median / p90 / Max |
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | 1 | `hl-default-v1` | `8a4cdfa` | **28 / 80 (35.0%)** | 28 / 28 | 13 / 14 | 17.5 min | $35.76 | 0.87 s / 2.94 s / 19.24 s |
-| 2 | `hl-default-v2` | *pending* | *pending* | *pending* | *pending* | *pending* | *pending* | *pending* |
+| 2 | `hl-default-v2` | `ec52868` | **32 / 80 (40.0%)** *(22/64 excl. Gemini)* | 32 / 32 | **16 / 16** | **11.3 min** | **$24.70** | 0.77 s / 3.05 s / 77.70 s |
+| 3 | `hl-default-v3` | *pending* | *pending (64 cells, 4 models)* | *pending* | *pending* | *pending* | *pending* | *pending* |
 
 ---
 
@@ -85,4 +86,34 @@ Our existing unit and fuzz tests (`test_hl.py`, `test_hl_fuzz.py`) tested only a
 - **Exact same 80 cells** (5 models × 8 tasks × 2 targets).
 - **Tail-latency cuts:** `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`, `max_usd: 50`.
 
-*(Results for `hl-default-v2` will be appended as soon as the run completes.)*
+### 4. Results for `hl-default-v2` (commit `ec52868`)
+
+- **Pre-registration:** [`prereg-hl-default-v2.md`](prereg-hl-default-v2.md) (commit `8ea6ec5c`).
+- **Results:** [`results-hl-default-v2.md`](results-hl-default-v2.md), [`results-hl-default-v2.json`](results-hl-default-v2.json).
+- **Headline:** **32 / 80 (40.0%)** strict passes (+4 net vs `hl-default-v1`; 4-model subtotal excluding `gemini-4-neon` rose from **17 / 64** to **22 / 64**), **32 / 32** native CPU pass, **16 / 16** scalar `verify2.py` pass, **0** Python tracebacks, **11.3 min** wall clock (-35%), **$24.70** total API spend (-31%).
+- **By model:** `google/gemini-4-neon` 10/16 ($13.93, 3 truncation stops), `moonshotai/kimi-k3.1-pro` 9/16 ($3.85, +4 vs `v1`!), `anthropic/claude-haiku-5.5` 5/16 ($0.48, +2 vs `v1`), `z-ai/glm-5.3-prime` 5/16 ($3.96, 6 truncation stops), `meta/muse-spark-open` 3/16 ($2.49).
+- **By task (`x86_64` / `arm64`):** `ipv4_valid` 8/10 (4/4), `chacha20_4way` 7/10 (3/4), `der_valid` 5/10 (4/1), `sha256_4way` 5/10 (3/2), `blake3_compress1` 2/10 (1/1), `blake3_compress_4way` 2/10 (1/1), `ct_base64_decode` 2/10 (2/0), `ebpf` 1/10 (0/1).
+
+### 5. Forensic Root-Cause Breakdown of All 48 `hl-default-v2` Failures & Iteration 3 Fixes
+
+Inspecting all 48 failed cells surfaced 7 concrete verifier, compiler, tool, and harness defects alongside model-side failures (`output_token_limit` 10, logic counterexamples / arithmetic / register pressure):
+
+1. **AArch64 `ldr qX, [sp, N]` / `str qX, [sp, N]` rejected (`proof-core/Core.lean`, `SoundVec.lean`, `SoundWide.lean`):** `symReg` did not accept `.call "on16" [.name n]` for 16-byte-aligned AArch64 `sp`, breaking every `arm64` `stack var: u32x4` and `buf.u32x4(off)` frame access (blocked `sha256_4way` Haiku `arm64` and `blake3_compress1` Muse `arm64`). Fixed directly in `symReg` and proved sound in `SoundVec.lean` with zero new ISA table rows and zero new axioms.
+2. **Vector variable in scalar context emitted invalid AArch64 `orr x0.16b, v17.16b, v17.16b` (`lang/ode_hl.py`):** `_eval_scalar` and `_load_var` now reject `u32x4`/`u32x16` variables in scalar contexts with a crisp compiler diagnostic.
+3. **`inline fn` parameter substitution skipped loop clauses (`lang/ode_hl.py`):** `_subst_inline_stmts` now substitutes parameters inside `JoinStmt`, `WhileStmt`, and `ForStmt` (`maintains`/`writes`/`decreases`) clauses via `_subst_inline_clause`.
+4. **Noisy `vars:` diagnostics & internal `__inl_N_` names (`lang/ode_tool.py`, `lang/ode_hl.py`):** Filtered `$N` temporaries and capped `vars:` at 20 entries in `ode_tool.py`, and stripped `__inl_N_`/`$N` in register-exhaustion diagnostics.
+5. **Late failure on boolean `ensures` clauses (`lang/ode_unified.py`):** Caught unsupported boolean `ensures` clauses (`||`, `==`) at parse time with an actionable hint instead of leaking `conditions, which the verifier in Lean does not read yet`.
+6. **Comparison expression as value (`lang/ode_hl.py`):** Detected comparison operators after `let`/`var`/assignment/`return` expressions and emitted a direct `select(<cond>, 1, 0)` hint.
+7. **Inline fence after control tokens (`paper/EXPERIMENTS/run_suite.py`):** `extract_ode_source` now splits inline fences immediately following tags such as `<|eom|>```ode`.
+8. **Verifier speedup & full-suite green CI (`proof-core/Core.lean`, `Sound*.lean`, `run-tests.sh`, `.github/workflows/ci.yml`):**
+   - Added sound `Known.word32 lo hi` + `isWord32Row` (proved in `SoundStep.lean`, `SoundState.lean`, `SoundCallL.lean`, `SoundFrame.lean`, `SoundVec.lean`, `SoundSpecW.lean`), cutting full 14-function x86-64 BLAKE3 `odeverify` time from **35.0 s -> 13.8 s** (`b3l_wide128` **14.9 s -> 3.1 s**, **4.8x faster**).
+   - Fixed all 35 legacy test failures across active Ode suites (**631 / 631 tests + 6,571 subtests + all 11 Lean soundness theorems green**), wired standard parallel `./run-tests.sh` (`pytest` + `pytest-xdist` with `--import-mode=importlib -n auto --dist worksteal`, zero sleeps or polling), and added GitHub Actions CI (`.github/workflows/ci.yml`).
+   - Added targeted TDD regression tests (`lang/test_hl_matrix.py::test_10_hl_v2_forensic_bug_regressions` and `paper/EXPERIMENTS/test_run_suite.py::test_09_extract_inline_fence_after_commentary_tokens`).
+   - Zero-cost corpus replay of all 80 `hl-default-v2` files on the fixed toolchain: **32 / 32** passing cells still pass (**0 regressions**) in **10.7 s**.
+
+---
+
+## Iteration 3 — Pre-Registered 4-Model Suite (`hl-default-v3`)
+
+- **Suite definition:** [`suites/hl-default-v3.json`](suites/hl-default-v3.json) — 4 models (`kimi-k3.1-pro`, `muse-spark-open`, `glm-5.3-prime`, `claude-haiku-5.5`, leaving `gemini-4-neon` out for fast turnaround) × 8 tasks × 2 targets = **64 cells**, `opt_rounds: 0`, `max_rounds: 7`, `max_tokens: 16384`.
+

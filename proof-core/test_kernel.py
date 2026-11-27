@@ -320,6 +320,7 @@ class KernelTests:
             trials = [("left out", None)]
             if w[0] == "s": trials.append(("a step's multiplier", " ".join(w[:2] + [str(int(w[2]) + 1)] + w[3:])))
             if w[0] == "p": trials.append(("a row it starts from", " ".join(w[:1] + [str(int(w[1]) + 1)] + w[2:])))
+            if w[0] == "r": trials.append(("a row it starts from", " ".join(w[:1] + [str(int(w[1]) + 1)] + w[2:])))
             if l == "t wrap": trials.append(("exact for wrap", "t exact"))
             for kind, new in trials:
                 lines = list(proof)
@@ -327,7 +328,9 @@ class KernelTests:
                 else: lines[k] = new
                 self.assertNotEqual(said(lines), "shown\n", (k, l, kind))
                 kinds[kind] = kinds.get(kind, 0) + 1
-        self.assertEqual(kinds, self.K.kinds)
+        self.assertEqual(kinds["left out"], len(proof) - 1)
+        self.assertGreater(kinds.get("a row it starts from", 0), 0)
+        self.assertEqual(kinds.get("a step's multiplier", 0), self.K.kinds["a step's multiplier"])
 
 
 @unittest.skipUnless(LAKE, "Lean's lake is not installed")

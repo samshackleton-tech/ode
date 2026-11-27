@@ -3684,10 +3684,7 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
       split at h
       next hk =>
         -- the row of the remainders by 2^32 is a word: the high half is the row of the quotients, nothing is divided
-        have hk' : knownNonneg s (Lin.word xr) = true ∧ plain s.facts (Lin.sub (Lin.const (W32i - 1)) (Lin.word xr)) = true := by
-          have hk2 := hk
-          simp only [Bool.and_eq_true] at hk2
-          exact ⟨hk2.1.2, hk2.2⟩
+        have ⟨w0, w1⟩ := isWord32Row_sound H (Bool.and_eq_true_iff.mp hk).2
         have hs := V.pure_ok h
         injection hs with h1 _
         subst h1
@@ -3695,9 +3692,6 @@ theorem symStore8_sound {ctx : Ctx} {p : Program} {s0 : State} (E : Setting ctx 
         have hm := List.mem_of_getElem? hw
         have CT := touch_carried E H wf w
         have sxT := EV.sem_agree sx CT.agree CT.mono
-        have w0 := knownNonneg_sound H hk'.1
-        have w1 := plain_sound hk'.2 ρ H.facts
-        simp only [ev_sub, ev_const] at w1
         have eh := ev_high ρ xr
         have S1 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) CT.wf.words.ok sxT.2.2
         have S2 := wAtom_step (inp := inpOf ctx s0) (ρ := ρ) S1.ok (bounded_high sxT.2.2)

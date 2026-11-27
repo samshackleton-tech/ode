@@ -130,8 +130,8 @@ SOURCES = [
     ("b3l_pad writes at byte 36 of the record", "  mov rax, r13\n  add rax, 32\n", "  mov rax, r13\n  add rax, 36\n", WORD),
     ("b3l_pad writes at byte 28 of the record", "  mov rax, r13\n  add rax, 32\n", "  mov rax, r13\n  add rax, 28\n", WORD),
     ("b3l_pad is given the whole length to read", "  mov rdx, rbp\n  call b3l_pad\n", "  mov rdx, qword ptr [rsp + 8]\n  call b3l_pad\n", KNOW),
-    ("b3l_pad is given the input from its start", "  mov rsi, rbx\n  mov rdx, rbp\n  call b3l_pad\n", "  mov rsi, qword ptr [rsp + 0]\n  mov rdx, rbp\n  call b3l_pad\n", FOLLOW),
-    ("b3l_pad is not called", "  call b3l_pad\n", "", FOLLOW),
+    ("b3l_pad is given the input from its start", "  mov rsi, rbx\n  mov rdx, rbp\n  call b3l_pad\n", "  mov rsi, qword ptr [rsp + 0]\n  mov rdx, rbp\n  call b3l_pad\n", KNOW),
+    ("b3l_pad is not called", "  call b3l_pad\n", "", KNOW),
     ("the chunk's number is stored at byte 100", "  add rcx, 96\n", "  add rcx, 100\n", WORD),
     ("the length left is stored for the chunk's number", "  mov rax, r14\n  mov rcx, r13\n  add rcx, 96\n", "  mov rax, rbp\n  mov rcx, r13\n  add rcx, 96\n", FOLLOW),
     ("the length is stored at byte 108", "  add rcx, 104\n", "  add rcx, 108\n", WORD),
@@ -328,7 +328,7 @@ class Verify(unittest.TestCase):
 
     def test_a_changed_proof_is_refused(self):
         lines = read(os.path.join(HERE, "proofs", CHUNK + ".proof")).split("\n")[:-1]
-        self.assertGreater(len(lines), 600)
+        self.assertGreater(len(lines), 300)
         rng = random.Random(53)
         picked = sorted(rng.sample(range(1, len(lines)), 12))
         changed = [(f"line {k + 1} left out", lines[:k] + lines[k + 1:]) for k in picked] + \

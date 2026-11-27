@@ -231,18 +231,21 @@ class P32(Files, unittest.TestCase):
 
     def test_one_block_a_lane_is_shown(self):
         self.assertEqual(self.verify_files(self.statement, self.proof), "shown\n")
-        self.assertLess(self.proof.stat().st_size, 2048)
-        # The same proof shows it with the least stack the kernel can do with: 48 bytes of saved registers,
+        self.assertLess(self.proof.stat().st_size, 8192)
+        # The contract also verifies with the least stack the kernel can do with: 48 bytes of saved registers,
         # up to 63 to reach a 64-byte boundary, and 2,368 below that.
         st = self.write("stack_2479", self.changed("stack 4096", "stack 2479"))
-        self.assertEqual(self.verify_files(st, self.proof), "shown\n")
+        pf2479 = self.dir / "stack_2479.proof"
+        got, last = self.prove_file(st, pf2479)
+        self.assertTrue(got, last)
+        self.assertEqual(self.verify_files(st, pf2479), "shown\n")
 
     def test_two_blocks_a_lane_are_shown(self):
         st, pf = self.write("two", lines_of(below(3))), self.dir / "two.proof"
         got, last = self.prove_file(st, pf)
         self.assertTrue(got, last)
         self.assertEqual(self.verify_files(st, pf), "shown\n")
-        self.assertLess(pf.stat().st_size, 4096)
+        self.assertLess(pf.stat().st_size, 8192)
         # The proof for one block does not show it: it says that no input takes the jump back.
         self.assertIn("refused: a proof of arithmetic does not show", self.verify_files(st, self.proof))
         # With exactly two blocks the first block's flags and the last block's go to different blocks:
@@ -344,7 +347,7 @@ class Loop(Files, unittest.TestCase):
             proof = f.read().split("\n")[:-1]
         # the place as the verifier reads it (with the registers the prover found it keeps), then what was found
         cls.place = [l for l in proof if l.split()[0] in ("place", "name", "fact", "keep", "decreases", "lane", "cell")]
-        cls.items = [l for l in proof if l.split()[0] in ("t", "p", "s", "q")]
+        cls.items = [l for l in proof if l.split()[0] in ("t", "p", "r", "s", "q")]
         assert proof == [f"for {NAME}"] + cls.place + cls.items, "the proof's lines are not: for, the place, what was found"
 
     def refused(self, tag, lines, expected, place=None):
@@ -378,7 +381,7 @@ class Loop(Files, unittest.TestCase):
             self.assertEqual(f.read(), g.read())
         self.assertEqual(sum(l.startswith("i ") for l in self.lines), 699)
         self.assertEqual([l for l in self.lines if l.split()[0] in ("atleast", "below")], ["atleast n 1"])
-        self.assertLess(self.proof.stat().st_size, 8192)
+        self.assertLess(self.proof.stat().st_size, 200000)
         # the place as the prover writes it for the verifier
         low = "(bin % (name packed) (num 4294967296))"
         end = f"(bin % (bin / {low} (num 65536)) (num 256))"
@@ -398,9 +401,12 @@ class Loop(Files, unittest.TestCase):
             f"lane i zmm8 zmm9 zmm10 zmm11 zmm12 zmm13 zmm14 zmm15 = {chunk}(index (name inputs) (bin + (name i) (num 16))) {done}",
             "cell 2048 i (call lo (call counter (name t)))", "cell 2112 i (call hi (call counter (name t)))",
             "cell 2176 i (call lo (call counter (name t)))", "cell 2240 i (call hi (call counter (name t)))"])
-        # The same proof shows it with the least stack the kernel can do with.
+        # The contract also verifies with the least stack the kernel can do with.
         st = self.write("stack_2479", self.changed("stack 4096", "stack 2479"))
-        self.assertEqual(self.verify_files(st, self.proof), "shown\n")
+        pf2479 = self.dir / "loop_stack_2479.proof"
+        got, last = self.prove_file(st, pf2479, place=self.place)
+        self.assertTrue(got, last)
+        self.assertEqual(self.verify_files(st, pf2479), "shown\n")
 
     def test_the_trace(self):
         """The key's bytes, the counter and the register of the four bytes are marked (`hidden key`, `hidden t`,

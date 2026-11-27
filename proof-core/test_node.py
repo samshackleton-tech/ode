@@ -241,7 +241,7 @@ class Verify(unittest.TestCase):
         prove.prove(spec_text(), [(obj, symbol, "") for obj, symbol in FUNCTIONS], statement_path, proof_path)
         with open(proof_path) as f: found = f.read()
         with open(os.path.join(HERE, "proofs", NODE + ".proof")) as f: kept = f.read()
-        self.assertEqual(kept, "for b3l_node_out\nt live\nt live\nt live\n")
+        self.assertEqual(kept, "for b3l_node_out\nt live\nt neq 0\n")
         self.assertEqual(found[found.index("for " + NODE):], kept)
         # controls: the kernels are not taken as shown without their proofs, nor left out of what is to be shown
         shown, said = lean_verify.verify(spec_text(), FUNCTIONS, self.kept((NODE,)))

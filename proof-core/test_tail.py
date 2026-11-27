@@ -53,7 +53,7 @@ AT_CALL = "refused: at a call, something the called function's contract requires
 JUMP = "refused: a jump on a flag that may depend on values kept out of the trace: which instructions run would depend on them"
 # (what is changed, the contract as it is, the contract changed, what the verifier then says)
 CONTRACTS = [
-    ("the block is said to hold the message from byte 15 on", "src[16 .. len]", "src[15 .. len]", FOLLOW),
+    ("the block is said to hold the message from byte 15 on", "src[16 .. len]", "src[15 .. len]", KNOW),
     ("the block is said to hold the whole message", "padded(src[16 .. len])", "padded(src)", FOLLOW),
     ("the block is said to hold bytes 16 to 80, which a shorter message does not have", "src[16 .. len]", "src[16 .. 80]", KNOW),
     ("the block is said to hold all but the last byte", "src[16 .. len]", "src[16 .. len - 1]", KNOW),
@@ -69,9 +69,9 @@ SOURCES = [
     ("b3l_pad is given r + 36 to write: its last word is past the record", "  add rdi, 32\n", "  add rdi, 36\n", NOT_WORDS),
     ("b3l_pad is given r to write", "  add rdi, 32\n", "  add rdi, 0\n", WORD),
     ("b3l_pad is given r + 34 to write: no whole words", "  add rdi, 32\n", "  add rdi, 34\n", NOT_WORDS),
-    ("b3l_pad is given the message from byte 15 on, as long as before", "  add rsi, 16\n", "  add rsi, 15\n", FOLLOW),
+    ("b3l_pad is given the message from byte 15 on, as long as before", "  add rsi, 16\n", "  add rsi, 15\n", KNOW),
     ("b3l_pad is given one byte more to read: a byte past the message", "  sub rdx, 16\n", "  sub rdx, 15\n", KNOW),
-    ("b3l_pad is given one byte less to read", "  sub rdx, 16\n", "  sub rdx, 17\n", FOLLOW),
+    ("b3l_pad is given one byte less to read", "  sub rdx, 16\n", "  sub rdx, 17\n", KNOW),
     ("b3l_pad is given the whole length to read: 16 bytes past the message", "  sub rdx, 16\n", "", KNOW),
     ("b3l_pad is given the message itself to write", "  add rdi, 32\n", "  mov rdi, rsi\n", NOT_WORDS),
     ("b3l_pad is given the record's own bytes to read", "  add rsi, 16\n", "  mov rsi, rdi\n", NO_PART),
