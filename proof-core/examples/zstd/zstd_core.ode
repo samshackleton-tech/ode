@@ -1,0 +1,405 @@
+// RFC 8878 Zstandard (Zstd) Frame, Block, FSE, and Sequence Core in 100% pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`) with identical
+// 52-character BLAKE3-256 contract identifiers across both processors.
+
+// ---------------------------------------------------------------------------
+// 1. RFC 8878 §3.1.1 / §3.1.2 Magic Number Detector
+//    Returns 1 for Zstandard frame (0xFD2FB528), 2 for skippable frame
+//    (0x184D2A50..0x184D2A5F), and 0 otherwise.
+// ---------------------------------------------------------------------------
+def zstd_magic_of(buf) {
+    if len(buf) < 4 then 0
+    else if buf[0] == 40 && buf[1] == 181 && buf[2] == 47 && buf[3] == 253 then 1
+    else if buf[0] >= 80 && buf[0] <= 95 && buf[1] == 42 && buf[2] == 77 && buf[3] == 24 then 2
+    else 0
+}
+
+fn zstd_magic(buf: n bytes, n: number)
+    returns zstd_magic_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 4 { return 0 }
+    let b0: u64 := buf[0]
+    let b1: u64 := buf[1]
+    let b2: u64 := buf[2]
+    let b3: u64 := buf[3]
+    if b0 == 0x28 {
+        if b1 == 0xB5 {
+            if b2 == 0x2F {
+                if b3 == 0xFD { return 1 }
+            }
+        }
+    }
+    if b0 >= 0x50 {
+        if b0 <= 0x5F {
+            if b1 == 0x2A {
+                if b2 == 0x4D {
+                    if b3 == 0x18 { return 2 }
+                }
+            }
+        }
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 2. RFC 8878 §3.1.1.1 Frame Header Descriptor (FHD) Decoder
+//    Rejects reserved bit 3 != 0 (returns 0).
+//    Otherwise packs:
+//      bits  0..3:  total header bytes after 4-byte magic (1..14)
+//      bits  4..7:  Window_Descriptor bytes (0 or 1)
+//      bits  8..11: Dictionary_ID bytes (0, 1, 2, or 4)
+//      bits 12..15: Frame_Content_Size bytes (0, 1, 2, 4, or 8)
+//      bit      16: Content_Checksum_flag (0 or 1)
+// ---------------------------------------------------------------------------
+def fhd_did_sz(d) {
+    if d == 0 then 0
+    else if d == 1 then 1
+    else if d == 2 then 2
+    else 4
+}
+
+def fhd_fcs_sz(ff, ss) {
+    if ff == 0 then ss
+    else if ff == 1 then 2
+    else if ff == 2 then 4
+    else 8
+}
+
+def fhd_pack(wd, did, fcs, cksum) {
+    (1 + wd + did + fcs) + wd * 16 + did * 256 + fcs * 4096 + cksum * 65536
+}
+
+def frame_hdr_info(fhd) {
+    if (fhd / 8) % 2 != 0 then 0
+    else fhd_pack(
+        1 - (fhd / 32) % 2,
+        fhd_did_sz(fhd % 4),
+        fhd_fcs_sz(fhd / 64, (fhd / 32) % 2),
+        (fhd / 4) % 2,
+    )
+}
+
+fn zstd_frame_hdr_info(fhd: u8)
+    returns frame_hdr_info(fhd)
+    trace depends on fhd
+    stack 0
+{
+    let did_f: u64 := fhd & 3
+    var did: u64 := 0
+    if did_f == 0 { did := 0 }
+    else if did_f == 1 { did := 1 }
+    else if did_f == 2 { did := 2 }
+    else { did := 4 }
+    join
+        maintains did == fhd_did_sz(fhd % 4)
+        maintains did <= 4
+    let ss: u64 := (fhd >> 5) & 1
+    let ff: u64 := fhd >> 6
+    var fcs: u64 := ss
+    if ff == 0 { fcs := ss }
+    else if ff == 1 { fcs := 2 }
+    else if ff == 2 { fcs := 4 }
+    else { fcs := 8 }
+    join
+        maintains did == fhd_did_sz(fhd % 4)
+        maintains did <= 4
+        maintains fcs == fhd_fcs_sz(fhd / 64, (fhd / 32) % 2)
+        maintains fcs <= 8
+    if ((fhd >> 3) & 1) != 0 { return 0 }
+    let cksum: u64 := (fhd >> 2) & 1
+    let wd: u64 := 1 - ((fhd >> 5) & 1)
+    let tot: u64 := 1 + wd + did + fcs
+    return tot + (wd << 4) + (did << 8) + (fcs << 12) + (cksum << 16)
+}
+
+// ---------------------------------------------------------------------------
+// 3. RFC 8878 §3.1.1.1.2 Window_Descriptor Decoder
+//    Exact formula: base = 2^(10 + exp), window_size = base + (base / 8) * mant
+//    = (8 + mant) * 2^(7 + exp), covering 1 KiB .. 3.75 TiB with zero overflow.
+// ---------------------------------------------------------------------------
+def wstep0(wd) { 8 + (wd % 8) }
+def wstep1(wd) { if (wd / 8) % 2 == 1 then wstep0(wd) * 2 else wstep0(wd) }
+def wstep2(wd) { if (wd / 16) % 2 == 1 then wstep1(wd) * 4 else wstep1(wd) }
+def wstep3(wd) { if (wd / 32) % 2 == 1 then wstep2(wd) * 16 else wstep2(wd) }
+def wstep4(wd) { if (wd / 64) % 2 == 1 then wstep3(wd) * 256 else wstep3(wd) }
+def wstep5(wd) { if (wd / 128) % 2 == 1 then wstep4(wd) * 65536 else wstep4(wd) }
+
+def window_size_of(wd) { wstep5(wd) * 128 }
+
+fn zstd_window_size(wd: u8)
+    returns window_size_of(wd)
+    trace depends on wd
+    stack 0
+{
+    var s: u64 := 8 + (wd & 7)
+    if ((wd >> 3) & 1) != 0 { s := s << 1 }
+    join
+        maintains s <= 30
+        maintains s == wstep1(wd)
+    if ((wd >> 4) & 1) != 0 { s := s << 2 }
+    join
+        maintains s <= 120
+        maintains s == wstep2(wd)
+    if ((wd >> 5) & 1) != 0 { s := s << 4 }
+    join
+        maintains s <= 1920
+        maintains s == wstep3(wd)
+    if ((wd >> 6) & 1) != 0 { s := s << 8 }
+    join
+        maintains s <= 491520
+        maintains s == wstep4(wd)
+    if ((wd >> 7) & 1) != 0 { s := s << 16 }
+    join
+        maintains s <= 32212254720
+        maintains s == wstep5(wd)
+    return s << 7
+}
+
+// ---------------------------------------------------------------------------
+// 4. RFC 8878 §3.1.1.2 3-Byte Block Header Decoder
+//    Rejects Block_Type == 3 (Reserved) or Block_Size > 131072 (returns 0xFFFFFFFF).
+//    Otherwise packs: (block_type << 24) + (last_block << 20) + block_size.
+// ---------------------------------------------------------------------------
+def u24_le0(buf) {
+    buf[0] + buf[1] * 256 + buf[2] * 65536
+}
+
+def block_hdr_of(buf) {
+    if len(buf) < 3 then 4294967295
+    else if (u24_le0(buf) / 2) % 4 == 3 then 4294967295
+    else if u24_le0(buf) / 8 > 131072 then 4294967295
+    else ((u24_le0(buf) / 2) % 4) * 16777216
+       + (u24_le0(buf) % 2) * 1048576
+       + (u24_le0(buf) / 8)
+}
+
+fn zstd_block_hdr(buf: n bytes, n: number)
+    returns block_hdr_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    let one: u64 := 1
+    if n < 3 { return (one << 32) - 1 }
+    let b0: u64 := buf[0]
+    let b1: u64 := buf[1]
+    let b2: u64 := buf[2]
+    let h: u64 := b0 + (b1 << 8) + (b2 << 16)
+    let last_b: u64 := h & 1
+    let btype: u64 := (h >> 1) & 3
+    let bsize: u64 := h >> 3
+    if btype == 3 { return (one << 32) - 1 }
+    if bsize > 131072 { return (one << 32) - 1 }
+    return (btype << 24) + (last_b << 20) + bsize
+}
+
+// ---------------------------------------------------------------------------
+// 5. RFC 8878 §4.1.1 FSE Normalized Distribution Table Validator
+//    Each byte encodes symbol weight: 255 -> -1 ("less than 1", weight 1),
+//    0 -> unused (weight 0), 1..254 -> exact weight.
+//    Returns 1 iff 5 <= acc_log <= 9 and total weight == 2^acc_log.
+// ---------------------------------------------------------------------------
+def fse_w(p) { if p == 255 then 1 else p }
+
+def fse_sum_from(probs, i, acc) {
+    if i >= len(probs) then acc
+    else fse_sum_from(probs, i + 1, acc + fse_w(probs[i]))
+}
+
+def fse_target(acc_log) {
+    if acc_log == 5 then 32
+    else if acc_log == 6 then 64
+    else if acc_log == 7 then 128
+    else if acc_log == 8 then 256
+    else 512
+}
+
+def fse_norm_valid(probs, acc_log) {
+    if acc_log < 5 || acc_log > 9 then 0
+    else if fse_sum_from(probs, 0, 0) == fse_target(acc_log) then 1
+    else 0
+}
+
+fn zstd_fse_norm_valid(probs: n bytes, n: number, acc_log: number)
+    requires n <= 256
+    returns fse_norm_valid(probs, acc_log)
+    trace depends on probs, n, acc_log
+    stack 0
+{
+    if acc_log < 5 { return 0 }
+    if acc_log > 9 { return 0 }
+    var target: u64 := 512
+    if acc_log == 5 { target := 32 }
+    else if acc_log == 6 { target := 64 }
+    else if acc_log == 7 { target := 128 }
+    else if acc_log == 8 { target := 256 }
+    join maintains target == fse_target(acc_log)
+    var acc: u64 := 0
+    for i in 0..n
+        maintains acc <= i * 254
+        maintains fse_sum_from(probs, i, acc) == fse_sum_from(probs, 0, 0)
+    {
+        let p: u64 := probs[i]
+        if p == 255 {
+            acc += 1
+        } else {
+            acc += p
+        }
+        join
+            maintains acc <= (i + 1) * 254
+            maintains fse_sum_from(probs, i + 1, acc) == fse_sum_from(probs, 0, 0)
+    }
+    if acc == target { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 6. RFC 8878 §3.1.1.3.2.1.1 Literals Length Code Decoder (all 36 codes 0..35)
+// ---------------------------------------------------------------------------
+def zstd_ll(code, extra) {
+    if code < 16 then code
+    else if code == 16 then 16 + (extra % 2)
+    else if code == 17 then 18 + (extra % 2)
+    else if code == 18 then 20 + (extra % 2)
+    else if code == 19 then 22 + (extra % 2)
+    else if code == 20 then 24 + (extra % 4)
+    else if code == 21 then 28 + (extra % 4)
+    else if code == 22 then 32 + (extra % 8)
+    else if code == 23 then 40 + (extra % 8)
+    else if code == 24 then 48 + (extra % 16)
+    else if code == 25 then 64 + (extra % 64)
+    else if code == 26 then 128 + (extra % 128)
+    else if code == 27 then 256 + (extra % 256)
+    else if code == 28 then 512 + (extra % 512)
+    else if code == 29 then 1024 + (extra % 1024)
+    else if code == 30 then 2048 + (extra % 2048)
+    else if code == 31 then 4096 + (extra % 4096)
+    else if code == 32 then 8192 + (extra % 8192)
+    else if code == 33 then 16384 + (extra % 16384)
+    else if code == 34 then 32768 + (extra % 32768)
+    else 65536 + (extra % 65536)
+}
+
+fn zstd_ll_decode(code: number, extra: number)
+    requires code < 36
+    returns zstd_ll(code, extra)
+    trace depends on code, extra
+    stack 0
+{
+    if code < 16 { return code }
+    if code == 16 { return 16 + (extra & 1) }
+    if code == 17 { return 18 + (extra & 1) }
+    if code == 18 { return 20 + (extra & 1) }
+    if code == 19 { return 22 + (extra & 1) }
+    if code == 20 { return 24 + (extra & 3) }
+    if code == 21 { return 28 + (extra & 3) }
+    if code == 22 { return 32 + (extra & 7) }
+    if code == 23 { return 40 + (extra & 7) }
+    if code == 24 { return 48 + (extra & 15) }
+    if code == 25 { return 64 + (extra & 63) }
+    if code == 26 { return 128 + (extra & 127) }
+    if code == 27 { return 256 + (extra & 255) }
+    if code == 28 { return 512 + (extra & 511) }
+    if code == 29 { return 1024 + (extra & 1023) }
+    if code == 30 { return 2048 + (extra & 2047) }
+    if code == 31 { return 4096 + (extra & 4095) }
+    if code == 32 { return 8192 + (extra & 8191) }
+    if code == 33 { return 16384 + (extra & 16383) }
+    if code == 34 { return 32768 + (extra & 32767) }
+    let one: u64 := 1
+    return 65536 + (extra & ((one << 16) - 1))
+}
+
+// ---------------------------------------------------------------------------
+// 7. RFC 8878 §3.1.1.3.2.1.1 Match Length Code Decoder (all 53 codes 0..52)
+// ---------------------------------------------------------------------------
+def zstd_ml(code, extra) {
+    if code < 32 then 3 + code
+    else if code == 32 then 35 + (extra % 2)
+    else if code == 33 then 37 + (extra % 2)
+    else if code == 34 then 39 + (extra % 2)
+    else if code == 35 then 41 + (extra % 2)
+    else if code == 36 then 43 + (extra % 4)
+    else if code == 37 then 47 + (extra % 4)
+    else if code == 38 then 51 + (extra % 8)
+    else if code == 39 then 59 + (extra % 8)
+    else if code == 40 then 67 + (extra % 16)
+    else if code == 41 then 83 + (extra % 16)
+    else if code == 42 then 99 + (extra % 32)
+    else if code == 43 then 131 + (extra % 128)
+    else if code == 44 then 259 + (extra % 256)
+    else if code == 45 then 515 + (extra % 512)
+    else if code == 46 then 1027 + (extra % 1024)
+    else if code == 47 then 2051 + (extra % 2048)
+    else if code == 48 then 4099 + (extra % 4096)
+    else if code == 49 then 8195 + (extra % 8192)
+    else if code == 50 then 16387 + (extra % 16384)
+    else if code == 51 then 32771 + (extra % 32768)
+    else 65539 + (extra % 65536)
+}
+
+fn zstd_ml_decode(code: number, extra: number)
+    requires code < 53
+    returns zstd_ml(code, extra)
+    trace depends on code, extra
+    stack 0
+{
+    if code < 32 { return 3 + code }
+    if code == 32 { return 35 + (extra & 1) }
+    if code == 33 { return 37 + (extra & 1) }
+    if code == 34 { return 39 + (extra & 1) }
+    if code == 35 { return 41 + (extra & 1) }
+    if code == 36 { return 43 + (extra & 3) }
+    if code == 37 { return 47 + (extra & 3) }
+    if code == 38 { return 51 + (extra & 7) }
+    if code == 39 { return 59 + (extra & 7) }
+    if code == 40 { return 67 + (extra & 15) }
+    if code == 41 { return 83 + (extra & 15) }
+    if code == 42 { return 99 + (extra & 31) }
+    if code == 43 { return 131 + (extra & 127) }
+    if code == 44 { return 259 + (extra & 255) }
+    if code == 45 { return 515 + (extra & 511) }
+    if code == 46 { return 1027 + (extra & 1023) }
+    if code == 47 { return 2051 + (extra & 2047) }
+    if code == 48 { return 4099 + (extra & 4095) }
+    if code == 49 { return 8195 + (extra & 8191) }
+    if code == 50 { return 16387 + (extra & 16383) }
+    if code == 51 { return 32771 + (extra & 32767) }
+    let one: u64 := 1
+    return 65539 + (extra & ((one << 16) - 1))
+}
+
+// ---------------------------------------------------------------------------
+// 8. RFC 8878 §3.1.1.2.2 Verified RLE Block Expander (up to 64-byte slot)
+//    Fills `out[0..n)` with `byte_val` and zeroes `out[n..64)`.
+// ---------------------------------------------------------------------------
+def rle_pad64(byte_val, n) {
+    [if i < n then byte_val else 0 for i in 0..64]
+}
+
+fn zstd_rle_block64(out: 64 bytes, byte_val: u8, n: number)
+    requires n <= 64
+    ensures out = rle_pad64(byte_val, n)
+    trace depends on n
+    stack 0
+{
+    var i: u64 := 0
+    while i < n
+        maintains i <= n
+        writes out[..i] = rle_pad64(byte_val, n)
+        decreases n - i
+    {
+        out[i] := byte_val
+        i += 1
+    }
+    while i < 64
+        maintains n <= i
+        maintains i <= 64
+        writes out[..i] = rle_pad64(byte_val, n)
+        decreases 64 - i
+    {
+        out[i] := 0
+        i += 1
+    }
+}
