@@ -1,0 +1,287 @@
+// RFC 8949 Deterministic (Canonical) CBOR Framing & Integer Validators in 100% pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`) with identical
+// 52-character BLAKE3-256 contract identifiers across both processors.
+
+def u16_be(buf, o) { buf[o] * 256 + buf[o + 1] }
+def u32_be(buf, o) {
+    buf[o] * 16777216 + buf[o + 1] * 65536 + buf[o + 2] * 256 + buf[o + 3]
+}
+
+// ---------------------------------------------------------------------------
+// 1. RFC 8949 §4.2.1 Canonical CBOR Item Header Size Validator
+//    Enforces minimal integer encoding (ai=24 => v>=24, ai=25 => v>=256,
+//    ai=26 => v>=65536, ai=27 => v>=2^32) and rejects reserved/indefinite (ai>=28).
+//    Returns header byte size (1, 2, 3, 5, or 9), or 0 if non-canonical/truncated.
+// ---------------------------------------------------------------------------
+def cbor_hsz_ai(buf, off, ai) {
+    if ai <= 23 then 1
+    else if ai == 24 then
+        if off + 2 > len(buf) then 0
+        else if buf[off + 1] < 24 then 0
+        else 2
+    else if ai == 25 then
+        if off + 3 > len(buf) then 0
+        else if u16_be(buf, off + 1) < 256 then 0
+        else 3
+    else if ai == 26 then
+        if off + 5 > len(buf) then 0
+        else if u32_be(buf, off + 1) < 65536 then 0
+        else 5
+    else if ai == 27 then
+        if off + 9 > len(buf) then 0
+        else if u32_be(buf, off + 1) == 0 then 0
+        else 9
+    else 0
+}
+
+def cbor_head_size_of(buf, off) {
+    if off >= len(buf) then 0
+    else cbor_hsz_ai(buf, off, buf[off] % 32)
+}
+
+fn cbor_head_size(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns cbor_head_size_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    if off >= n { return 0 }
+    let ib: u64 := buf[off]
+    let ai: u64 := ib & 31
+    if ai <= 23 { return 1 }
+    if ai == 24 {
+        if off + 2 > n { return 0 }
+        let v: u64 := buf[off + 1]
+        if v < 24 { return 0 }
+        return 2
+    }
+    if ai == 25 {
+        if off + 3 > n { return 0 }
+        let b0: u64 := buf[off + 1]
+        let b1: u64 := buf[off + 2]
+        let v: u64 := (b0 << 8) + b1
+        if v < 256 { return 0 }
+        return 3
+    }
+    if ai == 26 {
+        if off + 5 > n { return 0 }
+        let b0: u64 := buf[off + 1]
+        let b1: u64 := buf[off + 2]
+        let b2: u64 := buf[off + 3]
+        let b3: u64 := buf[off + 4]
+        let v: u64 := (b0 << 24) + (b1 << 16) + (b2 << 8) + b3
+        if v < 65536 { return 0 }
+        return 5
+    }
+    if ai == 27 {
+        if off + 9 > n { return 0 }
+        let b0: u64 := buf[off + 1]
+        let b1: u64 := buf[off + 2]
+        let b2: u64 := buf[off + 3]
+        let b3: u64 := buf[off + 4]
+        let hi: u64 := (b0 << 24) + (b1 << 16) + (b2 << 8) + b3
+        if hi == 0 { return 0 }
+        return 9
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 2. RFC 8949 §4.2.1 Canonical u32 Argument Extractor
+//    Returns exact argument value (0..2^32-1) if canonical with ai <= 26,
+//    or 2^32 (4294967296) if non-canonical, truncated, or >= 2^32.
+// ---------------------------------------------------------------------------
+def cbor_arg_ai(buf, off, ai) {
+    if ai <= 23 then ai
+    else if ai == 24 then
+        if off + 2 > len(buf) then 4294967296
+        else if buf[off + 1] < 24 then 4294967296
+        else buf[off + 1]
+    else if ai == 25 then
+        if off + 3 > len(buf) then 4294967296
+        else if u16_be(buf, off + 1) < 256 then 4294967296
+        else u16_be(buf, off + 1)
+    else if ai == 26 then
+        if off + 5 > len(buf) then 4294967296
+        else if u32_be(buf, off + 1) < 65536 then 4294967296
+        else u32_be(buf, off + 1)
+    else 4294967296
+}
+
+def cbor_arg_u32_of(buf, off) {
+    if off >= len(buf) then 4294967296
+    else cbor_arg_ai(buf, off, buf[off] % 32)
+}
+
+fn cbor_arg_u32(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns cbor_arg_u32_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    let one: u64 := 1
+    let err: u64 := one << 32
+    if off >= n { return err }
+    let ib: u64 := buf[off]
+    let ai: u64 := ib & 31
+    if ai <= 23 { return ai }
+    if ai == 24 {
+        if off + 2 > n { return err }
+        let v: u64 := buf[off + 1]
+        if v < 24 { return err }
+        return v
+    }
+    if ai == 25 {
+        if off + 3 > n { return err }
+        let b0: u64 := buf[off + 1]
+        let b1: u64 := buf[off + 2]
+        let v: u64 := (b0 << 8) + b1
+        if v < 256 { return err }
+        return v
+    }
+    if ai == 26 {
+        if off + 5 > n { return err }
+        let b0: u64 := buf[off + 1]
+        let b1: u64 := buf[off + 2]
+        let b2: u64 := buf[off + 3]
+        let b3: u64 := buf[off + 4]
+        let v: u64 := (b0 << 24) + (b1 << 16) + (b2 << 8) + b3
+        if v < 65536 { return err }
+        return v
+    }
+    return err
+}
+
+// ---------------------------------------------------------------------------
+// 3. RFC 8949 §3.1 + §4.2.1 Canonical Byte/Text String Bounds-Checked Skipper
+//    Validates major type 2 (bstr) or 3 (tstr), canonical header & payload bounds.
+//    Returns exact next byte offset (`off + hsz + slen`), or 0 if invalid.
+// ---------------------------------------------------------------------------
+def cbor_str_next_arg(buf, off, hsz, slen) {
+    if slen >= 4294967296 then 0
+    else if off + hsz + slen > len(buf) then 0
+    else off + hsz + slen
+}
+
+def cbor_str_next_hsz(buf, off, hsz) {
+    if hsz == 0 || hsz > 9 then 0
+    else cbor_str_next_arg(buf, off, hsz, cbor_arg_u32_of(buf, off))
+}
+
+def cbor_str_next_of(buf, off) {
+    if off >= len(buf) then 0
+    else if buf[off] / 32 != 2 && buf[off] / 32 != 3 then 0
+    else cbor_str_next_hsz(buf, off, cbor_head_size_of(buf, off))
+}
+
+fn cbor_str_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns cbor_str_next_of(buf, off)
+    trace depends on buf, n, off
+    stack 64
+{
+    if off >= n { return 0 }
+    let maj: u64 := buf[off] >> 5
+    if maj != 2 {
+        if maj != 3 { return 0 }
+    }
+    let hsz: u64 := cbor_head_size(buf, n, off)
+    if hsz == 0 { return 0 }
+    if hsz > 9 { return 0 }
+    let slen: u64 := cbor_arg_u32(buf, n, off)
+    let one: u64 := 1
+    if slen >= (one << 32) { return 0 }
+    let end_off: u64 := off + hsz + slen
+    if end_off > n { return 0 }
+    return end_off
+}
+
+// ---------------------------------------------------------------------------
+// 4. RFC 8949 §4.2.1 Flat Canonical CBOR Sequence Validator & Item Counter
+//    Scans canonical items of major types 0 (uint), 1 (nint), 2 (bstr), 3 (tstr),
+//    and 7 (simple/float) across `buf[0..n)`. Returns exact item count, or
+//    4294967295 if any item is malformed, non-canonical, or truncated.
+// ---------------------------------------------------------------------------
+def cbor_prim_next(off, hsz) {
+    if hsz == 0 || hsz > 9 then 0
+    else off + hsz
+}
+
+def cbor_item_next(buf, off) {
+    if off >= len(buf) then 0
+    else if buf[off] / 32 == 0 || buf[off] / 32 == 1 || buf[off] / 32 == 7 then
+        cbor_prim_next(off, cbor_head_size_of(buf, off))
+    else if buf[off] / 32 == 2 || buf[off] / 32 == 3 then
+        cbor_str_next_of(buf, off)
+    else 0
+}
+
+def cbor_seq_step(buf, off, cnt, nxt) {
+    if nxt <= off || nxt > len(buf) then 4294967295
+    else cbor_seq_from(buf, nxt, cnt + 1)
+}
+
+def cbor_seq_from(buf, off, cnt) {
+    if off >= len(buf) then cnt
+    else cbor_seq_step(buf, off, cnt, cbor_item_next(buf, off))
+}
+
+fn cbor_item_next_fn(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns cbor_item_next(buf, off)
+    trace depends on buf, n, off
+    stack 96
+{
+    if off >= n { return 0 }
+    let maj: u64 := buf[off] >> 5
+    if maj == 0 {
+        let hsz: u64 := cbor_head_size(buf, n, off)
+        if hsz == 0 { return 0 }
+        if hsz > 9 { return 0 }
+        return off + hsz
+    }
+    if maj == 1 {
+        let hsz: u64 := cbor_head_size(buf, n, off)
+        if hsz == 0 { return 0 }
+        if hsz > 9 { return 0 }
+        return off + hsz
+    }
+    if maj == 7 {
+        let hsz: u64 := cbor_head_size(buf, n, off)
+        if hsz == 0 { return 0 }
+        if hsz > 9 { return 0 }
+        return off + hsz
+    }
+    if maj == 2 { return cbor_str_next(buf, n, off) }
+    if maj == 3 { return cbor_str_next(buf, n, off) }
+    return 0
+}
+
+fn cbor_flat_count(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns cbor_seq_from(buf, 0, 0)
+    trace depends on buf, n
+    stack 160
+{
+    let one: u64 := 1
+    let err: u64 := (one << 32) - 1
+    var off: u64 := 0
+    var cnt: u64 := 0
+    while off < n
+        maintains off <= n
+        maintains cnt <= off
+        maintains cbor_seq_from(buf, off, cnt) == cbor_seq_from(buf, 0, 0)
+        decreases n - off
+    {
+        let nxt: u64 := cbor_item_next_fn(buf, n, off)
+        if nxt <= off { return err }
+        if nxt > n { return err }
+        off := nxt
+        cnt += 1
+    }
+    return cnt
+}
