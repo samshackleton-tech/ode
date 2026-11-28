@@ -1,0 +1,344 @@
+// LZ4 Block Format (Yann Collet) & LZ4 Frame Format v1.6.4 Core in 100% Pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`).
+
+// ---------------------------------------------------------------------------
+// 1. Extended length byte-chain end offset (`lz4_ext_len_end`)
+//    Scans from `pos` through consecutive 255 bytes up to and including the
+//    first byte < 255. Returns offset right after that byte, or 4294967295 on EOF.
+// ---------------------------------------------------------------------------
+def ext_end_from(buf, p) {
+    if p >= len(buf) then 4294967295
+    else if buf[p] < 255 then p + 1
+    else ext_end_from(buf, p + 1)
+}
+
+fn lz4_ext_len_end(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 8388608
+    returns ext_end_from(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    let one: u64 := 1
+    let err: u64 := (one << 32) - 1
+    var p: u64 := pos
+    while p < n
+        maintains pos <= p
+        maintains p <= n
+        maintains ext_end_from(buf, p) == ext_end_from(buf, pos)
+        decreases n - p
+    {
+        if buf[p] < 255 { return p + 1 }
+        p += 1
+    }
+    return err
+}
+
+// ---------------------------------------------------------------------------
+// 2. Extended length decoded value (`lz4_ext_len_val`)
+//    Adds consecutive 255 bytes plus the terminating < 255 byte onto `base`.
+//    Returns decoded length, or 4294967295 on EOF before terminator.
+// ---------------------------------------------------------------------------
+def ext_val_from(buf, p, acc) {
+    if p >= len(buf) then 4294967295
+    else if buf[p] < 255 then acc + buf[p]
+    else ext_val_from(buf, p + 1, acc + 255)
+}
+
+fn lz4_ext_len_val(buf: n bytes, n: number, pos: number, base: number)
+    requires pos <= n
+    requires n < 8388608
+    requires base <= 15
+    returns ext_val_from(buf, pos, base)
+    trace depends on buf, n, pos, base
+    stack 0
+{
+    let one: u64 := 1
+    let err: u64 := (one << 32) - 1
+    var p: u64 := pos
+    var acc: u64 := base
+    while p < n
+        maintains pos <= p
+        maintains p <= n
+        maintains acc <= base + (p - pos) * 255
+        maintains ext_val_from(buf, p, acc) == ext_val_from(buf, pos, base)
+        decreases n - p
+    {
+        let b: u64 := buf[p]
+        if b < 255 { return acc + b }
+        acc += 255
+        p += 1
+    }
+    return err
+}
+
+// ---------------------------------------------------------------------------
+// 3. Single LZ4 sequence validator & state transition (`lz4_seq_step`)
+//    Validates one sequence starting at `at` with `out_len` decoded bytes so far:
+//      - token byte: `lit_nib = tok / 16`, `match_nib = tok % 16`
+//      - optional literal extended length chain
+//      - literal bytes `buf[lit_start .. lit_end]` (`lit_end <= n`)
+//      - if `lit_end == n`: clean end-of-block, returns `n + (out_after_lit * 2^32)`
+//      - else: 2-byte LE offset `off = buf[lit_end] + 256 * buf[lit_end + 1]`,
+//        enforcing `1 <= off <= out_after_lit`, optional match extended length + 4,
+//        returning `next_at + (out_after_match * 2^32)` (with `out_after_match < 2^31`),
+//        or `4294967295` on any malformed/truncated/OOB/overflow sequence.
+// ---------------------------------------------------------------------------
+def lz4_seq_match(buf, lit_end, mnib, out1, next_at, mlen) {
+    if next_at <= lit_end || next_at > len(buf) then 0
+    else if mlen >= 2147483644 then 0
+    else if out1 + mlen + 4 >= 2147483648 then 0
+    else next_at + (out1 + mlen + 4) * 4294967296
+}
+
+def lz4_match_spec(buf, lit_end, mnib, out1) {
+    if lit_end + 2 > len(buf) then 0
+    else if buf[lit_end] + buf[lit_end + 1] * 256 == 0 then 0
+    else if buf[lit_end] + buf[lit_end + 1] * 256 > out1 then 0
+    else if mnib < 15 then
+        lz4_seq_match(buf, lit_end, mnib, out1, lit_end + 2, mnib)
+    else
+        lz4_seq_match(buf, lit_end, mnib, out1,
+                      ext_end_from(buf, lit_end + 2),
+                      ext_val_from(buf, lit_end + 2, 15))
+}
+
+def lz4_seq_after_lit(buf, at, mnib, out_len, lstart, llen) {
+    if lstart <= at || lstart > len(buf) then 0
+    else if llen >= 2147483648 then 0
+    else if lstart + llen > len(buf) then 0
+    else if out_len + llen >= 2147483648 then 0
+    else if lstart + llen == len(buf) then
+        len(buf) + (out_len + llen) * 4294967296
+    else lz4_match_spec(buf, lstart + llen, mnib, out_len + llen)
+}
+
+def lz4_seq_spec(buf, at, out_len) {
+    if at >= len(buf) then 0
+    else if buf[at] / 16 < 15 then
+        lz4_seq_after_lit(buf, at, buf[at] % 16, out_len, at + 1, buf[at] / 16)
+    else
+        lz4_seq_after_lit(buf, at, buf[at] % 16, out_len,
+                          ext_end_from(buf, at + 1),
+                          ext_val_from(buf, at + 1, 15))
+}
+
+fn lz4_match_step(buf: n bytes, n: number, lit_end: number, mnib: number, out1: number)
+    requires lit_end <= n
+    requires n < 8388608
+    requires mnib <= 15
+    requires out1 < 2147483648
+    returns lz4_match_spec(buf, lit_end, mnib, out1)
+    trace depends on buf, n, lit_end, mnib, out1
+    stack 160
+{
+    if lit_end + 2 > n { return 0 }
+    let off_lo: u64 := buf[lit_end]
+    let off_hi: u64 := buf[lit_end + 1]
+    let off: u64 := off_lo + (off_hi << 8)
+    if off == 0 { return 0 }
+    if off > out1 { return 0 }
+    if mnib < 15 {
+        let one1: u64 := 1
+        let lim1: u64 := one1 << 31
+        let out2: u64 := out1 + mnib + 4
+        if out2 >= lim1 { return 0 }
+        return (lit_end + 2) + (out2 << 32)
+    }
+    let next_at: u64 := lz4_ext_len_end(buf, n, lit_end + 2)
+    let mlen: u64 := lz4_ext_len_val(buf, n, lit_end + 2, 15)
+    if next_at <= lit_end { return 0 }
+    if next_at > n { return 0 }
+    let one2: u64 := 1
+    let lim2: u64 := one2 << 31
+    if mlen >= lim2 - 4 { return 0 }
+    let out2: u64 := out1 + mlen + 4
+    if out2 >= lim2 { return 0 }
+    return next_at + (out2 << 32)
+}
+
+fn lz4_seq_step(buf: n bytes, n: number, at: number, out_len: number)
+    requires at <= n
+    requires n < 8388608
+    requires out_len < 2147483648
+    returns lz4_seq_spec(buf, at, out_len)
+    trace depends on buf, n, at, out_len
+    stack 224
+{
+    if at >= n { return 0 }
+    let tok: u64 := buf[at]
+    let lnib: u64 := tok >> 4
+    let mnib: u64 := tok & 15
+    if lnib < 15 {
+        let lit_end: u64 := (at + 1) + lnib
+        if lit_end > n { return 0 }
+        let one1: u64 := 1
+        let lim1: u64 := one1 << 31
+        let out1: u64 := out_len + lnib
+        if out1 >= lim1 { return 0 }
+        if lit_end == n { return n + (out1 << 32) }
+        return lz4_match_step(buf, n, lit_end, mnib, out1)
+    }
+    let lstart: u64 := lz4_ext_len_end(buf, n, at + 1)
+    let llen: u64 := lz4_ext_len_val(buf, n, at + 1, 15)
+    if lstart <= at { return 0 }
+    if lstart > n { return 0 }
+    let one2: u64 := 1
+    let lim2: u64 := one2 << 31
+    if llen >= lim2 { return 0 }
+    let lit_end: u64 := lstart + llen
+    if lit_end > n { return 0 }
+    let out1: u64 := out_len + llen
+    if out1 >= lim2 { return 0 }
+    if lit_end == n { return n + (out1 << 32) }
+    return lz4_match_step(buf, n, lit_end, mnib, out1)
+}
+
+// ---------------------------------------------------------------------------
+// 4. Complete LZ4 block validator & exact decoded size (`lz4_block_decoded_size`)
+//    Walks every sequence in `buf[0..n)`. Returns exact decoded byte count
+//    (< 2^31), or 4294967295 if the block is malformed, truncated, has a zero
+//    or out-of-range back-reference offset, or exceeds 2 GiB decoded size.
+// ---------------------------------------------------------------------------
+def lz4_block_step(buf, at, packed) {
+    if packed % 4294967296 <= at || packed % 4294967296 > len(buf) then 4294967295
+    else if packed / 4294967296 >= 2147483648 then 4294967295
+    else lz4_block_from(buf, packed % 4294967296, packed / 4294967296)
+}
+
+def lz4_block_from(buf, at, out_len) {
+    if at >= len(buf) then out_len
+    else lz4_block_step(buf, at, lz4_seq_spec(buf, at, out_len))
+}
+
+fn lz4_block_decoded_size(buf: n bytes, n: number)
+    requires n < 8388608
+    returns lz4_block_from(buf, 0, 0)
+    trace depends on buf, n
+    stack 320
+{
+    let one: u64 := 1
+    let err: u64 := (one << 32) - 1
+    let max_out: u64 := one << 31
+    var at: u64 := 0
+    var out_len: u64 := 0
+    while at < n
+        maintains at <= n
+        maintains out_len < 2147483648
+        maintains lz4_block_from(buf, at, out_len) == lz4_block_from(buf, 0, 0)
+        decreases n - at
+    {
+        let packed: u64 := lz4_seq_step(buf, n, at, out_len)
+        let next_at: u64 := packed & err
+        let next_out: u64 := packed >> 32
+        if next_at <= at { return err }
+        if next_at > n { return err }
+        if next_out >= max_out { return err }
+        at := next_at
+        out_len := next_out
+    }
+    return out_len
+}
+
+// ---------------------------------------------------------------------------
+// 5. LZ4 Frame Format v1.6.4 magic detector (`lz4_frame_magic`)
+//    Returns 1 for standard LZ4 Frame magic `0x184D2204`, 2 for Skippable Frame
+//    `0x184D2A50..0x184D2A5F`, or 0 otherwise.
+// ---------------------------------------------------------------------------
+def u32_le(buf, o) {
+    buf[o] + buf[o + 1] * 256 + buf[o + 2] * 65536 + buf[o + 3] * 16777216
+}
+
+def frame_magic_of(buf) {
+    if len(buf) < 4 then 0
+    else if u32_le(buf, 0) == 407708164 then 1
+    else if u32_le(buf, 0) >= 407710288 && u32_le(buf, 0) <= 407710303 then 2
+    else 0
+}
+
+fn lz4_frame_magic(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns frame_magic_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 4 { return 0 }
+    let w: u64 := buf.u32(0)
+    let std_magic: u64 := (0x184D << 16) + 0x2204
+    if w == std_magic { return 1 }
+    let skip_lo: u64 := (0x184D << 16) + 0x2A50
+    let skip_hi: u64 := (0x184D << 16) + 0x2A5F
+    if w >= skip_lo {
+        if w <= skip_hi { return 2 }
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 6. LZ4 Frame Format v1.6.4 header validator & exact byte size (`lz4_frame_hdr_len`)
+//    Checks magic `0x184D2204`, FLG version == 01, FLG reserved bit1 == 0,
+//    BD reserved bits (low 4 + top 1) == 0, BD blockMaxSize in 4..7, and
+//    total header length `7 + (8 if C.Size) + (4 if DictID) <= n`.
+//    Returns exact header byte count (7, 11, 15, or 19), or 0 if invalid.
+// ---------------------------------------------------------------------------
+def frame_hdr_len_of(buf) {
+    if len(buf) < 7 then 0
+    else if u32_le(buf, 0) != 407708164 then 0
+    else if buf[4] / 64 != 1 then 0
+    else if (buf[4] / 2) % 2 != 0 then 0
+    else if buf[5] % 16 != 0 then 0
+    else if buf[5] / 128 != 0 then 0
+    else if (buf[5] / 16) % 8 < 4 then 0
+    else if 7 + ((buf[4] / 8) % 2) * 8 + (buf[4] % 2) * 4 > len(buf) then 0
+    else 7 + ((buf[4] / 8) % 2) * 8 + (buf[4] % 2) * 4
+}
+
+fn lz4_frame_hdr_len(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns frame_hdr_len_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 7 { return 0 }
+    let w: u64 := buf.u32(0)
+    let std_magic: u64 := (0x184D << 16) + 0x2204
+    if w != std_magic { return 0 }
+    let flg: u64 := buf[4]
+    let bd: u64 := buf[5]
+    if (flg >> 6) != 1 { return 0 }
+    if ((flg >> 1) & 1) != 0 { return 0 }
+    if (bd & 15) != 0 { return 0 }
+    if (bd >> 7) != 0 { return 0 }
+    let bsize: u64 := (bd >> 4) & 7
+    if bsize < 4 { return 0 }
+    let has_csize: u64 := (flg >> 3) & 1
+    let has_dict: u64 := flg & 1
+    let hlen: u64 := 7 + (has_csize << 3) + (has_dict << 2)
+    if hlen > n { return 0 }
+    return hlen
+}
+
+// ---------------------------------------------------------------------------
+// 7. 64-byte cache-line-aligned SIMD fast literal block copy (`lz4_copy_lit64`)
+// ---------------------------------------------------------------------------
+def copy16(a) { [a[i] for i in 0..16] }
+
+fn lz4_copy_lit64(out: 64 bytes, src: 64 bytes)
+    requires no_overlap(out, src)
+    requires aligned(out, 64)
+    requires aligned(src, 64)
+    requires line_disjoint(out, src)
+    ensures out = bytes_of(copy16(words(src)))
+    stack 0
+{
+    for x86_64 {
+        let v: u32x16 := src.u32x16(0)
+        out.u32x16(0) := v
+    }
+    for arm64 {
+        for k in 0..4 unroll {
+            let v: u32x4 := src.u32x4(k * 16)
+            out.u32x4(k * 16) := v
+        }
+    }
+}

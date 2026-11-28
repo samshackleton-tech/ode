@@ -1,0 +1,260 @@
+// Sigil 0.1 Byte-to-Glyph Codec Core (github.com/johnservil/sigil, kcheck/programs/sigil/sigil.spec)
+// in 100% Pure High-Level Ode. Portable across x86-64 and AArch64; dual-verified (`--verifier both`).
+
+// ---------------------------------------------------------------------------
+// 1. Sigil letter count `letters(L) = ceil((8 * L + 14) / 11) = (8 * L + 24) / 11`
+//    and check prime `check_prime(L) = CHECK_PRIMES[11 * letters(L) - 8 * L - 14]`
+// ---------------------------------------------------------------------------
+def div11_from(rem, q) {
+    if rem < 11 then q
+    else div11_from(rem - 11, q + 1)
+}
+
+def letters_spec(L) { div11_from(8 * L + 24, 0) }
+
+def check_prime_of_idx(idx) {
+    if idx == 0 then 4093
+    else if idx == 1 then 8179
+    else if idx == 2 then 16381
+    else if idx == 3 then 32749
+    else if idx == 4 then 65519
+    else if idx == 5 then 131063
+    else if idx == 6 then 262133
+    else if idx == 7 then 524269
+    else if idx == 8 then 1048433
+    else if idx == 9 then 2096881
+    else 4193633
+}
+
+def check_prime_spec(L) {
+    check_prime_of_idx(11 * div11_from(8 * L + 24, 0) - 8 * L - 14)
+}
+
+fn sigil_letters(L: number)
+    requires 1 <= L
+    requires L <= 1024
+    returns letters_spec(L)
+    trace depends on L
+    stack 0
+{
+    var rem: u64 := (L << 3) + 24
+    var q: u64 := 0
+    while rem >= 11
+        maintains q * 11 + rem == L * 8 + 24
+        maintains div11_from(rem, q) == div11_from(L * 8 + 24, 0)
+        decreases rem
+    {
+        rem -= 11
+        q += 1
+    }
+    return q
+}
+
+fn sigil_check_prime(L: number)
+    requires 1 <= L
+    requires L <= 1024
+    returns check_prime_spec(L)
+    trace depends on L
+    stack 0
+{
+    var rem: u64 := (L << 3) + 24
+    var q: u64 := 0
+    while rem >= 11
+        maintains q * 11 + rem == L * 8 + 24
+        maintains div11_from(rem, q) == div11_from(L * 8 + 24, 0)
+        decreases rem
+    {
+        rem -= 11
+        q += 1
+    }
+    let q11: u64 := (q << 3) + (q << 1) + q
+    let idx: u64 := q11 - (L << 3) - 14
+    let one: u64 := 1
+    if idx == 0 { return 4093 }
+    if idx == 1 { return 8179 }
+    if idx == 2 { return 16381 }
+    if idx == 3 { return 32749 }
+    if idx == 4 { return 65519 }
+    if idx == 5 { return (one << 17) - 9 }
+    if idx == 6 { return (one << 18) - 11 }
+    if idx == 7 { return (one << 19) - 19 }
+    if idx == 8 { return (one << 20) - 143 }
+    if idx == 9 { return (one << 21) - 271 }
+    return (one << 22) - 671
+}
+
+// ---------------------------------------------------------------------------
+// 2. 4-byte Sigil marker insertion `marked(4, d)` (`sigil_marked4`)
+//    Inserts marker bits `01` between high 16 bits and low 16 bits of `d`.
+// ---------------------------------------------------------------------------
+def marked4_spec(d) {
+    (4 * (d / 65536) + 1) * 65536 + d % 65536
+}
+
+fn sigil_marked4(d: number)
+    requires d < 4294967296
+    returns marked4_spec(d)
+    stack 0
+{
+    let hi: u64 := d >> 16
+    let lo: u64 := d & 65535
+    return (((hi << 2) + 1) << 16) + lo
+}
+
+// ---------------------------------------------------------------------------
+// 3. Full 4-byte Sigil product encoder (`sigil_encode4_word`)
+//    Reads 4 big-endian bytes `d`, inserts marker `01`, and multiplies by
+//    `check_prime(4) = 2096881 = 2^21 - 2^8 - 2^4 + 1` (exact 55-bit word).
+// ---------------------------------------------------------------------------
+def u32_be(buf) {
+    buf[0] * 16777216 + buf[1] * 65536 + buf[2] * 256 + buf[3]
+}
+
+def encode4_word_spec(buf) {
+    marked4_spec(u32_be(buf)) * 2096881
+}
+
+fn sigil_encode4_word(buf: n bytes, n: number)
+    requires n >= 4
+    requires n < 4294967296
+    returns encode4_word_spec(buf)
+    stack 0
+{
+    let b0: u64 := buf[0]
+    let b1: u64 := buf[1]
+    let b2: u64 := buf[2]
+    let b3: u64 := buf[3]
+    let hi: u64 := (b0 << 8) + b1
+    let lo: u64 := (b2 << 8) + b3
+    let m: u64 := (((hi << 2) + 1) << 16) + lo
+    // 2096881 = 2^21 - 2^8 - 2^4 + 1 (zero overflow since m < 2^34 -> m << 21 < 2^55)
+    let p: u64 := (m << 21) - (m << 8) - (m << 4) + m
+    return p
+}
+
+// ---------------------------------------------------------------------------
+// 4. 4-byte Sigil base-2048 digit extractor (`sigil_digit5`)
+//    Extracts the k-th MSB-first 11-bit base-2048 digit of a 5-letter word `w`.
+// ---------------------------------------------------------------------------
+def digit5_spec(w, k) {
+    if k == 0 then (w / 17592186044416) % 2048
+    else if k == 1 then (w / 8589934592) % 2048
+    else if k == 2 then (w / 4194304) % 2048
+    else if k == 3 then (w / 2048) % 2048
+    else w % 2048
+}
+
+fn sigil_digit5(w: number, k: number)
+    requires w < 36028797018963968
+    requires k < 5
+    returns digit5_spec(w, k)
+    trace depends on k
+    stack 0
+{
+    if k == 0 { return (w >> 44) & 2047 }
+    if k == 1 { return (w >> 33) & 2047 }
+    if k == 2 { return (w >> 22) & 2047 }
+    if k == 3 { return (w >> 11) & 2047 }
+    return w & 2047
+}
+
+// ---------------------------------------------------------------------------
+// 5. 4-byte Sigil checksum & marker verification (`sigil_verify4_decode`)
+//    Returns 1 iff 55-bit Sigil word `w` equals `marked(4, d) * 2096881`, else 0.
+// ---------------------------------------------------------------------------
+def verify4_spec(w, d) {
+    if marked4_spec(d) * 2096881 == w then 1 else 0
+}
+
+fn sigil_verify4_decode(w: number, d: number)
+    requires w < 36028797018963968
+    requires d < 4294967296
+    returns verify4_spec(w, d)
+    trace depends on w, d
+    stack 0
+{
+    let hi: u64 := d >> 16
+    let lo: u64 := d & 65535
+    let m: u64 := (((hi << 2) + 1) << 16) + lo
+    let expected: u64 := (m << 21) - (m << 8) - (m << 4) + m
+    if expected == w { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 6. 32-byte Sigil multi-limb multiply-add step (`sigil_mul_k32_limb`)
+//    Computes `limb * check_prime(32) + carry` where `check_prime(32) = 131063`
+//    (`2^17 - 2^3 - 1`), the exact inner step of 32-byte `ode_sigil32`.
+// ---------------------------------------------------------------------------
+def mul_k32_spec(limb, carry) {
+    limb * 131063 + carry
+}
+
+fn sigil_mul_k32_limb(limb: number, carry: number)
+    requires limb < 4294967296
+    requires carry < 131063
+    returns mul_k32_spec(limb, carry)
+    stack 0
+{
+    let prod: u64 := (limb << 17) - (limb << 3) - limb
+    return prod + carry
+}
+
+// ---------------------------------------------------------------------------
+// 7. Sigil BMP 3-byte UTF-8 encoder (`sigil_utf8_pack3`)
+//    Packs `utf8(p) = [224 + p/4096, 128 + (p/64)%64, 128 + p%64]` into
+//    `b0 + b1*256 + b2*65536` for any BMP glyph `0x0800 <= p <= 0xFFFF`.
+// ---------------------------------------------------------------------------
+def utf8_pack3_spec(p) {
+    (224 + p / 4096) + (128 + (p / 64) % 64) * 256 + (128 + p % 64) * 65536
+}
+
+fn sigil_utf8_pack3(p: number)
+    requires 2048 <= p
+    requires p <= 65535
+    returns utf8_pack3_spec(p)
+    stack 0
+{
+    let b0: u64 := 224 + (p >> 12)
+    let b1: u64 := 128 + ((p >> 6) & 63)
+    let b2: u64 := 128 + (p & 63)
+    return b0 + (b1 << 8) + (b2 << 16)
+}
+
+// ---------------------------------------------------------------------------
+// 8. Strict 3-byte UTF-8 decoder for Sigil glyphs (`sigil_utf8_decode3`)
+//    Validates 3-byte UTF-8 encoding (`E0..EF`, `80..BF`, `80..BF`), rejects
+//    overlong sequences (`< U+0800`) and UTF-16 surrogates (`U+D800..U+DFFF`).
+//    Returns exact BMP code point (0x0800..0xFFFF), or 0 if invalid.
+// ---------------------------------------------------------------------------
+def utf8_decode3_spec(b0, b1, b2) {
+    if b0 < 224 || b0 > 239 then 0
+    else if b1 < 128 || b1 > 191 then 0
+    else if b2 < 128 || b2 > 191 then 0
+    else if b0 == 224 && b1 < 160 then 0
+    else if b0 == 237 && b1 >= 160 then 0
+    else (b0 - 224) * 4096 + (b1 - 128) * 64 + (b2 - 128)
+}
+
+fn sigil_utf8_decode3(b0: u8, b1: u8, b2: u8)
+    returns utf8_decode3_spec(b0, b1, b2)
+    trace depends on b0, b1, b2
+    stack 0
+{
+    if b0 < 224 { return 0 }
+    if b0 > 239 { return 0 }
+    if b1 < 128 { return 0 }
+    if b1 > 191 { return 0 }
+    if b2 < 128 { return 0 }
+    if b2 > 191 { return 0 }
+    if b0 == 224 {
+        if b1 < 160 { return 0 }
+    }
+    if b0 == 237 {
+        if b1 >= 160 { return 0 }
+    }
+    let p0: u64 := (b0 - 224) << 12
+    let p1: u64 := (b1 - 128) << 6
+    let p2: u64 := b2 - 128
+    return p0 + p1 + p2
+}
