@@ -1,260 +1,177 @@
 use spec = "r6y26tckd64yc2ryvfe6ekd6tcepzrjmksdufiqqx6xmqvoix2ta"  // chacha20_4way_spec.ode
+use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
 
-inline fn qr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
-    distinct(a, b, c, d)
-    changes a, b, c, d
-{
-    vpaddd a, a, b
-    vpxord d, d, a
-    vprord d, d, 16
-    vpaddd c, c, d
-    vpxord b, b, c
-    vprord b, b, 20
-    vpaddd a, a, b
-    vpxord d, d, a
-    vprord d, d, 24
-    vpaddd c, c, d
-    vpxord b, b, c
-    vprord b, b, 25
+inline fn qr16(var a: u32x16, var b: u32x16, var c: u32x16, var d: u32x16) {
+    a +%= b
+    d := vec.rotl32_x16(d ^ a, 16)
+    c +%= d
+    b := vec.rotl32_x16(b ^ c, 12)
+    a +%= b
+    d := vec.rotl32_x16(d ^ a, 8)
+    c +%= d
+    b := vec.rotl32_x16(b ^ c, 7)
 }
 
-inline fn dr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
-    distinct(a, b, c, d)
-    changes a, b, c, d
-{
-    qr_x86(a, b, c, d)
-    vpshufd b, b, 57
-    vpshufd c, c, 78
-    vpshufd d, d, 147
-    qr_x86(a, b, c, d)
-    vpshufd b, b, 147
-    vpshufd c, c, 78
-    vpshufd d, d, 57
+// Self-inverse 4x4 word transpose within each 128-bit quarter of 4 x u32x16.
+inline fn transpose_in_q(var x0: u32x16, var x1: u32x16, var x2: u32x16, var x3: u32x16) {
+    let u0: u32x16 := unpacklo32(x0, x1)
+    let u1: u32x16 := unpackhi32(x0, x1)
+    let u2: u32x16 := unpacklo32(x2, x3)
+    let u3: u32x16 := unpackhi32(x2, x3)
+    x0 := unpacklo64(u0, u2)
+    x1 := unpackhi64(u0, u2)
+    x2 := unpacklo64(u1, u3)
+    x3 := unpackhi64(u1, u3)
 }
 
-inline fn ten_dr_x86 for x86_64 (a: xmm, b: xmm, c: xmm, d: xmm)
-    distinct(a, b, c, d)
-    changes a, b, c, d
-{
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
-    dr_x86(a, b, c, d)
+// Self-inverse 4x4 128-bit quarter transpose across 4 x u32x16.
+inline fn transpose_q(var c0: u32x16, var c1: u32x16, var c2: u32x16, var c3: u32x16) {
+    let q0: u32x16 := shufi32x4(c0, c1, 0x44)
+    let q1: u32x16 := shufi32x4(c0, c1, 0xEE)
+    let q2: u32x16 := shufi32x4(c2, c3, 0x44)
+    let q3: u32x16 := shufi32x4(c2, c3, 0xEE)
+    c0 := shufi32x4(q0, q2, 0x88)
+    c1 := shufi32x4(q0, q2, 0xDD)
+    c2 := shufi32x4(q1, q3, 0x88)
+    c3 := shufi32x4(q1, q3, 0xDD)
 }
 
-inline fn qr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
-    distinct(a, b, c, d, t1, t2)
-    changes a, b, c, d, t1, t2
-{
-    add a.4s, a.4s, b.4s
-    eor d.16b, d.16b, a.16b
-    rev32 d.8h, d.8h
-    add c.4s, c.4s, d.4s
-    eor b.16b, b.16b, c.16b
-    shl t1.4s, b.4s, 12
-    ushr t2.4s, b.4s, 20
-    orr b.16b, t1.16b, t2.16b
-    add a.4s, a.4s, b.4s
-    eor d.16b, d.16b, a.16b
-    shl t1.4s, d.4s, 8
-    ushr t2.4s, d.4s, 24
-    orr d.16b, t1.16b, t2.16b
-    add c.4s, c.4s, d.4s
-    eor b.16b, b.16b, c.16b
-    shl t1.4s, b.4s, 7
-    ushr t2.4s, b.4s, 25
-    orr b.16b, t1.16b, t2.16b
-}
-
-inline fn dr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
-    distinct(a, b, c, d, t1, t2)
-    changes a, b, c, d, t1, t2
-{
-    qr_arm(a, b, c, d, t1, t2)
-    ext b.16b, b.16b, b.16b, 4
-    ext c.16b, c.16b, c.16b, 8
-    ext d.16b, d.16b, d.16b, 12
-    qr_arm(a, b, c, d, t1, t2)
-    ext b.16b, b.16b, b.16b, 12
-    ext c.16b, c.16b, c.16b, 8
-    ext d.16b, d.16b, d.16b, 4
-}
-
-inline fn ten_dr_arm for arm64 (a: vec, b: vec, c: vec, d: vec, t1: vec, t2: vec)
-    distinct(a, b, c, d, t1, t2)
-    changes a, b, c, d, t1, t2
-{
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
-    dr_arm(a, b, c, d, t1, t2)
+// 4-way interleaved 128-bit ChaCha20 quarter-round (fills all 4 NEON pipes, zero spills).
+inline fn qr4_quad(
+    var a0: u32x4, var b0: u32x4, var c0: u32x4, var d0: u32x4,
+    var a1: u32x4, var b1: u32x4, var c1: u32x4, var d1: u32x4,
+    var a2: u32x4, var b2: u32x4, var c2: u32x4, var d2: u32x4,
+    var a3: u32x4, var b3: u32x4, var c3: u32x4, var d3: u32x4
+) {
+    a0 +%= b0
+    a1 +%= b1
+    a2 +%= b2
+    a3 +%= b3
+    d0 := vec.rotl32(d0 ^ a0, 16)
+    d1 := vec.rotl32(d1 ^ a1, 16)
+    d2 := vec.rotl32(d2 ^ a2, 16)
+    d3 := vec.rotl32(d3 ^ a3, 16)
+    c0 +%= d0
+    c1 +%= d1
+    c2 +%= d2
+    c3 +%= d3
+    b0 := vec.rotl32(b0 ^ c0, 12)
+    b1 := vec.rotl32(b1 ^ c1, 12)
+    b2 := vec.rotl32(b2 ^ c2, 12)
+    b3 := vec.rotl32(b3 ^ c3, 12)
+    a0 +%= b0
+    a1 +%= b1
+    a2 +%= b2
+    a3 +%= b3
+    d0 := vec.rotl32(d0 ^ a0, 8)
+    d1 := vec.rotl32(d1 ^ a1, 8)
+    d2 := vec.rotl32(d2 ^ a2, 8)
+    d3 := vec.rotl32(d3 ^ a3, 8)
+    c0 +%= d0
+    c1 +%= d1
+    c2 +%= d2
+    c3 +%= d3
+    b0 := vec.rotl32(b0 ^ c0, 7)
+    b1 := vec.rotl32(b1 ^ c1, 7)
+    b2 := vec.rotl32(b2 ^ c2, 7)
+    b3 := vec.rotl32(b3 ^ c3, 7)
 }
 
 fn chacha20_4way(out: 256 bytes, st: 256 bytes)
     requires no_overlap(out, st)
     ensures out = bytes_of(spec.chacha20_4way(words(st)))
     stack 256
-{
-    for x86_64 needs avx needs avx512 {
-        // Block 0
-        vmovdqu xmm0, [rsi + 0]
-        vmovdqu xmm1, [rsi + 16]
-        vmovdqu xmm2, [rsi + 32]
-        vmovdqu xmm3, [rsi + 48]
-        vmovdqa xmm4, xmm0
-        vmovdqa xmm5, xmm1
-        vmovdqa xmm6, xmm2
-        vmovdqa xmm7, xmm3
-        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
-        vpaddd xmm0, xmm0, xmm4
-        vpaddd xmm1, xmm1, xmm5
-        vpaddd xmm2, xmm2, xmm6
-        vpaddd xmm3, xmm3, xmm7
-        vmovdqu [rdi + 0], xmm0
-        vmovdqu [rdi + 16], xmm1
-        vmovdqu [rdi + 32], xmm2
-        vmovdqu [rdi + 48], xmm3
-        // Block 1
-        vmovdqu xmm0, [rsi + 64]
-        vmovdqu xmm1, [rsi + 80]
-        vmovdqu xmm2, [rsi + 96]
-        vmovdqu xmm3, [rsi + 112]
-        vmovdqa xmm4, xmm0
-        vmovdqa xmm5, xmm1
-        vmovdqa xmm6, xmm2
-        vmovdqa xmm7, xmm3
-        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
-        vpaddd xmm0, xmm0, xmm4
-        vpaddd xmm1, xmm1, xmm5
-        vpaddd xmm2, xmm2, xmm6
-        vpaddd xmm3, xmm3, xmm7
-        vmovdqu [rdi + 64], xmm0
-        vmovdqu [rdi + 80], xmm1
-        vmovdqu [rdi + 96], xmm2
-        vmovdqu [rdi + 112], xmm3
-        // Block 2
-        vmovdqu xmm0, [rsi + 128]
-        vmovdqu xmm1, [rsi + 144]
-        vmovdqu xmm2, [rsi + 160]
-        vmovdqu xmm3, [rsi + 176]
-        vmovdqa xmm4, xmm0
-        vmovdqa xmm5, xmm1
-        vmovdqa xmm6, xmm2
-        vmovdqa xmm7, xmm3
-        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
-        vpaddd xmm0, xmm0, xmm4
-        vpaddd xmm1, xmm1, xmm5
-        vpaddd xmm2, xmm2, xmm6
-        vpaddd xmm3, xmm3, xmm7
-        vmovdqu [rdi + 128], xmm0
-        vmovdqu [rdi + 144], xmm1
-        vmovdqu [rdi + 160], xmm2
-        vmovdqu [rdi + 176], xmm3
-        // Block 3
-        vmovdqu xmm0, [rsi + 192]
-        vmovdqu xmm1, [rsi + 208]
-        vmovdqu xmm2, [rsi + 224]
-        vmovdqu xmm3, [rsi + 240]
-        vmovdqa xmm4, xmm0
-        vmovdqa xmm5, xmm1
-        vmovdqa xmm6, xmm2
-        vmovdqa xmm7, xmm3
-        ten_dr_x86(xmm0, xmm1, xmm2, xmm3)
-        vpaddd xmm0, xmm0, xmm4
-        vpaddd xmm1, xmm1, xmm5
-        vpaddd xmm2, xmm2, xmm6
-        vpaddd xmm3, xmm3, xmm7
-        vmovdqu [rdi + 192], xmm0
-        vmovdqu [rdi + 208], xmm1
-        vmovdqu [rdi + 224], xmm2
-        vmovdqu [rdi + 240], xmm3
-        ret
+for x86_64 needs avx needs avx512 {
+    var a: u32x16 := st.u32x16(0)
+    var b: u32x16 := st.u32x16(64)
+    var c: u32x16 := st.u32x16(128)
+    var d: u32x16 := st.u32x16(192)
+    transpose_in_q(a, b, c, d)
+    transpose_q(a, b, c, d)
+    let a0: u32x16 := a
+    let b0: u32x16 := b
+    let c0: u32x16 := c
+    let d0: u32x16 := d
+    for r in 0..10 unroll {
+        qr16(a, b, c, d)
+        b := shufi32x4(b, b, 0x39)
+        c := shufi32x4(c, c, 0x4E)
+        d := shufi32x4(d, d, 0x93)
+        qr16(a, b, c, d)
+        b := shufi32x4(b, b, 0x93)
+        c := shufi32x4(c, c, 0x4E)
+        d := shufi32x4(d, d, 0x39)
     }
-    for arm64 {
-        // Block 0
-        ldr q0, [x1, 0]
-        ldr q1, [x1, 16]
-        ldr q2, [x1, 32]
-        ldr q3, [x1, 48]
-        mov v4.16b, v0.16b
-        mov v5.16b, v1.16b
-        mov v6.16b, v2.16b
-        mov v7.16b, v3.16b
-        ten_dr_arm(v0, v1, v2, v3, v16, v17)
-        add v0.4s, v0.4s, v4.4s
-        add v1.4s, v1.4s, v5.4s
-        add v2.4s, v2.4s, v6.4s
-        add v3.4s, v3.4s, v7.4s
-        str q0, [x0, 0]
-        str q1, [x0, 16]
-        str q2, [x0, 32]
-        str q3, [x0, 48]
-        // Block 1
-        ldr q0, [x1, 64]
-        ldr q1, [x1, 80]
-        ldr q2, [x1, 96]
-        ldr q3, [x1, 112]
-        mov v4.16b, v0.16b
-        mov v5.16b, v1.16b
-        mov v6.16b, v2.16b
-        mov v7.16b, v3.16b
-        ten_dr_arm(v0, v1, v2, v3, v16, v17)
-        add v0.4s, v0.4s, v4.4s
-        add v1.4s, v1.4s, v5.4s
-        add v2.4s, v2.4s, v6.4s
-        add v3.4s, v3.4s, v7.4s
-        str q0, [x0, 64]
-        str q1, [x0, 80]
-        str q2, [x0, 96]
-        str q3, [x0, 112]
-        // Block 2
-        ldr q0, [x1, 128]
-        ldr q1, [x1, 144]
-        ldr q2, [x1, 160]
-        ldr q3, [x1, 176]
-        mov v4.16b, v0.16b
-        mov v5.16b, v1.16b
-        mov v6.16b, v2.16b
-        mov v7.16b, v3.16b
-        ten_dr_arm(v0, v1, v2, v3, v16, v17)
-        add v0.4s, v0.4s, v4.4s
-        add v1.4s, v1.4s, v5.4s
-        add v2.4s, v2.4s, v6.4s
-        add v3.4s, v3.4s, v7.4s
-        str q0, [x0, 128]
-        str q1, [x0, 144]
-        str q2, [x0, 160]
-        str q3, [x0, 176]
-        // Block 3
-        ldr q0, [x1, 192]
-        ldr q1, [x1, 208]
-        ldr q2, [x1, 224]
-        ldr q3, [x1, 240]
-        mov v4.16b, v0.16b
-        mov v5.16b, v1.16b
-        mov v6.16b, v2.16b
-        mov v7.16b, v3.16b
-        ten_dr_arm(v0, v1, v2, v3, v16, v17)
-        add v0.4s, v0.4s, v4.4s
-        add v1.4s, v1.4s, v5.4s
-        add v2.4s, v2.4s, v6.4s
-        add v3.4s, v3.4s, v7.4s
-        str q0, [x0, 192]
-        str q1, [x0, 208]
-        str q2, [x0, 224]
-        str q3, [x0, 240]
-        ret
+    a +%= a0
+    b +%= b0
+    c +%= c0
+    d +%= d0
+    transpose_q(a, b, c, d)
+    transpose_in_q(a, b, c, d)
+    out.u32x16(0) := a
+    out.u32x16(64) := b
+    out.u32x16(128) := c
+    out.u32x16(192) := d
+}
+for arm64 {
+    var a0: u32x4 := st.u32x4(0)
+    var b0: u32x4 := st.u32x4(16)
+    var c0: u32x4 := st.u32x4(32)
+    var d0: u32x4 := st.u32x4(48)
+    var a1: u32x4 := st.u32x4(64)
+    var b1: u32x4 := st.u32x4(80)
+    var c1: u32x4 := st.u32x4(96)
+    var d1: u32x4 := st.u32x4(112)
+    var a2: u32x4 := st.u32x4(128)
+    var b2: u32x4 := st.u32x4(144)
+    var c2: u32x4 := st.u32x4(160)
+    var d2: u32x4 := st.u32x4(176)
+    var a3: u32x4 := st.u32x4(192)
+    var b3: u32x4 := st.u32x4(208)
+    var c3: u32x4 := st.u32x4(224)
+    var d3: u32x4 := st.u32x4(240)
+    for r in 0..10 unroll {
+        qr4_quad(a0, b0, c0, d0, a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3)
+        b0 := ext4(b0, b0)
+        b1 := ext4(b1, b1)
+        b2 := ext4(b2, b2)
+        b3 := ext4(b3, b3)
+        c0 := ext8(c0, c0)
+        c1 := ext8(c1, c1)
+        c2 := ext8(c2, c2)
+        c3 := ext8(c3, c3)
+        d0 := ext12(d0, d0)
+        d1 := ext12(d1, d1)
+        d2 := ext12(d2, d2)
+        d3 := ext12(d3, d3)
+        qr4_quad(a0, b0, c0, d0, a1, b1, c1, d1, a2, b2, c2, d2, a3, b3, c3, d3)
+        b0 := ext12(b0, b0)
+        b1 := ext12(b1, b1)
+        b2 := ext12(b2, b2)
+        b3 := ext12(b3, b3)
+        c0 := ext8(c0, c0)
+        c1 := ext8(c1, c1)
+        c2 := ext8(c2, c2)
+        c3 := ext8(c3, c3)
+        d0 := ext4(d0, d0)
+        d1 := ext4(d1, d1)
+        d2 := ext4(d2, d2)
+        d3 := ext4(d3, d3)
     }
+    out.u32x4(0) := a0 +% st.u32x4(0)
+    out.u32x4(16) := b0 +% st.u32x4(16)
+    out.u32x4(32) := c0 +% st.u32x4(32)
+    out.u32x4(48) := d0 +% st.u32x4(48)
+    out.u32x4(64) := a1 +% st.u32x4(64)
+    out.u32x4(80) := b1 +% st.u32x4(80)
+    out.u32x4(96) := c1 +% st.u32x4(96)
+    out.u32x4(112) := d1 +% st.u32x4(112)
+    out.u32x4(128) := a2 +% st.u32x4(128)
+    out.u32x4(144) := b2 +% st.u32x4(144)
+    out.u32x4(160) := c2 +% st.u32x4(160)
+    out.u32x4(176) := d2 +% st.u32x4(176)
+    out.u32x4(192) := a3 +% st.u32x4(192)
+    out.u32x4(208) := b3 +% st.u32x4(208)
+    out.u32x4(224) := c3 +% st.u32x4(224)
+    out.u32x4(240) := d3 +% st.u32x4(240)
 }

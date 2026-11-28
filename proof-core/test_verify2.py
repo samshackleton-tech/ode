@@ -715,7 +715,7 @@ fn fast_sum(a: n bytes, n: number)
                 r2 = subprocess.run([sys.executable, os.path.join(HERE, "verify2.py"), tab, st_p, pf_p],
                                     capture_output=True, text=True)
                 self.assertEqual(r2.returncode, 0, r2.stdout + r2.stderr)
-                self.assertIn("shown (8 functions, verify2)", r2.stdout)
+                self.assertIn("shown (4 functions, verify2)", r2.stdout)
 
     def test_09_cmov_csel_constant_time_and_refusal(self):
         """Constant-time `cmov*` (x86-64) and `csel` (AArch64) pass both verifiers; branching on their result is refused."""
