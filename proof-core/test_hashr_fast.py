@@ -112,8 +112,10 @@ class HashrFastTests(unittest.TestCase):
             res = ode_audit.pack_bundle(
                 unit_elfs, order19, "b3l_hashr", full_spec, out_o, out_p,
                 existing_proof_path=comb_prf,
+                verifier="both",
             )
             self.assertEqual(res["verdict"], "shown", res)
+            self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
             self.assertEqual(res["contract_b32"], "7jb2pyzuwz6tqd3qmjsra3mk36tl4547sfpy3at5scbk772lbila")
             self.assertEqual(res["coverage"]["functions"], 19)
             self.assertEqual(res["coverage"]["local_helpers"], 18)

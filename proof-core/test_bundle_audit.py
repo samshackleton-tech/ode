@@ -348,8 +348,10 @@ class BundleAuditTests(unittest.TestCase):
             out_o,
             out_p,
             existing_proof_path=os.path.join(HERE, "proofs", "b3hashr_arm64.proof"),
+            verifier="both",
         )
         self.assertEqual(res["verdict"], "shown", res)
+        self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
         self.assertEqual(res["contract_b32"], "ckdrhllybtjzr7vgscyhlgz6sxqaga347kozoepvqk3b54ohbfra")
         self.assertEqual(res["coverage"]["functions"], 7)
         self.assertEqual(res["coverage"]["local_helpers"], 6)
@@ -429,8 +431,10 @@ class BundleAuditTests(unittest.TestCase):
             out_o,
             out_p,
             existing_proof_path=comb_prf,
+            verifier="both",
         )
         self.assertEqual(res["verdict"], "shown", res)
+        self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
         self.assertEqual(res["contract_b32"], "7jb2pyzuwz6tqd3qmjsra3mk36tl4547sfpy3at5scbk772lbila")
         self.assertEqual(res["coverage"]["functions"], 14)
         self.assertEqual(res["coverage"]["local_helpers"], 13)

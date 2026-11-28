@@ -96,8 +96,10 @@ class TestHashrArm64Fast(unittest.TestCase):
                 HASH_ODE, None, out_o, None,
                 fn_name="hashr_arm64", target="arm64",
                 existing_bundle_proof=KEPT_PROOF,
+                verifier="both",
             )
             self.assertEqual(res["verdict"], "shown", res)
+            self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
             self.assertEqual(res["contract_b32"], CONTRACT_B32)
             self.assertEqual(res["coverage"]["functions"], 8)
             self.assertEqual(res["coverage"]["local_helpers"], 7)
