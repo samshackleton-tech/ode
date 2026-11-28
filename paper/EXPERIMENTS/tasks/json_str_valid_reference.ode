@@ -1,331 +1,51 @@
 use spec = "5p2s6autx4gpak5n34fuom4egxjthz6l34sma2uko5hjwpw2dmta"  // json_str_valid_spec.ode
 
-// Check whether byte `c` is an ASCII hexadecimal digit ('0'-'9', 'A'-'F', 'a'-'f').
-fn chk_hex(c: number)
-    requires c < 256
+fn check_hex(c: u8) -> u64
     returns spec.is_hex(c)
     trace depends on c
-    stack 0
 {
-    for x86_64 calling {
-        in c = rdx
-        out = rax
-        preserves rbx, rbp, r12, r13, r14, r15, rdi, rsi, rcx, r8, r9
-    } {
-        cmp rdx, 48
-        jb @no
-        cmp rdx, 57
-        jbe @yes
-        cmp rdx, 65
-        jb @no
-        cmp rdx, 70
-        jbe @yes
-        cmp rdx, 97
-        jb @no
-        cmp rdx, 102
-        jbe @yes
-    @no:
-        rax := 0
-        ret
-    @yes:
-        rax := 1
-        ret
-    }
-    for arm64 calling {
-        in c = x4
-        out = x0
-        preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x1, x2, x3, x5
-    } {
-        cmp x4, 48
-        b.lo @no
-        cmp x4, 57
-        b.ls @yes
-        cmp x4, 65
-        b.lo @no
-        cmp x4, 70
-        b.ls @yes
-        cmp x4, 97
-        b.lo @no
-        cmp x4, 102
-        b.ls @yes
-    @no:
-        x0 := 0
-        ret
-    @yes:
-        x0 := 1
-        ret
-    }
+    if 48 <= c && c <= 57 { return 1 }
+    if 65 <= c && c <= 70 { return 1 }
+    if 97 <= c && c <= 102 { return 1 }
+    return 0
 }
 
-// Check whether byte `c` is one of the 8 single-character JSON escapes: " \ / b f n r t.
-fn chk_simple_esc(c: number)
-    requires c < 256
-    returns spec.is_simple_esc(c)
-    trace depends on c
-    stack 0
-{
-    for x86_64 calling {
-        in c = rdx
-        out = rax
-        preserves rbx, rbp, r12, r13, r14, r15, rdi, rsi, rcx, rdx, r8, r9
-    } {
-        cmp rdx, 34
-        je @yes
-        cmp rdx, 92
-        je @yes
-        cmp rdx, 47
-        je @yes
-        cmp rdx, 98
-        je @yes
-        cmp rdx, 102
-        je @yes
-        cmp rdx, 110
-        je @yes
-        cmp rdx, 114
-        je @yes
-        cmp rdx, 116
-        je @yes
-        rax := 0
-        ret
-    @yes:
-        rax := 1
-        ret
-    }
-    for arm64 calling {
-        in c = x4
-        out = x0
-        preserves x19, x20, x21, x22, x23, x24, x25, x26, x27, x28, x29, x1, x2, x3, x4, x5
-    } {
-        cmp x4, 34
-        b.eq @yes
-        cmp x4, 92
-        b.eq @yes
-        cmp x4, 47
-        b.eq @yes
-        cmp x4, 98
-        b.eq @yes
-        cmp x4, 102
-        b.eq @yes
-        cmp x4, 110
-        b.eq @yes
-        cmp x4, 114
-        b.eq @yes
-        cmp x4, 116
-        b.eq @yes
-        x0 := 0
-        ret
-    @yes:
-        x0 := 1
-        ret
-    }
-}
-
-// RFC 8259 ASCII JSON string literal validator.
 fn json_str_valid(src: n bytes, n: number)
     requires n <= 4096
     returns spec.json_str_valid(src)
     trace depends on src, n
     stack 32
 {
-    for x86_64 {
-        sub rsp, 24
-        cmp rsi, 2
-        jb @bad
-        movzx eax, byte ptr [rdi]
-        cmp rax, 34
-        jne @bad
-        mov r8, rsi
-        sub r8, 1           // end = n - 1
-        mov r9, rdi
-        add r9, r8
-        movzx eax, byte ptr [r9]
-        cmp rax, 34
-        jne @bad
-
-        rcx := 1            // i = 1
-        place {
-            fact 1 <= rcx
-            fact rcx <= r8
-            fact r8 == n - 1
-            keep rdi, rsi, r8
-            fact spec.json_str_valid(src) == spec.json_body_valid(src, rcx, r8)
-            decreases r8 - rcx
+    if n < 2 { return 0 }
+    if src[0] != 34 { return 0 }
+    let end: u64 := n - 1
+    if src[end] != 34 { return 0 }
+    var i: u64 := 1
+    while i < end
+        maintains 1 <= i, i <= end
+        maintains spec.json_str_valid(src) == spec.json_body_valid(src, i, end)
+        decreases end - i
+    {
+        let c: u64 := src[i]
+        if c == 92 {
+            if i + 1 >= end { return 0 }
+            let e: u64 := src[i + 1]
+            if e == 34 || e == 92 || e == 47 || e == 98 || e == 102 || e == 110 || e == 114 || e == 116 {
+                i += 2
+            } else if e == 117 {
+                if i + 5 >= end { return 0 }
+                if check_hex(src[i + 2]) != 1 { return 0 }
+                if check_hex(src[i + 3]) != 1 { return 0 }
+                if check_hex(src[i + 4]) != 1 { return 0 }
+                if check_hex(src[i + 5]) != 1 { return 0 }
+                i += 6
+            } else {
+                return 0
+            }
+        } else {
+            if c < 32 || c == 34 || c > 126 { return 0 }
+            i += 1
         }
-    @loop:
-        cmp rcx, r8
-        jae @ok
-        mov r9, rdi
-        add r9, rcx
-        movzx eax, byte ptr [r9]
-        cmp rax, 92
-        je @esc
-        cmp rax, 32
-        jb @bad
-        cmp rax, 34
-        je @bad
-        cmp rax, 126
-        ja @bad
-        add rcx, 1
-        jmp @loop
-
-    @esc:
-        mov r10, rcx
-        add r10, 1
-        cmp r10, r8
-        jae @bad
-        mov r9, rdi
-        add r9, r10
-        movzx edx, byte ptr [r9]
-        call chk_simple_esc
-        cmp rax, 1
-        je @esc2
-        cmp rdx, 117
-        jne @bad
-        mov r10, rcx
-        add r10, 5
-        cmp r10, r8
-        jae @bad
-
-        mov r9, rdi
-        add r9, rcx
-        movzx edx, byte ptr [r9 + 2]
-        call chk_hex
-        cmp rax, 1
-        jne @bad
-
-        mov r9, rdi
-        add r9, rcx
-        movzx edx, byte ptr [r9 + 3]
-        call chk_hex
-        cmp rax, 1
-        jne @bad
-
-        mov r9, rdi
-        add r9, rcx
-        movzx edx, byte ptr [r9 + 4]
-        call chk_hex
-        cmp rax, 1
-        jne @bad
-
-        mov r9, rdi
-        add r9, rcx
-        movzx edx, byte ptr [r9 + 5]
-        call chk_hex
-        cmp rax, 1
-        jne @bad
-
-        add rcx, 6
-        jmp @loop
-
-    @esc2:
-        add rcx, 2
-        jmp @loop
-
-    @ok:
-        rax := 1
-        add rsp, 24
-        ret
-    @bad:
-        rax := 0
-        add rsp, 24
-        ret
     }
-    for arm64 {
-        sub sp, sp, 32
-        str x30, [sp, 0]
-        mov x5, x0          // src
-        mov x2, x1          // n
-        cmp x2, 2
-        b.lo @bad
-        ldrb w6, [x5, 0]
-        cmp x6, 34
-        b.ne @bad
-        sub x3, x2, 1       // end = n - 1
-        add x7, x5, x3
-        ldrb w6, [x7, 0]
-        cmp x6, 34
-        b.ne @bad
-
-        x1 := 1             // i = 1
-        place {
-            fact 1 <= x1
-            fact x1 <= x3
-            fact x3 == n - 1
-            keep x5, x2, x3
-            fact spec.json_str_valid(src) == spec.json_body_valid(src, x1, x3)
-            decreases x3 - x1
-        }
-    @loop:
-        cmp x1, x3
-        b.hs @ok
-        add x7, x5, x1
-        ldrb w6, [x7, 0]
-        cmp x6, 92
-        b.eq @esc
-        cmp x6, 32
-        b.lo @bad
-        cmp x6, 34
-        b.eq @bad
-        cmp x6, 126
-        b.hi @bad
-        add x1, x1, 1
-        b @loop
-
-    @esc:
-        add x8, x1, 1
-        cmp x8, x3
-        b.hs @bad
-        add x7, x5, x8
-        ldrb w4, [x7, 0]
-        bl chk_simple_esc
-        cmp x0, 1
-        b.eq @esc2
-        cmp x4, 117
-        b.ne @bad
-        add x8, x1, 5
-        cmp x8, x3
-        b.hs @bad
-
-        add x7, x5, x1
-        ldrb w4, [x7, 2]
-        bl chk_hex
-        cmp x0, 1
-        b.ne @bad
-
-        add x7, x5, x1
-        ldrb w4, [x7, 3]
-        bl chk_hex
-        cmp x0, 1
-        b.ne @bad
-
-        add x7, x5, x1
-        ldrb w4, [x7, 4]
-        bl chk_hex
-        cmp x0, 1
-        b.ne @bad
-
-        add x7, x5, x1
-        ldrb w4, [x7, 5]
-        bl chk_hex
-        cmp x0, 1
-        b.ne @bad
-
-        add x1, x1, 6
-        b @loop
-
-    @esc2:
-        add x1, x1, 2
-        b @loop
-
-    @ok:
-        x0 := 1
-        ldr x30, [sp, 0]
-        add sp, sp, 32
-        ret
-    @bad:
-        x0 := 0
-        ldr x30, [sp, 0]
-        add sp, sp, 32
-        ret
-    }
+    return 1
 }

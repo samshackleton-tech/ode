@@ -6,152 +6,28 @@ fn byte_sum(a: n bytes, n: number)
     trace depends on n
     stack 0
 {
-    for x86_64 {
-        // rdi = a (base, unchanged), rsi = n (unchanged), rcx = i
-        // rax = s0, r8 = s1, r9 = s2, r10 = s3, r11 = addr (a + i), rdx/edx = tmp
-        rax := 0
-        r8 := 0
-        r9 := 0
-        r10 := 0
-        rcx := 0
-        place {
-            name i = rcx
-            name s0 = rax
-            name s1 = r8
-            name s2 = r9
-            name s3 = r10
-            fact 0 <= i
-            fact i <= n
-            fact 0 <= s0
-            fact 0 <= s1
-            fact 0 <= s2
-            fact 0 <= s3
-            fact s0 + s1 + s2 + s3 <= i * 255
-            fact spec.byte_sum(a) == spec.sum_from(a, i, s0 + s1 + s2 + s3)
-            decreases n - i
-        }
-    @loop8:
-        mov rdx, rsi
-        sub rdx, rcx
-        cmp rdx, 8
-        jb @merge
-        mov r11, rdi
-        add r11, rcx
-        movzx edx, byte ptr [r11 + 0]
-        add rax, rdx
-        movzx edx, byte ptr [r11 + 1]
-        add r8, rdx
-        movzx edx, byte ptr [r11 + 2]
-        add r9, rdx
-        movzx edx, byte ptr [r11 + 3]
-        add r10, rdx
-        movzx edx, byte ptr [r11 + 4]
-        add rax, rdx
-        movzx edx, byte ptr [r11 + 5]
-        add r8, rdx
-        movzx edx, byte ptr [r11 + 6]
-        add r9, rdx
-        movzx edx, byte ptr [r11 + 7]
-        add r10, rdx
-        add rcx, 8
-        jmp @loop8
-    @merge:
-        add rax, r8
-        add rax, r9
-        add rax, r10
-        place {
-            name i = rcx
-            name s = rax
-            fact 0 <= i
-            fact i <= n
-            fact 0 <= s
-            fact s <= i * 255
-            fact spec.byte_sum(a) == spec.sum_from(a, i, s)
-            decreases n - i
-        }
-    @tail:
-        cmp rcx, rsi
-        jae @done
-        mov r11, rdi
-        add r11, rcx
-        movzx edx, byte ptr [r11 + 0]
-        add rax, rdx
-        add rcx, 1
-        jmp @tail
-    @done:
-        ret
+    var i: u64 := 0
+    var s0: u64 := 0
+    var s1: u64 := 0
+    while i + 4 <= n
+        maintains i <= n, s0 + s1 <= i * 255
+        maintains spec.byte_sum(a) == spec.sum_from(a, i, s0 + s1)
+        decreases n - i
+    {
+        s0 += a[i]
+        s1 += a[i + 1]
+        s0 += a[i + 2]
+        s1 += a[i + 3]
+        i += 4
     }
-    for arm64 {
-        // x0 = a (base, unchanged), x1 = n (unchanged), x2 = i
-        // x3 = s0, x4 = s1, x5 = s2, x6 = s3, x7 = limit (n - 7), x12 = addr
-        x2 := 0
-        x3 := 0
-        x4 := 0
-        x5 := 0
-        x6 := 0
-        place {
-            name i = x2
-            name s0 = x3
-            name s1 = x4
-            name s2 = x5
-            name s3 = x6
-            fact 0 <= i
-            fact i <= n
-            fact 0 <= s0
-            fact 0 <= s1
-            fact 0 <= s2
-            fact 0 <= s3
-            fact s0 + s1 + s2 + s3 <= i * 255
-            fact spec.byte_sum(a) == spec.sum_from(a, i, s0 + s1 + s2 + s3)
-            decreases n - i
-        }
-    @loop8:
-        sub x7, x1, x2
-        cmp x7, 8
-        b.lo @merge
-        add x12, x0, x2
-        ldrb w8, [x12, 0]
-        ldrb w9, [x12, 1]
-        ldrb w10, [x12, 2]
-        ldrb w11, [x12, 3]
-        add x3, x3, x8
-        add x4, x4, x9
-        add x5, x5, x10
-        add x6, x6, x11
-        ldrb w8, [x12, 4]
-        ldrb w9, [x12, 5]
-        ldrb w10, [x12, 6]
-        ldrb w11, [x12, 7]
-        add x3, x3, x8
-        add x4, x4, x9
-        add x5, x5, x10
-        add x6, x6, x11
-        add x2, x2, 8
-        b @loop8
-    @merge:
-        add x3, x3, x4
-        add x3, x3, x5
-        add x3, x3, x6
-        place {
-            name i = x2
-            name s = x3
-            fact 0 <= i
-            fact i <= n
-            fact 0 <= s
-            fact s <= i * 255
-            fact spec.byte_sum(a) == spec.sum_from(a, i, s)
-            decreases n - i
-        }
-    @tail:
-        cmp x2, x1
-        b.hs @done
-        add x12, x0, x2
-        ldrb w8, [x12, 0]
-        add x3, x3, x8
-        add x2, x2, 1
-        b @tail
-    @done:
-        mov x0, x3
-        ret
+    var acc: u64 := s0 + s1
+    while i < n
+        maintains i <= n, acc <= i * 255
+        maintains spec.byte_sum(a) == spec.sum_from(a, i, acc)
+        decreases n - i
+    {
+        acc += a[i]
+        i += 1
     }
+    return acc
 }

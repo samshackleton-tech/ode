@@ -6,134 +6,32 @@ fn weighted_sum(a: n bytes, n: number)
     trace depends on n
     stack 0
 {
-    for x86_64 {
-        reg base = rdi, count = rsi, idx = rcx, s1 = r8, s2 = rax
-        reg addr = rdx, b0 = r9, b0w = r9d, b1 = r10, b1w = r10d, b2 = r11, b2w = r11d
-
-        idx := 0
-        s1 := 0
-        s2 := 0
-        cmp count, 4
-        jb @tail
-        place {
-            fact 0 <= idx
-            fact idx + 4 <= n
-            fact 0 <= s1
-            fact s1 <= idx * 255
-            fact 0 <= s2
-            fact s2 <= idx * 1044480
-            fact spec.weighted_sum(a) == spec.wsum_from(a, idx, s1, s2)
-            decreases n - idx
-        }
-    @loop4:
-        lea addr, [base + idx]
-        movzx b0w, byte ptr [addr + 0]
-        movzx b1w, byte ptr [addr + 1]
-        movzx b2w, byte ptr [addr + 2]
-        // s2 += 4 * s1
-        mov addr, s1
-        shl addr, 2
-        add s2, addr
-        // p1 = b0+b1, p2 = p1+b2, sum4 = p2+b3, w = b0 + p1 + p2 + sum4 = 4*b0 + 3*b1 + 2*b2 + b3
-        add b1, b0          // b1 = p1 = b0 + b1
-        add b0, b1          // b0 = 2*b0 + b1
-        add b2, b1          // b2 = p2 = b0 + b1 + b2
-        add b0, b2          // b0 = 3*b0 + 2*b1 + b2
-        lea addr, [base + idx]
-        movzx b1w, byte ptr [addr + 3]
-        add b2, b1          // b2 = sum4 = b0 + b1 + b2 + b3
-        add b0, b2          // b0 = w = 4*b0 + 3*b1 + 2*b2 + b3 (wait: b0+p1+p2+sum4 = 4b0+3b1+2b2+b3!)
-        // Wait: check above: b0 was 3*b0+2*b1+b2, b2 is b0+b1+b2+b3 -> sum is 4*b0+3*b1+2*b2+b3!
-        add s1, b2
-        add s2, b0
-        add idx, 4
-        lea addr, [idx + 4]
-        cmp addr, count
-        jbe @loop4
-
-        place {
-            fact 0 <= idx
-            fact idx <= n
-            fact 0 <= s1
-            fact s1 <= idx * 255
-            fact 0 <= s2
-            fact s2 <= idx * 1044480
-            fact spec.weighted_sum(a) == spec.wsum_from(a, idx, s1, s2)
-            decreases n - idx
-        }
-    @tail:
-        cmp idx, count
-        jae @done
-        lea addr, [base + idx]
-        movzx b0w, byte ptr [addr + 0]
-        add s1, b0
-        add s2, s1
-        add idx, 1
-        jmp @tail
-    @done:
-        ret
+    var i: u64 := 0
+    var s1: u64 := 0
+    var s2: u64 := 0
+    while i + 4 <= n
+        maintains i <= n, s1 <= i * 255, s2 <= i * 1044480
+        maintains spec.weighted_sum(a) == spec.wsum_from(a, i, s1, s2)
+        decreases n - i
+    {
+        s1 += a[i]
+        s2 += s1
+        s1 += a[i + 1]
+        s2 += s1
+        s1 += a[i + 2]
+        s2 += s1
+        s1 += a[i + 3]
+        s2 += s1
+        i += 4
     }
-    for arm64 {
-        reg base = x0, count = x1, idx = x2, s1 = x3, s2 = x4
-        reg addr = x5, tmp = x6
-
-        idx := 0
-        s1 := 0
-        s2 := 0
-        cmp count, 4
-        b.lo @tail
-        place {
-            fact 0 <= idx
-            fact idx + 4 <= n
-            fact 0 <= s1
-            fact s1 <= idx * 255
-            fact 0 <= s2
-            fact s2 <= idx * 1044480
-            fact spec.weighted_sum(a) == spec.wsum_from(a, idx, s1, s2)
-            decreases n - idx
-        }
-    @loop4:
-        add addr, base, idx
-        ldrb w7, [addr, 0]
-        ldrb w8, [addr, 1]
-        ldrb w9, [addr, 2]
-        ldrb w10, [addr, 3]
-        lsl tmp, s1, 2
-        add s2, s2, tmp
-        add x11, x7, x8     // b0 + b1
-        add x12, x7, x11    // 2*b0 + b1
-        add x13, x11, x9    // b0 + b1 + b2
-        add x14, x12, x13   // 3*b0 + 2*b1 + b2
-        add x13, x13, x10   // sum4 = b0 + b1 + b2 + b3
-        add x14, x14, x13   // w = 4*b0 + 3*b1 + 2*b2 + b3
-        add s1, s1, x13
-        add s2, s2, x14
-        add idx, idx, 4
-        add tmp, idx, 4
-        cmp tmp, count
-        b.ls @loop4
-
-        place {
-            fact 0 <= idx
-            fact idx <= n
-            fact 0 <= s1
-            fact s1 <= idx * 255
-            fact 0 <= s2
-            fact s2 <= idx * 1044480
-            fact spec.weighted_sum(a) == spec.wsum_from(a, idx, s1, s2)
-            decreases n - idx
-        }
-    @tail:
-        cmp idx, count
-        b.hs @done
-        add addr, base, idx
-        ldrb w7, [addr, 0]
-        add s1, s1, x7
-        add s2, s2, s1
-        add idx, idx, 1
-        b @tail
-    @done:
-        mov x0, s2
-        ret
+    while i < n
+        maintains i <= n, s1 <= i * 255, s2 <= i * 1044480
+        maintains spec.weighted_sum(a) == spec.wsum_from(a, i, s1, s2)
+        decreases n - i
+    {
+        s1 += a[i]
+        s2 += s1
+        i += 1
     }
+    return s2
 }
