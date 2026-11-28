@@ -1,0 +1,309 @@
+// Verifier-in-Ode Stage 3: Reader lexer/tokenizer, signed i64 parser, hex byte decoder,
+// and 64-byte-aligned SIMD row negation & linear-combination kernels in 100% pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`).
+
+use ints = "raeybpdavam7upiziaktzghulvfgv6er54pcn6xjgiq7uuoc6kvq"  // std/int.ode
+
+const I64_MAX_ACC = 72057594037927936        // 2^56 (safe before * 10 + 9)
+const I64_SIGN_BIT = 1152921504606846976     // 2^60
+const I64_ERR = 2305843009213693952          // 2^61
+
+// ---------------------------------------------------------------------------
+// 1. `Reader` horizontal whitespace skipper (`v_skip_spaces`: ' ' and '\t')
+// ---------------------------------------------------------------------------
+def skip_ws_from(buf, i) {
+    if i >= len(buf) then i
+    else if buf[i] == 32 || buf[i] == 9 then skip_ws_from(buf, i + 1)
+    else i
+}
+
+fn v_skip_spaces(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns skip_ws_from(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    var i: u64 := pos
+    while i < n
+        maintains pos <= i
+        maintains i <= n
+        maintains skip_ws_from(buf, i) == skip_ws_from(buf, pos)
+        decreases n - i
+    {
+        let c: u64 := buf[i]
+        if c == 32 {
+            i += 1
+        } else if c == 9 {
+            i += 1
+        } else {
+            return i
+        }
+    }
+    return i
+}
+
+// ---------------------------------------------------------------------------
+// 2. `Reader` newline scanner (`v_line_end`: scans to '\n' or EOF)
+// ---------------------------------------------------------------------------
+def line_end_from(buf, i) {
+    if i >= len(buf) then i
+    else if buf[i] == 10 then i
+    else line_end_from(buf, i + 1)
+}
+
+fn v_line_end(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns line_end_from(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    var i: u64 := pos
+    while i < n
+        maintains pos <= i
+        maintains i <= n
+        maintains line_end_from(buf, i) == line_end_from(buf, pos)
+        decreases n - i
+    {
+        if buf[i] == 10 { return i }
+        i += 1
+    }
+    return i
+}
+
+// ---------------------------------------------------------------------------
+// 3. `Reader` token boundary scanner (`v_token_end`: stops at space/tab/CR/LF/EOF)
+// ---------------------------------------------------------------------------
+def is_sep(c) {
+    if c == 32 || c == 9 || c == 10 || c == 13 then 1 else 0
+}
+
+def tok_end_from(buf, i) {
+    if i >= len(buf) then i
+    else if is_sep(buf[i]) == 1 then i
+    else tok_end_from(buf, i + 1)
+}
+
+fn v_token_end(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns tok_end_from(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    var i: u64 := pos
+    while i < n
+        maintains pos <= i
+        maintains i <= n
+        maintains tok_end_from(buf, i) == tok_end_from(buf, pos)
+        decreases n - i
+    {
+        let c: u64 := buf[i]
+        if c == 32 { return i }
+        if c == 9  { return i }
+        if c == 10 { return i }
+        if c == 13 { return i }
+        i += 1
+    }
+    return i
+}
+
+// ---------------------------------------------------------------------------
+// 4. `Reader` multi-function tokenizer (`v_next_token_span`)
+//    Calls verified `v_skip_spaces` and `v_token_end`.
+//    Returns `(tok_end << 32) + tok_start` (tok_start == tok_end at EOL/EOF).
+// ---------------------------------------------------------------------------
+def next_tok_pack(buf, st) {
+    if st > len(buf) then 0
+    else if tok_end_from(buf, st) > len(buf) then 0
+    else tok_end_from(buf, st) * 4294967296 + st
+}
+
+def next_tok_of(buf, pos) {
+    next_tok_pack(buf, skip_ws_from(buf, pos))
+}
+
+fn v_next_token_span(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns next_tok_of(buf, pos)
+    trace depends on buf, n, pos
+    stack 64
+{
+    let st: u64 := v_skip_spaces(buf, n, pos)
+    if st > n { return 0 }
+    let en: u64 := v_token_end(buf, n, st)
+    if en > n { return 0 }
+    return (en << 32) + st
+}
+
+// ---------------------------------------------------------------------------
+// 5. `Reader` signed decimal integer parser (`v_parse_i64`)
+//    Parses optional leading '-' + non-empty ASCII digits (< 10 * 2^56).
+//    Returns (sign_bit << 60) + abs_val, or I64_ERR (2^61) on invalid/overflow.
+// ---------------------------------------------------------------------------
+def parse_mag(buf, i, acc, sign_add) {
+    if i >= len(buf) then sign_add + acc
+    else if buf[i] < 48 || buf[i] > 57 then I64_ERR
+    else if acc >= I64_MAX_ACC then I64_ERR
+    else parse_mag(buf, i + 1, acc * 10 + (buf[i] - 48), sign_add)
+}
+
+def parse_i64_of(buf) {
+    if len(buf) == 0 then I64_ERR
+    else if buf[0] == 45 then
+        if len(buf) == 1 then I64_ERR
+        else parse_mag(buf, 1, 0, I64_SIGN_BIT)
+    else parse_mag(buf, 0, 0, 0)
+}
+
+fn v_parse_i64(buf: n bytes, n: number)
+    returns parse_i64_of(buf)
+    trace depends on buf, n
+    stack 16
+{
+    let one: u64 := 1
+    let err: u64 := one << 61
+    if n == 0 { return err }
+    var pos: u64 := 0
+    var sign_add: u64 := 0
+    if buf[0] == 45 {
+        if n == 1 { return err }
+        pos := 1
+        sign_add := one << 60
+    }
+    join
+        maintains pos <= n
+        maintains sign_add <= 1152921504606846976
+        maintains parse_mag(buf, pos, 0, sign_add) == parse_i64_of(buf)
+    var acc: u64 := 0
+    while pos < n
+        maintains pos <= n
+        maintains sign_add <= 1152921504606846976
+        maintains acc < 1152921504606846976
+        maintains parse_mag(buf, pos, acc, sign_add) == parse_i64_of(buf)
+        decreases n - pos
+    {
+        let c: u64 := buf[pos]
+        if c < 48 { return one << 61 }
+        if c > 57 { return one << 61 }
+        if acc >= (one << 56) { return one << 61 }
+        acc := ints.mul_const(acc, 10) + (c - 48)
+        pos += 1
+    }
+    return sign_add + acc
+}
+
+// ---------------------------------------------------------------------------
+// 6. `Reader` 2-hex-digit machine-code byte decoder (`v_hex_byte`)
+//    Decodes two ASCII hex characters (hi, lo) into 0..255, or 256 if invalid.
+// ---------------------------------------------------------------------------
+def hex_nib(c) {
+    if c >= 48 && c <= 57 then c - 48
+    else if c >= 65 && c <= 70 then c - 55
+    else if c >= 97 && c <= 102 then c - 87
+    else 16
+}
+
+def hex_byte_of(hi, lo) {
+    if hex_nib(hi) >= 16 || hex_nib(lo) >= 16 then 256
+    else hex_nib(hi) * 16 + hex_nib(lo)
+}
+
+fn v_hex_byte(hi: u8, lo: u8)
+    returns hex_byte_of(hi, lo)
+    trace depends on hi, lo
+    stack 0
+{
+    var h: u64 := 16
+    if hi >= 48 {
+        if hi <= 57 { h := hi - 48 }
+        else if hi >= 65 {
+            if hi <= 70 { h := hi - 55 }
+            else if hi >= 97 {
+                if hi <= 102 { h := hi - 87 }
+            }
+        }
+    }
+    join
+        maintains h == hex_nib(hi)
+        maintains h <= 16
+    if h >= 16 { return 256 }
+    var l: u64 := 16
+    if lo >= 48 {
+        if lo <= 57 { l := lo - 48 }
+        else if lo >= 65 {
+            if lo <= 70 { l := lo - 55 }
+            else if lo >= 97 {
+                if lo <= 102 { l := lo - 87 }
+            }
+        }
+    }
+    join
+        maintains h == hex_nib(hi)
+        maintains h < 16
+        maintains l == hex_nib(lo)
+        maintains l <= 16
+    if l >= 16 { return 256 }
+    return (h << 4) + l
+}
+
+// ---------------------------------------------------------------------------
+// 7. `Core.plain` 64-byte-aligned 16-word SIMD row-difference (`v_row_xor16`)
+//    Computes `[a[i] ^ b[i] for i in 0..16]` (all-zero iff rows a and b are identical).
+// ---------------------------------------------------------------------------
+def xor16(a, b) { [a[i] ^ b[i] for i in 0..16] }
+
+fn v_row_xor16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
+    requires no_overlap(out, a, b)
+    requires aligned(out, 64)
+    requires aligned(a, 64)
+    requires aligned(b, 64)
+    requires line_disjoint(out, a)
+    requires line_disjoint(out, b)
+    ensures out = bytes_of(xor16(words(a), words(b)))
+    stack 0
+{
+    for x86_64 {
+        let va: u32x16 := a.u32x16(0)
+        let vb: u32x16 := b.u32x16(0)
+        out.u32x16(0) := va ^ vb
+    }
+    for arm64 {
+        for k in 0..4 unroll {
+            let va: u32x4 := a.u32x4(k * 16)
+            let vb: u32x4 := b.u32x4(k * 16)
+            out.u32x4(k * 16) := va ^ vb
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 8. `Arithmetic.comb` 64-byte-aligned SIMD `2*a + b` row combination (`v_row_2a_plus_b16`)
+// ---------------------------------------------------------------------------
+def comb2_16(a, b) { [(a[i] + a[i]) + b[i] for i in 0..16] }
+
+fn v_row_2a_plus_b16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
+    requires no_overlap(out, a, b)
+    requires aligned(out, 64)
+    requires aligned(a, 64)
+    requires aligned(b, 64)
+    requires line_disjoint(out, a)
+    requires line_disjoint(out, b)
+    ensures out = bytes_of(comb2_16(words(a), words(b)))
+    stack 0
+{
+    for x86_64 {
+        let va: u32x16 := a.u32x16(0)
+        let vb: u32x16 := b.u32x16(0)
+        out.u32x16(0) := (va + va) + vb
+    }
+    for arm64 {
+        for k in 0..4 unroll {
+            let va: u32x4 := a.u32x4(k * 16)
+            let vb: u32x4 := b.u32x4(k * 16)
+            out.u32x4(k * 16) := (va + va) + vb
+        }
+    }
+}

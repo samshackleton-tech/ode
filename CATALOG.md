@@ -32,7 +32,7 @@ and current verification status on x86-64 and AArch64.
 | **Common byte prefix / constant-time byte equality** | Utility | `proof-core/examples/hasher/hash_eq_ct.ode`, `kcheck/programs/common/common.spec`, `proof-core/examples/equal/equal.spec` | — | **`shown`** (`ct_bytes_eq`, `stack 0`, `trace depends on n`, 21 insns) | **`shown`** (`ct_bytes_eq`, `stack 0`, `trace depends on n`, 20 insns) |
 | **LZ4 block decompressor + LZ4/Adler frame** | Compression | `kcheck/programs/lz4/lz4.spec` (109 lines), `factory/verified/lz4_*` | — | **`shown`** (`ext_len`, `pad_lit32`) / `legacy-kcheck` (full) | **`shown`** (`ext_len`, `pad_lit32`) |
 | **Sigil (byte-to-glyph codec)** | Encoding | `kcheck/programs/sigil/sigil.spec` (175 lines) | `johnservil/sigil` (Apache-2.0: `lean/Sigil/Spec.lean`) | `spec-ready` | `spec-ready` |
-| **Verifier-in-Ode Stages 1–2 (`Arithmetic.refutes` + `Core.plain` + `Reader`)** | Self-hosting | `proof-core/examples/verifier/verifier_hl.ode`, `arith.spec` | `proof-core/Arithmetic.lean`, `Reader.lean`, `Core.lean` | **`shown`** (dual-verified `both`: 8 pure HL kernels + 5 Stage 1) | **`shown`** (dual-verified `both`: 8 pure HL kernels + 5 Stage 1) |
+| **Verifier-in-Ode Stages 1–3 (`Arithmetic` + `Core.plain` + `Reader` lexer/parser)** | Self-hosting | `proof-core/examples/verifier/{verifier_hl,verifier_stage3}.ode`, `arith.spec` | `proof-core/Arithmetic.lean`, `Reader.lean`, `Core.lean` | **`shown`** (dual-verified `both`: 16 pure HL kernels + 5 Stage 1) | **`shown`** (dual-verified `both`: 16 pure HL kernels + 5 Stage 1) |
 
 ---
 

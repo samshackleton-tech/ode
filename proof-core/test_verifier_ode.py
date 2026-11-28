@@ -6,7 +6,7 @@ functions on hardware where available.
 
     pypy3 test_verifier_ode.py        (Lean tests skipped without `lake`; hardware run on AArch64)
 """
-import os, platform, shutil, subprocess, sys, tempfile, unittest
+import os, platform, shutil, struct, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -21,7 +21,9 @@ SPEC_PATH = os.path.join(VER, "arith.spec")
 X86_PATH = os.path.join(VER, "arith_x86.ode")
 ARM_PATH = os.path.join(VER, "arith_arm64.ode")
 HL_PATH = os.path.join(VER, "verifier_hl.ode")
+STAGE3_PATH = os.path.join(VER, "verifier_stage3.ode")
 STD_DIR = os.path.join(ROOT, "std")
+IS_MAC_ARM64 = platform.system() == "Darwin" and ARM_MACHINE
 
 
 def once(old, new):
@@ -273,6 +275,210 @@ int main(void) {{
                 )
                 r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
                 self.assertEqual(r.stdout.strip(), "verifier_hl_x86: OK")
+
+    def test_hl_verifier_stage3_dual_verify_and_native(self):
+        """All 8 Verifier-in-Ode Stage 3 kernels (`verifier_stage3.ode`) pass `--verifier both`
+        across x86-64 and AArch64, share identical contract IDs on all 6 portable kernels,
+        and tokenize/parse a real `.proof` line + SIMD row ops natively on x86-64 and Apple M6."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.isfile(odeverify):
+            self.skipTest("odeverify binary not built")
+        portable = [
+            "v_skip_spaces", "v_line_end", "v_token_end",
+            "v_next_token_span", "v_parse_i64", "v_hex_byte",
+        ]
+        all_fns = portable + ["v_row_xor16", "v_row_2a_plus_b16"]
+        cids, objs, syms = {}, {}, {}
+        with tempfile.TemporaryDirectory() as d:
+            for fn in all_fns:
+                for tgt in ("x86_64", "arm64"):
+                    out_o = os.path.join(d, f"{fn}_{tgt}.o")
+                    out_p = os.path.join(d, f"{fn}_{tgt}.proof")
+                    res = ode_audit.pack_verified(
+                        STAGE3_PATH, None, out_o, out_p,
+                        fn_name=fn, target=tgt, c_abi=True,
+                        stores=[STD_DIR], verifier="both",
+                    )
+                    self.assertEqual(res["verdict"], "shown", (fn, tgt, res))
+                    self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
+                    cids[(fn, tgt)] = res["contract_b32"]
+                    objs[(fn, tgt)] = out_o
+                    syms[(fn, tgt)] = res["symbol"]
+            for fn in portable:
+                self.assertEqual(
+                    cids[(fn, "x86_64")], cids[(fn, "arm64")],
+                    f"cross-arch contract hash mismatch on {fn}",
+                )
+
+            def stage3_c_body(p, run_simd):
+                simd_block = (
+                    f"_Alignas(64) uint32_t a[16], b[16], xo[16], co[16];\n"
+                    f"    for (uint32_t k = 0; k < 16; k++) {{ a[k] = 10U + k; b[k] = 3U * k + 1U; }}\n"
+                    f"    {p}v_row_xor16(xo, a, b);\n"
+                    f"    {p}v_row_2a_plus_b16(co, a, b);\n"
+                    f"    for (uint32_t k = 0; k < 16; k++) {{\n"
+                    f"        CHK(xo[k] == (a[k] ^ b[k]));\n"
+                    f"        CHK(co[k] == (a[k] + a[k] + b[k]));\n"
+                    f"    }}\n"
+                    if run_simd else ""
+                )
+                return f"""
+    const char *line = "  r\\t1 0 -16 42\\n";
+    uint64_t n = strlen(line);
+    CHK({p}v_line_end((const uint8_t *)line, n, 0) == n - 1);
+    uint64_t sp0 = {p}v_next_token_span((const uint8_t *)line, n, 0);
+    CHK((sp0 & 0xFFFFFFFFULL) == 2 && (sp0 >> 32) == 3); /* "r" */
+    uint64_t sp1 = {p}v_next_token_span((const uint8_t *)line, n, sp0 >> 32);
+    CHK((sp1 & 0xFFFFFFFFULL) == 4 && (sp1 >> 32) == 5); /* "1" */
+    uint64_t sp2 = {p}v_next_token_span((const uint8_t *)line, n, sp1 >> 32);
+    CHK((sp2 & 0xFFFFFFFFULL) == 6 && (sp2 >> 32) == 7); /* "0" */
+    uint64_t sp3 = {p}v_next_token_span((const uint8_t *)line, n, sp2 >> 32);
+    uint64_t s3 = sp3 & 0xFFFFFFFFULL, e3 = sp3 >> 32;
+    CHK(s3 == 8 && e3 == 11); /* "-16" */
+    const uint64_t SBIT = 1ULL << 60, ERR = 1ULL << 61;
+    CHK({p}v_parse_i64((const uint8_t *)(line + s3), e3 - s3) == (SBIT | 16ULL));
+    uint64_t sp4 = {p}v_next_token_span((const uint8_t *)line, n, e3);
+    uint64_t s4 = sp4 & 0xFFFFFFFFULL, e4 = sp4 >> 32;
+    CHK(s4 == 12 && e4 == 14); /* "42" */
+    CHK({p}v_parse_i64((const uint8_t *)(line + s4), e4 - s4) == 42ULL);
+    CHK({p}v_parse_i64((const uint8_t *)"-", 1) == ERR);
+    CHK({p}v_parse_i64((const uint8_t *)"", 0) == ERR);
+    CHK({p}v_hex_byte('f', '9') == 0xF9);
+    CHK({p}v_hex_byte('A', '0') == 0xA0);
+    CHK({p}v_hex_byte('g', '0') == 256);
+    {simd_block}
+"""
+
+            cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+            if IS_LINUX_X86 and cc:
+                with open("/proc/cpuinfo", "r", encoding="utf-8") as ci:
+                    has_avx512 = "avx512f" in ci.read()
+                run_fns = all_fns if has_avx512 else portable
+                decls = "\n".join([
+                    f'uint64_t {syms[("v_skip_spaces", "x86_64")]}(const uint8_t *, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_line_end", "x86_64")]}(const uint8_t *, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_token_end", "x86_64")]}(const uint8_t *, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_next_token_span", "x86_64")]}(const uint8_t *, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_parse_i64", "x86_64")]}(const uint8_t *, uint64_t);',
+                    f'uint64_t {syms[("v_hex_byte", "x86_64")]}(uint64_t, uint64_t);',
+                ] + ([
+                    f'void {syms[("v_row_xor16", "x86_64")]}(uint32_t *, const uint32_t *, const uint32_t *);',
+                    f'void {syms[("v_row_2a_plus_b16", "x86_64")]}(uint32_t *, const uint32_t *, const uint32_t *);',
+                ] if has_avx512 else []))
+                aliases = "\n".join(f'#define fn_{fn} {syms[(fn, "x86_64")]}' for fn in run_fns)
+                c_src = f"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+{decls}
+{aliases}
+#define CHK(cond) do {{ if (!(cond)) {{ fprintf(stderr, "FAIL line %d\\n", __LINE__); return 1; }} }} while (0)
+int main(void) {{
+{stage3_c_body("fn_", has_avx512)}
+    puts("verifier_stage3_x86: OK");
+    return 0;
+}}
+"""
+                c_p = os.path.join(d, "run_s3.c")
+                exe_p = os.path.join(d, "run_s3")
+                with open(c_p, "w", encoding="utf-8") as f:
+                    f.write(c_src)
+                subprocess.run(
+                    [cc, "-O1", "-o", exe_p, c_p] + [objs[(fn, "x86_64")] for fn in run_fns],
+                    check=True, capture_output=True, text=True,
+                )
+                r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
+                self.assertEqual(r.stdout.strip(), "verifier_stage3_x86: OK")
+
+            elif IS_MAC_ARM64 and shutil.which("clang"):
+                def reloc_text(elf_path, sym_name):
+                    with open(elf_path, "rb") as f:
+                        b = f.read()
+                    e_shoff = struct.unpack_from("<Q", b, 40)[0]
+                    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", b, 58)
+                    secs = [struct.unpack_from("<IIQQQQI", b, e_shoff + i * e_shentsize) for i in range(e_shnum)]
+                    shstr_off = secs[e_shstrndx][4]
+                    sname = lambda idx: b[shstr_off + idx:b.index(0, shstr_off + idx)].decode("ascii", "replace")
+                    tb, eoff, sv = b"", 0, {}
+                    for sn, st, _, _, so, sz, sl in secs:
+                        if sname(sn) == ".text":
+                            tb = b[so:so + sz]
+                        elif st == 2:
+                            stro = secs[sl][4]
+                            for idx, pos in enumerate(range(so, so + sz, 24)):
+                                nm, _, _, _, val, _ = struct.unpack_from("<IBBHQQ", b, pos)
+                                sv[idx] = val
+                                if b[stro + nm:b.index(0, stro + nm)].decode("ascii", "replace") == sym_name:
+                                    eoff = val
+                    buf = bytearray(tb)
+                    for sn, st, _, _, so, sz, _ in secs:
+                        if st == 4 and sname(sn) == ".rela.text":
+                            for pos in range(so, so + sz, 24):
+                                ro, ri, ra = struct.unpack_from("<QQq", b, pos)
+                                if (ri & 0xFFFFFFFF) in (282, 283):
+                                    imm26 = (((sv[ri >> 32] + ra) - ro) >> 2) & 0x03FFFFFF
+                                    ins = struct.unpack_from("<I", buf, ro)[0]
+                                    struct.pack_into("<I", buf, ro, (ins & 0xFC000000) | imm26)
+                    return bytes(buf), eoff
+
+                types = {
+                    "v_skip_spaces": "uint64_t (*)(const uint8_t *, uint64_t, uint64_t)",
+                    "v_line_end": "uint64_t (*)(const uint8_t *, uint64_t, uint64_t)",
+                    "v_token_end": "uint64_t (*)(const uint8_t *, uint64_t, uint64_t)",
+                    "v_next_token_span": "uint64_t (*)(const uint8_t *, uint64_t, uint64_t)",
+                    "v_parse_i64": "uint64_t (*)(const uint8_t *, uint64_t)",
+                    "v_hex_byte": "uint64_t (*)(uint64_t, uint64_t)",
+                    "v_row_xor16": "void (*)(uint32_t *, const uint32_t *, const uint32_t *)",
+                    "v_row_2a_plus_b16": "void (*)(uint32_t *, const uint32_t *, const uint32_t *)",
+                }
+                load_lines = []
+                for fn in all_fns:
+                    code, entry = reloc_text(objs[(fn, "arm64")], syms[(fn, "arm64")])
+                    bp = os.path.join(d, f"{fn}.bin")
+                    with open(bp, "wb") as bf:
+                        bf.write(code)
+                    ty = types[fn]
+                    load_lines.append(
+                        f'    {ty.replace("(*)", "(*fn_" + fn + ")")} = ({ty})load_jit("{bp}", {len(code)}, {entry});'
+                    )
+                loads = "\n".join(load_lines)
+                c_src = f"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <pthread.h>
+#include <libkern/OSCacheControl.h>
+static void *load_jit(const char *path, size_t n, size_t entry_off) {{
+    uint8_t *tmp = (uint8_t *)malloc(n);
+    FILE *fp = fopen(path, "rb");
+    if (!tmp || !fp || fread(tmp, 1, n, fp) != n) {{ fprintf(stderr, "read %s\\n", path); exit(2); }}
+    fclose(fp);
+    void *p = mmap(NULL, (n + 4095) & ~4095ULL, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+    if (p == MAP_FAILED) {{ perror("mmap"); exit(2); }}
+    pthread_jit_write_protect_np(0);
+    memcpy(p, tmp, n);
+    pthread_jit_write_protect_np(1);
+    sys_icache_invalidate(p, n);
+    free(tmp);
+    return (uint8_t *)p + entry_off;
+}}
+#define CHK(cond) do {{ if (!(cond)) {{ fprintf(stderr, "FAIL line %d\\n", __LINE__); return 1; }} }} while (0)
+int main(void) {{
+{loads}
+{stage3_c_body("fn_", True)}
+    puts("verifier_stage3_arm64: OK");
+    return 0;
+}}
+"""
+                c_p = os.path.join(d, "run_s3_arm64.c")
+                exe_p = os.path.join(d, "run_s3_arm64")
+                with open(c_p, "w", encoding="utf-8") as f:
+                    f.write(c_src)
+                subprocess.run(["clang", "-O1", "-o", exe_p, c_p], check=True, capture_output=True, text=True)
+                r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
+                self.assertEqual(r.stdout.strip(), "verifier_stage3_arm64: OK")
 
 
 if __name__ == "__main__":
