@@ -576,7 +576,7 @@ class TestHighLevelOdeFuzz(unittest.TestCase):
                 lines.append(f"    {a_nm} := {fmt_fn(a_nm, b_nm)}")
             lines.append("    out.u32x4(0) := v0 ^ v1")
             src = (
-                'use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode\n'
+                'use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode\n'
                 "fn vec_fuzz(out: 16 bytes, inp: 32 bytes, lo64: u64, hi64: u64)\n"
                 "    requires no_overlap(out, inp)\n"
                 "    trace depends on nothing\n"

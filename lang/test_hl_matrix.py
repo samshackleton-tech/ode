@@ -1053,7 +1053,7 @@ fn read_off(buf: 256 bytes, b: number)
         # + masked `t & 0xffffffff` must verify `shown` against `bytes_of(... words(m), lo(t), hi(t))`
         # on BOTH x86_64 and arm64!
         src_u64_words = """\
-use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
 
 def mix_u64(m, t) {
     [m[0] ^ lo(t), m[1] ^ hi(t), m[2] + m[0], m[3] + m[1]]
@@ -1163,7 +1163,7 @@ fn f_disjoint(a: number, b: number, d: number)
 
         # A3: `add64` unsigned fast-path & x86_64 `_emit_imm` `or` for constants >= 2^63 (`vec.const_u32x4(0xFFFFFFFF, ...)`).
         src_imm64_vec = """\
-use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
 
 def mask_hi(m) {
     [m[0] ^ word(4294967295), m[1] ^ word(4294967295), m[2] ^ word(1), m[3] ^ word(2)]
@@ -1780,6 +1780,57 @@ fn f_stack_arch(a: number, b: number, c: number)
         self.assertEqual(p_sa["fns_by_name"]["f_stack_arch"]["impls"]["arm64"]["hl_meta"]["total_stack"], 0)
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_stack_arch, "f_stack_arch", arch, check_v2=True)
+
+    def test_17_hl_v9_forensic_regressions(self):
+        """Regression tests for hl-default-v9 forensic fixes:
+        1. Compound `decreases end - i` on a `fn` contract gives a crisp parse-time diagnostic (never leaks to Lean),
+           while single-parameter `decreases rem` stays valid.
+        2. No-free-register diagnostic from an `inline fn` on `x86_64` recommends `stack(x86_64) var <outer_var>`.
+        """
+        src_fn_dec = """\
+def id(n) { n }
+fn f_dec(i: number, end: number)
+    requires i <= end, end <= 10
+    returns id(end - i)
+    decreases end - i
+    stack 32 + 32 * (end - i)
+{
+    return end - i
+}
+"""
+        with self.assertRaises(ode_unified.UnifiedErr) as cm:
+            ode_unified.parse_unified(src_fn_dec, src="dec.ode")
+        self.assertIn("must name a single numeric parameter", str(cm.exception))
+        self.assertIn("while", str(cm.exception))
+
+        # Trigger `x86_64` no-free-register from inside an `inline fn` with 12 live outer scalars
+        src_spill_inl = """\
+inline fn add_two(a: u64, b: u64) -> u64 {
+    let t := (a | b) - (a & b)
+    return t
+}
+fn f_reg_press(a: u64, b: u64, c: u64, d: u64) -> u64
+    requires a < 10, b < 10, c < 10, d < 10
+    returns a
+    trace depends on a, b, c, d
+{
+    let v0 := a + 1
+    let v1 := b + 1
+    let v2 := c + 1
+    let v3 := d + 1
+    let v4 := a + 2
+    let v5 := b + 2
+    let v6 := c + 2
+    let v7 := d + 2
+    let r := add_two(v0 + v1, v2 + v3)
+    return a + (b & 0) + (c & 0) + (d & 0) + (r & 0) + (v4 & 0) + (v5 & 0) + (v6 & 0) + (v7 & 0) + (v0 & 0) + (v1 & 0) + (v2 & 0) + (v3 & 0)
+}
+"""
+        p_sp = ode_unified.parse_unified(src_spill_inl, src="sp.ode")
+        err_x86 = p_sp["fns_by_name"]["f_reg_press"]["impls"]["x86_64"].get("hl_err") or ""
+        self.assertIn("has no free register", err_x86)
+        self.assertIn("stack(x86_64) var", err_x86)
+        self.assertNotIn("stack var t:", err_x86)
 
 
 if __name__ == "__main__":

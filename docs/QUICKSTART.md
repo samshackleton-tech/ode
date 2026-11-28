@@ -194,7 +194,7 @@ On AArch64, `u32x4` uses up to 22 caller-saved NEON registers (`v0..v7, v16..v29
 To share repeated sequences (round functions, bit-packing steps, target-specialized rotates, constant-multiplier expansions) with zero call overhead and without losing surrounding path facts across a call boundary, define a hygienic `inline fn` with by-value, `var`, or compile-time `const` parameters, optional return type (`-> ty`), optional contract clauses (`requires` checked strictly at every call site via a non-generalizing `check`), and optional per-target `for <target>[:variant]` arms:
 
 ```ode
-use vec = "7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa"  // std/vec.ode
+use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
 
 inline fn mix_step(var a: u32x4, var b: u32x4, c: u32x4) {
     a +%= b
@@ -209,7 +209,7 @@ Ordinary, auditable helper modules live in `std/` and carry zero special compile
 
 | Module | BLAKE3-256 digest (`ode hash`) | Helpers (exact signatures) |
 |---|---|---|
-| `std/vec.ode` | `7zjhuvtcpskuqp5hojlblzp4sohvyncst5we3ol4ohbhk43ujbxa` | `rotr32(v: u32x4, const k: u64) -> u32x4` (`vprord` on `x86_64:avx512`, `rev32_16` on `arm64` when `k == 16`, shift-or otherwise), `rotl32(v: u32x4, const k: u64) -> u32x4`, `rotr32_x16(v: u32x16, const k: u64) -> u32x16`, `rotl32_x16(v: u32x16, const k: u64) -> u32x16`, `pack_u64x2(lo: u64, hi: u64) -> u32x4`, `const_u32x4(const a, const b, const c, const d) -> u32x4`, `transpose_4x4(var r0, var r1, var r2, var r3)` |
+| `std/vec.ode` | `7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra` | `rotr32(v: u32x4, const k: u64) -> u32x4` (`vprord` on `x86_64:avx512`, `rev32_16` on `arm64` when `k == 16`, shift-or otherwise), `rotl32(v: u32x4, const k: u64) -> u32x4`, `rotr32_x16(v: u32x16, const k: u64) -> u32x16`, `rotl32_x16(v: u32x16, const k: u64) -> u32x16`, `pack_u64x2(lo: u64, hi: u64) -> u32x4`, `const_u32x4(const a, const b, const c, const d) -> u32x4`, `rot_lanes(v: u32x4, const k: u64) -> u32x4` (1-insn lane rotate left by `k` in `1..3`: `[v[1],v[2],v[3],v[0]]`, etc.), `transpose_4x4(var r0, var r1, var r2, var r3)` (in-place 8-insn transpose using only 2 temporary registers) |
 | `std/bytes.ode` | `ozgki74ogmdvuzubstiqnse5xlh2guawnta5dmhrmaqokwp3dfqa` | `load_u16_le(buf, i) -> u64`, `load_u16_be(buf, i) -> u64`, `store_u16_le(out, i, v)`, `store_u16_be(out, i, v)` |
 | `std/int.ode` | `raeybpdavam7upiziaktzghulvfgv6er54pcn6xjgiq7uuoc6kvq` | `mul_const(x: u64, const k: u64) -> u64`, `min_u64(a, b) -> u64`, `max_u64(a, b) -> u64`, `clamp_u64(x, lo, hi) -> u64` (`requires lo <= hi`; also exports spec `def min2`, `def max2`, `def clamp`) |
 

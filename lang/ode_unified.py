@@ -927,8 +927,18 @@ def _parse_single_unified(text, src="<ode>"):
             # Crisp compile-time diagnostic for unsupported boolean `ensures` clauses
             # (which otherwise become `conditions` and fail late with `statement: ... has conditions`).
             has_returns = bool(re.search(r"(?m)^\s*returns\b", clauses_text))
+            pnames_set = {nm for nm, _ in ode_hl.parse_param_list(raw_params_text)}
             for cl_line in clauses_text.splitlines():
                 cs = _strip_line_comment(cl_line).strip()
+                m_dec = re.match(r"^decreases\s+(.+)$", cs)
+                if m_dec:
+                    dec_expr = m_dec.group(1).strip()
+                    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", dec_expr) or dec_expr not in pnames_set:
+                        raise UnifiedErr(
+                            f"{src}: line {line_no}: `fn {fname}`: `{cs}` on a `fn` contract must name a single "
+                            f"numeric parameter (pass the remaining count as a parameter, e.g. `rem` with `decreases rem`, "
+                            f"or rewrite the recursion as a `while` loop where `decreases {dec_expr}` is supported)"
+                        )
                 m_er = re.match(r"^ensures\s+(ret|result|r)\s*==\s*(.+)$", cs)
                 if m_er and not has_returns:
                     raise UnifiedErr(

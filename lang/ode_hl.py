@@ -2676,7 +2676,23 @@ class HLLower:
             lines.append("  how to fix:")
             lines.append("    - narrow an earlier `let` lifetime (move it closer to use or inside the branch that uses it)")
             lines.append("    - reuse an existing `var` instead of keeping another variable live")
-            lines.append(f"    - or declare a cold variable explicitly on the stack: `stack var {disp}: {ty} := ...`")
+            outer_vars = [_pretty_var(vnm) for vnm, _ in live_pairs if not vnm.startswith("__inl_")]
+            if nm.startswith("__inl_") and outer_vars:
+                eg = outer_vars[-1]
+                lines.append(
+                    f"    - or place a cold outer variable on the stack for `{self.arch}` "
+                    f"(e.g. `stack({self.arch}) var {eg}: {ty} := ...` or `stack var {eg}: {ty} := ...`)"
+                )
+            else:
+                lines.append(
+                    f"    - or declare a cold variable explicitly on the stack: "
+                    f"`stack({self.arch}) var {disp}: {ty} := ...` (or `stack var {disp}: {ty} := ...`)"
+                )
+            if self.arch == "x86_64":
+                lines.append(
+                    "    - note: `x86_64` has fewer registers (12 GP, 14 `xmm`) than `arm64` (24 GP, 22 NEON); "
+                    "marking 1-4 cold variables `stack(x86_64) var` frees registers on x86-64 with zero cost on arm64"
+                )
             raise HLErr("\n".join(lines))
 
         # Stack-slot interference guard for `Core.lean`'s `first.frame` loop invariant:

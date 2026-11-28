@@ -124,6 +124,68 @@ fn f_transpose(out: 64 bytes, src: 64 bytes)
         for arch in ("x86_64", "arm64"):
             _pack_and_verify(src_tr, "f_transpose", arch, check_v2=False)
 
+        # Test `vec.rot_lanes(v, 1|2|3)` + high-pressure 12-live-`u32x4` `vec.transpose_4x4` fitting 14 `xmm` regs!
+        src_rot_and_12 = ("""\
+use vec = "__H_VEC__"  // std/vec.ode
+
+def rot_spec(ws) {
+    let a = [ws[1], ws[2], ws[3], ws[0]]
+    let b = [ws[2], ws[3], ws[0], ws[1]]
+    let c = [ws[3], ws[0], ws[1], ws[2]]
+    [a[i] ^ b[i] ^ c[i] for i in 0..4]
+}
+
+fn f_rot_lanes(out: 16 bytes, src: 16 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(rot_spec(words(src)))
+    trace depends on nothing
+{
+    let v: u32x4 := src.u32x4(0)
+    out.u32x4(0) := vec.rot_lanes(v, 1) ^ vec.rot_lanes(v, 2) ^ vec.rot_lanes(v, 3)
+}
+""").replace("__H_VEC__", h_vec)
+        for arch in ("x86_64", "arm64"):
+            _pack_and_verify(src_rot_and_12, "f_rot_lanes", arch, check_v2=False)
+
+        # 12 live u32x4 vectors on x86_64 + `vec.transpose_4x4` MUST fit in 14 xmm regs (only 2 temps)!
+        src_12_tr = ("""\
+use vec = "__H_VEC__"  // std/vec.ode
+
+def sum12_tr(ws) {
+    let t0 = [ws[0], ws[4], ws[8], ws[12]]
+    let t1 = [ws[1], ws[5], ws[9], ws[13]]
+    let t2 = [ws[2], ws[6], ws[10], ws[14]]
+    let t3 = [ws[3], ws[7], ws[11], ws[15]]
+    let base = [t0[i] ^ t1[i] ^ t2[i] ^ t3[i] for i in 0..4]
+    let e0 = [ws[16 + i] ^ ws[20 + i] ^ ws[24 + i] ^ ws[28 + i] for i in 0..4]
+    let e1 = [ws[32 + i] ^ ws[36 + i] ^ ws[40 + i] ^ ws[44 + i] for i in 0..4]
+    [base[i] ^ e0[i] ^ e1[i] for i in 0..4]
+}
+
+fn f_tr_12live(out: 16 bytes, src: 192 bytes)
+    requires no_overlap(out, src)
+    ensures out = bytes_of(sum12_tr(words(src)))
+    trace depends on nothing
+{
+    var r0: u32x4 := src.u32x4(0)
+    var r1: u32x4 := src.u32x4(16)
+    var r2: u32x4 := src.u32x4(32)
+    var r3: u32x4 := src.u32x4(48)
+    let k0: u32x4 := src.u32x4(64)
+    let k1: u32x4 := src.u32x4(80)
+    let k2: u32x4 := src.u32x4(96)
+    let k3: u32x4 := src.u32x4(112)
+    let k4: u32x4 := src.u32x4(128)
+    let k5: u32x4 := src.u32x4(144)
+    let k6: u32x4 := src.u32x4(160)
+    let k7: u32x4 := src.u32x4(176)
+    vec.transpose_4x4(r0, r1, r2, r3)
+    out.u32x4(0) := (r0 ^ r1 ^ r2 ^ r3) ^ (k0 ^ k1 ^ k2 ^ k3) ^ (k4 ^ k5 ^ k6 ^ k7)
+}
+""").replace("__H_VEC__", h_vec)
+        for arch in ("x86_64", "arm64"):
+            _pack_and_verify(src_12_tr, "f_tr_12live", arch, check_v2=False)
+
         # Also test `for x86_64:avx512` `vec.rotr32` picks single-insn `vprord` when `needs avx512`!
         src_avx512 = ("""\
 use vec = "__H_VEC__"  // std/vec.ode

@@ -42,13 +42,25 @@ inline fn const_u32x4(const a: u64, const b: u64, const c: u64, const d: u64) ->
     )
 }
 
+inline fn rot_lanes(v: u32x4, const k: u64) -> u32x4
+    for x86_64 {
+        if k == 1 { return shuf32(v, 0x39) }
+        if k == 2 { return shuf32(v, 0x4E) }
+        return shuf32(v, 0x93)
+    }
+    for arm64 {
+        if k == 1 { return ext4(v, v) }
+        if k == 2 { return ext8(v, v) }
+        return ext12(v, v)
+    }
+
 inline fn transpose_4x4(var r0: u32x4, var r1: u32x4, var r2: u32x4, var r3: u32x4) {
     let t0: u32x4 := unpacklo32(r0, r1)
-    let t1: u32x4 := unpackhi32(r0, r1)
-    let t2: u32x4 := unpacklo32(r2, r3)
+    r1 := unpackhi32(r0, r1)
+    r0 := unpacklo32(r2, r3)
     let t3: u32x4 := unpackhi32(r2, r3)
-    r0 := unpacklo64(t0, t2)
-    r1 := unpackhi64(t0, t2)
-    r2 := unpacklo64(t1, t3)
-    r3 := unpackhi64(t1, t3)
+    r2 := unpacklo64(r1, t3)
+    r3 := unpackhi64(r1, t3)
+    r1 := unpackhi64(t0, r0)
+    r0 := unpacklo64(t0, r0)
 }
