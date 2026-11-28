@@ -1630,7 +1630,8 @@ fn run_tail(pkt: n bytes, n: number) -> u64
         arm_tab = os.path.join(ROOT, "arm64", "arm64.tab")
 
         # 1a. Production BLAKE3-Servil AVX-512 & SSE4.1 + negative controls
-        one_src = open(os.path.join(ROOT, "wide", "one.ode"), encoding="utf-8").read()
+        with open(os.path.join(ROOT, "wide", "one.ode"), encoding="utf-8") as f:
+            one_src = f.read()
         for K in (test_kernel.AVX512, test_kernel.SSE):
             spec = test_kernel.spec_text(contract=K.contract)
             pf_p = os.path.join(HERE, "proofs", K.symbol + ".proof")
@@ -1679,10 +1680,12 @@ fn run_tail(pkt: n bytes, n: number) -> u64
             obj = os.path.join(td, "a.o")
             odec.build(os.path.join(HERE, "examples", "arm64", "compress_arm64.ode"),
                        "compress1_arm64", obj, target="arm64")
-            spec_a = test_arm.spec_text() if hasattr(test_arm, "spec_text") else (
-                open(os.path.join(ROOT, "kcheck", "blake3.spec"), encoding="utf-8").read() + "\n"
-                + open(os.path.join(HERE, "examples", "arm64", "compress_arm64.spec"), encoding="utf-8").read()
-            )
+            if hasattr(test_arm, "spec_text"):
+                spec_a = test_arm.spec_text()
+            else:
+                with open(os.path.join(ROOT, "kcheck", "blake3.spec"), encoding="utf-8") as f1, \
+                     open(os.path.join(HERE, "examples", "arm64", "compress_arm64.spec"), encoding="utf-8") as f2:
+                    spec_a = f1.read() + "\n" + f2.read()
             st_p = os.path.join(td, "a.s")
             with open(st_p, "w", encoding="utf-8") as f:
                 f.write("\n".join(statement.statement(spec_a, [(obj, "blake3_servil_compress_in_place_arm64")])) + "\n")
@@ -1714,7 +1717,8 @@ fn run_tail(pkt: n bytes, n: number) -> u64
             obj = os.path.join(td, "c4.o")
             odec.build(os.path.join(HERE, "examples", "chacha20", "blocks4_arm64.ode"),
                        "chacha20_blocks4_arm64", obj, target="arm64")
-            spec_c4 = open(os.path.join(HERE, "examples", "chacha20", "blocks4_arm64.spec"), encoding="utf-8").read()
+            with open(os.path.join(HERE, "examples", "chacha20", "blocks4_arm64.spec"), encoding="utf-8") as f:
+                spec_c4 = f.read()
             st_p = os.path.join(td, "c4.s")
             with open(st_p, "w", encoding="utf-8") as f:
                 f.write("\n".join(statement.statement(spec_c4, [(obj, "ode_chacha20_blocks4_arm64")])) + "\n")

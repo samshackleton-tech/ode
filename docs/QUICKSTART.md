@@ -66,7 +66,7 @@ python3 lang/ode_tool.py audit /tmp/all_zero.o --proof /tmp/all_zero.proof \
   --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika
 ```
 
-The auditor obtains `--expect-contract` independently from the published specification—never from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no unresolved external relocations exist, that `.ode.ocl` hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that the verifier accepts the `.proof` file for those bytes. An auditor can also run the independent pure-Python verifier `python3 proof-core/verify2.py` on the same `.statement` and `.proof` files.
+The auditor obtains `--expect-contract` independently from the published specification—never from the object file under audit. `ode audit` verifies that 100% of executable bytes in `.text` belong to verified functions, that no external relocations remain, that `.ode.ocl` hashes to the expected 52-character lowercase base-32 BLAKE3 identifier, and that the verifier accepts the `.proof` file for those bytes. An auditor can also run the independent pure-Python verifier `python3 proof-core/verify2.py` on the exact same `.statement` and `.proof` files (covering scalar, byte, word-level, 128-bit SIMD, SHA-NI/SHA2, and 512-bit AVX-512 contracts on both `x86_64` and `arm64`).
 
 ### The Four Outcomes
 
@@ -87,12 +87,13 @@ High-Level Ode lowers statements in exact written order with lexical block scopi
 |---|---|---|
 | Immutable / mutable scalar | `let x := expr`, `var i: u64 := 0`, `var b: u8 := 0`, `{ ... }` | Allocates a register (`u8` records `0 <= b <= 255`); lexical `{ ... }` blocks and dead parameters reuse registers immediately. |
 | Explicit stack variable | `stack var x: u64 := 0`, `stack let v: u32x4 := expr` | Places the variable in an explicit aligned stack slot instead of a register (avoids register pressure with no hidden spills). |
-| Local stack buffer | `buf tmp[64] align 16` | Fixed aligned stack frame slot; no dynamic allocation. |
+| Local stack buffer | `buf tmp[64] align 16` (or `align 64`) | Fixed aligned stack frame slot; no dynamic allocation. On `x86_64`, leaf frames using `align >= 16` or `u32x16` pad to keep `rsp` 16-byte aligned. |
 | Exact arithmetic (default) | `a + b`, `a - b`, `a * b`, `x += k`, `x -= k` | Verifier proves no 64-bit unsigned overflow or underflow. |
 | Explicit wrapping mod $2^{64}$ | `a +% b`, `a -% b`, `a *% b`, `x +%= k`, `x -%= k` | Emits hardware wraparound (`wrap` proof marker); enables single-compare unsigned range checks like `(c -% 65) <= 25`. |
 | Bitwise & shifts | `a & b`, `a \| b`, `a ^ b`, `a << k`, `a >> k` | Exact bitmask (`& (2^w - 1)`), contiguous bitfields, power-of-two shifts (`<< k` / `>> k`). |
 | Branchless select | `select(cond, then_expr, else_expr)` | Lowers directly to `cmov*` (x86-64) / `csel` (AArch64); safe on data kept out of the trace (`trace depends on ...`). |
-| Scalar memory loads/stores | `a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `buf.u64(i) := v` | 1-, 2-, 4-, or 8-byte little-endian loads; 1-byte stores to `out`, 8-byte stores to stack `buf` (pack 32-bit words with `u32x4` and `.u32x4(i) := v`). |
+| Scalar memory loads/stores | `a[i]`, `a.u16(i)`, `a.u32(i)`, `a.u64(i)`, `out[i] := v`, `out.u32(i) := v` (`arm64`), `out.u64(i) := v`, `buf.u32(i) := v` (`arm64`), `buf.u64(i) := v` | 1-, 2-, 4-, or 8-byte little-endian loads uniformly across read-only, in-out (before and after partial writes), and stack buffers (`frameW`); pure write-only `out` buffers stay unreadable before write. |
+| Cache-line & page contracts | `requires aligned(buf, 64)`, `requires aligned(page, 4096)`, `requires line_disjoint(a, b[, ...][, 64\|128])` | `aligned(buf, A)` (`A` in `8, 16, 32, 64, 128, 4096, 16384`) simplifies `buf & (A-1) == 0` and `buf & ~(A-1) == buf` directly; `line_disjoint` strengthens `no_overlap` to prevent false sharing and propagates across aligned arena sub-slices (`arena`, `arena + 64`). |
 | Branches | `if cond { ... } else if cond2 { ... } else { ... }` | Exact comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`) and short-circuit `&&`, `\|\|`, `!`. |
 | Counted loop | `for i in lo..hi [step k] [maintains ...] [writes ...] { ... }` | Auto-tracks `lo <= i <= hi`, step alignment, `decreases hi - i`, and inherits all invariant dominating outer `if`-guards and `let` equalities automatically. |
 | Compile-time unroll | `for i in 0..N [step k] unroll { ... }` | Expands straight-line at compile time with constant folding on `i` (zero loop overhead). |
@@ -220,10 +221,11 @@ Ordinary, auditable helper modules live in `std/` and carry zero special compile
 Without executing the binary, `ode advise --asm --all-archs` prints:
 1. The exact `variable -> register / [sp+off] (SPILL)` table and stack frame size.
 2. Side-by-side High-Level Ode source lines and the exact machine instructions emitted.
-3. A calibrated out-of-order pipeline simulation over every loop and straight-line function (`cyc/iter`, `cyc/B`, active bottleneck: `frontend`, `dependency`, or execution ports, critical-path chains, i-cache line alignment, and microarchitectural hints).
+3. A calibrated out-of-order pipeline simulation over every loop and straight-line function (`cyc/iter`, `cyc/B`, active bottleneck: `frontend`, `dependency`, or execution ports, critical-path chains, i-cache line alignment, per-loop `locality` stream/stride/working-set analysis, function `memory_footprint` in cache lines and VM pages, and microarchitectural hints including `stlf-width`, `line-split`, `stream-count`, and `stride-4k-alias`).
 
 Common optimization levers visible in `ode advise --asm`:
 - **Eliminate spills and callee-saves:** inspect the `variables:` table; shrinking live ranges or using `unroll` keeps hot state in caller-saved registers (`stack 0 B`, `spills: 0`).
+- **Avoid store-forwarding and cache-line hazards:** watch for `stlf-width` (narrow stack store overlapping a wider stack load), `line-split` (access crossing a 64-byte line boundary), `stream-count` (too many concurrent hardware prefetcher streams), and `stride-4k-alias` (4 KiB stride aliasing); declare `requires aligned(buf, 64)` and `requires line_disjoint(a, b, 64)` when partitioning buffers across workers.
 - **Interleave independent chains:** compute 2–4 independent lanes or blocks side by side (e.g., `a0..d0` and `a1..d1`, or 4-way interleaved vectors) to hide multi-cycle ALU/vector latency and fill all execution ports.
 - **Widen memory reads/unroll loops:** use `.u32(off)` / `.u64(off)` / `.u32x4(off)` / `.u32x16(off)` and `for k in 0..4 unroll` to reduce loop overhead and saturate load pipes.
 - **Keep branchless hot paths:** replace short data-dependent branches with `select(cond, a, b)` and single-compare wrapping checks `(c -% lo) <= hi - lo`.

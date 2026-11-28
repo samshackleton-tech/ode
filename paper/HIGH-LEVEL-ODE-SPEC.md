@@ -27,7 +27,7 @@ The table below lists every value type in High-Level Ode; each row gives the typ
 
 ## 3. Complete Grammar (EBNF)
 
-Specifications (`def`), content-addressed imports (`use alias = "<52-char-blake3-256>"`), and function contracts (`requires`, `ensures`, `returns`, `trace depends on`, `stack`) keep Ode's existing syntax, adding only linear stack bounds `stack C + D * param`.
+Specifications (`def`), content-addressed imports (`use alias = "<52-char-blake3-256>"`), and function contracts (`requires`, `aligned(buf, A)`, `line_disjoint(a, b[, ...][, L])`, `ensures`, `returns`, `trace depends on`, `stack`) keep Ode's contract syntax, including linear stack bounds `stack C + D * param`.
 
 ```ebnf
 file      := (use_decl | def_decl | fn_decl)*
@@ -40,17 +40,20 @@ block     := "{" stmt* "}"
 
 stmt      := "let" ident [":" type] ":=" expr               -- immutable local
            | "var" ident [":" type] ":=" expr               -- mutable local
+           | "stack" ["(" arch ")"] ("let" | "var") ident [":" type] ":=" expr
            | "buf" ident "[" int "]" ["align" int]          -- local stack array
            | lvalue assign_op expr                          -- in-place update or store
            | "if" cond block ["else" (if_stmt | block)]
            | "while" cond loop_clause* block
            | "for" ident "in" expr ".." expr ["step" int] loop_clause* block
            | "for" ident "in" int ".." int "unroll" block   -- compile-time unroll
+           | "join" "maintains" spec_expr ("," spec_expr)*  -- acyclic branch merge
            | "break" | "continue"
            | "return" [expr]                                -- tail call if `return f(...)`
 
 assign_op := ":=" | "+=" | "-=" | "+%=" | "-%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
-lvalue    := ident | ident "[" expr "]" | ident "." ("u32x4" | "u32x16") "(" expr ")"
+lvalue    := ident | ident "[" expr "]"
+           | ident "." ("u32" | "u64" | "u32x4" | "u32x16") "(" expr ")"
 
 loop_clause := "maintains" spec_expr
              | "writes" ident "[" ".." spec_expr "]" "=" spec_expr
@@ -178,14 +181,13 @@ for x86_64 needs avx {
 
 ---
 
-## 6. Small Verifier Additions Needed in `Core.lean` and `verify2.py`
+## 6. Verifier Architecture in `Core.lean` and `verify2.py`
 
-All 11 top-level soundness theorems in `proof-core/test_sound.py` stay unchanged. High-Level Ode relies on five small, orthogonal verifier additions (~110 lines of Lean 4 total):
+All 11 top-level soundness theorems in `proof-core/test_sound.py` hold from standard axioms with zero omitted proofs and zero heartbeat overrides. Both `proof-core/Core.lean` (Lean 4) and `proof-core/verify2.py` (independent pure-Python second verifier sharing zero code with Lean or `kcheck/`) verify the exact same `.statement` and `.proof` files across x86-64 and AArch64:
 
-1. **Buffer bound `base + n < 2^64`** (`Contract.lean`, ~5 lines) — allows one-past-the-end pointers (`base + n`).
-2. **Modular `+%` / `-%` rule on `add` / `sub`** (`Core.lean`, ~35 lines) — when no-wrap is not proved, records `if a >= b then a - b else a + 2^64 - b` (recovering exact `a - b` whenever guarded by `a >= b` in `select` or `if`).
-3. **Linear stack bound `stack C + D * param`** (`Core.lean`, `statement.py`, ~15 lines) — exact sibling of existing `stack C + D * bits(param)`.
-4. **Indexed `[base + idx]` load/store rows** (`x86.tab`, `arm64.tab`, ~20 lines) — single hardware instruction per `buf[i]`.
-5. **SIMD `pshufb` `bswap32`, 16-byte `bytes` loads, periodic SWAR byte masks, and `or64` in `verify2.py`** (~35 lines).
+1. **Buffer bounds and alignment** (`Contract.lean`, `Core.lean`, `verify2.py`): `base + n <= 2^64`, `requires aligned(buf, A)` (`A` in `8..16384`) simplifying aligned bitmasks in O(1), and `requires line_disjoint(a, b[, ...][, L])` (`L` in `64, 128`) preventing false sharing across both inherited buffers and aligned arena sub-slices.
+2. **Uniform word-backed memory (`Row <-> Tab` bridge):** `Known.termVal` links scalar `.u32`/`.u64` loads and stores (`symLoadWordScalar`, `symStore4`, `symStore8`, `wroteW`, `frameW`) losslessly with 128-bit and 512-bit SIMD word terms (`WordTab`), while keeping pure write-only `out` buffers unreadable before write.
+3. **Exact and modular arithmetic + stack bounds:** `+%`/`-%` wraparound, linear `stack C + D * param` and logarithmic `stack C + D * bits(param)` bounds, indexed `[base + idx]` loads/stores, non-generalizing call-site `check` assertions, and acyclic `join` places.
+4. **Full SIMD and crypto coverage in `verify2.py`:** `WordTab`, 128-bit and 512-bit SIMD lanes, hardware SHA-256 ops (`sha256msg1/2`, `sha256su1`, `sha256rnds2`, `sha256h/h2`), aligned 64-byte stack spills, lane pointer tables, `ensuresw`, and vector loop `lane`/`cell` invariants (independently verifying production BLAKE3-Servil AVX-512/SSE4.1/AArch64/16-lane `p16`, ChaCha20, and SHA-256 kernels).
 
-*(For future Brotli/LZ77 decompress and compress tasks, two additional `Core.lean` rules will be needed later: reading back from a written output buffer for back-references `out[dst] := out[dst - dist]`, and variable-length output return contracts `ensures out[0..ret] = ...`.)*
+*(Future work for LZ77/Brotli decompression adds byte-level back-reference reads from written output regions `out[dst] := out[dst - dist]` and variable-length output contracts `ensures out[0..ret] = ...`.)*
