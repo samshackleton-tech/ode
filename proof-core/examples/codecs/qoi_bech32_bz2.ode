@@ -1,0 +1,390 @@
+// Verified QOI Image, BIP 173/350 Bech32/Bech32m, and bzip2 (`mibz2`) Codec Kernels
+// in 100% pure High-Level Ode (zero raw assembly).
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`) with identical
+// 52-character BLAKE3-256 contract identifiers across both processors.
+
+def u32_be(buf, o) {
+    buf[o] * 16777216 + buf[o + 1] * 65536 + buf[o + 2] * 256 + buf[o + 3]
+}
+
+// ---------------------------------------------------------------------------
+// 1. QOI (Quite OK Image) 14-Byte Header Validator (`qoi_header_valid`)
+//    Magic "qoif", width >= 1, height >= 1, channels in {3, 4}, colorspace in {0, 1}.
+//    Returns (channels << 32) + width, or 0 if invalid/truncated.
+// ---------------------------------------------------------------------------
+def qoi_hdr_of(buf) {
+    if len(buf) < 14 then 0
+    else if buf[0] != 113 || buf[1] != 111 || buf[2] != 105 || buf[3] != 102 then 0
+    else if u32_be(buf, 4) == 0 || u32_be(buf, 8) == 0 then 0
+    else if buf[12] != 3 && buf[12] != 4 then 0
+    else if buf[13] > 1 then 0
+    else buf[12] * 4294967296 + u32_be(buf, 4)
+}
+
+fn qoi_header_valid(buf: n bytes, n: number)
+    returns qoi_hdr_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 14 { return 0 }
+    if buf[0] != 113 { return 0 }
+    if buf[1] != 111 { return 0 }
+    if buf[2] != 105 { return 0 }
+    if buf[3] != 102 { return 0 }
+    var w: u64 := buf[4]
+    w := (w << 8) + buf[5]
+    w := (w << 8) + buf[6]
+    w := (w << 8) + buf[7]
+    if w == 0 { return 0 }
+    var h: u64 := buf[8]
+    h := (h << 8) + buf[9]
+    h := (h << 8) + buf[10]
+    h := (h << 8) + buf[11]
+    if h == 0 { return 0 }
+    let ch: u64 := buf[12]
+    if ch != 3 {
+        if ch != 4 { return 0 }
+    }
+    if buf[13] > 1 { return 0 }
+    return (ch << 32) + w
+}
+
+// ---------------------------------------------------------------------------
+// 2. QOI Running-Array Color Index Hash (`qoi_color_hash`, constant-time, stack 0)
+//    Exact QOI formula: (r * 3 + g * 5 + b * 7 + a * 11) % 64.
+// ---------------------------------------------------------------------------
+def qoi_hash_of(r, g, b, a) {
+    (r * 3 + g * 5 + b * 7 + a * 11) % 64
+}
+
+fn qoi_color_hash(r: u8, g: u8, b: u8, a: u8)
+    returns qoi_hash_of(r, g, b, a)
+    stack 0
+{
+    let r3: u64 := (r << 1) + r
+    let g5: u64 := (g << 2) + g
+    let b7: u64 := (b << 3) - b
+    let a11: u64 := (a << 3) + (a << 1) + a
+    return (r3 + g5 + b7 + a11) & 63
+}
+
+// ---------------------------------------------------------------------------
+// 3. QOI Chunk Op-Tag Stepper (`qoi_op_next`)
+//    0xFE (RGB: 4B), 0xFF (RGBA: 5B), 10xxxxxx (LUMA: 2B), else 1B.
+//    Returns next offset within `buf[0..n)`, or 0 if truncated.
+// ---------------------------------------------------------------------------
+def qoi_op_next_of(buf, off) {
+    if off >= len(buf) then 0
+    else if buf[off] == 254 then
+        if off + 4 > len(buf) then 0 else off + 4
+    else if buf[off] == 255 then
+        if off + 5 > len(buf) then 0 else off + 5
+    else if buf[off] >= 128 && buf[off] <= 191 then
+        if off + 2 > len(buf) then 0 else off + 2
+    else off + 1
+}
+
+fn qoi_op_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns qoi_op_next_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    if off >= n { return 0 }
+    let tag: u64 := buf[off]
+    if tag == 254 {
+        if off + 4 > n { return 0 }
+        return off + 4
+    }
+    if tag == 255 {
+        if off + 5 > n { return 0 }
+        return off + 5
+    }
+    if tag >= 128 {
+        if tag <= 191 {
+            if off + 2 > n { return 0 }
+            return off + 2
+        }
+    }
+    return off + 1
+}
+
+// ---------------------------------------------------------------------------
+// 4. BIP 173 / BIP 350 Bech32/Bech32m Human-Readable Part Validator (`bech32_hrp_valid`)
+//    1 <= n <= 83, all bytes in ASCII 33..126, forbids mixed uppercase + lowercase.
+// ---------------------------------------------------------------------------
+def hrp_step(buf, i, has_up, has_lo) {
+    if i >= len(buf) then 1
+    else if buf[i] < 33 || buf[i] > 126 then 0
+    else if buf[i] >= 65 && buf[i] <= 90 then
+        if has_lo == 1 then 0 else hrp_step(buf, i + 1, 1, has_lo)
+    else if buf[i] >= 97 && buf[i] <= 122 then
+        if has_up == 1 then 0 else hrp_step(buf, i + 1, has_up, 1)
+    else hrp_step(buf, i + 1, has_up, has_lo)
+}
+
+def bech32_hrp_of(buf) {
+    if len(buf) == 0 || len(buf) > 83 then 0
+    else hrp_step(buf, 0, 0, 0)
+}
+
+fn bech32_hrp_valid(buf: n bytes, n: number)
+    returns bech32_hrp_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n == 0 { return 0 }
+    if n > 83 { return 0 }
+    var has_up: u64 := 0
+    var has_lo: u64 := 0
+    for i in 0..n
+        maintains has_up <= 1
+        maintains has_lo <= 1
+        maintains hrp_step(buf, i, has_up, has_lo) == hrp_step(buf, 0, 0, 0)
+    {
+        let c: u64 := buf[i]
+        if c < 33 { return 0 }
+        if c > 126 { return 0 }
+        if c >= 65 {
+            if c <= 90 {
+                if has_lo == 1 { return 0 }
+                has_up := 1
+            } else if c >= 97 {
+                if c <= 122 {
+                    if has_up == 1 { return 0 }
+                    has_lo := 1
+                }
+            }
+        }
+        join
+            maintains has_up <= 1
+            maintains has_lo <= 1
+            maintains hrp_step(buf, i + 1, has_up, has_lo) == hrp_step(buf, 0, 0, 0)
+    }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// 5. BIP 173 / BIP 350 Bech32 Data-Character Decoder (`bech32_char_val`)
+//    Charset: "qpzry9x8gf2tvdw0s3jn54khce6mua7l" (0..31, case-folded, else 32).
+// ---------------------------------------------------------------------------
+def b32_low(c) { if c >= 65 && c <= 90 then c + 32 else c }
+
+def b32_val_lo(c) {
+    if c == 113 then 0
+    else if c == 112 then 1
+    else if c == 122 then 2
+    else if c == 114 then 3
+    else if c == 121 then 4
+    else if c == 57 then 5
+    else if c == 120 then 6
+    else if c == 56 then 7
+    else if c == 103 then 8
+    else if c == 102 then 9
+    else if c == 50 then 10
+    else if c == 116 then 11
+    else if c == 118 then 12
+    else if c == 100 then 13
+    else if c == 119 then 14
+    else if c == 48 then 15
+    else if c == 115 then 16
+    else if c == 51 then 17
+    else if c == 106 then 18
+    else if c == 110 then 19
+    else if c == 53 then 20
+    else if c == 52 then 21
+    else if c == 107 then 22
+    else if c == 104 then 23
+    else if c == 99 then 24
+    else if c == 101 then 25
+    else if c == 54 then 26
+    else if c == 109 then 27
+    else if c == 117 then 28
+    else if c == 97 then 29
+    else if c == 55 then 30
+    else if c == 108 then 31
+    else 32
+}
+
+def bech32_val_of(c) { b32_val_lo(b32_low(c)) }
+
+fn bech32_char_val(c: u8)
+    returns bech32_val_of(c)
+    trace depends on c
+    stack 0
+{
+    var lo: u64 := c
+    if lo >= 65 {
+        if lo <= 90 { lo += 32 }
+    }
+    join maintains lo == b32_low(c)
+    if lo == 113 { return 0 }
+    if lo == 112 { return 1 }
+    if lo == 122 { return 2 }
+    if lo == 114 { return 3 }
+    if lo == 121 { return 4 }
+    if lo == 57  { return 5 }
+    if lo == 120 { return 6 }
+    if lo == 56  { return 7 }
+    if lo == 103 { return 8 }
+    if lo == 102 { return 9 }
+    if lo == 50  { return 10 }
+    if lo == 116 { return 11 }
+    if lo == 118 { return 12 }
+    if lo == 100 { return 13 }
+    if lo == 119 { return 14 }
+    if lo == 48  { return 15 }
+    if lo == 115 { return 16 }
+    if lo == 51  { return 17 }
+    if lo == 106 { return 18 }
+    if lo == 110 { return 19 }
+    if lo == 53  { return 20 }
+    if lo == 52  { return 21 }
+    if lo == 107 { return 22 }
+    if lo == 104 { return 23 }
+    if lo == 99  { return 24 }
+    if lo == 101 { return 25 }
+    if lo == 54  { return 26 }
+    if lo == 109 { return 27 }
+    if lo == 117 { return 28 }
+    if lo == 97  { return 29 }
+    if lo == 55  { return 30 }
+    if lo == 108 { return 31 }
+    return 32
+}
+
+// ---------------------------------------------------------------------------
+// 6. bzip2 (`mibz2`) Stream Header Validator (`bz2_stream_hdr`)
+//    Magic "BZh" + block-size digit '1'..'9' -> returns 1..9 (100..900 KiB), else 0.
+// ---------------------------------------------------------------------------
+def bz2_hdr_of(buf) {
+    if len(buf) < 4 then 0
+    else if buf[0] != 66 || buf[1] != 90 || buf[2] != 104 then 0
+    else if buf[3] < 49 || buf[3] > 57 then 0
+    else buf[3] - 48
+}
+
+fn bz2_stream_hdr(buf: n bytes, n: number)
+    returns bz2_hdr_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 4 { return 0 }
+    if buf[0] != 66 { return 0 }
+    if buf[1] != 90 { return 0 }
+    if buf[2] != 104 { return 0 }
+    let d: u64 := buf[3]
+    if d < 49 { return 0 }
+    if d > 57 { return 0 }
+    return d - 48
+}
+
+// ---------------------------------------------------------------------------
+// 7. bzip2 (`mibz2`) 6-Byte Block vs. End-of-Stream Magic Classifier (`bz2_block_magic`)
+//    Block magic (pi: 0x314159265359) -> 1; EOS magic (sqrt(pi): 0x177245385090) -> 2; else 0.
+// ---------------------------------------------------------------------------
+def bz2_magic_of(buf) {
+    if len(buf) < 6 then 0
+    else if buf[0] == 49 && buf[1] == 65 && buf[2] == 89 && buf[3] == 38 && buf[4] == 83 && buf[5] == 89 then 1
+    else if buf[0] == 23 && buf[1] == 114 && buf[2] == 69 && buf[3] == 56 && buf[4] == 80 && buf[5] == 144 then 2
+    else 0
+}
+
+fn bz2_block_magic(buf: n bytes, n: number)
+    returns bz2_magic_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 6 { return 0 }
+    let b0: u64 := buf[0]
+    if b0 == 0x31 {
+        if buf[1] == 0x41 {
+            if buf[2] == 0x59 {
+                if buf[3] == 0x26 {
+                    if buf[4] == 0x53 {
+                        if buf[5] == 0x59 { return 1 }
+                    }
+                }
+            }
+        }
+        return 0
+    }
+    if b0 == 0x17 {
+        if buf[1] == 0x72 {
+            if buf[2] == 0x45 {
+                if buf[3] == 0x38 {
+                    if buf[4] == 0x50 {
+                        if buf[5] == 0x90 { return 2 }
+                    }
+                }
+            }
+        }
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 8. bzip2 (`mibz2`) RLE1 Exact Expanded Output Length (`bz2_rle1_decoded_len`)
+//    After 4 identical consecutive bytes, the next byte gives 0..255 extra copies.
+//    Returns exact expanded byte count, or 4294967295 if truncated right after a 4-run.
+// ---------------------------------------------------------------------------
+def rle1_step(buf, i, prev, run, out_len) {
+    if i >= len(buf) then out_len
+    else if buf[i] == prev && run == 3 then
+        if i + 1 >= len(buf) then 4294967295
+        else rle1_step(buf, i + 2, 256, 0, out_len + 1 + buf[i + 1])
+    else if buf[i] == prev then
+        rle1_step(buf, i + 1, prev, run + 1, out_len + 1)
+    else
+        rle1_step(buf, i + 1, buf[i], 1, out_len + 1)
+}
+
+def bz2_rle1_len_of(buf) {
+    rle1_step(buf, 0, 256, 0, 0)
+}
+
+fn bz2_rle1_decoded_len(buf: n bytes, n: number)
+    requires n < 16777216
+    returns bz2_rle1_len_of(buf)
+    trace depends on buf, n
+    stack 16
+{
+    var i: u64 := 0
+    var prev: u64 := 256
+    var run: u64 := 0
+    var out_len: u64 := 0
+    while i < n
+        maintains i <= n
+        maintains prev <= 256
+        maintains run <= 3
+        maintains out_len <= i * 256
+        maintains rle1_step(buf, i, prev, run, out_len) == bz2_rle1_len_of(buf)
+        decreases n - i
+    {
+        let c: u64 := buf[i]
+        if c == prev {
+            if run == 3 {
+                if i + 1 >= n {
+                    let one: u64 := 1
+                    return (one << 32) - 1
+                }
+                let extra: u64 := buf[i + 1]
+                out_len := out_len + 1 + extra
+                prev := 256
+                run := 0
+                i += 2
+            } else {
+                out_len += 1
+                run += 1
+                i += 1
+            }
+        } else {
+            out_len += 1
+            prev := c
+            run := 1
+            i += 1
+        }
+    }
+    return out_len
+}
