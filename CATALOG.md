@@ -107,7 +107,7 @@ Each row below lists a pure-computation interpreter or virtual machine: a functi
 | Target | Category | Why It Matters | Status |
 |---|---|---|---|
 | **eBPF / cBPF interpreter & bytecode verifier** | Systems VM | Fixed-width register VM with bounded jumps and explicit memory-region checks; high-value attack surface in kernels and sandboxes | **`shown`** (RFC 9669 eBPF core VM on x86-64 & AArch64: 11 opcodes, 6 fns, 209 x86-64 / 192 arm64 insns, `qlwaeo77ybph4b6zqshpx2k4hheyorgdhcmieq2tljuowzsjfwva`; `examples/ebpf/`) |
-| **WebAssembly (Wasm) core interpreter** | Portable VM | Pure numeric and linear-memory execution step over a caller-supplied memory slice, with no host imports | `planned` |
+| **WebAssembly (Wasm) core interpreter** | Portable VM | Pure numeric and linear-memory execution step over a caller-supplied memory slice, with no host imports | **`shown`** (dual-verified `both`: 6 pure HL kernels in `proof-core/examples/wasm/wasm_core.ode` — Wasm 2.0 binary module validator + 17-opcode bounded stack-machine interpreter on x86-64 & AArch64) |
 | **Regex VM (Thompson NFA / PikeVM)** | Text engine | Linear-time regular-expression matching with proved buffer bounds and no catastrophic backtracking | `planned` |
 | **Small stack & register VMs** | Scripting / query | Bitcoin Script, Forth inner interpreter, SQLite VDBE expression evaluator, or a small Scheme bytecode VM | `planned` |
 

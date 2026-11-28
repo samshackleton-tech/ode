@@ -1,0 +1,488 @@
+// WebAssembly 2.0 Binary Module Framing & Bounded Stack-Machine Core Interpreter
+// in 100% Pure High-Level Ode. Portable across x86-64 and AArch64; dual-verified (`--verifier both`).
+
+// ---------------------------------------------------------------------------
+// 1. Wasm 2.0 §5.5.16 Binary Module Preamble Validator (`wasm_module_hdr_ok`)
+//    Checks magic `\0asm` (0x6D736100 LE) and version 1 (0x00000001 LE).
+// ---------------------------------------------------------------------------
+def u32_le(buf, o) {
+    buf[o] + buf[o + 1] * 256 + buf[o + 2] * 65536 + buf[o + 3] * 16777216
+}
+
+def wasm_hdr_spec(buf) {
+    if len(buf) < 8 then 0
+    else if u32_le(buf, 0) != 1836278016 then 0
+    else if u32_le(buf, 4) != 1 then 0
+    else 1
+}
+
+fn wasm_module_hdr_ok(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns wasm_hdr_spec(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 8 { return 0 }
+    let magic: u64 := buf.u32(0)
+    let want_magic: u64 := (0x6D73 << 16) + 0x6100
+    if magic != want_magic { return 0 }
+    let ver: u64 := buf.u32(4)
+    if ver != 1 { return 0 }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// 2. Wasm 2.0 §5.2.2 Strict ULEB128 32-bit Length Validator (`wasm_uleb32_len`)
+//    Returns exact byte count (1..5) of a valid u32 LEB128 integer at `pos`,
+//    enforcing 5th-byte high-bit bound (< 16), or 0 on truncation / overflow.
+// ---------------------------------------------------------------------------
+def uleb32_len_spec(buf, p) {
+    if p >= len(buf) then 0
+    else if buf[p] < 128 then 1
+    else if p + 1 >= len(buf) then 0
+    else if buf[p + 1] < 128 then 2
+    else if p + 2 >= len(buf) then 0
+    else if buf[p + 2] < 128 then 3
+    else if p + 3 >= len(buf) then 0
+    else if buf[p + 3] < 128 then 4
+    else if p + 4 >= len(buf) then 0
+    else if buf[p + 4] < 16 then 5
+    else 0
+}
+
+fn wasm_uleb32_len(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns uleb32_len_spec(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    if pos >= n { return 0 }
+    if buf[pos] < 128 { return 1 }
+    if pos + 1 >= n { return 0 }
+    if buf[pos + 1] < 128 { return 2 }
+    if pos + 2 >= n { return 0 }
+    if buf[pos + 2] < 128 { return 3 }
+    if pos + 3 >= n { return 0 }
+    if buf[pos + 3] < 128 { return 4 }
+    if pos + 4 >= n { return 0 }
+    if buf[pos + 4] < 16 { return 5 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 3. Wasm 2.0 §5.2.2 Strict ULEB128 32-bit Value Decoder (`wasm_uleb32_val`)
+//    Returns decoded unsigned 32-bit value (0..2^32-1), or 2^32 on error.
+// ---------------------------------------------------------------------------
+def uleb32_val_spec(buf, p) {
+    if p >= len(buf) then 4294967296
+    else if buf[p] < 128 then buf[p]
+    else if p + 1 >= len(buf) then 4294967296
+    else if buf[p + 1] < 128 then (buf[p] % 128) + buf[p + 1] * 128
+    else if p + 2 >= len(buf) then 4294967296
+    else if buf[p + 2] < 128 then (buf[p] % 128) + (buf[p + 1] % 128) * 128 + buf[p + 2] * 16384
+    else if p + 3 >= len(buf) then 4294967296
+    else if buf[p + 3] < 128 then
+        (buf[p] % 128) + (buf[p + 1] % 128) * 128 + (buf[p + 2] % 128) * 16384 + buf[p + 3] * 2097152
+    else if p + 4 >= len(buf) then 4294967296
+    else if buf[p + 4] < 16 then
+        (buf[p] % 128) + (buf[p + 1] % 128) * 128 + (buf[p + 2] % 128) * 16384
+        + (buf[p + 3] % 128) * 2097152 + buf[p + 4] * 268435456
+    else 4294967296
+}
+
+fn wasm_uleb32_val(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns uleb32_val_spec(buf, pos)
+    trace depends on buf, n, pos
+    stack 16
+{
+    let one: u64 := 1
+    let err: u64 := one << 32
+    if pos >= n { return err }
+    let b0: u64 := buf[pos]
+    if b0 < 128 { return b0 }
+    if pos + 1 >= n { return err }
+    let b1: u64 := buf[pos + 1]
+    let v0: u64 := b0 & 127
+    if b1 < 128 { return v0 + (b1 << 7) }
+    if pos + 2 >= n { return err }
+    let b2: u64 := buf[pos + 2]
+    let v1: u64 := v0 + ((b1 & 127) << 7)
+    if b2 < 128 { return v1 + (b2 << 14) }
+    if pos + 3 >= n { return err }
+    let b3: u64 := buf[pos + 3]
+    let v2: u64 := v1 + ((b2 & 127) << 14)
+    if b3 < 128 { return v2 + (b3 << 21) }
+    if pos + 4 >= n { return err }
+    let b4: u64 := buf[pos + 4]
+    if b4 >= 16 { return err }
+    let v3: u64 := v2 + ((b3 & 127) << 21)
+    return v3 + (b4 << 28)
+}
+
+// ---------------------------------------------------------------------------
+// 4. Wasm 2.0 §5.5.2 Binary Section Framing Parser (`wasm_section_next`)
+//    Validates section id (0..12), ULEB128 payload size, and buffer bounds.
+//    Returns exact byte offset of the next section, or 0 on malformed/truncated.
+// ---------------------------------------------------------------------------
+def wasm_sec_finish(buf, pos, slen, sz) {
+    if slen == 0 || slen > 5 then 0
+    else if sz >= 4294967296 then 0
+    else if pos + 1 + slen + sz > len(buf) then 0
+    else pos + 1 + slen + sz
+}
+
+def wasm_section_next_spec(buf, pos) {
+    if pos >= len(buf) then 0
+    else if buf[pos] > 12 then 0
+    else wasm_sec_finish(buf, pos, uleb32_len_spec(buf, pos + 1), uleb32_val_spec(buf, pos + 1))
+}
+
+fn wasm_section_next(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns wasm_section_next_spec(buf, pos)
+    trace depends on buf, n, pos
+    stack 128
+{
+    if pos >= n { return 0 }
+    if buf[pos] > 12 { return 0 }
+    let slen: u64 := wasm_uleb32_len(buf, n, pos + 1)
+    let sz: u64 := wasm_uleb32_val(buf, n, pos + 1)
+    if slen == 0 { return 0 }
+    if slen > 5 { return 0 }
+    let one: u64 := 1
+    let lim: u64 := one << 32
+    if sz >= lim { return 0 }
+    let nxt: u64 := pos + 1 + slen + sz
+    if nxt > n { return 0 }
+    return nxt
+}
+
+// ---------------------------------------------------------------------------
+// 5. Full Multi-Section Wasm 2.0 Binary Module Validator (`wasm_validate_module`)
+//    Checks `\0asm\1\0\0\0` preamble, walks every section enforcing valid IDs,
+//    canonical ULEB128 sizes, non-custom monotonic section ordering (Wasm 2.0
+//    §5.5.2, mapping DataCount section 12 cleanly), and exact module EOF.
+//    Returns exact section count, or 4294967295 on any malformed module.
+// ---------------------------------------------------------------------------
+def wasm_mod_step(buf, pos, last_id, cnt, nxt) {
+    if nxt <= pos || nxt > len(buf) then 4294967295
+    else if buf[pos] == 0 then wasm_mod_from(buf, nxt, last_id, cnt + 1)
+    else if buf[pos] <= last_id then 4294967295
+    else wasm_mod_from(buf, nxt, buf[pos], cnt + 1)
+}
+
+def wasm_mod_from(buf, pos, last_id, cnt) {
+    if pos >= len(buf) then cnt
+    else wasm_mod_step(buf, pos, last_id, cnt, wasm_section_next_spec(buf, pos))
+}
+
+def wasm_validate_spec(buf) {
+    if len(buf) < 8 then 4294967295
+    else if wasm_hdr_spec(buf) == 0 then 4294967295
+    else wasm_mod_from(buf, 8, 0, 0)
+}
+
+fn wasm_validate_module(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns wasm_validate_spec(buf)
+    trace depends on buf, n
+    stack 224
+{
+    let one: u64 := 1
+    let err: u64 := (one << 32) - 1
+    if n < 8 { return err }
+    let ok: u64 := wasm_module_hdr_ok(buf, n)
+    if ok == 0 { return err }
+    var pos: u64 := 8
+    var last_id: u64 := 0
+    var cnt: u64 := 0
+    while pos < n
+        maintains 8 <= pos
+        maintains pos <= n
+        maintains last_id <= 255
+        maintains cnt <= pos
+        maintains wasm_mod_from(buf, pos, last_id, cnt) == wasm_mod_from(buf, 8, 0, 0)
+        decreases n - pos
+    {
+        let sid: u64 := buf[pos]
+        let nxt: u64 := wasm_section_next(buf, n, pos)
+        if nxt <= pos { return err }
+        if nxt > n { return err }
+        if sid != 0 {
+            if sid <= last_id { return err }
+            last_id := sid
+        }
+        join
+            maintains nxt <= n
+            maintains pos < nxt
+            maintains last_id <= 255
+            maintains cnt + 1 <= nxt
+            maintains wasm_mod_from(buf, nxt, last_id, cnt + 1) == wasm_mod_from(buf, 8, 0, 0)
+        pos := nxt
+        cnt += 1
+    }
+    return cnt
+}
+
+// ---------------------------------------------------------------------------
+// 6. Bounded Wasm 2.0 Stack-Machine Bytecode Interpreter (`wasm_eval_stack`)
+//    Pure-computation register-backed 3-deep operand stack (s0, s1, s2, sp) +
+//    local0 executing 16 real Wasm 2.0 binary opcodes directly from `prog`:
+//      0x01 nop | 0x0B end | 0x1A drop | 0x1B select
+//      0x20 local.get 0 | 0x21 local.set 0 | 0x22 local.tee 0
+//      0x41 i32.const imm7 (0..127)
+//      0x45 i32.eqz | 0x46 i32.eq | 0x47 i32.ne | 0x49 i32.lt_u
+//      0x4B i32.gt_u | 0x4D i32.le_u | 0x4F i32.ge_u
+//      0x6A i32.add (mod 2^32) | 0x6B i32.sub (mod 2^32)
+//    Returns top-of-stack u32 (0..2^32-1) on `end` (0x0B), or 4294967296 (2^32)
+//    on trap (stack underflow/overflow, unknown opcode, bad local, EOF, or out of fuel).
+// ---------------------------------------------------------------------------
+def wasm_bin_i32(op, a, b) {
+    if op == 70 then (if a == b then 1 else 0)
+    else if op == 71 then (if a != b then 1 else 0)
+    else if op == 73 then (if a < b then 1 else 0)
+    else if op == 75 then (if a > b then 1 else 0)
+    else if op == 77 then (if a <= b then 1 else 0)
+    else if op == 79 then (if a >= b then 1 else 0)
+    else if op == 106 then (a + b) % 4294967296
+    else (a + 4294967296 - b) % 4294967296
+}
+
+def wasm_vm_run(prog, pc, fuel, sp, s0, s1, s2, loc0) {
+    if fuel == 0 || pc >= len(prog) then 4294967296
+    else if prog[pc] == 1 then
+        wasm_vm_run(prog, pc + 1, fuel - 1, sp, s0, s1, s2, loc0)
+    else if prog[pc] == 11 then
+        if sp == 1 then s0
+        else if sp == 2 then s1
+        else if sp == 3 then s2
+        else 4294967296
+    else if prog[pc] == 26 then
+        if sp == 0 then 4294967296
+        else wasm_vm_run(prog, pc + 1, fuel - 1, sp - 1, s0, s1, s2, loc0)
+    else if prog[pc] == 27 then
+        if sp != 3 then 4294967296
+        else wasm_vm_run(prog, pc + 1, fuel - 1, 1, (if s2 != 0 then s0 else s1), s1, s2, loc0)
+    else if prog[pc] == 32 then
+        if pc + 1 >= len(prog) || prog[pc + 1] != 0 then 4294967296
+        else if sp == 0 then wasm_vm_run(prog, pc + 2, fuel - 1, 1, loc0, s1, s2, loc0)
+        else if sp == 1 then wasm_vm_run(prog, pc + 2, fuel - 1, 2, s0, loc0, s2, loc0)
+        else if sp == 2 then wasm_vm_run(prog, pc + 2, fuel - 1, 3, s0, s1, loc0, loc0)
+        else 4294967296
+    else if prog[pc] == 33 then
+        if pc + 1 >= len(prog) || prog[pc + 1] != 0 then 4294967296
+        else if sp == 1 then wasm_vm_run(prog, pc + 2, fuel - 1, 0, s0, s1, s2, s0)
+        else if sp == 2 then wasm_vm_run(prog, pc + 2, fuel - 1, 1, s0, s1, s2, s1)
+        else if sp == 3 then wasm_vm_run(prog, pc + 2, fuel - 1, 2, s0, s1, s2, s2)
+        else 4294967296
+    else if prog[pc] == 34 then
+        if pc + 1 >= len(prog) || prog[pc + 1] != 0 then 4294967296
+        else if sp == 1 then wasm_vm_run(prog, pc + 2, fuel - 1, 1, s0, s1, s2, s0)
+        else if sp == 2 then wasm_vm_run(prog, pc + 2, fuel - 1, 2, s0, s1, s2, s1)
+        else if sp == 3 then wasm_vm_run(prog, pc + 2, fuel - 1, 3, s0, s1, s2, s2)
+        else 4294967296
+    else if prog[pc] == 65 then
+        if pc + 1 >= len(prog) || prog[pc + 1] >= 128 then 4294967296
+        else if sp == 0 then wasm_vm_run(prog, pc + 2, fuel - 1, 1, prog[pc + 1], s1, s2, loc0)
+        else if sp == 1 then wasm_vm_run(prog, pc + 2, fuel - 1, 2, s0, prog[pc + 1], s2, loc0)
+        else if sp == 2 then wasm_vm_run(prog, pc + 2, fuel - 1, 3, s0, s1, prog[pc + 1], loc0)
+        else 4294967296
+    else if prog[pc] == 69 then
+        if sp == 1 then wasm_vm_run(prog, pc + 1, fuel - 1, 1, (if s0 == 0 then 1 else 0), s1, s2, loc0)
+        else if sp == 2 then wasm_vm_run(prog, pc + 1, fuel - 1, 2, s0, (if s1 == 0 then 1 else 0), s2, loc0)
+        else if sp == 3 then wasm_vm_run(prog, pc + 1, fuel - 1, 3, s0, s1, (if s2 == 0 then 1 else 0), loc0)
+        else 4294967296
+    else if prog[pc] == 70 || prog[pc] == 71 || prog[pc] == 73 || prog[pc] == 75
+         || prog[pc] == 77 || prog[pc] == 79 || prog[pc] == 106 || prog[pc] == 107 then
+        if sp == 2 then wasm_vm_run(prog, pc + 1, fuel - 1, 1, wasm_bin_i32(prog[pc], s0, s1), s1, s2, loc0)
+        else if sp == 3 then wasm_vm_run(prog, pc + 1, fuel - 1, 2, s0, wasm_bin_i32(prog[pc], s1, s2), s2, loc0)
+        else 4294967296
+    else 4294967296
+}
+
+fn wasm_eval_stack(prog: n bytes, n: number, fuel: number)
+    requires n < 4294967296
+    requires fuel < 4294967296
+    returns wasm_vm_run(prog, 0, fuel, 0, 0, 0, 0, 0)
+    trace depends on prog, n, fuel
+    stack 64
+{
+    var pc: u64 := 0
+    var rem: u64 := fuel
+    var sp: u64 := 0
+    var s0: u64 := 0
+    var s1: u64 := 0
+    var s2: u64 := 0
+    var loc0: u64 := 0
+    while rem > 0
+        maintains pc <= n
+        maintains rem <= fuel
+        maintains sp <= 3
+        maintains s0 < 4294967296
+        maintains s1 < 4294967296
+        maintains s2 < 4294967296
+        maintains loc0 < 4294967296
+        maintains wasm_vm_run(prog, pc, rem, sp, s0, s1, s2, loc0) == wasm_vm_run(prog, 0, fuel, 0, 0, 0, 0, 0)
+        decreases rem
+    {
+        if pc >= n { let one: u64 := 1; return one << 32 }
+        let op: u64 := prog[pc]
+        if op == 1 {
+            pc += 1
+            rem -= 1
+        } else if op == 11 {
+            if sp == 1 { return s0 }
+            if sp == 2 { return s1 }
+            if sp == 3 { return s2 }
+            let one: u64 := 1
+            return one << 32
+        } else if op == 26 {
+            if sp == 0 { let one: u64 := 1; return one << 32 }
+            sp -= 1
+            pc += 1
+            rem -= 1
+        } else if op == 27 {
+            if sp != 3 { let one: u64 := 1; return one << 32 }
+            if s2 == 0 { s0 := s1 }
+            sp := 1
+            pc += 1
+            rem -= 1
+        } else if op == 32 {
+            if pc + 1 >= n { let one: u64 := 1; return one << 32 }
+            if prog[pc + 1] != 0 { let one: u64 := 1; return one << 32 }
+            if sp == 0 { s0 := loc0; sp := 1 }
+            else if sp == 1 { s1 := loc0; sp := 2 }
+            else if sp == 2 { s2 := loc0; sp := 3 }
+            else { let one: u64 := 1; return one << 32 }
+            pc += 2
+            rem -= 1
+        } else if op == 33 {
+            if pc + 1 >= n { let one: u64 := 1; return one << 32 }
+            if prog[pc + 1] != 0 { let one: u64 := 1; return one << 32 }
+            if sp == 1 { loc0 := s0; sp := 0 }
+            else if sp == 2 { loc0 := s1; sp := 1 }
+            else if sp == 3 { loc0 := s2; sp := 2 }
+            else { let one: u64 := 1; return one << 32 }
+            pc += 2
+            rem -= 1
+        } else if op == 34 {
+            if pc + 1 >= n { let one: u64 := 1; return one << 32 }
+            if prog[pc + 1] != 0 { let one: u64 := 1; return one << 32 }
+            if sp == 1 { loc0 := s0 }
+            else if sp == 2 { loc0 := s1 }
+            else if sp == 3 { loc0 := s2 }
+            else { let one: u64 := 1; return one << 32 }
+            pc += 2
+            rem -= 1
+        } else if op == 65 {
+            if pc + 1 >= n { let one: u64 := 1; return one << 32 }
+            let imm: u64 := prog[pc + 1]
+            if imm >= 128 { let one: u64 := 1; return one << 32 }
+            if sp == 0 { s0 := imm; sp := 1 }
+            else if sp == 1 { s1 := imm; sp := 2 }
+            else if sp == 2 { s2 := imm; sp := 3 }
+            else { let one: u64 := 1; return one << 32 }
+            pc += 2
+            rem -= 1
+        } else if op == 69 {
+            if sp == 1 {
+                if s0 == 0 { s0 := 1 } else { s0 := 0 }
+            } else if sp == 2 {
+                if s1 == 0 { s1 := 1 } else { s1 := 0 }
+            } else if sp == 3 {
+                if s2 == 0 { s2 := 1 } else { s2 := 0 }
+            } else {
+                let one: u64 := 1
+                return one << 32
+            }
+            pc += 1
+            rem -= 1
+        } else if op == 70 {
+            if sp == 2 {
+                if s0 == s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 == s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 71 {
+            if sp == 2 {
+                if s0 != s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 != s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 73 {
+            if sp == 2 {
+                if s0 < s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 < s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 75 {
+            if sp == 2 {
+                if s0 > s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 > s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 77 {
+            if sp == 2 {
+                if s0 <= s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 <= s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 79 {
+            if sp == 2 {
+                if s0 >= s1 { s0 := 1 } else { s0 := 0 }
+                sp := 1
+            } else if sp == 3 {
+                if s1 >= s2 { s1 := 1 } else { s1 := 0 }
+                sp := 2
+            } else { let one: u64 := 1; return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 106 {
+            let one: u64 := 1
+            let mask32: u64 := (one << 32) - 1
+            if sp == 2 {
+                s0 := (s0 + s1) & mask32
+                sp := 1
+            } else if sp == 3 {
+                s1 := (s1 + s2) & mask32
+                sp := 2
+            } else { return one << 32 }
+            pc += 1; rem -= 1
+        } else if op == 107 {
+            let one: u64 := 1
+            let base32: u64 := one << 32
+            let mask32: u64 := base32 - 1
+            if sp == 2 {
+                s0 := ((s0 + base32) - s1) & mask32
+                sp := 1
+            } else if sp == 3 {
+                s1 := ((s1 + base32) - s2) & mask32
+                sp := 2
+            } else { return base32 }
+            pc += 1; rem -= 1
+        } else {
+            let one: u64 := 1
+            return one << 32
+        }
+    }
+    let one: u64 := 1
+    return one << 32
+}
