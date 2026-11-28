@@ -8,6 +8,7 @@ and the lines of the Lean files. paper/test_paper.py fails where facts.json is n
     pypy3 paper/make_facts.py           writes paper/facts.json
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,8 @@ def facts():
     _, canon = make_figures.all_zero_example()
     x86_rows = table.read(str(ROOT / "core" / "x86.tab"))
     arm_rows = table.read(word.TABLE)
+    agree_txt = (ROOT / "arm64" / "agree" / "CheckMain.lean").read_text(encoding="utf-8")
+    arm_proved = len(set(re.findall(r'checkRow\s+table\s+"([^"]+)"', agree_txt)))
     pc = ROOT / "proof-core"
     sound = sorted(p.name for p in pc.glob("Sound*.lean"))
     return {
@@ -45,6 +48,7 @@ def facts():
             "x86_rows": len(x86_rows),
             "x86_rows_run_on_a_processor": sum(1 for r in x86_rows if r.asm != "-"),
             "arm64_rows": len(arm_rows),
+            "arm64_rows_proved_agree": arm_proved,
             "arm64_rows_run_on_a_processor": sum(1 for r in arm_rows if r.asm != "-"),
         },
         "lean": {
@@ -53,6 +57,9 @@ def facts():
             "model_lines": sum(count_lines(pc / f"{m}.lean") for m in MODEL),
             "sound_files": len(sound),
             "sound_lines": sum(count_lines(pc / s) for s in sound),
+        },
+        "verify2": {
+            "lines": count_lines(pc / "verify2.py"),
         },
     }
 

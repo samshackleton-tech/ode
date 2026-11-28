@@ -12,8 +12,12 @@
   },
   "tables": {
     "arm64_rows": 67,
+    "arm64_rows_proved_agree": 56,
     "arm64_rows_run_on_a_processor": 58,
     "x86_rows": 109,
     "x86_rows_run_on_a_processor": 106
+  },
+  "verify2": {
+    "lines": 5417
   }
 }
