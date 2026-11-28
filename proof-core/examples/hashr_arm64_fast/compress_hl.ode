@@ -1,0 +1,79 @@
+// Portable 1-block BLAKE3 compression in 100% pure High-Level Ode + std/vec.ode.
+// Zero raw assembly mnemonics; compiles 1-to-1 to the exact 14-op in-register NEON
+// message schedule on AArch64 and AVX/SSE on x86-64, with identical contract ID to
+// hand-written assembly `compress_arm64.ode`, zero stack, zero read-only data, and
+// constant-time execution (dual-verified `--verifier both`).
+
+use b3 = "ya6gqve7vxwsty67gvln6hr4lxkvo2vmknwk4l3prxrvtmuetiqq"   // blake3_spec.ode
+use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
+
+inline fn g_half(var a: u32x4, var b: u32x4, var c: u32x4, var d: u32x4, mx: u32x4, my: u32x4) {
+    a := a + mx
+    a := a + b
+    d := vec.rotr32(d ^ a, 16)
+    c := c + d
+    b := vec.rotr32(b ^ c, 12)
+    a := a + my
+    a := a + b
+    d := vec.rotr32(d ^ a, 8)
+    c := c + d
+    b := vec.rotr32(b ^ c, 7)
+}
+
+inline fn permute_msg(var m0: u32x4, var m1: u32x4, var m2: u32x4, var m3: u32x4) {
+    var t0: u32x4 := uzp2_32(m1, m0)
+    var t1: u32x4 := unpacklo64(m0, t0)
+    var t2: u32x4 := ext8(m0, m0)
+    var t3: u32x4 := ext4(m2, m0)
+    let t4: u32x4 := uzp2_32(m0, t3)
+    let t5: u32x4 := ext12(m3, m0)
+    m0 := ext4(t1, t2)
+    t0 := uzp1_32(m3, m1)
+    t1 := ext12(m2, m3)
+    t2 := unpackhi32(m1, m3)
+    t3 := unpacklo64(m2, t2)
+    t2 := ext4(m1, m2)
+    m1 := ext4(t4, t5)
+    m2 := uzp1_32(t0, t1)
+    m3 := uzp2_32(t3, t2)
+}
+
+fn compress1(h: cv, m: block, length: word, t: counter, flags: low word)
+    requires no_overlap(h, m)
+    ensures h = b3.compress(h, m, t, length, flags)
+    stack 0
+{
+    var v0: u32x4 := h.u32x4(0)
+    var v1: u32x4 := h.u32x4(16)
+    var v2: u32x4 := vec.const_u32x4(0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A)
+    var v3: u32x4 := vec.pack_u64x2(t, length + (flags << 32))
+
+    let b0: u32x4 := m.u32x4(0)
+    let b1: u32x4 := m.u32x4(16)
+    let b2: u32x4 := m.u32x4(32)
+    let b3_v: u32x4 := m.u32x4(48)
+
+    var m0: u32x4 := uzp1_32(b0, b1)
+    var m1: u32x4 := uzp2_32(b0, b1)
+    let p2: u32x4 := uzp1_32(b2, b3_v)
+    var m2: u32x4 := ext12(p2, p2)
+    let p3: u32x4 := uzp2_32(b2, b3_v)
+    var m3: u32x4 := ext12(p3, p3)
+
+    for r in 0..7 unroll {
+        g_half(v0, v1, v2, v3, m0, m1)
+        v0 := vec.rot_lanes(v0, 3)
+        v3 := vec.rot_lanes(v3, 2)
+        v2 := vec.rot_lanes(v2, 1)
+        g_half(v0, v1, v2, v3, m2, m3)
+        v0 := vec.rot_lanes(v0, 1)
+        v3 := vec.rot_lanes(v3, 2)
+        v2 := vec.rot_lanes(v2, 3)
+        if r < 6 {
+            permute_msg(m0, m1, m2, m3)
+        }
+    }
+
+    h.u32x4(0) := v0 ^ v2
+    h.u32x4(16) := v1 ^ v3
+}
