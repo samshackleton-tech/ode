@@ -13,12 +13,15 @@ ROOT = os.path.dirname(HERE)
 VER = os.path.join(HERE, "examples", "verifier")
 sys.path[:0] = [HERE, os.path.join(ROOT, "lang"), os.path.join(ROOT, "arm64"),
                 os.path.join(ROOT, "core")]
-import built, obj as aobj, ode_tool, odec
+import built, obj as aobj, ode_audit, ode_tool, odec
 
 ARM_MACHINE = platform.machine() in ("arm64", "aarch64")
+IS_LINUX_X86 = platform.system() == "Linux" and platform.machine() in ("x86_64", "amd64")
 SPEC_PATH = os.path.join(VER, "arith.spec")
 X86_PATH = os.path.join(VER, "arith_x86.ode")
 ARM_PATH = os.path.join(VER, "arith_arm64.ode")
+HL_PATH = os.path.join(VER, "verifier_hl.ode")
+STD_DIR = os.path.join(ROOT, "std")
 
 
 def once(old, new):
@@ -158,6 +161,118 @@ class VerifierInOde(unittest.TestCase):
                            check=True, capture_output=True)
             r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
             self.assertEqual(r.stdout.strip(), "verifier_ode_arm64: 11 checks OK")
+
+    def test_hl_verifier_stage2_dual_verify_and_native_x86(self):
+        """All 8 Verifier-in-Ode Stage 2 kernels in `verifier_hl.ode` pass `--verifier both`
+        (Lean `odeverify` + standalone pure-Python `verify2.py`) on BOTH x86-64 and AArch64,
+        share identical contract IDs on all 7 portable kernels, and pass native C tests."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.isfile(odeverify):
+            self.skipTest("odeverify binary not built")
+        portable = [
+            "v_all_zero", "v_row_contradicts", "v_bytes_eq",
+            "v_plain_match", "v_step_ok", "v_parse_u64", "v_tag_kind",
+        ]
+        all_fns = portable + ["v_row_sum16"]
+        cids = {}
+        x86_objs = {}
+        x86_syms = {}
+        with tempfile.TemporaryDirectory() as d:
+            for fn in all_fns:
+                for target in ("x86_64", "arm64"):
+                    out_o = os.path.join(d, f"{fn}_{target}.o")
+                    out_p = os.path.join(d, f"{fn}_{target}.proof")
+                    res = ode_audit.pack_verified(
+                        HL_PATH, None, out_o, out_p,
+                        fn_name=fn, target=target, c_abi=True,
+                        stores=[STD_DIR], verifier="both",
+                    )
+                    self.assertEqual(res["verdict"], "shown", (fn, target, res))
+                    self.assertEqual(list(res["verifiers"].keys()), ["odeverify", "verify2"])
+                    cids[(fn, target)] = res["contract_b32"]
+                    if target == "x86_64":
+                        x86_objs[fn] = out_o
+                        x86_syms[fn] = res["symbol"]
+            for fn in portable:
+                self.assertEqual(
+                    cids[(fn, "x86_64")], cids[(fn, "arm64")],
+                    f"cross-arch contract hash mismatch on {fn}",
+                )
+            cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+            if IS_LINUX_X86 and cc:
+                with open("/proc/cpuinfo", "r", encoding="utf-8") as ci:
+                    has_avx512 = "avx512f" in ci.read()
+                run_fns = all_fns if has_avx512 else portable
+                avx_decl = (
+                    "void " + x86_syms["v_row_sum16"] + "(uint32_t *, const uint32_t *, const uint32_t *);"
+                    if has_avx512 else ""
+                )
+                avx_body = (
+                    "_Alignas(64) uint32_t a[16], b[16], out[16];\n"
+                    "    for (uint32_t k = 0; k < 16; k++) { a[k] = k * 100U; b[k] = 7U + k; }\n"
+                    "    " + x86_syms["v_row_sum16"] + "(out, a, b);\n"
+                    "    for (uint32_t k = 0; k < 16; k++) CHK(out[k] == a[k] + b[k]);"
+                    if has_avx512 else ""
+                )
+                c_src = f"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+uint64_t {x86_syms["v_all_zero"]}(const uint8_t *, uint64_t);
+uint64_t {x86_syms["v_row_contradicts"]}(const uint8_t *, uint64_t, uint64_t, uint64_t);
+uint64_t {x86_syms["v_bytes_eq"]}(const uint8_t *, const uint8_t *, uint64_t);
+uint64_t {x86_syms["v_plain_match"]}(const uint8_t *, const uint8_t *, uint64_t, uint64_t, uint64_t);
+uint64_t {x86_syms["v_step_ok"]}(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+uint64_t {x86_syms["v_parse_u64"]}(const uint8_t *, uint64_t);
+uint64_t {x86_syms["v_tag_kind"]}(const uint8_t *, uint64_t);
+{avx_decl}
+#define CHK(cond) do {{ if (!(cond)) {{ fprintf(stderr, "FAIL line %d\\n", __LINE__); return 1; }} }} while (0)
+int main(void) {{
+    uint8_t z[4] = {{0, 0, 0, 0}}, nz[4] = {{0, 0, 1, 0}};
+    CHK({x86_syms["v_all_zero"]}(z, 0) == 1);
+    CHK({x86_syms["v_all_zero"]}(z, 4) == 1);
+    CHK({x86_syms["v_all_zero"]}(nz, 4) == 0);
+    CHK({x86_syms["v_row_contradicts"]}(z, 4, 3, 5) == 1);
+    CHK({x86_syms["v_row_contradicts"]}(z, 4, 5, 5) == 0);
+    CHK({x86_syms["v_row_contradicts"]}(nz, 4, 3, 5) == 0);
+    CHK({x86_syms["v_bytes_eq"]}((const uint8_t *)"place", (const uint8_t *)"place", 5) == 1);
+    CHK({x86_syms["v_bytes_eq"]}((const uint8_t *)"place", (const uint8_t *)"placx", 5) == 0);
+    CHK({x86_syms["v_plain_match"]}(z, z, 4, 10, 12) == 1);
+    CHK({x86_syms["v_plain_match"]}(z, z, 4, 13, 12) == 0);
+    CHK({x86_syms["v_plain_match"]}(z, nz, 4, 10, 12) == 0);
+    CHK({x86_syms["v_step_ok"]}(0, 1, 2, 3, 1, 5) == 1);
+    CHK({x86_syms["v_step_ok"]}(5, 1, 2, 3, 1, 5) == 0);
+    CHK({x86_syms["v_step_ok"]}(0, 0, 2, 3, 1, 5) == 0);
+    CHK({x86_syms["v_step_ok"]}(0, 1, 2, 3, 0, 5) == 0);
+    const uint64_t ERR = 1152921504606846976ULL;
+    CHK({x86_syms["v_parse_u64"]}((const uint8_t *)"", 0) == ERR);
+    CHK({x86_syms["v_parse_u64"]}((const uint8_t *)"0", 1) == 0);
+    CHK({x86_syms["v_parse_u64"]}((const uint8_t *)"12345678901234567", 17) == 12345678901234567ULL);
+    CHK({x86_syms["v_parse_u64"]}((const uint8_t *)"720575940379279360", 18) == ERR);
+    CHK({x86_syms["v_parse_u64"]}((const uint8_t *)"12a3", 4) == ERR);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"r", 1) == 1);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"s", 1) == 2);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"q", 1) == 3);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"t", 1) == 4);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"k", 1) == 5);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"for", 3) == 6);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"place", 5) == 7);
+    CHK({x86_syms["v_tag_kind"]}((const uint8_t *)"bad", 3) == 0);
+    {avx_body}
+    puts("verifier_hl_x86: OK");
+    return 0;
+}}
+"""
+                c_p = os.path.join(d, "run_hl.c")
+                exe_p = os.path.join(d, "run_hl")
+                with open(c_p, "w", encoding="utf-8") as f:
+                    f.write(c_src)
+                subprocess.run(
+                    [cc, "-O1", "-o", exe_p, c_p] + [x86_objs[fn] for fn in run_fns],
+                    check=True, capture_output=True, text=True,
+                )
+                r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
+                self.assertEqual(r.stdout.strip(), "verifier_hl_x86: OK")
 
 
 if __name__ == "__main__":
