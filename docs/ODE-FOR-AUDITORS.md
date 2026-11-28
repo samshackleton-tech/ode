@@ -41,7 +41,17 @@ BINARY:   utf8_decode_2byte_x86_64.o
   BLAKE3(contract):  jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa  (embedded .ode.ocl)
   SYMBOL:            ode_jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa
   COVERAGE:          100% of executable code (1 function, 24 instructions, 92 B, 1 exported symbol, 0 hooks)
+  VERIFIERS:         odeverify (shown)
   VERDICT:           shown
+```
+
+To cross-check the exact same machine code and `.proof` file with **both** independent verifiers
+(Lean 4 `odeverify` and standalone pure-Python `proof-core/verify2.py`), or to verify with pure
+Python alone without installing Lean, pass `--verifier`:
+
+```sh
+ode audit path/to/binary --proof path/to/binary.proof --verifier both
+ode audit path/to/binary --proof path/to/binary.proof --verifier verify2
 ```
 
 ### Contracts Have No Names
@@ -124,7 +134,7 @@ and what to check while reading it.
 |---|---|---|
 | `a0: a1 bytes` / `64 bytes` / `cv` | Memory buffer passed by pointer (`cv` = 32 B, `block` = 64 B); read-only unless written by `ensures`. | Buffer size and layout match what callers pass. |
 | `a1: number` | 64-bit unsigned integer argument. | Range and sentinel values match what callers expect. |
-| `requires COND` | Assumed true at entry (for example, `no_overlap(a0, a1)`, `a1 <= 64`). | Callers actually satisfy it, and the preconditions are not contradictory. |
+| `requires COND` | Assumed true at entry (for example, `no_overlap(a0, a1)`, `aligned(a0, 64)`, `line_disjoint(a0, a1)`, `a1 <= 64`). | Callers actually satisfy alignment, disjointness, and bounds, and the preconditions are not contradictory. |
 | `returns EXPR` | Binary returns `EXPR` on every valid input. | Edge cases (empty, maximum-length, malformed inputs) match the intended behavior. |
 | `ensures a0 = EXPR` | Binary writes `EXPR` into `a0` on every valid input. | Every byte of `a0` matches the intended behavior. |
 | `stack N` (or formula) | Binary uses at most `N` bytes of stack (including callees). | Fits inside the caller's stack budget. |
@@ -224,11 +234,12 @@ size, and how it is checked.
 
 | Component | Size | How it is checked today |
 |---|---|---|
-| **Lean 4 verifier (`proof-core/*.lean`)** | 8,673 lines across 8 core files | Formally proved sound in Lean 4 (zero `sorry`, standard axioms only). |
-| **Instruction tables (`core/x86.tab`, `arm64/arm64.tab`)** | 94 x86-64 rows; 54 AArch64 rows | Cross-checked against real x86-64 and Apple M6 hardware (`0` diffs); all `54/54` AArch64 rows formally proved against Google DeepMind's `arm64-semantics` (`arm64/agree/`). |
-| **Statement builder (`proof-core/statement.py`)** | 791 lines of Python | Tested and audited, not yet formally proved. Translates ELF `.o` + canonical `.ocl` into `.statement`. |
-| **Auditor front-end (`lang/ode_canon.py`, `lang/ode_audit.py`)** | 1,490 lines of Python | Tested with positive and adversarial controls (`lang/test_ode_canon.py`, `proof-core/test_ode_audit.py`); checks ELF structure, `.ode.ocl`, hashes, and invokes `odeverify`. |
-| **Lean 4 kernel / runtime** | External | Standard Lean 4 toolchain. For the scalar/byte/loop fragment, Bob can also cross-check the exact same `.statement` and order-independent (`r ...`) `.proof` files with the standalone pure-Python second verifier `proof-core/verify2.py` (~940 lines, zero verification code shared with Lean). |
+| **Lean 4 verifier (`proof-core/*.lean`)** | 8,881 lines across 7 files (`Core.lean`: 6,179 lines) | Formally proved sound in Lean 4 (zero `sorry`, standard axioms only). |
+| **Independent Python verifier (`proof-core/verify2.py`)** | 4,156 lines of standalone Python | Shares zero verification code with Lean or the prover; checks the exact same `.statement` and order-independent (`r ...`) `.proof` files across scalar, loop, word-memory, alignment/disjointness, 128-bit SIMD, and 512-bit AVX-512 crypto kernels (`ode audit --verifier verify2` or `--verifier both`). |
+| **Instruction tables (`core/x86.tab`, `arm64/arm64.tab`)** | 109 x86-64 rows; 67 AArch64 rows | Cross-checked against real x86-64 and AArch64 hardware (`0` diffs); 54 AArch64 rows are formally proved against Google DeepMind's `arm64-semantics` (`arm64/agree/`). |
+| **Statement builder (`proof-core/statement.py`)** | 938 lines of Python | Tested and audited, not yet formally proved. Translates ELF `.o` + canonical `.ocl` into `.statement`. |
+| **Auditor front-end (`lang/ode_canon.py`, `lang/ode_audit.py`)** | 2,864 lines of Python | Tested with positive and adversarial controls (`lang/test_ode_canon.py`, `proof-core/test_ode_audit.py`, `proof-core/test_verify2.py`); checks ELF structure, `.ode.ocl`, hashes, and invokes `odeverify`, `verify2.py`, or both. |
+| **Lean 4 kernel / runtime** | External | Standard Lean 4 toolchain; optional when auditing with `--verifier verify2`, and independently cross-checked when auditing with `--verifier both`. |
 
 *(Where a specification was translated from an existing Lean 4 specification using `lean2ode/`, see
 `lean2ode/agree/` for machine-checked Lean 4 theorems proving the Ode specification agrees with the
@@ -245,7 +256,7 @@ still on our roadmap.
 |---|---|---|
 | Canonical `<52-char-hash>.ocl` extraction + glossary split + hash-filename check | **Working today** (`lang/ode_canon.py`, `lang/ode_unified.py`) | `python3 lang/ode_tool.py canon program.ode --fn name --target x86_64 --out-dir /tmp` |
 | Hash-bound ELF `.o` (`ode_<52>` symbol + embedded `.ode.ocl` + separate `.proof`) | **Working today** for single-function and multi-function ELF `.o` bundles (unified `.ode` with local custom-`calling` helpers, plus full 14-fn x86-64 & 7-fn AArch64 BLAKE3 bundles) (`lang/ode_audit.py`) | `python3 lang/ode_tool.py pack program.ode --fn name --target x86_64 --out /tmp/u.o --proof /tmp/u.proof` |
-| Binary-first `ode audit` (100% `.text` & symbol coverage across exported + `STB_LOCAL` functions, rejects hooks/extra sections/undefined symbols/non-NOP gaps/shadowing/spoofed `<hash>.ocl`, optional `--proof` auto-proving for loop-free single-fn `.o`, runs `odeverify`) | **Working today** for single- and multi-function ELF `.o` bundles (`lang/ode_tool.py audit`; suites in `proof-core/test_ode_audit.py`, `test_unified_ode.py`, `test_bundle_audit.py`) | `python3 lang/ode_tool.py audit /tmp/u.o --proof /tmp/u.proof --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa --show-contract` |
+| Binary-first `ode audit` (100% `.text` & symbol coverage across exported + `STB_LOCAL` functions, rejects hooks/extra sections/external symbols/non-NOP gaps/shadowing/spoofed `<hash>.ocl`, optional `--proof` auto-proving for loop-free single-fn `.o`, runs `odeverify`, standalone `verify2.py`, or `--verifier both`) | **Working today** for single- and multi-function ELF `.o` bundles (`lang/ode_tool.py audit`; suites in `proof-core/test_ode_audit.py`, `test_unified_ode.py`, `test_bundle_audit.py`, `test_verify2.py`) | `python3 lang/ode_tool.py audit /tmp/u.o --proof /tmp/u.proof --expect-contract jsvn5lp6d5igxjd5vq6iz4da5bmtqsfpvp5h3wle27pgrbm2peqa --verifier both --show-contract` |
 | Concrete `.ocl` vector tests (`ode spec-test`) | **Working today** (`lang/ode_tool.py spec-test`) | `python3 lang/ode_tool.py spec-test /tmp/<52-char-hash>.ocl --call f0 --arg "[192, 175]"` |
 | Multi-function `.o` bundles with local Ode callees & custom calling conventions | **Working today** — pure-Python ELF64 merger (`ode_audit.merge_elf_objects`), helper contracts & `calling` blocks inside `.proof` checked via `ode.with_proof`, verified on `quad.ode` and full x86-64 (14 fns) & AArch64 (7 fns) BLAKE3 | `python3 proof-core/test_bundle_audit.py` |
 | Cross-platform binary decoding (Mach-O, COFF) | `ode_audit.py` and `statement.py` decode **ELF `.o`** today (x86-64 & AArch64) | On macOS Mach-O / Windows COFF builds, compare linked `.text` instruction bytes against the verified ELF `.o` |

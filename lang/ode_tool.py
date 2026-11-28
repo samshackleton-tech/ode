@@ -13,7 +13,7 @@ Commands:
     python3 lang/ode_tool.py canon   SPEC.ocl [--contract NAME] [--glossary-out FILE.json] [--json]
     python3 lang/ode_tool.py pack    SOURCE.ode SPEC.ocl --out BIN.o --proof BIN.proof
                                      [--fn NAME] [--glossary-out FILE.json] [--json]
-    python3 lang/ode_tool.py audit   BINARY --proof FILE.proof [--expect-contract B32]
+    python3 lang/ode_tool.py audit   BINARY --proof FILE.proof [--expect-contract B32] [--verifier {odeverify,verify2,both}]
                                      [--contract FILE.ocl] [--glossary FILE.json] [--show-contract] [--json]
     python3 lang/ode_tool.py spec-test FILE.ocl --call FN [--arg JSON ...] [--glossary FILE.json]
 """
@@ -1065,15 +1065,17 @@ def main(argv=None):
     p_pck.add_argument("--try-harder", action="store_true", help="shorthand for `--effort deep` (retry proving the same source with deep search effort)")
     p_pck.add_argument("--glossary-out", default=None, help="write separate author glossary JSON")
     p_pck.add_argument("--include", action="append", default=[], help="additional .ocl/.spec file(s) prepended before spec")
+    p_pck.add_argument("--verifier", choices=("odeverify", "verify2", "both"), default="odeverify", help="verifier(s) used to audit the packed binary (default: odeverify; use `both` for dual verification)")
     p_pck.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
 
-    p_aud = sub.add_parser("audit", help="binary-first auditor: check coverage, .ode.ocl, BLAKE3 hashes, and odeverify")
+    p_aud = sub.add_parser("audit", help="binary-first auditor: check coverage, .ode.ocl, BLAKE3 hashes, and proof verifier(s)")
     p_aud.add_argument("binary", help="compiled ELF binary (.o) to audit")
     p_aud.add_argument("--proof", default=None, help="separate .proof file (optional for loop-free single-function .o)")
     p_aud.add_argument("--expect-contract", default=None, help="full 52-char lowercase base-32 BLAKE3 contract ID")
     p_aud.add_argument("--contract", default=None, help="optional external .ocl/.spec file (must match embedded .ode.ocl if present)")
     p_aud.add_argument("--glossary", default=None, help="optional local glossary JSON for --show-contract rendering")
     p_aud.add_argument("--show-contract", action="store_true", help="print the verified canonical contract")
+    p_aud.add_argument("--verifier", choices=("odeverify", "verify2", "both"), default="odeverify", help="proof verifier(s) to run: odeverify (Lean 4), verify2 (standalone Python), or both")
     p_aud.add_argument("--json", action="store_true", help="emit machine-readable JSON output")
 
     p_st = sub.add_parser("spec-test", help="evaluate a definition in a .ocl/.spec contract on concrete JSON inputs")
@@ -1225,7 +1227,7 @@ def main(argv=None):
             res = ode_audit.pack_verified(
                 args.source, args.spec, args.out, args.proof,
                 fn_name=args.fn, target=args.target, glossary_out=args.glossary_out, includes=args.include,
-                c_abi=args.c_abi, stores=args.store,
+                c_abi=args.c_abi, stores=args.store, verifier=args.verifier,
             )
         except ode_audit.PackProofError as exc:
             by_sym = {exc.fn_sym: exc.info} if (exc.fn_sym and exc.info) else {}
@@ -1269,6 +1271,7 @@ def main(argv=None):
             args.binary, args.proof,
             expect_contract=args.expect_contract,
             contract_path=args.contract,
+            verifier=args.verifier,
         )
         glossary = None
         if args.glossary:

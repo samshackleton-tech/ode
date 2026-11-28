@@ -302,6 +302,9 @@ def _is_pure_nop_pad(pad, target):
     return True
 
 
+VALID_VERIFIERS = ("odeverify", "verify2", "both")
+
+
 def _find_odeverify(verify_bin=None):
     cand = verify_bin or os.path.join(ROOT, "proof-core", ".lake", "build", "bin", "odeverify")
     if os.path.isfile(cand) and os.access(cand, os.X_OK):
@@ -309,6 +312,13 @@ def _find_odeverify(verify_bin=None):
     raise FileNotFoundError(
         f"Lean verifier binary not found at `{cand}`; build it with `cd proof-core && lake build odeverify`"
     )
+
+
+def _find_verify2(verify2_script=None):
+    cand = verify2_script or os.path.join(ROOT, "proof-core", "verify2.py")
+    if os.path.isfile(cand):
+        return cand
+    raise FileNotFoundError(f"independent Python verifier not found at `{cand}`")
 
 
 def format_proof_bundle(order, helper_spec_text, raw_proof_text):
@@ -568,15 +578,28 @@ def audit_binary(
     expect_contract=None,
     contract_path=None,
     verify_bin=None,
+    verifier="odeverify",
+    verify2_script=None,
 ):
     """Audit a compiled ELF64 binary directly against its canonical `.ocl` contract and separate `.proof`.
 
     Supports both single-function `.o` files and multi-function `.o` bundles containing `STB_LOCAL`
     callees whose contracts and custom `calling` conventions travel inside `.proof`. When
     `proof_path` is omitted on a single-function binary, tries auto-proving loop-free code and
-    verifies the result with `odeverify`.
+    verifies the result.
+
+    `verifier` chooses which proof verifier(s) check the binary:
+      - `"odeverify"` (default): Lean 4 verifier (`proof-core/.lake/build/bin/odeverify`).
+      - `"verify2"`: standalone pure-Python second verifier (`proof-core/verify2.py`, no Lean needed).
+      - `"both"`: runs both `odeverify` and `verify2.py` on the exact same statement and proof,
+        returning `"shown"` only if both verifiers independently agree on `"shown"`.
     """
     errors = []
+    if verifier not in VALID_VERIFIERS:
+        return {
+            "verdict": "refused",
+            "errors": [f"unknown verifier {verifier!r}; expected one of {', '.join(VALID_VERIFIERS)}"],
+        }
     if not os.path.isfile(bin_path):
         return {"verdict": "refused", "errors": [f"binary not found: {bin_path}"]}
     with open(bin_path, "rb") as f:
@@ -908,12 +931,23 @@ def audit_binary(
         "hooks": 0,
     }
 
-    # 9. Invoke Lean 4 `odeverify` directly on ALL functions in topological order!
-    try:
-        verifier = _find_odeverify(verify_bin)
-    except FileNotFoundError as exc:
-        errors.append(str(exc))
-        return res
+    # 9. Invoke the selected verifier(s) on ALL functions in topological order!
+    run_lean = verifier in ("odeverify", "both")
+    run_py = verifier in ("verify2", "both")
+    lean_bin = None
+    py_script = None
+    if run_lean:
+        try:
+            lean_bin = _find_odeverify(verify_bin)
+        except FileNotFoundError as exc:
+            errors.append(str(exc))
+            return res
+    if run_py:
+        try:
+            py_script = _find_verify2(verify2_script)
+        except FileNotFoundError as exc:
+            errors.append(str(exc))
+            return res
 
     with tempfile.TemporaryDirectory(prefix="ode_audit_") as tmp:
         stmt_path = os.path.join(tmp, "audit.statement")
@@ -939,16 +973,27 @@ def audit_binary(
             with open(verify_proof_path, "w", encoding="utf-8") as pf:
                 pf.write(raw_proof_text)
         table_path = statement.table_of(stmt_lines)
-        proc = subprocess.run(
-            [verifier, table_path, stmt_path, verify_proof_path],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        out_txt = (proc.stdout + proc.stderr).strip()
-        res["verifier_output"] = out_txt
-        if proc.returncode != 0 or not out_txt.startswith("shown"):
-            errors.append(f"odeverify refused (rc={proc.returncode}): {out_txt}")
+        cmds = []
+        if run_lean:
+            cmds.append(("odeverify", [lean_bin, table_path, stmt_path, verify_proof_path]))
+        if run_py:
+            cmds.append(("verify2", [sys.executable, py_script, table_path, stmt_path, verify_proof_path]))
+        verifiers_out = {}
+        for vname, cmd in cmds:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            out_txt = (proc.stdout + proc.stderr).strip()
+            ok = (proc.returncode == 0) and out_txt.startswith("shown")
+            verifiers_out[vname] = {"ok": ok, "returncode": proc.returncode, "output": out_txt}
+            if not ok:
+                errors.append(f"{vname} refused (rc={proc.returncode}): {out_txt}")
+        res["verifiers"] = verifiers_out
+        if len(verifiers_out) == 1:
+            res["verifier_output"] = next(iter(verifiers_out.values()))["output"]
+        else:
+            res["verifier_output"] = " | ".join(
+                f"{k}: {v['output']}" for k, v in verifiers_out.items()
+            )
+        if errors:
             return res
 
     res["verdict"] = "shown"
@@ -980,6 +1025,12 @@ def format_audit_report(res, show_contract=False, glossary=None):
             f"({fn_desc}, {cov['instructions']} instructions, "
             f"{cov['code_bytes']} B, {cov['exported_symbols']} exported symbol, {cov['hooks']} hooks)"
         )
+    if res.get("verifiers"):
+        v_parts = [
+            f"{k} ({'shown' if v.get('ok') else 'refused'})"
+            for k, v in res["verifiers"].items()
+        ]
+        lines.append(f"  VERIFIERS:         {', '.join(v_parts)}")
     lines.append(f"  VERDICT:           {res['verdict']}")
     for err in res.get("errors") or ():
         lines.append(f"  ERROR:             {err}")
@@ -1221,6 +1272,8 @@ def pack_bundle(
     glossary_out=None,
     verify_bin=None,
     compiled_by_sym=None,
+    verifier="odeverify",
+    verify2_script=None,
 ):
     """Pack a pre-compiled multi-function set of relocatable ELF64 `.o` blobs into one hash-bound
     `.o` + self-contained `.proof`, and run Bob's full `audit_binary`.
@@ -1310,7 +1363,10 @@ def pack_bundle(
             json.dump({"contract_id": cid, "glossary": canon["glossary"]}, f, indent=2, sort_keys=True)
             f.write("\n")
 
-    audit_res = audit_binary(out_obj, out_proof, expect_contract=cid, verify_bin=verify_bin)
+    audit_res = audit_binary(
+        out_obj, out_proof, expect_contract=cid, verify_bin=verify_bin,
+        verifier=verifier, verify2_script=verify2_script,
+    )
     audit_res["proof"] = out_proof
     audit_res["proof_bytes"] = os.path.getsize(out_proof)
     audit_res["glossary"] = canon["glossary"]
@@ -1332,6 +1388,8 @@ def pack_verified(
     c_abi=False,
     parsed_override=None,
     stores=(),
+    verifier="odeverify",
+    verify2_script=None,
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
@@ -1437,7 +1495,10 @@ def pack_verified(
                 os.makedirs(os.path.dirname(os.path.abspath(out_obj)), exist_ok=True)
                 with open(out_obj, "wb") as f:
                     f.write(obj_bytes)
-                audit_res = audit_binary(out_obj, existing_bundle_proof, expect_contract=cid, verify_bin=verify_bin)
+                audit_res = audit_binary(
+                    out_obj, existing_bundle_proof, expect_contract=cid, verify_bin=verify_bin,
+                    verifier=verifier, verify2_script=verify2_script,
+                )
                 audit_res["proof"] = existing_bundle_proof
                 audit_res["proof_bytes"] = os.path.getsize(existing_bundle_proof)
                 audit_res["glossary"] = canon["glossary"]
@@ -1458,6 +1519,8 @@ def pack_verified(
                 glossary_out=glossary_out,
                 verify_bin=verify_bin,
                 compiled_by_sym=compiled_by_sym,
+                verifier=verifier,
+                verify2_script=verify2_script,
             )
 
         info = compiled[chosen_fn]
@@ -1550,14 +1613,17 @@ def pack_verified(
             f.write("\n")
 
     # Immediately run Bob's full auditor check on the produced artifact!
-    audit_res = audit_binary(out_obj, out_proof, expect_contract=cid, verify_bin=verify_bin)
+    audit_res = audit_binary(
+        out_obj, out_proof, expect_contract=cid, verify_bin=verify_bin,
+        verifier=verifier, verify2_script=verify2_script,
+    )
     audit_res["proof"] = out_proof
     audit_res["proof_bytes"] = os.path.getsize(out_proof)
     audit_res["glossary"] = canon["glossary"]
     return audit_res
 
 
-def audit_inlines(source_path, target=None, verify_bin=None, stores=()):
+def audit_inlines(source_path, target=None, verify_bin=None, stores=(), verifier="odeverify", verify2_script=None):
     """Independently verify every contracted non-`const`/non-`var` `inline fn` declared in `source_path`
     across its target arm(s), returning a list of `{name, target, verdict, contract_id}` dicts."""
     import ode_unified
@@ -1579,6 +1645,7 @@ def audit_inlines(source_path, target=None, verify_bin=None, stores=()):
                     source_path, None, out_o, out_p,
                     fn_name=inl_rec["name"], target=tk,
                     verify_bin=verify_bin, c_abi=True, parsed_override=syn, stores=stores,
+                    verifier=verifier, verify2_script=verify2_script,
                 )
                 results.append({
                     "name": inl_rec["name"],

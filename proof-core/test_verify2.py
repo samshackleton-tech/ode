@@ -1740,17 +1740,73 @@ fn run_tail(pkt: n bytes, n: number) -> u64
                 with tempfile.TemporaryDirectory() as td:
                     out_o, out_p = os.path.join(td, "o.o"), os.path.join(td, "o.proof")
                     res = ode_audit.pack_verified(
-                        src_p, None, out_o, out_p, fn_name=fn_nm, target=target, c_abi=True, stores=stores,
+                        src_p, None, out_o, out_p, fn_name=fn_nm, target=target, c_abi=True,
+                        stores=stores, verifier="both",
                     )
                     self.assertEqual(res["verdict"], "shown", f"{fn_nm}/{target}: {res}")
-                    dump = os.path.join(td, "dump.sh")
-                    st_p, pf_p = os.path.join(td, "st.txt"), os.path.join(td, "pf.txt")
-                    with open(dump, "w", encoding="utf-8") as f:
-                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
-                    os.chmod(dump, 0o755)
-                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
-                    tab = arm_tab if target == "arm64" else x86_tab
-                    self.assertEqual(verify2.verify_files(tab, st_p, pf_p), 1, f"{fn_nm}/{target}")
+                    self.assertTrue(res["verifiers"]["odeverify"]["ok"])
+                    self.assertTrue(res["verifiers"]["verify2"]["ok"])
+
+    def test_20_ode_audit_verifier_modes(self):
+        """`ode audit` and `ode pack` support `--verifier {odeverify,verify2,both}` cleanly."""
+        odeverify = os.path.join(HERE, ".lake", "build", "bin", "odeverify")
+        if not os.path.exists(odeverify):
+            self.skipTest("odeverify binary not built")
+        tool = os.path.join(ROOT, "lang", "ode_tool.py")
+        stores = (os.path.join(ROOT, "std"), os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks"))
+        ipv4 = os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks", "ipv4_valid_reference.ode")
+        with tempfile.TemporaryDirectory() as td:
+            out_o = os.path.join(td, "ipv4.o")
+            out_p = os.path.join(td, "ipv4.proof")
+            # 1. End-to-end CLI `pack --verifier both` + `audit --verifier both` + `audit --verifier verify2`
+            p_pack = subprocess.run(
+                [sys.executable, tool, "pack", ipv4, "--fn", "ipv4_valid", "--target", "x86_64",
+                 "--c-abi", "--store", stores[0], "--store", stores[1],
+                 "--out", out_o, "--proof", out_p, "--verifier", "both"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_pack.returncode, 0, p_pack.stdout + p_pack.stderr)
+            self.assertIn("VERIFIERS:         odeverify (shown), verify2 (shown)", p_pack.stdout)
+            self.assertIn("VERDICT:           shown", p_pack.stdout)
+
+            p_aud_both = subprocess.run(
+                [sys.executable, tool, "audit", out_o, "--proof", out_p, "--verifier", "both"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(p_aud_both.returncode, 0, p_aud_both.stdout + p_aud_both.stderr)
+            self.assertIn("VERIFIERS:         odeverify (shown), verify2 (shown)", p_aud_both.stdout)
+
+            # 2. Pure-Python `verify2` mode works WITHOUT any Lean verifier binary!
+            r_v2 = ode_audit.audit_binary(
+                out_o, out_p, verify_bin="/nonexistent/odeverify", verifier="verify2",
+            )
+            self.assertEqual(r_v2["verdict"], "shown", r_v2)
+            self.assertEqual(list(r_v2["verifiers"].keys()), ["verify2"])
+            self.assertTrue(r_v2["verifiers"]["verify2"]["ok"])
+
+            # 3. Adversarial disagreement: if either verifier refuses under `both`, verdict MUST be `refused`!
+            bad_py = os.path.join(td, "bad_v2.py")
+            with open(bad_py, "w", encoding="utf-8") as f:
+                f.write("import sys\nprint('refused: simulated failure')\nsys.exit(1)\n")
+            r_dis1 = ode_audit.audit_binary(out_o, out_p, verifier="both", verify2_script=bad_py)
+            self.assertEqual(r_dis1["verdict"], "refused", r_dis1)
+            self.assertTrue(r_dis1["verifiers"]["odeverify"]["ok"])
+            self.assertFalse(r_dis1["verifiers"]["verify2"]["ok"])
+            self.assertIn("VERIFIERS:         odeverify (shown), verify2 (refused)", ode_audit.format_audit_report(r_dis1))
+
+            bad_sh = os.path.join(td, "bad_lean.sh")
+            with open(bad_sh, "w", encoding="utf-8") as f:
+                f.write("#!/bin/sh\necho 'refused: simulated lean failure'\nexit 1\n")
+            os.chmod(bad_sh, 0o755)
+            r_dis2 = ode_audit.audit_binary(out_o, out_p, verifier="both", verify_bin=bad_sh)
+            self.assertEqual(r_dis2["verdict"], "refused", r_dis2)
+            self.assertFalse(r_dis2["verifiers"]["odeverify"]["ok"])
+            self.assertTrue(r_dis2["verifiers"]["verify2"]["ok"])
+
+            # 4. Invalid verifier name refused loudly.
+            r_bad = ode_audit.audit_binary(out_o, out_p, verifier="nope")
+            self.assertEqual(r_bad["verdict"], "refused", r_bad)
+            self.assertIn("unknown verifier", r_bad["errors"][0])
 
 
 def _run_one_test(test_name):
