@@ -1,6 +1,6 @@
 # Proving rows of `arm64.tab` against Google DeepMind's `arm64-semantics`
 
-This folder is a standalone Lean 4 package. It proves that **all 54 of the 54 rows** of `../arm64.tab`
+This folder is a standalone Lean 4 package. It proves that **all 67 of the 67 rows** of `../arm64.tab`
 agree with Google DeepMind's `arm64-semantics` (package `arm64` in `google-deepmind/code-verification` at
 commit `b0f729accbc21a0413e7ca4e1da43fa45b5f2e1b`, under Lean 4.34.0).
 
@@ -9,7 +9,7 @@ and Google DeepMind's `Arm64.Trusted.ISA` (`Decode` and `Eval`).
 
 ## What is proved
 
-The table below lists all 58 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
+The table below lists all 71 theorems in `Agree.lean` (one per row of `../arm64.tab`, plus separate
 misaligned-stack fault theorems for `ldr64_sp`, `str64_sp`, `ldr128_sp`, and `str128_sp`), the row each
 theorem covers, and what it states for every valid choice of operands and matching starting states.
 
@@ -43,6 +43,8 @@ theorem covers, and what it states for every valid choice of operands and matchi
 | `ArmAgree.agree_b_ne` | `b_ne` (`jump I if not zf`) | Takes the signed 19-bit PC-relative jump on the exact same states (`PSTATE.Z = zf = false`) and falls through by 4 bytes otherwise. |
 | `ArmAgree.agree_b_hs` | `b_hs` (`jump I if not cf`) | Under `PSTATE.C = !cf`, `B.CS` (`B.HS`) takes the signed 19-bit PC-relative jump on the exact same states as `jump I if not cf` and falls through by 4 bytes otherwise. |
 | `ArmAgree.agree_b_lo` | `b_lo` (`jump I if cf`) | Under `PSTATE.C = !cf`, `B.CC` (`B.LO`) takes the signed 19-bit PC-relative jump on the exact same states as `jump I if cf` and falls through by 4 bytes otherwise. |
+| `ArmAgree.agree_b_hi` | `b_hi` (`jump I if hi`) | Under `PSTATE.C = !cf` and `PSTATE.Z = zf`, `B.HI` takes the signed 19-bit PC-relative jump iff `!cf && !zf` and falls through by 4 bytes otherwise. |
+| `ArmAgree.agree_b_ls` | `b_ls` (`jump I if nhi`) | Under `PSTATE.C = !cf` and `PSTATE.Z = zf`, `B.LS` takes the signed 19-bit PC-relative jump iff `cf || zf` and falls through by 4 bytes otherwise. |
 | `ArmAgree.agree_bl` | `bl` (`call I link x30`) | `Ode.afterCall` and `BL` both write `pc + 4` into `x30` (`lr`), jump `pc` to the callee entry address, and leave every other register, vector lane, flag, and memory byte equal. |
 | `ArmAgree.agree_ret` | `ret` (`return x30`) | `Ode.exec` (`.returned`) and `RET X30` both set `pc` to the value of `x30` and leave every register, vector lane, flag, and memory byte equal. |
 | `ArmAgree.agree_ld1_4s` | `ld1_4s` (`X = mem128(B, 0)`) | For all `v0`..`v31` destination `x` and `x0`..`x30` base `b`, when `b + 16 <= 2^64` and readable, both models load the same four 32-bit little-endian lanes into `x`. |
@@ -73,9 +75,20 @@ theorem covers, and what it states for every valid choice of operands and matchi
 | `ArmAgree.agree_ldr128_sp` | `ldr128_sp` (`X = mem128(on16(sp), N)`) | Whenever `sp` is a multiple of 16 and the 16 bytes at `sp + 16*n` are readable without wrapping past `2^64`, both models load the same four 32-bit little-endian lanes into `x`. |
 | `ArmAgree.agree_str128_sp_fault` | `str128_sp` (`mem128(on16(sp), N) = X`) | Whenever `sp` is not a multiple of 16, `Ode.exec` returns `none` and Google DeepMind's model raises `.Exception "SP alignment fault"`. |
 | `ArmAgree.agree_str128_sp` | `str128_sp` (`mem128(on16(sp), N) = X`) | Whenever `sp` is a multiple of 16 and the 16 bytes at `sp + 16*n` are writable without wrapping past `2^64`, both models store the same 16 little-endian bytes from `x`. |
+| `ArmAgree.agree_and_v` | `and_v` (`X = each32(and32, Y, Z)`) | For all `v0`..`v31` operands `x, y, z`, `AND Vx.16B, Vy.16B, Vz.16B` writes the lane-wise bitwise AND across all four 32-bit lanes. |
+| `ArmAgree.agree_csel_eq` | `csel_eq` (`D = select(zf, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, EQ` selects `s` when `zf` holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_csel_ne` | `csel_ne` (`D = select(nzf, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, NE` selects `s` when `!zf` holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_csel_hs` | `csel_hs` (`D = select(ncf, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, HS` selects `s` when `!cf` (`PSTATE.C = true`) holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_csel_lo` | `csel_lo` (`D = select(cf, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, LO` selects `s` when `cf` (`PSTATE.C = false`) holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_csel_hi` | `csel_hi` (`D = select(hi, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, HI` selects `s` when `!cf && !zf` holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_csel_ls` | `csel_ls` (`D = select(nhi, S, P)`) | For all `x0`..`x30` operands `d, s, p`, `CSEL Xd, Xs, Xp, LS` selects `s` when `cf || zf` holds and `p` otherwise, preserving flags. |
+| `ArmAgree.agree_sha256su0` | `sha256su0` (`X = sha256msg1(X, Y)`) | For all `v0`..`v31` operands `x, y`, `SHA256SU0 Vx.4S, Vy.4S` computes the 4-lane SHA-256 schedule update 0 (`σ0`) matching `Ode.sha256Msg1`. |
+| `ArmAgree.agree_sha256su1` | `sha256su1` (`X = sha256su1(X, Y, Z)`) | For all `v0`..`v31` operands `x, y, z`, `SHA256SU1 Vx.4S, Vy.4S, Vz.4S` computes the 4-lane SHA-256 schedule update 1 (`σ1`) matching `Ode.sha256Su1`. |
+| `ArmAgree.agree_sha256h` | `sha256h` (`X = sha256h(X, Y, Z)`) | For all `v0`..`v31` operands `x, y, z`, `SHA256H Qx, Qy, Vz.4S` computes the 4-round SHA-256 upper state `(a..d)` matching `Ode.sha256H`. |
+| `ArmAgree.agree_sha256h2` | `sha256h2` (`X = sha256h2(X, Y, Z)`) | For all `v0`..`v31` operands `x, y, z`, `SHA256H2 Qx, Qy, Vz.4S` computes the 4-round SHA-256 lower state `(e..h)` matching `Ode.sha256H2`. |
 
-All 58 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
-with no `sorry`, no `admit`, and no `bv_decide` axioms.
+All 71 theorems depend only on Lean's three standard axioms (`propext`, `Classical.choice`, `Quot.sound`),
+with no `sorry`, no `admit`, no `maxHeartbeats`, no `maxRecDepth`, and no `bv_decide` axioms.
 
 ## What else is checked
 
@@ -85,12 +98,12 @@ the register-name lookup results as hypotheses. Two executable tests close that 
 files:
 
 - `CheckMain.lean` (`agree-check`) reads `../arm64.tab` through `Ode.readTable`, checks that the table
-  has 54 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
+  has 67 rows and that every single row has the exact effect AST used in `Agree.lean`, and checks
   `Ode.findRow`, `Ode.regOf`, `Ode.vecOf`, and `Ode.readInt` across all 31 general registers, all 32
   vector registers, sample displacements, immediates, shifts, and signed branch offsets.
-- `test_agree.py` runs `agree-check`, compares encoded 32-bit words for all 54 rows against `../word.py`
-  (both `word.decode` and `word.encode`, verifying the proved set equals the full set of rows in
-  `arm64.tab`), and checks `#print axioms` on all 58 theorems.
+- `test_agree.py` runs `agree-check`, compares 2,180 encoded 32-bit words across all 67 rows against
+  `../word.py` (both `word.decode` and `word.encode`, verifying the proved set equals the full set of
+  rows in `arm64.tab`), and checks `#print axioms` on all 71 theorems.
 
 ## Known differences between the two models
 

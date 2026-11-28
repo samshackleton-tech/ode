@@ -45,9 +45,9 @@ def main (args : List String) : IO Unit := do
     | .ok t => pure t
     | .error e => throw (IO.userError s!"readTable failed: {e}")
 
-  -- 1. Check that ALL 56 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
-  if table.size != 56 then
-    throw (IO.userError s!"expected 56 rows in arm64.tab, found {table.size}")
+  -- 1. Check that ALL 67 rows of arm64.tab match Agree.lean's effect ASTs verbatim.
+  if table.size != 67 then
+    throw (IO.userError s!"expected 67 rows in arm64.tab, found {table.size}")
   checkRow table "add_rrr" ArmAgree.effectAddRrr
   checkRow table "ldr64_sp" ArmAgree.effectLdr64Sp
   checkRow table "eor_v" ArmAgree.effectEorV
@@ -104,6 +104,17 @@ def main (args : List String) : IO Unit := do
   checkRow table "ext_4" ArmAgree.effectExt4
   checkRow table "ext_8" ArmAgree.effectExt8
   checkRow table "ext_12" ArmAgree.effectExt12
+  checkRow table "and_v" ArmAgree.effectAndV
+  checkRow table "csel_eq" ArmAgree.effectCselEq
+  checkRow table "csel_ne" ArmAgree.effectCselNe
+  checkRow table "csel_hs" ArmAgree.effectCselHs
+  checkRow table "csel_lo" ArmAgree.effectCselLo
+  checkRow table "csel_hi" ArmAgree.effectCselHi
+  checkRow table "csel_ls" ArmAgree.effectCselLs
+  checkRow table "sha256su0" ArmAgree.effectSha256su0
+  checkRow table "sha256su1" ArmAgree.effectSha256su1
+  checkRow table "sha256h" ArmAgree.effectSha256h
+  checkRow table "sha256h2" ArmAgree.effectSha256h2
 
   -- 2. Check Ode.findRow and register/immediate lookup for all 31/32 register indices.
   for i in List.range 31 do
@@ -550,5 +561,61 @@ def main (args : List String) : IO Unit := do
               IO.println s!"ldr128_sp {hex32 (ArmAgree.encodeLdr128Sp ⟨x, hx⟩ ⟨n, hn⟩)} {insLS}"
               IO.println s!"str128_sp {hex32 (ArmAgree.encodeStr128Sp ⟨x, hx⟩ ⟨n, hn⟩)} {insSS}"
 
+  for i in List.range 31 do
+    let s := (i + 7) % 31
+    let p := (i + 19) % 31
+    let insEq := s!"(.csel_eq .x{i} .x{s} .x{p})"
+    let insNe := s!"(.csel_ne .x{i} .x{s} .x{p})"
+    let insHs := s!"(.csel_hs .x{i} .x{s} .x{p})"
+    let insLo := s!"(.csel_lo .x{i} .x{s} .x{p})"
+    let insHi := s!"(.csel_hi .x{i} .x{s} .x{p})"
+    let insLs := s!"(.csel_ls .x{i} .x{s} .x{p})"
+    let checkCsel := fun b =>
+      Ode.regOf b "D" == some (ArmAgree.armSlot i) &&
+      Ode.regOf b "S" == some (ArmAgree.armSlot s) &&
+      Ode.regOf b "P" == some (ArmAgree.armSlot p)
+    checkInstance table "csel_eq" insEq checkCsel
+    checkInstance table "csel_ne" insNe checkCsel
+    checkInstance table "csel_hs" insHs checkCsel
+    checkInstance table "csel_lo" insLo checkCsel
+    checkInstance table "csel_hi" insHi checkCsel
+    checkInstance table "csel_ls" insLs checkCsel
+    if hi : i < 31 then
+      if wordsOnly then
+        let dd : Fin 31 := ⟨i, hi⟩
+        let ss : Fin 31 := ⟨s, Nat.mod_lt _ (by decide)⟩
+        let pp : Fin 31 := ⟨p, Nat.mod_lt _ (by decide)⟩
+        IO.println s!"csel_eq {hex32 (ArmAgree.encodeCselEq dd ss pp)} {insEq}"
+        IO.println s!"csel_ne {hex32 (ArmAgree.encodeCselNe dd ss pp)} {insNe}"
+        IO.println s!"csel_hs {hex32 (ArmAgree.encodeCselHs dd ss pp)} {insHs}"
+        IO.println s!"csel_lo {hex32 (ArmAgree.encodeCselLo dd ss pp)} {insLo}"
+        IO.println s!"csel_hi {hex32 (ArmAgree.encodeCselHi dd ss pp)} {insHi}"
+        IO.println s!"csel_ls {hex32 (ArmAgree.encodeCselLs dd ss pp)} {insLs}"
+
+  for i in List.range 32 do
+    let y := (i + 5) % 32
+    let z := (i + 17) % 32
+    let insAndV := s!"(.andv {i} {y} {z})"
+    let insSu0 := s!"(.sha256su0 {i} {y})"
+    let insSu1 := s!"(.sha256su1 {i} {y} {z})"
+    let insH := s!"(.sha256h {i} {y} {z})"
+    let insH2 := s!"(.sha256h2 {i} {y} {z})"
+    let check3 := fun b => Ode.vecOf b "X" == some i && Ode.vecOf b "Y" == some y && Ode.vecOf b "Z" == some z
+    checkInstance table "and_v" insAndV check3
+    checkInstance table "sha256su0" insSu0 (fun b => Ode.vecOf b "X" == some i && Ode.vecOf b "Y" == some y)
+    checkInstance table "sha256su1" insSu1 check3
+    checkInstance table "sha256h" insH check3
+    checkInstance table "sha256h2" insH2 check3
+    if hi : i < 32 then
+      if wordsOnly then
+        let xx : Fin 32 := ⟨i, hi⟩
+        let yy : Fin 32 := ⟨y, Nat.mod_lt _ (by decide)⟩
+        let zz : Fin 32 := ⟨z, Nat.mod_lt _ (by decide)⟩
+        IO.println s!"and_v {hex32 (ArmAgree.encodeAndV xx yy zz)} {insAndV}"
+        IO.println s!"sha256su0 {hex32 (ArmAgree.encodeSha256su0 xx yy)} {insSu0}"
+        IO.println s!"sha256su1 {hex32 (ArmAgree.encodeSha256su1 xx yy zz)} {insSu1}"
+        IO.println s!"sha256h {hex32 (ArmAgree.encodeSha256h xx yy zz)} {insH}"
+        IO.println s!"sha256h2 {hex32 (ArmAgree.encodeSha256h2 xx yy zz)} {insH2}"
+
   if !wordsOnly then
-    IO.println "agree-check: all 56 rows match arm64.tab"
+    IO.println "agree-check: all 67 rows match arm64.tab"

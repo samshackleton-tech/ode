@@ -19,6 +19,8 @@ THEOREMS = [
     "ArmAgree.agree_cmp_rr",
     "ArmAgree.agree_b_hs",
     "ArmAgree.agree_b_lo",
+    "ArmAgree.agree_b_hi",
+    "ArmAgree.agree_b_ls",
     "ArmAgree.agree_nop",
     "ArmAgree.agree_mov_ri",
     "ArmAgree.agree_mov32_ri",
@@ -68,6 +70,17 @@ THEOREMS = [
     "ArmAgree.agree_ldr128_sp",
     "ArmAgree.agree_str128_sp_fault",
     "ArmAgree.agree_str128_sp",
+    "ArmAgree.agree_and_v",
+    "ArmAgree.agree_csel_eq",
+    "ArmAgree.agree_csel_ne",
+    "ArmAgree.agree_csel_hs",
+    "ArmAgree.agree_csel_lo",
+    "ArmAgree.agree_csel_hi",
+    "ArmAgree.agree_csel_ls",
+    "ArmAgree.agree_sha256su0",
+    "ArmAgree.agree_sha256su1",
+    "ArmAgree.agree_sha256h",
+    "ArmAgree.agree_sha256h2",
 ]
 ALLOWED_AXIOMS = "[propext, Classical.choice, Quot.sound]"
 CHECK_BIN = os.path.join(HERE, ".lake", "build", "bin", "agree-check")
@@ -102,7 +115,7 @@ class StaticChecks(unittest.TestCase):
             imports,
             ["Table", "Machine", "Arm64.Trusted.ISA.Decode", "Arm64.Trusted.ISA.Eval"],
         )
-        for bad in (r"\bsorry\b", r"\badmit\b", r"^axiom\s", r"maxHeartbeats"):
+        for bad in (r"\bsorry\b", r"\badmit\b", r"^axiom\s", r"maxHeartbeats", r"maxRecDepth"):
             self.assertIsNone(re.search(bad, text, re.M), f"found {bad} in Agree.lean")
 
 
@@ -119,7 +132,7 @@ class BuiltChecks(unittest.TestCase):
             text=True,
             check=True,
         )
-        self.assertEqual(r.stdout.strip(), "agree-check: all 54 rows match arm64.tab")
+        self.assertEqual(r.stdout.strip(), "agree-check: all 67 rows match arm64.tab")
 
     def test_encodings_match_word_py(self):
         r = subprocess.run(

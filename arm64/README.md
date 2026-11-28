@@ -17,7 +17,7 @@ The table below lists each file in this folder and what it does.
 | `cross.py` | Runs each runnable row on the processor of the machine it is started on, from random states, and compares what the processor leaves (registers, flags, vector lanes, memory, and faults) with what the row says. |
 | `test_arm64.py` | The tests: on any machine, the instruction words and decoding; on an AArch64 machine with clang, comparison against the processor. |
 | `results/` | What `cross.py --out` wrote on each processor tested (`apple-m6.json`, `ampereone.json`). |
-| `agree/` | A standalone Lean 4 package proving that **56 of the 67 rows** of `arm64.tab` (179 theorems, including stack-pointer alignment fault theorems for `ldr64_sp`, `str64_sp`, `ldr128_sp`, and `str128_sp`) agree with Google DeepMind's `arm64-semantics`. |
+| `agree/` | A standalone Lean 4 package proving that **all 67 of the 67 rows** of `arm64.tab` (71 top-level agreement theorems — every row plus stack-pointer alignment fault theorems for `ldr64_sp`, `str64_sp`, `ldr128_sp`, and `str128_sp` — and 2,180 concrete 32-bit instruction words cross-checked against `word.py`) agree with Google DeepMind's `arm64-semantics`. |
 
 The effect language and its interpreter on numbers are shared with the x86-64 table: `../core/table.py`
 and `../core/conc.py`. Three small additions were made to those two files for AArch64:
@@ -76,10 +76,10 @@ mention must stay unchanged.
 
 One general register per case is left out of the comparison, a different one from case to case: it holds
 the address of the case's state while the instruction runs. On macOS, `x18` is left out as well, because
-the system reserves it. Control-flow rows (`b`, `b_eq`, `b_ne`, `b_hs`, `b_lo`, `bl`, `ret`) are not run
-on the processor inside the single-instruction harness, because they jump out of it; their bit encodings
-are compared directly against `clang` in `test_arm64.py`, and all seven control-flow rows (`b`, `b_eq`,
-`b_ne`, `b_hs`, `b_lo`, `bl`, `ret`) are proved in `agree/`.
+the system reserves it. Control-flow rows (`b`, `b_eq`, `b_ne`, `b_hs`, `b_lo`, `b_hi`, `b_ls`, `bl`,
+`ret`) are not run on the processor inside the single-instruction harness, because they jump out of it;
+their bit encodings are compared directly against `clang` in `test_arm64.py`, and all nine control-flow
+rows are proved in `agree/`.
 
 The tests give `cross.py` 23 tables with one row changed (a wrong effect, a wrong displacement unit, a
 missing or extra alignment fault, flipped comparison flags, wrong load width, wrong lane permutation, or
@@ -99,10 +99,10 @@ Nothing in `arm64/` or `arm64/agree/` depends on Ode's verifier, contracts, comp
 To reuse this AArch64 table, encoder/decoder, hardware comparison script, or Lean 4 agreement proofs in
 another project, copy only:
 
-- **Table, encoder/decoder, assembler, and hardware comparison script (1,301 lines total):** `arm64/` plus
+- **Table, encoder/decoder, assembler, and hardware comparison script (1,488 lines total):** `arm64/` plus
   the two shared parser/evaluator modules `core/table.py` and `core/conc.py` (Python 3 standard library
   only; no external packages).
-- **Lean 4 agreement proofs against Google DeepMind's `arm64-semantics` (8,277 lines total):**
+- **Lean 4 agreement proofs against Google DeepMind's `arm64-semantics` (9,445 lines total):**
   `arm64/agree/` plus `proof-core/Table.lean` and `proof-core/Machine.lean` (built with Lean 4.34.0 via
   `cd arm64/agree && lake build`).
 
@@ -111,8 +111,5 @@ another project, copy only:
 - Conditional set (`cset`) and flag-setting register arithmetic (`adds`, `subs`).
 - Loads and stores that update their base register (`ldr w2, [x0], #4`), register pairs (`stp`, `ldp`),
   and negative displacements.
-- 56 of the 67 rows in `arm64.tab` are currently proved in `agree/` (zero `sorry`, standard Lean axioms
-  only); the 11 newer rows (`csel_*`, `and_v`, and `sha256*`, all hardware-checked by `cross.py` on
-  Apple M6) are queued for `agree/`.
 
 *Ode stands for Object-code Direct Evidence.*
