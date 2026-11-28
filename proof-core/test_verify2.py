@@ -1617,6 +1617,137 @@ fn run_tail(pkt: n bytes, n: number) -> u64
                 self.assertEqual(r2.returncode, 0, f"verify2 tail_open/{target}: {r2.stdout}{r2.stderr}")
                 self.assertIn("shown (2 functions, verify2)", r2.stdout)
 
+    def test_19_simd_and_crypto_kernels(self):
+        """Independent pure-Python `verify2.py` checks real SIMD crypto kernels on x86-64 and AArch64:
+        1. Production BLAKE3-Servil kernels: `avx512`, `sse41`, `arm64`, and 16-lane AVX-512 `p16`.
+        2. Production ChaCha20 kernels: 16-block AVX-512 and 4-block AArch64.
+        3. All 4 SIMD benchmark reference kernels (`blake3_compress1`, `blake3_compress_4way`,
+           `chacha20_4way`, `sha256_4way` SHA-NI/SHA2) on BOTH `x86_64` and `arm64`.
+        4. Negative mutation controls: corrupted spec rotation, swapped contract arguments, and
+           corrupted machine instruction are all refused by `verify2.py`."""
+        import odec, statement, test_arm, test_kernel, test_p16, verify2
+        x86_tab = os.path.join(ROOT, "core", "x86.tab")
+        arm_tab = os.path.join(ROOT, "arm64", "arm64.tab")
+
+        # 1a. Production BLAKE3-Servil AVX-512 & SSE4.1 + negative controls
+        one_src = open(os.path.join(ROOT, "wide", "one.ode"), encoding="utf-8").read()
+        for K in (test_kernel.AVX512, test_kernel.SSE):
+            spec = test_kernel.spec_text(contract=K.contract)
+            pf_p = os.path.join(HERE, "proofs", K.symbol + ".proof")
+            with tempfile.TemporaryDirectory() as td:
+                obj = os.path.join(td, "k.o")
+                odec.build(os.path.join(ROOT, "wide", "one.ode"), K.fn, obj)
+                st_p = os.path.join(td, "k.s")
+                with open(st_p, "w", encoding="utf-8") as f:
+                    f.write("\n".join(statement.statement(spec, [(obj, K.symbol)])) + "\n")
+                self.assertEqual(verify2.verify_files(x86_tab, st_p, pf_p), 1, K.symbol)
+
+                # Negative control: wrong rotation amount in spec must be refused
+                mut_spec = spec.replace(">>> 16", ">>> 15")
+                st_bad = os.path.join(td, "bad_spec.s")
+                with open(st_bad, "w", encoding="utf-8") as f:
+                    f.write("\n".join(statement.statement(mut_spec, [(obj, K.symbol)])) + "\n")
+                with self.assertRaises(verify2.Refuse, msg=f"{K.symbol} mutated spec accepted"):
+                    verify2.verify_files(x86_tab, st_bad, pf_p)
+
+                # Negative control: swapped contract arguments must be refused
+                mut_c = spec.replace(
+                    "ensures h = compress(h, m, t, length, flags)",
+                    "ensures h = compress(h, m, t, flags, length)",
+                )
+                st_bad_c = os.path.join(td, "bad_c.s")
+                with open(st_bad_c, "w", encoding="utf-8") as f:
+                    f.write("\n".join(statement.statement(mut_c, [(obj, K.symbol)])) + "\n")
+                with self.assertRaises(verify2.Refuse, msg=f"{K.symbol} swapped contract accepted"):
+                    verify2.verify_files(x86_tab, st_bad_c, pf_p)
+
+                # Negative control: corrupted machine instruction must be refused
+                what, old, new, _ = K.sources[0]
+                mut_ode = os.path.join(td, "mut.ode")
+                mut_o = os.path.join(td, "mut.o")
+                with open(mut_ode, "w", encoding="utf-8") as f:
+                    f.write(one_src.replace(old, new))
+                odec.build(mut_ode, K.fn, mut_o)
+                st_bad_m = os.path.join(td, "bad_m.s")
+                with open(st_bad_m, "w", encoding="utf-8") as f:
+                    f.write("\n".join(statement.statement(spec, [(mut_o, K.symbol)])) + "\n")
+                with self.assertRaises(verify2.Refuse, msg=f"{K.symbol} mutated code ({what}) accepted"):
+                    verify2.verify_files(x86_tab, st_bad_m, pf_p)
+
+        # 1b. Production BLAKE3-Servil AArch64 NEON compress
+        with tempfile.TemporaryDirectory() as td:
+            obj = os.path.join(td, "a.o")
+            odec.build(os.path.join(HERE, "examples", "arm64", "compress_arm64.ode"),
+                       "compress1_arm64", obj, target="arm64")
+            spec_a = test_arm.spec_text() if hasattr(test_arm, "spec_text") else (
+                open(os.path.join(ROOT, "kcheck", "blake3.spec"), encoding="utf-8").read() + "\n"
+                + open(os.path.join(HERE, "examples", "arm64", "compress_arm64.spec"), encoding="utf-8").read()
+            )
+            st_p = os.path.join(td, "a.s")
+            with open(st_p, "w", encoding="utf-8") as f:
+                f.write("\n".join(statement.statement(spec_a, [(obj, "blake3_servil_compress_in_place_arm64")])) + "\n")
+            self.assertEqual(
+                verify2.verify_files(arm_tab, st_p, os.path.join(HERE, "proofs", "blake3_servil_compress_in_place_arm64.proof")),
+                1,
+            )
+
+        # 1c. Production 16-lane AVX-512 BLAKE3 `hash_many` (`p16`)
+        with tempfile.TemporaryDirectory() as td:
+            st_p = os.path.join(td, "p16.s")
+            with open(st_p, "w", encoding="utf-8") as f:
+                f.write("\n".join(statement.statement(test_p16.spec_text(), [(test_p16.OBJ, test_p16.NAME)])) + "\n")
+            self.assertEqual(
+                verify2.verify_files(x86_tab, st_p, os.path.join(HERE, "proofs", "blake3_servil_avx512_p16.proof")),
+                1,
+            )
+
+        # 2. Production ChaCha20 (16-block AVX-512 & 4-block AArch64)
+        self.assertEqual(
+            verify2.verify_files(
+                x86_tab,
+                os.path.join(HERE, "examples", "chacha20", "blocks16_x86_64.statement"),
+                os.path.join(HERE, "proofs", "ode_chacha20_blocks16.proof"),
+            ),
+            1,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            obj = os.path.join(td, "c4.o")
+            odec.build(os.path.join(HERE, "examples", "chacha20", "blocks4_arm64.ode"),
+                       "chacha20_blocks4_arm64", obj, target="arm64")
+            spec_c4 = open(os.path.join(HERE, "examples", "chacha20", "blocks4_arm64.spec"), encoding="utf-8").read()
+            st_p = os.path.join(td, "c4.s")
+            with open(st_p, "w", encoding="utf-8") as f:
+                f.write("\n".join(statement.statement(spec_c4, [(obj, "ode_chacha20_blocks4_arm64")])) + "\n")
+            self.assertEqual(
+                verify2.verify_files(arm_tab, st_p, os.path.join(HERE, "proofs", "ode_chacha20_blocks4_arm64.proof")),
+                1,
+            )
+
+        # 3. All 4 SIMD benchmark reference kernels on BOTH x86_64 and arm64
+        stores = (os.path.join(ROOT, "std"), os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks"))
+        for fn_file, fn_nm in [
+            ("blake3_compress1_reference.ode", "blake3_compress1"),
+            ("blake3_compress_4way_reference.ode", "blake3_compress_4way"),
+            ("chacha20_4way_reference.ode", "chacha20_4way"),
+            ("sha256_4way_reference.ode", "sha256_4way"),
+        ]:
+            src_p = os.path.join(ROOT, "paper", "EXPERIMENTS", "tasks", fn_file)
+            for target in ("x86_64", "arm64"):
+                with tempfile.TemporaryDirectory() as td:
+                    out_o, out_p = os.path.join(td, "o.o"), os.path.join(td, "o.proof")
+                    res = ode_audit.pack_verified(
+                        src_p, None, out_o, out_p, fn_name=fn_nm, target=target, c_abi=True, stores=stores,
+                    )
+                    self.assertEqual(res["verdict"], "shown", f"{fn_nm}/{target}: {res}")
+                    dump = os.path.join(td, "dump.sh")
+                    st_p, pf_p = os.path.join(td, "st.txt"), os.path.join(td, "pf.txt")
+                    with open(dump, "w", encoding="utf-8") as f:
+                        f.write(f"#!/bin/sh\ncp \"$2\" {st_p}\ncp \"$3\" {pf_p}\necho shown\n")
+                    os.chmod(dump, 0o755)
+                    ode_audit.audit_binary(out_o, out_p, verify_bin=dump)
+                    tab = arm_tab if target == "arm64" else x86_tab
+                    self.assertEqual(verify2.verify_files(tab, st_p, pf_p), 1, f"{fn_nm}/{target}")
+
 
 def _run_one_test(test_name):
     import io, time

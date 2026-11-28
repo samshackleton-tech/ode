@@ -6,7 +6,6 @@
   "spec_basename": "blake3_compress1_spec.ode",
   "reference_solution": "paper/EXPERIMENTS/tasks/blake3_compress1_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/blake3_compress1_native.c",
-  "skip_verify2": true,
   "input_bytes_per_call": 64,
   "expected_contract_id": "hkxqh23yct3ndyut6iehnh6p7jtyy4qprhin7lqtbwgxqzt65u4q",
   "expected_contract_ids": {

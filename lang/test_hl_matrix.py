@@ -2050,7 +2050,7 @@ fn f_fixed_u32(out: 16 bytes, a: 16 bytes)
 }
 """
         for arch in ("x86_64", "arm64"):
-            _pack_and_dual_verify(src_fixed_u32, "f_fixed_u32", arch, check_v2=False)
+            _pack_and_dual_verify(src_fixed_u32, "f_fixed_u32", arch, check_v2=True)
 
         # 2. In-out word buffer `.u64` & `.u32` reads BEFORE and AFTER partial write (`wroteW`)
         src_inout_rw = """\
@@ -2079,7 +2079,7 @@ fn f_inout_rw(h: 16 bytes)
 }
 """
         for arch in ("x86_64", "arm64"):
-            _pack_and_dual_verify(src_inout_rw, "f_inout_rw", arch, check_v2=False)
+            _pack_and_dual_verify(src_inout_rw, "f_inout_rw", arch, check_v2=True)
 
         # 3. Vector stack store (`frameW`) -> scalar `.u64` & `.u32` loads
         src_framew_scalar = """\
@@ -2101,7 +2101,7 @@ fn f_framew_scalar(out: 16 bytes, src: 16 bytes)
 }
 """
         for arch in ("x86_64", "arm64"):
-            _pack_and_dual_verify(src_framew_scalar, "f_framew_scalar", arch, check_v2=False)
+            _pack_and_dual_verify(src_framew_scalar, "f_framew_scalar", arch, check_v2=True)
 
         # 4. 4-byte scalar stores (`buf.u32` & `out.u32`) on `arm64` via `symStore4`
         src_store4 = """\
@@ -2123,7 +2123,7 @@ fn f_store4(out: 16 bytes, src: 16 bytes)
     out.u32(12) := tmp.u32(12)
 }
 """
-        _pack_and_dual_verify(src_store4, "f_store4", "arm64", check_v2=False)
+        _pack_and_dual_verify(src_store4, "f_store4", "arm64", check_v2=True)
 
         # 5. Pure write-only `out` buffer (`arg out out N`) STILL refused on `.u32`/`.u64` read
         src_wo_read = """\

@@ -6,7 +6,6 @@
   "spec_basename": "blake3_compress_4way_spec.ode",
   "reference_solution": "paper/EXPERIMENTS/tasks/blake3_compress_4way_reference.ode",
   "native_harness": "paper/EXPERIMENTS/tasks/blake3_compress_4way_native.c",
-  "skip_verify2": true,
   "input_bytes_per_call": 256,
   "expected_contract_id": "btdd6bqgvacwoyoysfjzlmt7dcxlhoanqtslor6sp47cdsfp36zq",
   "expected_contract_ids": {

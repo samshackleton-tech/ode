@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Independent second verifier for Ode `.statement` + `.proof` files (core scalar/byte/loop/call fragment).
+"""Independent second verifier for Ode `.statement` + `.proof` files (scalar, byte, word, and SIMD).
 
 Written from scratch in pure Python with ZERO code shared with Lean's `Core.lean`, `Machine.lean`,
 `Contract.lean`, or `kcheck/`. Reads only the instruction tables (`core/x86.tab`, `arm64/arm64.tab`
 via `core/table.py`), a `.statement` file, and a `.proof` file, and prints `shown` or `refused: ...`.
 
-Covers the core fragment (both x86-64 and AArch64):
-  - Table-driven symbolic execution of integer, load/store (`mem8`/`mem64`), compare, branch, call,
-    and return instructions.
-  - Linear-inequality Farkas/Gomory refutation certificates (`p ...; s i a j b d; q`).
-  - Loop invariants (`place PC`, `name`, `fact`, `keep`, `decreases`, `marked`).
-  - Pure specification `def` unfolding (`t open K`) and case splitting (`t live`/`t dead`/`t eq`/`t lt`/`t gt`).
-  - Multi-function call verification by contract (stack budget, callee-saved registers, return value).
-  - Trace-mark enforcement (refuses branches and memory addresses that depend on unmarked inputs).
+Covers both x86-64 and AArch64:
+  - Table-driven symbolic execution of integer, load/store (`mem8`/`mem16`/`mem32`/`mem64`/`mem128`/
+    `mem512`/`mem512a`), compare, branch, select, call, tail-call, and return instructions.
+  - 32-bit word term table (`WordTab`), 128-bit and 512-bit SIMD lanes, hardware SHA-256 ops
+    (x86 SHA-NI and AArch64 SHA2), uniform word-backed scalar/vector memory, aligned 64-byte stack
+    spills, lane pointer tables, `ensuresw`, and vector loop `lane`/`cell` invariants.
+  - Cache-line and VM-page alignment (`align`) and disjointness (`linedisjoint`).
+  - Linear-inequality Farkas/Gomory refutation certificates (`p`/`r`, `s`, `q`), loop/join `place`s,
+    `check` assertions, `def` unfolding, multi-function contracts, and trace-mark enforcement.
 
     python3 proof-core/verify2.py TABLE STATEMENT PROOF
 """
@@ -119,6 +120,308 @@ def r_const_of(facts, r):
     return None
 
 
+# ---------------------------------------------------------------------------
+# 32-bit word term table (`WordTab`) for SIMD / word-level verification
+# ---------------------------------------------------------------------------
+
+W32 = 1 << 32
+
+
+def r_word(r):
+    """Reduce a row's constant and coefficients modulo 2^32."""
+    return (r[0] % W32, _trim(tuple(c % W32 for c in r[1])))
+
+
+def r_high(r):
+    """Quotient row by 2^32 (exact floor division, matching Lean `Int.tdiv`/`/` for nonnegative)."""
+    return (r[0] // W32, _trim(tuple(c // W32 for c in r[1])))
+
+
+def r_has_high(r):
+    """Whether `r` has any nonzero coefficient that is a multiple of 2^32."""
+    return any(c != 0 and (c % W32) == 0 for c in r[1])
+
+
+def r_var_idx(r):
+    """If `r` is exactly `1 * v_i + 0`, return `i`, else `None`."""
+    if r[0] != 0:
+        return None
+    nz = [(i, c) for i, c in enumerate(r[1]) if c != 0]
+    if len(nz) == 1 and nz[0][1] == 1:
+        return nz[0][0]
+    return None
+
+
+def merge_add(xs, ys):
+    """Canonical sorted linear combination of 32-bit word term IDs modulo 2^32."""
+    out = []
+    i = j = 0
+    nx, ny = len(xs), len(ys)
+    while i < nx and j < ny:
+        a, ca = xs[i]
+        b, cb = ys[j]
+        if a < b:
+            out.append((a, ca))
+            i += 1
+        elif b < a:
+            out.append((b, cb))
+            j += 1
+        else:
+            c = (ca + cb) % W32
+            if c != 0:
+                out.append((a, c))
+            i += 1
+            j += 1
+    if i < nx:
+        out.extend(xs[i:])
+    if j < ny:
+        out.extend(ys[j:])
+    return tuple(out)
+
+
+def vec_reg_index(name):
+    """Map `zmm0..31`, `xmm0..15`, `ymm0..15`, `v0..31` to `0..31`."""
+    if name.startswith(("zmm", "xmm", "ymm")):
+        s = name[3:]
+    elif name.startswith("v"):
+        s = name[1:]
+    else:
+        return None
+    if s.isdigit():
+        r = int(s)
+        if 0 <= r < 32:
+            return r
+    return None
+
+
+class WordTab:
+    """Hash-consed table of 32-bit word terms (independent Python counterpart to Core.lean `Tab`)."""
+
+    def __init__(self, arr=None, idx=None):
+        self.arr = [] if arr is None else list(arr)
+        self.idx = {} if idx is None else dict(idx)
+
+    def clone(self):
+        return WordTab(self.arr, self.idx)
+
+    def find(self, node):
+        i = self.idx.get(node)
+        if i is not None and i < len(self.arr) and self.arr[i] == node:
+            return i
+        return None
+
+    def intern(self, node):
+        i = self.find(node)
+        if i is not None:
+            return i
+        i = len(self.arr)
+        self.arr.append(node)
+        self.idx[node] = i
+        return i
+
+    def addends(self, a):
+        if 0 <= a < len(self.arr) and self.arr[a][0] == "add":
+            return self.arr[a][1]
+        return ((a, 1),)
+
+    def w_atom(self, r):
+        return self.intern(("atom", r_word(r)))
+
+    def w_atom_k(self, known_div_rem, var_to_term, r):
+        """Convert a linear row (mod 2^32) into a word term ID, resolving canonical mod-2^32
+        remainders (`known_div_rem`) and `termVal` scalar variables (`var_to_term`)."""
+        w0 = r_word(r)
+        v0 = r_var_idx(w0)
+        r_eff = known_div_rem[v0] if (v0 is not None and v0 in known_div_rem) else r
+        w = r_word(r_eff)
+        pulled = False
+        ts = ()
+        rem = []
+        n_arr = len(self.arr)
+        for v, c in enumerate(w[1]):
+            cm = c % W32
+            if cm != 0 and v in var_to_term and var_to_term[v] < n_arr:
+                tid = var_to_term[v]
+                pulled = True
+                add = self.addends(tid) if cm == 1 else ((tid, cm),)
+                ts = merge_add(add, ts)
+                rem.append(0)
+            else:
+                rem.append(c if cm != 0 else 0)
+        if not pulled:
+            return self.w_atom(r)
+        rem_row = (w[0], _trim(tuple(rem)))
+        if rem_row == (0, ()):
+            if not ts:
+                return self.w_atom((0, ()))
+            if len(ts) == 1 and ts[0][1] == 1:
+                return ts[0][0]
+            return self.intern(("add", ts))
+        rid = self.w_atom(rem_row)
+        if not ts:
+            return rid
+        return self.intern(("add", merge_add(((rid, 1),), ts)))
+
+    def w_add(self, a, b):
+        return self.intern(("add", merge_add(self.addends(a), self.addends(b))))
+
+    def w_xor(self, a, b):
+        return self.intern(("xor", min(a, b), max(a, b)))
+
+    def w_and(self, a, b):
+        return self.intern(("band", min(a, b), max(a, b)))
+
+    def w_rotr(self, a, n):
+        return self.intern(("rotr", a, n))
+
+    def w_shl(self, a, n):
+        return self.intern(("shl", a, n))
+
+    def w_shr(self, a, n):
+        return self.intern(("shr", a, n))
+
+    def w_ult(self, a, b):
+        if a == b:
+            return self.w_atom((0, ()))
+        return self.intern(("ult", a, b))
+
+    def w_sel(self, m, a, b):
+        if 0 <= m < len(self.arr) and self.arr[m] == ("atom", (0, ())):
+            return b
+        return self.intern(("sel", m, a, b))
+
+    def w_add_const(self, a, k):
+        if k == 0:
+            return a
+        if 0 <= a < len(self.arr) and self.arr[a][0] == "atom":
+            return self.w_atom(r_add(self.arr[a][1], r_const(k)))
+        return self.w_add(a, self.w_atom(r_const(k)))
+
+    def or_turns(self, pairs):
+        out = []
+        for a, b in pairs:
+            if not (0 <= a < len(self.arr) and 0 <= b < len(self.arr)):
+                return None
+            na, nb = self.arr[a], self.arr[b]
+            if na[0] == "shl" and nb[0] == "shr" and na[1] == nb[1] and na[2] + nb[2] == 32 and 0 < nb[2] < 32:
+                out.append((na[1], nb[2]))
+            elif na[0] == "shr" and nb[0] == "shl" and na[1] == nb[1] and na[2] + nb[2] == 32 and 0 < na[2] < 32:
+                out.append((na[1], na[2]))
+            else:
+                return None
+        return out
+
+    def const_words(self, ids):
+        out = []
+        for a in ids:
+            if not (0 <= a < len(self.arr)):
+                return None
+            nd = self.arr[a]
+            if nd[0] != "atom" or nd[1][1]:
+                return None
+            out.append(nd[1][0])
+        return out
+
+    @staticmethod
+    def shuffle_turn(ks):
+        if ks == [0x00030201, 0x04070605, 0x080B0A09, 0x0C0F0E0D]:
+            return 8
+        if ks == [0x01000302, 0x05040706, 0x09080B0A, 0x0D0C0F0E]:
+            return 16
+        return None
+
+    # Hardware SHA-256 word combinators (x86 SHA-NI and AArch64 SHA2)
+    def w_sha256_ch(self, e, f, g):
+        fg = self.w_xor(f, g)
+        efg = self.w_and(e, fg)
+        return self.w_xor(g, efg)
+
+    def w_sha256_maj(self, a, b, c):
+        ab = self.w_and(a, b)
+        axb = self.w_xor(a, b)
+        axbc = self.w_and(axb, c)
+        return self.w_xor(ab, axbc)
+
+    def w_sha256_S0(self, a):
+        r2 = self.w_rotr(a, 2)
+        r13 = self.w_rotr(a, 13)
+        r22 = self.w_rotr(a, 22)
+        return self.w_xor(self.w_xor(r2, r13), r22)
+
+    def w_sha256_S1(self, e):
+        r6 = self.w_rotr(e, 6)
+        r11 = self.w_rotr(e, 11)
+        r25 = self.w_rotr(e, 25)
+        return self.w_xor(self.w_xor(r6, r11), r25)
+
+    def w_sha256_s0(self, x):
+        r7 = self.w_rotr(x, 7)
+        r18 = self.w_rotr(x, 18)
+        s3 = self.w_shr(x, 3)
+        return self.w_xor(self.w_xor(r7, r18), s3)
+
+    def w_sha256_s1(self, x):
+        r17 = self.w_rotr(x, 17)
+        r19 = self.w_rotr(x, 19)
+        s10 = self.w_shr(x, 10)
+        return self.w_xor(self.w_xor(r17, r19), s10)
+
+    def w_sha256_round(self, a, b, c, d, e, f, g, h, wk):
+        s1 = self.w_sha256_S1(e)
+        ch = self.w_sha256_ch(e, f, g)
+        t1 = self.w_add(self.w_add(self.w_add(h, s1), ch), wk)
+        s0 = self.w_sha256_S0(a)
+        mj = self.w_sha256_maj(a, b, c)
+        t2 = self.w_add(s0, mj)
+        return (self.w_add(t1, t2), a, b, c, self.w_add(d, t1), e, f, g)
+
+    def w_sha256_msg1(self, x, y):
+        r0 = self.w_add(x[0], self.w_sha256_s0(x[1]))
+        r1 = self.w_add(x[1], self.w_sha256_s0(x[2]))
+        r2 = self.w_add(x[2], self.w_sha256_s0(x[3]))
+        r3 = self.w_add(x[3], self.w_sha256_s0(y[0]))
+        return (r0, r1, r2, r3)
+
+    def w_sha256_msg2(self, x, z):
+        r0 = self.w_add(x[0], self.w_sha256_s1(z[2]))
+        r1 = self.w_add(x[1], self.w_sha256_s1(z[3]))
+        r2 = self.w_add(x[2], self.w_sha256_s1(r0))
+        r3 = self.w_add(x[3], self.w_sha256_s1(r1))
+        return (r0, r1, r2, r3)
+
+    def w_sha256_su1(self, x, y, z):
+        t0 = self.w_add(x[0], y[1])
+        t1 = self.w_add(x[1], y[2])
+        t2 = self.w_add(x[2], y[3])
+        t3 = self.w_add(x[3], z[0])
+        return self.w_sha256_msg2((t0, t1, t2, t3), z)
+
+    def w_sha256_rnds2(self, x, z, wk):
+        a1, b1, c1, d1, e1, f1, g1, h1 = self.w_sha256_round(
+            z[3], z[2], x[3], x[2], z[1], z[0], x[1], x[0], wk[0]
+        )
+        a2, b2, _, _, e2, f2, _, _ = self.w_sha256_round(a1, b1, c1, d1, e1, f1, g1, h1, wk[1])
+        return (f2, e2, b2, a2)
+
+    def w_sha256_h(self, x, y, wk):
+        a1, b1, c1, d1, e1, f1, g1, h1 = self.w_sha256_round(
+            x[0], x[1], x[2], x[3], y[0], y[1], y[2], y[3], wk[0]
+        )
+        a2, b2, c2, d2, e2, f2, g2, h2 = self.w_sha256_round(a1, b1, c1, d1, e1, f1, g1, h1, wk[1])
+        a3, b3, c3, d3, e3, f3, g3, h3 = self.w_sha256_round(a2, b2, c2, d2, e2, f2, g2, h2, wk[2])
+        a4, b4, c4, d4, _, _, _, _ = self.w_sha256_round(a3, b3, c3, d3, e3, f3, g3, h3, wk[3])
+        return (a4, b4, c4, d4)
+
+    def w_sha256_h2(self, x, y, wk):
+        a1, b1, c1, d1, e1, f1, g1, h1 = self.w_sha256_round(
+            y[0], y[1], y[2], y[3], x[0], x[1], x[2], x[3], wk[0]
+        )
+        a2, b2, c2, d2, e2, f2, g2, h2 = self.w_sha256_round(a1, b1, c1, d1, e1, f1, g1, h1, wk[1])
+        a3, b3, c3, d3, e3, f3, g3, h3 = self.w_sha256_round(a2, b2, c2, d2, e2, f2, g2, h2, wk[2])
+        _, _, _, _, e4, f4, g4, h4 = self.w_sha256_round(a3, b3, c3, d3, e3, f3, g3, h3, wk[3])
+        return (e4, f4, g4, h4)
+
+
 def mask_span(m):
     if m <= 0 or m >= (1 << 64):
         return None
@@ -218,6 +521,7 @@ def parse_statement(path):
     fns = []
     cur = None
     defs = {}
+    pieces = []
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
@@ -233,24 +537,47 @@ def parse_statement(path):
                     "args": [],
                     "requires": [],
                     "below": [],
+                    "mbounds": [],
+                    "lanes": [],
                     "atleast": [],
                     "aligns": [],
                     "linedisjoint": [],
                     "linpre": [],
                     "returns": None,
+                    "result": None,
                     "ensures": [],
+                    "ensuresw": [],
+                    "valspecs": [],
+                    "needs": [],
+                    "needsif": [],
                     "stack": 0,
                     "stacklin": None,
+                    "stackbits": None,
                     "decreases": None,
                     "hidden": set(),
+                    "trace_exprs": [],
+                    "result_dep": None,
                     "argregs": None,
                     "keeps": None,
                     "retreg": None,
                     "keeps_vec": None,
+                    "piece": None,
+                    "pieces": pieces,
                 }
                 fns.append(cur)
             elif kw == "machine":
                 cur["machine"] = parts[1]
+            elif kw == "piece":
+                al = int(parts[1])
+                hex_str = parts[2] if len(parts) > 2 else ""
+                pieces.append((al, bytes.fromhex(hex_str)))
+            elif kw == "data":
+                k = int(parts[1])
+                if cur["instrs"]:
+                    raise Refuse(f"`data` after an instruction of the function: {line}")
+                if k < 0 or k >= len(pieces):
+                    raise Refuse(f"no read-only data of number {k} stands before: {line}")
+                cur["piece"] = k
             elif kw == "i":
                 pc, nxt = int(parts[1]), int(parts[2])
                 cur["instrs"][pc] = (nxt, " ".join(parts[3:]))
@@ -263,8 +590,17 @@ def parse_statement(path):
                     cur["args"].append((parts[1], "out", parts[3]))
                 elif len(parts) == 4 and parts[2] == "fixed":
                     cur["args"].append((parts[1], "fixed", parts[3]))
+                elif len(parts) == 4 and parts[2] == "inout":
+                    cur["args"].append((parts[1], "inout", parts[3]))
+                elif len(parts) == 6 and parts[2] == "valarray":
+                    ch, el = int(parts[4]), int(parts[5])
+                    if ch <= 0 or el <= 0 or (el % 4) != 0:
+                        raise Refuse(f"malformed valarray arg in verify2: {line}")
+                    cur["args"].append((parts[1], "valarray", (parts[3], ch, el)))
                 else:
-                    raise Refuse(f"unsupported arg form in verify2: {line}")
+                    raise Refuse(f"arg form not handled in verify2: {line}")
+            elif kw == "valspec":
+                cur["valspecs"].append((parts[1], parts[2], parse_sexpr(" ".join(parts[3:]))))
             elif kw == "ensures":
                 rest = line[len("ensures "):].strip()
                 run_nm, exprs_txt = rest.split(None, 1)
@@ -272,10 +608,27 @@ def parse_statement(path):
                 if len(es) != 3:
                     raise Refuse(f"malformed ensures line in verify2: {line}")
                 cur["ensures"].append((run_nm, es[0], es[1], es[2]))
+            elif kw == "ensuresw":
+                run_nm = parts[1]
+                if len(parts) >= 5 and parts[2].isdigit() and parts[3].isdigit():
+                    part = (int(parts[2]), int(parts[3]))
+                    ex = parse_sexpr(" ".join(parts[4:]))
+                else:
+                    part = None
+                    ex = parse_sexpr(" ".join(parts[2:]))
+                cur["ensuresw"].append((run_nm, part, ex))
+            elif kw == "needs":
+                cur["needs"].append(parts[1])
+            elif kw == "needsif":
+                cur["needsif"].append((parts[1], parts[2], int(parts[3])))
             elif kw == "requires":
                 cur["requires"].append(parse_sexpr(line[len("requires "):]))
             elif kw == "below":
                 cur["below"].append((parts[1], int(parts[2])))
+            elif kw == "mbelow":
+                cur["mbounds"].append((parts[1], int(parts[2]), int(parts[3])))
+            elif kw == "lanes":
+                cur["lanes"].append((parts[1], parts[2]))
             elif kw == "atleast":
                 cur["atleast"].append((parts[1], int(parts[2])))
             elif kw == "align":
@@ -295,6 +648,8 @@ def parse_statement(path):
                 cur["linpre"].append((int(parts[1]), [(parts[i], int(parts[i + 1])) for i in range(2, len(parts), 2)]))
             elif kw == "returns":
                 cur["returns"] = parse_sexpr(line[len("returns "):])
+            elif kw == "result":
+                cur["result"] = parts[1]
             elif kw == "stack":
                 cur["stack"] = int(parts[1])
             elif kw == "stacklin":
@@ -302,24 +657,33 @@ def parse_statement(path):
                 if div <= 0:
                     raise Refuse(f"malformed stacklin in verify2: {line}")
                 cur["stacklin"] = (step, arg, sub, div)
+            elif kw == "stackbits":
+                step, arg, sub, div = int(parts[1]), parts[2], int(parts[3]), int(parts[4])
+                if div <= 0:
+                    raise Refuse(f"malformed stackbits in verify2: {line}")
+                cur["stackbits"] = (step, arg, sub, div)
             elif kw == "fndecreases":
                 cur["decreases"] = parts[1]
             elif kw == "hidden":
                 cur["hidden"].update(parts[1:])
+            elif kw == "traceexpr":
+                cur["trace_exprs"].append(parse_sexpr(line[len("traceexpr "):]))
+            elif kw == "resultdep":
+                cur["result_dep"] = parts[1:]
             elif kw == "argregs":
                 cur["argregs"] = parts[1:]
             elif kw == "keeps":
                 cur["keeps"] = parts[1:]
             elif kw == "retreg":
                 cur["retreg"] = parts[1]
-            elif kw == "keeps_vec":
+            elif kw in ("keeps_vec", "keepsvec"):
                 cur["keeps_vec"] = parts[1:]
             elif kw == "def":
                 eq = line.index(" = ")
                 hdr = line[:eq].split()
                 defs[hdr[1]] = (hdr[2:], parse_sexpr(line[eq + 3:]))
             else:
-                raise Refuse(f"unsupported statement line in verify2: {line}")
+                raise Refuse(f"statement line not handled in verify2: {line}")
     return fns, defs
 
 
@@ -344,7 +708,8 @@ def parse_proof(path):
             elif kw in ("place", "join"):
                 pc = int(parts[1])
                 cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(),
-                             "decreases": None, "wrote": None, "is_join": (kw == "join")}
+                             "marked_result": set(), "decreases": None, "wrote": None,
+                             "lanes": [], "cells": [], "is_join": (kw == "join")}
                 cur["places"][pc] = cur_place
                 cur_check = None
             elif kw == "check":
@@ -364,8 +729,25 @@ def parse_proof(path):
                 cur_place["keep"].update(parts[1:])
             elif kw == "marked" and cur_place is not None:
                 cur_place["marked"].update(parts[1:])
+            elif kw == "marked_result" and cur_place is not None:
+                cur_place["marked_result"].update(parts[1:])
             elif kw == "decreases" and cur_place is not None:
                 cur_place["decreases"] = parse_sexpr(line[len("decreases "):])
+            elif kw == "lane" and cur_place is not None:
+                x_var = parts[1]
+                eq_i = parts.index("=")
+                vregs = []
+                for vr_nm in parts[2:eq_i]:
+                    vr_i = vec_reg_index(vr_nm)
+                    if vr_i is None:
+                        raise Refuse(f"invalid vector register `{vr_nm}` in `lane`: {line}")
+                    vregs.append(vr_i)
+                call_ex = parse_sexpr(" ".join(parts[eq_i + 1:]))
+                if not (isinstance(call_ex, tuple) and len(call_ex) >= 2 and call_ex[0] == "call"):
+                    raise Refuse(f"malformed `lane` line in verify2: {line}")
+                cur_place["lanes"].append((vregs, x_var, call_ex[1], call_ex[2:]))
+            elif kw == "cell" and cur_place is not None:
+                cur_place["cells"].append((int(parts[1]), parts[2], parse_sexpr(" ".join(parts[3:]))))
             elif kw in ("wrote", "wrote_pre") and cur_place is not None:
                 rest = line[len(kw):].strip()
                 run_nm, expr_txt = rest.split(None, 1)
@@ -850,6 +1232,7 @@ class Verifier:
         facts = []
         regs = {}
         entry_regs = {}
+        reg_to_idx = {r: idx for idx, r in enumerate(reg_names)}
         for r in reg_names:
             v = init_fresh_var(0, M64, facts)
             regs[r] = v
@@ -858,7 +1241,12 @@ class Verifier:
         if not is_arm:
             facts.append(r_sub(r_const(M64 - 8), regs[sp_reg]))
         # Reserve one slot after registers (dataVar, matching Core.lean Sym.init)
-        init_fresh_var(0, M64, facts)
+        data_var_idx = init_nvars
+        data_var_row = init_fresh_var(0, M64, facts)
+        pieces = fn.get("pieces", [])
+        data_bytes = pieces[fn["piece"]][1] if fn.get("piece") is not None else b""
+        if data_bytes:
+            facts.append(r_sub(r_const(M64 - len(data_bytes)), data_var_row))
 
         # Trace marks: True = marked (kept out of trace), False = clean (may show in trace)
         marks = {r: True for r in reg_names}
@@ -872,21 +1260,69 @@ class Verifier:
         buf_clean = {}
         out_base = {}
         out_len = {}
+        outs_list = []       # [(name, reg_idx, count)] — BOTH `out` and `inout`, matching Contract.outs
+        fixeds_list = []     # [(name, reg_idx, count)]
+        inouts_list = []     # [(name, reg_idx, count)]
+        regions_list = []    # [(base_reg_idx, len_reg_idx)]
+        val_arrays_list = [] # [(name, ptr_reg_idx, len_reg_idx, ch, el)]
+        arg_reg_idx_by_name = {aname: reg_to_idx[arg_regs[i]] for i, (aname, _, _) in enumerate(fn["args"])}
         for idx, (aname, akind, alen) in enumerate(fn["args"]):
             areg = arg_regs[idx]
+            ridx = reg_to_idx[areg]
             if akind == "bytes":
                 env[aname] = ("buf", aname)
                 buf_base[aname] = regs[areg]
                 buf_clean[aname] = aname not in fn["hidden"]
+                if alen in arg_reg_idx_by_name:
+                    regions_list.append((ridx, arg_reg_idx_by_name[alen]))
             elif akind == "out":
+                cnt = int(alen)
                 env[aname] = ("out", aname)
                 out_base[aname] = regs[areg]
-                out_len[aname] = int(alen)
+                out_len[aname] = cnt
+                outs_list.append((aname, ridx, cnt))
                 buf_clean[aname] = True
+            elif akind == "inout":
+                cnt = int(alen)
+                env[aname] = regs[areg]
+                out_base[aname] = regs[areg]
+                out_len[aname] = cnt
+                outs_list.append((aname, ridx, cnt))
+                inouts_list.append((aname, ridx, cnt))
+                buf_clean[aname] = aname not in fn["hidden"]
+            elif akind == "fixed":
+                cnt = int(alen)
+                env[aname] = regs[areg]
+                fixeds_list.append((aname, ridx, cnt))
+                buf_clean[aname] = aname not in fn["hidden"]
+            elif akind == "valarray":
+                l_nm, ch, el = alen
+                env[aname] = regs[areg]
+                if l_nm in arg_reg_idx_by_name:
+                    val_arrays_list.append((aname, ridx, arg_reg_idx_by_name[l_nm], ch, el))
+                buf_clean[aname] = aname not in fn["hidden"]
             else:
                 env[aname] = regs[areg]
-            if aname not in fn["hidden"] or akind in ("bytes", "out"):
+            # Match Contract.cleanAtEntry: every pointer arg register is clean at entry; only hidden numbers are marked
+            if aname not in fn["hidden"] or akind != "number":
                 marks[areg] = False
+
+        word_runs = (
+            list(fixeds_list)
+            + list(inouts_list)
+            + [("", r, 0) for r, _ in regions_list]
+            + [(nm, r, 0) for nm, r, _, _, _ in val_arrays_list]
+        )
+        lanes_map = dict(fn.get("lanes", ()))
+        tables_by_j = {}
+        for j_f, (fnm, fr, fcnt) in enumerate(fixeds_list):
+            if fnm in lanes_map and lanes_map[fnm] in arg_reg_idx_by_name:
+                tables_by_j[j_f] = (fnm, fr, fcnt // 8, arg_reg_idx_by_name[lanes_map[fnm]])
+
+        if fn.get("keeps_vec") is not None:
+            callee_saved_vec = [vec_reg_index(v) for v in fn["keeps_vec"] if vec_reg_index(v) is not None]
+        else:
+            callee_saved_vec = [8, 9, 10, 11, 12, 13, 14, 15] if is_arm else []
 
         for aname, akind, alen in fn["args"]:
             if akind == "bytes":
@@ -1014,6 +1450,8 @@ class Verifier:
                 if best is not None:
                     f.append(r_sub(r_const(best // m), q))
             cur_st["div_cache"][key] = (q, rem)
+            if m == W32:
+                cur_st["known_div_rem"][r_idx] = x
             return q, rem
 
         def r_bound_of(facts, row):
@@ -1025,7 +1463,30 @@ class Verifier:
                         best = s[0]
             return best
 
-        def r_row_upper(facts, row):
+        def is_word32_row(cur_st, row):
+            if not row[1]:
+                return 0 <= row[0] < W32
+            vi = r_var_idx(row)
+            if vi is not None and vi in cur_st["word32_vars"]:
+                return True
+            return r_plain(cur_st["facts"], row) and r_plain(cur_st["facts"], r_sub(r_const(W32 - 1), row))
+
+        def row_word32_upper(cur_st, row):
+            """Pure O(1) upper bound using only `word32_vars` (mirrors Core.lean `rowWord32Upper`)."""
+            c0, cs = row
+            if c0 < 0 or not cs:
+                return None
+            wvars = cur_st["word32_vars"]
+            tot = c0
+            for i, c in enumerate(cs):
+                if c == 0:
+                    continue
+                if c < 0 or i not in wvars:
+                    return None
+                tot += c * (W32 - 1)
+            return tot
+
+        def r_row_upper(facts, row, wvars=()):
             c0, cs = row
             if c0 < 0:
                 return None
@@ -1036,15 +1497,19 @@ class Verifier:
                 if c < 0:
                     return None
                 vi = r_var(i)
-                if not r_plain(facts, vi):
-                    return None
-                ub = r_bound_of(facts, vi)
+                ub = None
+                if r_plain(facts, vi):
+                    ub = r_bound_of(facts, vi)
+                    if ub is None and i in wvars:
+                        ub = W32 - 1
+                elif i in wvars:
+                    ub = W32 - 1
                 if ub is None:
                     return None
                 total += c * ub
             return total
 
-        def sym_split(facts, x, m):
+        def sym_split(facts, x, m, wvars=()):
             c0, cs = x
             q_cs = [c // m if c % m == 0 else 0 for c in cs]
             r_cs = [0 if c % m == 0 else c for c in cs]
@@ -1054,7 +1519,7 @@ class Verifier:
                 r_cs.pop()
             q = (c0 // m, tuple(q_cs))
             r = (c0 % m, tuple(r_cs))
-            ub = r_row_upper(facts, r)
+            ub = r_row_upper(facts, r, wvars)
             if ub is not None and ub < m:
                 return q, r
             return None
@@ -1062,10 +1527,12 @@ class Verifier:
         def sym_low(x, m, cur_st):
             if all(c % m == 0 for c in x[1]):
                 return r_const(x[0] % m)
+            if m == W32 and is_word32_row(cur_st, x):
+                return x
             f = cur_st["facts"]
             if r_plain(f, r_sub(r_const(m - 1), x)):
                 return x
-            sp = sym_split(f, x, m)
+            sp = sym_split(f, x, m, cur_st["word32_vars"])
             if sp is not None:
                 return sp[1]
             return quot_rem(x, m, cur_st, nonneg=True, fold_const=False)[1]
@@ -1076,7 +1543,7 @@ class Verifier:
                 while q_cs and q_cs[-1] == 0:
                     q_cs.pop()
                 return (x[0] // m, tuple(q_cs))
-            sp = sym_split(cur_st["facts"], x, m)
+            sp = sym_split(cur_st["facts"], x, m, cur_st["word32_vars"])
             if sp is not None:
                 return sp[0]
             return quot_rem(x, m, cur_st, nonneg=True, fold_const=False)[0]
@@ -1085,6 +1552,7 @@ class Verifier:
             "nvars": init_nvars,
             "regs": regs,
             "marks": marks,
+            "low_clean": set(),
             "flags": {"zf": None, "cf": None},
             "flag_marks": {"zf": True, "cf": True},
             "facts": facts,
@@ -1104,7 +1572,34 @@ class Verifier:
             "or_cache": {},
             "stack_mem": {},  # sp_offset -> (val, mark)
             "min_sp": 0,
+            # Word / SIMD verification state (independent counterpart to Core.lean `Tab`/`vec`/`wroteW`)
+            "tab": WordTab(),
+            "vec": {},            # vec_reg (0..39) -> tuple of 4 or 16 word term IDs
+            "vec_intact": set(callee_saved_vec),
+            "wroteW": {},         # (out_w_idx, word_k) -> term_id
+            "intact": set(range(len(outs_list))),
+            "frameW": {},         # sp_offset -> term_id (4-byte stack word slots)
+            "spill": {},          # frame_offset_row -> tuple of 16 term IDs (aligned 64B stack cells)
+            "word32_vars": set(), # variable indices in [0, 2^32)
+            "term_val_to_var": {},
+            "var_to_term": {},
+            "known_load": {},     # (fixed_j, byte_c) -> var_idx
+            "known_load_of": {},  # var_idx -> (fixed_j, byte_c)
+            "known_div_rem": {},  # rem_var_idx -> dividend_row (for m == 2^32)
+            "known_block": [],    # [(j, c, off_row, vs_list)]
+            "known_held": [],     # [(f, keys, ids)]
+            "known_held_b": [],   # [(f, keys, ids)]
+            "known_use": [],      # [(f, keys, h)]
+            "stack_at": None,
         }
+
+        for _, vr, vl, vch, vel in val_arrays_list:
+            q_va, _ = quot_rem(r_var(vl), vch, state, nonneg=True, fold_const=False)
+            state["facts"].append(r_sub(r_const(M64), r_add(r_var(vr), r_scale(vel, q_va))))
+        slot_sz = 0 if is_arm else 8
+        for _, _, cnt8, l_idx in tables_by_j.values():
+            if cnt8 > 0 and fn["stack"] + slot_sz > 0:
+                state["facts"].append(r_sub(r_const((1 << 64) - 64), r_scale(64, r_var(l_idx))))
 
         for aname, bound in fn["below"]:
             if aname in env:
@@ -1205,6 +1700,7 @@ class Verifier:
                 "nvars": st["nvars"],
                 "regs": dict(st["regs"]),
                 "marks": dict(st["marks"]),
+                "low_clean": set(st["low_clean"]),
                 "flags": dict(st["flags"]),
                 "flag_marks": dict(st["flag_marks"]),
                 "facts": list(st["facts"]),
@@ -1226,7 +1722,1350 @@ class Verifier:
                 "min_sp": st["min_sp"],
                 "place_entry_regs": st.get("place_entry_regs", {}),
                 "place_entry_fq": st.get("place_entry_fq", frozenset()),
+                "tab": st["tab"].clone(),
+                "vec": dict(st["vec"]),
+                "vec_intact": set(st["vec_intact"]),
+                "wroteW": dict(st["wroteW"]),
+                "intact": set(st["intact"]),
+                "frameW": dict(st["frameW"]),
+                "spill": dict(st["spill"]),
+                "word32_vars": set(st["word32_vars"]),
+                "term_val_to_var": dict(st["term_val_to_var"]),
+                "var_to_term": dict(st["var_to_term"]),
+                "known_load": dict(st["known_load"]),
+                "known_load_of": dict(st["known_load_of"]),
+                "known_div_rem": dict(st["known_div_rem"]),
+                "known_block": list(st["known_block"]),
+                "known_held": list(st["known_held"]),
+                "known_held_b": list(st["known_held_b"]),
+                "known_use": list(st["known_use"]),
+                "stack_at": st.get("stack_at"),
             }
+
+        # ---------------------------------------------------------------
+        # Word-level & SIMD helpers (independent Python verification)
+        # ---------------------------------------------------------------
+
+        def _data_off(addr):
+            if not data_bytes:
+                return None
+            d = r_sub(addr, data_var_row)
+            return d[0] if not d[1] else None
+
+        def _data_word(c, size):
+            val = 0
+            for k in range(size):
+                val |= data_bytes[c + k] << (8 * k)
+            return val
+
+        def _find_in_runs(addr, runs):
+            for idx_r, (_, r_idx, cnt) in enumerate(runs):
+                if r_idx < len(addr[1]) and addr[1][r_idx] == 1:
+                    return idx_r, r_sub(addr, r_var(r_idx)), cnt
+            return None
+
+        def _run_at(r_idx, runs):
+            for j, (_, ri, _) in enumerate(runs):
+                if ri == r_idx:
+                    return j
+            return None
+
+        def _cur_sp_off(st):
+            d = r_sub(st["regs"][sp_reg], entry_regs[sp_reg])
+            return d[0] if not d[1] else None
+
+        def _val_of_term(st, tid):
+            tab = st["tab"]
+            if 0 <= tid < len(tab.arr) and tab.arr[tid][0] == "atom":
+                r = tab.arr[tid][1]
+                if is_word32_row(st, r):
+                    return r
+            if tid in st["term_val_to_var"]:
+                return r_var(st["term_val_to_var"][tid])
+            v = st["nvars"]
+            st["nvars"] += 1
+            st["word32_vars"].add(v)
+            st["term_val_to_var"][tid] = v
+            st["var_to_term"][v] = tid
+            return r_var(v)
+
+        def _sym_touch(st, w):
+            if w not in st["intact"]:
+                return
+            nm, b, n = outs_list[w]
+            if (nm, b, n) in inouts_list and (n % 4) == 0:
+                j = _run_at(b, word_runs)
+                if j is not None:
+                    tab = st["tab"]
+                    for k in range(n // 4):
+                        st["wroteW"][(w, k)] = tab.intern(("input", j, k))
+                    st["intact"].discard(w)
+
+        def _remember_store(st, w, word_j, ids):
+            st["intact"].discard(w)
+            st["spill"] = {}
+            st["range"] = None
+            for i, tid in enumerate(ids):
+                st["wroteW"][(w, word_j + i)] = tid
+
+        def _sym_load_words(st, addr, width):
+            tab = st["tab"]
+            # 1. Fixed read-only word runs
+            mf = _find_in_runs(addr, fixeds_list)
+            if mf is not None:
+                j, off, cnt = mf
+                if off[1]:
+                    raise Refuse("word load at non-constant fixed buffer offset")
+                c = off[0]
+                if 0 <= c and (c % 4) == 0 and c + 4 * width <= cnt:
+                    return tuple(tab.intern(("input", j, c // 4 + i)) for i in range(width))
+                raise Refuse("word load outside fixed buffer or misaligned")
+            # 2. Out / in-out word runs (pure write-only `out` is refused!)
+            mo = _find_in_runs(addr, outs_list)
+            if mo is not None:
+                w, off, n = mo
+                if off[1]:
+                    raise Refuse("word load at non-constant output buffer offset")
+                c = off[0]
+                _, r_idx, _ = outs_list[w]
+                j = _run_at(r_idx, fixeds_list + inouts_list)
+                if j is None:
+                    raise Refuse("a read of a run given only to write")
+                n_in = (fixeds_list + inouts_list)[j][2]
+                if not (0 <= c and (c % 4) == 0 and c + 4 * width <= n and c + 4 * width <= n_in):
+                    raise Refuse("word load outside in-out buffer or misaligned")
+                if w in st["intact"]:
+                    return tuple(tab.intern(("input", j, c // 4 + i)) for i in range(width))
+                ids = []
+                for i in range(width):
+                    key = (w, c // 4 + i)
+                    if key not in st["wroteW"]:
+                        raise Refuse("a part not written yet is read after a partial store")
+                    ids.append(st["wroteW"][key])
+                return tuple(ids)
+            # 3. Stack frame (8-byte cells in `stack_mem`, `known_load` spilled cells, or 4-byte `frameW`)
+            fo = r_sub(addr, entry_regs[sp_reg])
+            sp_c = _cur_sp_off(st)
+            if (not fo[1]) and sp_c is not None:
+                o = fo[0]
+                if sp_c <= o and o + 4 * width <= 0:
+                    if (width % 2) == 0:
+                        rows = []
+                        ok_rows = True
+                        for p in range(width // 2):
+                            cell = st["stack_mem"].get(o + 8 * p)
+                            if cell is None or not is_word32_row(st, r_word(cell[0])):
+                                ok_rows = False
+                                break
+                            rows.append(cell[0])
+                            rows.append(r_high(cell[0]))
+                        if ok_rows:
+                            return tuple(tab.w_atom_k(st["known_div_rem"], st["var_to_term"], r) for r in rows)
+                        nodes = []
+                        ok_nodes = True
+                        for p in range(width // 2):
+                            cell = st["stack_mem"].get(o + 8 * p)
+                            if cell is None:
+                                ok_nodes = False
+                                break
+                            vi = r_var_idx(cell[0])
+                            if vi is None or vi not in st["known_load_of"]:
+                                ok_nodes = False
+                                break
+                            fj, c0 = st["known_load_of"][vi]
+                            if (c0 % 4) != 0:
+                                ok_nodes = False
+                                break
+                            nodes.append(("input", fj, c0 // 4))
+                            nodes.append(("input", fj, c0 // 4 + 1))
+                        if ok_nodes:
+                            return tuple(tab.intern(nd) for nd in nodes)
+                    if all((o + 4 * k) in st["frameW"] for k in range(width)):
+                        return tuple(st["frameW"][o + 4 * k] for k in range(width))
+                    raise Refuse("stack frame word load where words are not known")
+                raise Refuse("word load outside stack frame")
+            # 4. Read-only value arrays
+            for k_va, (_, r_idx, l_idx, ch, el) in enumerate(val_arrays_list):
+                d = r_sub(addr, r_var(r_idx))
+                if not d[1] and d[0] >= 0 and (d[0] % 4) == 0:
+                    c = d[0]
+                    ei = c // el
+                    if ch > 0 and el > 0 and (el % 4) == 0 and c + 4 * width <= el * (ei + 1):
+                        self.entail(st["facts"], r_sub(r_var(l_idx), r_const((ei + 1) * ch)), stream)
+                        j = len(fixeds_list) + len(inouts_list) + len(regions_list) + k_va
+                        return tuple(tab.intern(("input", j, c // 4 + m)) for m in range(width))
+                    raise Refuse("word load outside value-array entry")
+            raise Refuse("word load address does not fall in any readable word buffer or stack frame")
+
+        def _sym_load_word_scalar(st, addr, size):
+            if size == 4:
+                ids = _sym_load_words(st, addr, 1)
+                return _val_of_term(st, ids[0])
+            if size == 8:
+                ids = _sym_load_words(st, addr, 2)
+                r0 = _val_of_term(st, ids[0])
+                r1 = _val_of_term(st, ids[1])
+                return r_add(r0, r_scale(W32, r1))
+            raise Refuse("word-backed scalar load must be 4 or 8 bytes")
+
+        def _sym_store_words(st, addr, ids, width):
+            if len(ids) != width:
+                raise Refuse("vector store width does not match known lanes")
+            mo = _find_in_runs(addr, outs_list)
+            if mo is not None:
+                w, off, cnt = mo
+                if off[1]:
+                    raise Refuse("word store at non-constant output buffer offset")
+                c = off[0]
+                if not (0 <= c and (c % 4) == 0 and c + 4 * width <= cnt):
+                    raise Refuse("word store outside output buffer or misaligned")
+                onm = outs_list[w][0]
+                if any(wn == onm for wn, _, _ in st["wrote"]):
+                    raise Refuse("words written to a run that single bytes were written to")
+                _remember_store(st, w, c // 4, ids)
+                return
+            fo = r_sub(addr, entry_regs[sp_reg])
+            sp_c = _cur_sp_off(st)
+            if (not fo[1]) and sp_c is not None:
+                o = fo[0]
+                if -fn["stack"] <= o and sp_c <= o and o + 4 * width <= 0:
+                    st["spill"] = {}
+                    st["range"] = None
+                    st["stack_mem"] = {
+                        c: v for c, v in st["stack_mem"].items()
+                        if c + 8 <= o or o + 4 * width <= c
+                    }
+                    st["frameW"] = {
+                        c: v for c, v in st["frameW"].items()
+                        if c + 4 <= o or o + 4 * width <= c
+                    }
+                    for k, tid in enumerate(ids):
+                        st["frameW"][o + 4 * k] = tid
+                    return
+            raise Refuse("word store address does not fall in an output buffer or active stack frame")
+
+        def _sym_store4(st, addr, val):
+            mo = _find_in_runs(addr, outs_list)
+            if mo is not None:
+                _sym_touch(st, mo[0])
+            lo = st["tab"].w_atom_k(st["known_div_rem"], st["var_to_term"], val)
+            _sym_store_words(st, addr, (lo,), 1)
+
+        def _sym_store8_out(st, w, cnt, off, val):
+            if off[1]:
+                raise Refuse("8-byte output store at non-constant offset")
+            c = off[0]
+            onm = outs_list[w][0]
+            if not (0 <= c and (c % 4) == 0 and c + 8 <= cnt) or any(wn == onm for wn, _, _ in st["wrote"]):
+                raise Refuse("8-byte store outside output buffer, misaligned, or mixed with byte stores")
+            _sym_touch(st, w)
+            if r_has_high(val) and is_word32_row(st, r_word(val)):
+                lo = st["tab"].w_atom_k(st["known_div_rem"], st["var_to_term"], val)
+                hi = st["tab"].w_atom_k(st["known_div_rem"], st["var_to_term"], r_high(val))
+            else:
+                q, _ = quot_rem(val, W32, st, nonneg=True, fold_const=False)
+                lo = st["tab"].w_atom_k(st["known_div_rem"], st["var_to_term"], val)
+                hi = st["tab"].w_atom_k(st["known_div_rem"], st["var_to_term"], q)
+            _remember_store(st, w, c // 4, (lo, hi))
+
+        def _sym_halves(st, x):
+            tab = st["tab"]
+            if r_high(x) == (0, ()) and x[1]:
+                q, rem = quot_rem(x, W32, st, nonneg=True, fold_const=False)
+                return tuple(tab.w_atom_k(st["known_div_rem"], st["var_to_term"], r) for r in (rem, q, (0, ()), (0, ())))
+            if not is_word32_row(st, r_word(x)):
+                self.entail(st["facts"], r_word(x), stream)
+                self.entail(st["facts"], r_sub(r_const(W32 - 1), r_word(x)), stream)
+            return tuple(tab.w_atom_k(st["known_div_rem"], st["var_to_term"], r) for r in (x, r_high(x), (0, ()), (0, ())))
+
+        def _vec_of(bind, nm):
+            if nm == "xmm0":
+                return 0
+            if nm in tab_mod.VECTORS and nm in bind:
+                r = int(bind[nm])
+                if 0 <= r < 32:
+                    return r
+            return None
+
+        def _vec_of_512(bind, nm):
+            if nm in tab_mod.WIDE:
+                return _vec_of(bind, tab_mod.WIDE[nm])
+            if nm == "M" and "M" in bind:
+                m = int(bind["M"])
+                if 0 < m < 8:
+                    return 32 + m
+            return None
+
+        def _sym_number(bind, ex):
+            if ex[0] == "number":
+                return ex[1] if 0 <= ex[1] < (1 << 64) else None
+            if ex[0] == "name" and ex[1] in tab_mod.NUMBERS and ex[1] in bind:
+                v = bind[ex[1]]
+                iv = int(v, 0) if isinstance(v, str) else int(v)
+                return iv % (1 << 64)
+            return None
+
+        def _sym_reg_val(bind, st, ex):
+            if ex[0] == "name" and ex[1] not in tab_mod.NUMBERS:
+                r = bind.get(ex[1], ex[1])
+                if r in st["regs"]:
+                    return st["regs"][r], st["marks"][r]
+                return None
+            if ex[0] == "call" and ex[1] == "on16" and len(ex[2]) == 1 and ex[2][0][0] == "name":
+                r = bind.get(ex[2][0][1], ex[2][0][1])
+                if r in st["regs"]:
+                    x = st["regs"][r]
+                    d = r_sub(x, entry_regs[sp_reg])
+                    if is_arm and (not d[1]) and (d[0] % 16) == 0:
+                        return x, st["marks"][r]
+                    raise Refuse("stack pointer is not shown to be 16-byte aligned for on16")
+            return None
+
+        def _sym_word_addr(bind, st, args):
+            if len(args) == 2:
+                rv = _sym_reg_val(bind, st, args[0])
+                k = _sym_number(bind, args[1])
+                if rv is None or k is None:
+                    raise Refuse("word address needs a base register and displacement")
+                if rv[1]:
+                    raise Refuse("word memory address depends on values kept out of the trace")
+                return r_add(r_signed(rv[0]), r_signed(r_const(k)))
+            if len(args) == 3:
+                rv = _sym_reg_val(bind, st, args[0])
+                k = _sym_number(bind, args[1])
+                iv = _sym_reg_val(bind, st, args[2])
+                if rv is None or k is None or iv is None:
+                    raise Refuse("indexed word address needs base, displacement, and index")
+                if rv[1] or iv[1]:
+                    raise Refuse("word memory address depends on values kept out of the trace")
+                return r_add(r_add(r_signed(rv[0]), r_signed(r_const(k))), r_signed(iv[0]))
+            raise Refuse("word address needs 2 or 3 operands")
+
+        def _frame_span_goals(st, a, size):
+            o = r_sub(a, entry_regs[sp_reg])
+            return [r_sub(a, st["regs"][sp_reg]), r_add(o, r_const(fn["stack"])), r_sub(r_const(-size), o)]
+
+        def _aligned64(a):
+            return (a[0] % 64) == 0 and all((c % 64) == 0 for c in a[1])
+
+        def _cells_apart(o1, o2):
+            return o1[1] == o2[1] and (o1[0] + 64 <= o2[0] or o2[0] + 64 <= o1[0])
+
+        def _sym_spill_load(bind, st, args):
+            a = _sym_word_addr(bind, st, args)
+            fo = r_sub(a, entry_regs[sp_reg])
+            if fo not in st["spill"]:
+                raise Refuse("aligned 512-bit load does not match a saved stack vector")
+            if not _aligned64(a):
+                raise Refuse("aligned 512-bit load address is not 64-byte aligned")
+            for g in _frame_span_goals(st, a, 64):
+                self.entail(st["facts"], g, stream)
+            return st["spill"][fo]
+
+        def _sym_spill_store(bind, st, args, lanes):
+            a = _sym_word_addr(bind, st, args)
+            if not _aligned64(a):
+                raise Refuse("aligned 512-bit store address is not 64-byte aligned")
+            fo = r_sub(a, entry_regs[sp_reg])
+            for g in _frame_span_goals(st, a, 64):
+                self.entail(st["facts"], g, stream)
+            for so in st["stack_mem"]:
+                self.entail(st["facts"], r_sub(r_const(so - 64), fo), stream)
+            st["range"] = None
+            st["frameW"] = {}
+            st["spill"] = {k: v for k, v in st["spill"].items() if _cells_apart(k, fo)}
+            st["spill"][fo] = tuple(lanes)
+
+        def _find_lane(addr, st):
+            for (fj, p), v in st["known_load"].items():
+                if fj in tables_by_j and v < len(addr[1]) and addr[1][v] == 1:
+                    _, _, _, l_idx = tables_by_j[fj]
+                    return v, fj, p, l_idx
+            return None
+
+        def _sym_load_block(st, v, j, p, l_idx, addr):
+            if (p % 8) != 0:
+                raise Refuse("block load through address not aligned in lane table")
+            off = r_sub(addr, r_var(v))
+            self.entail(st["facts"], off, stream)
+            self.entail(st["facts"], r_sub(r_sub(r_scale(64, r_var(l_idx)), r_const(64)), off), stream)
+            vs = [st["nvars"] + i for i in range(16)]
+            st["nvars"] += 16
+            tab = st["tab"]
+            ids = tuple(tab.w_atom(r_var(vi)) for vi in vs)
+            st["known_block"].insert(0, (j, p, off, vs))
+            return ids
+
+        def _sym_mem512(bind, st, op, args):
+            if op == "mem512":
+                a = _sym_word_addr(bind, st, args)
+                fl = _find_lane(a, st)
+                if fl is not None:
+                    return _sym_load_block(st, fl[0], fl[1], fl[2], fl[3], a)
+                fo = r_sub(a, entry_regs[sp_reg])
+                if fo in st["spill"]:
+                    for g in _frame_span_goals(st, a, 64):
+                        self.entail(st["facts"], g, stream)
+                    return st["spill"][fo]
+                return _sym_load_words(st, a, 16)
+            if op == "mem512a":
+                return _sym_spill_load(bind, st, args)
+            raise Refuse(f"512-bit memory op `{op}` not handled")
+
+        def _sym_vec4(bind, st, ex):
+            if ex[0] == "name":
+                r = _vec_of(bind, ex[1])
+                if r is not None and r in st["vec"] and len(st["vec"][r]) >= 4:
+                    return st["vec"][r][:4]
+            return None
+
+        def _sym_vec16(bind, st, ex):
+            if ex[0] == "name":
+                r = _vec_of_512(bind, ex[1])
+                if r is not None and r in st["vec"] and len(st["vec"][r]) == 16:
+                    return st["vec"][r]
+            return None
+
+        def _eval_vec128(ex, bind, st):
+            tab = st["tab"]
+            if ex[0] == "name":
+                l = _sym_vec4(bind, st, ex)
+                if l is None:
+                    raise Refuse("128-bit vector register has unknown words")
+                return l
+            if ex[0] != "call":
+                raise Refuse(f"128-bit vector expression `{ex}` not handled")
+            f, args = ex[1], ex[2]
+            if f == "mem128":
+                return _sym_load_words(st, _sym_word_addr(bind, st, args), 4)
+            if f == "words":
+                if len(args) != 4:
+                    raise Refuse("`words` expects four constants")
+                ks = [_sym_number(bind, a) for a in args]
+                if any(k is None for k in ks):
+                    raise Refuse("`words` operand is not a constant")
+                return tuple(tab.w_atom(r_const(k)) for k in ks)
+            if f == "lanes_of64":
+                if len(args) != 1:
+                    raise Refuse("`lanes_of64` expects one register")
+                rv = _sym_reg_val(bind, st, args[0])
+                if rv is None:
+                    raise Refuse("`lanes_of64` operand is not a general register")
+                return _sym_halves(st, rv[0])
+            if f == "lanes":
+                if len(args) != 4:
+                    raise Refuse("`lanes` expects four lane selections")
+                out = []
+                for a in args:
+                    if a[0] != "lane" or a[2] >= 4:
+                        raise Refuse("invalid lane selector")
+                    vr = _vec_of(bind, a[1])
+                    if vr is None or vr not in st["vec"] or a[2] >= len(st["vec"][vr]):
+                        raise Refuse("lane of unknown vector register")
+                    out.append(st["vec"][vr][a[2]])
+                return tuple(out)
+            if f == "each32":
+                if len(args) != 3 or args[0][0] != "name":
+                    raise Refuse("malformed `each32`")
+                op = args[0][1]
+                x = _sym_vec4(bind, st, args[1])
+                if x is None:
+                    raise Refuse("`each32` source vector has unknown words")
+                y = _sym_vec4(bind, st, args[2])
+                if y is not None:
+                    if op == "add32":
+                        return tuple(tab.w_add(a, b) for a, b in zip(x, y))
+                    if op == "xor32":
+                        return tuple(tab.w_xor(a, b) for a, b in zip(x, y))
+                    if op == "and32":
+                        return tuple(tab.w_and(a, b) for a, b in zip(x, y))
+                    if op == "or32":
+                        if x == y:
+                            return x
+                        turns = tab.or_turns(list(zip(x, y)))
+                        if turns is None:
+                            raise Refuse("vector `or32` is not a word rotation")
+                        return tuple(tab.w_rotr(a, n) for a, n in turns)
+                    raise Refuse(f"128-bit `each32` op `{op}` not handled")
+                n = _sym_number(bind, args[2])
+                if n is None:
+                    raise Refuse("`each32` second operand has unknown words")
+                if op == "ror32":
+                    return tuple(tab.w_rotr(a, n % 32) for a in x)
+                if op == "shl32":
+                    return tuple(tab.w_shl(a, n) for a in x)
+                if op == "shr32":
+                    return tuple(tab.w_shr(a, n) for a in x)
+                raise Refuse(f"128-bit immediate `each32` op `{op}` not handled")
+            if f == "shuffle_bytes" and len(args) == 2:
+                x = _sym_vec4(bind, st, args[0])
+                y = _sym_vec4(bind, st, args[1])
+                if x is None or y is None:
+                    raise Refuse("`shuffle_bytes` vector has unknown words")
+                ks = tab.const_words(y)
+                turn = tab.shuffle_turn(ks) if ks is not None else None
+                if turn is None:
+                    raise Refuse("`shuffle_bytes` is not an 8-bit or 16-bit word rotation")
+                return tuple(tab.w_rotr(a, turn) for a in x)
+            if f in ("sha256msg1", "sha256msg2") and len(args) == 2:
+                x = _sym_vec4(bind, st, args[0])
+                y = _sym_vec4(bind, st, args[1])
+                if x is None or y is None:
+                    raise Refuse(f"`{f}` vector has unknown words")
+                return tab.w_sha256_msg1(x, y) if f == "sha256msg1" else tab.w_sha256_msg2(x, y)
+            if f in ("sha256su1", "sha256rnds2", "sha256h", "sha256h2") and len(args) == 3:
+                x = _sym_vec4(bind, st, args[0])
+                y = _sym_vec4(bind, st, args[1])
+                z = _sym_vec4(bind, st, args[2])
+                if x is None or y is None or z is None:
+                    raise Refuse(f"`{f}` vector has unknown words")
+                if f == "sha256su1":
+                    return tab.w_sha256_su1(x, y, z)
+                if f == "sha256rnds2":
+                    return tab.w_sha256_rnds2(x, y, z)
+                if f == "sha256h":
+                    return tab.w_sha256_h(x, y, z)
+                return tab.w_sha256_h2(x, y, z)
+            if f in ("pick4", "blend4", "blend_halves") and len(args) == 3:
+                x = _sym_vec4(bind, st, args[0])
+                y = _sym_vec4(bind, st, args[1])
+                imm = _sym_number(bind, args[2])
+                if x is None or y is None or imm is None:
+                    raise Refuse(f"`{f}` needs two known vectors and an immediate")
+                if f == "pick4":
+                    return tab_mod.MOVES["pick4"](x, y, imm)
+                if f == "blend4":
+                    return tab_mod.MOVES["blend4"](x, y, imm)
+                if all(((imm // (4 ** k)) % 4) in (0, 3) for k in range(4)):
+                    return tuple(y[k] if ((imm // (4 ** k)) % 4) == 3 else x[k] for k in range(4))
+                raise Refuse("`blend_halves` splits a 32-bit word")
+            raise Refuse(f"128-bit vector op `{f}` not handled")
+
+        def _each512_op(st, op, x, y):
+            tab = st["tab"]
+            if op == "add32":
+                return tuple(tab.w_add(a, b) for a, b in zip(x, y))
+            if op == "xor32":
+                return tuple(tab.w_xor(a, b) for a, b in zip(x, y))
+            if op == "and32":
+                return tuple(tab.w_and(a, b) for a, b in zip(x, y))
+            if op == "ult32":
+                return tuple(tab.w_ult(a, b) for a, b in zip(x, y))
+            raise Refuse(f"512-bit `each32` op `{op}` not handled")
+
+        def _eval_vec512(ex, bind, st):
+            tab = st["tab"]
+            if ex[0] == "name":
+                l = _sym_vec16(bind, st, ex)
+                if l is None:
+                    raise Refuse("512-bit register has unknown lanes")
+                return l
+            if ex[0] != "call":
+                raise Refuse(f"512-bit expression `{ex}` not handled")
+            f, args = ex[1], ex[2]
+            if f == "zeros16" and not args:
+                z = tab.w_atom((0, ()))
+                return (z,) * 16
+            if f == "spread16" and len(args) == 1 and args[0][0] == "call" and args[0][1] == "lane32" and len(args[0][2]) == 1:
+                src = args[0][2][0]
+                if src[0] == "call" and src[1] == "mem32":
+                    ids = _sym_load_words(st, _sym_word_addr(bind, st, src[2]), 1)
+                    return (ids[0],) * 16
+                if src[0] == "call" and src[1] == "low32" and len(src[2]) == 1:
+                    val, _ = eval_table_expr(src[2][0], bind, st)
+                else:
+                    val, _ = eval_table_expr(src, bind, st)
+                w = tab.w_atom_k(st["known_div_rem"], st["var_to_term"], val)
+                return (w,) * 16
+            if f in ("mem512", "mem512a"):
+                return _sym_mem512(bind, st, f, args)
+            if f == "each32" and len(args) == 3 and args[0][0] == "name":
+                op = args[0][1]
+                x = _sym_vec16(bind, st, args[1])
+                if x is None:
+                    raise Refuse("512-bit `each32` source has unknown lanes")
+                if op == "ror32":
+                    n = _sym_number(bind, args[2])
+                    if n is None:
+                        raise Refuse("512-bit `ror32` needs an immediate")
+                    return tuple(tab.w_rotr(a, n % 32) for a in x)
+                b = args[2]
+                if b[0] == "call":
+                    if b[1] == "words16" and len(b[2]) == 1 and b[2][0][0] == "name" and b[2][0][1] in bind:
+                        raw_k = str(bind[b[2][0][1]]).split("#")[0]
+                        n512 = int(raw_k, 0)
+                        ks = [(n512 >> (32 * i)) & M32 for i in range(16)]
+                        if op != "add32":
+                            raise Refuse(f"512-bit constant op `{op}` not handled")
+                        return tuple(tab.w_add_const(a, k) for a, k in zip(x, ks))
+                    y = _sym_mem512(bind, st, b[1], b[2])
+                    return _each512_op(st, op, x, y)
+                y = _sym_vec16(bind, st, b)
+                if y is None:
+                    raise Refuse("512-bit `each32` second operand has unknown lanes")
+                return _each512_op(st, op, x, y)
+            if f == "choose16" and len(args) == 3 and args[1][0] == "call" and args[1][1] == "each32" and len(args[1][2]) == 3:
+                m_vec = _sym_vec16(bind, st, args[0])
+                op_nm = args[1][2][0][1]
+                a_vec = _sym_vec16(bind, st, args[1][2][1])
+                b_vec = _sym_vec16(bind, st, args[1][2][2])
+                c_vec = _sym_vec16(bind, st, args[2])
+                if None in (m_vec, a_vec, b_vec, c_vec):
+                    raise Refuse("`choose16` operand has unknown lanes")
+                new_vec = _each512_op(st, op_nm, a_vec, b_vec)
+                return tuple(tab.w_sel(mv, nv, ov) for mv, nv, ov in zip(m_vec, new_vec, c_vec))
+            if f == "in_quarters" and len(args) == 6:
+                x = _sym_vec16(bind, st, args[0])
+                y = _sym_vec16(bind, st, args[1])
+                picks = [a[1] for a in args[2:] if a[0] == "number" and 0 <= a[1] < 8]
+                if x is None or y is None or len(picks) != 4:
+                    raise Refuse("invalid `in_quarters`")
+                return tab_mod.MOVES["in_quarters"](x, y, *picks)
+            if f == "quarters" and len(args) == 3:
+                x = _sym_vec16(bind, st, args[0])
+                y = _sym_vec16(bind, st, args[1])
+                imm = _sym_number(bind, args[2])
+                if x is None or y is None or imm is None:
+                    raise Refuse("invalid `quarters`")
+                return tab_mod.MOVES["quarters"](x, y, imm)
+            raise Refuse(f"512-bit op `{f}` not handled")
+
+        # ---------------------------------------------------------------
+        # Word-level specification evaluator (`weval` + `ensuresw`)
+        # ---------------------------------------------------------------
+
+        def _r_same_row(facts, a, b):
+            if a == b:
+                return True
+            d1, d2 = r_sub(a, b), r_sub(b, a)
+            return r_plain(facts, d1) and r_plain(facts, d2)
+
+        def _w_id_of(tab, xs):
+            if len(xs) == 1 and xs[0][1] == 1:
+                return xs[0][0]
+            return tab.find(("add", xs))
+
+        def _w_atom_id(tab, st, r):
+            i = tab.find(("atom", r_word(r)))
+            if i is not None:
+                return i
+            w = r_word(r)
+            vi = r_var_idx(w)
+            if vi is not None and vi in st["var_to_term"]:
+                tid = st["var_to_term"][vi]
+                if tid < len(tab.arr):
+                    return tid
+            if (r, W32) in st["div_cache"]:
+                _, rem = st["div_cache"][(r, W32)]
+                return tab.find(("atom", rem))
+            return None
+
+        def _w_quot_of(st, r, m):
+            if all((c % m) == 0 for c in r[1]):
+                return (r[0] // m, _trim(tuple(c // m for c in r[1])))
+            sp = sym_split(st["facts"], r, m, st["word32_vars"])
+            if sp is not None:
+                return sp[0]
+            if (r, m) in st["div_cache"]:
+                return st["div_cache"][(r, m)][0]
+            return None
+
+        def _w_low_of(st, r, m):
+            if all((c % m) == 0 for c in r[1]):
+                return r_const(r[0] % m)
+            if r_plain(st["facts"], r) and r_plain(st["facts"], r_sub(r_const(m - 1), r)):
+                return r
+            if m == W32 and is_word32_row(st, r):
+                return r
+            sp = sym_split(st["facts"], r, m, st["word32_vars"])
+            if sp is not None:
+                return sp[1]
+            if (r, m) in st["div_cache"]:
+                return st["div_cache"][(r, m)][1]
+            return None
+
+        def _w_high_of(st, r):
+            if r_has_high(r) and is_word32_row(st, r_word(r)):
+                return r_high(r)
+            return _w_quot_of(st, r, W32)
+
+        def _w_known_or(st, x, y):
+            if (x, y) in st["or_cache"]:
+                return st["or_cache"][(x, y)]
+            if (y, x) in st["or_cache"]:
+                return st["or_cache"][(y, x)]
+            return None
+
+        def _w_hi_plus(tab, st, r):
+            if 0 < r[0] < W32 and r_plain(st["facts"], (0, r[1])):
+                base = (0, r[1])
+                a = _w_atom_id(tab, st, r)
+                l = _w_atom_id(tab, st, base)
+                hq = _w_high_of(st, base)
+                h = _w_atom_id(tab, st, hq) if hq is not None else None
+                one = tab.find(("atom", r_word(r_const(1))))
+                if None not in (a, l, h, one):
+                    m = tab.find(("ult", a, l))
+                    if m is not None:
+                        h1 = tab.find(("add", merge_add(((h, 1),), ((one, 1),))))
+                        if h1 is not None:
+                            return tab.find(("sel", m, h1, h))
+            return None
+
+        def _w_input_word_id(tab, st, j, k):
+            i = tab.find(("input", j, k))
+            if i is not None:
+                return i
+            if j < len(word_runs):
+                _, r_idx, _ = word_runs[j]
+                fj = _run_at(r_idx, fixeds_list)
+                if fj is not None:
+                    v = st["known_load"].get((fj, 4 * k))
+                    if v is not None:
+                        i2 = _w_atom_id(tab, st, r_var(v))
+                        if i2 is not None:
+                            return i2
+                    if k > 0:
+                        v2 = st["known_load"].get((fj, 4 * (k - 1)))
+                        if v2 is not None:
+                            hq = _w_high_of(st, r_var(v2))
+                            if hq is not None:
+                                return _w_atom_id(tab, st, hq)
+            return None
+
+        def _w_env():
+            we = {}
+            for idx_a, (anm, akind, alen) in enumerate(fn["args"]):
+                r_idx = reg_to_idx[arg_regs[idx_a]]
+                if akind == "number":
+                    we[anm] = ("num", r_var(r_idx))
+                elif akind == "bytes" and alen in arg_reg_idx_by_name:
+                    we[anm] = ("region", r_idx, arg_reg_idx_by_name[alen])
+                elif akind in ("fixed", "inout"):
+                    we[anm] = ("run", r_idx, int(alen))
+            # Match Core.lean `wenv = lanesW c ++ wenvIn c`: lane tables take precedence over fixed runs
+            for j_f, (fnm, _, cnt8, l_idx) in tables_by_j.items():
+                we[fnm] = ("lanes", j_f, cnt8, l_idx)
+            return we
+
+        WOWN = frozenset(("word", "counter", "lo", "hi", "words", "number.le"))
+
+        def _w_num_op(st, op, x, y):
+            f = st["facts"]
+            if op == "+":
+                return ("num", r_add(x, y))
+            if op == "-":
+                d = r_sub(x, y)
+                return ("num", d) if r_plain(f, d) else None
+            if op == "==":
+                if _r_same_row(f, x, y):
+                    return ("bool", True)
+                if r_plain(f, r_sub(r_sub(x, y), r_const(1))) or r_plain(f, r_sub(r_sub(y, x), r_const(1))):
+                    return ("bool", False)
+                return None
+            if op == "<":
+                if r_plain(f, r_sub(r_sub(y, x), r_const(1))):
+                    return ("bool", True)
+                if r_plain(f, r_sub(x, y)):
+                    return ("bool", False)
+                return None
+            if op == ">=":
+                if r_plain(f, r_sub(x, y)):
+                    return ("bool", True)
+                if r_plain(f, r_sub(r_sub(y, x), r_const(1))):
+                    return ("bool", False)
+                return None
+            if op == "<=":
+                if r_plain(f, r_sub(y, x)):
+                    return ("bool", True)
+                if r_plain(f, r_sub(r_sub(x, y), r_const(1))):
+                    return ("bool", False)
+                return None
+            if op == ">":
+                if r_plain(f, r_sub(r_sub(x, y), r_const(1))):
+                    return ("bool", True)
+                if r_plain(f, r_sub(y, x)):
+                    return ("bool", False)
+                return None
+            return None
+
+        def _w_int_bin(op, a, b):
+            if op == "+": return ("int", a + b)
+            if op == "-": return ("int", a - b) if a >= b else None
+            if op == "*": return ("int", a * b)
+            if op == "/" and b > 0: return ("int", a // b)
+            if op == "%" and b > 0: return ("int", a % b)
+            if op == "|": return ("int", a | b)
+            if op == "&": return ("int", a & b)
+            if op == "^": return ("int", a ^ b)
+            if op == "<<" and 0 <= b < 64: return ("int", a << b)
+            if op == ">>" and 0 <= b < 64: return ("int", a >> b)
+            if op == "==": return ("bool", a == b)
+            if op == "!=": return ("bool", a != b)
+            if op == "<": return ("bool", a < b)
+            if op == "<=": return ("bool", a <= b)
+            if op == ">": return ("bool", a > b)
+            if op == ">=": return ("bool", a >= b)
+            return None
+
+        def _weval(tab, st, wenv, e, fuel=1000):
+            if fuel <= 0 or not isinstance(e, tuple) or not e:
+                return None
+            tag = e[0]
+            if tag == "num":
+                n = int(e[1])
+                return ("int", n) if n >= 0 else None
+            if tag == "name":
+                return wenv.get(e[1])
+            if tag == "bin":
+                op = e[1]
+                xv = _weval(tab, st, wenv, e[2], fuel - 1)
+                yv = _weval(tab, st, wenv, e[3], fuel - 1)
+                if xv is None or yv is None:
+                    return None
+                tx, ty = xv[0], yv[0]
+                if tx == "int" and ty == "int":
+                    return _w_int_bin(op, xv[1], yv[1])
+                if tx == "word" and ty == "word":
+                    if op == "+":
+                        return ("word", merge_add(xv[1], yv[1]))
+                    if op == "^":
+                        a, b = _w_id_of(tab, xv[1]), _w_id_of(tab, yv[1])
+                        if a is not None and b is not None:
+                            i = tab.find(("xor", min(a, b), max(a, b)))
+                            return ("word", ((i, 1),)) if i is not None else None
+                        return None
+                    if op == "&":
+                        a, b = _w_id_of(tab, xv[1]), _w_id_of(tab, yv[1])
+                        if a is not None and b is not None:
+                            i = tab.find(("band", min(a, b), max(a, b)))
+                            return ("word", ((i, 1),)) if i is not None else None
+                        return None
+                    return None
+                if tx == "word" and ty == "int":
+                    n = yv[1]
+                    a = _w_id_of(tab, xv[1])
+                    if a is None:
+                        return None
+                    if op == ">>>" and 0 <= n <= 32:
+                        i = tab.find(("rotr", a, n))
+                        return ("word", ((i, 1),)) if i is not None else None
+                    if op == ">>" and 0 <= n < 32:
+                        i = tab.find(("shr", a, n))
+                        return ("word", ((i, 1),)) if i is not None else None
+                    if op == "<<" and 0 <= n < 32:
+                        i = tab.find(("shl", a, n))
+                        return ("word", ((i, 1),)) if i is not None else None
+                    return None
+                if tx == "num" and ty == "int":
+                    r, m = xv[1], yv[1]
+                    if op == "*" and m >= 0:
+                        return ("num", r_scale(m, r))
+                    if op == "%" and m > 0:
+                        lo = _w_low_of(st, r, m)
+                        return ("num", lo) if lo is not None else None
+                    if op == "/" and m > 0:
+                        q = _w_quot_of(st, r, m)
+                        return ("num", q) if q is not None else None
+                    if op == "|":
+                        if m == 0 and r_plain(st["facts"], r):
+                            return ("num", r)
+                        kv = _w_known_or(st, r, r_const(m))
+                        if kv is not None:
+                            return ("num", kv)
+                        for jbits in (8, 16, 32):
+                            powj = 1 << jbits
+                            if m >= powj and r_plain(st["facts"], r) and r_plain(st["facts"], r_sub(r_const(powj - 1), r)):
+                                if (m % powj) == 0:
+                                    return ("num", r_add(r, r_const(m)))
+                                kv2 = _w_known_or(st, r, r_const(m % powj))
+                                if kv2 is not None:
+                                    return ("num", r_add(kv2, r_const(m - (m % powj))))
+                                break
+                        return None
+                    return _w_num_op(st, op, r, r_const(m))
+                if tx == "int" and ty == "num":
+                    m, r = xv[1], yv[1]
+                    if op == "*" and m >= 0:
+                        return ("num", r_scale(m, r))
+                    if op == "|":
+                        return ("num", r) if (m == 0 and r_plain(st["facts"], r)) else None
+                    return _w_num_op(st, op, r_const(m), r)
+                if tx == "num" and ty == "num":
+                    if op == "|":
+                        kv = _w_known_or(st, xv[1], yv[1])
+                        return ("num", kv) if kv is not None else None
+                    return _w_num_op(st, op, xv[1], yv[1])
+                if tx == "counter" and ty == "int":
+                    if op == "+" and yv[1] >= 0:
+                        return ("counter", xv[1] if yv[1] == 0 else r_add(xv[1], r_const(yv[1])))
+                    return None
+                if tx == "list" and ty == "list" and op == "++":
+                    return ("list", xv[1] + yv[1])
+                return None
+            if tag == "ifx":
+                cv = _weval(tab, st, wenv, e[1], fuel - 1)
+                if cv == ("bool", True):
+                    return _weval(tab, st, wenv, e[2], fuel - 1)
+                if cv == ("bool", False):
+                    return _weval(tab, st, wenv, e[3], fuel - 1)
+                return None
+            if tag == "index":
+                av = _weval(tab, st, wenv, e[1], fuel - 1)
+                iv = _weval(tab, st, wenv, e[2], fuel - 1)
+                if av is None or iv is None:
+                    return None
+                if av[0] == "list" and iv[0] == "int":
+                    k = iv[1]
+                    return av[1][k] if 0 <= k < len(av[1]) else None
+                if av[0] == "run" and iv[0] == "int":
+                    k = iv[1]
+                    return ("pbyte", av[1], k) if 0 <= k < av[2] else None
+                if av[0] == "part" and iv[0] == "int":
+                    k = iv[1]
+                    return ("pbyte", av[1], av[2] + k) if 0 <= k < av[3] else None
+                if av[0] == "lanes" and iv[0] == "int":
+                    k = iv[1]
+                    return ("lane", av[1], 8 * k, av[3]) if 0 <= k < av[2] else None
+                if av[0] == "lane" and iv[0] in ("int", "num"):
+                    off_r = r_const(64 * iv[1]) if iv[0] == "int" else r_scale(64, iv[1])
+                    if iv[0] == "int" and iv[1] < 0:
+                        return None
+                    for bj, bc, boff, bvs in st["known_block"]:
+                        if bj == av[1] and bc == av[2] and _r_same_row(st["facts"], boff, off_r):
+                            ws = []
+                            for bvi in bvs:
+                                tid = tab.find(("atom", r_word(r_var(bvi))))
+                                if tid is None:
+                                    return None
+                                ws.append(("word", ((tid, 1),)))
+                            return ("list", ws)
+                    return None
+                return None
+            if tag == "call":
+                fn_nm = e[1]
+                vs = []
+                for ae in e[2:]:
+                    v = _weval(tab, st, wenv, ae, fuel - 1)
+                    if v is None:
+                        return None
+                    vs.append(v)
+                if fn_nm == "len" and len(vs) == 1:
+                    v0 = vs[0]
+                    if v0[0] == "region": return ("num", r_var(v0[2]))
+                    if v0[0] == "span": return ("num", v0[3])
+                    if v0[0] == "run": return ("int", v0[2])
+                    if v0[0] == "part": return ("int", v0[3])
+                    if v0[0] == "list": return ("int", len(v0[1]))
+                    if v0[0] == "wbytes": return ("int", 4 * len(v0[1]))
+                    return None
+                if fn_nm in WOWN:
+                    if len(vs) != 1:
+                        return None
+                    v0 = vs[0]
+                    if v0[0] == "int":
+                        n = v0[1]
+                        if fn_nm == "word" and n >= 0:
+                            i = tab.find(("atom", r_word(r_const(n))))
+                            return ("word", ((i, 1),)) if i is not None else None
+                        if fn_nm == "counter" and n >= 0:
+                            return ("counter", r_const(n))
+                        return None
+                    if v0[0] == "num":
+                        r = v0[1]
+                        if not r_plain(st["facts"], r):
+                            return None
+                        if fn_nm == "word":
+                            i = _w_atom_id(tab, st, r)
+                            return ("word", ((i, 1),)) if i is not None else None
+                        if fn_nm == "counter":
+                            return ("counter", r)
+                        return None
+                    if v0[0] == "word" and fn_nm == "word":
+                        return v0
+                    if v0[0] == "counter":
+                        r = v0[1]
+                        if fn_nm == "counter":
+                            return v0
+                        if fn_nm == "lo":
+                            i = _w_atom_id(tab, st, r)
+                            return ("word", ((i, 1),)) if i is not None else None
+                        if fn_nm == "hi":
+                            hq = _w_high_of(st, r)
+                            if hq is not None:
+                                i = _w_atom_id(tab, st, hq)
+                                if i is not None:
+                                    return ("word", ((i, 1),))
+                            i2 = _w_hi_plus(tab, st, r)
+                            return ("word", ((i2, 1),)) if i2 is not None else None
+                        return None
+                    if v0[0] == "run":
+                        r_idx, n = v0[1], v0[2]
+                        if fn_nm == "words" and (n % 4) == 0:
+                            j = _run_at(r_idx, word_runs)
+                            if j is None:
+                                return None
+                            ws = []
+                            for k in range(n // 4):
+                                i = _w_input_word_id(tab, st, j, k)
+                                if i is None:
+                                    return None
+                                ws.append(("word", ((i, 1),)))
+                            return ("list", ws)
+                        return None
+                    if v0[0] == "part":
+                        r_idx, off, n = v0[1], v0[2], v0[3]
+                        if fn_nm == "words" and (off % 4) == 0 and (n % 4) == 0:
+                            j = _run_at(r_idx, word_runs)
+                            if j is None:
+                                return None
+                            ws = []
+                            for k in range(n // 4):
+                                i = _w_input_word_id(tab, st, j, off // 4 + k)
+                                if i is None:
+                                    return None
+                                ws.append(("word", ((i, 1),)))
+                            return ("list", ws)
+                        if fn_nm == "number.le" and n == 8:
+                            fj = _run_at(r_idx, fixeds_list)
+                            if fj is not None and (fj, off) in st["known_load"]:
+                                return ("num", r_var(st["known_load"][(fj, off)]))
+                        return None
+                    if v0[0] == "wbytes":
+                        ids = v0[1]
+                        if fn_nm == "words":
+                            return ("list", [("word", ((i, 1),)) for i in ids])
+                        if fn_nm == "number.le" and len(ids) == 2:
+                            a, b = ids
+                            if (a < len(tab.arr) and b < len(tab.arr)
+                                    and tab.arr[a][0] == "atom" and tab.arr[b][0] == "atom"):
+                                r1, r2 = tab.arr[a][1], tab.arr[b][1]
+                                if is_word32_row(st, r1) and is_word32_row(st, r2):
+                                    return ("num", r_add(r1, r_scale(W32, r2)))
+                        return None
+                    if v0[0] == "list" and v0[1] and v0[1][0][0] == "pbyte":
+                        r0, off0 = v0[1][0][1], v0[1][0][2]
+                        n = len(v0[1])
+                        if (fn_nm == "words" and (off0 % 4) == 0 and (n % 4) == 0
+                                and all(b[0] == "pbyte" and b[1] == r0 and b[2] == off0 + idx_b for idx_b, b in enumerate(v0[1]))):
+                            j = _run_at(r0, word_runs)
+                            if j is None:
+                                return None
+                            ws = []
+                            for k in range(n // 4):
+                                i = _w_input_word_id(tab, st, j, off0 // 4 + k)
+                                if i is None:
+                                    return None
+                                ws.append(("word", ((i, 1),)))
+                            return ("list", ws)
+                    return None
+                if any(f0 == fn_nm for f0, _, _ in st["known_held"]) or any(f0 == fn_nm for f0, _, _ in st["known_held_b"]) or any(f0 == fn_nm for f0, _, _ in st["known_use"]):
+                    ks = _flat_keys(tab, vs)
+                    if ks is not None:
+                        for f0, ks0, ids0 in st["known_held"]:
+                            if f0 == fn_nm and _same_keys(st["facts"], ks0, ks):
+                                return ("list", [("word", ((i, 1),)) for i in ids0])
+                        for f0, ks0, ids0 in st["known_held_b"]:
+                            if f0 == fn_nm and _same_keys(st["facts"], ks0, ks):
+                                return ("wbytes", ids0)
+                        for f0, ks0, h0 in st["known_use"]:
+                            if f0 == fn_nm and _same_keys(st["facts"], ks0, ks):
+                                return ("use", h0)
+                if fn_nm in self.defs:
+                    dparams, dbody = self.defs[fn_nm]
+                    if len(dparams) == len(vs):
+                        return _weval(tab, st, dict(zip(dparams, vs)), dbody, fuel - 1)
+                return None
+            if tag == "list":
+                out = []
+                for it in e[1:]:
+                    v = _weval(tab, st, wenv, it, fuel - 1)
+                    if v is None:
+                        return None
+                    out.append(v)
+                return ("list", out)
+            if tag == "let":
+                v = _weval(tab, st, wenv, e[2], fuel - 1)
+                if v is None:
+                    return None
+                ne = dict(wenv)
+                ne[e[1]] = v
+                return _weval(tab, st, ne, e[3], fuel - 1)
+            if tag == "each":
+                lo_v = _weval(tab, st, wenv, e[3], fuel - 1)
+                hi_v = _weval(tab, st, wenv, e[4], fuel - 1)
+                if lo_v is None or hi_v is None or lo_v[0] != "int" or hi_v[0] != "int":
+                    return None
+                out = []
+                for idx_i in range(lo_v[1], hi_v[1]):
+                    ne = dict(wenv)
+                    ne[e[2]] = ("int", idx_i)
+                    v = _weval(tab, st, ne, e[1], fuel - 1)
+                    if v is None:
+                        return None
+                    out.append(v)
+                return ("list", out)
+            if tag == "with":
+                av = _weval(tab, st, wenv, e[1], fuel - 1)
+                if av is None or av[0] != "list":
+                    return None
+                lst = list(av[1])
+                puts = [_weval(tab, st, wenv, pe, fuel - 1) for pe in e[2:]]
+                if any(p is None for p in puts) or (len(puts) % 2) != 0:
+                    return None
+                for k in range(0, len(puts), 2):
+                    iv, xv = puts[k], puts[k + 1]
+                    if iv[0] != "int" or not (0 <= iv[1] < len(lst)):
+                        return None
+                    lst[iv[1]] = xv
+                return ("list", lst)
+            if tag == "slice":
+                av = _weval(tab, st, wenv, e[1], fuel - 1)
+                lo_v = _weval(tab, st, wenv, e[2], fuel - 1)
+                hi_v = _weval(tab, st, wenv, e[3], fuel - 1)
+                if av is None or lo_v is None or hi_v is None:
+                    return None
+                if lo_v[0] == "int" and hi_v[0] == "int":
+                    i, j = lo_v[1], hi_v[1]
+                    if av[0] == "run" and 0 <= i <= j <= av[2]:
+                        return ("part", av[1], i, j - i)
+                    if av[0] == "part" and 0 <= i <= j <= av[3]:
+                        return ("part", av[1], av[2] + i, j - i)
+                    if av[0] == "region" and 0 <= i <= j and r_plain(st["facts"], r_sub(r_var(av[2]), r_const(j))):
+                        return ("part", av[1], i, j - i)
+                    if av[0] == "list" and 0 <= i <= j <= len(av[1]):
+                        return ("list", av[1][i:j])
+                    if av[0] == "wbytes" and 0 <= i <= j and (i % 4) == 0 and (j % 4) == 0 and j // 4 <= len(av[1]):
+                        return ("wbytes", av[1][i // 4:j // 4])
+                return None
+            if tag == "record":
+                fvs = {}
+                for fpair in e[1:]:
+                    v = _weval(tab, st, wenv, fpair[1], fuel - 1)
+                    if v is None:
+                        return None
+                    fvs[fpair[0]] = v
+                return ("record", fvs)
+            if tag == "field":
+                rv = _weval(tab, st, wenv, e[1], fuel - 1)
+                if rv is not None and rv[0] == "record":
+                    return rv[1].get(e[2])
+                return None
+            if tag == "thenumber":
+                which, xnm, lo_e, hi_e, cond_e = e[1], e[2], e[3], e[4], e[5]
+                lo_v = _weval(tab, st, wenv, lo_e, fuel - 1)
+                hi_v = _weval(tab, st, wenv, hi_e, fuel - 1)
+                if lo_v is None or hi_v is None or lo_v[0] != "int" or hi_v[0] != "int":
+                    return None
+                rng = list(range(lo_v[1], hi_v[1]))
+                if which == "greatest":
+                    rng.reverse()
+                for n in rng:
+                    ne = dict(wenv)
+                    ne[xnm] = ("int", n)
+                    cv = _weval(tab, st, ne, cond_e, fuel - 1)
+                    if cv == ("bool", True):
+                        return ("int", n)
+                    if cv != ("bool", False):
+                        return None
+                return None
+            if tag == "thepower":
+                which, xnm, cond_e = e[1], e[2], e[3]
+                rng = [1 << k for k in range(64)]
+                if which == "greatest":
+                    rng.reverse()
+                for n in rng:
+                    ne = dict(wenv)
+                    ne[xnm] = ("int", n)
+                    cv = _weval(tab, st, ne, cond_e, fuel - 1)
+                    if cv == ("bool", True):
+                        return ("int", n)
+                    if cv != ("bool", False):
+                        return None
+                return None
+            return None
+
+        def _flat_key(tab, v):
+            tv = v[0]
+            if tv == "int": return ("num", r_const(v[1]))
+            if tv == "num": return ("num", v[1])
+            if tv == "counter": return ("counter", v[1])
+            if tv == "list":
+                ids = []
+                for it in v[1]:
+                    if it[0] != "word":
+                        return None
+                    tid = _w_id_of(tab, it[1])
+                    if tid is None:
+                        return None
+                    ids.append(tid)
+                return ("words", tuple(ids))
+            if tv == "lane": return ("lane", v[1], v[2], v[3])
+            if tv == "use": return ("use", v[1])
+            if tv == "span": return ("span", v[1], v[2], v[3])
+            if tv == "region": return ("span", v[1], r_const(0), r_var(v[2]))
+            if tv == "part": return ("span", v[1], r_const(v[2]), r_const(v[3]))
+            return None
+
+        def _flat_keys(tab, vs):
+            out = []
+            for v in vs:
+                k = _flat_key(tab, v)
+                if k is None:
+                    return None
+                out.append(k)
+            return tuple(out)
+
+        def _key_ok(k, nvars, ntab):
+            tk = k[0]
+            if tk in ("num", "counter"): return len(k[1][1]) <= nvars
+            if tk == "words": return all(i < ntab for i in k[1])
+            if tk == "lane": return True
+            if tk == "span": return len(k[2][1]) <= nvars and len(k[3][1]) <= nvars
+            if tk == "use": return k[1] < nvars
+            return False
+
+        def _same_key(facts, a, b):
+            if a[0] != b[0]:
+                return False
+            tk = a[0]
+            if tk in ("num", "counter"):
+                return _r_same_row(facts, a[1], b[1])
+            if tk == "span":
+                return a[1] == b[1] and _r_same_row(facts, a[2], b[2]) and _r_same_row(facts, a[3], b[3])
+            return a == b
+
+        def _same_keys(facts, ks1, ks2):
+            return len(ks1) == len(ks2) and all(_same_key(facts, a, b) for a, b in zip(ks1, ks2))
+
+        def _place_wenv(pl, st_p):
+            we = _w_env()
+            for nm, rn in pl["names"]:
+                we[nm] = ("num", st_p["regs"][rn])
+            return we
+
+        def _lanes_shown(pl, st_p):
+            tab = st_p["tab"]
+            we = _place_wenv(pl, st_p)
+            for vregs, x_var, f_nm, arg_es in pl.get("lanes", ()):
+                call_e = ("call", f_nm) + tuple(arg_es)
+                for i in range(16):
+                    ne = dict(we)
+                    ne[x_var] = ("int", i)
+                    res = _weval(tab, st_p, ne, call_e)
+                    if res is None or res[0] != "list" or len(res[1]) != len(vregs):
+                        raise Refuse(f"at place {pl['pc']} vector lanes `{f_nm}` do not match lane {i}")
+                    for vr, wv in zip(vregs, res[1]):
+                        if wv[0] != "word":
+                            raise Refuse(f"at place {pl['pc']} lane {i} is not a word")
+                        tid = _w_id_of(tab, wv[1])
+                        vec_v = st_p["vec"].get(vr)
+                        if tid is None or vec_v is None or i >= len(vec_v) or vec_v[i] != tid:
+                            raise Refuse(f"at place {pl['pc']} vector register v{vr} lane {i} does not match `{f_nm}`")
+
+        def _cells_shown(pl, st_p):
+            tab = st_p["tab"]
+            we = _place_wenv(pl, st_p)
+            for off_c, x_var, c_expr in pl.get("cells", ()):
+                c_row = r_add(r_sub(st_p["regs"][sp_reg], entry_regs[sp_reg]), r_const(off_c))
+                held = st_p["spill"].get(c_row)
+                if held is None or len(held) != 16:
+                    raise Refuse(f"at place {pl['pc']} stack cell at +{off_c} is not stored")
+                for i in range(16):
+                    ne = dict(we)
+                    ne[x_var] = ("int", i)
+                    wv = _weval(tab, st_p, ne, c_expr)
+                    if wv is None or wv[0] != "word":
+                        raise Refuse(f"at place {pl['pc']} stack cell +{off_c} lane {i} is not a word")
+                    tid = _w_id_of(tab, wv[1])
+                    if tid is None or tid != held[i]:
+                        raise Refuse(f"at place {pl['pc']} stack cell +{off_c} lane {i} does not match")
+
+        def _suppose_lanes_cells(pl, st_p):
+            tab = st_p["tab"]
+            we = _place_wenv(pl, st_p)
+            for vregs, x_var, f_nm, arg_es in pl.get("lanes", ()):
+                if f_nm == "len" or f_nm in WOWN:
+                    raise Refuse("a place's lanes must name a specification definition")
+                lane_keys = []
+                for i in range(16):
+                    ne = dict(we)
+                    ne[x_var] = ("int", i)
+                    vs = [_weval(tab, st_p, ne, ae) for ae in arg_es]
+                    if any(v is None for v in vs):
+                        raise Refuse(f"at place {pl['pc']} lane {i} arguments not followed")
+                    ks = _flat_keys(tab, vs)
+                    if ks is None or not all(_key_ok(k, st_p["nvars"], len(tab.arr)) for k in ks):
+                        raise Refuse(f"at place {pl['pc']} lane {i} keys not followed")
+                    lane_keys.append(ks)
+                m = len(vregs)
+                base_u = st_p["nvars"]
+                st_p["nvars"] += 16 * m
+                made = [tab.w_atom(r_var(base_u + u)) for u in range(16 * m)]
+                for k_r, vr in enumerate(vregs):
+                    st_p["vec"][vr] = tuple(made[m * i + k_r] for i in range(16))
+                for i in range(16):
+                    st_p["known_held"].insert(0, (f_nm, lane_keys[i], tuple(made[m * i + k_r] for k_r in range(m))))
+            for off_c, x_var, c_expr in pl.get("cells", ()):
+                c_row = r_add(r_sub(st_p["regs"][sp_reg], entry_regs[sp_reg]), r_const(off_c))
+                ids = []
+                for i in range(16):
+                    ne = dict(we)
+                    ne[x_var] = ("int", i)
+                    wv = _weval(tab, st_p, ne, c_expr)
+                    if wv is None or wv[0] != "word":
+                        raise Refuse(f"at place {pl['pc']} general stack cell +{off_c} lane {i} not followed")
+                    tid = _w_id_of(tab, wv[1])
+                    if tid is None or tid >= len(tab.arr):
+                        raise Refuse(f"at place {pl['pc']} general stack cell +{off_c} lane {i} not in table")
+                    ids.append(tid)
+                st_p["spill"][c_row] = tuple(ids)
+
+        def _sym_know(st_r, limit=200):
+            for _ in range(limit):
+                if stream.pos >= len(stream.items):
+                    break
+                nxt_it = stream.items[stream.pos]
+                if nxt_it[0] == "k":
+                    stream.pos += 1
+                    g = nxt_it[1]
+                    if len(g[1]) > st_r["nvars"]:
+                        raise Refuse("`k` row speaks of an unknown variable not in use")
+                    self.entail(st_r["facts"], g, stream)
+                    st_r["facts"].append(g)
+                elif nxt_it[0] == "t" and nxt_it[1] == "next":
+                    stream.pos += 1
+                    break
+                else:
+                    break
+
+        def _check_ensuresw(st_r, run_nm, part, val_e):
+            _sym_know(st_r)
+            if not (isinstance(val_e, tuple) and len(val_e) == 3 and val_e[0] == "call" and val_e[1] == "bytes_of"):
+                raise Refuse("`ensuresw` value must be `(call bytes_of ...)`")
+            w_idx = None
+            out_n = 0
+            for idx_o, (onm, _, cnt) in enumerate(outs_list):
+                if onm == run_nm:
+                    w_idx = idx_o
+                    out_n = cnt
+                    break
+            if w_idx is None:
+                raise Refuse(f"`ensuresw` names unknown output run `{run_nm}`")
+            first = part[0] if part is not None else 0
+            size = part[1] if part is not None else out_n
+            res = _weval(st_r["tab"], st_r, _w_env(), val_e[2])
+            if res is None or res[0] != "list":
+                raise Refuse("the specification's words are not followed on the terms the function made")
+            lst = res[1]
+            if (first % 4) != 0 or len(lst) * 4 != size or first + size > out_n:
+                raise Refuse("a word of the run is not known to hold what the specification says")
+            for k_w, wv in enumerate(lst):
+                if wv[0] != "word":
+                    raise Refuse("a word of the run is not known to hold what the specification says")
+                tid = _w_id_of(st_r["tab"], wv[1])
+                if tid is None or st_r["wroteW"].get((w_idx, first // 4 + k_w)) != tid:
+                    raise Refuse("a word of the run is not known to hold what the specification says")
 
         def eval_table_expr(ex, bind, st):
             tag = ex[0]
@@ -1250,8 +3089,15 @@ class Verifier:
                     raw = r_add(a, b)
                     if r_plain(st["facts"], raw) and r_plain(st["facts"], r_sub(r_const(M64), raw)):
                         return raw, (ma or mb)
+                    ub_raw = row_word32_upper(st, raw)
+                    if ub_raw is not None and ub_raw <= M64:
+                        return raw, (ma or mb)
                     res = r_add(r_signed(a), r_signed(b))
                     plain_ok = r_plain(st["facts"], res) and r_plain(st["facts"], r_sub(r_const(M64), res))
+                    if not plain_ok:
+                        ub_res = row_word32_upper(st, res)
+                        if ub_res is not None and ub_res <= M64:
+                            return res, (ma or mb)
                     if (not plain_ok) and stream.pos < len(stream.items) and stream.items[stream.pos][0] == "t" and stream.items[stream.pos][1] == "wrap":
                         stream.pos += 1
                         return sym_low(r_add(a, b), M64 + 1, st), (ma or mb)
@@ -1302,30 +3148,8 @@ class Verifier:
                         return a, (ma or mb)
                     if (not a[1]) and a[0] == 0:
                         return b, (ma or mb)
-                    def _row_upper(r):
-                        if r[0] < 0:
-                            return None
-                        tot = r[0]
-                        for vi, c in enumerate(r[1]):
-                            if c == 0:
-                                continue
-                            if c < 0:
-                                return None
-                            vr = r_var(vi)
-                            if not r_plain(st["facts"], vr):
-                                return None
-                            ub = None
-                            for f in st["facts"]:
-                                nz = [(i, fc) for i, fc in enumerate(f[1]) if fc != 0]
-                                if len(nz) == 1 and nz[0] == (vi, -1):
-                                    if ub is None or f[0] < ub:
-                                        ub = f[0]
-                            if ub is None:
-                                return None
-                            tot += c * ub
-                        return tot
                     def _disjoint_or(x, y):
-                        u = _row_upper(y)
+                        u = r_row_upper(st["facts"], y, st["word32_vars"])
                         if u is None or u < 0 or (u == 0 and not any(c != 0 for c in x[1])):
                             return False
                         for jbits in range(1, 64):
@@ -1353,6 +3177,8 @@ class Verifier:
                     k = bk
                     if not a[1]:
                         return r_const(((a[0] & M64) << k) & M64), (ma or mb)
+                    if k <= 32 and is_word32_row(st, a):
+                        return r_scale(1 << k, a), (ma or mb)
                     lim = 1 << (64 - k)
                     bound_goal = r_sub(r_const(lim - 1), a)
                     if r_plain(st["facts"], bound_goal):
@@ -1409,7 +3235,27 @@ class Verifier:
                     return sym_low(a, 1 << 32, st), ma
                 if op == "low8":
                     a, ma = eval_table_expr(args[0], bind, st)
+                    if args[0][0] == "name":
+                        rn = bind.get(args[0][1], args[0][1])
+                        if rn in st["low_clean"]:
+                            ma = False
                     return sym_low(a, 256, st), ma
+                if op == "sub8":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    b, mb = eval_table_expr(args[1], bind, st)
+                    yb = sym_low(b, 256, st)
+                    return sym_low(r_sub(r_add(a, r_const(256)), yb), 256, st), (ma or mb)
+                if op == "setlow8":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    b, mb = eval_table_expr(args[1], bind, st)
+                    q = sym_quot(a, 256, st)
+                    bl = sym_low(b, 256, st)
+                    return r_add(r_scale(256, q), bl), (ma or mb)
+                if op == "data":
+                    a, ma = eval_table_expr(args[0], bind, st)
+                    if not data_bytes or a[1] or not (0 <= a[0] < len(data_bytes)):
+                        raise Refuse("`data(I)` out of range or function has no read-only data")
+                    return r_add(data_var_row, r_const(a[0])), ma
                 if op == "equal":
                     a, ma = eval_table_expr(args[0], bind, st)
                     b, mb = eval_table_expr(args[1], bind, st)
@@ -1423,14 +3269,30 @@ class Verifier:
                     msz = sz_map[op]
                     base, mb = eval_table_expr(args[0], bind, st)
                     disp, md = eval_table_expr(args[1], bind, st)
-                    addr = r_add(base, disp)
+                    addr = r_add(r_signed(base), r_signed(disp))
                     if mb or md:
                         raise Refuse(f"{op} address depends on values kept out of the trace")
-                    if msz == 8:
-                        off_row = r_sub(addr, entry_regs[sp_reg])
-                        if not off_row[1] and off_row[0] in st["stack_mem"]:
-                            return st["stack_mem"][off_row[0]]
-                    # Match `addr = buf_base[b] + idx` with `0 <= idx + k < buf_len[b]` for k=0..msz-1
+                    # 1. Stack frame (8-byte `stack_mem` or word-backed `frameW`)
+                    off_row = r_sub(addr, entry_regs[sp_reg])
+                    if not off_row[1]:
+                        sp_c = _cur_sp_off(st)
+                        if sp_c is not None and sp_c <= off_row[0] and off_row[0] + msz <= 0:
+                            if msz == 8:
+                                if off_row[0] in st["stack_mem"]:
+                                    return st["stack_mem"][off_row[0]]
+                                if all((off_row[0] + 4 * k) in st["frameW"] for k in range(2)):
+                                    return _sym_load_word_scalar(st, addr, 8), True
+                                raise Refuse("a read of the frame where nothing was written")
+                            if msz == 4:
+                                return _sym_load_word_scalar(st, addr, 4), True
+                            raise Refuse("a read of the frame that is not 4 or 8 bytes")
+                    # 2. Read-only file data
+                    doff = _data_off(addr)
+                    if doff is not None:
+                        if msz in (1, 4, 8) and 0 <= doff and doff + msz <= len(data_bytes):
+                            return r_const(_data_word(doff, msz)), False
+                        raise Refuse("a read of the file's read-only data out of bounds")
+                    # 3. Byte-addressed `bytes` regions
                     def counted_from(bbase):
                         vs = [i for i, cf in enumerate(bbase[1]) if cf != 0]
                         return (bbase[0] == 0 and len(vs) == 1 and bbase[1][vs[0]] == 1
@@ -1449,10 +3311,49 @@ class Verifier:
                             acc = r_add(acc, r_scale(mul, bk_row))
                             mul *= 256
                         return acc, (not st["buf_clean"][bnm])
+                    # 4. In-out / out runs (4B & 8B word loads; pure write-only `out` is refused!)
+                    mo = _find_in_runs(addr, outs_list)
+                    if mo is not None:
+                        if msz in (4, 8):
+                            return _sym_load_word_scalar(st, addr, msz), True
+                        raise Refuse("a read of a run given only to write")
+                    # 5. Fixed read-only word runs (`mem32` -> word scalar; `mem64` -> `known_load` + `mbounds`)
+                    mf = _find_in_runs(addr, fixeds_list)
+                    if mf is not None:
+                        fj, foff, fcnt = mf
+                        fnm = fixeds_list[fj][0]
+                        fmk = fnm in fn["hidden"]
+                        if msz == 4:
+                            return _sym_load_word_scalar(st, addr, 4), fmk
+                        if msz == 8 and (not foff[1]) and 0 <= foff[0] and foff[0] + 8 <= fcnt:
+                            c = foff[0]
+                            if (fj, c) in st["known_load"]:
+                                return r_var(st["known_load"][(fj, c)]), fmk
+                            v = st["nvars"]
+                            st["nvars"] += 1
+                            vr = r_var(v)
+                            st["known_load"][(fj, c)] = v
+                            st["known_load_of"][v] = (fj, c)
+                            st["facts"].append(vr)
+                            st["facts"].append(r_sub(r_const(M64), vr))
+                            for m_nm, m_off, m_bnd in fn.get("mbounds", ()):
+                                if m_nm == fnm and m_off == c:
+                                    st["facts"].append(r_sub(r_const(m_bnd - 1), vr))
+                            return vr, fmk
+                        raise Refuse("a read of a fixed run that is not 4 or 8 bytes within it")
+                    # 6. Read-only value arrays
+                    if msz in (4, 8):
+                        for _, r_idx, _, _, _ in val_arrays_list:
+                            d = r_sub(addr, r_var(r_idx))
+                            if not d[1] and d[0] >= 0 and (d[0] % 4) == 0:
+                                return _sym_load_word_scalar(st, addr, msz), True
                     raise Refuse(f"{op} address does not fall in any contract buffer or stack slot")
                 if op == "on16":
+                    rv = _sym_reg_val(bind, st, ex)
+                    if rv is not None:
+                        return rv
                     return eval_table_expr(args[0], bind, st)
-                raise Refuse(f"unsupported table op `{op}` in verify2")
+                raise Refuse(f"table op `{op}` not handled in verify2")
             raise Refuse(f"unsupported table expr {ex} in verify2")
 
         def _each_of(f_name, nargs):
@@ -1600,6 +3501,10 @@ class Verifier:
                     for fct in pl["facts"]:
                         self.check_fact(fct, penv, st, stream)
                     _range_shown(pl, penv, st)
+                    if pl.get("lanes") or pl.get("cells"):
+                        _sym_know(st)
+                        _lanes_shown(pl, st)
+                        _cells_shown(pl, st)
                     if origin_place == pc and pl["decreases"] is not None:
                         new_dec = self.eval_sexpr(pl["decreases"], penv, st, stream)
                         self.entail(st["facts"], r_sub(r_sub(origin_dec, new_dec), r_const(1)), stream)
@@ -1610,6 +3515,9 @@ class Verifier:
                         for o in st.get("place_entry_fq", frozenset()):
                             if o not in st["stack_mem"] or st["stack_mem"][o][1]:
                                 raise Refuse(f"at loop place clean frame slot {o} may depend on values kept out of the trace")
+                        for vr in st.get("place_entry_vec_intact", frozenset()):
+                            if vr not in st["vec_intact"]:
+                                raise Refuse(f"at loop place callee-saved vector register v{vr} was modified")
                         return
                     # Enter place once as fresh symbolic state, keeping path facts, `eqs`, and `neq` (matching Core.lean `Sym.general`)
                     pst = clone(st)
@@ -1617,8 +3525,13 @@ class Verifier:
                     pst["eqs"] = list(st["eqs"])
                     pst["neq"] = list(st["neq"])
                     pst["wrote"] = []
+                    pst["wroteW"] = {}
+                    pst["intact"] = set()
+                    pst["vec"] = {}
+                    pst["spill"] = {}
                     pst["range"] = None
                     pst["place_entry_fq"] = frozenset(o for o, (_, mk) in st["stack_mem"].items() if not mk)
+                    pst["place_entry_vec_intact"] = frozenset(st["vec_intact"])
                     base_v = pst["nvars"]
                     pst["nvars"] += len(reg_names)
                     for r_idx, r in enumerate(reg_names):
@@ -1635,11 +3548,12 @@ class Verifier:
                     for fct in pl["facts"]:
                         self.assume_fact(fct, penv2, pst, stream)
                     _suppose_range(pl, penv2, pst)
+                    _suppose_lanes_cells(pl, pst)
                     dec_val = self.eval_sexpr(pl["decreases"], penv2, pst, stream) if pl["decreases"] is not None else None
                     if dec_val is not None:
                         self.entail(pst["facts"], dec_val, stream)
-                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=(visited_places - jstack) | {pc},
-                             base_st=clone(pst), jstack=frozenset(), jdone={})
+                    run_path(pc, pst, origin_place=pc, origin_dec=dec_val, visited_places=(visited_places - jstack),
+                             base_st=clone(pst), jstack=frozenset(), jdone={}, at_entry=True)
                     return
 
                 if pc not in fn["instrs"]:
@@ -1754,6 +3668,57 @@ class Verifier:
                                 next_v = visited_places if (nxt != origin_place and nxt not in jstack) else (visited_places - {nxt})
                                 run_path(nxt, st_w, origin_place, origin_dec, next_v, base_st, jstack, jdone)
                             return
+                        # Vector / 512-bit / mask / above128 statements
+                        if lhs[0] == "name" and lhs[1] == "above128":
+                            if rhs != ("name", "unknown"):
+                                raise Refuse("`above128` assignment not handled")
+                            st["vec"] = {r: (v[:4] if r < 16 else v) for r, v in st["vec"].items()}
+                            st["vec_intact"] = {r for r in st["vec_intact"] if r >= 16}
+                            continue
+                        if lhs[0] == "name" and lhs[1] in tab_mod.VECTORS:
+                            vr = _vec_of(bind, lhs[1])
+                            if vr is None:
+                                raise Refuse("vector register assignment out of range")
+                            lanes = _eval_vec128(rhs, bind, st)
+                            if len(lanes) != 4:
+                                raise Refuse("128-bit vector assignment did not yield 4 words")
+                            st["vec"][vr] = tuple(lanes)
+                            st["vec_intact"].discard(vr)
+                            continue
+                        if lhs[0] == "name" and (lhs[1] in tab_mod.WIDE or lhs[1] in tab_mod.MASKS):
+                            vr = _vec_of_512(bind, lhs[1])
+                            if vr is None:
+                                raise Refuse("512-bit/mask register assignment out of range")
+                            lanes = _eval_vec512(rhs, bind, st)
+                            if len(lanes) != 16:
+                                raise Refuse("512-bit vector assignment did not yield 16 lanes")
+                            st["vec"][vr] = tuple(lanes)
+                            st["vec_intact"].discard(vr)
+                            continue
+                        if lhs[0] == "call" and lhs[1] == "mem128":
+                            lanes = _sym_vec4(bind, st, rhs)
+                            if lanes is None:
+                                raise Refuse("128-bit store from unknown vector register")
+                            addr = _sym_word_addr(bind, st, lhs[2])
+                            _sym_store_words(st, addr, lanes, 4)
+                            continue
+                        if lhs[0] == "call" and lhs[1] == "mem512":
+                            lanes = _sym_vec16(bind, st, rhs)
+                            if lanes is None:
+                                raise Refuse("512-bit store from unknown vector register")
+                            addr = _sym_word_addr(bind, st, lhs[2])
+                            _sym_store_words(st, addr, lanes, 16)
+                            continue
+                        if lhs[0] == "call" and lhs[1] == "mem512a":
+                            lanes = _sym_vec16(bind, st, rhs)
+                            if lanes is None:
+                                raise Refuse("aligned 512-bit store from unknown vector register")
+                            _sym_spill_store(bind, st, lhs[2], lanes)
+                            continue
+                        low_is_clean = False
+                        if rhs[0] == "call" and rhs[1] == "setlow8" and len(rhs[2]) == 2:
+                            _, mb_low = eval_table_expr(rhs[2][1], bind, st)
+                            low_is_clean = not mb_low
                         val, mk = eval_table_expr(rhs, bind, st)
                         if lhs[0] == "name":
                             v = bind.get(lhs[1], lhs[1])
@@ -1764,16 +3729,34 @@ class Verifier:
                             else:
                                 st["regs"][rname] = val
                                 st["marks"][rname] = mk
+                                if low_is_clean:
+                                    st["low_clean"].add(rname)
+                                else:
+                                    st["low_clean"].discard(rname)
+                        elif lhs[0] == "call" and lhs[1] == "mem32":
+                            base, mb = eval_table_expr(lhs[2][0], bind, st)
+                            disp, md = eval_table_expr(lhs[2][1], bind, st)
+                            if mb or md:
+                                raise Refuse("mem32 store address depends on values kept out of the trace")
+                            _sym_store4(st, r_add(r_signed(base), r_signed(disp)), val)
                         elif lhs[0] == "call" and lhs[1] == "mem64":
                             base, mb = eval_table_expr(lhs[2][0], bind, st)
                             disp, md = eval_table_expr(lhs[2][1], bind, st)
                             if mb or md:
                                 raise Refuse("mem64 store address depends on values kept out of the trace")
-                            off_row = r_sub(r_add(base, disp), entry_regs[sp_reg])
-                            if off_row[1]:
-                                raise Refuse("non-constant stack store offset")
-                            st["stack_mem"][off_row[0]] = (val, mk)
-                            st["min_sp"] = min(st["min_sp"], off_row[0])
+                            addr = r_add(r_signed(base), r_signed(disp))
+                            off_row = r_sub(addr, entry_regs[sp_reg])
+                            if not off_row[1]:
+                                o = off_row[0]
+                                st["spill"] = {}
+                                st["stack_mem"][o] = (val, mk)
+                                st["frameW"] = {c: v for c, v in st["frameW"].items() if c + 4 <= o or o + 8 <= c}
+                                st["min_sp"] = min(st["min_sp"], o)
+                            else:
+                                mo = _find_in_runs(addr, outs_list)
+                                if mo is None:
+                                    raise Refuse("mem64 store address does not fall in stack frame or output buffer")
+                                _sym_store8_out(st, mo[0], mo[2], mo[1], val)
                         elif lhs[0] == "call" and lhs[1] == "mem8":
                             base, mb = eval_table_expr(lhs[2][0], bind, st)
                             disp, md = eval_table_expr(lhs[2][1], bind, st)
@@ -1790,6 +3773,17 @@ class Verifier:
                                     matched_out = (onm, r_sub(addr, obase))
                                     break
                             if matched_out is None:
+                                if addr == st["regs"][sp_reg]:
+                                    # `symTouchFrame`: stack probe write to `[rsp]` (e.g. `mov byte ptr [rsp], 0`)
+                                    fo = r_sub(addr, entry_regs[sp_reg])
+                                    for g in _frame_span_goals(st, addr, 1):
+                                        self.entail(st["facts"], g, stream)
+                                    for so in sorted(st["stack_mem"].keys()):
+                                        self.entail(st["facts"], r_sub(r_const(so - 1), fo), stream)
+                                    st["spill"] = {}
+                                    st["frameW"] = {}
+                                    st["range"] = None
+                                    continue
                                 raise Refuse("mem8 store address does not fall in any output buffer")
                             onm, off = matched_out
                             self.entail(st["facts"], off, stream)
@@ -2045,8 +4039,13 @@ class Verifier:
                                 raise Refuse("at return link register x30 may depend on values kept out of the trace")
                         for r in callee_saved:
                             self.entail_eq(st["facts"], st["regs"][r], entry_regs[r], stream)
+                        for vr in callee_saved_vec:
+                            if vr not in st["vec_intact"]:
+                                raise Refuse(f"at return callee-saved vector register v{vr} was modified")
 
                         def _check_ret_body(st_r):
+                            for run_nm, part, val_e in fn["ensuresw"]:
+                                _check_ensuresw(st_r, run_nm, part, val_e)
                             for run_nm, lo_e, hi_e, val_e in fn["ensures"]:
                                 if run_nm not in st_r["out_len"]:
                                     raise Refuse(f"ensures names unknown out buffer `{run_nm}`")
@@ -2098,7 +4097,28 @@ class Verifier:
                         _check_ret_split(st)
                         return
                     else:
-                        raise Refuse(f"unsupported table stmt `{kind}` in verify2")
+                        raise Refuse(f"table stmt `{kind}` not handled in verify2")
+                # Mirror Core.lean `settle` when `rsp` has a non-constant offset from entry `rsp` (e.g. `and rsp, -64`)
+                sp_off_now = r_sub(st["regs"][sp_reg], entry_regs[sp_reg])
+                if sp_off_now[1]:
+                    cur_sig = (st["regs"][sp_reg], tuple(sorted(st["stack_mem"].keys())), tuple(st["spill"].keys()))
+                    if st.get("stack_at") != cur_sig:
+                        goals = [
+                            r_add(sp_off_now, r_const(fn["stack"])),
+                            r_scale(-1, sp_off_now),
+                        ]
+                        for so in sorted(st["stack_mem"].keys()):
+                            goals.append(r_sub(r_const(so), sp_off_now))
+                        for sp_k in st["spill"]:
+                            goals.append(r_sub(sp_k, sp_off_now))
+                        missing = [g for g in goals if not r_plain(st["facts"], g)]
+                        for g in missing:
+                            self.entail(st["facts"], g, stream)
+                        st["facts"].extend(missing)
+                        st["frameW"] = {}
+                        st["stack_at"] = cur_sig
+                else:
+                    st["stack_at"] = None
                 pc = next_pc
 
         run_path(0, state, at_entry=True)
