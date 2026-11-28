@@ -98,11 +98,14 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
     (a place not in it: all it does not name); `seqs`: the specification's sequences (statement.sequences);
     `kinds`, `counted`, `name`: for a line of lanes (lane_line)."""
     reg_list = REGISTERS if regs is None else regs
-    out, named, also, lanes, at, hdr_idx, saw_dec = [], [], [], [], None, None, False
+    out, named, also, lanes, at, hdr_idx, saw_dec, in_check = [], [], [], [], None, None, False, False
     for raw in places_text.split("\n"):
         line = raw.split("//")[0].strip()
         if not line: continue
         if line == "}":
+            if in_check:
+                in_check = False
+                continue
             if at is not None and not saw_dec:
                 # A `place { ... }` without `decreases` is an acyclic mid-function join point.
                 # Unlike loop places, named registers unchanged since the enclosing scope (e.g. a loop counter
@@ -114,12 +117,17 @@ def places(places_text, keep={}, seqs={}, kinds={}, counted={}, name="", marked=
                 out += lanes
             at, hdr_idx, saw_dec = None, None, False
             continue
+        cm = re.fullmatch(r"check \+(0x[0-9a-fA-F]+) \{", line)
+        if cm:
+            out.append(f"check {int(cm.group(1), 16)}")
+            in_check = True
+            continue
         m = re.fullmatch(r"place \+(0x[0-9a-fA-F]+) \{", line)
         if m:
             at = int(m.group(1), 16)
             hdr_idx = len(out)
             out.append(f"place {at}")
-            named, also, lanes, saw_dec = [], [], [], False
+            named, also, lanes, saw_dec, in_check = [], [], [], False, False
             continue
         m = re.fullmatch(r"keep ((?:\w+ ?)+)", line)              # registers a place names and keeps all the same
         if m: also += m.group(1).split(); continue

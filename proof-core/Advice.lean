@@ -313,6 +313,7 @@ def exploreAt (ctx : Ctx) (livePrefix : Array Nat) : Nat → Sym → List Seen �
     | none => fun _ => .error s!"at +{pc}\nrefused: no instruction at {pc}"
     | some i => do
       let s ← tagPc pc (symClears ctx pc CLEARS s)
+      tagPc pc (runChecks ctx pc s)
       let nexts ← tagPc pc (symNext ctx s i)
       eachState (onwardAt ctx livePrefix base seen jstack visited (exploreAt ctx livePrefix fuel)) jdone nexts
 

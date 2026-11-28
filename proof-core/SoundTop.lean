@@ -1520,6 +1520,7 @@ theorem explore_sound {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
     | some i =>
       simp only [explore, hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
+      obtain ⟨_, r_ck, _, h⟩ := V.bind_ok h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
       have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
           ReliedJoin world ctx p s0 jd base.nvars ρb →
@@ -2041,13 +2042,13 @@ theorem verifyOne_sound_rec (world : List Program) (pieces : List Piece) (defs :
     (hp : findProgram world f.name = some p) (hc : p.code = f.code) (hf : p.fits)
     (I : ∀ name c, done.lookup name = some c → ∃ q, findProgram world name = some q ∧ q.fits ∧ Meets world pieces c defs q)
     (hpass : verdictOne
-      { code := f.code, contract := f.contract, defs := defs, places := f.places,
+      { code := f.code, contract := f.contract, defs := defs, places := f.places, checks := f.checks,
         callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
         selfName := if f.contract.decreases.isSome then some f.name else none,
         pieces := pieces, piece := f.piece } f.proof = none) :
     Meets world pieces f.contract defs p := by
   let ctx : Ctx :=
-    { code := f.code, contract := f.contract, defs := defs, places := f.places,
+    { code := f.code, contract := f.contract, defs := defs, places := f.places, checks := f.checks,
       callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
       selfName := if f.contract.decreases.isSome then some f.name else none,
       pieces := pieces, piece := f.piece }
@@ -2113,7 +2114,7 @@ theorem verdictFrom_sound (world : List Program) (pieces : List Piece) (defs : L
     split at h
     · cases h
     · let ctx : Ctx :=
-        { code := f.code, contract := f.contract, defs := defs, places := f.places,
+        { code := f.code, contract := f.contract, defs := defs, places := f.places, checks := f.checks,
           callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
           selfName := if f.contract.decreases.isSome then some f.name else none,
           pieces := pieces, piece := f.piece }
@@ -3809,6 +3810,7 @@ theorem explore_trace {world : List Program} {ctx : Ctx} {p : Program} {a0 b0 : 
     | some i =>
       simp only [explore, hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
+      obtain ⟨_, r_ck, _, h⟩ := V.bind_ok h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
       have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
           ReliedJoinTrace world ctx p a0 b0 jd base.nvars ρab ρbb →
@@ -4757,6 +4759,7 @@ theorem explore_runsT {world : List Program} {ctx : Ctx} {p : Program} {s0 : Sta
       simp only [hl] at h
       obtain ⟨sc, r0, hc, h⟩ := V.bind_ok h
       have hsc := symClears_empty he CLEARS hc; rw [hsc] at h
+      obtain ⟨_, r_ck, _, h⟩ := V.bind_ok h
       obtain ⟨nexts, r1, e1, h⟩ := V.bind_ok h
       have honward_J : ∀ nx ∈ nexts, ∀ jd jd' it it',
           ReliedJoinT world ctx p s0 jd base.nvars ρb →
@@ -5005,7 +5008,7 @@ theorem verdictFrom_trace_sound (world : List Program) (pieces : List Piece) (de
     split at h
     · cases h
     · let ctx : Ctx :=
-        { code := f.code, contract := f.contract, defs := defs, places := f.places,
+        { code := f.code, contract := f.contract, defs := defs, places := f.places, checks := f.checks,
           callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done,
           selfName := if f.contract.decreases.isSome then some f.name else none,
           pieces := pieces, piece := f.piece }

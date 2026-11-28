@@ -31,6 +31,7 @@ inductive PlaceCont where
   | genJoin (fuel : Nat) (base : Sym) (seen : List Seen) (jstack : List Nat) (p : Place) (first : Sym)
   | arriveLoop (p : Place) (d : Row)
   | genLoop (fuel : Nat) (seen : List Seen) (p : Place) (origNext : Sym)
+  | checkDone
 
 /-- One pure continuation frame of the incremental verifier driver. -/
 inductive StepTask where
@@ -66,14 +67,19 @@ def itemsAt (arr : Array Item) (pos : Nat) : Items :=
 `rangeShown` (byte-by-byte via `filledBytes` so each output byte checkpoints independently). -/
 def stepFinishPlace (ctx : Ctx) (st : DriverState) (arr : Array Item) (p : Place) (s : Sym) (cont : PlaceCont)
     (tail : List StepTask) : StepOut :=
+  match cont with
+  | .checkDone => .next { st with stack := tail }
+  | _ =>
   let laneErr := match cont with
     | .arriveJoin _ | .genJoin .. => s!"at the join place {p.pc} the vector registers are not shown to hold what the place says"
     | .arriveLoop .. => s!"at the place {p.pc} the vector registers are not shown to hold what the place says, on coming there again"
     | .genLoop .. => s!"at the place {p.pc} the vector registers are not shown to hold what the place says"
+    | .checkDone => ""
   let cellErr := match cont with
     | .arriveJoin _ | .genJoin .. => s!"at the join place {p.pc} a cell of the frame is not shown to hold what the place says"
     | .arriveLoop .. => s!"at the place {p.pc} a cell of the frame is not shown to hold what the place says, on coming there again"
     | .genLoop .. => s!"at the place {p.pc} a cell of the frame is not shown to hold what the place says"
+    | .checkDone => ""
   if !(p.lanes.all (lanesShown ctx p s)) then .err laneErr
   else if !(p.cells.all (cellShown ctx p s)) then .err cellErr
   else
@@ -136,7 +142,14 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
         match symClears ctx pc CLEARS s it with
         | .error msg => .err msg
         | .ok (s', it') =>
-          .next { st with next := it'.next, stack := .afterClears (fuel - 1) base seen jstack s' pc i :: tail }
+          let checks := ctx.checks.filter fun c => c.pc == pc
+          match checks.find? fun c => !(c.names.all fun nr => nr.2 < ctx.nreg) with
+          | some bad => .err s!"at the check {bad.pc} a register is out of range"
+          | none =>
+            let checkTasks := checks.map fun c =>
+              StepTask.placeFacts { pc := c.pc, names := c.names, keep := [], facts := c.facts, decreases := .num 0 }
+                (checkEnv ctx c s'.reg) s' c.facts .checkDone
+            .next { st with next := it'.next, stack := checkTasks ++ (.afterClears (fuel - 1) base seen jstack s' pc i :: tail) }
     | .afterClears fuel base seen jstack s pc i =>
       match symNext ctx s i it with
       | .error msg => .err (if withPc && msg.startsWith "need entail\n" then s!"{msg}at {pc}\n" else msg)
@@ -297,6 +310,7 @@ def stepOnce (ctx : Ctx) (st : DriverState) (arr : Array Item) (withPc : Bool :=
     | .afterRange _p s cont =>
       match cont with
       | .arriveJoin _ => .next { st with stack := tail }
+      | .checkDone => .next { st with stack := tail }
       | .genJoin fuel base seen jstack p' first =>
         match generalizeJoin ctx p' first it with
         | .error msg => .err msg
@@ -397,7 +411,7 @@ def finishRest (ctx : Ctx) (items : Array Item) (afterFns : List Fn) (doneAfter 
             let selfName := if f.contract.decreases.isSome then some f.name else none
             let fctx : Ctx := {
               ctx with
-              code := f.code, contract := f.contract, places := f.places,
+              code := f.code, contract := f.contract, places := f.places, checks := f.checks,
               callees := callees, selfName := selfName, piece := f.piece,
               advice := {}
             }
@@ -426,7 +440,7 @@ def main (args : List String) : IO UInt32 := do
         IO.println s!"refused: two functions are named {f.name}\nin {f.name}"; return 1
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
-      let baseCtx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
+      let baseCtx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, checks := f.checks, callees := callees,
                              selfName := selfName, pieces := job.pieces, piece := f.piece }
       let ctx : Ctx := { baseCtx with advice := { specMeta := specMetaFor baseCtx } }
       match locateRefusal ctx f.proof with
@@ -478,7 +492,7 @@ def main (args : List String) : IO UInt32 := do
           say s!"refused: two functions are named {f.name}\nin {f.name}\n.end\n"; return 0
         let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
         let selfName := if f.contract.decreases.isSome then some f.name else none
-        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, callees := callees,
+        let ctx : Ctx := { code := f.code, contract := f.contract, defs := job.defs, places := f.places, checks := f.checks, callees := callees,
                            selfName := selfName, pieces := job.pieces, piece := f.piece }
         if f.name == name then
           if !ctx.contract.callingOk then

@@ -313,6 +313,7 @@ def parse_proof(path):
     proofs = {}
     cur = None
     cur_place = None
+    cur_check = None
     cur_p = None
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
@@ -322,14 +323,25 @@ def parse_proof(path):
             parts = line.split()
             kw = parts[0]
             if kw == "for":
-                cur = {"places": {}, "items": []}
+                cur = {"places": {}, "checks": {}, "items": []}
                 proofs[parts[1]] = cur
                 cur_place = None
+                cur_check = None
             elif kw in ("place", "join"):
                 pc = int(parts[1])
                 cur_place = {"pc": pc, "names": [], "facts": [], "keep": set(), "marked": set(),
                              "decreases": None, "wrote": None, "is_join": (kw == "join")}
                 cur["places"][pc] = cur_place
+                cur_check = None
+            elif kw == "check":
+                pc = int(parts[1])
+                cur_check = {"pc": pc, "names": [], "facts": []}
+                cur["checks"].setdefault(pc, []).append(cur_check)
+                cur_place = None
+            elif kw == "name" and cur_check is not None:
+                cur_check["names"].append((parts[1], parts[2]))
+            elif kw == "fact" and cur_check is not None:
+                cur_check["facts"].append(parse_sexpr(line[len("fact "):]))
             elif kw == "name" and cur_place is not None:
                 cur_place["names"].append((parts[1], parts[2]))
             elif kw == "fact" and cur_place is not None:
@@ -350,18 +362,22 @@ def parse_proof(path):
                 cur_place["wrote"] = (run_nm, ex[2], ex[1][1], ex[1][2:], kw == "wrote_pre")
             elif kw == "t":
                 cur_place = None
+                cur_check = None
                 tag = parts[1]
                 arg = int(parts[2]) if len(parts) > 2 else 0
                 cur["items"].append(("t", tag, arg))
             elif kw == "k":
                 cur_place = None
+                cur_check = None
                 nums = [int(x) for x in parts[1:]]
                 cur["items"].append(("k", (nums[0], _trim(tuple(nums[1:])))))
             elif kw == "p":
                 cur_place = None
+                cur_check = None
                 cur_p = ("p", [int(x) for x in parts[1:]], [])
             elif kw == "r":
                 cur_place = None
+                cur_check = None
                 nums = [int(x) for x in parts[1:]]
                 row = (nums[0], _trim(tuple(nums[1:])))
                 if cur_p is None:
@@ -1087,6 +1103,7 @@ class Verifier:
 
         stream = Stream(proof["items"])
         places = proof["places"]
+        checks = proof.get("checks", {})
 
         def clone(st):
             return {
@@ -1528,6 +1545,15 @@ class Verifier:
 
                 if pc not in fn["instrs"]:
                     raise Refuse(f"pc {pc} has no instruction")
+                for chk in checks.get(pc, ()):
+                    chk_st = clone(st)
+                    cenv = dict(env)
+                    for nm, rn in chk["names"]:
+                        if rn not in chk_st["regs"]:
+                            raise Refuse(f"at check {pc} register {rn} is out of range")
+                        cenv[nm] = chk_st["regs"][rn]
+                    for fct in chk["facts"]:
+                        self.check_fact(fct, cenv, chk_st, stream)
                 nxt, row_text = fn["instrs"][pc]
                 ins_toks = tab_mod.parse_row(row_text)
                 row, bind = tab_mod.find(self.heads, ins_toks)

@@ -544,6 +544,14 @@ structure Place where
   isJoin : Bool := false          -- true for an acyclic mid-function join place (no `decreases`, shared across sibling paths)
   deriving Inhabited
 
+/-- A non-generalizing assertion checked at `pc` before executing the instruction there: registers, flags,
+stack slots, trace marks, and written ranges stay intact while each `fact` is shown from the current state. -/
+structure Check where
+  pc : Nat
+  names : List (String × Nat)
+  facts : List SExpr
+  deriving Inhabited
+
 /-- What a prover's helper may say where a proof that is still being written has run out: the rows it
 would try to show next, before an `ensures` of a run of words and before a call. The verifier's program
 gives none. Nothing is concluded from these rows: they are only printed (`popKnow`). -/
@@ -559,6 +567,7 @@ structure Ctx where
   contract : Contract
   defs : List Def
   places : List Place := []                     -- the maker's: where the paths of loops are cut
+  checks : List Check := []                     -- non-generalizing assertions checked before the instruction at `pc`
   callees : List (String × Contract) := []      -- the functions this one calls, each with its contract
   selfName : Option String := none              -- this function's name when direct self-recursion is allowed
   advice : Advice := {}                         -- a prover's helper's; the verifier's program leaves it empty
@@ -5781,6 +5790,21 @@ def onward (ctx : Ctx) (base : Sym) (seen : List Seen) (jstack : List Nat)
           let _ ← go g0 (⟨p, d, { first with q := q0 }⟩ :: seen) [] [] g0 pc'
           pure jdone
 
+def checkEnv (ctx : Ctx) (c : Check) (value : Nat → Row) : List (String × SVal) :=
+  c.names.map (fun (n, r) => (n, SVal.lin (value r))) ++ symEnv ctx.contract
+
+/-- Verify every `fact` of a non-generalizing `check` at `c.pc`, leaving the symbolic state intact. -/
+def runCheck (ctx : Ctx) (s : Sym) (c : Check) : V Unit :=
+  if !(c.names.all fun nr => nr.2 < ctx.nreg) then
+    refuse s!"at the check {c.pc} a register is out of range"
+  else do
+    let _ ← fold (establish ctx (checkEnv ctx c s.reg)) s c.facts
+    pure ()
+
+/-- Verify all non-generalizing `check` blocks attached to `pc`. -/
+def runChecks (ctx : Ctx) (pc : Nat) (s : Sym) : V Unit :=
+  each (runCheck ctx s) (ctx.checks.filter fun c => c.pc == pc)
+
 /-- Every path from `pc`: each to the function's return, a previously verified join place, or an enclosing
 loop place. Returns the updated list of join places verified in the current scope `base`. -/
 def explore (ctx : Ctx) : Nat → Sym → List Seen → List Nat → List JoinEntry → Sym → Nat → V (List JoinEntry)
@@ -5790,6 +5814,7 @@ def explore (ctx : Ctx) : Nat → Sym → List Seen → List Nat → List JoinEn
     | none => refuse s!"no instruction at {pc}"
     | some i => do
       let s ← symClears ctx pc CLEARS s
+      runChecks ctx pc s
       let nexts ← symNext ctx s i
       eachState (onward ctx base seen jstack (explore ctx fuel)) jdone nexts
 
@@ -5860,6 +5885,7 @@ structure Fn where
   contract : Contract := { args := [], returns := none, stack := 0 }
   piece : Option Nat := none
   places : List Place := []
+  checks : List Check := []
   proof : List Item := []
 
 /-- The functions one after another, `done` being those already shown, each with its contract. A call is
@@ -5872,7 +5898,7 @@ def verdictFrom (pieces : List Piece) (defs : List Def) : List (String × Contra
     else
       let callees := if f.contract.decreases.isSome then (f.name, f.contract) :: done else done
       let selfName := if f.contract.decreases.isSome then some f.name else none
-      match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, callees := callees,
+      match verdict { code := f.code, contract := f.contract, defs := defs, places := f.places, checks := f.checks, callees := callees,
                       selfName := selfName, pieces := pieces, piece := f.piece } f.proof with
       | some why => some s!"{why}\nin {f.name}"
       | none => verdictFrom pieces defs ((f.name, f.contract) :: done) more

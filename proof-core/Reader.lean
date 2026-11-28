@@ -44,6 +44,7 @@ structure Job where
   pieces : List Piece := []         -- the read-only data of the object files, in the statement's order (numbered from 0)
   defs : List Def := []
   cur : Option String := none       -- in the proof: the function the lines are for
+  inCheck : Bool := false           -- true when reading `name`/`fact` lines of a `check` block
   starts : List Nat := []
   startRows : List Row := []
   steps : List Step := []
@@ -106,11 +107,17 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     | some name => do
       let fns ← t.fns.mapM fun g => if g.name == name then f g else pure g
       pure { t with fns := fns }
-  let inPlace (f : Place → Place) : Except String Job := onCur fun g =>
-    -- a line of a place is of the place last begun
-    match g.places.reverse with
-    | p :: before => pure { g with places := before.reverse ++ [f p] }
-    | [] => throw s!"outside a place: {line}"
+  let inPlace (f : Place → Place) : Except String Job :=
+    if t.inCheck then throw s!"outside a place: {line}"
+    else onCur fun g =>
+      -- a line of a place is of the place last begun
+      match g.places.reverse with
+      | p :: before => pure { g with places := before.reverse ++ [f p] }
+      | [] => throw s!"outside a place: {line}"
+  let inCheckFn (f : Check → Check) : Except String Job := onCur fun g =>
+    match g.checks.reverse with
+    | c :: before => pure { g with checks := before.reverse ++ [f c] }
+    | [] => throw s!"outside a check: {line}"
   match (words line).head? with
   | some kind =>
     if inProof && statementKinds.contains kind then throw s!"refused: a line of the statement in the proof: {line}"
@@ -242,23 +249,39 @@ def Job.line (table : Array TRow) (inProof : Bool) (t : Job) (line : String) : E
     let params := more.takeWhile (· ≠ "=")
     pure { t with defs := t.defs ++ [⟨name, params, ← readSExpr (rest line (3 + params.length))⟩] }
   | ["for", name] =>
-    if t.fns.any (fun g => g.name == name) then pure { t with cur := some name }
+    if t.fns.any (fun g => g.name == name) then pure { t with cur := some name, inCheck := false }
     else throw s!"refused: the proof speaks of {name}, which is no function of the statement"
-  | ["place", pc] => onCur fun g => match pc.toNat? with
-    | some pc =>
-      if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
-      else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0 }] }
-    | none => throw s!"cannot read {line}"
-  | ["join", pc] => onCur fun g => match pc.toNat? with
-    | some pc =>
-      if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
-      else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0, isJoin := true }] }
-    | none => throw s!"cannot read {line}"
-  | ["name", name, reg] => do let r ← regOrFail reg; inPlace fun p => { p with names := p.names ++ [(name, r)] }
+  | ["place", pc] => do
+    let t' ← onCur fun g => match pc.toNat? with
+      | some pc =>
+        if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
+        else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0 }] }
+      | none => throw s!"cannot read {line}"
+    pure { t' with inCheck := false }
+  | ["join", pc] => do
+    let t' ← onCur fun g => match pc.toNat? with
+      | some pc =>
+        if g.places.any (fun p => p.pc == pc) then throw s!"refused: two places at {pc}"
+        else pure { g with places := g.places ++ [{ pc := pc, names := [], keep := [], facts := [], decreases := .num 0, isJoin := true }] }
+      | none => throw s!"cannot read {line}"
+    pure { t' with inCheck := false }
+  | ["check", pc] => do
+    let t' ← onCur fun g => match pc.toNat? with
+      | some pc =>
+        pure { g with checks := g.checks ++ [{ pc := pc, names := [], facts := [] }] }
+      | none => throw s!"cannot read {line}"
+    pure { t' with inCheck := true }
+  | ["name", name, reg] => do
+    let r ← regOrFail reg
+    if t.inCheck then inCheckFn fun c => { c with names := c.names ++ [(name, r)] }
+    else inPlace fun p => { p with names := p.names ++ [(name, r)] }
   | "keep" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with keep := p.keep ++ rs }
   | "marked" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with marked := p.marked ++ rs }
   | "marked_result" :: regs => do let rs ← regs.mapM regOrFail; inPlace fun p => { p with markedResult := p.markedResult ++ rs }
-  | "fact" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with facts := p.facts ++ [e] }
+  | "fact" :: _ => do
+    let e ← readSExpr (rest line 1)
+    if t.inCheck then inCheckFn fun c => { c with facts := c.facts ++ [e] }
+    else inPlace fun p => { p with facts := p.facts ++ [e] }
   | "decreases" :: _ => do let e ← readSExpr (rest line 1); inPlace fun p => { p with decreases := e }
   | "lane" :: x :: more => do
     -- lane X REG … = (call F THING …): in each lane X, the words of the vector registers are what F gives
