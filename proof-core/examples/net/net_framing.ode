@@ -1,0 +1,372 @@
+// Verified Network & Binary Framing Parsers in 100% pure High-Level Ode (zero raw assembly):
+//   1. RFC 8446 §5.1 TLS Record Layer header & bounds validator (`tls_record_next`)
+//   2. RFC 6520 §4 TLS Heartbeat validator — CVE-2014-0160 Heartbleed defense (`tls_heartbeat_ok`)
+//   3. RFC 8446 §4 TLS Handshake message framing parser (`tls_handshake_next`)
+//   4. RFC 9112 §7.1 strict HTTP/1.1 chunked transfer-encoding parser (`http_chunk_next`)
+//   5. RFC 7541 §5.1 HTTP/2 HPACK prefix-integer decoder (`hpack_int_decode`)
+//   6. ISO/IEC 15948 PNG chunk framing validator (`png_chunk_next`)
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`) with identical
+// 52-character BLAKE3-256 contract identifiers across both processors.
+
+def u16_be(buf, o) { buf[o] * 256 + buf[o + 1] }
+def u24_be(buf, o) { buf[o] * 65536 + buf[o + 1] * 256 + buf[o + 2] }
+def u32_be(buf, o) {
+    buf[o] * 16777216 + buf[o + 1] * 65536 + buf[o + 2] * 256 + buf[o + 3]
+}
+
+// ---------------------------------------------------------------------------
+// 1. RFC 8446 §5.1 / RFC 5246 §6.2 TLS Record Layer Header & Bounds Validator
+//    ContentType in 20..23, legacy_record_version in 0x0301..0x0303,
+//    length <= 16640 (RFC 8446 §5.2 max TLSCiphertext), off + 5 + len <= n.
+//    Returns exact next record offset (`off + 5 + len`), or 0 if invalid.
+// ---------------------------------------------------------------------------
+def tls_rec_next_of(buf, off) {
+    if off + 5 > len(buf) then 0
+    else if buf[off] < 20 || buf[off] > 23 then 0
+    else if buf[off + 1] != 3 || buf[off + 2] < 1 || buf[off + 2] > 3 then 0
+    else if u16_be(buf, off + 3) > 16640 then 0
+    else if off + 5 + u16_be(buf, off + 3) > len(buf) then 0
+    else off + 5 + u16_be(buf, off + 3)
+}
+
+fn tls_record_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns tls_rec_next_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    if off + 5 > n { return 0 }
+    let ctype: u64 := buf[off]
+    if ctype < 20 { return 0 }
+    if ctype > 23 { return 0 }
+    let v_maj: u64 := buf[off + 1]
+    let v_min: u64 := buf[off + 2]
+    if v_maj != 3 { return 0 }
+    if v_min < 1 { return 0 }
+    if v_min > 3 { return 0 }
+    let hi: u64 := buf[off + 3]
+    let lo: u64 := buf[off + 4]
+    let rlen: u64 := (hi << 8) + lo
+    if rlen > 16640 { return 0 }
+    let nxt: u64 := off + 5 + rlen
+    if nxt > n { return 0 }
+    return nxt
+}
+
+// ---------------------------------------------------------------------------
+// 2. RFC 6520 §4 TLS Heartbeat Bounds Validator (CVE-2014-0160 Heartbleed Guard)
+//    Requires type in {1, 2}, n >= 19, and 3 + payload_len + 16 <= n.
+//    Returns 1 iff the claimed payload + 16-byte padding fits strictly in `buf[0..n)`.
+// ---------------------------------------------------------------------------
+def tls_hb_ok_of(buf) {
+    if len(buf) < 19 then 0
+    else if buf[0] != 1 && buf[0] != 2 then 0
+    else if 3 + u16_be(buf, 1) + 16 > len(buf) then 0
+    else 1
+}
+
+fn tls_heartbeat_ok(buf: n bytes, n: number)
+    requires n < 4294967296
+    returns tls_hb_ok_of(buf)
+    trace depends on buf, n
+    stack 0
+{
+    if n < 19 { return 0 }
+    let mtype: u64 := buf[0]
+    if mtype != 1 {
+        if mtype != 2 { return 0 }
+    }
+    let hi: u64 := buf[1]
+    let lo: u64 := buf[2]
+    let plen: u64 := (hi << 8) + lo
+    if 3 + plen + 16 > n { return 0 }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// 3. RFC 8446 §4 TLS Handshake Message Framing Parser
+//    1-byte msg_type + 3-byte big-endian uint24 length; checks off + 4 + hlen <= n.
+// ---------------------------------------------------------------------------
+def tls_hs_next_of(buf, off) {
+    if off + 4 > len(buf) then 0
+    else if off + 4 + u24_be(buf, off + 1) > len(buf) then 0
+    else off + 4 + u24_be(buf, off + 1)
+}
+
+fn tls_handshake_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns tls_hs_next_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    if off + 4 > n { return 0 }
+    let b1: u64 := buf[off + 1]
+    let b2: u64 := buf[off + 2]
+    let b3: u64 := buf[off + 3]
+    let hlen: u64 := (b1 << 16) + (b2 << 8) + b3
+    let nxt: u64 := off + 4 + hlen
+    if nxt > n { return 0 }
+    return nxt
+}
+
+// ---------------------------------------------------------------------------
+// 4. RFC 9112 §7.1 Strict HTTP/1.1 Chunked Transfer-Encoding Chunk Parser
+//    Parses 1..8 strict ASCII hex digits followed immediately by "\r\n", verifies
+//    `payload_start + sz + 2 <= n` and trailing "\r\n" after payload.
+//    Returns next chunk offset (`payload_start + sz + 2`), or 0 if malformed/smuggled.
+// ---------------------------------------------------------------------------
+def hex_val(c) {
+    if c >= 48 && c <= 57 then c - 48
+    else if c >= 65 && c <= 70 then c - 55
+    else if c >= 97 && c <= 102 then c - 87
+    else 16
+}
+
+fn hex_digit_val(c: u8)
+    returns hex_val(c)
+    trace depends on c
+    stack 0
+{
+    if c >= 48 {
+        if c <= 57 { return c - 48 }
+    }
+    if c >= 65 {
+        if c <= 70 { return c - 55 }
+    }
+    if c >= 97 {
+        if c <= 102 { return c - 87 }
+    }
+    return 16
+}
+
+def chunk_finish(buf, pos, sz) {
+    if pos + 2 > len(buf) then 0
+    else if buf[pos] != 13 || buf[pos + 1] != 10 then 0
+    else if pos + 2 + sz + 2 > len(buf) then 0
+    else if buf[pos + 2 + sz] != 13 || buf[pos + 2 + sz + 1] != 10 then 0
+    else pos + 2 + sz + 2
+}
+
+def chunk_step(buf, pos, digs, sz, d) {
+    if d < 16 then
+        if digs >= 8 || sz >= 268435456 then 0
+        else chunk_digits(buf, pos + 1, digs + 1, sz * 16 + d)
+    else if digs == 0 then 0
+    else chunk_finish(buf, pos, sz)
+}
+
+def chunk_digits(buf, pos, digs, sz) {
+    if pos >= len(buf) then 0
+    else chunk_step(buf, pos, digs, sz, hex_val(buf[pos]))
+}
+
+fn http_chunk_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns chunk_digits(buf, off, 0, 0)
+    trace depends on buf, n, off
+    stack 64
+{
+    var pos: u64 := off
+    var digs: u64 := 0
+    var sz: u64 := 0
+    while pos < n
+        maintains off <= pos
+        maintains pos <= n
+        maintains digs <= 8
+        maintains sz < 4294967296
+        maintains chunk_digits(buf, pos, digs, sz) == chunk_digits(buf, off, 0, 0)
+        decreases n - pos
+    {
+        let c: u64 := buf[pos]
+        let d: u64 := hex_digit_val(c)
+        if d < 16 {
+            if digs >= 8 { return 0 }
+            let one: u64 := 1
+            if sz >= (one << 28) { return 0 }
+            sz := (sz << 4) + d
+            digs += 1
+            pos += 1
+        } else {
+            if digs == 0 { return 0 }
+            if pos + 2 > n { return 0 }
+            let r1: u64 := buf[pos]
+            let n1: u64 := buf[pos + 1]
+            if r1 != 13 { return 0 }
+            if n1 != 10 { return 0 }
+            let trail: u64 := pos + 2 + sz
+            if trail + 2 > n { return 0 }
+            let r2: u64 := buf[trail]
+            let n2: u64 := buf[trail + 1]
+            if r2 != 13 { return 0 }
+            if n2 != 10 { return 0 }
+            return trail + 2
+        }
+    }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 5. RFC 7541 §5.1 HTTP/2 HPACK Prefix-Integer Decoder
+//    Decodes prefix integer with `pbits` in 1..8 (capped at 4 continuation bytes,
+//    value < 2^28 + 255). Returns `(next_off << 32) + val`, or 0 on truncated/overflow.
+// ---------------------------------------------------------------------------
+def hpack_mask(pbits) {
+    if pbits == 1 then 1
+    else if pbits == 2 then 3
+    else if pbits == 3 then 7
+    else if pbits == 4 then 15
+    else if pbits == 5 then 31
+    else if pbits == 6 then 63
+    else if pbits == 7 then 127
+    else 255
+}
+
+def hpack_v0(b, pbits) {
+    if pbits == 1 then b % 2
+    else if pbits == 2 then b % 4
+    else if pbits == 3 then b % 8
+    else if pbits == 4 then b % 16
+    else if pbits == 5 then b % 32
+    else if pbits == 6 then b % 64
+    else if pbits == 7 then b % 128
+    else b
+}
+
+def hpack_c3(buf, p, v) {
+    if p >= len(buf) then 0
+    else if buf[p] < 128 then (p + 1) * 4294967296 + v + buf[p] * 2097152
+    else 0
+}
+
+def hpack_c2(buf, p, v) {
+    if p >= len(buf) then 0
+    else if buf[p] < 128 then (p + 1) * 4294967296 + v + buf[p] * 16384
+    else hpack_c3(buf, p + 1, v + (buf[p] - 128) * 16384)
+}
+
+def hpack_c1(buf, p, v) {
+    if p >= len(buf) then 0
+    else if buf[p] < 128 then (p + 1) * 4294967296 + v + buf[p] * 128
+    else hpack_c2(buf, p + 1, v + (buf[p] - 128) * 128)
+}
+
+def hpack_c0(buf, p, v) {
+    if p >= len(buf) then 0
+    else if buf[p] < 128 then (p + 1) * 4294967296 + v + buf[p]
+    else hpack_c1(buf, p + 1, v + (buf[p] - 128))
+}
+
+def hpack_int_of(buf, off, pbits) {
+    if off >= len(buf) then 0
+    else if hpack_v0(buf[off], pbits) < hpack_mask(pbits) then
+        (off + 1) * 4294967296 + hpack_v0(buf[off], pbits)
+    else hpack_c0(buf, off + 1, hpack_mask(pbits))
+}
+
+fn hpack_int_decode(buf: n bytes, n: number, off: number, pbits: number)
+    requires off <= n
+    requires n < 4294967296
+    requires pbits >= 1
+    requires pbits <= 8
+    returns hpack_int_of(buf, off, pbits)
+    trace depends on buf, n, off, pbits
+    stack 16
+{
+    if off >= n { return 0 }
+    let b0: u64 := buf[off]
+    var mask: u64 := 255
+    var v0: u64 := b0
+    if pbits == 1 { mask := 1; v0 := b0 & 1 }
+    else if pbits == 2 { mask := 3; v0 := b0 & 3 }
+    else if pbits == 3 { mask := 7; v0 := b0 & 7 }
+    else if pbits == 4 { mask := 15; v0 := b0 & 15 }
+    else if pbits == 5 { mask := 31; v0 := b0 & 31 }
+    else if pbits == 6 { mask := 63; v0 := b0 & 63 }
+    else if pbits == 7 { mask := 127; v0 := b0 & 127 }
+    join
+        maintains off < n
+        maintains mask == hpack_mask(pbits)
+        maintains mask <= 255
+        maintains v0 == hpack_v0(buf[off], pbits)
+        maintains v0 <= mask
+    if v0 < mask {
+        return ((off + 1) << 32) + v0
+    }
+    let p0: u64 := off + 1
+    if p0 >= n { return 0 }
+    let c0: u64 := buf[p0]
+    if c0 < 128 { return ((p0 + 1) << 32) + mask + c0 }
+    let v1: u64 := mask + (c0 - 128)
+    let p1: u64 := p0 + 1
+    if p1 >= n { return 0 }
+    let c1: u64 := buf[p1]
+    if c1 < 128 { return ((p1 + 1) << 32) + v1 + (c1 << 7) }
+    let v2: u64 := v1 + ((c1 - 128) << 7)
+    let p2: u64 := p1 + 1
+    if p2 >= n { return 0 }
+    let c2: u64 := buf[p2]
+    if c2 < 128 { return ((p2 + 1) << 32) + v2 + (c2 << 14) }
+    let v3: u64 := v2 + ((c2 - 128) << 14)
+    let p3: u64 := p2 + 1
+    if p3 >= n { return 0 }
+    let c3: u64 := buf[p3]
+    if c3 < 128 { return ((p3 + 1) << 32) + v3 + (c3 << 21) }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 6. ISO/IEC 15948 PNG Chunk Framing Validator
+//    4-byte big-endian length (<= 2^31 - 1) + 4 ASCII-letter type + data + 4-byte CRC.
+//    Returns next chunk offset (`off + 12 + clen`), or 0 if invalid/truncated.
+// ---------------------------------------------------------------------------
+def is_ascii_alpha(c) {
+    if (c >= 65 && c <= 90) || (c >= 97 && c <= 122) then 1 else 0
+}
+
+def png_chunk_next_of(buf, off) {
+    if off + 12 > len(buf) then 0
+    else if u32_be(buf, off) >= 2147483648 then 0
+    else if is_ascii_alpha(buf[off + 4]) == 0 then 0
+    else if is_ascii_alpha(buf[off + 5]) == 0 then 0
+    else if is_ascii_alpha(buf[off + 6]) == 0 then 0
+    else if is_ascii_alpha(buf[off + 7]) == 0 then 0
+    else if off + 12 + u32_be(buf, off) > len(buf) then 0
+    else off + 12 + u32_be(buf, off)
+}
+
+fn png_chunk_next(buf: n bytes, n: number, off: number)
+    requires off <= n
+    requires n < 4294967296
+    returns png_chunk_next_of(buf, off)
+    trace depends on buf, n, off
+    stack 0
+{
+    if off + 12 > n { return 0 }
+    if buf[off] >= 128 { return 0 }
+    var t: u64 := buf[off + 4]
+    if t < 65 { return 0 }
+    if t > 122 { return 0 }
+    if t > 90 { if t < 97 { return 0 } }
+    t := buf[off + 5]
+    if t < 65 { return 0 }
+    if t > 122 { return 0 }
+    if t > 90 { if t < 97 { return 0 } }
+    t := buf[off + 6]
+    if t < 65 { return 0 }
+    if t > 122 { return 0 }
+    if t > 90 { if t < 97 { return 0 } }
+    t := buf[off + 7]
+    if t < 65 { return 0 }
+    if t > 122 { return 0 }
+    if t > 90 { if t < 97 { return 0 } }
+    var clen: u64 := buf[off]
+    clen := (clen << 8) + buf[off + 1]
+    clen := (clen << 8) + buf[off + 2]
+    clen := (clen << 8) + buf[off + 3]
+    let nxt: u64 := off + 12 + clen
+    if nxt > n { return 0 }
+    return nxt
+}

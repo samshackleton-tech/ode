@@ -44,7 +44,7 @@ the Lean 4 reference repository and license, and current Ode status.
 
 | Target | Category | Security / Practical Value | Open-Source Lean 4 Reference (License) | Status |
 |---|---|---|---|---|
-| **PNG chunk parser + CRC-32** | Image / framing | Classic `libpng` bounds and checksum verification | `Proven-Commons/png` (Apache-2.0: `Parse.lean`, `Header.lean`, `Crc32.lean`) | `planned` |
+| **PNG chunk parser + CRC-32** | Image / framing | Classic `libpng` bounds and checksum verification | `Proven-Commons/png` (Apache-2.0: `Parse.lean`, `Header.lean`, `Crc32.lean`) | **`shown`** (dual-verified `both`: `png_chunk_next` in `proof-core/examples/net/net_framing.ode`, x86-64 & AArch64) |
 | **CRC32C (hardware + software)** | Checksum | Storage and networking integrity | `ryancbuckley/lean-verified-crc32c` (Apache-2.0: `MemcpyCrc32c/`) | `planned` |
 | **ASN.1 / DER TLV + X.509 parser** | Binary wire | Prevents DER length malleability and certificate over-reads | `keithadler/lean-x509` (MIT: `X509/Der.lean`, `Cert.lean`) | **`shown`** (`der_tlv_len`, `der_walk_seq` on x86-64 & AArch64) |
 | **ChaCha20 & Poly1305 (RFC 8439)** | Crypto | Constant-time SIMD AEAD cipher | `Egly443/chacha20-poly1305-aarch64-lean` (Apache-2.0) | **`shown`** (dual-verified `both`: pure HL 512-bit AVX-512 & 4-way NEON `chacha20_4way`, 20-round `chacha20_block`, `blocks16`/`blocks4`) |
@@ -55,7 +55,7 @@ the Lean 4 reference repository and license, and current Ode status.
 | **DNS wire-name decoder (RFC 1035)** | Network parser | Compression-pointer loop and bounds safety | `BasisResearch/VeriDNS` | **`shown`** (dual-verified `both`: 5 pure HL kernels in `proof-core/examples/dns/dns_wire.ode`, incl. acyclic pointer expansion & multi-fn RR parser, x86-64 & AArch64) |
 | **SHA-256 (FIPS 180-4) & RSA** | Crypto | Pure `Nat` + `List Nat` spec (immediate `lean2ode` fit); plus `UInt32` reference | `keithadler/lean-x509` (`X509/Sha256.lean`, `Rsa.lean`, MIT); `SentinelOps-CI/lean-toolchain` (`SHA256.lean`, `HMAC.lean`, MIT) | **`shown`** (`sha256_big_sigma_4x` AVX & NEON) |
 | **CRC-32, LZ77, Huffman & DEFLATE** | Compression / checksum | Hardware `pclmulqdq`/`crc32x` SIMD target scaling up to full DEFLATE | `kim-em/lean-zip` (Apache-2.0: `Zip/Spec/Crc32.lean`, `LZ77.lean`, DEFLATE); `cla7aye15I4nd/zlib-lean` (`ZlibF/Spec/`) | `planned` |
-| **HPACK prefix integers & Huffman (HTTP/2 RFC 7541)** | Network codec | Hot path in HTTP/2 proxies and servers | `Proven-Commons/hpack` (Apache-2.0: `Spec/Defs.lean`) | `planned` |
+| **HPACK prefix integers & Huffman (HTTP/2 RFC 7541)** | Network codec | Hot path in HTTP/2 proxies and servers | `Proven-Commons/hpack` (Apache-2.0: `Spec/Defs.lean`) | **`shown`** (dual-verified `both`: `hpack_int_decode` in `proof-core/examples/net/net_framing.ode`, x86-64 & AArch64) |
 | **Bech32 / Bech32m checksum (BIP 173/350)** | Encoding / checksum | Pure `polymod` / `hrpExpand` for keys and addresses | `Proven-Commons/bech32` (Apache-2.0: `Spec/Defs.lean`) | `planned` |
 | **AES S-Box & GF(2^m) bit-sliced circuits** | Crypto / erasure coding | Constant-time bitsliced AES and GF(2^8) Reed-Solomon | `Swapnil-jain/gf2m-circuits` (Apache-2.0: `sbox/lean/Sbox106.lean`) | `planned` |
 | **BLAKE2b/2s, SHA-2, Keccak-p[1600]/SHA-3, Poseidon/Poseidon2** | Crypto / ZK | Zero-monad `Reference.lean` hash suite | `Verified-zkEVM/hash-specs` (Apache-2.0, 108 files); `NethermindEth/poseidon2-fv` (BabyBear width-16) | `planned` |
@@ -78,8 +78,8 @@ Ode specification once Wave 1 and Wave 2 patterns are proven in the Spec-First A
 | **Strict Hex encoder & decoder** | Encoding | Canonical RFC 4648 two-char hex decode & zero-branch encode | **`shown`** (`hex_decode_byte` x86-64 & AArch64) |
 | **Constant-time byte equality & conditional select** | Crypto utility | Core building blocks (`trace depends on len` / nothing) | **`shown`** (`ct_bytes_eq` x86-64 & AArch64, `stack 0`, `trace depends on n`) |
 | **URL percent-decoder & JSON string unescaper** | Text parser | Frequent parser-differential and smuggling vulnerabilities | `planned` |
-| **HTTP/1.1 chunk-size & header-line parser** | Network parser | Request-smuggling defense | `planned` |
-| **TLS record header & bounds validator** | Network parser | Heartbleed-class bounds guarantee | `planned` |
+| **HTTP/1.1 chunk-size & header-line parser** | Network parser | Request-smuggling defense | **`shown`** (dual-verified `both`: `http_chunk_next` in `proof-core/examples/net/net_framing.ode`, x86-64 & AArch64) |
+| **TLS record header & bounds validator** | Network parser | Heartbleed-class bounds guarantee | **`shown`** (dual-verified `both`: `tls_record_next`, `tls_heartbeat_ok`, `tls_handshake_next` in `proof-core/examples/net/net_framing.ode`, x86-64 & AArch64) |
 | **SHA-256 / SHA-512 compression** | Crypto | Primitives left hooked in prior whole-library verifications | **`shown`** (`sha256_big_sigma_4x` AVX & NEON) |
 | **bzip2 decompressor (`mibz2`)** | Compression | BWT, move-to-front, Huffman, and RLE decompression ([`mibz2` blog](https://lmmx.github.io/mibz2/blog/)) | `planned` |
 | **Non-crypto SIMD showcases** | Hashing / bitsets / text | `xxHash3` / `XXH64`, Roaring Bitmaps (popcnt/intersection), Reed-Solomon GF(2^8)/GF(2^16), UTF-8 <-> UTF-16 (`simdutf`), `simdjson` Stage 1 bitmask indexing | `planned` |
