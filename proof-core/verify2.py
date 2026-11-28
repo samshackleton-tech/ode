@@ -1035,8 +1035,10 @@ class Verifier:
             raise Refuse(f"unknown spec name `{nm}`")
         if op == "bin":
             bop, l, r = e[1], e[2], e[3]
-            lv = self.as_num(self.eval_sexpr(l, env, state, stream), env, state, stream)
-            rv = self.as_num(self.eval_sexpr(r, env, state, stream), env, state, stream)
+            raw_l = self.eval_sexpr(l, env, state, stream)
+            raw_r = self.eval_sexpr(r, env, state, stream)
+            lv = self.as_num(raw_l, env, state, stream)
+            rv = self.as_num(raw_r, env, state, stream)
             if bop == "+":
                 return r_add(lv, rv)
             if bop == "-":
@@ -1108,8 +1110,10 @@ class Verifier:
         if cond[0] != "bin":
             raise Refuse(f"unsupported ifx condition {cond}")
         cop, cl, cr = cond[1], cond[2], cond[3]
-        lv = self.as_num(self.eval_sexpr(cl, env, state, stream), env, state, stream)
-        rv = self.as_num(self.eval_sexpr(cr, env, state, stream), env, state, stream)
+        raw_l = self.eval_sexpr(cl, env, state, stream)
+        raw_r = self.eval_sexpr(cr, env, state, stream)
+        lv = self.as_num(raw_l, env, state, stream)
+        rv = self.as_num(raw_r, env, state, stream)
         facts = state["facts"]
         diff = r_sub(lv, rv)
         if cop in ("==", "!=") and (diff in state["neq"] or r_sub(rv, lv) in state["neq"]):

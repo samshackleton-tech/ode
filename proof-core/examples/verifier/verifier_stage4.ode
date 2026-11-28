@@ -1,0 +1,366 @@
+// Verifier-in-Ode Stage 4: End-to-end order-independent `r`/`s`/`q` linear-arithmetic
+// proof-certificate verifier in 100% pure High-Level Ode.
+// Portable across x86-64 and AArch64; dual-verified (`--verifier both`).
+
+// ---------------------------------------------------------------------------
+// 1. `.proof` directive tag classifier (`v_rsq_line_kind`)
+//    Maps first byte of a proof line to its directive class:
+//    'r'=1, 's'=2, 'q'=3, 't'=4, 'f'=5, 'p'=6, 'n'=7, 'k'=8, 'd'=9, else 0.
+// ---------------------------------------------------------------------------
+def rsq_line_kind(b) {
+    if b == 114 then 1
+    else if b == 115 then 2
+    else if b == 113 then 3
+    else if b == 116 then 4
+    else if b == 102 then 5
+    else if b == 112 then 6
+    else if b == 110 then 7
+    else if b == 107 then 8
+    else if b == 100 then 9
+    else 0
+}
+
+fn v_rsq_line_kind(b: u8)
+    returns rsq_line_kind(b)
+    trace depends on b
+    stack 0
+{
+    if b == 114 { return 1 }
+    if b == 115 { return 2 }
+    if b == 113 { return 3 }
+    if b == 116 { return 4 }
+    if b == 102 { return 5 }
+    if b == 112 { return 6 }
+    if b == 110 { return 7 }
+    if b == 107 { return 8 }
+    if b == 100 { return 9 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 2. `.proof` `r`/`s`/`q` refutation-block structural scanner (`v_scan_rsq_block`)
+//    Walks lines from `pos`: every line before `q` must begin with `r ` or `s `
+//    and end with `\n`; terminates on `q\n` or `q` at EOF, returning the byte
+//    offset immediately after the `q` line, or 4294967296 on any syntax error.
+// ---------------------------------------------------------------------------
+def rsq_eol(buf, i) {
+    if i >= len(buf) then i
+    else if buf[i] == 10 then i
+    else rsq_eol(buf, i + 1)
+}
+
+def scan_rsq_step(buf, p, e) {
+    if e < p + 2 || e >= len(buf) then 4294967296
+    else scan_rsq_from(buf, e + 1)
+}
+
+def scan_rsq_from(buf, p) {
+    if p >= len(buf) then 4294967296
+    else if buf[p] == 113 then
+        if p + 1 >= len(buf) then p + 1
+        else if buf[p + 1] == 10 then p + 2
+        else 4294967296
+    else if buf[p] == 114 || buf[p] == 115 then
+        if p + 1 >= len(buf) then 4294967296
+        else if buf[p + 1] != 32 then 4294967296
+        else scan_rsq_step(buf, p, rsq_eol(buf, p + 2))
+    else 4294967296
+}
+
+fn v_rsq_eol(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns rsq_eol(buf, pos)
+    trace depends on buf, n, pos
+    stack 0
+{
+    var i: u64 := pos
+    while i < n
+        maintains pos <= i
+        maintains i <= n
+        maintains rsq_eol(buf, i) == rsq_eol(buf, pos)
+        decreases n - i
+    {
+        if buf[i] == 10 { return i }
+        i += 1
+    }
+    return i
+}
+
+fn v_scan_rsq_block(buf: n bytes, n: number, pos: number)
+    requires pos <= n
+    requires n < 4294967296
+    returns scan_rsq_from(buf, pos)
+    trace depends on buf, n, pos
+    stack 128
+{
+    let one: u64 := 1
+    let err: u64 := one << 32
+    var p: u64 := pos
+    while p < n
+        maintains p <= n
+        maintains scan_rsq_from(buf, p) == scan_rsq_from(buf, pos)
+        decreases n - p
+    {
+        let tag: u64 := buf[p]
+        if tag == 113 {
+            if p + 1 >= n { return p + 1 }
+            if buf[p + 1] == 10 { return p + 2 }
+            return err
+        }
+        if tag != 114 {
+            if tag != 115 { return err }
+        }
+        if p + 1 >= n { return err }
+        if buf[p + 1] != 32 { return err }
+        let e: u64 := v_rsq_eol(buf, n, p + 2)
+        if e >= n { return err }
+        if e < p + 2 { return err }
+        p := e + 1
+    }
+    return err
+}
+
+// ---------------------------------------------------------------------------
+// 3. `Arithmetic.lean` `q` contradiction verifier on 16-word signed i32 rows
+//    (`v_row_contradicts_at`)
+//    Row `row_idx` starts at byte offset `row_idx * 64` (16 little-endian i32s).
+//    Returns 1 iff `c0 < 0` (`u32_le >= 2^31`) and `c1..c15 == 0`, else 0.
+// ---------------------------------------------------------------------------
+def u32_le(buf, o) {
+    buf[o] + buf[o + 1] * 256 + buf[o + 2] * 65536 + buf[o + 3] * 16777216
+}
+
+def row_vars_zero_from(rows, base, k) {
+    if k >= 16 then 1
+    else if u32_le(rows, base + k * 4) != 0 then 0
+    else row_vars_zero_from(rows, base, k + 1)
+}
+
+def row_contradicts_at_spec(rows, row_idx) {
+    if u32_le(rows, row_idx * 64) < 2147483648 then 0
+    else row_vars_zero_from(rows, row_idx * 64, 1)
+}
+
+fn v_row_contradicts_at(rows: n bytes, n: number, row_idx: number)
+    requires n < 1073741824
+    requires row_idx * 64 + 64 <= n
+    returns row_contradicts_at_spec(rows, row_idx)
+    trace depends on rows, n, row_idx
+    stack 0
+{
+    let one: u64 := 1
+    let sign32: u64 := one << 31
+    let base: u64 := row_idx << 6
+    let c0: u64 := rows.u32(base)
+    if c0 < sign32 { return 0 }
+    var k: u64 := 1
+    while k < 16
+        maintains 1 <= k
+        maintains k <= 16
+        maintains row_vars_zero_from(rows, base, k) == row_vars_zero_from(rows, base, 1)
+        decreases 16 - k
+    {
+        let v: u64 := rows.u32(base + (k << 2))
+        if v != 0 { return 0 }
+        k += 1
+    }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// 4. `Arithmetic.lean` `s a 1 b 1 1` unit-combination row verifier
+//    (`v_row_unit_add_match`)
+//    Verifies that row `dst_idx` equals `(row[a_idx] + row[b_idx]) mod 2^32`
+//    across all 16 signed 32-bit lanes. Returns 1 on exact match, 0 otherwise.
+// ---------------------------------------------------------------------------
+def row_add_match_from(rows, db, ab, bb, k) {
+    if k >= 16 then 1
+    else if u32_le(rows, db + k * 4) != (u32_le(rows, ab + k * 4) + u32_le(rows, bb + k * 4)) % 4294967296 then 0
+    else row_add_match_from(rows, db, ab, bb, k + 1)
+}
+
+def row_unit_add_spec(rows, dst_idx, a_idx, b_idx) {
+    row_add_match_from(rows, dst_idx * 64, a_idx * 64, b_idx * 64, 0)
+}
+
+fn v_row_unit_add_match(rows: n bytes, n: number, dst_idx: number, a_idx: number, b_idx: number)
+    requires n < 1073741824
+    requires dst_idx * 64 + 64 <= n
+    requires a_idx * 64 + 64 <= n
+    requires b_idx * 64 + 64 <= n
+    returns row_unit_add_spec(rows, dst_idx, a_idx, b_idx)
+    trace depends on rows, n, dst_idx, a_idx, b_idx
+    stack 32
+{
+    let one: u64 := 1
+    let mask32: u64 := (one << 32) - 1
+    let db: u64 := dst_idx << 6
+    let ab: u64 := a_idx << 6
+    let bb: u64 := b_idx << 6
+    var k: u64 := 0
+    while k < 16
+        maintains k <= 16
+        maintains row_add_match_from(rows, db, ab, bb, k) == row_add_match_from(rows, db, ab, bb, 0)
+        decreases 16 - k
+    {
+        let off: u64 := k << 2
+        let dv: u64 := rows.u32(db + off)
+        let av: u64 := rows.u32(ab + off)
+        let bv: u64 := rows.u32(bb + off)
+        let sum: u64 := (av + bv) & mask32
+        if dv != sum { return 0 }
+        k += 1
+    }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// 5. General weighted Gomory/Fourier-Motzkin column equation verifier
+//    (`v_check_s_comb_coeff`)
+//    Verifies `(wa * a_val + wb * b_val) mod 2^32 == (d * out_val) mod 2^32`
+//    for arbitrary positive weights `1 <= wa, wb, d <= 64` using explicit
+//    repeated addition (zero hidden multiply lowering).
+// ---------------------------------------------------------------------------
+def mul_mod32(v, w, acc) {
+    if w == 0 then acc
+    else mul_mod32(v, w - 1, (acc + v) % 4294967296)
+}
+
+def check_s_comb_spec(a_val, wa, b_val, wb, d, out_val) {
+    if (mul_mod32(a_val, wa, 0) % 4294967296 + mul_mod32(b_val, wb, 0) % 4294967296) % 4294967296
+       == mul_mod32(out_val, d, 0) % 4294967296 then 1
+    else 0
+}
+
+fn v_mul_mod32(v: number, w: number)
+    requires v < 4294967296
+    requires w <= 64
+    returns mul_mod32(v, w, 0)
+    trace depends on v, w
+    stack 0
+{
+    let one: u64 := 1
+    let mask32: u64 := (one << 32) - 1
+    var acc: u64 := 0
+    var rem: u64 := w
+    while rem > 0
+        maintains rem <= w
+        maintains acc < 4294967296
+        maintains mul_mod32(v, rem, acc) == mul_mod32(v, w, 0)
+        decreases rem
+    {
+        acc := (acc + v) & mask32
+        rem -= 1
+    }
+    return acc
+}
+
+fn v_check_s_comb_coeff(a_val: number, wa: number, b_val: number, wb: number, d: number, out_val: number)
+    requires a_val < 4294967296
+    requires b_val < 4294967296
+    requires out_val < 4294967296
+    requires 1 <= wa
+    requires wa <= 64
+    requires 1 <= wb
+    requires wb <= 64
+    requires 1 <= d
+    requires d <= 64
+    returns check_s_comb_spec(a_val, wa, b_val, wb, d, out_val)
+    trace depends on a_val, wa, b_val, wb, d, out_val
+    stack 128
+{
+    let raw_a: u64 := v_mul_mod32(a_val, wa)
+    let raw_b: u64 := v_mul_mod32(b_val, wb)
+    let raw_r: u64 := v_mul_mod32(out_val, d)
+    let one: u64 := 1
+    let mask32: u64 := (one << 32) - 1
+    let lhs_a: u64 := raw_a & mask32
+    let lhs_b: u64 := raw_b & mask32
+    let rhs: u64 := raw_r & mask32
+    let lhs: u64 := (lhs_a + lhs_b) & mask32
+    if lhs == rhs { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// 6. End-to-end multi-step `r`/`s`/`q` Farkas refutation certificate verifier
+//    (`v_verify_rsq_unit_cert`)
+//    Checks a complete derivation: `n_init` initial `r`-rows followed by
+//    `n_steps` derived `s`-rows (whose parent index pairs `(a_idx, b_idx)`
+//    live in `steps`). Verifies every step references only earlier rows,
+//    matches `row[cur] == row[a] + row[b] mod 2^32` across all 16 lanes,
+//    and ends with a valid `q` contradiction (`c0 < 0` and `c1..c15 == 0`).
+// ---------------------------------------------------------------------------
+def verify_rsq_step(rows, steps, n_init, n_steps, t, a_idx, b_idx) {
+    if a_idx >= n_init + t || b_idx >= n_init + t then 0
+    else if row_unit_add_spec(rows, n_init + t, a_idx, b_idx) == 0 then 0
+    else verify_rsq_from(rows, steps, n_init, n_steps, t + 1)
+}
+
+def verify_rsq_from(rows, steps, n_init, n_steps, t) {
+    if t >= n_steps then row_contradicts_at_spec(rows, n_init + n_steps - 1)
+    else verify_rsq_step(rows, steps, n_init, n_steps, t,
+                         u32_le(steps, t * 8), u32_le(steps, t * 8 + 4))
+}
+
+fn v_verify_rsq_unit_cert(rows: n bytes, n: number, steps: m bytes, m: number, n_init: number, n_steps: number)
+    requires n < 1073741824
+    requires m < 134217728
+    requires n_init >= 1
+    requires n_steps * 8 <= m
+    requires n_init * 64 + n_steps * 64 <= n
+    returns verify_rsq_from(rows, steps, n_init, n_steps, 0)
+    trace depends on rows, n, steps, m, n_init, n_steps
+    stack 160
+{
+    var t: u64 := 0
+    while t < n_steps
+        maintains t <= n_steps
+        maintains verify_rsq_from(rows, steps, n_init, n_steps, t) == verify_rsq_from(rows, steps, n_init, n_steps, 0)
+        decreases n_steps - t
+    {
+        let soff: u64 := t << 3
+        let a_idx: u64 := steps.u32(soff)
+        let b_idx: u64 := steps.u32(soff + 4)
+        let cur: u64 := n_init + t
+        if a_idx >= cur { return 0 }
+        if b_idx >= cur { return 0 }
+        let ok: u64 := v_row_unit_add_match(rows, n, cur, a_idx, b_idx)
+        if ok == 0 { return 0 }
+        t += 1
+    }
+    let last: u64 := (n_init + n_steps) - 1
+    return v_row_contradicts_at(rows, n, last)
+}
+
+// ---------------------------------------------------------------------------
+// 7. 64-byte-aligned SIMD `2*a + 2*b` row combination (`v_row_2a_plus_2b16`)
+// ---------------------------------------------------------------------------
+def comb22_16(a, b) { [(a[i] + b[i]) + (a[i] + b[i]) for i in 0..16] }
+
+fn v_row_2a_plus_2b16(out: 64 bytes, a: 64 bytes, b: 64 bytes)
+    requires no_overlap(out, a, b)
+    requires aligned(out, 64)
+    requires aligned(a, 64)
+    requires aligned(b, 64)
+    requires line_disjoint(out, a)
+    requires line_disjoint(out, b)
+    ensures out = bytes_of(comb22_16(words(a), words(b)))
+    stack 0
+{
+    for x86_64 {
+        let va: u32x16 := a.u32x16(0)
+        let vb: u32x16 := b.u32x16(0)
+        let s: u32x16 := va + vb
+        out.u32x16(0) := s + s
+    }
+    for arm64 {
+        for k in 0..4 unroll {
+            let va: u32x4 := a.u32x4(k * 16)
+            let vb: u32x4 := b.u32x4(k * 16)
+            let s: u32x4 := va + vb
+            out.u32x4(k * 16) := s + s
+        }
+    }
+}

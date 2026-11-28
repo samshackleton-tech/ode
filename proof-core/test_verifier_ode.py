@@ -6,7 +6,7 @@ functions on hardware where available.
 
     pypy3 test_verifier_ode.py        (Lean tests skipped without `lake`; hardware run on AArch64)
 """
-import os, platform, shutil, struct, subprocess, sys, tempfile, unittest
+import os, platform, re, shutil, struct, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -479,6 +479,313 @@ int main(void) {{
                 subprocess.run(["clang", "-O1", "-o", exe_p, c_p], check=True, capture_output=True, text=True)
                 r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
                 self.assertEqual(r.stdout.strip(), "verifier_stage3_arm64: OK")
+
+    def test_hl_verifier_stage4_rsq_cert_dual_verify_and_native(self):
+        """Stage 4: dual-verify all 9 pure High-Level Ode r/s/q certificate verifier kernels on both
+        x86-64 and AArch64 (`--verifier both`), verify cross-arch contract hash identity, and
+        execute real r/s/q proof blocks from Ode's own .proof files on Linux x86-64 and Apple M6."""
+        src = os.path.join(HERE, "examples", "verifier", "verifier_stage4.ode")
+        ode_tool = os.path.join(ROOT, "lang", "ode_tool.py")
+        self.assertTrue(os.path.exists(src))
+        portable = [
+            "v_rsq_line_kind",
+            "v_rsq_eol",
+            "v_scan_rsq_block",
+            "v_row_contradicts_at",
+            "v_row_unit_add_match",
+            "v_mul_mod32",
+            "v_check_s_comb_coeff",
+            "v_verify_rsq_unit_cert",
+        ]
+        all_fns = portable + ["v_row_2a_plus_2b16"]
+        root_fns = [
+            "v_rsq_line_kind",
+            "v_scan_rsq_block",
+            "v_check_s_comb_coeff",
+            "v_verify_rsq_unit_cert",
+            "v_row_2a_plus_2b16",
+        ]
+
+        with tempfile.TemporaryDirectory() as d:
+            cids = {}
+            syms = {}
+            objs = {}
+            prfs = {}
+            for fn in all_fns:
+                for tgt in ("x86_64", "arm64"):
+                    obj_p = os.path.join(d, f"{fn}_{tgt}.o")
+                    prf_p = os.path.join(d, f"{fn}_{tgt}.proof")
+                    res = subprocess.run(
+                        [sys.executable, ode_tool, "pack", src, "--fn", fn, "--target", tgt,
+                         "--c-abi", "--verifier", "both", "--out", obj_p, "--proof", prf_p],
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(res.returncode, 0,
+                                     f"Stage 4 pack failed ({fn}, {tgt}):\n{res.stdout}\n{res.stderr}")
+                    self.assertIn("VERDICT:           shown", res.stdout)
+                    self.assertIn("odeverify (shown), verify2 (shown)", res.stdout)
+                    m = re.search(r"SYMBOL:\s+(ode_[a-z2-7]{52})", res.stdout)
+                    self.assertIsNotNone(m, res.stdout)
+                    syms[(fn, tgt)] = m.group(1)
+                    cids[(fn, tgt)] = m.group(1)[4:]
+                    objs[(fn, tgt)] = obj_p
+                    prfs[(fn, tgt)] = prf_p
+            for fn in portable:
+                self.assertEqual(cids[(fn, "x86_64")], cids[(fn, "arm64")],
+                                 f"Stage 4 cross-arch contract hash mismatch for {fn}")
+
+            # Extract real r/s/q refutation blocks directly from Ode's own freshly generated .proof file!
+            def parse_real_rsq_blocks(proof_path):
+                with open(proof_path, "r", encoding="utf-8") as f:
+                    lines = f.read().splitlines()
+                blocks = []
+                i = 0
+                while i < len(lines):
+                    if lines[i].startswith("r "):
+                        start = i
+                        rows = []
+                        steps = []
+                        while i < len(lines) and (lines[i].startswith("r ") or lines[i].startswith("s ")):
+                            if lines[i].startswith("r "):
+                                rows.append([int(x) for x in lines[i].split()[1:]])
+                            else:
+                                steps.append(tuple(int(x) for x in lines[i].split()[1:]))
+                            i += 1
+                        if i < len(lines) and lines[i] == "q":
+                            raw = "\n".join(lines[start:i + 1]) + "\n"
+                            blocks.append((raw.encode("ascii"), rows, steps))
+                    i += 1
+                return blocks
+
+            own_blocks = parse_real_rsq_blocks(prfs[("v_verify_rsq_unit_cert", "x86_64")])
+            self.assertGreater(len(own_blocks), 0, "expected real r/s/q blocks in own .proof")
+
+            # Pick a real unit-weight (a=1, b=1, d=1, <= 16 vars, signed i32 coeffs) block from own .proof,
+            # falling back to factory/verified/utf8_is_ascii_x86_64.proof if needed.
+            unit_block = None
+            for cand_blocks in (own_blocks, parse_real_rsq_blocks(os.path.join(ROOT, "factory", "verified", "utf8_is_ascii_x86_64.proof"))):
+                for raw_b, r_rows, s_steps in cand_blocks:
+                    if not r_rows or not s_steps:
+                        continue
+                    if all(a == 1 and b == 1 and div == 1 for _, a, _, b, div in s_steps):
+                        # Project nonzero columns down to <= 16 lanes (preserving exact linear algebra)
+                        nz_cols = sorted({c for row in r_rows for c in range(1, len(row)) if row[c] != 0})
+                        if len(nz_cols) <= 15:
+                            proj = []
+                            ok_i32 = True
+                            for row in r_rows:
+                                c0 = row[0] if row else 0
+                                vec = [c0] + [row[c] if c < len(row) else 0 for c in nz_cols]
+                                vec += [0] * (16 - len(vec))
+                                if any(v < -(1 << 31) or v >= (1 << 31) for v in vec):
+                                    ok_i32 = False
+                                proj.append(vec)
+                            if ok_i32:
+                                unit_block = (raw_b, proj, s_steps)
+                                break
+                if unit_block is not None:
+                    break
+            self.assertIsNotNone(unit_block, "expected a real unit-weight r/s/q block from Ode .proof")
+            real_raw, real_init_rows, real_steps = unit_block
+
+            # Build the derived rows table & steps buffer for the real proof block
+            sim_rows = [list(r) for r in real_init_rows]
+            for ia, _, ib, _, _ in real_steps:
+                ra, rb = sim_rows[ia], sim_rows[ib]
+                sim_rows.append([((ra[k] + rb[k]) & 0xFFFFFFFF) for k in range(16)])
+            rows_bytes = b"".join(
+                struct.pack("<16I", *[(v & 0xFFFFFFFF) for v in row]) for row in sim_rows
+            )
+            steps_bytes = b"".join(struct.pack("<II", ia, ib) for ia, _, ib, _, _ in real_steps)
+            real_raw_hex = ", ".join(str(b) for b in real_raw)
+            rows_hex = ", ".join(str(b) for b in rows_bytes)
+            steps_hex = ", ".join(str(b) for b in steps_bytes)
+
+            def stage4_c_body(p, run_simd):
+                simd_block = ""
+                if run_simd:
+                    simd_block = f"""
+    _Alignas(64) uint32_t va[16], vb[16], vout[16];
+    for (int k = 0; k < 16; k++) {{ va[k] = (uint32_t)(k * 100 + 7); vb[k] = (uint32_t)(k * 50 + 3); }}
+    {p}v_row_2a_plus_2b16(vout, va, vb);
+    for (int k = 0; k < 16; k++) {{ CHK(vout[k] == (uint32_t)(2U * (va[k] + vb[k]))); }}
+"""
+                return f"""
+    /* 1. Directive line tag classifier across all 256 byte values */
+    for (uint64_t b = 0; b < 256; b++) {{
+        uint64_t want = (b == 'r') ? 1 : (b == 's') ? 2 : (b == 'q') ? 3 :
+                        (b == 't') ? 4 : (b == 'f') ? 5 : (b == 'p') ? 6 :
+                        (b == 'n') ? 7 : (b == 'k') ? 8 : (b == 'd') ? 9 : 0;
+        CHK({p}v_rsq_line_kind(b) == want);
+    }}
+    /* 2. Real r/s/q block structural scanner on Ode's own live .proof block */
+    static const uint8_t real_blk[] = {{ {real_raw_hex} }};
+    CHK({p}v_scan_rsq_block(real_blk, sizeof(real_blk), 0) == sizeof(real_blk));
+    /* Truncated block (missing q) must fail with 2^32 */
+    CHK({p}v_scan_rsq_block(real_blk, sizeof(real_blk) - 2, 0) == (1ULL << 32));
+    /* Malformed directive tag ('x ...') must fail with 2^32 */
+    const char *bad_blk = "r 0 1\\nx 1 2\\nq\\n";
+    CHK({p}v_scan_rsq_block((const uint8_t *)bad_blk, strlen(bad_blk), 0) == (1ULL << 32));
+    /* 3. Weighted Gomory/Fourier-Motzkin column verifier (s i wa j wb d) */
+    CHK({p}v_check_s_comb_coeff(7, 3, 5, 4, 1, 41) == 1);      /* 3*7 + 4*5 = 1*41 */
+    CHK({p}v_check_s_comb_coeff(7, 3, 5, 4, 1, 42) == 0);      /* wrong output */
+    CHK({p}v_check_s_comb_coeff(0xFFFFFFFFU, 64, 64, 1, 1, 0) == 1); /* -1*64 + 64 == 0 (mod 2^32) */
+    CHK({p}v_check_s_comb_coeff(10, 2, 4, 5, 4, 10) == 1);     /* (2*10 + 5*4) == 4*10 */
+    /* 4. Self-verification of real multi-step r/s/q certificate from Ode's own .proof */
+    uint8_t real_rows[] = {{ {rows_hex} }};
+    uint8_t real_steps[] = {{ {steps_hex} }};
+    uint64_t n_init = {len(real_init_rows)}ULL, n_steps = {len(real_steps)}ULL;
+    CHK({p}v_verify_rsq_unit_cert(real_rows, sizeof(real_rows), real_steps, sizeof(real_steps), n_init, n_steps) == 1);
+    /* Tamper A: corrupt 1 byte in final derived row -> must refuse (0) */
+    real_rows[sizeof(real_rows) - 1] ^= 1;
+    CHK({p}v_verify_rsq_unit_cert(real_rows, sizeof(real_rows), real_steps, sizeof(real_steps), n_init, n_steps) == 0);
+    real_rows[sizeof(real_rows) - 1] ^= 1;
+    /* Tamper B: forward/self reference a_idx == cur -> must refuse (0) */
+    uint32_t saved_a = 0;
+    memcpy(&saved_a, real_steps, 4);
+    uint32_t bad_a = (uint32_t)n_init;
+    memcpy(real_steps, &bad_a, 4);
+    CHK({p}v_verify_rsq_unit_cert(real_rows, sizeof(real_rows), real_steps, sizeof(real_steps), n_init, n_steps) == 0);
+    memcpy(real_steps, &saved_a, 4);
+    /* Tamper C: synthetic 2-step cert whose final c0 == 0 (no contradiction) -> must refuse (0) */
+    uint32_t non_contra[3][16];
+    memset(non_contra, 0, sizeof(non_contra));
+    non_contra[0][0] = 5; non_contra[0][1] = 1;
+    non_contra[1][0] = (uint32_t)(-5); non_contra[1][1] = (uint32_t)(-1);
+    /* sum: c0 = 0, c1 = 0 -> NOT a contradiction! */
+    uint32_t nc_steps[2] = {{ 0, 1 }};
+    CHK({p}v_verify_rsq_unit_cert((const uint8_t *)non_contra, sizeof(non_contra), (const uint8_t *)nc_steps, sizeof(nc_steps), 2, 1) == 0);
+    /* Changing row 1's c0 to -6 makes sum c0 = -1, c1 = 0 -> valid contradiction! */
+    non_contra[1][0] = (uint32_t)(-6);
+    non_contra[2][0] = (uint32_t)(-1);
+    CHK({p}v_verify_rsq_unit_cert((const uint8_t *)non_contra, sizeof(non_contra), (const uint8_t *)nc_steps, sizeof(nc_steps), 2, 1) == 1);
+    {simd_block}
+"""
+
+            cc = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+            if IS_LINUX_X86 and cc:
+                with open("/proc/cpuinfo", "r", encoding="utf-8") as ci:
+                    has_avx512 = "avx512f" in ci.read()
+                run_roots = root_fns if has_avx512 else root_fns[:-1]
+                decls = "\n".join([
+                    f'uint64_t {syms[("v_rsq_line_kind", "x86_64")]}(uint64_t);',
+                    f'uint64_t {syms[("v_scan_rsq_block", "x86_64")]}(const uint8_t *, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_check_s_comb_coeff", "x86_64")]}(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);',
+                    f'uint64_t {syms[("v_verify_rsq_unit_cert", "x86_64")]}(const uint8_t *, uint64_t, const uint8_t *, uint64_t, uint64_t, uint64_t);',
+                ] + ([
+                    f'void {syms[("v_row_2a_plus_2b16", "x86_64")]}(uint32_t *, const uint32_t *, const uint32_t *);',
+                ] if has_avx512 else []))
+                aliases = "\n".join(f'#define fn_{fn} {syms[(fn, "x86_64")]}' for fn in run_roots)
+                c_src = f"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+{decls}
+{aliases}
+#define CHK(cond) do {{ if (!(cond)) {{ fprintf(stderr, "FAIL line %d\\n", __LINE__); return 1; }} }} while (0)
+int main(void) {{
+{stage4_c_body("fn_", has_avx512)}
+    puts("verifier_stage4_x86: OK");
+    return 0;
+}}
+"""
+                c_p = os.path.join(d, "run_s4.c")
+                exe_p = os.path.join(d, "run_s4")
+                with open(c_p, "w", encoding="utf-8") as f:
+                    f.write(c_src)
+                subprocess.run(
+                    [cc, "-O1", "-o", exe_p, c_p] + [objs[(fn, "x86_64")] for fn in run_roots],
+                    check=True, capture_output=True, text=True,
+                )
+                r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
+                self.assertEqual(r.stdout.strip(), "verifier_stage4_x86: OK")
+
+            elif IS_MAC_ARM64 and shutil.which("clang"):
+                def reloc_text(elf_path, sym_name):
+                    with open(elf_path, "rb") as f:
+                        b = f.read()
+                    e_shoff = struct.unpack_from("<Q", b, 40)[0]
+                    e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", b, 58)
+                    secs = [struct.unpack_from("<IIQQQQI", b, e_shoff + i * e_shentsize) for i in range(e_shnum)]
+                    shstr_off = secs[e_shstrndx][4]
+                    sname = lambda idx: b[shstr_off + idx:b.index(0, shstr_off + idx)].decode("ascii", "replace")
+                    tb, eoff, sv = b"", 0, {}
+                    for sn, st, _, _, so, sz, sl in secs:
+                        if sname(sn) == ".text":
+                            tb = b[so:so + sz]
+                        elif st == 2:
+                            stro = secs[sl][4]
+                            for idx, pos in enumerate(range(so, so + sz, 24)):
+                                nm, _, _, _, val, _ = struct.unpack_from("<IBBHQQ", b, pos)
+                                sv[idx] = val
+                                if b[stro + nm:b.index(0, stro + nm)].decode("ascii", "replace") == sym_name:
+                                    eoff = val
+                    buf = bytearray(tb)
+                    for sn, st, _, _, so, sz, _ in secs:
+                        if st == 4 and sname(sn) == ".rela.text":
+                            for pos in range(so, so + sz, 24):
+                                ro, ri, ra = struct.unpack_from("<QQq", b, pos)
+                                if (ri & 0xFFFFFFFF) in (282, 283):
+                                    imm26 = (((sv[ri >> 32] + ra) - ro) >> 2) & 0x03FFFFFF
+                                    ins = struct.unpack_from("<I", buf, ro)[0]
+                                    struct.pack_into("<I", buf, ro, (ins & 0xFC000000) | imm26)
+                    return bytes(buf), eoff
+
+                types = {
+                    "v_rsq_line_kind": "uint64_t (*)(uint64_t)",
+                    "v_scan_rsq_block": "uint64_t (*)(const uint8_t *, uint64_t, uint64_t)",
+                    "v_check_s_comb_coeff": "uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t)",
+                    "v_verify_rsq_unit_cert": "uint64_t (*)(const uint8_t *, uint64_t, const uint8_t *, uint64_t, uint64_t, uint64_t)",
+                    "v_row_2a_plus_2b16": "void (*)(uint32_t *, const uint32_t *, const uint32_t *)",
+                }
+                load_lines = []
+                for fn in root_fns:
+                    code, entry = reloc_text(objs[(fn, "arm64")], syms[(fn, "arm64")])
+                    bp = os.path.join(d, f"{fn}.bin")
+                    with open(bp, "wb") as bf:
+                        bf.write(code)
+                    ty = types[fn]
+                    load_lines.append(
+                        f'    {ty.replace("(*)", "(*fn_" + fn + ")")} = ({ty})load_jit("{bp}", {len(code)}, {entry});'
+                    )
+                loads = "\n".join(load_lines)
+                c_src = f"""
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <pthread.h>
+#include <libkern/OSCacheControl.h>
+static void *load_jit(const char *path, size_t n, size_t entry_off) {{
+    uint8_t *tmp = (uint8_t *)malloc(n);
+    FILE *fp = fopen(path, "rb");
+    if (!tmp || !fp || fread(tmp, 1, n, fp) != n) {{ fprintf(stderr, "read %s\\n", path); exit(2); }}
+    fclose(fp);
+    void *p = mmap(NULL, (n + 4095) & ~4095ULL, PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE|MAP_ANON|MAP_JIT, -1, 0);
+    if (p == MAP_FAILED) {{ perror("mmap"); exit(2); }}
+    pthread_jit_write_protect_np(0);
+    memcpy(p, tmp, n);
+    pthread_jit_write_protect_np(1);
+    sys_icache_invalidate(p, n);
+    free(tmp);
+    return (uint8_t *)p + entry_off;
+}}
+#define CHK(cond) do {{ if (!(cond)) {{ fprintf(stderr, "FAIL line %d\\n", __LINE__); return 1; }} }} while (0)
+int main(void) {{
+{loads}
+{stage4_c_body("fn_", True)}
+    puts("verifier_stage4_arm64: OK");
+    return 0;
+}}
+"""
+                c_p = os.path.join(d, "run_s4_arm64.c")
+                exe_p = os.path.join(d, "run_s4_arm64")
+                with open(c_p, "w", encoding="utf-8") as f:
+                    f.write(c_src)
+                subprocess.run(["clang", "-O1", "-o", exe_p, c_p], check=True, capture_output=True, text=True)
+                r = subprocess.run([exe_p], check=True, capture_output=True, text=True)
+                self.assertEqual(r.stdout.strip(), "verifier_stage4_arm64: OK")
 
 
 if __name__ == "__main__":
