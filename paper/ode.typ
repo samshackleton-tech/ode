@@ -247,7 +247,7 @@
 
 Suppose you need a fast cryptographic hash, parser, or memory routine compiled to native x86-64 or AArch64 machine code. You did not write it, and you do not wish to read three thousand lines of assembly or rely on a compiler you cannot inspect. Test vectors confirm the binary on chosen inputs; they tell you nothing about the next input, reads past a buffer end, or branches depending on key material.
 
-Ode separates what a routine _promises_ from how it is _built_. The promise is a short mathematical _contract_, embedded in the `.ode.ocl` section of the compiled ELF64 object file (`.o`) and identified by its 52-character BLAKE3 hash. The maker (_Alice_) writes the machine instructions for each target and delivers two files: the `.o` object file and a separate `.proof` file. The auditor (_Bob_) obtains the expected contract independently (from a published specification or release record, or by inspecting the extracted contract text), then runs `ode audit`—which invokes a Lean 4 verifier (`odeverify`)—on the machine bytes, contract, and proof. If a sound verifier answers `shown`, those bytes satisfy the contract for every input meeting its preconditions. Errors in Alice's compiler, assembler, or proof finder cannot forge a valid proof; Bob relies instead on the verifier, the object-to-statement reader, and the instruction tables (section 8).
+Ode separates what a routine _promises_ from how it is _built_. The promise is a short mathematical _contract_, embedded in the `.ode.ocl` section of the compiled ELF64 object file (`.o`) and identified by its 52-character BLAKE3 hash. The maker (_Alice_) writes the implementation for each target and delivers two files: the `.o` object file and a separate `.proof` file. The auditor (_Bob_) obtains the expected contract independently (from a published specification or release record, or by inspecting the extracted contract text), then runs `ode audit`—invoking the Lean 4 verifier (`odeverify`), the independent pure-Python verifier (`verify2.py`), or `--verifier both`—on the machine bytes, contract, and proof. If a sound verifier answers `shown`, those bytes satisfy the contract for every input meeting its preconditions. Errors in Alice's compiler, assembler, or proof finder cannot forge a valid proof; Bob relies instead on the verifier, the object-to-statement reader, and the instruction tables (section 8).
 
 #fig(
   1,
@@ -500,18 +500,19 @@ Before linking an object file into an executable, Bob needs assurance against tw
 Bob runs `ode audit` on those two files together with his independently obtained expected contract identifier:
 
 #listing(label: "Bob's audit invocation", width: 6.80in)[
-  #raw(block: true, "python3 lang/ode_tool.py audit bundle.o --proof bundle.proof \\\n  --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika")
+  #raw(block: true, "python3 lang/ode_tool.py audit bundle.o --proof bundle.proof --verifier both \\\n  --expect-contract jbqyjqpese4s4cq35qxlhaevjvzuaqznquqw6mtlaqleluc25ika")
 ]
 
-`ode audit` checks five properties: (1) `.ode.ocl` hashes to the 52-character identifier and matches `--expect-contract`; (2) the sole global text symbol is `ode_<52-char-ID>`; (3) 100% of executable bytes in `.text` belong to verified functions; (4) no `.init_array`/`.fini_array` hooks or unresolved external symbol relocations exist; and (5) `odeverify` returns `shown` for every function in bottom-up dependency order.
+`ode audit` checks five properties: (1) `.ode.ocl` hashes to the 52-character identifier and matches `--expect-contract`; (2) the sole global text symbol is `ode_<52-char-ID>`; (3) 100% of executable bytes in `.text` belong to verified functions; (4) no `.init_array`/`.fini_array` hooks or unresolved external symbol relocations exist; and (5) `odeverify` (and `verify2.py` under `--verifier both`) returns `shown` for every function in bottom-up dependency order.
 
-#fig(
-  6,
-  "figures/fig5-bundle.svg",
-  "Anatomy of a packed object file and proof file",
-  [`ode audit` binds the single exported symbol to the BLAKE3 digest of `.ode.ocl`, accounts for 100% of `.text`, rejects init/fini hooks and external calls, and checks `.proof` step by step against the object bytes.],
-)
+#block(width: 6.80in, breakable: false, above: 0.55em, below: 0.55em)[
+  #figs.step()
+  #align(center)[#image("figures/fig5-bundle.svg", width: 6.10in)]
+  #v(2pt)
+  #caption("Figure", 6, "Anatomy of a packed object file and proof file", [`ode audit` binds the single exported symbol to the BLAKE3 digest of `.ode.ocl`, accounts for 100% of `.text`, rejects init/fini hooks and external calls, and checks `.proof` step by step against the object bytes.])
+]
 
+#v(-0.25em)
 == Outcomes and What Each Means
 
 Reports and tools in Ode distinguish four outcomes cleanly (Table 2). In particular, `no proof found` is inconclusive rather than a defect found, whereas `refused with a proof` presents a concrete counterexample input refuting the contract.
@@ -570,20 +571,21 @@ Table 4 summarizes all verified programs currently in the repository.
   4, "Programs verified shown on x86-64 and AArch64",
   columns: (1.65in, 0.90in, 1.65in, 2.60in),
   ([Program], [Targets], [Code verified], [Scope and properties]),
-  [BLAKE3 (one thread)], [x86-64], [19 fns, 3,837 insns], [One-block, 16-way, and 32-way AVX-512 kernels.],
-  [BLAKE3 (one thread)], [AArch64], [8 fns, 1,891 insns], [4 `use`-linked `.ode` files; 4-way NEON kernel.],
+  [BLAKE3 (one thread)], [x86-64], [19 fns, 3,837 insns], [One-block, 16-way, and 32-way AVX-512 kernels; dual-verified (`both`).],
+  [BLAKE3 (one thread)], [AArch64], [8 fns, 1,891 insns], [4 `use`-linked `.ode` files; 4-way NEON kernel; dual-verified (`both`).],
   [BLAKE3 64 B XOF block], [both], [115 (x86), 125 (arm) insns], [Extendable-output compression; SSE2 & NEON, `stack 0`, `trace depends on nothing`, same ID.],
-  [ChaCha20 block], [both], [1,090 (x86), 1,759 (arm)], [16-block AVX-512 / 4-block NEON kernels.],
-  [RFC 9669 eBPF subset], [both], [209 (x86), 192 (arm) insns], [11 opcodes, 4 registers, signed relative jumps, bounded step fuel; 6 fns; audits in 0.16 s / 0.20 s.],
+  [ChaCha20 block], [both], [1,090 (x86), 1,759 (arm)], [16-block AVX-512 / 4-block NEON kernels (plus pure HL 4-way dual-verified).],
+  [RFC 9669 eBPF subset], [both], [209 (x86), 192 (arm) insns], [11 opcodes, 4 registers, signed relative jumps, bounded step fuel; 6 fns; dual-verified (`both`).],
+  [RFC codecs & framing (50 fns)], [both], [100 `.o` bundles], [Pure HL Ode (`--verifier both`, same ID across targets): Brotli (RFC 7932), Zstd (RFC 8878), DNS (RFC 1035), canonical CBOR (RFC 8949), TLS 1.3 + Heartbleed guard, HTTP/1.1 chunked, HPACK, PNG, QOI, Bech32, bzip2, Verifier Stage 2.],
   [Two-target routines (5)], [both], [10 `.o` bundles], [RFC 1950 Adler-32, strict RFC 3629 UTF-8, RFC 1071 checksum, ASCII decimal, constant-time `ct_bytes_eq` (`stack 0`, identical ID across targets).],
-  [Smaller routines (19)], [both], [38 `.o` bundles], [Base64, ASN.1 DER, LZ4, SHA-256, ChaCha20, hex, varint, and verifier building blocks.],
+  [Smaller routines (19)], [both], [38 `.o` bundles], [Base64, ASN.1 DER, LZ4, SHA-256, ChaCha20, hex, varint, and verifier building blocks (all 38 dual-verified).],
 )
 
 Audit verdicts depend solely on the compiled bytes, contract, and proof—never on source authorship (36 of the 38 `.ode` sources in the last row were generated from specifications by language models).
 
 == Static Advice About Speed (`ode advise`)
 
-Contracts govern correctness and trace policy, not microarchitectural latency. For Alice's tuning loop, `ode advise` reports static code-size, instruction-cache-line, and store-forwarding counts, and checks optional `budget` annotations (such as `max_bytes 64`, `max_icache_lines 1`). Budgets are advisory diagnostics for Alice; they never alter emitted bytes or Bob's verification verdict.
+Contracts govern correctness and trace policy, not microarchitectural latency. For Alice's tuning loop, `ode advise` reports static code-size, instruction-cache-line, cache-line/page working-set locality, and hazard counts (`stlf-width`, `line-split`, `stream-count`, `stride-4k-alias`), and checks optional `budget` annotations (such as `max_bytes 64`, `max_icache_lines 1`). Budgets are advisory diagnostics for Alice; they never alter emitted bytes or Bob's verification verdict.
 
 // ============================================================================
 // 8. What Bob relies on
@@ -595,14 +597,14 @@ Contracts govern correctness and trace policy, not microarchitectural latency. F
 
 Bob's confidence in a `shown` verdict rests on three distinct layers: (1) soundness of the verifier relative to the instruction model, (2) fidelity of the instruction tables to real processors, and (3) integrity of the front-end reader that extracts ELF bytes and hashes `.ode.ocl`. Table 5 summarizes the evidence supporting each layer.
 
-#block(width: 6.80in, breakable: true, above: 0.70em, below: 0.70em)[
+#block(width: 6.80in, breakable: true, above: 0.45em, below: 0.45em)[
   #tabs.step()
-  #block(sticky: true, below: 4pt)[#caption("Table", 5, "Assurance layers for Bob's reliance set", [])]
-  #set text(size: 8.15pt)
-  #set par(justify: false, leading: 0.46em)
+  #block(sticky: true, below: 3pt)[#caption("Table", 5, "Assurance layers for Bob's reliance set", [])]
+  #set text(size: 7.85pt)
+  #set par(justify: false, leading: 0.40em)
   #show table.cell: set block(breakable: false)
   #table(
-    columns: (1.42in, 2.83in, 2.55in),
+    columns: (1.38in, 2.84in, 2.58in),
     align: left,
     stroke: (x, y) => (
       top: if y == 0 { 0.9pt + ink } else if y == 1 { 0.55pt + slate } else { none },
@@ -610,7 +612,7 @@ Bob's confidence in a `shown` verdict rests on three distinct layers: (1) soundn
       left: none,
       right: none,
     ),
-    inset: (x: 5.5pt, y: 3.4pt),
+    inset: (x: 5.0pt, y: 2.5pt),
     table.header(
       text(weight: "bold", size: 8.0pt, fill: ink)[Layer],
       text(weight: "bold", size: 8.0pt, fill: ink)[What it establishes and relies on],
@@ -618,21 +620,21 @@ Bob's confidence in a `shown` verdict rests on three distinct layers: (1) soundn
     ),
     [*Lean 4 soundness proof*], [The primary verifier (`odeverify`) is written in Lean 4 (de Moura & Ullrich, 2021). Eleven machine-checked theorems prove that whenever `odeverify` returns `shown`, the program meets its contract—including two-run trace equality—on the operational model defined by the instruction tables. Relies on Lean's kernel and three standard axioms (`propext`, `Classical.choice`, `Quot.sound`), with zero `sorry`.], [Complete for x86-64 and AArch64, private calling conventions, and tail calls (`test_sound.py`).],
     [*Instruction-table fidelity*], [Two separate checks test whether `core/x86.tab` and `arm64/arm64.tab` match real CPUs: (a) a Lean proof that every AArch64 row agrees with Google DeepMind's `arm64-semantics` formal model; (b) random hardware cross-tests comparing table execution against real processors (sampled tests, not exhaustive proofs).], [x86-64: #F.tables.x86_rows rows (#F.tables.x86_rows_run_on_a_processor sampled on CPU). AArch64: #F.tables.arm64_rows rows (#F.tables.arm64_rows/#F.tables.arm64_rows proved against `arm64-semantics`; #F.tables.arm64_rows_run_on_a_processor sampled on Apple M6). Omitted from CPU sampling: calls, returns, jumps, data-address load.],
-    [*Independent second verifier*], [Proof arithmetic steps carry explicit premise rows rather than relying on one verifier's internal fact numbering. An independent pure-Python verifier (`verify2.py`, about 1,260 lines, zero shared verification code with Lean) checks the same intermediate statement and `.proof` files.], [Dual-verifies single- and multi-function scalar, byte, loop, custom-calling, and branch-dispatch proofs on both targets—including `quad.ode` and the full 6-function RFC 9669 eBPF VM (`test_verify2.py`); vector and record-layout instructions are not yet covered in `verify2.py`.],
-    [*Front-end reader & ELF audit*], [Before calling `odeverify`, the Python audit wrapper (`ode_tool.py`, `statement.py`, ELF decoders) checks ELF sections/symbols, hashes `.ode.ocl`, and decodes instruction bytes into the verifier's input text. This wrapper is currently in Bob's reliance set.], [Tested across negative controls (tampered bytes, rogue hooks, wrong hashes); not yet proved in Lean.],
-    [*Ode-written verifier parts*], [Long-term goal: compile the verifier itself from verified Ode code once an external check anchors the bootstrap.], [Early building blocks only (e.g. `all_zero`, byte scanners); not yet a full verifier.],
+    [*Independent second verifier*], [Proof arithmetic steps carry explicit premise rows (`r ...`) rather than relying on one verifier's internal fact numbering. An independent pure-Python verifier (`verify2.py`, 5,417 lines, zero shared verification code with Lean) checks the exact same intermediate statement and `.proof` files via `--verifier both` or `--verifier verify2`.], [Dual-verifies scalar, byte, loop, custom-calling, branch-dispatch, SIMD (SSE4.1/AVX-512/NEON), record-layout, and `stackbits` proofs on both targets—including all four full BLAKE3-Servil bundles (14-fn & 19-fn x86-64 AVX-512; 7-fn & 8-fn AArch64 NEON), the 6-fn eBPF VM, and all 94 kept proofs in the repository (zero legacy positional `p` proofs remain).],
+    [*Front-end reader & ELF audit*], [Before calling `odeverify` or `verify2.py`, the Python audit wrapper (`ode_tool.py`, `statement.py`, ELF decoders) checks ELF sections/symbols, hashes `.ode.ocl`, and decodes instruction bytes into the verifier's input text. This wrapper is currently in Bob's reliance set.], [Tested across negative controls (tampered bytes, rogue hooks, wrong hashes); not yet proved in Lean.],
+    [*Ode-written verifier parts*], [Long-term goal: compile the verifier itself from verified Ode code once an external check anchors the bootstrap.], [Stages 1–2 dual-verified on both targets (8 pure High-Level Ode kernels in `verifier_hl.ode`, incl. `v_parse_u64`, `v_tag_kind`, 64 B aligned SIMD `v_row_sum16`, plus 5 Stage 1 kernels); not yet a full verifier.],
   )
 ]
 
 == Scope and Limits
 
-Ode verifies pure computational functions taking numbers and memory regions and returning to their caller. Its current scope excludes operating-system calls, I/O, concurrency, and dynamic memory allocation; microarchitectural side channels beyond the architectural trace (speculation, power, data-dependent latency); vector and record-layout coverage in `verify2.py`; and a machine-checked parser proof for `Main.lean`, `Reader.lean`, and the Python ELF-to-statement decoder.
+Ode verifies pure computational functions taking numbers and memory regions and returning to their caller. Its current scope excludes operating-system calls, I/O, concurrency, and dynamic memory allocation; microarchitectural side channels beyond the architectural trace (speculation, power, data-dependent latency); and a machine-checked parser proof for `Main.lean`, `Reader.lean`, and the Python ELF-to-statement decoder.
 
 == Complexity and Size Inventory
 
 #block(width: 6.80in, breakable: false, above: 0.45em, below: 0.45em)[
   #tabs.step()
-  #block(sticky: true, below: 4pt)[#caption("Table", 6, "Sizes of the report, Lean verifier, soundness proofs, and instruction tables", [])]
+  #block(sticky: true, below: 4pt)[#caption("Table", 6, "Sizes of the report, verifiers, soundness proofs, and instruction tables", [])]
   #set text(size: 8.2pt)
   #set par(justify: false, leading: 0.45em)
   #table(
@@ -652,6 +654,7 @@ Ode verifies pure computational functions taking numbers and memory regions and 
     ),
     [Language report], [#context counter(page).final().first() pages], [#context figs.final().first() figures and #context tabs.final().first() tables.],
     [Lean verifier & machine model], [#commas(F.lean.model_lines) lines], [#F.lean.model_files Lean files defining machine semantics, contracts, and `odeverify` (`Core.lean`: #commas(F.lean.core_lines) lines).],
+    [Independent Python verifier], [5,417 lines], [`proof-core/verify2.py`, standalone pure Python (zero Lean code shared).],
     [Lean soundness proofs], [#commas(F.lean.sound_lines) lines], [#F.lean.sound_files Lean files checked by Lean's kernel; Bob need not read them.],
     [Instruction tables], [#F.tables.x86_rows / #F.tables.arm64_rows rows], [`core/x86.tab` (x86-64) and `arm64/arm64.tab` (AArch64).],
   )
@@ -684,11 +687,11 @@ Every command below is invoked from the repository root as `python3 lang/ode_too
     ),
     inset: (x: 5.5pt, y: 3.4pt),
     table.header(text(weight: "bold", size: 8.0pt, fill: ink)[Command], text(weight: "bold", size: 8.0pt, fill: ink)[Purpose]),
-    [`audit OBJ --proof PROOF [--expect-contract ID] [--show-contract]`], [Bob's check (section 6): verifies 100% of `.text`, checks `.ode.ocl` against `ID`, and prints the verified contract with `--show-contract`.],
+    [`audit OBJ --proof PROOF [--verifier V] [--expect-contract ID] [--show-contract]`], [Bob's check (section 6): verifies 100% of `.text` with `V` (`odeverify`, `verify2`, or `both`), checks `.ode.ocl` against `ID`, and prints the verified contract with `--show-contract`.],
     [`spec-test OCL --call NAME --arg JSON [--glossary G]`], [Evaluates a contract definition on JSON inputs (`NAME` is a canonical name like `f0`, or an authored name when `--glossary` is given).],
     [`canon SRC [--fn NAME] [--out-dir DIR]`], [Prints the 52-character BLAKE3 identifier; with `--out-dir`, writes `<ID>.ocl`.],
     [`hash FILE...`], [Prints the 52-character lowercase base-32 BLAKE3-256 module digest for each `.ode` file (for `use` imports).],
-    [`pack SRC --fn NAME --target T --out OBJ --proof PROOF`], [Compiles (`T` = `x86_64` or `arm64`), proves, packs `.o` + `.proof`, and audits them.],
+    [`pack SRC --fn NAME --target T [--verifier V] --out OBJ --proof PROOF`], [Compiles (`T` = `x86_64` or `arm64`), proves, packs `.o` + `.proof`, and audits them with `V`.],
     [`check SRC [--fn NAME] [--target T]`], [Development loop: compiles, proves, verifies, and reports counterexamples on failure.],
     [`advise SRC --fn NAME`], [Reports static code-size, cache-line, and `budget` diagnostics (section 7.3).],
     [`compare A B --fn NAME`], [Compares static advice and verification verdicts of two `.ode` variants.],
