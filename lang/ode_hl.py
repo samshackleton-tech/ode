@@ -43,7 +43,7 @@ _RAW_ASM_RE = re.compile(
 )
 
 _HL_START_RE = re.compile(
-    r"^(?:let\s+|var\s+|stack\s+(?:var|let)\s+|buf\s+|while\s+|return(?:\s|$)|for\s+[A-Za-z_]\w*\s+in\s+|join(?:\s|$))"
+    r"^(?:let\s+|var\s+|stack(?:\s*\([^)]*\))?\s+(?:var|let)\s+|buf\s+|while\s+|return(?:\s|$)|for\s+[A-Za-z_]\w*\s+in\s+|join(?:\s|$))"
 )
 
 _RAW_IF_CONDS = frozenset({
@@ -311,6 +311,11 @@ class JoinStmt:
     line: int
 
 @dataclass
+class CheckStmt:
+    facts: list
+    line: int
+
+@dataclass
 class ExprStmt:
     expr: object      # e.g. store_u32x4(out, off, v) or helper(...)
     line: int
@@ -446,12 +451,35 @@ class HLParser:
 
     def parse_stmt(self):
         t = self.cur()
-        if t.val in ("let", "var") or (t.val == "stack" and self.i + 1 < len(self.toks) and self.toks[self.i + 1].val in ("let", "var")):
+        if t.val in ("let", "var") or (
+            t.val == "stack"
+            and (
+                (self.i + 1 < len(self.toks) and self.toks[self.i + 1].val in ("let", "var"))
+                or (self.i + 1 < len(self.toks) and self.toks[self.i + 1].val == "(")
+            )
+        ):
             on_stack = False
             if t.val == "stack":
-                on_stack = True
                 self.i += 1
+                if self.maybe("("):
+                    arches = []
+                    while True:
+                        a = self.take(kind="id").val
+                        if a not in ("x86_64", "arm64"):
+                            raise HLErr(
+                                f"{self.src}: line {t.line}: unknown architecture `{a}` in `stack(...)` "
+                                f"(expected `x86_64` or `arm64`)"
+                            )
+                        arches.append(a)
+                        if not self.maybe(","):
+                            break
+                    self.take(")")
+                    on_stack = frozenset(arches)
+                else:
+                    on_stack = True
                 t = self.cur()
+                if t.val not in ("let", "var"):
+                    raise HLErr(f"{self.src}: line {t.line}: expected `var` or `let` after `stack(...)`, got {t.val or t.kind!r}")
             mutable = (t.val == "var")
             self.i += 1
             nm = self.take(kind="id").val
@@ -876,11 +904,19 @@ def _const_eval_binop(op, a, b):
     return None
 
 
+def _is_on_stack(on_stack, arch):
+    if on_stack is True:
+        return True
+    if isinstance(on_stack, (set, frozenset, tuple, list)):
+        return arch in on_stack
+    return False
+
+
 def _subst_stmts(stmts, vname, kval):
     out = []
     for st in stmts:
         if isinstance(st, LetStmt):
-            out.append(LetStmt(st.name, st.ty, _subst_expr(st.expr, vname, kval), st.mutable, st.line, on_stack=st.on_stack))
+            out.append(LetStmt(st.name, st.ty, _subst_expr(st.expr, vname, kval) if st.expr is not None else None, st.mutable, st.line, on_stack=st.on_stack))
         elif isinstance(st, AssignStmt):
             out.append(AssignStmt(st.target, st.op, _subst_expr(st.expr, vname, kval), st.line))
         elif isinstance(st, StoreStmt):
@@ -953,7 +989,7 @@ def _alpha_rename_blocks(stmts, param_names):
         out = []
         for st in body:
             if isinstance(st, LetStmt):
-                e2 = ren_expr(st.expr, env)
+                e2 = ren_expr(st.expr, env) if st.expr is not None else None
                 nm2 = fresh(st.name)
                 env[st.name] = nm2
                 out.append(LetStmt(nm2, st.ty, e2, st.mutable, st.line, on_stack=st.on_stack))
@@ -994,6 +1030,8 @@ def _alpha_rename_blocks(stmts, param_names):
                 out.append(ReturnStmt(ren_expr(st.expr, env) if st.expr is not None else None, st.line))
             elif isinstance(st, JoinStmt):
                 out.append(JoinStmt([ren_spec(f, env) for f in st.facts], st.line))
+            elif isinstance(st, CheckStmt):
+                out.append(CheckStmt([ren_spec(f, env) for f in st.facts], st.line))
             elif isinstance(st, ExprStmt):
                 out.append(ExprStmt(ren_expr(st.expr, env), st.line))
             elif isinstance(st, BlockStmt):
@@ -1007,7 +1045,7 @@ def _alpha_rename_blocks(stmts, param_names):
 
 
 def expand_unrolls(stmts, src):
-    """Expand `for i in lo..hi unroll { ... }` at compile time."""
+    """Expand `for i in lo..hi unroll { ... }` and fold compile-time constant `if`s."""
     out = []
     for st in stmts:
         if isinstance(st, ForStmt) and st.unroll:
@@ -1016,7 +1054,13 @@ def expand_unrolls(stmts, src):
             for k in range(st.lo.val, st.hi.val, st.step):
                 out.extend(expand_unrolls(_subst_stmts(st.body, st.var, k), src))
         elif isinstance(st, IfStmt):
-            out.append(IfStmt(st.cond, expand_unrolls(st.then_body, src), expand_unrolls(st.else_body, src), st.line))
+            cv = _const_eval_cond(st.cond)
+            if cv is True:
+                out.extend(expand_unrolls(st.then_body, src))
+            elif cv is False:
+                out.extend(expand_unrolls(st.else_body, src))
+            else:
+                out.append(IfStmt(st.cond, expand_unrolls(st.then_body, src), expand_unrolls(st.else_body, src), st.line))
         elif isinstance(st, WhileStmt):
             out.append(WhileStmt(st.cond, st.maintains, st.writes, st.decreases, expand_unrolls(st.body, src), st.line))
         elif isinstance(st, ForStmt):
@@ -1050,20 +1094,24 @@ _VEC16_INTRINSICS = frozenset({
 
 
 # ---------------------------------------------------------------------------
-# Wirth-style High-Level `inline fn` with `var` (by-reference) parameters
+# Wirth-style High-Level `inline fn` with `var`, `const`, `-> ty`, & contracts
 # ---------------------------------------------------------------------------
 
 @dataclass
 class HLInline:
     name: str
-    params: list   # [(param_name, param_ty, is_var)]
+    params: list          # [(param_name, param_ty, mode)] where mode in ("val", "var", "const")
     stmts: list
     line: int
+    ret_ty: str = None    # "u64", "u8", "u32", "u32x4", "u32x16", or None
+    requires: tuple = ()  # tuple[str, ...] from contract `requires` clauses
+    returns: str = None   # raw spec expr from `returns <expr>` (or None)
+    ensures: tuple = ()   # tuple[str, ...] from extra postconditions (if any)
 
 
 def is_hl_inline(raw_text):
     """Return True if an `inline fn ... { ... }` declaration is a High-Level Ode inline
-    (typed HL params / `var` params and no raw-asm `distinct(...)`/`changes ...` clauses)."""
+    (typed HL params / `var` / `const` params, `-> ty`, or HL body; no raw-asm `distinct`/`changes`)."""
     bopen = raw_text.find("{")
     if bopen == -1:
         return False
@@ -1074,57 +1122,109 @@ def is_hl_inline(raw_text):
     p2 = hdr.rfind(")")
     if p1 != -1 and p2 > p1:
         params_s = hdr[p1 + 1:p2]
-        if re.search(r"\bvar\s+[A-Za-z_]\w*\s*:", params_s):
+        if re.search(r"\b(?:var|const)\s+[A-Za-z_]\w*\s*:", params_s):
             return True
-        if re.search(r":\s*(?:(?:[A-Za-z0-9_]+\s+)?bytes|ptr|u64|u32|u8|u32x4|u32x16)\b", params_s):
+        if re.search(r":\s*(?:(?:[A-Za-z0-9_]+\s+)?bytes|ptr|u64|u32|u8|u32x4|u32x16|number)\b", params_s):
+            return True
+        if "->" in hdr[p2 + 1:]:
             return True
     body_lines = raw_text[bopen + 1:raw_text.rfind("}")].splitlines()
     return is_hl_body(body_lines)
 
 
-def parse_hl_inline(raw_text, first_line, src="<ode>"):
-    """Parse a High-Level Ode `inline fn NAME([var] p: ty, ...) { <HL stmts> }`."""
-    bopen = raw_text.find("{")
-    bclose = raw_text.rfind("}")
-    if bopen == -1 or bclose <= bopen:
-        raise HLErr(f"{src}: line {first_line}: malformed `inline fn` block")
-    hdr = raw_text[:bopen]
-    m = re.match(r"^\s*inline\s+fn\s+([A-Za-z_]\w*)\s*(?:for\s+\w+\s*)?\((.*)\)\s*$", hdr, re.S)
-    if not m:
-        if "->" in hdr:
-            raise HLErr(
-                f"{src}: line {first_line}: High-Level `inline fn` is a statement template with no return type "
-                f"(`{hdr.strip()}`); pass a `var out: u64` parameter to write a result, or use a contract-bearing `fn ... returns ...`"
-            )
-        raise HLErr(f"{src}: line {first_line}: invalid High-Level `inline fn` header `{hdr.strip()}`")
-    name = m.group(1)
-    pstr = m.group(2).strip()
+def parse_hl_inline_params(name, pstr, first_line, src="<ode>"):
+    """Parse `[var|const] name: type, ...` -> `[(pname, pty, mode)]`."""
     params = []
     seen = set()
-    if pstr:
+    if pstr.strip():
         for raw_p in pstr.split(","):
             ps = raw_p.strip()
             if not ps:
                 continue
             pm = re.fullmatch(
-                r"(var\s+)?([A-Za-z_]\w*)\s*:\s*(?:([A-Za-z0-9_]+)\s+bytes|([A-Za-z0-9_]+))",
+                r"(?:(var|const)\s+)?([A-Za-z_]\w*)\s*:\s*(?:([A-Za-z0-9_]+)\s+bytes|([A-Za-z0-9_]+))",
                 ps,
             )
             if not pm:
-                raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: invalid parameter `{ps}` (expected `[var] name: type`)")
-            is_var = bool(pm.group(1))
+                raise HLErr(
+                    f"{src}: line {first_line}: inline fn `{name}`: invalid parameter `{ps}` "
+                    f"(expected `[var|const] name: type`)"
+                )
+            mode = pm.group(1) or "val"
             pname = pm.group(2)
             pty = "bytes" if pm.group(3) is not None else pm.group(4)
+            if pty == "number":
+                pty = "u64"
+            if mode == "const" and pty not in ("u64", "u32", "u8"):
+                raise HLErr(
+                    f"{src}: line {first_line}: inline fn `{name}`: `const {pname}` must have an integer type (`u64`/`u8`), not `{pty}`"
+                )
             if pname in seen:
                 raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: duplicate parameter `{pname}`")
             seen.add(pname)
-            params.append((pname, pty, is_var))
-    body_start_line = first_line + raw_text[:bopen].count("\n")
-    body_text = raw_text[bopen + 1:bclose]
-    body_lines = body_text.split("\n")
+            params.append((pname, pty, mode))
+    return params
+
+
+def extract_inline_contract_clauses(clauses_text):
+    """Extract `(requires_list, returns_expr_or_None, ensures_list)` from a unified `inline fn` contract header."""
+    reqs = []
+    ret_expr = None
+    ens = []
+    if not clauses_text or not clauses_text.strip():
+        return (), None, ()
+    for raw in clauses_text.splitlines():
+        s = raw.split("//", 1)[0].strip()
+        if not s:
+            continue
+        m_req = re.match(r"^requires\s+(.+)$", s)
+        if m_req:
+            reqs.append(m_req.group(1).strip())
+            continue
+        m_ret = re.match(r"^returns\s+(.+)$", s)
+        if m_ret:
+            ret_expr = m_ret.group(1).strip()
+            continue
+        m_ens = re.match(r"^ensures\s+(.+)$", s)
+        if m_ens:
+            ens.append(m_ens.group(1).strip())
+            continue
+    return tuple(reqs), ret_expr, tuple(ens)
+
+
+def build_hl_inline(name, raw_params_text, ret_ty, clauses_text, body_lines, body_start_line, first_line, src="<ode>"):
+    """Build a structured `HLInline` from parsed unified `inline fn` components."""
+    params = parse_hl_inline_params(name, raw_params_text, first_line, src=src)
+    if ret_ty == "number":
+        ret_ty = "u64"
+    elif ret_ty == "void":
+        ret_ty = None
+    reqs, ret_expr, ens = extract_inline_contract_clauses(clauses_text)
     parser = HLParser(body_lines, body_start_line, src)
     stmts = parser.parse_block_stmts(until_brace=False)
-    return HLInline(name, params, stmts, first_line)
+    return HLInline(name, params, stmts, first_line, ret_ty=ret_ty, requires=reqs, returns=ret_expr, ensures=ens)
+
+
+def parse_hl_inline(raw_text, first_line, src="<ode>"):
+    """Parse a High-Level Ode `inline fn NAME([var|const] p: ty, ...) [-> ty] [clauses] { <HL stmts> }`."""
+    bopen = raw_text.find("{")
+    bclose = raw_text.rfind("}")
+    if bopen == -1 or bclose <= bopen:
+        raise HLErr(f"{src}: line {first_line}: malformed `inline fn` block")
+    hdr = raw_text[:bopen]
+    m = re.match(
+        r"^\s*inline\s+fn\s+([A-Za-z_]\w*)\s*(?:for\s+\w+\s*)?\((.*?)\)\s*(?:->\s*([A-Za-z0-9_]+)\s*)?(.*)$",
+        hdr,
+        re.S,
+    )
+    if not m:
+        raise HLErr(f"{src}: line {first_line}: invalid High-Level `inline fn` header `{hdr.strip()}`")
+    name, pstr, ret_ty, clauses_text = m.group(1), m.group(2), m.group(3), m.group(4)
+    if ret_ty is not None and ret_ty not in ("u64", "u32", "u8", "u32x4", "u32x16", "number", "void"):
+        raise HLErr(f"{src}: line {first_line}: inline fn `{name}`: unsupported return type `{ret_ty}`")
+    body_start_line = first_line + raw_text[:bopen].count("\n")
+    body_lines = raw_text[bopen + 1:bclose].split("\n")
+    return build_hl_inline(name, pstr, ret_ty, clauses_text, body_lines, body_start_line, first_line, src=src)
 
 
 def _subst_inline_expr(e, vmap, emap, call_line):
@@ -1156,8 +1256,14 @@ def _subst_inline_expr(e, vmap, emap, call_line):
     if isinstance(e, NotOp):
         return NotOp(_subst_inline_expr(e.expr, vmap, emap, call_line), call_line)
     if isinstance(e, Select):
+        sc = _subst_inline_expr(e.cond, vmap, emap, call_line)
+        cv = _const_eval_cond(sc)
+        if cv is True:
+            return _subst_inline_expr(e.then_e, vmap, emap, call_line)
+        if cv is False:
+            return _subst_inline_expr(e.else_e, vmap, emap, call_line)
         return Select(
-            _subst_inline_expr(e.cond, vmap, emap, call_line),
+            sc,
             _subst_inline_expr(e.then_e, vmap, emap, call_line),
             _subst_inline_expr(e.else_e, vmap, emap, call_line),
             call_line,
@@ -1168,7 +1274,7 @@ def _subst_inline_expr(e, vmap, emap, call_line):
 
 
 def _expr_to_spec_str(e):
-    """Best-effort rendering of an HL argument expression for substitution inside `maintains`/`writes`/`decreases`."""
+    """Best-effort rendering of an HL argument expression for substitution inside `maintains`/`writes`/`decreases`/`requires`/`returns`."""
     if isinstance(e, Var):
         return e.name
     if isinstance(e, Num):
@@ -1186,7 +1292,7 @@ def _expr_to_spec_str(e):
 
 
 def _subst_inline_clause(text, vmap, emap):
-    """Substitute `inline fn` parameter names inside `maintains` / `writes` / `decreases` strings."""
+    """Substitute `inline fn` parameter names inside `maintains` / `writes` / `decreases` / `requires` / `returns` strings."""
     if not text:
         return text
     repl = {}
@@ -1210,7 +1316,7 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
     cur_vmap = dict(vmap)
     for st in stmts:
         if isinstance(st, LetStmt):
-            ne = _subst_inline_expr(st.expr, cur_vmap, emap, call_line)
+            ne = _subst_inline_expr(st.expr, cur_vmap, emap, call_line) if st.expr is not None else None
             new_nm = f"{prefix}{st.name}"
             cur_vmap[st.name] = new_nm
             out.append(LetStmt(new_nm, st.ty, ne, st.mutable, call_line, on_stack=st.on_stack))
@@ -1223,17 +1329,26 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
                 buf = emap[st.buf].name
             out.append(StoreStmt(buf, _subst_inline_expr(st.idx, cur_vmap, emap, call_line), st.width, _subst_inline_expr(st.expr, cur_vmap, emap, call_line), call_line))
         elif isinstance(st, IfStmt):
-            out.append(IfStmt(
-                _subst_inline_expr(st.cond, cur_vmap, emap, call_line),
-                _subst_inline_stmts(st.then_body, cur_vmap, emap, prefix, call_line),
-                _subst_inline_stmts(st.else_body, cur_vmap, emap, prefix, call_line),
-                call_line,
-            ))
+            sc = _subst_inline_expr(st.cond, cur_vmap, emap, call_line)
+            cv = _const_eval_cond(sc)
+            if cv is True:
+                out.extend(_subst_inline_stmts(st.then_body, cur_vmap, emap, prefix, call_line))
+            elif cv is False:
+                out.extend(_subst_inline_stmts(st.else_body, cur_vmap, emap, prefix, call_line))
+            else:
+                out.append(IfStmt(
+                    sc,
+                    _subst_inline_stmts(st.then_body, cur_vmap, emap, prefix, call_line),
+                    _subst_inline_stmts(st.else_body, cur_vmap, emap, prefix, call_line),
+                    call_line,
+                ))
         elif isinstance(st, WhileStmt):
             out.append(WhileStmt(
                 _subst_inline_expr(st.cond, cur_vmap, emap, call_line),
                 [_subst_inline_clause(m, cur_vmap, emap) for m in st.maintains],
-                [_subst_inline_clause(w, cur_vmap, emap) for w in st.writes],
+                [(cur_vmap.get(b, emap[b].name if b in emap and isinstance(emap[b], Var) else b),
+                  md, _subst_inline_clause(ix, cur_vmap, emap), _subst_inline_clause(rh, cur_vmap, emap))
+                 for b, md, ix, rh in st.writes],
                 _subst_inline_clause(st.decreases, cur_vmap, emap) if st.decreases else None,
                 _subst_inline_stmts(st.body, cur_vmap, emap, prefix, call_line),
                 call_line,
@@ -1248,13 +1363,20 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
                 _subst_inline_expr(st.hi, cur_vmap, emap, call_line),
                 st.step, st.unroll,
                 [_subst_inline_clause(m, inner_vm, emap) for m in st.maintains],
-                [_subst_inline_clause(w, inner_vm, emap) for w in st.writes],
+                [(inner_vm.get(b, emap[b].name if b in emap and isinstance(emap[b], Var) else b),
+                  md, _subst_inline_clause(ix, inner_vm, emap), _subst_inline_clause(rh, inner_vm, emap))
+                 for b, md, ix, rh in st.writes],
                 _subst_inline_clause(st.decreases, inner_vm, emap) if st.decreases else None,
                 _subst_inline_stmts(st.body, inner_vm, emap, prefix, call_line),
                 call_line,
             ))
         elif isinstance(st, JoinStmt):
             out.append(JoinStmt(
+                [_subst_inline_clause(f, cur_vmap, emap) for f in st.facts],
+                call_line,
+            ))
+        elif isinstance(st, CheckStmt):
+            out.append(CheckStmt(
                 [_subst_inline_clause(f, cur_vmap, emap) for f in st.facts],
                 call_line,
             ))
@@ -1269,62 +1391,429 @@ def _subst_inline_stmts(stmts, vmap, emap, prefix, call_line):
     return out
 
 
-def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None):
-    """Hygienically expand High-Level `inline fn` calls in exact statement order."""
+def _has_branch_or_select_expr(e):
+    if isinstance(e, Select):
+        return True
+    if isinstance(e, (BinOp, Cmp, BoolOp)):
+        return _has_branch_or_select_expr(e.left) or _has_branch_or_select_expr(e.right)
+    if isinstance(e, NotOp):
+        return _has_branch_or_select_expr(e.expr)
+    if isinstance(e, IndexLoad):
+        return _has_branch_or_select_expr(e.idx)
+    if isinstance(e, Call):
+        return any(_has_branch_or_select_expr(a) for a in e.args)
+    return False
+
+
+def _has_branch_or_select(stmts):
+    for st in stmts:
+        if isinstance(st, IfStmt):
+            return True
+        if isinstance(st, LetStmt) and st.expr is not None and _has_branch_or_select_expr(st.expr):
+            return True
+        if isinstance(st, AssignStmt) and _has_branch_or_select_expr(st.expr):
+            return True
+        if isinstance(st, StoreStmt) and (_has_branch_or_select_expr(st.idx) or _has_branch_or_select_expr(st.expr)):
+            return True
+        if isinstance(st, ReturnStmt) and st.expr is not None and _has_branch_or_select_expr(st.expr):
+            return True
+        if isinstance(st, ExprStmt) and _has_branch_or_select_expr(st.expr):
+            return True
+        if isinstance(st, (WhileStmt, ForStmt, BlockStmt)) and _has_branch_or_select(st.body):
+            return True
+    return False
+
+
+def _stmts_has_return(stmts):
+    for st in stmts:
+        if isinstance(st, ReturnStmt):
+            return True
+        if isinstance(st, IfStmt) and (_stmts_has_return(st.then_body) or _stmts_has_return(st.else_body)):
+            return True
+        if isinstance(st, (WhileStmt, ForStmt, BlockStmt)) and _stmts_has_return(st.body):
+            return True
+    return False
+
+
+def _stmts_always_return(stmts):
+    for st in stmts:
+        if isinstance(st, ReturnStmt):
+            return True
+        if isinstance(st, IfStmt) and st.else_body and _stmts_always_return(st.then_body) and _stmts_always_return(st.else_body):
+            return True
+        if isinstance(st, BlockStmt) and _stmts_always_return(st.body):
+            return True
+    return False
+
+
+def _rewrite_inline_returns(stmts, dst_var, inl_name, call_line, src):
+    """Rewrite every `ReturnStmt(e)` inside an expanded `inline fn` body into `AssignStmt(dst_var, ':=', e)`
+    via structured tail-continuation (`if c { return e1 } rest` -> `if c { dst := e1 } else { rest }`)."""
+    out = []
+    i = 0
+    n = len(stmts)
+    while i < n:
+        st = stmts[i]
+        if isinstance(st, ReturnStmt):
+            if st.expr is None:
+                raise HLErr(f"{src}: line {call_line}: value-returning inline fn `{inl_name}` has bare `return` with no expression")
+            out.append(AssignStmt(dst_var, ":=", st.expr, call_line))
+            break
+        if isinstance(st, (WhileStmt, ForStmt)) and _stmts_has_return(st.body):
+            raise HLErr(
+                f"{src}: line {call_line}: inline fn `{inl_name}` uses `return` inside a loop; "
+                f"assign to a `var`, `break`, and `return` after the loop"
+            )
+        if isinstance(st, BlockStmt):
+            if _stmts_always_return(st.body):
+                out.extend(_rewrite_inline_returns(st.body, dst_var, inl_name, call_line, src))
+                break
+            out.append(BlockStmt(_rewrite_inline_returns(st.body, dst_var, inl_name, call_line, src), st.line))
+            i += 1
+            continue
+        if isinstance(st, IfStmt):
+            th_ret = _stmts_has_return(st.then_body)
+            el_ret = _stmts_has_return(st.else_body)
+            if not th_ret and not el_ret:
+                out.append(st)
+                i += 1
+                continue
+            rest = stmts[i + 1:]
+            th_always = _stmts_always_return(st.then_body)
+            el_always = bool(st.else_body) and _stmts_always_return(st.else_body)
+            if th_always and el_always:
+                out.append(IfStmt(
+                    st.cond,
+                    _rewrite_inline_returns(st.then_body, dst_var, inl_name, call_line, src),
+                    _rewrite_inline_returns(st.else_body, dst_var, inl_name, call_line, src),
+                    st.line,
+                ))
+                break
+            if th_always and not st.else_body:
+                out.append(IfStmt(
+                    st.cond,
+                    _rewrite_inline_returns(st.then_body, dst_var, inl_name, call_line, src),
+                    _rewrite_inline_returns(rest, dst_var, inl_name, call_line, src),
+                    st.line,
+                ))
+                break
+            if th_always and not el_ret:
+                out.append(IfStmt(
+                    st.cond,
+                    _rewrite_inline_returns(st.then_body, dst_var, inl_name, call_line, src),
+                    _rewrite_inline_returns(st.else_body + rest, dst_var, inl_name, call_line, src),
+                    st.line,
+                ))
+                break
+            if el_always and not th_ret:
+                out.append(IfStmt(
+                    st.cond,
+                    _rewrite_inline_returns(st.then_body + rest, dst_var, inl_name, call_line, src),
+                    _rewrite_inline_returns(st.else_body, dst_var, inl_name, call_line, src),
+                    st.line,
+                ))
+                break
+            raise HLErr(
+                f"{src}: line {call_line}: inline fn `{inl_name}` has a partial early `return` inside `if`; "
+                f"return on all paths of the branch or assign to a `var` and `return` at the end"
+            )
+        out.append(st)
+        i += 1
+    return out
+
+
+def _expand_hl_inlines(stmts, hl_inlines, src, depth=0, seq=None, const_env=None):
+    """Hygienically expand High-Level `inline fn` calls (statements, `let`/`var`, assignments,
+    `return`, and nested expressions) in exact statement order, evaluating `const` params,
+    emitting strict `CheckStmt` for `requires`, and auto-`JoinStmt` for contracted branching scalars."""
     if not hl_inlines:
         return stmts
     if seq is None:
         seq = [0]
+    if const_env is None:
+        const_env = {}
     if depth > 16:
         raise HLErr(f"{src}: `inline fn` expansion exceeded max depth 16 (recursive inline fn?)")
-    out = []
-    for st in stmts:
-        if isinstance(st, ExprStmt) and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
-            inl = hl_inlines[st.expr.name]
-            args = st.expr.args
-            if len(args) != len(inl.params):
-                raise HLErr(
-                    f"{src}: line {st.line}: inline fn `{inl.name}` takes {len(inl.params)} argument(s), got {len(args)}"
-                )
-            seq[0] += 1
-            pfx = f"__inl_{seq[0]}_"
-            vmap, emap, preamble = {}, {}, []
-            for (pname, pty, is_var), a in zip(inl.params, args):
-                if is_var:
-                    if not isinstance(a, Var):
-                        raise HLErr(
-                            f"{src}: line {st.line}: inline fn `{inl.name}` parameter `var {pname}: {pty}` requires a variable argument"
-                        )
-                    vmap[pname] = a.name
-                elif isinstance(a, (Var, Num)):
+
+    def _expand_call(call_e, dst_info, call_line, cenv):
+        """Expand `call_e` (where `call_e.name in hl_inlines`).
+        `dst_info`:
+          - None: void statement call (`ExprStmt`)
+          - ("let", name, ty, mutable, on_stack): bind result directly into a new local
+          - ("assign", target): assign result directly into an existing variable
+          - ("return",): return result directly from enclosing function
+        """
+        inl = hl_inlines[call_e.name]
+        args = call_e.args
+        if len(args) != len(inl.params):
+            raise HLErr(
+                f"{src}: line {call_line}: inline fn `{inl.name}` takes {len(inl.params)} argument(s), got {len(args)}"
+            )
+        if dst_info is None and inl.ret_ty is not None:
+            raise HLErr(
+                f"{src}: line {call_line}: inline fn `{inl.name}` returns `{inl.ret_ty}`; bind or assign its result"
+            )
+        if dst_info is not None and inl.ret_ty is None:
+            raise HLErr(
+                f"{src}: line {call_line}: inline fn `{inl.name}` has no return type (`-> ty`) and cannot be used as a value"
+            )
+        seq[0] += 1
+        pfx = f"__inl_{seq[0]}_"
+        pre_stmts = []
+        # First lift any nested value-returning `inline fn` calls inside argument expressions
+        lifted_args = []
+        for (pname, pty, mode), a in zip(inl.params, args):
+            if mode == "const":
+                lifted_args.append(a)
+            else:
+                a_pre, a_new = _lift_expr(a, call_line, cenv)
+                pre_stmts.extend(a_pre)
+                lifted_args.append(a_new)
+
+        # Collect mutated targets (`var` params + in-place `assign` destination) so call-by-value args never alias
+        mutated_targets = set()
+        if dst_info is not None and dst_info[0] == "assign":
+            mutated_targets.add(dst_info[1])
+        for (pname, pty, mode), a in zip(inl.params, lifted_args):
+            if mode == "var":
+                if not isinstance(a, Var):
+                    raise HLErr(
+                        f"{src}: line {call_line}: inline fn `{inl.name}` parameter `var {pname}: {pty}` requires a variable argument"
+                    )
+                mutated_targets.add(a.name)
+
+        vmap, emap, spec_emap = {}, {}, {}
+        for (pname, pty, mode), a in zip(inl.params, lifted_args):
+            if mode == "const":
+                kv = _const_eval_expr(a, cenv)
+                if kv is None:
+                    raise HLErr(
+                        f"{src}: line {call_line}: inline fn `{inl.name}` parameter `const {pname}: {pty}` "
+                        f"requires a compile-time constant integer"
+                    )
+                num_a = Num(kv, call_line)
+                emap[pname] = num_a
+                spec_emap[pname] = num_a
+            elif mode == "var":
+                vmap[pname] = a.name
+                spec_emap[pname] = a
+            else:
+                uses_mut = bool(_used_vars_expr(a) & mutated_targets)
+                if isinstance(a, Num) or (isinstance(a, Var) and not uses_mut):
                     emap[pname] = a
+                    spec_emap[pname] = a
                 else:
                     tmp_nm = f"{pfx}arg_{pname}"
-                    preamble.append(LetStmt(tmp_nm, pty, a, False, st.line))
+                    pre_stmts.append(LetStmt(tmp_nm, pty, a, False, call_line))
                     vmap[pname] = tmp_nm
-            expanded = preamble + _subst_inline_stmts(inl.stmts, vmap, emap, pfx, st.line)
-            out.extend(_expand_hl_inlines(expanded, hl_inlines, src, depth + 1, seq))
+                    # For postcondition `join` (after body), prefer the caller's pure spec expr (e.g. `src[4*g]`)
+                    # when none of its variables are mutated, so `tmp_nm`'s register can be freely recycled!
+                    if (not uses_mut) and _expr_to_spec_str(a) is not None:
+                        spec_emap[pname] = a
+                    else:
+                        spec_emap[pname] = Var(tmp_nm, call_line)
+
+        # Strict call-site `requires` check (non-generalizing `CheckStmt` right before expanded body!)
+        if inl.requires:
+            chk_facts = [_subst_inline_clause(r, vmap, emap) for r in inl.requires]
+            pre_stmts.append(CheckStmt(chk_facts, call_line))
+
+        body = _subst_inline_stmts(inl.stmts, vmap, emap, pfx, call_line)
+        body = expand_unrolls(body, src)
+        body = _expand_hl_inlines(body, hl_inlines, src, depth + 1, seq, cenv)
+
+        if dst_info is None:
+            return pre_stmts + body
+
+        # Determine if this is a straight-line single trailing `return expr` (zero extra vars/moves!)
+        straight_return = (
+            len(body) >= 1
+            and isinstance(body[-1], ReturnStmt)
+            and body[-1].expr is not None
+            and not _stmts_has_return(body[:-1])
+        )
+        needs_auto_join = (
+            inl.returns is not None
+            and inl.ret_ty in ("u64", "u32", "u8")
+            and _has_branch_or_select(body)
+        )
+        post_join = []
+        if dst_info[0] == "return":
+            if straight_return and not needs_auto_join:
+                return pre_stmts + body[:-1] + [ReturnStmt(body[-1].expr, call_line)]
+            ret_var = f"{pfx}ret"
+            out_body = _bind_return_body(body, straight_return, ("let", ret_var, inl.ret_ty, False, False), inl.name, call_line)
+            if needs_auto_join:
+                post_join = _make_auto_join(inl, ret_var, spec_emap, call_line)
+            return pre_stmts + out_body + post_join + [ReturnStmt(Var(ret_var, call_line), call_line)]
+
+        dst_var = dst_info[1]
+        out_body = _bind_return_body(body, straight_return, dst_info, inl.name, call_line)
+        if needs_auto_join:
+            post_join = _make_auto_join(inl, dst_var, spec_emap, call_line)
+        return pre_stmts + out_body + post_join
+
+    def _bind_return_body(body, straight_return, dst_info, inl_name, call_line):
+        if straight_return:
+            ret_e = body[-1].expr
+            head = body[:-1]
+            if dst_info[0] == "let":
+                _, nm, ty, mut, on_stk = dst_info
+                return head + [LetStmt(nm, ty or hl_inlines[inl_name].ret_ty, ret_e, mut, call_line, on_stack=on_stk)]
+            else:
+                _, tgt = dst_info
+                return head + [AssignStmt(tgt, ":=", ret_e, call_line)]
+        if not _stmts_always_return(body):
+            raise HLErr(f"{src}: line {call_line}: value-returning inline fn `{inl_name}` does not return on every path")
+        if dst_info[0] == "let":
+            _, nm, ty, mut, on_stk = dst_info
+            decl = [LetStmt(nm, ty or hl_inlines[inl_name].ret_ty, None, True, call_line, on_stack=on_stk)]
+            return decl + _rewrite_inline_returns(body, nm, inl_name, call_line, src)
+        _, tgt = dst_info
+        return _rewrite_inline_returns(body, tgt, inl_name, call_line, src)
+
+    def _make_auto_join(inl, dst_var, spec_emap, call_line):
+        ret_s = _subst_inline_clause(inl.returns, {}, spec_emap)
+        jfacts = [f"{dst_var} == {ret_s}"]
+        for ens in inl.ensures:
+            es = _subst_inline_clause(ens, {"result": dst_var}, spec_emap)
+            if es:
+                jfacts.append(es)
+        return [JoinStmt(jfacts, call_line)]
+
+    def _expr_has_inline(e):
+        if isinstance(e, Call):
+            return e.name in hl_inlines or any(_expr_has_inline(a) for a in e.args)
+        if isinstance(e, (BinOp, Cmp, BoolOp)):
+            return _expr_has_inline(e.left) or _expr_has_inline(e.right)
+        if isinstance(e, NotOp):
+            return _expr_has_inline(e.expr)
+        if isinstance(e, Select):
+            return _expr_has_inline(e.cond) or _expr_has_inline(e.then_e) or _expr_has_inline(e.else_e)
+        if isinstance(e, IndexLoad):
+            return _expr_has_inline(e.idx)
+        return False
+
+    def _lift_expr(e, call_line, cenv):
+        """Lift any value-returning `inline fn` calls nested inside `e` into fresh `LetStmt`s."""
+        if not _expr_has_inline(e):
+            return [], e
+        if isinstance(e, Call):
+            if e.name in hl_inlines:
+                inl = hl_inlines[e.name]
+                if inl.ret_ty is None:
+                    raise HLErr(
+                        f"{src}: line {call_line}: inline fn `{inl.name}` has no return type (`-> ty`) and cannot be used inside an expression"
+                    )
+                seq[0] += 1
+                tmp = f"__inl_{seq[0]}_res"
+                pre = _expand_call(e, ("let", tmp, inl.ret_ty, False, False), call_line, cenv)
+                return pre, Var(tmp, call_line)
+            pre, new_args = [], []
+            for a in e.args:
+                ap, an = _lift_expr(a, call_line, cenv)
+                pre.extend(ap)
+                new_args.append(an)
+            return pre, Call(e.name, new_args, e.line)
+        if isinstance(e, BinOp):
+            lp, l = _lift_expr(e.left, call_line, cenv)
+            rp, r = _lift_expr(e.right, call_line, cenv)
+            return lp + rp, BinOp(e.op, l, r, e.line)
+        if isinstance(e, Cmp):
+            lp, l = _lift_expr(e.left, call_line, cenv)
+            rp, r = _lift_expr(e.right, call_line, cenv)
+            return lp + rp, Cmp(e.op, l, r, e.line)
+        if isinstance(e, BoolOp):
+            if _expr_has_inline(e.right):
+                raise HLErr(
+                    f"{src}: line {call_line}: bind `inline fn` result to a `let` before `{e.op}` "
+                    f"(to keep short-circuit evaluation order explicit)"
+                )
+            lp, l = _lift_expr(e.left, call_line, cenv)
+            return lp, BoolOp(e.op, l, e.right, e.line)
+        if isinstance(e, NotOp):
+            ep, ex = _lift_expr(e.expr, call_line, cenv)
+            return ep, NotOp(ex, e.line)
+        if isinstance(e, Select):
+            cp, c = _lift_expr(e.cond, call_line, cenv)
+            tp, te = _lift_expr(e.then_e, call_line, cenv)
+            fp, fe = _lift_expr(e.else_e, call_line, cenv)
+            return cp + tp + fp, Select(c, te, fe, e.line)
+        if isinstance(e, IndexLoad):
+            ip, ix = _lift_expr(e.idx, call_line, cenv)
+            return ip, IndexLoad(e.buf, ix, e.width, e.line)
+        return [], e
+
+    out = []
+    cur_cenv = dict(const_env)
+    mutated = _mutated_vars(stmts)
+    for st in stmts:
+        if isinstance(st, ExprStmt) and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
+            out.extend(_expand_call(st.expr, None, st.line, cur_cenv))
+        elif isinstance(st, ExprStmt) and _expr_has_inline(st.expr):
+            pre, ex = _lift_expr(st.expr, st.line, cur_cenv)
+            out.extend(pre)
+            out.append(ExprStmt(ex, st.line))
+        elif isinstance(st, LetStmt) and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
+            out.extend(_expand_call(st.expr, ("let", st.name, st.ty, st.mutable, st.on_stack), st.line, cur_cenv))
+        elif isinstance(st, LetStmt) and st.expr is not None:
+            pre, ex = _lift_expr(st.expr, st.line, cur_cenv)
+            out.extend(pre)
+            if (not st.mutable) and st.name not in mutated and st.ty in (None, "u64", "u8"):
+                kv = _const_eval_expr(ex, cur_cenv)
+                if kv is not None:
+                    cur_cenv[st.name] = kv
+            out.append(LetStmt(st.name, st.ty, ex, st.mutable, st.line, on_stack=st.on_stack))
+        elif isinstance(st, AssignStmt) and st.op == ":=" and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
+            out.extend(_expand_call(st.expr, ("assign", st.target), st.line, cur_cenv))
+        elif isinstance(st, AssignStmt) and _expr_has_inline(st.expr):
+            pre, ex = _lift_expr(st.expr, st.line, cur_cenv)
+            out.extend(pre)
+            out.append(AssignStmt(st.target, st.op, ex, st.line))
+        elif isinstance(st, StoreStmt) and (_expr_has_inline(st.idx) or _expr_has_inline(st.expr)):
+            ip, ix = _lift_expr(st.idx, st.line, cur_cenv)
+            ep, ex = _lift_expr(st.expr, st.line, cur_cenv)
+            out.extend(ip)
+            out.extend(ep)
+            out.append(StoreStmt(st.buf, ix, st.width, ex, st.line))
+        elif isinstance(st, ReturnStmt) and isinstance(st.expr, Call) and st.expr.name in hl_inlines:
+            out.extend(_expand_call(st.expr, ("return",), st.line, cur_cenv))
+        elif isinstance(st, ReturnStmt) and st.expr is not None and _expr_has_inline(st.expr):
+            pre, ex = _lift_expr(st.expr, st.line, cur_cenv)
+            out.extend(pre)
+            out.append(ReturnStmt(ex, st.line))
         elif isinstance(st, IfStmt):
+            cp, c = _lift_expr(st.cond, st.line, cur_cenv)
+            out.extend(cp)
             out.append(IfStmt(
-                st.cond,
-                _expand_hl_inlines(st.then_body, hl_inlines, src, depth, seq),
-                _expand_hl_inlines(st.else_body, hl_inlines, src, depth, seq),
+                c,
+                _expand_hl_inlines(st.then_body, hl_inlines, src, depth, seq, cur_cenv),
+                _expand_hl_inlines(st.else_body, hl_inlines, src, depth, seq, cur_cenv),
                 st.line,
             ))
         elif isinstance(st, WhileStmt):
+            if _expr_has_inline(st.cond):
+                raise HLErr(
+                    f"{src}: line {st.line}: cannot call a value-returning `inline fn` directly in a `while` condition; "
+                    f"evaluate it into a `var` before and at the end of the loop"
+                )
             out.append(WhileStmt(
                 st.cond, st.maintains, st.writes, st.decreases,
-                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq),
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv),
                 st.line,
             ))
         elif isinstance(st, ForStmt):
+            lp, lo = _lift_expr(st.lo, st.line, cur_cenv)
+            hp, hi = _lift_expr(st.hi, st.line, cur_cenv)
+            out.extend(lp)
+            out.extend(hp)
             out.append(ForStmt(
-                st.var, st.lo, st.hi, st.step, st.unroll, st.maintains, st.writes, st.decreases,
-                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq),
+                st.var, lo, hi, st.step, st.unroll, st.maintains, st.writes, st.decreases,
+                _expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv),
                 st.line,
             ))
         elif isinstance(st, BlockStmt):
-            out.append(BlockStmt(_expand_hl_inlines(st.body, hl_inlines, src, depth, seq), st.line))
+            out.append(BlockStmt(_expand_hl_inlines(st.body, hl_inlines, src, depth, seq, cur_cenv), st.line))
         else:
             out.append(st)
     return out
@@ -1428,7 +1917,7 @@ def _collect_real_calls_expr(e, fn_names):
     return out
 
 
-def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
+def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None, arch=None):
     """Collect declared locals, inferred types, explicit stack vars, buffers, and exact per-variable crossed non-tail calls."""
     locals_order = []   # [(name, ty, mutable, line)]
     local_types = {}
@@ -1476,13 +1965,13 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
     def walk(body):
         for idx, st in enumerate(body):
             if isinstance(st, LetStmt):
-                ty = st.ty or infer_ty(st.expr)
+                ty = st.ty or (infer_ty(st.expr) if st.expr is not None else "u64")
                 if st.name not in local_types:
                     local_types[st.name] = ty
                     locals_order.append((st.name, ty, st.mutable, st.line))
-                if st.on_stack:
+                if _is_on_stack(st.on_stack, arch):
                     stack_vars.add(st.name)
-                if _has_real_call_expr(st.expr, fn_names):
+                if st.expr is not None and _has_real_call_expr(st.expr, fn_names):
                     has_non_tail_call[0] = True
             elif isinstance(st, BufStmt):
                 bufs.append((st.name, st.size, st.align, st.line))
@@ -1538,15 +2027,18 @@ def _analyze_calls_and_vars(stmts, param_names, fn_names, self_name=None):
                     live = set(brk_live)
                 elif isinstance(st, ContinueStmt):
                     live = set(cont_live)
-                elif isinstance(st, (BufStmt, JoinStmt)):
+                elif isinstance(st, (BufStmt, JoinStmt, CheckStmt)):
                     pass
                 elif isinstance(st, LetStmt):
                     after = live - {st.name}
-                    cs = _collect_real_calls_expr(st.expr, fn_names)
-                    if cs:
-                        extra = _used_vars_expr(st.expr) if not isinstance(st.expr, Call) else set()
-                        record_crossed(after | extra, cs)
-                    live = after | _used_vars_expr(st.expr)
+                    if st.expr is not None:
+                        cs = _collect_real_calls_expr(st.expr, fn_names)
+                        if cs:
+                            extra = _used_vars_expr(st.expr) if not isinstance(st.expr, Call) else set()
+                            record_crossed(after | extra, cs)
+                        live = after | _used_vars_expr(st.expr)
+                    else:
+                        live = after
                 elif isinstance(st, AssignStmt):
                     after = (live - {st.target}) if st.op == ":=" else (live | {st.target})
                     cs = _collect_real_calls_expr(st.expr, fn_names)
@@ -1797,7 +2289,7 @@ def _subst_consts_expr(e, env):
     return e
 
 
-def _fold_const_lets(stmts):
+def _fold_const_lets(stmts, arch=None):
     """Fold pure immutable scalar constant `let m := <const>` bindings directly into `Num(k)` so
     constant masks/shifts (`c & m`, `x >> sh`) use immediate operands and zero physical registers."""
     mutated = _mutated_vars(stmts)
@@ -1808,8 +2300,11 @@ def _fold_const_lets(stmts):
         cur = dict(env)
         for st in body:
             if isinstance(st, LetStmt):
+                if st.expr is None:
+                    out.append(st)
+                    continue
                 ex = _subst_consts_expr(st.expr, cur)
-                if (not st.mutable) and (not st.on_stack) and st.name not in mutated and st.ty in (None, "u64", "u8"):
+                if (not st.mutable) and (not _is_on_stack(st.on_stack, arch)) and st.name not in mutated and st.ty in (None, "u64", "u8"):
                     kv = _const_eval_expr(ex, cur)
                     if kv is not None:
                         cur[st.name] = kv
@@ -1898,15 +2393,15 @@ class HLLower:
         self.needs = set(needs) if needs else set()
         self.hl_inlines = dict(hl_inlines) if hl_inlines else {}
 
-        expanded = _expand_hl_inlines(stmts, self.hl_inlines, src)
-        expanded = expand_unrolls(expanded, src)
+        expanded = expand_unrolls(stmts, src)
         expanded = _expand_hl_inlines(expanded, self.hl_inlines, src)
+        expanded = expand_unrolls(expanded, src)
         self.stmts = _alpha_rename_blocks(expanded, self.param_names)
-        self.stmts, self.const_vals = _fold_const_lets(self.stmts)
+        self.stmts, self.const_vals = _fold_const_lets(self.stmts, arch=self.arch)
         self._live_temps = {}  # reg -> description of held temporary value
         (self.locals_order, self.local_types, self.stack_vars, self.bufs,
          self.has_calls, self.live_across_call, self.var_crossed_calls) = _analyze_calls_and_vars(
-            self.stmts, self.param_names, self.fn_names, self_name=fn_name
+            self.stmts, self.param_names, self.fn_names, self_name=fn_name, arch=self.arch
         )
         # Param types (`u8` vs `u64` / `bytes`)
         self.param_types = {}
@@ -1936,6 +2431,7 @@ class HLLower:
         self._last_place_end = None   # out_lines index right after previous `place { ... }` at current PC
         self.lbl_seq = 0
         self.loop_stack = []     # [(head_lbl, end_lbl, step_lbl_or_None)]
+        self.loop_writes = []    # stack of active enclosing loop `writes` clauses (forwarded to inner `join`s)
         self.active_facts = []   # [(fact_str, vars_used)]
         self.pure_aliases = {}   # immutable `let` var -> (spec_expr_str, vars_used)
         self.defined_vars = set(self.param_names)
@@ -1982,9 +2478,13 @@ class HLLower:
                 elif isinstance(st, JoinStmt):
                     for f in st.facts:
                         live |= spec_vars(f)
+                elif isinstance(st, CheckStmt):
+                    for f in st.facts:
+                        live |= spec_vars(f)
                 elif isinstance(st, LetStmt):
-                    rhs_v = _used_vars_expr(st.expr) & tracked_set
-                    add_interf(st.name, live | (_clobber_sensitive_vars(st.expr) & tracked_set))
+                    rhs_v = (_used_vars_expr(st.expr) & tracked_set) if st.expr is not None else set()
+                    clob_v = (_clobber_sensitive_vars(st.expr) & tracked_set) if st.expr is not None else set()
+                    add_interf(st.name, live | clob_v)
                     live = (live - {st.name}) | rhs_v
                 elif isinstance(st, AssignStmt):
                     rhs_v = _used_vars_expr(st.expr) & tracked_set
@@ -3811,9 +4311,26 @@ class HLLower:
     def _lower_stmt(self, st):
         if isinstance(st, BufStmt):
             return
+        if isinstance(st, CheckStmt):
+            check_lines = []
+            seen = set()
+            for mf in st.facts:
+                s = self._subst_spec_vars(mf, line=st.line).strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    check_lines.append(f"fact {s}")
+            if check_lines:
+                self.out_lines.append((st.line, "check {"))
+                for cl in check_lines:
+                    self.out_lines.append((st.line, f"    {cl}"))
+                self.out_lines.append((st.line, "}"))
+            return
         if isinstance(st, LetStmt):
             ty = self.var_ty[st.name]
             kind, loc = self.var_loc[st.name]
+            if st.expr is None:
+                self.defined_vars.add(st.name)
+                return
             if ty in ("u32x4", "u32x16"):
                 dst = loc if kind == "reg" else self._vec_scratch(ty)
                 self._eval_vec(st.expr, dst, ty)
@@ -3976,6 +4493,7 @@ class HLLower:
             self._emit_loop_place(st.line, wvars, st.maintains, st.writes, st.decreases, outer_vars=self.defined_vars)
             self._emit_branch(st.cond, end_lbl, jump_if_true=False)
             self.loop_stack.append((head_lbl, end_lbl, head_lbl))
+            self.loop_writes.append(list(st.writes))
             saved_facts = list(self.active_facts)
             saved_owner = dict(self.reg_owner)
             self.active_facts.extend(
@@ -3984,6 +4502,7 @@ class HLLower:
             self.lower_stmts(st.body)
             self.reg_owner = {r: v for r, v in saved_owner.items() if self.reg_owner.get(r) == v}
             self.active_facts = [(fs, fv) for fs, fv in saved_facts if not (fv & wvars)]
+            self.loop_writes.pop()
             self.loop_stack.pop()
             self.emit(st.line, f"{'b' if self.arch == 'arm64' else 'jmp'} {head_lbl}")
             self.emit(st.line, f"{end_lbl}:")
@@ -4024,9 +4543,11 @@ class HLLower:
             # Loop guard: `i < hi` (or `i + step <= hi`? Standard: `i < hi` — matches `0..hi`)
             self._emit_branch(Cmp("<", Var(st.var, st.line), st.hi, st.line), end_lbl, jump_if_true=False)
             self.loop_stack.append((head_lbl, end_lbl, step_lbl))
+            self.loop_writes.append(list(st.writes))
             if hi_lin is not None:
                 self.active_facts.append((f"{st.var} + 1 <= {hi_lin[0]}", {st.var} | hi_lin[1]))
             self.lower_stmts(st.body)
+            self.loop_writes.pop()
             self.loop_stack.pop()
             self.emit(st.line, f"{step_lbl}:")
             self._lower_stmt(AssignStmt(st.var, "+=", Num(st.step, st.line), st.line))
@@ -4049,7 +4570,8 @@ class HLLower:
             return
 
         if isinstance(st, JoinStmt):
-            self._emit_loop_place(st.line, set(), st.facts, [], None, outer_vars=self.defined_vars)
+            active_w = self.loop_writes[-1] if self.loop_writes else []
+            self._emit_loop_place(st.line, set(), st.facts, active_w, None, outer_vars=self.defined_vars)
             return
 
         if isinstance(st, ReturnStmt):
@@ -4105,7 +4627,7 @@ def _compute_clobbered_regs(asm_lines, arch, callee_saved, callee_clobbers):
     in_place = False
     for raw in asm_lines:
         s = raw.strip()
-        if s == "place {":
+        if s in ("place {", "check {"):
             in_place = True; continue
         if in_place:
             if s == "}": in_place = False

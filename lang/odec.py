@@ -249,14 +249,15 @@ def inline_of(src, n, name, params, clauses, body, target="x86_64"):
     return Inline(name, n, ps, distinct, changes, body)
 
 
-def source(text, src="the source", target=None):
+def source(text, src="the source", target=None, parsed=None):
     """A source read: (its target, its data, its inline functions, its functions), as
     (name, [(name, [words])], {name: Inline}, [(name, symbol, lines, the number of the first of them)]).
     Supports both unified `.ode` files (with contracts on `fn` and multi-arch `for <arch>` blocks)
     and legacy `.ode` files (`fn name as "sym" { ... }`)."""
     import ode_unified
-    if ode_unified.is_unified(text):
-        parsed = ode_unified.parse_unified(text, src)
+    if parsed is not None or ode_unified.is_unified(text):
+        if parsed is None:
+            parsed = ode_unified.parse_unified(text, src)
         arch, u_data, u_inlines, u_fns = ode_unified.target_source_view(parsed, target, src)
         inlines = {}
         for raw_inl, lno in u_inlines:
@@ -699,6 +700,12 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
             if s == "wrap":
                 if notes is not None: notes.append(("wrap", len(out), None, None, n))
                 continue
+            if re.fullmatch(r"check\s*\{", s):
+                if env or inside: stop(src, n, f"fn {fn}: a check inside a for or an inline function")
+                body, i = block(lines, i)
+                said = expand_place_block(body)
+                if notes is not None: notes.append(("check", len(out), None, said, n))
+                continue
             m = re.fullmatch(r'place\s*(?:"(\w+)"\s*)?\{', s) or re.fullmatch(r"place\s+(\w+)\s*\{", s)
             if m:
                 if env or inside: stop(src, n, f"fn {fn}: a place inside a for or an inline function")
@@ -788,9 +795,9 @@ def expand(src, fn, numbered, inlines, notes=None, typed_lines=None, target="x86
     return out
 
 
-def found(src, name, with_target=False, target=None):
+def found(src, name, with_target=False, target=None, parsed=None):
     """(the data, the symbol, the numbered lines, the source's inline functions) of the function NAME of a source."""
-    arch, data, inlines, fns = source(read_source(src), src, target=target)
+    arch, data, inlines, fns = source("" if parsed is not None else read_source(src), src, target=target, parsed=parsed)
     got = [(symbol, [(first + k, line) for k, line in enumerate(lines)]) for n, symbol, lines, first in fns if n == name]
     if len(got) != 1: sys.exit(f"{src}: no `fn {name}`")
     res = (data, got[0][0], got[0][1], inlines)
@@ -883,36 +890,39 @@ def elf(src, name, symbol, expanded, typed, notes, data, where=None, target="x86
         raise SystemExit(f"odec: {src}: fn {name}: {e}") from None
 
 
-def _contract_params_for(src, name):
+def _contract_params_for(src, name, parsed=None):
     """Return the contract parameter names for unified `fn NAME(...)`, or None for legacy sources."""
     import ode_unified
-    text = read_source(src)
-    if not ode_unified.is_unified(text):
-        return None
-    parsed = ode_unified.parse_unified(text, src)
+    if parsed is None:
+        text = read_source(src)
+        if not ode_unified.is_unified(text):
+            return None
+        parsed = ode_unified.parse_unified(text, src)
     for fn_rec in parsed["fns"]:
         if fn_rec["name"] == name:
             return ode_unified._collect_param_names(fn_rec["params_text"])
     return set()
 
 
-def compile_info(src, name, symbol=None, target=None):
+def compile_info(src, name, symbol=None, target=None, parsed=None):
     """Compile one function to ELF bytes and return its full metadata (target, symbol, ELF bytes, exact
     pc-to-source line_map, user register names, frame layout, label offsets, and per-entry places text)."""
-    target, data, own, lines, inlines = found(src, name, with_target=True, target=target)
+    target, data, own, lines, inlines = found(src, name, with_target=True, target=target, parsed=parsed)
     sym = symbol or own
     notes, typed, meta = [], [], {}
-    cparams = _contract_params_for(src, name)
+    cparams = _contract_params_for(src, name, parsed=parsed)
     expanded = expand(src, name, lines, inlines, notes, typed, target=target, meta=meta, contract_params=cparams)
     entries = {sym} | {note[2] for note in notes if note[0] == "entry"}
     for note in notes:
         if note[0] == "at" and note[2] is not None and note[2] not in entries:
             stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
     at_notes = [note for note in notes if note[0] == "at"]
+    check_notes = [note for note in notes if note[0] == "check"]
     wrap_notes = [note for note in notes if note[0] == "wrap"]
-    non_at = [note for note in notes if note[0] not in ("at", "wrap")]
+    non_at = [note for note in notes if note[0] not in ("at", "check", "wrap")]
     elf_notes = (non_at
                  + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(at_notes)]
+                 + [("at", note[1], f".Lode_chk_{k}") for k, note in enumerate(check_notes)]
                  + [("at", note[1], f".Lode_wrap_{k}") for k, note in enumerate(wrap_notes)])
     where, locs = {}, []
     blob = elf(src, name, sym, expanded, typed, elf_notes, data, where=where, target=target, locs=locs)
@@ -937,6 +947,13 @@ def compile_info(src, name, symbol=None, target=None):
                 f"place +0x{where[f'.Lode_at_{k}'] - where[entry]:x} {{\n"
                 + "".join(f"    {line}\n" for line in note[3]) + "}\n"
                 for k, note in mine
+            ))
+        if check_notes:
+            parts.append("".join(
+                f"check +0x{where[f'.Lode_chk_{k}'] - where[entry]:x} {{\n"
+                + "".join(f"    {line}\n" for line in note[3]) + "}\n"
+                for k, note in enumerate(check_notes)
+                if where[f'.Lode_chk_{k}'] >= where[entry]
             ))
         if wrap_notes:
             parts.append("".join(
@@ -995,16 +1012,20 @@ def places(src, name, entry=None, target=None):
     for note in notes:
         if note[0] == "at" and note[2] is not None and note[2] not in entries: stop(src, note[4], f"fn {name}: a place for `{note[2]}`, which is no entry of the function")
     mine = [note for note in notes if note[0] == "at" and (note[2] or own) == (entry or own)]
+    check_notes = [note for note in notes if note[0] == "check"]
     wrap_notes = [note for note in notes if note[0] == "wrap"]
-    if not mine and not wrap_notes: return ""
+    if not mine and not check_notes and not wrap_notes: return ""
     where = {}
-    elf_notes = ([note for note in notes if note[0] not in ("at", "wrap")]
+    elf_notes = ([note for note in notes if note[0] not in ("at", "check", "wrap")]
                  + [("at", note[1], f".Lode_at_{k}") for k, note in enumerate(mine)]
+                 + [("at", note[1], f".Lode_chk_{k}") for k, note in enumerate(check_notes)]
                  + [("at", note[1], f".Lode_wrap_{k}") for k, note in enumerate(wrap_notes)])
     elf(src, name, own, expanded, typed, elf_notes, data, where, target=target)
     parts = []
     if mine:
         parts.append("".join(f"place +0x{where[f'.Lode_at_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(mine)))
+    if check_notes:
+        parts.append("".join(f"check +0x{where[f'.Lode_chk_{k}'] - where[entry or own]:x} {{\n" + "".join(f"    {line}\n" for line in note[3]) + "}\n" for k, note in enumerate(check_notes) if where[f'.Lode_chk_{k}'] >= where[entry or own]))
     if wrap_notes:
         parts.append("".join(f"wrap +0x{where[f'.Lode_wrap_{k}'] - where[entry or own]:x}\n" for k in range(len(wrap_notes)) if where[f'.Lode_wrap_{k}'] >= where[entry or own]))
     return "".join(parts)

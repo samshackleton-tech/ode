@@ -248,11 +248,33 @@ def _rewrite_hl_lines(lines, first_line, mod_prefix, mod_exports, uses_map, src)
                 if exp["kind"] in ("fn", "def", "const", "data"):
                     target_nm = mod_prefix + (exp["symbol"] if exp["kind"] == "fn" else nm)
                     code = re.sub(rf"(?<!\.)\b{re.escape(nm)}\b", target_nm, code)
+                elif exp["kind"] == "inline":
+                    target_nm = mod_prefix + nm
+                    code = re.sub(rf"(?<!\.)\b{re.escape(nm)}(?=\s*\()", target_nm, code)
         out.append(code + comment)
     return out
 
 
-def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
+def _select_hl_inline_impl(inl_rec, arch, variant=None, needs=()):
+    """Pick the best `for <arch>[:variant]` arm of a structured HL `inline fn`."""
+    impls = inl_rec["impls"]
+    if variant:
+        k = f"{arch}:{variant}"
+        if k in impls:
+            return impls[k]
+    for nd in needs:
+        k = f"{arch}:{nd}"
+        if k in impls:
+            return impls[k]
+    if arch in impls:
+        return impls[arch]
+    for im in impls.values():
+        if im.get("portable"):
+            return im
+    return None
+
+
+def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=(), hl_inlines=()):
     """Lower every High-Level Ode implementation block deterministically into `odec` assembly + `hl_meta`,
     giving every `fn` (including `use`-imported top-level functions) Ode's fast calling convention
     with auto-derived exact `preserves` by default; only `c_abi_fn` (when packing for C FFI) uses C ABI."""
@@ -261,7 +283,7 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
     for darch, dname, _ in data:
         for a in (TARGETS if darch is None else (darch,)):
             data_by_arch.setdefault(a, set()).add(dname)
-    hl_inlines_by_arch = {a: {} for a in TARGETS}
+    legacy_hl_inlines_by_arch = {a: {} for a in TARGETS}
     for iarch, raw_inl, lno in inlines:
         if not ode_hl.is_hl_inline(raw_inl):
             continue
@@ -270,7 +292,28 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
         except ode_hl.HLErr as exc:
             raise UnifiedErr(str(exc)) from exc
         for a in (TARGETS if iarch is None else (iarch,)):
-            hl_inlines_by_arch[a][parsed_inl.name] = parsed_inl
+            legacy_hl_inlines_by_arch[a][parsed_inl.name] = parsed_inl
+
+    def _hl_inlines_for(arch, variant, impl_needs):
+        out = dict(legacy_hl_inlines_by_arch.get(arch, {}))
+        for inl_rec in hl_inlines:
+            im = _select_hl_inline_impl(inl_rec, arch, variant=variant, needs=impl_needs)
+            if im is None:
+                continue
+            try:
+                out[inl_rec["name"]] = ode_hl.build_hl_inline(
+                    inl_rec["name"],
+                    inl_rec["raw_params_text"],
+                    inl_rec["ret_ty"],
+                    inl_rec["clauses_text"],
+                    im["lines"],
+                    im["first_line"],
+                    inl_rec["line"],
+                    src=src,
+                )
+            except ode_hl.HLErr as exc:
+                raise UnifiedErr(str(exc)) from exc
+        return out
     # Every function called by another function (in this file OR across `use`-imported modules) gets
     # Ode's fast calling convention with exact `preserves`; `c_abi_fn` uses pure C ABI at the FFI boundary.
     called_by_other = set()
@@ -305,7 +348,7 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                     explicit_stack=explicit_stack,
                     callee_clobbers=callee_clobbers.get(arch),
                     needs=impl_needs,
-                    hl_inlines=hl_inlines_by_arch.get(arch),
+                    hl_inlines=_hl_inlines_for(arch, im.get("variant"), impl_needs),
                 )
             except ode_hl.HLErr as exc:
                 if im.get("portable"):
@@ -412,13 +455,13 @@ def _lower_all_hl(fns, data, src, c_abi_fn=None, inlines=()):
                 callee_clobbers[arch][fn_rec["symbol"]] = res["clobbered"]
 
 
-def _parse_for_blocks(body_text, fn_name, body_start_line, src):
+def _parse_for_blocks(body_text, fn_name, body_start_line, src, force_hl=False):
     """Parse zero or more `for <arch>[:variant] ... { ... }` blocks OR a portable High-Level Ode body `{ ... }`."""
     pos = _skip_ws_and_comments(body_text, 0)
     n = len(body_text)
     if pos < n and not re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", body_text[pos:]):
         dedented, start_line = _dedent_body(body_text, body_start_line)
-        if ode_hl.is_hl_body(dedented):
+        if force_hl or ode_hl.is_hl_body(dedented):
             impls = {}
             for arch in TARGETS:
                 impls[arch] = {
@@ -527,7 +570,7 @@ def _parse_for_blocks(body_text, fn_name, body_start_line, src):
             "calling_text": calling_text,
             "lines": dedented,
             "first_line": asm_start_line,
-            "hl": ode_hl.is_hl_body(dedented),
+            "hl": True if force_hl else ode_hl.is_hl_body(dedented),
         }
         pos = _skip_ws_and_comments(body_text, bclose + 1)
     return impls
@@ -539,6 +582,7 @@ def _parse_single_unified(text, src="<ode>"):
     spec_defs = []
     data = []
     inlines = []
+    hl_inlines = []
     fns = []
     fns_by_name = {}
     declared_names = {}
@@ -639,22 +683,135 @@ def _parse_single_unified(text, src="<ode>"):
             pos = _skip_ws_and_comments(text, pos + m.end())
             continue
 
-        # 5. `inline fn NAME [for ARCH] (...) ... { ... }`
+        # 5. `inline fn NAME [for ARCH] (params) [-> ty] [contract_clauses] ({ ... } | (for target[:variant] { ... })+)`
         m = re.match(r"^inline\s+fn\s+([A-Za-z_]\w*)(?:\s+for\s+(\w+))?\b", rest)
         if m:
+            iname = m.group(1)
             iarch = m.group(2)
             if iarch is not None and iarch not in TARGETS:
                 raise UnifiedErr(f"{src}: line {line_no}: unsupported `inline fn ... for {iarch}`")
-            claim("inline", m.group(1), line_no, allow_multi_kind="inline")
-            bopen = _find_open_brace(text, pos + m.end())
-            if bopen == -1:
-                raise UnifiedErr(f"{src}: line {line_no}: `inline fn {m.group(1)}` missing `{{`")
-            bclose = _find_matching_brace(text, bopen, src)
-            # Rewrite `inline fn NAME for ARCH (` -> `inline fn NAME (` for odec.inline_of
-            raw_hdr = text[pos:bopen]
-            if iarch is not None:
-                raw_hdr = re.sub(r"^(inline\s+fn\s+[A-Za-z_]\w*)\s+for\s+\w+", r"\1", raw_hdr, count=1)
-            inlines.append((iarch, m.group(1), raw_hdr + text[bopen:bclose + 1], line_no))
+            claim("inline", iname, line_no, allow_multi_kind="inline")
+            after_inm = _skip_ws_and_comments(text, pos + m.end())
+            if iarch is not None or after_inm >= n or text[after_inm] != "(":
+                bopen = _find_open_brace(text, pos + m.end())
+                if bopen == -1:
+                    raise UnifiedErr(f"{src}: line {line_no}: `inline fn {iname}` missing `{{`")
+                bclose = _find_matching_brace(text, bopen, src)
+                raw_hdr = text[pos:bopen]
+                if iarch is not None:
+                    raw_hdr = re.sub(r"^(inline\s+fn\s+[A-Za-z_]\w*)\s+for\s+\w+", r"\1", raw_hdr, count=1)
+                inlines.append((iarch, iname, raw_hdr + text[bopen:bclose + 1], line_no))
+                pos = _skip_ws_and_comments(text, bclose + 1)
+                continue
+
+            pclose = _find_matching_paren(text, after_inm, src)
+            raw_params_text = text[after_inm + 1:pclose].strip()
+            # Scan header after `)` up to `{` or `for <arch>[:variant]`
+            scan = pclose + 1
+            bopen = -1
+            direct_for_pos = -1
+            s_pdepth = 0
+            while scan < n:
+                ch = text[scan]
+                if ch == "/" and scan + 1 < n and text[scan + 1] == "/":
+                    nl = text.find("\n", scan)
+                    scan = n if nl == -1 else nl + 1
+                    continue
+                if ch == "(":
+                    s_pdepth += 1
+                elif ch == ")":
+                    s_pdepth = max(0, s_pdepth - 1)
+                elif s_pdepth == 0:
+                    if ch == "{":
+                        bopen = scan
+                        break
+                    if (scan == pclose + 1 or text[scan - 1].isspace()) and re.match(
+                        r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[scan:]
+                    ):
+                        direct_for_pos = scan
+                        break
+                scan += 1
+            hdr_after_params = text[pclose + 1:(direct_for_pos if direct_for_pos != -1 else bopen)].strip() if (direct_for_pos != -1 or bopen != -1) else ""
+            # Legacy raw-asm `inline fn` (has `distinct`/`changes` or non-HL asm body with no `for <target>` arms)
+            is_legacy_asm = (
+                direct_for_pos == -1
+                and bopen != -1
+                and (
+                    bool(re.search(r"\b(?:distinct|changes)\b", hdr_after_params))
+                    or not ode_hl.is_hl_inline(text[pos:_find_matching_brace(text, bopen, src) + 1])
+                )
+            )
+            if is_legacy_asm:
+                bclose = _find_matching_brace(text, bopen, src)
+                inlines.append((None, iname, text[pos:bclose + 1], line_no))
+                pos = _skip_ws_and_comments(text, bclose + 1)
+                continue
+
+            if direct_for_pos != -1:
+                clauses_raw = text[pclose + 1:direct_for_pos].strip()
+                cur_f = direct_for_pos
+                end_f = direct_for_pos
+                while cur_f < n:
+                    cur_f = _skip_ws_and_comments(text, cur_f)
+                    if cur_f >= n or not re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[cur_f:]):
+                        break
+                    fm = re.match(r"for\s+(?:x86_64|arm64)(?::[A-Za-z0-9_+.-]+)?\b", text[cur_f:])
+                    hpos = cur_f + fm.end()
+                    while hpos < n:
+                        hpos = _skip_ws_and_comments(text, hpos)
+                        if hpos >= n:
+                            raise UnifiedErr(f"{src}: line {line_no}: `inline fn {iname}` missing `{{` for target block")
+                        if text[hpos] == "{":
+                            break
+                        hpos += 1
+                    fclose = _find_matching_brace(text, hpos, src)
+                    end_f = fclose + 1
+                    cur_f = end_f
+                body_start_line = text.count("\n", 0, direct_for_pos) + 1
+                body_text = text[direct_for_pos:end_f]
+                bclose = end_f - 1
+            else:
+                if bopen == -1:
+                    raise UnifiedErr(f"{src}: line {line_no}: `inline fn {iname}` missing `{{`")
+                clauses_raw = text[pclose + 1:bopen].strip()
+                bclose = _find_matching_brace(text, bopen, src)
+                body_start_line = text.count("\n", 0, bopen + 1) + 1
+                body_text = text[bopen + 1:bclose]
+
+            ret_ty = None
+            m_rt = re.match(r"^->\s*([A-Za-z0-9_]+)\s*", clauses_raw)
+            if m_rt:
+                ret_ty = m_rt.group(1)
+                if ret_ty not in ("u64", "u32", "u8", "u32x4", "u32x16", "number", "void"):
+                    raise UnifiedErr(f"{src}: line {line_no}: `inline fn {iname}`: unsupported return type `{ret_ty}`")
+                clauses_raw = clauses_raw[m_rt.end():].strip()
+            # Normalize `u8` parameter bounds into `requires` (preserving `var`/`const` in `raw_params_text`)
+            clean_p_for_norm = re.sub(r"\b(?:var|const)\s+", "", raw_params_text)
+            params_text, u8_reqs = ode_hl.normalize_contract_params(clean_p_for_norm)
+            clauses_text = _expand_comma_requires(clauses_raw)
+            if u8_reqs:
+                clauses_text = ("\n".join(u8_reqs) + ("\n" + clauses_text if clauses_text else "")).strip()
+            impls = _parse_for_blocks(body_text, iname, body_start_line, src, force_hl=True)
+            # Validate inline params eagerly so syntax errors surface with exact line numbers
+            try:
+                parsed_params = ode_hl.parse_hl_inline_params(iname, raw_params_text, line_no, src=src)
+            except ode_hl.HLErr as exc:
+                raise UnifiedErr(str(exc)) from exc
+            has_contract = bool(re.search(r"(?m)^\s*(?:returns|ensures)\b", clauses_text))
+            has_non_abi_param = any(
+                mode in ("const", "var") or pty in ("u32x4", "u32x16")
+                for _, pty, mode in parsed_params
+            ) or ret_ty in ("u32x4", "u32x16")
+            hl_inlines.append({
+                "name": iname,
+                "raw_params_text": raw_params_text,
+                "params_text": params_text,
+                "ret_ty": ret_ty,
+                "clauses_text": clauses_text,
+                "impls": impls,
+                "line": line_no,
+                "auditable": has_contract and not has_non_abi_param,
+            })
             pos = _skip_ws_and_comments(text, bclose + 1)
             continue
 
@@ -799,6 +956,7 @@ def _parse_single_unified(text, src="<ode>"):
         "spec_defs": spec_defs,
         "data": data,
         "inlines": inlines,
+        "hl_inlines": hl_inlines,
         "fns": fns,
         "fns_by_name": fns_by_name,
         "exports": exports,
@@ -1083,11 +1241,16 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
     root_parsed = _parse_single_unified(text, src)
     if not resolve_uses or not root_parsed["uses"]:
         all_inlines = [(arch, raw, lno) for arch, _, raw, lno in root_parsed["inlines"]]
-        _lower_all_hl(root_parsed["fns"], root_parsed["data"], src, c_abi_fn=c_abi_fn, inlines=all_inlines)
+        all_hl_inlines = list(root_parsed["hl_inlines"])
+        _lower_all_hl(
+            root_parsed["fns"], root_parsed["data"], src,
+            c_abi_fn=c_abi_fn, inlines=all_inlines, hl_inlines=all_hl_inlines,
+        )
         return {
             "spec_defs": [raw for _, _, raw, _ in root_parsed["spec_defs"]],
             "data": root_parsed["data"],
             "inlines": [(arch, raw, lno) for arch, raw, lno in all_inlines if not ode_hl.is_hl_inline(raw)],
+            "hl_inlines": all_hl_inlines,
             "fns": root_parsed["fns"],
             "fns_by_name": root_parsed["fns_by_name"],
             "root_fns": list(root_parsed["fns"]),
@@ -1157,6 +1320,7 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
     merged_spec_defs = []
     merged_data = []
     merged_inlines = []
+    merged_hl_inlines = []
     merged_fns = []
     merged_fns_by_name = {}
     root_fns = []
@@ -1195,6 +1359,31 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
                 ]
             merged_inlines.append((iarch, "\n".join(rew_body), lno))
 
+        for inl_rec in p["hl_inlines"]:
+            inl_params = _collect_param_names(inl_rec["params_text"])
+            new_iname = pref + inl_rec["name"]
+            rew_params = _rewrite_spec_text(inl_rec["params_text"], pref, exps, umap, inl_params, msrc, inl_rec["line"])
+            cl_binders = _collect_local_binders(inl_rec["clauses_text"], inl_params)
+            rew_clauses = _rewrite_spec_text(inl_rec["clauses_text"], pref, exps, umap, cl_binders, msrc, inl_rec["line"])
+            new_impls = {}
+            for k, im in inl_rec["impls"].items():
+                rew_extra = [
+                    _rewrite_spec_text(ec, pref, exps, umap, _collect_local_binders(ec, inl_params), msrc, im["first_line"])
+                    for ec in im["extra_clauses"]
+                ]
+                rew_lines = _rewrite_hl_lines(im["lines"], im["first_line"], pref, exps, umap, msrc)
+                new_impls[k] = dict(im, extra_clauses=rew_extra, lines=rew_lines)
+            merged_hl_inlines.append({
+                "name": new_iname,
+                "raw_params_text": inl_rec["raw_params_text"],
+                "params_text": rew_params,
+                "ret_ty": inl_rec["ret_ty"],
+                "clauses_text": rew_clauses,
+                "impls": new_impls,
+                "line": inl_rec["line"],
+                "auditable": inl_rec["auditable"],
+            })
+
         for fn_rec in p["fns"]:
             fn_params = _collect_param_names(fn_rec["params_text"])
             new_name = pref + fn_rec["name"]
@@ -1227,15 +1416,53 @@ def parse_unified(text, src="<ode>", resolve_uses=True, c_abi_fn=None):
             if real == root_real:
                 root_fns.append(new_fn)
 
-    _lower_all_hl(merged_fns, merged_data, src, c_abi_fn=c_abi_fn, inlines=merged_inlines)
+    _lower_all_hl(
+        merged_fns, merged_data, src,
+        c_abi_fn=c_abi_fn, inlines=merged_inlines, hl_inlines=merged_hl_inlines,
+    )
     return {
         "spec_defs": merged_spec_defs,
         "data": merged_data,
         "inlines": [(a, r, l) for a, r, l in merged_inlines if not ode_hl.is_hl_inline(r)],
+        "hl_inlines": merged_hl_inlines,
         "fns": merged_fns,
         "fns_by_name": merged_fns_by_name,
         "root_fns": root_fns,
         "pretty_names": pretty_names,
+    }
+
+
+def parsed_for_auditable_inline(parsed, inl_rec, src="<ode>"):
+    """Build a standalone single-fn `parsed` view for verifying a contracted non-`const`/non-`var` `inline fn`."""
+    raw_impls = {}
+    for k, im in inl_rec["impls"].items():
+        raw_impls[k] = dict(im, lines=list(im["lines"]), extra_clauses=list(im["extra_clauses"]))
+    synth_fn = {
+        "name": inl_rec["name"],
+        "symbol": inl_rec["name"],
+        "params_text": inl_rec["params_text"],
+        "raw_params_text": inl_rec["raw_params_text"],
+        "clauses_text": inl_rec["clauses_text"],
+        "line": inl_rec["line"],
+        "impls": raw_impls,
+    }
+    fns_list = [synth_fn]
+    other_inlines = [x for x in parsed.get("hl_inlines", ()) if x["name"] != inl_rec["name"]]
+    _lower_all_hl(
+        fns_list, parsed["data"], src,
+        c_abi_fn=inl_rec["name"],
+        inlines=parsed.get("inlines", ()),
+        hl_inlines=other_inlines,
+    )
+    return {
+        "spec_defs": list(parsed["spec_defs"]),
+        "data": list(parsed["data"]),
+        "inlines": list(parsed.get("inlines", ())),
+        "hl_inlines": other_inlines,
+        "fns": fns_list,
+        "fns_by_name": {synth_fn["name"]: synth_fn},
+        "root_fns": fns_list,
+        "pretty_names": dict(parsed.get("pretty_names", {})),
     }
 
 

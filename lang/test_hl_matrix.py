@@ -320,9 +320,9 @@ fn parse_if_and(c: u64) -> u64
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_and_if, "parse_if_and", arch, check_v2=True)
 
-        # 2. `inline fn foo(x: u32x4) -> u32x4` must raise clean UnifiedErr (never uncaught HLErr traceback)
+        # 2. `inline fn foo(x: u32x4) -> bogus` must raise clean UnifiedErr (never uncaught HLErr traceback)
         src_inl = """\
-inline fn bad_inl(x: u32x4) -> u32x4 {
+inline fn bad_inl(x: u32x4) -> bogus {
     return x
 }
 fn f(x: u64) -> u64
@@ -1085,22 +1085,20 @@ fn run_mix(out: 16 bytes, m: 16 bytes, t: counter)
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_u64_words, "run_mix", arch, check_v2=False)
 
-        # Fix #3 (ode_hl.py): clear errors for `inline fn ... -> u64` and bare `select(...)` stmt.
-        src_bad_inl = """\
-inline fn bad_ret(x: u64) -> u64 {
+        # Fix #3 (ode_hl.py): value-returning `inline fn ... -> u64` now parses cleanly, and bare `select(...)` stmt gives crisp error.
+        src_ok_inl = """\
+inline fn id_ret(x: u64) -> u64 {
     return x
 }
 fn dummy(x: number)
     returns x
     stack 0
 {
-    return x
+    return id_ret(x)
 }
 """
-        with self.assertRaises(ode_unified.UnifiedErr) as cm1:
-            ode_unified.parse_unified(src_bad_inl, src="<bad_inl>", c_abi_fn="dummy")
-        self.assertIn("no return type", str(cm1.exception))
-        self.assertIn("var out: u64", str(cm1.exception))
+        p_ok = ode_unified.parse_unified(src_ok_inl, src="<ok_inl>", c_abi_fn="dummy")
+        self.assertIn("dummy", p_ok["fns_by_name"])
 
         src_bare_sel = """\
 inline fn bad_sel(c: u64) {
@@ -1542,6 +1540,240 @@ fn f_neq_zero(n: number)
 """
         for arch in ("x86_64", "arm64"):
             _pack_and_dual_verify(src_neq_zero_loop, "f_neq_zero", arch, check_v2=True)
+
+    def test_16_unified_inline_fn_const_stack_and_strict_check(self):
+        """Phase 2 end-to-end tests across x86_64 + arm64 with dual verification (odeverify + verify2.py):
+        1. Target-specialized `inline fn` with `const` params, `-> ty`, nested calls, and `for ... unroll`
+           + compile-time `if` (`mul_const` in pure Ode, `my_rotr32`/`my_rotl32` with `for x86_64`/`for arm64`).
+        2. Runtime arg passed to `const` param is refused loudly.
+        3. Contracted `inline fn` with `select(...)` called inside a `while` loop with `writes`:
+           strict call-site `check`, auto-`join` forwarding enclosing `writes`, zero `call` insns,
+           AND standalone `ode_audit.audit_inlines` verification across both targets.
+        4. Negative control: violated `requires` on contracted `inline fn` is refused even when
+           the expanded machine instructions would never overflow.
+        5. Early `return` inside `if` inside contracted `inline fn` (`clamp_hi`) verifies both targets.
+        6. `stack(x86_64) var` places on stack on x86_64 and keeps 0-stack register on arm64.
+        """
+        # 1a. Pure-Ode `mul_const(x, const k)` via `for bit in 0..64 unroll` + compile-time `if`!
+        src_mul_const = """\
+def times25(x) {
+    25 * x
+}
+
+inline fn mul_const(x: u64, const k: u64) -> u64 {
+    var acc: u64 := 0
+    for bit in 0..64 unroll {
+        if ((k >> bit) & 1) == 1 {
+            if bit == 0 {
+                acc += x
+            } else {
+                acc += x << bit
+            }
+        }
+    }
+    return acc
+}
+
+fn f_times25(x: number)
+    requires x < 100000
+    returns times25(x)
+    trace depends on x
+    stack 0
+{
+    return mul_const(x, 25)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_mul_const, "f_times25", arch, check_v2=True)
+
+        # 1b. Target-specialized `for x86_64` / `for arm64` vector `inline fn` with `const k` + nested `my_rotl32`!
+        src_vec_inline = """\
+def rot_block(ws) {
+    [ws[i] >>> 24 for i in 0..4]
+}
+
+inline fn my_rotr32(v: u32x4, const k: u64) -> u32x4
+    for x86_64 { return (v >> k) | (v << (32 - k)) }
+    for arm64  { return (v >> k) | (v << (32 - k)) }
+
+inline fn my_rotl32(v: u32x4, const k: u64) -> u32x4 {
+    return my_rotr32(v, 32 - k)
+}
+
+fn f_rot_vec(src: 16 bytes, out: 16 bytes)
+    requires no_overlap(src, out)
+    ensures out = bytes_of(rot_block(words(src)))
+    trace depends on nothing
+    stack 0
+{
+    let v: u32x4 := src.u32x4(0)
+    let r: u32x4 := my_rotl32(v, 8)
+    out.u32x4(0) := r
+    return
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_vec_inline, "f_rot_vec", arch, check_v2=False)
+
+        # 2. Passing runtime `var` to `const` param is rejected loudly.
+        src_bad_const = """\
+def id(x) { x }
+inline fn shift_k(x: u64, const k: u64) -> u64 { return x << k }
+fn f_bad(x: number, k: number)
+    requires x < 100, k < 8
+    returns id(x)
+    trace depends on x, k
+    stack 0
+{
+    return shift_k(x, k)
+}
+"""
+        p_bad = ode_unified.parse_unified(src_bad_const, src="bad_const.ode")
+        with self.assertRaises(ode_unified.UnifiedErr) as cm_c:
+            ode_unified.target_source_view(p_bad, "x86_64", src="bad_const.ode")
+        self.assertIn("compile-time constant", str(cm_c.exception))
+
+        # 3. Contracted `inline fn` with `select(...)` inside a `while` loop with `writes`:
+        # strict call-site `check`, auto-`join` forwarding `writes`, zero `call` insns, AND standalone audit!
+        src_contracted_inl = """\
+def map_byte(c) {
+    if c >= 65 then
+        if c <= 90 then c - 65 else c
+    else c
+}
+
+def map_all(src) {
+    [map_byte(src[i]) % 256 for i in 0..64]
+}
+
+inline fn lower_ascii(c: u8) -> u64
+    requires c <= 255
+    returns map_byte(c)
+{
+    var d: u64 := c
+    d := select(65 <= c && c <= 90, c - 65, d)
+    return d
+}
+
+fn f_map_buf(src: n bytes, out: 64 bytes, n: number)
+    requires no_overlap(src, out)
+    requires n >= 64
+    requires n <= 64
+    ensures out = map_all(src)
+    trace depends on n
+    stack 0
+{
+    var i: u64 := 0
+    while i < 64
+        maintains i <= 64
+        writes out[.. i] = map_all(src)
+        decreases 64 - i
+    {
+        let b: u64 := lower_ascii(src[i])
+        out[i] := b
+        i += 1
+    }
+    return
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_contracted_inl, "f_map_buf", arch, check_v2=True)
+            # Confirm zero `call`/`bl` emitted inside `f_map_buf`!
+            p = ode_unified.parse_unified(src_contracted_inl, src="inl_map.ode")
+            asm = "\n".join(p["fns_by_name"]["f_map_buf"]["impls"][arch]["lines"])
+            self.assertNotIn("call ", asm)
+            self.assertNotIn("bl ", asm)
+        with tempfile.TemporaryDirectory() as td:
+            sp = os.path.join(td, "inl_map.ode")
+            with open(sp, "w", encoding="utf-8") as f:
+                f.write(src_contracted_inl)
+            aud = ode_audit.audit_inlines(sp)
+            self.assertEqual(len(aud), 2)
+            self.assertEqual({r["target"] for r in aud}, {"x86_64", "arm64"})
+            for r in aud:
+                self.assertEqual(r["verdict"], "shown")
+
+        # 4. Negative control: violated `requires` on contracted `inline fn` MUST be refused even
+        # though `a + 1` alone would never overflow for `x < 1000`!
+        src_bad_req = """\
+def add1(x) { x + 1 }
+
+inline fn narrow_add1(a: u64) -> u64
+    requires a <= 50
+    returns add1(a)
+{
+    return a + 1
+}
+
+fn f_caller_bad(x: number)
+    requires x < 1000
+    returns add1(x)
+    trace depends on x
+    stack 0
+{
+    return narrow_add1(x)
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            with self.assertRaises(ode_audit.PackProofError):
+                _pack_and_dual_verify(src_bad_req, "f_caller_bad", arch, check_v2=False)
+
+        # 5. Early `return` inside `if` inside contracted `inline fn` (`clamp_hi`) + standalone audit!
+        src_early_ret = """\
+def clamp50(x) {
+    if x >= 50 then 50 else x
+}
+
+inline fn clamp_hi(x: u64) -> u64
+    requires x <= 100
+    returns clamp50(x)
+    trace depends on x
+{
+    if x >= 50 {
+        return 50
+    }
+    return x
+}
+
+fn f_clamp(x: number)
+    requires x <= 100
+    returns clamp50(x)
+    trace depends on x
+    stack 0
+{
+    let y: u64 := clamp_hi(x)
+    return y
+}
+"""
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_early_ret, "f_clamp", arch, check_v2=True)
+        with tempfile.TemporaryDirectory() as td:
+            sp = os.path.join(td, "clamp.ode")
+            with open(sp, "w", encoding="utf-8") as f:
+                f.write(src_early_ret)
+            aud = ode_audit.audit_inlines(sp)
+            self.assertEqual(len(aud), 2)
+            for r in aud:
+                self.assertEqual(r["verdict"], "shown")
+
+        # 6. `stack(x86_64) var` allocates stack on x86_64 and keeps 0-stack register on arm64!
+        src_stack_arch = """\
+def sum3(a, b, c) { a + b + c }
+
+fn f_stack_arch(a: number, b: number, c: number)
+    requires a < 100, b < 100, c < 100
+    returns sum3(a, b, c)
+    trace depends on a, b, c
+{
+    stack(x86_64) var t: u64 := a + b
+    return t + c
+}
+"""
+        p_sa = ode_unified.parse_unified(src_stack_arch, src="stack_arch.ode")
+        self.assertGreater(p_sa["fns_by_name"]["f_stack_arch"]["impls"]["x86_64"]["hl_meta"]["frame_bytes"], 0)
+        self.assertEqual(p_sa["fns_by_name"]["f_stack_arch"]["impls"]["arm64"]["hl_meta"]["total_stack"], 0)
+        for arch in ("x86_64", "arm64"):
+            _pack_and_dual_verify(src_stack_arch, "f_stack_arch", arch, check_v2=True)
 
 
 if __name__ == "__main__":

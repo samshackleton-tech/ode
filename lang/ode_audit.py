@@ -1308,6 +1308,7 @@ def pack_verified(
     verify_bin=None,
     existing_bundle_proof=None,
     c_abi=False,
+    parsed_override=None,
 ):
     """Compile `.ode`, bind symbol to `ode_<52-char-b32>`, embed `.ode.ocl`, prove, and audit.
 
@@ -1319,11 +1320,13 @@ def pack_verified(
     """
     import ode_unified
     src_text = odec.read_source(source_path)
-    unified = ode_unified.is_unified(src_text)
+    unified = (parsed_override is not None) or ode_unified.is_unified(src_text)
 
     if unified:
-        parsed = ode_unified.parse_unified(src_text, source_path, c_abi_fn=(fn_name if c_abi else None))
-        arch, _, _, fns = odec.source(src_text, source_path, target=target)
+        parsed = parsed_override if parsed_override is not None else ode_unified.parse_unified(
+            src_text, source_path, c_abi_fn=(fn_name if c_abi else None)
+        )
+        arch, _, _, fns = odec.source(src_text, source_path, target=target, parsed=parsed)
         if not fns:
             raise ValueError(f"{source_path}: no `fn` found for target {target!r}")
         chosen_fn = fn_name or fns[-1][0]
@@ -1350,7 +1353,7 @@ def pack_verified(
             if name in visited or name in visiting:
                 return
             visiting.add(name)
-            inf = odec.compile_info(source_path, name, target=use_target)
+            inf = odec.compile_info(source_path, name, target=use_target, parsed=parsed)
             rec_n = parsed["fns_by_name"].get(name)
             impl_n = ode_unified._select_impl(rec_n, use_target, source_path) if rec_n else None
             if impl_n and impl_n.get("hl_meta"):
@@ -1515,6 +1518,38 @@ def pack_verified(
     audit_res["proof_bytes"] = os.path.getsize(out_proof)
     audit_res["glossary"] = canon["glossary"]
     return audit_res
+
+
+def audit_inlines(source_path, target=None, verify_bin=None):
+    """Independently verify every contracted non-`const`/non-`var` `inline fn` declared in `source_path`
+    across its target arm(s), returning a list of `{name, target, verdict, contract_id}` dicts."""
+    import ode_unified
+    src_text = odec.read_source(source_path)
+    if not ode_unified.is_unified(src_text):
+        return []
+    parsed = ode_unified.parse_unified(src_text, source_path)
+    results = []
+    for inl_rec in parsed.get("hl_inlines", ()):
+        if not inl_rec.get("auditable"):
+            continue
+        targets = [target] if target is not None else sorted(inl_rec["impls"].keys())
+        syn = ode_unified.parsed_for_auditable_inline(parsed, inl_rec, src=source_path)
+        for tk in targets:
+            with tempfile.TemporaryDirectory(prefix="ode_audit_inl_") as td:
+                out_o = os.path.join(td, f"{inl_rec['name']}_{tk.replace(':', '_')}.o")
+                out_p = os.path.join(td, f"{inl_rec['name']}_{tk.replace(':', '_')}.proof")
+                res = pack_verified(
+                    source_path, None, out_o, out_p,
+                    fn_name=inl_rec["name"], target=tk,
+                    verify_bin=verify_bin, c_abi=True, parsed_override=syn,
+                )
+                results.append({
+                    "name": inl_rec["name"],
+                    "target": tk,
+                    "verdict": res["verdict"],
+                    "contract_id": res["contract_b32"],
+                })
+    return results
 
 
 # ---------------------------------------------------------------------------
