@@ -4,11 +4,11 @@ use vec = "7zpczpzr6tshzr6ew4fnhluakp3vs4q3xu4pndhflmztv6rdpqra"  // std/vec.ode
 data b3_iv_lo = 0x6A09E667, 0xBB67AE85, 0x3C6EF372, 0xA54FF53A
 
 inline fn g_half(var v0: u32x4, var v1: u32x4, var v2: u32x4, var v3: u32x4, mx: u32x4, my: u32x4) {
-    v0 := (v0 + v1) + mx
+    v0 := (v0 + mx) + v1
     v3 := vec.rotr32(v3 ^ v0, 16)
     v2 := v2 + v3
     v1 := vec.rotr32(v1 ^ v2, 12)
-    v0 := (v0 + v1) + my
+    v0 := (v0 + my) + v1
     v3 := vec.rotr32(v3 ^ v0, 8)
     v2 := v2 + v3
     v1 := vec.rotr32(v1 ^ v2, 7)
